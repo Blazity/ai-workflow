@@ -22,8 +22,8 @@ vi.mock("../../env.js", () => ({
 // The engine boundary, replaced exactly where run-checks.test.ts replaces it:
 // neither the load nor the run is a step the block owns, so the block is
 // exercised against the two calls it makes and nothing below them.
-vi.mock("./blocks/pre-pr-checks.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./blocks/pre-pr-checks.js")>()),
+vi.mock("../engine/blocks/pre-pr-checks.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../engine/blocks/pre-pr-checks.js")>()),
   loadPrePrCheckConfigStep: mocks.loadPrePrCheckConfigStep,
   runPrePrChecksWithFixes: mocks.runPrePrChecksWithFixes,
 }));
@@ -38,7 +38,6 @@ import {
   prePrChecksFailureInput,
   prePrChecksFailureMustPropagate,
   prePrChecksFailureReport,
-  executeRunScripts,
   failureExitPhase,
   nodeCanRecordGate,
   repositoryScriptFailureEntry,
@@ -54,7 +53,7 @@ import {
   expectOutputConformsToRegistry,
   makeCtx,
   runControlErrorCases as blockRunControlErrorCases,
-} from "./blocks/test-support.js";
+} from "../engine/blocks/support/test-support.js";
 import type {
   WorkflowBlockType,
   WorkflowDefinitionNode,
@@ -72,14 +71,15 @@ import {
   isRepositoryScriptsRefusal,
   repositoryScriptsRefusalMessage,
   REPOSITORY_SCRIPTS_BUDGET_CLASS,
-} from "./blocks/repository-scripts-output.js";
+} from "../engine/blocks/support/repository-scripts-output.js";
 import type { PrePrCheckRunResult } from "../pre-pr-checks/runner.js";
 import {
   checksCeilingExceededError,
   isDurationAbortError,
 } from "./run-budget.js";
 import { isRunControlError } from "./run-control-error.js";
-import { runControlErrorCases } from "./blocks/test-support.js";
+import { runControlErrorCases } from "../engine/blocks/support/test-support.js";
+import { execute as executeRunScripts } from "../engine/blocks/run-scripts/execute.js";
 
 const MESSAGE_LEAD = "The repository scripts step failed: ";
 
@@ -802,7 +802,7 @@ describe("repository scripts block output", () => {
   });
 
   it("keeps the gate output recoverable by finalize and run_scripts out of it", async () => {
-    const { recoverPrePrGateFromSteps } = await import("./blocks/finalize-workspace.js");
+    const { recoverPrePrGateFromSteps } = await import("../engine/blocks/finalize-workspace/execute.js");
     const shared = repositoryScriptsOutput(
       engineResult({
         results: ranOneCommand(),
@@ -1037,6 +1037,17 @@ describe("run_scripts executor", () => {
     await expect(
       executeRunScripts(scriptsNode(["test"]), {}, makeCtx()),
     ).rejects.toThrow("sandbox connection reset");
+  });
+
+  it("uses the failure-message callback supplied by the engine context", async () => {
+    mocks.runPrePrChecksWithFixes.mockRejectedValue(new Error("ignored by callback"));
+    const ctx = makeCtx({
+      prePrChecksFailureMessage: () => Promise.resolve("literal message"),
+    });
+
+    await expect(executeRunScripts(scriptsNode(["test"]), {}, ctx)).rejects.toThrow(
+      "literal message",
+    );
   });
 
   it.each(blockRunControlErrorCases())(

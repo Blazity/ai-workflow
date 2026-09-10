@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  BLOCK_CATALOG,
   BLOCK_TYPE_SPECS,
+  GENERATED_TRIGGER_BLOCK_TYPES,
   MANUALLY_DISPATCHABLE_TRIGGER_TYPES,
   NON_DISPATCHABLE_TRIGGER_TYPES,
   TRIGGER_BLOCK_TYPES,
@@ -15,6 +17,7 @@ import {
   workflowRepositoryScopeIssues,
   type WorkflowBlockRegistryContext,
 } from "./block-registry.js";
+import { LEGACY_BLOCK_METADATA } from "./legacy-block-metadata.fixture.js";
 
 const context: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: false },
@@ -39,16 +42,66 @@ describe("workflow block registry", () => {
       expect(contract.presentation.label.trim(), `${type} label`).not.toBe("");
       expect(contract.presentation.description.trim(), `${type} description`).not.toBe("");
       expect(contract.presentation.group.trim(), `${type} group`).not.toBe("");
-      expect(contract.defaults, `${type} defaults`).toBeTypeOf("object");
       expect(contract.ports, `${type} ports`).toEqual(BLOCK_TYPE_SPECS[type].ports);
       expect(contract.allowsFailurePort, `${type} failure port`).toBe(
         BLOCK_TYPE_SPECS[type].allowsFailurePort,
       );
-      expect(contract.inputs, `${type} inputs`).toBeTypeOf("object");
-      expect(contract.additionalInputs, `${type} additional inputs`).toBeInstanceOf(Array);
       expect(contract.output.schema, `${type} output`).toBeTypeOf("object");
       expect(contract.output.bindingSchema, `${type} binding output`).toBeTypeOf("object");
       expect(contract.output.statusVariants.length, `${type} statuses`).toBeGreaterThan(0);
+    }
+  });
+
+  it("keeps generated metadata compatible with the legacy registry snapshot", () => {
+    const registry = buildWorkflowBlockRegistry(context);
+    const catalogTypes = Object.keys(BLOCK_CATALOG).sort();
+    const legacyTypes = Object.keys(LEGACY_BLOCK_METADATA).sort();
+
+    expect(legacyTypes).toEqual(catalogTypes);
+    for (const type of catalogTypes as WorkflowBlockType[]) {
+      const legacy = LEGACY_BLOCK_METADATA[type];
+      const catalog = BLOCK_CATALOG[type];
+      const registered = registry[type];
+      const staticDefaults = { ...registered.defaults };
+      if (
+        [
+          "planning_agent",
+          "implementation_agent",
+          "review_agent",
+          "fix_agent",
+          "generic_agent",
+        ].includes(type)
+      ) {
+        delete staticDefaults.provider;
+        delete staticDefaults.model;
+      }
+
+      expect(
+        {
+          contract: catalog.contract,
+          ui: catalog.ui,
+          defaults: catalog.defaults,
+          inputs: catalog.inputs,
+          additionalInputs: catalog.additionalInputs,
+        },
+        `${type} generated metadata`,
+      ).toEqual({
+        contract: legacy.contract,
+        ui: legacy.ui,
+        defaults: legacy.defaults,
+        inputs: legacy.inputs,
+        additionalInputs: legacy.additionalInputs,
+      });
+      expect(
+        {
+          contract: BLOCK_TYPE_SPECS[type],
+          ui: registered.presentation,
+          defaults: staticDefaults,
+          inputs: registered.inputs,
+          additionalInputs: registered.additionalInputs,
+        },
+        `${type} registry metadata`,
+      ).toEqual(legacy);
     }
   });
 
@@ -1059,5 +1112,11 @@ describe("manual dispatch allowlist", () => {
       ...NON_DISPATCHABLE_TRIGGER_TYPES,
     ].filter((type) => BLOCK_TYPE_SPECS[type].category !== "trigger");
     expect(notTriggers).toEqual([]);
+  });
+});
+
+describe("trigger catalog parity", () => {
+  it("keeps the stable hand-authored order equal to generated trigger data", () => {
+    expect(new Set(TRIGGER_BLOCK_TYPES)).toEqual(new Set(GENERATED_TRIGGER_BLOCK_TYPES));
   });
 });

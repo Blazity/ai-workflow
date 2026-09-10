@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { EngineCtx } from "../workflows/blocks/types.js";
+import type { EngineCtx } from "../engine/blocks/support/types.js";
 import { MEMORY_PRE_COMMIT_HOOK } from "./git-excludes.js";
 import {
   attachResearchRepositories,

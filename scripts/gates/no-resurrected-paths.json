@@ -8,5 +8,6 @@
   "apps/worker/src/workflow-definition/v2-migration.ts",
   "apps/worker/src/workflow-definition/v2-migration-prompts.ts",
   "apps/worker/src/workflow-definition/v2-migration-harness-profiles.ts",
-  "apps/dashboard/components/cockpit/flow-editor/workflow-migration-drawer.tsx"
+  "apps/dashboard/components/cockpit/flow-editor/workflow-migration-drawer.tsx",
+  "apps/worker/src/workflows/blocks"
 ]

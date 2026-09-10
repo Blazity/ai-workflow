@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { BLOCK_TYPE_SPECS } from "@shared/contracts";
+import { BLOCK_CATALOG, BLOCK_TYPE_SPECS } from "@shared/contracts";
 import type { WorkflowBlockType, WorkflowDefinitionNode } from "@shared/contracts";
+import {
+  BLOCK_EXECUTORS,
+  INLINE_EXECUTED_BLOCK_TYPES,
+} from "../engine/blocks/executors.generated.js";
 import {
   blockTypesMissingExecutor,
   detachScratchSandboxesForClarification,
@@ -15,6 +19,65 @@ import {
 // Exhaustiveness guard for the v1 block dispatch in agent.ts. V2-only action
 // types are executed by the v2 scheduler once that runtime is enabled.
 describe("block executor exhaustiveness", () => {
+  it("keeps map, inline, and graph execution sets exact", () => {
+    const mapTypes = [
+      "arthur_injection_check",
+      "call_llm",
+      "complete_pr_check",
+      "create_pr_check",
+      "fetch_pr_context",
+      "finalize_workspace",
+      "fix_agent",
+      "generic_agent",
+      "human_question",
+      "investigate",
+      "leak_review",
+      "post_pr_comment",
+      "post_pr_review",
+      "post_ticket_comment",
+      "run_checks",
+      "run_scripts",
+      "send_plan_approval",
+    ];
+    const inlineTypes = [
+      "implementation_agent",
+      "open_pr",
+      "planning_agent",
+      "prepare_workspace",
+      "review_agent",
+      "run_pre_pr_checks",
+      "send_slack_message",
+      "update_ticket_status",
+    ];
+    const graphTypes = [
+      "branch",
+      "loop",
+      "terminate",
+      "transform",
+      "trigger_plan_approved",
+      "trigger_pr_checks_failed",
+      "trigger_pr_created",
+      "trigger_pr_merged",
+      "trigger_pr_ready",
+      "trigger_pr_review",
+      "trigger_pr_updated",
+      "trigger_schedule",
+      "trigger_ticket_ai",
+      "trigger_webhook",
+    ];
+    const generatedGraphTypes = Object.entries(BLOCK_CATALOG)
+      .filter(([, entry]) => entry.execution === "graph")
+      .map(([type]) => type);
+
+    expect(new Set(Object.keys(BLOCK_EXECUTORS))).toEqual(new Set(mapTypes));
+    expect(new Set(INLINE_EXECUTED_BLOCK_TYPES)).toEqual(new Set(inlineTypes));
+    expect(new Set(generatedGraphTypes)).toEqual(new Set(graphTypes));
+  });
+
+  it("dispatches run_scripts through the generated executor map", () => {
+    expect(BLOCK_EXECUTORS.run_scripts).toBeTypeOf("function");
+  });
+
   it("wires an executor for every v1 action block type", () => {
     const actionTypes = (Object.keys(BLOCK_TYPE_SPECS) as WorkflowBlockType[]).filter(
       (type) => type !== "transform" && BLOCK_TYPE_SPECS[type].category === "action",

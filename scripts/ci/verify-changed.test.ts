@@ -108,7 +108,6 @@ test("scope table selects only exact narrow commands", () => {
     [["apps/worker/src/lib/value.ts"], [...WB, GATES]],
     [["apps/dashboard/lib/value.ts"], ["pnpm --filter ai-workflow-dashboard run typecheck", GATES]],
     [["packages/conditions/index.ts"], ["pnpm run typecheck", GATES]],
-    [["docs/workflow-workspace/index.html"], [...WB, PACK]],
     [["packages/contracts/workflow-graph.ts"], ["pnpm run typecheck", ...WB.slice(1), PACK, GATES]],
     [["apps/worker/vitest.config.ts"], [...WB, PACK, GATES]],
     [["apps/worker/nitro.config.ts"], [...WB, GATES]],

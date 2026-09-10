@@ -1,0 +1,58 @@
+import type { ActiveRunOwner } from "../../../lib/active-run-owner.js";
+import { scrubForPublication } from "../../../lib/publication-scrub.js";
+import { isRunControlError } from "../../../workflows/run-control-error.js";
+import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "../support/types.js";
+
+async function blockPostTicketCommentStep(
+  ticketId: string,
+  body: string,
+  owner: ActiveRunOwner,
+): Promise<string | null> {
+  "use step";
+  const { getDb } = await import("../../../db/client.js");
+  const { assertActiveRunOwner } = await import("../../../lib/active-run-owner.js");
+  const { createAdapters } = await import("../../../lib/adapters.js");
+  const { issueTracker } = createAdapters();
+  await assertActiveRunOwner(getDb(), owner);
+  // The body is {{variable}}-substituted before it gets here, so it can carry
+  // {{change_summary}} or any agent block's output, exactly like post_pr_comment.
+  return issueTracker.postComment(ticketId, scrubForPublication(body));
+}
+blockPostTicketCommentStep.maxRetries = 0;
+
+/**
+ * post_ticket_comment: post the body param as a comment on the run's ticket.
+ * Returns the deep-linkable comment URL when the tracker exposes one.
+ */
+export const execute: BlockExecuteFn = async (
+  block,
+  _steps,
+  ctx,
+  resolvedInputs = {},
+): Promise<BlockExecutionResult> => {
+  const body =
+    typeof resolvedInputs.body === "string"
+      ? resolvedInputs.body.trim()
+      : typeof block.params.body === "string"
+        ? block.params.body.trim()
+        : "";
+  if (body.length === 0) {
+    return executionError("post_ticket_comment requires a body", {
+      category: "binding",
+    });
+  }
+
+  try {
+    const commentUrl = await blockPostTicketCommentStep(ctx.ticket.identifier, body, {
+      subjectKey: ctx.entry.subjectKey,
+      ownerToken: ctx.entry.ownerToken,
+      runId: ctx.runId,
+    });
+    return { kind: "next", output: { status: "ok", commentUrl } };
+  } catch (err) {
+    if (isRunControlError(err)) throw err;
+    return executionError(err instanceof Error ? err.message : String(err), {
+      category: "provider",
+    });
+  }
+};

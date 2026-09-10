@@ -58,11 +58,14 @@ local gate and 500s on the deployed worker.
 sanctioned shape is a single statement, usually a CTE chain, so that the write is
 atomic without a transaction.
 
-## 3. The block catalog is mirrored by hand
+## 3. The block catalog is generated from manifests
 
-Adding or changing a workflow block type means editing both the registry and the
-catalog mirror in `docs/workflow-workspace/index.html`. A gate test compares the
-two, including the block count and the exact parameter lists.
+Adding or changing a workflow block type means editing its pure manifest under
+`apps/worker/src/engine/blocks/` and regenerating
+`packages/contracts/block-catalog.generated.ts` plus the other generated
+catalogs. The generator check and the registry parity test compare the
+generated UI, defaults, inputs and contract data, including the block count and
+exact parameter lists.
 
 `[Medium]` Detect: a change to `apps/worker/src/workflow-definition/block-registry.ts`
 or to `BLOCK_PARAM_KEYS` with no matching change to the mirror. Statuses must

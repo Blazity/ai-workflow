@@ -23,9 +23,9 @@ import {
   WORKSPACE_GATE_NOT_RECORDED_MESSAGE,
   WORKSPACE_NOT_VERIFIABLE_MESSAGE,
 } from "../workflow-definition/interpreter.js";
-import type { RepositoryScriptsOutput } from "./blocks/repository-scripts-output.js";
+import type { RepositoryScriptsOutput } from "../engine/blocks/support/repository-scripts-output.js";
 import { fingerprintWorkspaceState } from "./workspace-gate-fingerprint.js";
-import { recoverPrePrGateFromSteps } from "./blocks/finalize-workspace.js";
+import { recoverPrePrGateFromSteps } from "../engine/blocks/finalize-workspace/execute.js";
 
 /** The stored configuration the boundary reads to decide the gate applies. */
 function configuredForAcmeWeb() {

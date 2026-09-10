@@ -29,7 +29,7 @@ import {
 import {
   isRepositoryScriptsRefusal,
   REPOSITORY_SCRIPTS_SETUP_FAILED_PREFIX,
-} from "../workflows/blocks/repository-scripts-output.js";
+} from "../engine/blocks/support/repository-scripts-output.js";
 
 export type RunDiagnosisCategory =
   | "succeeded"

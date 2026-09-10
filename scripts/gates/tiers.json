@@ -59,7 +59,7 @@
     },
     "engine": {
       "patterns": [
-        "^apps/worker/src/(?:harness-profiles|memory|post-pr-gate|pre-pr-checks|pre-sandbox|prompt-library|run-analysis|run-observability|sandbox|workflow-definition|workflows)(?:/|$)"
+        "^apps/worker/src/(?:engine|harness-profiles|memory|post-pr-gate|pre-pr-checks|pre-sandbox|prompt-library|run-analysis|run-observability|sandbox|workflow-definition|workflows)(?:/|$)"
       ]
     },
     "adapters": {

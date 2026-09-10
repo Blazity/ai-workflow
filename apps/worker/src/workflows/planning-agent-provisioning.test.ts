@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   ensureAgentSandbox: vi.fn(),
 }));
 
-vi.mock("./blocks/agent-sandbox.js", () => ({
+vi.mock("../engine/blocks/agent-sandbox.js", () => ({
   ensureAgentSandbox: mocks.ensureAgentSandbox,
 }));
 
@@ -13,9 +13,9 @@ import {
   ensurePlanningAgentSandboxForBlock,
   shouldPromoteResearchWriteScope,
 } from "./agent.js";
-import { maybePromoteTicketWorkspaceWrites } from "./blocks/prepare-workspace.js";
+import { maybePromoteTicketWorkspaceWrites } from "../engine/blocks/prepare-workspace/execute.js";
 import type { WorkspaceManifestV2 } from "../sandbox/repo-workspace.js";
-import { makeCtx, runControlErrorCases } from "./blocks/test-support.js";
+import { makeCtx, runControlErrorCases } from "../engine/blocks/support/test-support.js";
 
 const node = (id: string, type: WorkflowDefinitionNode["type"]): WorkflowDefinitionNode => ({
   id,

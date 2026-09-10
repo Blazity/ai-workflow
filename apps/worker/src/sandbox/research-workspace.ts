@@ -1,6 +1,6 @@
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
 import { buildVcsUrls, gitAuthArgs } from "../lib/vcs-urls.js";
-import type { EngineCtx } from "../workflows/blocks/types.js";
+import type { EngineCtx } from "../engine/blocks/support/types.js";
 import type { SelectedRepositoryPromptContext } from "./context.js";
 import {
   configureRepositoryExcludes,

@@ -22,7 +22,7 @@ import {
   type WorkflowPrLink,
 } from "./repository-prs.js";
 import type { ReviewLedgerGuardSummary } from "./review-ledger.js";
-import type { RepositoryScriptsOutput } from "./blocks/repository-scripts-output.js";
+import type { RepositoryScriptsOutput } from "../engine/blocks/support/repository-scripts-output.js";
 import { isRunControlError } from "./run-control-error.js";
 import {
   assertOpenSourcePullRequest,

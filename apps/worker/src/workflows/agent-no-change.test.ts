@@ -27,7 +27,7 @@ import {
   unsettledWorkItemAliases,
   type ReviewLedgerMetrics,
 } from "./agent.js";
-import { makeCtx, makePrPayload } from "./blocks/test-support.js";
+import { makeCtx, makePrPayload } from "../engine/blocks/support/test-support.js";
 
 // The failure note is the only step here that talks to a provider; everything
 // else in this file is pure. Mocked at module level so the note's body can be

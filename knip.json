@@ -7,5 +7,12 @@
     "apps/worker/src/mcp/contracts/mcp-contract.json",
     "apps/worker/src/sandbox/agents/fixtures/**",
     "apps/worker/workflow-test-fixtures/**"
-  ]
+  ],
+  "entry": [
+    "apps/worker/src/engine/blocks/*/manifest.ts",
+    "apps/worker/src/engine/blocks/*/execute.ts"
+  ],
+  "ignoreIssues": {
+    "apps/worker/src/engine/blocks/run-checks/execute.ts": ["exports"]
+  }
 }

@@ -6,7 +6,7 @@ import {
 import {
   repositoryScriptsRefusalMessage,
   type RepositoryScriptsOutput,
-} from "./blocks/repository-scripts-output.js";
+} from "../engine/blocks/support/repository-scripts-output.js";
 import {
   parseVerifiedWorkspaceManifest,
   WORKSPACE_MANIFEST_PATH,

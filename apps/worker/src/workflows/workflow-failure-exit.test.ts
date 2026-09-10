@@ -3,7 +3,7 @@ import {
   handleUnhandledWorkflowError,
   handleWorkflowFailureExit,
 } from "./workflow-failure-exit.js";
-import { runControlErrorCases } from "./blocks/test-support.js";
+import { runControlErrorCases } from "../engine/blocks/support/test-support.js";
 
 describe("handleWorkflowFailureExit", () => {
   it("logs a PR-only review-safe failure without touching issue tracking or messaging", async () => {

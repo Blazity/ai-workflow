@@ -4,7 +4,7 @@ import {
   type WorkflowDefinitionNode,
   type WorkflowParamValue,
 } from "@shared/contracts";
-import type { EngineCtx } from "./blocks/types.js";
+import type { EngineCtx } from "../engine/blocks/support/types.js";
 import { formatPRComments } from "../sandbox/context.js";
 
 /** Which string/string[] params of each block type receive {{var}} substitution.
