@@ -9,11 +9,11 @@ vi.mock("../../../../auth-instance.js", () => ({
   auth: {},
 }));
 
-vi.mock("../../../../lib/auth/sso-handoff.js", () => ({
+vi.mock("../../../../services/auth/sso-handoff.js", () => ({
   consumeDashboardSsoHandoff: state.consume,
 }));
 
-vi.mock("../../../../lib/auth/request-context.js", () => ({
+vi.mock("../../../../services/auth/request-context.js", () => ({
   toHttpError: (error: unknown) => {
     throw error;
   },

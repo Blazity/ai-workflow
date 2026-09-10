@@ -1,7 +1,7 @@
 /* eslint-disable require-unicode-regexp */
 import { createHook, getWorkflowMetadata } from "workflow";
-import { branchForTicket } from "../lib/workflow-naming.js";
-import { ticketRunUrl, hasDashboardLinkComment } from "../lib/dashboard-links.js";
+import { branchForTicket } from "../services/publication/workflow-naming.js";
+import { ticketRunUrl, hasDashboardLinkComment } from "../services/publication/dashboard-links.js";
 import { computeUsageTotals } from "../sandbox/usage.js";
 import type { AgentOutput, PhaseUsage, ResearchResult, ReviewOutput } from "../sandbox/agents/types.js";
 import type { AgentKind } from "../sandbox/agents/index.js";
@@ -1185,7 +1185,7 @@ async function agentWorkflowBody(
 
           if (snapshot) {
             const { restoreCheckpointSandboxReferences } = await import(
-              "../clarifications/checkpoint.js"
+              "../services/clarifications/checkpoint.js"
             );
             const { restoreClarificationSandboxStep } = await import(
               "./steps/clarification-snapshot-steps.js"
@@ -1474,7 +1474,7 @@ async function agentWorkflowBody(
         const {
           REPOSITORY_DISCOVERY_SCHEMA,
           assembleRepositoryDiscoveryPrompt,
-        } = await import("../repository-discovery/runner.js");
+        } = await import("../services/repository-discovery/runner.js");
         const { paths, script } = await planPhaseStep(
           ctx.runDefaultKind,
           phase,
@@ -1527,7 +1527,7 @@ async function agentWorkflowBody(
         if (!parsed.result.ok) return agentProtocolBlockError(parsed.result);
 
         const { validateRepositoryDiscoveryResult } = await import(
-          "../repository-discovery/protocol.js"
+          "../services/repository-discovery/protocol.js"
         );
         const decision = validateRepositoryDiscoveryResult(
           parsed.result.value,
@@ -1576,7 +1576,7 @@ async function agentWorkflowBody(
           );
         }
         const { validateRepositoryExpansionRequests } = await import(
-          "../repository-discovery/runner.js"
+          "../services/repository-discovery/runner.js"
         );
         const decision = validateRepositoryExpansionRequests({
           requests,
@@ -3582,7 +3582,7 @@ async function agentWorkflowBody(
             sourceSandboxId !== ctx.sandboxId
           ) {
             const { restoreCheckpointValueSandboxReferences } = await import(
-              "../clarifications/checkpoint.js"
+              "../services/clarifications/checkpoint.js"
             );
             checkpoint = restoreCheckpointValueSandboxReferences(
               checkpoint,

@@ -10,9 +10,9 @@ import type {
   WorkflowDefinitionValidationIssue,
 } from "@shared/contracts";
 import { env } from "../../config/env.js";
-import { workflowDefinitionUrl } from "../../lib/dashboard-links.js";
+import { workflowDefinitionUrl } from "../../services/publication/dashboard-links.js";
 import { logger } from "../../infra/logger.js";
-import { isRepoAllowed } from "../../lib/repo-allowlist.js";
+import { isRepoAllowed } from "../../services/dispatch/repo-allowlist.js";
 import { listSchedulesForDefinition } from "../../schedule-trigger/schedule-store.js";
 import { getWebhookEndpointForNode } from "../../webhook-trigger/endpoint-store.js";
 import type { Db } from "../../db/client.js";

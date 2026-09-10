@@ -7,14 +7,14 @@ import type {
   SettleReviewThreadInput,
   VCSAdapter,
 } from "../../adapters/vcs/types.js";
-import { createRepositoryVCS } from "../../lib/vcs-runtime.js";
+import { createRepositoryVCS } from "../../services/vcs/vcs-runtime.js";
 import {
   postRunFailureNoteForRun,
   settleReviewLedgerStep,
   settleReviewThreads,
 } from "./review-ledger-settle.js";
 
-vi.mock("../../lib/vcs-runtime.js", () => ({ createRepositoryVCS: vi.fn() }));
+vi.mock("../../services/vcs/vcs-runtime.js", () => ({ createRepositoryVCS: vi.fn() }));
 
 const MARKER_T1 = "<!-- ai-workflow:ledger:th-1 --> <!-- ai-workflow:bot -->";
 

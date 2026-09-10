@@ -1,8 +1,8 @@
 import { defineEventHandler } from "h3";
 import type { PromptLibraryUsageResponse } from "@shared/contracts";
 import { getDb } from "../../../../../db/client.js";
-import { requireDashboardActor, toHttpError } from "../../../../../lib/auth/request-context.js";
-import { findPromptUsage, findPromptUsageInPrompts } from "../../../../../lib/prompt-library-service.js";
+import { requireDashboardActor, toHttpError } from "../../../../../services/auth/request-context.js";
+import { findPromptUsage, findPromptUsageInPrompts } from "../../../../../services/prompts/prompt-library-service.js";
 import { parsePromptId } from "../../prompt-library.get.js";
 
 export default defineEventHandler(async (event): Promise<PromptLibraryUsageResponse | undefined> => {

@@ -15,7 +15,7 @@ import {
   type WorkspaceRepo,
   type WorkspaceRepositoryInput,
 } from "./repo-workspace.js";
-import { isActiveRunOwnerError } from "../lib/run-control-errors.js";
+import { isActiveRunOwnerError } from "../services/run-lifecycle/run-control-errors.js";
 import { buildVcsUrls, gitAuthArgs } from "../infra/vcs-urls.js";
 import { stopSandboxAndConfirm } from "./stop-ticket-sandboxes.js";
 import { isAgentRuntimeError } from "./agents/protocol.js";

@@ -63,7 +63,7 @@ describe("US-14: Stale claim cleaned up", () => {
     expect(await getTicketStatus(ticketKey)).toBe(e2eEnv.COLUMN_BACKLOG);
 
     // 2. Seed a `claiming:<ts>` sentinel timestamped 6 minutes ago — safely
-    //    past the 5-minute STALE_CLAIM_MS threshold in src/lib/reconcile.ts.
+    //    past the 5-minute STALE_CLAIM_MS threshold in src/services/run-lifecycle/reconcile.ts.
     const staleTimestamp = Date.now() - 6 * 60 * 1000;
     const staleClaim = `claiming:${staleTimestamp}`;
     await setEntry(ticketKey, staleClaim);

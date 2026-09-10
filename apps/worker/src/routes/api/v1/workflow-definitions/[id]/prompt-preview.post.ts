@@ -8,7 +8,7 @@ import { getDb } from "../../../../../db/client.js";
 import {
   requireDashboardActor,
   toHttpError,
-} from "../../../../../lib/auth/request-context.js";
+} from "../../../../../services/auth/request-context.js";
 import { workflowBlockRegistryContextFromEnv } from "../../../../../workflow-definition/models.js";
 import { previewWorkflowPromptCandidate } from "../../../../../workflow-definition/prompt-preview.js";
 import { getWorkflowDefinition } from "../../../../../workflow-definition/store.js";

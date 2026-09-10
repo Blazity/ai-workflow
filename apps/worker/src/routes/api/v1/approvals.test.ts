@@ -36,13 +36,13 @@ vi.mock("../../../auth-instance.js", () => ({
     },
   },
 }));
-vi.mock("../../../lib/adapters.js", () => ({
+vi.mock("../../../services/vcs/adapters.js", () => ({
   createAdapters: () => ({
     issueTracker: { fetchTicket: mocks.fetchTicket, postComment: mocks.postComment },
     runRegistry: {},
   }),
 }));
-vi.mock("../../../approvals/dispatch.js", () => ({
+vi.mock("../../../services/approvals/dispatch.js", () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   dispatchPlanApproved: (...args: any[]) => mocks.dispatchPlanApproved(...args),
 }));

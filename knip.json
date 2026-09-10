@@ -12,6 +12,11 @@
     "apps/worker/src/engine/blocks/*/manifest.ts",
     "apps/worker/src/engine/blocks/*/execute.ts"
   ],
+  "workspaces": {
+    "apps/worker": {
+      "entry": ["src/services/*/index.ts"]
+    }
+  },
   "ignoreIssues": {
     "apps/worker/src/engine/blocks/run-checks/execute.ts": ["exports"]
   }

@@ -29,7 +29,7 @@ export async function setEntry(
   opts?: { ageMs?: number },
 ): Promise<void> {
   // Mirror the production adapter: created_at backs reconcile's orphan
-  // grace window (src/lib/reconcile.ts:ORPHAN_GRACE_MS). Callers
+  // grace window (src/services/run-lifecycle/reconcile.ts:ORPHAN_GRACE_MS). Callers
   // exercising the orphan-cancel path (US-15) pass `ageMs` to backdate
   // past the grace window so reconcile acts on the first tick.
   const ageMs = opts?.ageMs ?? 0;

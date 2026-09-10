@@ -63,7 +63,7 @@ vi.mock("../../memory/store.js", () => ({
 vi.mock("../../infra/logger.js", () => ({ logger: mocks.logger }));
 
 import { repoSelectionStep, selectRepositoriesFromMetadata } from "./repo-selection.js";
-import { MAX_ACCESSIBLE_REPOSITORIES } from "../../repository-discovery/catalog.js";
+import { MAX_ACCESSIBLE_REPOSITORIES } from "../../services/repository-discovery/catalog.js";
 
 const repos: RepositoryMetadata[] = [
   {

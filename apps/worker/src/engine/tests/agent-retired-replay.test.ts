@@ -72,13 +72,13 @@ vi.mock("../steps/workflow-ticket.js", () => ({
     attachments: [],
   })),
 }));
-vi.mock("../../lib/adapters.js", () => ({
+vi.mock("../../services/vcs/adapters.js", () => ({
   createAdapters: () => ({ issueTracker: { postComment: jira.postComment } }),
 }));
-vi.mock("../../lib/active-run-owner.js", () => ({
+vi.mock("../../services/run-lifecycle/active-run-owner.js", () => ({
   assertActiveRunOwner: vi.fn(async () => {}),
 }));
-vi.mock("../../lib/telemetry/run-telemetry.js", () => ({
+vi.mock("../../services/telemetry/run-telemetry.js", () => ({
   markRunFailedOnSelfMove: telemetry.markRunFailedOnSelfMove,
   markRunSucceededOnSelfMove: vi.fn(),
   recordBlockStatuses: vi.fn(),
@@ -89,7 +89,7 @@ vi.mock("../../run-analysis/store.js", () => ({
   finalizeRunAnalysisUsage: telemetry.finalizeRunAnalysisUsage,
 }));
 vi.mock("workflow/runtime", () => ({ getWorld: () => ({}) }));
-vi.mock("../../lib/overview/collect-run-detail.js", () => ({
+vi.mock("../../services/overview/collect-run-detail.js", () => ({
   captureRunStepsBestEffort: vi.fn(async () => []),
   sanitizeRunStepsForDiagnosticError: telemetry.sanitizeRunStepsForDiagnosticError,
 }));

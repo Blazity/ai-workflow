@@ -3,7 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   answerClarificationAndResume,
   type AnswerClarificationOutcome,
-} from "../../clarifications/answer-core.js";
+} from "../../services/clarifications/answer-core.js";
 import {
   getResumableClarificationForRun,
   getResumeFailedClarificationForRun,
@@ -13,7 +13,7 @@ import {
   findLiveRunClaimByRunId,
   findRunOutcomeByRunId,
 } from "../../db/queries/runs-read.js";
-import { cancelRunForOperator } from "../../lib/cancel-run.js";
+import { cancelRunForOperator } from "../../services/run-lifecycle/cancel-run.js";
 import { McpPublicError, type McpToolDependencies } from "../contracts.js";
 import { executeMcpMutation, executeMcpRead } from "../execute-tool.js";
 import { hashCanonicalJson } from "../sanitize-result.js";

@@ -3,8 +3,8 @@ import { createError, defineEventHandler, readBody } from "h3";
 import { env } from "../../../../config/env.js";
 import { auth } from "../../../../auth-instance.js";
 import { getDb } from "../../../../db/client.js";
-import { acceptDashboardInvite } from "../../../../lib/auth/invite-acceptance.js";
-import { toHttpError } from "../../../../lib/auth/request-context.js";
+import { acceptDashboardInvite } from "../../../../services/auth/invite-acceptance.js";
+import { toHttpError } from "../../../../services/auth/request-context.js";
 
 type AcceptInviteBody = {
   inviteId?: string;

@@ -17,7 +17,7 @@ import { BLOCK_CATALOG, BLOCK_TYPE_SPECS } from "@shared/contracts";
 import { DEFAULT_OPEN_PR_BODY, DEFAULT_OPEN_PR_TITLE } from "@shared/prompts";
 import type { BlockOutput, BlockRunState, WorkflowBlockType, WorkflowDefinitionNode, WorkflowDefinitionV2, WorkflowDefinitionV2Node } from "@shared/contracts";
 import type { TerminalStatus } from "./review-ledger.js";
-import type { HumanDecision } from "../../lib/human-decisions-memory.js";
+import type { HumanDecision } from "../../services/publication/human-decisions-memory.js";
 
 /** Append one durable answer round without duplicating a retry of the same answer. */
 export function appendClarificationRound(

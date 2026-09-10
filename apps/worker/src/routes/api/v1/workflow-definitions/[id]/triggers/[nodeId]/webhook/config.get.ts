@@ -2,8 +2,8 @@ import type { WebhookEndpointConfigResponse } from "@shared/contracts";
 import { defineEventHandler } from "h3";
 import { env } from "../../../../../../../../config/env.js";
 import { getDb, type Db } from "../../../../../../../../db/client.js";
-import { toHttpError } from "../../../../../../../../lib/auth/request-context.js";
-import { canDispatchWorkflowRuns } from "../../../../../../../../lib/auth/roles.js";
+import { toHttpError } from "../../../../../../../../services/auth/request-context.js";
+import { canDispatchWorkflowRuns } from "../../../../../../../../services/auth/roles.js";
 import {
   getWebhookEndpointForNode,
   mintWebhookEndpointsForDefinition,

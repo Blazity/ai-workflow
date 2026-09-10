@@ -22,7 +22,7 @@ vi.mock("@vercel/sandbox", () => ({
 vi.mock("../../sandbox/credentials.js", () => ({
   getSandboxCredentials: () => ({ token: "vercel-token", teamId: "team", projectId: "project" }),
 }));
-vi.mock("../../lib/adapters.js", () => ({
+vi.mock("../../services/vcs/adapters.js", () => ({
   createAdapters: () => ({
     runRegistry: {
       registerSandbox: mocks.registerSandbox,

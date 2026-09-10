@@ -16,10 +16,10 @@ vi.mock("../../../../auth-instance.js", () => ({
   auth: { api: { getSession: state.getSession } },
 }));
 vi.mock("../../../../db/client.js", () => ({ getDb: vi.fn() }));
-vi.mock("../../../../lib/auth/invite-acceptance.js", () => ({
+vi.mock("../../../../services/auth/invite-acceptance.js", () => ({
   acceptDashboardSsoInvite: vi.fn(),
 }));
-vi.mock("../../../../lib/auth/sso-handoff.js", () => ({
+vi.mock("../../../../services/auth/sso-handoff.js", () => ({
   createDashboardSsoHandoff: state.createHandoff,
 }));
 

@@ -45,8 +45,8 @@ import {
 import {
   canManageHarnessProfiles,
   type DashboardRole,
-} from "../lib/auth/roles.js";
-import { DashboardAuthError } from "../lib/auth/users-read.js";
+} from "../services/auth/roles.js";
+import { DashboardAuthError } from "../services/auth/users-read.js";
 import { isUniqueViolation } from "../infra/unique-violation.js";
 import {
   compileHarnessProfileManifest,

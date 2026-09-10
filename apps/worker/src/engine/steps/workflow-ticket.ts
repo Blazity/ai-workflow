@@ -87,7 +87,7 @@ export async function resolveWorkflowTicketStep(
 
   const ticketKey = entry.ticketKey;
   if (!ticketKey) throw new Error("ticket-correlated workflow input is missing ticketKey");
-  const { createAdapters } = await import("../../lib/adapters.js");
+  const { createAdapters } = await import("../../services/vcs/adapters.js");
   const ticket = await createAdapters().issueTracker.fetchTicket(ticketKey);
   if (entry.kind === "ticket" && ticket.trackerStatus.toLowerCase() !== columnAi.toLowerCase()) {
     return null;

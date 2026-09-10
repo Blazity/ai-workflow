@@ -3,8 +3,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { formatTicketEvent } from "../adapters/messaging/format.js";
-import { scrubForPublication } from "../lib/publication-scrub.js";
-import { sanitizeRunError } from "../lib/overview/sanitize-run-detail.js";
+import { scrubForPublication } from "../services/publication/publication-scrub.js";
+import { sanitizeRunError } from "../services/overview/sanitize-run-detail.js";
 import {
   createWorkflowExecutionErrorState,
   executionError,

@@ -107,7 +107,7 @@ describe("US-02: Ticket with attachments (real pipeline)", () => {
     const { getSandboxCredentials } = await import(
       "../../src/sandbox/credentials.js"
     );
-    const { mintInstallationToken } = await import("../../src/lib/github-auth.js");
+    const { mintInstallationToken } = await import("../../src/services/vcs/github-auth.js");
     const installationToken = await mintInstallationToken({
       appId: e2eEnv.E2E_GITHUB_APP_ID,
       privateKeyBase64: e2eEnv.E2E_GITHUB_APP_PRIVATE_KEY,

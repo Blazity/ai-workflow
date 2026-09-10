@@ -12,7 +12,7 @@ import type { PhaseUsage } from "../sandbox/agents/types.js";
 import type { PriceLookup, UsageTotals } from "../sandbox/usage.js";
 import { configuredReplaySecrets } from "../run-observability/configured-secrets.js";
 import { sanitizeReplayValue } from "../run-observability/sanitizer.js";
-import { scrubForPublication } from "../lib/publication-scrub.js";
+import { scrubForPublication } from "../services/publication/publication-scrub.js";
 
 const REPORT_MAX_BYTES = 64 * 1024;
 const COMMENT_MAX_BYTES = 20_000;

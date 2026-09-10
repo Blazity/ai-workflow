@@ -1,7 +1,7 @@
 import type { WebhookRevokeResponse } from "@shared/contracts";
 import { createError, defineEventHandler } from "h3";
 import { getDb } from "../../../../../../../../db/client.js";
-import { toHttpError } from "../../../../../../../../lib/auth/request-context.js";
+import { toHttpError } from "../../../../../../../../services/auth/request-context.js";
 import {
   getWebhookEndpointById,
   revokeWebhookEndpoint,

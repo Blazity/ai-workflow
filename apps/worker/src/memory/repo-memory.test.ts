@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { orgSubjectKey, repoOwner, repoSubjectKey } from "../lib/subject-key.js";
+import { orgSubjectKey, repoOwner, repoSubjectKey } from "../services/run-lifecycle/subject-key.js";
 import { utf8Bytes } from "./content.js";
 import {
   REPO_MEMORY_DOC_PATHS,

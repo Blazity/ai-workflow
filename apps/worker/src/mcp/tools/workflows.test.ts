@@ -22,13 +22,13 @@ const service = vi.hoisted(() => ({
   preflightManualDispatch: vi.fn(),
   dispatchManualWorkflow: vi.fn(),
 }));
-vi.mock("../../manual-dispatch/service.js", () => service);
+vi.mock("../../services/manual-dispatch/service.js", () => service);
 
-import type { Adapters } from "../../lib/adapters.js";
+import type { Adapters } from "../../services/vcs/adapters.js";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
 import { mcpAuditEvents, organization } from "../../db/schema.js";
-import { ManualDispatchError } from "../../manual-dispatch/errors.js";
+import { ManualDispatchError } from "../../services/manual-dispatch/errors.js";
 import type { McpActorContext } from "../contracts.js";
 import { actorFor, depsFor } from "../test-support.js";
 import { registerWorkflowTools } from "./workflows.js";

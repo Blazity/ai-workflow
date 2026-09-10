@@ -9,9 +9,9 @@ import {
   HarnessProfileStoreError,
   replaceHarnessProfileSkillArtifact,
 } from "../../../../../../harness-profiles/store.js";
-import { requireDashboardActor } from "../../../../../../lib/auth/request-context.js";
-import { canManageHarnessProfiles } from "../../../../../../lib/auth/roles.js";
-import { DashboardAuthError } from "../../../../../../lib/auth/users-read.js";
+import { requireDashboardActor } from "../../../../../../services/auth/request-context.js";
+import { canManageHarnessProfiles } from "../../../../../../services/auth/roles.js";
+import { DashboardAuthError } from "../../../../../../services/auth/users-read.js";
 import {
   parseHarnessProfileId,
   setHarnessApiNoStore,

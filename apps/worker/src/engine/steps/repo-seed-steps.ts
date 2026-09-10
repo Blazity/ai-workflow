@@ -6,7 +6,7 @@ import {
   repoMemoryComparisonKey,
   type RepoMemoryItem,
 } from "../../memory/repo-memory.js";
-import { repoSubjectKey } from "../../lib/subject-key.js";
+import { repoSubjectKey } from "../../services/run-lifecycle/subject-key.js";
 
 type SandboxInstance = Awaited<ReturnType<typeof SandboxType.get>>;
 

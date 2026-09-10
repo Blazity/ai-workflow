@@ -1,11 +1,11 @@
 import { createError, defineEventHandler, getRouterParam } from "h3";
 import type { ApprovalDecisionResponse } from "@shared/contracts";
 import { getDb } from "../../../../../db/client.js";
-import { requireDashboardActor } from "../../../../../lib/auth/request-context.js";
-import { canApproveWorkflowPlans } from "../../../../../lib/auth/roles.js";
-import { createAdapters } from "../../../../../lib/adapters.js";
+import { requireDashboardActor } from "../../../../../services/auth/request-context.js";
+import { canApproveWorkflowPlans } from "../../../../../services/auth/roles.js";
+import { createAdapters } from "../../../../../services/vcs/adapters.js";
 import { dashboardUserLabel } from "../../../../../pre-pr-checks/store.js";
-import { resolveAwaitingRun } from "../../../../../lib/telemetry/run-telemetry.js";
+import { resolveAwaitingRun } from "../../../../../services/telemetry/run-telemetry.js";
 import {
   decideApproval,
   getApproval,

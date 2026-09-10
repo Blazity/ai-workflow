@@ -1,9 +1,9 @@
 import { createError, defineEventHandler } from "h3";
 import { env } from "../../../config/env.js";
 import { getDb } from "../../../db/client.js";
-import { requireDashboardActor, toHttpError } from "../../../lib/auth/request-context.js";
-import { canInvite } from "../../../lib/auth/roles.js";
-import { listDashboardUsers } from "../../../lib/auth/users-read.js";
+import { requireDashboardActor, toHttpError } from "../../../services/auth/request-context.js";
+import { canInvite } from "../../../services/auth/roles.js";
+import { listDashboardUsers } from "../../../services/auth/users-read.js";
 
 export default defineEventHandler(async (event) => {
   try {

@@ -5,8 +5,8 @@ import { getDb } from "../../db/client.js";
 import {
   applyInviteEmailDeliveryEvent,
   type ResendEmailDeliveryEvent,
-} from "../../lib/email/invite-delivery.js";
-import { observeProviderWebhook } from "../../system-health/provider-webhook-observation.js";
+} from "../../services/email/invite-delivery.js";
+import { observeProviderWebhook } from "../../services/system/provider-webhook-observation.js";
 
 export default defineEventHandler(async (event) => {
   const rawBody = (await readRawBody(event, "utf8")) ?? "";

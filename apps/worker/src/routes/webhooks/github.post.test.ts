@@ -20,14 +20,14 @@ vi.mock("../../config/env.js", () => ({
   env: mocks.env,
 }));
 
-vi.mock("../../lib/vcs-bot-login.js", () => ({
+vi.mock("../../services/vcs/vcs-bot-login.js", () => ({
   getVcsBotLogin: mocks.getVcsBotLogin,
 }));
 
 vi.mock("../../infra/github-webhook-sig.js", () => ({
   verifyGitHubWebhookSignature: vi.fn(),
 }));
-vi.mock("../../lib/repo-allowlist.js", () => ({
+vi.mock("../../services/dispatch/repo-allowlist.js", () => ({
   isRepoAllowed: (...args: any[]) => mocks.isRepoAllowed(...args),
 }));
 
@@ -40,17 +40,17 @@ vi.mock("../../db/queries/workflow-owned-branches.js", () => ({
   findWorkflowOwnedPullRequestIdentity: (...args: any[]) =>
     mocks.findWorkflowOwnedPullRequestIdentity(...args),
 }));
-vi.mock("../../system-health/provider-webhook-observation.js", () => ({
+vi.mock("../../services/system/provider-webhook-observation.js", () => ({
   observeProviderWebhook: mocks.observeProviderWebhook,
 }));
 
 const mockDispatchTriggerEvent = vi.fn();
-vi.mock("../../lib/dispatch-trigger.js", () => ({
+vi.mock("../../services/dispatch/dispatch-trigger.js", () => ({
   dispatchTriggerEvent: (...args: any[]) => mockDispatchTriggerEvent(...args),
 }));
 
 const mockDispatchPostPrGateWebhook = vi.fn();
-vi.mock("../../lib/post-pr-gate-dispatch.js", () => ({
+vi.mock("../../services/dispatch/post-pr-gate-dispatch.js", () => ({
   dispatchPostPrGateWebhook: (...args: any[]) => mockDispatchPostPrGateWebhook(...args),
 }));
 

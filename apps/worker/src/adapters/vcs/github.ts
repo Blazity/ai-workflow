@@ -1,6 +1,6 @@
 import { FatalError } from "workflow";
 import type { Octokit } from "@octokit/rest";
-import { buildOctokit, type GitHubAppAuth } from "../../lib/github-auth.js";
+import { buildOctokit, type GitHubAppAuth } from "../../services/vcs/github-auth.js";
 import { logger } from "../../infra/logger.js";
 import type {
   VCSAdapter,
@@ -47,7 +47,7 @@ import {
   readReviewLedgerMarker,
   reviewLedgerFailureMarker,
   vcsLoginsMatch,
-} from "../../lib/vcs-bot-identity.js";
+} from "../../services/vcs/vcs-bot-identity.js";
 
 export interface GitHubConfig {
   auth: GitHubAppAuth;

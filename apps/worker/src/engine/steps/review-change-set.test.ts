@@ -12,7 +12,7 @@ import {
 const { mockCreateRepositoryVCS } = vi.hoisted(() => ({
   mockCreateRepositoryVCS: vi.fn(),
 }));
-vi.mock("../../lib/vcs-runtime.js", () => ({
+vi.mock("../../services/vcs/vcs-runtime.js", () => ({
   createRepositoryVCS: mockCreateRepositoryVCS,
 }));
 

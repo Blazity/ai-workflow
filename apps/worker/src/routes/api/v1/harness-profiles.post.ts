@@ -4,7 +4,7 @@ import type {
 } from "@shared/contracts";
 import { getDb } from "../../../db/client.js";
 import { createHarnessProfile } from "../../../harness-profiles/store.js";
-import { requireDashboardActor } from "../../../lib/auth/request-context.js";
+import { requireDashboardActor } from "../../../services/auth/request-context.js";
 import {
   setHarnessApiNoStore,
   toHarnessProfileHttpError,

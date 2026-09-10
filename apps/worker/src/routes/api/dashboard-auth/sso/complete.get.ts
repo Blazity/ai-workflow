@@ -3,8 +3,8 @@ import { defineEventHandler, getQuery, sendRedirect, toWebRequest } from "h3";
 import { env } from "../../../../config/env.js";
 import { auth } from "../../../../auth-instance.js";
 import { getDb } from "../../../../db/client.js";
-import { acceptDashboardSsoInvite } from "../../../../lib/auth/invite-acceptance.js";
-import { createDashboardSsoHandoff } from "../../../../lib/auth/sso-handoff.js";
+import { acceptDashboardSsoInvite } from "../../../../services/auth/invite-acceptance.js";
+import { createDashboardSsoHandoff } from "../../../../services/auth/sso-handoff.js";
 import { safeOAuthReturnPath } from "../../../../mcp/auth-pages.js";
 
 export default defineEventHandler(async (event) => {

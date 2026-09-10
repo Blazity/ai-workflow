@@ -7,7 +7,7 @@ import type {
 } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 import { activeRuns, approvalRequests } from "../db/schema.js";
-import { resolveAwaitingRunsForTicket } from "../lib/telemetry/run-telemetry.js";
+import { resolveAwaitingRunsForTicket } from "../services/telemetry/run-telemetry.js";
 
 export interface ApprovalRow {
   id: string;

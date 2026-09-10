@@ -12,7 +12,7 @@ import { getDb } from "../../../../../db/client.js";
 import {
   requireDashboardActor,
   toHttpError,
-} from "../../../../../lib/auth/request-context.js";
+} from "../../../../../services/auth/request-context.js";
 import { analyzeWorkflowV2Catalog } from "../../../../../workflow-definition/available-values.js";
 import { workflowBlockRegistryContextFromEnv } from "../../../../../workflow-definition/models.js";
 import { workflowDefinitionV2Schema } from "../../../../../workflow-definition/schema.js";

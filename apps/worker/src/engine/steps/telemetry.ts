@@ -38,10 +38,10 @@ export async function recordRunTelemetryStep(payload: {
   const { finalizeRunAnalysisUsage } = await import("../../run-analysis/store.js");
   const { getWorld } = await import("workflow/runtime");
   const collectRunDetailMod = await import(
-    "../../lib/overview/collect-run-detail.js"
+    "../../services/overview/collect-run-detail.js"
   );
   const capturedSteps = await collectRunDetailMod.captureRunStepsBestEffort(
-    getWorld() as unknown as import("../../lib/overview/collect-run-detail.js").RunDetailSource,
+    getWorld() as unknown as import("../../services/overview/collect-run-detail.js").RunDetailSource,
     payload.runId,
   );
   const steps = collectRunDetailMod.sanitizeRunStepsForDiagnosticError(

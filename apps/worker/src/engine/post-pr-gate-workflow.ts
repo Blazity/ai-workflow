@@ -41,8 +41,8 @@ async function runGate(input: PostPrGateWorkflowInput) {
     gateCheckName,
     isManagedBranch,
     ticketKeyFromBranch,
-  } = await import("../lib/workflow-naming.js");
-  const { createAdapters } = await import("../lib/adapters.js");
+  } = await import("../services/publication/workflow-naming.js");
+  const { createAdapters } = await import("../services/vcs/adapters.js");
   const { logger } = await import("../infra/logger.js");
   const { hasGateStatusCapability } = await import("../adapters/vcs/types.js");
 

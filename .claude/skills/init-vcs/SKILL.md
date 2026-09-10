@@ -60,7 +60,7 @@ GITHUB_WEBHOOK_SECRET=<value>
 Walk the user through `references/gitlab-pat.md` to mint a token. Then collect:
 
 - `GITLAB_TOKEN` (`glpat-...`)
-- `GITLAB_PROJECT_ID`, the namespace and project path, for example `your-group/your-repo`. A numeric project id does not work: the sandbox clone URL is built from the path (`apps/worker/src/lib/vcs-urls.ts`). See [SETUP.md section 2.2](../../../SETUP.md#22-github-or-gitlab).
+- `GITLAB_PROJECT_ID`, the namespace and project path, for example `your-group/your-repo`. A numeric project id does not work: the sandbox clone URL is built from the path (`apps/worker/src/infra/vcs-urls.ts`). See [SETUP.md section 2.2](../../../SETUP.md#22-github-or-gitlab).
 - `GITLAB_BASE_BRANCH` (default `main`)
 - `GITLAB_HOST`, only for a self-hosted instance. It defaults to `https://gitlab.com` (`apps/worker/env.ts`).
 

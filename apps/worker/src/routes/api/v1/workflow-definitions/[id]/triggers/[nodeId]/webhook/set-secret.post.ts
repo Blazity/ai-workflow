@@ -1,7 +1,7 @@
 import type { WebhookSetSecretRequest, WebhookSetSecretResponse } from "@shared/contracts";
 import { createError, defineEventHandler, readBody } from "h3";
 import { getDb } from "../../../../../../../../db/client.js";
-import { toHttpError } from "../../../../../../../../lib/auth/request-context.js";
+import { toHttpError } from "../../../../../../../../services/auth/request-context.js";
 import {
   setWebhookEndpointSecret,
   WebhookSecretInvalidError,

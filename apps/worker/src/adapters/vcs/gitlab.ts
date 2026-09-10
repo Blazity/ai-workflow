@@ -44,7 +44,7 @@ import {
   readAnyReviewLedgerMarker,
   readReviewLedgerMarker,
   reviewLedgerFailureMarker,
-} from "../../lib/vcs-bot-identity.js";
+} from "../../services/vcs/vcs-bot-identity.js";
 
 /**
  * Posted into a discussion just before it is resolved. GitLab's only way to collapse

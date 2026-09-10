@@ -1,7 +1,7 @@
 import { defineEventHandler, readBody } from "h3";
 import { getDb } from "../../../../../db/client.js";
 import { deleteHarnessProfileWithUsage } from "../../../../../db/harness-profile-detail-store.js";
-import { requireDashboardActor } from "../../../../../lib/auth/request-context.js";
+import { requireDashboardActor } from "../../../../../services/auth/request-context.js";
 import {
   parseHarnessProfileId,
   setHarnessApiNoStore,

@@ -137,7 +137,7 @@ For GitLab.com single-project setup, see [`docs/GITLAB-SETUP.md`](./docs/runbook
 3. Set the namespace/project path, for example `my-group/my-repo` → `GITLAB_PROJECT_ID`. Numeric project IDs are not supported because sandbox clone/push needs a path.
 4. Generate a random webhook secret → `GITLAB_WEBHOOK_SECRET`.
 5. Note the base branch (usually `main`) → `GITLAB_BASE_BRANCH`.
-6. On a self-hosted instance, set the instance URL → `GITLAB_HOST`. It defaults to `https://gitlab.com` (`apps/worker/env.ts`), so leave it unset for GitLab.com. The sandbox clone URL is built as `<host>/<project path>.git` (`apps/worker/src/lib/vcs-urls.ts`), which is also why step 3 requires a path and not a numeric id.
+6. On a self-hosted instance, set the instance URL → `GITLAB_HOST`. It defaults to `https://gitlab.com` (`apps/worker/env.ts`), so leave it unset for GitLab.com. The sandbox clone URL is built as `<host>/<project path>.git` (`apps/worker/src/infra/vcs-urls.ts`), which is also why step 3 requires a path and not a numeric id.
 
 ### 2.3 Slack
 
@@ -333,7 +333,7 @@ This is enough for password-only dashboard login. SSO and Resend are optional wo
 
 Both failure modes are logged rather than silent: an empty effective allowlist logs a one-time `warn` on startup, and any entry that is not a valid `owner/repo` path logs an `error` naming it. Malformed entries are ignored **individually**, so a single typo cannot silently widen the allowlist to "all" as long as one valid entry remains.
 
-Unlike most variables here, `AGENT_ALLOWED_REPOS` is read from `process.env` directly (in `apps/worker/src/lib/repo-allowlist.ts`) rather than through the validated `env.ts` singleton, so it is deliberately absent from `env.ts` and a malformed value will not crash startup.
+Unlike most variables here, `AGENT_ALLOWED_REPOS` is read from `process.env` directly (in `apps/worker/src/services/dispatch/repo-allowlist.ts`) rather than through the validated `env.ts` singleton, so it is deliberately absent from `env.ts` and a malformed value will not crash startup.
 
 Repository scripts (per-repo commands run before push/PR creation) are configured in the dashboard:
 **Repository scripts** in the cockpit sidebar. Admins and owners can edit; changes are versioned

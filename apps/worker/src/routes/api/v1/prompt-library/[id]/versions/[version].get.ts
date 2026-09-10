@@ -1,7 +1,7 @@
 import { createError, defineEventHandler, getRouterParam } from "h3";
 import type { PromptLibraryVersionResponse } from "@shared/contracts";
 import { getDb } from "../../../../../../db/client.js";
-import { requireDashboardActor, toHttpError } from "../../../../../../lib/auth/request-context.js";
+import { requireDashboardActor, toHttpError } from "../../../../../../services/auth/request-context.js";
 import { getPromptVersion, serializePromptVersion } from "../../../../../../prompt-library/store.js";
 import { parsePromptId } from "../../../prompt-library.get.js";
 

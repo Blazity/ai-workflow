@@ -1,5 +1,5 @@
 import type { Db } from "../db/client.js";
-import type { Adapters } from "../lib/adapters.js";
+import type { Adapters } from "../services/vcs/adapters.js";
 import type { McpActorContext, McpToolDependencies } from "./contracts.js";
 
 export function actorFor(overrides: Partial<McpActorContext> = {}): McpActorContext {

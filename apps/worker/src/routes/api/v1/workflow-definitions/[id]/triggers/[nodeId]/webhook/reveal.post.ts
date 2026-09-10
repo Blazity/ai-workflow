@@ -1,7 +1,7 @@
 import type { WebhookRevealResponse } from "@shared/contracts";
 import { createError, defineEventHandler } from "h3";
 import { getDb } from "../../../../../../../../db/client.js";
-import { toHttpError } from "../../../../../../../../lib/auth/request-context.js";
+import { toHttpError } from "../../../../../../../../services/auth/request-context.js";
 import { revealWebhookEndpointSecret } from "../../../../../../../../webhook-trigger/endpoint-store.js";
 import {
   auditWebhookAction,

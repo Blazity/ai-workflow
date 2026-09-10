@@ -1,29 +1,29 @@
 import { defineEventHandler, getHeader, createError } from "h3";
 import { getWorld } from "workflow/runtime";
 import { env } from "../../config/env.js";
-import { createAdapters } from "../../lib/adapters.js";
-import { dispatchTicket } from "../../lib/dispatch.js";
-import { reconcileAtCapacityQueue } from "../../dispatch-queue/at-capacity-queue.js";
-import { reconcileRuns } from "../../lib/reconcile.js";
+import { createAdapters } from "../../services/vcs/adapters.js";
+import { dispatchTicket } from "../../services/dispatch/dispatch.js";
+import { reconcileAtCapacityQueue } from "../../services/dispatch-queue/at-capacity-queue.js";
+import { reconcileRuns } from "../../services/run-lifecycle/reconcile.js";
 import { logger } from "../../infra/logger.js";
 import { GateStore } from "../../post-pr-gate/gate-store.js";
 import { getDb } from "../../db/client.js";
-import { collectSnapshots } from "../../lib/telemetry/collect-snapshots.js";
+import { collectSnapshots } from "../../services/telemetry/collect-snapshots.js";
 import {
   sweepOrphanedAwaitingRuns,
   sweepOrphanedRunningRuns,
   upsertRunSnapshots,
-} from "../../lib/telemetry/run-telemetry.js";
-import type { RunsLister } from "../../lib/overview/collect-runs.js";
-import { drainOldestPendingTrigger } from "../../lib/dispatch-trigger.js";
-import { listPendingTriggers } from "../../lib/trigger-delivery-store.js";
+} from "../../services/telemetry/run-telemetry.js";
+import type { RunsLister } from "../../services/overview/collect-runs.js";
+import { drainOldestPendingTrigger } from "../../services/dispatch/dispatch-trigger.js";
+import { listPendingTriggers } from "../../services/dispatch/trigger-delivery-store.js";
 import {
   classifyProtectedClarificationSubjects,
 } from "../../clarifications/store.js";
-import { resumeClarificationFromComments } from "../../clarifications/resume-from-comments.js";
-import { ticketSubjectKey } from "../../lib/subject-key.js";
-import { expireHookClarifications } from "../../clarifications/expiry.js";
-import { dispatchPlanApproved } from "../../approvals/dispatch.js";
+import { resumeClarificationFromComments } from "../../services/clarifications/resume-from-comments.js";
+import { ticketSubjectKey } from "../../services/run-lifecycle/subject-key.js";
+import { expireHookClarifications } from "../../services/clarifications/expiry.js";
+import { dispatchPlanApproved } from "../../services/approvals/dispatch.js";
 import {
   getApproval,
   listApprovalParkedSubjects,
@@ -31,23 +31,23 @@ import {
   type ApprovalRow,
 } from "../../approvals/store.js";
 import { deleteExpiredRunObservations } from "../../run-observability/store.js";
-import { recoverManualDispatches } from "../../manual-dispatch/service.js";
+import { recoverManualDispatches } from "../../services/manual-dispatch/service.js";
 import { listRecoverableManualDispatches } from "../../manual-dispatch/store.js";
 import { sweepWebhookDeliveries } from "../../webhook-trigger/delivery-store.js";
-import { redispatchPendingWebhookDeliveries } from "../../webhook-trigger/dispatch-webhook-trigger.js";
-import { sweepWebhookRateLimits } from "../../webhook-trigger/rate-limit.js";
-import { sweepWebhookRejectionCounters } from "../../webhook-trigger/rejection-counters.js";
+import { redispatchPendingWebhookDeliveries } from "../../services/webhook-trigger/dispatch-webhook-trigger.js";
+import { sweepWebhookRateLimits } from "../../services/webhook-trigger/rate-limit.js";
+import { sweepWebhookRejectionCounters } from "../../services/webhook-trigger/rejection-counters.js";
 import { pruneMcpAudits } from "../../mcp/audit-store.js";
 import { sweepMcpIdempotencyKeys } from "../../mcp/idempotency-store.js";
 import { sweepMcpRateLimits } from "../../mcp/rate-limit-store.js";
 import {
   sweepTriggerRateLimits,
   sweepTriggerRejectionCounters,
-} from "../../lib/trigger-rate-limit.js";
+} from "../../services/dispatch/trigger-rate-limit.js";
 import {
   createScheduleDispatchDeps,
   runScheduleTriggerPass,
-} from "../../schedule-trigger/dispatch-schedule-trigger.js";
+} from "../../services/schedule-trigger/dispatch-schedule-trigger.js";
 import { reconcilePendingPrChecks } from "../../engine/runtime/pr-external-resources.js";
 import { createWebhookDispatchDeps } from "../webhooks/custom/[endpointId].post.js";
 
@@ -533,7 +533,7 @@ async function dispatchDiscoveredTickets(
   db: ReturnType<typeof getDb>,
 ): Promise<DispatchOutcome> {
   // Dispatch in parallel. dispatchTicket is internally atomic — the
-  // post-claim fairness check in src/lib/dispatch.ts caps started
+  // post-claim fairness check in src/services/dispatch/dispatch.ts caps started
   // workflows at MAX_CONCURRENT_AGENTS even when racers run concurrently,
   // so excess parallel dispatches safely return `at_capacity`.
   const results = await Promise.all(

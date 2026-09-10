@@ -1,7 +1,7 @@
 ---
 paths:
   - "apps/worker/src/**/arthur*.ts"
-  - "apps/worker/src/lib/overview/**"
+  - "apps/worker/src/services/overview/**"
 ---
 
 # Arthur Engine API

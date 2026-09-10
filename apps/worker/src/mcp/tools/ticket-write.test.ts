@@ -22,7 +22,7 @@ import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js
 import type { Db } from "../../db/client.js";
 import { mcpAuditEvents, organization } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
-import type { Adapters } from "../../lib/adapters.js";
+import type { Adapters } from "../../services/vcs/adapters.js";
 import type { ActiveRunEntry } from "../../adapters/run-registry/types.js";
 import type { McpActorContext, McpScope } from "../contracts.js";
 import { policyFor } from "../policy.js";

@@ -8,7 +8,7 @@ import {
   renderHumanDecisionsSection,
   upsertHumanDecisionsSection,
   type HumanDecision,
-} from "../../lib/human-decisions-memory.js";
+} from "../../services/publication/human-decisions-memory.js";
 
 /**
  * Deterministically upserts the "Human decisions" section into the memory

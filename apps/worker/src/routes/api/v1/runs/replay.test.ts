@@ -29,7 +29,7 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../../db/client.js", () => ({ getDb: () => ({}) }));
-vi.mock("../../../../lib/auth/request-context.js", () => ({
+vi.mock("../../../../services/auth/request-context.js", () => ({
   requireDashboardActor: vi.fn(async () => {
     if (!state.actor) {
       throw createError({ statusCode: 401, statusMessage: "Unauthorized" });

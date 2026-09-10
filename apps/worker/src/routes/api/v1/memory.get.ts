@@ -4,7 +4,7 @@ import type {
   MemoryDocumentsResponse,
 } from "@shared/contracts";
 import { getDb } from "../../../db/client.js";
-import { requireDashboardActor, toHttpError } from "../../../lib/auth/request-context.js";
+import { requireDashboardActor, toHttpError } from "../../../services/auth/request-context.js";
 import { getMemoryDocument, listMemoryDocuments } from "../../../memory/store.js";
 
 function stringParam(value: unknown): string | undefined {

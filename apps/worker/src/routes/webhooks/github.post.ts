@@ -11,24 +11,24 @@ import { getDb } from "../../db/client.js";
 import {
   dispatchTriggerEvent,
   type DispatchTriggerResult,
-} from "../../lib/dispatch-trigger.js";
+} from "../../services/dispatch/dispatch-trigger.js";
 import { verifyGitHubWebhookSignature } from "../../infra/github-webhook-sig.js";
-import { recordIngestionFailure } from "../../lib/ingestion-diagnostic.js";
+import { recordIngestionFailure } from "../../services/dispatch/ingestion-diagnostic.js";
 import { logger } from "../../infra/logger.js";
-import { dispatchPostPrGateWebhook } from "../../lib/post-pr-gate-dispatch.js";
-import { isRepoAllowed } from "../../lib/repo-allowlist.js";
-import { normalizeGitHubEvents } from "../../lib/trigger-events.js";
-import { getVcsBotLogin } from "../../lib/vcs-bot-login.js";
+import { dispatchPostPrGateWebhook } from "../../services/dispatch/post-pr-gate-dispatch.js";
+import { isRepoAllowed } from "../../services/dispatch/repo-allowlist.js";
+import { normalizeGitHubEvents } from "../../services/dispatch/trigger-events.js";
+import { getVcsBotLogin } from "../../services/vcs/vcs-bot-login.js";
 import {
   isWorkflowGeneratedPush,
   workflowPushNormalizationOptions,
-} from "../../lib/workflow-push-suppression.js";
+} from "../../services/publication/workflow-push-suppression.js";
 import {
   gateCheckNameAliases,
   ticketKeyFromBranch,
-} from "../../lib/workflow-naming.js";
+} from "../../services/publication/workflow-naming.js";
 import { loadPostPrGateConfig } from "../../post-pr-gate/config.js";
-import { observeProviderWebhook } from "../../system-health/provider-webhook-observation.js";
+import { observeProviderWebhook } from "../../services/system/provider-webhook-observation.js";
 
 const GATE_ACTIONS = new Set(["opened", "synchronize", "reopened"]);
 

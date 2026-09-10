@@ -320,7 +320,7 @@ The current sandbox adapter (`src/adapters/sandbox/`) uses `@vercel/sandbox` for
 
 - **`provisionAndStartAgent()`** — calls `ECS.RunTask()` with the task definition, subnets, security group, capacity provider strategy, and env var overrides. Returns a `taskArn`.
 - **`pollTaskStatus(taskArn)`** — calls `ECS.DescribeTasks()` to check task state and detect Spot interruptions (`stopCode: SpotInterruption`).
-- **`getActiveSandboxCount()`** — currently calls `Sandbox.list()`. Must be replaced with `ECS.ListTasks({ cluster, desiredStatus: "RUNNING" })` and return the count. Used by `src/lib/dispatch.ts` for concurrency gating.
+- **`getActiveSandboxCount()`**: currently calls `Sandbox.list()`. Must be replaced with `ECS.ListTasks({ cluster, desiredStatus: "RUNNING" })` and return the count. Used by `src/services/dispatch/dispatch.ts` for concurrency gating.
 - **`collectResults(runId)`** — reads agent output from the EFS workspace (`/workspace/$RUN_ID/`) instead of `sandbox.readFileToBuffer()`. Runs `git diff` against the pre-agent SHA to identify changed files.
 
 The adapter selection should be driven by config — e.g., `SANDBOX_KIND=ecs` alongside the existing `vercel` option.

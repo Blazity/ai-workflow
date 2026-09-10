@@ -1,5 +1,5 @@
 import type { WorkflowRepositoryScope } from "@shared/contracts";
-import { buildOctokit } from "../../lib/github-auth.js";
+import { buildOctokit } from "../../services/vcs/github-auth.js";
 
 type RepositoryProviderConfig =
   (

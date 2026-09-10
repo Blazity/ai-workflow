@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import { asc, and, eq, isNotNull, sql } from "drizzle-orm";
 import type { Db } from "../src/db/client.js";
 import { activeRuns, workflowRuns } from "../src/db/schema.js";
-import { sweepOrphanedRunningRuns } from "../src/lib/telemetry/run-telemetry.js";
+import { sweepOrphanedRunningRuns } from "../src/services/telemetry/run-telemetry.js";
 
 export interface OrphanedRunningRunCandidate {
   runId: string;

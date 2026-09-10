@@ -1,5 +1,5 @@
-import type { ActiveRunOwner } from "../../../lib/active-run-owner.js";
-import { scrubForPublication } from "../../../lib/publication-scrub.js";
+import type { ActiveRunOwner } from "../../../services/run-lifecycle/active-run-owner.js";
+import { scrubForPublication } from "../../../services/publication/publication-scrub.js";
 import { isRunControlError } from "../../helpers/run-control-error.js";
 import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "../support/types.js";
 
@@ -10,8 +10,8 @@ async function blockPostTicketCommentStep(
 ): Promise<string | null> {
   "use step";
   const { getDb } = await import("../../../db/client.js");
-  const { assertActiveRunOwner } = await import("../../../lib/active-run-owner.js");
-  const { createAdapters } = await import("../../../lib/adapters.js");
+  const { assertActiveRunOwner } = await import("../../../services/run-lifecycle/active-run-owner.js");
+  const { createAdapters } = await import("../../../services/vcs/adapters.js");
   const { issueTracker } = createAdapters();
   await assertActiveRunOwner(getDb(), owner);
   // The body is {{variable}}-substituted before it gets here, so it can carry

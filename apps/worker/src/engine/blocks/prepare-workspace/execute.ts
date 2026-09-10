@@ -138,9 +138,9 @@ async function blockApprovedRepositoryScopeStep(
   const { getConfiguredVcsProviders } = await import("../../../config/env.js");
   const { createRepositoryDirectoryForProviders, isRepositoryWithinPinnedScope } =
     await import("../../../adapters/vcs/repository-directory.js");
-  const { createRepositoryVCS } = await import("../../../lib/vcs-runtime.js");
+  const { createRepositoryVCS } = await import("../../../services/vcs/vcs-runtime.js");
   const { filterRepositoriesForScope } = await import(
-    "../../../lib/repo-allowlist.js"
+    "../../../services/dispatch/repo-allowlist.js"
   );
   const { getDb } = await import("../../../db/client.js");
   const { listWorkflowOwnedBranchesForTicket } = await import(
@@ -290,7 +290,7 @@ async function blockPrepareWorkspaceProvisionStep(
   const { env } = await import("../../../config/env.js");
   const { SandboxManager } = await import("../../../sandbox/manager.js");
   const { createAgentAdapter } = await import("../../../sandbox/agents/index.js");
-  const { buildSandboxProviderConfigs } = await import("../../../lib/vcs-runtime.js");
+  const { buildSandboxProviderConfigs } = await import("../../../services/vcs/vcs-runtime.js");
 
   const arthur =
     env.GENAI_ENGINE_API_KEY && env.GENAI_ENGINE_TRACE_ENDPOINT && arthurTaskId
@@ -395,7 +395,7 @@ async function blockPrepareWorkspaceProvisionStep(
       additionalAgents,
       {
         onCreated: async (sandboxId) => {
-          const { createAdapters } = await import("../../../lib/adapters.js");
+          const { createAdapters } = await import("../../../services/vcs/adapters.js");
           await createAdapters().runRegistry.registerSandbox(
             subjectKey,
             ownerToken,
@@ -523,7 +523,7 @@ async function blockPrepareWorkspaceRegisterSandboxStep(
   sandboxId: string,
 ): Promise<void> {
   "use step";
-  const { createAdapters } = await import("../../../lib/adapters.js");
+  const { createAdapters } = await import("../../../services/vcs/adapters.js");
   const { runRegistry } = createAdapters();
   await runRegistry.registerSandbox(subjectKey, ownerToken, sandboxId);
 }

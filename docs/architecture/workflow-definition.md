@@ -147,8 +147,8 @@ unknown block, or a block binding to its own output, is a validation error in
 
 Trigger blocks are the entry points. Their configuration is validated by the
 per-type schemas in `schema.ts` and their runtime selection happens in
-`apps/worker/src/lib/dispatch.ts` and
-`apps/worker/src/lib/dispatch-trigger.ts`.
+`apps/worker/src/services/dispatch/dispatch.ts` and
+`apps/worker/src/services/dispatch/dispatch-trigger.ts`.
 
 Common ground: every trigger type accepts an optional start budget
 (`rateLimitMax` with a fixed `rateLimitWindow` of `minute`, `hour`, `day` or

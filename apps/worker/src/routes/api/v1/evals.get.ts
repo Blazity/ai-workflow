@@ -2,7 +2,7 @@ import { defineEventHandler, setResponseHeader } from "h3";
 import type { EvalsResponse } from "@shared/contracts";
 import { env } from "../../../config/env.js";
 import { ArthurClient } from "../../../sandbox/arthur-client.js";
-import { collectEvals } from "../../../lib/overview/collect-evals.js";
+import { collectEvals } from "../../../services/overview/collect-evals.js";
 import { logger } from "../../../infra/logger.js";
 
 const WINDOW_HOURS = 24;

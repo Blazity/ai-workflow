@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../db/client.js", () => ({ getDb: () => ({ db: true }) }));
-vi.mock("../../lib/telemetry/run-telemetry.js", () => ({
+vi.mock("../../services/telemetry/run-telemetry.js", () => ({
   markRunFailedOnSelfMove: vi.fn(),
   markRunSucceededOnSelfMove: vi.fn(),
   recordBlockStatuses: vi.fn(),
@@ -17,7 +17,7 @@ vi.mock("../../lib/telemetry/run-telemetry.js", () => ({
 vi.mock("../../clarifications/store.js", () => ({
   getClarification: (...args: unknown[]) => mocks.getClarification(...args),
 }));
-vi.mock("../../lib/overview/collect-run-detail.js", () => ({
+vi.mock("../../services/overview/collect-run-detail.js", () => ({
   captureRunStepsBestEffort: (...args: unknown[]) => mocks.captureRunSteps(...args),
   sanitizeRunStepsForDiagnosticError: (steps: unknown) => steps,
 }));

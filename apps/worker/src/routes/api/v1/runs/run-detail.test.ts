@@ -12,7 +12,7 @@ const state = vi.hoisted(() => ({
 
 vi.mock("../../../../config/env.js", () => ({ env: { JIRA_BASE_URL: "https://jira.example", DASHBOARD_ORIGIN: "https://dash.example" } }));
 vi.mock("../../../../db/client.js", () => ({ getDb: () => ({}) }));
-vi.mock("../../../../lib/auth/request-context.js", () => ({
+vi.mock("../../../../services/auth/request-context.js", () => ({
   requireDashboardActor: vi.fn(async () => {
     if (!state.actor) throw createError({ statusCode: 401, statusMessage: "Unauthorized" });
     return { organizationId: "org", role: "member" };
@@ -23,13 +23,13 @@ vi.mock("../../../../db/queries/run-detail-read.js", () => ({
   fetchRunDetailFromDb: vi.fn(async () => state.dbDetail),
   fetchRunRefs: vi.fn(async () => null),
 }));
-vi.mock("../../../../lib/overview/resolve-run-detail.js", () => ({
+vi.mock("../../../../services/overview/resolve-run-detail.js", () => ({
   resolveRunDetail: vi.fn(async () => {
     if (state.resolveError) throw state.resolveError;
     return state.worldResult;
   }),
 }));
-vi.mock("../../../../lib/overview/collect-run-detail.js", () => ({ collectRunDetail: vi.fn() }));
+vi.mock("../../../../services/overview/collect-run-detail.js", () => ({ collectRunDetail: vi.fn() }));
 vi.mock("../../../../clarifications/store.js", () => ({ getClarificationForRun: vi.fn(async () => null), serializeClarification: vi.fn() }));
 vi.mock("../../../../run-analysis/store.js", () => ({ getRunAnalysisReport: vi.fn(async () => state.storedReport) }));
 

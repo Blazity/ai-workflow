@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import { env } from "../../config/env.js";
-import { promptLibraryUrl } from "../../lib/dashboard-links.js";
+import { promptLibraryUrl } from "../../services/publication/dashboard-links.js";
 import { builtInPromptNameForSlug } from "@shared/prompts";
 import {
   getCurrentPromptVersion,

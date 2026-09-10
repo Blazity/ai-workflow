@@ -3,7 +3,7 @@ import { APIError } from "better-auth/api";
 
 import type { Db } from "../db/client.js";
 import { member, oauthClient, organization } from "../db/schema.js";
-import { normalizeDashboardRole } from "../lib/auth/roles.js";
+import { normalizeDashboardRole } from "../services/auth/roles.js";
 import { and, eq } from "drizzle-orm";
 import { MCP_SCOPES } from "./contracts.js";
 

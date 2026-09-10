@@ -35,7 +35,7 @@ const runRegistry = {
   setParent: vi.fn().mockResolvedValue(undefined),
   clearParent: vi.fn().mockResolvedValue(undefined),
 };
-vi.mock("../../lib/adapters.js", () => ({
+vi.mock("../../services/vcs/adapters.js", () => ({
   createAdapters: () => ({
     runRegistry,
     issueTracker: {},
@@ -45,10 +45,10 @@ vi.mock("../../lib/adapters.js", () => ({
 }));
 
 const cancelRunFn = vi.fn();
-vi.mock("../../lib/cancel-run.js", () => ({
+vi.mock("../../services/run-lifecycle/cancel-run.js", () => ({
   cancelRun: (...args: any[]) => cancelRunFn(...args),
 }));
-vi.mock("../../system-health/provider-webhook-observation.js", () => ({
+vi.mock("../../services/system/provider-webhook-observation.js", () => ({
   observeProviderWebhook,
 }));
 
@@ -58,7 +58,7 @@ vi.mock("../../sandbox/stop-ticket-sandboxes.js", () => ({
 }));
 
 let postedToResponseUrl: Array<{ url: string; payload: any }> = [];
-vi.mock("../../lib/slack/respond.js", () => ({
+vi.mock("../../services/slack/respond.js", () => ({
   postToResponseUrl: vi.fn(async (url: string, payload: any) => {
     postedToResponseUrl.push({ url, payload });
   }),

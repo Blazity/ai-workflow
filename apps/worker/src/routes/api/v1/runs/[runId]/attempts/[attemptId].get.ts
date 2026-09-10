@@ -8,7 +8,7 @@ import { getDb } from "../../../../../../db/client.js";
 import {
   requireDashboardActor,
   toHttpError,
-} from "../../../../../../lib/auth/request-context.js";
+} from "../../../../../../services/auth/request-context.js";
 import {
   getRunReplayAttempt,
   RunObservationStoreError,

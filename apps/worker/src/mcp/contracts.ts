@@ -1,5 +1,5 @@
 import type { Db } from "../db/client.js";
-import type { Adapters } from "../lib/adapters.js";
+import type { Adapters } from "../services/vcs/adapters.js";
 
 // Four scopes, because an OAuth consent is granted one scope at a time and these
 // are four different things to agree to. "prompts:write" is not a subset of the

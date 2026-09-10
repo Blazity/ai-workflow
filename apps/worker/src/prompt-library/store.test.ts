@@ -4,13 +4,13 @@ import { DEFAULT_AGENT_PROMPTS } from "@shared/prompts";
 import type { Db } from "../db/client.js";
 import { promptLibrary, promptLibraryVersions } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
-import { DashboardAuthError } from "../lib/auth/users-read.js";
+import { DashboardAuthError } from "../services/auth/users-read.js";
 import {
   archivePrompt,
   createPrompt,
   findPromptUsageInPrompts,
   updatePromptMeta,
-} from "../lib/prompt-library-service.js";
+} from "../services/prompts/prompt-library-service.js";
 import {
   findPromptRowsByNames,
   getCurrentPromptVersion,

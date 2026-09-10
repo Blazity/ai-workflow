@@ -42,7 +42,7 @@ vi.mock("workflow/api", () => ({
 
 vi.mock("../../db/client.js", () => ({ getDb: () => hooks.db }));
 
-import { MAX_ANSWER_LENGTH } from "../../clarifications/answer-core.js";
+import { MAX_ANSWER_LENGTH } from "../../services/clarifications/answer-core.js";
 import {
   getHookClarification,
   prepareHookClarification,
@@ -56,7 +56,7 @@ import {
   organization,
   workflowRuns,
 } from "../../db/schema.js";
-import type { Adapters } from "../../lib/adapters.js";
+import type { Adapters } from "../../services/vcs/adapters.js";
 import type {
   ActiveRunEntry,
   RunRegistryAdapter,

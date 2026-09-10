@@ -5,7 +5,7 @@ import type {
   ScheduleWeekday,
 } from "@shared/contracts";
 import { createError, defineEventHandler, readBody } from "h3";
-import { toHttpError } from "../../../../../../../../lib/auth/request-context.js";
+import { toHttpError } from "../../../../../../../../services/auth/request-context.js";
 import {
   compileSchedulePreset,
   nextRuns,
@@ -15,7 +15,7 @@ import {
   type EveryNMinutesStep,
   type SchedulePreset as OccurrenceSchedulePreset,
   type Weekday as OccurrenceWeekday,
-} from "../../../../../../../../schedule-trigger/occurrence.js";
+} from "../../../../../../../../services/schedule-trigger/occurrence.js";
 import { parseScheduleTarget, requireScheduleActor } from "./config.get.js";
 
 /** How many upcoming occurrences the editor shows. Fixed, not client-supplied:

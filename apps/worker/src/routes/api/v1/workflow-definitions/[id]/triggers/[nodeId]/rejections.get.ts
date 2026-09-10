@@ -4,8 +4,8 @@ import { getDb } from "../../../../../../../db/client.js";
 import {
   requireDashboardActor,
   toHttpError,
-} from "../../../../../../../lib/auth/request-context.js";
-import { getTriggerRejectionsToday } from "../../../../../../../lib/trigger-rate-limit.js";
+} from "../../../../../../../services/auth/request-context.js";
+import { getTriggerRejectionsToday } from "../../../../../../../services/dispatch/trigger-rate-limit.js";
 import { parseDefinitionId } from "../../../../workflow-definitions.get.js";
 
 export interface TriggerRejectionsResponse {

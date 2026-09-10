@@ -19,7 +19,7 @@ import { makeCtx, makePrPayload } from "../blocks/support/test-support.js";
 // else in this file is pure. Mocked at module level so the note's body can be
 // read off the adapter it would have posted to.
 const vcs = vi.hoisted(() => ({ postRunFailureNote: vi.fn() }));
-vi.mock("../../lib/vcs-runtime.js", () => ({
+vi.mock("../../services/vcs/vcs-runtime.js", () => ({
   buildSandboxProviderConfigs: vi.fn(),
   createRepositoryVCS: () => vcs,
 }));

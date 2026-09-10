@@ -15,12 +15,12 @@ import { getDb, type Db } from "../../../db/client.js";
 import {
   envTriggerRateLimitDefault,
   triggerNodeRateLimitParams,
-} from "../../../lib/dispatch.js";
+} from "../../../services/dispatch/dispatch.js";
 import { logger } from "../../../infra/logger.js";
 import {
   resolveTriggerRateLimit,
   type TriggerRateLimitConfig,
-} from "../../../lib/trigger-rate-limit.js";
+} from "../../../services/dispatch/trigger-rate-limit.js";
 import {
   WebhookSecretDecryptionError,
   WebhookSecretKeyMismatchError,
@@ -31,7 +31,7 @@ import {
   type WebhookDispatchDeps,
   type WebhookDispatchGuardRejection,
   type WebhookDispatchTarget,
-} from "../../../webhook-trigger/dispatch-webhook-trigger.js";
+} from "../../../services/webhook-trigger/dispatch-webhook-trigger.js";
 import {
   decryptCandidateSecrets,
   getWebhookEndpointById,
@@ -41,14 +41,14 @@ import {
 import {
   mapWebhookPayload,
   type WebhookMappingConfig,
-} from "../../../webhook-trigger/payload-mapping.js";
+} from "../../../services/webhook-trigger/payload-mapping.js";
 import {
   checkAndIncrementWebhookRate,
   DEFAULT_WEBHOOK_RATE_LIMIT_PER_MINUTE,
   WEBHOOK_INGRESS_LIMIT_PER_MINUTE,
-} from "../../../webhook-trigger/rate-limit.js";
-import { recordWebhookRejection } from "../../../webhook-trigger/rejection-counters.js";
-import { verifyWebhookAuth } from "../../../webhook-trigger/verify.js";
+} from "../../../services/webhook-trigger/rate-limit.js";
+import { recordWebhookRejection } from "../../../services/webhook-trigger/rejection-counters.js";
+import { verifyWebhookAuth } from "../../../services/webhook-trigger/verify.js";
 import {
   getEnabledDeployedDefinition,
   getWorkflowDefinitionVersion,

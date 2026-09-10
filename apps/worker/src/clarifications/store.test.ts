@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Db } from "../db/client.js";
 import { activeRuns, workflowRuns } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
-import { ActiveRunOwnerError } from "../lib/run-control-errors.js";
+import { ActiveRunOwnerError } from "../services/run-lifecycle/run-control-errors.js";
 import { getHookClarification, prepareHookClarification, publishHookClarification } from "./hook-store.js";
 import { reconcileClarificationPickupState } from "./store.js";
 

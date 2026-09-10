@@ -15,8 +15,8 @@ import {
 import {
   requireDashboardActor,
   toHttpError,
-} from "../../../lib/auth/request-context.js";
-import { canManageHarnessProfiles } from "../../../lib/auth/roles.js";
+} from "../../../services/auth/request-context.js";
+import { canManageHarnessProfiles } from "../../../services/auth/roles.js";
 
 export function parseHarnessProfileId(event: H3Event): string {
   const id = getRouterParam(event, "id");

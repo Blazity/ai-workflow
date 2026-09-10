@@ -19,13 +19,13 @@ vi.mock("../../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
 vi.mock("../../llm.js", () => ({
   generateStructured: mocks.generateStructured,
 }));
-vi.mock("../../../lib/adapters.js", () => ({
+vi.mock("../../../services/vcs/adapters.js", () => ({
   createAdapters: () => ({
     issueTracker: { searchTicketSummaries: mocks.searchTicketSummaries },
   }),
 }));
-vi.mock("../../../lib/slack-search.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../lib/slack-search.js")>();
+vi.mock("../../../services/slack/slack-search.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../services/slack/slack-search.js")>();
   // Only the network call is mocked; the failure classifier is the real one, so
   // the block's degradation reasons are the ones production would produce.
   return { ...actual, searchSlackChannels: mocks.searchSlackChannels };

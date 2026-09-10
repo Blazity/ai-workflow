@@ -13,25 +13,25 @@ import { getDb } from "../../db/client.js";
 import {
   dispatchTriggerEvent,
   type DispatchTriggerResult,
-} from "../../lib/dispatch-trigger.js";
+} from "../../services/dispatch/dispatch-trigger.js";
 import {
   type GitLabProject,
   normalizeGitLabMergeRequestEvent,
   projectMatchesConfiguredId,
   verifyGitLabWebhookToken,
-} from "../../lib/gitlab-webhook.js";
+} from "../../services/vcs/gitlab-webhook.js";
 import { logger } from "../../infra/logger.js";
-import { recordIngestionFailure } from "../../lib/ingestion-diagnostic.js";
-import { dispatchPostPrGateWebhook } from "../../lib/post-pr-gate-dispatch.js";
-import { isRepoAllowed } from "../../lib/repo-allowlist.js";
-import { normalizeGitLabEvents } from "../../lib/trigger-events.js";
-import { getVcsBotLogin } from "../../lib/vcs-bot-login.js";
+import { recordIngestionFailure } from "../../services/dispatch/ingestion-diagnostic.js";
+import { dispatchPostPrGateWebhook } from "../../services/dispatch/post-pr-gate-dispatch.js";
+import { isRepoAllowed } from "../../services/dispatch/repo-allowlist.js";
+import { normalizeGitLabEvents } from "../../services/dispatch/trigger-events.js";
+import { getVcsBotLogin } from "../../services/vcs/vcs-bot-login.js";
 import {
   isWorkflowGeneratedPush,
   workflowPushNormalizationOptions,
-} from "../../lib/workflow-push-suppression.js";
-import { ticketKeyFromBranch } from "../../lib/workflow-naming.js";
-import { observeProviderWebhook } from "../../system-health/provider-webhook-observation.js";
+} from "../../services/publication/workflow-push-suppression.js";
+import { ticketKeyFromBranch } from "../../services/publication/workflow-naming.js";
+import { observeProviderWebhook } from "../../services/system/provider-webhook-observation.js";
 
 const ALLOWED_ACTIONS = new Set(["opened", "update", "reopened"]);
 

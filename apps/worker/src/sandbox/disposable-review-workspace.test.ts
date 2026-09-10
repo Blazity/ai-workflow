@@ -52,7 +52,7 @@ vi.mock("./agents/index.js", () => ({
 vi.mock("./agents/protocol.js", () => ({
   isAgentRuntimeError: mocks.isAgentRuntimeError,
 }));
-vi.mock("../lib/adapters.js", () => ({
+vi.mock("../services/vcs/adapters.js", () => ({
   createAdapters: () => ({
     runRegistry: {
       registerSandbox: mocks.registerSandbox,

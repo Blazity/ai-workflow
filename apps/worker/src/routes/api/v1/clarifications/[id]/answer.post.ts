@@ -1,13 +1,13 @@
 import { createError, defineEventHandler, getRouterParam, readBody } from "h3";
 import type { ClarificationAnswerResponse } from "@shared/contracts";
 import { getDb } from "../../../../../db/client.js";
-import { requireDashboardActor, toHttpError } from "../../../../../lib/auth/request-context.js";
-import { createAdapters } from "../../../../../lib/adapters.js";
+import { requireDashboardActor, toHttpError } from "../../../../../services/auth/request-context.js";
+import { createAdapters } from "../../../../../services/vcs/adapters.js";
 import { dashboardUserLabel } from "../../../../../pre-pr-checks/store.js";
 import {
   answerClarificationAndResume,
   MAX_ANSWER_LENGTH,
-} from "../../../../../clarifications/answer-core.js";
+} from "../../../../../services/clarifications/answer-core.js";
 import {
   getHookClarification,
   type HookClarificationRow,

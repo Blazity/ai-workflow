@@ -1,6 +1,6 @@
 import { defineEventHandler, setResponseHeader } from "h3";
 import { env } from "../../../../config/env.js";
-import { requireDashboardActor, toHttpError } from "../../../../lib/auth/request-context.js";
+import { requireDashboardActor, toHttpError } from "../../../../services/auth/request-context.js";
 import { MCP_CONTRACT_ARTIFACT } from "../../../../mcp/contract-artifact.js";
 import { MCP_PROTOCOL_VERSION } from "../../../../mcp/server.js";
 import { MCP_ENABLED_DOMAINS } from "../../../../mcp/tool-catalog.js";

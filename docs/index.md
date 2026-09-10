@@ -32,9 +32,9 @@ each `apps/*/AGENTS.md`, and `README.md`, `AGENTS.md`, `SETUP.md` and
 | [architecture/repository-scripts.md](./architecture/repository-scripts.md) | The repository scripts config contract: named command groups, how a block selects them |
 | [architecture/blocks.md](./architecture/blocks.md) | How block manifests, executor modules, generated catalogs, and the reviewer walkthrough fit together |
 | [architecture/skills.md](./architecture/skills.md) | Product skill manifests, artifact integrity, source boundaries, and the repository-root `skills/` convention |
+| [architecture/overview.md](./architecture/overview.md) | The `services/` tier: what each cluster owns, what it may import, and what its `index.ts` promises |
 
-Stage 4 and later stages of the restructure plan add `architecture/blocks.md`,
-`architecture/overview.md`, `architecture/data-model.md` and
+Later stages of the restructure plan add `architecture/data-model.md` and
 `architecture/gates.md` to this group.
 
 ## Decision records

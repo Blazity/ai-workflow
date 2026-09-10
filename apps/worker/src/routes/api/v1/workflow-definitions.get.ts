@@ -13,7 +13,7 @@ import type {
 import { env } from "../../../config/env.js";
 import { getDb } from "../../../db/client.js";
 import { getCurrentSystemHarnessProfileReference } from "../../../harness-profiles/store.js";
-import { requireDashboardActor, toHttpError } from "../../../lib/auth/request-context.js";
+import { requireDashboardActor, toHttpError } from "../../../services/auth/request-context.js";
 import { defaultWorkflowDefinitionV2 } from "../../../workflow-definition/default.js";
 import { workflowDefinitionTemplates } from "../../../workflow-definition/templates.js";
 import {

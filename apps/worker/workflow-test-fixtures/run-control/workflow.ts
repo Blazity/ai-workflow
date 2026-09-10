@@ -1,5 +1,5 @@
 import { getStepMetadata } from "workflow";
-import { ActiveRunOwnerError } from "../../src/lib/run-control-errors.js";
+import { ActiveRunOwnerError } from "../../src/services/run-lifecycle/run-control-errors.js";
 import { isRunControlError } from "../../src/engine/helpers/run-control-error.js";
 import { WorkflowExecutionError } from "../../src/workflow-definition/interpreter.js";
 import {

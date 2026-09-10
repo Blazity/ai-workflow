@@ -9,7 +9,7 @@ import {
   dispatchCapacityQueue,
 } from "../../src/db/schema.js";
 import * as schema from "../../src/db/schema.js";
-import { ticketSubjectKey } from "../../src/lib/subject-key.js";
+import { ticketSubjectKey } from "../../src/services/run-lifecycle/subject-key.js";
 import { e2eEnv } from "../env.js";
 
 const CAMPAIGN_ID =

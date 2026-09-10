@@ -65,10 +65,10 @@ vi.mock("../config/env.js", () => ({ env: state.env }));
 // client we do not have. Everything downstream of the actor is real.
 vi.mock("./request-context.js", () => ({ requireMcpActor: state.requireMcpActor }));
 vi.mock("../db/client.js", () => ({ getDb: () => state.db }));
-vi.mock("../lib/adapters.js", () => ({ createAdapters: state.createAdapters }));
+vi.mock("../services/vcs/adapters.js", () => ({ createAdapters: state.createAdapters }));
 // Seam S3, as in tools/workflows.test.ts: the dispatch domain owns its own rules
 // and its own tests. Faking it is what makes "exactly one service call" visible.
-vi.mock("../manual-dispatch/service.js", () => ({
+vi.mock("../services/manual-dispatch/service.js", () => ({
   preflightManualDispatch: state.preflightManualDispatch,
   dispatchManualWorkflow: state.dispatchManualWorkflow,
 }));

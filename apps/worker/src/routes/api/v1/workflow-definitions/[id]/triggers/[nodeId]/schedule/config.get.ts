@@ -7,8 +7,8 @@ import type {
 } from "@shared/contracts";
 import { createError, defineEventHandler, getRouterParam, type H3Event } from "h3";
 import { getDb, type Db } from "../../../../../../../../db/client.js";
-import { requireDashboardActor, toHttpError } from "../../../../../../../../lib/auth/request-context.js";
-import { canDispatchWorkflowRuns } from "../../../../../../../../lib/auth/roles.js";
+import { requireDashboardActor, toHttpError } from "../../../../../../../../services/auth/request-context.js";
+import { canDispatchWorkflowRuns } from "../../../../../../../../services/auth/roles.js";
 import {
   listOccurrencesForSchedule,
   type OccurrenceRow,

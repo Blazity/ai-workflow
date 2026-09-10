@@ -1,7 +1,7 @@
 import { createError, defineEventHandler, getQuery } from "h3";
 import { getDb } from "../../../db/client.js";
-import { requireDashboardActor, toHttpError } from "../../../lib/auth/request-context.js";
-import { canDeleteAgentMemory } from "../../../lib/auth/roles.js";
+import { requireDashboardActor, toHttpError } from "../../../services/auth/request-context.js";
+import { canDeleteAgentMemory } from "../../../services/auth/roles.js";
 import { deleteMemoryDocument } from "../../../memory/store.js";
 
 /** Subject keys and doc paths the agent writes are short identifiers, so a

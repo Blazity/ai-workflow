@@ -25,7 +25,7 @@ vi.mock("../steps/repository-prs.js", () => ({
   recordWorkflowOwnedPullRequestIntent: mocks.recordIntent,
   recordWorkflowOwnedPullRequest: mocks.recordPr,
 }));
-vi.mock("../../lib/vcs-runtime.js", () => ({
+vi.mock("../../services/vcs/vcs-runtime.js", () => ({
   createRepositoryVcsRuntime: () => ({
     config: {
       kind: "github",
@@ -39,7 +39,7 @@ vi.mock("../../lib/vcs-runtime.js", () => ({
 vi.mock("../../sandbox/credentials.js", () => ({
   getSandboxCredentials: () => ({ teamId: "team" }),
 }));
-vi.mock("../../lib/repo-allowlist.js", () => ({
+vi.mock("../../services/dispatch/repo-allowlist.js", () => ({
   isRepoAllowed: mocks.isRepoAllowed,
   isRepoAllowedForScope: (repository: { repoPath: string }) =>
     mocks.isRepoAllowed(repository.repoPath),
@@ -58,13 +58,13 @@ vi.mock("@vercel/sandbox", () => ({
 
 import {
   validateRepositoryDiscoveryResult,
-} from "../../repository-discovery/protocol.js";
+} from "../../services/repository-discovery/protocol.js";
 import {
   EXPANSION_LIMIT_CLARIFICATION_PREFIX,
   validateHumanRepositoryExpansion,
   validateRepositoryExpansionRequests,
-} from "../../repository-discovery/runner.js";
-import type { RepositoryCatalogEntry } from "../../repository-discovery/catalog.js";
+} from "../../services/repository-discovery/runner.js";
+import type { RepositoryCatalogEntry } from "../../services/repository-discovery/catalog.js";
 import { filterPinnedRepositories } from "../../adapters/vcs/repository-directory.js";
 import type { WorkspaceManifest } from "../../sandbox/repo-workspace.js";
 import { workspaceRepositoryAccess } from "../../sandbox/repo-workspace.js";
