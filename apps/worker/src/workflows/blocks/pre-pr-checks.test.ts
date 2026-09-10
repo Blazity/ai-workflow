@@ -1,10 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrePrCheckConfig } from "../../pre-pr-checks/config.js";
-import {
-  RunBudgetError,
-  createRunBudgetState,
-  type RunBudgetObservation,
-} from "../run-budget.js";
+import type { RunBudgetObservation } from "../run-budget.js";
 
 const mocks = vi.hoisted(() => ({
   startRepoCheckBatchStep: vi.fn(),
@@ -46,6 +42,7 @@ import type { PhasePollOutcome, PhasePollTuning } from "./poll-phase.js";
 import {
   createV2InvocationCancellationController,
   createV2InvocationContext,
+  V2InvocationCancelledError,
   type V2InvocationObservationHooks,
 } from "../../workflow-definition/invocation-context.js";
 
@@ -92,6 +89,36 @@ function started(repoIndex: number) {
   };
 }
 
+function fakeChecksClock(input: {
+  readings: number[];
+  initialChecksElapsedMs?: number;
+  recordStep?: (name: string) => void;
+}) {
+  let checksElapsedMs = input.initialChecksElapsedMs ?? 0;
+  let lastObservedAtMs = input.readings[0] ?? 0;
+  let readingIndex = 0;
+  return vi.fn((_requireRemainingDuration?: boolean, observedAtMs?: number) => {
+    const now = observedAtMs ?? input.readings[readingIndex++] ?? lastObservedAtMs;
+    if (observedAtMs === undefined) input.recordStep?.("readRunBudgetClockStep");
+    checksElapsedMs += Math.max(0, now - lastObservedAtMs);
+    lastObservedAtMs = Math.max(lastObservedAtMs, now);
+    return Promise.resolve({
+      check: { status: "ok" as const },
+      remainingDurationMs: 1_800_000,
+      checksElapsedMs,
+      observedAtMs: lastObservedAtMs,
+    });
+  });
+}
+
+function budgetObservers(clock: ReturnType<typeof fakeChecksClock>) {
+  return {
+    observeBudget: (requireRemainingDuration?: boolean) =>
+      clock(requireRemainingDuration),
+    observeChecksBudget: clock,
+  };
+}
+
 /**
  * A poll that ends the way the real one does: it records what it consumed into
  * the tuning it was handed before returning. Everything downstream of a stall
@@ -130,6 +157,7 @@ function collected(overrides: {
   preExistingDirty?: string[];
   setupMarkerFailed?: boolean;
   progress?: { completed: number; total: number; stoppedAt: string | null };
+  checksClockObservedAtMs?: number;
 } = {}) {
   const results = overrides.results ?? [];
   const failures = overrides.failures ?? [];
@@ -145,8 +173,24 @@ function collected(overrides: {
       total: results.length,
       stoppedAt: null,
     },
+    ...(overrides.checksClockObservedAtMs === undefined
+      ? {}
+      : { checksClockObservedAtMs: overrides.checksClockObservedAtMs }),
   };
 }
+
+const HEAD_PRE_PR_CHECK_STEP_ORDER = [
+  "readRunBudgetClockStep",
+  "loadPrePrCheckConfigStep",
+  "readRunBudgetClockStep",
+  "startRepoCheckBatchStep",
+  "checkPhaseDone",
+  "readRunBudgetClockStep",
+  "delayPhasePollStep",
+  "readRunBudgetClockStep",
+  "checkPhaseDone",
+  "collectRepoCheckBatchStep",
+] as const;
 
 describe("runPrePrChecksWithFixes", () => {
   beforeEach(() => {
@@ -243,14 +287,15 @@ describe("runPrePrChecksWithFixes", () => {
 
     expect(result.passed).toBe(false);
     expect(result.outcome).toBe("failed");
-    // The elapsed time the poll actually consumed, not the cap it was given:
-    // the cap is derived from the remaining budget and the poll can end early,
-    // so a fixed sentence would eventually be a false one.
-    expect(result.summary).toContain("ran for 25 minutes without finishing");
+    expect(result.summary).toContain(
+      "The checks batch for github:acme/web reached the 60 minute checks ceiling",
+    );
     expect(result.summary).toContain(
       "while running `uv run pytest tests/ -m integration`; 3 of 5 script commands had finished",
     );
-    expect(result.summary).toContain("this is a timeout");
+    expect(result.summary).toContain(
+      "this is a checks timeout, not a duration budget failure",
+    );
     // The abandoned batch is still read back: those files are the only record
     // of where it died. It is read as abandoned, so the commands after the one
     // that was running are not reported at all.
@@ -289,7 +334,7 @@ describe("runPrePrChecksWithFixes", () => {
 
     const entries = result.summary.split("\n\n");
     const setupEntry = entries.find((entry) => entry.startsWith("SETUP FAILED"));
-    const stallEntry = entries.find((entry) => entry.includes("this is a timeout"));
+    const stallEntry = entries.find((entry) => entry.includes("this is a checks timeout"));
     expect(setupEntry).toBeDefined();
     expect(stallEntry).toContain("CHECK BATCH ABANDONED for gitlab:acme/api");
     // The proof the phase is doing the work: it is not headed by the bare
@@ -359,22 +404,21 @@ describe("runPrePrChecksWithFixes", () => {
     // outlive the budget that pays for the agent's work without the run
     // halting as budget_exceeded with a green check run behind it.
     mocks.collectRepoCheckBatchStep.mockResolvedValue(collected());
-    observeBudget.mockResolvedValueOnce({
-      check: { status: "ok" as const },
-      remainingDurationMs: 60_000,
-      checksElapsedMs: 900_000,
+    const checksClock = fakeChecksClock({
+      readings: [10_000],
+      initialChecksElapsedMs: 900_000,
     });
 
-    await runPrePrChecksWithFixes(options());
+    await runPrePrChecksWithFixes(options(budgetObservers(checksClock)));
 
     const tuning = mocks.pollPhaseUntilDone.mock.calls[0]![6] as PhasePollTuning;
-    expect(tuning.phaseLimitMs).toBe(60 * 60_000 - 900_000);
+    expect(tuning.phaseLimitMs).toBe(2_700_000);
     // And the poll is told not to consult the run's duration at all, so an
     // exhausted run budget cannot pre-empt the checks report.
     expect(tuning.ignoreRemainingDuration).toBe(true);
   });
 
-  it("hands the poll the observer that charges its waiting to the checks ceiling", async () => {
+  it("hands the poll a boundary observer that charges its waiting to the checks ceiling", async () => {
     // Two observers, because the split is a boundary: everything up to the
     // launch is the run's time, everything the poll waits through is the
     // checks phase's.
@@ -383,7 +427,162 @@ describe("runPrePrChecksWithFixes", () => {
 
     await runPrePrChecksWithFixes(options({ observeChecksBudget }));
 
-    expect(mocks.pollPhaseUntilDone.mock.calls[0]![4]).toBe(observeChecksBudget);
+    const pollObserver = mocks.pollPhaseUntilDone.mock.calls[0]![4] as (
+      requireRemainingDuration?: boolean,
+    ) => Promise<RunBudgetObservation>;
+    await pollObserver(false);
+    expect(observeChecksBudget).toHaveBeenLastCalledWith(false);
+  });
+
+  it("reduces the polling cap by the allowance spent launching the batch", async () => {
+    const checksClock = fakeChecksClock({ readings: [1_000] });
+    mocks.startRepoCheckBatchStep.mockResolvedValue({
+      ...started(0),
+      checksClockObservedAtMs: 51_000,
+    });
+    mocks.pollPhaseUntilDone.mockImplementation(pollEnds("finished", 0));
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({ checksClockObservedAtMs: 51_000 }),
+    );
+
+    await runPrePrChecksWithFixes(options({
+      checksCeilingMs: 60_000,
+      ...budgetObservers(checksClock),
+    }));
+
+    const tuning = mocks.pollPhaseUntilDone.mock.calls[0]![6] as PhasePollTuning;
+    expect(tuning.phaseLimitMs).toBe(10_000);
+  });
+
+  it("fails when collection crosses the checks ceiling", async () => {
+    const checksClock = fakeChecksClock({ readings: [0] });
+    mocks.startRepoCheckBatchStep.mockResolvedValue({
+      ...started(0),
+      checksClockObservedAtMs: 1_000,
+    });
+    mocks.pollPhaseUntilDone.mockImplementation(pollEnds("finished", 0));
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({ checksClockObservedAtMs: 61_000 }),
+    );
+
+    await expect(runPrePrChecksWithFixes(options({
+      checksCeilingMs: 60_000,
+      ...budgetObservers(checksClock),
+    }))).rejects.toThrow(
+      "The repository checks did not finish within the 1 minute checks ceiling. " +
+      "Raise batchTimeoutMinutes for this definition or split the run. " +
+      "(checks_ceiling_exceeded: Checks batch for github:acme/web reached the 1 minute checks ceiling)",
+    );
+  });
+
+  it("rethrows an ordinary sandbox abort without calling it the checks ceiling", async () => {
+    const abort = new DOMException("sandbox request aborted", "AbortError");
+    mocks.startRepoCheckBatchStep.mockRejectedValue(abort);
+
+    await expect(runPrePrChecksWithFixes(options())).rejects.toBe(abort);
+  });
+
+  it("rethrows invocation cancellation without calling it the checks ceiling", async () => {
+    const cancellation = new V2InvocationCancelledError("superseded");
+    mocks.pollPhaseUntilDone.mockRejectedValue(cancellation);
+
+    await expect(runPrePrChecksWithFixes(options())).rejects.toBe(cancellation);
+  });
+
+  it("fails immediately when a replay re-enters after the durable checks start exceeded the ceiling", async () => {
+    const checksClock = fakeChecksClock({ readings: [0] });
+    mocks.startRepoCheckBatchStep.mockResolvedValue({
+      ...started(0),
+      checksClockObservedAtMs: 1_200_000,
+    });
+
+    await expect(runPrePrChecksWithFixes(options({
+      checksCeilingMs: 900_000,
+      ...budgetObservers(checksClock),
+    }))).rejects.toThrow(
+      "The repository checks did not finish within the 15 minute checks ceiling. " +
+      "Raise batchTimeoutMinutes for this definition or split the run. " +
+      "(checks_ceiling_exceeded: Checks batch for github:acme/web reached the 15 minute checks ceiling)",
+    );
+    expect(mocks.pollPhaseUntilDone).not.toHaveBeenCalled();
+    expect(mocks.collectRepoCheckBatchStep).not.toHaveBeenCalled();
+  });
+
+  it("falls back at start and collect for old-shaped step results without adding a step", async () => {
+    const durableStepCalls: string[] = [];
+    const checksClock = fakeChecksClock({
+      readings: [123_000],
+      recordStep: (name) => durableStepCalls.push(name),
+    });
+    mocks.startRepoCheckBatchStep.mockResolvedValue(started(0));
+    mocks.pollPhaseUntilDone.mockImplementation(pollEnds("finished", 0));
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(collected());
+
+    await expect(runPrePrChecksWithFixes(options({
+      checksCeilingMs: 900_000,
+      ...budgetObservers(checksClock),
+    }))).resolves.toMatchObject({ passed: true });
+
+    const tuning = mocks.pollPhaseUntilDone.mock.calls[0]![6] as PhasePollTuning;
+    expect(tuning.phaseLimitMs).toBe(900_000);
+    expect(checksClock.mock.calls).toEqual([
+      [false],
+      [false, 123_000],
+      [false, 123_000],
+      [false, 123_000],
+    ]);
+    expect(durableStepCalls).toEqual(["readRunBudgetClockStep"]);
+  });
+
+  it.each([
+    { label: "timestamped start and collect outputs", oldShaped: false },
+    { label: "old-shaped start and collect outputs", oldShaped: true },
+  ])("keeps the full HEAD pre-PR checks step order for $label", async ({ oldShaped }) => {
+    const calls: string[] = [];
+    const checksClock = fakeChecksClock({
+      readings: [0, 2_000, 4_000, 6_000],
+      recordStep: (name) => calls.push(name),
+    });
+    mocks.getCurrentPrePrCheckConfig.mockImplementation(() => {
+      calls.push("loadPrePrCheckConfigStep");
+      return Promise.resolve({ version: 7, config: oneRepoConfig });
+    });
+    mocks.startRepoCheckBatchStep.mockImplementation(() => {
+      calls.push("startRepoCheckBatchStep");
+      return Promise.resolve(
+        oldShaped
+          ? started(0)
+          : { ...started(0), checksClockObservedAtMs: 2_000 },
+      );
+    });
+    mocks.pollPhaseUntilDone.mockImplementation(async (...args: unknown[]) => {
+      calls.push("checkPhaseDone");
+      const pollObserver = args[4] as (required?: boolean) => Promise<RunBudgetObservation>;
+      await pollObserver(false);
+      calls.push("delayPhasePollStep");
+      await pollObserver(false);
+      calls.push("checkPhaseDone");
+      const tuning = args[6] as PhasePollTuning;
+      Object.assign(tuning.outcome!, { reason: "finished", elapsedMs: 2_000, ticks: 1 });
+      return true;
+    });
+    mocks.collectRepoCheckBatchStep.mockImplementation(() => {
+      calls.push("collectRepoCheckBatchStep");
+      return Promise.resolve(
+        oldShaped
+          ? collected()
+          : collected({ checksClockObservedAtMs: 7_000 }),
+      );
+    });
+
+    await checksClock(false);
+    const loaded = await loadPrePrCheckConfigStep();
+    await runPrePrChecksWithFixes(options({
+      config: loaded.config,
+      ...budgetObservers(checksClock),
+    }));
+
+    expect(calls).toEqual(HEAD_PRE_PR_CHECK_STEP_ORDER);
   });
 
   it("stops launching once the ceiling is spent, and says so exactly once", async () => {
@@ -469,21 +668,14 @@ describe("runPrePrChecksWithFixes", () => {
     // never by a refreshed ceiling. The checks total lives on the run's budget
     // state and the ceiling is journaled, so a run that resumes mid-phase
     // continues spending the same minutes rather than starting them again.
-    mocks.collectRepoCheckBatchStep.mockResolvedValue(collected());
-    observeBudget
-      .mockResolvedValueOnce({
-        check: { status: "ok" as const },
-        remainingDurationMs: 1_800_000,
-        checksElapsedMs: 0,
-      })
-      .mockResolvedValueOnce({
-        check: { status: "ok" as const },
-        remainingDurationMs: 1_800_000,
-        checksElapsedMs: 1_200_000,
-      });
+    mocks.collectRepoCheckBatchStep
+      .mockResolvedValueOnce(collected({ checksClockObservedAtMs: 1_200_000 }))
+      .mockResolvedValueOnce(collected({ checksClockObservedAtMs: 1_200_000 }));
+    const checksClock = fakeChecksClock({ readings: [0, 1_200_000] });
 
     await runPrePrChecksWithFixes(
       options({
+        ...budgetObservers(checksClock),
         config: {
           repositories: [
             { provider: "github" as const, repoPath: "acme/web", commands: ["pnpm typecheck"] },
@@ -495,8 +687,8 @@ describe("runPrePrChecksWithFixes", () => {
 
     const first = mocks.pollPhaseUntilDone.mock.calls[0]![6] as PhasePollTuning;
     const second = mocks.pollPhaseUntilDone.mock.calls[1]![6] as PhasePollTuning;
-    expect(first.phaseLimitMs).toBe(60 * 60_000);
-    expect(second.phaseLimitMs).toBe(60 * 60_000 - 1_200_000);
+    expect(first.phaseLimitMs).toBe(3_600_000);
+    expect(second.phaseLimitMs).toBe(2_400_000);
   });
 
   it("prefers the ceiling prepare_workspace published over the configuration's own", async () => {
@@ -1583,6 +1775,57 @@ describe("runRepositorySetup", () => {
     expect(requireChange).toBe(false);
   });
 
+  it("fails before counting a second repository whose setup cannot start", async () => {
+    const available = {
+      check: { status: "ok" as const },
+      remainingDurationMs: 1_800_000,
+      checksElapsedMs: 0,
+    };
+    const spent = {
+      ...available,
+      checksElapsedMs: 3_600_000,
+    };
+    observeBudget
+      .mockResolvedValueOnce(available)
+      .mockResolvedValueOnce(available)
+      .mockResolvedValueOnce(available)
+      .mockResolvedValueOnce(available)
+      .mockResolvedValue(spent);
+    await expect(
+      runRepositorySetup({
+        sandboxId: "sbx-test-123",
+        config: {
+          repositories: [
+            {
+              provider: "github" as const,
+              repoPath: "acme/web",
+              setup: ["make bootstrap"],
+              commands: ["pnpm test"],
+            },
+            {
+              provider: "gitlab" as const,
+              repoPath: "acme/api",
+              setup: ["pnpm install"],
+              commands: ["pnpm test"],
+            },
+          ],
+        },
+        observeBudget,
+        checksCeilingMs: 3_600_000,
+      }),
+    ).rejects.toMatchObject({
+      name: "ChecksCeilingExceededError",
+      message:
+        "The repository checks did not finish within the 60 minute checks ceiling. " +
+        "Raise batchTimeoutMinutes for this definition or split the run. " +
+        "(checks_ceiling_exceeded: Setup batch for gitlab:acme/api reached the 60 minute checks ceiling)",
+    });
+    // Only the first repository launched. The second is not counted as ran,
+    // and a thrown ceiling error leaves no success summary to report.
+    expect(mocks.startRepoCheckBatchStep).toHaveBeenCalledOnce();
+    expect(mocks.startRepoCheckBatchStep.mock.calls[0]![2]).toBe("acme/web");
+  });
+
   it("skips a repository that configured no setup at all", async () => {
     const outcome = await runRepositorySetup({
       sandboxId: "sbx-test-123",
@@ -1634,11 +1877,8 @@ describe("runRepositorySetup", () => {
     expect(outcome.summary).toBe("Setup failed in 1 of 1 repositories.");
   });
 
-  it("charges its waiting to the run's duration, with the ceiling only as a backstop", async () => {
-    // Setup is provisioning, not verification. A toolchain install is work the
-    // agent needs done before it can start, so it spends the run's minutes and
-    // is bounded by them tick by tick; the checks ceiling only stops a setup
-    // that would otherwise run unbounded.
+  it("charges setup batch start and polling to the checks clock only", async () => {
+    const setupBudget = vi.fn(observeBudget);
     await runRepositorySetup({
       sandboxId: "sbx-test-123",
       config: {
@@ -1651,50 +1891,47 @@ describe("runRepositorySetup", () => {
           },
         ],
       },
-      observeBudget,
+      observeBudget: setupBudget,
       checksCeilingMs: 60 * 60_000,
     });
 
     const tuning = mocks.pollPhaseUntilDone.mock.calls[0]![6] as PhasePollTuning;
-    expect(tuning.ignoreRemainingDuration).toBe(false);
+    expect(tuning.ignoreRemainingDuration).toBe(true);
     expect(tuning.phaseLimitMs).toBe(60 * 60_000);
-    // And no separate checks observer: the one budget context it polls through
-    // is the run's, which is what makes the elapsed land on duration.
-    expect(mocks.pollPhaseUntilDone.mock.calls[0]![4]).toBe(observeBudget);
+    const checksObserver = mocks.pollPhaseUntilDone.mock.calls[0]![4] as (
+      requireRemainingDuration?: boolean,
+    ) => Promise<RunBudgetObservation>;
+    await checksObserver(false);
+    expect(setupBudget).toHaveBeenLastCalledWith(false, "checks");
   });
 
-  it("names setup, not checks, when the run's budget stops it", async () => {
-    // Two phases spend two different budgets, and an operator reading "setup
-    // stopped" reaches for a different knob than one reading "checks stopped".
-    mocks.pollPhaseUntilDone.mockRejectedValue(
-      new RunBudgetError({
-        status: "budget_exceeded",
-        metric: "duration",
-        limit: 1_800_000,
-        consumed: 1_800_001,
-        reason: "budget_exceeded: duration 1800001 reached limit 1800000",
-      }),
+  it("names the checks ceiling when a setup batch spends it", async () => {
+    mocks.pollPhaseUntilDone.mockImplementation(pollEnds("duration_cap", 3_600_000));
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({ progress: { completed: 0, total: 1, stoppedAt: "make bootstrap" } }),
     );
 
-    await expect(
-      runRepositorySetup({
-        sandboxId: "sbx-test-123",
-        config: {
-          repositories: [
-            {
-              provider: "github" as const,
-              repoPath: "acme/web",
-              setup: ["make bootstrap"],
-              commands: ["pnpm typecheck"],
-            },
-          ],
-        },
-        observeBudget,
-      }),
-    ).rejects.toMatchObject({
-      name: "RunBudgetError",
-      failure: { reason: expect.stringContaining("setup for github:acme/web stopped") },
+    const outcome = await runRepositorySetup({
+      sandboxId: "sbx-test-123",
+      config: {
+        repositories: [
+          {
+            provider: "github" as const,
+            repoPath: "acme/web",
+            setup: ["make bootstrap"],
+            commands: ["pnpm typecheck"],
+          },
+        ],
+      },
+      observeBudget,
+      checksCeilingMs: 3_600_000,
     });
+
+    expect(outcome.failures[0]!.note).toBe(
+      "The setup batch for github:acme/web reached the 60 minute checks ceiling while running " +
+        "`make bootstrap`; 0 of 1 script command had finished. Nothing was verified: this is " +
+        "a checks timeout, not a duration budget failure.",
+    );
   });
 
   it("leaves the workspace alone when the configuration cannot be read", async () => {
@@ -1919,11 +2156,7 @@ describe("checks phase progress observations", () => {
     expect(run.outcome).toBe("passed");
   });
 
-  it("reports the setup substep too, which is where a run is silent longest", async () => {
-    // Provisioning precedes every block that produces output, so an operator
-    // watching a five minute `uv sync` has nothing else at all to look at. A
-    // setup batch spends the run's duration rather than the checks ceiling, so
-    // its elapsed is its own wait and nothing is claimed about the ceiling.
+  it("reports setup progress against the checks ceiling", async () => {
     const emit = vi.fn();
     mocks.pollPhaseUntilDone.mockImplementation(
       pollTicking([
@@ -1948,13 +2181,10 @@ describe("checks phase progress observations", () => {
       observations: wired({ emit }),
     });
 
-    // Setup is charged to the run's duration budget and is deliberately outside
-    // the checks ceiling, so the line names no ceiling at all: its bound is
-    // what the duration budget had left at this tick.
     expect(emit).toHaveBeenCalledWith({
       kind: "log",
       value:
-        "Setup running: about 2 seconds in, 15 minutes of run budget left, " +
+        "Setup running: about 2 seconds of 60 minutes, " +
         "1 command launched, github:acme/web",
     });
   });

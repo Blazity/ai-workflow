@@ -75,6 +75,8 @@ describe("agent workflow budget integration", () => {
 
     expect(budget.limits).toEqual({
       maxDurationMs: 20_000,
+      maxDurationSource: "profile",
+      maxDurationProfileName: "Claude",
       maxTokens: 100,
       maxCostUsd: 2,
     });
@@ -104,6 +106,75 @@ describe("agent workflow budget integration", () => {
     // so it is the one that has to know which total to charge.
     expect(observeWorkflowBudget).toHaveBeenCalledWith(false, "duration");
   });
+
+  it("reports invocation time when a strict profile expires after more run time", async () => {
+    const active = makeHarnessRuntime("active", "generic_agent", {
+      limits: {
+        maxDurationMs: 600_000,
+        maxTokens: null,
+        maxCostUsd: null,
+      },
+    });
+    let clock = 0;
+    const observeWorkflowBudget = vi.fn().mockResolvedValue({
+      check: { status: "ok" },
+      remainingDurationMs: 300_000,
+      durationLimitMs: 1_800_000,
+      activeElapsedMs: 1_500_000,
+      maxDurationSource: "definition",
+    });
+    const budget = await createHarnessInvocationBudget({
+      workflowLimits: {
+        maxDurationMs: 1_800_000,
+        maxDurationSource: "definition",
+      },
+      runtime: active,
+      observeWorkflowBudget,
+      readClock: () => Promise.resolve(clock),
+    });
+
+    clock = 725_999;
+
+    await expect(budget.observeBudget(false)).resolves.toMatchObject({
+      check: {
+        status: "budget_exceeded",
+        metric: "duration",
+        limit: 600_000,
+        consumed: 725_999,
+        reason:
+          "budget_exceeded: this invocation took 12 min 5 s, over the 10 min limit from " +
+          "the harness profile \"Claude\" (runtimeLimits.maxDurationMs). " +
+          "Raise that limit on the profile to allow longer invocations.",
+      },
+    });
+  });
+
+  it.each(["env", "definition"] as const)(
+    "keeps the %s workflow duration source when the profile is not tighter",
+    async (maxDurationSource) => {
+      const active = makeHarnessRuntime("active", "generic_agent", {
+        limits: {
+          maxDurationMs: 600_000,
+          maxTokens: null,
+          maxCostUsd: null,
+        },
+      });
+      const budget = await createHarnessInvocationBudget({
+        workflowLimits: {
+          maxDurationMs: 600_000,
+          maxDurationSource,
+        },
+        runtime: active,
+        observeWorkflowBudget: vi.fn(),
+        readClock: () => Promise.resolve(0),
+      });
+
+      expect(budget.limits).toEqual({
+        maxDurationMs: 600_000,
+        maxDurationSource,
+      });
+    },
+  );
 
   it("does not reconcile still-running sibling usage on v2 block finishes", () => {
     expect(shouldReconcilePhaseUsageOnBlockFinish(1)).toBe(true);

@@ -310,6 +310,7 @@ describe("startRepoCheckBatchStep", () => {
       skipped: false,
       commandId: "cmd-batch",
       localPath: "/vercel/sandbox",
+      checksClockObservedAtMs: expect.any(Number),
     });
     expect(started.skipped).toBe(false);
     if (started.skipped || started.envFailure) throw new Error("unreachable");
@@ -346,7 +347,10 @@ describe("startRepoCheckBatchStep", () => {
       0,
     );
 
-    expect(started).toEqual({ skipped: true });
+    expect(started).toEqual({
+      skipped: true,
+      checksClockObservedAtMs: expect.any(Number),
+    });
     expect(mockWriteFiles).not.toHaveBeenCalled();
   });
 
@@ -363,7 +367,10 @@ describe("startRepoCheckBatchStep", () => {
       0,
     );
 
-    expect(started).toEqual({ skipped: true });
+    expect(started).toEqual({
+      skipped: true,
+      checksClockObservedAtMs: expect.any(Number),
+    });
     expect(mockWriteFiles).not.toHaveBeenCalled();
   });
 
@@ -479,6 +486,7 @@ describe("collectRepoCheckBatchStep", () => {
     expect(collected.failures).toHaveLength(1);
     expect(collected.failures[0]).toMatchObject({ command: "pnpm lint", stderr: "lint failed" });
     expect(collected.setupFailed).toBe(false);
+    expect(collected.checksClockObservedAtMs).toEqual(expect.any(Number));
   });
 
   it("stops a repository's checks at a failing setup command", async () => {

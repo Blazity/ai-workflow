@@ -212,12 +212,15 @@ import {
   RunBudgetError,
   addActiveElapsed,
   addElapsed,
+  checksCeilingErrorDetail,
   checksElapsedOf,
   createRunBudgetState,
-  durationBudgetFailure,
+  isChecksCeilingExceededError,
   isDurationAbortError,
+  isV2InvocationCancelledError,
   missingRequiredPriceFailure,
   observeRunBudget,
+  propagateInvocationInterruption,
   recordBudgetUsage,
   runBudgetFailureFromError,
   type RunBudgetAttribution,
@@ -501,9 +504,7 @@ export const executeRunScripts: BlockExecuteFn = async (
       model: ctx.defaults[ctx.runDefaultKind],
       groupSelection: { kind: "named", groups },
       observeBudget: blockBudgetObserver(ctx, execution),
-      observeChecksBudget: blockBudgetObserver(ctx, execution, {
-        attribution: "checks",
-      }),
+      observeChecksBudget: checksBudgetObserver(ctx, execution),
       ...checksCeilingOption(steps),
       cancellation: execution?.cancellation,
       // So a batch that runs for forty minutes reports progress instead of
@@ -512,12 +513,10 @@ export const executeRunScripts: BlockExecuteFn = async (
       ...(execution?.observations ? { observations: execution.observations } : {}),
     });
   } catch (err) {
-    if (isRunControlError(err)) throw err;
-    const after = await ctx.observeBudget();
+    if (isRunControlError(err) || isChecksCeilingExceededError(err)) throw err;
+    propagateInvocationInterruption(err);
+    const after = await ctx.observeBudget(false, "checks");
     if (after.check.status !== "ok") throw new RunBudgetError(after.check);
-    if (isDurationAbortError(err)) {
-      throw new RunBudgetError(durationBudgetFailure(after, "Repository scripts"));
-    }
     throw new Error(await prePrChecksFailureMessage(err, current.version));
   }
   const output = repositoryScriptsOutput(run, groups);
@@ -3231,18 +3230,39 @@ export const PRE_PR_CHECKS_FAILURE_CAUSE_MAX_LENGTH = 200;
  *  frames leak internal paths and are what turns a detail into a firehose. */
 export const PRE_PR_CHECKS_FAILURE_STACK_TAIL_MAX_LENGTH = 600;
 
+type BoundaryCapableBudgetObserver = (
+  requireRemainingDuration?: boolean,
+  attribution?: RunBudgetAttribution,
+  observedAtMs?: number,
+) => Promise<RunBudgetObservation>;
+
+function checksBudgetObserver(
+  ctx: Pick<EngineCtx, "observeBudget">,
+  execution?: BlockExecutionContext,
+): (
+  requireRemainingDuration?: boolean,
+  observedAtMs?: number,
+) => Promise<RunBudgetObservation> {
+  const observe = (execution?.observeBudget ?? ctx.observeBudget) as BoundaryCapableBudgetObserver;
+  return (requireRemainingDuration, observedAtMs) =>
+    observe(requireRemainingDuration, "checks", observedAtMs);
+}
+
 /**
  * Errors the Pre-PR checks call site must rethrow untouched.
  *
- * Both predicates identify an error structurally, by `name`
- * (run-budget.ts:52, run-budget.ts:280) or by a sentinel in its message
- * (run-control-errors.ts:16), because Workflow serializes step errors across
- * VMs. Wrapping one in a new Error therefore destroys the identity the call
- * site depends on, and a budget stop would start reporting as a generic
- * failure.
+ * These predicates identify errors structurally because Workflow serializes
+ * step errors across VMs. Wrapping one in a new Error destroys the identity
+ * the call site depends on, so checks ceilings, aborts and cancellations must
+ * pass through unchanged.
  */
 export function prePrChecksFailureMustPropagate(error: unknown): boolean {
-  return isRunControlError(error) || isDurationAbortError(error);
+  return (
+    isRunControlError(error) ||
+    isChecksCeilingExceededError(error) ||
+    isDurationAbortError(error) ||
+    isV2InvocationCancelledError(error)
+  );
 }
 
 /**
@@ -4004,6 +4024,8 @@ export interface HarnessInvocationBudget {
   limits: RunBudgetLimits;
   observeBudget(
     requireRemainingDuration?: boolean,
+    attribution?: RunBudgetAttribution,
+    observedAtMs?: number,
   ): Promise<RunBudgetObservation>;
   recordUsage(usage: PhaseUsage | null, model: string): void;
 }
@@ -4019,6 +4041,7 @@ export async function createHarnessInvocationBudget(input: {
   observeWorkflowBudget(
     requireRemainingDuration?: boolean,
     attribution?: RunBudgetAttribution,
+    observedAtMs?: number,
   ): Promise<RunBudgetObservation>;
   readClock(): Promise<number>;
   priceLookup?(
@@ -4042,9 +4065,12 @@ export async function createHarnessInvocationBudget(input: {
     async observeBudget(
       requireRemainingDuration = true,
       attribution: RunBudgetAttribution = "duration",
+      observedAtMs?: number,
     ) {
-      const workflow = await observeWorkflowBudget(requireRemainingDuration, attribution);
-      const now = await readClock();
+      const workflow = observedAtMs === undefined
+        ? await observeWorkflowBudget(requireRemainingDuration, attribution)
+        : await observeWorkflowBudget(requireRemainingDuration, attribution, observedAtMs);
+      const now = observedAtMs ?? await readClock();
       state = addElapsed(state, now - lastClockMs, attribution);
       lastClockMs = Math.max(lastClockMs, now);
       const profile = observeRunBudget(
@@ -4052,7 +4078,10 @@ export async function createHarnessInvocationBudget(input: {
         limits,
         requireRemainingDuration,
       );
-      return mergeBudgetObservations(workflow, profile);
+      return {
+        ...mergeBudgetObservations(workflow, profile),
+        observedAtMs: lastClockMs,
+      };
     },
     recordUsage(usage, model) {
       state = recordBudgetUsage(state, usage, priceLookup?.(model) ?? null);
@@ -4076,11 +4105,17 @@ export function mergeBudgetObservations(
     checksElapsedOf(workflow),
     checksElapsedOf(profile),
   );
+  const observedAtValues = [workflow.observedAtMs, profile.observedAtMs].filter(
+    (value): value is number => value !== undefined,
+  );
+  const observedAt = observedAtValues.length > 0
+    ? { observedAtMs: Math.max(...observedAtValues) }
+    : {};
   if (workflow.check.status !== "ok") {
-    return { ...workflow, remainingDurationMs, checksElapsedMs };
+    return { ...workflow, remainingDurationMs, checksElapsedMs, ...observedAt };
   }
   if (profile.check.status !== "ok") {
-    return { ...profile, remainingDurationMs, checksElapsedMs };
+    return { ...profile, remainingDurationMs, checksElapsedMs, ...observedAt };
   }
   const tighter =
     profile.remainingDurationMs < workflow.remainingDurationMs
@@ -4091,7 +4126,49 @@ export function mergeBudgetObservations(
     check: { status: "ok" },
     remainingDurationMs,
     checksElapsedMs,
+    ...observedAt,
   };
+}
+
+export async function reconcileRunBudgetErrorAtBoundary(
+  caught: unknown,
+  observeBudget: (requireRemainingDuration: boolean) => Promise<RunBudgetObservation>,
+): Promise<unknown> {
+  if (
+    isRunControlError(caught) ||
+    isChecksCeilingExceededError(caught) ||
+    isDurationAbortError(caught) ||
+    isV2InvocationCancelledError(caught)
+  ) {
+    return caught;
+  }
+  const observation = await observeBudget(false);
+  return observation.check.status === "ok"
+    ? caught
+    : new RunBudgetError(observation.check);
+}
+
+/** Graph engines must not flatten errors whose identity drives workflow-level
+ * terminal handling. Keep this as the single predicate supplied to both
+ * schema engines. */
+export function shouldRethrowAgentExecutionError(error: unknown): boolean {
+  return isRunControlError(error) || isChecksCeilingExceededError(error);
+}
+
+/** Classify an error that reached the workflow boundary after graph execution. */
+export function unhandledAgentExecutionError(
+  error: unknown,
+  currentBlockId: string | null,
+) {
+  return isChecksCeilingExceededError(error)
+    ? executionError(checksCeilingErrorDetail(error), {
+        category: "checks",
+        message: error.message,
+      }).error
+    : executionError(errorMessage(error), {
+        category: currentBlockId ? "unknown" : "engine",
+        phase: currentBlockId ? undefined : "engine",
+      }).error;
 }
 
 /**
@@ -4749,6 +4826,8 @@ async function agentWorkflowBody(
     .sort((left, right) => left.nodeId.localeCompare(right.nodeId));
   const budgetLimits: RunBudgetLimits = {
     maxDurationMs: plan.budgets?.maxDurationMs ?? env.JOB_TIMEOUT_MS,
+    maxDurationSource:
+      plan.budgets?.maxDurationMs === undefined ? "env" : "definition",
     ...(plan.budgets?.maxTokens !== undefined
       ? { maxTokens: plan.budgets.maxTokens }
       : {}),
@@ -4761,15 +4840,19 @@ async function agentWorkflowBody(
   const observeBudgetAtBoundary = async (
     requireRemainingDuration: boolean,
     attribution: RunBudgetAttribution = "duration",
+    observedAtMs?: number,
   ): Promise<RunBudgetObservation> => {
-    const now = await readRunBudgetClockStep();
+    const now = observedAtMs ?? await readRunBudgetClockStep();
     // The clock is journaled, so a replay re-reads the same instants and lands
     // on the same split between the two totals. Attributing from Date.now()
     // here would give a resumed run a different checks bill than the one it
     // was already charged.
     budgetState = addElapsed(budgetState, now - lastBudgetClockMs, attribution);
     lastBudgetClockMs = Math.max(lastBudgetClockMs, now);
-    return observeRunBudget(budgetState, budgetLimits, requireRemainingDuration);
+    return {
+      ...observeRunBudget(budgetState, budgetLimits, requireRemainingDuration),
+      observedAtMs: lastBudgetClockMs,
+    };
   };
   const enforceBudgetAtBoundary = async (requireRemainingDuration: boolean): Promise<void> => {
     const observation = await observeBudgetAtBoundary(requireRemainingDuration);
@@ -5200,8 +5283,8 @@ async function agentWorkflowBody(
         taskId: null,
       },
       checksCeilingMs: null,
-      observeBudget: (requireRemainingDuration = true, attribution) =>
-        observeBudgetAtBoundary(requireRemainingDuration, attribution),
+      observeBudget: (requireRemainingDuration = true, attribution, observedAtMs?: number) =>
+        observeBudgetAtBoundary(requireRemainingDuration, attribution, observedAtMs),
       recordUsage: (label, usage, model, attempt) => {
         const key = phaseKey(label, attempt ?? state.attempt);
         phaseUsages[key] = usage;
@@ -7137,9 +7220,7 @@ async function agentWorkflowBody(
                 agentKind: repairKind,
                 model: repairModel,
                 observeBudget: blockBudgetObserver(ctx, execution),
-                observeChecksBudget: blockBudgetObserver(ctx, execution, {
-                  attribution: "checks",
-                }),
+                observeChecksBudget: checksBudgetObserver(ctx, execution),
                 ...checksCeilingOption(steps),
                 cancellation: execution?.cancellation,
                 ...(execution?.observations
@@ -7154,12 +7235,10 @@ async function agentWorkflowBody(
                 arthurTaskId: ctx.arthur.taskId,
               });
             } catch (err) {
-              if (isRunControlError(err)) throw err;
-              const after = await ctx.observeBudget();
+              if (isRunControlError(err) || isChecksCeilingExceededError(err)) throw err;
+              propagateInvocationInterruption(err);
+              const after = await ctx.observeBudget(false, "checks");
               if (after.check.status !== "ok") throw new RunBudgetError(after.check);
-              if (isDurationAbortError(err)) {
-                throw new RunBudgetError(durationBudgetFailure(after, "Pre-PR checks"));
-              }
               // Everything prePrChecksFailureMustPropagate covers has already
               // left through the two branches above, so what remains cannot
               // have an identity that wrapping destroys. It must still be
@@ -7815,7 +7894,7 @@ async function agentWorkflowBody(
           runValues,
           executeBlock,
           hooks,
-          shouldRethrowExecutionError: isRunControlError,
+          shouldRethrowExecutionError: shouldRethrowAgentExecutionError,
           maxTotalExecutions: 200,
         });
       } else {
@@ -7845,7 +7924,7 @@ async function agentWorkflowBody(
             ),
             maxTotalExecutions:
               V2_PRODUCTION_SCHEDULER_BOUNDS.maxTotalExecutions,
-            shouldRethrowExecutionError: isRunControlError,
+            shouldRethrowExecutionError: shouldRethrowAgentExecutionError,
             ...(resume ? { resume } : {}),
           });
           if (v2Walk.outcome !== "paused") {
@@ -8041,20 +8120,13 @@ async function agentWorkflowBody(
     }
   } catch (caught) {
     reconcileMissingPhaseUsages();
-    let err = caught;
-    if (!isRunControlError(err)) {
-      const observation = await observeBudgetAtBoundary(false);
-      if (observation.check.status !== "ok") err = new RunBudgetError(observation.check);
-    }
+    let err = await reconcileRunBudgetErrorAtBoundary(caught, observeBudgetAtBoundary);
     terminalBudgetFailure = runBudgetFailureFromError(err);
     const controlError = isRunControlError(err);
     if (!controlError) {
       const nodeId = currentBlockId ?? "engine";
       const attempt = blockStatuses[nodeId]?.attempt ?? 1;
-      const blockError = executionError(errorMessage(err), {
-        category: currentBlockId ? "unknown" : "engine",
-        phase: currentBlockId ? undefined : "engine",
-      }).error;
+      const blockError = unhandledAgentExecutionError(err, currentBlockId);
       const diagnostic = createWorkflowExecutionErrorState(
         workflowRunId,
         nodeId,

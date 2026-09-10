@@ -33,9 +33,14 @@ import type {
   V2InvocationObservationHooks,
 } from "../../workflow-definition/invocation-context.js";
 import {
+  checksCeilingExceededError,
   RunBudgetError,
+  isChecksCeilingExceededError,
   isRunBudgetError,
+  propagateInvocationInterruption,
   remainingChecksMs,
+  type ChecksCeilingExceededError,
+  type RunBudgetAttribution,
   type RunBudgetObservation,
 } from "../run-budget.js";
 import {
@@ -85,19 +90,20 @@ export interface PrePrChecksOptions {
    *  survives a replay instead of being recomputed from Date.now(). */
   observeBudget: (
     requireRemainingDuration?: boolean,
+    attribution?: RunBudgetAttribution,
+    observedAtMs?: number,
   ) => Promise<RunBudgetObservation>;
   /**
    * The same observer, charging what it measures to the checks ceiling instead
    * of to the run's duration.
    *
-   * Two observers rather than one flag, because the split is a boundary and not
-   * a mode: `observeBudget` closes the run's clock at the launch, and this one
-   * carries every tick the poll then waits through. A caller that supplies only
-   * the first keeps the old behaviour, which is what run_checks' explicit
-   * command mode does when nothing prepared a workspace.
+   * The optional timestamp charges an existing durable step result without
+   * calling another clock step. Older results omit it and fall back to the
+   * durable checks start already held by the caller.
    */
   observeChecksBudget?: (
     requireRemainingDuration?: boolean,
+    observedAtMs?: number,
   ) => Promise<RunBudgetObservation>;
   cancellation?: V2InvocationCancellation;
   /** Where a running batch reports its progress. Absent for a caller with no
@@ -168,16 +174,12 @@ export function newPhasePollOutcome(): PhasePollOutcome {
 export function batchPollTuning(
   outcome: PhasePollOutcome,
   capMs: number,
-  phase: RepoBatchPhase = "checks",
 ): PhasePollTuning {
   return {
     checkBeforeFirstTick: true,
-    // Checks time is charged to the checks ceiling, and that ceiling is
-    // already the phase cap, so consulting the run's duration would halt the
-    // run as budget_exceeded instead of reporting checks that outlived their
-    // bound. Setup is the opposite case: it is provisioning, its time IS the
-    // run's, and a run that dies during `uv sync` genuinely ran out of time.
-    ignoreRemainingDuration: phase !== "setup",
+    // Repository checks infrastructure, including setup, spends the checks
+    // ceiling. The run's remaining duration must not pre-empt that report.
+    ignoreRemainingDuration: true,
     initialTickMs: 2_000,
     tickGrowthFactor: 1.6,
     maxTicks: maxTicksFor(capMs),
@@ -209,20 +211,16 @@ export interface RepositoryScriptsProgressObservation {
   /** provider:repoPath of the repository being polled. */
   repo: string;
   /** Checks time this run has spent against its ceiling, this batch's wait
-   *  included. Zero-based for a setup batch, which spends the run's duration
-   *  rather than the checks ceiling.
+   *  included.
    *
    *  Approximate, and the rendered line says so: it is the sum of the sleeps
    *  the poll REQUESTED, so an SDK retry or a slow resume between ticks is time
    *  this never counted. It under-reports, never over-reports. */
   elapsedMs: number;
-  /** The checks ceiling, and null for a setup batch: setup is charged to the
-   *  run's duration budget and is deliberately outside the checks ceiling, so
-   *  printing one beside it would name a clock this wait is not on. */
+  /** The checks ceiling shared by setup and repository script batches. */
   ceilingMs: number | null;
   /** The bound that actually applies to this batch: what was left of the checks
-   *  ceiling when it launched, or, for setup, what the run's duration budget
-   *  had left at this tick. */
+   *  ceiling when it launched. */
   boundMs: number;
   ticks: number;
   /** How many commands this batch LAUNCHED. Never how many have finished. */
@@ -317,28 +315,38 @@ export async function emitRepositoryScriptsProgress(
  * launched. The poll would raise the same error on its first tick, but only
  * after a wrapper had been written, chmodded and started in the sandbox.
  */
-export async function batchCapMs(
-  observeBudget: PrePrChecksOptions["observeBudget"],
+interface ChecksAllowanceBoundary {
+  observation: RunBudgetObservation;
+  observedAtMs: number;
+  remainingMs: number;
+  failure: ChecksCeilingExceededError | null;
+}
+
+async function observeChecksAllowance(
+  observeBudget: () => Promise<RunBudgetObservation>,
   ceilingMs: number,
-  phase: RepoBatchPhase = "checks",
-): Promise<number> {
-  const observed = await observeBudget(false);
+  activity: string,
+  observedAtMs?: number,
+): Promise<ChecksAllowanceBoundary> {
+  const observed = await observeBudget();
   if (observed.check.status !== "ok") throw new RunBudgetError(observed.check);
-  // Setup spends the run's duration, not the checks ceiling, so the ceiling is
-  // only a backstop against an unbounded poll here. The bound that actually
-  // binds is the remaining duration, which the poll re-reads on every tick.
-  return phase === "setup" ? ceilingMs : remainingChecksMs(observed, ceilingMs);
+  const remainingMs = remainingChecksMs(observed, ceilingMs);
+  return {
+    observation: observed,
+    observedAtMs: observed.observedAtMs ?? observedAtMs ?? 0,
+    remainingMs,
+    failure:
+      remainingMs <= 0
+        ? checksCeilingExceededError(ceilingMs, activity)
+        : null,
+  };
 }
 
 /**
  * Which budget a batch is spending.
  *
- * "setup" is provisioning a workspace (a toolchain install, a registry login):
- * it is the run's own time, bounded by the run's duration budget. "checks" is
- * verification, charged to the checks ceiling and deliberately outside the
- * duration budget. The distinction decides three things at once: which clock
- * the elapsed time lands on, which bound the poll obeys, and which knob an
- * operator is told to turn when it runs out.
+ * Both phases spend the checks ceiling. The distinction controls labels and
+ * result formatting, not budget attribution.
  */
 export type RepoBatchPhase = "checks" | "setup";
 
@@ -475,12 +483,9 @@ export interface RepositorySetupOutcome {
  * hash of the setup array (setupMarkerPath), so a batch carrying the same setup
  * finds the marker and skips straight to its commands.
  *
- * Its time is the RUN's, not the checks phase's. Setup is provisioning, and
- * three repositories running `uv sync` must not eat the budget the tests were
- * given; an operator whose run dies inside it has to be pointed at the setup
- * commands, never at batchTimeoutMinutes. So it takes no checks observer and
- * runs with phase "setup", which keeps the run's remaining duration binding
- * the poll tick by tick, exactly as every other block is bound.
+ * Its time belongs to the checks phase. Setup, launch and polling all exist to
+ * run repository checks, so they share the checks ceiling and never spend the
+ * run's duration budget.
  *
  * It never fails on a configuration it cannot read. That failure belongs to the
  * checks block, which names the field that broke; refusing to create a
@@ -519,7 +524,7 @@ export async function runRepositorySetup(options: {
   sandboxId: string;
   config: unknown;
   observeBudget: PrePrChecksOptions["observeBudget"];
-  /** Only a backstop on the poll here, never a budget setup draws from. */
+  /** The checks ceiling shared by setup and repository script batches. */
   checksCeilingMs?: number;
   cancellation?: V2InvocationCancellation;
   /** Where a running setup batch reports its progress. Provisioning is the
@@ -561,6 +566,10 @@ export async function runRepositorySetup(options: {
       // there is no agent work yet at this point in the run.
       requireChange: false,
       observeBudget: options.observeBudget,
+      observeChecksBudget: (requireRemainingDuration, observedAtMs) =>
+        observedAtMs === undefined
+          ? options.observeBudget(requireRemainingDuration, "checks")
+          : options.observeBudget(requireRemainingDuration, "checks", observedAtMs),
       phase: "setup",
       ...(options.observations ? { observations: options.observations } : {}),
       ...(options.checksCeilingMs === undefined
@@ -572,6 +581,12 @@ export async function runRepositorySetup(options: {
         ? {}
         : { commandTimeoutMinutes: repo.commandTimeoutMinutes }),
     });
+    if (run.budgetExhausted) {
+      throw checksCeilingExceededError(
+        options.checksCeilingMs ?? checksCeilingMsOf(parsed.data.batchTimeoutMinutes),
+        `Setup batch for ${repo.provider}:${repo.repoPath}`,
+      );
+    }
     if (run.skipped) continue;
     ran += 1;
     if (run.stall) {
@@ -582,12 +597,16 @@ export async function runRepositorySetup(options: {
         exitCode: -1,
         stdout: "",
         stderr: "",
-        note:
-          `Setup for ${repo.repoPath} ${
-            run.stall === "sandbox_stopped"
-              ? "lost its sandbox"
-              : `did not finish within ${formatElapsed(run.elapsedMs)}`
-          }, so the workspace is not provisioned.`,
+        note: batchStallReason(
+          run.stall,
+          run.collected.progress,
+          {
+            phase: "setup",
+            provider: repo.provider,
+            repoPath: repo.repoPath,
+            ceilingMs: options.checksCeilingMs ?? checksCeilingMsOf(parsed.data.batchTimeoutMinutes),
+          },
+        ),
         phase: "setup",
       });
     }
@@ -646,7 +665,6 @@ export async function runPrePrChecksWithFixes(
         `${describePrePrCheckIssues(parsed.error)}. Fix it in the dashboard and re-run.`,
     });
   }
-
   const config = parsed.data;
   if (config.repositories.length === 0) {
     return emptyRunResult({
@@ -655,7 +673,6 @@ export async function runPrePrChecksWithFixes(
       summary: NO_CONFIGURATION_SUMMARY,
     });
   }
-
   const batch = await runCheckBatches(options, config);
   return {
     outcome: batch.outcome,
@@ -702,7 +719,8 @@ export function checksBudgetExhaustedFailure(
     note:
       `Nothing ran in ${names.length} ${names.length === 1 ? "repository" : "repositories"} ` +
       `(${names.join(", ")}): this run's ${minutes} minute checks budget was already ` +
-      "spent by the repositories before them. Raise batchTimeoutMinutes in the " +
+      "spent by the repositories before them, so the checks ceiling was reached. " +
+      "Raise batchTimeoutMinutes in the " +
       "repository scripts configuration, or split the run.",
     phase: "budget",
   };
@@ -856,9 +874,8 @@ export async function runRepoCheckBatch(args: {
    *  batches already run is this batch's bound. */
   checksCeilingMs?: number;
   /** The observer to hand the poll, already charging its time to the checks
-   *  ceiling. Absent for callers with no attribution seam, which then spend the
-   *  run's duration as before. */
-  observeChecksBudget?: PrePrChecksOptions["observeBudget"];
+   *  ceiling. */
+  observeChecksBudget?: NonNullable<PrePrChecksOptions["observeChecksBudget"]>;
   /** Which budget this batch spends. Default "checks". */
   phase?: RepoBatchPhase;
   /** Where this batch reports its progress while it runs. Absent means no
@@ -879,13 +896,18 @@ export async function runRepoCheckBatch(args: {
   const total = args.setup.length + args.commands.length;
   const phase = args.phase ?? "checks";
   const ceilingMs = args.checksCeilingMs ?? checksCeilingMsOf();
-  const capMs = await batchCapMs(args.observeBudget, ceilingMs, phase);
-  if (capMs <= 0) {
-    // Nothing is launched, and nothing is claimed about this repository. A
-    // batch given no time would be collected as a batch that reported nothing,
-    // which reads as an infrastructure fault; the truth is that earlier
-    // repositories spent the run's ceiling. The caller turns this into one
-    // failure for the whole slice it could not reach.
+  const activity = `${phase === "setup" ? "Setup" : "Checks"} batch for ${args.provider}:${args.repoPath}`;
+  const observeChecksBudget = args.observeChecksBudget ??
+    ((requireRemainingDuration?: boolean, observedAtMs?: number) =>
+      args.observeBudget(requireRemainingDuration, "checks", observedAtMs));
+  const entryBoundary = await observeChecksAllowance(
+    () => args.observeBudget(false),
+    ceilingMs,
+    activity,
+  );
+  if (entryBoundary.failure) {
+    // The ceiling was spent before this repository. Nothing is launched, and
+    // the caller records the whole unreached slice as not run.
     return {
       skipped: false,
       collected: {
@@ -919,6 +941,16 @@ export async function runRepoCheckBatch(args: {
       ...(args.restoreTree === undefined ? {} : { restoreTree: args.restoreTree }),
     },
   );
+  const launchBoundary = await observeChecksAllowance(
+    () => observeChecksBudget(
+      false,
+      started.checksClockObservedAtMs ?? entryBoundary.observedAtMs,
+    ),
+    ceilingMs,
+    activity,
+    started.checksClockObservedAtMs ?? entryBoundary.observedAtMs,
+  );
+  if (launchBoundary.failure) throw launchBoundary.failure;
   if (started.skipped) {
     return { skipped: true, collected: unreadableBatch(), stall: null, elapsedMs: 0 };
   }
@@ -942,8 +974,8 @@ export async function runRepoCheckBatch(args: {
     };
   }
 
-  const collect = (batchFinished: boolean): Promise<CollectedRepoCheckBatch> =>
-    collectRepoCheckBatchStep(
+  const collect = async (batchFinished: boolean): Promise<CollectedRepoCheckBatch> => {
+    const collected = await collectRepoCheckBatchStep(
       args.sandboxId,
       args.provider,
       args.repoPath,
@@ -960,13 +992,25 @@ export async function runRepoCheckBatch(args: {
           : { commandTimeoutMinutes: args.commandTimeoutMinutes }),
       },
     );
+    const collectionBoundary = await observeChecksAllowance(
+      () => observeChecksBudget(
+        false,
+        collected.checksClockObservedAtMs ?? launchBoundary.observedAtMs,
+      ),
+      ceilingMs,
+      activity,
+      collected.checksClockObservedAtMs ?? launchBoundary.observedAtMs,
+    );
+    if (collectionBoundary.failure) throw collectionBoundary.failure;
+    return collected;
+  };
 
   const outcome = newPhasePollOutcome();
-  // What the ceiling had already lost before this batch launched. capMs is the
-  // remainder the observer just measured, so the difference is the only place
+  // What the ceiling had already lost before this batch launched. The entry
+  // allowance is the remainder the observer measured, so the difference is the only place
   // the run's cumulative checks time is readable from here: the running total
   // itself lives in the in-memory budget state, not on any durable output.
-  const spentBeforeBatchMs = phase === "checks" ? Math.max(0, ceilingMs - capMs) : 0;
+  const spentBeforeBatchMs = Math.max(0, ceilingMs - entryBoundary.remainingMs);
   let lastProgressMs: number | null = null;
   const reportProgress = async (progress: {
     elapsedMs: number;
@@ -992,8 +1036,8 @@ export async function runRepoCheckBatch(args: {
       phase,
       repo: `${args.provider}:${args.repoPath}`,
       elapsedMs: spentBeforeBatchMs + progress.elapsedMs,
-      ceilingMs: phase === "setup" ? null : ceilingMs,
-      boundMs: phase === "setup" ? progress.remainingDurationMs : capMs,
+      ceilingMs,
+      boundMs: launchBoundary.remainingMs,
       ticks: progress.ticks,
       commandsLaunched: total,
     });
@@ -1007,19 +1051,32 @@ export async function runRepoCheckBatch(args: {
       // checks ceiling in milliseconds rather than a whole number of minutes.
       0,
       started.commandId,
-      // Setup deliberately keeps the plain observer: its waiting is the run's
-      // time, so it must land on the duration clock like every other block.
-      phase === "setup"
-        ? args.observeBudget
-        : args.observeChecksBudget ?? args.observeBudget,
+      async (_requireRemainingDuration) => {
+        const boundary = await observeChecksAllowance(
+          () => observeChecksBudget(false),
+          ceilingMs,
+          activity,
+        );
+        if (boundary.failure) throw boundary.failure;
+        return boundary.observation;
+      },
       args.cancellation,
       {
-        ...batchPollTuning(outcome, capMs, phase),
-        phaseLimitMs: capMs,
+        ...batchPollTuning(outcome, launchBoundary.remainingMs),
+        phaseLimitMs: launchBoundary.remainingMs,
         onTick: reportProgress,
       },
     );
   } catch (error) {
+    propagateInvocationInterruption(error);
+    if (isChecksCeilingExceededError(error)) {
+      try {
+        await collect(false);
+      } catch (collectionError) {
+        propagateInvocationInterruption(collectionError);
+      }
+      throw error;
+    }
     // A budget stop still ends the run, but the wrapper's files say exactly how
     // far the checks got and the operator has no other way to find out.
     throw await budgetErrorNamingProgress(
@@ -1029,6 +1086,24 @@ export async function runRepoCheckBatch(args: {
       collect,
       phase,
     );
+  }
+
+  const pollBoundary = await observeChecksAllowance(
+    () => observeChecksBudget(
+      false,
+      launchBoundary.observedAtMs + outcome.elapsedMs,
+    ),
+    ceilingMs,
+    activity,
+    launchBoundary.observedAtMs + outcome.elapsedMs,
+  );
+  if (pollBoundary.failure) {
+    try {
+      await collect(false);
+    } catch (error) {
+      propagateInvocationInterruption(error);
+    }
+    throw pollBoundary.failure;
   }
 
   if (!done) {
@@ -1070,7 +1145,9 @@ async function collectAbandonedBatch(
 ): Promise<CollectedRepoCheckBatch> {
   try {
     return await collect(false);
-  } catch {
+  } catch (error) {
+    if (isChecksCeilingExceededError(error)) throw error;
+    propagateInvocationInterruption(error);
     return unreadableBatch();
   }
 }
@@ -1466,7 +1543,7 @@ async function runCheckBatches(
         repo.provider,
         repo.repoPath,
         run.stall,
-        run.elapsedMs,
+        ceilingMs,
         run.collected,
         results,
         failures,
@@ -1558,22 +1635,30 @@ function formatProgress(progress: RepoCheckBatchProgress): string {
 /**
  * The sentence a stalled batch reports, in either check mode.
  *
- * It states the time that actually elapsed, never the cap that was requested: a
- * poll can end early, the cap itself is derived from the remaining budget, and
- * a message that can be false is worse than no message.
+ * A live timed-out batch reports the checks ceiling that stopped it. Every caller
+ * supplies the phase and repository context used to name that ceiling.
  */
 export function batchStallReason(
   stall: Exclude<PrePrPhaseStall, "none">,
-  elapsedMs: number,
   progress: RepoCheckBatchProgress,
+  context: {
+    phase: RepoBatchPhase;
+    provider: PrePrCheckFailure["provider"];
+    repoPath: string;
+    ceilingMs: number;
+  },
 ): string {
   const where = formatProgress(progress);
-  return stall === "sandbox_stopped"
-    ? `The Run Workspace sandbox stopped while this repository's checks were running${where}. ` +
-        "Nothing was verified: this is a lost workspace, not a failing check."
-    : `The checks for this repository ran for ${formatElapsed(elapsedMs)} without finishing and ` +
-        `were stopped${where}. Nothing was verified: this is a timeout, not a passing or a ` +
-        "failing check result.";
+  if (stall === "sandbox_stopped") {
+    return `The Run Workspace sandbox stopped while this repository's checks were running${where}. ` +
+      "Nothing was verified: this is a lost workspace, not a failing check.";
+  }
+  const activity = context.phase === "setup" ? "setup batch" : "checks batch";
+  return (
+    `The ${activity} for ${context.provider}:${context.repoPath} reached the ` +
+    `${Math.round(context.ceilingMs / 60_000)} minute checks ceiling${where}. ` +
+    "Nothing was verified: this is a checks timeout, not a duration budget failure."
+  );
 }
 
 /**
@@ -1588,7 +1673,7 @@ function stalledBatches(
   provider: PrePrCheckFailure["provider"],
   repoPath: string,
   stall: Exclude<PrePrPhaseStall, "none">,
-  elapsedMs: number,
+  ceilingMs: number,
   collected: CollectedRepoCheckBatch,
   results: PrePrCheckCommandResult[],
   failures: PrePrCheckFailure[],
@@ -1607,7 +1692,12 @@ function stalledBatches(
     command: collected.progress.stoppedAt ?? "(pre-PR check batch)",
     exitCode: -1,
     stdout: "",
-    stderr: batchStallReason(stall, elapsedMs, collected.progress),
+    stderr: batchStallReason(stall, collected.progress, {
+      phase: "checks",
+      provider,
+      repoPath,
+      ceilingMs,
+    }),
     // The batch never reported, so this is not a check result at all. Without a
     // phase it reads as an ordinary failing check, and every sentence that only
     // makes sense for a command that ran would be attached to it.

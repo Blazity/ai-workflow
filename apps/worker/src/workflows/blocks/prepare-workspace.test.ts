@@ -120,6 +120,7 @@ import {
 } from "./prepare-workspace.js";
 import type { WorkspaceManifestV2 } from "../../sandbox/repo-workspace.js";
 import { teardownSandboxes } from "../../sandbox/poll-agent.js";
+import { checksCeilingExceededError } from "../run-budget.js";
 import {
   expectOutputConformsToRegistry,
   makeCtx,
@@ -141,6 +142,15 @@ const MOVED_SHA = "b".repeat(40);
 
 function contextsFor(repository: SelectedRepository, hasConflicts = false) {
   return [{ repository, prComments: [], checkResults: [], hasConflicts }];
+}
+
+function restoreAgentAdapterMock(): void {
+  mocks.createAgentAdapter.mockImplementation((kind: string) => ({
+    kind,
+    cliSpec: { displayName: kind, binName: kind },
+    install: mocks.agentInstall,
+    configure: mocks.agentConfigure,
+  }));
 }
 
 // vi.clearAllMocks() clears calls but keeps implementations, and mocks.env is a
@@ -192,9 +202,43 @@ const SCRIPT_NODES = [
   { id: "checks", type: "run_pre_pr_checks", name: "Run pre-PR checks", params: {} },
 ] as unknown as NonNullable<Parameters<typeof makeCtx>[0]>["definitionNodes"];
 
+const SETUP_BOUNDARY_ERROR_CASES = [
+  {
+    label: "checks ceiling",
+    create: () =>
+      checksCeilingExceededError(900_000, "Setup batch for github:acme/api"),
+    expected: {
+      name: "ChecksCeilingExceededError",
+      message:
+        "The repository checks did not finish within the 15 minute checks ceiling. " +
+        "Raise batchTimeoutMinutes for this definition or split the run. " +
+        "(checks_ceiling_exceeded: Setup batch for github:acme/api reached the 15 minute checks ceiling)",
+    },
+  },
+  {
+    label: "ordinary abort",
+    create: () => new DOMException("sandbox request aborted", "AbortError"),
+    expected: { name: "AbortError", message: "sandbox request aborted" },
+  },
+  {
+    label: "invocation cancellation",
+    create: () =>
+      Object.assign(new Error("invocation superseded"), {
+        name: "V2InvocationCancelledError",
+      }),
+    expected: {
+      name: "V2InvocationCancelledError",
+      message: "invocation superseded",
+    },
+  },
+] as const;
+
 describe("prepare_workspace execute", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    // Setup failures and registration failures must not survive into the next case.
+    vi.resetAllMocks();
+    restoreAgentAdapterMock();
+    mocks.captureDefaultBranchFilesStep.mockResolvedValue({});
     // No stored configuration and the default ceiling: what a deployment with
     // nothing configured sees, and what every test that is not about the
     // checks phase should get.
@@ -858,14 +902,68 @@ describe("prepare_workspace execute", () => {
     expect(mocks.runRepositorySetup).toHaveBeenCalledWith(
       expect.objectContaining({ sandboxId: "sbx-9", config, checksCeilingMs: 900_000 }),
     );
-    // The plain observer only. Setup is provisioning, so its time is the run's
-    // duration and must never be charged to the checks ceiling: three repos of
-    // `uv sync` would otherwise eat the budget the tests were given, and the
-    // failure would point an operator at batchTimeoutMinutes, the wrong knob.
+    // One observer is enough: runRepositorySetup attributes its durable phase
+    // boundaries to the checks clock through that observer.
     expect(mocks.runRepositorySetup.mock.calls[0]![0]).not.toHaveProperty(
       "observeChecksBudget",
     );
   });
+
+  it.each(SETUP_BOUNDARY_ERROR_CASES)(
+    "rethrows a $label from setup while reusing a workspace",
+    async ({ create, expected }) => {
+      mocks.resolveChecksProvisioningStep.mockResolvedValue({
+        ceilingMs: 900_000,
+        config: { repositories: [{ provider: "github", repoPath: "acme/api" }] },
+      });
+      const error = create();
+      mocks.runRepositorySetup.mockRejectedValue(error);
+      let caught: unknown;
+
+      try {
+        await ensureWorkspace(
+          makeCtx({ sandboxId: "code-1", definitionNodes: SCRIPT_NODES }),
+          undefined,
+          {},
+        );
+      } catch (thrown) {
+        caught = thrown;
+      }
+
+      expect(caught).toBe(error);
+      expect(caught).toMatchObject(expected);
+    },
+  );
+
+  it.each(SETUP_BOUNDARY_ERROR_CASES)(
+    "rethrows a $label from setup after creating a workspace",
+    async ({ create, expected }) => {
+      mocks.resolveChecksProvisioningStep.mockResolvedValue({
+        ceilingMs: 900_000,
+        config: { repositories: [{ provider: "github", repoPath: "acme/api" }] },
+      });
+      mocks.runPreSandboxPhase.mockResolvedValue({
+        status: "continue",
+        promptAdditions: { research: [], implementation: [], review: [] },
+        selectedRepositories: [repo],
+      });
+      mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+      const error = create();
+      mocks.runRepositorySetup.mockRejectedValue(error);
+      const ctx = makeCtx({ sandboxId: null, definitionNodes: SCRIPT_NODES });
+      let caught: unknown;
+
+      try {
+        await ensureWorkspace(ctx, undefined, {});
+      } catch (thrown) {
+        caught = thrown;
+      }
+
+      expect(ctx.sandboxId).toBe("sbx-9");
+      expect(caught).toBe(error);
+      expect(caught).toMatchObject(expected);
+    },
+  );
 
   it("hands the setup substep the observation channel it reports progress on", async () => {
     // Provisioning precedes every block that produces output, so a five minute

@@ -43,9 +43,12 @@ import {
   nodeCanRecordGate,
   repositoryScriptFailureEntry,
   recoverLatestRepositoryScriptsFailureFromSteps,
+  reconcileRunBudgetErrorAtBoundary,
   repositoryScriptsFailureComment,
   repositoryScriptsOutput,
   repositoryScriptsStatus,
+  shouldRethrowAgentExecutionError,
+  unhandledAgentExecutionError,
 } from "./agent.js";
 import {
   expectOutputConformsToRegistry,
@@ -71,7 +74,10 @@ import {
   REPOSITORY_SCRIPTS_BUDGET_CLASS,
 } from "./blocks/repository-scripts-output.js";
 import type { PrePrCheckRunResult } from "../pre-pr-checks/runner.js";
-import { isDurationAbortError } from "./run-budget.js";
+import {
+  checksCeilingExceededError,
+  isDurationAbortError,
+} from "./run-budget.js";
 import { isRunControlError } from "./run-control-error.js";
 import { runControlErrorCases } from "./blocks/test-support.js";
 
@@ -94,6 +100,49 @@ function describe_(error: unknown, version: number | null = 7) {
 }
 
 describe("pre-PR checks step failure cause", () => {
+  it("keeps a checks ceiling cause when almost no duration remains", async () => {
+    const ceiling = checksCeilingExceededError(
+      900_000,
+      "Checks batch for github:acme/web",
+    );
+    const observeBudget = vi.fn().mockResolvedValue({
+      check: {
+        status: "budget_exceeded",
+        metric: "duration",
+        limit: 1_800_000,
+        consumed: 1_800_001,
+        reason: "budget_exceeded: duration 1800001 exceeds limit 1800000",
+      },
+      remainingDurationMs: 0,
+    });
+
+    await expect(
+      reconcileRunBudgetErrorAtBoundary(ceiling, observeBudget),
+    ).resolves.toBe(ceiling);
+    expect(observeBudget).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    new DOMException("sandbox request aborted", "AbortError"),
+    Object.assign(new Error("superseded"), { name: "V2InvocationCancelledError" }),
+  ])("keeps %s untouched when duration is already exhausted", async (cause) => {
+    const observeBudget = vi.fn().mockResolvedValue({
+      check: {
+        status: "budget_exceeded",
+        metric: "duration",
+        limit: 1_800_000,
+        consumed: 1_800_001,
+        reason: "budget_exceeded: duration 1800001 exceeds limit 1800000",
+      },
+      remainingDurationMs: 0,
+    });
+
+    await expect(
+      reconcileRunBudgetErrorAtBoundary(cause, observeBudget),
+    ).resolves.toBe(cause);
+    expect(observeBudget).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -169,7 +218,7 @@ describe("pre-PR checks step failure cause", () => {
   );
 
   it.each([["AbortError"], ["TimeoutError"]])(
-    "keeps a %s out of the wrap so the duration budget stop survives",
+    "keeps a %s out of the wrap without claiming it hit a budget",
     (name) => {
       const error = namedError(name, "The operation was aborted.");
 
@@ -181,7 +230,7 @@ describe("pre-PR checks step failure cause", () => {
   it("wraps only what wrapping cannot break", () => {
     // Why the two predicates gate the wrap at all: both match structurally on
     // `name`, so a control error re-thrown as `new Error(message)` stops being
-    // one, and a duration budget stop would report as a generic failure.
+    // one, and an abort would report as a generic checks failure.
     const budgetStop = namedError("RunBudgetError", "budget exceeded");
     const abort = namedError("AbortError", "The operation was aborted.");
     const identity = (value: string) => value;
@@ -1887,6 +1936,86 @@ describe("v2 terminal failure exit", () => {
   ): WorkflowDefinitionV2Node {
     return { id, type, x: 0, y: 0, configuration: {}, inputs: {}, additionalInputs: [] };
   }
+
+  it.each(["run_pre_pr_checks", "run_scripts"] as const)(
+    "keeps a checks ceiling from %s intact through scheduler execution",
+    async (type) => {
+      const ceiling = checksCeilingExceededError(
+        900_000,
+        `Checks batch for github:acme/${type === "run_scripts" ? "scripts" : "gate"}`,
+      );
+      const currentDefinition: WorkflowDefinitionV2 = {
+        schemaVersion: 2,
+        nodes: [v2Node("trigger", "trigger_ticket_ai"), v2Node("checks", type)],
+        edges: [{ id: "trigger-checks", from: "trigger", to: "checks" }],
+      };
+
+      let caught: unknown;
+      try {
+        await executeV2Graph({
+          definition: currentDefinition,
+          entryTriggerId: "trigger",
+          triggerOutput: { status: "fired" },
+          shouldRethrowExecutionError: shouldRethrowAgentExecutionError,
+          executeBlock: () => {
+            throw ceiling;
+          },
+        });
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBe(ceiling);
+      expect(unhandledAgentExecutionError(caught, "checks")).toMatchObject({
+        category: "checks",
+        message: ceiling.message,
+      });
+    },
+  );
+
+  it("wires the shared rethrow predicate into both graph engines", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./agent.ts", import.meta.url)),
+      "utf8",
+    );
+
+    expect(
+      source.split("shouldRethrowExecutionError: shouldRethrowAgentExecutionError").length - 1,
+    ).toBe(2);
+  });
+
+  it("keeps the actionable checks ceiling text in the run reason, telemetry and Jira comment", () => {
+    const ceilingReason =
+      "The repository checks did not finish within the 15 minute checks ceiling. " +
+      "Raise batchTimeoutMinutes for this definition or split the run. " +
+      "(checks_ceiling_exceeded: Checks batch for github:acme/web reached the 15 minute checks ceiling)";
+    const failure = executionError(
+      "checks_ceiling_exceeded: Checks batch for github:acme/web reached the 15 minute checks ceiling",
+      {
+      category: "checks",
+      message: ceilingReason,
+      },
+    ).error;
+    const state: WorkflowExecutionErrorState = {
+      ...failure,
+      diagnosticId: "AIW-DIAG-wrun-checks-checks-1",
+      nodeId: "checks",
+      attempt: 1,
+    };
+    const expected =
+      "The repository checks did not finish within the 15 minute checks ceiling. " +
+      "Raise batchTimeoutMinutes for this definition or split the run. " +
+      "(checks_ceiling_exceeded: Checks batch for github:acme/web reached the 15 minute checks ceiling) " +
+      "Diagnostic ID: AIW-DIAG-wrun-checks-checks-1";
+
+    const runReason = formatExecutionErrorForUser(state);
+    const telemetryMessage = formatExecutionErrorForUser(state);
+    const jiraComment = commentForWalk({ executionError: state, steps: {} });
+
+    expect(runReason).toBe(expected);
+    expect(telemetryMessage).toBe(expected);
+    expect(jiraComment).toBe(expected);
+  });
 
   const definition: WorkflowDefinitionV2 = {
     schemaVersion: 2,

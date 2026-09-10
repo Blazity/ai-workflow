@@ -7,7 +7,7 @@ import {
   workspaceRepositoryAccess,
   type WorkspaceManifest,
 } from "../../sandbox/repo-workspace.js";
-import { RunBudgetError } from "../run-budget.js";
+import { durationBudgetFailure, RunBudgetError } from "../run-budget.js";
 import { isRunControlError } from "../run-control-error.js";
 import { resolveCallLlmTarget } from "./call-llm.js";
 import {
@@ -723,15 +723,7 @@ export const execute: BlockExecuteFn = async (
     const after = await ctx.observeBudget();
     if (after.check.status !== "ok") throw new RunBudgetError(after.check);
     if (after.remainingDurationMs <= 0) {
-      const limit = after.durationLimitMs ?? after.activeElapsedMs ?? 0;
-      const consumed = after.activeElapsedMs ?? limit;
-      throw new RunBudgetError({
-        status: "budget_exceeded",
-        metric: "duration",
-        limit,
-        consumed,
-        reason: `budget_exceeded: duration ${consumed} reached limit ${limit} during Leak review`,
-      });
+      throw new RunBudgetError(durationBudgetFailure(after));
     }
     return reportOnly("The LLM scan was skipped after a provider error.");
   };

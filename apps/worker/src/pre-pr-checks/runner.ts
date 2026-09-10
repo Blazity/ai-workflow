@@ -725,6 +725,16 @@ export interface RepoCheckBatchStartOptions {
   restoreTree?: boolean;
 }
 
+interface ChecksClockStepObservation {
+  /** Clock reading captured in this durable step result. Optional so a result
+   *  journaled by an older deployment remains valid on replay. */
+  checksClockObservedAtMs?: number;
+}
+
+function withChecksClockObservation<T extends object>(value: T): T & ChecksClockStepObservation {
+  return { ...value, checksClockObservedAtMs: Date.now() };
+}
+
 /**
  * Write and launch one repository's check batch, detached, and return at once.
  *
@@ -753,15 +763,17 @@ export async function startRepoCheckBatchStep(
   requireChange = true,
   options: RepoCheckBatchStartOptions = {},
 ): Promise<
-  | { skipped: true }
-  | { skipped: false; envFailure: PrePrCheckFailure }
-  | {
-      skipped: false;
-      envFailure?: undefined;
-      commandId: string;
-      localPath: string;
-      paths: RepoCheckBatchPaths;
-    }
+  (
+    | { skipped: true }
+    | { skipped: false; envFailure: PrePrCheckFailure }
+    | {
+        skipped: false;
+        envFailure?: undefined;
+        commandId: string;
+        localPath: string;
+        paths: RepoCheckBatchPaths;
+      }
+  ) & ChecksClockStepObservation
 > {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
@@ -771,7 +783,7 @@ export async function startRepoCheckBatchStep(
     (candidate) =>
       candidate.provider === provider && candidate.repoPath === repoPath,
   );
-  if (!repo) return { skipped: true };
+  if (!repo) return withChecksClockObservation({ skipped: true });
 
   if (requireChange) {
     const headResult = await sandbox.runCommand("git", [
@@ -787,7 +799,9 @@ export async function startRepoCheckBatchStep(
         `Could not inspect workspace HEAD for ${provider}:${repoPath}`,
       );
     }
-    if (repo.preAgentSha && repo.preAgentSha === headSha) return { skipped: true };
+    if (repo.preAgentSha && repo.preAgentSha === headSha) {
+      return withChecksClockObservation({ skipped: true });
+    }
   }
 
   // Resolved inside the step, never in workflow scope: a value resolved out
@@ -796,10 +810,10 @@ export async function startRepoCheckBatchStep(
   // anything is written, so a misconfigured secret cannot half-run a batch.
   const resolvedEnv = resolveRepoEnv(options.envNames ?? []);
   if (resolvedEnv.rejected.length > 0) {
-    return {
+    return withChecksClockObservation({
       skipped: false,
       envFailure: repoEnvFailure(provider, repoPath, resolvedEnv.rejected),
-    };
+    });
   }
 
   const paths = repoCheckBatchPaths(fixCycle, repoIndex, newLaunchId());
@@ -844,12 +858,12 @@ export async function startRepoCheckBatchStep(
       `The repository scripts batch for ${provider}:${repoPath} exited ${launch.exitCode} before it started.`,
     );
   }
-  return {
+  return withChecksClockObservation({
     skipped: false,
     commandId: launch.cmdId,
     localPath: repo.localPath,
     paths,
-  };
+  });
 }
 startRepoCheckBatchStep.maxRetries = 0;
 
@@ -921,6 +935,9 @@ export interface CollectedRepoCheckBatch {
    *  it is only slower, and an operator should still be able to find out. */
   setupMarkerFailed: boolean;
   progress: RepoCheckBatchProgress;
+  /** Clock reading captured in this durable step result. Optional for replay
+   *  compatibility with results journaled before this field existed. */
+  checksClockObservedAtMs?: number;
 }
 
 /** Extra inputs the collect step takes, bundled for the same reason the start
@@ -1001,7 +1018,7 @@ export async function collectRepoCheckBatchStep(
   // maxRetries is 0. Same guard checkPhaseDone makes for the same reason
   // (sandbox/poll-agent.ts).
   if (sandbox.status !== "running") {
-    return workspaceIncident(BATCH_SANDBOX_GONE_REASON);
+    return withChecksClockObservation(workspaceIncident(BATCH_SANDBOX_GONE_REASON));
   }
 
   const read = await readBatchFiles(sandbox, paths, total);
@@ -1009,7 +1026,9 @@ export async function collectRepoCheckBatchStep(
   // must never be reported as each other. The reader runs under `bash -lc`,
   // which sources the very profile these setup commands append to, so a broken
   // profile fails the read while the batch itself is fine.
-  if (!read.ok) return workspaceIncident(BATCH_READER_FAILED_REASON);
+  if (!read.ok) {
+    return withChecksClockObservation(workspaceIncident(BATCH_READER_FAILED_REASON));
+  }
   const files = read.files;
   // Zero records is the reader losing its own stdout, not a batch that never
   // started. `names` always asks for `launch` and `stopped-at`, and the script
@@ -1017,7 +1036,9 @@ export async function collectRepoCheckBatchStep(
   // reader cannot return nothing. A login profile that redirects the shell's
   // stdout (`exec 1>/dev/null`) produces exactly this, and reporting it as
   // "the wrapper never started" sends the operator to look at the wrapper.
-  if (files.size === 0) return workspaceIncident(BATCH_READER_FAILED_REASON);
+  if (files.size === 0) {
+    return withChecksClockObservation(workspaceIncident(BATCH_READER_FAILED_REASON));
+  }
 
   // Identity before content. A directory whose `launch` marker is not this
   // launch's was written by a different wrapper, so nothing in it describes the
@@ -1030,17 +1051,17 @@ export async function collectRepoCheckBatchStep(
     // The wrapper writes this marker before anything else it does, so its
     // absence means the wrapper never ran, which is worth saying plainly
     // instead of arriving later as "the first command recorded no exit".
-    return workspaceIncident(BATCH_NEVER_STARTED_REASON);
+    return withChecksClockObservation(workspaceIncident(BATCH_NEVER_STARTED_REASON));
   }
   if (decodeBatchFile(launch) !== paths.launchId) {
-    return workspaceIncident(BATCH_IDENTITY_REASON);
+    return withChecksClockObservation(workspaceIncident(BATCH_IDENTITY_REASON));
   }
 
   const stoppedAtFile = files.get("stopped-at");
   const stoppedAtText = stoppedAtFile ? decodeBatchFile(stoppedAtFile) : "";
   const stoppedAt = /^-?\d+$/.test(stoppedAtText) ? Number(stoppedAtText) : null;
   if (stoppedAt === BATCH_NO_COMMAND_RAN) {
-    return {
+    return withChecksClockObservation({
       results: [],
       failures: [
         batchFailure(
@@ -1056,7 +1077,7 @@ export async function collectRepoCheckBatchStep(
       preExistingDirty: [],
       setupMarkerFailed: false,
       progress: emptyProgress,
-    };
+    });
   }
 
   // Setup that the marker skipped left no exit files, and a collector that
@@ -1201,7 +1222,7 @@ export async function collectRepoCheckBatchStep(
     }
   }
 
-  return {
+  return withChecksClockObservation({
     results,
     // The ordering guarantee: every byte of every stream was scrubbed by
     // decodeBatchFile as it was decoded, edges included, so no value survives
@@ -1218,7 +1239,7 @@ export async function collectRepoCheckBatchStep(
     preExistingDirty: parseDirtyFiles(streamText(files.get("dirty-before"))),
     setupMarkerFailed,
     progress: { completed, total: commands.length, stoppedAt: stoppedAtCommand },
-  };
+  });
 }
 collectRepoCheckBatchStep.maxRetries = 0;
 

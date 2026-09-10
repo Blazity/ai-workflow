@@ -81,6 +81,52 @@ describe("mergeBudgetObservations", () => {
         .checksElapsedMs,
     ).toBe(120_000);
     expect(mergeBudgetObservations(legacy, legacy).checksElapsedMs).toBe(0);
+    expect(mergeBudgetObservations(legacy, legacy)).not.toHaveProperty("observedAtMs");
+  });
+});
+
+describe("checks phase duration pause", () => {
+  const envLimits = { maxDurationMs: 1_800_000, maxDurationSource: "env" } as const;
+
+  it("pauses duration for repository checks and names the env fallback when it resumes over budget", () => {
+    let state = addActiveElapsed(createRunBudgetState(), 1_572_999);
+    state = addChecksElapsed(state, 900_000);
+    expect(checksElapsedOf(state)).toBe(900_000);
+    expect(checkRunBudget(state, envLimits)).toEqual({ status: "ok" });
+    state = addActiveElapsed(state, 300_000);
+    expect(checkRunBudget(state, envLimits)).toEqual({
+      status: "budget_exceeded",
+      metric: "duration",
+      limit: 1_800_000,
+      consumed: 1_872_999,
+      reason: "budget_exceeded: the run took 31 min 12 s, over the 30 min limit from JOB_TIMEOUT_MS (this workflow sets no budgets.maxDurationMs). Raise budgets.maxDurationMs on the workflow definition, or JOB_TIMEOUT_MS, to allow longer runs.",
+    });
+    const exact = addActiveElapsed(createRunBudgetState(), 1_800_000);
+    expect(observeRunBudget(exact, envLimits, false).check).toEqual({ status: "ok" });
+    expect(observeRunBudget(exact, envLimits, true).check).toMatchObject({ consumed: 1_800_000 });
+  });
+
+  it("names the workflow definition when its duration budget is exceeded", () => {
+    const state = addActiveElapsed(createRunBudgetState(), 2_883_999);
+    expect(checkRunBudget(state, { maxDurationMs: 2_700_000, maxDurationSource: "definition" })).toEqual({
+      status: "budget_exceeded",
+      metric: "duration",
+      limit: 2_700_000,
+      consumed: 2_883_999,
+      reason: "budget_exceeded: the run took 48 min 3 s, over the 45 min limit from budgets.maxDurationMs on this workflow definition. Raise budgets.maxDurationMs to allow longer runs.",
+    });
+  });
+
+  it.each([
+    ["Strict profile", "the harness profile \"Strict profile\""],
+    [undefined, "the harness profile"],
+  ] as const)("formats the exact profile duration message for name %s", (name, source) => {
+    const check = checkRunBudget(addActiveElapsed(createRunBudgetState(), 725_999), {
+      maxDurationMs: 600_000, maxDurationSource: "profile", maxDurationProfileName: name,
+    });
+    expect(check).toMatchObject({
+      reason: `budget_exceeded: this invocation took 12 min 5 s, over the 10 min limit from ${source} (runtimeLimits.maxDurationMs). Raise that limit on the profile to allow longer invocations.`,
+    });
   });
 });
 
@@ -134,32 +180,6 @@ describe("checks phase accounting", () => {
 });
 
 describe("run budget accounting", () => {
-  it("tracks active elapsed time without reading the clock itself", () => {
-    const state = addActiveElapsed(addActiveElapsed(createRunBudgetState(), 400), 600);
-
-    expect(state.activeElapsedMs).toBe(1_000);
-    expect(checkRunBudget(state, { maxDurationMs: 1_000 })).toEqual({ status: "ok" });
-    expect(checkRunBudget(addActiveElapsed(state, 1), { maxDurationMs: 1_000 })).toMatchObject({
-      status: "budget_exceeded",
-      metric: "duration",
-      limit: 1_000,
-      consumed: 1_001,
-    });
-  });
-
-  it("allows exact duration on completion but not when more work would start", () => {
-    const state = addActiveElapsed(createRunBudgetState(), 1_000);
-    const limits = { maxDurationMs: 1_000 };
-
-    expect(observeRunBudget(state, limits, false).check).toEqual({ status: "ok" });
-    expect(observeRunBudget(state, limits, true).check).toMatchObject({
-      status: "budget_exceeded",
-      metric: "duration",
-      limit: 1_000,
-      consumed: 1_000,
-    });
-  });
-
   it("counts input, cached input, and output tokens", () => {
     const state = recordBudgetUsage(createRunBudgetState(), usage(), null);
 

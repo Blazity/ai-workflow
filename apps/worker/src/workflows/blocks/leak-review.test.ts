@@ -670,7 +670,7 @@ describe("leak_review execute", () => {
       });
 
     await expect(execute(makeNode("leak_review"), {}, ctx)).rejects.toThrow(
-      /budget_exceeded: duration/,
+      /budget_exceeded: the run took/,
     );
   });
 

@@ -19,9 +19,12 @@ import {
   type RepositoryScriptGroupCoverage,
 } from "./repository-scripts-output.js";
 import {
+  checksCeilingErrorDetail,
+  isChecksCeilingExceededError,
   RunBudgetError,
-  durationBudgetFailure,
-  isDurationAbortError,
+  propagateInvocationInterruption,
+  type RunBudgetAttribution,
+  type RunBudgetObservation,
 } from "../run-budget.js";
 import { isRunControlError } from "../run-control-error.js";
 import {
@@ -119,6 +122,13 @@ interface RunChecksStepResult {
  *  as no coverage for its own reasons. */
 const NO_GROUP_COVERAGE: RepositoryScriptGroupCoverage[] = [];
 
+type BoundaryCapableBudgetObserver = (
+  requireRemainingDuration?: boolean,
+  attribution?: RunBudgetAttribution,
+  observedAtMs?: number,
+) => Promise<RunBudgetObservation>;
+
+
 function toBlockResults(
   collected: CollectedRepoCheckBatch,
 ): RunChecksStepResult["results"] {
@@ -185,7 +195,7 @@ async function runExplicitCommands(
   sandboxId: string,
   commands: string[],
   observeBudget: PrePrChecksOptions["observeBudget"],
-  observeChecksBudget: PrePrChecksOptions["observeBudget"],
+  observeChecksBudget: NonNullable<PrePrChecksOptions["observeChecksBudget"]>,
   cancellation: PrePrChecksOptions["cancellation"],
   checksCeilingMs: number | null,
 ): Promise<RunChecksStepResult> {
@@ -251,7 +261,12 @@ async function runExplicitCommands(
             command: run.collected.progress.stoppedAt ?? "(check batch)",
             exitCode: -1,
             output: boundFailureOutput(
-              batchStallReason(run.stall, run.elapsedMs, run.collected.progress),
+              batchStallReason(run.stall, run.collected.progress, {
+                phase: "checks",
+                provider: repo.provider,
+                repoPath: repo.repoPath,
+                ceilingMs: checksCeilingMs ?? checksCeilingMsOf(),
+              }),
               OUTPUT_TRUNCATE,
             ),
           },
@@ -288,7 +303,7 @@ async function runConfiguredChecks(
   agentKind: PrePrChecksOptions["agentKind"],
   model: string,
   observeBudget: PrePrChecksOptions["observeBudget"],
-  observeChecksBudget: PrePrChecksOptions["observeBudget"],
+  observeChecksBudget: NonNullable<PrePrChecksOptions["observeChecksBudget"]>,
   cancellation: PrePrChecksOptions["cancellation"],
   groups: string[],
   checksCeilingMs: number | null,
@@ -394,9 +409,12 @@ export const execute: BlockExecuteFn = async (
   // Two views of one budget context: the plain observer closes the run's clock
   // at each launch, the checks one carries every tick the poll waits through.
   const observeBudget = blockBudgetObserver(ctx, execution);
-  const observeChecksBudget = blockBudgetObserver(ctx, execution, {
-    attribution: "checks",
-  });
+  const boundaryObserver = (execution?.observeBudget ?? ctx.observeBudget) as
+    BoundaryCapableBudgetObserver;
+  const observeChecksBudget = (
+    requireRemainingDuration?: boolean,
+    observedAtMs?: number,
+  ) => boundaryObserver(requireRemainingDuration, "checks", observedAtMs);
   const checksCeilingMs = recoverChecksCeilingFromSteps(steps);
   try {
     const result =
@@ -473,11 +491,15 @@ export const execute: BlockExecuteFn = async (
     };
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    const after = await ctx.observeBudget();
-    if (after.check.status !== "ok") throw new RunBudgetError(after.check);
-    if (isDurationAbortError(err)) {
-      throw new RunBudgetError(durationBudgetFailure(after, "Run checks"));
+    if (isChecksCeilingExceededError(err)) {
+      return executionError(checksCeilingErrorDetail(err), {
+        category: "checks",
+        message: err.message,
+      });
     }
+    propagateInvocationInterruption(err);
+    const after = await observeChecksBudget(false);
+    if (after.check.status !== "ok") throw new RunBudgetError(after.check);
     return executionError(err instanceof Error ? err.message : String(err), {
       category: "checks",
     });
