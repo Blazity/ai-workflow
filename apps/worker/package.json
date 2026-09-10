@@ -4,8 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "rm -rf .nitro/workflow && nitro dev",
-    "build": "pnpm validate:pre-sandbox && pnpm validate:local-skills && pnpm db:migrate && pnpm seed:auth-user && rm -rf .nitro/workflow && NODE_OPTIONS=--max-old-space-size=8192 nitro build",
-    "build:ci": "pnpm validate:pre-sandbox && pnpm validate:local-skills && pnpm mcp:contract:check && rm -rf .nitro/workflow && NODE_OPTIONS=--max-old-space-size=8192 nitro build",
+    "build": "pnpm validate:pre-sandbox && pnpm validate:local-skills && pnpm db:migrate && pnpm seed:auth-user && pnpm --dir ../.. run gen:blocks -- --check && rm -rf .nitro/workflow && NODE_OPTIONS=--max-old-space-size=8192 nitro build",
+    "build:ci": "pnpm validate:pre-sandbox && pnpm validate:local-skills && pnpm mcp:contract:check && pnpm --dir ../.. run gen:blocks -- --check && rm -rf .nitro/workflow && NODE_OPTIONS=--max-old-space-size=8192 nitro build",
     "preview": "nitro preview",
     "test": "vitest run",
     "test:workflow-sdk": "vitest run --config vitest.run-control-workflow.config.ts",

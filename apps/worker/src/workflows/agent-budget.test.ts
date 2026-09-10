@@ -14,7 +14,7 @@ import {
   missingRequiredPriceFailure,
   recordBudgetUsage,
 } from "./run-budget.js";
-import { makeHarnessRuntime } from "./blocks/test-support.js";
+import { makeHarnessRuntime } from "../engine/blocks/support/test-support.js";
 
 const node = (
   id: string,

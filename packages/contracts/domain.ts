@@ -1,3 +1,22 @@
+import type { WorkflowBlockType } from "./block-catalog.generated";
+import type {
+  WorkflowBlockAdditionalInputContract,
+  WorkflowBlockGroup,
+  WorkflowBlockInputContract,
+  WorkflowParamValue,
+  WorkflowValueSchema,
+} from "./block-catalog-types";
+
+export type { WorkflowBlockType } from "./block-catalog.generated";
+export type {
+  WorkflowBlockAdditionalInputContract,
+  WorkflowBlockGroup,
+  WorkflowBlockInputContract,
+  WorkflowParamValue,
+  WorkflowValueSchema,
+  WorkflowValueSchemaMetadata,
+} from "./block-catalog-types";
+
 export type RunStatus = "success" | "running" | "failed" | "blocked" | "awaiting";
 export type SpanKind = "workflow" | "llm" | "tool" | "guardrail" | "retrieval";
 
@@ -287,47 +306,6 @@ export interface RepositoryOption {
 
 // --- Workflow definition (dashboard-managed run graph) ---
 
-export type WorkflowBlockType =
-  | "trigger_ticket_ai"
-  | "trigger_plan_approved"
-  | "trigger_pr_created"
-  | "trigger_pr_ready"
-  | "trigger_pr_updated"
-  | "trigger_pr_checks_failed"
-  | "trigger_pr_review"
-  | "trigger_pr_merged"
-  | "trigger_webhook"
-  | "trigger_schedule"
-  | "planning_agent"
-  | "implementation_agent"
-  | "review_agent"
-  | "fix_agent"
-  | "generic_agent"
-  | "prepare_workspace"
-  | "finalize_workspace"
-  | "run_pre_pr_checks"
-  | "run_checks"
-  | "run_scripts"
-  | "call_llm"
-  | "transform"
-  | "fetch_pr_context"
-  | "investigate"
-  | "open_pr"
-  | "update_ticket_status"
-  | "post_ticket_comment"
-  | "post_pr_comment"
-  | "create_pr_check"
-  | "complete_pr_check"
-  | "post_pr_review"
-  | "send_slack_message"
-  | "send_plan_approval"
-  | "human_question"
-  | "arthur_injection_check"
-  | "leak_review"
-  | "branch"
-  | "loop"
-  | "terminate";
-
 export const V2_ONLY_BLOCK_TYPES = [
   "transform",
   // Repository scripts ship v2-only on purpose. The v1 interpreter has no
@@ -399,8 +377,6 @@ export interface BlockOutput {
  * `ai_review` / `backlog` values remain valid for existing definitions. */
 export type TicketStatusTarget = string;
 
-export type WorkflowParamValue = string | number | boolean | string[];
-
 /** Provenance of a prompt param copied from the prompt library. Purely
  *  informational: the runtime never reads it; the editor uses it to render
  *  "from library: Name vN" and to detect drift against the library head. */
@@ -424,38 +400,6 @@ export type WorkflowBindingSource =
 
 export type WorkflowInputBindings = Record<string, WorkflowBindingSource>;
 
-export interface WorkflowValueSchemaMetadata {
-  description?: string;
-  enum?: JsonValue[];
-}
-
-/** Small JSON-shaped type language used by block input/output contracts. */
-export type WorkflowValueSchema =
-  | ({ type: "string" } & WorkflowValueSchemaMetadata)
-  | ({ type: "number" } & WorkflowValueSchemaMetadata)
-  | ({ type: "boolean" } & WorkflowValueSchemaMetadata)
-  | ({ type: "null" } & WorkflowValueSchemaMetadata)
-  | ({ type: "unknown" } & WorkflowValueSchemaMetadata)
-  | ({ type: "nullable"; value: WorkflowValueSchema } & WorkflowValueSchemaMetadata)
-  | ({ type: "array"; items: WorkflowValueSchema } & WorkflowValueSchemaMetadata)
-  | ({
-      type: "object";
-      properties: Record<string, WorkflowValueSchema>;
-      required: string[];
-      additionalProperties: boolean;
-    } & WorkflowValueSchemaMetadata);
-
-export type WorkflowBlockGroup =
-  | "trigger"
-  | "agents"
-  | "workspace"
-  | "control"
-  | "ticket"
-  | "vcs"
-  | "human"
-  | "utility"
-  | "arthur";
-
 export interface WorkflowBlockPresentation {
   label: string;
   description: string;
@@ -463,19 +407,6 @@ export interface WorkflowBlockPresentation {
   color: string;
   softColor: string;
   glyph: string;
-}
-
-export interface WorkflowBlockInputContract {
-  required: boolean;
-  schema: WorkflowValueSchema;
-}
-
-/** A safe, registry-owned family of additional named inputs. The worker still
- * validates every concrete input name against `keyPattern`; this is only the
- * serializable contract the editor uses to offer those inputs. */
-export interface WorkflowBlockAdditionalInputContract {
-  keyPattern: string;
-  schema: WorkflowValueSchema;
 }
 
 export type WorkflowBlockAvailability =

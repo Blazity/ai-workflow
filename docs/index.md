@@ -30,10 +30,7 @@ each `apps/*/AGENTS.md`, and `README.md`, `AGENTS.md`, `SETUP.md` and
 |---|---|
 | [architecture/workflow-definition.md](./architecture/workflow-definition.md) | The definition schema v2: nodes, edges, bindings, triggers, harness profiles, loops, validation, deployment, the MCP authoring surface |
 | [architecture/repository-scripts.md](./architecture/repository-scripts.md) | The repository scripts config contract: named command groups, how a block selects them |
-
-Stage 4 and later stages of the restructure plan add `architecture/blocks.md`,
-`architecture/overview.md`, `architecture/data-model.md` and
-`architecture/gates.md` to this group.
+| [architecture/blocks.md](./architecture/blocks.md) | How block manifests, executor modules, generated catalogs, and the reviewer walkthrough fit together |
 
 ## Decision records
 
@@ -120,4 +117,3 @@ have no status header and the docs gate skips them.
 | `docs/releases/artur/YYYY.MM.PATCH.md` | The release pipeline copies the reviewed note into the tenant repository |
 | `docs/example-skill/SKILL.md` | The example agent skill referenced from SETUP.md |
 | `docs/example-workflows/loop-branch-workflow.json` | An importable example definition |
-| `docs/workflow-workspace/index.html` | The hand-maintained block catalog mock, deleted in stage 4 by ADR-002 |

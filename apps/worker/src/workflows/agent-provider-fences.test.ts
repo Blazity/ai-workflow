@@ -73,7 +73,7 @@ import {
   recordRunAnalysisReportBestEffort,
   reconcileClarificationsOnPickup,
 } from "./agent.js";
-import { runControlErrorCases } from "./blocks/test-support.js";
+import { runControlErrorCases } from "../engine/blocks/support/test-support.js";
 import { buildResearchAnalysisReport } from "../run-analysis/report.js";
 
 const owner = {

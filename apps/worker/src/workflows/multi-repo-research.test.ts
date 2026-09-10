@@ -70,7 +70,7 @@ import type { WorkspaceManifest } from "../sandbox/repo-workspace.js";
 import { workspaceRepositoryAccess } from "../sandbox/repo-workspace.js";
 import { publishTrustedWorkspaceFromSandbox } from "../sandbox/trusted-workspace-publisher.js";
 import { applyHumanRepositoryExpansion } from "./agent.js";
-import { makeCtx } from "./blocks/test-support.js";
+import { makeCtx } from "../engine/blocks/support/test-support.js";
 import {
   openPullRequestsForPublication,
   type FinalizedBranch,

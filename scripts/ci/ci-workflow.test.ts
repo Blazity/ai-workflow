@@ -74,6 +74,7 @@ const SOURCE_COMMANDS = [
   "pnpm install --frozen-lockfile",
   "pnpm run build:ci",
   "pnpm run gates",
+  "pnpm run gen:blocks --check",
   "pnpm run test:ci",
   "pnpm run test:release-notes",
   "pnpm run test:workflow-sdk",
@@ -196,10 +197,14 @@ test("the source build covers worker and dashboard without deployment side effec
     "pnpm validate:pre-sandbox",
     "pnpm validate:local-skills",
     "pnpm mcp:contract:check",
+    "pnpm --dir ../.. run gen:blocks -- --check",
     "rm -rf .nitro/workflow",
     "NODE_OPTIONS=--max-old-space-size=8192 nitro build",
   ]);
-  assert.equal(dashboardPackage.scripts.build, "next build");
+  assert.equal(
+    dashboardPackage.scripts.build,
+    "tsx ../../scripts/gates/generate-block-catalog.ts --check && next build",
+  );
   assert.doesNotMatch(workerPackage.scripts["build:ci"], /db:migrate/);
   assert.doesNotMatch(workerPackage.scripts["build:ci"], /seed:auth-user/);
 });
@@ -224,6 +229,7 @@ test("the source build uses the validator entrypoints and preserves deployment s
     "pnpm validate:local-skills",
     "pnpm db:migrate",
     "pnpm seed:auth-user",
+    "pnpm --dir ../.. run gen:blocks -- --check",
     "rm -rf .nitro/workflow",
     "NODE_OPTIONS=--max-old-space-size=8192 nitro build",
   ]);

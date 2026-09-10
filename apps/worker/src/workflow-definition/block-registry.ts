@@ -1,15 +1,11 @@
 import {
+  BLOCK_CATALOG,
   BLOCK_TYPE_SPECS,
-  DEFAULT_OPEN_PR_BODY,
-  DEFAULT_OPEN_PR_TITLE,
   REVIEW_RESULT_JSON_SCHEMA,
   type BlockOutput,
   type VcsProviderKind,
   type WorkflowBlockAvailability,
-  type WorkflowBlockAdditionalInputContract,
   type WorkflowBlockContract,
-  type WorkflowBlockGroup,
-  type WorkflowBlockInputContract,
   type WorkflowBlockPresentation,
   type WorkflowBlockType,
   type WorkflowParamValue,
@@ -37,10 +33,6 @@ export interface WorkflowBlockRegistryContext {
 }
 
 interface ContractDefinition {
-  presentation: WorkflowBlockPresentation;
-  defaults: Record<string, WorkflowParamValue>;
-  inputs: Record<string, WorkflowBlockInputContract>;
-  additionalInputs?: WorkflowBlockAdditionalInputContract[];
   output: WorkflowValueSchema;
   /** Top-level fields guaranteed whenever the block advances through a normal
    * output port. Nested guarantees remain declared by their own schemas. */
@@ -70,10 +62,6 @@ const objectType = (
   properties,
   required,
   additionalProperties,
-});
-const input = (schema: WorkflowValueSchema, required = false): WorkflowBlockInputContract => ({
-  required,
-  schema,
 });
 const statusOutput = (
   properties: Record<string, WorkflowValueSchema> = {},
@@ -388,37 +376,12 @@ const ticketTriggerOutputFields = {
   priorAnswers: arrayType(humanAnswerType),
 };
 
-const colors: Record<WorkflowBlockGroup, { color: string; softColor: string }> = {
-  trigger: { color: "#D14343", softColor: "#FBECEC" },
-  agents: { color: "#7C3AED", softColor: "#F2EBFD" },
-  workspace: { color: "#0f7f8b", softColor: "#E7F2F3" },
-  control: { color: "#35823f", softColor: "#E9F3EA" },
-  ticket: { color: "#2563EB", softColor: "#E9EFFD" },
-  vcs: { color: "#3C43E7", softColor: "#ECECFD" },
-  human: { color: "#b06a14", softColor: "#F7F0E7" },
-  utility: { color: "#64748B", softColor: "#EEF1F5" },
-  arthur: { color: "#8b6f8f", softColor: "#F3F0F4" },
-};
-
-function presentation(
-  group: WorkflowBlockGroup,
-  label: string,
-  description: string,
-  glyph: string,
-): WorkflowBlockPresentation {
-  return { group, label, description, glyph, ...colors[group] };
+function catalogPresentation(type: WorkflowBlockType): WorkflowBlockPresentation {
+  return { ...BLOCK_CATALOG[type].ui };
 }
 
 const definitions: Record<WorkflowBlockType, ContractDefinition> = {
   trigger_ticket_ai: {
-    presentation: presentation(
-      "trigger",
-      "Ticket assigned to AI",
-      "Starts when a configured ticket enters the AI workflow state.",
-      "▶",
-    ),
-    defaults: {},
-    inputs: {},
     output: statusOutput(
       { ticketKey: stringType(), ...ticketTriggerOutputFields },
       ["ticketKey"],
@@ -427,14 +390,6 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["fired"],
   },
   trigger_plan_approved: {
-    presentation: presentation(
-      "trigger",
-      "Plan approved",
-      "Starts the pinned implementation path after plan approval.",
-      "✔",
-    ),
-    defaults: {},
-    inputs: {},
     output: statusOutput(
       {
         ticketKey: stringType(),
@@ -449,14 +404,6 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["fired"],
   },
   trigger_pr_created: {
-    presentation: presentation(
-      "trigger",
-      "PR created",
-      "Starts from an allowed pull or merge request creation event.",
-      "⎇",
-    ),
-    defaults: { providers: ["github", "gitlab"], scope: "workflow_owned" },
-    inputs: {},
     output: statusOutput(
       {
         ticketKey: stringType(),
@@ -490,14 +437,6 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["fired"],
   },
   trigger_pr_ready: {
-    presentation: presentation(
-      "trigger",
-      "PR ready for review",
-      "Starts when a pull or merge request is ready for review.",
-      "⎇",
-    ),
-    defaults: { providers: ["github", "gitlab"], scope: "any" },
-    inputs: {},
     output: statusOutput(
       {
         provider: stringType(),
@@ -527,14 +466,6 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["fired"],
   },
   trigger_pr_updated: {
-    presentation: presentation(
-      "trigger",
-      "PR updated",
-      "Starts when the pull or merge request head commit changes.",
-      "⟳",
-    ),
-    defaults: { providers: ["github", "gitlab"], scope: "any" },
-    inputs: {},
     output: statusOutput(
       {
         provider: stringType(),
@@ -564,22 +495,6 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["fired"],
   },
   trigger_pr_checks_failed: {
-    presentation: presentation(
-      "trigger",
-      "PR checks failed",
-      "Starts when external CI reports one or more failed checks.",
-      "✗",
-    ),
-    defaults: {
-      providers: ["github", "gitlab"],
-      scope: "workflow_owned",
-      checkNames: [],
-      ignoreCheckNames: [],
-      githubAppSlugs: ["github-actions"],
-      gitlabPipelineSources: ["merge_request_event"],
-      maxFixAttemptsPerPr: 2,
-    },
-    inputs: {},
     output: statusOutput(
       {
         ticketKey: stringType(),
@@ -620,19 +535,6 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["fired"],
   },
   trigger_pr_review: {
-    presentation: presentation(
-      "trigger",
-      "PR review",
-      "Starts from an allowed human pull or merge request review.",
-      "✎",
-    ),
-    defaults: {
-      providers: ["github"],
-      on: ["changes_requested"],
-      scope: "workflow_owned",
-      maxRunsPerPr: 10,
-    },
-    inputs: {},
     output: statusOutput(
       {
         ticketKey: stringType(),
@@ -668,14 +570,6 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["fired"],
   },
   trigger_pr_merged: {
-    presentation: presentation(
-      "trigger",
-      "PR merged",
-      "Starts when an allowed pull or merge request is merged.",
-      "◆",
-    ),
-    defaults: { providers: ["github", "gitlab"], scope: "workflow_owned" },
-    inputs: {},
     output: statusOutput(
       {
         ticketKey: stringType(),
@@ -711,22 +605,6 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["fired"],
   },
   trigger_webhook: {
-    presentation: presentation(
-      "trigger",
-      "Webhook",
-      "Starts from a signed webhook delivery sent by an external system (for example Zendesk).",
-      "⇥",
-    ),
-    defaults: {
-      authScheme: "hmac_sha256",
-      requireTimestamp: false,
-      timestampToleranceSeconds: 300,
-      mapSubject: "subject",
-      mapDescription: "description",
-      mapRequester: "requester",
-      mapPriority: "priority",
-    },
-    inputs: {},
     output: statusOutput(
       {
         subject: stringType(),
@@ -741,21 +619,6 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["fired"],
   },
   trigger_schedule: {
-    presentation: presentation(
-      "trigger",
-      "Schedule",
-      "Starts the workflow on a recurring schedule in a timezone you configure.",
-      "◷",
-    ),
-    defaults: {
-      cron: "",
-      timezone: "UTC",
-      overlapPolicy: "skip",
-      catchUpGraceMinutes: 60,
-      taskTitle: "",
-      taskDescription: "",
-    },
-    inputs: {},
     output: statusOutput(
       {
         scheduledFor: stringType(),
@@ -768,18 +631,6 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["fired"],
   },
   planning_agent: {
-    presentation: presentation(
-      "agents",
-      "Planning agent",
-      "Researches the ticket and returns a plan or clarification questions.",
-      "✦",
-    ),
-    defaults: {},
-    inputs: {
-      ticket: input(ticketContextType),
-      comments: input(arrayType(ticketCommentType)),
-      priorAnswers: input(arrayType(humanAnswerType)),
-    },
     output: statusOutput(
       {
         plan: stringType(),
@@ -794,17 +645,6 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["ready", "needs_human_input", "no_change_needed"],
   },
   implementation_agent: {
-    presentation: presentation(
-      "agents",
-      "Implementation agent",
-      "Implements an approved or generated plan in a managed workspace.",
-      "⌨",
-    ),
-    defaults: {},
-    inputs: {
-      ticket: input(ticketContextType),
-      plan: input(stringType()),
-    },
     output: statusOutput({
       workspaceId: stringType(),
       branches: arrayType(branchRefType),
@@ -819,32 +659,11 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["implemented", "needs_human_input"],
   },
   review_agent: {
-    presentation: presentation(
-      "agents",
-      "Review agent",
-      "Reviews the current workspace diff before publication.",
-      "☰",
-    ),
-    defaults: {},
-    inputs: {
-      reviewFeedback: input(reviewFeedbackType),
-    },
     output: statusOutput(reviewResultType.properties),
     normalOutputRequired: ["findings", "decision"],
     statusVariants: ["reviewed"],
   },
   fix_agent: {
-    presentation: presentation(
-      "agents",
-      "Fix agent",
-      "Applies review, CI, or conflict remediation in a managed workspace.",
-      "✚",
-    ),
-    defaults: { maxMinutes: 25 },
-    inputs: {
-      reviewFeedback: input(reviewFeedbackType),
-      reviewResults: input(arrayType(reviewResultType)),
-    },
     output: statusOutput({
       workspaceId: stringType(),
       commits: arrayType(commitRefType),
@@ -865,16 +684,6 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["fixed", "needs_human_input"],
   },
   generic_agent: {
-    presentation: presentation(
-      "agents",
-      "Generic agent",
-      "Runs a configurable agent prompt with an optional declared output schema.",
-      "❖",
-    ),
-    defaults: { prompt: "", workspaceMode: "none" },
-    inputs: {
-      prompt: input(stringType()),
-    },
     output: statusOutput(
       {
         body: stringType(),
@@ -887,14 +696,6 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["completed", "needs_human_input"],
   },
   prepare_workspace: {
-    presentation: presentation(
-      "workspace",
-      "Prepare workspace",
-      "Selects repositories and creates or reuses a managed code workspace.",
-      "⊞",
-    ),
-    defaults: {},
-    inputs: {},
     output: statusOutput({
       sandboxId: stringType(),
       repositories: arrayType(stringType()),
@@ -910,20 +711,6 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["ok", "needs_human_input"],
   },
   finalize_workspace: {
-    presentation: presentation(
-      "workspace",
-      "Finalize workspace",
-      "Preflights and publishes committed workspace changes.",
-      "⇉",
-    ),
-    defaults: {},
-    inputs: {},
-    additionalInputs: [
-      {
-        keyPattern: "^checks\\.[A-Za-z0-9_-]+$",
-        schema: stringType(),
-      },
-    ],
     output: statusOutput({
       repositories: arrayType(finalizedBranchType),
       // One entry per review thread the run answered after the push, with
@@ -949,25 +736,10 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["finalized"],
   },
   run_pre_pr_checks: {
-    presentation: presentation(
-      "utility",
-      // "Pre-PR checks" named the block after the wrong thing: it runs the very
-      // same repository script groups run_scripts does, only as the gate
-      // publication depends on. The glyph moves off the check mark for the same
-      // reason, so the gate and run_scripts never read as one block at a
-      // glance. The name lives here because every surface reads the registry:
-      // the editor palette, blocks_list over MCP and the block reference page
-      // must all call it by one name or an admin cannot look up what they added.
-      "Run scripts (publication gate)",
-      "Runs the repository's gate groups (gateGroups when set, otherwise every group) on the repositories the run changed; they must pass before publication.",
-      "◈",
-    ),
     // maxFixCycles is gone from the defaults, not from the schema: the repair
     // loop it bounded no longer exists, so offering it to a new graph would
     // advertise behaviour nothing implements. Deployed definitions still carry
     // the key and still validate (schema.ts), it is simply never read.
-    defaults: {},
-    inputs: {},
     output: statusOutput({
       ...repoScriptOutputFields,
       // Always 0. Kept required because definitions deployed against this
@@ -993,16 +765,8 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["ok", "skipped"],
   },
   run_scripts: {
-    presentation: presentation(
-      "utility",
-      "Run scripts",
-      "Runs named repository script groups in the run workspace. ok means nothing failed, while allPassed additionally requires that a selected group actually ran and passed.",
-      "❯",
-    ),
     // "checks" is the group every legacy configuration normalizes to, so a
     // freshly dropped block is runnable before anyone opens the scripts screen.
-    defaults: { groups: ["checks"] },
-    inputs: {},
     // Deliberately no `gate` key. recoverPrePrGateFromSteps (finalize-workspace)
     // recognizes a gate by the outcome+gate pair on any step output, so the
     // absent key is what keeps a generic script run out of publication
@@ -1026,14 +790,6 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["ok", "skipped"],
   },
   run_checks: {
-    presentation: presentation(
-      "utility",
-      "Run checks",
-      "Legacy: runs configured or explicit validation commands in the workspace. Use Run scripts instead, which reports per-group verdicts and coverage.",
-      "✓",
-    ),
-    defaults: { commands: [] },
-    inputs: {},
     output: statusOutput({
       ok: booleanType(),
       outcome: enumStringType([
@@ -1067,46 +823,16 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["ok"],
   },
   call_llm: {
-    presentation: presentation(
-      "utility",
-      "Call LLM",
-      "Runs a focused non-agent LLM transform with an optional output schema.",
-      "λ",
-    ),
-    defaults: { prompt: "" },
-    inputs: { prompt: input(stringType()), system: input(stringType(), false) },
     output: statusOutput({ output: stringType() }),
     normalOutputRequired: ["output"],
     statusVariants: ["ok"],
   },
   transform: {
-    presentation: presentation(
-      "utility",
-      "Transform",
-      "Formats, cleans, converts, parses, replaces, or consolidates workflow values.",
-      "↦",
-    ),
-    defaults: {},
-    inputs: {},
-    additionalInputs: [
-      {
-        keyPattern: "^[A-Za-z_][A-Za-z0-9_-]*$",
-        schema: unknownType(),
-      },
-    ],
     output: statusOutput({ output: unknownType() }),
     normalOutputRequired: ["output"],
     statusVariants: ["ok"],
   },
   fetch_pr_context: {
-    presentation: presentation(
-      "vcs",
-      "Fetch PR context",
-      "Loads review comments, check results, and conflict state for the PR or MR.",
-      "⇊",
-    ),
-    defaults: {},
-    inputs: {},
     output: statusOutput(
       {
         contexts: arrayType(unknownType()),
@@ -1120,18 +846,6 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["ok"],
   },
   investigate: {
-    presentation: presentation(
-      "ticket",
-      "Investigate",
-      "Searches Jira and Slack for context on the ticket and builds an evidence-backed classification and theory for a human decision. Jira is always scoped to the configured project and Slack to the configured channels; a JQL template narrows within that project and cannot widen past it. Read-only: it never mutates the ticket, so every path leaving this block MUST end in a ticket mutation (Update ticket status or a label) or a Human question — otherwise the trigger poller re-runs the investigation (two LLM calls) on every poll.",
-      "⌕",
-    ),
-    defaults: {
-      providers: ["jira", "slack"],
-      slackLookbackDays: 30,
-      maxResults: 10,
-    },
-    inputs: {},
     output: statusOutput(
       {
         classification: enumStringType([
@@ -1159,18 +873,6 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["ok"],
   },
   open_pr: {
-    presentation: presentation(
-      "vcs",
-      "Open PR/MR",
-      "Creates or reuses pull or merge requests from a successful Finalize output.",
-      "⇪",
-    ),
-    defaults: { title: DEFAULT_OPEN_PR_TITLE, body: DEFAULT_OPEN_PR_BODY },
-    inputs: {
-      repositories: input(arrayType(finalizedBranchType), true),
-      title: input(stringType(), false),
-      body: input(stringType(), false),
-    },
     output: statusOutput({
       prs: arrayType(workflowPrRefType),
       prUrl: stringType(),
@@ -1180,69 +882,26 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["ok"],
   },
   update_ticket_status: {
-    presentation: presentation(
-      "ticket",
-      "Update ticket status",
-      "Moves the ticket to a configured provider status.",
-      "▤",
-    ),
-    defaults: { target: "ai_review" },
-    inputs: { target: input(stringType()) },
     output: statusOutput({ target: stringType() }),
     normalOutputRequired: ["target"],
     statusVariants: ["ok"],
   },
   post_ticket_comment: {
-    presentation: presentation(
-      "ticket",
-      "Post ticket comment",
-      "Posts questions, plans, or status updates to the ticket.",
-      "❝",
-    ),
-    defaults: { body: "" },
-    inputs: { body: input(stringType()) },
     output: statusOutput({ commentUrl: nullableType(stringType()) }),
     normalOutputRequired: ["commentUrl"],
     statusVariants: ["ok"],
   },
   post_pr_comment: {
-    presentation: presentation(
-      "vcs",
-      "Post PR comment",
-      "Posts a summary or response to the pull or merge request.",
-      "❞",
-    ),
-    defaults: { body: "", target: "all" },
-    inputs: { body: input(stringType()) },
     output: statusOutput({ comments: arrayType(unknownType()) }),
     normalOutputRequired: ["comments"],
     statusVariants: ["ok"],
   },
   create_pr_check: {
-    presentation: presentation(
-      "vcs",
-      "Create PR check",
-      "Creates a pending check for the exact pull request commit being reviewed.",
-      "◌",
-    ),
-    defaults: { checkName: "AI Workflow / Review" },
-    inputs: {},
     output: statusOutput({ check: workflowPrCheckRefType }, ["check"]),
     normalOutputRequired: ["check"],
     statusVariants: ["ok"],
   },
   complete_pr_check: {
-    presentation: presentation(
-      "vcs",
-      "Complete PR check",
-      "Completes a check created by this workflow run.",
-      "●",
-    ),
-    defaults: { conclusion: "success", details: "", refreshHead: false },
-    inputs: {
-      check: input(workflowPrCheckRefType, true),
-      details: input(stringType(), false),
-    },
     output: statusOutput(
       {
         check: workflowPrCheckRefType,
@@ -1254,16 +913,6 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["ok"],
   },
   post_pr_review: {
-    presentation: presentation(
-      "vcs",
-      "Post PR review",
-      "Publishes compatible review findings against the exact reviewed commit.",
-      "✎",
-    ),
-    defaults: {},
-    inputs: {
-      reviewResults: input(arrayType(reviewResultType), true),
-    },
     output: statusOutput(
       {
         decision: enumStringType(["approve", "request_changes"]),
@@ -1287,46 +936,15 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["ok"],
   },
   send_slack_message: {
-    presentation: presentation(
-      "utility",
-      "Send Slack message",
-      "Notifies the configured Slack channel about a workflow milestone.",
-      "✉",
-    ),
-    defaults: { message: "", sendOn: "pr_ready" },
-    inputs: { message: input(stringType()) },
     output: statusOutput(),
     statusVariants: ["ok", "skipped"],
   },
   send_plan_approval: {
-    presentation: presentation(
-      "human",
-      "Send plan for approval",
-      "Creates a durable approval item and ends this path.",
-      "☑",
-    ),
-    defaults: { mirrorComment: true },
-    inputs: {
-      plan: input(stringType(), true),
-      assumptions: input(arrayType(stringType()), false),
-    },
     output: statusOutput({ approvalRequestId: stringType() }),
     normalOutputRequired: ["approvalRequestId"],
     statusVariants: ["awaiting_approval"],
   },
   human_question: {
-    presentation: presentation(
-      "human",
-      "Human question",
-      "Parks execution until the ticket owner answers scoped questions.",
-      "?",
-    ),
-    defaults: { questions: [] },
-    inputs: {
-      questions: input(arrayType(stringType())),
-      suggestedAnswers: input(arrayType(stringType()), false),
-      context: input(stringType(), false),
-    },
     output: statusOutput({
       questions: arrayType(stringType()),
       suggestedAnswers: arrayType(stringType()),
@@ -1336,14 +954,6 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["needs_human_input", "answered"],
   },
   arthur_injection_check: {
-    presentation: presentation(
-      "arthur",
-      "Prompt injection check",
-      "Scans untrusted content with the optional Arthur Engine integration.",
-      "◬",
-    ),
-    defaults: {},
-    inputs: { content: input(stringType()) },
     output: statusOutput({
       findings: arrayType(unknownType()),
       reason: stringType(),
@@ -1352,14 +962,6 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["ok", "flagged", "skipped"],
   },
   leak_review: {
-    presentation: presentation(
-      "utility",
-      "Leak review",
-      "Screens the unpushed diff for secrets and sensitive data before publication.",
-      "⊘",
-    ),
-    defaults: { llmScan: true },
-    inputs: {},
     output: statusOutput({
       findings: arrayType(unknownType()),
       summary: stringType(),
@@ -1369,38 +971,14 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     statusVariants: ["ok", "flagged", "skipped"],
   },
   branch: {
-    presentation: presentation(
-      "control",
-      "Branch",
-      "Chooses one of two paths using the restricted condition language.",
-      "⋔",
-    ),
-    defaults: { condition: "" },
-    inputs: {},
     output: statusOutput({ path: stringType(), reason: stringType() }),
     statusVariants: ["ok"],
   },
   loop: {
-    presentation: presentation(
-      "control",
-      "Loop",
-      "Repeats one cycle up to a bounded maximum attempt count.",
-      "↻",
-    ),
-    defaults: { maxAttempts: 3, onExhaust: "fail" },
-    inputs: {},
     output: statusOutput({ attempt: numberType(), answer: stringType() }, ["attempt"]),
     statusVariants: ["ok", "exhausted"],
   },
   terminate: {
-    presentation: presentation(
-      "control",
-      "Terminate",
-      "Stops the current path with an explicit terminal outcome.",
-      "■",
-    ),
-    defaults: { terminalStatus: "done" },
-    inputs: {},
     output: statusOutput(),
     statusVariants: ["waiting_for_human", "failed", "skipped", "done"],
   },
@@ -1916,12 +1494,13 @@ export function resolveWorkflowBlockContract(
   context: WorkflowBlockRegistryContext,
 ): WorkflowBlockContract {
   const definition = definitions[type];
-  const defaults = defaultsForContext(type, definition.defaults, context);
+  const catalog = BLOCK_CATALOG[type];
+  const defaults = defaultsForContext(type, catalog.defaults, context);
   const spec = BLOCK_TYPE_SPECS[type];
   const output = resolvedOutput(type, params, definition.output);
   return {
     type,
-    presentation: definition.presentation,
+    presentation: catalogPresentation(type),
     defaults: {
       ...(agentBlocks.has(type)
         ? { provider: context.defaultAgent.provider, model: context.defaultAgent.model }
@@ -1930,8 +1509,8 @@ export function resolveWorkflowBlockContract(
     },
     ports: [...spec.ports],
     allowsFailurePort: spec.allowsFailurePort,
-    inputs: definition.inputs,
-    additionalInputs: definition.additionalInputs ?? [],
+    inputs: catalog.inputs,
+    additionalInputs: catalog.additionalInputs,
     output: {
       schema: output,
       bindingSchema: resolvedBindingOutput(type, params, definition, output),
@@ -1949,7 +1528,7 @@ export function buildWorkflowBlockRegistry(
       type,
       resolveWorkflowBlockContract(
         type,
-        defaultsForContext(type, definitions[type].defaults, context),
+        defaultsForContext(type, BLOCK_CATALOG[type].defaults, context),
         context,
       ),
     ]),

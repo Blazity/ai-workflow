@@ -1,12 +1,11 @@
-import type { WorkflowBlockType } from "./domain";
+import {
+  BLOCK_TYPE_SPECS,
+  GENERATED_TRIGGER_BLOCK_TYPES,
+  type WorkflowBlockType,
+} from "./block-catalog.generated";
 
-export type BlockCategory = "trigger" | "action" | "control";
-
-export interface BlockTypeSpec {
-  category: BlockCategory;
-  ports: string[];
-  allowsFailurePort: boolean;
-}
+export { BLOCK_TYPE_SPECS } from "./block-catalog.generated";
+export type { BlockCategory, BlockTypeSpec, WorkflowBlockType } from "./block-catalog.generated";
 
 export const DEFAULT_OUT_PORT = "out";
 export const FAILURE_PORT = "failed";
@@ -39,57 +38,31 @@ export function isSafeWorkflowInputName(name: string): boolean {
   );
 }
 
-export const BLOCK_TYPE_SPECS: Record<WorkflowBlockType, BlockTypeSpec> = {
-  trigger_ticket_ai: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
-  trigger_plan_approved: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
-  trigger_pr_created: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
-  trigger_pr_ready: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
-  trigger_pr_updated: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
-  trigger_pr_checks_failed: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
-  trigger_pr_review: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
-  trigger_pr_merged: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
-  trigger_webhook: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
-  trigger_schedule: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
-  planning_agent: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
-  implementation_agent: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
-  review_agent: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
-  fix_agent: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
-  generic_agent: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
-  prepare_workspace: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
-  finalize_workspace: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
-  run_pre_pr_checks: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
-  run_checks: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
-  run_scripts: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
-  call_llm: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
-  transform: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
-  fetch_pr_context: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
-  investigate: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
-  open_pr: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
-  update_ticket_status: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
-  post_ticket_comment: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
-  post_pr_comment: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
-  create_pr_check: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
-  complete_pr_check: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
-  post_pr_review: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
-  send_slack_message: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
-  send_plan_approval: { category: "action", ports: [], allowsFailurePort: false },
-  human_question: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
-  arthur_injection_check: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
-  leak_review: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
-  branch: { category: "control", ports: ["true", "false"], allowsFailurePort: false },
-  loop: { category: "control", ports: ["continue", "exhausted"], allowsFailurePort: false },
-  terminate: { category: "control", ports: [], allowsFailurePort: false },
-};
-
 /** Ports an editor may wire from: the spec ports plus the failure port when allowed. */
 export function wirablePorts(type: WorkflowBlockType): string[] {
   const spec = BLOCK_TYPE_SPECS[type];
   return spec.allowsFailurePort ? [...spec.ports, FAILURE_PORT] : [...spec.ports];
 }
 
-export const TRIGGER_BLOCK_TYPES: readonly WorkflowBlockType[] = (
-  Object.keys(BLOCK_TYPE_SPECS) as WorkflowBlockType[]
-).filter((type) => BLOCK_TYPE_SPECS[type].category === "trigger");
+const TRIGGER_BLOCK_TYPE_ORDER = [
+  "trigger_ticket_ai",
+  "trigger_plan_approved",
+  "trigger_pr_created",
+  "trigger_pr_ready",
+  "trigger_pr_updated",
+  "trigger_pr_checks_failed",
+  "trigger_pr_review",
+  "trigger_pr_merged",
+  "trigger_webhook",
+  "trigger_schedule",
+] as const satisfies readonly WorkflowBlockType[];
+
+const GENERATED_TRIGGER_BLOCK_TYPE_SET = new Set(GENERATED_TRIGGER_BLOCK_TYPES);
+
+export const TRIGGER_BLOCK_TYPES: readonly WorkflowBlockType[] =
+  TRIGGER_BLOCK_TYPE_ORDER.filter(
+    (type) => GENERATED_TRIGGER_BLOCK_TYPE_SET.has(type),
+  );
 
 /** Triggers a human can fire by hand from the editor. Both apps need this: the
  *  dashboard decides whether to offer "Run manually", and the worker fails closed
@@ -99,10 +72,10 @@ export const TRIGGER_BLOCK_TYPES: readonly WorkflowBlockType[] = (
  *  offered manual dispatch for a schedule, whose modal then asked for a pull
  *  request URL and whose worker answered 422 with a message that was not true.
  *
- *  TRIGGER_BLOCK_TYPES is derived from BLOCK_TYPE_SPECS at runtime, so the
- *  compiler cannot force a new trigger into one of these halves. A gate test
- *  asserts the two halves partition it exactly, the same way the block catalog
- *  mirror is gated. */
+ *  TRIGGER_BLOCK_TYPES uses the stable catalog order above, so the compiler
+ *  cannot force a new trigger into one of these halves. A gate test asserts the
+ *  two halves partition it exactly, the same way the block catalog mirror is
+ *  gated. */
 export const MANUALLY_DISPATCHABLE_TRIGGER_TYPES = [
   "trigger_ticket_ai",
   "trigger_pr_created",

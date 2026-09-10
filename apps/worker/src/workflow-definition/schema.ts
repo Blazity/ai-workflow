@@ -27,23 +27,24 @@ import {
   resolveBuiltinHarnessProfile,
   evaluateWorkflowValueCompatibility,
 } from "@shared/contracts";
-import { paramsSchema as prepareWorkspaceParams } from "../workflows/blocks/prepare-workspace.js";
-import { paramsSchema as finalizeWorkspaceParams } from "../workflows/blocks/finalize-workspace.js";
-import { paramsSchema as fixAgentParams } from "../workflows/blocks/fix-agent.js";
-import { paramsSchema as genericAgentParams } from "../workflows/blocks/generic-agent.js";
-import { paramsSchema as callLlmParams } from "../workflows/blocks/call-llm.js";
-import { paramsSchema as fetchPrContextParams } from "../workflows/blocks/fetch-pr-context.js";
-import { paramsSchema as investigateParams } from "../workflows/blocks/investigate.js";
+import { parseCondition } from "@shared/conditions";
 import {
-  paramsSchema as runChecksParams,
-  repositoryScriptGroupNameSchema,
-} from "../workflows/blocks/run-checks.js";
-import { paramsSchema as postTicketCommentParams } from "../workflows/blocks/post-ticket-comment.js";
-import { paramsSchema as postPrCommentParams } from "../workflows/blocks/post-pr-comment.js";
-import { paramsSchema as humanQuestionParams } from "../workflows/blocks/human-question.js";
-import { paramsSchema as arthurInjectionCheckParams } from "../workflows/blocks/arthur-injection-check.js";
-import { paramsSchema as leakReviewParams } from "../workflows/blocks/leak-review.js";
-import { paramsSchema as sendPlanApprovalParams } from "../workflows/blocks/send-plan-approval.js";
+  prepareWorkspaceParams,
+  finalizeWorkspaceParams,
+  fixAgentParams,
+  genericAgentParams,
+  callLlmParams,
+  fetchPrContextParams,
+  investigateParams,
+  runChecksParams,
+  postTicketCommentParams,
+  postPrCommentParams,
+  humanQuestionParams,
+  arthurInjectionCheckParams,
+  leakReviewParams,
+  sendPlanApprovalParams,
+} from "../engine/definition/params.generated.js";
+import { repositoryScriptGroupNameSchema } from "../engine/blocks/run-checks/manifest.js";
 import {
   MINIMUM_PERIOD_MS,
   parseSchedule,

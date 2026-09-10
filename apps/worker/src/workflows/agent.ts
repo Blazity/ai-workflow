@@ -115,9 +115,8 @@ import {
   blockBudgetObserver,
   buildV2AgentArtifactKeys,
   recordBlockPhaseUsage,
-  type BlockExecuteFn,
   type EngineCtx,
-} from "./blocks/types.js";
+} from "../engine/blocks/support/types.js";
 import {
   buildPromptVariables,
   substitutePromptVariables,
@@ -162,46 +161,39 @@ import {
   promoteWorkspaceWrites,
   requiredAgentsForDefinition,
   researchDeclaredNoWritesGuard,
-} from "./blocks/prepare-workspace.js";
+} from "../engine/blocks/prepare-workspace/execute.js";
 import {
   ensureAgentSandbox,
   prepareHarnessAgentInvocationStep,
-} from "./blocks/agent-sandbox.js";
+} from "../engine/blocks/agent-sandbox.js";
 import {
-  execute as executeFinalizeWorkspace,
   recoverScriptDriftFromSteps,
-} from "./blocks/finalize-workspace.js";
-import { execute as executeFixAgent } from "./blocks/fix-agent.js";
-import { execute as executeGenericAgent } from "./blocks/generic-agent.js";
-import {
-  execute as executeCallLlm,
-  resolveCallLlmTarget,
-} from "./blocks/call-llm.js";
-import { pollPhaseUntilDone } from "./blocks/poll-phase.js";
+} from "../engine/blocks/finalize-workspace/execute.js";
+import { resolveCallLlmTarget } from "../engine/blocks/call-llm/execute.js";
+import { pollPhaseUntilDone } from "../engine/blocks/poll-phase.js";
 import {
   loadPrePrCheckConfigStep,
   recoverChecksCeilingFromSteps,
   runPrePrChecksWithFixes,
-} from "./blocks/pre-pr-checks.js";
+} from "../engine/blocks/pre-pr-checks.js";
 import {
-  boundFailureOutput,
-  FAILURE_OUTPUT_MAX_CHARS,
-  type PrePrCheckFailure,
   type PrePrCheckRunResult,
 } from "../pre-pr-checks/runner.js";
 import {
   asRepositoryScriptsOutput,
-  countUncoveredGroups,
   isRepositoryScriptsRefusal,
+  repositoryScriptFailureEntry,
   repositoryScriptCoverageNotes,
+  repositoryScriptsOutput,
+  repositoryScriptsStatus,
   REPOSITORY_SCRIPTS_ABANDONED_CLASS,
   REPOSITORY_SCRIPTS_BUDGET_CLASS,
   REPOSITORY_SCRIPTS_FAILED_CLASS,
   REPOSITORY_SCRIPTS_NOT_STARTED_CLASS,
   REPOSITORY_SCRIPTS_NOTHING_RAN_CLASS,
-  type RepositoryScriptGroupStatus,
   type RepositoryScriptsOutput,
-} from "./blocks/repository-scripts-output.js";
+} from "../engine/blocks/support/repository-scripts-output.js";
+export { execute as executeRunScripts } from "../engine/blocks/run-scripts/execute.js";
 import {
   RunBudgetError,
   addElapsed,
@@ -224,19 +216,12 @@ import {
 } from "./run-budget.js";
 import { redactDiagnosticText } from "../sandbox/agents/redact.js";
 import { isRunControlError } from "./run-control-error.js";
-import { execute as executeFetchPrContext } from "./blocks/fetch-pr-context.js";
-import { execute as executeInvestigate } from "./blocks/investigate.js";
-import { execute as executeRunChecks } from "./blocks/run-checks.js";
-import { execute as executePostTicketComment } from "./blocks/post-ticket-comment.js";
-import { execute as executePostPrComment } from "./blocks/post-pr-comment.js";
-import { execute as executeCreatePrCheck } from "./blocks/create-pr-check.js";
-import { execute as executeCompletePrCheck } from "./blocks/complete-pr-check.js";
-import { execute as executePostPrReview } from "./blocks/post-pr-review.js";
-import { execute as executeHumanQuestion } from "./blocks/human-question.js";
-import { execute as executeArthurInjectionCheck } from "./blocks/arthur-injection-check.js";
-import { execute as executeLeakReview } from "./blocks/leak-review.js";
-import { execute as executeSendPlanApproval } from "./blocks/send-plan-approval.js";
 import {
+  BLOCK_EXECUTORS,
+  INLINE_EXECUTED_BLOCK_TYPES,
+} from "../engine/blocks/executors.generated.js";
+import {
+  BLOCK_CATALOG,
   BLOCK_TYPE_SPECS,
   DEFAULT_OPEN_PR_BODY,
   DEFAULT_OPEN_PR_TITLE,
@@ -431,119 +416,10 @@ export function v2OpenPrRepositoriesProvenanceIssue(input: {
  * execution error. kind "execution_error" stays reserved for scripts that could
  * not run at all, which is a different thing an operator answers differently.
  */
-/**
- * The checks ceiling to hand the engine, as an options fragment.
- *
- * Absent when prepare_workspace published none, and then the engine derives one
- * from the configuration. Spread rather than passed as null so the engine's
- * "did anyone tell me" test stays a presence test.
- */
 function checksCeilingOption(steps: StepsRecord): { checksCeilingMs?: number } {
   const ceilingMs = recoverChecksCeilingFromSteps(steps);
   return ceilingMs === null ? {} : { checksCeilingMs: ceilingMs };
 }
-
-export const executeRunScripts: BlockExecuteFn = async (
-  block,
-  steps,
-  ctx,
-  _resolvedInputs,
-  execution,
-): Promise<BlockExecutionResult> => {
-  if (!ctx.sandboxId) {
-    return executionError(
-      "no workspace: connect prepare_workspace before run_scripts",
-      { category: "sandbox" },
-    );
-  }
-  // No invalidateWorkspaceGate call here, deliberately. Nulling ctx.prePrGate
-  // would not durably invalidate anything: finalize resolves
-  // `ctx.prePrGate ?? recoverPrePrGateFromSteps(steps)`, so the checkpointed
-  // gate is resurrected from the gate block's own step output on the very next
-  // read. The call would only imply a protection that does not exist. What
-  // actually happens when a restoreTree:false group runs after a passed gate is
-  // that the publication boundary re-verifies the tracked-file fingerprint and
-  // fails with workspace_changed, which is loud and correct.
-  const groups = Array.isArray(block.params.groups)
-    ? block.params.groups.filter((group): group is string => typeof group === "string")
-    : [];
-  const budget = await ctx.observeBudget();
-  if (budget.check.status !== "ok") throw new RunBudgetError(budget.check);
-  // Loading the configuration is a step; running the scripts is not. They are
-  // launched detached and polled across ticks, because a client tenant's real
-  // scripts outlive the 300s one function invocation gets. See
-  // workflows/blocks/pre-pr-checks.ts.
-  const current = await loadPrePrCheckConfigStep();
-  let run: PrePrCheckRunResult;
-  try {
-    run = await runPrePrChecksWithFixes({
-      sandboxId: ctx.sandboxId,
-      config: current.config,
-      // No agent is launched from this path. Both fields are deprecated engine
-      // options kept until stage 3 drops them, so they carry the run's defaults
-      // rather than a repair identity this block never has.
-      agentKind: ctx.runDefaultKind,
-      model: ctx.defaults[ctx.runDefaultKind],
-      groupSelection: { kind: "named", groups },
-      observeBudget: blockBudgetObserver(ctx, execution),
-      observeChecksBudget: checksBudgetObserver(ctx, execution),
-      ...checksCeilingOption(steps),
-      cancellation: execution?.cancellation,
-      // So a batch that runs for forty minutes reports progress instead of
-      // reading as a hung run. Best effort inside the emitter; nothing here
-      // depends on it.
-      ...(execution?.observations ? { observations: execution.observations } : {}),
-    });
-  } catch (err) {
-    if (isRunControlError(err) || isChecksCeilingExceededError(err)) throw err;
-    propagateInvocationInterruption(err);
-    const after = await ctx.observeBudget(false, "checks");
-    if (after.check.status !== "ok") throw new RunBudgetError(after.check);
-    throw new Error(await prePrChecksFailureMessage(err, current.version));
-  }
-  const output = repositoryScriptsOutput(run, groups);
-  return {
-    kind: "next",
-    output: { status: repositoryScriptsStatus(output), ...output },
-  };
-};
-
-const BLOCK_EXECUTORS: Partial<Record<WorkflowBlockType, BlockExecuteFn>> = {
-  finalize_workspace: executeFinalizeWorkspace,
-  fix_agent: executeFixAgent,
-  generic_agent: executeGenericAgent,
-  call_llm: executeCallLlm,
-  fetch_pr_context: executeFetchPrContext,
-  investigate: executeInvestigate,
-  run_checks: executeRunChecks,
-  run_scripts: executeRunScripts,
-  post_ticket_comment: executePostTicketComment,
-  post_pr_comment: executePostPrComment,
-  create_pr_check: executeCreatePrCheck,
-  complete_pr_check: executeCompletePrCheck,
-  post_pr_review: executePostPrReview,
-  human_question: executeHumanQuestion,
-  arthur_injection_check: executeArthurInjectionCheck,
-  leak_review: executeLeakReview,
-  send_plan_approval: executeSendPlanApproval,
-};
-
-// Action blocks executed by an inline switch rather than the registry above
-// (they need run-scoped closure state, or the scheduler's own invocation
-// context). Kept in sync with the switch cases; blockTypesMissingExecutor()
-// (asserted in tests) turns any drift into a loud failure instead of a silent
-// no-op.
-const INLINE_EXECUTED_BLOCK_TYPES: readonly WorkflowBlockType[] = [
-  "transform",
-  "prepare_workspace",
-  "planning_agent",
-  "implementation_agent",
-  "review_agent",
-  "run_pre_pr_checks",
-  "open_pr",
-  "send_slack_message",
-  "update_ticket_status",
-];
 
 /** Action block types with no executor wired in either BLOCK_EXECUTORS or an
  *  inline switch. */
@@ -552,6 +428,7 @@ export function blockTypesMissingExecutor(): WorkflowBlockType[] {
     .filter(
       (type) =>
         BLOCK_TYPE_SPECS[type].category === "action" &&
+        BLOCK_CATALOG[type].execution !== "graph" &&
         BLOCK_EXECUTORS[type] === undefined &&
         !INLINE_EXECUTED_BLOCK_TYPES.includes(type),
     );
@@ -3373,200 +3250,12 @@ export async function prePrChecksFailureMessage(
   }
 }
 
-export type {
-  RepositoryScriptsOutput,
-} from "./blocks/repository-scripts-output.js";
-
-/** The command's own output, bounded, then the note on its own line. The note
- *  goes after the bound because a head-and-tail bound eats the middle, which is
- *  exactly where a note folded into the stream would land. */
-function repositoryScriptFailureOutput(failure: PrePrCheckFailure): string {
-  const output = boundFailureOutput(
-    [failure.stderr, failure.stdout]
-      .map((part) => part.trim())
-      .filter(Boolean)
-      .join("\n"),
-    FAILURE_OUTPUT_MAX_CHARS,
-  );
-  if (!failure.note) return output;
-  return output ? `${output}\n${failure.note}` : failure.note;
-}
-
-/** One engine failure as the block output and the ticket comment carry it.
- *  Shared with the setup path, which fails in a different block entirely and
- *  has to reach the comment through the same renderer. */
-export function repositoryScriptFailureEntry(
-  failure: PrePrCheckFailure,
-): RepositoryScriptsOutput["failures"][number] {
-  return {
-    repo: `${failure.provider}:${failure.repoPath}`,
-    command: failure.command,
-    exitCode: failure.exitCode,
-    output: repositoryScriptFailureOutput(failure),
-    phase: failure.phase ?? null,
-  };
-}
-
-/**
- * Groups the run was asked for that no repository it reached declares.
- *
- * Only groups declared *nowhere* are synthesized. A group two of five
- * repositories define is the engine's normal case, deliberately not an error,
- * and reporting the other three as not_run would make every partial-workspace
- * selection unreportable. A name no repository has is the other thing: a typo,
- * or a group deleted from the configuration, and silently running nothing for
- * it is how a node reports a pass for work that never happened. It is attached
- * to every repository the run reached, because it is equally true of each and
- * there is no single repository it belongs to.
- */
-function undeclaredGroupStatuses(
-  reached: RepositoryScriptGroupStatus[],
-  requestedGroups: readonly string[],
-): RepositoryScriptGroupStatus[] {
-  if (requestedGroups.length === 0 || reached.length === 0) return [];
-  const declared = new Set(reached.map((entry) => entry.group));
-  const repositories = [
-    ...new Map(
-      reached.map((entry) => [
-        `${entry.provider}:${entry.repoPath}`,
-        { provider: entry.provider, repoPath: entry.repoPath },
-      ]),
-    ).values(),
-  ];
-  const missing = [...new Set(requestedGroups)].filter(
-    (group) => !declared.has(group),
-  );
-  return missing.flatMap((group) =>
-    repositories.map((repo) => ({ ...repo, group, status: "not_run" as const })),
-  );
-}
-
-/**
- * Shape one engine run into the fields the graph binds against.
- *
- * Three booleans rather than one, because they answer three different
- * questions and collapsing them is how "nothing ran" started reading as
- * "everything is fine":
- *
- *   ok         nothing failed. Still true for a run that matched nothing, which
- *              is the historical contract every deployed graph branches on.
- *   anyFailed  something was verified and did not hold, OR the run could not
- *              start at all. The second half matters: an unreadable
- *              configuration produces no group statuses whatsoever, so deriving
- *              this from groups alone let an anyFailed -> remediate wire take
- *              the happy path on the one failure nobody can see from inside.
- *   allPassed  the stricter reading a publication decision wants. Something was
- *              actually selected, it ran to completion, and it passed. A group
- *              left not_run (a stalled batch, a refused environment, a name no
- *              repository declares) denies it, because a partial run is never
- *              evidence of a pass. Read over the SELECTED groups only: a group
- *              nobody asked for reports not_run the moment one command it
- *              shares with a selected group runs, and that is not a fact about
- *              what this run verified.
- *
- * `skipped` groups are excluded from all of it: a group whose commands did not
- * all run and which nothing selected, and every group of a repository the
- * workspace never touched. Letting them weigh on allPassed would make naming
- * one group of five turn an entirely green run unreportable. A group reached
- * only through another group's `extends` is NOT one of them: its commands ran,
- * so it reports its own verdict and counts like any other.
- *
- * The summary is the engine's own. It words itself per selection (a gate says
- * "matched changed repositories", a named selection says "matched the selected
- * groups"), and overwriting it here pointed the operator of a named run at a
- * change filter that selection never applied.
- */
-export function repositoryScriptsOutput(
-  run: PrePrCheckRunResult,
-  requestedGroups: readonly string[] = [],
-): RepositoryScriptsOutput {
-  const reached: RepositoryScriptGroupStatus[] = run.groupStatuses.map(
-    (entry) => ({
-      provider: entry.provider,
-      repoPath: entry.repoPath,
-      group: entry.group,
-      status: entry.status,
-    }),
-  );
-  const undeclared = undeclaredGroupStatuses(reached, requestedGroups);
-  const groupStatuses = [...reached, ...undeclared];
-  const groupCoverage = run.groupCoverage.map((entry) => ({
-    group: entry.group,
-    declaredIn: entry.declaredIn,
-    missing: entry.missing,
-    skipped: entry.skipped,
-  }));
-  // What a publication decision may weigh: the groups this run asked for, plus
-  // the names it asked for that no repository declares. A group reached only
-  // through another group's `extends` reports its own verdict, and a sibling
-  // that shares one command with a selected group reports not_run as soon as
-  // that command runs, because nothing may be claimed about the rest of it.
-  // Weighing that would deny a run whose every selected group passed.
-  const selected = new Set(run.selectedGroupKeys);
-  const decisive = [
-    ...reached.filter((entry) =>
-      selected.has(`${entry.provider}:${entry.repoPath}:${entry.group}`),
-    ),
-    ...undeclared,
-  ];
-  const ranNothing =
-    run.outcome === "passed" && run.results.length === 0 && run.failures.length === 0;
-  const outcome = ranNothing ? "skipped" : run.outcome;
-  const anyFailed =
-    outcome === "failed" ||
-    groupStatuses.some(
-      (entry) => entry.status === "failed" || entry.status === "timed_out",
-    );
-  return {
-    ok: run.passed,
-    outcome,
-    allPassed:
-      !anyFailed &&
-      !decisive.some((entry) => entry.status === "not_run") &&
-      decisive.some((entry) => entry.status === "passed"),
-    anyFailed,
-    groupStatuses,
-    // Straight through from the engine, which recorded it as the walk went.
-    // Deliberately NOT derived from groupStatuses here: a repository the run
-    // never started has no status entry at all, so the reconstruction would
-    // have nothing to distinguish it from a covered one.
-    groupCoverage,
-    uncoveredGroupCount: countUncoveredGroups(groupCoverage),
-    results: run.results.map((result) => ({
-      repo: `${result.provider}:${result.repoPath}`,
-      command: result.command,
-      group: result.group,
-      exitCode: result.exitCode,
-      durationMs: result.durationMs,
-      timedOut: result.timedOut,
-    })),
-    failures: run.failures.map(repositoryScriptFailureEntry),
-    dirtied: run.dirtied.map((entry) => ({
-      repo: `${entry.provider}:${entry.repoPath}`,
-      files: entry.files,
-      preExisting: entry.preExisting,
-    })),
-    setupFailed: run.setupFailed,
-    summary: run.summary,
-  };
-}
-
-/**
- * The status variant a shaped run reports.
- *
- * Deliberately never "failed". That word is reserved for execution errors, and
- * re-admitting it as an outcome word would make status ambiguous again: an
- * author reading `status: "failed"` could not tell a failing script from a
- * block that could not run. A failing run is an ordinary branchable outcome and
- * says so through ok, outcome and anyFailed, all three in the binding schema.
- */
-export function repositoryScriptsStatus(
-  output: Pick<RepositoryScriptsOutput, "ok" | "outcome">,
-): "ok" | "skipped" {
-  return output.outcome === "skipped" || output.outcome === "missing_configuration"
-    ? "skipped"
-    : "ok";
-}
+export {
+  repositoryScriptFailureEntry,
+  repositoryScriptsOutput,
+  repositoryScriptsStatus,
+  type RepositoryScriptsOutput,
+} from "../engine/blocks/support/repository-scripts-output.js";
 
 /**
  * What a failure comment reports about the repository scripts, recovered from
@@ -5293,6 +4982,7 @@ async function agentWorkflowBody(
         taskId: null,
       },
       checksCeilingMs: null,
+      prePrChecksFailureMessage,
       observeBudget: (requireRemainingDuration = true, attribution, observedAtMs?: number) =>
         observeBudgetAtBoundary(requireRemainingDuration, attribution, observedAtMs),
       recordUsage: (label, usage, model, attempt) => {
@@ -5490,7 +5180,7 @@ async function agentWorkflowBody(
               "./clarification-snapshot-steps.js"
             );
             const { ensureArthurTask, ensureChecksCeiling, sandboxLifetimeMs } =
-              await import("./blocks/prepare-workspace.js");
+              await import("../engine/blocks/prepare-workspace/execute.js");
             const requiredAgents = requiredAgentsForDefinition({
               nodes: plan.nodes,
               defaultKind: runDefaultKind,
@@ -5538,7 +5228,7 @@ async function agentWorkflowBody(
             for (const key of Object.keys(checkpointSteps)) delete checkpointSteps[key];
             Object.assign(checkpointSteps, restoredSteps);
             if (ctx.selectedRepositories.length > 0) {
-              const { blockFetchPrContextsStep } = await import("./blocks/fetch-pr-context.js");
+              const { blockFetchPrContextsStep } = await import("../engine/blocks/fetch-pr-context/execute.js");
               ctx.repositoryContexts = await blockFetchPrContextsStep(
                 ctx.selectedRepositories,
                 ctx.repositoryScope,
@@ -5933,7 +5623,7 @@ async function agentWorkflowBody(
           ...decision.repositories,
         ];
         const { blockFetchPrContextsStep } = await import(
-          "./blocks/fetch-pr-context.js"
+          "../engine/blocks/fetch-pr-context/execute.js"
         );
         ctx.workspaceManifest = attached.manifest;
         ctx.selectedRepositories = repositories;
@@ -6185,7 +5875,7 @@ async function agentWorkflowBody(
               },
               fetchContexts: async (repositories) => {
                 const { blockFetchPrContextsStep } = await import(
-                  "./blocks/fetch-pr-context.js"
+                  "../engine/blocks/fetch-pr-context/execute.js"
                 );
                 return blockFetchPrContextsStep(repositories, ctx.repositoryScope);
               },
@@ -6250,7 +5940,7 @@ async function agentWorkflowBody(
             // because planning runs before any code workspace is provisioned.
             if (ctx.entry.kind === "ticket" && ctx.repositoryContexts.length === 0) {
               const { resolveTicketWorkflowOwnedReposStep, blockFetchPrContextsStep } =
-                await import("./blocks/fetch-pr-context.js");
+                await import("../engine/blocks/fetch-pr-context/execute.js");
               const ownedRepos = await resolveTicketWorkflowOwnedReposStep(ctx.ticket.identifier);
               if (ownedRepos.length > 0) {
                 ctx.repositoryContexts = await blockFetchPrContextsStep(
@@ -6875,7 +6565,7 @@ async function agentWorkflowBody(
               });
             }
             try {
-              const { inspectFixWorkspace } = await import("./blocks/fix-workspace-state.js");
+              const { inspectFixWorkspace } = await import("../engine/blocks/fix-workspace-state.js");
               const workspaceState = await inspectFixWorkspace(sandboxId);
               // Last point before finalize publishes: re-check the quotes the
               // planner promised against the tree this run actually produced.

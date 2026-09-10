@@ -1,4 +1,5 @@
 export * from "./domain";
+export * from "./block-catalog.generated";
 export * from "./api";
 export * from "./workflow-graph";
 export * from "./workflow-layout";

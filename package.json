@@ -10,6 +10,7 @@
     "build:ci": "pnpm --filter worker build:ci && NEXT_TELEMETRY_DISABLED=1 pnpm --filter ai-workflow-dashboard build",
     "typecheck": "pnpm typecheck:release-notes && pnpm -r typecheck",
     "typecheck:release-notes": "tsc -p scripts/release-notes/tsconfig.json",
+    "gen:blocks": "tsx scripts/gates/generate-block-catalog.ts",
     "test": "pnpm -r test",
     "test:workflow-sdk": "pnpm --filter worker test:workflow-sdk",
     "test:e2e": "pnpm --filter worker test:e2e",

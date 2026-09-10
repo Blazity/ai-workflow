@@ -14,7 +14,6 @@ export type Plan = { scopes: string[]; commands: Cmd[] };
 export const WORKFLOW_TESTS = [
   "src/workflows/step-registration-coverage.test.ts",
   "src/workflows/block-executors.test.ts",
-  "src/workflow-definition/block-catalog-sync.test.ts",
   "src/workflow-definition/block-registry.test.ts",
 ] as const;
 
@@ -32,6 +31,7 @@ const C = {
   preSandbox: ["pnpm", "--dir", "apps/worker", "run", "validate:pre-sandbox"],
   skills: ["pnpm", "--dir", "apps/worker", "run", "validate:local-skills"],
   mcp: ["pnpm", "--dir", "apps/worker", "run", "mcp:contract:check"],
+  blockCatalog: ["pnpm", "run", "gen:blocks", "--check"],
   ci: ["pnpm", "run", "test:ci"],
   releaseType: ["pnpm", "run", "typecheck:release-notes"],
   releaseTest: ["pnpm", "run", "test:release-notes"],
@@ -91,8 +91,18 @@ const isProduct = (path: string) =>
   path.startsWith("apps/worker/src/sandbox/agents/fixtures/") ||
   path.startsWith("apps/worker/workflow-test-fixtures/") ||
   path.startsWith("packages/contracts/") ||
-  path.startsWith("docs/workflow-workspace/") ||
+  path.startsWith("apps/worker/src/engine/blocks/") ||
+  path.startsWith("apps/worker/src/engine/definition/") ||
+  path === "packages/contracts/block-catalog.generated.ts" ||
+  path === "apps/worker/src/engine/blocks/executors.generated.ts" ||
   path === "apps/worker/vitest.config.ts";
+
+const isBlockCatalogSource = (path: string) =>
+  path.startsWith("apps/worker/src/engine/blocks/") ||
+  path.startsWith("apps/worker/src/engine/definition/") ||
+  path === "scripts/gates/generate-block-catalog.ts" ||
+  path === "packages/contracts/block-catalog.generated.ts" ||
+  path === "apps/worker/src/engine/blocks/executors.generated.ts";
 
 function discoveredTests(path: string, repo: Repo): string[] {
   if (TEST.test(path)) return repo.exists(path) ? [path] : [];
@@ -121,6 +131,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
   const dashboard = any(paths, (path) => path.startsWith("apps/dashboard/"));
   const shared = any(paths, (path) => path.startsWith("packages/"));
   const ci = any(paths, isCi);
+  const blockCatalog = any(paths, isBlockCatalogSource);
   const gates = any(paths, (path) =>
     path.startsWith("apps/") ||
     path.startsWith("packages/") ||
@@ -186,6 +197,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
     );
     add(["pnpm", "--dir", "apps/worker", "exec", "vitest", "run", ...args]);
   }
+  if (blockCatalog) add(C.blockCatalog);
   if (dashboardTests.size) {
     add([
       "pnpm",

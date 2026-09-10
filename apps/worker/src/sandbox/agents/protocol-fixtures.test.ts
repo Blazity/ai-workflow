@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { CollectedPhaseArtifacts } from "./types.js";
 import { ClaudeAgentAdapter } from "./claude.js";
 import { CodexAgentAdapter } from "./codex.js";
-import { agentProtocolExecutionError } from "../../workflows/blocks/types.js";
+import { agentProtocolExecutionError } from "../../engine/blocks/support/types.js";
 import {
   createWorkflowExecutionErrorState,
   formatExecutionErrorForUser,
