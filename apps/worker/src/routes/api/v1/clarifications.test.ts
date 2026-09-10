@@ -34,7 +34,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../db/client.js", () => ({ getDb: () => state.db }));
-vi.mock("../../../../env.js", () => ({ env: state.env }));
+vi.mock("../../../config/env.js", () => ({ env: state.env }));
 vi.mock("../../../auth-instance.js", () => ({
   auth: { api: { getSession: vi.fn(async () => state.session) } },
 }));

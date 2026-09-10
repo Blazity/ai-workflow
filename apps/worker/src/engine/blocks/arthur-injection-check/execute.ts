@@ -13,7 +13,7 @@ async function blockArthurValidatePromptStep(
   content: string,
 ): Promise<{ ok: boolean; findings: InjectionCheckFinding[] }> {
   "use step";
-  const { env } = await import("../../../../env.js");
+  const { env } = await import("../../../config/env.js");
   if (!env.GENAI_ENGINE_API_KEY || !env.GENAI_ENGINE_TRACE_ENDPOINT) {
     throw new Error("Arthur is not configured");
   }
@@ -30,7 +30,7 @@ async function blockArthurValidatePromptStep(
     await client.addPromptInjectionRule(taskId);
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    const { logger } = await import("../../../lib/logger.js");
+    const { logger } = await import("../../../infra/logger.js");
     logger.warn(
       { err: err instanceof Error ? err.message : String(err), taskId },
       "arthur_prompt_injection_rule_add_failed",
@@ -92,7 +92,7 @@ export const execute: BlockExecuteFn = async (
     };
   }
 
-  const { env } = await import("../../../../env.js");
+  const { env } = await import("../../../config/env.js");
   if (!env.GENAI_ENGINE_API_KEY || !env.GENAI_ENGINE_TRACE_ENDPOINT) {
     return {
       kind: "next",

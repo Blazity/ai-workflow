@@ -20,7 +20,7 @@ import {
   harnessCapabilityCatalogs,
   organization,
 } from "../db/schema.js";
-import { logger } from "../lib/logger.js";
+import { logger } from "../infra/logger.js";
 import {
   HARNESS_PROVIDER_CONTRACTS,
   stableJson,
@@ -604,7 +604,7 @@ export async function discoverClaudeCapabilities(
   credential?: string,
 ): Promise<HarnessCapabilityCatalog> {
   const resolvedCredential =
-    credential ?? (await import("../../env.js")).env.ANTHROPIC_API_KEY;
+    credential ?? (await import("../config/env.js")).env.ANTHROPIC_API_KEY;
   if (!resolvedCredential) {
     throw new HarnessCapabilityDiscoveryPrerequisiteError(
       "Configure ANTHROPIC_API_KEY for Claude model discovery.",
@@ -816,7 +816,7 @@ async function readCodexAppServerModels(
   cliVersion: string,
   signal: AbortSignal,
 ): Promise<unknown[]> {
-  const { env } = await import("../../env.js");
+  const { env } = await import("../config/env.js");
   if (!env.CODEX_API_KEY && !env.CODEX_CHATGPT_OAUTH_TOKEN) {
     throw new HarnessCapabilityDiscoveryPrerequisiteError(
       "Configure CODEX_API_KEY or CODEX_CHATGPT_OAUTH_TOKEN for Codex model discovery.",

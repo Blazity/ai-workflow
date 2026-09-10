@@ -5,19 +5,20 @@ import {
   createError,
   type H3Event,
 } from "h3";
-import { env, getVcsBotLogin } from "../../../env.js";
+import { env } from "../../config/env.js";
 import { PostgresRunRegistry } from "../../adapters/run-registry/postgres.js";
 import { getDb } from "../../db/client.js";
 import {
   dispatchTriggerEvent,
   type DispatchTriggerResult,
 } from "../../lib/dispatch-trigger.js";
-import { verifyGitHubWebhookSignature } from "../../lib/github-webhook-sig.js";
+import { verifyGitHubWebhookSignature } from "../../infra/github-webhook-sig.js";
 import { recordIngestionFailure } from "../../lib/ingestion-diagnostic.js";
-import { logger } from "../../lib/logger.js";
+import { logger } from "../../infra/logger.js";
 import { dispatchPostPrGateWebhook } from "../../lib/post-pr-gate-dispatch.js";
 import { isRepoAllowed } from "../../lib/repo-allowlist.js";
 import { normalizeGitHubEvents } from "../../lib/trigger-events.js";
+import { getVcsBotLogin } from "../../lib/vcs-bot-login.js";
 import {
   isWorkflowGeneratedPush,
   workflowPushNormalizationOptions,

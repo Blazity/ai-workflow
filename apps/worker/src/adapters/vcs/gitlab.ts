@@ -32,7 +32,7 @@ import {
   REVIEW_LEDGER_MAX_WORK_ITEMS,
 } from "./types.js";
 import { clampBothEnds } from "../../workflow-definition/failure-message.js";
-import { logger } from "../../lib/logger.js";
+import { logger } from "../../infra/logger.js";
 import {
   AI_WORKFLOW_COMMENT_MARKER,
   hasReviewLedgerFailureMarker,

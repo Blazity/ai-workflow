@@ -20,7 +20,7 @@ vi.mock("workflow", async (importOriginal) => ({
   createHook: vi.fn(),
   getWorkflowMetadata: () => ({ workflowRunId: "run-retired-replay" }),
 }));
-vi.mock("../../../env.js", () => ({
+vi.mock("../../config/env.js", () => ({
   env: {
     AGENT_KIND: "codex",
     CLAUDE_MODEL: "claude-test",
@@ -93,7 +93,7 @@ vi.mock("../../lib/overview/collect-run-detail.js", () => ({
   captureRunStepsBestEffort: vi.fn(async () => []),
   sanitizeRunStepsForDiagnosticError: telemetry.sanitizeRunStepsForDiagnosticError,
 }));
-vi.mock("../../lib/logger.js", () => ({
+vi.mock("../../infra/logger.js", () => ({
   logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 

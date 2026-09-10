@@ -1,6 +1,6 @@
 import { start } from "workflow/api";
 import type { VcsProviderKind, WorkflowDefinition } from "@shared/contracts";
-import { getVcsBotLogin } from "../../env.js";
+import { getVcsBotLogin } from "./vcs-bot-login.js";
 import type { Db } from "../db/client.js";
 import {
   IssueTrackerNotFoundError,
@@ -26,7 +26,7 @@ import {
 import { createAdapters } from "./adapters.js";
 import { claimSubjectRun, envTriggerRateLimitDefault, triggerRateLimitNodes } from "./dispatch.js";
 import { recordIngestionFailure } from "./ingestion-diagnostic.js";
-import { logger } from "./logger.js";
+import { logger } from "../infra/logger.js";
 import {
   enforcePrAutofixCap,
   refundPrAutofixCap,
@@ -325,7 +325,7 @@ async function readRepositoryScope(
 
 export async function isConfiguredTriggerRepository(pr: PrTriggerPayload): Promise<boolean> {
   if (pr.provider !== "gitlab") return true;
-  const { env, getConfiguredVcsProviders } = await import("../../env.js");
+  const { env, getConfiguredVcsProviders } = await import("../config/env.js");
   if (env.GITLAB_PROJECT_ID) {
     return (
       pr.repoPath === env.GITLAB_PROJECT_ID ||
@@ -435,7 +435,7 @@ async function prTriggerRateLimited(
     accepted.definitionId,
     accepted.definitionVersion,
   );
-  const { env } = await import("../../env.js");
+  const { env } = await import("../config/env.js");
   const limit = resolveTriggerRateLimitForType(
     triggerRateLimitNodes(runnableDefinitionOf(pinned), accepted.triggerType),
     envTriggerRateLimitDefault(env),

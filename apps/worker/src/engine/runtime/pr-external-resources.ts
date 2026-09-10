@@ -35,7 +35,7 @@ import {
 import { scrubForPublication } from "../../lib/publication-scrub.js";
 import type { PrTriggerPayload } from "../agent-input.js";
 import { findRunPrSiblings } from "../../db/queries/run-pr-siblings.js";
-import { logger } from "../../lib/logger.js";
+import { logger } from "../../infra/logger.js";
 
 export type CheckBusinessConclusion = "success" | "failure" | "neutral";
 export type CheckTerminalIntent =

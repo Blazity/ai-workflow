@@ -40,7 +40,7 @@ vi.mock("../../adapters/vcs/repository-directory.js", async (importOriginal) => 
   listRepositoriesAcrossProviders: mocks.listRepositoriesAcrossProviders,
 }));
 
-vi.mock("../../../env.js", () => ({
+vi.mock("../../config/env.js", () => ({
   env: mocks.env,
   getConfiguredVcsProviders: mocks.getConfiguredVcsProviders,
 }));
@@ -60,7 +60,7 @@ vi.mock("../../memory/store.js", () => ({
   upsertMemoryDocument: mocks.upsertMemoryDocument,
 }));
 
-vi.mock("../../lib/logger.js", () => ({ logger: mocks.logger }));
+vi.mock("../../infra/logger.js", () => ({ logger: mocks.logger }));
 
 import { repoSelectionStep, selectRepositoriesFromMetadata } from "./repo-selection.js";
 import { MAX_ACCESSIBLE_REPOSITORIES } from "../../repository-discovery/catalog.js";

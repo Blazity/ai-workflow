@@ -1,4 +1,4 @@
-import { env } from "../../env.js";
+import { env } from "../config/env.js";
 import { and, eq, isNull, or, sql } from "drizzle-orm";
 import {
   IssueTrackerNotFoundError,
@@ -7,7 +7,7 @@ import {
 import type { Db } from "../db/client.js";
 import { workflowRuns } from "../db/schema.js";
 import { ticketPageUrl } from "../lib/dashboard-links.js";
-import { logger } from "../lib/logger.js";
+import { logger } from "../infra/logger.js";
 import {
   answerClarificationAndResume,
   MAX_ANSWER_LENGTH,

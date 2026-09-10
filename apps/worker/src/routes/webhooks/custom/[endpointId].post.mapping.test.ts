@@ -49,7 +49,7 @@ const state = vi.hoisted(() => ({
 }));
 const mockStart = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../../env.js", () => ({ env: state.env }));
+vi.mock("../../../config/env.js", () => ({ env: state.env }));
 vi.mock("../../../db/client.js", () => ({ getDb: () => state.db }));
 vi.mock("workflow/api", () => ({ start: (...args: unknown[]) => mockStart(...args) }));
 

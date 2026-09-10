@@ -1089,7 +1089,7 @@ export async function collectRepoCheckBatchStep(
     // Logged rather than failed: nothing about the batch's verdict is wrong,
     // but every later batch in this sandbox pays for provisioning again and
     // without this line there would be nothing anywhere saying why.
-    const { logger } = await import("../../lib/logger.js");
+    const { logger } = await import("../../infra/logger.js");
     logger.warn(
       { provider, repoPath },
       "pre_pr_checks_setup_marker_unwritable",

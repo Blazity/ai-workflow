@@ -9,7 +9,7 @@ import {
   HarnessSkillImportError,
 } from "../../../../harness-profiles/github-skills.js";
 import { createConfiguredGitHubSkillRepository } from "../../../../harness-profiles/configured-github-skills.js";
-import { getVcsProviderConfig } from "../../../../../env.js";
+import { getVcsProviderConfig } from "../../../../config/env.js";
 import {
   requireDashboardActor,
   toHttpError,

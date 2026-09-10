@@ -43,7 +43,7 @@ export async function parkForClarificationStep(
       });
     } catch (err) {
       if (isRunControlError(err)) throw err;
-      const { logger } = await import("../../lib/logger.js");
+      const { logger } = await import("../../infra/logger.js");
       logger.warn(
         { ticketId, err: errorMessage(err) },
         "clarification_label_add_failed",
@@ -97,7 +97,7 @@ export async function reconcileClarificationsOnPickup(
       });
     } catch (err) {
       if (isRunControlError(err)) throw err;
-      const { logger } = await import("../../lib/logger.js");
+      const { logger } = await import("../../infra/logger.js");
       logger.warn(
         { ticketKey, err: errorMessage(err) },
         "clarification_label_remove_failed",
@@ -135,7 +135,7 @@ export async function postPickupCommentStep(
     );
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    const { logger } = await import("../../lib/logger.js");
+    const { logger } = await import("../../infra/logger.js");
     logger.warn(
       { ticketKey, err: errorMessage(err) },
       "pickup_comment_failed",
@@ -182,7 +182,7 @@ export async function postClarificationQuestionsCommentStep(
     );
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    const { logger } = await import("../../lib/logger.js");
+    const { logger } = await import("../../infra/logger.js");
     logger.warn(
       { ticketKey, err: errorMessage(err) },
       "clarification_questions_comment_failed",
@@ -211,7 +211,7 @@ async function loadClarificationHistoryStep(
 
 async function logClarificationHistoryFailure(ticketKey: string, reason: string): Promise<void> {
   "use step";
-  const { logger } = await import("../../lib/logger.js");
+  const { logger } = await import("../../infra/logger.js");
   logger.warn(
     { ticketKey, reason: reason.slice(0, 1_000) },
     "clarification_history_load_failed",

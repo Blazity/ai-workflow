@@ -1,7 +1,7 @@
 import { Chat, ThreadImpl } from "chat";
 import type { StateAdapter, Lock } from "chat";
 import { createSlackAdapter } from "@chat-adapter/slack";
-import { logger } from "../../lib/logger.js";
+import { logger } from "../../infra/logger.js";
 import { formatTicketEvent, formatTicketStatus } from "./format.js";
 import type { MessagingAdapter, TicketEvent } from "./types.js";
 import type { ThreadStore } from "../run-registry/types.js";

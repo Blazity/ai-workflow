@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { CostResponse, RunStatus } from "@shared/contracts";
 
-import { env } from "../../../env.js";
+import { env } from "../../config/env.js";
 import { costAgg, listRuns, type TimeWindow } from "../../db/queries/runs-read.js";
 import { isTerminalRunStatus, type McpToolDependencies } from "../contracts.js";
 import { executeMcpRead } from "../execute-tool.js";

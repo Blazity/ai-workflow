@@ -1,5 +1,5 @@
+import type { VcsProviderKind } from "@shared/contracts";
 import type { GateStatusCapableVCS, GateStatusRef } from "../adapters/vcs/types.js";
-import type { VcsProviderKind } from "../../env.js";
 
 export interface PostPrGateWorkflowInput {
   prNumber: number;
@@ -43,7 +43,7 @@ async function runGate(input: PostPrGateWorkflowInput) {
     ticketKeyFromBranch,
   } = await import("../lib/workflow-naming.js");
   const { createAdapters } = await import("../lib/adapters.js");
-  const { logger } = await import("../lib/logger.js");
+  const { logger } = await import("../infra/logger.js");
   const { hasGateStatusCapability } = await import("../adapters/vcs/types.js");
 
   const config = loadPostPrGateConfig();

@@ -1,7 +1,7 @@
 import { oauthProviderResourceClient } from "@better-auth/oauth-provider/resource-client";
 import { and, eq } from "drizzle-orm";
 
-import { env } from "../../env.js";
+import { env } from "../config/env.js";
 import { auth } from "../auth-instance.js";
 import { getDb } from "../db/client.js";
 import { member, oauthClient, organization } from "../db/schema.js";

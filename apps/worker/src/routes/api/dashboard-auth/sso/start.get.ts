@@ -9,7 +9,7 @@ import {
   type H3Event,
 } from "h3";
 
-import { env } from "../../../../../env.js";
+import { env } from "../../../../config/env.js";
 import { DASHBOARD_SSO_PROVIDER_ID } from "../../../../auth.js";
 import { auth } from "../../../../auth-instance.js";
 import { readOAuthFlowCookie, safeOAuthReturnPath } from "../../../../mcp/auth-pages.js";

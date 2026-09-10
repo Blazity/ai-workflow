@@ -8,7 +8,7 @@ import {
 } from "./types.js";
 import { reviewLedgerMarker } from "../../lib/vcs-bot-identity.js";
 
-vi.mock("../../lib/logger.js", () => ({
+vi.mock("../../infra/logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 

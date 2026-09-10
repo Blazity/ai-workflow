@@ -4,7 +4,7 @@ import type {
   RunRegistryAdapter,
 } from "../adapters/run-registry/types.js";
 
-vi.mock("../../env.js", () => ({
+vi.mock("../config/env.js", () => ({
   env: { JIRA_PROJECT_KEY: "PROJ", COLUMN_AI: "AI" },
 }));
 const { hostedStart } = vi.hoisted(() => ({ hostedStart: vi.fn() }));

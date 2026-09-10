@@ -27,7 +27,7 @@ vi.mock("../sandbox/credentials.js", () => ({
   getSandboxCredentials: () => ({}),
 }));
 
-vi.mock("../lib/logger.js", () => ({
+vi.mock("../infra/logger.js", () => ({
   logger: {
     info: vi.fn(),
     warn: vi.fn(),

@@ -16,7 +16,7 @@ const state = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../../../env.js", () => ({
+vi.mock("../../config/env.js", () => ({
   env: state.env,
 }));
 
@@ -29,7 +29,7 @@ vi.mock("../../auth-instance.js", () => ({
   },
 }));
 
-vi.mock("../../lib/logger.js", () => ({
+vi.mock("../../infra/logger.js", () => ({
   logger: { warn: state.loggerWarn },
 }));
 

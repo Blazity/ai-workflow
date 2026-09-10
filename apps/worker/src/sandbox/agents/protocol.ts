@@ -149,7 +149,7 @@ export async function verifyInstalledCli(
     });
   }
 
-  const { logger } = await import("../../lib/logger.js");
+  const { logger } = await import("../../infra/logger.js");
   logger.info(
     {
       provider: spec.kind,

@@ -5,11 +5,11 @@ import {
   getRouterParam,
   type H3Event,
 } from "h3";
-import { env } from "../../../../../../../../../env.js";
+import { env } from "../../../../../../../../config/env.js";
 import type { Db } from "../../../../../../../../db/client.js";
 import { requireDashboardActor } from "../../../../../../../../lib/auth/request-context.js";
 import { canDispatchWorkflowRuns } from "../../../../../../../../lib/auth/roles.js";
-import { logger } from "../../../../../../../../lib/logger.js";
+import { logger } from "../../../../../../../../infra/logger.js";
 import {
   getWebhookEndpointForNode,
   type MintableWebhookNode,

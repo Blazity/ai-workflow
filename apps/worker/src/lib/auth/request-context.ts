@@ -1,5 +1,5 @@
 import { createError, getHeaders, type H3Event } from "h3";
-import { env } from "../../../env.js";
+import { env } from "../../config/env.js";
 import { auth } from "../../auth-instance.js";
 import { getDb } from "../../db/client.js";
 import { getDashboardActor, DashboardAuthError } from "./users-read.js";

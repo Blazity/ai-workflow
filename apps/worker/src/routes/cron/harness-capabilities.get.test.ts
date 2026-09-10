@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   prewarm: vi.fn(),
 }));
 
-vi.mock("../../../env.js", () => ({
+vi.mock("../../config/env.js", () => ({
   env: { CRON_SECRET: "cron-secret" },
 }));
 vi.mock("../../db/client.js", () => ({
@@ -15,7 +15,7 @@ vi.mock("../../harness-profiles/capability-catalog.js", () => ({
   prewarmHarnessCapabilityCatalogs: (...args: unknown[]) =>
     mocks.prewarm(...args),
 }));
-vi.mock("../../lib/logger.js", () => ({
+vi.mock("../../infra/logger.js", () => ({
   logger: { info: vi.fn() },
 }));
 

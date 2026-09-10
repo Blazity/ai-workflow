@@ -1,5 +1,5 @@
 import { start } from "workflow/api";
-import { env } from "../../env.js";
+import { env } from "../config/env.js";
 import type { Db } from "../db/client.js";
 import type {
   RunRegistryAdapter,
@@ -8,7 +8,7 @@ import type {
 import type { AgentWorkflowInput } from "../engine/index.js";
 import { agentWorkflow } from "../engine/index.js";
 import { claimSubjectRun, envTriggerRateLimitDefault } from "../lib/dispatch.js";
-import { logger } from "../lib/logger.js";
+import { logger } from "../infra/logger.js";
 import {
   enforceTriggerRateLimit,
   resolveTriggerRateLimit,

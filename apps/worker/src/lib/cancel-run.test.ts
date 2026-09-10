@@ -19,7 +19,7 @@ const state = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
 
-vi.mock("../../env.js", () => ({
+vi.mock("../config/env.js", () => ({
   env: {
     COLUMN_AI: "AI",
     COLUMN_BACKLOG: "Backlog",
@@ -59,7 +59,7 @@ vi.mock("../db/queries/runs-read.js", () => ({
 vi.mock("../schedule-trigger/occurrence-store.js", () => ({
   settleScheduleOccurrenceOnCancel: state.settleOccurrence,
 }));
-vi.mock("./logger.js", () => ({
+vi.mock("../infra/logger.js", () => ({
   logger: { warn: state.warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 

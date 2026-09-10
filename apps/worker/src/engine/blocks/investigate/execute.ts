@@ -294,7 +294,7 @@ async function blockInvestigateKeywordsStep(input: {
   prompt: string;
 }): Promise<string[]> {
   "use step";
-  const { generateStructured } = await import("../../../lib/llm.js");
+  const { generateStructured } = await import("../../llm.js");
   const result = await generateStructured({ ...input, schema: KEYWORDS_SCHEMA });
   const parsed = keywordsResultSchema.safeParse(result.object);
   if (!parsed.success) {
@@ -419,7 +419,7 @@ async function blockInvestigateRetrievalStep(input: {
   // Both providers' credentials and the Jira project scope come from here, one
   // read, so no block param can influence what either provider is allowed to
   // reach.
-  const { env } = await import("../../../../env.js");
+  const { env } = await import("../../../config/env.js");
   const [jira, slack] = await Promise.all([
     input.jira === null
       ? Promise.resolve<ProviderOutcome<TicketSummary[]>>({ status: "disabled" })
@@ -474,7 +474,7 @@ async function blockInvestigateTheoryStep(input: {
   prompt: string;
 }): Promise<z.infer<typeof theoryResultSchema>> {
   "use step";
-  const { generateStructured } = await import("../../../lib/llm.js");
+  const { generateStructured } = await import("../../llm.js");
   const result = await generateStructured({ ...input, schema: THEORY_SCHEMA });
   const parsed = theoryResultSchema.safeParse(result.object);
   if (!parsed.success) {

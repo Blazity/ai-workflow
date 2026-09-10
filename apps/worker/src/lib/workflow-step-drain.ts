@@ -1,4 +1,4 @@
-import { logger } from "./logger.js";
+import { logger } from "../infra/logger.js";
 
 /**
  * Longest a single step invocation can stay alive on Vercel. The deployed step

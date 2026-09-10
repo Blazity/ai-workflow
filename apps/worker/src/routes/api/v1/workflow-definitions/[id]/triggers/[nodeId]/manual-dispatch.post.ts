@@ -6,7 +6,7 @@ import {
   readBody,
   setResponseStatus,
 } from "h3";
-import { env } from "../../../../../../../../env.js";
+import { env } from "../../../../../../../config/env.js";
 import { getDb } from "../../../../../../../db/client.js";
 import { createAdapters } from "../../../../../../../lib/adapters.js";
 import { requireDashboardActor } from "../../../../../../../lib/auth/request-context.js";

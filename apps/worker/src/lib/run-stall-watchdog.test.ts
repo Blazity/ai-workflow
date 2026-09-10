@@ -8,7 +8,7 @@ import { workflowRuns } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
 import * as runTelemetry from "./telemetry/run-telemetry.js";
 
-vi.mock("../../env.js", () => ({
+vi.mock("../config/env.js", () => ({
   env: { COLUMN_AI: "AI" },
 }));
 
@@ -40,7 +40,7 @@ vi.mock("./cancel-run.js", () => ({
   cancelSubjectRunDetailed: (...args: unknown[]) =>
     mocks.cancelSubjectRunDetailed(...args),
 }));
-vi.mock("./logger.js", () => ({
+vi.mock("../infra/logger.js", () => ({
   logger: { warn: mocks.warn, info: mocks.info, error: vi.fn(), debug: vi.fn() },
 }));
 vi.mock("./active-run-owner.js", () => ({

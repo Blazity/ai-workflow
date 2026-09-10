@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-import { env } from "../../env.js";
+import { env } from "../config/env.js";
 import type { McpToolDependencies } from "./contracts.js";
 import { executeMcpRead } from "./execute-tool.js";
 import { MCP_CONTRACT_HASH } from "./sanitize-result.js";

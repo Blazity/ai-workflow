@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const warn = vi.hoisted(() => vi.fn());
-vi.mock("../lib/logger.js", () => ({ logger: { warn } }));
+vi.mock("../infra/logger.js", () => ({ logger: { warn } }));
 
 const { loadPreSandboxConfig, parsePreSandboxConfig } = await import("./config.js");
 

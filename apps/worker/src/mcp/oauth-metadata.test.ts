@@ -12,7 +12,7 @@ const state = vi.hoisted(() => ({
   auth: {} as Record<PropertyKey, unknown>,
 }));
 
-vi.mock("../../env.js", () => ({ env: state.env }));
+vi.mock("../config/env.js", () => ({ env: state.env }));
 vi.mock("../auth-instance.js", () => ({
   auth: new Proxy({}, {
     get: (_target, property) => {

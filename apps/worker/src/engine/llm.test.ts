@@ -5,6 +5,7 @@ const mockGenerateText = vi.fn();
 const mockJsonSchema = vi.fn((s: unknown) => ({ __schema: s }));
 const mockOutputObject = vi.fn((cfg: unknown) => ({ __outputObject: cfg }));
 const mockAnthropic = vi.fn((model: string) => ({ __model: model }));
+const mockCreateAnthropic = vi.fn((_opts: unknown) => mockAnthropic);
 const mockOpenAiModel = vi.fn((model: string) => ({ __openaiModel: model }));
 const mockCreateOpenAI = vi.fn((_opts: unknown) => mockOpenAiModel);
 
@@ -15,14 +16,19 @@ vi.mock("ai", () => ({
 }));
 
 vi.mock("@ai-sdk/anthropic", () => ({
-  anthropic: (model: any) => mockAnthropic(model),
+  createAnthropic: (opts: any) => mockCreateAnthropic(opts),
 }));
 
 vi.mock("@ai-sdk/openai", () => ({
   createOpenAI: (opts: any) => mockCreateOpenAI(opts),
 }));
 
-vi.mock("../../env.js", () => ({ env: { CODEX_API_KEY: "test-codex-key" } }));
+vi.mock("../config/env.js", () => ({
+  env: {
+    ANTHROPIC_API_KEY: "test-anthropic-key",
+    CODEX_API_KEY: "test-codex-key",
+  },
+}));
 
 describe("generateStructured", () => {
   beforeEach(() => {
@@ -46,6 +52,7 @@ describe("generateStructured", () => {
     });
 
     expect(mockAnthropic).toHaveBeenCalledWith("claude-haiku-4-5");
+    expect(mockCreateAnthropic).toHaveBeenCalledWith({ apiKey: "test-anthropic-key" });
     const callArg = mockGenerateText.mock.calls[0][0];
     expect(callArg).toMatchObject({
       model: { __model: "claude-haiku-4-5" },

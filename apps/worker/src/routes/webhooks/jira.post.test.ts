@@ -23,7 +23,7 @@ const state = vi.hoisted(() => ({
   observeProviderWebhook: vi.fn(),
 }));
 
-vi.mock("../../../env.js", () => ({ env: state.env }));
+vi.mock("../../config/env.js", () => ({ env: state.env }));
 vi.mock("../../lib/adapters.js", () => ({ createAdapters: state.createAdapters }));
 vi.mock("../../lib/dispatch.js", () => ({ dispatchTicket: state.dispatch }));
 vi.mock("../../lib/cancel-run.js", () => ({ cancelRunDetailed: state.cancel }));

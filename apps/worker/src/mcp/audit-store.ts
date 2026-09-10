@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gte, inArray, lt } from "drizzle-orm";
 
-import { env } from "../../env.js";
+import { env } from "../config/env.js";
 import type { Db } from "../db/client.js";
 import { mcpAuditEvents } from "../db/schema.js";
 import type { McpAuditInput } from "./contracts.js";

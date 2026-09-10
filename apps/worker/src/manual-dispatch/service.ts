@@ -6,7 +6,7 @@ import type {
   ManualDispatchRequest,
   ManualDispatchResponse,
 } from "@shared/contracts";
-import { env } from "../../env.js";
+import { env } from "../config/env.js";
 import type { Adapters } from "../lib/adapters.js";
 import { reserveSubjectWithinCapacity } from "../lib/dispatch.js";
 import { aiColumnMoveTarget } from "../lib/move-targets.js";

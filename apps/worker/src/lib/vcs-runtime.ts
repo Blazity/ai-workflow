@@ -2,14 +2,13 @@ import {
   env,
   getConfiguredVcsProviders,
   getVcsProviderConfig,
-  getVcsToken,
   type VcsProviderConfig,
   type VcsProviderKind,
-} from "../../env.js";
+} from "../config/env.js";
 import type { VCSAdapter } from "../adapters/vcs/types.js";
 import type { SandboxProviderConfig } from "../sandbox/manager.js";
 import { createVCSForRepository } from "./create-vcs.js";
-import { getBotIdentity } from "./github-auth.js";
+import { getBotIdentity, getVcsToken } from "./github-auth.js";
 
 export interface RepositoryVcsTarget {
   provider: VcsProviderKind;
@@ -52,7 +51,7 @@ export function createRepositoryVCS(target: RepositoryVcsTarget): VCSAdapter {
 export async function buildSandboxProviderConfigs(
   neededProviders?: Iterable<VcsProviderKind>,
 ): Promise<SandboxProviderConfig[]> {
-  const { logger } = await import("./logger.js");
+  const { logger } = await import("../infra/logger.js");
   const needed = neededProviders ? new Set(neededProviders) : null;
   const configs: SandboxProviderConfig[] = [];
   for (const provider of getConfiguredVcsProviders().filter((provider) => !needed || needed.has(provider.kind))) {

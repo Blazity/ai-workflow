@@ -7,7 +7,7 @@ import type {
 import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 
-vi.mock("../../env.js", () => ({
+vi.mock("../config/env.js", () => ({
   env: {
     AGENT_KIND: "claude",
     CLAUDE_MODEL: "claude-test",
@@ -27,8 +27,8 @@ vi.mock("../../env.js", () => ({
 const { loggerMock } = vi.hoisted(() => ({
   loggerMock: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
-vi.mock("../lib/logger.js", () => ({ logger: loggerMock }));
-import { env } from "../../env.js";
+vi.mock("../infra/logger.js", () => ({ logger: loggerMock }));
+import { env } from "../config/env.js";
 import {
   webhookTriggerEndpoints,
   workflowDefinitions,

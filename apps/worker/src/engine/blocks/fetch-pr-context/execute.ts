@@ -42,10 +42,10 @@ export async function blockPrTriggerRepositoriesWithSiblingsStep(
   const { createRepositoryDirectoryForProviders } = await import(
     "../../../adapters/vcs/repository-directory.js",
   );
-  const { getConfiguredVcsProviders } = await import("../../../../env.js");
+  const { getConfiguredVcsProviders } = await import("../../../config/env.js");
   const { createRepositoryVCS } = await import("../../../lib/vcs-runtime.js");
   const { getDb } = await import("../../../db/client.js");
-  const { logger } = await import("../../../lib/logger.js");
+  const { logger } = await import("../../../infra/logger.js");
   const { isRepoAllowed } = await import("../../../lib/repo-allowlist.js");
 
   const lookup = await findRunPrSiblings({
@@ -160,7 +160,7 @@ export async function blockFetchPrContextsStep(
   const { isRepoAllowedForScope } = await import("../../../lib/repo-allowlist.js");
   // Read inside the step, not in workflow scope: the flag decides one provider
   // call, and env parsing has no business running on every replay.
-  const { env } = await import("../../../../env.js");
+  const { env } = await import("../../../config/env.js");
 
   return Promise.all(
     repositories.map(async (repo) => {
@@ -196,7 +196,7 @@ export async function blockFetchPrContextsStep(
         wantsReviewThreads
           ? vcs.listReviewThreads(pr.id).catch(async (error: unknown) => {
               if (isRunControlError(error)) throw error;
-              const { logger } = await import("../../../lib/logger.js");
+              const { logger } = await import("../../../infra/logger.js");
               logger.warn(
                 {
                   provider: repo.provider,

@@ -61,7 +61,7 @@ vi.mock("../../../../lib/adapters.js", () => ({
 vi.mock("../../../../pre-pr-checks/store.js", () => ({
   dashboardUserLabel: vi.fn(async () => "Operator"),
 }));
-vi.mock("../../../../lib/logger.js", () => ({
+vi.mock("../../../../infra/logger.js", () => ({
   logger: { warn: state.warn, info: vi.fn(), error: vi.fn() },
 }));
 

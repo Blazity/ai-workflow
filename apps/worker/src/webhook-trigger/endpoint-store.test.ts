@@ -8,7 +8,7 @@ import {
   encryptWebhookSecret,
   WebhookSecretDecryptionError,
   WebhookSecretKeyMismatchError,
-} from "../lib/webhook-crypto.js";
+} from "../infra/webhook-crypto.js";
 import {
   decryptCandidateSecrets,
   getWebhookEndpointById,

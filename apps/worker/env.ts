@@ -1,7 +1,5 @@
 import { createEnv } from "@t3-oss/env-core";
 import { z } from "zod";
-import type { GitHubAppAuth } from "./src/lib/github-auth.js";
-import { resolveVcsBotLogin } from "./src/lib/vcs-bot-identity.js";
 
 export const env = createEnv({
   onValidationError: (issues) => {
@@ -301,6 +299,14 @@ export const env = createEnv({
   emptyStringAsUndefined: true,
 });
 
+function hasAnyGithubProviderCredential(): boolean {
+  return Boolean(env.GITHUB_APP_ID || env.GITHUB_APP_PRIVATE_KEY || env.GITHUB_INSTALLATION_ID);
+}
+
+function isGithubProviderConfigured(): boolean {
+  return Boolean(env.GITHUB_APP_ID && env.GITHUB_APP_PRIVATE_KEY && env.GITHUB_INSTALLATION_ID);
+}
+
 // Cross-field validation — fail fast at startup instead of at first workflow
 // step. Provider credentials are intentionally optional at the schema level:
 // a deployment may configure GitHub, GitLab, or both.
@@ -396,7 +402,7 @@ export const env = createEnv({
         "  RESEND_WEBHOOK_SECRET requires RESEND_API_KEY",
     );
   }
-  // Same rule as isValidWebhookEncryptionKey in src/lib/webhook-crypto.ts, which
+  // Same rule as isValidWebhookEncryptionKey in src/infra/webhook-crypto.ts, which
   // cannot be imported here: env.ts must stay dependency-free at boot. Change
   // both together.
   if (
@@ -411,151 +417,3 @@ export const env = createEnv({
 }
 
 export type Env = typeof env;
-
-/**
- * VCS config — discriminated on `kind`.
- * GitHub auth is App-based (mints short-lived installation tokens on demand).
- * GitLab auth is a static PAT (no App equivalent in this codebase).
- */
-export type VcsProviderConfig =
-  | {
-      kind: "github";
-      auth: GitHubAppAuth;
-      host: string;
-      legacyRepoPath?: string;
-      legacyBaseBranch: string;
-    }
-  | {
-      kind: "gitlab";
-      token: string;
-      host: string;
-      legacyRepoPath?: string;
-      legacyBaseBranch: string;
-    };
-
-type LegacyVcsConfig<T extends VcsProviderConfig> = T extends unknown
-  ? Omit<T, "legacyRepoPath" | "legacyBaseBranch"> & {
-      repoPath: string;
-      baseBranch: string;
-    }
-  : never;
-
-export type VcsConfig = LegacyVcsConfig<VcsProviderConfig>;
-
-export type VcsProviderKind = VcsProviderConfig["kind"];
-
-function hasAnyGithubProviderCredential(): boolean {
-  return Boolean(env.GITHUB_APP_ID || env.GITHUB_APP_PRIVATE_KEY || env.GITHUB_INSTALLATION_ID);
-}
-
-function isGithubProviderConfigured(): boolean {
-  return Boolean(env.GITHUB_APP_ID && env.GITHUB_APP_PRIVATE_KEY && env.GITHUB_INSTALLATION_ID);
-}
-
-/** Resolve every provider configured by credentials. */
-export function getConfiguredVcsProviders(): VcsProviderConfig[] {
-  const providers: VcsProviderConfig[] = [];
-
-  if (isGithubProviderConfigured()) {
-    providers.push({
-      kind: "github",
-      auth: {
-        appId: env.GITHUB_APP_ID!,
-        privateKeyBase64: env.GITHUB_APP_PRIVATE_KEY!,
-        installationId: env.GITHUB_INSTALLATION_ID!,
-      },
-      host: "https://github.com",
-      ...(env.GITHUB_OWNER && env.GITHUB_REPO
-        ? { legacyRepoPath: `${env.GITHUB_OWNER}/${env.GITHUB_REPO}` }
-        : {}),
-      legacyBaseBranch: env.GITHUB_BASE_BRANCH ?? "main",
-    });
-  }
-
-  if (env.GITLAB_TOKEN) {
-    providers.push({
-      kind: "gitlab",
-      token: env.GITLAB_TOKEN,
-      host: env.GITLAB_HOST,
-      ...(env.GITLAB_PROJECT_ID ? { legacyRepoPath: env.GITLAB_PROJECT_ID } : {}),
-      legacyBaseBranch: env.GITLAB_BASE_BRANCH ?? "main",
-    });
-  }
-
-  return providers;
-}
-
-/** Resolve the automation account used to suppress recursive review triggers.
- * The legacy shared value is safe only when exactly one provider is configured. */
-export function getVcsBotLogin(kind: VcsProviderKind): string | undefined {
-  return resolveVcsBotLogin(
-    kind,
-    getConfiguredVcsProviders().map((provider) => provider.kind),
-    {
-      github: env.GITHUB_BOT_LOGIN,
-      gitlab: env.GITLAB_BOT_LOGIN,
-      legacy: env.VCS_BOT_LOGIN,
-    },
-  );
-}
-
-export function getVcsProviderConfig(kind: VcsProviderKind): VcsProviderConfig {
-  const provider = getConfiguredVcsProviders().find((candidate) => candidate.kind === kind);
-  if (!provider) {
-    throw new Error(`VCS provider is not configured: ${kind}`);
-  }
-  return provider;
-}
-
-/** Resolve legacy single-repo VCS config. New multi-repo code should use provider configs. */
-export function getVcsConfig(): VcsConfig {
-  const providers = getConfiguredVcsProviders();
-  const selectedProvider =
-    env.VCS_KIND
-      ? providers.find((provider) => provider.kind === env.VCS_KIND)
-      : providers.length === 1
-        ? providers[0]
-        : undefined;
-
-  if (!selectedProvider) {
-    throw new Error("legacy VCS config requires exactly one selected provider");
-  }
-  if (!selectedProvider.legacyRepoPath) {
-    throw new Error("legacy VCS config requires a repository");
-  }
-
-  if (selectedProvider.kind === "gitlab") {
-    return {
-      kind: "gitlab",
-      token: selectedProvider.token,
-      repoPath: selectedProvider.legacyRepoPath,
-      baseBranch: selectedProvider.legacyBaseBranch,
-      host: selectedProvider.host,
-    };
-  }
-  return {
-    kind: "github",
-    auth: selectedProvider.auth,
-    repoPath: selectedProvider.legacyRepoPath,
-    baseBranch: selectedProvider.legacyBaseBranch,
-    host: selectedProvider.host,
-  };
-}
-
-/**
- * Resolve a fresh git-credential-shaped token for the configured VCS.
- * - GitLab: returns the static PAT.
- * - GitHub: mints a fresh ~1h installation access token via the App's JWT.
- *
- * Call this immediately before any operation that needs the raw token (git
- * push, Sandbox.create source.password). Do not cache the result outside the
- * operation that needs it.
- */
-export async function getVcsToken(config: VcsProviderConfig): Promise<string> {
-  if (config.kind === "gitlab") return config.token;
-  // Dynamic import keeps @octokit/* off the env-validation cold path. Modules
-  // that only need env (e.g. Slack webhook handler) shouldn't transitively
-  // load the GitHub App auth deps.
-  const { mintInstallationToken } = await import("./src/lib/github-auth.js");
-  return mintInstallationToken(config.auth);
-}

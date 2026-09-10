@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({
   generateStructured: vi.fn(),
 }));
 
-vi.mock("../../../lib/llm.js", () => ({
+vi.mock("../../llm.js", () => ({
   generateStructured: mocks.generateStructured,
 }));
 

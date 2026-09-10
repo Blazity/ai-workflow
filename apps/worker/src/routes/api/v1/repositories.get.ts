@@ -5,7 +5,7 @@ import type {
   RepositoryProviderStatus,
   VcsProviderKind,
 } from "@shared/contracts";
-import { getConfiguredVcsProviders } from "../../../../env.js";
+import { getConfiguredVcsProviders } from "../../../config/env.js";
 import { listRepositoriesAcrossProviders } from "../../../adapters/vcs/repository-directory.js";
 import { requireDashboardActor, toHttpError } from "../../../lib/auth/request-context.js";
 

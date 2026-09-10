@@ -60,7 +60,7 @@ const state = vi.hoisted(() => ({
   db: undefined as unknown as Db,
 }));
 
-vi.mock("../../env.js", () => ({ env: state.env }));
+vi.mock("../config/env.js", () => ({ env: state.env }));
 // The one seam that cannot be crossed in a test: a token is minted by an OAuth
 // client we do not have. Everything downstream of the actor is real.
 vi.mock("./request-context.js", () => ({ requireMcpActor: state.requireMcpActor }));

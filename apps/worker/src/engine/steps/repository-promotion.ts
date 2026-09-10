@@ -1,6 +1,6 @@
 import type { ActiveRunOwner } from "../internal/ports.js";
 import type { WorkflowRepositoryScope } from "@shared/contracts";
-import { buildVcsUrls, gitAuthArgs } from "../../lib/vcs-urls.js";
+import { buildVcsUrls, gitAuthArgs } from "../../infra/vcs-urls.js";
 import {
   WORKSPACE_MANIFEST_PATH,
   type WorkspaceManifestV2,
@@ -367,7 +367,7 @@ export async function promoteRepositoryWriteScopeStep(input: {
   } = await import("../../db/queries/workflow-owned-branches.js");
   const { createRepositoryVCS } = await loadVcsRuntimePort();
   const { buildSandboxProviderConfigs } = await loadVcsRuntimePort();
-  const { logger } = await import("../../lib/logger.js");
+  const { logger } = await import("../../infra/logger.js");
   const db = getDb();
   const owned = await listWorkflowOwnedBranchesForTicket(db, input.ticketKey);
   const adapterFor = (repository: WorkspaceRepoV2) =>

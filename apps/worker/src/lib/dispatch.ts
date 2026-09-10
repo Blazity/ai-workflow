@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { start } from "workflow/api";
 import type { WorkflowDefinition } from "@shared/contracts";
-import { env } from "../../env.js";
+import { env } from "../config/env.js";
 import {
   RESERVATION_BIND_GRACE_MS,
   type RunKind,
@@ -29,7 +29,7 @@ import { BUILTIN_FALLBACK_DEFINITION_VERSION } from "../engine/agent-input.js";
 import { agentWorkflow } from "../engine/index.js";
 import { hasDispatchBlockingApprovalForTicket } from "../approvals/store.js";
 import type { Adapters } from "./adapters.js";
-import { logger } from "./logger.js";
+import { logger } from "../infra/logger.js";
 import { ticketSubjectKey } from "./subject-key.js";
 
 export const STALE_CLAIM_MS = RESERVATION_BIND_GRACE_MS;

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { EXECUTION_DIAGNOSTIC_PREFIX } from "@shared/contracts";
-import { logger } from "./logger.js";
+import { logger } from "../infra/logger.js";
 
 export function recordIngestionFailure(
   event: string,

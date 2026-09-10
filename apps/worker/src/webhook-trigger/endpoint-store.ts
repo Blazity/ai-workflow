@@ -3,14 +3,14 @@ import { WEBHOOK_AUTH_SCHEMES } from "@shared/contracts";
 import { and, eq, getTableColumns, isNotNull, isNull, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { webhookTriggerEndpoints } from "../db/schema.js";
-import { logger } from "../lib/logger.js";
+import { logger } from "../infra/logger.js";
 import {
   decryptWebhookSecret,
   encryptWebhookSecret,
   generateWebhookEndpointId,
   generateWebhookSecret,
   WebhookSecretKeyMismatchError,
-} from "../lib/webhook-crypto.js";
+} from "../infra/webhook-crypto.js";
 
 /**
  * Endpoint rows for webhook trigger nodes: minting, rotation, revocation, and

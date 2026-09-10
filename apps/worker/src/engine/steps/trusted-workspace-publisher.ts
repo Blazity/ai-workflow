@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { WorkflowRepositoryScope } from "@shared/contracts";
 import type { RepositoryVcsRuntime } from "../../lib/vcs-runtime.js";
-import { buildCloneUrl, buildVcsUrls, gitAuthArgs } from "../../lib/vcs-urls.js";
+import { buildCloneUrl, buildVcsUrls, gitAuthArgs } from "../../infra/vcs-urls.js";
 import type { ReviewLedgerGuardSummary } from "../helpers/review-ledger.js";
 import { getSandboxCredentials } from "../../sandbox/credentials.js";
 import {
@@ -74,7 +74,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
 }): Promise<TrustedWorkspacePushResult> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
-  const { env } = await import("../../../env.js");
+  const { env } = await import("../../config/env.js");
   const { createRepositoryVcsRuntime } = await import("../../lib/vcs-runtime.js");
   const { isRepoAllowedForScope } = await import("../../lib/repo-allowlist.js");
   const { assertOpenSourcePullRequest, isSourcePullRequestRepository } = await import(

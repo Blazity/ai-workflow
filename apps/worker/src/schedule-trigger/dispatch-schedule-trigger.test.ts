@@ -17,7 +17,7 @@ const { testEnv } = vi.hoisted(() => ({
     MAX_CONCURRENT_AGENTS: 3,
   } as Record<string, unknown>,
 }));
-vi.mock("../../env.js", () => ({ env: testEnv }));
+vi.mock("../config/env.js", () => ({ env: testEnv }));
 const { hostedStart } = vi.hoisted(() => ({ hostedStart: vi.fn() }));
 vi.mock("workflow/api", () => ({ start: hostedStart, getRun: vi.fn() }));
 vi.mock("../engine/index.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
@@ -30,7 +30,7 @@ vi.mock("../db/client.js", () => ({ getDb: () => ({}) }));
 const { loggerMock } = vi.hoisted(() => ({
   loggerMock: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
-vi.mock("../lib/logger.js", () => ({ logger: loggerMock }));
+vi.mock("../infra/logger.js", () => ({ logger: loggerMock }));
 
 const {
   createScheduleDispatchDeps,

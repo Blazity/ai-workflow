@@ -70,13 +70,12 @@
     "config": {
       "patterns": [
         "^apps/worker/env\\.ts$",
-        "^apps/worker/src/lib/env\\.(?:d\\.)?[cm]?[jt]sx?$",
-        "^apps/worker/src/lib/env-[^/]+\\.(?:d\\.)?[cm]?[jt]sx?$"
+        "^apps/worker/src/config(?:/|$)"
       ]
     },
     "infra": {
       "patterns": [
-        "^apps/worker/src/lib/(?:github-webhook-sig|llm|llm-provider|logger|telemetry|unique-violation|vcs-urls|webhook-crypto)\\.(?:d\\.)?[cm]?[jt]sx?$"
+        "^apps/worker/src/infra(?:/|$)"
       ]
     }
   },

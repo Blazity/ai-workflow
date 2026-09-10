@@ -151,7 +151,7 @@ export async function seedRepoMemoryStep(
   let pruned = 0;
   try {
     if (input.repositories.length === 0) return { seeded, pruned };
-    const { logger } = await import("../../lib/logger.js");
+    const { logger } = await import("../../infra/logger.js");
     const log = logger.child({
       sandboxId: input.sandboxId,
       runId: input.runId,
@@ -343,7 +343,7 @@ export async function seedRepoMemoryStep(
     // The reporting path is itself wrapped: a failed logger import here would
     // otherwise escape a step whose whole contract is that it cannot throw.
     try {
-      const { logger } = await import("../../lib/logger.js");
+      const { logger } = await import("../../infra/logger.js");
       logger.warn(
         {
           sandboxId: input.sandboxId,

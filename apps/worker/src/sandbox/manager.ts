@@ -1,4 +1,5 @@
 import type { Sandbox as SandboxType } from "@vercel/sandbox";
+import type { VcsProviderKind } from "@shared/contracts";
 import { getSandboxCredentials } from "./credentials.js";
 import type { AgentAdapter, ConfigureOpts } from "./agents/types.js";
 import {
@@ -14,9 +15,8 @@ import {
   type WorkspaceRepo,
   type WorkspaceRepositoryInput,
 } from "./repo-workspace.js";
-import type { VcsProviderKind } from "../../env.js";
 import { isActiveRunOwnerError } from "../lib/run-control-errors.js";
-import { buildVcsUrls, gitAuthArgs } from "../lib/vcs-urls.js";
+import { buildVcsUrls, gitAuthArgs } from "../infra/vcs-urls.js";
 import { stopSandboxAndConfirm } from "./stop-ticket-sandboxes.js";
 import { isAgentRuntimeError } from "./agents/protocol.js";
 import type { ResolvedHarnessRuntime } from "./harness-runtime.js";
@@ -141,7 +141,7 @@ export class SandboxManager {
         );
         const commitHook = await installMemoryCommitHook(sandbox, repo.localPath);
         if (commitHook.kind !== "installed") {
-          const { logger } = await import("../lib/logger.js");
+          const { logger } = await import("../infra/logger.js");
           const base = { repoPath: repo.repoPath, localPath: repo.localPath };
           if (commitHook.kind === "failed") {
             logger.warn(
@@ -198,7 +198,7 @@ export class SandboxManager {
             const stdout = (await merge.stdout()).trim();
             const stderr = (await merge.stderr()).trim();
             const out = stderr || stdout;
-            const { logger } = await import("../lib/logger.js");
+            const { logger } = await import("../infra/logger.js");
             logger.warn({ repoPath: repo.repoPath, mergeBase: repo.mergeBase, exitCode: merge.exitCode, output: out.slice(0, 500) }, "merge_conflicts_during_provision");
           }
         }

@@ -13,7 +13,7 @@ import { createTestDb } from "../db/test-db.js";
 import { PostgresRunRegistry } from "../adapters/run-registry/postgres.js";
 import { getWebhookDelivery } from "./delivery-store.js";
 
-vi.mock("../../env.js", () => ({
+vi.mock("../config/env.js", () => ({
   env: { JIRA_PROJECT_KEY: "PROJ", COLUMN_AI: "AI" },
 }));
 const mockStart = vi.fn();

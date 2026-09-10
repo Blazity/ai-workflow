@@ -3,9 +3,9 @@ import { GitLabAdapter } from "./gitlab.js";
 import { reviewFindingDigest } from "./types.js";
 import type { ReviewThread } from "./types.js";
 import { AI_WORKFLOW_COMMENT_MARKER } from "../../lib/vcs-bot-identity.js";
-import { logger } from "../../lib/logger.js";
+import { logger } from "../../infra/logger.js";
 
-vi.mock("../../lib/logger.js", () => ({
+vi.mock("../../infra/logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 

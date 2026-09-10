@@ -50,7 +50,7 @@ export async function checkPhaseDone(
     });
   } catch (error) {
     if (error instanceof SandboxDeadlineError) {
-      const { logger } = await import("../../lib/logger.js");
+      const { logger } = await import("../../infra/logger.js");
       logger.warn(
         { sandboxId, sentinelFile, deadlineMs },
         "sandbox_phase_check_deadline_exceeded",

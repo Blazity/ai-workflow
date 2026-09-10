@@ -29,7 +29,7 @@ vi.mock("../../schedule-trigger/schedule-store.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../../env.js", () => ({
+vi.mock("../../config/env.js", () => ({
   env: {
     MCP_SERVER_VERSION: "0.1.0",
     DASHBOARD_ORIGIN: "https://dashboard.example",

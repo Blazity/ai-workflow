@@ -4,7 +4,7 @@ import type { Db } from "../db/client.js";
 import type { IssueTrackerAdapter, TicketContent } from "../adapters/issue-tracker/types.js";
 import { activeRuns, clarificationRequests, workflowRuns } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
-import { logger } from "../lib/logger.js";
+import { logger } from "../infra/logger.js";
 import { answerClarificationAndResume } from "./answer-core.js";
 import {
   getHookClarification,
@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
   cancelRunForOperator: vi.fn(),
 }));
 
-vi.mock("../../env.js", () => ({
+vi.mock("../config/env.js", () => ({
   env: { COLUMN_AI: "AI", DASHBOARD_ORIGIN: "https://dash.example" },
 }));
 vi.mock("workflow/api", () => ({

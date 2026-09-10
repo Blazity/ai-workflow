@@ -21,7 +21,7 @@ const state = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../../env.js", () => ({ env: state.env }));
+vi.mock("../config/env.js", () => ({ env: state.env }));
 
 beforeEach(() => {
   vi.resetModules();

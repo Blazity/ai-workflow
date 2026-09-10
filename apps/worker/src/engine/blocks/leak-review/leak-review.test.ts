@@ -11,8 +11,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.sandboxGet } }));
 vi.mock("../../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
-vi.mock("../../../lib/llm.js", () => ({ generateStructured: mocks.generateStructured }));
-vi.mock("../../../lib/logger.js", () => ({
+vi.mock("../../llm.js", () => ({ generateStructured: mocks.generateStructured }));
+vi.mock("../../../infra/logger.js", () => ({
   logger: { warn: mocks.warn, info: vi.fn(), error: vi.fn() },
 }));
 vi.mock("../../../run-observability/configured-secrets.js", () => ({

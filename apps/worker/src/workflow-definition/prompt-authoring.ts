@@ -286,7 +286,7 @@ export async function validateWorkflowPromptAuthoringIssues(
         definition,
         organizationId: await dashboardOrganizationId(
           db,
-          (await import("../../env.js")).env.DASHBOARD_ORG_SLUG,
+          (await import("../config/env.js")).env.DASHBOARD_ORG_SLUG,
         ),
       });
   return dedupeIssues([...promptIssues, ...profileIssues]);

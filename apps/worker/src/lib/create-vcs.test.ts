@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("../../env.js", () => ({
+vi.mock("../config/env.js", () => ({
   getVcsConfig: vi.fn(),
 }));
 

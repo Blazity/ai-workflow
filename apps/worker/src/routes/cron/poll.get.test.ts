@@ -1,6 +1,6 @@
 import { createApp, toWebHandler } from "h3";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { logger } from "../../lib/logger.js";
+import { logger } from "../../infra/logger.js";
 
 const state = vi.hoisted(() => ({
   order: [] as string[],
@@ -43,7 +43,7 @@ const mocks = vi.hoisted(() => ({
   createScheduleDispatchDeps: vi.fn(),
 }));
 
-vi.mock("../../../env.js", () => ({
+vi.mock("../../config/env.js", () => ({
   env: {
     CRON_SECRET: undefined,
     JIRA_PROJECT_KEY: "AIW",

@@ -329,7 +329,7 @@ export async function provisionDisposableReviewWorkspaceStep(
           await sandbox.writeFiles([{ path: absolutePath, content: memoryDocument }]);
         }
       } catch (error) {
-        const { logger } = await import("../../lib/logger.js");
+        const { logger } = await import("../../infra/logger.js");
         logger.warn(
           {
             sandboxId: sandbox.sandboxId,

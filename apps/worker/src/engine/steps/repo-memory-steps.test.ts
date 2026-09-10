@@ -61,7 +61,7 @@ vi.mock("../../lib/vcs-runtime.js", () => ({
   buildSandboxProviderConfigs: mocks.buildSandboxProviderConfigs,
 }));
 
-vi.mock("../../lib/logger.js", () => ({
+vi.mock("../../infra/logger.js", () => ({
   logger: {
     child: () => ({ warn: mocks.logWarn, info: mocks.logInfo }),
     warn: mocks.logWarn,
@@ -69,8 +69,8 @@ vi.mock("../../lib/logger.js", () => ({
   },
 }));
 vi.mock("../../db/client.js", () => ({ getDb: () => mocks.db }));
-vi.mock("../../../env.js", () => ({ env: mocks.env }));
-vi.mock("../../lib/llm.js", () => ({ generateStructured: mocks.generateStructured }));
+vi.mock("../../config/env.js", () => ({ env: mocks.env }));
+vi.mock("../llm.js", () => ({ generateStructured: mocks.generateStructured }));
 // Passthrough by default. `prepareMemoryContent` wraps its whole redaction call,
 // this one included, so failing it here is what drives the null-result branch.
 vi.mock("../../run-observability/configured-secrets.js", async (importOriginal) => {

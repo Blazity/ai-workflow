@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { parse } from "yaml";
 import { z } from "zod";
-import { logger } from "../lib/logger.js";
+import { logger } from "../infra/logger.js";
 import { preSandboxStepRegistry, type PreSandboxStepId } from "./steps/index.js";
 import type { PreSandboxConfig } from "./types.js";
 

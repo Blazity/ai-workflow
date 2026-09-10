@@ -21,7 +21,7 @@ export async function runPreSandboxPhase(
   "use step";
   const { loadPreSandboxConfig } = await import("../../pre-sandbox/config.js");
   const { preSandboxStepRegistry } = await import("../../pre-sandbox/steps/index.js");
-  const { logger } = await import("../../lib/logger.js");
+  const { logger } = await import("../../infra/logger.js");
 
   return executePreSandboxPhase(input, loadPreSandboxConfig(), preSandboxStepRegistry, logger);
 }

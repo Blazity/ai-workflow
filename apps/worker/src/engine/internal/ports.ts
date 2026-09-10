@@ -1,5 +1,5 @@
 export async function loadEnvironmentPort() {
-  const environment = await import("../../../env.js");
+  const environment = await import("../../config/env.js");
   return {
     get env() {
       return environment.env;

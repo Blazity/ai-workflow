@@ -1,7 +1,7 @@
 import { defineEventHandler, getRouterParam, setResponseHeader } from "h3";
 import { getWorld } from "workflow/runtime";
 import type { RunDetailResponse } from "@shared/contracts";
-import { env } from "../../../../../env.js";
+import { env } from "../../../../config/env.js";
 import { getDb } from "../../../../db/client.js";
 import { fetchRunDetailFromDb, fetchRunRefs } from "../../../../db/queries/run-detail-read.js";
 import {
@@ -13,7 +13,7 @@ import {
   collectRunDetail,
   type RunDetailSource,
 } from "../../../../lib/overview/collect-run-detail.js";
-import { logger } from "../../../../lib/logger.js";
+import { logger } from "../../../../infra/logger.js";
 import { resolveRunDetail } from "../../../../lib/overview/resolve-run-detail.js";
 import { sanitizeRunDetailForResponse } from "../../../../lib/overview/sanitize-run-detail.js";
 

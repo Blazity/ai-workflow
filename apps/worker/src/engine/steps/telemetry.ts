@@ -159,7 +159,7 @@ async function markV2ReplayCaptureUnavailable(payload: {
       }),
     );
   } catch {
-    const { logger } = await import("../../lib/logger.js");
+    const { logger } = await import("../../infra/logger.js");
     logger.warn(
       { runId: payload.runId },
       "run_replay_capture_unavailable_marker_failed",
@@ -315,7 +315,7 @@ async function captureV2RunObservationStartStep(payload: {
         organizationId,
       });
     }
-    const { logger } = await import("../../lib/logger.js");
+    const { logger } = await import("../../infra/logger.js");
     logger.warn(
       { runId: payload.runId },
       "run_replay_capture_start_failed",
@@ -353,7 +353,7 @@ async function startV2RunObservationAttemptStep(payload: {
     return result.attemptId;
   } catch {
     await markV2ReplayCaptureUnavailable(payload);
-    const { logger } = await import("../../lib/logger.js");
+    const { logger } = await import("../../infra/logger.js");
     logger.warn(
       {
         runId: payload.runId,
@@ -414,7 +414,7 @@ async function flushV2RunObservationsStep(payload: {
     return true;
   } catch {
     await markV2ReplayCaptureUnavailable(payload);
-    const { logger } = await import("../../lib/logger.js");
+    const { logger } = await import("../../infra/logger.js");
     logger.warn(
       { runId: payload.runId, attemptId: payload.attemptId },
       "run_replay_attempt_flush_failed",
@@ -454,7 +454,7 @@ async function updateV2RunObservationWaitingStep(payload: {
     return true;
   } catch {
     await markV2ReplayCaptureUnavailable(payload);
-    const { logger } = await import("../../lib/logger.js");
+    const { logger } = await import("../../infra/logger.js");
     logger.warn(
       { runId: payload.runId, attemptId: payload.attemptId },
       "run_replay_attempt_waiting_failed",
@@ -506,7 +506,7 @@ async function finishV2RunObservationAttemptStep(payload: {
     return true;
   } catch {
     await markV2ReplayCaptureUnavailable(payload);
-    const { logger } = await import("../../lib/logger.js");
+    const { logger } = await import("../../infra/logger.js");
     logger.warn(
       { runId: payload.runId, attemptId: payload.attemptId },
       "run_replay_attempt_finish_failed",

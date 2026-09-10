@@ -1,5 +1,5 @@
 import { Resend } from "resend";
-import { env } from "../env.js";
+import { env } from "./config/env.js";
 import { createAuth, type AuthOptions } from "./auth.js";
 import { getDb } from "./db/client.js";
 import { sendEmail } from "./lib/email/send-email.js";

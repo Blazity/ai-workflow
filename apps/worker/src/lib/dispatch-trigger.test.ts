@@ -26,9 +26,11 @@ const testEnv = vi.hoisted(() => ({
   TRIGGER_RATE_LIMIT_MAX: undefined as number | undefined,
   TRIGGER_RATE_LIMIT_WINDOW: undefined as "minute" | "hour" | "day" | "month" | undefined,
 }));
-vi.mock("../../env.js", () => ({
+vi.mock("../config/env.js", () => ({
   env: testEnv,
   getConfiguredVcsProviders: vi.fn(() => []),
+}));
+vi.mock("./vcs-bot-login.js", () => ({
   getVcsBotLogin: vi.fn((provider: "github" | "gitlab") =>
     provider === "github" ? testEnv.GITHUB_BOT_LOGIN : testEnv.GITLAB_BOT_LOGIN),
 }));
@@ -55,7 +57,7 @@ const { loggerMock } = vi.hoisted(() => ({
   },
 }));
 loggerMock.child.mockReturnValue(loggerMock);
-vi.mock("./logger.js", () => ({ logger: loggerMock }));
+vi.mock("../infra/logger.js", () => ({ logger: loggerMock }));
 const { announceMock } = vi.hoisted(() => ({ announceMock: vi.fn() }));
 vi.mock("./pr-autofix-exhaustion.js", () => ({
   announcePrAutofixExhaustion: (...args: any[]) => announceMock(...args),

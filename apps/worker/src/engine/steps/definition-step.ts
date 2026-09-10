@@ -61,7 +61,7 @@ export async function loadWorkflowDefinitionFor(
   version?: WorkflowDefinitionVersionPin,
 ): Promise<LoadedWorkflowPlan | null> {
   "use step";
-  const { env } = await import("../../../env.js");
+  const { env } = await import("../../config/env.js");
   const { getDb } = await import("../../db/client.js");
   const {
     getDeployedWorkflowDefinitionVersion,
@@ -77,7 +77,7 @@ export async function loadWorkflowDefinitionFor(
   const { workflowBlockRegistryContextFromEnv } =
     await import("../../workflow-definition/models.js");
   const { defaultWorkflowDefinitionV2 } = await import("../../workflow-definition/default.js");
-  const { logger } = await import("../../lib/logger.js");
+  const { logger } = await import("../../infra/logger.js");
 
   const toRuntimeShape = (
     def: WorkflowDefinition,

@@ -17,7 +17,7 @@ vi.mock("../../pre-pr-checks/store.js", () => ({
   getCurrentPrePrCheckConfig: (...args: unknown[]) =>
     mocks.getCurrentPrePrCheckConfig(...args),
 }));
-vi.mock("../../lib/logger.js", () => ({
+vi.mock("../../infra/logger.js", () => ({
   logger: { info: mocks.loggerInfo, warn: vi.fn(), error: vi.fn() },
 }));
 vi.mock("../steps/pre-pr-checks-runner.js", async (importOriginal) => ({

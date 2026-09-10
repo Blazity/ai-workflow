@@ -17,7 +17,12 @@ vi.mock("@octokit/rest", () => ({
   }),
 }));
 
-import { buildOctokit, mintInstallationToken, getBotIdentity } from "./github-auth.js";
+import {
+  buildOctokit,
+  getBotIdentity,
+  getVcsToken,
+  mintInstallationToken,
+} from "./github-auth.js";
 
 const FAKE_PEM = "-----BEGIN RSA PRIVATE KEY-----\nFAKE\n-----END RSA PRIVATE KEY-----";
 const fakeAuth = {
@@ -49,6 +54,20 @@ describe("github-auth", () => {
       }),
     );
     expect(mockHook).toHaveBeenCalledWith({ type: "installation" });
+  });
+
+  it("getVcsToken preserves static GitLab tokens", async () => {
+    await expect(getVcsToken({
+      kind: "gitlab",
+      token: "glpat-test",
+    })).resolves.toBe("glpat-test");
+  });
+
+  it("getVcsToken mints GitHub installation tokens", async () => {
+    await expect(getVcsToken({
+      kind: "github",
+      auth: fakeAuth,
+    })).resolves.toBe("ghs_minted-token");
   });
 
   it("getBotIdentity returns App slug + numeric-id noreply email", async () => {

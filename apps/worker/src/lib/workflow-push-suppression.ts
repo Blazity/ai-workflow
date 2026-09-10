@@ -1,7 +1,7 @@
 import type { VcsProvider } from "../adapters/vcs/repository-directory.js";
 import type { Db } from "../db/client.js";
 import { findWorkflowOwnedPullRequestIdentity } from "../db/queries/workflow-owned-branches.js";
-import { logger } from "./logger.js";
+import { logger } from "../infra/logger.js";
 import { vcsLoginsMatch } from "./vcs-bot-identity.js";
 
 export function isWorkflowGeneratedPush(input: {

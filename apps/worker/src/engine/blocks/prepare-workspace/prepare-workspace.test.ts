@@ -38,7 +38,7 @@ const mocks = vi.hoisted(() => ({
   runRepositorySetup: vi.fn(),
 }));
 
-vi.mock("../../../../env.js", () => ({
+vi.mock("../../../config/env.js", () => ({
   env: mocks.env,
   getConfiguredVcsProviders: () => [{ kind: "github" }],
 }));

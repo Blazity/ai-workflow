@@ -6,7 +6,7 @@ import type {
 } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 
-vi.mock("../../env.js", () => ({
+vi.mock("../config/env.js", () => ({
   env: {
     AGENT_KIND: "claude",
     CLAUDE_MODEL: "claude-test",

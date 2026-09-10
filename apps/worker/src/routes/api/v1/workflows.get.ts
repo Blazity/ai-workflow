@@ -1,11 +1,11 @@
 import { defineEventHandler, getQuery, setResponseHeader } from "h3";
 import type { WorkflowsResponse } from "@shared/contracts";
-import { env } from "../../../../env.js";
+import { env } from "../../../config/env.js";
 import { getDb } from "../../../db/client.js";
 import { parseWindow, workflowAgg } from "../../../db/queries/runs-read.js";
 import { getWorkflowRegistry } from "../../../lib/overview/workflow-registry.js";
 import { registryRows } from "../../../lib/overview/collect-workflows.js";
-import { logger } from "../../../lib/logger.js";
+import { logger } from "../../../infra/logger.js";
 
 export default defineEventHandler(async (event): Promise<WorkflowsResponse> => {
   setResponseHeader(

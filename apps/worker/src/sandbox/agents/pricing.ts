@@ -17,7 +17,7 @@ interface LiteLLMEntry {
 }
 
 async function loadAll(): Promise<Record<string, TokenPrice> | null> {
-  const { env } = await import("../../../env.js");
+  const { env } = await import("../../config/env.js");
   const ttl = env.CODEX_PRICING_TTL_MS;
   if (cache && Date.now() - cache.fetchedAt < ttl) return cache.data;
 

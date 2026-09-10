@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
 
-vi.mock("../../../lib/logger.js", () => ({ logger: { warn: mocks.warn } }));
+vi.mock("../../../infra/logger.js", () => ({ logger: { warn: mocks.warn } }));
 vi.mock("../../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
 vi.mock("../../../lib/active-run-owner.js", () => ({
   assertActiveRunOwner: (...args: any[]) => mocks.assertActiveRunOwner(...args),

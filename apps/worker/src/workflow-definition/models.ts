@@ -1,6 +1,6 @@
 import type { WorkflowEditorOptions } from "@shared/contracts";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
-import { env } from "../../env.js";
+import { env } from "../config/env.js";
 import { resolveVcsBotLogin } from "../lib/vcs-bot-identity.js";
 import {
   buildWorkflowBlockRegistry,

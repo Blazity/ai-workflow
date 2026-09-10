@@ -1,4 +1,5 @@
-import { env, type VcsProviderKind } from "../../env.js";
+import type { VcsProviderKind } from "@shared/contracts";
+import { env } from "../config/env.js";
 import { JiraAdapter } from "../adapters/issue-tracker/jira.js";
 import { ChatSDKAdapter } from "../adapters/messaging/chatsdk.js";
 import { NoopMessagingAdapter } from "../adapters/messaging/noop.js";

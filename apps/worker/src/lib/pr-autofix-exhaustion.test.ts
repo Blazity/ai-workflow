@@ -12,11 +12,11 @@ vi.mock("./adapters.js", () => ({
   createAdapters: (...args: unknown[]) => mocks.createAdapters(...args),
 }));
 
-vi.mock("./logger.js", () => ({
+vi.mock("../infra/logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-import { logger } from "./logger.js";
+import { logger } from "../infra/logger.js";
 import { announcePrAutofixExhaustion } from "./pr-autofix-exhaustion.js";
 
 const notice = {

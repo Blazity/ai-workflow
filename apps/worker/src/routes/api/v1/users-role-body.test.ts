@@ -21,7 +21,7 @@ vi.mock("h3", async (importOriginal) => {
   };
 });
 
-vi.mock("../../../../env.js", () => ({
+vi.mock("../../../config/env.js", () => ({
   env: state.env,
 }));
 

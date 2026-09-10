@@ -1,9 +1,9 @@
-import { env } from "../../env.js";
+import { env } from "../config/env.js";
 import type {
   IssueTrackerAdapter,
   IssueTrackerMoveTarget,
 } from "../adapters/issue-tracker/types.js";
-import { logger } from "./logger.js";
+import { logger } from "../infra/logger.js";
 
 /**
  * The destination a run's own success finalization moves its ticket to. The

@@ -13,7 +13,7 @@ import {
   workflowDefinitionVersions,
 } from "../../../db/schema.js";
 import { createTestDb } from "../../../db/test-db.js";
-import { encryptWebhookSecret } from "../../../lib/webhook-crypto.js";
+import { encryptWebhookSecret } from "../../../infra/webhook-crypto.js";
 import { webhookRateWindowStart } from "../../../webhook-trigger/rate-limit.js";
 import { mintWebhookEndpointsForDefinition } from "../../../webhook-trigger/endpoint-store.js";
 import {
@@ -37,7 +37,7 @@ const state = vi.hoisted(() => ({
 }));
 const mockStart = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../../env.js", () => ({ env: state.env }));
+vi.mock("../../../config/env.js", () => ({ env: state.env }));
 vi.mock("../../../db/client.js", () => ({ getDb: () => state.db }));
 vi.mock("workflow/api", () => ({ start: (...args: unknown[]) => mockStart(...args) }));
 vi.mock("../../../engine/index.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));

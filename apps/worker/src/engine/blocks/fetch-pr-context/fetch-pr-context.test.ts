@@ -30,12 +30,12 @@ vi.mock("../../../adapters/vcs/repository-directory.js", () => ({
   }),
 }));
 
-vi.mock("../../../../env.js", () => ({
+vi.mock("../../../config/env.js", () => ({
   getConfiguredVcsProviders: () => [{ kind: "github" }, { kind: "gitlab" }],
   env: mocks.env,
 }));
 
-vi.mock("../../../lib/logger.js", () => ({
+vi.mock("../../../infra/logger.js", () => ({
   logger: { warn: mocks.warn },
 }));
 

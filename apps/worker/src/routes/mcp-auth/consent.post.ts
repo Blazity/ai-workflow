@@ -9,9 +9,9 @@ import {
 } from "h3";
 import { isAPIError } from "better-auth/api";
 
-import { env } from "../../../env.js";
+import { env } from "../../config/env.js";
 import { auth } from "../../auth-instance.js";
-import { logger } from "../../lib/logger.js";
+import { logger } from "../../infra/logger.js";
 import {
   allowedScopes,
   clearOAuthFlowCookie,

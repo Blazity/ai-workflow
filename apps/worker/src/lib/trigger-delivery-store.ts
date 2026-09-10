@@ -1,7 +1,7 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { activeRuns, triggerDeliveries, workflowRuns } from "../db/schema.js";
-import { isUniqueViolation } from "./unique-violation.js";
+import { isUniqueViolation } from "../infra/unique-violation.js";
 import type { PrTriggerType } from "../engine/agent-input.js";
 import type { TriggerEvent } from "./trigger-events.js";
 

@@ -7,7 +7,7 @@ const state = vi.hoisted(() => ({
 const preflight = vi.hoisted(() => vi.fn());
 const dispatch = vi.hoisted(() => vi.fn());
 
-vi.mock("../../env.js", () => ({
+vi.mock("../config/env.js", () => ({
   env: { MAX_CONCURRENT_AGENTS: 4 },
 }));
 vi.mock("../db/client.js", () => ({

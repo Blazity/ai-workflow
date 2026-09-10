@@ -58,7 +58,7 @@ async function blockCallLlmGenerateStep(input: {
   timeoutMs: number;
 }): Promise<CallLlmStepResult> {
   "use step";
-  const { generateStructured } = await import("../../../lib/llm.js");
+  const { generateStructured } = await import("../../llm.js");
   const startedAt = Date.now();
   const result = await generateStructured(input);
   return {
@@ -72,7 +72,7 @@ async function blockCallLlmGenerateStep(input: {
 blockCallLlmGenerateStep.maxRetries = 0;
 
 /**
- * call_llm: one in-process LLM call via lib/llm.ts generateStructured (no
+ * call_llm: one in-process LLM call via engine/llm.ts generateStructured (no
  * sandbox involved). The provider is the block's provider param, else inferred
  * from an explicit model id, else the run default kind; the model is the block's
  * model param, else the claude-haiku-4-5 default for claude / CODEX_MODEL for

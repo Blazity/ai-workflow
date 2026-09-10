@@ -26,7 +26,7 @@ export async function writeHumanDecisionsMemory(
   clarifications: HumanDecision[],
 ): Promise<void> {
   "use step";
-  const { logger } = await import("../../lib/logger.js");
+  const { logger } = await import("../../infra/logger.js");
   const log = logger.child({ sandboxId, ticketKey, step: "writeHumanDecisionsMemory" });
 
   if (clarifications.length === 0) return;

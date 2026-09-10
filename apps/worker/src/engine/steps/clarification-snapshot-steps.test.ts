@@ -33,7 +33,7 @@ vi.mock("../../lib/adapters.js", () => ({
 vi.mock("../../sandbox/agents/index.js", () => ({
   createAgentAdapter: (kind: string) => ({ kind, configure: mocks.configure }),
 }));
-vi.mock("../../../env.js", () => ({
+vi.mock("../../config/env.js", () => ({
   env: {
     ANTHROPIC_API_KEY: "anthropic-fresh",
     CODEX_API_KEY: "codex-fresh",

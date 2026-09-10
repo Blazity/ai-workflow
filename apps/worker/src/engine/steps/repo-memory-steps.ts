@@ -813,7 +813,7 @@ export async function distillRepoMemoryStep(
     // Imported before the first return rather than after it: the emptiest path
     // out of this step is exactly the one an operator has to be able to tell
     // from "the model ran and stored nothing".
-    const { logger } = await import("../../lib/logger.js");
+    const { logger } = await import("../../infra/logger.js");
     const log = logger.child({
       runId: input.runId,
       subjectKey: input.subjectKey,
@@ -910,7 +910,7 @@ export async function distillRepoMemoryStep(
       });
     }
 
-    const { generateStructured } = await import("../../lib/llm.js");
+    const { generateStructured } = await import("../llm.js");
     let object: unknown;
     try {
       const result = await generateStructured({
@@ -1065,7 +1065,7 @@ export async function distillRepoMemoryStep(
     // the read path keeps injecting an owner document that already exists,
     // because flipping a flag must not silently hide knowledge that is already
     // stored and already correct.
-    const { env } = await import("../../../env.js");
+    const { env } = await import("../../config/env.js");
     for (const group of env.ENABLE_ORG_MEMORY_PROMOTION ? groupByOwner(states) : []) {
       if (group.members.length < PROMOTION_MIN_REPOSITORIES) continue;
       // Re-read rather than reuse the merge results above, so promotion
@@ -1203,7 +1203,7 @@ export async function distillRepoMemoryStep(
     // The reporting path is itself wrapped: a failed logger import here would
     // otherwise escape a step whose whole contract is that it cannot throw.
     try {
-      const { logger } = await import("../../lib/logger.js");
+      const { logger } = await import("../../infra/logger.js");
       const bindings = {
         runId: input.runId,
         subjectKey: input.subjectKey,
@@ -1344,7 +1344,7 @@ export async function captureDefaultBranchFilesStep(
     // timeout below is reported with. A step that cannot even reach a logger
     // inside the budget has nothing to report with, so it returns no listing,
     // which leaves the filter off exactly as an unreadable repository does.
-    const loaded = await raceDeadline(() => import("../../lib/logger.js"));
+    const loaded = await raceDeadline(() => import("../../infra/logger.js"));
     if (loaded === CAPTURE_DEADLINE) return captured;
     const log = loaded.logger.child({
       sandboxId: input.sandboxId,
@@ -1481,7 +1481,7 @@ export async function captureDefaultBranchFilesStep(
             (candidate) => candidate.kind === repository.provider,
           );
           if (provider) {
-            const { buildVcsUrls, gitAuthArgs } = await import("../../lib/vcs-urls.js");
+            const { buildVcsUrls, gitAuthArgs } = await import("../../infra/vcs-urls.js");
             const { buildProviderRepoSlug } = await import("../../sandbox/repo-workspace.js");
             const urls = buildVcsUrls({
               kind: provider.kind,
@@ -1642,7 +1642,7 @@ export async function captureDefaultBranchFilesStep(
     // The reporting path is itself wrapped: a failed logger import here would
     // otherwise escape a step whose whole contract is that it cannot throw.
     try {
-      const { logger } = await import("../../lib/logger.js");
+      const { logger } = await import("../../infra/logger.js");
       logger.warn(
         {
           sandboxId: input.sandboxId,
@@ -1911,7 +1911,7 @@ export async function loadRepoMemorySourcesStep(
       // memory stored, which is what made a degraded database read as a
       // mysteriously slow run with no signal anywhere.
       try {
-        const { logger } = await import("../../lib/logger.js");
+        const { logger } = await import("../../infra/logger.js");
         logger.warn(
           {
             step: "loadRepoMemorySources",
@@ -1929,7 +1929,7 @@ export async function loadRepoMemorySourcesStep(
       // populated result through the outer catch just because the warning about
       // what was dropped could not be emitted.
       try {
-        const { logger } = await import("../../lib/logger.js");
+        const { logger } = await import("../../infra/logger.js");
         logger.warn(
           {
             step: "loadRepoMemorySources",
@@ -1947,7 +1947,7 @@ export async function loadRepoMemorySourcesStep(
       // Wrapped for the same reason as the warning above: what this prompt paid
       // for is worth reporting, and never at the price of the result itself.
       try {
-        const { logger } = await import("../../lib/logger.js");
+        const { logger } = await import("../../infra/logger.js");
         logger.info(
           {
             step: "loadRepoMemorySources",
@@ -1968,7 +1968,7 @@ export async function loadRepoMemorySourcesStep(
     // Same wrapped reporting as the write path: a failed logger import here
     // would otherwise escape a step whose whole contract is that it cannot throw.
     try {
-      const { logger } = await import("../../lib/logger.js");
+      const { logger } = await import("../../infra/logger.js");
       logger.warn(
         { step: "loadRepoMemorySources", err: redactProviderError(err) },
         "repo_memory_load_failed",

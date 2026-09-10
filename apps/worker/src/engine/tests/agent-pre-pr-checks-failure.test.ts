@@ -10,13 +10,13 @@ const mocks = vi.hoisted(() => ({
   runPrePrChecksWithFixes: vi.fn(),
 }));
 
-vi.mock("../../lib/logger.js", () => ({
+vi.mock("../../infra/logger.js", () => ({
   logger: { info: mocks.info, warn: mocks.warn, error: mocks.error },
 }));
 // The regex half of the real redactor is what these assert against; its
 // process.env half would make the output depend on the machine running the
 // suite, and there is no secret in these fixtures for it to find.
-vi.mock("../../../env.js", () => ({
+vi.mock("../../config/env.js", () => ({
   env: { DASHBOARD_ORIGIN: "https://dashboard.example.com" },
 }));
 // The engine boundary, replaced exactly where run-checks.test.ts replaces it:

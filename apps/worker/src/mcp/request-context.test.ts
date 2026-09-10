@@ -9,7 +9,7 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("../db/client.js", () => ({ getDb: () => state.db }));
-vi.mock("../../env.js", () => ({
+vi.mock("../config/env.js", () => ({
   env: {
     BETTER_AUTH_URL: "https://worker.example.com",
     DASHBOARD_ORG_SLUG: "ai-workflow",
