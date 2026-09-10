@@ -713,7 +713,7 @@ export const execute: BlockExecuteFn = async (
    * does, instead of walking on to Finalize with an unscreened diff.
    */
   const llmUnavailable = async (): Promise<BlockExecutionResult> => {
-    recordBlockPhaseUsage(ctx, usageLabel, null, model, execution);
+    recordBlockPhaseUsage(ctx, usageLabel, null, provider, model, execution);
     const after = await ctx.observeBudget();
     if (after.check.status !== "ok") throw new RunBudgetError(after.check);
     if (after.remainingDurationMs <= 0) {
@@ -753,6 +753,7 @@ export const execute: BlockExecuteFn = async (
           num_turns: 1,
         }
       : null,
+    provider,
     model,
     execution,
   );

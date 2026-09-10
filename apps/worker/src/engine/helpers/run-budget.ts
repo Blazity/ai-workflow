@@ -1,6 +1,11 @@
 import type { WorkflowRunBudgetFailure } from "@shared/contracts";
+import {
+  aggregateUsage,
+  usdToNanos,
+  type CostProvider,
+  type TokenPrice,
+} from "@shared/costs";
 import type { PhaseUsage } from "../../sandbox/agents/types.js";
-import type { TokenPrice } from "../../sandbox/agents/pricing.js";
 
 export interface RunBudgetLimits {
   maxDurationMs: number;
@@ -240,58 +245,31 @@ export function remainingChecksMs(
 export function recordBudgetUsage(
   state: RunBudgetState,
   usage: PhaseUsage | null,
-  price: TokenPrice | null,
+  provider: CostProvider | null,
 ): RunBudgetState {
-  if (!usage) {
-    return { ...state, tokensKnown: false, costKnown: false };
-  }
+  const totals = aggregateUsage(
+    { usage },
+    { usage: provider ?? undefined },
+    {
+      costNanos: state.costNanos,
+      costKnown: state.costKnown,
+      tokensInput: state.tokensInput,
+      tokensCached: state.tokensCached,
+      tokensOutput: state.tokensOutput,
+      tokensKnown: state.tokensKnown,
+    },
+  );
 
-  const tokens = usage.tokens;
-  const tokensValid =
-    tokens !== null &&
-    [tokens.input, tokens.cached_input, tokens.output].every(
-      (value) => Number.isSafeInteger(value) && value >= 0,
-    );
-  const next = tokensValid && tokens
-    ? {
-        ...state,
-        tokensInput: state.tokensInput + tokens.input,
-        tokensCached: state.tokensCached + tokens.cached_input,
-        tokensOutput: state.tokensOutput + tokens.output,
-      }
-    : { ...state, tokensKnown: false };
-
-  if (typeof usage.cost_usd === "number" && usage.cost_usd >= 0) {
-    const costNanos = usdToNanos(usage.cost_usd);
-    if (costNanos !== null && Number.isSafeInteger(next.costNanos + costNanos)) {
-      return withCostNanos(next, next.costNanos + costNanos);
-    }
-    return { ...next, costKnown: false };
-  }
-
-  const priceValid =
-    price !== null &&
-    [price.input, price.cached_input, price.output].every(
-      (value) => Number.isFinite(value) && value >= 0,
-    );
-  if (tokensValid && tokens && priceValid && price) {
-    const inputNanos = usdToNanos(price.input);
-    const cachedNanos = usdToNanos(price.cached_input);
-    const outputNanos = usdToNanos(price.output);
-    if (inputNanos === null || cachedNanos === null || outputNanos === null) {
-      return { ...next, costKnown: false };
-    }
-    const derivedNanos =
-      tokens.input * inputNanos +
-      tokens.cached_input * cachedNanos +
-      tokens.output * outputNanos;
-    if (!Number.isSafeInteger(derivedNanos) || !Number.isSafeInteger(next.costNanos + derivedNanos)) {
-      return { ...next, costKnown: false };
-    }
-    return withCostNanos(next, next.costNanos + derivedNanos);
-  }
-
-  return { ...next, costKnown: false };
+  return {
+    ...state,
+    costNanos: totals.costNanos,
+    costUsd: totals.costUsd,
+    costKnown: totals.costKnown,
+    tokensInput: totals.tokensInput,
+    tokensCached: totals.tokensCached,
+    tokensOutput: totals.tokensOutput,
+    tokensKnown: totals.tokensKnown,
+  };
 }
 
 export function totalBudgetTokens(state: RunBudgetState): number {
@@ -366,18 +344,6 @@ export function missingRequiredPriceFailure(
     consumed: null,
     reason: `budget_unverifiable: pricing is unavailable for ${label} ${missing.join(", ")}`,
   };
-}
-
-const USD_NANOS = 1_000_000_000;
-
-function usdToNanos(value: number): number | null {
-  if (!Number.isFinite(value) || value < 0) return null;
-  const nanos = Math.round(value * USD_NANOS);
-  return Number.isSafeInteger(nanos) ? nanos : null;
-}
-
-function withCostNanos(state: RunBudgetState, costNanos: number): RunBudgetState {
-  return { ...state, costNanos, costUsd: costNanos / USD_NANOS };
 }
 
 export function observeRunBudget(

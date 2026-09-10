@@ -59,6 +59,7 @@ describe("call_llm execute", () => {
         tokens: { input: 10, cached_input: 2, output: 5 },
         num_turns: 1,
       }),
+      "claude",
       "claude-haiku-4-5",
     );
     expect(ctx.markLaunched).toHaveBeenCalledWith("LLM llm-1");
@@ -70,7 +71,12 @@ describe("call_llm execute", () => {
 
     await execute(makeNode("call_llm", { prompt: "hi" }, "llm-unknown"), {}, ctx);
 
-    expect(ctx.recordUsage).toHaveBeenCalledWith("LLM llm-unknown", null, "claude-haiku-4-5");
+    expect(ctx.recordUsage).toHaveBeenCalledWith(
+      "LLM llm-unknown",
+      null,
+      "claude",
+      "claude-haiku-4-5",
+    );
   });
 
   it("caps the provider call to the remaining run duration", async () => {
@@ -167,7 +173,12 @@ describe("call_llm execute", () => {
       prompt: "hi",
       timeoutMs: 1_800_000,
     });
-    expect(ctx.recordUsage).toHaveBeenCalledWith("LLM llm-2", expect.anything(), "codex-model");
+    expect(ctx.recordUsage).toHaveBeenCalledWith(
+      "LLM llm-2",
+      expect.anything(),
+      "codex",
+      "codex-model",
+    );
   });
 
   it("honors an explicit provider param alongside a model id", async () => {
@@ -319,7 +330,12 @@ describe("call_llm execute", () => {
     expect(result.kind).toBe("execution_error");
     if (result.kind === "execution_error") expect(result.error.detail).toBe("api down");
     expect(ctx.markLaunched).toHaveBeenCalledWith("LLM blk");
-    expect(ctx.recordUsage).toHaveBeenCalledWith("LLM blk", null, "claude-haiku-4-5");
+    expect(ctx.recordUsage).toHaveBeenCalledWith(
+      "LLM blk",
+      null,
+      "claude",
+      "claude-haiku-4-5",
+    );
   });
 
   it.each(runControlErrorCases())("rethrows %s from the LLM call", async (_label, error) => {
@@ -356,7 +372,12 @@ describe("call_llm execute", () => {
     ).rejects.toMatchObject({ name: "RunBudgetError", failure });
 
     expect(ctx.markLaunched).toHaveBeenCalledWith("LLM capped");
-    expect(ctx.recordUsage).toHaveBeenCalledWith("LLM capped", null, "claude-haiku-4-5");
+    expect(ctx.recordUsage).toHaveBeenCalledWith(
+      "LLM capped",
+      null,
+      "claude",
+      "claude-haiku-4-5",
+    );
   });
 
   it("keeps a provider timeout as a normal block failure while run budget remains", async () => {
@@ -373,7 +394,12 @@ describe("call_llm execute", () => {
         detail: "provider timed out",
       },
     });
-    expect(ctx.recordUsage).toHaveBeenCalledWith("LLM blk", null, "claude-haiku-4-5");
+    expect(ctx.recordUsage).toHaveBeenCalledWith(
+      "LLM blk",
+      null,
+      "claude",
+      "claude-haiku-4-5",
+    );
   });
 });
 

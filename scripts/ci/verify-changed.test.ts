@@ -50,6 +50,7 @@ const WB = [
 ];
 const PACK =
   "pnpm --dir apps/worker exec vitest run " + WORKFLOW_TESTS.join(" ");
+const PACKAGES = "pnpm run test:packages";
 const GATES = "pnpm run gates";
 const commands = (paths: string[], repo?: Repo) =>
   plan(paths, repo).commands.map(show);
@@ -108,8 +109,9 @@ test("scope table selects only exact narrow commands", () => {
     [["apps/worker/src/lib/value.ts"], [...WB, GATES]],
     [["apps/worker/src/engine/helpers/value.ts"], [...WB, PACK, GATES]],
     [["apps/dashboard/lib/value.ts"], ["pnpm --filter ai-workflow-dashboard run typecheck", GATES]],
-    [["packages/conditions/index.ts"], ["pnpm run typecheck", GATES]],
-    [["packages/contracts/workflow-graph.ts"], ["pnpm run typecheck", ...WB.slice(1), PACK, GATES]],
+    [["packages/conditions/index.ts"], ["pnpm run typecheck", PACKAGES, GATES]],
+    [["packages/costs/index.ts"], ["pnpm run typecheck", PACKAGES, GATES]],
+    [["packages/contracts/workflow-graph.ts"], ["pnpm run typecheck", ...WB.slice(1), PACK, PACKAGES, GATES]],
     [["apps/worker/vitest.config.ts"], [...WB, PACK, GATES]],
     [["apps/worker/nitro.config.ts"], [...WB, GATES]],
     [["apps/worker/vitest.run-control-workflow.config.ts", "apps/worker/vitest.workflow-divergence.config.ts", "apps/worker/e2e/vitest.e2e.config.ts"], [...WB, GATES]],

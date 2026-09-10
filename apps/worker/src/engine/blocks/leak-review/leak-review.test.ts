@@ -167,6 +167,7 @@ describe("leak_review execute", () => {
         cost_usd: null,
         tokens: { input: 10, cached_input: 2, output: 4 },
       }),
+      "claude",
       "claude-haiku-4-5",
     );
     expectOutputConformsToRegistry("leak_review", result.output!);
@@ -452,7 +453,12 @@ describe("leak_review execute", () => {
       },
     ]);
     expect(JSON.stringify(result.output!)).not.toContain(ANTHROPIC_SECRET);
-    expect(ctx.recordUsage).toHaveBeenCalledWith("Leak review leak", null, "claude-haiku-4-5");
+    expect(ctx.recordUsage).toHaveBeenCalledWith(
+      "Leak review leak",
+      null,
+      "claude",
+      "claude-haiku-4-5",
+    );
     expectOutputConformsToRegistry("leak_review", result.output!);
   });
 
@@ -526,7 +532,12 @@ describe("leak_review execute", () => {
       expect.objectContaining({ err: "provider 500" }),
       "leak_review_llm_scan_failed",
     );
-    expect(ctx.recordUsage).toHaveBeenCalledWith("Leak review leak", null, "claude-haiku-4-5");
+    expect(ctx.recordUsage).toHaveBeenCalledWith(
+      "Leak review leak",
+      null,
+      "claude",
+      "claude-haiku-4-5",
+    );
     expectOutputConformsToRegistry("leak_review", result.output!);
   });
 

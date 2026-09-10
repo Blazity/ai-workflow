@@ -1,5 +1,6 @@
 /* eslint-disable max-lines, max-lines-per-function */
-import { type PriceLookup, type TokenPrice } from "../../sandbox/usage.js";
+import type { TokenPrice } from "@shared/costs";
+import { type PriceLookup } from "../../sandbox/usage.js";
 import type { ResearchRepository, ReviewOutput } from "../../sandbox/agents/types.js";
 import type { AgentKind } from "../../sandbox/agents/index.js";
 import { executionError, type StepsRecord } from "../../workflow-definition/interpreter.js";

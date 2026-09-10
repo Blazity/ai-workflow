@@ -76,6 +76,7 @@ const SOURCE_COMMANDS = [
   "pnpm run gates",
   "pnpm run gen:blocks --check",
   "pnpm run test:ci",
+  "pnpm run test:packages",
   "pnpm run test:release-notes",
   "pnpm run test:workflow-sdk",
   "pnpm run typecheck",

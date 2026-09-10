@@ -190,7 +190,7 @@ describe("run budget accounting", () => {
     const state = recordBudgetUsage(
       createRunBudgetState(),
       usage({ cost_usd: 1.25, tokens: null }),
-      null,
+      { kind: "claude", price: null },
     );
 
     expect(state.costUsd).toBe(1.25);
@@ -199,9 +199,8 @@ describe("run budget accounting", () => {
 
   it("derives phase cost from token pricing when direct cost is absent", () => {
     const state = recordBudgetUsage(createRunBudgetState(), usage(), {
-      input: 0.01,
-      cached_input: 0.001,
-      output: 0.02,
+      kind: "codex",
+      price: { input: 0.01, cached_input: 0.001, output: 0.02 },
     });
 
     expect(state.costUsd).toBeCloseTo(0.1 + 0.02 + 0.6, 8);
@@ -212,7 +211,7 @@ describe("run budget accounting", () => {
     const exact = recordBudgetUsage(
       createRunBudgetState(),
       usage({ cost_usd: 2 }),
-      null,
+      { kind: "claude", price: null },
     );
 
     expect(checkRunBudget(exact, { maxDurationMs: 5_000, maxTokens: 60, maxCostUsd: 2 })).toEqual({
@@ -236,9 +235,9 @@ describe("run budget accounting", () => {
     let state = recordBudgetUsage(
       createRunBudgetState(),
       usage({ cost_usd: 0.1 }),
-      null,
+      { kind: "claude", price: null },
     );
-    state = recordBudgetUsage(state, usage({ cost_usd: 0.2 }), null);
+    state = recordBudgetUsage(state, usage({ cost_usd: 0.2 }), { kind: "claude", price: null });
 
     expect(checkRunBudget(state, { maxDurationMs: 5_000, maxCostUsd: 0.3 })).toEqual({
       status: "ok",
@@ -257,14 +256,12 @@ describe("run budget accounting", () => {
       tokens: { input: 1, cached_input: 0, output: 0 },
     });
     let state = recordBudgetUsage(createRunBudgetState(), oneInputToken, {
-      input: 0.1,
-      cached_input: 0,
-      output: 0,
+      kind: "codex",
+      price: { input: 0.1, cached_input: 0, output: 0 },
     });
     state = recordBudgetUsage(state, oneInputToken, {
-      input: 0.2,
-      cached_input: 0,
-      output: 0,
+      kind: "codex",
+      price: { input: 0.2, cached_input: 0, output: 0 },
     });
 
     expect(checkRunBudget(state, { maxDurationMs: 5_000, maxCostUsd: 0.3 })).toEqual({
@@ -286,7 +283,11 @@ describe("run budget accounting", () => {
   });
 
   it("fails closed when pricing is missing under a cost cap", () => {
-    const state = recordBudgetUsage(createRunBudgetState(), usage(), null);
+    const state = recordBudgetUsage(
+      createRunBudgetState(),
+      usage(),
+      { kind: "codex", price: null },
+    );
 
     expect(checkRunBudget(state, { maxDurationMs: 5_000, maxCostUsd: 10 })).toEqual({
       status: "budget_unverifiable",

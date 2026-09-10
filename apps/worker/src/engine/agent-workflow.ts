@@ -48,6 +48,7 @@ import { isRunControlError } from "./helpers/run-control-error.js";
 import { BLOCK_EXECUTORS } from "./blocks/executors.generated.js";
 import { isTriggerBlockType, RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import type { BlockOutput, BlockRunState, RunPullRequest, RunAnalysisReport, TransformConfiguration, WorkflowBlockType, WorkflowDefinitionNode, WorkflowDefinitionV2, WorkflowParamValue, HarnessRunManifestRecord } from "@shared/contracts";
+import type { CostProvider, CostProviderKind, TokenPrice } from "@shared/costs";
 import type { ResolvedHarnessRuntime } from "../sandbox/harness-runtime.js";
 import { buildResearchAnalysisReportBestEffort, loadApprovedPlanAnalysisReportBestEffort, logPhaseFailure, logWorkflowExecutionErrorStep, markRunFailedOnSelfMoveStep, markRunSucceededOnSelfMoveStep, markTicketFailed, notifyTicket, notifyTicketBestEffort, postFailureReasonCommentStep, postPrLinksComment, postRunAnalysisCommentStep, postTicketComment, recordRunAnalysisCommentFailureBestEffort, recordRunAnalysisReportBestEffort, recordRunFailureReasonStep, safeRunAnalysisDeliveryError, safeRunAnalysisReportError } from "./steps/ticket-analysis.js";
 import { applyHumanRepositoryExpansion, attachResearchRepositoriesStep, checksCeilingOption, createHarnessInvocationBudget, ensurePlanningAgentSandboxForBlock, fetchAttachments, fetchModelPriceStep, listFreshRepositoryCatalogStep, parseAgentOutputStep, parseRepositoryDiscoveryStep, parseResearchStep, parseReviewStep, planPhaseStep, readRunBudgetClockStep, resolveHumanRepositoryExpansionStep, setCommitGuardStep, writeAndStartPhase, writeAttachments } from "./steps/phase.js";
@@ -65,6 +66,7 @@ export { execute as executeRunScripts } from "./blocks/run-scripts/execute.js";
 export function recordPrePrFixCycleUsages(
   ctx: Pick<EngineCtx, "markLaunched" | "recordUsage">,
   usages: ReadonlyArray<PhaseUsage | null>,
+  provider: CostProviderKind,
   model: string,
   budgetFailure: RunBudgetFailure | null = null,
   attempt?: number,
@@ -76,10 +78,10 @@ export function recordPrePrFixCycleUsages(
       : `Pre-PR Fix ${index + 1}`;
     if (attempt === undefined) {
       ctx.markLaunched(label);
-      ctx.recordUsage(label, usage, model);
+      ctx.recordUsage(label, usage, provider, model);
     } else {
       ctx.markLaunched(label, attempt);
-      ctx.recordUsage(label, usage, model, attempt);
+      ctx.recordUsage(label, usage, provider, model, attempt);
     }
   });
   if (budgetFailure) throw new RunBudgetError(budgetFailure);
@@ -448,7 +450,7 @@ async function agentWorkflowBody(
               ? entry.pr.prUrl
               : null,
           model: null,
-          totals: computeUsageTotals({}, undefined, undefined, {}),
+          totals: computeUsageTotals({}, {}, undefined, undefined, {}),
           budgetFailure: null,
           pr: null,
           prs: null,
@@ -758,11 +760,13 @@ async function agentWorkflowBody(
   }
 
   const phaseUsages: Record<string, PhaseUsage | null> = {};
+  const phaseProviders: Record<string, CostProviderKind | undefined> = {};
   const phaseModels: Record<string, string> = {};
   // The cumulative maps feed downstream notifications and the next checkpoint.
   // Run-local maps keep per-run telemetry additive instead of charging restored
   // predecessor usage a second time.
   const runPhaseUsages: Record<string, PhaseUsage | null> = {};
+  const runPhaseProviders: Record<string, CostProviderKind | undefined> = {};
   const runPhaseModels: Record<string, string> = {};
   // Phases whose agent was launched. A phase that times out or exits before
   // its usage is parsed never gets a phaseUsages entry; the finally reconciles
@@ -792,12 +796,28 @@ async function agentWorkflowBody(
   // Seeded with the run default model once prepare_workspace provisions the
   // sandbox, then set to the implementation block's model once it runs.
   let activeModel: string | undefined;
-  let priceLookup: ((m: string) => { input: number; cached_input: number; output: number } | null) | undefined;
+  let priceLookup: ((m: string) => TokenPrice | null) | undefined;
+  // The phase's model price rides along whatever provider recorded the usage,
+  // and even when no provider was stated: a token-only usage stays priceable,
+  // which is what keeps a run under a cost cap verifiable.
+  const costProviderFor = (
+    provider: CostProviderKind | undefined,
+    model: string,
+  ): CostProvider => ({
+    kind: provider,
+    price: priceLookup?.(model) ?? null,
+  });
   // Returns the formatted usage report when any phase has produced usage,
   // otherwise undefined so the messaging formatter can omit the trailing block.
   const usageReportOrUndefined = (): string | undefined =>
     Object.keys(phaseUsages).length
-      ? formatUsageReport(phaseUsages, priceLookup, activeModel, phaseModels)
+      ? formatUsageReport(
+          phaseUsages,
+          phaseProviders,
+          priceLookup,
+          activeModel,
+          phaseModels,
+        )
       : undefined;
 
   try {
@@ -974,16 +994,18 @@ async function agentWorkflowBody(
       prePrChecksFailureMessage,
       observeBudget: (requireRemainingDuration = true, attribution, observedAtMs?: number) =>
         observeBudgetAtBoundary(requireRemainingDuration, attribution, observedAtMs),
-      recordUsage: (label, usage, model, attempt) => {
+      recordUsage: (label, usage, provider, model, attempt) => {
         const key = phaseKey(label, attempt ?? state.attempt);
         phaseUsages[key] = usage;
+        phaseProviders[key] = provider;
         phaseModels[key] = model;
         runPhaseUsages[key] = usage;
+        runPhaseProviders[key] = provider;
         runPhaseModels[key] = model;
         budgetState = recordBudgetUsage(
           budgetState,
           usage,
-          priceLookup?.(model) ?? null,
+          costProviderFor(provider, model),
         );
       },
       markLaunched: (label, attempt) => {
@@ -1498,6 +1520,7 @@ async function agentWorkflowBody(
         ctx.recordUsage(
           label,
           parsed.usage,
+          ctx.runDefaultKind,
           defaultModel,
           execution?.attempt,
         );
@@ -2072,6 +2095,7 @@ async function agentWorkflowBody(
               ctx,
               researchLabel,
               researchUsage,
+              kind,
               model,
               execution,
             );
@@ -2187,6 +2211,7 @@ async function agentWorkflowBody(
             if (noChangeAction === "no_change") {
               const researchTotals = computeUsageTotals(
                 runPhaseUsages,
+                runPhaseProviders,
                 priceLookup,
                 activeModel,
                 runPhaseModels,
@@ -2324,6 +2349,7 @@ async function agentWorkflowBody(
             ctx.researchPlanMarkdown = research.body;
             const researchTotals = computeUsageTotals(
               runPhaseUsages,
+              runPhaseProviders,
               priceLookup,
               activeModel,
               runPhaseModels,
@@ -2511,6 +2537,7 @@ async function agentWorkflowBody(
                 ctx,
                 implementationLabel,
                 implUsage,
+                kind,
                 model,
                 execution,
               );
@@ -2769,6 +2796,7 @@ async function agentWorkflowBody(
                 ctx,
                 reviewLabel,
                 reviewUsage,
+                kind,
                 model,
                 execution,
               );
@@ -2874,6 +2902,7 @@ async function agentWorkflowBody(
             recordPrePrFixCycleUsages(
               ctx,
               prePrChecks.fixCycleUsages,
+              repairKind,
               repairModel,
               prePrChecks.budgetFailure,
               invocationAttempt,
@@ -2995,7 +3024,13 @@ async function agentWorkflowBody(
                   ctx.analysisReport,
                   publication,
                   ctx.changeSummary,
-                  computeUsageTotals(runPhaseUsages, priceLookup, activeModel, runPhaseModels),
+                  computeUsageTotals(
+                    runPhaseUsages,
+                    runPhaseProviders,
+                    priceLookup,
+                    activeModel,
+                    runPhaseModels,
+                  ),
                 );
                 ctx.analysisReport = publicationReport;
                 publicationReportPersisted = await recordRunAnalysisReportBestEffort(publicationReport);
@@ -3060,7 +3095,13 @@ async function agentWorkflowBody(
             const publication = ctx.publication;
             const publishedPrs = publicationPrsForTelemetry(publication);
             if (publication?.status === "published" && publishedPrs) {
-              const usageReport = formatUsageReport(phaseUsages, priceLookup, activeModel, phaseModels);
+              const usageReport = formatUsageReport(
+                phaseUsages,
+                phaseProviders,
+                priceLookup,
+                activeModel,
+                phaseModels,
+              );
               await notifyTicket(ticket.identifier, {
                 kind: "pr_ready",
                 prs: publishedPrs,
@@ -3696,6 +3737,7 @@ async function agentWorkflowBody(
                       num_turns: 1,
                     }
                   : null,
+                provider,
                 model,
                 // Pin the attempt so the label never inherits the last block's
                 // retry count and reads "Repo memory distill #3".
@@ -3847,6 +3889,7 @@ async function agentWorkflowBody(
         model: activeModel ?? null,
         totals: computeUsageTotals(
           runPhaseUsages,
+          runPhaseProviders,
           priceLookup,
           activeModel,
           runPhaseModels,

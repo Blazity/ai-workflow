@@ -205,14 +205,34 @@ describe("agent workflow budget integration", () => {
           provider: "codex",
           model: "gpt-agent",
         }),
-        node("llm-explicit", "call_llm", { prompt: "summarize", model: "claude-haiku" }),
+        node("llm-codex", "call_llm", {
+          prompt: "summarize",
+          provider: "codex",
+          model: "gpt-summary",
+        }),
+        node("llm-unresolved", "call_llm", { prompt: "summarize", model: "claude-haiku" }),
+        node("llm-claude", "call_llm", {
+          prompt: "summarize",
+          provider: "claude",
+          model: "claude-fast",
+        }),
         node("llm-default", "call_llm", { prompt: "classify" }),
       ],
       "codex",
       { claude: "claude-default", codex: "codex-default" },
     );
 
-    expect(models).toEqual(new Set(["gpt-agent", "claude-haiku", "codex-default"]));
+    // "llm-unresolved" states a model and no provider. It is priceable by model
+    // id, so dropping it from the prefetch is what would make it unpriceable.
+    expect(models).toEqual(
+      new Set([
+        "gpt-agent",
+        "gpt-summary",
+        "claude-haiku",
+        "claude-fast",
+        "codex-default",
+      ]),
+    );
   });
 
   it("fails a configured cost budget before a required unpriced model can launch", () => {
@@ -249,15 +269,15 @@ describe("agent workflow budget integration", () => {
     let budgetState = createRunBudgetState();
     const recordUsage = vi.fn((_label: string, usage: PhaseUsage | null) => {
       budgetState = recordBudgetUsage(budgetState, usage, {
-        input: 0.001,
-        cached_input: 0.0001,
-        output: 0.002,
+        kind: "codex",
+        price: { input: 0.001, cached_input: 0.0001, output: 0.002 },
       });
     });
 
     recordPrePrFixCycleUsages(
       { markLaunched, recordUsage },
       [knownUsage, null],
+      "codex",
       "gpt-5",
     );
 
@@ -266,8 +286,8 @@ describe("agent workflow budget integration", () => {
       ["Pre-PR Fix 2"],
     ]);
     expect(recordUsage.mock.calls).toEqual([
-      ["Pre-PR Fix 1", knownUsage, "gpt-5"],
-      ["Pre-PR Fix 2", null, "gpt-5"],
+      ["Pre-PR Fix 1", knownUsage, "codex", "gpt-5"],
+      ["Pre-PR Fix 2", null, "codex", "gpt-5"],
     ]);
     expect(checkRunBudget(budgetState, { maxDurationMs: 1_000, maxTokens: 1_000 })).toMatchObject({
       status: "budget_unverifiable",
@@ -297,10 +317,16 @@ describe("agent workflow budget integration", () => {
       recordPrePrFixCycleUsages(
         { markLaunched, recordUsage },
         [usage],
+        "codex",
         "gpt-5",
         failure,
       ),
     ).toThrowError(expect.objectContaining({ name: "RunBudgetError", failure }));
-    expect(recordUsage).toHaveBeenCalledWith("Pre-PR Fix 1", usage, "gpt-5");
+    expect(recordUsage).toHaveBeenCalledWith(
+      "Pre-PR Fix 1",
+      usage,
+      "codex",
+      "gpt-5",
+    );
   });
 });

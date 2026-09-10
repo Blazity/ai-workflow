@@ -64,6 +64,7 @@ describe("repository memory distill pricing", () => {
 
       const totals = computeUsageTotals(
         { [DISTILL_PHASE]: distillUsage },
+        { [DISTILL_PHASE]: distill.provider },
         priceLookup,
         undefined,
         { [DISTILL_PHASE]: distill.model },

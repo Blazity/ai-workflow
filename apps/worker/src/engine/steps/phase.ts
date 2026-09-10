@@ -15,6 +15,7 @@ import { recoverChecksCeilingFromSteps } from "../blocks/pre-pr-checks.js";
 import { addElapsed, checksElapsedOf, createRunBudgetState, observeRunBudget, recordBudgetUsage, type RunBudgetAttribution, type RunBudgetLimits, type RunBudgetObservation } from "../helpers/run-budget.js";
 import { isRunControlError } from "../helpers/run-control-error.js";
 import type { VcsProviderKind, WorkflowRepositoryScope } from "@shared/contracts";
+import type { CostProvider, TokenPrice } from "@shared/costs";
 import { combineHarnessRuntimeLimits } from "../../sandbox/harness-runtime-limits.js";
 import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
 
@@ -682,7 +683,7 @@ export async function createHarnessInvocationBudget(input: {
   readClock(): Promise<number>;
   priceLookup?(
     model: string,
-  ): { input: number; cached_input: number; output: number } | null;
+  ): TokenPrice | null;
 }): Promise<HarnessInvocationBudget> {
   // readClock is a workflow step. Invoking it as a property of `input`
   // captures `input` as the call receiver, and the Workflow SDK then tries to
@@ -690,6 +691,7 @@ export async function createHarnessInvocationBudget(input: {
   // observer function. Destructure first so every call is a free-function
   // call with serializable arguments only.
   const { observeWorkflowBudget, readClock, priceLookup } = input;
+  const providerKind = input.runtime.manifest.harness.provider;
   const limits = combineHarnessRuntimeLimits(
     input.workflowLimits,
     input.runtime,
@@ -720,7 +722,11 @@ export async function createHarnessInvocationBudget(input: {
       };
     },
     recordUsage(usage, model) {
-      state = recordBudgetUsage(state, usage, priceLookup?.(model) ?? null);
+      const provider: CostProvider = {
+        kind: providerKind,
+        price: priceLookup?.(model) ?? null,
+      };
+      state = recordBudgetUsage(state, usage, provider);
     },
   };
 }

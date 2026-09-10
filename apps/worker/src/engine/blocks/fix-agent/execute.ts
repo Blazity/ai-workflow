@@ -825,6 +825,7 @@ export const execute: BlockExecuteFn = async (
       ctx,
       usageLabel(block.id),
       usage,
+      kind,
       model,
       execution,
     );
