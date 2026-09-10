@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_AGENT_PROMPTS } from "@shared/contracts";
+import { DEFAULT_AGENT_PROMPTS } from "@shared/prompts";
 
 const migrationsDir = fileURLToPath(new URL("../../drizzle/", import.meta.url));
 /** The newest resync migration, picked up by suffix rather than a pinned

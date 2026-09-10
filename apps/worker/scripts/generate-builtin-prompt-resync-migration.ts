@@ -17,7 +17,7 @@
  * definition was saved, so this migration must reach platform-authored versions
  * above 1 as well.
  *
- * Usage, from apps/worker (the bodies are read from @shared/contracts, which is
+ * Usage, from apps/worker (the bodies are read from @shared/prompts, which is
  * consumed as TypeScript source, so nothing has to be built first):
  *
  *   pnpm exec drizzle-kit generate --custom --name=builtin_prompt_resync
@@ -33,8 +33,10 @@
  * migration's is skipped just as silently.
  */
 import { writeFileSync } from "node:fs";
-import { DEFAULT_AGENT_PROMPTS } from "@shared/contracts";
-import { BUILT_IN_PROMPT_SLUG_BY_NAME } from "../src/prompt-library/builtin-prompts.js";
+import {
+  BUILT_IN_PROMPT_SLUG_BY_NAME,
+  DEFAULT_AGENT_PROMPTS,
+} from "@shared/prompts";
 
 /** Dollar-quote tag, so the bodies are copied verbatim instead of being escaped
  *  quote by quote. Verified absent from every body below. */
@@ -49,7 +51,7 @@ const BREAKPOINT = "--> statement-breakpoint";
 const SLUG_BY_PROMPT = BUILT_IN_PROMPT_SLUG_BY_NAME;
 
 const HEADER = `-- Re-syncs the three built-in agent prompt bodies with the code constants in
--- packages/contracts/default-prompts.ts (DEFAULT_AGENT_PROMPTS).
+-- packages/prompts/default-prompts.ts (DEFAULT_AGENT_PROMPTS).
 --
 -- Migration 0021 froze those bodies as SQL literals in prompt_library_versions,
 -- and only a resync migration like this one moves them. A v2 run never reads the

@@ -2,7 +2,7 @@ import type {
   WorkflowDefinitionValidationIssue,
 } from "@shared/contracts";
 import type { Db } from "../db/client.js";
-import { createPromptReferenceLoader } from "../prompt-library/store.js";
+import { createPromptReferenceLoader } from "../prompt-library/prompt-reference-loader.js";
 import {
   exampleValueForJsonSchema,
   effectivePromptProfileSource,

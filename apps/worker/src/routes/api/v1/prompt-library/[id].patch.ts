@@ -3,11 +3,11 @@ import type { PromptLibraryDetailResponse } from "@shared/contracts";
 import { getDb } from "../../../../db/client.js";
 import { requireDashboardActor } from "../../../../lib/auth/request-context.js";
 import { dashboardUserLabel } from "../../../../pre-pr-checks/store.js";
+import { updatePromptMeta } from "../../../../lib/prompt-library-service.js";
 import {
   listPromptVersionRows,
   serializePromptMeta,
   serializePromptVersion,
-  updatePromptMeta,
 } from "../../../../prompt-library/store.js";
 import { parsePromptId, toPromptLibraryHttpError } from "../prompt-library.get.js";
 

@@ -3,8 +3,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FlowNodeDef } from "@/lib/flows";
 import {
-  parsePromptReferenceTokens,
-  promptReferenceMatchesRow,
   type PromptLibraryVersion,
   type PromptLibraryVersionResponse,
   type PromptLibraryListRowDto,
@@ -12,7 +10,13 @@ import {
   type JsonValue,
   type WorkflowParamValue,
 } from "@shared/contracts";
-import { driftFor, getPromptRef, makePromptRef } from "@/lib/prompt-library/provenance";
+import {
+  driftFor,
+  getPromptRef,
+  makePromptRef,
+  parsePromptReferenceTokens,
+  promptReferenceMatchesRow,
+} from "@shared/prompts";
 import { DiffView } from "@/components/cockpit/prompt-diff";
 import { CkChip } from "@/components/ui";
 import { ConfigField } from "./blocks/shared";
@@ -20,13 +24,13 @@ import type { PromptInsertPayload } from "./prompt-insert-popup";
 import { PromptEditorModal } from "./prompt-editor-modal";
 import { PromptInspectorCard } from "./prompt-inspector-card";
 import { usePromptLibrary } from "./prompt-library-context";
-import { effectiveDefaultPromptValue } from "@/lib/prompt-library/effective-default";
-import { promptInspectorSummary } from "@/lib/prompt-library/prompt-inspector-summary";
+import { effectiveDefaultPromptValue } from "@shared/prompts";
+import { promptInspectorSummary } from "@shared/prompts";
 import {
   includePendingPromptSlotBindings,
   promptVersionLoadRequests,
   resolvePromptSlotsFromLibrary,
-} from "@/lib/prompt-library/slots";
+} from "@shared/prompts";
 import {
   PromptSlotBindingsEditor,
   promptSlotBindingsFromConfiguration,

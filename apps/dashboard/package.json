@@ -17,6 +17,7 @@
     "@phosphor-icons/react": "2.1.10",
     "@shared/conditions": "workspace:*",
     "@shared/contracts": "workspace:*",
+    "@shared/prompts": "workspace:*",
     "@shared/skills": "workspace:*",
     "@tiptap/core": "^3.31.3",
     "@tiptap/markdown": "^3.31.3",

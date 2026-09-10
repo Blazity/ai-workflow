@@ -2,8 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  isPromptSlotBinding,
-  PROMPT_SLOT_NAME_PATTERN,
   type JsonSchema202012,
   type JsonValue,
   type PromptSlotBinding,
@@ -11,6 +9,7 @@ import {
   type WorkflowDataCatalogEntry,
   type WorkflowDataReferenceV2,
 } from "@shared/contracts";
+import { isPromptSlotBinding, PROMPT_SLOT_NAME_PATTERN } from "@shared/prompts";
 import { JsonSchemaEditor } from "@/components/cockpit/flow-editor/json-schema-editor";
 import type { JsonSchemaEditorValidationState } from "@/components/cockpit/flow-editor/json-schema-editor";
 

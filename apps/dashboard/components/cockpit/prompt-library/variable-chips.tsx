@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { usedVariables } from "@/lib/prompt-library/variables";
+import { usedVariables } from "@shared/prompts";
 import { VariablePickerPopover } from "./variable-picker-popover";
 
 /** Compact variable summary for a prompt body: a row of chips for the

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_PROMPT_NAME_BY_AGENT } from "@shared/contracts";
+import { DEFAULT_PROMPT_NAME_BY_AGENT } from "@shared/prompts";
 
 describe("DEFAULT_PROMPT_NAME_BY_AGENT", () => {
   it("maps only first-party default agents to their versioned library prompts", () => {

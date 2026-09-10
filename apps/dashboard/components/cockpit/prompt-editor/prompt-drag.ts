@@ -1,4 +1,4 @@
-import { formatPromptReferenceToken } from "@shared/contracts";
+import { formatPromptReferenceToken } from "@shared/prompts";
 
 export const PROMPT_DRAG_MIME = "application/x-ai-workflow-prompt-block";
 

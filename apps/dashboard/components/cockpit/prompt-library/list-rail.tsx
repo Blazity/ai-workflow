@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import { CkCard, CkChip } from "@/components/ui";
-import { filterPrompts } from "@/lib/prompt-library/filter";
+import { filterPrompts } from "@shared/prompts";
 import type { PromptLibraryListRowDto } from "@shared/contracts";
 
 /** Compact "3m ago" style relative time for the row meta line. */

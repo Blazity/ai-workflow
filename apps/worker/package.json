@@ -52,6 +52,7 @@
     "@shared/conditions": "workspace:*",
     "@shared/contracts": "workspace:*",
     "@shared/costs": "workspace:*",
+    "@shared/prompts": "workspace:*",
     "@shared/skills": "workspace:*",
     "@t3-oss/env-core": "^0.13.10",
     "@vercel/functions": "^3.5.0",

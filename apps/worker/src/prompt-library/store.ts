@@ -4,11 +4,8 @@ import { z } from "zod";
 import type {
   JsonValue,
   PromptLibraryEntryMeta,
-  PromptLibraryPromptUsageRow,
-  PromptLibraryUsageRow,
   PromptLibraryVersion,
   PromptSlotDefinition,
-  WorkflowBlockType,
 } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 import {
@@ -17,43 +14,12 @@ import {
   workflowDefinitions,
   workflowDefinitionVersions,
 } from "../db/schema.js";
-import {
-  DEFAULT_PROMPT_NAME_BY_AGENT,
-  parsePromptReferenceTokens,
-  slugifyPromptName,
-} from "@shared/contracts";
 import { canEditPromptLibrary, type DashboardRole } from "../lib/auth/roles.js";
 import { DashboardAuthError } from "../lib/auth/users-read.js";
-import type { PromptReferenceLoader } from "../engine/helpers/prompt-references.js";
 import {
   inspectJsonSchema202012,
   validateJsonSchemaValue,
 } from "../workflow-definition/json-schema.js";
-
-/** Built-in agent defaults are looked up BY NAME at run time (implicit
- *  materialization); archiving or renaming one would fail every workflow run
- *  that relies on the default prompt. */
-const BUILTIN_DEFAULT_PROMPT_NAMES = new Set<string>(
-  Object.values(DEFAULT_PROMPT_NAME_BY_AGENT),
-);
-
-/** Minimal structural read of a stored definition for the usage scan. The scan
- *  must surface refs even in definitions today's deploy rules would reject
- *  (legacy params, retired blocks), so it deliberately avoids the strict
- *  workflowDefinitionSchema and only reads the shapes it needs. */
-const usageScanNodeSchema = z.object({
-  id: z.string(),
-  type: z.string(),
-  name: z.string().optional(),
-  params: z.record(z.string(), z.unknown()).catch({}),
-  promptRefs: z
-    .record(z.string(), z.object({ promptId: z.number(), version: z.number() }))
-    .optional()
-    .catch(undefined),
-});
-const usageScanDefinitionSchema = z.object({
-  nodes: z.array(z.unknown()).catch([]),
-});
 
 const VERSION_LIST_LIMIT = 50;
 const QUERY_MAX_LENGTH = 100;
@@ -424,47 +390,6 @@ export async function getPrompt(db: Db, id: number): Promise<PromptLibraryRow | 
   return rows[0] ? mapPromptRow(rows[0]) : null;
 }
 
-/** Run-time loader behind {{prompt:...}} resolution: maps a token target
- *  (slug, or legacy numeric id) plus version selector onto a concrete library
- *  version. Errors are worded for run logs; latest on an archived prompt is
- *  rejected while pinned versions of archived prompts stay resolvable. */
-export function createPromptReferenceLoader(db: Db): PromptReferenceLoader {
-  const INT4_MAX = 2147483647;
-  return async (target, requestedVersion) => {
-    const label = target.slug ?? `#${target.legacyPromptId}`;
-    // Token digits are unbounded; anything past the int4 columns cannot exist,
-    // so fail with the clean missing-prompt error instead of a driver overflow.
-    if (target.legacyPromptId !== undefined && target.legacyPromptId > INT4_MAX) {
-      throw new Error(`Prompt ${label} does not exist`);
-    }
-    if (requestedVersion !== "latest" && requestedVersion > INT4_MAX) {
-      throw new Error(`Prompt ${label} does not have version ${requestedVersion}`);
-    }
-    const prompt = target.slug !== undefined
-      ? await findPromptBySlug(db, target.slug)
-      : await getPrompt(db, target.legacyPromptId!);
-    if (!prompt) throw new Error(`Prompt ${label} does not exist`);
-    if (requestedVersion === "latest" && prompt.archivedAt !== null) {
-      throw new Error(`Prompt ${label} (${prompt.name}) is archived and cannot follow latest`);
-    }
-    const version = requestedVersion === "latest"
-      ? await getCurrentPromptVersion(db, prompt.id)
-      : await getPromptVersion(db, prompt.id, requestedVersion);
-    if (!version) {
-      const versionLabel = requestedVersion === "latest" ? "a current version" : `version ${requestedVersion}`;
-      throw new Error(`Prompt ${label} (${prompt.name}) does not have ${versionLabel}`);
-    }
-    return {
-      promptId: prompt.id,
-      promptName: prompt.name,
-      requestedVersion,
-      resolvedVersion: version.version,
-      body: version.body,
-      slots: structuredClone(version.slots),
-    };
-  };
-}
-
 /** Resolves a {{prompt:<slug>}} target. Slugs are unique among active prompts;
  *  when only archived rows hold the slug, the newest one is returned so pinned
  *  references to archived prompts keep resolving. */
@@ -600,10 +525,11 @@ async function nextAvailableSlug(db: Db, base: string): Promise<string> {
   }
 }
 
-export async function createPrompt(
+export async function createPromptWithSlugBase(
   db: Db,
   input: {
     name: string;
+    slugBase: string;
     body: string;
     slots?: PromptSlotDefinition[];
     description?: string | null;
@@ -617,7 +543,7 @@ export async function createPrompt(
   const slots = validateSlots(input.slots ?? []);
   const description = validateDescription(input.description ?? null);
   const tags = validateTags(input.tags ?? []);
-  const slug = await nextAvailableSlug(db, slugifyPromptName(name));
+  const slug = await nextAvailableSlug(db, input.slugBase);
 
   let created: PromptSelect;
   try {
@@ -631,7 +557,7 @@ export async function createPrompt(
     // prompt keeps the 409, and a concurrent healer racing us re-triggers
     // 23505 -> also 409.
     const healed = await tryHealOrphanName(db, name);
-    const retrySlug = await nextAvailableSlug(db, slugifyPromptName(name));
+    const retrySlug = await nextAvailableSlug(db, input.slugBase);
     if (!healed && retrySlug === slug) {
       throw new PromptLibraryStoreError(409, "Name already in use");
     }
@@ -822,13 +748,14 @@ export async function savePromptVersion(
   return { version: mapVersionRow(saved), changed: true };
 }
 
-export async function updatePromptMeta(
+export async function updatePromptMetaWithProtectedNames(
   db: Db,
   input: {
     promptId: number;
     name?: string;
     description?: string | null;
     tags?: string[];
+    protectedNames: ReadonlySet<string>;
     actor: PromptLibraryActor;
   },
 ): Promise<PromptLibraryRow> {
@@ -851,7 +778,7 @@ export async function updatePromptMeta(
   if (
     set.name !== undefined
     && set.name !== current.name
-    && BUILTIN_DEFAULT_PROMPT_NAMES.has(current.name)
+    && input.protectedNames.has(current.name)
   ) {
     throw new PromptLibraryStoreError(
       409,
@@ -880,9 +807,13 @@ export async function updatePromptMeta(
   return mapPromptRow(updated);
 }
 
-export async function archivePrompt(
+export async function archivePromptWithProtectedNames(
   db: Db,
-  input: { promptId: number; actor: PromptLibraryActor },
+  input: {
+    promptId: number;
+    protectedNames: ReadonlySet<string>;
+    actor: PromptLibraryActor;
+  },
 ): Promise<PromptLibraryRow> {
   requireEditRole(input.actor.role);
   const rows = await db
@@ -895,7 +826,7 @@ export async function archivePrompt(
     throw new PromptLibraryStoreError(404, "Unknown prompt");
   }
   if (current.archivedAt) return mapPromptRow(current);
-  if (BUILTIN_DEFAULT_PROMPT_NAMES.has(current.name)) {
+  if (input.protectedNames.has(current.name)) {
     throw new PromptLibraryStoreError(
       409,
       `"${current.name}" is a built-in default prompt and cannot be archived`,
@@ -971,20 +902,17 @@ export async function restorePromptVersion(
   return mapVersionRow(saved);
 }
 
-/** Walks the head version of every active workflow definition for block params
- *  that carry a promptRef to `promptId`, reporting each with its sync state
- *  against the library: "modified" when the stored param text no longer matches
- *  the referenced version body (or that version is gone), "behind" when the
- *  reference points at an older-than-head library version, else "current". */
-export async function findPromptUsage(
-  db: Db,
-  promptId: number,
-): Promise<PromptLibraryUsageRow[]> {
-  const promptRow = await getPrompt(db, promptId);
-  if (!promptRow) return [];
-  const head = await getCurrentPromptVersion(db, promptId);
-  const currentHeadVersion = head?.version ?? 0;
+export interface PromptUsageDefinitionHead {
+  id: number;
+  name: string;
+  definition: unknown;
+}
 
+/** Raw definition heads for the prompt-usage service. Parsing stays above the
+ * database tier while this pre-stage-7 store still owns the query. */
+export async function listPromptUsageDefinitionHeads(
+  db: Db,
+): Promise<PromptUsageDefinitionHead[]> {
   const defs = await db
     .select({ id: workflowDefinitions.id, name: workflowDefinitions.name })
     .from(workflowDefinitions)
@@ -1019,131 +947,13 @@ export async function findPromptUsage(
         ),
       ),
     );
-  const headByDef = new Map(headRows.map((r) => [r.definitionId, r.definition]));
-
-  // Each referenced library version's body is fetched at most once.
-  const versionBodyCache = new Map<number, string | null>();
-  async function bodyOfVersion(version: number): Promise<string | null> {
-    const cached = versionBodyCache.get(version);
-    if (cached !== undefined) return cached;
-    const rows = await db
-      .select({ body: promptLibraryVersions.body })
-      .from(promptLibraryVersions)
-      .where(
-        and(eq(promptLibraryVersions.promptId, promptId), eq(promptLibraryVersions.version, version)),
-      )
-      .limit(1);
-    const body = rows[0]?.body ?? null;
-    versionBodyCache.set(version, body);
-    return body;
-  }
-
-  const result: PromptLibraryUsageRow[] = [];
-  for (const def of defs) {
-    const raw = headByDef.get(def.id);
-    if (!raw) continue;
-    const parsedDefinition = usageScanDefinitionSchema.safeParse(raw);
-    if (!parsedDefinition.success) continue;
-    for (const rawNode of parsedDefinition.data.nodes) {
-      const parsedNode = usageScanNodeSchema.safeParse(rawNode);
-      if (!parsedNode.success) continue;
-      const node = parsedNode.data;
-      const coveredParams = new Set<string>();
-      for (const [paramKey, ref] of Object.entries(node.promptRefs ?? {})) {
-        if (ref.promptId !== promptId) continue;
-        const paramValue = node.params[paramKey];
-        const text = typeof paramValue === "string" ? paramValue : null;
-        const versionBody = await bodyOfVersion(ref.version);
-
-        let state: "current" | "behind" | "modified";
-        if (versionBody === null || text !== versionBody) {
-          state = "modified";
-        } else if (ref.version < currentHeadVersion) {
-          state = "behind";
-        } else {
-          state = "current";
-        }
-
-        coveredParams.add(paramKey);
-        result.push({
-          definitionId: def.id,
-          definitionName: def.name,
-          nodeId: node.id,
-          nodeName: node.name ?? null,
-          blockType: node.type as WorkflowBlockType,
-          paramKey,
-          version: ref.version,
-          state,
-        });
-      }
-
-      // Live {{prompt:...}} tokens are the default insert mode and carry no
-      // provenance ref; scan raw param text so they count as usage too. One
-      // row per param: text cannot drift, so state is only current/behind.
-      for (const [paramKey, value] of Object.entries(node.params)) {
-        if (coveredParams.has(paramKey)) continue;
-        const texts = typeof value === "string"
-          ? [value]
-          : Array.isArray(value)
-            ? value.filter((item): item is string => typeof item === "string")
-            : [];
-        const token = texts
-          .flatMap((text) => parsePromptReferenceTokens(text))
-          .find((candidate) =>
-            candidate.slug !== undefined
-              ? candidate.slug === promptRow.slug
-              : candidate.legacyPromptId === promptId,
-          );
-        if (!token) continue;
-        const version = token.version === "latest" ? currentHeadVersion : token.version;
-        result.push({
-          definitionId: def.id,
-          definitionName: def.name,
-          nodeId: node.id,
-          nodeName: node.name ?? null,
-          blockType: node.type as WorkflowBlockType,
-          paramKey,
-          version,
-          state: version < currentHeadVersion ? "behind" : "current",
-        });
-      }
-    }
-  }
-  return result;
-}
-
-/** Prompt-in-prompt usage: which ACTIVE prompts' head bodies reference this
- *  prompt via {{prompt:...}} tokens (slug, or legacy numeric id). One row per
- *  referencing prompt; live text cannot drift, so state is current/behind. */
-export async function findPromptUsageInPrompts(
-  db: Db,
-  promptId: number,
-): Promise<PromptLibraryPromptUsageRow[]> {
-  const promptRow = await getPrompt(db, promptId);
-  if (!promptRow) return [];
-  const head = await getCurrentPromptVersion(db, promptId);
-  const currentHeadVersion = head?.version ?? 0;
-
-  const activePrompts = await listPrompts(db);
-  const result: PromptLibraryPromptUsageRow[] = [];
-  for (const row of activePrompts) {
-    if (row.id === promptId) continue;
-    const token = parsePromptReferenceTokens(row.body).find((candidate) =>
-      candidate.slug !== undefined
-        ? candidate.slug === promptRow.slug
-        : candidate.legacyPromptId === promptId,
-    );
-    if (!token) continue;
-    const version = token.version === "latest" ? currentHeadVersion : token.version;
-    result.push({
-      promptId: row.id,
-      slug: row.slug,
-      name: row.name,
-      version,
-      state: version < currentHeadVersion ? "behind" : "current",
-    });
-  }
-  return result;
+  const headByDef = new Map(
+    headRows.map((row) => [row.definitionId, row.definition]),
+  );
+  return defs.flatMap((definition) => {
+    const head = headByDef.get(definition.id);
+    return head === undefined ? [] : [{ ...definition, definition: head }];
+  });
 }
 
 // --- Serialization ---

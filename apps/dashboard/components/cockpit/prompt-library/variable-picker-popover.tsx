@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { AVAILABLE_VARIABLES } from "@/lib/prompt-library/variables";
+import { AVAILABLE_VARIABLES } from "@shared/prompts";
 import { useEnterExit } from "@/lib/use-enter-exit";
 
 interface Placement {

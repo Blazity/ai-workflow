@@ -11,7 +11,7 @@ import {
   serializeComposerBlocks,
   updateComposerBlock,
   type ComposerBlock,
-} from "@/lib/prompt-library/composer";
+} from "@shared/prompts";
 import { PromptEditor } from "./prompt-editor";
 import { PromptReferenceChips } from "./prompt-reference-chips";
 import {

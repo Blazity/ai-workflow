@@ -1,12 +1,11 @@
 import {
-  formatPromptDataToken,
-  parsePromptDataTokens,
   WORKFLOW_PROMPT_PARAM_KEYS,
   type JsonValue,
   type WorkflowBindingSource,
   type WorkflowDataReferenceV2,
   type WorkflowInputBindingV2,
 } from "@shared/contracts";
+import { formatPromptDataToken, parsePromptDataTokens } from "@shared/prompts";
 import type { FlowNodeDef } from "@/lib/flows";
 
 export interface WorkflowReferenceOccurrence {

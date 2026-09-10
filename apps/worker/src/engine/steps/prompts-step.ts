@@ -1,4 +1,4 @@
-import { PROMPT_FALLBACKS } from "../../lib/prompts.js";
+import { PROMPT_FALLBACKS } from "@shared/prompts";
 
 export interface LoadedPrompts {
   research: string;
@@ -9,7 +9,7 @@ export interface LoadedPrompts {
 export async function loadPrompts(): Promise<LoadedPrompts> {
   "use step";
   // Prompts are first-party: the in-code defaults (mirrored from
-  // @shared/contracts via PROMPT_FALLBACKS) are the single source of truth.
+  // @shared/prompts via PROMPT_FALLBACKS) are the single source of truth.
   // Per-block prompt overrides are applied elsewhere in the graph.
   return {
     research: PROMPT_FALLBACKS["research-plan"],

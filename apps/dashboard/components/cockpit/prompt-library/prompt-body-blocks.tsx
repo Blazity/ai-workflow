@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import type { PromptLibraryListRowDto } from "@shared/contracts";
 import { usePromptLibrary } from "@/components/cockpit/flow-editor/prompt-library-context";
 import { PromptReferenceChipsView } from "@/components/cockpit/prompt-editor/prompt-reference-chips";
-import { parseComposerBlocks } from "@/lib/prompt-library/composer";
+import { parseComposerBlocks } from "@shared/prompts";
 import { PromptPreview } from "./prompt-preview";
 
 const noop = () => {};
