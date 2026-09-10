@@ -6,7 +6,7 @@ import {
   validateJsonSchemaValue,
   type ParsedJsonSchema,
 } from "../../workflow-definition/json-schema.js";
-import { RunBudgetError } from "../run-budget.js";
+import { durationBudgetFailure, RunBudgetError } from "../run-budget.js";
 import { isRunControlError } from "../run-control-error.js";
 import {
   executionError,
@@ -198,15 +198,7 @@ export const execute: BlockExecuteFn = async (
     const after = await ctx.observeBudget();
     if (after.check.status !== "ok") throw new RunBudgetError(after.check);
     if (after.remainingDurationMs <= 0) {
-      const limit = after.durationLimitMs ?? after.activeElapsedMs ?? 0;
-      const consumed = after.activeElapsedMs ?? limit;
-      throw new RunBudgetError({
-        status: "budget_exceeded",
-        metric: "duration",
-        limit,
-        consumed,
-        reason: `budget_exceeded: duration ${consumed} reached limit ${limit} during Call LLM`,
-      });
+      throw new RunBudgetError(durationBudgetFailure(after));
     }
     return executionError(err instanceof Error ? err.message : String(err), {
       category: "provider",

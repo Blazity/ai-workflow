@@ -1,4 +1,8 @@
-import { RunBudgetError, type RunBudgetObservation } from "../run-budget.js";
+import {
+  durationBudgetFailure,
+  RunBudgetError,
+  type RunBudgetObservation,
+} from "../run-budget.js";
 import {
   V2InvocationCancelledError,
   type V2InvocationCancellation,
@@ -180,16 +184,8 @@ export async function pollPhaseUntilDone(
       ? Math.min(tickMs, phaseLimitMs - phaseElapsedMs)
       : Math.min(tickMs, phaseLimitMs - phaseElapsedMs, before.remainingDurationMs);
     if (sleepMs <= 0) {
-      const limit = before.durationLimitMs ?? before.activeElapsedMs ?? 0;
-      const consumed = before.activeElapsedMs ?? limit;
       await stopPhaseCommand(sandboxId, commandId);
-      throw new RunBudgetError({
-        status: "budget_exceeded",
-        metric: "duration",
-        limit,
-        consumed,
-        reason: `budget_exceeded: duration ${consumed} reached limit ${limit} while command is active`,
-      });
+      throw new RunBudgetError(durationBudgetFailure(before));
     }
 
     if (cancellation) {
@@ -243,16 +239,8 @@ export async function pollPhaseUntilDone(
       consecutiveStopped = 0;
     }
     if (!ignoreRemainingDuration && after.remainingDurationMs === 0) {
-      const limit = after.durationLimitMs ?? after.activeElapsedMs ?? 0;
-      const consumed = after.activeElapsedMs ?? limit;
       await stopPhaseCommand(sandboxId, commandId);
-      throw new RunBudgetError({
-        status: "budget_exceeded",
-        metric: "duration",
-        limit,
-        consumed,
-        reason: `budget_exceeded: duration ${consumed} reached limit ${limit} while command is active`,
-      });
+      throw new RunBudgetError(durationBudgetFailure(after));
     }
   }
   await stopPhaseCommand(sandboxId, commandId);

@@ -4,6 +4,10 @@ import type { TokenPrice } from "../sandbox/agents/pricing.js";
 
 export interface RunBudgetLimits {
   maxDurationMs: number;
+  /** Where the workflow-level duration ceiling came from. Optional only for
+   *  legacy journaled values and lightweight callers that predate this field. */
+  maxDurationSource?: "definition" | "env" | "profile";
+  maxDurationProfileName?: string;
   maxTokens?: number;
   maxCostUsd?: number;
 }
@@ -42,8 +46,16 @@ export type RunBudgetCheck = { status: "ok" } | RunBudgetFailure;
 export interface RunBudgetObservation {
   check: RunBudgetCheck;
   remainingDurationMs: number;
+  /** Durable clock reading that produced this observation. Optional because
+   *  older deployments and lightweight callers do not include it. */
+  observedAtMs?: number;
   durationLimitMs?: number;
   activeElapsedMs?: number;
+  /** Source paired with durationLimitMs. Absent legacy observations use the
+   *  JOB_TIMEOUT_MS fallback wording. */
+  maxDurationSource?: "definition" | "env" | "profile";
+  /** Display name paired with a profile-sourced duration limit, when known. */
+  maxDurationProfileName?: string;
   /** Checks time this observation has seen. Optional for the same reason the
    *  state field is: an observation produced by an older deployment carries no
    *  such number, and remainingChecksMs treats that as zero spent. */
@@ -70,6 +82,49 @@ export class RunBudgetError extends Error {
     this.name = "RunBudgetError";
     this.failure = failure;
   }
+}
+
+export interface ChecksCeilingExceededError extends Error {
+  readonly ceilingMs: number;
+  readonly detail: string;
+}
+
+export function checksCeilingExceededError(
+  ceilingMs: number,
+  activity: string,
+): ChecksCeilingExceededError {
+  return Object.assign(
+    new Error(checksCeilingFailureReason(ceilingMs, activity)),
+    {
+      name: "ChecksCeilingExceededError",
+      ceilingMs,
+      detail: checksCeilingFailureDetail(ceilingMs, activity),
+    },
+  );
+}
+
+export function isChecksCeilingExceededError(
+  error: unknown,
+): error is ChecksCeilingExceededError {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    error.name === "ChecksCeilingExceededError" &&
+    "message" in error &&
+    typeof error.message === "string"
+  );
+}
+
+export function checksCeilingErrorDetail(
+  error: Pick<Error, "message"> & { detail?: string },
+): string {
+  if (error.detail) return error.detail;
+  const marker = "(checks_ceiling_exceeded:";
+  const start = error.message.lastIndexOf(marker);
+  return start >= 0 && error.message.endsWith(")")
+    ? error.message.slice(start + 1, -1)
+    : error.message;
 }
 
 export function isRunBudgetError(error: unknown): error is RunBudgetError {
@@ -243,14 +298,15 @@ export function totalBudgetTokens(state: RunBudgetState): number {
   return state.tokensInput + state.tokensCached + state.tokensOutput;
 }
 
-export function checkRunBudget(
-  state: RunBudgetState,
-  limits: RunBudgetLimits,
-): RunBudgetCheck {
+export function checkRunBudget(state: RunBudgetState, limits: RunBudgetLimits): RunBudgetCheck {
   if (state.activeElapsedMs > limits.maxDurationMs) {
-    return exceeded("duration", limits.maxDurationMs, state.activeElapsedMs);
+    return durationBudgetFailure({
+      durationLimitMs: limits.maxDurationMs,
+      activeElapsedMs: state.activeElapsedMs,
+      maxDurationSource: limits.maxDurationSource,
+      maxDurationProfileName: limits.maxDurationProfileName,
+    });
   }
-
   if (limits.maxTokens !== undefined) {
     if (!state.tokensKnown) {
       return {
@@ -264,7 +320,6 @@ export function checkRunBudget(
     const tokens = totalBudgetTokens(state);
     if (tokens > limits.maxTokens) return exceeded("tokens", limits.maxTokens, tokens);
   }
-
   if (limits.maxCostUsd !== undefined) {
     if (!state.costKnown) {
       return {
@@ -333,19 +388,20 @@ export function observeRunBudget(
   const remainingDurationMs = Math.max(0, limits.maxDurationMs - state.activeElapsedMs);
   let check = checkRunBudget(state, limits);
   if (check.status === "ok" && requireRemainingDuration && remainingDurationMs === 0) {
-    check = {
-      status: "budget_exceeded",
-      metric: "duration",
-      limit: limits.maxDurationMs,
-      consumed: state.activeElapsedMs,
-      reason: `budget_exceeded: duration ${state.activeElapsedMs} reached limit ${limits.maxDurationMs} before more work`,
-    };
+    check = durationBudgetFailure({
+      durationLimitMs: limits.maxDurationMs,
+      activeElapsedMs: state.activeElapsedMs,
+      maxDurationSource: limits.maxDurationSource,
+      maxDurationProfileName: limits.maxDurationProfileName,
+    });
   }
   return {
     check,
     remainingDurationMs,
     durationLimitMs: limits.maxDurationMs,
     activeElapsedMs: state.activeElapsedMs,
+    maxDurationSource: limits.maxDurationSource ?? "env",
+    maxDurationProfileName: limits.maxDurationProfileName,
     checksElapsedMs: checksElapsedOf(state),
   };
 }
@@ -359,23 +415,93 @@ export function isDurationAbortError(error: unknown): boolean {
   );
 }
 
+/** Workflow rehydrates invocation cancellation as a plain Error, so the name
+ *  is the only identity that survives the durable boundary. */
+export function isV2InvocationCancelledError(error: unknown): error is Error {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    error.name === "V2InvocationCancelledError"
+  );
+}
+
+/** Keep infrastructure aborts and invocation cancellation out of error
+ *  conversion paths. Both must reach the workflow boundary unchanged. */
+export function propagateInvocationInterruption(error: unknown): void {
+  if (isDurationAbortError(error) || isV2InvocationCancelledError(error)) {
+    throw error;
+  }
+}
+
 export function durationBudgetFailure(
-  observation: RunBudgetObservation,
-  activity: string,
+  observation: Pick<
+    RunBudgetObservation,
+    | "durationLimitMs"
+    | "activeElapsedMs"
+    | "maxDurationSource"
+    | "maxDurationProfileName"
+  >,
 ): RunBudgetFailure {
   const limit = observation.durationLimitMs ?? observation.activeElapsedMs ?? 0;
   const consumed = Math.max(limit, observation.activeElapsedMs ?? limit);
+  const elapsed = formatBudgetDuration(consumed);
+  const configuredLimit = formatBudgetDuration(limit);
+  const source = observation.maxDurationSource ?? "env";
+  const profileLabel = observation.maxDurationProfileName
+    ? ` "${observation.maxDurationProfileName}"`
+    : "";
   return {
     status: "budget_exceeded",
     metric: "duration",
     limit,
     consumed,
-    reason: `budget_exceeded: duration ${consumed} reached limit ${limit} during ${activity}`,
+    reason:
+      source === "profile"
+        ? `budget_exceeded: this invocation took ${elapsed}, over the ${configuredLimit} limit from ` +
+          `the harness profile${profileLabel} (runtimeLimits.maxDurationMs). ` +
+          "Raise that limit on the profile to allow longer invocations."
+        : source === "definition"
+        ? `budget_exceeded: the run took ${elapsed}, over the ${configuredLimit} limit from ` +
+          "budgets.maxDurationMs on this workflow definition. Raise budgets.maxDurationMs to allow longer runs."
+        : `budget_exceeded: the run took ${elapsed}, over the ${configuredLimit} limit from ` +
+          "JOB_TIMEOUT_MS (this workflow sets no budgets.maxDurationMs). Raise " +
+          "budgets.maxDurationMs on the workflow definition, or JOB_TIMEOUT_MS, to allow longer runs.",
   };
 }
 
+function formatBudgetDuration(durationMs: number): string {
+  const wholeSeconds = Math.floor(Math.max(0, durationMs) / 1_000);
+  const minutes = Math.floor(wholeSeconds / 60);
+  const seconds = wholeSeconds % 60;
+  if (minutes === 0) return `${seconds} s`;
+  return seconds === 0 ? `${minutes} min` : `${minutes} min ${seconds} s`;
+}
+
+function checksCeilingFailureReason(
+  ceilingMs: number,
+  activity: string,
+): string {
+  return checksCeilingUserMessage(ceilingMs) +
+    " " +
+    `(${checksCeilingFailureDetail(ceilingMs, activity)})`;
+}
+
+function checksCeilingUserMessage(ceilingMs: number): string {
+  const minutes = Math.round(ceilingMs / 60_000);
+  return (
+    `The repository checks did not finish within the ${minutes} minute checks ceiling. ` +
+    "Raise batchTimeoutMinutes for this definition or split the run."
+  );
+}
+
+function checksCeilingFailureDetail(ceilingMs: number, activity: string): string {
+  const minutes = Math.round(ceilingMs / 60_000);
+  return `checks_ceiling_exceeded: ${activity} reached the ${minutes} minute checks ceiling`;
+}
+
 function exceeded(
-  metric: "duration" | "tokens" | "cost",
+  metric: "tokens" | "cost",
   limit: number,
   consumed: number,
 ): RunBudgetFailure {

@@ -13,6 +13,10 @@ import type {
 } from "../../sandbox/repo-workspace.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
 import { isRunControlError } from "../run-control-error.js";
+import {
+  isChecksCeilingExceededError,
+  propagateInvocationInterruption,
+} from "../run-budget.js";
 import { hydrateWorkspaceMemoryStep } from "../memory-steps.js";
 import { captureDefaultBranchFilesStep } from "../repo-memory-steps.js";
 import { seedRepoMemoryStep } from "../repo-seed-steps.js";
@@ -679,7 +683,8 @@ async function verifyRepositorySetup(
   const setup = await runRepositorySetup({
     sandboxId,
     config,
-    // The plain observer: setup time is the run's, never the checks ceiling's.
+    // The observer can attribute a known durable boundary to the checks clock;
+    // setup, launch, polling and collection all share that ceiling.
     observeBudget: blockBudgetObserver(ctx, execution),
     checksCeilingMs,
     ...(execution?.cancellation ? { cancellation: execution.cancellation } : {}),
@@ -771,7 +776,8 @@ export async function ensureWorkspace(
         },
       };
     } catch (err) {
-      if (isRunControlError(err)) throw err;
+      if (isRunControlError(err) || isChecksCeilingExceededError(err)) throw err;
+      propagateInvocationInterruption(err);
       return executionError(err instanceof Error ? err.message : String(err), {
         category: "sandbox",
       });
@@ -1105,7 +1111,8 @@ export async function ensureWorkspace(
       },
     };
   } catch (err) {
-    if (isRunControlError(err)) throw err;
+    if (isRunControlError(err) || isChecksCeilingExceededError(err)) throw err;
+    propagateInvocationInterruption(err);
     return executionError(err instanceof Error ? err.message : String(err), {
       category: "sandbox",
     });

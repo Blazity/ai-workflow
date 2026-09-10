@@ -136,7 +136,8 @@ function pollEnds(reason: string, elapsedMs: number) {
 
 describe("run_checks execute", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    // Rejections and one-shot results must not survive into the next case.
+    vi.resetAllMocks();
     mocks.pollPhaseUntilDone.mockImplementation(pollEnds("finished", 30_000));
     mocks.resolvePhaseStall.mockResolvedValue("none");
     mocks.listWorkspaceRepositoriesStep.mockResolvedValue([
@@ -371,9 +372,13 @@ describe("run_checks execute", () => {
     });
     // The same rule as the configured path: a stall is never a pass, and the
     // sentence says where the batch actually got to.
-    expect(failures[0]!.output).toContain("ran for 25 minutes without finishing");
+    expect(failures[0]!.output).toContain(
+      "The checks batch for github:acme/web reached the 60 minute checks ceiling",
+    );
     expect(failures[0]!.output).toContain("0 of 2 script commands had finished");
-    expect(failures[0]!.output).toContain("this is a timeout");
+    expect(failures[0]!.output).toContain(
+      "this is a checks timeout, not a duration budget failure",
+    );
     // The finished repository's commands are still reported, but they never
     // become a pass, and the stalled batch is read back as abandoned.
     expect(result.output!.results).toEqual([
@@ -690,18 +695,35 @@ describe("run_checks execute", () => {
     });
   });
 
-  it("hands configured checks the run budget observer and classifies their abort", async () => {
-    mocks.loadPrePrCheckConfigStep.mockResolvedValue({ version: null, config: { repositories: [] } });
-    mocks.runPrePrChecksWithFixes.mockRejectedValue(
-      new DOMException("duration expired", "TimeoutError"),
-    );
+  it("fails duration before configured checks start", async () => {
     const failure = {
       status: "budget_exceeded" as const,
       metric: "duration" as const,
-      limit: 100,
-      consumed: 100,
-      reason: "budget_exceeded: duration 100 reached limit 100 during Run checks",
+      limit: 1_800_000,
+      consumed: 1_800_001,
+      reason: "budget_exceeded: duration 1800001 exceeds limit 1800000",
     };
+    const ctx = makeCtx({
+      observeBudget: vi.fn().mockResolvedValue({
+        check: failure,
+        remainingDurationMs: 0,
+        durationLimitMs: 1_800_000,
+        activeElapsedMs: 1_800_001,
+      }),
+    });
+
+    await expect(execute(makeNode("run_checks"), {}, ctx)).rejects.toMatchObject({
+      name: "RunBudgetError",
+      failure,
+    });
+    expect(mocks.loadPrePrCheckConfigStep).not.toHaveBeenCalled();
+    expect(mocks.runPrePrChecksWithFixes).not.toHaveBeenCalled();
+  });
+
+  it("rethrows an ordinary abort during configured checks untouched", async () => {
+    mocks.loadPrePrCheckConfigStep.mockResolvedValue({ version: null, config: { repositories: [] } });
+    const abort = new DOMException("sandbox request aborted", "AbortError");
+    mocks.runPrePrChecksWithFixes.mockRejectedValue(abort);
     const ctx = makeCtx({
       observeBudget: vi
         .fn()
@@ -711,13 +733,16 @@ describe("run_checks execute", () => {
           durationLimitMs: 100,
           activeElapsedMs: 75,
         })
-        .mockResolvedValueOnce({ check: failure, remainingDurationMs: 0 }),
+        .mockResolvedValueOnce({
+          check: { status: "ok" },
+          remainingDurationMs: 25,
+          durationLimitMs: 100,
+          activeElapsedMs: 75,
+          checksElapsedMs: 3_600_000,
+        }),
     });
 
-    await expect(execute(makeNode("run_checks"), {}, ctx)).rejects.toMatchObject({
-      name: "RunBudgetError",
-      failure,
-    });
+    await expect(execute(makeNode("run_checks"), {}, ctx)).rejects.toBe(abort);
     expect(mocks.runPrePrChecksWithFixes).toHaveBeenCalledWith(
       expect.objectContaining({
         sandboxId: "sbx-1",
@@ -729,6 +754,35 @@ describe("run_checks execute", () => {
         observeBudget: expect.any(Function),
       }),
     );
+  });
+
+  it("preserves a configured checks ceiling in the execution failure", async () => {
+    mocks.loadPrePrCheckConfigStep.mockResolvedValue({ version: null, config: { repositories: [] } });
+    const replayed = new Error(
+      "The repository checks did not finish within the 7 minute checks ceiling. " +
+      "Raise batchTimeoutMinutes for this definition or split the run. " +
+      "(checks_ceiling_exceeded: Checks batch for github:acme/web reached the 7 minute checks ceiling)",
+    );
+    replayed.name = "ChecksCeilingExceededError";
+    mocks.runPrePrChecksWithFixes.mockRejectedValue(replayed);
+
+    const result = await execute(
+      makeNode("run_checks"),
+      { prepare: { output: { status: "ok", checksCeilingMs: 420_000 } } },
+      makeCtx(),
+    );
+
+    expect(result).toMatchObject({
+      kind: "execution_error",
+      error: {
+        message:
+          "The repository checks did not finish within the 7 minute checks ceiling. " +
+          "Raise batchTimeoutMinutes for this definition or split the run. " +
+          "(checks_ceiling_exceeded: Checks batch for github:acme/web reached the 7 minute checks ceiling)",
+        detail:
+          "checks_ceiling_exceeded: Checks batch for github:acme/web reached the 7 minute checks ceiling",
+      },
+    });
   });
 
   it("dispatches named groups to the engine, leaving report-only semantics alone", async () => {

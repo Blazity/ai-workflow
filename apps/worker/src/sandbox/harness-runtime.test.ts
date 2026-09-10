@@ -257,6 +257,8 @@ describe("Harness Profile runtime resolution", () => {
       combineHarnessRuntimeLimits(workflowLimits, active),
     ).toEqual({
       maxDurationMs: 20_000,
+      maxDurationSource: "profile",
+      maxDurationProfileName: "Codex",
       maxTokens: 5_000,
       maxCostUsd: 5,
     });

@@ -139,6 +139,22 @@ describe("sanitizeReplayValue", () => {
     expect(envelope.metadata.redactions.phone).toBeUndefined();
   });
 
+  it.each([
+    "budget_exceeded: the run took 31 min 12 s, over the 30 min limit from " +
+      "JOB_TIMEOUT_MS (this workflow sets no budgets.maxDurationMs). Raise " +
+      "budgets.maxDurationMs on the workflow definition, or JOB_TIMEOUT_MS, to allow longer runs.",
+    "budget_exceeded: the run took 48 min 3 s, over the 45 min limit from " +
+      "budgets.maxDurationMs on this workflow definition. Raise budgets.maxDurationMs to allow longer runs.",
+    "budget_exceeded: this invocation took 12 min 5 s, over the 10 min limit from " +
+      "the harness profile \"Strict profile\" (runtimeLimits.maxDurationMs). " +
+      "Raise that limit on the profile to allow longer invocations.",
+  ])("keeps a duration budget message unchanged", (message) => {
+    const envelope = sanitizeReplayValue(message);
+
+    expect(envelope.value).toBe(message);
+    expect(envelope.metadata.redactions.phone).toBeUndefined();
+  });
+
   it("keeps a UUID intact when embedded in a JSON-ish sentence", () => {
     const uuid = "0b363504-6791-4963-9492-0cdea08acfe2";
     const envelope = sanitizeReplayValue(
