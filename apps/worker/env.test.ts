@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 async function importEnvModule() {
   const [config, botIdentity] = await Promise.all([
     import("./src/config/env.js"),
-    import("./src/lib/vcs-bot-login.js"),
+    import("./src/services/vcs/vcs-bot-login.js"),
   ]);
   return { ...config, getVcsBotLogin: botIdentity.getVcsBotLogin };
 }

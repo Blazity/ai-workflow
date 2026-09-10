@@ -8,7 +8,7 @@ import {
   workflowRuns,
 } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
-import { ActiveRunOwnerError } from "../../lib/run-control-errors.js";
+import { ActiveRunOwnerError } from "../../services/run-lifecycle/run-control-errors.js";
 import { PostgresRunRegistry } from "./postgres.js";
 import { RESERVATION_BIND_GRACE_MS } from "./types.js";
 

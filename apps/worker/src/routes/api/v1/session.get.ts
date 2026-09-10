@@ -1,12 +1,12 @@
 import { defineEventHandler } from "h3";
 import { getDb } from "../../../db/client.js";
-import { requireDashboardActor, toHttpError } from "../../../lib/auth/request-context.js";
+import { requireDashboardActor, toHttpError } from "../../../services/auth/request-context.js";
 import {
   canDispatchWorkflowRuns,
   canEditPrePrChecks,
   canEditWorkflowDefinitions,
   canInvite,
-} from "../../../lib/auth/roles.js";
+} from "../../../services/auth/roles.js";
 import { dashboardUserLabel } from "../../../pre-pr-checks/store.js";
 
 export default defineEventHandler(async (event) => {

@@ -2,22 +2,22 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { defineEventHandler, readRawBody, getHeader, createError } from "h3";
 import { env } from "../../config/env.js";
 import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js";
-import { resumeClarificationFromComments } from "../../clarifications/resume-from-comments.js";
+import { resumeClarificationFromComments } from "../../services/clarifications/resume-from-comments.js";
 import { listApprovalParkedSubjects } from "../../approvals/store.js";
 import { classifyProtectedClarificationSubjects } from "../../clarifications/store.js";
 import { getDb } from "../../db/client.js";
 import { isRunRecordedFailed, isRunRecordedSucceeded } from "../../db/queries/runs-read.js";
-import { createAdapters } from "../../lib/adapters.js";
-import { isAiReviewDestination } from "../../lib/ai-review-destination.js";
+import { createAdapters } from "../../services/vcs/adapters.js";
+import { isAiReviewDestination } from "../../services/tickets/ai-review-destination.js";
 import {
   decideAiReviewRun,
   PREMATURE_AI_REVIEW_CANCELLATION_REASON,
-} from "../../lib/ai-review-transition.js";
-import { cancelRunDetailed } from "../../lib/cancel-run.js";
-import { dispatchTicket } from "../../lib/dispatch.js";
+} from "../../services/tickets/ai-review-transition.js";
+import { cancelRunDetailed } from "../../services/run-lifecycle/cancel-run.js";
+import { dispatchTicket } from "../../services/dispatch/dispatch.js";
 import { logger } from "../../infra/logger.js";
-import { ticketSubjectKey } from "../../lib/subject-key.js";
-import { observeProviderWebhook } from "../../system-health/provider-webhook-observation.js";
+import { ticketSubjectKey } from "../../services/run-lifecycle/subject-key.js";
+import { observeProviderWebhook } from "../../services/system/provider-webhook-observation.js";
 
 /**
  * Jira webhook handler — triggers the same dispatch logic as the cron poller.

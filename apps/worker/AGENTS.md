@@ -53,13 +53,13 @@ moves them.
 | `routes/` | app | Nitro scans this path, so it keeps its name |
 | `middleware/`, `plugins/`, `auth.ts`, `auth-instance.ts`, `nitro.d.ts` | app | the server surface |
 | `mcp/` | app | MCP tools, auth, catalog, contract |
-| `approvals/`, `clarifications/`, `dispatch-queue/`, `manual-dispatch/`, `repository-discovery/`, `schedule-trigger/`, `system-health/`, `webhook-trigger/` | services | mixed today: `store.ts` files belong to db, files carrying `"use step"` belong to engine |
-| `deployment-identity.ts` | services | |
+| `services/` | services | one directory per domain cluster, each with an `index.ts` interface; [docs/architecture/overview.md](../../docs/architecture/overview.md) lists them |
+| `approvals/`, `clarifications/`, `manual-dispatch/`, `schedule-trigger/`, `webhook-trigger/` | services | only the store files are left here; they become db repositories in stage 7 |
 | `engine/`, `workflow-definition/`, `memory/`, `post-pr-gate/`, `pre-pr-checks/`, `pre-sandbox/`, `run-analysis/`, `run-observability/`, `sandbox/` | engine | the runtime: the `"use workflow"` body, the `"use step"` functions, blocks, definition handling |
 | `harness-profiles/`, `prompt-library/` | engine (runtime) | their `store.ts` moves to db, their pure parts to packages |
 | `adapters/` | adapters | `adapters/vcs`, `adapters/issue-tracker`, `adapters/messaging`; `adapters/run-registry` is db, because it is one repository implementation |
 | `db/` | db | the only tier that knows the driver |
-| `lib/` | split by file | env accessors are config; logger, telemetry, llm, llm-provider, github-webhook-sig, webhook-crypto, unique-violation, vcs-urls are infra; the rest (dispatch, run-lifecycle, tickets, publication, overview, auth, slack) are services |
+| `config/`, `infra/` | config, infra | the validated env schema; the logger, LLM client, webhook signature and unique-violation helpers |
 | `env.ts` | config | one schema, validated at boot |
 | `test-support/`, `mcp-dogfood/`, `e2e/`, `workflow-test-fixtures/`, colocated `*.test.ts` | testing | |
 
@@ -85,7 +85,8 @@ moves them.
 - **Invocation ceilings are real.** A plain function is killed at 300 s; the
   deployed step function ships `maxDuration` `"max"` and is killed at 800 s on
   Pro. Anything long has to be resumable across invocations. See
-  `src/lib/workflow-step-drain.ts` and `src/lib/run-stall-watchdog.ts`.
+  `src/services/run-lifecycle/workflow-step-drain.ts` and
+  `src/services/run-lifecycle/run-stall-watchdog.ts`.
 - **Tests replay migrations from disk.** `src/db/test-db.ts` reads the
   `drizzle/` directory in the working tree, so a freshly generated, uncommitted
   migration is already active in unit tests.

@@ -56,7 +56,7 @@ vi.mock("../../config/env.js", () => ({
 }));
 vi.mock("workflow/runtime", () => ({ getWorld: () => ({ runs: {} }) }));
 vi.mock("../../db/client.js", () => ({ getDb: () => ({ db: true }) }));
-vi.mock("../../lib/adapters.js", () => ({
+vi.mock("../../services/vcs/adapters.js", () => ({
   createAdapters: () => ({
     issueTracker: {
       searchTickets: vi.fn(async () => {
@@ -69,10 +69,10 @@ vi.mock("../../lib/adapters.js", () => ({
     messaging: { notifyForTicket: vi.fn() },
   }),
 }));
-vi.mock("../../lib/dispatch.js", () => ({
+vi.mock("../../services/dispatch/dispatch.js", () => ({
   dispatchTicket: (...args: any[]) => mocks.dispatchTicket(...args),
 }));
-vi.mock("../../dispatch-queue/at-capacity-queue.js", () => ({
+vi.mock("../../services/dispatch-queue/at-capacity-queue.js", () => ({
   reconcileAtCapacityQueue: (...args: any[]) =>
     mocks.reconcileAtCapacityQueue(...args),
 }));
@@ -85,10 +85,10 @@ vi.mock("../../approvals/store.js", () => ({
   rejectUndispatchableApproval: (...args: any[]) =>
     mocks.rejectUndispatchableApproval(...args),
 }));
-vi.mock("../../approvals/dispatch.js", () => ({
+vi.mock("../../services/approvals/dispatch.js", () => ({
   dispatchPlanApproved: (...args: any[]) => mocks.dispatchPlanApproved(...args),
 }));
-vi.mock("../../lib/reconcile.js", () => ({
+vi.mock("../../services/run-lifecycle/reconcile.js", () => ({
   reconcileRuns: (...args: any[]) => mocks.reconcileRuns(...args),
 }));
 vi.mock("../../clarifications/store.js", () => ({
@@ -109,18 +109,18 @@ vi.mock("../../clarifications/reconciliation.js", () => ({
   startQueuedClarificationSnapshotCleanups: (...args: any[]) =>
     mocks.startCleanups(...args),
 }));
-vi.mock("../../clarifications/expiry.js", () => ({
+vi.mock("../../services/clarifications/expiry.js", () => ({
   expireHookClarifications: (...args: any[]) => mocks.expireClarifications(...args),
 }));
-vi.mock("../../clarifications/resume-from-comments.js", () => ({
+vi.mock("../../services/clarifications/resume-from-comments.js", () => ({
   resumeClarificationFromComments: (...args: any[]) =>
     mocks.resumeClarificationFromComments(...args),
 }));
-vi.mock("../../lib/dispatch-trigger.js", () => ({
+vi.mock("../../services/dispatch/dispatch-trigger.js", () => ({
   drainOldestPendingTrigger: (...args: any[]) =>
     mocks.drainOldestPendingTrigger(...args),
 }));
-vi.mock("../../lib/trigger-delivery-store.js", () => ({
+vi.mock("../../services/dispatch/trigger-delivery-store.js", () => ({
   listPendingTriggers: (...args: any[]) => mocks.listPendingTriggers(...args),
 }));
 vi.mock("../../run-observability/store.js", () => ({
@@ -132,7 +132,7 @@ vi.mock("../../post-pr-gate/gate-store.js", () => ({
     purgeExpired = vi.fn().mockResolvedValue(undefined);
   },
 }));
-vi.mock("../../manual-dispatch/service.js", () => ({
+vi.mock("../../services/manual-dispatch/service.js", () => ({
   recoverManualDispatches: (...args: unknown[]) =>
     mocks.recoverManualDispatches(...args),
 }));
@@ -143,14 +143,14 @@ vi.mock("../../manual-dispatch/store.js", () => ({
 vi.mock("../../webhook-trigger/delivery-store.js", () => ({
   sweepWebhookDeliveries: (...args: unknown[]) => mocks.sweepWebhookDeliveries(...args),
 }));
-vi.mock("../../webhook-trigger/dispatch-webhook-trigger.js", () => ({
+vi.mock("../../services/webhook-trigger/dispatch-webhook-trigger.js", () => ({
   redispatchPendingWebhookDeliveries: (...args: unknown[]) =>
     mocks.redispatchPendingWebhookDeliveries(...args),
 }));
-vi.mock("../../webhook-trigger/rate-limit.js", () => ({
+vi.mock("../../services/webhook-trigger/rate-limit.js", () => ({
   sweepWebhookRateLimits: (...args: unknown[]) => mocks.sweepWebhookRateLimits(...args),
 }));
-vi.mock("../../webhook-trigger/rejection-counters.js", () => ({
+vi.mock("../../services/webhook-trigger/rejection-counters.js", () => ({
   sweepWebhookRejectionCounters: (...args: unknown[]) =>
     mocks.sweepWebhookRejectionCounters(...args),
 }));
@@ -168,16 +168,16 @@ vi.mock("../webhooks/custom/[endpointId].post.js", () => ({
   createWebhookDispatchDeps: (...args: unknown[]) =>
     mocks.createWebhookDispatchDeps(...args),
 }));
-vi.mock("../../schedule-trigger/dispatch-schedule-trigger.js", () => ({
+vi.mock("../../services/schedule-trigger/dispatch-schedule-trigger.js", () => ({
   runScheduleTriggerPass: (...args: unknown[]) =>
     mocks.runScheduleTriggerPass(...args),
   createScheduleDispatchDeps: (...args: unknown[]) =>
     mocks.createScheduleDispatchDeps(...args),
 }));
-vi.mock("../../lib/telemetry/collect-snapshots.js", () => ({
+vi.mock("../../services/telemetry/collect-snapshots.js", () => ({
   collectSnapshots: vi.fn().mockResolvedValue([]),
 }));
-vi.mock("../../lib/telemetry/run-telemetry.js", () => ({
+vi.mock("../../services/telemetry/run-telemetry.js", () => ({
   upsertRunSnapshots: vi.fn().mockResolvedValue(undefined),
   sweepOrphanedAwaitingRuns: (...args: unknown[]) =>
     mocks.sweepOrphanedAwaitingRuns(...args),

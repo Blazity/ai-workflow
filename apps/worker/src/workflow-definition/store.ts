@@ -20,17 +20,17 @@ import {
   workflowDefinitionVersions,
 } from "../db/schema.js";
 import { env } from "../config/env.js";
-import { canEditWorkflowDefinitions, type DashboardRole } from "../lib/auth/roles.js";
-import { DashboardAuthError } from "../lib/auth/users-read.js";
+import { canEditWorkflowDefinitions, type DashboardRole } from "../services/auth/roles.js";
+import { DashboardAuthError } from "../services/auth/users-read.js";
 import { logger } from "../infra/logger.js";
-import type { TriggerRateLimitNodeParams } from "../lib/trigger-rate-limit.js";
+import type { TriggerRateLimitNodeParams } from "../services/dispatch/trigger-rate-limit.js";
 import { mintWebhookEndpointsForDefinition } from "../webhook-trigger/endpoint-store.js";
 import {
   listSchedulesForDefinition,
   mintSchedulesForLiveHead,
   revokeSchedule,
 } from "../schedule-trigger/schedule-store.js";
-import { cancelWaitingOccurrences } from "../schedule-trigger/revoked-occurrences.js";
+import { cancelWaitingOccurrences } from "../services/schedule-trigger/revoked-occurrences.js";
 import {
   describeWorkflowDefinitionIssues,
   parseStoredWorkflowDefinition,

@@ -10,14 +10,14 @@ import {
 } from "h3";
 import { env } from "../../../../../../../../config/env.js";
 import { getDb } from "../../../../../../../../db/client.js";
-import { createAdapters } from "../../../../../../../../lib/adapters.js";
-import { requireDashboardActor } from "../../../../../../../../lib/auth/request-context.js";
-import { canDispatchWorkflowRuns } from "../../../../../../../../lib/auth/roles.js";
+import { createAdapters } from "../../../../../../../../services/vcs/adapters.js";
+import { requireDashboardActor } from "../../../../../../../../services/auth/request-context.js";
+import { canDispatchWorkflowRuns } from "../../../../../../../../services/auth/roles.js";
 import {
   parseManualDispatchInput,
   toManualDispatchHttpError,
-} from "../../../../../../../../manual-dispatch/http.js";
-import { preflightManualDispatch } from "../../../../../../../../manual-dispatch/service.js";
+} from "../../../../../../../../services/manual-dispatch/http.js";
+import { preflightManualDispatch } from "../../../../../../../../services/manual-dispatch/service.js";
 import { parseDefinitionId } from "../../../../../workflow-definitions.get.js";
 
 export default defineEventHandler(

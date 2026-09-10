@@ -7,10 +7,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../db/client.js", () => ({ getDb: () => mocks.db }));
-vi.mock("../../lib/adapters.js", () => ({
+vi.mock("../../services/vcs/adapters.js", () => ({
   createAdapters: () => ({ issueTracker: mocks.issueTracker }),
 }));
-vi.mock("../../lib/ticket-transition.js", () => ({
+vi.mock("../../services/tickets/ticket-transition.js", () => ({
   moveTicketForRun: (...args: any[]) => mocks.moveTicket(...args),
 }));
 

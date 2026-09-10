@@ -5,7 +5,7 @@ import {
   toWebHandler,
 } from "h3";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CancelRunForOperatorResult } from "../../../../lib/cancel-run.js";
+import type { CancelRunForOperatorResult } from "../../../../services/run-lifecycle/cancel-run.js";
 import type { Db } from "../../../../db/client.js";
 import { workflowRuns } from "../../../../db/schema.js";
 import { createTestDb } from "../../../../db/test-db.js";
@@ -44,7 +44,7 @@ vi.mock("../../../../sandbox/stop-ticket-sandboxes.js", () => ({
 }));
 
 vi.mock("../../../../db/client.js", () => ({ getDb: () => state.db }));
-vi.mock("../../../../lib/auth/request-context.js", () => ({
+vi.mock("../../../../services/auth/request-context.js", () => ({
   requireDashboardActor: vi.fn(async () => {
     if (!state.actor) {
       throw createError({ statusCode: 401, statusMessage: "Unauthorized" });
@@ -55,7 +55,7 @@ vi.mock("../../../../lib/auth/request-context.js", () => ({
     throw error;
   },
 }));
-vi.mock("../../../../lib/adapters.js", () => ({
+vi.mock("../../../../services/vcs/adapters.js", () => ({
   createAdapters: () => ({ runRegistry: {} }),
 }));
 vi.mock("../../../../pre-pr-checks/store.js", () => ({
@@ -68,9 +68,9 @@ vi.mock("../../../../infra/logger.js", () => ({
 // Hybrid seams: delegate to the real implementation by default (so not_found and
 // already_terminal are exercised end to end against pglite) and short-circuit
 // only when a test sets an override for a live outcome.
-vi.mock("../../../../lib/cancel-run.js", async (importOriginal) => {
+vi.mock("../../../../services/run-lifecycle/cancel-run.js", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("../../../../lib/cancel-run.js")>();
+    await importOriginal<typeof import("../../../../services/run-lifecycle/cancel-run.js")>();
   const cancelRunForOperator = vi.fn(
     (db: Db, runId: string, opts: { actorLabel: string; runRegistry: unknown }) =>
       state.cancelOverride

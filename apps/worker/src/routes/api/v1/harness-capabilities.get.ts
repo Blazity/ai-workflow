@@ -16,7 +16,7 @@ import {
 import {
   requireDashboardActor,
   toHttpError,
-} from "../../../lib/auth/request-context.js";
+} from "../../../services/auth/request-context.js";
 
 export default defineEventHandler(
   async (event): Promise<HarnessCapabilitiesResponse | undefined> => {

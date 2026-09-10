@@ -3,7 +3,7 @@ import type { JsonSchemaAuthoringInspectionResponse } from "@shared/contracts";
 import {
   requireDashboardActor,
   toHttpError,
-} from "../../../../lib/auth/request-context.js";
+} from "../../../../services/auth/request-context.js";
 import { inspectAuthoredJsonSchema } from "../../../../workflow-definition/json-schema-authoring.js";
 
 export default defineEventHandler(

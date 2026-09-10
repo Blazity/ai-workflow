@@ -15,7 +15,7 @@ import type { ZodIssue } from "zod";
 
 import { env } from "../config/env.js";
 import { getDb, type Db } from "../db/client.js";
-import { createAdapters } from "../lib/adapters.js";
+import { createAdapters } from "../services/vcs/adapters.js";
 import { logger } from "../infra/logger.js";
 import { writeMcpAudit } from "./audit-store.js";
 import {

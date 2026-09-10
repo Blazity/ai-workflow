@@ -146,5 +146,5 @@ A step's identity is its module path plus its function name, so moving or renami
 
 The deployed step function is the exception: it ships `maxDuration` `"max"`,
 which resolves to 800 s on Pro, and the runtime kills the invocation there
-(`apps/worker/src/lib/workflow-step-drain.ts`). Long work has to be resumable
+(`apps/worker/src/services/run-lifecycle/workflow-step-drain.ts`). Long work has to be resumable
 across invocations, not merely fast.

@@ -17,7 +17,7 @@ vi.mock("../../config/env.js", () => ({
 }));
 
 import type { MessagingAdapter, TicketEvent } from "../../adapters/messaging/types.js";
-import type { Adapters } from "../../lib/adapters.js";
+import type { Adapters } from "../../services/vcs/adapters.js";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
 import {

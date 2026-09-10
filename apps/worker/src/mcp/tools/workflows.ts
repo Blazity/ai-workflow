@@ -7,11 +7,11 @@ import type {
   ManualDispatchResponse,
 } from "@shared/contracts";
 import { env } from "../../config/env.js";
-import { ManualDispatchError } from "../../manual-dispatch/errors.js";
+import { ManualDispatchError } from "../../services/manual-dispatch/errors.js";
 import {
   dispatchManualWorkflow,
   preflightManualDispatch,
-} from "../../manual-dispatch/service.js";
+} from "../../services/manual-dispatch/service.js";
 import {
   McpPublicError,
   type McpErrorCode,

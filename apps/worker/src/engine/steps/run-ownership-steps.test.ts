@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ActiveRunOwnerError } from "../../lib/run-control-errors.js";
+import { ActiveRunOwnerError } from "../../services/run-lifecycle/run-control-errors.js";
 
 const markRunEntryStarted = vi.fn();
 const beginParking = vi.fn();
@@ -28,7 +28,7 @@ const moveTicket = vi.fn();
 const fetchTicket = vi.fn();
 const updateTicketLabels = vi.fn();
 const acknowledgeManualDispatch = vi.fn();
-vi.mock("../../lib/adapters.js", () => ({
+vi.mock("../../services/vcs/adapters.js", () => ({
   createAdapters: () => ({
     runRegistry: {
       markRunEntryStarted,
@@ -41,10 +41,10 @@ vi.mock("../../lib/adapters.js", () => ({
   }),
 }));
 vi.mock("../../db/client.js", () => ({ getDb: () => ({ db: true }) }));
-vi.mock("../../lib/active-run-owner.js", () => ({
+vi.mock("../../services/run-lifecycle/active-run-owner.js", () => ({
   assertActiveRunOwner: (...args: any[]) => assertActiveRunOwner(...args),
 }));
-vi.mock("../../lib/trigger-delivery-store.js", () => ({
+vi.mock("../../services/dispatch/trigger-delivery-store.js", () => ({
   deletePendingTrigger: (...args: any[]) => deletePending(...args),
   acknowledgeStartedTriggerDelivery: (...args: any[]) => acknowledgeStartedDelivery(...args),
   completeTriggerDelivery: (...args: any[]) => completeTriggerDelivery(...args),
@@ -55,7 +55,7 @@ vi.mock("../../webhook-trigger/delivery-store.js", () => ({
 vi.mock("../../schedule-trigger/occurrence-store.js", () => ({
   recordOccurrenceStarted: (...args: any[]) => recordOccurrenceStarted(...args),
 }));
-vi.mock("../../lib/vcs-runtime.js", () => ({
+vi.mock("../../services/vcs/vcs-runtime.js", () => ({
   createRepositoryVCS: (...args: any[]) => {
     createRepositoryVcsRuntime(...args);
     return { getPRHead, getLatestCheckRuns };
@@ -73,7 +73,7 @@ vi.mock("../../clarifications/store.js", () => ({
   getClarification: (...args: unknown[]) => getClarification(...args),
   markClarificationCheckpointConsumed: (...args: unknown[]) => markConsumed(...args),
 }));
-vi.mock("../../lib/telemetry/run-telemetry.js", () => ({
+vi.mock("../../services/telemetry/run-telemetry.js", () => ({
   resolveAwaitingRun: (...args: unknown[]) => resolveAwaitingRun(...args),
 }));
 vi.mock("../../approvals/store.js", () => ({
@@ -82,14 +82,14 @@ vi.mock("../../approvals/store.js", () => ({
 vi.mock("../../sandbox/stop-ticket-sandboxes.js", () => ({
   stopSandboxesByIds: (...args: any[]) => stopSandboxes(...args),
 }));
-vi.mock("../../lib/ticket-transition.js", () => ({
+vi.mock("../../services/tickets/ticket-transition.js", () => ({
   moveTicketForRun: (...args: any[]) => moveTicket(...args),
 }));
-vi.mock("../../lib/ticket-label-mutation.js", () => ({
+vi.mock("../../services/tickets/ticket-label-mutation.js", () => ({
   updateTicketLabelsForRun: (...args: any[]) =>
     updateTicketLabels(...args),
 }));
-vi.mock("../../manual-dispatch/acknowledge-workflow.js", () => ({
+vi.mock("../../services/manual-dispatch/acknowledge-workflow.js", () => ({
   acknowledgeManualDispatchWorkflow: (...args: unknown[]) =>
     acknowledgeManualDispatch(...args),
 }));

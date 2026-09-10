@@ -1,0 +1,657 @@
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  ActiveRunEntry,
+  RunRegistryAdapter,
+  RunReservation,
+  ThreadStore,
+} from "../../adapters/run-registry/types.js";
+import type { Db } from "../../db/client.js";
+import {
+  triggerRateLimits,
+  triggerRejectionCounters,
+  workflowRuns,
+} from "../../db/schema.js";
+import { createTestDb } from "../../db/test-db.js";
+import type { Adapters } from "../vcs/adapters.js";
+
+const testEnv = vi.hoisted(() => ({
+  JIRA_PROJECT_KEY: "PROJ",
+  COLUMN_AI: "AI",
+  TRIGGER_RATE_LIMIT_MAX: undefined as number | undefined,
+  TRIGGER_RATE_LIMIT_WINDOW: undefined as "minute" | "hour" | "day" | "month" | undefined,
+}));
+vi.mock("../../config/env.js", () => ({ env: testEnv }));
+const mockStart = vi.fn();
+vi.mock("workflow/api", () => ({ start: (...args: any[]) => mockStart(...args) }));
+vi.mock("../../engine/index.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
+
+// A real in-memory Postgres: the no-definition skip now writes a durable run
+// row, and its anti-spam guard is a query the fake object could not answer.
+const dbRef = vi.hoisted(() => ({ current: null as unknown as Db }));
+vi.mock("../../db/client.js", () => ({ getDb: () => dbRef.current }));
+const mockGetEnabled = vi.fn();
+const mockHasBlockingApproval = vi.fn();
+vi.mock("../../workflow-definition/store.js", () => ({
+  getEnabledWorkflowDefinitionForTrigger: (...args: any[]) => mockGetEnabled(...args),
+  runnableDefinitionOf: (row: any) => row?.schema === "v2" ? row.definition : undefined,
+}));
+vi.mock("../../approvals/store.js", () => ({
+  hasDispatchBlockingApprovalForTicket: (...args: any[]) =>
+    mockHasBlockingApproval(...args),
+}));
+
+const { dispatchTicket, STALE_CLAIM_MS, capacityConsumerCount } = await import(
+  "./dispatch.js"
+);
+const { NO_DEFINITION_BLOCKED_REASON } = await import("../run-lifecycle/run-start-lifecycle.js");
+
+function entry(overrides: Partial<ActiveRunEntry> = {}): ActiveRunEntry {
+  return {
+    subjectKey: "ticket:jira:OTHER-1",
+    ticketKey: "OTHER-1",
+    ownerToken: "owner:other",
+    runId: "run-other",
+    state: "bound",
+    kind: "ticket",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    ...overrides,
+  };
+}
+
+function registry(options: {
+  reserveResult?: boolean;
+  initial?: ActiveRunEntry[];
+  listError?: Error;
+  failed?: boolean;
+  failedError?: Error;
+  capacityEntries?: ActiveRunEntry[];
+} = {}): RunRegistryAdapter & ThreadStore {
+  const rows = [...(options.initial ?? [])];
+  return {
+    reserve: vi.fn(async (reservation: RunReservation) => {
+      if (options.reserveResult === false || rows.some((row) => row.subjectKey === reservation.subjectKey)) {
+        return false;
+      }
+      const now = Date.now();
+      rows.push({ ...reservation, runId: null, state: "reserved", createdAt: now, updatedAt: now });
+      return true;
+    }),
+    commitStartedRun: vi.fn(async () => true),
+    markRunEntryStarted: vi.fn(async () => true),
+    bindRun: vi.fn(),
+    beginParking: vi.fn(),
+    finishParking: vi.fn(),
+    handoff: vi.fn(),
+    get: vi.fn(async (subjectKey) => rows.find((row) => row.subjectKey === subjectKey) ?? null),
+    beginCancellation: vi.fn(),
+    releaseCancellation: vi.fn(),
+    releaseReservation: vi.fn(async (subjectKey, ownerToken) => {
+      const index = rows.findIndex(
+        (row) => row.subjectKey === subjectKey && row.ownerToken === ownerToken && row.state === "reserved",
+      );
+      if (index < 0) return false;
+      rows.splice(index, 1);
+      return true;
+    }),
+    release: vi.fn(),
+    listAll: vi.fn(async () => {
+      if (options.listError) throw options.listError;
+      return [...rows];
+    }),
+    ...(options.capacityEntries
+      ? { listCapacityConsumers: vi.fn(async () => [...options.capacityEntries!]) }
+      : {}),
+    registerSandbox: vi.fn(),
+    listSandboxes: vi.fn(),
+    markFailed: vi.fn(),
+    isTicketFailed: vi.fn(async () => {
+      if (options.failedError) throw options.failedError;
+      return options.failed ?? false;
+    }),
+    listAllFailed: vi.fn(),
+    clearFailedMark: vi.fn(),
+    getParent: vi.fn(),
+    setParent: vi.fn(),
+    clearParent: vi.fn(),
+  };
+}
+
+function ticket(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "ticket-id",
+    identifier: "PROJ-42",
+    projectKey: "PROJ",
+    title: "Implement it",
+    description: "",
+    acceptanceCriteria: "",
+    comments: [],
+    labels: [],
+    trackerStatus: "AI",
+    attachments: [],
+    ...overrides,
+  };
+}
+
+function adapters(runRegistry = registry(), ticketValue = ticket()): Adapters {
+  return {
+    runRegistry,
+    issueTracker: {
+      fetchTicket: vi.fn().mockResolvedValue(ticketValue),
+      moveTicket: vi.fn(),
+      postComment: vi.fn(),
+      searchTickets: vi.fn(),
+    },
+    messaging: {} as never,
+    vcs: {} as never,
+  };
+}
+
+describe("dispatchTicket owner reservation", () => {
+  beforeAll(async () => {
+    dbRef.current = await createTestDb();
+  });
+
+  beforeEach(async () => {
+    await dbRef.current.delete(workflowRuns);
+    mockStart.mockReset();
+    mockGetEnabled.mockReset();
+    mockHasBlockingApproval.mockReset().mockResolvedValue(false);
+    mockStart.mockResolvedValue({ runId: "run-started" });
+    mockGetEnabled.mockResolvedValue({
+      definition: { id: 7 },
+      current: {
+        definitionId: 7,
+        version: 4,
+        schema: "v2",
+        definition: { schemaVersion: 2, nodes: [], edges: [] },
+      },
+    });
+  });
+
+  it("does not replace a pending or approved-undispatched pinned plan", async () => {
+    mockHasBlockingApproval.mockResolvedValue(true);
+    const runRegistry = registry();
+
+    expect(await dispatchTicket("PROJ-42", adapters(runRegistry), 3)).toEqual({
+      started: false,
+      reason: "approval_pending",
+    });
+    expect(mockHasBlockingApproval).toHaveBeenCalledWith(expect.anything(), "PROJ-42");
+    expect(runRegistry.releaseReservation).toHaveBeenCalledOnce();
+    expect(mockGetEnabled).not.toHaveBeenCalled();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("reserves the normalized ticket subject and pins the deployed definition for the candidate", async () => {
+    const runRegistry = registry();
+    const result = await dispatchTicket("proj-42", adapters(runRegistry), 3);
+
+    expect(result).toEqual({ started: true, runId: "run-started" });
+    expect(runRegistry.reserve).toHaveBeenCalledWith({
+      subjectKey: "ticket:jira:PROJ-42",
+      ticketKey: "proj-42",
+      ownerToken: expect.stringMatching(/^owner:/),
+      kind: "ticket",
+    });
+    expect(mockStart).toHaveBeenCalledWith("agentWorkflow_sentinel", [
+      expect.objectContaining({
+        kind: "ticket",
+        subjectKey: "ticket:jira:PROJ-42",
+        ticketKey: "proj-42",
+        ownerToken: expect.stringMatching(/^owner:/),
+        definitionId: 7,
+        definitionVersion: 4,
+      }),
+    ]);
+  });
+
+  it("pins the built-in fallback selection while retaining owner identity", async () => {
+    mockGetEnabled.mockResolvedValue({
+      definition: { id: 1 },
+      current: null,
+    });
+    const runRegistry = registry();
+
+    expect(await dispatchTicket("PROJ-42", adapters(runRegistry), 3)).toEqual({
+      started: true,
+      runId: "run-started",
+    });
+    expect(mockStart).toHaveBeenCalledWith("agentWorkflow_sentinel", [
+      expect.objectContaining({
+        kind: "ticket",
+        subjectKey: "ticket:jira:PROJ-42",
+        ownerToken: expect.stringMatching(/^owner:/),
+        definitionId: 1,
+        definitionVersion: "builtin_fallback",
+      }),
+    ]);
+  });
+
+  it("owner-releases the reservation when no deployed definition is available", async () => {
+    mockGetEnabled.mockResolvedValue(null);
+    const runRegistry = registry();
+
+    expect(await dispatchTicket("PROJ-42", adapters(runRegistry), 3)).toEqual({
+      started: false,
+      reason: "no_definition",
+    });
+    expect(runRegistry.releaseReservation).toHaveBeenCalledOnce();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("records the skipped ticket as a blocked run so the skip is visible", async () => {
+    mockGetEnabled.mockResolvedValue(null);
+    const runRegistry = registry();
+
+    await dispatchTicket("PROJ-42", adapters(runRegistry), 3);
+
+    const rows = await dbRef.current.select().from(workflowRuns);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      status: "blocked",
+      statusReason: NO_DEFINITION_BLOCKED_REASON,
+      subjectKey: "ticket:jira:PROJ-42",
+      ticketKey: "PROJ-42",
+      ticketTitle: "Implement it",
+    });
+    expect(runRegistry.markFailed).not.toHaveBeenCalled();
+  });
+
+  it("records the blocked run once while the ticket keeps being polled", async () => {
+    mockGetEnabled.mockResolvedValue(null);
+
+    await dispatchTicket("PROJ-42", adapters(), 3);
+    expect(await dispatchTicket("PROJ-42", adapters(), 3)).toEqual({
+      started: false,
+      reason: "no_definition",
+    });
+
+    expect(await dbRef.current.select().from(workflowRuns)).toHaveLength(1);
+  });
+
+  it("dispatches the blocked ticket normally once a definition owns the trigger", async () => {
+    mockGetEnabled.mockResolvedValueOnce(null);
+
+    await dispatchTicket("PROJ-42", adapters(), 3);
+    expect(await dispatchTicket("PROJ-42", adapters(), 3)).toEqual({
+      started: true,
+      runId: "run-started",
+    });
+  });
+
+  it("releases the reservation when the live ticket left the AI column", async () => {
+    const runRegistry = registry();
+    const result = await dispatchTicket(
+      "PROJ-42",
+      adapters(runRegistry, ticket({ trackerStatus: "Backlog" })),
+      3,
+    );
+    expect(result).toEqual({ started: false, reason: "not_in_ai_column" });
+    expect(runRegistry.releaseReservation).toHaveBeenCalledOnce();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("rejects a ticket outside the configured project", async () => {
+    const result = await dispatchTicket(
+      "OTHER-42",
+      adapters(registry(), ticket({ identifier: "OTHER-42", projectKey: "OTHER" })),
+      3,
+    );
+    expect(result).toEqual({ started: false, reason: "wrong_project_key" });
+  });
+
+  it("does not auto-enrol a subject already claimed by a manual dispatch", async () => {
+    const manualClaim = entry({
+      subjectKey: "ticket:jira:PROJ-42",
+      ticketKey: "PROJ-42",
+      ownerToken: "owner:manual",
+      runId: "run-manual",
+      kind: "manual_ticket",
+    });
+    const connected = adapters(registry({ initial: [manualClaim] }));
+    const result = await dispatchTicket("PROJ-42", connected, 3);
+    expect(result).toEqual({ started: false, reason: "already_claimed" });
+    expect(connected.issueTracker.fetchTicket).not.toHaveBeenCalled();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("returns at_capacity without reserving when bound capacity is full", async () => {
+    const runRegistry = registry({ initial: [entry()] });
+    expect(await dispatchTicket("PROJ-42", adapters(runRegistry), 1)).toEqual({
+      started: false,
+      reason: "at_capacity",
+    });
+    expect(runRegistry.reserve).not.toHaveBeenCalled();
+  });
+
+  it("admits work when the exact parked owner is absent from the capacity view", async () => {
+    const parked = entry({
+      subjectKey: "ticket:jira:PROJ-PARKED",
+      ticketKey: "PROJ-PARKED",
+      ownerToken: "owner-parked",
+      runId: "run-parked",
+    });
+    const runRegistry = registry({ initial: [parked], capacityEntries: [] });
+
+    expect(await dispatchTicket("PROJ-42", adapters(runRegistry), 1)).toEqual({
+      started: true,
+      runId: "run-started",
+    });
+    expect(runRegistry.listCapacityConsumers).toHaveBeenCalled();
+  });
+
+  it("ignores stale unbound reservations in capacity", async () => {
+    const stale = entry({
+      state: "reserved",
+      runId: null,
+      createdAt: Date.now() - STALE_CLAIM_MS - 1,
+      updatedAt: Date.now() - STALE_CLAIM_MS - 1,
+    });
+    const result = await dispatchTicket("PROJ-42", adapters(registry({ initial: [stale] })), 1);
+    expect(result.started).toBe(true);
+  });
+
+  it("trusts an adapter capacity view instead of reapplying the process clock", async () => {
+    const databaseLiveReservation = entry({
+      state: "reserved",
+      runId: null,
+      createdAt: Date.now() - STALE_CLAIM_MS - 1,
+      updatedAt: Date.now() - STALE_CLAIM_MS - 1,
+    });
+    const runRegistry = registry({ capacityEntries: [databaseLiveReservation] });
+
+    expect(await dispatchTicket("PROJ-42", adapters(runRegistry), 1)).toEqual({
+      started: false,
+      reason: "at_capacity",
+    });
+    expect(runRegistry.reserve).not.toHaveBeenCalled();
+  });
+
+  it("counts a freshly handed-off reservation by its refreshed timestamp", async () => {
+    const handedOff = entry({
+      state: "reserved",
+      runId: null,
+      ownerToken: "owner:clarification-successor",
+      createdAt: Date.now() - STALE_CLAIM_MS - 1,
+      updatedAt: Date.now(),
+    });
+    const runRegistry = registry({ initial: [handedOff] });
+
+    expect(await dispatchTicket("PROJ-42", adapters(runRegistry), 1)).toEqual({
+      started: false,
+      reason: "at_capacity",
+    });
+    expect(runRegistry.reserve).not.toHaveBeenCalled();
+  });
+
+  it("counts a cancelling claim even when cleanup has been pending past the stale threshold", async () => {
+    const cancelling = entry({
+      state: "cancelling",
+      createdAt: Date.now() - STALE_CLAIM_MS - 1,
+      updatedAt: Date.now() - STALE_CLAIM_MS - 1,
+    });
+    const runRegistry = registry({ initial: [cancelling] });
+
+    expect(await dispatchTicket("PROJ-42", adapters(runRegistry), 1)).toEqual({
+      started: false,
+      reason: "at_capacity",
+    });
+    expect(runRegistry.reserve).not.toHaveBeenCalled();
+  });
+
+  it("does not let a new reservation outrank a claim that starts cancelling during arbitration", async () => {
+    const runRegistry = registry();
+    const cancelling = entry({
+      state: "cancelling",
+      createdAt: Date.now() - STALE_CLAIM_MS - 1,
+      updatedAt: Date.now(),
+    });
+    vi.mocked(runRegistry.listAll)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        entry({
+          subjectKey: "ticket:jira:PROJ-42",
+          ticketKey: "PROJ-42",
+          ownerToken: "owner:candidate",
+          runId: null,
+          state: "reserved",
+        }),
+        cancelling,
+      ]);
+
+    expect(await dispatchTicket("PROJ-42", adapters(runRegistry), 1)).toEqual({
+      started: false,
+      reason: "at_capacity",
+    });
+    expect(runRegistry.releaseReservation).toHaveBeenCalledOnce();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when registry capacity cannot be read", async () => {
+    const result = await dispatchTicket(
+      "PROJ-42",
+      adapters(registry({ listError: new Error("registry unavailable") })),
+      3,
+    );
+    expect(result).toEqual({ started: false, reason: "at_capacity" });
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("skips tickets with a durable failed marker", async () => {
+    const result = await dispatchTicket("PROJ-42", adapters(registry({ failed: true })), 3);
+    expect(result).toEqual({ started: false, reason: "previously_failed" });
+  });
+
+  it("returns error and owner-releases when the post-reservation ticket read fails", async () => {
+    const runRegistry = registry();
+    const value = adapters(runRegistry);
+    vi.mocked(value.issueTracker.fetchTicket).mockRejectedValue(new Error("jira down"));
+    expect(await dispatchTicket("PROJ-42", value, 3)).toEqual({
+      started: false,
+      reason: "error",
+    });
+    expect(runRegistry.releaseReservation).toHaveBeenCalledOnce();
+  });
+
+  it("allows only one of two concurrent dispatches to reserve the subject", async () => {
+    const runRegistry = registry();
+    const [first, second] = await Promise.all([
+      dispatchTicket("PROJ-42", adapters(runRegistry), 3),
+      dispatchTicket("PROJ-42", adapters(runRegistry), 3),
+    ]);
+    expect([first.started, second.started].sort()).toEqual([false, true]);
+    expect(mockStart).toHaveBeenCalledOnce();
+  });
+});
+
+describe("dispatchTicket trigger rate limit", () => {
+  beforeAll(async () => {
+    dbRef.current = await createTestDb();
+  });
+
+  beforeEach(async () => {
+    await dbRef.current.delete(triggerRateLimits);
+    await dbRef.current.delete(triggerRejectionCounters);
+    mockStart.mockReset().mockResolvedValue({ runId: "run-started" });
+    mockGetEnabled.mockReset();
+    mockHasBlockingApproval.mockReset().mockResolvedValue(false);
+    testEnv.TRIGGER_RATE_LIMIT_MAX = undefined;
+    testEnv.TRIGGER_RATE_LIMIT_WINDOW = undefined;
+  });
+
+  function enabledWithTriggerParams(params: Record<string, unknown>) {
+    return {
+      definition: { id: 7 },
+      current: {
+        definitionId: 7,
+        version: 4,
+        schema: "v2",
+        definition: {
+          schemaVersion: 2,
+          nodes: [
+            { id: "ticket-trigger", type: "trigger_ticket_ai", configuration: params },
+          ],
+          edges: [],
+        },
+      },
+    };
+  }
+
+  it("drops the start once the node limit is spent and tallies the refusal", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabledWithTriggerParams({ rateLimitMax: 1, rateLimitWindow: "day" }),
+    );
+
+    await expect(dispatchTicket("PROJ-42", adapters(), 3)).resolves.toEqual({
+      started: true,
+      runId: "run-started",
+    });
+    await expect(
+      dispatchTicket(
+        "PROJ-43",
+        adapters(registry(), ticket({ identifier: "PROJ-43" })),
+        3,
+      ),
+    ).resolves.toEqual({ started: false, reason: "rate_limited" });
+
+    expect(mockStart).toHaveBeenCalledOnce();
+    expect(await dbRef.current.select().from(triggerRateLimits)).toEqual([
+      expect.objectContaining({
+        definitionId: "7",
+        nodeId: "ticket-trigger",
+        count: 2,
+      }),
+    ]);
+    expect(await dbRef.current.select().from(triggerRejectionCounters)).toEqual([
+      expect.objectContaining({
+        definitionId: "7",
+        nodeId: "ticket-trigger",
+        reason: "rate_limited",
+        count: 1,
+      }),
+    ]);
+  });
+
+  it("never spends the limit on a candidate refused by an earlier guard", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabledWithTriggerParams({ rateLimitMax: 1, rateLimitWindow: "day" }),
+    );
+
+    // Duplicate guard: the subject is already claimed, so the candidate must
+    // not consume the limit nor tally a rejection.
+    const runRegistry = registry();
+    await dispatchTicket("PROJ-42", adapters(runRegistry), 3);
+    await expect(
+      dispatchTicket("PROJ-42", adapters(runRegistry), 3),
+    ).resolves.toEqual({ started: false, reason: "already_claimed" });
+
+    // Same for a guard inside the claim: this ticket left the AI column.
+    await expect(
+      dispatchTicket(
+        "PROJ-43",
+        adapters(registry(), ticket({ identifier: "PROJ-43", trackerStatus: "Backlog" })),
+        3,
+      ),
+    ).resolves.toEqual({ started: false, reason: "not_in_ai_column" });
+
+    expect(await dbRef.current.select().from(triggerRateLimits)).toEqual([
+      expect.objectContaining({ definitionId: "7", nodeId: "ticket-trigger", count: 1 }),
+    ]);
+    expect(await dbRef.current.select().from(triggerRejectionCounters)).toEqual([]);
+  });
+
+  it("writes nothing when no limit is configured", async () => {
+    mockGetEnabled.mockResolvedValue({
+      definition: { id: 7 },
+      current: {
+        definitionId: 7,
+        version: 4,
+        schema: "v2",
+        definition: { schemaVersion: 2, nodes: [], edges: [] },
+      },
+    });
+
+    await expect(dispatchTicket("PROJ-42", adapters(), 3)).resolves.toEqual({
+      started: true,
+      runId: "run-started",
+    });
+    expect(await dbRef.current.select().from(triggerRateLimits)).toEqual([]);
+    expect(await dbRef.current.select().from(triggerRejectionCounters)).toEqual([]);
+  });
+
+  it("applies the env default when the node has no params of its own", async () => {
+    testEnv.TRIGGER_RATE_LIMIT_MAX = 1;
+    testEnv.TRIGGER_RATE_LIMIT_WINDOW = "day";
+    mockGetEnabled.mockResolvedValue(enabledWithTriggerParams({}));
+
+    await dispatchTicket("PROJ-42", adapters(), 3);
+    await expect(
+      dispatchTicket(
+        "PROJ-43",
+        adapters(registry(), ticket({ identifier: "PROJ-43" })),
+        3,
+      ),
+    ).resolves.toEqual({ started: false, reason: "rate_limited" });
+
+    // A limit that is purely the env default is keyed under the definition's
+    // first trigger node.
+    expect(await dbRef.current.select().from(triggerRejectionCounters)).toEqual([
+      expect.objectContaining({
+        definitionId: "7",
+        nodeId: "ticket-trigger",
+        reason: "rate_limited",
+        count: 1,
+      }),
+    ]);
+  });
+
+  it("prefers the node's own params over the env default", async () => {
+    testEnv.TRIGGER_RATE_LIMIT_MAX = 5;
+    testEnv.TRIGGER_RATE_LIMIT_WINDOW = "day";
+    mockGetEnabled.mockResolvedValue(
+      enabledWithTriggerParams({ rateLimitMax: 1, rateLimitWindow: "day" }),
+    );
+
+    await dispatchTicket("PROJ-42", adapters(), 3);
+    await expect(
+      dispatchTicket(
+        "PROJ-43",
+        adapters(registry(), ticket({ identifier: "PROJ-43" })),
+        3,
+      ),
+    ).resolves.toEqual({ started: false, reason: "rate_limited" });
+  });
+});
+
+describe("capacityConsumerCount", () => {
+  // The dashboard occupied-slot count must equal what the refusal path counts:
+  // listCapacityConsumers (parked claims and fresh reservations included).
+  it("returns listCapacityConsumers().length when the registry exposes it", async () => {
+    const consumers = [
+      entry({ subjectKey: "ticket:jira:A-1", state: "bound" }),
+      entry({ subjectKey: "ticket:jira:A-2", state: "parked" }),
+      entry({ subjectKey: "ticket:jira:A-3", state: "reserved" }),
+    ];
+    const runRegistry = registry({ capacityEntries: consumers });
+
+    const count = await capacityConsumerCount(runRegistry);
+
+    expect(count).toBe(consumers.length);
+    expect(count).toBe((await runRegistry.listCapacityConsumers!()).length);
+  });
+
+  it("falls back to the live (non-stale) entries of listAll when unavailable", async () => {
+    const fresh = entry({ subjectKey: "ticket:jira:B-1", state: "bound" });
+    const staleReservation = entry({
+      subjectKey: "ticket:jira:B-2",
+      state: "reserved",
+      updatedAt: Date.now() - STALE_CLAIM_MS - 1_000,
+    });
+    const runRegistry = registry({ initial: [fresh, staleReservation] });
+
+    expect(runRegistry.listCapacityConsumers).toBeUndefined();
+    // The stale reservation is dropped, exactly as the refusal path drops it.
+    expect(await capacityConsumerCount(runRegistry)).toBe(1);
+  });
+});

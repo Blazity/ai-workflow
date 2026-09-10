@@ -1,7 +1,7 @@
 import type { ScheduleResumeResponse } from "@shared/contracts";
 import { createError, defineEventHandler } from "h3";
 import { getDb } from "../../../../../../../../db/client.js";
-import { toHttpError } from "../../../../../../../../lib/auth/request-context.js";
+import { toHttpError } from "../../../../../../../../services/auth/request-context.js";
 import { resumeSchedule } from "../../../../../../../../schedule-trigger/schedule-store.js";
 import {
   parseScheduleTarget,

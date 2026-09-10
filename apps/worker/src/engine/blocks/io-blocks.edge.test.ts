@@ -24,10 +24,10 @@ const mocks = vi.hoisted(() => ({
   assertActiveRunOwner: vi.fn(),
 }));
 
-vi.mock("../../lib/adapters.js", () => ({
+vi.mock("../../services/vcs/adapters.js", () => ({
   createAdapters: () => ({ issueTracker: { postComment: mocks.postComment } }),
 }));
-vi.mock("../../lib/vcs-runtime.js", () => ({ createRepositoryVCS: mocks.createRepositoryVCS }));
+vi.mock("../../services/vcs/vcs-runtime.js", () => ({ createRepositoryVCS: mocks.createRepositoryVCS }));
 vi.mock("../../db/client.js", () => ({ getDb: mocks.getDb }));
 vi.mock("../../db/queries/workflow-owned-branches.js", () => ({
   listWorkflowOwnedBranchesForTicket: mocks.listWorkflowOwnedBranchesForTicket,
@@ -68,8 +68,8 @@ vi.mock("../../infra/logger.js", () => ({
 // env module validates every Jira/VCS variable on import, which this suite does
 // not set.
 vi.mock("../../config/env.js", () => ({ env: { REVIEW_LEDGER_ENABLED: false } }));
-vi.mock("../../lib/github-auth.js", () => ({ buildOctokit: mocks.buildOctokit }));
-vi.mock("../../lib/active-run-owner.js", () => ({
+vi.mock("../../services/vcs/github-auth.js", () => ({ buildOctokit: mocks.buildOctokit }));
+vi.mock("../../services/run-lifecycle/active-run-owner.js", () => ({
   assertActiveRunOwner: (...args: any[]) => mocks.assertActiveRunOwner(...args),
 }));
 
@@ -78,8 +78,8 @@ import type {
   WorkspaceRepositoryInput,
 } from "../../sandbox/repo-workspace.js";
 import { emptyPrePrCheckConfig } from "../../pre-pr-checks/config.js";
-import { isRepoAllowed, filterAllowedRepositories } from "../../lib/repo-allowlist.js";
-import { AI_WORKFLOW_COMMENT_MARKER } from "../../lib/vcs-bot-identity.js";
+import { isRepoAllowed, filterAllowedRepositories } from "../../services/dispatch/repo-allowlist.js";
+import { AI_WORKFLOW_COMMENT_MARKER } from "../../services/vcs/vcs-bot-identity.js";
 import {
   createRepositoryDirectory,
   createRepositoryDirectoryForProviders,

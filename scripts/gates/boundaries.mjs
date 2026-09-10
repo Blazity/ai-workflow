@@ -1,8 +1,10 @@
 /**
  * This gate stops new imports that violate ADR-001 and growth in distinct file
- * cycles. It exits 1 for unknown paths, tool failures, or counts above the
- * recorded tier-pair and file-cycle baseline. Run with --update-baseline after
- * an approved architecture change and review the complete before and after table.
+ * cycles. It exits 1 for unknown paths, tool failures, counts above the
+ * recorded tier-pair and file-cycle baseline, or a services cluster reaching
+ * past another cluster's index.ts without an entry in
+ * cluster-deep-imports.json. Run with --update-baseline after an approved
+ * architecture change and review the complete before and after table.
  */
 import { existsSync, globSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -35,6 +37,38 @@ function slash(path) {
 
 function within(path, prefix) {
   return path === prefix || path.startsWith(`${prefix}/`);
+}
+
+const clusterRoot = tierMap.serviceClusterRoot ?? null;
+
+export function serviceCluster(path) {
+  if (!clusterRoot || !path.startsWith(`${clusterRoot}/`)) return null;
+  return path.slice(clusterRoot.length + 1).split("/")[0] || null;
+}
+
+export function isClusterInterface(path) {
+  const cluster = serviceCluster(path);
+  return cluster !== null && path === `${clusterRoot}/${cluster}/index.ts`;
+}
+
+// One cluster reaching into another cluster's files instead of its index.ts.
+export function crossClusterDeepImport(fromPath, toPath) {
+  const from = serviceCluster(fromPath);
+  const to = serviceCluster(toPath);
+  return from !== null && to !== null && from !== to && !isClusterInterface(toPath);
+}
+
+function deepImportKey(pair) {
+  return pair.join(" -> ");
+}
+
+export function deepImportRegression(observed, recorded) {
+  const recordedKeys = new Set(recorded.map((pair) => deepImportKey(pair)));
+  const observedKeys = new Set(observed.map((pair) => deepImportKey(pair)));
+  return {
+    added: observed.filter((pair) => !recordedKeys.has(deepImportKey(pair))),
+    stale: recorded.filter((pair) => !observedKeys.has(deepImportKey(pair))),
+  };
 }
 
 function workspacePath(modulePath, root) {
@@ -262,6 +296,7 @@ function dependencyCounts(root, config) {
   }
   const counts = new Map();
   const unknown = new Set();
+  const deepImports = new Set();
   const packageDirectories = workspacePackageDirectories(root);
   const tsconfigCache = new Map();
   for (const module of report.modules ?? report.output?.modules ?? []) {
@@ -285,9 +320,17 @@ function dependencyCounts(root, config) {
       if (fromTier && toTier && !allowed(fromTier, toTier, toPath)) {
         increment(counts, `${fromTier}->${toTier}`);
       }
+      if (!dependency.dynamic && crossClusterDeepImport(fromPath, toPath)) {
+        deepImports.add(JSON.stringify([fromPath, toPath]));
+      }
     }
   }
-  return { counts: sortedObject(counts), report, unknown: [...unknown].sort() };
+  return {
+    counts: sortedObject(counts),
+    report,
+    unknown: [...unknown].sort(),
+    deepImports: [...deepImports].toSorted().map((entry) => JSON.parse(entry)),
+  };
 }
 
 export function normalizeFileCycles(report) {
@@ -361,11 +404,21 @@ function main() {
     "--root": "root",
     "--baseline": "baseline",
     "--config": "config",
+    "--cluster-deep-imports": "clusterDeepImports",
   });
   const root = realpathSync(options.root);
   const baselinePath = options.baseline ?? fileURLToPath(defaultBaseline);
   const config = options.config ?? join(repositoryRoot, ".dependency-cruiser.cjs");
-  const { counts: tierPairs, report, unknown } = dependencyCounts(root, config);
+  const { counts: tierPairs, report, unknown, deepImports } = dependencyCounts(root, config);
+  // The default list belongs to this repository, so a fixture root under --root
+  // neither reads nor overwrites it; a fixture passes its own with the flag.
+  const ownsDefaultList = root === realpathSync(repositoryRoot);
+  const deepImportPath = options.clusterDeepImports ?? (tierMap.clusterDeepImports && ownsDefaultList
+    ? fileURLToPath(new URL(tierMap.clusterDeepImports, import.meta.url))
+    : null);
+  if (deepImportPath && options.updateBaseline) writeJson(deepImportPath, deepImports);
+  const recordedDeepImports = deepImportPath && existsSync(deepImportPath) ? readJson(deepImportPath) : [];
+  const deepImportDrift = deepImportRegression(deepImports, recordedDeepImports);
   const directoryCycles = directoryCycleCounts(root);
   const fileCycles = normalizeFileCycles(report);
   const current = { tierPairs, fileCycleCount: fileCycles.length, fileCycles };
@@ -380,12 +433,20 @@ function main() {
   console.log("Directory cycle pairs (informational)");
   printTable(["pair", "now"], Object.entries(directoryCycles).map(([key, count]) => [key, count]));
   console.log(`file cycles  ${baseline.fileCycleCount}  ${current.fileCycleCount}`);
+  console.log("Cross-cluster deep imports (shrink-only ratchet)");
+  printTable(
+    ["state", "count"],
+    [["recorded", recordedDeepImports.length], ["now", deepImports.length]],
+  );
+  for (const [from, to] of deepImportDrift.added) console.log(`new deep import  ${from} -> ${to}`);
+  for (const [from, to] of deepImportDrift.stale) console.log(`retired deep import still listed  ${from} -> ${to}`);
   if (unknown.length) {
     console.log("Unknown paths");
     for (const path of unknown) console.log(path);
   }
   const failed = unknown.length > 0 || countRegression(tierPairs, baseline.tierPairs) ||
-    exceedsFileCycleBaseline(fileCycles, baseline);
+    exceedsFileCycleBaseline(fileCycles, baseline) ||
+    deepImportDrift.added.length > 0 || deepImportDrift.stale.length > 0;
   console.log(failed ? "boundaries FAIL" : "boundaries PASS");
   process.exitCode = failed ? 1 : 0;
 }

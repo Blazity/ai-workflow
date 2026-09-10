@@ -25,7 +25,7 @@ vi.mock("../../../../auth-instance.js", () => ({
 }));
 // The guard runs before any registry work; an empty registry keeps the
 // authorized case on the collector's "nothing qualifies" path.
-vi.mock("../../../../lib/adapters.js", () => ({
+vi.mock("../../../../services/vcs/adapters.js", () => ({
   createAdapters: () => ({ runRegistry: { listAll: async () => [] } }),
 }));
 

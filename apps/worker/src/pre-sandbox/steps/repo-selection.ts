@@ -19,14 +19,14 @@ import {
   buildRepositoryCatalog,
   buildRepositoryCatalogEntries,
   type RepositoryCatalogEntry,
-} from "../../repository-discovery/catalog.js";
+} from "../../services/repository-discovery/catalog.js";
 // Pure token parser, no adapters behind it: runner.js imports only types plus
 // catalog.js, which this module already pulls in.
 import {
   parseRepositoryExpansionAnswer,
   type ParsedRepositoryIdentity,
-} from "../../repository-discovery/runner.js";
-import { filterRepositoriesForScope } from "../../lib/repo-allowlist.js";
+} from "../../services/repository-discovery/runner.js";
+import { filterRepositoriesForScope } from "../../services/dispatch/repo-allowlist.js";
 // Type only, so importing this file never pulls the routing module in with it.
 //
 // This file is NOT in the workflow isolate: the bundles were built and checked, and
@@ -246,7 +246,7 @@ async function rememberedRoutingSelection(
     // A ticket with no labels has nothing to look up, so it never reaches the
     // database at all.
     if (labels.length === 0) return null;
-    const { orgSubjectKey, repoOwner } = await import("../../lib/subject-key.js");
+    const { orgSubjectKey, repoOwner } = await import("../../services/run-lifecycle/subject-key.js");
     const { getDb } = await import("../../db/client.js");
     const { getMemoryDocument } = await import("../../memory/store.js");
     const {
@@ -416,7 +416,7 @@ async function rememberRoutingAnswer(input: {
     if (named.length !== 1) return;
     const chosen = named[0]!;
 
-    const { orgSubjectKey, repoOwner } = await import("../../lib/subject-key.js");
+    const { orgSubjectKey, repoOwner } = await import("../../services/run-lifecycle/subject-key.js");
     const owner = repoOwner(chosen.repoPath);
     // A path with no owning namespace names no organisation to remember it under.
     if (owner === null) return;

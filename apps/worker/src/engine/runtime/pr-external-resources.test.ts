@@ -33,10 +33,10 @@ const { mockUpdateGateStatus, mockCreateRepositoryVCS, mockAssertActiveRunOwner 
     mockCreateRepositoryVCS: vi.fn(),
     mockAssertActiveRunOwner: vi.fn(),
   }));
-vi.mock("../../lib/vcs-runtime.js", () => ({
+vi.mock("../../services/vcs/vcs-runtime.js", () => ({
   createRepositoryVCS: mockCreateRepositoryVCS,
 }));
-vi.mock("../../lib/active-run-owner.js", () => ({
+vi.mock("../../services/run-lifecycle/active-run-owner.js", () => ({
   assertActiveRunOwner: mockAssertActiveRunOwner,
 }));
 

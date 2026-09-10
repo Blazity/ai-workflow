@@ -1,8 +1,8 @@
 import { defineEventHandler } from "h3";
 import { env } from "../../../config/env.js";
 import { getDb } from "../../../db/client.js";
-import { listDashboardInvites } from "../../../lib/auth/invites.js";
-import { requireDashboardActor, toHttpError } from "../../../lib/auth/request-context.js";
+import { listDashboardInvites } from "../../../services/auth/invites.js";
+import { requireDashboardActor, toHttpError } from "../../../services/auth/request-context.js";
 
 export default defineEventHandler(async (event) => {
   try {

@@ -7,19 +7,19 @@ import {
 } from "h3";
 import { env } from "../../../../../../../../config/env.js";
 import type { Db } from "../../../../../../../../db/client.js";
-import { requireDashboardActor } from "../../../../../../../../lib/auth/request-context.js";
-import { canDispatchWorkflowRuns } from "../../../../../../../../lib/auth/roles.js";
+import { requireDashboardActor } from "../../../../../../../../services/auth/request-context.js";
+import { canDispatchWorkflowRuns } from "../../../../../../../../services/auth/roles.js";
 import { logger } from "../../../../../../../../infra/logger.js";
 import {
   getWebhookEndpointForNode,
   type MintableWebhookNode,
   type WebhookEndpointRow,
 } from "../../../../../../../../webhook-trigger/endpoint-store.js";
-import { getWebhookRejectionsToday } from "../../../../../../../../webhook-trigger/rejection-counters.js";
+import { getWebhookRejectionsToday } from "../../../../../../../../services/webhook-trigger/rejection-counters.js";
 import {
   resolveWebhookHeaderName,
   resolveWebhookTimestampHeaderName,
-} from "../../../../../../../../webhook-trigger/verify.js";
+} from "../../../../../../../../services/webhook-trigger/verify.js";
 import {
   getDeployedWorkflowDefinitionVersion,
   runnableDefinitionOf,

@@ -5,7 +5,7 @@
  * without a usable dashboard owner.
  */
 import { config } from "dotenv";
-import { resolveSeedAuthEnv } from "../src/lib/auth/seed-auth-env.js";
+import { resolveSeedAuthEnv } from "../src/services/auth/seed-auth-env.js";
 
 config({ path: [".env.local", ".env"], quiet: true });
 

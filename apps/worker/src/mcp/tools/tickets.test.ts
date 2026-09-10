@@ -14,7 +14,7 @@ vi.mock("../../config/env.js", () => ({
   },
 }));
 
-import type { Adapters } from "../../lib/adapters.js";
+import type { Adapters } from "../../services/vcs/adapters.js";
 import type {
   IssueTrackerAdapter,
   TicketContent,

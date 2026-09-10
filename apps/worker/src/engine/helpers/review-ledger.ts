@@ -10,7 +10,7 @@ import type {
   ReviewThreadTarget,
   SettleReviewThreadAction,
 } from "../../adapters/vcs/types.js";
-import { isReviewLedgerWorkItem, reviewLedgerMarker } from "../../lib/vcs-bot-identity.js";
+import { isReviewLedgerWorkItem, reviewLedgerMarker } from "../../services/vcs/vcs-bot-identity.js";
 import type { ResearchResult } from "../../sandbox/agents/types.js";
 import type { ExecutionErrorCategory } from "../../workflow-definition/interpreter.js";
 import type { AgentWorkflowInput } from "../agent-input.js";

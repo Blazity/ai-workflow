@@ -28,7 +28,7 @@ import { e2eEnv } from "../env.js";
  * This replaces an older approach that created MAX+1 real tickets. That
  * was correct but wasteful: with MAX=20 it spun up 20 real workflows and
  * sandboxes just to prove the cap. Pre-saturating with dummies exercises
- * the same `isAtCapacity` code path in `src/lib/dispatch.ts` without any
+ * the same `isAtCapacity` code path in `src/services/dispatch/dispatch.ts` without any
  * real workflow execution.
  */
 describe("US-11: Capacity limit respected", () => {

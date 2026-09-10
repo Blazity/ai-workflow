@@ -1,11 +1,11 @@
 import { defineEventHandler, setResponseHeader } from "h3";
 import { env } from "../../../../config/env.js";
 import { getDb } from "../../../../db/client.js";
-import { createAdapters } from "../../../../lib/adapters.js";
-import { requireDashboardActor, toHttpError } from "../../../../lib/auth/request-context.js";
+import { createAdapters } from "../../../../services/vcs/adapters.js";
+import { requireDashboardActor, toHttpError } from "../../../../services/auth/request-context.js";
 import { fetchRunModels } from "../../../../db/queries/runs-read.js";
-import { collectLiveRuns } from "../../../../lib/overview/collect-live-runs.js";
-import { collectAwaitingRuns } from "../../../../lib/overview/collect-awaiting-store.js";
+import { collectLiveRuns } from "../../../../services/overview/collect-live-runs.js";
+import { collectAwaitingRuns } from "../../../../services/overview/collect-awaiting-store.js";
 import type { LiveRunsResponse } from "@shared/contracts";
 
 export default defineEventHandler(

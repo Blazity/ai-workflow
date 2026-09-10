@@ -6,6 +6,9 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import {
+  classify,
+  crossClusterDeepImport,
+  deepImportRegression,
   exceedsFileCycleBaseline,
   normalizeFileCycles,
 } from "../gates/boundaries.mjs";
@@ -413,4 +416,79 @@ test("gate baselines are machine readable JSON", async () => {
   ]) {
     JSON.parse(await readFile(join(repoRoot, "scripts/gates", file), "utf8"));
   }
+});
+
+// Two service clusters, where beta reaches past alpha's interface.
+const clusterFixture = async (deep: boolean): Promise<{ root: string; deepImports: string }> => {
+  const root = await mkdtemp(join(tmpdir(), "cluster-gate-"));
+  const services = join(root, "apps/worker/src/services");
+  await mkdir(join(services, "alpha"), { recursive: true });
+  await mkdir(join(services, "beta"), { recursive: true });
+  await writeFile(join(services, "alpha/thing.ts"), "export const thing = 1;\n");
+  await writeFile(join(services, "alpha/index.ts"), 'export { thing } from "./thing.js";\n');
+  await writeFile(
+    join(services, "beta/user.ts"),
+    `import { thing } from "../alpha/${deep ? "thing" : "index"}.js";\nexport const used = thing;\n`,
+  );
+  await writeFile(join(services, "beta/index.ts"), 'export { used } from "./user.js";\n');
+  await writeFile(join(root, "boundaries.baseline.json"), '{"tierPairs":{},"fileCycleCount":0,"fileCycles":[]}\n');
+  const deepImports = join(root, "cluster-deep-imports.json");
+  await writeFile(deepImports, "[]\n");
+  return { root, deepImports };
+};
+
+test("a services cluster file classifies as services and its test as testing", () => {
+  const root = repoRoot;
+  assert.equal(classify(root, "apps/worker/src/services/dispatch/dispatch.ts"), "services");
+  assert.equal(classify(root, "apps/worker/src/services/dispatch/index.ts"), "services");
+  assert.equal(classify(root, "apps/worker/src/services/dispatch/dispatch.test.ts"), "testing");
+});
+
+test("the cross-cluster rule names deep imports and accepts the interface", () => {
+  assert.equal(
+    crossClusterDeepImport(
+      "apps/worker/src/services/beta/user.ts",
+      "apps/worker/src/services/alpha/thing.ts",
+    ),
+    true,
+  );
+  assert.equal(
+    crossClusterDeepImport(
+      "apps/worker/src/services/beta/user.ts",
+      "apps/worker/src/services/alpha/index.ts",
+    ),
+    false,
+  );
+  assert.equal(
+    crossClusterDeepImport(
+      "apps/worker/src/services/beta/user.ts",
+      "apps/worker/src/services/beta/other.ts",
+    ),
+    false,
+  );
+  const drift = deepImportRegression([["a", "b"]], [["c", "d"]]);
+  assert.deepEqual(drift.added, [["a", "b"]]);
+  assert.deepEqual(drift.stale, [["c", "d"]]);
+});
+
+test("an unlisted cross-cluster deep import fails the boundary gate", async () => {
+  const deepCase = await clusterFixture(true);
+  const failing = gate("boundaries.mjs", [
+    "--root", deepCase.root,
+    "--baseline", join(deepCase.root, "boundaries.baseline.json"),
+    "--cluster-deep-imports", deepCase.deepImports,
+  ]);
+  assert.equal(failing.status, gateFailure, failing.stderr || failing.stdout);
+  assert.match(
+    failing.stdout,
+    /new deep import {2}apps\/worker\/src\/services\/beta\/user\.ts -> apps\/worker\/src\/services\/alpha\/thing\.ts/u,
+  );
+
+  const interfaceCase = await clusterFixture(false);
+  const passing = gate("boundaries.mjs", [
+    "--root", interfaceCase.root,
+    "--baseline", join(interfaceCase.root, "boundaries.baseline.json"),
+    "--cluster-deep-imports", interfaceCase.deepImports,
+  ]);
+  assert.equal(passing.status, gateSuccess, passing.stderr || passing.stdout);
 });

@@ -3,8 +3,8 @@ import type { RunAnalysisReport, RunDetail, RunPullRequest, RunStep } from "@sha
 import type { Db } from "../client.js";
 import { workflowRuns } from "../schema.js";
 import { coerceStatus } from "./runs-read.js";
-import { attributeRunModel } from "../../lib/overview/attribute-run-model.js";
-import { sanitizeRunSteps } from "../../lib/overview/sanitize-run-detail.js";
+import { attributeRunModel } from "../../services/overview/attribute-run-model.js";
+import { sanitizeRunSteps } from "../../services/overview/sanitize-run-detail.js";
 import { parseStoredRunAnalysisReport } from "../../run-analysis/report.js";
 
 /**

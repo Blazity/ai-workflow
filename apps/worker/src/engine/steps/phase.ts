@@ -133,7 +133,7 @@ export async function applyHumanRepositoryExpansion(
     return { kind: "noop" };
   }
   const { isExpansionLimitClarification } = await import(
-    "../../repository-discovery/runner.js"
+    "../../services/repository-discovery/runner.js"
   );
   if (!isExpansionLimitClarification(latest.questions)) {
     return { kind: "noop" };
@@ -473,10 +473,10 @@ async function listFreshRepositoryCatalogStep(
     "../../adapters/vcs/repository-directory.js"
   );
   const { buildRepositoryCatalog } = await import(
-    "../../repository-discovery/catalog.js"
+    "../../services/repository-discovery/catalog.js"
   );
   const { filterRepositoriesForScope } = await import(
-    "../../lib/repo-allowlist.js"
+    "../../services/dispatch/repo-allowlist.js"
   );
   return buildRepositoryCatalog(
     filterRepositoriesForScope(
@@ -530,7 +530,7 @@ async function attachResearchRepositoriesStep(
   // point every attach path shares, so an allowlist tightened mid-run cuts off
   // new read attaches before any clone happens (the earlier catalog check may be
   // stale by the time this step runs).
-  const { isRepoAllowedForScope } = await import("../../lib/repo-allowlist.js");
+  const { isRepoAllowedForScope } = await import("../../services/dispatch/repo-allowlist.js");
   for (const repository of repositories) {
     if (!isRepoAllowedForScope(repository, repositoryScope)) {
       throw new Error(
@@ -601,10 +601,10 @@ async function resolveHumanRepositoryExpansionStep(
     "../../adapters/vcs/repository-directory.js"
   );
   const { buildRepositoryCatalog } = await import(
-    "../../repository-discovery/catalog.js"
+    "../../services/repository-discovery/catalog.js"
   );
   const { filterRepositoriesForScope } = await import(
-    "../../lib/repo-allowlist.js"
+    "../../services/dispatch/repo-allowlist.js"
   );
   const { validateHumanRepositoryExpansion } =
     await loadRepositoryDiscoveryPort();

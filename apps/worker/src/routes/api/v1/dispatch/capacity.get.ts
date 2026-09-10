@@ -1,13 +1,13 @@
 import { defineEventHandler, setResponseHeader } from "h3";
 import { env } from "../../../../config/env.js";
 import { getDb } from "../../../../db/client.js";
-import { createAdapters } from "../../../../lib/adapters.js";
+import { createAdapters } from "../../../../services/vcs/adapters.js";
 import {
   requireDashboardActor,
   toHttpError,
-} from "../../../../lib/auth/request-context.js";
-import { capacityConsumerCount } from "../../../../lib/dispatch.js";
-import { listQueued } from "../../../../dispatch-queue/at-capacity-queue.js";
+} from "../../../../services/auth/request-context.js";
+import { capacityConsumerCount } from "../../../../services/dispatch/dispatch.js";
+import { listQueued } from "../../../../services/dispatch-queue/at-capacity-queue.js";
 import type { DispatchCapacityResponse } from "@shared/contracts";
 
 /**

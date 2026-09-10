@@ -14,7 +14,7 @@ import {
 } from "../../../db/schema.js";
 import { createTestDb } from "../../../db/test-db.js";
 import { encryptWebhookSecret } from "../../../infra/webhook-crypto.js";
-import { webhookRateWindowStart } from "../../../webhook-trigger/rate-limit.js";
+import { webhookRateWindowStart } from "../../../services/webhook-trigger/rate-limit.js";
 import { mintWebhookEndpointsForDefinition } from "../../../webhook-trigger/endpoint-store.js";
 import {
   rotateWebhookEndpointSecret,

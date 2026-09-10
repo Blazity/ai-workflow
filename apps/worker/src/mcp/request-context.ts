@@ -5,7 +5,7 @@ import { env } from "../config/env.js";
 import { auth } from "../auth-instance.js";
 import { getDb } from "../db/client.js";
 import { member, oauthClient, organization } from "../db/schema.js";
-import { normalizeDashboardRole } from "../lib/auth/roles.js";
+import { normalizeDashboardRole } from "../services/auth/roles.js";
 import {
   MCP_SCOPES,
   McpPublicError,

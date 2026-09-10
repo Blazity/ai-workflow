@@ -461,7 +461,7 @@ export async function snapshotClarificationSandboxStep(
     );
   }
 
-  const { createAdapters } = await import("../../lib/adapters.js");
+  const { createAdapters } = await import("../../services/vcs/adapters.js");
   const { runRegistry } = createAdapters();
   if (typeof runRegistry.unregisterSandbox === "function") {
     try {
@@ -499,7 +499,7 @@ export async function restoreClarificationSandboxStep(
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
   const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
-  const { createAdapters } = await import("../../lib/adapters.js");
+  const { createAdapters } = await import("../../services/vcs/adapters.js");
   const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
   const { env } = await import("../../config/env.js");
 

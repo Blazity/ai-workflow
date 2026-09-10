@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { WorkflowRepositoryScope } from "@shared/contracts";
-import type { RepositoryVcsRuntime } from "../../lib/vcs-runtime.js";
+import type { RepositoryVcsRuntime } from "../../services/vcs/vcs-runtime.js";
 import { buildCloneUrl, buildVcsUrls, gitAuthArgs } from "../../infra/vcs-urls.js";
 import type { ReviewLedgerGuardSummary } from "../helpers/review-ledger.js";
 import { getSandboxCredentials } from "../../sandbox/credentials.js";
@@ -75,8 +75,8 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
   const { env } = await import("../../config/env.js");
-  const { createRepositoryVcsRuntime } = await import("../../lib/vcs-runtime.js");
-  const { isRepoAllowedForScope } = await import("../../lib/repo-allowlist.js");
+  const { createRepositoryVcsRuntime } = await import("../../services/vcs/vcs-runtime.js");
+  const { isRepoAllowedForScope } = await import("../../services/dispatch/repo-allowlist.js");
   const { assertOpenSourcePullRequest, isSourcePullRequestRepository } = await import(
     "../helpers/source-pull-request.js"
   );
@@ -361,7 +361,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
     timeout: env.JOB_TIMEOUT_MS,
   });
   try {
-    const { createAdapters } = await import("../../lib/adapters.js");
+    const { createAdapters } = await import("../../services/vcs/adapters.js");
     const { runRegistry } = createAdapters();
     await runRegistry.registerSandbox(
       input.subjectKey,

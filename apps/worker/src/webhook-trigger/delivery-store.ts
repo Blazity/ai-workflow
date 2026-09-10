@@ -7,8 +7,8 @@ import {
   workflowRuns,
 } from "../db/schema.js";
 import { isUniqueViolation } from "../infra/unique-violation.js";
-import type { WebhookTriggerEntry } from "./payload-mapping.js";
-import type { WebhookVerifiedWith } from "./verify.js";
+import type { WebhookTriggerEntry } from "../services/webhook-trigger/payload-mapping.js";
+import type { WebhookVerifiedWith } from "../services/webhook-trigger/verify.js";
 
 /**
  * Durable inbox for authenticated webhook deliveries.

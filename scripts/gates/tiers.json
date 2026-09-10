@@ -43,9 +43,8 @@
     },
     "services": {
       "patterns": [
-        "^apps/worker/src/(?:approvals|clarifications|dispatch-queue|manual-dispatch|repository-discovery|schedule-trigger|system-health|webhook-trigger)(?:/|$)",
-        "^apps/worker/src/lib(?:/|$)",
-        "^apps/worker/src/deployment-identity\\.ts$"
+        "^apps/worker/src/services(?:/|$)",
+        "^apps/worker/src/(?:approvals|clarifications|manual-dispatch|schedule-trigger|webhook-trigger)(?:/|$)"
       ]
     },
     "engine": {
@@ -62,8 +61,8 @@
       "patterns": [
         "^apps/worker/src/db(?:/|$)",
         "^apps/worker/src/adapters/run-registry(?:/|$)",
-        "^apps/worker/src/(?:approvals|clarifications|dispatch-queue|manual-dispatch|repository-discovery|schedule-trigger|system-health|webhook-trigger)/(?:[^/]+-schema|store)\\.[cm]?[jt]s$",
-        "^apps/worker/src/(?:approvals|clarifications|dispatch-queue|manual-dispatch|repository-discovery|schedule-trigger|system-health|webhook-trigger)/.+/(?:[^/]+-schema|store)\\.[cm]?[jt]s$",
+        "^apps/worker/src/(?:approvals|clarifications|manual-dispatch|schedule-trigger|webhook-trigger)/(?:[^/]+-schema|store)\\.[cm]?[jt]s$",
+        "^apps/worker/src/(?:approvals|clarifications|manual-dispatch|schedule-trigger|webhook-trigger)/.+/(?:[^/]+-schema|store)\\.[cm]?[jt]s$",
         "^apps/worker/src/(?:harness-profiles|prompt-library|workflow-definition)/store\\.[cm]?[jt]s$"
       ]
     },
@@ -91,6 +90,8 @@
   "edgeExceptions": {
     "app->engine": ["apps/worker/src/engine/index.ts"]
   },
+  "serviceClusterRoot": "apps/worker/src/services",
+  "clusterDeepImports": "./cluster-deep-imports.json",
   "packageEdges": {
     "default": ["contracts"],
     "workflow-graph": ["conditions"],

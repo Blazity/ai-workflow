@@ -27,7 +27,7 @@ import { e2eEnv } from "../env.js";
  * paths (webhook via the Jira transition, and an explicit cron poll). Each
  * path should observe the existing claim via HSETNX and skip. The atomic
  * `claim` semantics themselves are exhaustively covered by the unit tests in
- * `src/lib/dispatch.test.ts` ("only one concurrent dispatch wins when claim
+ * `src/services/dispatch/dispatch.test.ts` ("only one concurrent dispatch wins when claim
  * is atomic").
  */
 describe("US-10: Duplicate dispatch prevented by atomic claim", () => {

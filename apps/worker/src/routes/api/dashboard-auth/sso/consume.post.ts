@@ -1,8 +1,8 @@
 import { createError, defineEventHandler, readBody } from "h3";
 
 import { auth } from "../../../../auth-instance.js";
-import { consumeDashboardSsoHandoff } from "../../../../lib/auth/sso-handoff.js";
-import { toHttpError } from "../../../../lib/auth/request-context.js";
+import { consumeDashboardSsoHandoff } from "../../../../services/auth/sso-handoff.js";
+import { toHttpError } from "../../../../services/auth/request-context.js";
 
 export default defineEventHandler(async (event) => {
   const body = await readBody<{ token?: string }>(event);

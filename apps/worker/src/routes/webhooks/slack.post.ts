@@ -1,11 +1,11 @@
 import { defineEventHandler, readRawBody, getHeader, createError, type H3Event } from "h3";
 import { waitUntil } from "@vercel/functions";
 import { env } from "../../config/env.js";
-import { createAdapters } from "../../lib/adapters.js";
-import { cancelRun } from "../../lib/cancel-run.js";
+import { createAdapters } from "../../services/vcs/adapters.js";
+import { cancelRun } from "../../services/run-lifecycle/cancel-run.js";
 import { logger } from "../../infra/logger.js";
-import { parseCommand, type ParsedCommand } from "../../lib/slack/commands.js";
-import { HELP_TEXT } from "../../lib/slack/format.js";
+import { parseCommand, type ParsedCommand } from "../../services/slack/commands.js";
+import { HELP_TEXT } from "../../services/slack/format.js";
 import {
   handleCancel,
   handleInspect,
@@ -13,10 +13,10 @@ import {
   handleReset,
   handleStatus,
   handleSummary,
-} from "../../lib/slack/handlers.js";
-import { postToResponseUrl } from "../../lib/slack/respond.js";
-import { verifySlackSignature } from "../../lib/slack/verify.js";
-import { observeProviderWebhook } from "../../system-health/provider-webhook-observation.js";
+} from "../../services/slack/handlers.js";
+import { postToResponseUrl } from "../../services/slack/respond.js";
+import { verifySlackSignature } from "../../services/slack/verify.js";
+import { observeProviderWebhook } from "../../services/system/provider-webhook-observation.js";
 
 /**
  * Slack slash command webhook.

@@ -1,7 +1,7 @@
 import { createError, defineEventHandler, readBody } from "h3";
 import type { PrePrCheckSaveResponse } from "@shared/contracts";
 import { getDb } from "../../../../db/client.js";
-import { requireDashboardActor, toHttpError } from "../../../../lib/auth/request-context.js";
+import { requireDashboardActor, toHttpError } from "../../../../services/auth/request-context.js";
 import {
   dashboardUserLabel,
   restorePrePrCheckConfig,

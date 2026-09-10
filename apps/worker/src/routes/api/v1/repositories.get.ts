@@ -7,7 +7,7 @@ import type {
 } from "@shared/contracts";
 import { getConfiguredVcsProviders } from "../../../config/env.js";
 import { listRepositoriesAcrossProviders } from "../../../adapters/vcs/repository-directory.js";
-import { requireDashboardActor, toHttpError } from "../../../lib/auth/request-context.js";
+import { requireDashboardActor, toHttpError } from "../../../services/auth/request-context.js";
 
 const CACHE_TTL_MS = 60_000;
 

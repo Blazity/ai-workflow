@@ -1,5 +1,5 @@
 /* eslint-disable max-lines, max-lines-per-function */
-import { ticketRunUrl } from "../../lib/dashboard-links.js";
+import { ticketRunUrl } from "../../services/publication/dashboard-links.js";
 import type { TicketEvent } from "../../adapters/messaging/types.js";
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
 import { type WorkflowExecutionLogEvent } from "../../workflow-definition/interpreter.js";

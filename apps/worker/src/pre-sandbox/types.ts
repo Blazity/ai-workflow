@@ -3,7 +3,7 @@ import type {
   SelectedRepository,
   VcsProvider,
 } from "../adapters/vcs/repository-directory.js";
-import type { RepositoryCatalogEntry } from "../repository-discovery/catalog.js";
+import type { RepositoryCatalogEntry } from "../services/repository-discovery/catalog.js";
 
 export interface PreSandboxRepositoryDiscovery {
   catalog: RepositoryCatalogEntry[];

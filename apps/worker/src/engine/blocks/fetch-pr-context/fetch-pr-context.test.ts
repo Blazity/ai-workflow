@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   env: { REVIEW_LEDGER_ENABLED: false },
 }));
 
-vi.mock("../../../lib/vcs-runtime.js", () => ({
+vi.mock("../../../services/vcs/vcs-runtime.js", () => ({
   createRepositoryVCS: mocks.createRepositoryVCS,
 }));
 

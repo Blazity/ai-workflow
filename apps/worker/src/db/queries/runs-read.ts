@@ -13,7 +13,7 @@ import type {
 import type { Db } from "../client.js";
 import type { RunKind } from "../../adapters/run-registry/types.js";
 import { activeRuns, workflowOwnedBranches, workflowRuns } from "../schema.js";
-import { attributeRunModel } from "../../lib/overview/attribute-run-model.js";
+import { attributeRunModel } from "../../services/overview/attribute-run-model.js";
 
 /**
  * Postgres read path for the dashboard. Replaces the Vercel Workflow `world.runs`

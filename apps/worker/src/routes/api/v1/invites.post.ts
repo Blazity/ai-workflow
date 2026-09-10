@@ -2,10 +2,10 @@ import { Resend } from "resend";
 import { createError, defineEventHandler, readBody } from "h3";
 import { env } from "../../../config/env.js";
 import { getDb } from "../../../db/client.js";
-import { createDashboardInvite, type SendInviteEmail } from "../../../lib/auth/invites.js";
-import { requireDashboardActor, toHttpError } from "../../../lib/auth/request-context.js";
-import { DashboardAuthError } from "../../../lib/auth/users-read.js";
-import { sendEmail } from "../../../lib/email/send-email.js";
+import { createDashboardInvite, type SendInviteEmail } from "../../../services/auth/invites.js";
+import { requireDashboardActor, toHttpError } from "../../../services/auth/request-context.js";
+import { DashboardAuthError } from "../../../services/auth/users-read.js";
+import { sendEmail } from "../../../services/email/send-email.js";
 
 export default defineEventHandler(async (event) => {
   const actor = await requireDashboardActor(event);

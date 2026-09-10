@@ -8,7 +8,7 @@ import type {
   WorkflowDefinitionDeploymentValidationResponse,
 } from "@shared/contracts";
 import { getDb } from "../../../../../db/client.js";
-import { requireDashboardActor } from "../../../../../lib/auth/request-context.js";
+import { requireDashboardActor } from "../../../../../services/auth/request-context.js";
 import { dashboardUserLabel } from "../../../../../pre-pr-checks/store.js";
 import {
   rollbackWorkflowDefinition,

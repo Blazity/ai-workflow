@@ -23,7 +23,7 @@ import {
 } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
 import { listHarnessProfileUsage } from "../db/harness-profile-usage-store.js";
-import { DashboardAuthError } from "../lib/auth/users-read.js";
+import { DashboardAuthError } from "../services/auth/users-read.js";
 import { hashHarnessSkillArtifact } from "@shared/skills";
 import { sha256Digest } from "./skill-artifact-digest.js";
 import {

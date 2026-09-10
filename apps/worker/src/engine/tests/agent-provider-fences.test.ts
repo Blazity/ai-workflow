@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ActiveRunOwnerError } from "../../lib/run-control-errors.js";
+import { ActiveRunOwnerError } from "../../services/run-lifecycle/run-control-errors.js";
 
 const mocks = vi.hoisted(() => ({
   assertActiveRunOwner: vi.fn(),
@@ -20,10 +20,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
-vi.mock("../../lib/active-run-owner.js", () => ({
+vi.mock("../../services/run-lifecycle/active-run-owner.js", () => ({
   assertActiveRunOwner: (...args: any[]) => mocks.assertActiveRunOwner(...args),
 }));
-vi.mock("../../lib/adapters.js", () => ({
+vi.mock("../../services/vcs/adapters.js", () => ({
   createAdapters: () => ({
     issueTracker: {
       fetchTicket: mocks.fetchTicket,
@@ -39,7 +39,7 @@ vi.mock("../../clarifications/store.js", () => ({
     mocks.reconcileClarificationPickupState(...args),
   supersedePendingForTicket: (...args: any[]) => mocks.supersedePendingForTicket(...args),
 }));
-vi.mock("../../lib/telemetry/run-telemetry.js", () => ({
+vi.mock("../../services/telemetry/run-telemetry.js", () => ({
   markRunFailedOnSelfMove: vi.fn(),
   markRunSucceededOnSelfMove: vi.fn(),
   recordBlockStatuses: vi.fn(),
@@ -48,10 +48,10 @@ vi.mock("../../lib/telemetry/run-telemetry.js", () => ({
   resolveAwaitingRunsForTicket: (...args: any[]) =>
     mocks.resolveAwaitingRunsForTicket(...args),
 }));
-vi.mock("../../lib/ticket-transition.js", () => ({
+vi.mock("../../services/tickets/ticket-transition.js", () => ({
   moveTicketForRun: (...args: any[]) => mocks.moveTicket(...args),
 }));
-vi.mock("../../lib/ticket-label-mutation.js", () => ({
+vi.mock("../../services/tickets/ticket-label-mutation.js", () => ({
   updateTicketLabelsForRun: (...args: any[]) =>
     mocks.updateTicketLabels(...args),
 }));

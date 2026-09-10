@@ -13,9 +13,9 @@ import { getVcsProviderConfig } from "../../../../config/env.js";
 import {
   requireDashboardActor,
   toHttpError,
-} from "../../../../lib/auth/request-context.js";
-import { canManageHarnessProfiles } from "../../../../lib/auth/roles.js";
-import { DashboardAuthError } from "../../../../lib/auth/users-read.js";
+} from "../../../../services/auth/request-context.js";
+import { canManageHarnessProfiles } from "../../../../services/auth/roles.js";
+import { DashboardAuthError } from "../../../../services/auth/users-read.js";
 import { setHarnessApiNoStore } from "../harness-profiles.get.js";
 
 export function toHarnessSkillHttpError(error: unknown): never {

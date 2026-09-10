@@ -1,6 +1,6 @@
 ---
 paths:
-  - "apps/worker/src/lib/**"
+  - "apps/worker/src/services/**"
   - "apps/worker/src/run-observability/**"
   - "apps/worker/src/routes/api/v1/runs**"
 ---

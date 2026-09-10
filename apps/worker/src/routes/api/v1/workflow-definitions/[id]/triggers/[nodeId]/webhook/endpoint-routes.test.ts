@@ -18,13 +18,13 @@ import {
   acceptWebhookDelivery,
   completeWebhookDelivery,
 } from "../../../../../../../../webhook-trigger/delivery-store.js";
-import { fallbackWebhookDeliveryId } from "../../../../../../../../webhook-trigger/dispatch-webhook-trigger.js";
+import { fallbackWebhookDeliveryId } from "../../../../../../../../services/webhook-trigger/dispatch-webhook-trigger.js";
 import {
   getWebhookEndpointForNode,
   mintWebhookEndpointsForDefinition,
   revokeWebhookEndpoint,
 } from "../../../../../../../../webhook-trigger/endpoint-store.js";
-import { webhookRejectionWindowStart } from "../../../../../../../../webhook-trigger/rejection-counters.js";
+import { webhookRejectionWindowStart } from "../../../../../../../../services/webhook-trigger/rejection-counters.js";
 
 const KEY = "a".repeat(64);
 const DEFINITION_ID = 9;

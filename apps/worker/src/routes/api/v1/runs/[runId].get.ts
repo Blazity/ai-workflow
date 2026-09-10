@@ -8,14 +8,14 @@ import {
   getClarificationForRun,
   serializeClarification,
 } from "../../../../clarifications/store.js";
-import { requireDashboardActor, toHttpError } from "../../../../lib/auth/request-context.js";
+import { requireDashboardActor, toHttpError } from "../../../../services/auth/request-context.js";
 import {
   collectRunDetail,
   type RunDetailSource,
-} from "../../../../lib/overview/collect-run-detail.js";
+} from "../../../../services/overview/collect-run-detail.js";
 import { logger } from "../../../../infra/logger.js";
-import { resolveRunDetail } from "../../../../lib/overview/resolve-run-detail.js";
-import { sanitizeRunDetailForResponse } from "../../../../lib/overview/sanitize-run-detail.js";
+import { resolveRunDetail } from "../../../../services/overview/resolve-run-detail.js";
+import { sanitizeRunDetailForResponse } from "../../../../services/overview/sanitize-run-detail.js";
 
 const EMPTY: Omit<RunDetailResponse, "generatedAt"> = {
   available: false,

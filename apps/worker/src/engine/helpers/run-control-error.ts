@@ -1,6 +1,6 @@
 import { FatalError } from "workflow";
 import { WorkflowRunCancelledError } from "workflow/errors";
-import { isActiveRunOwnerError } from "../../lib/run-control-errors.js";
+import { isActiveRunOwnerError } from "../../services/run-lifecycle/run-control-errors.js";
 import { isRunBudgetControlError } from "./run-budget.js";
 
 /**

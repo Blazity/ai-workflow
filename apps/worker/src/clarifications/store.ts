@@ -2,9 +2,9 @@ import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import type { ClarificationRequest, ClarificationStatus } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 import { activeRuns, clarificationRequests } from "../db/schema.js";
-import type { ActiveRunOwner } from "../lib/active-run-owner.js";
-import { ActiveRunOwnerError } from "../lib/run-control-errors.js";
-import { resolveAwaitingRunsForTicket } from "../lib/telemetry/run-telemetry.js";
+import type { ActiveRunOwner } from "../services/run-lifecycle/active-run-owner.js";
+import { ActiveRunOwnerError } from "../services/run-lifecycle/run-control-errors.js";
+import { resolveAwaitingRunsForTicket } from "../services/telemetry/run-telemetry.js";
 
 export interface ClarificationRow {
   id: string;

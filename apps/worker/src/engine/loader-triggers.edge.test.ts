@@ -21,7 +21,7 @@ const H = vi.hoisted(() => ({
 vi.mock("../config/env.js", () => ({
   env: H.env,
 }));
-vi.mock("../lib/vcs-bot-login.js", () => ({
+vi.mock("../services/vcs/vcs-bot-login.js", () => ({
   getVcsBotLogin: () => H.env.VCS_BOT_LOGIN,
 }));
 
@@ -54,7 +54,7 @@ vi.mock("../db/client.js", () => ({ getDb: vi.fn(() => ({})) }));
 // github.post.ts consumes the mocked dispatch-trigger; the dispatchTriggerEvent
 // area re-loads the real module via vi.importActual (partial-mock pattern).
 const mockDispatchTriggerEvent = vi.fn();
-vi.mock("../lib/dispatch-trigger.js", () => ({
+vi.mock("../services/dispatch/dispatch-trigger.js", () => ({
   dispatchTriggerEvent: (...args: any[]) => mockDispatchTriggerEvent(...args),
   resolveEnabledReviewStates: vi.fn().mockResolvedValue(undefined),
 }));
@@ -70,7 +70,7 @@ vi.mock("../post-pr-gate/config.js", () => ({
 }));
 
 const mockDispatchPostPrGateWebhook = vi.fn();
-vi.mock("../lib/post-pr-gate-dispatch.js", () => ({
+vi.mock("../services/dispatch/post-pr-gate-dispatch.js", () => ({
   dispatchPostPrGateWebhook: (...args: any[]) => mockDispatchPostPrGateWebhook(...args),
 }));
 

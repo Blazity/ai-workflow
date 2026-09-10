@@ -2,7 +2,7 @@ import { createError, defineEventHandler, readBody } from "h3";
 import type { HarnessProfileMutationResponse } from "@shared/contracts";
 import { getDb } from "../../../../../db/client.js";
 import { restoreHarnessProfileVersion } from "../../../../../harness-profiles/store.js";
-import { requireDashboardActor } from "../../../../../lib/auth/request-context.js";
+import { requireDashboardActor } from "../../../../../services/auth/request-context.js";
 import {
   parseHarnessProfileId,
   setHarnessApiNoStore,

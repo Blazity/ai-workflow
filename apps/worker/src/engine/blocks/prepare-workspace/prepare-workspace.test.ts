@@ -79,7 +79,7 @@ vi.mock("../pre-pr-checks.js", async (importOriginal) => ({
 vi.mock("../../../sandbox/agents/index.js", () => ({
   createAgentAdapter: mocks.createAgentAdapter,
 }));
-vi.mock("../../../lib/vcs-runtime.js", () => ({
+vi.mock("../../../services/vcs/vcs-runtime.js", () => ({
   buildSandboxProviderConfigs: mocks.buildSandboxProviderConfigs,
   createRepositoryVCS: () => ({
     getBranchSha: mocks.getBranchSha,
@@ -100,7 +100,7 @@ vi.mock("../../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
 vi.mock("../../../db/queries/workflow-owned-branches.js", () => ({
   listWorkflowOwnedBranchesForTicket: mocks.listWorkflowOwnedBranchesForTicket,
 }));
-vi.mock("../../../lib/adapters.js", () => ({
+vi.mock("../../../services/vcs/adapters.js", () => ({
   createAdapters: () => ({ runRegistry: { registerSandbox: mocks.registerSandbox } }),
 }));
 vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.sandboxGet } }));

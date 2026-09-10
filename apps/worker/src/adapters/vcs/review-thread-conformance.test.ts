@@ -6,7 +6,7 @@ import {
   REVIEW_LEDGER_MAX_WORK_ITEMS,
   REVIEW_LEDGER_MAX_CONTEXT_THREADS,
 } from "./types.js";
-import { reviewLedgerMarker } from "../../lib/vcs-bot-identity.js";
+import { reviewLedgerMarker } from "../../services/vcs/vcs-bot-identity.js";
 
 vi.mock("../../infra/logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -130,7 +130,7 @@ const mockOctokit = {
   pulls: { listReviews: vi.fn(), listCommentsForReview: vi.fn() },
 };
 
-vi.mock("../../lib/github-auth.js", () => ({
+vi.mock("../../services/vcs/github-auth.js", () => ({
   buildOctokit: vi.fn(() => mockOctokit),
 }));
 

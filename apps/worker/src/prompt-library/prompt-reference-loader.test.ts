@@ -4,7 +4,7 @@ import { createTestDb } from "../db/test-db.js";
 import {
   archivePrompt,
   createPrompt,
-} from "../lib/prompt-library-service.js";
+} from "../services/prompts/prompt-library-service.js";
 import { createPromptReferenceLoader } from "./prompt-reference-loader.js";
 import {
   savePromptVersion,

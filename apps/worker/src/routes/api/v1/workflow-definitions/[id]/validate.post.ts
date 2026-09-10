@@ -1,7 +1,7 @@
 import { defineEventHandler, readBody, setResponseHeader } from "h3";
 import type { WorkflowDefinitionValidationResponse } from "@shared/contracts";
 import { getDb } from "../../../../../db/client.js";
-import { requireDashboardActor, toHttpError } from "../../../../../lib/auth/request-context.js";
+import { requireDashboardActor, toHttpError } from "../../../../../services/auth/request-context.js";
 import { workflowBlockRegistryContextFromEnv } from "../../../../../workflow-definition/models.js";
 import { validateWorkflowDefinitionCandidateWithPromptAuthoring } from "../../../../../workflow-definition/prompt-authoring.js";
 

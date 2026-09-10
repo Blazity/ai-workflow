@@ -1,8 +1,8 @@
 import { createError, defineEventHandler, getRouterParam } from "h3";
 import { env } from "../../../../../config/env.js";
 import { getDb } from "../../../../../db/client.js";
-import { cancelDashboardInvite } from "../../../../../lib/auth/invites.js";
-import { requireDashboardActor, toHttpError } from "../../../../../lib/auth/request-context.js";
+import { cancelDashboardInvite } from "../../../../../services/auth/invites.js";
+import { requireDashboardActor, toHttpError } from "../../../../../services/auth/request-context.js";
 
 export default defineEventHandler(async (event) => {
   try {

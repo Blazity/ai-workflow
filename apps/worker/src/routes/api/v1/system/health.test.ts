@@ -9,7 +9,7 @@ const state = vi.hoisted(() => ({
   read: vi.fn(),
 }));
 
-vi.mock("../../../../lib/auth/request-context.js", () => ({
+vi.mock("../../../../services/auth/request-context.js", () => ({
   requireDashboardActor: vi.fn(async () => {
     if (state.role === null) {
       throw createError({ statusCode: 401, statusMessage: "Unauthorized" });
@@ -20,10 +20,10 @@ vi.mock("../../../../lib/auth/request-context.js", () => ({
     throw error;
   },
 }));
-vi.mock("../../../../system-health/probes.js", () => ({
+vi.mock("../../../../services/system/probes.js", () => ({
   collectDeploymentSystemHealth: state.collect,
 }));
-vi.mock("../../../../system-health/last-scan.js", () => ({
+vi.mock("../../../../services/system/last-scan.js", () => ({
   saveSystemHealthScan: state.save,
   readSystemHealthScan: state.read,
 }));

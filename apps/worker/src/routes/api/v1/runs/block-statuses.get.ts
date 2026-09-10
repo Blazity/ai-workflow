@@ -1,8 +1,8 @@
 import { defineEventHandler, getQuery, setResponseHeader } from "h3";
 import { getDb } from "../../../../db/client.js";
-import { createAdapters } from "../../../../lib/adapters.js";
-import { requireDashboardActor, toHttpError } from "../../../../lib/auth/request-context.js";
-import { collectBlockStatuses } from "../../../../lib/overview/collect-block-statuses.js";
+import { createAdapters } from "../../../../services/vcs/adapters.js";
+import { requireDashboardActor, toHttpError } from "../../../../services/auth/request-context.js";
+import { collectBlockStatuses } from "../../../../services/overview/collect-block-statuses.js";
 import type { RunBlockStatusesResponse } from "@shared/contracts";
 
 export default defineEventHandler(

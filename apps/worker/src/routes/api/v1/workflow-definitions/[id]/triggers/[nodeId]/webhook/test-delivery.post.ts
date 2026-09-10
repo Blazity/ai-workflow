@@ -5,8 +5,8 @@ import type {
 } from "@shared/contracts";
 import { createError, defineEventHandler, readBody } from "h3";
 import { getDb } from "../../../../../../../../db/client.js";
-import { toHttpError } from "../../../../../../../../lib/auth/request-context.js";
-import { webhookSubjectKey } from "../../../../../../../../lib/subject-key.js";
+import { toHttpError } from "../../../../../../../../services/auth/request-context.js";
+import { webhookSubjectKey } from "../../../../../../../../services/run-lifecycle/subject-key.js";
 import {
   acceptWebhookDelivery,
   completeWebhookDelivery,
@@ -14,7 +14,7 @@ import {
 import {
   mapWebhookPayload,
   type WebhookMappingConfig,
-} from "../../../../../../../../webhook-trigger/payload-mapping.js";
+} from "../../../../../../../../services/webhook-trigger/payload-mapping.js";
 import { getEnabledDeployedDefinition } from "../../../../../../../../workflow-definition/store.js";
 import { WEBHOOK_MAX_BODY_BYTES } from "../../../../../../../webhooks/custom/[endpointId].post.js";
 import {

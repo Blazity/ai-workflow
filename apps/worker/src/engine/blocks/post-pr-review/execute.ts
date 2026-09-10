@@ -5,7 +5,7 @@ import {
 import type { PrTriggerPayload } from "../../agent-input.js";
 import type { ReviewResult } from "@shared/contracts";
 import type { WorkflowOwnedBranchRecord } from "../../../db/queries/workflow-owned-branches.js";
-import { prSubjectKey } from "../../../lib/subject-key.js";
+import { prSubjectKey } from "../../../services/run-lifecycle/subject-key.js";
 import {
   executionError,
   type BlockExecuteFn,

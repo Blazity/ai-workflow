@@ -1,7 +1,7 @@
 import type { WebhookDeliveriesResponse } from "@shared/contracts";
 import { defineEventHandler } from "h3";
 import { getDb } from "../../../../../../../../db/client.js";
-import { toHttpError } from "../../../../../../../../lib/auth/request-context.js";
+import { toHttpError } from "../../../../../../../../services/auth/request-context.js";
 import { listRecentWebhookDeliveries } from "../../../../../../../../webhook-trigger/delivery-store.js";
 import {
   parseWebhookEndpointTarget,

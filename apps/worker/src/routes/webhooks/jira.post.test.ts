@@ -24,11 +24,11 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("../../config/env.js", () => ({ env: state.env }));
-vi.mock("../../lib/adapters.js", () => ({ createAdapters: state.createAdapters }));
-vi.mock("../../lib/dispatch.js", () => ({ dispatchTicket: state.dispatch }));
-vi.mock("../../lib/cancel-run.js", () => ({ cancelRunDetailed: state.cancel }));
+vi.mock("../../services/vcs/adapters.js", () => ({ createAdapters: state.createAdapters }));
+vi.mock("../../services/dispatch/dispatch.js", () => ({ dispatchTicket: state.dispatch }));
+vi.mock("../../services/run-lifecycle/cancel-run.js", () => ({ cancelRunDetailed: state.cancel }));
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
-vi.mock("../../clarifications/resume-from-comments.js", () => ({
+vi.mock("../../services/clarifications/resume-from-comments.js", () => ({
   resumeClarificationFromComments: (...args: unknown[]) => state.resume(...args),
 }));
 vi.mock("../../clarifications/store.js", () => ({
@@ -44,12 +44,12 @@ vi.mock("../../db/queries/runs-read.js", () => ({
   isRunRecordedSucceeded: state.isRunRecordedSucceeded,
   hasDurableRunPublication: state.hasDurableRunPublication,
 }));
-vi.mock("../../system-health/provider-webhook-observation.js", () => ({
+vi.mock("../../services/system/provider-webhook-observation.js", () => ({
   observeProviderWebhook: state.observeProviderWebhook,
 }));
 
 const { resetAiReviewDestinationCache } = await import(
-  "../../lib/ai-review-destination.js"
+  "../../services/tickets/ai-review-destination.js"
 );
 const handler = (await import("./jira.post.js")).default;
 

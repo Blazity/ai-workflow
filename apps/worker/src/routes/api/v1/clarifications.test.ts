@@ -38,7 +38,7 @@ vi.mock("../../../config/env.js", () => ({ env: state.env }));
 vi.mock("../../../auth-instance.js", () => ({
   auth: { api: { getSession: vi.fn(async () => state.session) } },
 }));
-vi.mock("../../../lib/adapters.js", () => ({
+vi.mock("../../../services/vcs/adapters.js", () => ({
   createAdapters: () => ({
     issueTracker: {
       fetchTicket: mocks.fetchTicket,

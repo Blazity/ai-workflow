@@ -5,9 +5,9 @@ import {
   type IssueTrackerAdapter,
   type IssueTrackerMoveTarget,
 } from "../../adapters/issue-tracker/types.js";
-import { scrubForPublication } from "../../lib/publication-scrub.js";
-import { ticketSubjectKey } from "../../lib/subject-key.js";
-import { moveTicket } from "../../lib/ticket-transition.js";
+import { scrubForPublication } from "../../services/publication/publication-scrub.js";
+import { ticketSubjectKey } from "../../services/run-lifecycle/subject-key.js";
+import { moveTicket } from "../../services/tickets/ticket-transition.js";
 import { McpPublicError, type McpToolDependencies } from "../contracts.js";
 import { executeMcpMutation } from "../execute-tool.js";
 import { hashCanonicalJson } from "../sanitize-result.js";

@@ -3,7 +3,7 @@ import { start } from "workflow/api";
 import { WorkflowRunFailedError } from "workflow/errors";
 import { parseStepName } from "workflow/observability";
 import { getWorld } from "workflow/runtime";
-import { ACTIVE_RUN_OWNER_ERROR_SENTINEL } from "../src/lib/run-control-errors.js";
+import { ACTIVE_RUN_OWNER_ERROR_SENTINEL } from "../src/services/run-lifecycle/run-control-errors.js";
 import {
   probeRunControlStepBoundary,
   probeStickyExecutionFailure,

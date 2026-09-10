@@ -89,7 +89,7 @@ async function blockProvisionAgentSandboxStep(
   });
 
   try {
-    const { createAdapters } = await import("../../lib/adapters.js");
+    const { createAdapters } = await import("../../services/vcs/adapters.js");
     await createAdapters().runRegistry.registerSandbox(
       subjectKey,
       ownerToken,

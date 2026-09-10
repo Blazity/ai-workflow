@@ -14,7 +14,7 @@ import type {
 
 import { env } from "../../config/env.js";
 import { fetchRunDetailFromDb } from "../../db/queries/run-detail-read.js";
-import { sanitizeRunDetailForResponse } from "../../lib/overview/sanitize-run-detail.js";
+import { sanitizeRunDetailForResponse } from "../../services/overview/sanitize-run-detail.js";
 import {
   getRunReplay,
   getRunReplayAttempt,
