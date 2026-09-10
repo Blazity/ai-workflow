@@ -23,12 +23,12 @@ import {
   type EffectivePromptCompilation,
   type EffectivePromptProfileSource,
   type EffectivePromptRepositorySource,
-} from "../workflows/effective-prompt.js";
+} from "../engine/helpers/effective-prompt.js";
 import {
   resolvePromptReferences,
   type PromptReferenceLoader,
-} from "../workflows/prompt-references.js";
-import { VARIABLE_PARAM_KEYS } from "../workflows/prompt-vars.js";
+} from "../engine/helpers/prompt-references.js";
+import { VARIABLE_PARAM_KEYS } from "../engine/helpers/prompt-vars.js";
 import {
   analyzeWorkflowV2Bindings,
   analyzeWorkflowV2Catalog,

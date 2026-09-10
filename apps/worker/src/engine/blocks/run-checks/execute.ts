@@ -4,7 +4,7 @@ import {
   type CheckOutcome,
   type CollectedRepoCheckBatch,
   type PrePrCheckFailure,
-} from "../../../pre-pr-checks/runner.js";
+} from "../../steps/pre-pr-checks-runner.js";
 // The mapped alias, not the engine's interface: a block output field has to
 // satisfy BlockOutput's JsonValue index signature, which TypeScript grants to
 // object type aliases only.
@@ -19,12 +19,12 @@ import {
   propagateInvocationInterruption,
   type RunBudgetAttribution,
   type RunBudgetObservation,
-} from "../../../workflows/run-budget.js";
-import { isRunControlError } from "../../../workflows/run-control-error.js";
+} from "../../helpers/run-budget.js";
+import { isRunControlError } from "../../helpers/run-control-error.js";
 import {
   invalidateWorkspaceGate,
   recordSuccessfulWorkspaceGate,
-} from "../../../workflows/workspace-gate.js";
+} from "../../steps/workspace-gate.js";
 import {
   batchStallReason,
   checksBudgetExhaustedFailure,

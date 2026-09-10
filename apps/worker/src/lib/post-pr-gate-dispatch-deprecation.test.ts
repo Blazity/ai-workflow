@@ -61,8 +61,8 @@ vi.mock("./adapters.js", () => ({
   createAdapters: vi.fn(),
 }));
 
-vi.mock("../workflows/post-pr-gate.js", () => ({
-  postPrGateWorkflow: vi.fn(),
+vi.mock("../engine/index.js", () => ({
+  postPrGateWorkflow: "postPrGateWorkflow_sentinel",
 }));
 
 const { dispatchPostPrGateWebhook } = await import("./post-pr-gate-dispatch.js");
@@ -197,6 +197,7 @@ describe("post-pr-gate deprecation warning coverage", () => {
       workflowInput,
     });
     const baselineFootprint = dispatchFootprint();
+    expect(mockStart.mock.calls[0]?.[0]).toBe("postPrGateWorkflow_sentinel");
 
     vi.clearAllMocks();
     mockAcquireLock.mockResolvedValue("lock-token");
@@ -213,6 +214,7 @@ describe("post-pr-gate deprecation warning coverage", () => {
     });
 
     expect(supersededResult).toEqual(baselineResult);
+    expect(mockStart.mock.calls[0]?.[0]).toBe("postPrGateWorkflow_sentinel");
     expect(dispatchFootprint()).toEqual(baselineFootprint);
     expect(deprecationWarnings()).toHaveLength(1);
   });

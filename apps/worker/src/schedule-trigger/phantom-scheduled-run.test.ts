@@ -40,7 +40,7 @@ const { startMock, getRunMock } = vi.hoisted(() => ({
   getRunMock: vi.fn(),
 }));
 vi.mock("workflow/api", () => ({ start: startMock, getRun: getRunMock }));
-vi.mock("../workflows/agent.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
+vi.mock("../engine/index.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
 vi.mock("../lib/workflow-step-drain.js", () => ({
   confirmWorkflowStepsDrained: vi.fn(async () => true),
 }));
@@ -148,6 +148,7 @@ describe("AIW-249: a started occurrence names a run that exists", () => {
       createScheduleDispatchDeps(db, new PostgresRunRegistry(db), 3),
     );
     expect(result).toEqual({ result: "started", runId: RUN_ID });
+    expect(startMock.mock.calls[0]?.[0]).toBe("agentWorkflow_sentinel");
     await expectNoPhantom();
   });
 

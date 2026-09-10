@@ -4,7 +4,7 @@ import type {
   RetrievalFailureReason,
   SlackSearchResult,
 } from "../../../lib/slack-search.js";
-import { isRunControlError } from "../../../workflows/run-control-error.js";
+import { isRunControlError } from "../../helpers/run-control-error.js";
 import { resolveCallLlmTarget } from "../call-llm/execute.js";
 import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "../support/types.js";
 

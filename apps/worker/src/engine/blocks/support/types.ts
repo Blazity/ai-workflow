@@ -25,14 +25,14 @@ import type {
   WorkspaceManifest,
   WorkspaceRepositoryInput,
 } from "../../../sandbox/repo-workspace.js";
-import type { WorkspacePublicationResult } from "../../../workflows/workspace-publication.js";
-import type { LoadedPrompts } from "../../../workflows/prompts-step.js";
-import type { AgentWorkflowInput } from "../../../workflows/agent-input.js";
+import type { WorkspacePublicationResult } from "../../steps/workspace-publication.js";
+import type { LoadedPrompts } from "../../steps/prompts-step.js";
+import type { AgentWorkflowInput } from "../../agent-input.js";
 import type {
   RunBudgetAttribution,
   RunBudgetObservation,
-} from "../../../workflows/run-budget.js";
-import type { WorkspaceGate } from "../../../workflows/workspace-gate.js";
+} from "../../helpers/run-budget.js";
+import type { WorkspaceGate } from "../../steps/workspace-gate.js";
 import type { ResolvedHarnessRuntime } from "../../../sandbox/harness-runtime.js";
 import type {
   PreSandboxRepositoryDiscovery,
@@ -40,8 +40,8 @@ import type {
 } from "../../../pre-sandbox/types.js";
 import type { ResearchRepository } from "../../../sandbox/agents/types.js";
 import type { ReviewLedgerState } from "../../../adapters/vcs/types.js";
-import type { SettledThread } from "../../../workflows/review-ledger-settle.js";
-import type { PrePrCheckFailure } from "../../../pre-pr-checks/runner.js";
+import type { SettledThread } from "../../steps/review-ledger-settle.js";
+import type { PrePrCheckFailure } from "../../steps/pre-pr-checks-runner.js";
 
 /**
  * Frozen contract between the graph engine (agent.ts, wired in stage C4) and

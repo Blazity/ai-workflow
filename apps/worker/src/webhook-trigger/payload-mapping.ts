@@ -1,4 +1,5 @@
 import { isSafeWorkflowInputName, type JsonValue } from "@shared/contracts";
+import type { SupportCase } from "../engine/agent-input.js";
 
 /**
  * Block-facing shape of one webhook delivery. Every field is a string because
@@ -18,23 +19,6 @@ export interface WebhookTriggerEntry {
    *  configured mappings did not name. JSON-shaped because it is persisted as
    *  jsonb and carried through a Workflow input, both of which must serialize. */
   payload: JsonValue;
-}
-
-/** Explicit contract shared by provider-specific support webhook endpoints.
- * The raw payload remains available alongside this bounded, normalized view. */
-export interface SupportCase {
-  [key: string]: JsonValue;
-  provider: "zendesk" | "sentry";
-  endpoint: string;
-  sourceId: string;
-  sourceUrl: string;
-  title: string;
-  description: string;
-  severity: string;
-  priority: string;
-  reporter: string;
-  customerContext: JsonValue;
-  metadata: JsonValue;
 }
 
 /** Payload-shaped node-config keys. The endpoint row owns the auth keys, which

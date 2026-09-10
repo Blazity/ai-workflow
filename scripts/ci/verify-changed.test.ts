@@ -106,6 +106,7 @@ test("scope table selects only exact narrow commands", () => {
   const rows: Array<[string[], string[]]> = [
     [["README.md", "docs/guide.md"], []],
     [["apps/worker/src/lib/value.ts"], [...WB, GATES]],
+    [["apps/worker/src/engine/helpers/value.ts"], [...WB, PACK, GATES]],
     [["apps/dashboard/lib/value.ts"], ["pnpm --filter ai-workflow-dashboard run typecheck", GATES]],
     [["packages/conditions/index.ts"], ["pnpm run typecheck", GATES]],
     [["packages/contracts/workflow-graph.ts"], ["pnpm run typecheck", ...WB.slice(1), PACK, GATES]],

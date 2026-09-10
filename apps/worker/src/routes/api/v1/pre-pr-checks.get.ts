@@ -2,7 +2,7 @@ import { defineEventHandler } from "h3";
 import type { PrePrChecksResponse } from "@shared/contracts";
 import { getDb } from "../../../db/client.js";
 import { requireDashboardActor, toHttpError } from "../../../lib/auth/request-context.js";
-import { allowedRepoEnvNames } from "../../../pre-pr-checks/runner.js";
+import { allowedRepoEnvNames } from "../../../engine/steps/pre-pr-checks-runner.js";
 import {
   listPrePrCheckConfigVersions,
   serializePrePrCheckConfigVersion,

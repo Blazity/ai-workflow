@@ -40,7 +40,7 @@ vi.mock("../adapters/vcs/repository-directory.js", async (importOriginal) => ({
 }));
 const mockStart = vi.fn();
 vi.mock("workflow/api", () => ({ start: (...args: any[]) => mockStart(...args) }));
-vi.mock("../workflows/agent.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
+vi.mock("../engine/index.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
 const mockCancelSubjectRun = vi.fn();
 vi.mock("./cancel-run.js", () => ({
   cancelSubjectRun: (...args: any[]) => mockCancelSubjectRun(...args),
@@ -298,6 +298,7 @@ describe("provider trigger dispatch", () => {
       result: "started",
       runId: "run-pr",
     });
+    expect(mockStart.mock.calls[0]?.[0]).toBe("agentWorkflow_sentinel");
     const input = mockStart.mock.calls[0]?.[1]?.[0];
     expect(input).toMatchObject({
       kind: "pr_trigger",

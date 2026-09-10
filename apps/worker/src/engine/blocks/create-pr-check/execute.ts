@@ -1,6 +1,6 @@
 import type { WorkflowPrCheckReference } from "@shared/contracts";
-import { isRunControlError } from "../../../workflows/run-control-error.js";
-import type { PrTriggerPayload } from "../../../workflows/agent-input.js";
+import { isRunControlError } from "../../helpers/run-control-error.js";
+import type { PrTriggerPayload } from "../../agent-input.js";
 import {
   executionError,
   type BlockExecuteFn,
@@ -20,7 +20,7 @@ async function createPrCheckStep(args: {
   const {
     createRunOwnedPrCheck,
     prRunTarget,
-  } = await import("../../../workflows/pr-external-resources.js");
+  } = await import("../../runtime/pr-external-resources.js");
   return createRunOwnedPrCheck({
     db: getDb(),
     owner: args.owner,

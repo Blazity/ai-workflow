@@ -33,7 +33,7 @@ vi.mock("../../db/queries/workflow-owned-branches.js", () => ({
   listWorkflowOwnedBranchesForTicket: mocks.listWorkflowOwnedBranchesForTicket,
   upsertWorkflowOwnedBranch: mocks.upsertWorkflowOwnedBranch,
 }));
-vi.mock("../../workflows/workspace-publication.js", () => ({
+vi.mock("../steps/workspace-publication.js", () => ({
   finalizeWorkspacePublication: mocks.finalizeWorkspacePublication,
 }));
 vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.sandboxGet } }));
@@ -48,8 +48,8 @@ vi.mock("./pre-pr-checks.js", async (importOriginal) => ({
 // modes launch detached and poll, so neither runs a command inline any more.
 // Only the steps are replaced: the derived cap, the output bounding and the
 // stall sentence stay real.
-vi.mock("../../pre-pr-checks/runner.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../pre-pr-checks/runner.js")>()),
+vi.mock("../steps/pre-pr-checks-runner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../steps/pre-pr-checks-runner.js")>()),
   listWorkspaceRepositoriesStep: mocks.listWorkspaceRepositoriesStep,
   startRepoCheckBatchStep: mocks.startRepoCheckBatchStep,
   collectRepoCheckBatchStep: mocks.collectRepoCheckBatchStep,
@@ -84,8 +84,8 @@ import {
   createRepositoryDirectory,
   createRepositoryDirectoryForProviders,
 } from "../../adapters/vcs/repository-directory.js";
-import { createOrFindWorkflowOwnedPullRequest } from "../../workflows/repository-prs.js";
-import type { WorkspacePublicationResult } from "../../workflows/workspace-publication.js";
+import { createOrFindWorkflowOwnedPullRequest } from "../steps/repository-prs.js";
+import type { WorkspacePublicationResult } from "../steps/workspace-publication.js";
 import { execute as executeFetchPrContext } from "./fetch-pr-context/execute.js";
 import { execute as executeFinalizeWorkspace } from "./finalize-workspace/execute.js";
 import { execute as executePostPrComment } from "./post-pr-comment/execute.js";

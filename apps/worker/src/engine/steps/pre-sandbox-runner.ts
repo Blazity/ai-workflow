@@ -1,0 +1,234 @@
+import type {
+  PreSandboxConfig,
+  PreSandboxConfigStep,
+  PreSandboxPromptAddition,
+  PreSandboxPromptAdditionsByTarget,
+  PreSandboxStepContext,
+  PreSandboxStepRegistry,
+  RunPreSandboxPhaseInput,
+  RunPreSandboxPhaseResult,
+} from "../../pre-sandbox/types.js";
+import { preSandboxTicketInputFields } from "../../pre-sandbox/types.js";
+
+interface PreSandboxLogger {
+  info: (obj: Record<string, unknown>, msg: string) => void;
+  warn: (obj: Record<string, unknown>, msg: string) => void;
+}
+
+export async function runPreSandboxPhase(
+  input: RunPreSandboxPhaseInput,
+): Promise<RunPreSandboxPhaseResult> {
+  "use step";
+  const { loadPreSandboxConfig } = await import("../../pre-sandbox/config.js");
+  const { preSandboxStepRegistry } = await import("../../pre-sandbox/steps/index.js");
+  const { logger } = await import("../../lib/logger.js");
+
+  return executePreSandboxPhase(input, loadPreSandboxConfig(), preSandboxStepRegistry, logger);
+}
+runPreSandboxPhase.maxRetries = 0;
+
+export async function executePreSandboxPhase(
+  input: RunPreSandboxPhaseInput,
+  config: PreSandboxConfig,
+  registry: PreSandboxStepRegistry,
+  logger?: PreSandboxLogger,
+): Promise<RunPreSandboxPhaseResult> {
+  const promptAdditions = emptyPromptAdditions();
+  let selectedRepositories: RunPreSandboxPhaseResult["selectedRepositories"];
+  let repositoryDiscovery: RunPreSandboxPhaseResult["repositoryDiscovery"];
+  let repositoryScopeNarrowing: RunPreSandboxPhaseResult["repositoryScopeNarrowing"];
+  let repositoryCatalogDegradation: RunPreSandboxPhaseResult["repositoryCatalogDegradation"];
+
+  for (const step of config.preSandbox.steps) {
+    const handler = registry[step.uses];
+    if (!handler) {
+      return {
+        status: "halt",
+        outcome: "failed",
+        message: `Pre-sandbox step "${step.uses}" is not registered.`,
+        promptAdditions,
+        selectedRepositories,
+      };
+    }
+
+    const displayName = step.name ?? step.uses;
+    try {
+      const result = await withTimeout(
+        handler({
+          context: {
+            ticket: selectTicketFields(input.ticket, step),
+            run: input.run,
+            ...(input.repositoryScope ? { repositoryScope: input.repositoryScope } : {}),
+            ...(input.clarification ? { clarification: input.clarification } : {}),
+          },
+          config: step.with,
+          step,
+        }),
+        step.timeoutMs,
+        displayName,
+      );
+
+      if (result.promptAdditions) {
+        addPromptAdditions(promptAdditions, result.promptAdditions);
+      }
+      if (result.selectedRepositories) {
+        selectedRepositories = result.selectedRepositories;
+      }
+      if (result.repositoryDiscovery) {
+        repositoryDiscovery = result.repositoryDiscovery;
+      }
+      if (result.repositoryScopeNarrowing) {
+        repositoryScopeNarrowing = result.repositoryScopeNarrowing;
+      }
+      if (result.repositoryCatalogDegradation) {
+        repositoryCatalogDegradation = result.repositoryCatalogDegradation;
+      }
+
+      if (result.status === "halt") {
+        return {
+          status: "halt",
+          outcome: result.outcome,
+          message: result.message,
+          ...(result.cause ? { cause: result.cause } : {}),
+          questions: result.questions,
+          promptAdditions,
+          selectedRepositories,
+          repositoryDiscovery,
+          repositoryScopeNarrowing,
+          repositoryCatalogDegradation,
+        };
+      }
+    } catch (err) {
+      const message = failureMessage(step, err);
+      if (step.onFailure === "continue") {
+        logger?.warn({ step: displayName, err: errorMessage(err) }, "pre_sandbox_step_failed");
+        continue;
+      }
+
+      return {
+        status: "halt",
+        outcome: "failed",
+        message,
+        // `message` wraps the thrown reason in step-naming prose, so the reason
+        // is carried separately for the surfaces that have to bound the message.
+        cause: errorMessage(err),
+        promptAdditions,
+        selectedRepositories,
+      };
+    }
+  }
+
+  return {
+    status: "continue",
+    promptAdditions,
+    selectedRepositories,
+    repositoryDiscovery,
+    repositoryScopeNarrowing,
+    repositoryCatalogDegradation,
+  };
+}
+
+function selectTicketFields(
+  ticket: RunPreSandboxPhaseInput["ticket"],
+  step: PreSandboxConfigStep,
+): PreSandboxStepContext["ticket"] {
+  const selectedFields = selectedTicketFields(step.with);
+  const selectedTicket: PreSandboxStepContext["ticket"] = {};
+
+  for (const field of selectedFields) {
+    if (field === "identifier" && ticket.identifier !== undefined) {
+      selectedTicket.identifier = ticket.identifier;
+    } else if (field === "title" && ticket.title !== undefined) {
+      selectedTicket.title = ticket.title;
+    } else if (field === "description" && ticket.description !== undefined) {
+      selectedTicket.description = ticket.description;
+    } else if (field === "acceptanceCriteria" && ticket.acceptanceCriteria !== undefined) {
+      selectedTicket.acceptanceCriteria = ticket.acceptanceCriteria;
+    } else if (field === "comments" && ticket.comments !== undefined) {
+      selectedTicket.comments = ticket.comments;
+    } else if (field === "labels" && ticket.labels !== undefined) {
+      selectedTicket.labels = ticket.labels;
+    }
+  }
+
+  return selectedTicket;
+}
+
+function selectedTicketFields(config: unknown): typeof preSandboxTicketInputFields[number][] {
+  if (!isRecord(config)) {
+    return [...preSandboxTicketInputFields];
+  }
+
+  const inputConfig = config.input;
+  if (!isRecord(inputConfig)) {
+    return [...preSandboxTicketInputFields];
+  }
+
+  const ticketFields = inputConfig.ticket;
+  if (!Array.isArray(ticketFields)) {
+    return [...preSandboxTicketInputFields];
+  }
+
+  return preSandboxTicketInputFields.filter((field) => ticketFields.includes(field));
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number | undefined,
+  stepName: string,
+): Promise<T> {
+  if (timeoutMs === undefined) return promise;
+
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`Pre-sandbox step "${stepName}" timed out after ${timeoutMs}ms.`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+function failureMessage(step: PreSandboxConfigStep, err: unknown): string {
+  const displayName = step.name ?? step.uses;
+  const details = errorMessage(err);
+
+  if (step.onFailure === "move_to_backlog") {
+    return `Pre-sandbox rejected the ticket in "${displayName}": ${details}`;
+  }
+
+  return `Pre-sandbox step "${displayName}" failed: ${details}`;
+}
+
+function addPromptAdditions(
+  grouped: PreSandboxPromptAdditionsByTarget,
+  additions: PreSandboxPromptAddition[],
+): void {
+  for (const addition of additions) {
+    for (const target of addition.target) {
+      grouped[target].push(addition);
+    }
+  }
+}
+
+function emptyPromptAdditions(): PreSandboxPromptAdditionsByTarget {
+  return {
+    research: [],
+    implementation: [],
+    review: [],
+  };
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}

@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
-vi.mock("../../../workflows/pr-external-resources.js", () => ({
+vi.mock("../../runtime/pr-external-resources.js", () => ({
   completeRunOwnedPrCheck: mocks.completeRunOwnedPrCheck,
   prRunTarget: mocks.prRunTarget,
 }));

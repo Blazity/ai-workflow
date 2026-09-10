@@ -10,6 +10,7 @@ export function assertPureImports(filePath: string, file: ts.SourceFile): void {
     const normalized = specifier.replaceAll("\\", "/");
     const runtimePath =
       /(?:^|\/)(?:sandbox|lib|db|adapters|workflows)(?:\/|$)/u.test(normalized) ||
+      /(?:^|\/)agent-workflow(?:\.js)?$/u.test(normalized) ||
       /(?:^|\/)engine\/blocks\/[^/]+\/execute(?:\.js)?$/u.test(normalized);
     const reason = runtimePath ? "forbidden runtime import" : "unsupported import";
     throw new Error(filePath + ": " + reason + " \"" + specifier + "\".");

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import type { ManualDispatchPullRequestSnapshot } from "../adapters/vcs/types.js";
-import type { PrTriggerPayload } from "../workflows/agent-input.js";
+import type { PrTriggerPayload } from "../engine/agent-input.js";
 
 vi.mock("../../env.js", () => ({
   env: {},

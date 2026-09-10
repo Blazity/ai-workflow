@@ -8,8 +8,8 @@ import {
   effectivePromptProfileSource,
   resolveProfileInstructions,
   type EffectivePromptCompilation,
-} from "../workflows/effective-prompt.js";
-import { unresolvedRepositoryInstructionSources } from "../workflows/repository-instructions.js";
+} from "../engine/helpers/effective-prompt.js";
+import { unresolvedRepositoryInstructionSources } from "../engine/steps/repository-instructions.js";
 import type { WorkflowBlockRegistryContext } from "./block-registry.js";
 import {
   isPromptAuthoringBlock,

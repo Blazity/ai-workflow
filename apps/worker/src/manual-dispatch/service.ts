@@ -12,8 +12,8 @@ import { reserveSubjectWithinCapacity } from "../lib/dispatch.js";
 import { aiColumnMoveTarget } from "../lib/move-targets.js";
 import { moveTicketForRun } from "../lib/ticket-transition.js";
 import type { Db } from "../db/client.js";
-import type { AgentWorkflowInput, PrTriggerPayload } from "../workflows/agent-input.js";
-import { agentWorkflow } from "../workflows/agent.js";
+import type { AgentWorkflowInput, PrTriggerPayload } from "../engine/index.js";
+import { agentWorkflow } from "../engine/index.js";
 import { getDeployedWorkflowDefinitionVersion } from "../workflow-definition/store.js";
 import { ManualDispatchError } from "./errors.js";
 import {
@@ -160,22 +160,6 @@ function storedResponse(row: ManualDispatchRow): ManualDispatchResponse {
   }
   if (row.status === "failed") throw storedFailure(row);
   return { requestId: row.requestId, status: "recovering" };
-}
-
-export async function acknowledgeManualDispatchWorkflow(
-  db: Db,
-  input: {
-    requestId: string;
-    ownerToken: string;
-    runId: string;
-  },
-): Promise<boolean> {
-  return acknowledgeManualDispatchStarted(
-    db,
-    input.requestId,
-    input.ownerToken,
-    input.runId,
-  );
 }
 
 export async function recoverManualDispatches(input: {

@@ -10,7 +10,7 @@ import {
 } from "../../../db/schema.js";
 import { createTestDb } from "../../../db/test-db.js";
 import { mintWebhookEndpointsForDefinition } from "../../../webhook-trigger/endpoint-store.js";
-import { triggerOutputWithTicketContext } from "../../../workflows/agent.js";
+import { triggerOutputWithTicketContext } from "../../../engine/helpers/trigger-input.js";
 
 /**
  * End-to-end mapping coverage for the webhook ingress, complementary to

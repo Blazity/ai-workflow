@@ -13,7 +13,7 @@ import {
   resolveWorkflowPromptDataTokensV2,
   type V2BindingResolutionContext,
 } from "./v2-bindings.js";
-import { replaceTextRegexStep } from "./transform-regex-step.js";
+import { replaceTextRegexStep } from "../engine/steps/transform-regex-step.js";
 
 const MAX_FIELDS = 100;
 const JSON_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema";

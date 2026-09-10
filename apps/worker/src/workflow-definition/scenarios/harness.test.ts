@@ -2,9 +2,9 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { BlockOutput } from "@shared/contracts";
-import type { PrTriggerType } from "../../lib/trigger-events.js";
-import type { AgentWorkflowInput } from "../../workflows/agent-input.js";
-import { RunBudgetError } from "../../workflows/run-budget.js";
+import type { PrTriggerType } from "../../engine/agent-input.js";
+import type { AgentWorkflowInput } from "../../engine/agent-input.js";
+import { RunBudgetError } from "../../engine/helpers/run-budget.js";
 import { V2_PRODUCTION_SCHEDULER_BOUNDS } from "../v2-scheduler.js";
 import { expectNeverInvoked, expectStartsAfterFinishOf } from "./assertions.js";
 import {
@@ -622,7 +622,7 @@ describe("scenario harness", () => {
       maxTotalExecutions: 200,
     });
     const agentSource = readFileSync(
-      fileURLToPath(new URL("../../workflows/agent.ts", import.meta.url)),
+      fileURLToPath(new URL("../../engine/agent-workflow.ts", import.meta.url)),
       "utf8",
     );
     expect(agentSource).toContain(

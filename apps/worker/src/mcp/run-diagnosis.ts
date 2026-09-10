@@ -124,7 +124,7 @@ const NEXT_ACTIONS: Record<RunDiagnosisCategory, string[]> = {
   ],
   // The scripts block reports "ok" for any run that reached a command, whatever
   // the commands said: "failed" is reserved for a block that could not run at
-  // all (workflows/agent.ts repositoryScriptsStatus). Reading the status alone
+  // all (engine/agent-workflow.ts repositoryScriptsStatus). Reading the status alone
   // therefore says a script failure did not happen, so these actions send the
   // reader to the record that does carry the verdict.
   repository_scripts_failed: [
@@ -209,7 +209,7 @@ const WORKSPACE_GATE_KEYWORDS = ["Run Workspace", "pre-publication check"];
 // The two ways a repository scripts verdict ends a run, both system-composed
 // and neither of them the gate. finalize_workspace refuses an unmet `checks.*`
 // input with the first (workflows/blocks/finalize-workspace.ts), and a scripts
-// block that could not run at all throws the second (workflows/agent.ts
+// block that could not run at all throws the second (engine/agent-workflow.ts
 // prePrChecksFailureReport). Matched as substrings, not prefixes: both are
 // wrapped in a category lead before they reach a run reason.
 const REPOSITORY_SCRIPTS_KEYWORDS = [
@@ -239,7 +239,7 @@ const SOURCE_PULL_REQUEST_MOVED_KEYWORDS = [
 ];
 
 // "Run stopped on budget: <reason>", set as statusReason for a "failed" run
-// stopped by a budget check (workflows/agent.ts:2537-2543).
+// stopped by a budget check (engine/agent-workflow.ts).
 const BUDGET_EXHAUSTED_PREFIX = "Run stopped on budget:";
 
 // WATCHDOG_FAILURE_REASON_PREFIX (lib/telemetry/run-telemetry.ts:116), written
@@ -311,7 +311,7 @@ const DEPENDENCY_UNAVAILABLE_PREFIXES = [
 
 // SAFE_EXECUTION_ERROR_MESSAGES.timeout (workflow-definition/interpreter.ts:92),
 // composed whenever a block reports `category: "timeout"` (e.g. workflows/blocks/
-// generic-agent.ts:470, workflows/agent.ts:4396-4398).
+// generic-agent.ts:470, engine/agent-workflow.ts).
 const SANDBOX_TIMEOUT_PREFIX = SAFE_EXECUTION_ERROR_MESSAGES.timeout;
 
 // SAFE_EXECUTION_ERROR_MESSAGES.sandbox (interpreter.ts:88), the generic

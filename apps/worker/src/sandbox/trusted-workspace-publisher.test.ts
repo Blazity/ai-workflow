@@ -71,7 +71,7 @@ vi.mock("../lib/repo-allowlist.js", () => ({
     ),
 }));
 
-import { publishTrustedWorkspaceFromSandbox } from "./trusted-workspace-publisher.js";
+import { publishTrustedWorkspaceFromSandbox } from "../engine/steps/trusted-workspace-publisher.js";
 
 function command(stdout = "", stderr = "", exitCode = 0) {
   return {

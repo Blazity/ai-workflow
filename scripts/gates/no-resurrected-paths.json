@@ -11,5 +11,13 @@
   "apps/dashboard/components/cockpit/flow-editor/workflow-migration-drawer.tsx",
   "apps/worker/src/workflows/blocks",
   "apps/worker/src/harness-profiles/skill-artifact.test.ts",
-  "apps/worker/src/harness-profiles/skill-artifact.ts"
+  "apps/worker/src/harness-profiles/skill-artifact.ts",
+  "apps/worker/src/workflows",
+  "apps/worker/src/pre-pr-checks/runner.ts",
+  "apps/worker/src/pre-sandbox/runner.ts",
+  "apps/worker/src/sandbox/poll-agent.ts",
+  "apps/worker/src/sandbox/disposable-review-workspace.ts",
+  "apps/worker/src/sandbox/trusted-workspace-publisher.ts",
+  "apps/worker/src/sandbox/write-human-decisions-memory.ts",
+  "apps/worker/src/workflow-definition/transform-regex-step.ts"
 ]

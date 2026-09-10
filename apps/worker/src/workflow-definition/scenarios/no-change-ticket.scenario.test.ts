@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AgentWorkflowInput } from "../../workflows/agent-input.js";
+import type { AgentWorkflowInput } from "../../engine/agent-input.js";
 import { executorRunsOf, expectNeverInvoked } from "./assertions.js";
 import { createScenario, type Scenario, type ScenarioOutcome } from "./harness.js";
 

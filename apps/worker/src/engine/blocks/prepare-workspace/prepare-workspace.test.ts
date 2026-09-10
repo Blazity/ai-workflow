@@ -42,7 +42,7 @@ vi.mock("../../../../env.js", () => ({
   env: mocks.env,
   getConfiguredVcsProviders: () => [{ kind: "github" }],
 }));
-vi.mock("../../../pre-sandbox/runner.js", () => ({
+vi.mock("../../steps/pre-sandbox-runner.js", () => ({
   runPreSandboxPhase: mocks.runPreSandboxPhase,
 }));
 vi.mock("../fetch-pr-context/execute.js", () => ({
@@ -50,16 +50,16 @@ vi.mock("../fetch-pr-context/execute.js", () => ({
   blockPrTriggerRepositoriesStep: mocks.blockPrTriggerRepositoriesStep,
   blockPrTriggerRepositoriesWithSiblingsStep: mocks.blockPrTriggerRepositoriesStep,
 }));
-vi.mock("../../../workflows/repository-promotion.js", () => ({
+vi.mock("../../steps/repository-promotion.js", () => ({
   promoteRepositoryWriteScopeStep: mocks.promoteRepositoryWriteScopeStep,
 }));
-vi.mock("../../../workflows/memory-steps.js", () => ({
+vi.mock("../../steps/memory-steps.js", () => ({
   hydrateWorkspaceMemoryStep: mocks.hydrateWorkspaceMemoryStep,
 }));
-vi.mock("../../../workflows/repo-seed-steps.js", () => ({
+vi.mock("../../steps/repo-seed-steps.js", () => ({
   seedRepoMemoryStep: mocks.seedRepoMemoryStep,
 }));
-vi.mock("../../../workflows/repo-memory-steps.js", () => ({
+vi.mock("../../steps/repo-memory-steps.js", () => ({
   captureDefaultBranchFilesStep: mocks.captureDefaultBranchFilesStep,
 }));
 vi.mock("../../../sandbox/manager.js", () => ({
@@ -119,8 +119,8 @@ import {
 } from "./execute.js";
 import { manifest as prepareWorkspaceManifest } from "./manifest.js";
 import type { WorkspaceManifestV2 } from "../../../sandbox/repo-workspace.js";
-import { teardownSandboxes } from "../../../sandbox/poll-agent.js";
-import { checksCeilingExceededError } from "../../../workflows/run-budget.js";
+import { teardownSandboxes } from "../../steps/sandbox-poll-agent.js";
+import { checksCeilingExceededError } from "../../helpers/run-budget.js";
 import {
   makeCtx,
   makeNode,

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { executePreSandboxPhase } from "./runner.js";
+import { executePreSandboxPhase } from "../engine/steps/pre-sandbox-runner.js";
 import type {
   PreSandboxConfig,
   PreSandboxPromptTarget,

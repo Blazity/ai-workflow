@@ -5,7 +5,7 @@ import {
   type PrePrCheckRunResult,
   type RepoScriptsGroupCoverage,
   type RepoScriptsGroupStatusEntry,
-} from "../../../pre-pr-checks/runner.js";
+} from "../../steps/pre-pr-checks-runner.js";
 
 /**
  * The engine's own group-status entry, restated as an object type alias.

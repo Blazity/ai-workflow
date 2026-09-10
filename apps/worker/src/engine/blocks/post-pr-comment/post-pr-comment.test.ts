@@ -14,7 +14,7 @@ vi.mock("../../../lib/vcs-runtime.js", () => ({
 }));
 
 import { AI_WORKFLOW_COMMENT_MARKER } from "../../../lib/vcs-bot-identity.js";
-import type { WorkspacePublicationResult } from "../../../workflows/workspace-publication.js";
+import type { WorkspacePublicationResult } from "../../steps/workspace-publication.js";
 import { execute } from "./execute.js";
 import { manifest } from "./manifest.js";
 import { makeCtx, makeNode, makePrPayload, runControlErrorCases } from "../support/test-support.js";

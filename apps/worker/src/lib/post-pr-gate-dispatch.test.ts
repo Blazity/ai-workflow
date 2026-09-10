@@ -59,8 +59,8 @@ vi.mock("./adapters.js", () => ({
   createAdapters: (...args: any[]) => mockCreateAdapters(...args),
 }));
 
-vi.mock("../workflows/post-pr-gate.js", () => ({
-  postPrGateWorkflow: vi.fn(),
+vi.mock("../engine/index.js", () => ({
+  postPrGateWorkflow: "postPrGateWorkflow_sentinel",
 }));
 
 const { dispatchPostPrGateWebhook } = await import("./post-pr-gate-dispatch.js");
@@ -185,7 +185,7 @@ describe("dispatchPostPrGateWebhook orchestration", () => {
       headSha: "sha1",
       gateStatusRefs: [],
     });
-    expect(mockStart).toHaveBeenCalledWith(expect.any(Function), [workflowInput]);
+    expect(mockStart).toHaveBeenCalledWith("postPrGateWorkflow_sentinel", [workflowInput]);
     expect(mockClaimRun).toHaveBeenCalledWith("group/demo", 42, "sha1", "run_123");
     expect(mockUpdateRunIdIfHeadSha).toHaveBeenCalledWith(
       "group/demo",

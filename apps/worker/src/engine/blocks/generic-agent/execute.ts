@@ -25,13 +25,13 @@ import {
   ensureAgentSandbox,
   prepareHarnessAgentInvocationStep,
 } from "../agent-sandbox.js";
-import { isRunControlError } from "../../../workflows/run-control-error.js";
+import { isRunControlError } from "../../helpers/run-control-error.js";
 import { pollPhaseUntilDone } from "../poll-phase.js";
 import {
   emitAgentInvocationObservations,
   emitTimedOutAgentInvocationObservations,
 } from "../../../run-observability/agent-observations.js";
-import { resolveAgentInput } from "../../../workflows/resolve-agent-input.js";
+import { resolveAgentInput } from "../../helpers/resolve-agent-input.js";
 import {
   agentArtifactPhase,
   agentProtocolExecutionError,
@@ -176,7 +176,7 @@ async function blockGenericAgentStartPhaseStep(
     }
     return { ok: true, commandId: command.cmdId };
   } catch (error) {
-    const { isRunControlError } = await import("../../../workflows/run-control-error.js");
+    const { isRunControlError } = await import("../../helpers/run-control-error.js");
     if (isRunControlError(error)) throw error;
     const failure = protocolFailure({
       spec,
@@ -446,7 +446,7 @@ export const execute: BlockExecuteFn = async (
     );
     if (!done) {
       const { collectPhaseReplayDiagnostics } = await import(
-        "../../../sandbox/poll-agent.js"
+        "../../steps/sandbox-poll-agent.js"
       );
       await emitTimedOutAgentInvocationObservations({
         observations: execution?.observations,
@@ -459,7 +459,7 @@ export const execute: BlockExecuteFn = async (
       return executionError("agent phase timed out", { category: "timeout" });
     }
 
-    const { collectPhase } = await import("../../../sandbox/poll-agent.js");
+    const { collectPhase } = await import("../../steps/sandbox-poll-agent.js");
     const artifacts = await collectPhase(sandboxId, paths);
     const { result, usage } = await blockGenericAgentParseStep(
       kind,

@@ -13,7 +13,7 @@ import {
   isValidWorkspaceLocalPath,
   type WorkspaceManifest,
 } from "./repo-workspace.js";
-import { selectWorkItems } from "../workflows/review-ledger.js";
+import { selectWorkItems } from "../engine/helpers/review-ledger.js";
 
 interface TicketData {
   identifier: string;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AgentWorkflowInput } from "../../workflows/agent-input.js";
+import type { AgentWorkflowInput } from "../../engine/agent-input.js";
 import { executionError } from "../interpreter.js";
 import { executorRunsOf, expectNeverInvoked, portsOf } from "./assertions.js";
 import { createScenario, type Scenario } from "./harness.js";
@@ -13,7 +13,7 @@ import { createScenario, type Scenario } from "./harness.js";
  * wires it as a `{{data:steps.planning.output.plan}}` token embedded in the
  * implementation node's `configuration.prompt`, with no declared `inputs`
  * binding at all. Substituting that token is `resolveV2PromptDataConfiguration`
- * in `workflows/agent.ts`, called only from the production block dispatcher
+ * in `engine/agent-workflow.ts`, called only from the production block dispatcher
  * the harness deliberately never runs (the harness's `resolvedInputs` comes
  * solely from `resolveWorkflowNodeInputsV2` over declared `inputs`/
  * `additionalInputs`, per v2-scheduler.ts). Reimplementing that substitution

@@ -30,7 +30,6 @@ import {
 import { isRepoAllowedForScope } from "../lib/repo-allowlist.js";
 import { prSubjectKey, ticketSubjectKey } from "../lib/subject-key.js";
 import type {
-  PrTriggerType,
   TriggerEvent,
 } from "../lib/trigger-events.js";
 import { isGateCheckName } from "../lib/trigger-events.js";
@@ -42,7 +41,7 @@ import {
   runnableDefinitionOf,
   type WorkflowDefinitionVersionRow,
 } from "../workflow-definition/store.js";
-import type { PrTriggerPayload } from "../workflows/agent-input.js";
+import type { PrTriggerPayload, PrTriggerType } from "../engine/index.js";
 import { hasDispatchBlockingApprovalForTicket } from "../approvals/store.js";
 import { ManualDispatchError } from "./errors.js";
 

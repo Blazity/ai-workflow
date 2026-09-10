@@ -18,7 +18,7 @@ vi.mock("../../env.js", () => ({
 }));
 const mockStart = vi.fn();
 vi.mock("workflow/api", () => ({ start: (...args: any[]) => mockStart(...args) }));
-vi.mock("../workflows/agent.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
+vi.mock("../engine/index.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
 // The definition store is only reachable from ticket dispatch in this module's
 // import graph; stubbing it keeps this test independent of that file.
 vi.mock("../workflow-definition/store.js", () => ({
@@ -107,6 +107,7 @@ describe("webhook delivery dispatch", () => {
     });
 
     expect(mockStart).toHaveBeenCalledOnce();
+    expect(mockStart.mock.calls[0]?.[0]).toBe("agentWorkflow_sentinel");
     expect(mockStart.mock.calls[0]?.[1]?.[0]).toMatchObject({
       kind: "webhook_trigger",
       endpointId: ENDPOINT_ID,

@@ -11,8 +11,8 @@ import type {
   LatestCheckRun,
   PullRequestHead,
 } from "../adapters/vcs/types.js";
-import type { AgentWorkflowInput, PrTriggerPayload } from "../workflows/agent-input.js";
-import { agentWorkflow } from "../workflows/agent.js";
+import type { AgentWorkflowInput, PrTriggerPayload } from "../engine/index.js";
+import { agentWorkflow } from "../engine/index.js";
 import {
   bindWorkflowOwnedPullRequestIntent,
   findWorkflowOwnedPullRequest,
@@ -274,7 +274,7 @@ async function supersedePreviousPrRun(
   const active = await deps.runRegistry.get(accepted.subjectKey);
   if (!active?.runId || active.state !== "bound") return null;
   const { closeRunPrChecks } = await import(
-    "../workflows/pr-external-resources.js"
+    "../engine/runtime/pr-external-resources.js"
   );
   await closeRunPrChecks({
     db: deps.db,

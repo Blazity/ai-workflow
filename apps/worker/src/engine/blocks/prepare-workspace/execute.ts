@@ -11,15 +11,15 @@ import type {
   WorkspaceManifest,
   WorkspaceRepositoryInput,
 } from "../../../sandbox/repo-workspace.js";
-import { isRunControlError } from "../../../workflows/run-control-error.js";
+import { isRunControlError } from "../../helpers/run-control-error.js";
 import {
   isChecksCeilingExceededError,
   propagateInvocationInterruption,
-} from "../../../workflows/run-budget.js";
-import { hydrateWorkspaceMemoryStep } from "../../../workflows/memory-steps.js";
-import { captureDefaultBranchFilesStep } from "../../../workflows/repo-memory-steps.js";
-import { seedRepoMemoryStep } from "../../../workflows/repo-seed-steps.js";
-import { invalidateWorkspaceGate } from "../../../workflows/workspace-gate.js";
+} from "../../helpers/run-budget.js";
+import { hydrateWorkspaceMemoryStep } from "../../steps/memory-steps.js";
+import { captureDefaultBranchFilesStep } from "../../steps/repo-memory-steps.js";
+import { seedRepoMemoryStep } from "../../steps/repo-seed-steps.js";
+import { invalidateWorkspaceGate } from "../../steps/workspace-gate.js";
 import { emitRepositoryWorkflowObservation } from "../../../run-observability/agent-observations.js";
 import {
   blockFetchPrContextsStep,
@@ -37,7 +37,7 @@ import {
   runRepositorySetup,
   setupFailureMessage,
 } from "../pre-pr-checks.js";
-import { formatPrePrCheckFailures } from "../../../pre-pr-checks/runner.js";
+import { formatPrePrCheckFailures } from "../../steps/pre-pr-checks-runner.js";
 import type { BlockExecutionContext } from "../../../workflow-definition/interpreter.js";
 import type { ResolvedHarnessRuntime } from "../../../sandbox/harness-runtime.js";
 import type {
@@ -97,7 +97,7 @@ async function blockPrepareWorkspacePreSandboxStep(
   context: PreSandboxTicketContext,
 ): Promise<PreSandboxOutcome> {
   "use step";
-  const { runPreSandboxPhase } = await import("../../../pre-sandbox/runner.js");
+  const { runPreSandboxPhase } = await import("../../steps/pre-sandbox-runner.js");
   return runPreSandboxPhase(context);
 }
 blockPrepareWorkspacePreSandboxStep.maxRetries = 0;
@@ -1115,7 +1115,7 @@ export async function promoteWorkspaceWrites(
   }
   try {
     const { promoteRepositoryWriteScopeStep } = await import(
-      "../../../workflows/repository-promotion.js"
+      "../../steps/repository-promotion.js"
     );
     ctx.workspaceManifest = await promoteRepositoryWriteScopeStep({
       sandboxId: ctx.sandboxId,

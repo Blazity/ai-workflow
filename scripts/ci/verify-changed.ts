@@ -12,8 +12,8 @@ export type Repo = {
 export type Plan = { scopes: string[]; commands: Cmd[] };
 
 export const WORKFLOW_TESTS = [
-  "src/workflows/step-registration-coverage.test.ts",
-  "src/workflows/block-executors.test.ts",
+  "src/engine/step-registration-coverage.test.ts",
+  "src/engine/tests/block-executors.test.ts",
   "src/workflow-definition/block-registry.test.ts",
 ] as const;
 
@@ -86,13 +86,11 @@ const isCi = (path: string) =>
   path.startsWith("scripts/ci/") ||
   ROOT_CI.has(path);
 const isProduct = (path: string) =>
-  path.startsWith("apps/worker/src/workflows/") ||
+  path.startsWith("apps/worker/src/engine/") ||
   path.startsWith("apps/worker/src/workflow-definition/") ||
   path.startsWith("apps/worker/src/sandbox/agents/fixtures/") ||
   path.startsWith("apps/worker/workflow-test-fixtures/") ||
   path.startsWith("packages/contracts/") ||
-  path.startsWith("apps/worker/src/engine/blocks/") ||
-  path.startsWith("apps/worker/src/engine/definition/") ||
   path === "packages/contracts/block-catalog.generated.ts" ||
   path === "apps/worker/src/engine/blocks/executors.generated.ts" ||
   path === "apps/worker/vitest.config.ts";

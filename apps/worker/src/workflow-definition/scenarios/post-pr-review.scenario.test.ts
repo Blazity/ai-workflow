@@ -5,13 +5,13 @@ import type {
   ReviewResult,
   ReviewResultFinding,
 } from "@shared/contracts";
-import type { PrTriggerType } from "../../lib/trigger-events.js";
-import type { AgentWorkflowInput } from "../../workflows/agent-input.js";
-import { buildReviewAgentSuccessOutput } from "../../workflows/agent.js";
+import type { PrTriggerType } from "../../engine/agent-input.js";
+import type { AgentWorkflowInput } from "../../engine/agent-input.js";
+import { buildReviewAgentSuccessOutput } from "../../engine/helpers/prompt-output.js";
 import {
   partitionReviewFindings,
   reviewPublicationDecision,
-} from "../../workflows/pr-external-resources.js";
+} from "../../engine/runtime/pr-external-resources.js";
 import { clampBothEnds } from "../failure-message.js";
 import { executionError } from "../interpreter.js";
 import { workflowDefinitionTemplate } from "../templates.js";
