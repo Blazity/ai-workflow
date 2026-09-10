@@ -1,11 +1,21 @@
 import {
   BLOCK_TYPE_SPECS,
-  parsePromptReferenceTokens,
-  promptReferenceTargetLabel,
   WORKFLOW_PROMPT_PARAM_KEYS,
   type PromptReferenceSelector,
   type WorkflowBlockType,
 } from "@shared/contracts";
+import {
+  builtInPromptBodyForSlug,
+  parsePromptReferenceTokens,
+  promptReferenceTargetLabel,
+  type BuiltInPromptDriftReport,
+  type BuiltInPromptName,
+  type BuiltInPromptPin,
+  type BuiltInPromptPinSource,
+  type SkippedWalkTarget,
+  type UnresolvedPromptReference,
+  type WorkflowDefinitionCoordinates,
+} from "@shared/prompts";
 import { and, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import {
@@ -16,10 +26,6 @@ import {
   workflowDefinitionVersions,
 } from "../db/schema.js";
 import { defaultWorkflowDefinitionV2 } from "../workflow-definition/default.js";
-import {
-  builtInPromptBodyForSlug,
-  type BuiltInPromptName,
-} from "./builtin-prompts.js";
 import {
   findPromptBySlug,
   getCurrentPromptVersion,
@@ -59,42 +65,9 @@ import {
 
 /** Why a definition snapshot is reachable, so a finding says which dispatch path
  *  can still serve it. */
-export type BuiltInPromptPinSource =
-  /** Deployed pointer of a live definition: ordinary trigger selection. */
-  | "deployed"
-  /**
-   * Fresh install. Migration 0013 creates the enabled ticket definition with no
-   * version rows at all, and definition-step.ts runs the CODE DEFAULT graph for
-   * it rather than a stored snapshot. The v2 graph pins each specialized agent
-   * prompt to its shipped library version. This is the shape a brand new
-   * deployment has.
-   */
-  | "fresh_install_default"
-  /**
-   * Version an approved plan pinned. approvals/dispatch.ts resolves it
-   * regardless of the definition's enabled flag or archived_at, precisely
-   * because archiving must not strand a plan a human already approved.
-   */
-  | "approval"
-  /** Pending provider event waiting to dispatch. */
-  | "trigger_delivery"
-  /** Manual dispatch request that has not finished starting. */
-  | "manual_dispatch";
-
-export type BuiltInPromptAuthorship = "platform" | "customer";
-
-/** Marker migration 0021 and every resync migration write into the version row.
- *  No application path can produce it: createPrompt, savePromptVersion and
- *  restorePromptVersion all stamp actor.id / actor.label from the dashboard
- *  session, so customer text can never carry it. */
 const PLATFORM_AUTHOR_ID = "system";
 const PLATFORM_AUTHOR_LABEL = "System migration";
-
-/** Matches the runtime resolver's own nesting limit. */
 const MAX_REFERENCE_DEPTH = 10;
-
-/** Manual dispatch rows that have not yet produced a started run, so their
- *  pinned version can still be executed. Mirrors the status check constraint. */
 const LIVE_MANUAL_DISPATCH_STATUSES = [
   "pending",
   "reserved",
@@ -102,120 +75,8 @@ const LIVE_MANUAL_DISPATCH_STATUSES = [
   "candidate_started",
 ];
 
-export interface WorkflowDefinitionCoordinates {
-  definitionId: number;
-  definitionName: string;
-  /** null for the synthetic fresh-install graph, which has no version row. */
-  definitionVersion: number | null;
-  source: BuiltInPromptPinSource;
-  nodeId: string;
-  /** Prompt-bearing field the token sits in, with the array index when the field
-   *  holds a list. */
-  field: string;
-}
-
-export interface BuiltInPromptPin extends WorkflowDefinitionCoordinates {
-  slug: string;
-  promptName: BuiltInPromptName;
-  requestedVersion: PromptReferenceSelector;
-  resolvedVersion: number;
-  authorship: BuiltInPromptAuthorship;
-  matchesConstant: boolean;
-  /** Whether a resync migration will actually correct this row: its parent must
-   *  also be the platform's own, unarchived prompt, which is what 0037's guard
-   *  requires. Keeps the check from reporting drift the migration refuses to
-   *  fix. */
-  resyncCovered: boolean;
-}
-
-export interface UnresolvedPromptReference extends WorkflowDefinitionCoordinates {
-  target: string;
-  requestedVersion: PromptReferenceSelector;
-  reason: string;
-}
-
-export interface SkippedWalkTarget {
-  reason:
-    | "definition_version_missing"
-    | "definition_shape"
-    | "definition_has_no_nodes"
-    | "node_shape"
-    | "unknown_node_type"
-    | "prompt_keys_unknown"
-    | "node_container_missing";
-  definitionId: number;
-  definitionVersion: number | null;
-  source: BuiltInPromptPinSource;
-  nodeId: string | null;
-  detail: string;
-}
-
-export interface BuiltInPromptDriftReport {
-  /** Every built-in reference reachable from a selectable definition snapshot. */
-  pins: BuiltInPromptPin[];
-  /** Platform bodies that no longer match their constant and that a resync will
-   *  correct. Each one is a prompt fix that shipped in code and never reached a
-   *  run. */
-  drift: BuiltInPromptPin[];
-  /** Platform bodies that drifted but sit under a prompt row a resync will not
-   *  touch, so code alone cannot fix them. */
-  unfixableDrift: BuiltInPromptPin[];
-  /** Pins resolving to a version a real account authored. Not drift: that text
-   *  is the customer's. Still surfaced, because a platform prompt fix will not
-   *  reach those runs either. */
-  customerAuthored: BuiltInPromptPin[];
-  /** References a reachable snapshot pins that resolve to nothing. */
-  unresolved: UnresolvedPromptReference[];
-  /**
-   * Definition snapshots that had at least one node and were read. Diagnostic
-   * only: it counts snapshots opened, not references checked, so it is the
-   * weaker signal. `pins.length` is what tells you the walk actually reached
-   * built-in prompt text, and that is what the gate trusts.
-   */
-  definitionsWalked: number;
-  /** Everything the walk could not read. Non-empty means the report is
-   *  incomplete and must not be treated as a pass. */
-  skipped: SkippedWalkTarget[];
-}
-
 export interface FindBuiltInPromptDriftOptions {
-  /**
-   * Whether the fresh-install fallback graph is built with its review agent.
-   * Defaults to true so the alarm over-covers: checking a built-in an install
-   * does not currently run costs nothing, missing one is the defect this exists
-   * to catch. Leak review is irrelevant here because leak_review carries no
-   * prompt field and no implicit default prompt.
-   */
   includeReview?: boolean;
-}
-
-export function describeBuiltInPromptDrift(
-  report: BuiltInPromptDriftReport,
-): string {
-  const lines = [
-    ...report.drift.map(
-      (pin) =>
-        `${pin.slug}@${pin.resolvedVersion} reached by definition ${pin.definitionId} ` +
-        `("${pin.definitionName}" ${
-          pin.definitionVersion === null
-            ? "code default"
-            : `v${pin.definitionVersion}`
-        }, via ${pin.source}) block "${pin.nodeId}" field "${pin.field}": ` +
-        `stored body differs from DEFAULT_AGENT_PROMPTS.`,
-    ),
-    ...report.unfixableDrift.map(
-      (pin) =>
-        `${pin.slug}@${pin.resolvedVersion} drifted and no resync migration can ` +
-        `correct it: its prompt row is archived or not platform-owned.`,
-    ),
-    ...report.skipped.map(
-      (skip) =>
-        `NOT WALKED (${skip.reason}) definition ${skip.definitionId} ` +
-        `${skip.definitionVersion === null ? "code default" : `v${skip.definitionVersion}`} ` +
-        `via ${skip.source}${skip.nodeId === null ? "" : ` block "${skip.nodeId}"`}: ${skip.detail}`,
-    ),
-  ];
-  return lines.join("\n");
 }
 
 /**

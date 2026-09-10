@@ -3,11 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  formatPromptReferenceToken,
   type PromptLibraryEntryMeta,
   type PromptSlotDefinition,
   type WorkflowDataCatalogEntry,
 } from "@shared/contracts";
+import { formatPromptReferenceToken } from "@shared/prompts";
 import {
   PromptEditor,
   type PromptEditorSlotOption,
@@ -28,8 +28,8 @@ import {
   promptEditorModalCapabilities,
   promptEditorSurface,
   trappedDialogTabTarget,
-} from "@/lib/prompt-library/prompt-editor-modal-contract";
-import type { PromptPreviewRequest, PromptPreviewTarget } from "@/lib/prompt-library/reference-navigation";
+} from "@shared/prompts";
+import type { PromptPreviewRequest, PromptPreviewTarget } from "@shared/prompts";
 
 const headBtn =
   "appearance-none cursor-pointer inline-flex items-center gap-1 border border-neutral-200 bg-panel text-coal py-1 px-2 rounded-[3px] font-mono text-[10px] tracking-[0.04em] uppercase transition-[background-color,color,transform] duration-150 ease-standard hover:bg-app-bg active:scale-[0.96]";

@@ -3,8 +3,8 @@ import type { PromptLibraryDetailResponse } from "@shared/contracts";
 import { getDb } from "../../../../db/client.js";
 import { requireDashboardActor } from "../../../../lib/auth/request-context.js";
 import { dashboardUserLabel } from "../../../../pre-pr-checks/store.js";
+import { archivePrompt } from "../../../../lib/prompt-library-service.js";
 import {
-  archivePrompt,
   listPromptVersionRows,
   serializePromptMeta,
   serializePromptVersion,

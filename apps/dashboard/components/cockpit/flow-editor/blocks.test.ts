@@ -8,7 +8,7 @@ import type {
 import {
   DEFAULT_OPEN_PR_BODY,
   DEFAULT_OPEN_PR_TITLE,
-} from "@shared/contracts";
+} from "@shared/prompts";
 import type { FlowNodeDef } from "@/lib/flows";
 import { buildPaletteItems, CONNECTED_CARD_TEXT_CLASS, nodeSummary } from "./block-palette.ts";
 

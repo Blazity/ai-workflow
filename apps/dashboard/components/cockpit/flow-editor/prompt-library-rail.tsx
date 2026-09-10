@@ -2,13 +2,13 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  formatPromptReferenceToken,
   type PromptLibraryDetailResponse,
   type PromptLibraryListRowDto,
 } from "@shared/contracts";
-import { filterPrompts } from "@/lib/prompt-library/filter";
-import { splitSections } from "@/lib/prompt-library/sections";
-import { makePromptRef } from "@/lib/prompt-library/provenance";
+import { formatPromptReferenceToken } from "@shared/prompts";
+import { filterPrompts } from "@shared/prompts";
+import { splitSections } from "@shared/prompts";
+import { makePromptRef } from "@shared/prompts";
 import { PromptPreview } from "@/components/cockpit/prompt-library/prompt-preview";
 import { VariableChips } from "@/components/cockpit/prompt-library/variable-chips";
 import { usePromptLibrary } from "./prompt-library-context";
@@ -17,7 +17,7 @@ import { writePromptDrag } from "@/components/cockpit/prompt-editor/prompt-drag"
 import {
   resolvePreviewSelection,
   type PromptPreviewRequest,
-} from "@/lib/prompt-library/reference-navigation";
+} from "@shared/prompts";
 import { apiClient } from "@/lib/api/client";
 
 const pressable = "transition-transform duration-150 ease-standard active:scale-[0.96]";

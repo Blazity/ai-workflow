@@ -21,13 +21,13 @@ import type {
   PromptLibraryUsageResponse,
   PromptSlotDefinition,
 } from "@shared/contracts";
-import { initialPromptSelection } from "@/lib/prompt-library/query-selection";
-import { findReferenceCycle } from "@/lib/prompt-library/reference-cycle";
-import { parsePromptReferenceTokens, promptReferenceMatchesRow } from "@shared/contracts";
+import { initialPromptSelection } from "@shared/prompts";
+import { findReferenceCycle } from "@shared/prompts";
+import { parsePromptReferenceTokens, promptReferenceMatchesRow } from "@shared/prompts";
 import {
   renamePromptSlotTokens,
   samePromptSlots,
-} from "@/lib/prompt-library/slots";
+} from "@shared/prompts";
 import {
   promptSlotSchemaDraftBlocksSave,
   promptSlotSchemaDraftMarksDirty,

@@ -1,6 +1,6 @@
 "use client";
 
-import { DEFAULT_PROMPT_NAME_BY_AGENT } from "@shared/contracts";
+import { DEFAULT_PROMPT_NAME_BY_AGENT } from "@shared/prompts";
 import { PromptField } from "../prompt-field";
 import { AgentProviderModel } from "./shared";
 import type { BlockRendererProps } from "./types";

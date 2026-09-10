@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   loadPromptReference: vi.fn(),
 }));
 
-vi.mock("../prompt-library/store.js", () => ({
+vi.mock("../prompt-library/prompt-reference-loader.js", () => ({
   createPromptReferenceLoader: () => mocks.loadPromptReference,
 }));
 

@@ -1,7 +1,7 @@
 import { Extension } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
-import { AVAILABLE_VARIABLES } from "@/lib/prompt-library/variables";
+import { AVAILABLE_VARIABLES } from "@shared/prompts";
 
 const KNOWN = new Set(AVAILABLE_VARIABLES.map((v) => v.name));
 const VAR_RE = /\{\{\s*([a-z][a-z0-9_]*)\s*\}\}/g;

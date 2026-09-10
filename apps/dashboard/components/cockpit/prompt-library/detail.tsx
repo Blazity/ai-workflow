@@ -5,7 +5,7 @@ import { CkCard, CkChip, CkTabs } from "@/components/ui";
 import { Block } from "@/app/skeleton-block";
 import { DiffView } from "@/components/cockpit/prompt-diff";
 import { PromptBodyBlocks } from "@/components/cockpit/prompt-library/prompt-body-blocks";
-import { promptLibraryHref } from "@/lib/prompt-library/reference-navigation";
+import { promptLibraryHref } from "@shared/prompts";
 import type {
   PromptLibraryDetailResponse,
   PromptLibraryListRowDto,

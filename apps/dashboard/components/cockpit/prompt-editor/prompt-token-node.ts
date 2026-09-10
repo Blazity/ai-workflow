@@ -3,12 +3,12 @@ import {
   findCanonicalPromptTokens,
   parseCanonicalPromptToken,
   promptTokenNodeAttributes,
-} from "@/lib/prompt-library/canonical-tokens";
+} from "@shared/prompts";
 export {
   findCanonicalPromptTokens,
   parseCanonicalPromptToken,
   promptTokenNodeAttributes,
-} from "@/lib/prompt-library/canonical-tokens";
+} from "@shared/prompts";
 
 function promptTokenPasteMatches(text: string) {
   return findCanonicalPromptTokens(text).map((token) => ({

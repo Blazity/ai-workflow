@@ -1,0 +1,19 @@
+import type { PromptLibraryListRowDto } from "@shared/contracts";
+import { formatPromptReferenceToken } from "./prompt-references";
+
+export function effectiveDefaultPromptValue(
+  value: string,
+  promptName: string | undefined,
+  rows: readonly PromptLibraryListRowDto[],
+): { value: string; implicit: boolean } {
+  if (value.trim().length > 0 || !promptName) return { value, implicit: false };
+  const row = rows.find(
+    (candidate) => candidate.name === promptName && candidate.archivedAt === null,
+  );
+  return {
+    value: row
+      ? formatPromptReferenceToken({ slug: row.slug, version: "latest" })
+      : "",
+    implicit: true,
+  };
+}

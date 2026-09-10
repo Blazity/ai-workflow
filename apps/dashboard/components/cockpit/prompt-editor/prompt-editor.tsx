@@ -8,7 +8,7 @@ import { Markdown } from "@tiptap/markdown";
 import type { WorkflowDataCatalogEntry } from "@shared/contracts";
 import { VariableHighlight } from "./variable-highlight";
 import { VariablePickerPopover } from "@/components/cockpit/prompt-library/variable-picker-popover";
-import { AVAILABLE_VARIABLES } from "@/lib/prompt-library/variables";
+import { AVAILABLE_VARIABLES } from "@shared/prompts";
 import { useEnterExit } from "@/lib/use-enter-exit";
 import {
   PromptTokenNode,

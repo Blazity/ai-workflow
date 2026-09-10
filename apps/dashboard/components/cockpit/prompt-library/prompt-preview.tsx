@@ -1,4 +1,4 @@
-import { parseMarkdownBlocks, type InlineNode, type MarkdownBlock } from "@/lib/prompt-library/markdown";
+import { parseMarkdownBlocks, type InlineNode, type MarkdownBlock } from "@shared/prompts";
 
 /** Render a run of inline nodes: text (optionally bold), inline code, and
  *  {{variable}} tokens (mariner when known, warn when unknown). */

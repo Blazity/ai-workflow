@@ -9,7 +9,7 @@ import {
   isPromptSlotDefinition,
   parsePromptDataTokens,
   parsePromptSlotTokens,
-} from "@shared/contracts";
+} from "@shared/prompts";
 
 describe("Prompt Slot shared contracts", () => {
   it("formats and parses canonical slot and data tokens losslessly", () => {

@@ -3,21 +3,23 @@
 import Link from "next/link";
 import React, { useMemo, useRef, useState } from "react";
 import {
-  formatPromptReferenceToken,
-  parsePromptReferenceTokens,
-  promptReferenceMatchesRow,
-  promptReferenceTargetLabel,
   type ParsedPromptReference,
   type PromptLibraryDetailResponse,
   type PromptLibraryListRowDto,
 } from "@shared/contracts";
+import {
+  formatPromptReferenceToken,
+  parsePromptReferenceTokens,
+  promptReferenceMatchesRow,
+  promptReferenceTargetLabel,
+} from "@shared/prompts";
 import { usePromptLibrary } from "@/components/cockpit/flow-editor/prompt-library-context";
 import { PromptPreview } from "@/components/cockpit/prompt-library/prompt-preview";
 import {
   promptLibraryHref,
   promptReferenceCapabilities,
-} from "@/lib/prompt-library/reference-navigation";
-import { resolveReferencePreview } from "@/lib/prompt-library/reference-preview";
+} from "@shared/prompts";
+import { resolveReferencePreview } from "@shared/prompts";
 import { PromptReferenceActionsMenu } from "./prompt-reference-actions-menu";
 import { apiClient } from "@/lib/api/client";
 

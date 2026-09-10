@@ -6,7 +6,8 @@ import type {
 import { getDb } from "../../../db/client.js";
 import { requireDashboardActor } from "../../../lib/auth/request-context.js";
 import { dashboardUserLabel } from "../../../pre-pr-checks/store.js";
-import { createPrompt, serializePromptMeta, serializePromptVersion } from "../../../prompt-library/store.js";
+import { createPrompt } from "../../../lib/prompt-library-service.js";
+import { serializePromptMeta, serializePromptVersion } from "../../../prompt-library/store.js";
 import { toPromptLibraryHttpError } from "./prompt-library.get.js";
 
 interface CreateBody {

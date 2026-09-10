@@ -1,6 +1,6 @@
 "use client";
 
-import { DEFAULT_OPEN_PR_TITLE } from "@shared/contracts";
+import { DEFAULT_OPEN_PR_TITLE } from "@shared/prompts";
 import { usePromptAuthoringContext } from "../prompt-authoring-context";
 import { ConfigField, ConfigNote, RichTextField, TextInput, str } from "./shared";
 import type { BlockRendererProps } from "./types";

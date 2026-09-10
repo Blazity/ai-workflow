@@ -18,7 +18,6 @@ import {
   BLOCK_PARAM_KEYS,
   BLOCK_TYPE_SPECS,
   FAILURE_PORT,
-  PROMPT_SLOT_NAME_PATTERN,
   WEBHOOK_AUTH_SCHEMES,
   isHarnessProfileReference,
   isTriggerBlockType,
@@ -27,6 +26,7 @@ import {
   resolveBuiltinHarnessProfile,
   evaluateWorkflowValueCompatibility,
 } from "@shared/contracts";
+import { PROMPT_SLOT_NAME_PATTERN } from "@shared/prompts";
 import { parseCondition } from "@shared/conditions";
 import {
   prepareWorkspaceParams,

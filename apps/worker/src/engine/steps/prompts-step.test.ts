@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 
 import { loadPrompts } from "./prompts-step.js";
-import { PROMPT_FALLBACKS } from "../../lib/prompts.js";
+import { PROMPT_FALLBACKS } from "@shared/prompts";
 
 describe("loadPrompts", () => {
   it("returns the in-code prompt templates", async () => {

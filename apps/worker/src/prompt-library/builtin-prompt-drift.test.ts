@@ -4,18 +4,18 @@ import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_AGENT_PROMPTS,
   WORKFLOW_PROMPT_PARAM_KEYS,
   type WorkflowDefinitionV2,
 } from "@shared/contracts";
+import { DEFAULT_AGENT_PROMPTS } from "@shared/prompts";
 import type { Db } from "../db/client.js";
 import * as schema from "../db/schema.js";
 import { defaultWorkflowDefinitionV2 } from "../workflow-definition/default.js";
-import { evaluateBuiltInPromptDriftGate } from "./builtin-prompt-drift-gate.js";
+import { evaluateBuiltInPromptDriftGate } from "@shared/prompts";
 import {
-  describeBuiltInPromptDrift,
   findBuiltInPromptDrift,
 } from "./builtin-prompt-drift.js";
+import { describeBuiltInPromptDrift } from "@shared/prompts";
 
 const migrationsDir = fileURLToPath(new URL("../../drizzle/", import.meta.url));
 const migrationFiles = readdirSync(migrationsDir)

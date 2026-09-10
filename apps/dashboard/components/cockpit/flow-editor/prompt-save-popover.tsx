@@ -7,7 +7,7 @@ import { apiClient } from "@/lib/api/client";
 import {
   DIALOG_FOCUSABLE_SELECTOR,
   trappedDialogTabTarget,
-} from "@/lib/prompt-library/prompt-editor-modal-contract";
+} from "@shared/prompts";
 import { usePromptLibrary } from "./prompt-library-context";
 
 const labelCls = "font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500";

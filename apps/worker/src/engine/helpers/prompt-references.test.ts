@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  formatPromptReferenceToken,
-  parsePromptReferenceTokens,
   type PromptSlotDefinition,
   type PromptReferenceSelector,
 } from "@shared/contracts";
-import { resolvePromptReferences, type PromptReferenceTarget } from "./prompt-references.js";
+import {
+  formatPromptReferenceToken,
+  parsePromptReferenceTokens,
+  resolvePromptReferences,
+  type PromptReferenceTarget,
+} from "@shared/prompts";
 
 describe("prompt reference tokens", () => {
   it("formats latest and pinned references canonically", () => {

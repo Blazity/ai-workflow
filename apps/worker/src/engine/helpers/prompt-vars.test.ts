@@ -5,7 +5,8 @@ import {
   substituteNodePromptParams,
   VARIABLE_PARAM_KEYS,
 } from "./prompt-vars.js";
-import { PROMPT_VARIABLES, type WorkflowDefinitionNode } from "@shared/contracts";
+import type { WorkflowDefinitionNode } from "@shared/contracts";
+import { PROMPT_VARIABLES } from "@shared/prompts";
 import type { AgentWorkflowInput } from "../agent-input.js";
 import type { WorkspacePublicationResult } from "../steps/workspace-publication.js";
 import type { WorkspaceRepositoryInput } from "../../sandbox/repo-workspace.js";

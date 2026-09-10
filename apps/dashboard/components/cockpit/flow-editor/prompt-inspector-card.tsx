@@ -1,5 +1,5 @@
 import React from "react";
-import type { PromptInspectorSummary } from "@/lib/prompt-library/prompt-inspector-summary";
+import type { PromptInspectorSummary } from "@shared/prompts";
 
 export function PromptInspectorCard({
   label,

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { PromptSlotDefinition } from "@shared/contracts";
-import { DEFAULT_AGENT_PROMPTS } from "@shared/contracts";
+import { DEFAULT_AGENT_PROMPTS } from "@shared/prompts";
 import type { Db } from "../db/client.js";
 import { promptLibrary, promptLibraryVersions } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
@@ -8,8 +8,11 @@ import { DashboardAuthError } from "../lib/auth/users-read.js";
 import {
   archivePrompt,
   createPrompt,
-  findPromptRowsByNames,
   findPromptUsageInPrompts,
+  updatePromptMeta,
+} from "../lib/prompt-library-service.js";
+import {
+  findPromptRowsByNames,
   getCurrentPromptVersion,
   getPrompt,
   getPromptVersion,
@@ -19,7 +22,6 @@ import {
   retryOnUniqueViolation,
   savePromptVersion,
   serializePromptMeta,
-  updatePromptMeta,
   type PromptLibraryActor,
 } from "./store.js";
 
