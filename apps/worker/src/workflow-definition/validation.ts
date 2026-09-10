@@ -3,15 +3,17 @@ import type {
   WorkflowDefinitionValidationIssue,
   WorkflowDefinitionValidationResponse,
 } from "@shared/contracts";
+import {
+  RETIRED_SCHEMA_MESSAGE,
+  WORKFLOW_SCHEMA_VERSION,
+  workflowDefinitionSchemaVersionOf,
+} from "@shared/contracts";
 import type { z } from "zod";
 import { analyzeWorkflowV2Bindings } from "./available-values.js";
-import { resolveWorkflowBlockContract } from "./block-registry.js";
 import type { WorkflowBlockRegistryContext } from "./block-registry.js";
 import {
   validateWorkflowDefinitionIssuesForDeployment,
-  workflowDefinitionV1Schema,
   workflowDefinitionV2Schema,
-  workflowDefinitionSchema,
 } from "./schema.js";
 
 export type WorkflowDefinitionCandidateValidation =
@@ -27,19 +29,26 @@ export function validateWorkflowDefinitionCandidate(
   candidate: unknown,
   registryContext: WorkflowBlockRegistryContext,
 ): WorkflowDefinitionCandidateValidation {
-  const schema =
-    candidate !== null &&
-    typeof candidate === "object" &&
-    "schemaVersion" in candidate &&
-    candidate.schemaVersion === 1
-      ? workflowDefinitionV1Schema
-      : candidate !== null &&
-          typeof candidate === "object" &&
-          "schemaVersion" in candidate &&
-          candidate.schemaVersion === 2
-        ? workflowDefinitionV2Schema
-        : workflowDefinitionSchema;
-  const parsed = schema.safeParse(candidate);
+  if (declaresRetiredSchema(candidate)) {
+    return {
+      parsed: null,
+      response: {
+        valid: false,
+        issues: [
+          {
+            code: "schema",
+            severity: "error",
+            nodeId: null,
+            path: "/schemaVersion",
+            message: RETIRED_SCHEMA_MESSAGE,
+          },
+        ],
+        nodeContracts: {},
+        availableValuesByNode: {},
+      },
+    };
+  }
+  const parsed = workflowDefinitionV2Schema.safeParse(candidate);
   if (!parsed.success) {
     return {
       parsed: null,
@@ -56,31 +65,24 @@ export function validateWorkflowDefinitionCandidate(
     parsed.data,
     registryContext,
   );
-  const v2Analysis =
-    parsed.data.schemaVersion === 2
-      ? analyzeWorkflowV2Bindings(parsed.data, registryContext)
-      : null;
-  const issues = dedupeIssues([
-    ...deploymentIssues,
-    ...(v2Analysis?.issues ?? []),
-  ]);
+  const v2Analysis = analyzeWorkflowV2Bindings(parsed.data, registryContext);
+  const issues = dedupeIssues([...deploymentIssues, ...v2Analysis.issues]);
   return {
     parsed: parsed.data,
     response: {
       valid: issues.length === 0,
       issues,
-      nodeContracts:
-        parsed.data.schemaVersion === 1
-          ? Object.fromEntries(
-              parsed.data.nodes.map((node) => [
-                node.id,
-                resolveWorkflowBlockContract(node.type, node.params, registryContext),
-              ]),
-            )
-          : v2Analysis?.nodeContracts ?? {},
-      availableValuesByNode: v2Analysis?.availableValuesByNode ?? {},
+      nodeContracts: v2Analysis.nodeContracts,
+      availableValuesByNode: v2Analysis.availableValuesByNode,
     },
   };
+}
+
+/** A graph that names a schema this build no longer runs. The parse below would
+ *  refuse it too, but with a literal mismatch an author cannot act on. */
+export function declaresRetiredSchema(candidate: unknown): boolean {
+  const version = workflowDefinitionSchemaVersionOf(candidate);
+  return version !== undefined && version !== WORKFLOW_SCHEMA_VERSION;
 }
 
 function dedupeIssues(

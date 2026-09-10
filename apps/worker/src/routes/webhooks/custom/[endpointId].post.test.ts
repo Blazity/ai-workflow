@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import { and, eq } from "drizzle-orm";
 import { createApp, createRouter, toWebHandler } from "h3";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -398,6 +399,26 @@ describe("POST /webhooks/custom/:endpointId", () => {
 
     expect(response.status).toBe(404);
     expect(await rejections()).toEqual([{ reason: "endpoint_disabled", count: 1 }]);
+  });
+
+  it("keeps a retired live head non-enumerating and records the retirement reason", async () => {
+    await db.insert(workflowDefinitionVersions).values({
+      definitionId: DEFINITION_ID,
+      version: 2,
+      definition: { schemaVersion: 1, nodes: [], edges: [] },
+      createdById: "test",
+      createdByLabel: "Test",
+    });
+    await db
+      .update(workflowDefinitions)
+      .set({ deployedVersion: 2 })
+      .where(eq(workflowDefinitions.id, DEFINITION_ID));
+
+    const response = await handler()(signed());
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({ data: { reason: "not_found" } });
+    expect(await rejections()).toEqual([{ reason: RETIRED_SCHEMA_MESSAGE, count: 1 }]);
   });
 
   it("routes each endpoint's delivery to its own definition, with no cross-talk", async () => {

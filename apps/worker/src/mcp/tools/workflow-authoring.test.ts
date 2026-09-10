@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { asc, eq, gte } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 
 // The MCP fields the execute wrapper reads, plus the deployment facts the workflow
 // block registry resolves a graph against (mirroring workflow-definition/
@@ -545,6 +546,22 @@ describe("workflows.save_draft", () => {
     expect(await auditedErrorCodes()).toEqual(["VALIDATION_FAILED"]);
   });
 
+  it("refuses a retired v1 graph with the shared message and writes no version", async () => {
+    const client = await connectedClient();
+
+    const result = await saveDraft(client, {
+      definition: { schemaVersion: 1, nodes: [], edges: [] },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(errorPayload(result)).toEqual({
+      code: "VALIDATION_FAILED",
+      message: RETIRED_SCHEMA_MESSAGE,
+      retryable: false,
+    });
+    expect(await versionsOf(definitionId)).toEqual([]);
+  });
+
   it("refuses a stale draft revision, writes nothing, and leaves the key usable for the corrected save", async () => {
     const client = await connectedClient();
     // Somebody else saved revision 1 while this caller was still holding 0.
@@ -693,6 +710,23 @@ describe("workflows.publish", () => {
     expect(errorPayload(result).code).toBe("VALIDATION_FAILED");
     expect(errorPayload(result).message).toContain("reserved for the active trigger input");
     expect(await definitionRows()).toMatchObject([{ deployedVersion: null, triggerTypes: [] }]);
+  });
+
+  it("refuses to publish a legacy version as a permanent validation failure", async () => {
+    await seedDraft(definitionId, 1, { schemaVersion: 1, nodes: [], edges: [] });
+    const client = await connectedClient();
+
+    const result = await publish(client);
+
+    expect(result.isError).toBe(true);
+    expect(errorPayload(result)).toEqual({
+      code: "VALIDATION_FAILED",
+      message: RETIRED_SCHEMA_MESSAGE,
+      retryable: false,
+    });
+    expect(await definitionRows()).toMatchObject([
+      { deployedVersion: null, triggerTypes: [] },
+    ]);
   });
 
   it("refuses a stale expected deployed version and deploys nothing", async () => {
@@ -1235,6 +1269,27 @@ describe("workflows.get_graph", () => {
     expect(data.draftRevision).toBe(1);
     expect(data.deployed).toEqual(data.draft);
     expect((data.deployed as { schemaVersion: number }).schemaVersion).toBe(2);
+  });
+
+  it("reports a deployed legacy version explicitly", async () => {
+    await seedDraft(definitionId, 1, {
+      schemaVersion: 1,
+      nodes: [{ id: "historical node", type: "removed_block" }],
+      edges: [],
+    });
+    await db
+      .update(workflowDefinitions)
+      .set({ deployedVersion: 1, triggerTypes: [] })
+      .where(eq(workflowDefinitions.id, definitionId));
+
+    const client = await connectedClient();
+    const data = dataOf(await getGraph(client));
+
+    expect(data.deployed).toEqual({
+      schema: "legacy-v1",
+      message: RETIRED_SCHEMA_MESSAGE,
+    });
+    expect(data.deployedGraphHash).toBeNull();
   });
 
   it("answers NOT_FOUND for an unknown definition", async () => {

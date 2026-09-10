@@ -26,7 +26,10 @@ function flowNodes(nodes: TestFlowNode[]): FlowNodeDef[] {
 
 function assertSerializedNodes(actual: ReturnType<typeof serializeWorkflowDefinition>["nodes"], expected: unknown[]): void {
   assert.deepEqual(
-    actual.map(({ inputs: _inputs, ...node }) => node),
+    actual.map(({ inputs: _inputs, additionalInputs: _additionalInputs, configuration, ...node }) => ({
+      ...node,
+      params: configuration,
+    })),
     expected,
   );
   assert.deepEqual(
@@ -173,7 +176,7 @@ test("round-trips Generic Agent workspace mode without loss", () => {
 
   const out = serializeWorkflowDefinition(nodes, []);
 
-  assert.deepEqual(out.nodes[0].params, { prompt: "Summarize", workspaceMode: "none" });
+  assert.deepEqual(out.nodes[0].configuration, { prompt: "Summarize", workspaceMode: "none" });
 });
 
 test("round-trips Human Question suggested answers without loss", () => {
@@ -192,7 +195,7 @@ test("round-trips Human Question suggested answers without loss", () => {
 
   const out = serializeWorkflowDefinition(nodes, []);
 
-  assert.deepEqual(out.nodes[0].params, {
+  assert.deepEqual(out.nodes[0].configuration, {
     questions: ["Which environment?"],
     suggestedAnswers: ["staging", "production"],
   });
@@ -237,28 +240,6 @@ test("round-trips explicit ownership scope for every PR trigger", () => {
       params: { scope: "workflow_owned" },
     },
   ]);
-});
-
-test("preserves a non-empty exact input binding map", () => {
-  const nodes = flowNodes([
-    {
-      id: "llm",
-      type: "call_llm",
-      x: 0,
-      y: 0,
-      params: { prompt: "summarize" },
-      inputs: {
-        prompt: "steps.plan.output.plan",
-        context: "trigger.ticket.description",
-      },
-    },
-  ]);
-
-  const out = serializeWorkflowDefinition(nodes, []);
-  assert.deepEqual(out.nodes[0].inputs, {
-    prompt: "steps.plan.output.plan",
-    context: "trigger.ticket.description",
-  });
 });
 
 test("round-trips v2 configuration, typed bindings, and stable control-edge ids", () => {
@@ -307,7 +288,6 @@ test("round-trips v2 configuration, typed bindings, and stable control-edge ids"
     nodes,
     [{ id: "trigger-consumer", from: "trigger", to: "consumer" }],
     {},
-    2,
   );
 
   assert.deepEqual(out, {
@@ -384,7 +364,7 @@ test("round-trips the flat v2 Branch condition list without loss", () => {
 
   assert.equal(flow.nodes[0].params.condition, undefined);
   assert.deepEqual(
-    serializeWorkflowDefinition(flow.nodes, flow.edges, {}, 2),
+    serializeWorkflowDefinition(flow.nodes, flow.edges),
     original,
   );
 });
@@ -417,7 +397,7 @@ test("a pinned v2 Harness Profile is the sole serialized agent source", () => {
     },
   ]);
 
-  const serialized = serializeWorkflowDefinition(nodes, [], {}, 2);
+  const serialized = serializeWorkflowDefinition(nodes, []);
   assert.deepEqual(serialized.nodes[0]?.configuration, {
     harnessProfile: {
       profileId: "profile-1",
@@ -454,7 +434,6 @@ test("clears display-valued v2 configuration without deleting nested JSON", () =
     flow.nodes,
     flow.edges,
     {},
-    2,
   );
   assert.deepEqual(serialized.nodes[0].configuration, {
     metadata: { preserved: true },
@@ -484,7 +463,7 @@ test("emits only contract fields and rounds coordinates", () => {
   const edges: FlowEdgeDef[] = [{ from: "trigger", to: "status" }];
 
   assert.deepEqual(serializeWorkflowDefinition(nodes, edges), {
-    schemaVersion: 1,
+    schemaVersion: 2,
     nodes: [
       {
         id: "trigger",
@@ -492,8 +471,9 @@ test("emits only contract fields and rounds coordinates", () => {
         name: "Ticket assigned to AI",
         x: 40,
         y: 280,
-        params: {},
+        configuration: {},
         inputs: {},
+        additionalInputs: [],
       },
       {
         id: "status",
@@ -501,11 +481,12 @@ test("emits only contract fields and rounds coordinates", () => {
         name: "Update ticket status",
         x: 300,
         y: 280,
-        params: { target: "ai_review" },
+        configuration: { target: "ai_review" },
         inputs: {},
+        additionalInputs: [],
       },
     ],
-    edges: [{ from: "trigger", to: "status" }],
+    edges: [{ id: "v2-edge-0-trigger-out-status", from: "trigger", to: "status" }],
   });
 });
 
@@ -616,10 +597,10 @@ test("always emits fromPort for multi-port sources and omits it only for the sin
 
   const out = serializeWorkflowDefinition(nodes, edges);
   assert.deepEqual(out.edges, [
-    { from: "branch", to: "yes", fromPort: "true" },
-    { from: "branch", to: "no", fromPort: "false" },
-    { from: "agent", to: "done" },
-    { from: "agent", to: "recover", fromPort: "failed" },
+    { id: "v2-edge-0-branch-true-yes", from: "branch", to: "yes", fromPort: "true" },
+    { id: "v2-edge-1-branch-false-no", from: "branch", to: "no", fromPort: "false" },
+    { id: "v2-edge-2-agent-out-done", from: "agent", to: "done" },
+    { id: "v2-edge-3-agent-failed-recover", from: "agent", to: "recover", fromPort: "failed" },
   ]);
 });
 
@@ -641,10 +622,10 @@ test("serializes a branch and loop graph with fromPort on every control edge", (
 
   const out = serializeWorkflowDefinition(nodes, edges);
   assert.deepEqual(out.edges, [
-    { from: "branch", to: "yes", fromPort: "true" },
-    { from: "branch", to: "no", fromPort: "false" },
-    { from: "loop", to: "body", fromPort: "continue" },
-    { from: "loop", to: "after", fromPort: "exhausted" },
+    { id: "v2-edge-0-branch-true-yes", from: "branch", to: "yes", fromPort: "true" },
+    { id: "v2-edge-1-branch-false-no", from: "branch", to: "no", fromPort: "false" },
+    { id: "v2-edge-2-loop-continue-body", from: "loop", to: "body", fromPort: "continue" },
+    { id: "v2-edge-3-loop-exhausted-after", from: "loop", to: "after", fromPort: "exhausted" },
   ]);
   for (const edge of out.edges) {
     assert.equal(typeof edge.fromPort, "string");
@@ -666,7 +647,7 @@ test("drops cleared, whitespace-only and empty required string params", () => {
   ]);
 });
 
-test("leaves legacy edges without fromPort byte-comparable", () => {
+test("serializes a single-port edge without fromPort", () => {
   const nodes = flowNodes([
     { id: "trigger", type: "trigger_ticket_ai", x: 0, y: 0, params: {} },
     { id: "status", type: "update_ticket_status", x: 0, y: 0, params: { target: "ai_review" } },
@@ -674,143 +655,7 @@ test("leaves legacy edges without fromPort byte-comparable", () => {
   const edges: FlowEdgeDef[] = [{ from: "trigger", to: "status" }];
 
   const out = serializeWorkflowDefinition(nodes, edges);
-  assert.deepEqual(out.edges, [{ from: "trigger", to: "status" }]);
-});
-
-test("keeps a promptRef when its param serialized", () => {
-  const nodes = flowNodes([
-    {
-      id: "llm",
-      type: "call_llm",
-      x: 0,
-      y: 0,
-      params: { prompt: "summarize the ticket" },
-      promptRefs: { prompt: { promptId: 7, version: 2, insertedHash: "abc" } },
-    },
-  ]);
-
-  const out = serializeWorkflowDefinition(nodes, []);
-  assertSerializedNodes(out.nodes, [
-    {
-      id: "llm",
-      type: "call_llm",
-      x: 0,
-      y: 0,
-      params: { prompt: "summarize the ticket" },
-      promptRefs: { prompt: { promptId: 7, version: 2, insertedHash: "abc" } },
-    },
-  ]);
-});
-
-test("drops a promptRef when the param is an empty string or absent", () => {
-  const nodes = flowNodes([
-    {
-      id: "cleared",
-      type: "call_llm",
-      x: 0,
-      y: 0,
-      params: { prompt: "" },
-      promptRefs: { prompt: { promptId: 7, version: 2 } },
-    },
-    {
-      id: "absent",
-      type: "call_llm",
-      x: 0,
-      y: 0,
-      params: {},
-      promptRefs: { system: { promptId: 9, version: 1 } },
-    },
-  ]);
-
-  const out = serializeWorkflowDefinition(nodes, []);
-  assertSerializedNodes(out.nodes, [
-    { id: "cleared", type: "call_llm", x: 0, y: 0, params: {} },
-    { id: "absent", type: "call_llm", x: 0, y: 0, params: {} },
-  ]);
-  assert.equal("promptRefs" in out.nodes[0], false);
-  assert.equal("promptRefs" in out.nodes[1], false);
-});
-
-test("prunes each promptRef independently against its param", () => {
-  const nodes = flowNodes([
-    {
-      id: "llm",
-      type: "call_llm",
-      x: 0,
-      y: 0,
-      params: { prompt: "do the thing", system: "" },
-      promptRefs: {
-        prompt: { promptId: 7, version: 2 },
-        system: { promptId: 9, version: 1 },
-      },
-    },
-  ]);
-
-  const out = serializeWorkflowDefinition(nodes, []);
-  assertSerializedNodes(out.nodes, [
-    {
-      id: "llm",
-      type: "call_llm",
-      x: 0,
-      y: 0,
-      params: { prompt: "do the thing" },
-      promptRefs: { prompt: { promptId: 7, version: 2 } },
-    },
-  ]);
-});
-
-test("serializes nodes without promptRefs byte-identically to before", () => {
-  const nodes = flowNodes([
-    {
-      id: "trigger",
-      type: "trigger_ticket_ai",
-      name: "Ticket assigned to AI",
-      x: 40.4,
-      y: 279.6,
-      params: {},
-      locked: true,
-    },
-    {
-      id: "status",
-      type: "update_ticket_status",
-      name: "Update ticket status",
-      x: 300,
-      y: 280,
-      params: { target: "ai_review", stray: "drop me" },
-    },
-  ]);
-  const edges: FlowEdgeDef[] = [{ from: "trigger", to: "status" }];
-
-  // Key order matters here: the serializer appends `name` after `params`, and
-  // this locks that byte-identical output so the promptRefs change cannot shift it.
-  const out = serializeWorkflowDefinition(nodes, edges);
-  assert.equal(
-    JSON.stringify(out),
-    JSON.stringify({
-      schemaVersion: 1,
-      nodes: [
-        {
-          id: "trigger",
-          type: "trigger_ticket_ai",
-          x: 40,
-          y: 280,
-          params: {},
-          inputs: {},
-          name: "Ticket assigned to AI",
-        },
-        {
-          id: "status",
-          type: "update_ticket_status",
-          x: 300,
-          y: 280,
-          params: { target: "ai_review" },
-          inputs: {},
-          name: "Update ticket status",
-        },
-      ],
-      edges: [{ from: "trigger", to: "status" }],
-    }),
-  );
+  assert.deepEqual(out.edges, [{ id: "v2-edge-0-trigger-out-status", from: "trigger", to: "status" }]);
 });
 
 test("never emits provider for non-agent node types", () => {
@@ -859,105 +704,85 @@ function semanticKey(definition: WorkflowDefinition): string {
       flow.nodes,
       flow.edges,
       definition.budgets ?? {},
-      definition.schemaVersion,
       repositoryScopeFromDefinition(definition),
     ),
   );
 }
 
-for (const schemaVersion of [1, 2] as const) {
-  test(`a repository pin survives both v${schemaVersion} serializers`, () => {
-    const saved = serializeWorkflowDefinition(
+test("a repository pin survives the v2 serializers", () => {
+  const saved = serializeWorkflowDefinition(pinnedNodes, [], {}, pinnedScope);
+  const semantic = serializeSemanticWorkflowDefinition(pinnedNodes, [], {}, pinnedScope);
+
+  assert.deepEqual(saved.repositoryScope, pinnedScope);
+  assert.deepEqual(semantic.repositoryScope, pinnedScope);
+  assert.deepEqual(
+    repositoryScopeFromDefinition(saved),
+    repositoryScopeFromDefinition(semantic),
+  );
+});
+
+test("an unpinned v2 definition omits repositoryScope from both serializers", () => {
+  const saved = serializeWorkflowDefinition(pinnedNodes, []);
+  const semantic = serializeSemanticWorkflowDefinition(
+    pinnedNodes,
+    [],
+    {},
+    { repositories: [], providers: [] },
+  );
+
+  assert.equal("repositoryScope" in saved, false);
+  assert.equal("repositoryScope" in semantic, false);
+});
+
+test("opening a v2 definition without a pin never reports unsaved changes", () => {
+  const draft = serializeWorkflowDefinition(pinnedNodes, []);
+  const documentKey = JSON.stringify(
+    serializeSemanticWorkflowDefinition(
       pinnedNodes,
       [],
       {},
-      schemaVersion,
-      pinnedScope,
-    );
-    const semantic = serializeSemanticWorkflowDefinition(
+      repositoryScopeFromDefinition(draft),
+    ),
+  );
+
+  assert.equal(documentKey, semanticKey(draft));
+});
+
+test("opening a v2 pin stored out of order never reports unsaved changes", () => {
+  const draft = {
+    ...serializeWorkflowDefinition(pinnedNodes, []),
+    repositoryScope: {
+      repositories: [
+        { provider: "github" as const, repoPath: "Blazity/ai-workflow" },
+      ],
+      providers: ["gitlab" as const, "github" as const],
+    },
+  };
+  const documentKey = JSON.stringify(
+    serializeSemanticWorkflowDefinition(
       pinnedNodes,
       [],
       {},
-      schemaVersion,
-      pinnedScope,
-    );
+      repositoryScopeFromDefinition(draft),
+    ),
+  );
 
-    assert.deepEqual(saved.repositoryScope, pinnedScope);
-    assert.deepEqual(semantic.repositoryScope, pinnedScope);
-    assert.deepEqual(
-      repositoryScopeFromDefinition(saved),
-      repositoryScopeFromDefinition(semantic),
-    );
-  });
+  assert.equal(documentKey, semanticKey(draft));
+});
 
-  test(`an unpinned v${schemaVersion} definition omits repositoryScope from both serializers`, () => {
-    const saved = serializeWorkflowDefinition(pinnedNodes, [], {}, schemaVersion);
-    const semantic = serializeSemanticWorkflowDefinition(
-      pinnedNodes,
-      [],
-      {},
-      schemaVersion,
-      { repositories: [], providers: [] },
-    );
+test("changing a v2 pin changes the semantic definition", () => {
+  const before = serializeSemanticWorkflowDefinition(
+    pinnedNodes,
+    [],
+    {},
+    pinnedScope,
+  );
+  const after = serializeSemanticWorkflowDefinition(
+    pinnedNodes,
+    [],
+    {},
+    { ...pinnedScope, repositories: [pinnedScope.repositories[0]] },
+  );
 
-    assert.equal("repositoryScope" in saved, false);
-    assert.equal("repositoryScope" in semantic, false);
-  });
-
-  test(`opening a v${schemaVersion} definition without a pin never reports unsaved changes`, () => {
-    const draft = serializeWorkflowDefinition(pinnedNodes, [], {}, schemaVersion);
-    const documentKey = JSON.stringify(
-      serializeSemanticWorkflowDefinition(
-        pinnedNodes,
-        [],
-        {},
-        schemaVersion,
-        repositoryScopeFromDefinition(draft),
-      ),
-    );
-
-    assert.equal(documentKey, semanticKey(draft));
-  });
-
-  test(`opening a v${schemaVersion} pin stored out of order never reports unsaved changes`, () => {
-    const draft = {
-      ...serializeWorkflowDefinition(pinnedNodes, [], {}, schemaVersion),
-      repositoryScope: {
-        repositories: [
-          { provider: "github" as const, repoPath: "Blazity/ai-workflow" },
-        ],
-        providers: ["gitlab" as const, "github" as const],
-      },
-    };
-    const documentKey = JSON.stringify(
-      serializeSemanticWorkflowDefinition(
-        pinnedNodes,
-        [],
-        {},
-        schemaVersion,
-        repositoryScopeFromDefinition(draft),
-      ),
-    );
-
-    assert.equal(documentKey, semanticKey(draft));
-  });
-
-  test(`changing a v${schemaVersion} pin changes the semantic definition`, () => {
-    const before = serializeSemanticWorkflowDefinition(
-      pinnedNodes,
-      [],
-      {},
-      schemaVersion,
-      pinnedScope,
-    );
-    const after = serializeSemanticWorkflowDefinition(
-      pinnedNodes,
-      [],
-      {},
-      schemaVersion,
-      { ...pinnedScope, repositories: [pinnedScope.repositories[0]] },
-    );
-
-    assert.notDeepEqual(after, before);
-  });
-}
+  assert.notDeepEqual(after, before);
+});

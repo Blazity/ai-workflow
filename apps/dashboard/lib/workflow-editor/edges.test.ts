@@ -114,37 +114,19 @@ test("delete target stays 44 screen pixels across canvas zoom levels", () => {
   assert.equal(edgeDeleteTargetRadius(0.45) * 2 * 0.45, 44);
 });
 
-test("visibleOutPorts appends failed only when allowed and used or revealed", () => {
-  assert.deepEqual(visibleOutPorts("open_pr", false, false), ["out"]);
-  assert.deepEqual(visibleOutPorts("open_pr", true, false), ["out", "failed"]);
-  assert.deepEqual(visibleOutPorts("open_pr", false, true), ["out", "failed"]);
-  assert.deepEqual(visibleOutPorts("branch", true, true), ["true", "false"]);
-  assert.deepEqual(visibleOutPorts("terminate", false, true), []);
-});
-
-test("visibleOutPorts never exposes execution-failure ports for v2", () => {
-  assert.deepEqual(visibleOutPorts("open_pr", true, true, 2), ["out"]);
-});
-
-test("upsertEdge omits fromPort for the default port", () => {
-  const out = upsertEdge([], "a", "out", "b", "open_pr");
-  assert.deepEqual(out, [{ from: "a", to: "b" }]);
-});
-
-test("upsertEdge keeps fromPort for a non-default port", () => {
-  const out = upsertEdge([], "a", "false", "b", "branch");
-  assert.deepEqual(out, [{ from: "a", to: "b", fromPort: "false" }]);
+test("visibleOutPorts exposes the declared v2 ports", () => {
+  assert.deepEqual(visibleOutPorts("open_pr"), ["out"]);
+  assert.deepEqual(visibleOutPorts("branch"), ["true", "false"]);
+  assert.deepEqual(visibleOutPorts("terminate"), []);
 });
 
 test("upsertEdge v2 appends distinct targets from the same port with stable ids", () => {
   let nextId = 0;
   const generateEdgeId = () => `edge-${++nextId}`;
   const first = upsertEdge([], "a", "out", "b", "open_pr", {
-    schemaVersion: 2,
     generateEdgeId,
   });
   const second = upsertEdge(first, "a", "out", "c", "open_pr", {
-    schemaVersion: 2,
     generateEdgeId,
   });
 
@@ -157,7 +139,6 @@ test("upsertEdge v2 appends distinct targets from the same port with stable ids"
 test("upsertEdge v2 accepts a caller-generated stable id", () => {
   assert.deepEqual(
     upsertEdge([], "a", "false", "b", "branch", {
-      schemaVersion: 2,
       edgeId: "edge-branch-false",
     }),
     [
@@ -179,7 +160,6 @@ test("upsertEdge v2 dedupes an exact connection without allocating a new id", ()
   ];
   let generatorCalls = 0;
   const out = upsertEdge(edges, "a", "out", "b", "open_pr", {
-    schemaVersion: 2,
     generateEdgeId: () => {
       generatorCalls += 1;
       return "unused";
@@ -197,7 +177,6 @@ test("upsertEdge v2 retries generated id collisions", () => {
   const edges: FlowEdgeDef[] = [{ id: "edge-used", from: "a", to: "b" }];
   const candidates = ["edge-used", "", "edge-fresh"];
   const out = upsertEdge(edges, "a", "out", "c", "open_pr", {
-    schemaVersion: 2,
     generateEdgeId: () => candidates.shift() as string,
   });
 
@@ -218,76 +197,36 @@ test("upsertEdge v2 rejects a missing or reused stable id", () => {
         "out",
         "c",
         "open_pr",
-        { schemaVersion: 2 } as never,
+        {} as never,
       ),
     /requires an edge id or id generator/,
   );
   assert.throws(
     () =>
       upsertEdge(edges, "a", "out", "c", "open_pr", {
-        schemaVersion: 2,
         edgeId: "edge-used",
       }),
     /already in use/,
   );
 });
 
-test("upsertEdge replaces the existing edge from the same port", () => {
-  const edges: FlowEdgeDef[] = [{ from: "a", to: "b" }];
-  const out = upsertEdge(edges, "a", "out", "c", "open_pr");
-  assert.deepEqual(out, [{ from: "a", to: "c" }]);
-});
-
-test("upsertEdge keeps the array position when replacing an existing edge", () => {
-  const edges: FlowEdgeDef[] = [
-    { from: "a", to: "b" },
-    { from: "c", to: "d" },
-    { from: "e", to: "f" },
-  ];
-  assert.deepEqual(upsertEdge(edges, "a", "out", "z", "open_pr"), [
-    { from: "a", to: "z" },
-    { from: "c", to: "d" },
-    { from: "e", to: "f" },
-  ]);
-});
-
 test("upsertEdge re-upserting the same connection is byte-identical", () => {
   const edges: FlowEdgeDef[] = [
-    { from: "a", to: "b", fromPort: "false" },
-    { from: "a", to: "c", fromPort: "true" },
-    { from: "c", to: "d" },
+    { id: "edge-false", from: "a", to: "b", fromPort: "false" },
+    { id: "edge-true", from: "a", to: "c", fromPort: "true" },
+    { id: "edge-c-d", from: "c", to: "d" },
   ];
-  assert.deepEqual(upsertEdge(edges, "a", "false", "b", "branch"), edges);
-  assert.equal(JSON.stringify(upsertEdge(edges, "a", "false", "b", "branch")), JSON.stringify(edges));
-});
-
-test("upsertEdge drops stray duplicates from the same port", () => {
-  const edges: FlowEdgeDef[] = [
-    { from: "a", to: "b" },
-    { from: "c", to: "d" },
-    { from: "a", to: "x" },
-  ];
-  assert.deepEqual(upsertEdge(edges, "a", "out", "z", "open_pr"), [
-    { from: "a", to: "z" },
-    { from: "c", to: "d" },
-  ]);
-});
-
-test("upsertEdge leaves other ports intact when replacing one", () => {
-  const edges: FlowEdgeDef[] = [{ from: "a", to: "x", fromPort: "false" }];
-  const out = upsertEdge(edges, "a", "true", "y", "branch");
-  assert.deepEqual(out, [
-    { from: "a", to: "x", fromPort: "false" },
-    { from: "a", to: "y", fromPort: "true" },
-  ]);
+  const options = { edgeId: "unused" };
+  assert.deepEqual(upsertEdge(edges, "a", "false", "b", "branch", options), edges);
+  assert.equal(JSON.stringify(upsertEdge(edges, "a", "false", "b", "branch", options)), JSON.stringify(edges));
 });
 
 test("upsertEdge keeps fromPort for a multi-port default port", () => {
-  assert.deepEqual(upsertEdge([], "a", "true", "b", "branch"), [
-    { from: "a", to: "b", fromPort: "true" },
+  assert.deepEqual(upsertEdge([], "a", "true", "b", "branch", { edgeId: "edge-true" }), [
+    { id: "edge-true", from: "a", to: "b", fromPort: "true" },
   ]);
-  assert.deepEqual(upsertEdge([], "a", "continue", "b", "loop"), [
-    { from: "a", to: "b", fromPort: "continue" },
+  assert.deepEqual(upsertEdge([], "a", "continue", "b", "loop", { edgeId: "edge-continue" }), [
+    { id: "edge-continue", from: "a", to: "b", fromPort: "continue" },
   ]);
 });
 
@@ -300,7 +239,7 @@ test("canOmitFromPort only for the sole port of a single-port source", () => {
 
 test("upsertEdge blocks self-loops", () => {
   const edges: FlowEdgeDef[] = [{ from: "a", to: "b" }];
-  assert.deepEqual(upsertEdge(edges, "a", "out", "a", "open_pr"), edges);
+  assert.deepEqual(upsertEdge(edges, "a", "out", "a", "open_pr", { edgeId: "unused" }), edges);
 });
 
 test("isBackEdge is false for a forward edge", () => {

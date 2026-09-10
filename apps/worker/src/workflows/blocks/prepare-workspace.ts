@@ -11,7 +11,6 @@ import type {
   WorkspaceManifest,
   WorkspaceRepositoryInput,
 } from "../../sandbox/repo-workspace.js";
-import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
 import { isRunControlError } from "../run-control-error.js";
 import {
   isChecksCeilingExceededError,
@@ -541,32 +540,11 @@ const CODE_WORKSPACE_AGENT_BLOCK_TYPES = new Set<string>([
 ]);
 
 export function requiredAgentsForDefinition(input: {
-  schemaVersion: 1 | 2;
   nodes: WorkflowDefinitionNode[];
   defaultKind: AgentKind;
   defaults: { claude: string; codex: string };
   harnessRuntimes: Readonly<Record<string, ResolvedHarnessRuntime>>;
 }): WorkspaceAgentRuntime[] {
-  if (input.schemaVersion === 1) {
-    const kinds: AgentKind[] = [input.defaultKind];
-    for (const node of input.nodes) {
-      if (!CODE_WORKSPACE_AGENT_BLOCK_TYPES.has(node.type)) continue;
-      if (node.type === "generic_agent" && node.params.workspaceMode === "none") {
-        continue;
-      }
-      const resolved = resolveBlockAgent(
-        node.params,
-        input.defaultKind,
-        input.defaults,
-      );
-      if (!kinds.includes(resolved.kind)) kinds.push(resolved.kind);
-    }
-    return kinds.map((kind) => ({
-      kind,
-      model: input.defaults[kind],
-    }));
-  }
-
   const runtimes = new Map<string, ResolvedHarnessRuntime>();
   for (const node of input.nodes) {
     if (!CODE_WORKSPACE_AGENT_BLOCK_TYPES.has(node.type)) continue;
@@ -953,7 +931,6 @@ export async function ensureWorkspace(
     const arthurTaskId = await ensureArthurTask(ctx);
 
     const requiredAgents = requiredAgentsForDefinition({
-      schemaVersion: ctx.schemaVersion,
       nodes: ctx.definitionNodes,
       defaultKind: ctx.runDefaultKind,
       defaults: ctx.defaults,

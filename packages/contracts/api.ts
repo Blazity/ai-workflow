@@ -15,7 +15,6 @@ import type {
   WorkflowBlockType,
   WorkflowDefinition,
   WorkflowDefinitionLayout,
-  WorkflowDefinitionV2,
   WorkflowDefinitionVersion,
   WorkflowDataReferenceV2,
   WorkflowEditorOptions,
@@ -244,6 +243,10 @@ export interface WorkflowDefinitionMeta {
   id: number;
   name: string;
   enabled: boolean;
+  /** Effective status of the selected deployment, independent of the stored
+   * enabled flag. A legacy deployment is retired and cannot run. */
+  deployedSchema: "v2" | "legacy-v1";
+  retiredMessage?: string;
   triggerTypes: WorkflowBlockType[];
   currentVersion: number | null;
   /** Mutable semantic authoring revision. */
@@ -389,41 +392,6 @@ export interface WorkflowDefinitionDeploymentResponse {
 export interface WorkflowDefinitionDeploymentValidationResponse {
   error: string;
   issues: WorkflowDefinitionValidationIssue[];
-}
-
-export interface WorkflowDefinitionMigrationDiagnostic {
-  code: string;
-  message: string;
-  nodeId: string | null;
-  path?: string;
-}
-
-export interface WorkflowDefinitionMigrationPreview {
-  sourceDefinitionId: number;
-  sourceVersion: number;
-  targetSchemaVersion: 2;
-  conversionHash: string | null;
-  definition: WorkflowDefinitionV2 | null;
-  conversions: WorkflowDefinitionMigrationDiagnostic[];
-  warnings: WorkflowDefinitionMigrationDiagnostic[];
-  blockers: WorkflowDefinitionMigrationDiagnostic[];
-}
-
-export type WorkflowDefinitionMigrationResponse =
-  | (WorkflowDefinitionMigrationPreview & { mode: "preview" })
-  | (WorkflowDefinitionMigrationPreview & {
-      mode: "apply";
-      error: string;
-    })
-  | (WorkflowDefinitionMigrationPreview & {
-      mode: "apply";
-      meta: WorkflowDefinitionMeta;
-      draft: WorkflowDefinitionV2;
-    });
-
-export interface WorkflowDefinitionDuplicateMigrationBlockedResponse
-  extends WorkflowDefinitionMigrationPreview {
-  error: string;
 }
 
 /** Everything the editor may show about a webhook trigger endpoint. The signing

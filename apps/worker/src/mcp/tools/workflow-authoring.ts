@@ -1,6 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-import { isTriggerBlockType } from "@shared/contracts";
+import {
+  isTriggerBlockType,
+  RETIRED_SCHEMA_MESSAGE,
+} from "@shared/contracts";
 import type {
   WorkflowBlockType,
   WorkflowDefinition,
@@ -21,12 +24,16 @@ import {
   getDeployedWorkflowDefinitionVersion,
   getWorkflowDefinition,
   getWorkflowDefinitionVersion,
+  runnableDefinitionOf,
   saveWorkflowDefinitionDraft,
   updateWorkflowDefinition,
   WorkflowDefinitionStoreError,
   WorkflowDefinitionValidationError,
 } from "../../workflow-definition/store.js";
-import { validateWorkflowDefinitionCandidate } from "../../workflow-definition/validation.js";
+import {
+  declaresRetiredSchema,
+  validateWorkflowDefinitionCandidate,
+} from "../../workflow-definition/validation.js";
 import { McpPublicError, type McpToolDependencies } from "../contracts.js";
 import { executeMcpMutation, executeMcpRead } from "../execute-tool.js";
 import { hashCanonicalJson } from "../sanitize-result.js";
@@ -145,6 +152,11 @@ type PublishData = {
   repositoriesOutsideAllowlist: string[];
 };
 
+type LegacyGraphData = {
+  schema: "legacy-v1";
+  message: string;
+};
+
 type GraphData = {
   definitionId: number;
   name: string;
@@ -162,7 +174,7 @@ type GraphData = {
   // save_draft hashes (mapVersionRow, no editor layout applied over them), so
   // re-saving an unmodified draft canonicalizes to the same bytes and the same hash.
   draft: WorkflowDefinition | null;
-  deployed: WorkflowDefinition | null;
+  deployed: WorkflowDefinition | LegacyGraphData | null;
   // sha256 over the canonical JSON of each stored version, by the same rule
   // save_draft and publish hash, so an agent can confirm a round trip without
   // re-deriving it.
@@ -394,6 +406,9 @@ function throwPublicStoreError(error: unknown): never {
   }
   if (error instanceof WorkflowDefinitionStoreError) {
     if (error.statusCode === 400) throw refusal("VALIDATION_FAILED", error.message);
+    if (error.statusCode === 409 && error.message === RETIRED_SCHEMA_MESSAGE) {
+      throw refusal("VALIDATION_FAILED", RETIRED_SCHEMA_MESSAGE);
+    }
     if (error.statusCode === 404) throw refusal("NOT_FOUND", error.message);
     // Retryable because the message says which conflict it is: a draft that moved
     // on is worth re-reading and re-sending, an archived definition is not.
@@ -485,11 +500,6 @@ export function registerWorkflowAuthoringTools(
           // authority on a legal graph is applied, and the store then parses the
           // same schema again before it stores anything.
           //
-          // Not workflowDefinitionSchema directly, which is a union of the two
-          // stored shapes: a union failure says "invalid_union" at the root and
-          // nothing else, and an agent cannot fix a graph from that. This picks
-          // the branch the candidate's own schemaVersion names, so every issue
-          // arrives against the block it belongs to.
           const candidate = validateWorkflowDefinitionCandidate(
             input.definition,
             workflowBlockRegistryContextFromEnv(),
@@ -497,7 +507,9 @@ export function registerWorkflowAuthoringTools(
           if (!candidate.parsed) {
             throw refusal(
               "VALIDATION_FAILED",
-              `Invalid definition: ${issueText(candidate.response.issues)}`,
+              declaresRetiredSchema(input.definition)
+                ? RETIRED_SCHEMA_MESSAGE
+                : `Invalid definition: ${issueText(candidate.response.issues)}`,
             );
           }
           // The DEPLOYMENT issues it also reports are deliberately not blocking
@@ -736,8 +748,11 @@ export function registerWorkflowGraphTools(
             getCurrentWorkflowDefinitionVersion(deps.db, input.definitionId),
             getDeployedWorkflowDefinitionVersion(deps.db, input.definitionId),
           ]);
-          const draft = draftVersion?.definition ?? null;
-          const deployed = deployedVersion?.definition ?? null;
+          const draft = runnableDefinitionOf(draftVersion) ?? null;
+          const deployed =
+            deployedVersion?.schema === "legacy-v1"
+              ? { schema: "legacy-v1" as const, message: RETIRED_SCHEMA_MESSAGE }
+              : runnableDefinitionOf(deployedVersion) ?? null;
           return {
             definitionId: definition.id,
             name: definition.name,
@@ -747,7 +762,8 @@ export function registerWorkflowGraphTools(
             draft,
             deployed,
             draftGraphHash: draft ? graphDigest(draft) : null,
-            deployedGraphHash: deployed ? graphDigest(deployed) : null,
+            deployedGraphHash:
+              deployed !== null && "schemaVersion" in deployed ? graphDigest(deployed) : null,
           };
         },
       });

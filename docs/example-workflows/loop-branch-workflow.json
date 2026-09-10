@@ -1,133 +1,230 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "nodes": [
     {
       "id": "trigger",
       "type": "trigger_ticket_ai",
       "x": 40,
       "y": 160,
-      "params": {},
-      "inputs": {}
+      "configuration": {},
+      "inputs": {},
+      "additionalInputs": []
     },
     {
       "id": "planning",
       "type": "planning_agent",
       "x": 260,
       "y": 160,
-      "params": {},
+      "configuration": {},
       "inputs": {
-        "ticket": "trigger.ticket",
-        "comments": "trigger.comments",
-        "priorAnswers": "trigger.priorAnswers"
-      }
+        "ticket": {
+          "kind": "reference",
+          "reference": "steps.entry.output.ticket"
+        },
+        "comments": {
+          "kind": "reference",
+          "reference": "steps.entry.output.comments"
+        },
+        "priorAnswers": {
+          "kind": "reference",
+          "reference": "steps.entry.output.priorAnswers"
+        }
+      },
+      "additionalInputs": []
     },
     {
       "id": "gate",
       "type": "branch",
       "x": 480,
       "y": 160,
-      "params": {
-        "condition": "steps.planning.output.status == \"needs_human_input\""
+      "configuration": {
+        "combinator": "all",
+        "conditions": [
+          {
+            "reference": "steps.planning.output.status",
+            "operator": "equals",
+            "value": "needs_human_input"
+          }
+        ]
       },
-      "inputs": {}
+      "inputs": {},
+      "additionalInputs": []
     },
     {
       "id": "notify",
       "type": "send_slack_message",
       "x": 700,
       "y": 340,
-      "params": {},
-      "inputs": {}
+      "configuration": {},
+      "inputs": {},
+      "additionalInputs": []
     },
     {
       "id": "halt",
       "type": "terminate",
       "x": 920,
       "y": 340,
-      "params": {
+      "configuration": {
         "terminalStatus": "waiting_for_human"
       },
-      "inputs": {}
+      "inputs": {},
+      "additionalInputs": []
     },
     {
       "id": "implementation",
       "type": "implementation_agent",
       "x": 700,
       "y": 160,
-      "params": {},
+      "configuration": {},
       "inputs": {
-        "ticket": "trigger.ticket",
-        "plan": "steps.planning.output.plan"
-      }
+        "ticket": {
+          "kind": "reference",
+          "reference": "steps.entry.output.ticket"
+        },
+        "plan": {
+          "kind": "reference",
+          "reference": "steps.planning.output.plan"
+        }
+      },
+      "additionalInputs": []
     },
     {
       "id": "checks",
       "type": "run_pre_pr_checks",
       "x": 920,
       "y": 160,
-      "params": {},
-      "inputs": {}
+      "configuration": {},
+      "inputs": {},
+      "additionalInputs": []
     },
     {
       "id": "verdict",
       "type": "branch",
       "x": 1140,
       "y": 160,
-      "params": {
-        "condition": "steps.checks.output.ok"
+      "configuration": {
+        "combinator": "all",
+        "conditions": [
+          {
+            "reference": "steps.checks.output.ok",
+            "operator": "equals",
+            "value": true
+          }
+        ]
       },
-      "inputs": {}
+      "inputs": {},
+      "additionalInputs": []
     },
     {
       "id": "finalize",
       "type": "finalize_workspace",
       "x": 1360,
       "y": 160,
-      "params": {},
-      "inputs": {}
+      "configuration": {},
+      "inputs": {},
+      "additionalInputs": []
     },
     {
       "id": "open-pr",
       "type": "open_pr",
       "x": 1580,
       "y": 160,
-      "params": {},
+      "configuration": {},
       "inputs": {
-        "repositories": "steps.finalize.output.repositories"
-      }
+        "repositories": {
+          "kind": "reference",
+          "reference": "steps.finalize.output.repositories"
+        }
+      },
+      "additionalInputs": []
     },
     {
       "id": "retry",
       "type": "loop",
       "x": 1360,
       "y": 340,
-      "params": {
+      "configuration": {
         "maxAttempts": 3,
         "onExhaust": "fail"
       },
-      "inputs": {}
+      "inputs": {},
+      "additionalInputs": []
     },
     {
       "id": "fix",
       "type": "review_agent",
       "x": 1140,
       "y": 340,
-      "params": {},
-      "inputs": {}
+      "configuration": {},
+      "inputs": {},
+      "additionalInputs": []
     }
   ],
   "edges": [
-    { "from": "trigger", "to": "planning" },
-    { "from": "planning", "to": "gate" },
-    { "from": "gate", "to": "notify", "fromPort": "true" },
-    { "from": "notify", "to": "halt" },
-    { "from": "gate", "to": "implementation", "fromPort": "false" },
-    { "from": "implementation", "to": "checks" },
-    { "from": "checks", "to": "verdict" },
-    { "from": "verdict", "to": "finalize", "fromPort": "true" },
-    { "from": "finalize", "to": "open-pr" },
-    { "from": "verdict", "to": "retry", "fromPort": "false" },
-    { "from": "retry", "to": "fix", "fromPort": "continue" },
-    { "from": "fix", "to": "checks" }
+    {
+      "id": "trigger-planning",
+      "from": "trigger",
+      "to": "planning"
+    },
+    {
+      "id": "planning-gate",
+      "from": "planning",
+      "to": "gate"
+    },
+    {
+      "id": "gate-notify",
+      "from": "gate",
+      "fromPort": "true",
+      "to": "notify"
+    },
+    {
+      "id": "notify-halt",
+      "from": "notify",
+      "to": "halt"
+    },
+    {
+      "id": "gate-implementation",
+      "from": "gate",
+      "fromPort": "false",
+      "to": "implementation"
+    },
+    {
+      "id": "implementation-checks",
+      "from": "implementation",
+      "to": "checks"
+    },
+    {
+      "id": "checks-verdict",
+      "from": "checks",
+      "to": "verdict"
+    },
+    {
+      "id": "verdict-finalize",
+      "from": "verdict",
+      "fromPort": "true",
+      "to": "finalize"
+    },
+    {
+      "id": "finalize-open-pr",
+      "from": "finalize",
+      "to": "open-pr"
+    },
+    {
+      "id": "verdict-retry",
+      "from": "verdict",
+      "fromPort": "false",
+      "to": "retry"
+    },
+    {
+      "id": "retry-fix",
+      "from": "retry",
+      "fromPort": "continue",
+      "to": "fix"
+    },
+    {
+      "id": "fix-checks",
+      "from": "fix",
+      "to": "checks"
+    }
   ]
 }

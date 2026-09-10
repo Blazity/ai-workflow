@@ -1973,7 +1973,7 @@ describe("v2 terminal failure exit", () => {
     },
   );
 
-  it("wires the shared rethrow predicate into both graph engines", () => {
+  it("wires the shared rethrow predicate into the v2 graph engine", () => {
     const source = readFileSync(
       fileURLToPath(new URL("./agent.ts", import.meta.url)),
       "utf8",
@@ -1981,7 +1981,7 @@ describe("v2 terminal failure exit", () => {
 
     expect(
       source.split("shouldRethrowExecutionError: shouldRethrowAgentExecutionError").length - 1,
-    ).toBe(2);
+    ).toBe(1);
   });
 
   it("keeps the actionable checks ceiling text in the run reason, telemetry and Jira comment", () => {
@@ -2126,7 +2126,7 @@ describe("v2 terminal failure exit", () => {
       "utf8",
     ).split("\n");
     const index = lines.findIndex((line) =>
-      line.includes("terminalExecutionError && plan.schemaVersion === 2"),
+      line.includes("if (terminalExecutionError)"),
     );
     expect(index, "the v2 terminal failure exit moved out of agent.ts").toBeGreaterThan(-1);
 

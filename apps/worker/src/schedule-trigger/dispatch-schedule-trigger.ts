@@ -20,7 +20,7 @@ import {
 } from "../lib/trigger-rate-limit.js";
 import { getLiveScheduleTriggerTarget } from "../workflow-definition/store.js";
 import { scheduleSubjectKey } from "../lib/subject-key.js";
-import { dueOccurrence } from "./occurrence.js";
+import { dueOccurrence, nextRuns } from "./occurrence.js";
 import {
   cancelWaitingOccurrences,
   REVOKED_SCHEDULE_REASON,
@@ -32,6 +32,7 @@ import {
   listPendingOccurrences,
   recordOccurrenceAtCapacity,
   recordOccurrenceError,
+  recordRetiredOccurrence,
   recordOccurrenceSkipped,
   recordOccurrenceStarted,
   supersedePendingThenAccept,
@@ -86,10 +87,15 @@ export interface ScheduleOccurrenceLedgerPort {
     message: string,
   ): Promise<boolean>;
   recordAtCapacity(scheduleId: string, occurrenceAt: Date): Promise<boolean>;
+  recordRetired(admitted: AdmittedOccurrence, reason: string): Promise<boolean>;
   /** Settle whatever this schedule left waiting, for a revocation. Separate from
    *  recordSkipped because 'cancelled' is not a skip outcome a dispatcher may
    *  choose, and the frozen store writes it only from pauseSchedule. */
-  cancelWaiting(scheduleId: string, reason: string): Promise<number>;
+  cancelWaiting(
+    scheduleId: string,
+    reason: string,
+    overwriteReason?: boolean,
+  ): Promise<number>;
   listPending(limit: number): Promise<OccurrenceRow[]>;
   expirePending(now: Date): Promise<number>;
   sweepSettled(now: Date): Promise<void>;
@@ -105,7 +111,8 @@ export interface ScheduleRowPort {
 }
 
 /** What the graph still says about a schedule's node, re-read every tick. */
-export interface LiveScheduleTarget {
+interface LiveScheduleTarget {
+  kind: "runnable";
   /** Version the run must execute: the occurrence's pin when it has one, the
    *  deployed head otherwise. */
   definitionVersion: number;
@@ -116,7 +123,19 @@ export interface LiveScheduleTarget {
   rateLimit?: TriggerRateLimitNodeParams;
 }
 
-export interface ScheduleTargetQuery {
+interface RetiredHeadScheduleTarget {
+  kind: "retired-head";
+  definitionVersion: number;
+  reason: string;
+}
+
+interface RetiredPinnedScheduleTarget {
+  kind: "retired-pinned";
+  definitionVersion: number;
+  reason: string;
+}
+
+interface ScheduleTargetQuery {
   definitionId: number;
   nodeId: string;
   /** Version an already-admitted occurrence is pinned to, null while evaluating. */
@@ -136,7 +155,12 @@ export interface ScheduleDispatchDeps {
    */
   resolveScheduleTarget(
     query: ScheduleTargetQuery,
-  ): Promise<LiveScheduleTarget | null>;
+  ): Promise<
+    | LiveScheduleTarget
+    | RetiredHeadScheduleTarget
+    | RetiredPinnedScheduleTarget
+    | null
+  >;
   /**
    * Count one start against this schedule node's trigger rate limit and answer
    * whether it may proceed, or null when the node is unlimited (in which case
@@ -444,7 +468,8 @@ async function startAdmittedOccurrence(
       if (
         onOverlap === "retry" ||
         occurrence.overlapPolicy === "queue" ||
-        holder?.runId == null
+        holder?.runId === undefined ||
+        holder.runId === null
       ) {
         return { result: "queued" };
       }
@@ -490,9 +515,11 @@ async function revokeAndCancelWaiting(
   scheduleId: string,
   deps: ScheduleDispatchDeps,
   now: Date,
+  reason: string = REVOKED_SCHEDULE_REASON,
+  overwriteReason = false,
 ): Promise<void> {
   await deps.schedules.revoke(scheduleId, now);
-  await deps.occurrences.cancelWaiting(scheduleId, REVOKED_SCHEDULE_REASON);
+  await deps.occurrences.cancelWaiting(scheduleId, reason, overwriteReason);
 }
 
 /**
@@ -736,6 +763,58 @@ async function evaluateSchedule(
     return;
   }
 
+  if (target.kind === "retired-head") {
+    const verdict = dueOccurrence({
+      cron: row.cron,
+      timezone: row.timezone,
+      watermark: row.evaluationWatermarkAt,
+      now,
+      graceMs: row.catchUpGraceMinutes * 60_000,
+    });
+    if (verdict.kind === "due" || verdict.kind === "stale") {
+      await deps.occurrences.recordRetired(
+        {
+          scheduleId: row.id,
+          occurrenceAt: verdict.occurrence,
+          definitionId: row.definitionId,
+          definitionVersion: target.definitionVersion,
+          droppedOlder: verdict.droppedOlder,
+          droppedOlderAtLeast: verdict.droppedOlderAtLeast,
+        },
+        target.reason,
+      );
+    } else if (verdict.kind === "nothing-due") {
+      const upcoming = nextRuns({
+        cron: row.cron,
+        timezone: row.timezone,
+        from: now,
+        count: 1,
+      });
+      const nextOccurrence = upcoming.ok ? upcoming.runs[0] : undefined;
+      if (!nextOccurrence) {
+        throw new Error("retired schedule has no next occurrence to record");
+      }
+      await deps.occurrences.recordRetired(
+        {
+          scheduleId: row.id,
+          occurrenceAt: nextOccurrence,
+          definitionId: row.definitionId,
+          definitionVersion: target.definitionVersion,
+          droppedOlder: 0,
+          droppedOlderAtLeast: false,
+        },
+        target.reason,
+      );
+    }
+    await revokeAndCancelWaiting(row.id, deps, now, target.reason, true);
+    metrics.revoked += 1;
+    return;
+  }
+
+  if (target.kind === "retired-pinned") {
+    throw new Error("retired pinned schedule target returned for head evaluation");
+  }
+
   const verdict = dueOccurrence({
     cron: row.cron,
     timezone: row.timezone,
@@ -925,6 +1004,31 @@ export async function drainPendingScheduleOccurrences(
         metrics.revoked += 1;
         continue;
       }
+      if (target.kind === "retired-pinned") {
+        await deps.occurrences.recordRetired(
+          {
+            scheduleId: occurrence.scheduleId,
+            occurrenceAt: occurrence.occurrenceAt,
+            definitionId: occurrence.definitionId,
+            definitionVersion: target.definitionVersion,
+            droppedOlder: occurrence.droppedCount,
+            droppedOlderAtLeast: occurrence.droppedCountCapped,
+          },
+          target.reason,
+        );
+        continue;
+      }
+      if (target.kind === "retired-head") {
+        await revokeAndCancelWaiting(
+          row.id,
+          deps,
+          deps.now(),
+          target.reason,
+          true,
+        );
+        metrics.revoked += 1;
+        continue;
+      }
       if (waitedPastGrace(occurrence, row, deps.now())) {
         metrics.pastGrace += 1;
         continue;
@@ -1068,8 +1172,10 @@ export function createScheduleDispatchDeps(
         recordOccurrenceError(db, scheduleId, occurrenceAt, message),
       recordAtCapacity: (scheduleId, occurrenceAt) =>
         recordOccurrenceAtCapacity(db, scheduleId, occurrenceAt),
-      cancelWaiting: (scheduleId, reason) =>
-        cancelWaitingOccurrences(db, scheduleId, reason),
+      recordRetired: (admitted, reason) =>
+        recordRetiredOccurrence(db, admitted, reason),
+      cancelWaiting: (scheduleId, reason, overwriteReason) =>
+        cancelWaitingOccurrences(db, scheduleId, reason, overwriteReason),
       listPending: (limit) => listPendingOccurrences(db, limit),
       expirePending: (now) => expirePendingOccurrences(db, now),
       sweepSettled: (now) => sweepSettledOccurrences(db, now),
@@ -1112,7 +1218,10 @@ export function createScheduleDispatchDeps(
 function memoizeScheduleTarget(
   resolve: ScheduleDispatchDeps["resolveScheduleTarget"],
 ): ScheduleDispatchDeps["resolveScheduleTarget"] {
-  const cache = new Map<string, Promise<LiveScheduleTarget | null>>();
+  const cache = new Map<
+    string,
+    ReturnType<ScheduleDispatchDeps["resolveScheduleTarget"]>
+  >();
   return (query) => {
     const key = `${query.definitionId}:${query.nodeId}:${query.definitionVersion ?? "head"}`;
     const hit = cache.get(key);

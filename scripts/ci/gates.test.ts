@@ -154,6 +154,201 @@ test("an existing retired path fails the no-resurrected-paths gate", async () =>
   assert.match(result.stdout, /removed\/path\.ts/);
 });
 
+test("a reintroduced definition schema branch fails the single schema version gate", async () => {
+  const root = await mkdtemp(join(tmpdir(), "single-schema-gate-"));
+  const source = join(root, "apps/worker/src/workflow-definition");
+  const examples = join(root, "docs/example-workflows");
+  await mkdir(source, { recursive: true });
+  await mkdir(examples, { recursive: true });
+
+  const spellings = [
+    "export const less = (schemaVersion: number) => schemaVersion < 2;",
+    "export const lessOrEqual = (schemaVersion: number) => schemaVersion <= \"2\";",
+    "export const greater = (schemaVersion: number) => schemaVersion > 1;",
+    "export const greaterOrEqual = (schemaVersion: number) => schemaVersion >= '1';",
+    "export const equal = (schemaVersion: number) => schemaVersion == 1;",
+    "export const notEqual = (schemaVersion: number) => schemaVersion != \"2\";",
+    "export const strictEqual = (schemaVersion: number) => schemaVersion === 1;",
+    "export const strictNotEqual = (schemaVersion: number) => schemaVersion !== '2';",
+    'export const objectLiteral = { "schemaVersion": 1 };',
+    "export type schemaType = { schemaVersion: 1 };",
+    "export const legacy = isLegacy;",
+    "export type legacyDefinition = WorkflowDefinitionV1;",
+    "export const v2Only = isV2OnlyBlockType;",
+    "export const oldWalker = executeGraph;",
+  ].join("\n") + "\n";
+  await writeFile(join(source, "planner.ts"), spellings);
+  await writeFile(join(source, "planner.test.ts"), spellings);
+  await writeFile(
+    join(source, "stored-definition.ts"),
+    "export const retired = (definition: { schemaVersion: number }) => definition.schemaVersion === 1;\nexport const reason = RETIRED_SCHEMA_MESSAGE;\n",
+  );
+  await writeFile(join(examples, "legacy.json"), '{ "schemaVersion": 1 }\n');
+
+  const manifest = join(root, "apps/worker/src/harness-profiles");
+  await mkdir(manifest, { recursive: true });
+  await writeFile(
+    join(manifest, "manifest.ts"),
+    "export const oldManifest = (schemaVersion: number) => schemaVersion === 1;\n",
+  );
+
+  const result = gate("single-schema-version.mjs", ["--root", root]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  for (const match of [
+    "schemaVersion < 2",
+    'schemaVersion <= "2"',
+    "schemaVersion > 1",
+    "schemaVersion >= '1'",
+    "schemaVersion == 1",
+    'schemaVersion != "2"',
+    "schemaVersion === 1",
+    "schemaVersion !== '2'",
+    '"schemaVersion": 1',
+    "schemaVersion: 1",
+    "isLegacy",
+    "WorkflowDefinitionV1",
+    "isV2OnlyBlockType",
+    "executeGraph",
+  ]) {
+    assert.ok(result.stdout.includes(match), `missing gate match: ${match}`);
+  }
+  assert.match(result.stdout, /apps\/worker\/src\/workflow-definition\/planner\.ts/u);
+  assert.match(result.stdout, /docs\/example-workflows\/legacy\.json/u);
+  assert.doesNotMatch(result.stdout, /planner\.test\.ts/u);
+  assert.doesNotMatch(result.stdout, /stored-definition\.ts/u);
+  assert.doesNotMatch(result.stdout, /harness-profiles\/manifest\.ts/u);
+});
+
+test("adversarial retired schema spellings each fail the single schema version gate", () => {
+  const fixtures = [
+    {
+      file: "apps/worker/src/definition.ts",
+      contents: 'export const old = definition["schemaVersion"] === 1;\n',
+      match: /\["schemaVersion"\]/u,
+    },
+    {
+      file: "apps/worker/src/definition.ts",
+      contents: 'export const old = definition?.["schemaVersion"] === 1;\n',
+      match: /\?\.\["schemaVersion"\]/u,
+    },
+    {
+      file: "apps/worker/src/definition.ts",
+      contents: "export const old = def['schemaVersion'] === 1;\n",
+      match: /\['schemaVersion'\]/u,
+    },
+    {
+      file: "apps/worker/src/definition.ts",
+      contents: "const revision = definition.schemaVersion; export const old = revision === 1;\n",
+      match: /revision === 1/u,
+    },
+    {
+      file: "docs/example-workflows/legacy.json",
+      contents: '{ "schemaVersion": 1e0 }\n',
+      match: /schemaVersion: 1/u,
+    },
+    {
+      file: "apps/worker/src/definition.ts",
+      contents: "export interface WorkflowDefinitionV1 { nodes: unknown[] }\n",
+      match: /WorkflowDefinitionV1/u,
+    },
+    {
+      file: "apps/worker/src/definition.ts",
+      contents: [
+        "const {",
+        "  schemaVersion: retiredVersion,",
+        "} = definition;",
+        "export const old = retiredVersion === 1;",
+        "",
+      ].join("\n"),
+      match: /retiredVersion === 1/u,
+    },
+    {
+      file: "apps/worker/src/definition.ts",
+      contents: [
+        'const { ["schemaVersion"]: alias } = def;',
+        "export const old = alias === 1;",
+        "",
+      ].join("\n"),
+      match: /alias === 1/u,
+    },
+    {
+      file: "apps/worker/src/definition.ts",
+      contents: "export const versions = [{ schemaVersion: 2 }, { schemaVersion: 1 }];\n",
+      match: /schemaVersion: 1/u,
+    },
+    {
+      file: "apps/worker/src/definition.ts",
+      contents: "export const old = workflowDefinitionSchemaVersionOf(definition) === 1;\n",
+      match: /workflowDefinitionSchemaVersionOf\(definition\) === 1/u,
+    },
+    {
+      file: "apps/worker/src/definition.ts",
+      contents: "export const old = SchemaVersionOf(definition) === 0x1;\n",
+      match: /SchemaVersionOf\(definition\) === 0x1/u,
+    },
+    {
+      file: "apps/worker/src/harness-profiles/manifest.ts",
+      contents: [
+        'import { workflowDefinitionSchemaVersionOf } from "../../../../packages/contracts/domain";',
+        "export const old = workflowDefinitionSchemaVersionOf(definition) === 1;",
+        "",
+      ].join("\n"),
+      match: /workflowDefinitionSchemaVersionOf\(definition\) === 1/u,
+    },
+    {
+      file: "apps/worker/src/runtime.ts",
+      contents: 'import { executeLegacy } from "./legacy-runtime.test";\nexport { executeLegacy };\n',
+      match: /production imports test module \.\/legacy-runtime\.test/u,
+    },
+    {
+      file: "apps/worker/src/workflow-definition/stored-definition.ts",
+      contents: "export type Runtime = WorkflowDefinitionV1;\n",
+      match: /WorkflowDefinitionV1/u,
+    },
+    {
+      file: "apps/worker/src/workflow-definition/stored-definition.ts",
+      contents: "export const runtime = executeRetiredDefinition;\n",
+      match: /executeRetiredDefinition/u,
+    },
+  ];
+
+  for (const [index, fixture] of fixtures.entries()) {
+    const root = makeDepsRoot(`single-schema-adversarial-${index}-`, {
+      [fixture.file]: fixture.contents,
+    });
+    const result = gate("single-schema-version.mjs", ["--root", root]);
+    assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+    assert.match(result.stdout, fixture.match);
+  }
+});
+
+test("an unrelated harness profile schema version branch passes the single schema version gate", () => {
+  const root = makeDepsRoot("single-schema-harness-pass-", {
+    "apps/worker/src/harness-profiles/manifest.ts":
+      "export const oldManifest = (schemaVersion: number) => schemaVersion === 1;\n",
+  });
+  const result = gate("single-schema-version.mjs", ["--root", root]);
+  assert.equal(result.status, gateSuccess, result.stderr || result.stdout);
+  assert.match(result.stdout, /single-schema-version PASS/u);
+});
+
+test("a harness profile importing a local re-export is scanned for retired version helpers", () => {
+  const root = makeDepsRoot("single-schema-harness-local-import-", {
+    "apps/worker/src/harness-profiles/manifest.ts": [
+      'import { readRevision } from "./manifest-version";',
+      "export const retired = readRevision(definition) === 1;",
+      "",
+    ].join("\n"),
+    "apps/worker/src/harness-profiles/manifest-version.ts": [
+      'export { workflowDefinitionSchemaVersionOf as readRevision } from "@shared/contracts";',
+      "",
+    ].join("\n"),
+  });
+  const result = gate("single-schema-version.mjs", ["--root", root]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(result.stdout, /readRevision\(definition\) === 1/u);
+});
+
 test("a workspace package without a description fails package contracts", async () => {
   const root = await mkdtemp(join(tmpdir(), "package-contracts-gate-"));
   const directory = join(root, "packages/conditions");

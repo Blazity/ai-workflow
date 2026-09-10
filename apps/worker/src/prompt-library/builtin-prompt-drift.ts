@@ -1,6 +1,5 @@
 import {
   BLOCK_TYPE_SPECS,
-  DEFAULT_PROMPT_NAME_BY_AGENT,
   parsePromptReferenceTokens,
   promptReferenceTargetLabel,
   WORKFLOW_PROMPT_PARAM_KEYS,
@@ -16,14 +15,13 @@ import {
   workflowDefinitions,
   workflowDefinitionVersions,
 } from "../db/schema.js";
-import { defaultWorkflowDefinition } from "../workflow-definition/default.js";
+import { defaultWorkflowDefinitionV2 } from "../workflow-definition/default.js";
 import {
   builtInPromptBodyForSlug,
   type BuiltInPromptName,
 } from "./builtin-prompts.js";
 import {
   findPromptBySlug,
-  findPromptRowsByNames,
   getCurrentPromptVersion,
   getPrompt,
   getPromptVersion,
@@ -67,9 +65,9 @@ export type BuiltInPromptPinSource =
   /**
    * Fresh install. Migration 0013 creates the enabled ticket definition with no
    * version rows at all, and definition-step.ts runs the CODE DEFAULT graph for
-   * it rather than a stored snapshot. That graph pins nothing: v1 supplies each
-   * specialized agent prompt implicitly by name at `latest`, so the run serves
-   * the library HEAD. This is the shape a brand new deployment has.
+   * it rather than a stored snapshot. The v2 graph pins each specialized agent
+   * prompt to its shipped library version. This is the shape a brand new
+   * deployment has.
    */
   | "fresh_install_default"
   /**
@@ -300,8 +298,8 @@ async function collectWalkTargets(
   }
 
   // Fresh install: enabled ticket definition with no stored version at all, the
-  // exact row migration 0013 leaves behind. definition-step.ts serves the code
-  // default graph for it, which resolves each built-in implicitly at `latest`.
+  // exact row migration 0013 leaves behind. definition-step.ts serves the v2
+  // code default graph for it, with each built-in pinned to its shipped version.
   for (const row of await db
     .select({
       id: workflowDefinitions.id,
@@ -330,7 +328,7 @@ async function collectWalkTargets(
       definitionName: row.name,
       definitionVersion: null,
       source: "fresh_install_default",
-      definition: defaultWorkflowDefinition({
+      definition: defaultWorkflowDefinitionV2({
         includeReview: options.includeReview ?? true,
         includeLeakReview: false,
       }),
@@ -508,18 +506,17 @@ async function collectWalkTargets(
   return targets;
 }
 
-/** Every prompt-bearing string of a node, keyed by a locatable field path. v2
- *  keeps them under `configuration`, v1 under `params`; the key set is the one
- *  the runtime itself resolves through. */
+/** Every prompt-bearing string of a node, keyed by a locatable field path. They
+ *  live under `configuration`, and the key set is the one the runtime itself
+ *  resolves through. */
 function promptFields(
-  schemaVersion: number,
   node: Record<string, unknown>,
   target: WalkTarget,
   nodeId: string,
   keys: readonly string[],
   skipped: SkippedWalkTarget[],
 ): { field: string; text: string }[] {
-  const containerKey = schemaVersion === 2 ? "configuration" : "params";
+  const containerKey = "configuration";
   const container = node[containerKey];
   if (
     container === null ||
@@ -648,9 +645,7 @@ export async function findBuiltInPromptDrift(
 
   let definitionsWalked = 0;
   for (const target of targets) {
-    const definition = target.definition as
-      | { schemaVersion?: unknown; nodes?: unknown }
-      | null;
+    const definition = target.definition as { nodes?: unknown } | null;
     if (
       definition === null ||
       typeof definition !== "object" ||
@@ -681,9 +676,6 @@ export async function findBuiltInPromptDrift(
       continue;
     }
     definitionsWalked += 1;
-    // Anything not explicitly schema 2 is read as v1, which is how the runtime
-    // treats a legacy row predating the field.
-    const schemaVersion = definition.schemaVersion === 2 ? 2 : 1;
 
     for (const raw of definition.nodes) {
       if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
@@ -750,33 +742,10 @@ export async function findBuiltInPromptDrift(
       const fields =
         keys === undefined || keys.length === 0
           ? []
-          : promptFields(schemaVersion, node, target, nodeId, keys, skipped);
+          : promptFields(node, target, nodeId, keys, skipped);
       for (const { field, text } of fields) {
         await walk(text, { ...base, field }, []);
       }
-
-      // v1 supplies a specialized agent's prompt implicitly when the field is
-      // blank: the run materializes {{prompt:<slug>}} at `latest` from the
-      // library row matching the built-in's registry name, so the HEAD body
-      // reaches the agent. This is also how the fresh-install code default
-      // resolves all three built-ins.
-      if (schemaVersion !== 1) continue;
-      const implicitName = DEFAULT_PROMPT_NAME_BY_AGENT[blockType];
-      const authored = fields.find(({ field }) => field === "prompt")?.text;
-      if (!implicitName || (authored ?? "").trim().length > 0) continue;
-      const coordinates = { ...base, field: "prompt" };
-      const candidates = await findPromptRowsByNames(db, [implicitName]);
-      const active = candidates.find((candidate) => candidate.archivedAt === null);
-      if (!active) {
-        unresolved.push({
-          ...coordinates,
-          target: implicitName,
-          requestedVersion: "latest",
-          reason: "implicit v1 default prompt is missing or archived",
-        });
-        continue;
-      }
-      await walk(`{{prompt:${active.slug}}}`, coordinates, []);
     }
   }
 

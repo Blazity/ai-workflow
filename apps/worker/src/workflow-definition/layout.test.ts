@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type {
-  WorkflowDefinitionV1,
-  WorkflowDefinitionV2,
-} from "@shared/contracts";
+import type { WorkflowDefinitionV2 } from "@shared/contracts";
 import { normalizeWorkflowDefinitionLayout } from "@shared/contracts";
 import {
   applyWorkflowDefinitionLayout,
@@ -10,24 +7,7 @@ import {
   extractWorkflowDefinitionLayout,
 } from "./layout.js";
 
-const definition: WorkflowDefinitionV1 = {
-  schemaVersion: 1,
-  nodes: [
-    { id: "a", type: "trigger_ticket_ai", x: 12, y: 34, params: {}, inputs: {} },
-  ],
-  edges: [],
-};
-
 describe("workflow definition layout", () => {
-  it("round-trips coordinates outside the semantic graph", () => {
-    const layout = extractWorkflowDefinitionLayout(definition);
-    const semantic = canonicalizeWorkflowDefinition(definition);
-
-    expect(semantic.nodes[0]).toMatchObject({ x: 0, y: 0 });
-    expect(layout.edges).toEqual({});
-    expect(applyWorkflowDefinitionLayout(semantic, layout)).toEqual(definition);
-  });
-
   it("round-trips v2 layout without rewriting configuration or bindings", () => {
     const v2: WorkflowDefinitionV2 = {
       schemaVersion: 2,

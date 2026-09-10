@@ -53,7 +53,6 @@ test("copies selected nodes, internal edges, and their geometry only", () => {
     { id: "b-outside", from: "b", to: "outside" },
   ];
   const payload = createWorkflowClipboardPayload<Geometry>({
-    schemaVersion: 2,
     nodes,
     edges,
     selectedNodeIds: ["a", "b"],
@@ -79,7 +78,6 @@ test("copies selected nodes, internal edges, and their geometry only", () => {
 test("returns no payload for an edge-only or empty node selection", () => {
   assert.equal(
     createWorkflowClipboardPayload({
-      schemaVersion: 2,
       nodes: [v2Node("a")],
       edges: [],
       selectedNodeIds: [],
@@ -112,7 +110,6 @@ test("pastes atomically with collision-free ids, fresh edges, remapped reference
     },
   };
   const payload = createWorkflowClipboardPayload<Geometry>({
-    schemaVersion: 2,
     nodes: [v2Node("producer", "generic_agent", 0, 0), source],
     edges: [{ id: "source-edge", from: "producer", to: "consumer" }],
     selectedNodeIds: ["producer", "consumer"],
@@ -123,7 +120,6 @@ test("pastes atomically with collision-free ids, fresh edges, remapped reference
   const generated = ["existing-edge", "fresh-edge"];
   const result = planWorkflowClipboardPaste({
     payload,
-    schemaVersion: 2,
     destinationNodes: [
       v2Node("trigger", "trigger_ticket_ai"),
       v2Node("producer-copy"),
@@ -189,14 +185,12 @@ test("pastes atomically with collision-free ids, fresh edges, remapped reference
 
 test("repeated pastes advance the offset by another 32px", () => {
   const payload = createWorkflowClipboardPayload({
-    schemaVersion: 2,
     nodes: [v2Node("a", "post_ticket_comment", 10, 20)],
     edges: [],
     selectedNodeIds: ["a"],
   })!;
   const first = planWorkflowClipboardPaste({
     payload,
-    schemaVersion: 2,
     destinationNodes: [v2Node("trigger", "trigger_ticket_ai")],
     destinationEdges: [],
   });
@@ -209,7 +203,6 @@ test("repeated pastes advance the offset by another 32px", () => {
 
   const second = planWorkflowClipboardPaste({
     payload: first.nextClipboard,
-    schemaVersion: 2,
     destinationNodes: first.nodes,
     destinationEdges: first.edges,
   });
@@ -237,7 +230,6 @@ test("preserves valid external references and reports missing destination source
     },
   };
   const payload = createWorkflowClipboardPayload({
-    schemaVersion: 2,
     nodes: [validConsumer, invalidConsumer],
     edges: [],
     selectedNodeIds: ["valid", "invalid"],
@@ -245,7 +237,6 @@ test("preserves valid external references and reports missing destination source
 
   const result = planWorkflowClipboardPaste({
     payload,
-    schemaVersion: 2,
     destinationNodes: [
       v2Node("trigger", "trigger_ticket_ai"),
       v2Node("existing"),
@@ -282,7 +273,6 @@ test("new node ids cannot shadow a missing external reference", () => {
     },
   };
   const payload = createWorkflowClipboardPayload({
-    schemaVersion: 2,
     nodes: [source],
     edges: [],
     selectedNodeIds: ["foo"],
@@ -290,7 +280,6 @@ test("new node ids cannot shadow a missing external reference", () => {
 
   const result = planWorkflowClipboardPaste({
     payload,
-    schemaVersion: 2,
     destinationNodes: [v2Node("trigger", "trigger_ticket_ai")],
     destinationEdges: [],
   });
@@ -302,8 +291,8 @@ test("new node ids cannot shadow a missing external reference", () => {
 });
 
 test("refuses cross-schema paste rather than silently converting definitions", () => {
-  const payload = createWorkflowClipboardPayload({
-    schemaVersion: 1,
+  const payload = {
+    ...createWorkflowClipboardPayload({
     nodes: [
       {
         id: "legacy",
@@ -316,12 +305,13 @@ test("refuses cross-schema paste rather than silently converting definitions", (
     ],
     edges: [],
     selectedNodeIds: ["legacy"],
-  })!;
+    })!,
+    schemaVersion: 1,
+  };
 
   assert.deepEqual(
     planWorkflowClipboardPaste({
       payload,
-      schemaVersion: 2,
       destinationNodes: [],
       destinationEdges: [],
     }),
@@ -332,7 +322,6 @@ test("refuses cross-schema paste rather than silently converting definitions", (
 test("round-trips the session clipboard and fails closed on corrupt storage", () => {
   const storage = memoryStorage();
   const payload = createWorkflowClipboardPayload({
-    schemaVersion: 2,
     nodes: [v2Node("a")],
     edges: [],
     selectedNodeIds: ["a"],

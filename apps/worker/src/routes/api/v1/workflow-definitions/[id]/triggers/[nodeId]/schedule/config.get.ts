@@ -22,6 +22,7 @@ import {
 } from "../../../../../../../../schedule-trigger/schedule-store.js";
 import {
   getDeployedWorkflowDefinitionVersion,
+  runnableDefinitionOf,
   getWorkflowDefinition,
 } from "../../../../../../../../workflow-definition/store.js";
 import { parseDefinitionId } from "../../../../../workflow-definitions.get.js";
@@ -107,13 +108,11 @@ export async function findDeployedScheduleNode(
   const definition = await getWorkflowDefinition(db, target.definitionId);
   if (!definition || !definition.enabled || definition.archivedAt) return null;
   const head = await getDeployedWorkflowDefinitionVersion(db, target.definitionId);
-  if (!head) return null;
-  const nodes = head.definition.nodes as readonly {
-    id: string;
-    type: string;
-    configuration?: Record<string, unknown>;
-  }[];
-  const node = nodes.find((n) => n.id === target.nodeId && n.type === "trigger_schedule");
+  const graph = runnableDefinitionOf(head);
+  if (!graph) return null;
+  const node = graph.nodes.find(
+    (n) => n.id === target.nodeId && n.type === "trigger_schedule",
+  );
   if (!node) return null;
   return { id: node.id, type: "trigger_schedule", configuration: node.configuration ?? {} };
 }

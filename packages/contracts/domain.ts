@@ -344,13 +344,7 @@ export const V2_ONLY_BLOCK_TYPES = [
   "post_pr_review",
 ] as const satisfies readonly WorkflowBlockType[];
 
-export function isV2OnlyBlockType(
-  type: WorkflowBlockType,
-): type is (typeof V2_ONLY_BLOCK_TYPES)[number] {
-  return (V2_ONLY_BLOCK_TYPES as readonly WorkflowBlockType[]).includes(type);
-}
-
-/** Block types executable by the legacy definition/interpreter. */
+/** Block types a stored legacy definition can name. */
 export type WorkflowBlockTypeV1 = Exclude<
   WorkflowBlockType,
   (typeof V2_ONLY_BLOCK_TYPES)[number]
@@ -507,7 +501,7 @@ export interface WorkflowBlockContract {
   availability: WorkflowBlockAvailability;
 }
 
-export interface WorkflowDefinitionV1Node {
+export interface WorkflowDefinitionNode {
   id: string;
   type: WorkflowBlockTypeV1;
   name?: string;
@@ -520,16 +514,11 @@ export interface WorkflowDefinitionV1Node {
   inputs: WorkflowInputBindings;
 }
 
-export interface WorkflowDefinitionV1Edge {
+export interface WorkflowDefinitionEdge {
   from: string;
   to: string;
   fromPort?: string;
 }
-
-/** Compatibility aliases for the v1 editor and interpreter. New version-aware
- * code should use the explicitly versioned names below. */
-export type WorkflowDefinitionNode = WorkflowDefinitionV1Node;
-export type WorkflowDefinitionEdge = WorkflowDefinitionV1Edge;
 
 /** Canonical data paths persisted by v2 bindings. `entry` is the virtual
  * active-trigger source and is therefore reserved as a real node id. */
@@ -681,12 +670,23 @@ export interface WorkflowRepositoryScope {
   providers?: VcsProviderKind[];
 }
 
-export interface WorkflowDefinitionV1 {
-  schemaVersion: 1;
-  budgets?: WorkflowExecutionBudgets;
-  repositoryScope?: WorkflowRepositoryScope;
-  nodes: WorkflowDefinitionV1Node[];
-  edges: WorkflowDefinitionV1Edge[];
+/** The one definition schema that runs, deploys and is authored. Older stored
+ *  rows still carry an older number; apps/worker/src/workflow-definition/
+ *  stored-definition.ts is the only reader allowed to look at it. */
+export const WORKFLOW_SCHEMA_VERSION = 2;
+
+/** Refusal text shared by every path that would run, deploy, restore or store a
+ *  retired schema, so an operator meets one sentence wherever they hit it. */
+export const RETIRED_SCHEMA_MESSAGE =
+  "Definition schema v1 is retired: v1 versions stay readable but cannot be restored, deployed or saved. Recreate the definition as schema v2.";
+
+/** Read a definition discriminator without teaching every consumer how the
+ * retired stored shape was represented. Comparisons with the retired literal
+ * remain confined to the designated stored history parser. */
+export function workflowDefinitionSchemaVersionOf(value: unknown): unknown {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as { schemaVersion?: unknown }).schemaVersion
+    : undefined;
 }
 
 export interface WorkflowDefinitionV2 {
@@ -697,7 +697,14 @@ export interface WorkflowDefinitionV2 {
   edges: WorkflowDefinitionV2ControlEdge[];
 }
 
-export type WorkflowDefinition = WorkflowDefinitionV1 | WorkflowDefinitionV2;
+export type WorkflowDefinition = WorkflowDefinitionV2;
+
+/** How a stored definition row reads back. `v2` is runnable. `legacy-v1` is the
+ *  retired schema: it stays readable, is returned exactly as it was stored, and
+ *  can never be restored, deployed or saved, so nothing here interprets it. */
+export type StoredWorkflowDefinition =
+  | { schema: "v2"; definition: WorkflowDefinition }
+  | { schema: "legacy-v1"; definition: unknown };
 
 export interface WorkflowLayoutPoint {
   x: number;
@@ -721,15 +728,20 @@ export interface WorkflowDefinitionLayoutInput {
   edges?: Record<string, WorkflowEdgeGeometry>;
 }
 
-export interface WorkflowDefinitionVersion {
+export interface WorkflowDefinitionVersionMeta {
   version: number;
   definitionId: number;
-  definition: WorkflowDefinition;
   createdAt: string;
   createdById: string;
   createdByLabel: string;
   restoredFromVersion: number | null;
 }
+
+/** An immutable stored version as an operator reads it back. The `schema` arm
+ *  decides what may be done with it, so a caller cannot reach the graph without
+ *  first meeting the retired case. */
+export type WorkflowDefinitionVersion = WorkflowDefinitionVersionMeta &
+  StoredWorkflowDefinition;
 
 export interface WorkflowEditorOptions {
   agentKind: "claude" | "codex";

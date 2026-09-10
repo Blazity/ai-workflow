@@ -6,10 +6,7 @@ import {
   resolveBuiltinHarnessProfile,
 } from "@shared/contracts";
 import type { WorkflowBlockRegistryContext } from "./block-registry.js";
-import {
-  defaultWorkflowDefinition,
-  defaultWorkflowDefinitionV2,
-} from "./default.js";
+import { defaultWorkflowDefinitionV2 } from "./default.js";
 import {
   workflowDefinitionTemplate,
   workflowDefinitionTemplates,
@@ -67,10 +64,7 @@ describe("built-in Harness Profiles", () => {
 });
 
 describe("v2 built-in authoring definitions", () => {
-  it("keeps the legacy default on v1 and authors the new default on v2", () => {
-    expect(defaultWorkflowDefinition({ includeReview: false }).schemaVersion).toBe(
-      1,
-    );
+  it("authors the default as v2", () => {
     const authored = defaultWorkflowDefinitionV2({
       includeReview: false,
       provider: "codex",
@@ -109,47 +103,16 @@ describe("v2 built-in authoring definitions", () => {
     ).toBe("{{prompt:implement@1}}");
   });
 
-  it("keeps the leak review out of both templates until the flag enables it", () => {
-    const v1 = defaultWorkflowDefinition({ includeReview: false });
+  it("keeps the leak review out of the template until the flag enables it", () => {
     const v2 = defaultWorkflowDefinitionV2({ includeReview: false });
 
-    expect(v1.nodes.some((node) => node.type === "leak_review")).toBe(false);
     expect(v2.nodes.some((node) => node.type === "leak_review")).toBe(false);
-    expect(v1).toEqual(
-      defaultWorkflowDefinition({ includeReview: false, includeLeakReview: false }),
-    );
     expect(v2).toEqual(
       defaultWorkflowDefinitionV2({ includeReview: false, includeLeakReview: false }),
     );
   });
 
-  it("places the enabled leak review between checks and finalize on both templates", () => {
-    const v1 = defaultWorkflowDefinition({
-      includeReview: true,
-      includeLeakReview: true,
-    });
-    expect(v1.nodes.map((node) => node.id)).toEqual([
-      "trigger",
-      "planning",
-      "implementation",
-      "review",
-      "checks",
-      "leak-review",
-      "finalize",
-      "open-pr",
-      "slack",
-      "status",
-    ]);
-    expect(v1.edges).toEqual(
-      expect.arrayContaining([
-        { from: "checks", to: "leak-review" },
-        { from: "leak-review", to: "finalize" },
-      ]),
-    );
-    expect(v1.edges.some((edge) => edge.from === "checks" && edge.to === "finalize")).toBe(
-      false,
-    );
-
+  it("places the enabled leak review between checks and finalize", () => {
     const v2 = defaultWorkflowDefinitionV2({
       includeReview: true,
       includeLeakReview: true,

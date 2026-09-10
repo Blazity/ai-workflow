@@ -13,6 +13,7 @@ import {
   organization,
 } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
+import { listHarnessProfileUsage } from "../db/harness-profile-usage-store.js";
 import {
   compileHarnessProfileManifest,
   hashHarnessProfileManifest,
@@ -91,6 +92,7 @@ describe("Harness Profile detail", () => {
       profileId,
       actorRole: "owner",
       requestedVersion: 1,
+      usage: [],
     });
 
     expect(detail?.published?.version).toBe(51);
@@ -148,6 +150,7 @@ describe("Harness Profile detail", () => {
       organizationId: "org-detail",
       profileId: "profile-skill-sources",
       actorRole: "owner",
+      usage: [],
     });
 
     expect(

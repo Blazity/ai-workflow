@@ -22,6 +22,7 @@ import {
 } from "../../../../../../../../webhook-trigger/verify.js";
 import {
   getDeployedWorkflowDefinitionVersion,
+  runnableDefinitionOf,
   getWorkflowDefinition,
 } from "../../../../../../../../workflow-definition/store.js";
 import { parseDefinitionId } from "../../../../../workflow-definitions.get.js";
@@ -101,15 +102,11 @@ export async function findDeployedWebhookNode(
   const definition = await getWorkflowDefinition(db, target.definitionId);
   if (!definition || !definition.enabled || definition.archivedAt) return null;
   const head = await getDeployedWorkflowDefinitionVersion(db, target.definitionId);
-  if (!head) return null;
-  // A trigger_webhook node only exists in a v2 graph, so matching the type is
-  // also what rules out a v1 node that happens to share the id.
-  const nodes = head.definition.nodes as readonly {
-    id: string;
-    type: string;
-    configuration?: Record<string, unknown>;
-  }[];
-  const node = nodes.find((n) => n.id === target.nodeId && n.type === "trigger_webhook");
+  const graph = runnableDefinitionOf(head);
+  if (!head || !graph) return null;
+  const node = graph.nodes.find(
+    (n) => n.id === target.nodeId && n.type === "trigger_webhook",
+  );
   if (!node) return null;
   return {
     definitionVersion: head.version,

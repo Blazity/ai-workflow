@@ -240,8 +240,8 @@ describe("findBuiltInPromptDrift", () => {
   it("walks the fresh-install code default, which has no deployed version at all", async () => {
     // Nothing is deployed: exactly what migration 0013 leaves behind, and the
     // shape a brand new install has on day one. definition-step.ts serves
-    // defaultWorkflowDefinition() here, whose agent blocks carry no prompt param
-    // and so resolve each built-in implicitly by name at `latest`.
+    // defaultWorkflowDefinitionV2() here, whose agent blocks pin each built-in
+    // to the shipped library version.
     const { client, db } = await migrateThrough("9999");
 
     const clean = await findBuiltInPromptDrift(db);
@@ -252,13 +252,13 @@ describe("findBuiltInPromptDrift", () => {
       "fresh_install_default:research-plan@1",
       "fresh_install_default:review@1",
     ]);
-    expect(clean.pins.every((pin) => pin.requestedVersion === "latest")).toBe(
+    expect(clean.pins.every((pin) => pin.requestedVersion === 1)).toBe(
       true,
     );
     expect(clean.drift).toEqual([]);
 
-    // `latest` follows the head, so a platform version 2 a resync failed to move
-    // is served to this install with no pin anywhere to point at.
+    // The v2 default pins version 1, so a later platform version does not alter
+    // the definition that a fresh install serves.
     await appendVersion(
       client,
       "implement",
@@ -269,10 +269,8 @@ describe("findBuiltInPromptDrift", () => {
 
     const drifted = await findBuiltInPromptDrift(db);
     expect(drifted.definitionsWalked).toBe(1);
-    expect(drifted.drift.map(pinKey)).toEqual([
-      "fresh_install_default:implement@2",
-    ]);
-    expect(describeBuiltInPromptDrift(drifted)).toContain("code default");
+    expect(drifted.drift).toEqual([]);
+    expect(describeBuiltInPromptDrift(drifted)).toBe("");
   });
 
   it("fails on the production shape: a platform version 2 the active definition pins", async () => {

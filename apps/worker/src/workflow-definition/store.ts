@@ -1,4 +1,5 @@
 import type {
+  StoredWorkflowDefinition,
   WorkflowBlockType,
   WorkflowDefinition,
   WorkflowDefinitionLayout,
@@ -9,8 +10,9 @@ import type {
 import {
   isTriggerBlockType,
   normalizeWorkflowDefinitionLayout,
+  RETIRED_SCHEMA_MESSAGE,
 } from "@shared/contracts";
-import { and, arrayContains, arrayOverlaps, asc, desc, eq, isNull, max, ne, sql } from "drizzle-orm";
+import { and, arrayContains, asc, desc, eq, isNull, max, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import {
   workflowDefinitions,
@@ -31,10 +33,10 @@ import {
 import { cancelWaitingOccurrences } from "../schedule-trigger/revoked-occurrences.js";
 import {
   describeWorkflowDefinitionIssues,
-  upgradeStoredWorkflowDefinition,
+  parseStoredWorkflowDefinition,
   validateWorkflowDefinitionIssuesForDeployment,
-  workflowDefinitionSchema,
-} from "./schema.js";
+  workflowDefinitionV2Schema,
+} from "./stored-definition.js";
 import { workflowBlockRegistryContextFromEnv } from "./models.js";
 import { validateWorkflowPromptAuthoringIssues } from "./prompt-authoring.js";
 import {
@@ -56,6 +58,8 @@ export interface WorkflowDefinitionRow {
   id: number;
   name: string;
   enabled: boolean;
+  deployedSchema: "v2" | "legacy-v1";
+  retiredMessage?: typeof RETIRED_SCHEMA_MESSAGE;
   triggerTypes: WorkflowBlockType[];
   /** Latest saved semantic version; retained as the editor CAS name. */
   draftRevision: number;
@@ -79,22 +83,43 @@ export interface WorkflowDefinitionDraftRow {
   draftRevision: number;
 }
 
-export interface WorkflowDefinitionVersionRow {
+interface WorkflowDefinitionVersionMetaRow {
   definitionId: number;
   version: number;
-  definition: WorkflowDefinition;
   createdAt: Date;
   createdById: string;
   createdByLabel: string;
   restoredFromVersion: number | null;
 }
 
-/** Exact append-only JSON stored for a version, before compatibility reads
- * normalize legacy v1 shapes. Migration preflight uses this to ensure no
- * historical configuration is silently discarded. */
-export interface RawWorkflowDefinitionVersionRow
-  extends Omit<WorkflowDefinitionVersionRow, "definition"> {
-  definition: unknown;
+/** A stored version as read back. Callers that need to run, deploy or copy the
+ *  graph pass it through requireRunnableVersion first. */
+export type WorkflowDefinitionVersionRow = WorkflowDefinitionVersionMetaRow &
+  StoredWorkflowDefinition;
+
+type RunnableWorkflowDefinitionVersionRow = WorkflowDefinitionVersionMetaRow & {
+  schema: "v2";
+  definition: WorkflowDefinition;
+};
+
+/** The graph of a version that can still run, and nothing at all for a retired
+ *  one. Every reader that pulls a graph out of a version row wants exactly
+ *  this, so the two arms are separated here instead of at each call site. */
+export function runnableDefinitionOf(
+  row: WorkflowDefinitionVersionRow | null | undefined,
+): WorkflowDefinition | undefined {
+  return row?.schema === "v2" ? row.definition : undefined;
+}
+
+/** A retired version stays readable and nothing more: every write path that
+ *  would run, deploy or copy it stops here with one message. */
+function requireRunnableVersion(
+  row: WorkflowDefinitionVersionRow,
+): RunnableWorkflowDefinitionVersionRow {
+  if (row.schema !== "v2") {
+    throw new WorkflowDefinitionStoreError(409, RETIRED_SCHEMA_MESSAGE);
+  }
+  return row;
 }
 
 /** Domain-level failure a write raises (409 conflict, 404 not found). Routes map
@@ -124,11 +149,17 @@ function normalizeLayout(value: unknown): WorkflowDefinitionLayout {
 function mapDefinitionRow(
   row: DefinitionSelect,
   draftRevision = 0,
+  deployed: WorkflowDefinitionVersionRow | null = null,
 ): WorkflowDefinitionRow {
+  const deployedSchema = deployed?.schema === "legacy-v1" ? "legacy-v1" : "v2";
   return {
     id: row.id,
     name: row.name,
     enabled: row.enabled,
+    deployedSchema,
+    ...(deployedSchema === "legacy-v1"
+      ? { retiredMessage: RETIRED_SCHEMA_MESSAGE }
+      : {}),
     triggerTypes: row.triggerTypes as WorkflowBlockType[],
     draftRevision,
     layout: normalizeLayout(row.layout),
@@ -146,23 +177,11 @@ function mapVersionRow(row: VersionSelect): WorkflowDefinitionVersionRow {
   return {
     definitionId: row.definitionId,
     version: row.version,
-    definition: upgradeStoredWorkflowDefinition(row.definition),
     createdAt: row.createdAt,
     createdById: row.createdById,
     createdByLabel: row.createdByLabel,
     restoredFromVersion: row.restoredFromVersion,
-  };
-}
-
-function mapRawVersionRow(row: VersionSelect): RawWorkflowDefinitionVersionRow {
-  return {
-    definitionId: row.definitionId,
-    version: row.version,
-    definition: row.definition,
-    createdAt: row.createdAt,
-    createdById: row.createdById,
-    createdByLabel: row.createdByLabel,
-    restoredFromVersion: row.restoredFromVersion,
+    ...parseStoredWorkflowDefinition(row.definition),
   };
 }
 
@@ -203,7 +222,7 @@ function requireEditRole(role: DashboardRole): void {
  * shape upgrades. Known retired shapes remain readable; truly unknown block
  * types stay rejected instead of being guessed or silently discarded. */
 function assertValidDefinition(definition: WorkflowDefinition): void {
-  const parsed = workflowDefinitionSchema.safeParse(definition);
+  const parsed = workflowDefinitionV2Schema.safeParse(definition);
   if (!parsed.success) {
     throw new WorkflowDefinitionStoreError(
       400,
@@ -214,9 +233,9 @@ function assertValidDefinition(definition: WorkflowDefinition): void {
     parsed.data,
     workflowBlockRegistryContextFromEnv(),
     // This guard is used only when an already-stored snapshot is selected or
-    // copied. Keep the v1 validation subset that was in force when that
-    // immutable version was written. New deployments still pass through the
-    // strict `assertDeployableDefinition` path below.
+    // copied. Keep the validation subset that was in force when that immutable
+    // version was written. New deployments still pass through the strict
+    // `assertDeployableDefinition` path below.
     { allowLegacyCompatibility: true },
   );
   if (issues.length > 0) {
@@ -228,7 +247,7 @@ function assertValidDefinition(definition: WorkflowDefinition): void {
 }
 
 function assertDeployableDefinition(definition: WorkflowDefinition): void {
-  const parsed = workflowDefinitionSchema.safeParse(definition);
+  const parsed = workflowDefinitionV2Schema.safeParse(definition);
   if (!parsed.success) {
     throw new WorkflowDefinitionStoreError(
       400,
@@ -257,7 +276,7 @@ async function assertDeployableDefinitionWithPromptAuthoring(
 }
 
 function parseStructuralDefinition(definition: WorkflowDefinition): WorkflowDefinition {
-  const parsed = workflowDefinitionSchema.safeParse(definition);
+  const parsed = workflowDefinitionV2Schema.safeParse(definition);
   if (!parsed.success) {
     throw new WorkflowDefinitionStoreError(
       400,
@@ -358,8 +377,32 @@ export async function listWorkflowDefinitions(db: Db): Promise<WorkflowDefinitio
     .from(workflowDefinitionVersions)
     .groupBy(workflowDefinitionVersions.definitionId);
   const headByDefinition = new Map(heads.map((head) => [head.definitionId, head.currentVersion]));
+  const deployedDefinitions = defs.filter((row) => row.deployedVersion != null);
+  const deployedRows =
+    deployedDefinitions.length === 0
+      ? []
+      : await db
+          .select()
+          .from(workflowDefinitionVersions)
+          .where(
+            or(
+              ...deployedDefinitions.map((row) =>
+                and(
+                  eq(workflowDefinitionVersions.definitionId, row.id),
+                  eq(workflowDefinitionVersions.version, row.deployedVersion!),
+                ),
+              ),
+            ),
+          );
+  const deployedByDefinition = new Map(
+    deployedRows.map((row) => [row.definitionId, mapVersionRow(row)]),
+  );
   return defs.map((row) => ({
-    ...mapDefinitionRow(row, headByDefinition.get(row.id) ?? 0),
+    ...mapDefinitionRow(
+      row,
+      headByDefinition.get(row.id) ?? 0,
+      deployedByDefinition.get(row.id) ?? null,
+    ),
     currentVersion: headByDefinition.get(row.id) ?? null,
   }));
 }
@@ -374,8 +417,13 @@ export async function getWorkflowDefinition(
     .where(eq(workflowDefinitions.id, id))
     .limit(1);
   if (!rows[0]) return null;
-  const current = await getCurrentWorkflowDefinitionVersion(db, id);
-  return mapDefinitionRow(rows[0], current?.version ?? 0);
+  const [current, deployed] = await Promise.all([
+    getCurrentWorkflowDefinitionVersion(db, id),
+    rows[0].deployedVersion === null
+      ? Promise.resolve(null)
+      : getWorkflowDefinitionVersion(db, id, rows[0].deployedVersion),
+  ]);
+  return mapDefinitionRow(rows[0], current?.version ?? 0, deployed);
 }
 
 /** Loads definition lifecycle metadata and its head revision without decoding
@@ -397,7 +445,11 @@ export async function getWorkflowDefinitionRawState(
     .select({ currentVersion: max(workflowDefinitionVersions.version) })
     .from(workflowDefinitionVersions)
     .where(eq(workflowDefinitionVersions.definitionId, id));
-  return mapDefinitionRow(row, currentVersion ?? 0);
+  const deployed =
+    row.deployedVersion === null
+      ? null
+      : await getWorkflowDefinitionVersion(db, id, row.deployedVersion);
+  return mapDefinitionRow(row, currentVersion ?? 0, deployed);
 }
 
 export async function getWorkflowDefinitionDraft(
@@ -409,10 +461,18 @@ export async function getWorkflowDefinitionDraft(
     getCurrentWorkflowDefinitionVersion(db, definitionId),
   ]);
   if (!definition || !current) return null;
-  const semantic = upgradeStoredWorkflowDefinition(current.definition);
+  if (current.schema !== "v2") {
+    // A retired head cannot be opened by a v2-only editor. The definition reads
+    // as having no draft, and its history still shows the stored version.
+    logger.warn(
+      { definitionId, version: current.version },
+      "workflow_definition_draft_schema_retired",
+    );
+    return null;
+  }
   return {
     definition,
-    draft: applyWorkflowDefinitionLayout(semantic, definition.layout),
+    draft: applyWorkflowDefinitionLayout(current.definition, definition.layout),
     draftRevision: current.version,
   };
 }
@@ -446,26 +506,6 @@ export async function getWorkflowDefinitionVersion(
     )
     .limit(1);
   return rows[0] ? mapVersionRow(rows[0]) : null;
-}
-
-/** Returns the exact immutable JSON blob without applying v1 compatibility
- * upgrades. This is intentionally separate from every normal read API. */
-export async function getRawWorkflowDefinitionVersion(
-  db: Db,
-  definitionId: number,
-  version: number,
-): Promise<RawWorkflowDefinitionVersionRow | null> {
-  const rows = await db
-    .select()
-    .from(workflowDefinitionVersions)
-    .where(
-      and(
-        eq(workflowDefinitionVersions.definitionId, definitionId),
-        eq(workflowDefinitionVersions.version, version),
-      ),
-    )
-    .limit(1);
-  return rows[0] ? mapRawVersionRow(rows[0]) : null;
 }
 
 export async function getDeployedWorkflowDefinitionVersion(
@@ -534,9 +574,14 @@ export async function getEnabledWorkflowDefinitionForTrigger(
 
   // A definition with no versions falls back to the built-in default, whose
   // trigger_types column is fixed at seed time and cannot drift from a version.
-  const actualTriggers: WorkflowBlockType[] = current
-    ? triggerTypesOf(current.definition)
-    : ((defRow?.triggerTypes as WorkflowBlockType[]) ?? []);
+  const actualTriggers: WorkflowBlockType[] =
+    current === null
+      ? defRow?.deployedVersion === null
+        ? ((defRow?.triggerTypes as WorkflowBlockType[]) ?? [])
+        : []
+      : current.schema === "v2"
+        ? triggerTypesOf(current.definition)
+        : [];
   const stale =
     !defRow ||
     !defRow.enabled ||
@@ -583,7 +628,7 @@ export async function getEnabledWorkflowDefinitionForTrigger(
     );
     return null;
   }
-  return { definition: mapDefinitionRow(defRow!, current?.version ?? 0), current };
+  return { definition: mapDefinitionRow(defRow!, current?.version ?? 0, current), current };
 }
 
 /** Loads a definition by id, but only when it is a live handler: enabled, not
@@ -609,7 +654,7 @@ export async function getEnabledDeployedDefinition(
   // immutable, so a null here means the pointer is dangling (not routable).
   const current = await getWorkflowDefinitionVersion(db, defRow.id, defRow.deployedVersion);
   if (!current) return null;
-  return { definition: mapDefinitionRow(defRow, current.version), current };
+  return { definition: mapDefinitionRow(defRow, current.version, current), current };
 }
 
 async function readTriggerBinding(
@@ -687,9 +732,12 @@ async function enabledDefinitionsDeclaringTrigger(
         row.deployedVersion != null
           ? await getWorkflowDefinitionVersion(db, row.id, row.deployedVersion)
           : null;
-      const triggers = deployed
-        ? triggerTypesOf(deployed.definition)
-        : ((row.triggerTypes as WorkflowBlockType[]) ?? []);
+      const triggers =
+        row.deployedVersion === null
+          ? ((row.triggerTypes as WorkflowBlockType[]) ?? [])
+          : deployed?.schema === "v2"
+            ? triggerTypesOf(deployed.definition)
+            : [];
       return triggers.includes(triggerType) ? row.id : null;
     }),
   );
@@ -725,24 +773,17 @@ async function assertNoTriggerOverlap(
   // probe; a list that is all per-endpoint can never overlap.
   const singletonTriggers = input.triggerTypes.filter((type) => !isSelfRoutedTrigger(type));
   if (singletonTriggers.length === 0) return;
-  const conflicts = await db
-    .select({ name: workflowDefinitions.name })
-    .from(workflowDefinitions)
-    .where(
-      and(
-        eq(workflowDefinitions.enabled, true),
-        isNull(workflowDefinitions.archivedAt),
-        ne(workflowDefinitions.id, input.definitionId),
-        arrayOverlaps(workflowDefinitions.triggerTypes, singletonTriggers),
-      ),
-    )
-    .limit(1);
-  const conflict = conflicts[0];
-  if (conflict) {
-    throw new WorkflowDefinitionStoreError(
-      409,
-      `Its trigger is already handled by the enabled definition "${conflict.name}"`,
-    );
+  for (const triggerType of singletonTriggers) {
+    // Routing is also the stale-binding healer. Asking it here makes the
+    // precheck use the deployed graph as its source of truth and releases a
+    // legacy deployment's obsolete claim before this write tries to claim it.
+    const conflict = await getEnabledWorkflowDefinitionForTrigger(db, triggerType);
+    if (conflict && conflict.definition.id !== input.definitionId) {
+      throw new WorkflowDefinitionStoreError(
+        409,
+        `Its trigger is already handled by the enabled definition "${conflict.definition.name}"`,
+      );
+    }
   }
 }
 
@@ -832,7 +873,10 @@ export async function createWorkflowDefinitionDraft(
   }
   return {
     definition: created.definition,
-    draft: applyWorkflowDefinitionLayout(created.current.definition, created.definition.layout),
+    draft: applyWorkflowDefinitionLayout(
+      requireRunnableVersion(created.current).definition,
+      created.definition.layout,
+    ),
     draftRevision: created.current.version,
   };
 }
@@ -908,7 +952,10 @@ export async function saveWorkflowDefinitionDraft(
   }
   return {
     definition,
-    draft: applyWorkflowDefinitionLayout(version.definition, definition.layout),
+    draft: applyWorkflowDefinitionLayout(
+      requireRunnableVersion(version).definition,
+      definition.layout,
+    ),
     draftRevision: version.version,
   };
 }
@@ -948,12 +995,12 @@ export async function saveWorkflowDefinitionLayout(
     throw new WorkflowDefinitionStoreError(409, "Layout changed; reload before saving");
   }
   const current = await getCurrentWorkflowDefinitionVersion(db, input.definitionId);
-  return mapDefinitionRow(saved, current?.version ?? 0);
+  return (await getWorkflowDefinition(db, saved.id))!;
 }
 
 export interface WorkflowDefinitionSelectionResult {
   definition: WorkflowDefinitionRow;
-  version: WorkflowDefinitionVersionRow;
+  version: RunnableWorkflowDefinitionVersionRow;
 }
 
 /**
@@ -973,7 +1020,7 @@ async function mintWebhookEndpointsForLiveHead(
   if (!env.WEBHOOK_TRIGGER_ENCRYPTION_KEY) return;
   try {
     const head = await getDeployedWorkflowDefinitionVersion(db, definitionId);
-    if (!head) return;
+    if (head?.schema !== "v2") return;
     await mintWebhookEndpointsForDefinition(db, env.WEBHOOK_TRIGGER_ENCRYPTION_KEY, {
       definitionId,
       nodes: head.definition.nodes,
@@ -1019,7 +1066,7 @@ async function syncSchedulesForLiveHead(
     // as it takes the next tick to revoke them again. Enabling calls this anyway.
     if (!definition || !definition.enabled || definition.archivedAt != null) return;
     const head = await getDeployedWorkflowDefinitionVersion(db, definitionId);
-    if (!head) return;
+    if (head?.schema !== "v2") return;
     const nodes = head.definition.nodes;
     await mintSchedulesForLiveHead(db, { definitionId, nodes });
     const liveNodeIds = new Set(
@@ -1054,26 +1101,56 @@ async function syncSchedulesForLiveHead(
 export async function getLiveScheduleTriggerTarget(
   db: Db,
   input: { definitionId: number; nodeId: string; definitionVersion: number | null },
-): Promise<{
-  definitionVersion: number;
-  taskTitle: string;
-  taskDescription: string;
-  rateLimit: TriggerRateLimitNodeParams;
-} | null> {
+): Promise<
+  | {
+      kind: "runnable";
+      definitionVersion: number;
+      taskTitle: string;
+      taskDescription: string;
+      rateLimit: TriggerRateLimitNodeParams;
+    }
+  | {
+      kind: "retired-head";
+      definitionVersion: number;
+      reason: typeof RETIRED_SCHEMA_MESSAGE;
+    }
+  | {
+      kind: "retired-pinned";
+      definitionVersion: number;
+      reason: typeof RETIRED_SCHEMA_MESSAGE;
+    }
+  | null
+> {
   const definition = await getWorkflowDefinition(db, input.definitionId);
   if (!definition || !definition.enabled || definition.archivedAt != null) return null;
   const head = await getDeployedWorkflowDefinitionVersion(db, input.definitionId);
-  if (!head || !scheduleNodeOf(head, input.nodeId)) return null;
+  if (!head) return null;
+  if (head.schema !== "v2") {
+    return {
+      kind: "retired-head",
+      definitionVersion: head.version,
+      reason: RETIRED_SCHEMA_MESSAGE,
+    };
+  }
+  if (!scheduleNodeOf(head, input.nodeId)) return null;
 
   const version = input.definitionVersion ?? head.version;
   const source =
     version === head.version
       ? head
       : await getWorkflowDefinitionVersion(db, input.definitionId, version);
+  if (source?.schema === "legacy-v1") {
+    return {
+      kind: "retired-pinned",
+      definitionVersion: source.version,
+      reason: RETIRED_SCHEMA_MESSAGE,
+    };
+  }
   const node = source ? scheduleNodeOf(source, input.nodeId) : null;
   if (!node) return null;
   const configuration = (node.configuration ?? {}) as Record<string, unknown>;
   return {
+    kind: "runnable",
     definitionVersion: version,
     taskTitle: typeof configuration.taskTitle === "string" ? configuration.taskTitle : "",
     taskDescription:
@@ -1111,6 +1188,7 @@ function scheduleNodeOf(
   version: WorkflowDefinitionVersionRow,
   nodeId: string,
 ): { configuration?: Record<string, unknown> } | null {
+  if (version.schema !== "v2") return null;
   const node = version.definition.nodes.find((candidate) => candidate.id === nodeId);
   // The type check is not redundant with the id check: a node id can be reused
   // for a different block type, and then the schedule row names something that is
@@ -1147,8 +1225,9 @@ export async function deployWorkflowDefinition(
     input.expectedDraftRevision,
   );
   if (!target) throw new WorkflowDefinitionStoreError(409, "Save a draft before deploying");
-  await assertDeployableDefinitionWithPromptAuthoring(db, target.definition);
-  const triggerTypes = triggerTypesOf(target.definition);
+  const deployable = requireRunnableVersion(target);
+  await assertDeployableDefinitionWithPromptAuthoring(db, deployable.definition);
+  const triggerTypes = triggerTypesOf(deployable.definition);
   const triggerArray = triggerArraySql(triggerTypes);
   // The denormalized trigger_types column still mirrors the full graph (it feeds
   // the editor badges and the API), but the singleton binding table must not
@@ -1210,7 +1289,7 @@ export async function deployWorkflowDefinition(
     }
     await mintWebhookEndpointsForLiveHead(db, selected.id);
     await syncSchedulesForLiveHead(db, selected.id);
-    return { definition, version };
+    return { definition, version: requireRunnableVersion(version) };
   } catch (error) {
     if (error instanceof WorkflowDefinitionStoreError) throw error;
     if (isUniqueViolation(error)) {
@@ -1240,12 +1319,9 @@ export async function rollbackWorkflowDefinition(
   if (current.deployedVersion !== input.expectedDeployedVersion) {
     throw new WorkflowDefinitionStoreError(409, "Definition changed; reload before rolling back");
   }
-  if (target.definition.schemaVersion === 2) {
-    await assertDeployableDefinitionWithPromptAuthoring(db, target.definition);
-  } else {
-    assertValidDefinition(target.definition);
-  }
-  const triggerTypes = triggerTypesOf(target.definition);
+  const runnable = requireRunnableVersion(target);
+  await assertDeployableDefinitionWithPromptAuthoring(db, runnable.definition);
+  const triggerTypes = triggerTypesOf(runnable.definition);
   const triggerArray = triggerArraySql(triggerTypes);
   // trigger_types column mirrors the full graph; the singleton binding table must
   // not claim self-routed triggers (webhook, schedule), so those are dropped from insert.
@@ -1306,7 +1382,7 @@ export async function rollbackWorkflowDefinition(
     // the operator gets the old graph running on the new schedule and the rollback
     // has not actually rolled anything back.
     await syncSchedulesForLiveHead(db, selected.id);
-    return { definition, version: target };
+    return { definition, version: runnable };
   } catch (error) {
     if (error instanceof WorkflowDefinitionStoreError) throw error;
     if (isUniqueViolation(error)) {
@@ -1404,15 +1480,9 @@ export async function updateWorkflowDefinition(
         if (!deployed) {
           throw new WorkflowDefinitionStoreError(409, "The deployed version is unavailable");
         }
-        if (deployed.definition.schemaVersion === 2) {
-          await assertDeployableDefinitionWithPromptAuthoring(
-            db,
-            deployed.definition,
-          );
-        } else {
-          assertValidDefinition(deployed.definition);
-        }
-        triggerTypes = triggerTypesOf(deployed.definition);
+        const live = requireRunnableVersion(deployed);
+        await assertDeployableDefinitionWithPromptAuthoring(db, live.definition);
+        triggerTypes = triggerTypesOf(live.definition);
       } else {
         const latest = await getCurrentWorkflowDefinitionVersion(db, current.id);
         const isFreshInstallFallback =
@@ -1578,7 +1648,7 @@ export async function restoreWorkflowDefinitionVersion(
   }
   return saveWorkflowDefinitionVersion(db, {
     definitionId: input.definitionId,
-    definition: mapVersionRow(source).definition,
+    definition: requireRunnableVersion(mapVersionRow(source)).definition,
     restoredFromVersion: source.version,
     actor: input.actor,
   });
@@ -1589,15 +1659,17 @@ export async function restoreWorkflowDefinitionVersion(
 export function serializeWorkflowDefinitionVersion(
   row: WorkflowDefinitionVersionRow,
 ): WorkflowDefinitionVersion {
-  return {
+  const meta = {
     version: row.version,
     definitionId: row.definitionId,
-    definition: row.definition,
     createdAt: row.createdAt.toISOString(),
     createdById: row.createdById,
     createdByLabel: row.createdByLabel,
     restoredFromVersion: row.restoredFromVersion,
   };
+  return row.schema === "v2"
+    ? { ...meta, schema: "v2", definition: row.definition }
+    : { ...meta, schema: "legacy-v1", definition: row.definition };
 }
 
 // --- Back-compat wrappers (temporary; removed by stage B3) ---
@@ -1607,7 +1679,7 @@ export function serializeWorkflowDefinitionVersion(
 // targeting the seeded default definition, and convert the new store error back
 // to DashboardAuthError so the existing toHttpError mapping still applies.
 
-export async function resolveDefaultDefinitionId(db: Db): Promise<number> {
+async function resolveDefaultDefinitionId(db: Db): Promise<number> {
   const enabled = await db
     .select({ id: workflowDefinitions.id })
     .from(workflowDefinitions)

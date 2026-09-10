@@ -8,14 +8,15 @@ import {
   type ReactTestInstance,
   type ReactTestRenderer,
 } from "react-test-renderer";
-import type {
-  JsonValue,
-  ScheduleConfigResponse,
-  ScheduleOccurrenceEntry,
-  ScheduleStatus,
-  WorkflowDefinitionV2,
-  WorkflowEditorOptions,
-  WorkflowParamValue,
+import {
+  RETIRED_SCHEMA_MESSAGE,
+  type JsonValue,
+  type ScheduleConfigResponse,
+  type ScheduleOccurrenceEntry,
+  type ScheduleStatus,
+  type WorkflowDefinitionV2,
+  type WorkflowEditorOptions,
+  type WorkflowParamValue,
 } from "@shared/contracts";
 import type { FlowNodeDef } from "@/lib/flows";
 import {
@@ -653,6 +654,25 @@ test("a superseded occurrence reads with a human chip label and says it will not
   assert.doesNotMatch(html, />superseded</);
   assert.match(html, />replaced</);
   assert.match(html, /will not run and will not be replayed/);
+});
+
+test("a cancelled occurrence renders its durable retirement reason verbatim", () => {
+  const html = renderToStaticMarkup(
+    <ScheduleOccurrenceHistorySection
+      lastRun={null}
+      now={NOW}
+      periodMs={null}
+      occurrences={[
+        occurrence({ outcome: "cancelled", skipReason: RETIRED_SCHEMA_MESSAGE }),
+      ]}
+      loading={false}
+      error={null}
+      onRefresh={() => undefined}
+    />,
+  );
+
+  assert.ok(html.includes(RETIRED_SCHEMA_MESSAGE));
+  assert.doesNotMatch(html, /schedule was paused/);
 });
 
 test("an expired occurrence's meaning does not mention the drain", () => {

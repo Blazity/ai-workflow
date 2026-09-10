@@ -1,17 +1,13 @@
 import { eq } from "drizzle-orm";
 import { createApp, createRouter, toWebHandler } from "h3";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  PromptSlotDefinition,
-  WorkflowDefinition,
-} from "@shared/contracts";
+import type { PromptSlotDefinition } from "@shared/contracts";
 import type { Db } from "../../../db/client.js";
 import {
   member,
   organization,
   promptLibrary,
   user,
-  workflowDefinitionVersions,
 } from "../../../db/schema.js";
 import { createTestDb } from "../../../db/test-db.js";
 
@@ -396,50 +392,6 @@ describe("slot validation", () => {
 });
 
 describe("usage", () => {
-  it("returns the usage rows for a referenced prompt", async () => {
-    await create({ name: "Referenced", body: "BODY" });
-
-    const definition: WorkflowDefinition = {
-      schemaVersion: 1,
-      nodes: [
-        {
-          id: "n1",
-          type: "planning_agent",
-          name: "Plan",
-          x: 0,
-          y: 0,
-          inputs: {},
-          params: { prompt: "BODY" },
-          promptRefs: { prompt: { promptId: 4, version: 1 } },
-        },
-      ],
-      edges: [],
-    };
-    await db.insert(workflowDefinitionVersions).values({
-      definitionId: 1,
-      version: 1,
-      definition,
-      createdById: "user_admin",
-      createdByLabel: "Admin",
-      restoredFromVersion: null,
-    });
-
-    const res = await usage(new Request("http://worker.test/p/4/usage"));
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.rows).toHaveLength(1);
-    expect(body.rows[0]).toMatchObject({
-      definitionId: 1,
-      definitionName: "Ticket workflow",
-      nodeId: "n1",
-      nodeName: "Plan",
-      blockType: "planning_agent",
-      paramKey: "prompt",
-      version: 1,
-      state: "current",
-    });
-  });
-
   it("returns an empty list for an unreferenced prompt", async () => {
     await create({ name: "Lonely", body: "x" });
     const res = await usage(new Request("http://worker.test/p/4/usage"));

@@ -3,11 +3,10 @@ import type {
   WorkflowRepositoryScope,
   WorkflowBlockType,
   WorkflowDefinition,
-  WorkflowDefinitionV1,
   WorkflowDefinitionEdge,
   WorkflowDefinitionNode,
-  WorkflowDefinitionV2,
 } from "@shared/contracts";
+import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import type { WorkflowDefinitionVersionRow } from "../workflow-definition/store.js";
 import {
   BUILTIN_FALLBACK_DEFINITION_VERSION,
@@ -15,10 +14,9 @@ import {
 } from "./agent-input.js";
 
 export interface LoadedWorkflowPlan {
-  schemaVersion: 1 | 2;
-  /** Exact immutable definition selected for this run. V2 execution consumes
-   * this graph directly so stable edge IDs, fan-out, and typed bindings are
-   * never flattened into the legacy cursor model. */
+  /** Exact immutable definition selected for this run. Execution consumes this
+   * graph directly so stable edge IDs, fan-out, and typed bindings are never
+   * flattened into a cursor model. */
   definition: WorkflowDefinition;
   version: number | null;
   /** Definition selected for dispatch; legacy unpinned fallback loads use null. */
@@ -72,23 +70,18 @@ export async function loadWorkflowDefinitionFor(
     getEnabledWorkflowDefinitionForTrigger,
   } = await import("../workflow-definition/store.js");
   const {
-    workflowDefinitionV1Schema,
     workflowDefinitionV2Schema,
-    upgradeStoredWorkflowDefinition,
     validateWorkflowDefinitionForDeployment,
     describeWorkflowDefinitionIssues,
   } = await import("../workflow-definition/schema.js");
   const { workflowBlockRegistryContextFromEnv } =
     await import("../workflow-definition/models.js");
-  const { defaultWorkflowDefinition } = await import("../workflow-definition/default.js");
+  const { defaultWorkflowDefinitionV2 } = await import("../workflow-definition/default.js");
   const { logger } = await import("../lib/logger.js");
 
-  const toLegacyRuntimeShape = (
+  const toRuntimeShape = (
     def: WorkflowDefinition,
   ): { nodes: WorkflowDefinitionNode[]; edges: WorkflowDefinitionEdge[] } => {
-    if (def.schemaVersion === 1) {
-      return { nodes: def.nodes, edges: def.edges };
-    }
     return {
       nodes: def.nodes.map((node) => ({
         id: node.id,
@@ -112,9 +105,8 @@ export async function loadWorkflowDefinitionFor(
     version: number | null,
     id: number | null,
   ): LoadedWorkflowPlan => {
-    const normalized = toLegacyRuntimeShape(def);
+    const normalized = toRuntimeShape(def);
     return {
-      schemaVersion: def.schemaVersion,
       definition: def,
       version,
       definitionId: id,
@@ -129,9 +121,10 @@ export async function loadWorkflowDefinitionFor(
   const isTicket = triggerType === "trigger_ticket_ai";
   const buildDefault = (selectedDefinitionId: number | null = null): LoadedWorkflowPlan =>
     toPlan(
-      defaultWorkflowDefinition({
+      defaultWorkflowDefinitionV2({
         includeReview: env.ENABLE_REVIEW_PHASE,
         includeLeakReview: env.ENABLE_LEAK_REVIEW,
+        provider: env.AGENT_KIND,
       }),
       null,
       selectedDefinitionId,
@@ -199,35 +192,22 @@ export async function loadWorkflowDefinitionFor(
     return null;
   }
 
-  let upgraded: WorkflowDefinition;
-  try {
-    upgraded = upgradeStoredWorkflowDefinition(row.definition);
-  } catch (error) {
-    if (!isZodLikeError(error)) throw error;
+  if (row.schema !== "v2") {
+    // A stored row this build cannot run. Throwing hands the run to the
+    // transparent-failure path, which records the reason and comments it on the
+    // ticket; returning null would skip the run without saying why.
     logger.error(
-      {
-        definitionId: row.definitionId,
-        version: row.version,
-        issues: describeZodLikeError(error),
-      },
-      "workflow_definition_invalid",
+      { definitionId: row.definitionId, version: row.version },
+      "workflow_definition_schema_retired",
     );
-    return null;
+    throw new Error(RETIRED_SCHEMA_MESSAGE);
   }
-  const parsed =
-    upgraded.schemaVersion === 2
-      ? workflowDefinitionV2Schema.safeParse(upgraded)
-      : workflowDefinitionV1Schema.safeParse(upgraded);
+  const parsed = workflowDefinitionV2Schema.safeParse(row.definition);
   const graphIssues = parsed.success
     ? validateWorkflowDefinitionForDeployment(
         parsed.data,
         workflowBlockRegistryContextFromEnv(),
-        parsed.data.schemaVersion === 1
-          ? {
-              allowLegacyCompatibility: true,
-              checkEnvironmentAvailability: false,
-            }
-          : { checkEnvironmentAvailability: false },
+        { checkEnvironmentAvailability: false },
       )
     : [];
   if (!parsed.success || graphIssues.length > 0) {
@@ -241,6 +221,6 @@ export async function loadWorkflowDefinitionFor(
     return null;
   }
 
-  return toPlan(parsed.data as WorkflowDefinitionV1 | WorkflowDefinitionV2, row.version, row.definitionId);
+  return toPlan(parsed.data, row.version, row.definitionId);
 }
 loadWorkflowDefinitionFor.maxRetries = 0;

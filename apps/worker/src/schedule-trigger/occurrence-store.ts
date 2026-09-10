@@ -198,6 +198,47 @@ export async function acceptOccurrence(
 }
 
 /**
+ * Record that one occurrence cannot run because its workflow schema is retired.
+ *
+ * This is one statement for both cases that need it. Evaluation inserts the due
+ * occurrence already settled, so an empty ledger still records the exact reason.
+ * The drain targets the pending occurrence pinned to retired history and settles
+ * only that row. A terminal occurrence is never reopened or overwritten.
+ */
+export async function recordRetiredOccurrence(
+  db: Db,
+  admitted: AdmittedOccurrence,
+  reason: string,
+): Promise<boolean> {
+  const result = await db.execute(sql`
+    INSERT INTO ${scheduleOccurrences} (
+      schedule_id, occurrence_at, definition_id, definition_version,
+      pending, outcome, skip_reason, dropped_count, dropped_count_capped
+    )
+    VALUES (
+      ${admitted.scheduleId},
+      ${admitted.occurrenceAt},
+      ${admitted.definitionId},
+      ${admitted.definitionVersion},
+      false,
+      'cancelled',
+      ${reason},
+      ${admitted.droppedOlder},
+      ${admitted.droppedOlderAtLeast}
+    )
+    ON CONFLICT (schedule_id, occurrence_at) DO UPDATE
+    SET pending = false,
+        outcome = 'cancelled',
+        skip_reason = ${reason},
+        updated_at = now()
+    WHERE ${scheduleOccurrences.pending} = true
+       OR ${scheduleOccurrences.outcome} IS NULL
+    RETURNING schedule_id
+  `);
+  return rawRows(result).length === 1;
+}
+
+/**
  * The queue policy: keep at most one occurrence waiting, and make it the NEWEST.
  *
  * One statement, so the schedule is never briefly holding two pending

@@ -5,7 +5,10 @@ import type {
   WorkflowDefinitionDetailResponse,
   WorkflowDefinitionV2,
 } from "@shared/contracts";
-import { isHarnessGitHubSkillSource } from "@shared/contracts";
+import {
+  isHarnessGitHubSkillSource,
+  WORKFLOW_SCHEMA_VERSION,
+} from "@shared/contracts";
 import { z } from "zod";
 
 const positiveInteger = z.coerce.number().int().positive();
@@ -98,10 +101,12 @@ export function assertMinimalCanaryWorkflow(
   if (!detail.deployed || detail.meta.deployedVersion !== detail.deployed.version) {
     throw new Error(`Workflow ${detail.meta.id} must have one selected deployment`);
   }
-  const definition = detail.deployed.definition;
-  if (definition.schemaVersion !== 2) {
-    throw new Error(`Workflow ${detail.meta.id} must deploy schema version 2`);
+  if (detail.deployed.schema !== "v2") {
+    throw new Error(
+      `Workflow ${detail.meta.id} must deploy schema version ${WORKFLOW_SCHEMA_VERSION}`,
+    );
   }
+  const definition = detail.deployed.definition;
   if (definition.nodes.length !== 2 || definition.edges.length !== 1) {
     throw new Error(
       `Workflow ${detail.meta.id} must contain only a trigger and one Generic Agent`,

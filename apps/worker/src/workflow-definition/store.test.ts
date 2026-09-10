@@ -2,11 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import type {
   WorkflowBlockType,
-  WorkflowBlockTypeV1,
-  WorkflowDefinition,
-  WorkflowDefinitionV1,
   WorkflowDefinitionV2,
 } from "@shared/contracts";
+import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 
 vi.mock("../../env.js", () => ({
@@ -44,13 +42,11 @@ import { DashboardAuthError } from "../lib/auth/users-read.js";
 import {
   archiveWorkflowDefinition,
   createWorkflowDefinition,
-  createWorkflowDefinitionDraft,
   deployWorkflowDefinition,
   getCurrentWorkflowDefinitionVersion,
   getEnabledWorkflowDefinitionForTrigger,
-  getRawWorkflowDefinitionVersion,
+  getLiveScheduleTriggerTarget,
   getWorkflowDefinition,
-  getWorkflowDefinitionVersion,
   listWorkflowDefinitions,
   listWorkflowDefinitionVersionRows,
   listWorkflowDefinitionVersions,
@@ -71,71 +67,85 @@ const MEMBER: WorkflowDefinitionActor = { role: "member", id: "u_member", label:
  *  complete graph. The store reads node types to derive trigger_types. A
  *  trigger-less graph is not valid, so a definition with no trigger is made with
  *  `seed: null` (no version) instead. */
-function def(
-  triggers: WorkflowBlockTypeV1[] = ["trigger_ticket_ai"],
-): WorkflowDefinitionV1 {
+function def(triggers: WorkflowBlockType[] = ["trigger_ticket_ai"]): WorkflowDefinitionV2 {
   return {
-    schemaVersion: 1,
-    nodes: triggers.map((type, i) => ({ id: `n${i}`, type, x: 0, y: 0, params: {}, inputs: {} })),
+    schemaVersion: 2,
+    nodes: triggers.map((type, i) => ({
+      id: `n${i}`,
+      type,
+      x: 0,
+      y: 0,
+      configuration: {},
+      inputs: {},
+      additionalInputs: [],
+    })),
+    edges: [],
+  };
+}
+
+function webhookDefV2(nodeId = "hook"): WorkflowDefinitionV2 {
+  return {
+    schemaVersion: 2,
+    nodes: [
+      { id: nodeId, type: "trigger_webhook", x: 0, y: 0, configuration: {}, inputs: {}, additionalInputs: [] },
+    ],
     edges: [],
   };
 }
 
 /** A graph that is well-shaped but structurally invalid (an unreachable block),
  *  standing in for a version stored before a schema/rule tightened. */
-function invalidDef(): WorkflowDefinitionV1 {
+function invalidDef(): WorkflowDefinitionV2 {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     nodes: [
-      { id: "t", type: "trigger_ticket_ai", x: 0, y: 0, params: {}, inputs: {} },
-      { id: "orphan", type: "open_pr", x: 0, y: 0, params: {}, inputs: {} },
+      {
+        id: "t",
+        type: "trigger_ticket_ai",
+        x: 0,
+        y: 0,
+        configuration: {},
+        inputs: {},
+        additionalInputs: [],
+      },
+      {
+        id: "orphan",
+        type: "open_pr",
+        x: 0,
+        y: 0,
+        configuration: { repositories: [] },
+        inputs: {},
+        additionalInputs: [],
+      },
     ],
     edges: [],
   };
 }
 
-function invalidBindingDef(): WorkflowDefinitionV1 {
+function invalidBindingDef(): WorkflowDefinitionV2 {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     nodes: [
-      { id: "t", type: "trigger_ticket_ai", x: 0, y: 0, params: {}, inputs: {} },
-      { id: "approval", type: "send_plan_approval", x: 0, y: 0, params: {}, inputs: {} },
-    ],
-    edges: [{ from: "t", to: "approval" }],
-  };
-}
-
-function legacyStructuredOutputDef(
-  trigger: WorkflowBlockTypeV1 = "trigger_pr_review",
-): WorkflowDefinitionV1 {
-  const outputSchema = JSON.stringify({
-    $schema: "http://json-schema.org/draft-07/schema#",
-    title: "Legacy classifier",
-    type: "object",
-    properties: {
-      state: { title: "State", type: "string" },
-      metadata: {
-        type: "object",
-        properties: { note: { type: "string" } },
-      },
-    },
-    required: ["state"],
-    additionalProperties: false,
-  });
-  return {
-    schemaVersion: 1,
-    nodes: [
-      { id: "trigger", type: trigger, x: 0, y: 0, params: {}, inputs: {} },
       {
-        id: "classify",
-        type: "call_llm",
+        id: "t",
+        type: "trigger_ticket_ai",
         x: 0,
         y: 0,
-        params: { prompt: "Classify", outputSchema },
+        configuration: {},
         inputs: {},
+        additionalInputs: [],
+      },
+      {
+        id: "approval",
+        type: "send_plan_approval",
+        x: 0,
+        y: 0,
+        configuration: {},
+        inputs: {},
+        additionalInputs: [],
       },
     ],
-    edges: [{ from: "trigger", to: "classify" }],
+    edges: [{ id: "t-approval", from: "t", to: "approval" }],
   };
 }
 
@@ -149,7 +159,7 @@ async function triggerTypesOf(db: Db, definitionId: number): Promise<string[]> {
 
 async function createDeployed(
   name: string,
-  definition: WorkflowDefinition,
+  definition: WorkflowDefinitionV2,
 ): Promise<Awaited<ReturnType<typeof getWorkflowDefinition>> & {}> {
   const created = (await createWorkflowDefinition(db, { name, seed: null, actor: ADMIN })).definition;
   await saveWorkflowDefinitionDraft(db, {
@@ -258,7 +268,7 @@ describe("createWorkflowDefinition", () => {
     ).rejects.toMatchObject({ statusCode: 400 });
   });
 
-  it("creates a disabled definition with an optional v1 without claiming live triggers", async () => {
+  it("creates a disabled definition with an optional v2 without claiming live triggers", async () => {
     const created = await createWorkflowDefinition(db, {
       name: "With seed",
       seed: def(["trigger_ticket_ai"]),
@@ -292,80 +302,6 @@ describe("per-definition version numbering", () => {
     expect(aVersions.map((v) => v.version)).toEqual([3, 2, 1]);
     expect(bVersions.map((v) => v.version)).toEqual([2, 1]);
     expect(aVersions.every((v) => v.definitionId === a.id)).toBe(true);
-  });
-});
-
-describe("legacy version read normalization", () => {
-  it("returns canonical inputs from current, exact-version, and list reads", async () => {
-    const created = await createWorkflowDefinition(db, { name: "Legacy inputs", seed: null, actor: ADMIN });
-    const legacyDefinition = {
-      schemaVersion: 1,
-      nodes: [{ id: "t", type: "trigger_ticket_ai", x: 0, y: 0, params: {} }],
-      edges: [],
-    };
-    await db.insert(workflowDefinitionVersions).values({
-      definitionId: created.definition.id,
-      version: 1,
-      definition: legacyDefinition,
-      createdById: "legacy",
-      createdByLabel: "Legacy",
-      restoredFromVersion: null,
-    });
-
-    const current = await getCurrentWorkflowDefinitionVersion(db, created.definition.id);
-    const exact = await getWorkflowDefinitionVersion(db, created.definition.id, 1);
-    const listed = await listWorkflowDefinitionVersionRows(db, created.definition.id);
-
-    expect(current?.definition.nodes[0].inputs).toEqual({});
-    expect(exact?.definition.nodes[0].inputs).toEqual({});
-    expect(listed[0]?.definition.nodes[0].inputs).toEqual({});
-  });
-
-  it("removes a retired arthur_trace block and preserves the surrounding path", async () => {
-    const created = await createWorkflowDefinition(db, { name: "Legacy trace", seed: null, actor: ADMIN });
-    await db.insert(workflowDefinitionVersions).values({
-      definitionId: created.definition.id,
-      version: 1,
-      definition: {
-        schemaVersion: 1,
-        nodes: [
-          { id: "trigger", type: "trigger_ticket_ai", x: 0, y: 0, params: {} },
-          { id: "trace", type: "arthur_trace", x: 1, y: 0, params: {} },
-          { id: "open", type: "open_pr", x: 2, y: 0, params: {} },
-        ],
-        edges: [
-          { from: "trigger", to: "trace" },
-          { from: "trace", to: "open", fromPort: "out" },
-        ],
-      },
-      createdById: "legacy",
-      createdByLabel: "Legacy",
-      restoredFromVersion: null,
-    });
-
-    const raw = await getRawWorkflowDefinitionVersion(
-      db,
-      created.definition.id,
-      1,
-    );
-    const current = await getCurrentWorkflowDefinitionVersion(db, created.definition.id);
-    expect(
-      (raw?.definition as { nodes: Array<{ type: string }> }).nodes.map(
-        (node) => node.type,
-      ),
-    ).toEqual(["trigger_ticket_ai", "arthur_trace", "open_pr"]);
-    expect(current?.definition.nodes.map((node) => node.type)).toEqual([
-      "trigger_ticket_ai",
-      "finalize_workspace",
-      "open_pr",
-    ]);
-    expect(current?.definition.nodes.find((node) => node.id === "open")?.inputs).toEqual({
-      repositories: "steps.open-finalize.output.repositories",
-    });
-    expect(current?.definition.edges).toEqual([
-      { from: "trigger", to: "open-finalize" },
-      { from: "open-finalize", to: "open" },
-    ]);
   });
 });
 
@@ -448,6 +384,41 @@ describe("enabled-per-trigger overlap", () => {
     const d = await createDeployed("D", def(["trigger_pr_review"]));
     expect((await updateWorkflowDefinition(db, { definitionId: c.id, enabled: true, actor: ADMIN })).enabled).toBe(true);
     expect((await updateWorkflowDefinition(db, { definitionId: d.id, enabled: true, actor: ADMIN })).enabled).toBe(true);
+  });
+
+  it("releases a retired deployment's singleton trigger for a new live owner", async () => {
+    await db.insert(workflowDefinitionVersions).values({
+      definitionId: SEEDED_DEFAULT_ID,
+      version: 1,
+      definition: { schemaVersion: 1, nodes: [], edges: [] },
+      createdById: ADMIN.id,
+      createdByLabel: ADMIN.label,
+    });
+    await db
+      .update(workflowDefinitions)
+      .set({ deployedVersion: 1 })
+      .where(eq(workflowDefinitions.id, SEEDED_DEFAULT_ID));
+
+    const replacement = await createDeployed(
+      "Replacement ticket workflow",
+      def(["trigger_ticket_ai"]),
+    );
+    await expect(
+      updateWorkflowDefinition(db, {
+        definitionId: replacement.id,
+        enabled: true,
+        actor: ADMIN,
+      }),
+    ).resolves.toMatchObject({ enabled: true });
+
+    const legacy = await getWorkflowDefinition(db, SEEDED_DEFAULT_ID);
+    expect(legacy?.enabled).toBe(true);
+    const hit = await getEnabledWorkflowDefinitionForTrigger(db, "trigger_ticket_ai");
+    expect(hit?.definition.id).toBe(replacement.id);
+    expect(await db.select().from(workflowDefinitionTriggers)).toContainEqual({
+      triggerType: "trigger_ticket_ai",
+      definitionId: replacement.id,
+    });
   });
 
   it("allows two webhook definitions to both be enabled at once", async () => {
@@ -541,77 +512,6 @@ describe("enabled-per-trigger overlap", () => {
       actor: ADMIN,
     });
     expect(await triggerTypesOf(db, e.id)).toEqual(["trigger_pr_review"]);
-  });
-});
-
-describe("stored v1 structured-output compatibility", () => {
-  it("rolls back to and re-enables a deployed schema accepted before strict validation", async () => {
-    const current = await createDeployed("Legacy rollback", def(["trigger_pr_review"]));
-    const legacy = legacyStructuredOutputDef();
-    await db.insert(workflowDefinitionVersions).values({
-      definitionId: current.id,
-      version: 2,
-      definition: legacy,
-      createdById: "legacy",
-      createdByLabel: "Legacy",
-      restoredFromVersion: null,
-    });
-
-    const selected = await rollbackWorkflowDefinition(db, {
-      definitionId: current.id,
-      version: 2,
-      expectedDeployedVersion: 1,
-      actor: ADMIN,
-    });
-    expect(selected.version.definition).toMatchObject(legacy);
-
-    await updateWorkflowDefinition(db, {
-      definitionId: current.id,
-      enabled: false,
-      actor: ADMIN,
-    });
-    await expect(
-      updateWorkflowDefinition(db, {
-        definitionId: current.id,
-        enabled: true,
-        actor: ADMIN,
-      }),
-    ).resolves.toMatchObject({ enabled: true, deployedVersion: 2 });
-  });
-
-  it("restores and duplicates an immutable legacy schema without weakening new deployment checks", async () => {
-    const source = await createDeployed("Legacy stored source", def(["trigger_pr_review"]));
-    const legacy = legacyStructuredOutputDef();
-    await db.insert(workflowDefinitionVersions).values({
-      definitionId: source.id,
-      version: 2,
-      definition: legacy,
-      createdById: "legacy",
-      createdByLabel: "Legacy",
-      restoredFromVersion: null,
-    });
-
-    const restored = await restoreWorkflowDefinitionVersion(db, {
-      definitionId: source.id,
-      version: 2,
-      actor: ADMIN,
-    });
-    expect(restored.definition).toMatchObject(legacy);
-
-    const duplicate = await createWorkflowDefinitionDraft(db, {
-      name: "Legacy stored copy",
-      seed: legacy,
-      actor: ADMIN,
-    });
-    expect(duplicate.draft).toMatchObject(legacy);
-    await expect(
-      deployWorkflowDefinition(db, {
-        definitionId: duplicate.definition.id,
-        expectedDraftRevision: 1,
-        expectedDeployedVersion: null,
-        actor: ADMIN,
-      }),
-    ).rejects.toMatchObject({ statusCode: 422 });
   });
 });
 
@@ -785,7 +685,7 @@ describe("archiveWorkflowDefinition", () => {
 describe("archived definition write guards", () => {
   /** Create a disabled definition (optionally with a v1) and archive it; the
    *  seeded default keeps the non-archived count above one. */
-  async function archived(name: string, seed: WorkflowDefinition | null = null): Promise<number> {
+  async function archived(name: string, seed: WorkflowDefinitionV2 | null = null): Promise<number> {
     const d = (await createWorkflowDefinition(db, { name, seed, actor: ADMIN })).definition;
     await archiveWorkflowDefinition(db, { definitionId: d.id, actor: ADMIN });
     return d.id;
@@ -822,7 +722,19 @@ describe("write-path validation", () => {
       saveWorkflowDefinitionVersion(db, {
         definitionId: SEEDED_DEFAULT_ID,
         // A param the strict schema does not know.
-        definition: { schemaVersion: 1, nodes: [{ id: "t", type: "trigger_ticket_ai", x: 0, y: 0, params: { nope: 1 } }], edges: [] } as unknown as WorkflowDefinition,
+        definition: {
+          schemaVersion: 2,
+          nodes: [{
+            id: "t",
+            type: "trigger_ticket_ai",
+            x: 0,
+            y: 0,
+            configuration: { nope: 1 },
+            inputs: {},
+            additionalInputs: [],
+          }],
+          edges: [],
+        } as unknown as WorkflowDefinitionV2,
         actor: ADMIN,
       }),
     ).rejects.toMatchObject({ statusCode: 400, message: /^Invalid definition:/ });
@@ -862,52 +774,8 @@ describe("write-path validation", () => {
     expect(head?.definition).toEqual(def());
   });
 
-  it("still reads a legacy invalid row (validation is write-only)", async () => {
-    const d = (await createWorkflowDefinition(db, { name: "Readable", seed: def(), actor: ADMIN })).definition;
-    const legacyInvalid = {
-      schemaVersion: 1,
-      nodes: [
-        { id: "t", type: "trigger_ticket_ai", x: 0, y: 0, params: {} },
-        { id: "orphan", type: "open_pr", x: 0, y: 0, params: {} },
-      ],
-      edges: [],
-    };
-    await db.insert(workflowDefinitionVersions).values({
-      definitionId: d.id,
-      version: 2,
-      definition: legacyInvalid,
-      createdById: "u_admin",
-      createdByLabel: "Admin",
-      restoredFromVersion: null,
-    });
-    const head = await getCurrentWorkflowDefinitionVersion(db, d.id);
-    expect(head?.definition).toEqual({
-      ...legacyInvalid,
-      nodes: [
-        { ...legacyInvalid.nodes[0], inputs: {} },
-        {
-          id: "orphan-finalize",
-          type: "finalize_workspace",
-          x: -220,
-          y: 0,
-          params: {},
-          inputs: {},
-        },
-        {
-          ...legacyInvalid.nodes[1],
-          inputs: {
-            repositories: "steps.orphan-finalize.output.repositories",
-          },
-        },
-      ],
-      edges: [{ from: "orphan-finalize", to: "orphan" }],
-    });
-    expect(await getWorkflowDefinitionVersion(db, d.id, 2)).not.toBeNull();
-    expect((await listWorkflowDefinitionVersionRows(db, d.id)).map((v) => v.version)).toEqual([2, 1]);
-  });
-
   it("rejects deploying a pin whose repositories contradict its own provider list", async () => {
-    const contradictory: WorkflowDefinitionV1 = {
+    const contradictory: WorkflowDefinitionV2 = {
       ...def(),
       repositoryScope: {
         providers: ["github"],
@@ -1098,16 +966,6 @@ describe("webhook endpoint minting", () => {
   // so these tests set it on the mocked env for their duration.
   const mutableEnv = env as { WEBHOOK_TRIGGER_ENCRYPTION_KEY?: string };
 
-  function webhookDefV2(nodeId = "hook"): WorkflowDefinitionV2 {
-    return {
-      schemaVersion: 2,
-      nodes: [
-        { id: nodeId, type: "trigger_webhook", x: 0, y: 0, configuration: {}, inputs: {}, additionalInputs: [] },
-      ],
-      edges: [],
-    };
-  }
-
   beforeEach(() => {
     mutableEnv.WEBHOOK_TRIGGER_ENCRYPTION_KEY = KEY;
   });
@@ -1201,16 +1059,6 @@ describe("schedule trigger rows", () => {
     };
   }
 
-  function webhookDefV2(nodeId = "hook"): WorkflowDefinitionV2 {
-    return {
-      schemaVersion: 2,
-      nodes: [
-        { id: nodeId, type: "trigger_webhook", x: 0, y: 0, configuration: {}, inputs: {}, additionalInputs: [] },
-      ],
-      edges: [],
-    };
-  }
-
   /** Deploy AND enable: a schedule row only exists for a live workflow, and the
    *  sync deliberately does nothing for a definition nobody has enabled. */
   async function createLiveSchedule(name: string, definition: WorkflowDefinitionV2) {
@@ -1222,6 +1070,67 @@ describe("schedule trigger rows", () => {
     });
     return created;
   }
+
+  it("resolves a retired deployed schedule as retired with the operator reason", async () => {
+    const definition = await createLiveSchedule("Retired schedule", scheduleDefV2());
+    await db.insert(workflowDefinitionVersions).values({
+      definitionId: definition.id,
+      version: 2,
+      definition: { schemaVersion: 1, nodes: [], edges: [] },
+      createdById: ADMIN.id,
+      createdByLabel: ADMIN.label,
+    });
+    await db
+      .update(workflowDefinitions)
+      .set({ deployedVersion: 2 })
+      .where(eq(workflowDefinitions.id, definition.id));
+
+    await expect(
+      getLiveScheduleTriggerTarget(db, {
+        definitionId: definition.id,
+        nodeId: "schedule",
+        definitionVersion: null,
+      }),
+    ).resolves.toEqual({
+      kind: "retired-head",
+      definitionVersion: 2,
+      reason: RETIRED_SCHEMA_MESSAGE,
+    });
+  });
+
+  it("distinguishes a retired pinned version from a live deployed schedule", async () => {
+    const definition = await createLiveSchedule("Pinned retired schedule", scheduleDefV2());
+    await db.insert(workflowDefinitionVersions).values({
+      definitionId: definition.id,
+      version: 2,
+      definition: { schemaVersion: 1, nodes: [], edges: [] },
+      createdById: ADMIN.id,
+      createdByLabel: ADMIN.label,
+    });
+    await db.insert(workflowDefinitionVersions).values({
+      definitionId: definition.id,
+      version: 3,
+      definition: scheduleDefV2(),
+      createdById: ADMIN.id,
+      createdByLabel: ADMIN.label,
+    });
+    await db
+      .update(workflowDefinitions)
+      .set({ deployedVersion: 3 })
+      .where(eq(workflowDefinitions.id, definition.id));
+
+    await expect(
+      getLiveScheduleTriggerTarget(db, {
+        definitionId: definition.id,
+        nodeId: "schedule",
+        definitionVersion: 2,
+      }),
+    ).resolves.toEqual({
+      kind: "retired-pinned",
+      definitionVersion: 2,
+      reason: RETIRED_SCHEMA_MESSAGE,
+    });
+  });
 
   async function schedulesOf(definitionId: number) {
     return await db

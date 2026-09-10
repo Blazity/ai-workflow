@@ -165,6 +165,17 @@ export function resolveHarnessRuntime(input: {
   };
 }
 
+/** The model id a resolved runtime pins. A v1 harness profile manifest names no
+ *  model, so the caller's own default stands in. */
+export function harnessRuntimeModelId(
+  runtime: ResolvedHarnessRuntime | undefined,
+  fallback: string,
+): string {
+  return runtime?.manifest.schemaVersion === 2
+    ? runtime.manifest.model.id
+    : fallback;
+}
+
 function modelSettingsFromManifest(
   manifest: Extract<HarnessProfileManifest, { schemaVersion: 2 }>,
 ): AgentModelRuntimeSettings {

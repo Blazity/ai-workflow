@@ -6,8 +6,8 @@ import type {
   WorkflowBindingSource,
   WorkflowBlockType,
   WorkflowDefinition,
-  WorkflowDefinitionV1,
   WorkflowDefinitionV2,
+  WorkflowDefinitionVersion,
   WorkflowInputBindingV2,
   WorkflowParamValue,
 } from "@shared/contracts";
@@ -18,12 +18,21 @@ export type {
   WorkflowDefinition,
 };
 
+/** The graph of a stored version the editor can still open on the canvas. A
+ *  retired v1 version stays listed and readable in history and answers null
+ *  here, so nothing loads it into an editor that can only author v2. */
+export function runnableVersionDefinition(
+  version: WorkflowDefinitionVersion | null | undefined,
+): WorkflowDefinition | null {
+  return version?.schema === "v2" ? version.definition : null;
+}
+
 export type NodeRunStatus = BlockRunStatus;
 
 export type RunStatusMap = Record<string, NodeRunStatus>;
 
-/** Version-neutral canvas shape. V2-only persisted data stays together so the
- * existing v1 inspector cannot accidentally rewrite nested JSON configuration. */
+/** Canvas shape. The persisted v2 payload stays together under `v2` so the
+ * display-value inspector cannot rewrite nested JSON configuration. */
 export interface FlowNodeDef {
   id: string;
   type: WorkflowBlockType;
@@ -70,22 +79,10 @@ function displayParams(
 }
 
 export function toFlowDefinition(definition: WorkflowDefinition): {
-  schemaVersion: 1 | 2;
   nodes: FlowNodeDef[];
   edges: FlowEdgeDef[];
 } {
-  if (definition.schemaVersion === 1) {
-    return {
-      schemaVersion: 1,
-      nodes: definition.nodes.map((node) => ({
-        ...structuredClone(node),
-        type: node.type,
-      })),
-      edges: structuredClone(definition.edges),
-    };
-  }
   return {
-    schemaVersion: 2,
     nodes: definition.nodes.map((node) => ({
       id: node.id,
       type: node.type,
@@ -101,21 +98,6 @@ export function toFlowDefinition(definition: WorkflowDefinition): {
       },
     })),
     edges: structuredClone(definition.edges),
-  };
-}
-
-export function fromFlowDefinitionV1Node(
-  node: FlowNodeDef,
-): WorkflowDefinitionV1["nodes"][number] {
-  return {
-    id: node.id,
-    type: node.type as WorkflowDefinitionV1["nodes"][number]["type"],
-    x: node.x,
-    y: node.y,
-    params: node.params,
-    ...(node.promptRefs === undefined ? {} : { promptRefs: node.promptRefs }),
-    inputs: node.inputs,
-    ...(node.name === undefined ? {} : { name: node.name }),
   };
 }
 

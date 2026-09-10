@@ -102,15 +102,16 @@ beforeEach(async () => {
     definitionId: 9,
     version: 3,
     definition: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       nodes: [
         {
           id: "ticket-trigger",
           type: "trigger_ticket_ai",
           x: 0,
           y: 0,
-          params: {},
+          configuration: {},
           inputs: {},
+          additionalInputs: [],
         },
       ],
       edges: [],

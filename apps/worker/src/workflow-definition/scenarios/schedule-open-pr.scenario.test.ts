@@ -5,7 +5,7 @@ import type { AgentWorkflowInput } from "../../workflows/agent-input.js";
 import type { WorkflowBlockRegistryContext } from "../block-registry.js";
 import {
   validateWorkflowDefinitionIssuesForDeployment,
-  workflowDefinitionSchema,
+  workflowDefinitionV2Schema,
 } from "../schema.js";
 import { executorRunsOf, expectStartsAfterFinishOf } from "./assertions.js";
 import { createScenario, type Scenario } from "./harness.js";
@@ -183,7 +183,7 @@ function snapshotDefinition(): WorkflowDefinitionV2 {
   const raw = JSON.parse(
     readFileSync(new URL(`./snapshots/${SNAPSHOT.path}`, import.meta.url), "utf8"),
   );
-  return workflowDefinitionSchema.parse(raw) as WorkflowDefinitionV2;
+  return workflowDefinitionV2Schema.parse(raw) as WorkflowDefinitionV2;
 }
 
 describe("schedule trigger: the shipped snapshot", () => {

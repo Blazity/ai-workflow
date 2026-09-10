@@ -148,7 +148,7 @@ type PrFixPublicationInput = {
   reviewLedger?: ReviewLedgerGuardSummary;
 };
 
-export function buildPrFixPublicationInput(
+function buildPrFixPublicationInput(
   ctx: Parameters<BlockExecuteFn>[2],
   sandboxId: string,
   workspace?: FixWorkspaceState,
@@ -614,7 +614,7 @@ export const execute: BlockExecuteFn = async (
   resolvedInputs = {},
   execution,
 ): Promise<BlockExecutionResult> => {
-  if (ctx.schemaVersion === 2 && ctx.entry.kind === "pr_trigger") {
+  if (ctx.entry.kind === "pr_trigger") {
     try {
       await assertFixPrOwnershipStep(ctx.entry.pr, ctx.runId);
     } catch (error) {
@@ -675,9 +675,8 @@ export const execute: BlockExecuteFn = async (
       },
     };
   }
-  const runtime =
-    ctx.schemaVersion === 2 ? ctx.harnessRuntimes[block.id] : undefined;
-  if (ctx.schemaVersion === 2 && !runtime) {
+  const runtime = ctx.harnessRuntimes[block.id];
+  if (!runtime) {
     return executionError("The pinned Harness Profile could not be resolved.", {
       category: "schema",
     });
@@ -705,7 +704,7 @@ export const execute: BlockExecuteFn = async (
   try {
     const reviewFeedback = resolveReviewFeedbackInput(resolvedInputs, {
       ambient: ctx.entry.kind === "pr_trigger" ? ctx.entry.pr.review : undefined,
-      allowAmbientFallback: ctx.schemaVersion === 1,
+      allowAmbientFallback: false,
     });
     if (!reviewFeedback.ok) {
       return executionError("invalid reviewFeedback binding", {
@@ -715,13 +714,11 @@ export const execute: BlockExecuteFn = async (
     }
     const reviewResults = normalizeReviewResultsInput(
       resolvedInputs.reviewResults,
-      ctx.schemaVersion === 2
-        ? {
-            knownRepositories: ctx.selectedRepositories.map(
-              (repository) => repository.repoPath,
-            ),
-          }
-        : {},
+      {
+        knownRepositories: ctx.selectedRepositories.map(
+          (repository) => repository.repoPath,
+        ),
+      },
     );
     if (!reviewResults.ok) {
       return executionError("invalid reviewResults binding", {

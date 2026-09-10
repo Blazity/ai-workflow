@@ -76,7 +76,8 @@ function workflowDetail(
     meta: {
       id: 2,
       name: "Canary",
-      enabled: false,
+    enabled: false,
+    deployedSchema: "v2",
       triggerTypes: ["trigger_ticket_ai"],
       currentVersion: 1,
       draftRevision: 1,
@@ -90,6 +91,7 @@ function workflowDetail(
     deployed: {
       definitionId: 2,
       version: 1,
+      schema: "v2",
       definition,
       createdAt: new Date(0).toISOString(),
       createdById: "user",

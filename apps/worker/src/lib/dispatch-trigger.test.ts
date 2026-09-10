@@ -65,6 +65,7 @@ const mockGetVersion = vi.fn();
 vi.mock("../workflow-definition/store.js", () => ({
   getEnabledWorkflowDefinitionForTrigger: (...args: any[]) => mockGetEnabled(...args),
   getWorkflowDefinitionVersion: (...args: any[]) => mockGetVersion(...args),
+  runnableDefinitionOf: (row: any) => row?.schema === "v2" ? row.definition : undefined,
 }));
 
 let db: Db;
@@ -108,10 +109,19 @@ function enabled(
     current: {
       definitionId: 5,
       version: 12,
+      schema: "v2",
       definition: {
-        schemaVersion: 1,
+        schemaVersion: 2,
         ...(repositoryScope ? { repositoryScope } : {}),
-        nodes: [{ id: "trigger", type: triggerType, x: 0, y: 0, params, inputs: {} }],
+        nodes: [{
+          id: "trigger",
+          type: triggerType,
+          x: 0,
+          y: 0,
+          configuration: params,
+          inputs: {},
+          additionalInputs: [],
+        }],
         edges: [],
       },
     },
@@ -632,6 +642,7 @@ describe("resolveEnabledReviewStates", () => {
       current: {
         definitionId: 5,
         version: 12,
+        schema: "v2",
         definition: {
           schemaVersion: 2,
           nodes: [
@@ -667,10 +678,19 @@ describe("PR trigger rate limit", () => {
     return {
       definitionId: 5,
       version: 12,
+      schema: "v2",
       definition: {
-        schemaVersion: 1,
+        schemaVersion: 2,
         nodes: [
-          { id: "trigger", type: "trigger_pr_created", x: 0, y: 0, params, inputs: {} },
+          {
+            id: "trigger",
+            type: "trigger_pr_created",
+            x: 0,
+            y: 0,
+            configuration: params,
+            inputs: {},
+            additionalInputs: [],
+          },
         ],
         edges: [],
       },
@@ -976,24 +996,27 @@ describe("pull request auto-fix cap", () => {
       current: {
         definitionId: 5,
         version: 12,
+        schema: "v2",
         definition: {
-          schemaVersion: 1,
+          schemaVersion: 2,
           nodes: [
             {
               id: "loose",
               type: "trigger_pr_checks_failed",
               x: 0,
               y: 0,
-              params: { scope: "any", maxFixAttemptsPerPr: 5 },
+              configuration: { scope: "any", maxFixAttemptsPerPr: 5 },
               inputs: {},
+              additionalInputs: [],
             },
             {
               id: "tight",
               type: "trigger_pr_checks_failed",
               x: 0,
               y: 0,
-              params: { scope: "any", maxFixAttemptsPerPr: 1 },
+              configuration: { scope: "any", maxFixAttemptsPerPr: 1 },
               inputs: {},
+              additionalInputs: [],
             },
           ],
           edges: [],
@@ -1064,6 +1087,7 @@ describe("pull request auto-fix cap", () => {
       current: {
         definitionId: 5,
         version: 12,
+        schema: "v2",
         definition: {
           schemaVersion: 2,
           nodes: [
@@ -1248,24 +1272,27 @@ describe("pull request auto-fix cap", () => {
       current: {
         definitionId: 5,
         version: 12,
+        schema: "v2",
         definition: {
-          schemaVersion: 1,
+          schemaVersion: 2,
           nodes: [
             {
               id: "checks",
               type: "trigger_pr_checks_failed",
               x: 0,
               y: 0,
-              params: { scope: "any", maxFixAttemptsPerPr: 1 },
+              configuration: { scope: "any", maxFixAttemptsPerPr: 1 },
               inputs: {},
+              additionalInputs: [],
             },
             {
               id: "review",
               type: "trigger_pr_review",
               x: 0,
               y: 0,
-              params: { scope: "any", on: ["commented"] },
+              configuration: { scope: "any", on: ["commented"] },
               inputs: {},
+              additionalInputs: [],
             },
           ],
           edges: [],

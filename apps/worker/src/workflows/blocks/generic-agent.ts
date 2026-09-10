@@ -100,12 +100,12 @@ async function blockGenericAgentPlanPhaseStep(
 ): Promise<{ paths: PhaseArtifactPaths; script: string }> {
   "use step";
   const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
+  const { harnessRuntimeModelId } = await import(
+    "../../sandbox/harness-runtime.js"
+  );
   const adapter = createAgentAdapter(agentKind, runtime?.cliSpec);
   const paths = adapter.artifactPaths(phase);
-  const effectiveModel =
-    runtime?.manifest.schemaVersion === 2
-      ? runtime.manifest.model.id
-      : model;
+  const effectiveModel = harnessRuntimeModelId(runtime, model);
   const script = adapter.buildPhaseScript({
     phase,
     model: effectiveModel,
@@ -304,9 +304,8 @@ export const execute: BlockExecuteFn = async (
     }
   }
 
-  const runtime =
-    ctx.schemaVersion === 2 ? ctx.harnessRuntimes[block.id] : undefined;
-  if (ctx.schemaVersion === 2 && !runtime) {
+  const runtime = ctx.harnessRuntimes[block.id];
+  if (!runtime) {
     return executionError("The pinned Harness Profile could not be resolved.", {
       category: "schema",
     });
@@ -331,7 +330,7 @@ export const execute: BlockExecuteFn = async (
       workspaceMode === "none"
         ? await ensureAgentSandbox(ctx, kind, model, {
             runtime,
-            ...(ctx.schemaVersion === 2 ? { reuse: false } : {}),
+            reuse: false,
           })
         : ctx.sandboxId;
   } catch (err) {

@@ -14,7 +14,7 @@ import {
 
 test("a definition without a pin seeds an empty scope", () => {
   const scope = repositoryScopeFromDefinition({
-    schemaVersion: 1,
+    schemaVersion: 2,
     nodes: [],
     edges: [],
   });
@@ -24,7 +24,7 @@ test("a definition without a pin seeds an empty scope", () => {
 
 test("an explicitly empty pin is indistinguishable from no pin", () => {
   const scope = repositoryScopeFromDefinition({
-    schemaVersion: 1,
+    schemaVersion: 2,
     repositoryScope: { repositories: [], providers: [] },
     nodes: [],
     edges: [],

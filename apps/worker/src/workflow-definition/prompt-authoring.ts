@@ -265,7 +265,6 @@ export async function validateWorkflowPromptAuthoringIssues(
   registryContext?: WorkflowBlockRegistryContext,
   profileLoader?: HarnessProfileVersionLoader,
 ): Promise<WorkflowDefinitionValidationIssue[]> {
-  if (definition.schemaVersion !== 2) return [];
   const context =
     registryContext ??
     (await import("./models.js")).workflowBlockRegistryContextFromEnv();
@@ -446,7 +445,7 @@ export async function validateWorkflowDefinitionCandidateWithPromptAuthoring(
     registryContext ??
     (await import("./models.js")).workflowBlockRegistryContextFromEnv();
   const base = validateWorkflowDefinitionCandidate(candidate, context);
-  if (base.parsed?.schemaVersion !== 2) return base;
+  if (!base.parsed) return base;
   const promptIssues = await validateWorkflowPromptAuthoringIssues(
     db,
     base.parsed,

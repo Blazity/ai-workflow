@@ -3,7 +3,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { PlayIcon } from "@phosphor-icons/react/dist/csr/Play";
 import {
-  fromFlowDefinitionV1Node,
   fromFlowDefinitionV2Node,
   type FlowNodeDef,
   type FlowEdgeDef,
@@ -17,7 +16,6 @@ import type {
   WorkflowAdditionalInputV2,
   WorkflowDataCatalogEntry,
   WorkflowDefinitionCatalogResponse,
-  WorkflowDefinitionV1,
   WorkflowDefinitionV2,
   WorkflowDefinitionValidationIssue,
   WorkflowEdgeGeometry,
@@ -56,7 +54,6 @@ import { NodePalette, MobilePaletteList } from "./palette";
 import { ConfigFields } from "./config-fields";
 import { PromptAuthoringProvider } from "./prompt-authoring-context";
 import {
-  BindingFields,
   updateInputBindings,
   V2BindingFields,
 } from "./binding-fields";
@@ -488,7 +485,6 @@ function FlowCanvas({
   nodes,
   edges,
   edgeGeometry,
-  schemaVersion,
   canEdit,
   runnableTriggerIds,
   options,
@@ -516,7 +512,6 @@ function FlowCanvas({
   nodes: FlowNodeDef[];
   edges: FlowEdgeDef[];
   edgeGeometry: Record<string, WorkflowEdgeGeometry>;
-  schemaVersion: 1 | 2;
   canEdit: boolean;
   runnableTriggerIds?: ReadonlySet<string>;
   options: WorkflowEditorOptions;
@@ -571,8 +566,6 @@ function FlowCanvas({
       reconcileCanvasSelection(current, nodeIds, edgeKeys),
     );
   }, [edgeKeys, nodeIds, setSelection]);
-  const selectedId = selection.primaryNodeId;
-
   // Convert a client point into canvas (unscaled) coordinates.
   const toCanvas = useCallback((clientX: number, clientY: number): Point => {
     const el = containerRef.current;
@@ -828,28 +821,13 @@ function FlowCanvas({
   // For edges
   const nodeById = useMemo(() => Object.fromEntries(nodes.map(n => [n.id, n])), [nodes]);
 
-  // Nodes whose "failed" port is wired by an existing edge — such ports render
-  // even when the node isn't selected.
-  const failureUsed = useMemo(() => {
-    const set = new Set<string>();
-    for (const e of edges) if (e.fromPort === FAILURE_PORT) set.add(e.from);
-    return set;
-  }, [edges]);
-
-  // Output ports rendered per node: the spec ports plus "failed" when it is
-  // wired or the node is the editable selection.
   const portsByNode = useMemo(() => {
     const map: Record<string, string[]> = {};
     for (const n of nodes) {
-      map[n.id] = visibleOutPorts(
-        n.type,
-        failureUsed.has(n.id),
-        selectedId === n.id && canEdit,
-        schemaVersion,
-      );
+      map[n.id] = visibleOutPorts(n.type);
     }
     return map;
-  }, [nodes, failureUsed, selectedId, canEdit, schemaVersion]);
+  }, [nodes]);
   const onPortKeyStart = useCallback(
     (nodeId: string, portId: string) => {
       if (!canEdit) return;
@@ -1324,7 +1302,6 @@ export function FlowEditor({
   nodes,
   edges,
   edgeGeometry,
-  schemaVersion,
   limits,
   repositoryScope,
   onLimitsChange,
@@ -1371,7 +1348,6 @@ export function FlowEditor({
   nodes: FlowNodeDef[];
   edges: FlowEdgeDef[];
   edgeGeometry: Record<string, WorkflowEdgeGeometry>;
-  schemaVersion: 1 | 2;
   limits: WorkflowExecutionBudgets;
   repositoryScope: WorkflowRepositoryScope;
   onLimitsChange: (limits: WorkflowExecutionBudgets) => void;
@@ -1609,10 +1585,9 @@ export function FlowEditor({
           },
     [clipboardIssues, validation],
   );
-  const effectiveNodeContracts =
-    schemaVersion === 2 && dataCatalog
-      ? dataCatalog.nodeContracts
-      : effectiveValidation.nodeContracts;
+  const effectiveNodeContracts = dataCatalog
+    ? dataCatalog.nodeContracts
+    : effectiveValidation.nodeContracts;
   const groupedValidationIssues = useMemo(
     () => groupValidationIssues(effectiveValidation.issues),
     [effectiveValidation.issues],
@@ -1622,37 +1597,13 @@ export function FlowEditor({
     [nodes],
   );
 
-  const paletteGroups = useMemo(() => {
-    const groups = buildPaletteItems(options, schemaVersion);
-    if (schemaVersion === 2) return groups;
-    return groups
-      .map((group) => ({
-        ...group,
-        items: group.items.filter((item) => item.type !== "transform"),
-      }))
-      .filter((group) => group.items.length > 0);
-  }, [options, schemaVersion]);
-  const bindingDefinition = useMemo<WorkflowDefinitionV1 | null>(
-    () =>
-      schemaVersion === 1
-        ? {
-            schemaVersion: 1,
-            nodes: nodes.map(fromFlowDefinitionV1Node),
-            edges: edges.map((edge) => ({
-              from: edge.from,
-              to: edge.to,
-              ...(edge.fromPort === undefined ? {} : { fromPort: edge.fromPort }),
-            })),
-          }
-        : null,
-    [edges, nodes, schemaVersion],
+  const paletteGroups = useMemo(
+    () => buildPaletteItems(options),
+    [options],
   );
-  const previewDefinition = useMemo<WorkflowDefinitionV2 | null>(
-    () =>
-      schemaVersion === 2
-        ? serializeWorkflowDefinition(nodes, edges, limits, 2, repositoryScope)
-        : null,
-    [edges, limits, nodes, repositoryScope, schemaVersion],
+  const previewDefinition = useMemo<WorkflowDefinitionV2>(
+    () => serializeWorkflowDefinition(nodes, edges, limits, repositoryScope),
+    [edges, limits, nodes, repositoryScope],
   );
 
   const addNode = (item: PaletteItem, at?: Point) => {
@@ -1667,7 +1618,7 @@ export function FlowEditor({
       x = (nodes.length ? Math.max(...nodes.map(n => n.x)) : 200) + 60;
       y = nodes.length ? Math.round(nodes.reduce((s, n) => s + n.y, 0) / nodes.length) : 280;
     }
-    if (schemaVersion === 2 && item.templateId) {
+    if (item.templateId) {
       const instantiated = instantiateWorkflowEditorBlockTemplate({
         templateId: item.templateId,
         sourceName: blockPresentation(options, item.type).label,
@@ -1694,22 +1645,18 @@ export function FlowEditor({
         y,
         params: { ...item.params },
         inputs: {},
-        ...(schemaVersion === 2
-          ? {
-              v2: {
-                configuration:
-                  item.type === "transform"
-                    ? (structuredClone(
-                        defaultTransformConfiguration("format_text"),
-                      ) as unknown as Record<string, JsonValue>)
-                    : item.type === "branch"
-                      ? {}
-                      : ({ ...item.params } as Record<string, JsonValue>),
-                inputs: {},
-                additionalInputs: [],
-              },
-            }
-          : {}),
+        v2: {
+          configuration:
+            item.type === "transform"
+              ? (structuredClone(
+                  defaultTransformConfiguration("format_text"),
+                ) as unknown as Record<string, JsonValue>)
+              : item.type === "branch"
+                ? {}
+                : ({ ...item.params } as Record<string, JsonValue>),
+          inputs: {},
+          additionalInputs: [],
+        },
       },
     ]);
     setSelectedId(id);
@@ -1717,16 +1664,13 @@ export function FlowEditor({
 
   const addEdge = (from: string, fromPort: string, to: string) => {
     if (from === to) return;
-    if (schemaVersion === 2 && fromPort === FAILURE_PORT) return;
+    if (fromPort === FAILURE_PORT) return;
     const source = nodes.find(n => n.id === from);
     if (!source) return;
     onEdgesChange((prev) =>
-      schemaVersion === 1
-        ? upsertEdge(prev, from, fromPort, to, source.type)
-        : upsertEdge(prev, from, fromPort, to, source.type, {
-            schemaVersion: 2,
-            generateEdgeId: () => globalThis.crypto.randomUUID(),
-          }),
+      upsertEdge(prev, from, fromPort, to, source.type, {
+        generateEdgeId: () => globalThis.crypto.randomUUID(),
+      }),
     );
   };
 
@@ -1755,7 +1699,7 @@ export function FlowEditor({
         const params = { ...n.params };
         if (value === undefined) delete params[k];
         else params[k] = value as WorkflowParamValue;
-        if (schemaVersion === 1 || !n.v2) return { ...n, params };
+        if (!n.v2) return { ...n, params };
         const configuration = { ...n.v2.configuration };
         if (value === undefined) delete configuration[k];
         else configuration[k] = value as WorkflowParamValue;
@@ -1870,7 +1814,6 @@ export function FlowEditor({
 
   const copySelection = useCallback(() => {
     const payload = createWorkflowClipboardPayload<WorkflowEdgeGeometry>({
-      schemaVersion,
       nodes,
       edges,
       selectedNodeIds: selection.nodeIds,
@@ -1887,7 +1830,7 @@ export function FlowEditor({
       // The module-scoped fallback still preserves the clipboard this session.
     }
     setInteractionError(null);
-  }, [edgeGeometry, edges, nodes, schemaVersion, selection.nodeIds]);
+  }, [edgeGeometry, edges, nodes, selection.nodeIds]);
 
   const pasteSelection = useCallback(() => {
     let stored: WorkflowClipboardPayload<WorkflowEdgeGeometry> | null = null;
@@ -1905,7 +1848,6 @@ export function FlowEditor({
     }
     const result = planWorkflowClipboardPaste({
       payload,
-      schemaVersion,
       destinationNodes: nodes,
       destinationEdges: edges,
       destinationEdgeGeometry: edgeGeometry,
@@ -1940,7 +1882,7 @@ export function FlowEditor({
       // The module-scoped fallback still preserves the clipboard this session.
     }
     setInteractionError(null);
-  }, [edgeGeometry, edges, nodes, onGraphChange, schemaVersion]);
+  }, [edgeGeometry, edges, nodes, onGraphChange]);
 
   useEffect(() => {
     const handleKeyboard = (event: KeyboardEvent) => {
@@ -2133,7 +2075,6 @@ export function FlowEditor({
           nodes={nodes}
           edges={edges}
           edgeGeometry={edgeGeometry}
-          schemaVersion={schemaVersion}
           canEdit={canEdit}
           runnableTriggerIds={runnableTriggerIds}
           options={options}
@@ -2166,8 +2107,6 @@ export function FlowEditor({
             <NodeConfig
               node={selected}
               options={options}
-              schemaVersion={schemaVersion}
-              definition={bindingDefinition}
               previewDefinition={previewDefinition}
               definitionId={definitionId}
               nodeContracts={effectiveNodeContracts}
@@ -2206,8 +2145,6 @@ export function FlowEditor({
                 <NodeConfig
                   node={selected}
                   options={options}
-                  schemaVersion={schemaVersion}
-                  definition={bindingDefinition}
                   previewDefinition={previewDefinition}
                   definitionId={definitionId}
                   nodeContracts={effectiveNodeContracts}
@@ -2292,8 +2229,7 @@ export function FlowEditor({
 function NodeConfig({
   node,
   options,
-  schemaVersion,
-  definition,
+
   previewDefinition,
   definitionId,
   nodeContracts,
@@ -2318,8 +2254,6 @@ function NodeConfig({
 }: {
   node: FlowNodeDef;
   options: WorkflowEditorOptions;
-  schemaVersion: 1 | 2;
-  definition: WorkflowDefinitionV1 | null;
   previewDefinition: WorkflowDefinitionV2 | null;
   definitionId?: number;
   nodeContracts: WorkflowValidationState["nodeContracts"];
@@ -2406,15 +2340,13 @@ function NodeConfig({
           </div>
         )}
         <NodeValidationErrors nodeId={node.id} issues={validationIssues} />
-        {(schemaVersion === 1 || node.type !== "branch") && (
+        {node.type !== "branch" && (
           <PromptAuthoringProvider
             availableValues={availableValues}
             valuesRefreshing={valuesRefreshing}
             onV2ConfigurationChange={onV2ConfigurationChange}
             previewCandidate={
-              schemaVersion === 2 &&
-              previewDefinition &&
-              definitionId !== undefined
+              previewDefinition && definitionId !== undefined
                 ? {
                     definitionId,
                     definition: previewDefinition,
@@ -2431,67 +2363,53 @@ function NodeConfig({
             />
           </PromptAuthoringProvider>
         )}
-        {schemaVersion === 1 && definition ? (
-          <BindingFields
+        {node.type !== "transform" && node.type !== "branch" && (
+          <V2BindingFields
             key={node.id}
-            definition={definition}
-            nodeId={node.id}
-            options={options}
-            nodeContracts={nodeContracts}
+            node={fromFlowDefinitionV2Node(node)}
+            contract={contract}
+            availableValues={availableValues}
+            valuesRefreshing={valuesRefreshing}
             canEdit={canEdit}
-            onChange={(name, value) => onChange(`inputs.${name}`, value)}
+            onChange={onV2BindingsChange}
           />
-        ) : (
-          <>
-            {node.type !== "transform" && node.type !== "branch" && (
-              <V2BindingFields
-                key={node.id}
-                node={fromFlowDefinitionV2Node(node)}
-                contract={contract}
-                availableValues={availableValues}
-                valuesRefreshing={valuesRefreshing}
-                canEdit={canEdit}
-                onChange={onV2BindingsChange}
-              />
-            )}
-            {node.type === "transform" && node.v2 && (
-              <TransformFields
-                configuration={
-                  node.v2.configuration as unknown as TransformConfiguration
-                }
-                availableValues={availableValues}
-                valuesRefreshing={valuesRefreshing}
-                canEdit={canEdit}
-                onChange={(configuration) =>
-                  onV2ConfigurationChange(
-                    configuration as unknown as Record<string, JsonValue>,
-                  )
-                }
-              />
-            )}
-            {node.type === "branch" && node.v2 && (
-              <BranchFields
-                configuration={node.v2.configuration}
-                availableValues={availableValues}
-                valuesRefreshing={valuesRefreshing}
-                canEdit={canEdit}
-                onChange={(configuration) =>
-                  onV2ConfigurationChange(
-                    configuration as unknown as Record<string, JsonValue>,
-                  )
-                }
-              />
-            )}
-            {node.type === "loop" && node.v2 && (
-              <LoopFields
-                configuration={node.v2.configuration}
-                availableValues={availableValues}
-                valuesRefreshing={valuesRefreshing}
-                canEdit={canEdit}
-                onChange={onV2ConfigurationChange}
-              />
-            )}
-          </>
+        )}
+        {node.type === "transform" && node.v2 && (
+          <TransformFields
+            configuration={
+              node.v2.configuration as unknown as TransformConfiguration
+            }
+            availableValues={availableValues}
+            valuesRefreshing={valuesRefreshing}
+            canEdit={canEdit}
+            onChange={(configuration) =>
+              onV2ConfigurationChange(
+                configuration as unknown as Record<string, JsonValue>,
+              )
+            }
+          />
+        )}
+        {node.type === "branch" && node.v2 && (
+          <BranchFields
+            configuration={node.v2.configuration}
+            availableValues={availableValues}
+            valuesRefreshing={valuesRefreshing}
+            canEdit={canEdit}
+            onChange={(configuration) =>
+              onV2ConfigurationChange(
+                configuration as unknown as Record<string, JsonValue>,
+              )
+            }
+          />
+        )}
+        {node.type === "loop" && node.v2 && (
+          <LoopFields
+            configuration={node.v2.configuration}
+            availableValues={availableValues}
+            valuesRefreshing={valuesRefreshing}
+            canEdit={canEdit}
+            onChange={onV2ConfigurationChange}
+          />
         )}
         {!contract.availability.available && (
           <div className="py-2.5 px-[14px] border-b border-amber-300 bg-amber-50 font-body text-xs leading-[1.5] text-amber-900">

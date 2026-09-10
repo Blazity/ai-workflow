@@ -3,43 +3,29 @@ import {
   defineEventHandler,
   readBody,
   setResponseHeader,
-  setResponseStatus,
 } from "h3";
 import type {
   WorkflowDefinition,
   WorkflowDefinitionDetailResponse,
-  WorkflowDefinitionDuplicateMigrationBlockedResponse,
 } from "@shared/contracts";
+import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import { env } from "../../../../env.js";
 import { getDb } from "../../../db/client.js";
 import { getCurrentSystemHarnessProfileReference } from "../../../harness-profiles/store.js";
 import { requireDashboardActor } from "../../../lib/auth/request-context.js";
 import { canEditWorkflowDefinitions } from "../../../lib/auth/roles.js";
 import { dashboardUserLabel } from "../../../pre-pr-checks/store.js";
-import {
-  defaultWorkflowDefinition,
-  defaultWorkflowDefinitionV2,
-} from "../../../workflow-definition/default.js";
+import { defaultWorkflowDefinitionV2 } from "../../../workflow-definition/default.js";
 import { workflowDefinitionTemplate } from "../../../workflow-definition/templates.js";
 import {
   createWorkflowDefinitionDraft,
+  WorkflowDefinitionStoreError,
   getCurrentWorkflowDefinitionVersion,
   getDeployedWorkflowDefinitionVersion,
-  getRawWorkflowDefinitionVersion,
   getWorkflowDefinition,
   getWorkflowDefinitionDraft,
-  getWorkflowDefinitionRawState,
   serializeWorkflowDefinitionVersion,
 } from "../../../workflow-definition/store.js";
-import { upgradeStoredWorkflowDefinition } from "../../../workflow-definition/schema.js";
-import {
-  convertWorkflowDefinitionV1ToV2WithPromptResolution,
-  prepareWorkflowDefinitionV2Migration,
-} from "../../../workflow-definition/v2-migration.js";
-import {
-  ensureMigratedHarnessProfiles,
-  type MigratedHarnessProfilePlan,
-} from "../../../workflow-definition/v2-migration-harness-profiles.js";
 import {
   serializeDefinitionMeta,
   toWorkflowDefinitionHttpError,
@@ -53,7 +39,6 @@ type CreateSource =
 interface CreateBody {
   name?: unknown;
   source?: unknown;
-  targetSchemaVersion?: unknown;
 }
 
 function parseSource(source: unknown): CreateSource {
@@ -79,11 +64,7 @@ function parseSource(source: unknown): CreateSource {
 export default defineEventHandler(
   async (
     event,
-  ): Promise<
-    | WorkflowDefinitionDetailResponse
-    | WorkflowDefinitionDuplicateMigrationBlockedResponse
-    | undefined
-  > => {
+  ): Promise<WorkflowDefinitionDetailResponse | undefined> => {
     try {
       setResponseHeader(event, "Cache-Control", "private, no-store");
       const actor = await requireDashboardActor(event);
@@ -96,25 +77,6 @@ export default defineEventHandler(
         throw createError({ statusCode: 400, statusMessage: "Invalid name" });
       }
       const source = parseSource(body.source);
-      if (
-        body.targetSchemaVersion !== undefined &&
-        body.targetSchemaVersion !== 2
-      ) {
-        throw createError({
-          statusCode: 400,
-          statusMessage: "Target schema version must be 2",
-        });
-      }
-      if (
-        body.targetSchemaVersion === 2 &&
-        source.kind !== "duplicate"
-      ) {
-        throw createError({
-          statusCode: 400,
-          statusMessage:
-            "Target schema version is supported only when duplicating a workflow",
-        });
-      }
 
       const dbHandle = getDb();
       const currentSystemProfile =
@@ -124,108 +86,42 @@ export default defineEventHandler(
         );
 
       let seed: WorkflowDefinition;
-      let migratedHarnessProfiles: MigratedHarnessProfilePlan[] = [];
       if (source.kind === "duplicate") {
-        if (body.targetSchemaVersion === 2) {
-          const sourceRow = await getWorkflowDefinitionRawState(
-            dbHandle,
-            source.definitionId,
-          );
-          if (!sourceRow || sourceRow.archivedAt) {
-            throw createError({
-              statusCode: 404,
-              statusMessage: "Unknown definition",
-            });
-          }
-          if (sourceRow.draftRevision === 0) {
-            const fallback = defaultWorkflowDefinition({
-              includeReview: env.ENABLE_REVIEW_PHASE,
-              includeLeakReview: env.ENABLE_LEAK_REVIEW,
-            });
-            const migration =
-              await convertWorkflowDefinitionV1ToV2WithPromptResolution(
-                dbHandle,
-                {
-                  sourceDefinitionId: source.definitionId,
-                  sourceVersion: 0,
-                  definition: fallback,
-                },
-              );
-            if (!migration.definition) {
-              setResponseStatus(event, 422, "Workflow migration is blocked");
-              return {
-                ...migration,
-                error: "Workflow migration is blocked",
-              };
-            }
-            seed = migration.definition;
-          } else {
-            const raw = await getRawWorkflowDefinitionVersion(
-              dbHandle,
-              source.definitionId,
-              sourceRow.draftRevision,
-            );
-            if (!raw) {
-              throw createError({
-                statusCode: 404,
-                statusMessage: "Unknown definition",
-              });
-            }
-            if (
-              raw.definition !== null &&
-              typeof raw.definition === "object" &&
-              "schemaVersion" in raw.definition &&
-              raw.definition.schemaVersion === 2
-            ) {
-              seed = upgradeStoredWorkflowDefinition(raw.definition);
-            } else {
-              const prepared = await prepareWorkflowDefinitionV2Migration(
-                dbHandle,
-                {
-                  definitionId: source.definitionId,
-                  sourceVersion: sourceRow.draftRevision,
-                  expectedDraftRevision: sourceRow.draftRevision,
-                },
-              );
-              const migration = prepared.result;
-              if (!migration.definition) {
-                setResponseStatus(event, 422, "Workflow migration is blocked");
-                return {
-                  ...migration,
-                  error: "Workflow migration is blocked",
-                };
-              }
-              migratedHarnessProfiles = prepared.harnessProfiles;
-              seed = migration.definition;
-            }
-          }
-        } else {
-          const sourceRow = await getWorkflowDefinition(
-            dbHandle,
-            source.definitionId,
-          );
-          if (!sourceRow || sourceRow.archivedAt) {
-            throw createError({
-              statusCode: 404,
-              statusMessage: "Unknown definition",
-            });
-          }
-          const draft = await getWorkflowDefinitionDraft(
-            dbHandle,
-            source.definitionId,
-          );
-          const deployed = await getDeployedWorkflowDefinitionVersion(
-            dbHandle,
-            source.definitionId,
-          );
-          seed =
-            draft?.draft ??
-            deployed?.definition ??
-            defaultWorkflowDefinition({
-              includeReview: env.ENABLE_REVIEW_PHASE,
-              includeLeakReview: env.ENABLE_LEAK_REVIEW,
-            });
+        const sourceRow = await getWorkflowDefinition(
+          dbHandle,
+          source.definitionId,
+        );
+        if (!sourceRow || sourceRow.archivedAt) {
+          throw createError({
+            statusCode: 404,
+            statusMessage: "Unknown definition",
+          });
         }
+        const draft = await getWorkflowDefinitionDraft(
+          dbHandle,
+          source.definitionId,
+        );
+        const deployed = await getDeployedWorkflowDefinitionVersion(
+          dbHandle,
+          source.definitionId,
+        );
+        const current = await getCurrentWorkflowDefinitionVersion(
+          dbHandle,
+          source.definitionId,
+        );
+        const storedSource = deployed ?? current;
+        if (!draft && storedSource?.schema === "legacy-v1") {
+          throw new WorkflowDefinitionStoreError(409, RETIRED_SCHEMA_MESSAGE);
+        }
+        seed =
+          draft?.draft ??
+          (storedSource?.schema === "v2" ? storedSource.definition : undefined) ??
+          defaultWorkflowDefinitionV2({
+            includeReview: env.ENABLE_REVIEW_PHASE,
+            includeLeakReview: env.ENABLE_LEAK_REVIEW,
+            provider: env.AGENT_KIND,
+            profileReference: currentSystemProfile,
+          });
       } else if (source.kind === "template") {
         const template = workflowDefinitionTemplate(source.templateId, {
           includeReview: env.ENABLE_REVIEW_PHASE,
@@ -246,14 +142,6 @@ export default defineEventHandler(
         });
       }
 
-      await ensureMigratedHarnessProfiles(dbHandle, {
-        plans: migratedHarnessProfiles,
-        actor: {
-          organizationId: actor.organizationId,
-          role: actor.role,
-          id: actor.userId,
-        },
-      });
       const created = await createWorkflowDefinitionDraft(dbHandle, {
         name,
         seed,

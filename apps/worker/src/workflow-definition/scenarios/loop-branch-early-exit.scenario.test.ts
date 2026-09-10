@@ -5,7 +5,7 @@ import type { AgentWorkflowInput } from "../../workflows/agent-input.js";
 import type { WorkflowBlockRegistryContext } from "../block-registry.js";
 import {
   validateWorkflowDefinitionIssuesForDeployment,
-  workflowDefinitionSchema,
+  workflowDefinitionV2Schema,
 } from "../schema.js";
 import {
   executorRunsOf,
@@ -98,7 +98,7 @@ function snapshotDefinition(path: string = SNAPSHOT.path): WorkflowDefinitionV2 
   const raw = JSON.parse(
     readFileSync(new URL(`./snapshots/${path}`, import.meta.url), "utf8"),
   );
-  return workflowDefinitionSchema.parse(raw) as WorkflowDefinitionV2;
+  return workflowDefinitionV2Schema.parse(raw) as WorkflowDefinitionV2;
 }
 
 function noValidationIssues(path: string): unknown[] {

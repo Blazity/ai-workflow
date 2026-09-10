@@ -1,4 +1,4 @@
-import { BLOCK_TYPE_SPECS, DEFAULT_OUT_PORT, FAILURE_PORT } from "@shared/contracts";
+import { BLOCK_TYPE_SPECS, DEFAULT_OUT_PORT } from "@shared/contracts";
 import type { WorkflowBlockType } from "@shared/contracts";
 import type { FlowEdgeDef } from "@/lib/flows";
 
@@ -65,32 +65,13 @@ export function removeEdge(
   return edges.filter((_, index) => edgeInstanceKey(edges, index) !== instanceKey);
 }
 
-export function visibleOutPorts(
-  type: WorkflowBlockType,
-  failureUsed: boolean,
-  reveal: boolean,
-  schemaVersion: 1 | 2 = 1,
-): string[] {
-  const spec = BLOCK_TYPE_SPECS[type];
-  const ports = [...spec.ports];
-  if (
-    schemaVersion === 1 &&
-    spec.allowsFailurePort &&
-    (failureUsed || reveal)
-  ) {
-    ports.push(FAILURE_PORT);
-  }
-  return ports;
+export function visibleOutPorts(type: WorkflowBlockType): string[] {
+  return [...BLOCK_TYPE_SPECS[type].ports];
 }
 
 export type UpsertEdgeOptions =
-  | { schemaVersion?: 1 }
-  | ({
-      schemaVersion: 2;
-    } & (
-      | { edgeId: string; generateEdgeId?: never }
-      | { edgeId?: never; generateEdgeId: () => string }
-    ));
+  | { edgeId: string; generateEdgeId?: never }
+  | { edgeId?: never; generateEdgeId: () => string };
 
 function requireUsableEdgeId(id: string, usedIds: ReadonlySet<string>): string {
   if (id.length === 0 || id.trim() !== id) {
@@ -104,7 +85,7 @@ function requireUsableEdgeId(id: string, usedIds: ReadonlySet<string>): string {
 
 function allocateV2EdgeId(
   edges: readonly FlowEdgeDef[],
-  options: Extract<UpsertEdgeOptions, { schemaVersion: 2 }>,
+  options: UpsertEdgeOptions,
 ): string {
   const usedIds = new Set(
     edges.flatMap((edge) => (edge.id === undefined ? [] : [edge.id])),
@@ -134,36 +115,25 @@ export function upsertEdge(
   port: string,
   to: string,
   sourceType: WorkflowBlockType,
-  options: UpsertEdgeOptions = {},
+  options: UpsertEdgeOptions,
 ): FlowEdgeDef[] {
   if (from === to) return [...edges];
   const occupies = (e: FlowEdgeDef) => e.from === from && resolvedPort(e, sourceType) === port;
-  if (options.schemaVersion === 2) {
-    const isExactConnection = (edge: FlowEdgeDef) =>
-      occupies(edge) && edge.to === to;
-    const firstExact = edges.findIndex(isExactConnection);
-    if (firstExact !== -1) {
-      return edges.filter(
-        (edge, index) => index === firstExact || !isExactConnection(edge),
-      );
-    }
-    const next: FlowEdgeDef = {
-      id: allocateV2EdgeId(edges, options),
-      from,
-      to,
-      ...(canOmitFromPort(sourceType, port) ? {} : { fromPort: port }),
-    };
-    return [...edges, next];
+  const isExactConnection = (edge: FlowEdgeDef) =>
+    occupies(edge) && edge.to === to;
+  const firstExact = edges.findIndex(isExactConnection);
+  if (firstExact !== -1) {
+    return edges.filter(
+      (edge, index) => index === firstExact || !isExactConnection(edge),
+    );
   }
-
-  const next: FlowEdgeDef = canOmitFromPort(sourceType, port)
-    ? { from, to }
-    : { from, to, fromPort: port };
-  const idx = edges.findIndex(occupies);
-  if (idx === -1) return [...edges, next];
-  // Replace in place. Re-dragging a connection to the same target must not reorder
-  // the array, or the JSON dirty check flips on a semantically identical graph.
-  return edges.filter((e, i) => i === idx || !occupies(e)).map((e, i) => (i === idx ? next : e));
+  const next: FlowEdgeDef = {
+    id: allocateV2EdgeId(edges, options),
+    from,
+    to,
+    ...(canOmitFromPort(sourceType, port) ? {} : { fromPort: port }),
+  };
+  return [...edges, next];
 }
 
 export function isBackEdge(edges: readonly FlowEdgeDef[], edge: FlowEdgeDef): boolean {

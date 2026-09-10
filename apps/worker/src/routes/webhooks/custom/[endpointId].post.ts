@@ -1,4 +1,5 @@
 import type { JsonValue, WebhookAuthScheme } from "@shared/contracts";
+import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import {
   createError,
   defineEventHandler,
@@ -51,6 +52,7 @@ import { verifyWebhookAuth } from "../../../webhook-trigger/verify.js";
 import {
   getEnabledDeployedDefinition,
   getWorkflowDefinitionVersion,
+  runnableDefinitionOf,
 } from "../../../workflow-definition/store.js";
 
 /**
@@ -79,6 +81,7 @@ import {
 type WebhookRejectionReason =
   | "unknown_endpoint"
   | "endpoint_disabled"
+  | typeof RETIRED_SCHEMA_MESSAGE
   | "rate_limited"
   | "length_required"
   | "payload_too_large"
@@ -97,6 +100,7 @@ const REJECTIONS: Record<
   // which were taken out of service, is not something a caller may enumerate.
   unknown_endpoint: { status: 404, externalReason: "not_found" },
   endpoint_disabled: { status: 404, externalReason: "not_found" },
+  [RETIRED_SCHEMA_MESSAGE]: { status: 404, externalReason: "not_found" },
   rate_limited: { status: 429, externalReason: "rate_limited" },
   length_required: { status: 411, externalReason: "length_required" },
   payload_too_large: { status: 413, externalReason: "payload_too_large" },
@@ -169,8 +173,12 @@ export default defineEventHandler(async (event) => {
 
   // Fail-closed and uncached: an endpoint row outlives the definition state that
   // makes it dispatchable, so the live head is what decides, on every request.
-  const target = await resolveLiveWebhookTarget(db, endpoint);
-  if (!target) return reject(db, endpointId, "endpoint_disabled");
+  const resolvedTarget = await resolveLiveWebhookTarget(db, endpoint);
+  if (!resolvedTarget) return reject(db, endpointId, "endpoint_disabled");
+  if (resolvedTarget.kind === "retired") {
+    return reject(db, endpointId, resolvedTarget.reason);
+  }
+  const target = resolvedTarget.target;
 
   // Ingress budget, charged before any decrypt or HMAC: a URL holder flooding
   // junk cannot burn unbounded CPU, and this never touches the inbox budget the
@@ -328,7 +336,7 @@ async function resolveWebhookTriggerRateLimit(
     target.definitionVersion,
   );
   return resolveTriggerRateLimit(
-    triggerNodeRateLimitParams(pinned?.definition, target.nodeId),
+    triggerNodeRateLimitParams(runnableDefinitionOf(pinned), target.nodeId),
     envTriggerRateLimitDefault(env),
   );
 }
@@ -348,7 +356,8 @@ async function ensureStillDispatchable(
     target.definitionId,
     target.definitionVersion,
   );
-  if (!pinned || !webhookNodeOf(pinned.definition.nodes, target.nodeId)) {
+  const pinnedGraph = runnableDefinitionOf(pinned);
+  if (!pinnedGraph || !webhookNodeOf(pinnedGraph.nodes, target.nodeId)) {
     return "node_missing";
   }
   return null;
@@ -363,18 +372,31 @@ async function ensureStillDispatchable(
 async function resolveLiveWebhookTarget(
   db: Db,
   endpoint: WebhookEndpointRow,
-): Promise<LiveWebhookTarget | null> {
+): Promise<
+  | { kind: "runnable"; target: LiveWebhookTarget }
+  | { kind: "retired"; reason: typeof RETIRED_SCHEMA_MESSAGE }
+  | null
+> {
   const live = await getEnabledDeployedDefinition(db, endpoint.definitionId);
   if (!live || !live.current) {
     return null;
   }
-  const node = webhookNodeOf(live.current.definition.nodes, endpoint.nodeId);
+  if (live.current.schema === "legacy-v1") {
+    return { kind: "retired", reason: RETIRED_SCHEMA_MESSAGE };
+  }
+  const liveGraph = runnableDefinitionOf(live.current);
+  const node = liveGraph
+    ? webhookNodeOf(liveGraph.nodes, endpoint.nodeId)
+    : undefined;
   if (!node) return null;
   return {
-    definitionId: endpoint.definitionId,
-    definitionVersion: live.current.version,
-    nodeId: endpoint.nodeId,
-    configuration: node.configuration as WebhookMappingConfig,
+    kind: "runnable",
+    target: {
+      definitionId: endpoint.definitionId,
+      definitionVersion: live.current.version,
+      nodeId: endpoint.nodeId,
+      configuration: node.configuration as WebhookMappingConfig,
+    },
   };
 }
 

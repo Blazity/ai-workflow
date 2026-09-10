@@ -368,7 +368,7 @@ describe("specialized workflow block outputs", () => {
     expect(advisory.findings).toEqual([finding("Medium"), finding("Nit")]);
   });
 
-  it("routes rejected v2 reviews as normal data while preserving the v1 compatibility failure", () => {
+  it("routes rejected reviews as normal data", () => {
     const rejectedReview = {
       result: "failed" as const,
       feedback: "One blocking issue.",
@@ -377,21 +377,13 @@ describe("specialized workflow block outputs", () => {
       ],
     };
 
-    expect(reviewAgentExecutionResult(2, rejectedReview)).toEqual({
+    expect(reviewAgentExecutionResult(rejectedReview)).toEqual({
       kind: "next",
       output: {
         status: "reviewed",
         findings: rejectedReview.issues,
         decision: "request_changes",
         feedback: "One blocking issue.",
-      },
-    });
-    expect(reviewAgentExecutionResult(1, rejectedReview)).toMatchObject({
-      kind: "execution_error",
-      error: {
-        category: "unknown",
-        detail: "unknown",
-        phase: "review",
       },
     });
   });

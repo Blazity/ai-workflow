@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import type {
   ActiveRunEntry,
   RunRegistryAdapter,
@@ -65,10 +66,14 @@ class FakeLedger {
     return this.rows.get(this.key(scheduleId, occurrenceAt));
   }
 
-  seedPending(scheduleId: string, occurrenceAt: Date): void {
+  seedPending(
+    scheduleId: string,
+    occurrenceAt: Date,
+    overrides: Partial<OccurrenceRow> = {},
+  ): void {
     this.rows.set(
       this.key(scheduleId, occurrenceAt),
-      makeRow({ scheduleId, occurrenceAt, pending: true }),
+      makeRow({ scheduleId, occurrenceAt, pending: true, ...overrides }),
     );
   }
 
@@ -180,7 +185,34 @@ class FakeLedger {
     return true;
   };
 
-  cancelWaiting = async (scheduleId: string, reason: string) => {
+  recordRetired = async (admitted: AdmittedOccurrence, reason: string) => {
+    this.calls.push("recordRetired");
+    const key = this.key(admitted.scheduleId, admitted.occurrenceAt);
+    const existing = this.rows.get(key);
+    if (existing && !existing.pending && existing.outcome !== null) return false;
+    this.rows.set(
+      key,
+      makeRow({
+        ...existing,
+        scheduleId: admitted.scheduleId,
+        occurrenceAt: admitted.occurrenceAt,
+        definitionId: admitted.definitionId,
+        definitionVersion: admitted.definitionVersion,
+        pending: false,
+        outcome: "cancelled",
+        skipReason: reason,
+        droppedCount: admitted.droppedOlder,
+        droppedCountCapped: admitted.droppedOlderAtLeast,
+      }),
+    );
+    return true;
+  };
+
+  cancelWaiting = async (
+    scheduleId: string,
+    reason: string,
+    overwriteReason = false,
+  ) => {
     this.calls.push("cancelWaiting");
     let cancelled = 0;
     for (const [key, row] of this.rows) {
@@ -189,7 +221,7 @@ class FakeLedger {
         ...row,
         pending: false,
         outcome: "cancelled",
-        skipReason: row.skipReason ?? reason,
+        skipReason: overwriteReason ? reason : row.skipReason ?? reason,
       });
       cancelled += 1;
     }
@@ -679,6 +711,7 @@ describe("capacity and admission", () => {
 
 function liveTarget(version = 3) {
   return vi.fn(async () => ({
+    kind: "runnable" as const,
     definitionVersion: version,
     taskTitle: "Sweep the backlog",
     taskDescription: "Look for stale tickets.",
@@ -708,6 +741,88 @@ describe("schedule evaluation pass", () => {
     });
     expect(schedules.watermarks).toEqual([]);
     expect(startWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("records the due occurrence and retirement reason when an empty legacy schedule ledger is revoked", async () => {
+    const schedules = fakeSchedules([makeSchedule()]);
+    const resolveScheduleTarget = vi.fn(async () => ({
+      kind: "retired-head" as const,
+      definitionVersion: 2,
+      reason: RETIRED_SCHEMA_MESSAGE,
+    }));
+
+    await expect(
+      evaluateDueSchedules(
+        deps({ schedules: schedules.port, resolveScheduleTarget }),
+        10,
+      ),
+    ).resolves.toMatchObject({ evaluated: 1, revoked: 1, started: 0 });
+
+    expect([...ledger.rows.values()]).toHaveLength(1);
+    expect(ledger.row(SCHEDULE_ID, OCCURRENCE)).toMatchObject({
+      definitionVersion: 2,
+      pending: false,
+      outcome: "cancelled",
+      skipReason: RETIRED_SCHEMA_MESSAGE,
+    });
+  });
+
+  it("overwrites a waiting occurrence capacity annotation with the retirement reason", async () => {
+    ledger.seedPending(SCHEDULE_ID, EARLIER, { skipReason: "at_capacity" });
+    const schedules = fakeSchedules([makeSchedule()]);
+    const resolveScheduleTarget = vi.fn(async () => ({
+      kind: "retired-head" as const,
+      definitionVersion: 2,
+      reason: RETIRED_SCHEMA_MESSAGE,
+    }));
+
+    await expect(
+      drainPendingScheduleOccurrences(
+        deps({ schedules: schedules.port, resolveScheduleTarget }),
+        10,
+      ),
+    ).resolves.toMatchObject({ listed: 1, revoked: 1, started: 0 });
+
+    expect([...ledger.rows.values()]).toHaveLength(1);
+    expect(ledger.row(SCHEDULE_ID, EARLIER)).toMatchObject({
+      pending: false,
+      outcome: "cancelled",
+      skipReason: RETIRED_SCHEMA_MESSAGE,
+    });
+  });
+
+  it("records the next future occurrence when a fresh retired schedule has nothing due", async () => {
+    const createdAt = new Date("2026-08-05T14:01:00.000Z");
+    const schedules = fakeSchedules([
+      makeSchedule({
+        createdAt,
+        evaluationWatermarkAt: createdAt,
+      }),
+    ]);
+    const resolveScheduleTarget = vi.fn(async () => ({
+      kind: "retired-head" as const,
+      definitionVersion: 2,
+      reason: RETIRED_SCHEMA_MESSAGE,
+    }));
+
+    await expect(
+      evaluateDueSchedules(
+        deps({
+          schedules: schedules.port,
+          resolveScheduleTarget,
+          now: () => createdAt,
+        }),
+        10,
+      ),
+    ).resolves.toMatchObject({ evaluated: 1, revoked: 1, started: 0 });
+
+    expect([...ledger.rows.values()]).toHaveLength(1);
+    expect(ledger.row(SCHEDULE_ID, new Date("2026-08-05T14:15:00.000Z"))).toMatchObject({
+      definitionVersion: 2,
+      pending: false,
+      outcome: "cancelled",
+      skipReason: RETIRED_SCHEMA_MESSAGE,
+    });
   });
 
   // The batch is ordered by last_evaluated_at ascending with nulls first, so a
@@ -876,6 +991,54 @@ describe("schedule evaluation pass", () => {
 });
 
 describe("pending occurrence drain", () => {
+  it("cancels only a retired pinned occurrence and runs the next tick against the live head", async () => {
+    ledger.seedPending(SCHEDULE_ID, OCCURRENCE, { skipReason: "at_capacity" });
+    const schedules = fakeSchedules([
+      makeSchedule({ evaluationWatermarkAt: OCCURRENCE }),
+    ]);
+    const resolveScheduleTarget = vi
+      .fn()
+      .mockResolvedValueOnce({
+        kind: "retired-pinned" as const,
+        definitionVersion: 3,
+        reason: RETIRED_SCHEMA_MESSAGE,
+      })
+      .mockResolvedValueOnce({
+        kind: "runnable" as const,
+        definitionVersion: 4,
+        taskTitle: "Sweep the backlog",
+        taskDescription: "Look for stale tickets.",
+      });
+
+    await expect(
+      drainPendingScheduleOccurrences(
+        deps({ schedules: schedules.port, resolveScheduleTarget }),
+        10,
+      ),
+    ).resolves.toMatchObject({ listed: 1, started: 0, revoked: 0 });
+
+    expect(ledger.row(SCHEDULE_ID, OCCURRENCE)).toMatchObject({
+      pending: false,
+      outcome: "cancelled",
+      skipReason: RETIRED_SCHEMA_MESSAGE,
+    });
+    expect(schedules.revoked).toEqual([]);
+
+    await expect(
+      evaluateDueSchedules(
+        deps({
+          schedules: schedules.port,
+          resolveScheduleTarget,
+          now: () => new Date("2026-08-05T14:15:01.000Z"),
+        }),
+        10,
+      ),
+    ).resolves.toMatchObject({ evaluated: 1, started: 1, revoked: 0 });
+    expect(startWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ definitionVersion: 4 }),
+    );
+  });
+
   it("starts a waiting occurrence on the version it was admitted under, without re-admitting it", async () => {
     ledger.seedPending(SCHEDULE_ID, OCCURRENCE);
     const schedules = fakeSchedules([makeSchedule()]);

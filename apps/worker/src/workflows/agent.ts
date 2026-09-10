@@ -40,14 +40,11 @@ import {
 } from "./review-ledger.js";
 import { settleReviewLedgerStep, type SettledThread } from "./review-ledger-settle.js";
 import {
-  buildRuntimeGraph,
   createWorkflowExecutionErrorState,
   executionError,
-  executeGraph,
   formatExecutionErrorForUser,
   WorkflowExecutionError,
   WORKSPACE_GATE_NOT_RECORDED_PREFIX,
-  type RuntimeGraph,
   type StepsRecord,
   type WorkflowExecutionLogEvent,
   type WorkflowExecutionErrorState,
@@ -94,7 +91,6 @@ import {
 import { replayCaptureWithinTimeout } from "../run-observability/capture-timeout.js";
 import { executeTransform } from "../workflow-definition/transform.js";
 import {
-  isJsonValue,
   parseWorkflowDataReferenceV2,
   resolveWorkflowPromptDataTokensV2,
   type V2BindingResolutionContext,
@@ -103,7 +99,6 @@ import type {
   BlockExecutionContext,
   BlockExecutionResult,
   BlockExecutor,
-  ExecuteGraphHooks,
   ExecutionErrorCategory,
 } from "../workflow-definition/interpreter.js";
 import { resolveBlockAgent, resolveRunDefaultKind } from "../workflow-definition/resolve-agent.js";
@@ -125,7 +120,6 @@ import {
 } from "./blocks/types.js";
 import {
   buildPromptVariables,
-  substituteNodePromptParams,
   substitutePromptVariables,
   VARIABLE_PARAM_KEYS,
   type PromptVariableValues,
@@ -210,7 +204,6 @@ import {
 } from "./blocks/repository-scripts-output.js";
 import {
   RunBudgetError,
-  addActiveElapsed,
   addElapsed,
   checksCeilingErrorDetail,
   checksElapsedOf,
@@ -248,7 +241,7 @@ import {
   DEFAULT_OPEN_PR_BODY,
   DEFAULT_OPEN_PR_TITLE,
   isTriggerBlockType,
-  isV2OnlyBlockType,
+  RETIRED_SCHEMA_MESSAGE,
 } from "@shared/contracts";
 import type {
   BlockOutput,
@@ -263,7 +256,6 @@ import type {
   TransformConfiguration,
   VcsProviderKind,
   WorkflowBlockType,
-  WorkflowBlockTypeV1,
   WorkflowDefinition,
   WorkflowDefinitionNode,
   WorkflowDefinitionV2,
@@ -357,16 +349,6 @@ export function v2NonAgentPromptPlaceholderIssue(
     }
   }
   return null;
-}
-
-export function substituteNodePromptParamsForSchema(
-  rawNode: WorkflowDefinitionNode,
-  variables: PromptVariableValues,
-  schemaVersion: 1 | 2,
-): WorkflowDefinitionNode {
-  return schemaVersion === 2
-    ? rawNode
-    : substituteNodePromptParams(rawNode, variables);
 }
 
 function isV2AgentPromptField(
@@ -546,11 +528,13 @@ const BLOCK_EXECUTORS: Partial<Record<WorkflowBlockType, BlockExecuteFn>> = {
   send_plan_approval: executeSendPlanApproval,
 };
 
-// Action blocks executed by the inline switch inside executeBlock (they need
-// run-scoped closure state, so they can't live in the registry above). Kept in
-// sync with the switch cases; blockTypesMissingExecutor() (asserted in tests)
-// turns any drift into a loud failure instead of a silent no-op.
+// Action blocks executed by an inline switch rather than the registry above
+// (they need run-scoped closure state, or the scheduler's own invocation
+// context). Kept in sync with the switch cases; blockTypesMissingExecutor()
+// (asserted in tests) turns any drift into a loud failure instead of a silent
+// no-op.
 const INLINE_EXECUTED_BLOCK_TYPES: readonly WorkflowBlockType[] = [
+  "transform",
   "prepare_workspace",
   "planning_agent",
   "implementation_agent",
@@ -561,14 +545,10 @@ const INLINE_EXECUTED_BLOCK_TYPES: readonly WorkflowBlockType[] = [
   "update_ticket_status",
 ];
 
-/** V1 action block types with no executor wired in either BLOCK_EXECUTORS or
- *  the inline switch. V2-only blocks are owned by the v2 scheduler. */
-export function blockTypesMissingExecutor(): WorkflowBlockTypeV1[] {
+/** Action block types with no executor wired in either BLOCK_EXECUTORS or an
+ *  inline switch. */
+export function blockTypesMissingExecutor(): WorkflowBlockType[] {
   return (Object.keys(BLOCK_TYPE_SPECS) as WorkflowBlockType[])
-    .filter(
-      (type): type is WorkflowBlockTypeV1 =>
-        !isV2OnlyBlockType(type),
-    )
     .filter(
       (type) =>
         BLOCK_TYPE_SPECS[type].category === "action" &&
@@ -670,16 +650,9 @@ export function buildReviewAgentSuccessOutput(
 }
 
 export function reviewAgentExecutionResult(
-  schemaVersion: 1 | 2,
   review: ReviewOutput,
   workspaceManifest?: WorkspaceManifest,
 ): BlockExecutionResult {
-  if (schemaVersion === 1 && review.result === "failed") {
-    return executionError(review.error ?? "unknown", {
-      category: "unknown",
-      phase: "review",
-    });
-  }
   return {
     kind: "next",
     output: buildReviewAgentSuccessOutput(review, workspaceManifest),
@@ -809,76 +782,6 @@ export async function resolveRunPriceLookup(input: {
   return (model) => priceMap.get(model) ?? null;
 }
 
-export function modelsRequiringPriceLookupForRun(
-  graph: RuntimeGraph,
-  entryTriggerId: string,
-  runDefaultKind: AgentKind,
-  defaults: { claude: string; codex: string },
-): Set<string> {
-  const reachable: WorkflowDefinitionNode[] = [];
-  const pending = [entryTriggerId];
-  const seen = new Set<string>();
-
-  while (pending.length > 0) {
-    const id = pending.pop()!;
-    if (seen.has(id)) continue;
-    seen.add(id);
-
-    const node = graph.nodes.get(id);
-    if (!node) continue;
-    reachable.push(node);
-    for (const target of graph.outEdges.get(id)?.values() ?? []) pending.push(target);
-  }
-
-  const models = modelsRequiringPriceLookup(reachable, runDefaultKind, defaults);
-  const defaultModelCanLaunch = compatibilityPathCanLaunchDefaultModel(
-    graph,
-    entryTriggerId,
-    runDefaultKind,
-    defaults,
-  );
-  if (runDefaultKind === "codex" && defaultModelCanLaunch) models.add(defaults.codex);
-  return models;
-}
-
-function compatibilityPathCanLaunchDefaultModel(
-  graph: RuntimeGraph,
-  entryTriggerId: string,
-  runDefaultKind: AgentKind,
-  defaults: { claude: string; codex: string },
-): boolean {
-  if (runDefaultKind !== "codex") return false;
-
-  const pending = [{ id: entryTriggerId, implementationUsesDefault: true }];
-  const seen = new Set<string>();
-  while (pending.length > 0) {
-    const current = pending.pop()!;
-    const stateKey = `${current.id}:${current.implementationUsesDefault}`;
-    if (seen.has(stateKey)) continue;
-    seen.add(stateKey);
-
-    const node = graph.nodes.get(current.id);
-    if (!node) continue;
-    if (node.type === "finalize_workspace") return true;
-    if (
-      current.implementationUsesDefault &&
-      (node.type === "run_pre_pr_checks" || node.type === "open_pr")
-    ) {
-      return true;
-    }
-
-    let implementationUsesDefault = current.implementationUsesDefault;
-    if (node.type === "implementation_agent") {
-      const resolved = resolveBlockAgent(node.params, runDefaultKind, defaults);
-      implementationUsesDefault = resolved.kind === "codex" && resolved.model === defaults.codex;
-    }
-    for (const target of graph.outEdges.get(current.id)?.values() ?? []) {
-      pending.push({ id: target, implementationUsesDefault });
-    }
-  }
-  return false;
-}
-
 export function recordPrePrFixCycleUsages(
   ctx: Pick<EngineCtx, "markLaunched" | "recordUsage">,
   usages: ReadonlyArray<PhaseUsage | null>,
@@ -900,12 +803,6 @@ export function recordPrePrFixCycleUsages(
     }
   });
   if (budgetFailure) throw new RunBudgetError(budgetFailure);
-}
-
-export function shouldReconcilePhaseUsageOnBlockFinish(
-  schemaVersion: 1 | 2,
-): boolean {
-  return schemaVersion === 1;
 }
 
 export function blockRunStateSummary(state: BlockRunState): BlockRunState {
@@ -1240,6 +1137,65 @@ export function entryOwnsClarificationThread(
   }
   const kind = typeof entry === "string" ? entry : entry.kind;
   return kind === "ticket";
+}
+
+/** Resolve both ways a durable run can encounter schema v1: the current loader
+ * rejects it, while a resumed workflow may replay a plan snapshot already in
+ * the journal. The workflow body itself uses this seam, so its tests execute the
+ * same branch rather than inspecting agent.ts as text. */
+export async function loadWorkflowPlanWithRetirementExit<
+  Plan extends { definition: unknown },
+>(input: {
+  load(): Promise<Plan | null>;
+  retire(reason: typeof RETIRED_SCHEMA_MESSAGE): Promise<"failed">;
+}): Promise<Plan | null | "failed"> {
+  let plan: Plan | null;
+  try {
+    plan = await input.load();
+  } catch (error) {
+    if (!(error instanceof Error && error.message === RETIRED_SCHEMA_MESSAGE)) {
+      throw error;
+    }
+    return input.retire(RETIRED_SCHEMA_MESSAGE);
+  }
+  if (!plan) return null;
+  const { isLegacyStoredWorkflowDefinition } = await import(
+    "../workflow-definition/stored-definition.js"
+  );
+  return isLegacyStoredWorkflowDefinition(plan.definition)
+    ? input.retire(RETIRED_SCHEMA_MESSAGE)
+    : plan;
+}
+
+export interface RetiredWorkflowFailureDeps {
+  ticketKey: string | undefined;
+  cleanupClarifications(): Promise<void>;
+  markRunFailed(): Promise<void>;
+  recordFailureReason(reason: string): Promise<void>;
+  logFailure(reason: string): Promise<void>;
+  commentFailure(reason: string): Promise<void>;
+  moveTicket(): Promise<void>;
+  notifyTicket(reason: string): Promise<void>;
+}
+
+/** The concrete standard failure exit for a retired plan. It records the run
+ * state and reason before provider side effects, preserves the Jira comment
+ * path, and returns the durable workflow outcome. */
+export async function runRetiredWorkflowFailureExit(
+  reason: typeof RETIRED_SCHEMA_MESSAGE,
+  deps: RetiredWorkflowFailureDeps,
+): Promise<"failed"> {
+  await deps.cleanupClarifications();
+  await deps.markRunFailed();
+  await deps.recordFailureReason(reason);
+  const { handleWorkflowFailureExit } = await import("./workflow-failure-exit.js");
+  await handleWorkflowFailureExit(deps.ticketKey, {
+    logFailure: () => deps.logFailure(reason),
+    commentFailure: () => deps.commentFailure(reason),
+    moveTicket: deps.moveTicket,
+    notifyTicket: () => deps.notifyTicket(reason),
+  });
+  return "failed";
 }
 
 export const SCHEDULED_RUN_CANNOT_PARK_REASON =
@@ -3171,7 +3127,7 @@ async function validateReviewSafePlanStep(
 ): Promise<string[]> {
   "use step";
   const { validateAnyScopeReviewSafety } = await import("../workflow-definition/schema.js");
-  return validateAnyScopeReviewSafety({ schemaVersion: 1, nodes, edges });
+  return validateAnyScopeReviewSafety({ nodes, edges });
 }
 validateReviewSafePlanStep.maxRetries = 0;
 
@@ -3187,19 +3143,6 @@ async function resolveHarnessRuntimesStep(
   providerOverride: AgentKind | null,
 ): Promise<Record<string, ResolvedHarnessRuntime>> {
   "use step";
-  if (definition.schemaVersion === 1) {
-    const { resolveHarnessRuntimesWithLoader } = await import(
-      "../workflow-definition/harness-profile-runtime.js"
-    );
-    // V1 needs no redirect: `defaultProvider` already carries the ticket label,
-    // and a v1 block reads its provider from `configuration.provider` with that
-    // value as the fallback, which is also what `resolveBlockAgent` executes.
-    return resolveHarnessRuntimesWithLoader(
-      definition,
-      defaultProvider,
-      async () => null,
-    );
-  }
   const { env } = await import("../../env.js");
   const { getDb } = await import("../db/client.js");
   const {
@@ -4260,6 +4203,17 @@ export async function recordRunTelemetryStep(payload: {
 }
 recordRunTelemetryStep.maxRetries = 0;
 
+async function persistRunTelemetryBestEffort(
+  payload: Parameters<typeof recordRunTelemetryStep>[0],
+  ticketIdentifier: string,
+): Promise<void> {
+  await recordRunTelemetryStep(payload).catch(() => {
+    console.error(
+      `Run telemetry failed to persist for ${ticketIdentifier} (run ${payload.runId})`,
+    );
+  });
+}
+
 async function closeTerminalPrChecksStep(payload: {
   runId: string;
   intent: "timed_out" | "cancelled";
@@ -4753,6 +4707,83 @@ async function agentWorkflowBody(
   const ticket = await resolveWorkflowTicketStep(entry, env.COLUMN_AI);
   if (!ticket) return;
 
+  let clarificationsReconciled = false;
+  const cleanupClarifications = async (): Promise<void> => {
+    if (clarificationsReconciled) return;
+    clarificationsReconciled = true;
+    if (entryOwnsClarificationThread(entry)) {
+      await reconcileClarificationsOnPickup(
+        ticket.identifier,
+        workflowRunId,
+        transitionOwner,
+      );
+    }
+  };
+  const failRetiredDefinition = async (
+    reason: typeof RETIRED_SCHEMA_MESSAGE,
+  ): Promise<"failed"> => {
+    try {
+      return await runRetiredWorkflowFailureExit(reason, {
+        ticketKey: entry.ticketKey ?? undefined,
+        cleanupClarifications,
+        markRunFailed: () => markRunFailedOnSelfMoveStep(workflowRunId),
+        recordFailureReason: (failureReason) =>
+          recordRunFailureReasonStep(workflowRunId, failureReason),
+        logFailure: (failureReason) =>
+          logPhaseFailure(entry.subjectKey, "engine", failureReason),
+        commentFailure: (failureReason) =>
+          postFailureReasonCommentStep(
+            ticket.identifier,
+            failureReason,
+            transitionOwner,
+          ),
+        moveTicket: () =>
+          moveTicketStep(ticketId, backlogMoveTarget(), transitionOwner),
+        notifyTicket: (failureReason) =>
+          notifyTicket(
+            ticket.identifier,
+            { kind: "failed", reason: failureReason },
+            transitionOwner,
+          ),
+      });
+    } finally {
+      const retiredExecutionError = createWorkflowExecutionErrorState(
+        workflowRunId,
+        "workflow-definition",
+        1,
+        executionError(reason, {
+          category: "engine",
+          message: reason,
+          phase: "workflow-definition",
+        }).error,
+      );
+      await persistRunTelemetryBestEffort(
+        {
+          runId: workflowRunId,
+          subjectKey: entry.subjectKey,
+          status: "failed",
+          ticketKey: entry.ticketKey ?? null,
+          ticketTitle: ticket.title,
+          ticketUrl: entry.ticketKey
+            ? `${env.JIRA_BASE_URL.replace(/\/+$/, "")}/browse/${ticket.identifier}`
+            : entry.kind === "pr_trigger"
+              ? entry.pr.prUrl
+              : null,
+          model: null,
+          totals: computeUsageTotals({}, undefined, undefined, {}),
+          budgetFailure: null,
+          pr: null,
+          prs: null,
+          executionError: {
+            message: formatExecutionErrorForUser(retiredExecutionError),
+            code: retiredExecutionError.diagnosticId,
+          },
+          harnessManifests: [],
+        },
+        ticket.identifier,
+      );
+    }
+  };
   // Re-pickup housekeeping (strip the awaiting-input label, supersede any pending
   // clarification, flip parked predecessor runs off "awaiting"). Gated to the
   // entry kinds that own the ticket's main work thread: a plain "ticket" pickup
@@ -4761,13 +4792,7 @@ async function agentWorkflowBody(
   // plan_approved run is a PR/plan follow-up that must NOT touch the ticket's
   // clarification state. All operations inside are idempotent, so this is a safe
   // no-op on a first pickup too.
-  if (entryOwnsClarificationThread(entry)) {
-    await reconcileClarificationsOnPickup(
-      ticket.identifier,
-      workflowRunId,
-      transitionOwner,
-    );
-  }
+  await cleanupClarifications();
 
   // First pickup only: post exactly one dashboard link comment so a human can
   // follow progress and answer questions. The link itself is the idempotency
@@ -4790,7 +4815,13 @@ async function agentWorkflowBody(
   // An approved plan pins the definition version that produced it, so the run
   // replays the exact graph the human reviewed rather than the current head.
   const pinnedVersion = "definitionVersion" in entry ? entry.definitionVersion : undefined;
-  const plan = await loadWorkflowDefinitionFor(entryTriggerType, entry.definitionId, pinnedVersion);
+  const loadedPlan = await loadWorkflowPlanWithRetirementExit({
+    load: () =>
+      loadWorkflowDefinitionFor(entryTriggerType, entry.definitionId, pinnedVersion),
+    retire: failRetiredDefinition,
+  });
+  if (loadedPlan === "failed") return loadedPlan;
+  const plan = loadedPlan;
   if (!plan) {
     console.warn(
       `No runnable workflow definition for trigger ${entryTriggerType}; skipping run for ${ticket.identifier}`,
@@ -4860,13 +4891,10 @@ async function agentWorkflowBody(
   };
 
   const { resolvePromptReferencesForRun } = await import("./prompt-references-step.js");
-  const resolvedPrompts = await resolvePromptReferencesForRun(
-    plan.nodes,
-    plan.schemaVersion,
-  );
+  const resolvedPrompts = await resolvePromptReferencesForRun(plan.nodes);
   plan.nodes = resolvedPrompts.nodes;
-  if (plan.schemaVersion === 2) {
-    const definition = plan.definition as WorkflowDefinitionV2;
+  {
+    const definition = plan.definition;
     const resolvedConfigurationByNodeId = new Map(
       plan.nodes.map((node) => [node.id, node.params] as const),
     );
@@ -4918,9 +4946,9 @@ async function agentWorkflowBody(
     }).catch(() => {});
   await writeBlockStatuses();
   let v2RunObservation: V2RunObservationHooks | null = null;
-  if (plan.schemaVersion === 2) {
+  {
     const replayCaptureStartedAt = await readRunBudgetClockStep();
-    const definition = plan.definition as WorkflowDefinitionV2;
+    const definition = plan.definition;
     const replayGraph = sanitizeReplayGraphSnapshot(
       buildV2ReplayGraphSnapshot(definition),
       configuredReplaySecrets(),
@@ -5099,9 +5127,8 @@ async function agentWorkflowBody(
       await notifyTicket(ticket.identifier, { kind: "started" }, transitionOwner);
     }
 
-    const graph = buildRuntimeGraph({ nodes: plan.nodes, edges: plan.edges });
     const entryTrigger = selectEntryTriggerNode(plan.nodes, entryTriggerType, entry);
-    if (!entryTrigger || !graph.nodes.has(entryTrigger.id)) {
+    if (!entryTrigger) {
       throw new Error("workflow definition has no runnable trigger block");
     }
     const branchName =
@@ -5139,8 +5166,7 @@ async function agentWorkflowBody(
     const triggerOutput: BlockOutput = triggerOutputWithTicketContext(entry, ticketData);
 
     const resolveAgentForNode = (node: WorkflowDefinitionNode) => {
-      const runtime =
-        plan.schemaVersion === 2 ? harnessRuntimes[node.id] : undefined;
+      const runtime = harnessRuntimes[node.id];
       return runtime
         ? {
             kind: runtime.manifest.harness.provider,
@@ -5160,34 +5186,19 @@ async function agentWorkflowBody(
     // Codex agents and every in-process Call LLM need token pricing. Fetch all
     // resolved models before any block can record usage so configured cost caps
     // fail closed instead of depending on network timing during execution.
-    const pricedModels =
-      plan.schemaVersion === 1
-        ? modelsRequiringPriceLookupForRun(
-            graph,
-            entryTrigger.id,
-            runDefaultKind,
-            modelDefaults,
-          )
-        : new Set([
-            ...Object.values(harnessRuntimes)
-              .filter(
-                (runtime) =>
-                  runtime.manifest.harness.provider === "codex",
-              )
-              .map((runtime) => runtime.manifest.model.id),
-            ...plan.nodes
-              .filter((node) => node.type === "call_llm")
-              .map(
-                (node) =>
-                  resolveCallLlmTarget(
-                    node.params,
-                    runDefaultKind,
-                    modelDefaults,
-                  ).model,
-              ),
-          ]);
+    const pricedModels = new Set([
+      ...Object.values(harnessRuntimes)
+        .filter((runtime) => runtime.manifest.harness.provider === "codex")
+        .map((runtime) => runtime.manifest.model.id),
+      ...plan.nodes
+        .filter((node) => node.type === "call_llm")
+        .map(
+          (node) =>
+            resolveCallLlmTarget(node.params, runDefaultKind, modelDefaults)
+              .model,
+        ),
+    ]);
     if (
-      plan.schemaVersion === 2 &&
       runDefaultKind === "codex" &&
       plan.nodes.some((node) =>
         node.type === "run_pre_pr_checks" ||
@@ -5236,7 +5247,6 @@ async function agentWorkflowBody(
     }
     const ctx: EngineCtx = {
       runId: workflowRunId,
-      schemaVersion: plan.schemaVersion,
       definitionId: plan.definitionId,
       definitionVersion: plan.version,
       definitionNodes: plan.nodes,
@@ -5482,7 +5492,6 @@ async function agentWorkflowBody(
             const { ensureArthurTask, ensureChecksCeiling, sandboxLifetimeMs } =
               await import("./blocks/prepare-workspace.js");
             const requiredAgents = requiredAgentsForDefinition({
-              schemaVersion: plan.schemaVersion,
               nodes: plan.nodes,
               defaultKind: runDefaultKind,
               defaults: modelDefaults,
@@ -5572,8 +5581,6 @@ async function agentWorkflowBody(
           hook.dispose();
         }
       };
-
-      const clarificationExit = awaitClarification;
 
       // The reviewer is waiting in a thread, and a failed run that says
       // nothing is indistinguishable from a webhook that never fired. Posted
@@ -5698,52 +5705,6 @@ async function agentWorkflowBody(
             usageReport,
           }, transitionOwner),
         });
-      };
-
-      const terminate = async (
-        params: {
-          terminalStatus: TerminalStatus;
-          postComment?: string;
-        },
-      ): Promise<void> => {
-        // terminate is dispatched inline by the interpreter, so it never passes
-        // through executeBlock's substituteNodePromptParams wrapper. Substitute
-        // {{variables}} into the comment here so every terminal read below sees
-        // resolved text.
-        const postComment =
-          typeof params.postComment === "string"
-            ? substitutePromptVariables(params.postComment, buildPromptVariables(ctx))
-            : params.postComment;
-        const disposition = terminalStatusDisposition(params.terminalStatus);
-        if (disposition.runOutcome === "success") {
-          if (postComment && entry.ticketKey) {
-            await postTicketComment(ticket.identifier, postComment, transitionOwner);
-          }
-          runOutcome = disposition.runOutcome;
-          return;
-        }
-        if (!disposition.shouldRunFailureSideEffects) {
-          runOutcome = disposition.runOutcome;
-          return;
-        }
-        if (!entry.ticketKey) {
-          runOutcome = disposition.runOutcome;
-          return;
-        }
-        // Persist "failed" before this backlog move fires the self-triggered
-        // "ticket left the AI column" webhook (same race as failureExit).
-        await markRunFailedOnSelfMoveStep(workflowRunId);
-        await recordRunFailureReasonStep(
-          workflowRunId,
-          postComment ?? `Terminated by workflow: ${params.terminalStatus}`,
-        );
-        await moveTicketStep(ticketId, backlogMoveTarget(), transitionOwner);
-        await notifyTicket(ticket.identifier, {
-          kind: "failed",
-          reason: postComment ?? "Terminated by workflow.",
-          usageReport: usageReportOrUndefined(),
-        }, transitionOwner);
-        runOutcome = disposition.runOutcome;
       };
 
       const noWorkspace = (type: WorkflowBlockType): BlockExecutionResult => ({
@@ -6127,11 +6088,7 @@ async function agentWorkflowBody(
         // Substitute {{variables}} into prompt-bearing params per execution: the
         // run context (research plan, publication, selected repos) mutates
         // mid-run, so each block sees the values current at its turn.
-        const node = substituteNodePromptParamsForSchema(
-          rawNode,
-          buildPromptVariables(ctx),
-          ctx.schemaVersion,
-        );
+        const node = rawNode;
         await materializeHumanDecisions();
         if (
           node.type === "implementation_agent" ||
@@ -6251,10 +6208,7 @@ async function agentWorkflowBody(
             // artifact phase must stay distinct from the first pass (same
             // freshness trick as the -expansion-N suffix).
             const noChangeRetrySuffix = noChangeRetryUsed ? " no-change retry" : "";
-            const researchLabel =
-              ctx.schemaVersion === 2
-                ? `Research ${node.id}${expansionRound > 0 ? ` expansion ${expansionRound}` : ""}${noChangeRetrySuffix}`
-                : `Research${expansionRound > 0 ? ` expansion ${expansionRound}` : ""}${noChangeRetrySuffix}`;
+            const researchLabel = `Research ${node.id}${expansionRound > 0 ? ` expansion ${expansionRound}` : ""}${noChangeRetrySuffix}`;
             const baseResearchArtifactPhase = agentArtifactPhase("research", execution);
             const expandedResearchArtifactPhase =
               expansionRound > 0
@@ -6753,10 +6707,7 @@ async function agentWorkflowBody(
             });
             if (workspace.kind === "exit") return workspace.result;
             const sandboxId = workspace.sandboxId;
-            const implementationLabel =
-              ctx.schemaVersion === 2
-                ? `Impl ${node.id}`
-                : "Impl";
+            const implementationLabel = `Impl ${node.id}`;
             const implementationArtifactPhase = agentArtifactPhase("impl", execution);
             const implPhase = phaseKey(
               implementationLabel,
@@ -6960,7 +6911,7 @@ async function agentWorkflowBody(
             if (workspace.kind === "exit") return workspace.result;
             const reviewFeedback = resolveReviewFeedbackInput(resolvedInputs, {
               ambient: ctx.entry.kind === "pr_trigger" ? ctx.entry.pr.review : undefined,
-              allowAmbientFallback: ctx.schemaVersion === 1,
+              allowAmbientFallback: false,
             });
             if (!reviewFeedback.ok) {
               return executionError("invalid reviewFeedback binding", {
@@ -6997,16 +6948,13 @@ async function agentWorkflowBody(
             }
             const sandboxId = provisioned.sandboxId;
             ctx.sandboxIds.add(sandboxId);
-            const reviewLabel =
-              ctx.schemaVersion === 2
-                ? `Review ${node.id}`
-                : "Review";
+            const reviewLabel = `Review ${node.id}`;
             const reviewArtifactPhase = agentArtifactPhase("review", execution);
             const reviewPhase = phaseKey(reviewLabel, invocationAttempt);
             phaseModels[reviewPhase] = model;
             runPhaseModels[reviewPhase] = model;
             try {
-              if (ctx.schemaVersion === 2) {
+              {
                 const activationScopeId =
                   execution?.activationScopeId ?? "root";
                 const reviewSourceFingerprints =
@@ -7162,7 +7110,6 @@ async function agentWorkflowBody(
               }
 
               return reviewAgentExecutionResult(
-                ctx.schemaVersion,
                 reviewOutput,
                 ctx.workspaceManifest,
               );
@@ -7180,23 +7127,19 @@ async function agentWorkflowBody(
             // deployed with it keeps validating, and is ignored here.
             const repairRuntime =
               state.implementationRuntime ??
-              (ctx.schemaVersion === 2
-                ? ctx.definitionNodes
-                    .filter(
-                      (candidate) =>
-                        candidate.type === "implementation_agent" ||
-                        candidate.type === "fix_agent" ||
-                        (candidate.type === "generic_agent" &&
-                          candidate.params.workspaceMode !== "none"),
-                    )
-                    .map((candidate) => ctx.harnessRuntimes[candidate.id])
-                    .find(
-                      (
-                        candidate,
-                      ): candidate is ResolvedHarnessRuntime =>
-                        candidate !== undefined,
-                    )
-                : undefined);
+              ctx.definitionNodes
+                .filter(
+                  (candidate) =>
+                    candidate.type === "implementation_agent" ||
+                    candidate.type === "fix_agent" ||
+                    (candidate.type === "generic_agent" &&
+                      candidate.params.workspaceMode !== "none"),
+                )
+                .map((candidate) => ctx.harnessRuntimes[candidate.id])
+                .find(
+                  (candidate): candidate is ResolvedHarnessRuntime =>
+                    candidate !== undefined,
+                );
             const repairKind =
               repairRuntime?.manifest.harness.provider ??
               state.implementationKind ??
@@ -7255,7 +7198,7 @@ async function agentWorkflowBody(
               repairModel,
               prePrChecks.budgetFailure,
               invocationAttempt,
-              ctx.schemaVersion === 2 ? node.id : undefined,
+              node.id,
             );
             if (prePrChecks.agentFailure) {
               return agentProtocolBlockError(prePrChecks.agentFailure);
@@ -7485,12 +7428,8 @@ async function agentWorkflowBody(
         }
       };
 
-      const hooks: ExecuteGraphHooks = {
-        onExecutionError: (event) =>
-          logWorkflowExecutionErrorStep(
-            safeWorkflowExecutionLogEvent(event),
-          ),
-        async onBlockStart(nodeId, attempt) {
+      const hooks = {
+        async onBlockStart(nodeId: string, attempt: number) {
           await enforceBudgetAtBoundary(true);
           activeBlockIds.add(nodeId);
           syncCurrentBlockId();
@@ -7498,22 +7437,13 @@ async function agentWorkflowBody(
           blockStatuses[nodeId] = { status: "running", attempt };
           await writeBlockStatuses();
         },
-        async onBlockFinish(nodeId, state) {
-          // V1 is serial, so every launched phase belongs to the block that
-          // just finished. V2 may have active siblings; reconciling the global
-          // set here would permanently mark their still-running usage unknown.
-          if (shouldReconcilePhaseUsageOnBlockFinish(plan.schemaVersion)) {
-            reconcileMissingPhaseUsages();
-          }
+        async onBlockFinish(nodeId: string, state: BlockRunState) {
           blockStatuses[nodeId] = blockRunStateSummary(state);
           await writeBlockStatuses();
           activeBlockIds.delete(nodeId);
           syncCurrentBlockId();
           await enforceBudgetAtBoundary(false);
         },
-        clarificationExit,
-        failureExit,
-        terminate,
       };
 
       const runValues = {
@@ -7525,12 +7455,9 @@ async function agentWorkflowBody(
           type: entryTrigger.type,
         },
       };
-      const v2AgentArtifactKeys =
-        plan.schemaVersion === 2
-          ? buildV2AgentArtifactKeys(
-              (plan.definition as WorkflowDefinitionV2).nodes,
-            )
-          : new Map<string, string>();
+      const v2AgentArtifactKeys = buildV2AgentArtifactKeys(
+        plan.definition.nodes,
+      );
       const executeV2Block: V2BlockExecutor = async (
         node,
         steps,
@@ -7865,9 +7792,9 @@ async function agentWorkflowBody(
               attempt: errorState.attempt,
               category: errorState.category,
               ...(errorState.phase ? { phase: errorState.phase } : {}),
-              // V1 forwards this from the interpreter's recordExecutionError.
-              // Without it here, a V2 failure logs correlation metadata only and
-              // the cause exists nowhere but the capped customer-facing message.
+              // Without the detail here, a failure logs correlation metadata
+              // only and the cause exists nowhere but the capped
+              // customer-facing message.
               ...(error.detail ? { detail: error.detail } : {}),
               ...(errorState.message ? { message: errorState.message } : {}),
               ...(error.diagnostic
@@ -7882,23 +7809,9 @@ async function agentWorkflowBody(
           },
       };
 
-      let walk:
-        | Awaited<ReturnType<typeof executeGraph>>
-        | Awaited<ReturnType<typeof executeV2Graph>>;
-      if (plan.schemaVersion === 1) {
-        walk = await executeGraph({
-          runId: workflowRunId,
-          graph,
-          entryTriggerId: entryTrigger.id,
-          triggerOutput,
-          runValues,
-          executeBlock,
-          hooks,
-          shouldRethrowExecutionError: shouldRethrowAgentExecutionError,
-          maxTotalExecutions: 200,
-        });
-      } else {
-        const definition = plan.definition as WorkflowDefinitionV2;
+      let walk: Awaited<ReturnType<typeof executeV2Graph>>;
+      {
+        const definition = plan.definition;
         let resume:
           | {
               checkpoint: V2SchedulerCheckpoint;
@@ -7961,14 +7874,13 @@ async function agentWorkflowBody(
         }
       }
       terminalExecutionError = walk.executionError ?? null;
-      if (terminalExecutionError && plan.schemaVersion === 2) {
+      if (terminalExecutionError) {
         await failureExit(
           failureExitPhase(terminalExecutionError),
           formatExecutionErrorForUser(terminalExecutionError),
           terminalExecutionError.nodeId,
-          // The v2 walk's own steps, so the failure comment can read the
-          // repository scripts output back out of them exactly as the v1
-          // interpreter path does.
+          // The walk's own steps, so the failure comment can read the
+          // repository scripts output back out of them.
           walk.steps,
         );
       }
@@ -8241,39 +8153,38 @@ async function agentWorkflowBody(
     // the failure so a silent break (e.g. a schema drift like a missing column
     // on the run's Neon branch) surfaces immediately instead of dropping run
     // history for days unnoticed.
-    await recordRunTelemetryStep({
-      runId: workflowRunId,
-      subjectKey: entry.subjectKey,
-      status: runOutcome,
-      ticketKey: entry.ticketKey ?? null,
-      ticketTitle: ticket.title,
-      ticketUrl: entry.ticketKey
-        ? `${env.JIRA_BASE_URL.replace(/\/+$/, "")}/browse/${ticket.identifier}`
-        : entry.kind === "pr_trigger"
-          ? entry.pr.prUrl
+    await persistRunTelemetryBestEffort(
+      {
+        runId: workflowRunId,
+        subjectKey: entry.subjectKey,
+        status: runOutcome,
+        ticketKey: entry.ticketKey ?? null,
+        ticketTitle: ticket.title,
+        ticketUrl: entry.ticketKey
+          ? `${env.JIRA_BASE_URL.replace(/\/+$/, "")}/browse/${ticket.identifier}`
+          : entry.kind === "pr_trigger"
+            ? entry.pr.prUrl
+            : null,
+        model: activeModel ?? null,
+        totals: computeUsageTotals(
+          runPhaseUsages,
+          priceLookup,
+          activeModel,
+          runPhaseModels,
+        ),
+        budgetFailure: terminalBudgetFailure,
+        pr: prForTelemetry,
+        prs: prsForTelemetry,
+        executionError: terminalExecutionError
+          ? {
+              message: formatExecutionErrorForUser(terminalExecutionError),
+              code: terminalExecutionError.diagnosticId,
+            }
           : null,
-      model: activeModel ?? null,
-      totals: computeUsageTotals(
-        runPhaseUsages,
-        priceLookup,
-        activeModel,
-        runPhaseModels,
-      ),
-      budgetFailure: terminalBudgetFailure,
-      pr: prForTelemetry,
-      prs: prsForTelemetry,
-      executionError: terminalExecutionError
-        ? {
-            message: formatExecutionErrorForUser(terminalExecutionError),
-            code: terminalExecutionError.diagnosticId,
-          }
-        : null,
-      harnessManifests,
-    }).catch(() => {
-      console.error(
-        `Run telemetry failed to persist for ${ticket.identifier} (run ${workflowRunId})`,
-      );
-    });
+        harnessManifests,
+      },
+      ticket.identifier,
+    );
   }
   return terminalExecutionError
     ? { kind: "execution_error", error: terminalExecutionError }

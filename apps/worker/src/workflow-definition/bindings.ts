@@ -3,8 +3,8 @@ import type {
   JsonValue,
   WorkflowBindingSource,
   WorkflowBlockInputContract,
-  WorkflowDefinitionV1,
-  WorkflowDefinitionV1Node,
+  WorkflowDefinitionEdge,
+  WorkflowDefinitionNode,
   WorkflowDefinitionValidationIssue,
   WorkflowInputBindings,
   WorkflowValueSchema,
@@ -35,8 +35,15 @@ export interface WorkflowRunBindingValues {
   defaultAgent: { provider: string; model: string };
 }
 
+/** The flattened graph these checks read: every node's params and inputs, and
+ *  every edge's port. */
+export interface WorkflowBindingGraph {
+  nodes: WorkflowDefinitionNode[];
+  edges: WorkflowDefinitionEdge[];
+}
+
 export interface WorkflowBindingGraphContext {
-  nodeById: Map<string, WorkflowDefinitionV1Node>;
+  nodeById: Map<string, WorkflowDefinitionNode>;
   reachable: Set<string>;
   dominators: Map<string, Set<string>>;
   reachableFromTrigger: Map<string, Set<string>>;
@@ -121,7 +128,7 @@ export function resolveWorkflowSchemaPath(
  * indices and traversal through nullable values are intentionally excluded:
  * neither an array length nor a non-null value is guaranteed by this schema
  * language. */
-export function resolveRequiredWorkflowSchemaPath(
+function resolveRequiredWorkflowSchemaPath(
   schema: WorkflowValueSchema,
   path: readonly string[],
 ): WorkflowValueSchema | null {
@@ -415,8 +422,8 @@ export function computeWorkflowDominators(
   return dominators;
 }
 
-export function buildWorkflowBindingGraphContext(
-  definition: WorkflowDefinitionV1,
+function buildWorkflowBindingGraphContext(
+  definition: WorkflowBindingGraph,
 ): WorkflowBindingGraphContext {
   const nodeById = new Map(definition.nodes.map((node) => [node.id, node]));
   const forward = new Map<string, string[]>();
@@ -483,7 +490,7 @@ function inputContractFor(
 }
 
 export function validateWorkflowBindingIssues(
-  definition: WorkflowDefinitionV1,
+  definition: WorkflowBindingGraph,
   registryContext: WorkflowBlockRegistryContext,
   graphContext = buildWorkflowBindingGraphContext(definition),
 ): WorkflowDefinitionValidationIssue[] {
