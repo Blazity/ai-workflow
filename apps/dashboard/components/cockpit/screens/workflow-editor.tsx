@@ -15,7 +15,6 @@ import {
   RETIRED_SCHEMA_MESSAGE,
   type RunBlockStatusesResponse,
   type WorkflowDefinition,
-  type WorkflowDefinitionDeploymentResponse,
   type WorkflowDefinitionDeploymentValidationResponse,
   type WorkflowDefinitionDetailResponse,
   type WorkflowDefinitionLayoutResponse,
@@ -41,7 +40,7 @@ import {
   type FlowEdgeDef,
   type FlowNodeDef,
 } from "@/lib/flows";
-import { readErrorMessage } from "@/lib/api/error-message";
+import { apiClient } from "@/lib/api/client";
 import {
   serializeSemanticWorkflowDefinition,
   serializeWorkflowDefinition,
@@ -215,6 +214,16 @@ export function nodeSaveIssues(nodes: FlowNodeDef[]): WorkflowNodeSaveIssue[] {
 export function nodesValid(nodes: FlowNodeDef[]): boolean {
   if (!nodes.some((n) => isTriggerBlockType(n.type))) return false;
   return nodeSaveIssues(nodes).length === 0;
+}
+
+function isDeploymentValidationResponse(
+  value: unknown,
+): value is WorkflowDefinitionDeploymentValidationResponse {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    Array.isArray((value as { issues?: unknown }).issues)
+  );
 }
 
 const headerButtonClass =
@@ -474,14 +483,13 @@ export function WorkflowEditorScreen({
   const validationControllerRef =
     useWorkflowValidationController<ValidationRequest>({
       validate: async ({ definitionId, definition }, signal) => {
-        const res = await fetch(`/api/workflow-definitions/${definitionId}/validate`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ definition }),
-          signal,
-        });
-        if (!res.ok) throw new Error(await readErrorMessage(res));
-        return (await res.json()) as WorkflowDefinitionValidationResponse;
+        const res = await apiClient.workflowDefinitions.validate(
+          definitionId,
+          definition,
+          { signal },
+        );
+        if (!res.ok) throw new Error(res.errorMessage);
+        return res.data;
       },
       onState: (state) => setValidation({ key: validationKeyRef.current, state }),
     });
@@ -614,16 +622,16 @@ export function WorkflowEditorScreen({
     const definitionId = selectedId;
     pendingLayoutSave.schedule(async (expectedLayoutRevision) => {
       try {
-        const res = await fetch(`/api/workflow-definitions/${definitionId}/layout`, {
-          method: "PATCH",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ layout, expectedLayoutRevision }),
-        });
+        const res = await apiClient.workflowDefinitions.saveLayout(
+          definitionId,
+          layout,
+          expectedLayoutRevision,
+        );
         if (!res.ok) {
-          setError(await readErrorMessage(res));
+          setError(res.errorMessage);
           return false;
         }
-        const body = (await res.json()) as WorkflowDefinitionLayoutResponse;
+        const body = res.data;
         setMetas((prev) => prev.map((meta) => (meta.id === body.meta.id ? body.meta : meta)));
         setLayoutBaseline(JSON.stringify(body.layout));
         return body.meta.layoutRevision;
@@ -750,19 +758,16 @@ export function WorkflowEditorScreen({
       // Save is intentionally fail-open for deployment validation: an outage
       // must not discard an editable, structurally valid draft.
       await afterPendingLayoutSave(pendingLayoutSave, async () => {
-        const res = await fetch(`/api/workflow-definitions/${selectedId}`, {
-          method: "PUT",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            definition,
-            expectedDraftRevision: selectedMeta?.draftRevision ?? 0,
-          }),
-        });
+        const res = await apiClient.workflowDefinitions.save(
+          selectedId,
+          definition,
+          selectedMeta?.draftRevision ?? 0,
+        );
         if (!res.ok) {
-          setError(await readErrorMessage(res));
+          setError(res.errorMessage);
           return;
         }
-        const saved = (await res.json()) as WorkflowDefinitionSaveResponse;
+        const saved = res.data;
         const responseIsCurrent = editorResponseGuard.isCurrent(requestRevision);
         applySave(
           saved,
@@ -823,19 +828,16 @@ export function WorkflowEditorScreen({
       let draftRevision = selectedMeta.draftRevision;
       let deployedVersion = selectedMeta.deployedVersion;
       if (dirty) {
-        const saveRes = await fetch(`/api/workflow-definitions/${selectedId}`, {
-          method: "PUT",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            definition,
-            expectedDraftRevision: draftRevision,
-          }),
-        });
+        const saveRes = await apiClient.workflowDefinitions.save(
+          selectedId,
+          definition,
+          draftRevision,
+        );
         if (!saveRes.ok) {
-          setError(await readErrorMessage(saveRes));
+          setError(saveRes.errorMessage);
           return;
         }
-        const saved = (await saveRes.json()) as WorkflowDefinitionSaveResponse;
+        const saved = saveRes.data;
         const responseIsCurrent = editorResponseGuard.isCurrent(requestRevision);
         applySave(saved, false, responseIsCurrent);
         if (!responseIsCurrent) {
@@ -850,17 +852,14 @@ export function WorkflowEditorScreen({
         deployedVersion = saved.meta.deployedVersion;
       }
 
-      const res = await fetch(`/api/workflow-definitions/${selectedId}/deploy`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          expectedDraftRevision: draftRevision,
-          expectedDeployedVersion: deployedVersion,
-        }),
-      });
+      const res = await apiClient.workflowDefinitions.deploy(
+        selectedId,
+        draftRevision,
+        deployedVersion,
+      );
       if (!res.ok) {
-        if (res.status === 422) {
-          const body = (await res.json()) as WorkflowDefinitionDeploymentValidationResponse;
+        if (res.status === 422 && isDeploymentValidationResponse(res.error)) {
+          const body = res.error;
           validationKeyRef.current = candidateKey;
           setValidation({
             key: candidateKey,
@@ -873,10 +872,10 @@ export function WorkflowEditorScreen({
           });
           return;
         }
-        setError(await readErrorMessage(res));
+        setError(res.errorMessage);
         return;
       }
-      const body = (await res.json()) as WorkflowDefinitionDeploymentResponse;
+      const body = res.data;
       setDeployed(body.deployed);
       setVersions((prev) => [body.deployed, ...prev.filter((item) => item.version !== body.deployed.version)]);
       setMetas((prev) => prev.map((meta) => (meta.id === body.meta.id ? body.meta : meta)));
@@ -921,16 +920,16 @@ export function WorkflowEditorScreen({
     setBusy(`rollback-${version}`);
     setError(null);
     try {
-      const res = await fetch(`/api/workflow-definitions/${selectedId}/rollback`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ version, expectedDeployedVersion: selectedMeta?.deployedVersion ?? null }),
-      });
+      const res = await apiClient.workflowDefinitions.rollback(
+        selectedId,
+        version,
+        selectedMeta?.deployedVersion ?? null,
+      );
       if (!res.ok) {
-        setError(await readErrorMessage(res));
+        setError(res.errorMessage);
         return;
       }
-      const body = (await res.json()) as WorkflowDefinitionDeploymentResponse;
+      const body = res.data;
       setDeployed(body.deployed);
       setMetas((prev) => prev.map((meta) => (meta.id === body.meta.id ? body.meta : meta)));
       const rolledBackTo = runnableVersionDefinition(body.deployed);
@@ -983,12 +982,12 @@ export function WorkflowEditorScreen({
     setBusy("switch");
     setError(null);
     try {
-      const res = await fetch(`/api/workflow-definitions/${targetId}`);
+      const res = await apiClient.workflowDefinitions.detail(targetId);
       if (!res.ok) {
-        setError(await readErrorMessage(res));
+        setError(res.errorMessage);
         return;
       }
-      const detail = (await res.json()) as WorkflowDefinitionDetailResponse;
+      const detail = res.data;
       if (!editorResponseGuard.isCurrent(requestRevision)) {
         setError(
           "The workflow changed while the definition was loading. Switch again to discard the newer edits.",
@@ -1034,16 +1033,12 @@ export function WorkflowEditorScreen({
     setBusy(`patch-${id}`);
     setRowError(null);
     try {
-      const res = await fetch(`/api/workflow-definitions/${id}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      const res = await apiClient.workflowDefinitions.patch(id, body);
       if (!res.ok) {
-        setRowError({ id, message: await readErrorMessage(res) });
+        setRowError({ id, message: res.errorMessage });
         return;
       }
-      const meta = (await res.json()) as WorkflowDefinitionMeta;
+      const meta = res.data;
       setMetas((prev) => prev.map((m) => (m.id === meta.id ? meta : m)));
     } catch (err) {
       setRowError({ id, message: err instanceof Error ? err.message : "Unable to update definition" });
@@ -1056,9 +1051,9 @@ export function WorkflowEditorScreen({
     setBusy(`delete-${id}`);
     setRowError(null);
     try {
-      const res = await fetch(`/api/workflow-definitions/${id}`, { method: "DELETE" });
+      const res = await apiClient.workflowDefinitions.delete(id);
       if (!res.ok) {
-        setRowError({ id, message: await readErrorMessage(res) });
+        setRowError({ id, message: res.errorMessage });
         return;
       }
       const remaining = metas.filter((m) => m.id !== id);
@@ -1086,16 +1081,12 @@ export function WorkflowEditorScreen({
         newSource.startsWith("template:")
           ? { kind: "template" as const, templateId: newSource.slice("template:".length) }
           : { kind: "duplicate" as const, definitionId: Number(newSource.slice("duplicate:".length)) };
-      const res = await fetch("/api/workflow-definitions", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name, source }),
-      });
+      const res = await apiClient.workflowDefinitions.create({ name, source });
       if (!res.ok) {
-        setCreateError(await readErrorMessage(res));
+        setCreateError(res.errorMessage);
         return;
       }
-      const detail = (await res.json()) as WorkflowDefinitionDetailResponse;
+      const detail = res.data;
       setMetas((prev) => [...prev, detail.meta]);
       setNewName("");
       setNewSource(`template:${templates[0]?.id ?? "ticket-workflow"}`);

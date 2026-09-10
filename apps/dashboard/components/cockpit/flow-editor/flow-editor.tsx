@@ -46,8 +46,8 @@ import {
   buildPaletteItems,
   CONNECTED_CARD_TEXT_CLASS,
   nodeSummary,
-} from "./blocks";
-import type { PaletteItem } from "./blocks";
+} from "./block-palette";
+import type { PaletteItem } from "./block-palette";
 import { NODE_W, NODE_H, inPortPos, outPortPos, bezier } from "./ports";
 import type { Point } from "./ports";
 import { NodePalette, MobilePaletteList } from "./palette";
@@ -60,7 +60,7 @@ import {
 import {
   defaultTransformConfiguration,
   TransformFields,
-} from "./transform-fields";
+} from "./blocks/transform";
 import { BranchFields } from "./branch-fields";
 import { LoopFields } from "./loop-fields";
 import { instantiateWorkflowEditorBlockTemplate } from "@/lib/workflow-editor/block-templates";

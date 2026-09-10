@@ -2,20 +2,20 @@
 
 import { useState } from "react";
 import type {
-  JsonValue,
   TransformBuildObjectField,
   TransformConfiguration,
   WorkflowDataCatalogEntry,
   WorkflowDataReferenceV2,
 } from "@shared/contracts";
 import { evaluateWorkflowValueCompatibility } from "@shared/contracts";
-import { JsonSchemaEditor } from "./json-schema-editor";
+import { JsonSchemaEditor } from "../json-schema-editor";
 import {
   compatibilityInvalidReason,
   WorkflowDataPicker,
   WorkflowValueChip,
-} from "./workflow-data-picker";
-import { WorkflowTextTemplateEditor } from "./workflow-text-template-editor";
+} from "../workflow-data-picker";
+import { WorkflowTextTemplateEditor } from "../workflow-text-template-editor";
+import type { BlockRendererProps } from "./types";
 
 const DIALECT = "https://json-schema.org/draft/2020-12/schema" as const;
 const inputClass =
@@ -568,4 +568,8 @@ export function TransformFields({
       <OutputShape configuration={configuration} />
     </section>
   );
+}
+
+export function TransformConfigFields(_props: BlockRendererProps) {
+  return null;
 }

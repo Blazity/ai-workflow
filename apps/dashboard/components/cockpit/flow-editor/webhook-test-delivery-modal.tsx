@@ -3,10 +3,11 @@
 import { useEffect, useRef, useState } from "react";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import type {
+  JsonValue,
   WebhookMappedEntry,
   WebhookTestDeliveryResponse,
 } from "@shared/contracts";
-import { readErrorMessage } from "@/lib/api/error-message";
+import { apiClient } from "@/lib/api/client";
 
 const SAMPLE_PAYLOAD = `{
   "subject": "Card reader is offline",
@@ -110,7 +111,7 @@ export function WebhookTestDeliveryModal({
   }, [onClose]);
 
   async function send() {
-    let parsed: unknown;
+    let parsed: JsonValue;
     try {
       parsed = JSON.parse(payload);
     } catch {
@@ -121,17 +122,14 @@ export function WebhookTestDeliveryModal({
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch(
-        `/api/workflow-definitions/${definitionId}/triggers/${encodeURIComponent(nodeId)}/webhook/test-delivery`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ payload: parsed }),
-          cache: "no-store",
-        },
+      const response = await apiClient.triggers.webhookTestDelivery(
+        definitionId,
+        nodeId,
+        { payload: parsed },
+        { cache: "no-store" },
       );
-      if (!response.ok) throw new Error(await readErrorMessage(response));
-      setResult((await response.json()) as WebhookTestDeliveryResponse);
+      if (!response.ok) throw new Error(response.errorMessage);
+      setResult(response.data);
     } catch (caught) {
       setResult(null);
       setError(

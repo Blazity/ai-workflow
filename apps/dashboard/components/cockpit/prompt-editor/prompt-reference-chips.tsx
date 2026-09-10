@@ -19,6 +19,7 @@ import {
 } from "@/lib/prompt-library/reference-navigation";
 import { resolveReferencePreview } from "@/lib/prompt-library/reference-preview";
 import { PromptReferenceActionsMenu } from "./prompt-reference-actions-menu";
+import { apiClient } from "@/lib/api/client";
 
 const quietAction =
   "relative inline-flex min-h-10 cursor-pointer appearance-none items-center justify-center whitespace-nowrap rounded-[3px] border border-transparent bg-transparent px-2.5 font-mono text-[9px] uppercase tracking-[0.04em] text-mariner transition-[background-color,border-color,transform] duration-150 ease-standard hover:border-mariner-200 hover:bg-panel focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner-200 active:scale-[0.96]";
@@ -72,10 +73,10 @@ export function PromptReferenceChipsView({
       next.delete(promptId);
       return next;
     });
-    const request = fetch(`/api/prompt-library/${promptId}`)
+    const request = apiClient.prompts.detail(promptId)
       .then((response) => {
         if (!response.ok) throw new Error(String(response.status));
-        return response.json() as Promise<PromptLibraryDetailResponse>;
+        return response.data;
       })
       .then((detail) => {
         setDetailCache((current) => new Map(current).set(promptId, detail));

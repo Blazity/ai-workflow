@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { PromptLibraryDetailResponse, PromptLibraryEntryMeta } from "@shared/contracts";
-import { readErrorMessage } from "@/lib/api/error-message";
+import { apiClient } from "@/lib/api/client";
 import {
   DIALOG_FOCUSABLE_SELECTOR,
   trappedDialogTabTarget,
@@ -102,20 +102,16 @@ export function PromptSavePopover({
       .map((t) => t.trim())
       .filter((t) => t.length > 0);
     try {
-      const res = await fetch("/api/prompt-library", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          name: name.trim(),
-          body: initialBody,
-          tags: parsedTags.length > 0 ? parsedTags : undefined,
-        }),
+      const res = await apiClient.prompts.create({
+        name: name.trim(),
+        body: initialBody,
+        tags: parsedTags.length > 0 ? parsedTags : undefined,
       });
       if (!res.ok) {
-        setError(await readErrorMessage(res));
+        setError(res.errorMessage);
         return;
       }
-      const json = (await res.json()) as PromptLibraryDetailResponse;
+      const json = res.data;
       onSaved(json.meta);
       refresh();
       onClose();

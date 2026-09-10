@@ -13,7 +13,7 @@ import {
   withHarnessModel,
   withHarnessProvider,
 } from "@/lib/harness-profiles/editor";
-import { readErrorMessage } from "@/lib/api/error-message";
+import { apiClient } from "@/lib/api/client";
 import type {
   HarnessCapabilitiesResponse,
   HarnessLocalSkillDiscoveryResponse,
@@ -21,7 +21,6 @@ import type {
   HarnessProfileDetailResponse,
   HarnessProfileDraftManifest,
   HarnessProfileDraftManifestV1,
-  HarnessProfileDto,
   HarnessProfileSkillReference,
   HarnessSkillArtifact,
   HarnessSkillSource,
@@ -321,17 +320,14 @@ export function ProfileEditor({
     const controller = new AbortController();
     setCapabilityLoading(true);
     setCapabilityError(null);
-    const query = new URLSearchParams({
-      provider: draft.harness.provider,
-      cliVersion: draft.harness.cliVersion,
-    });
-    void fetch(`/api/harness-capabilities?${query.toString()}`, {
-      cache: "no-store",
-      signal: controller.signal,
-    })
+    void apiClient.harnessCapabilities.get(
+      draft.harness.provider,
+      draft.harness.cliVersion,
+      { cache: "no-store", signal: controller.signal },
+    )
       .then(async (response) => {
-        if (!response.ok) throw new Error(await readErrorMessage(response));
-        return response.json() as Promise<HarnessCapabilitiesResponse>;
+        if (!response.ok) throw new Error(response.errorMessage);
+        return response.data;
       })
       .then((next) => {
         if (!controller.signal.aborted) setCapabilities(next);
@@ -386,14 +382,12 @@ export function ProfileEditor({
   useEffect(() => {
     if (!comparesDeployment) return;
     const controller = new AbortController();
-    void fetch("/api/harness-skills/local", {
+    void apiClient.harnessSkills.local({
       cache: "no-store",
       signal: controller.signal,
     })
       .then((response) =>
-        response.ok
-          ? (response.json() as Promise<HarnessLocalSkillDiscoveryResponse>)
-          : null,
+        response.ok ? response.data : null,
       )
       .then((listing) => {
         if (listing && !controller.signal.aborted) setDeploymentSkills(listing);
@@ -506,20 +500,16 @@ export function ProfileEditor({
     }
 
     const baseline = newProfileDraft(provider);
-    const query = new URLSearchParams({
-      provider,
-      cliVersion: baseline.harness.cliVersion,
-    });
     setCapabilityLoading(true);
     setCapabilityError(null);
     try {
-      const response = await fetch(
-        `/api/harness-capabilities?${query.toString()}`,
+      const response = await apiClient.harnessCapabilities.get(
+        provider,
+        baseline.harness.cliVersion,
         { cache: "no-store" },
       );
-      if (!response.ok) throw new Error(await readErrorMessage(response));
-      const targetCapabilities =
-        (await response.json()) as HarnessCapabilitiesResponse;
+      if (!response.ok) throw new Error(response.errorMessage);
+      const targetCapabilities = response.data;
       const next = withHarnessProvider(
         draft,
         provider,

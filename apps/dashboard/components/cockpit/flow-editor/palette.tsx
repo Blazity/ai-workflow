@@ -1,6 +1,6 @@
 "use client";
 
-import type { PaletteGroup, PaletteItem } from "./blocks";
+import type { PaletteGroup, PaletteItem } from "./block-palette";
 
 function GroupHeader({ label, color }: { label: string; color: string }) {
   return (

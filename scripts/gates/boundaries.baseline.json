@@ -20,12 +20,8 @@
     "services->app": 4,
     "services->config": 21
   },
-  "fileCycleCount": 8,
+  "fileCycleCount": 6,
   "fileCycles": [
-    [
-      "apps/dashboard/components/cockpit/flow-editor/config-fields.tsx",
-      "apps/dashboard/components/cockpit/flow-editor/prompt-field.tsx"
-    ],
     [
       "apps/worker/src/lib/dispatch-trigger.ts",
       "apps/worker/src/lib/dispatch.ts",
@@ -55,10 +51,6 @@
       "apps/worker/src/manual-dispatch/service.ts",
       "apps/worker/src/workflows/agent.ts",
       "apps/worker/src/workflows/run-ownership-steps.ts"
-    ],
-    [
-      "apps/worker/src/workflow-definition/bindings.ts",
-      "apps/worker/src/workflow-definition/interpreter.ts"
     ],
     [
       "apps/worker/src/workflow-definition/failure-message.ts",

@@ -3,40 +3,21 @@
 import { useRef, useState } from "react";
 import type {
   WorkflowDefinitionV2,
-  WorkflowDefinitionValidationIssue,
 } from "@shared/contracts";
-import { readErrorMessage } from "@/lib/api/error-message";
+import {
+  apiClient,
+  type EffectivePromptPreviewProvenance,
+  type EffectivePromptPreviewResponse,
+  type EffectivePromptPreviewSection,
+  type EffectivePromptPreviewUnresolvedSource,
+} from "@/lib/api/client";
 
-export interface EffectivePromptPreviewProvenance {
-  kind: "profile" | "repository" | "memory" | "prompt" | "runtime";
-  id: string;
-  version: number | null;
-  hash: string;
-}
-
-export interface EffectivePromptPreviewSection {
-  kind: "profile" | "repository" | "memory" | "block" | "runtime";
-  title: string;
-  content: string;
-  hash: string;
-  provenance: EffectivePromptPreviewProvenance[];
-}
-
-export interface EffectivePromptPreviewUnresolvedSource {
-  kind: "profile" | "repository" | "data" | "slot";
-  reference: string;
-  message: string;
-}
-
-export interface EffectivePromptPreviewResponse {
-  blockId: string;
-  prompt: string;
-  hash: string;
-  sections: EffectivePromptPreviewSection[];
-  provenance: EffectivePromptPreviewProvenance[];
-  unresolvedSources: EffectivePromptPreviewUnresolvedSource[];
-  issues: WorkflowDefinitionValidationIssue[];
-}
+export type {
+  EffectivePromptPreviewProvenance,
+  EffectivePromptPreviewResponse,
+  EffectivePromptPreviewSection,
+  EffectivePromptPreviewUnresolvedSource,
+};
 
 const previewButton =
   "appearance-none rounded-xs border border-mariner bg-panel px-2.5 py-1.5 font-mono text-[9px] uppercase tracking-[0.04em] text-mariner disabled:opacity-40";
@@ -178,22 +159,18 @@ export function EffectivePromptPreview({
     setError(null);
     setOpen(true);
     try {
-      const response = await fetch(
-        `/api/workflow-definitions/${definitionId}/prompt-preview`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ definition, blockId }),
-          cache: "no-store",
-          signal: controller.signal,
-        },
+      const response = await apiClient.workflowDefinitions.promptPreview(
+        definitionId,
+        definition,
+        blockId,
+        { signal: controller.signal },
       );
       if (!response.ok) {
-        setError(await readErrorMessage(response));
+        setError(response.errorMessage);
         setResult(null);
         return;
       }
-      setResult((await response.json()) as EffectivePromptPreviewResponse);
+      setResult(response.data);
     } catch (caught) {
       if (controller.signal.aborted) return;
       setError(

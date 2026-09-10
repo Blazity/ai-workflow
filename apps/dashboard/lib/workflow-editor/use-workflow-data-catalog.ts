@@ -5,7 +5,7 @@ import type {
   WorkflowDefinitionCatalogResponse,
   WorkflowDefinitionV2,
 } from "@shared/contracts";
-import { readErrorMessage } from "@/lib/api/error-message";
+import { apiClient } from "@/lib/api/client";
 import { workflowCatalogFingerprint } from "./catalog-fingerprint";
 
 export interface WorkflowDataCatalogState {
@@ -51,15 +51,14 @@ export function useWorkflowDataCatalog(
       refreshing: true,
       error: null,
     }));
-    void fetch(`/api/workflow-definitions/${definitionId}/catalog`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ definition: requestDefinition }),
-      signal: controller.signal,
-    })
+    void apiClient.workflowDefinitions.catalog(
+      definitionId,
+      requestDefinition,
+      { signal: controller.signal },
+    )
       .then(async (response) => {
-        if (!response.ok) throw new Error(await readErrorMessage(response));
-        return (await response.json()) as WorkflowDefinitionCatalogResponse;
+        if (!response.ok) throw new Error(response.errorMessage);
+        return response.data;
       })
       .then((response) => {
         if (

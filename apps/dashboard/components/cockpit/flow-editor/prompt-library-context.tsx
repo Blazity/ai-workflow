@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { PromptLibraryListResponse, PromptLibraryListRowDto } from "@shared/contracts";
+import { apiClient } from "@/lib/api/client";
 
 export type PromptLibraryStatus = "loading" | "ready" | "error";
 
@@ -37,10 +38,10 @@ export function PromptLibraryProvider({ children }: { children: React.ReactNode 
   const refresh = useCallback(() => {
     const id = ++reqId.current;
     setStatus("loading");
-    fetch("/api/prompt-library?includeArchived=1")
+    apiClient.prompts.list(true)
       .then((res) => {
         if (!res.ok) throw new Error(String(res.status));
-        return res.json() as Promise<PromptLibraryListResponse>;
+        return res.data;
       })
       .then((data) => {
         if (id !== reqId.current) return; // a newer refresh won

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { apiClient } from "@/lib/api/client";
 
 import {
   AuthBanner,
@@ -36,16 +37,11 @@ export default function ResetPasswordForm({
     setError(null);
 
     try {
-      const res = await fetch("/api/auth/reset-password", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ token, password }),
-      });
+      const res = await apiClient.auth.resetPassword({ token, password });
       if (res.ok) {
         setDone(true);
       } else {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        setError(body.error ?? "Unable to reset password.");
+        setError(res.error?.error ?? "Unable to reset password.");
       }
     } catch {
       setError("Network error. Please try again.");

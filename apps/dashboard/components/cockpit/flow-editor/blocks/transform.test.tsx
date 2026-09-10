@@ -6,7 +6,7 @@ import type { WorkflowDataCatalogEntry } from "@shared/contracts";
 import {
   defaultTransformConfiguration,
   TransformFields,
-} from "./transform-fields";
+} from "./transform";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 

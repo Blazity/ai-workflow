@@ -7,7 +7,7 @@ import { CkStatusPill, CkChip, TicketLink, PRLinks } from "@/components/ui";
 import { useCockpit } from "@/components/cockpit/context";
 import { WindowSelector } from "@/components/cockpit/controls";
 import { windowPhrase, type TimeWindow } from "@/lib/window";
-import { cancelRun } from "@/lib/api/cancel-run";
+import { cancelRun } from "@/lib/api/client";
 import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
 import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
 import type { RunsResponse } from "@shared/contracts";

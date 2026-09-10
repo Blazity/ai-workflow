@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { apiClient } from "@/lib/api/client";
 
 import {
   AuthBanner,
@@ -24,8 +25,8 @@ export default function LoginPage() {
   useEffect(() => {
     let cancelled = false;
 
-    fetch("/api/auth/sso/status", { cache: "no-store" })
-      .then((res) => (res.ok ? res.json() : null))
+    apiClient.auth.ssoStatus({ cache: "no-store" })
+      .then((res) => (res.ok ? res.data : null))
       .then((body: { enabled?: unknown } | null) => {
         if (!cancelled) {
           setSsoEnabled(typeof body?.enabled === "boolean" ? body.enabled : null);
@@ -46,11 +47,7 @@ export default function LoginPage() {
     setError(null);
 
     try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
+      const res = await apiClient.auth.login({ email, password });
       if (res.ok) {
         router.replace("/");
         router.refresh();
@@ -61,8 +58,7 @@ export default function LoginPage() {
         setError("Your email or password is incorrect.");
         return;
       }
-      const body = (await res.json().catch(() => null)) as { error?: string } | null;
-      setError(body?.error ?? "Sign in is temporarily unavailable.");
+      setError(res.error?.error ?? "Sign in is temporarily unavailable.");
     } catch {
       setPending(false);
       setError("Sign in is temporarily unavailable.");

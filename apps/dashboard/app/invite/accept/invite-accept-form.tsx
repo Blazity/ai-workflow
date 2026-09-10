@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { apiClient, type AuthInviteState } from "@/lib/api/client";
 
 import {
   AuthBanner,
@@ -14,12 +15,7 @@ import {
   PasswordRule,
 } from "@/components/auth/auth-shell";
 
-type InviteState = {
-  email: string;
-  organizationName: string;
-  role: "owner" | "admin" | "member";
-  mode: "new_user" | "existing_password" | "sso_only";
-};
+type InviteState = AuthInviteState;
 
 const ROLE_LABELS: Record<InviteState["role"], string> = {
   owner: "Owner",
@@ -50,16 +46,16 @@ export default function InviteAcceptForm({ inviteId }: { inviteId: string }) {
     let active = true;
     setLoading(true);
     setError(null);
-    fetch(`/api/auth/invite/${encodeURIComponent(inviteId)}`)
-      .then(async (res) => {
-        const body = (await res.json().catch(() => ({}))) as InviteState & {
-          error?: string;
-          message?: string;
-        };
+    apiClient.auth.invite(inviteId)
+      .then((res) => {
         if (!res.ok) {
-          throw new Error(body.error ?? body.message ?? "This invitation is unavailable.");
+          throw new Error(
+            res.error?.error ??
+              res.error?.message ??
+              "This invitation is unavailable.",
+          );
         }
-        if (active) setInvite(body);
+        if (active) setInvite(res.data);
       })
       .catch((err) => {
         if (active) {
@@ -82,22 +78,17 @@ export default function InviteAcceptForm({ inviteId }: { inviteId: string }) {
     setError(null);
 
     try {
-      const res = await fetch("/api/auth/invite/accept", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          inviteId,
-          name: isNewUser ? name : undefined,
-          password,
-        }),
+      const res = await apiClient.auth.acceptInvite({
+        inviteId,
+        name: isNewUser ? name : undefined,
+        password,
       });
       if (res.ok) {
         router.replace("/");
         router.refresh();
         return;
       }
-      const body = (await res.json().catch(() => ({}))) as { error?: string };
-      setError(body.error ?? "This invitation is unavailable.");
+      setError(res.error?.error ?? "This invitation is unavailable.");
     } catch {
       setError("Network error. Please try again.");
     } finally {

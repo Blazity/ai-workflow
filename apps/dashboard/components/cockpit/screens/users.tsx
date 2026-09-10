@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 
-import { readErrorMessage } from "@/lib/api/error-message";
+import { apiClient } from "@/lib/api/client";
 import { CkChip, CkTabs } from "@/components/ui";
 
 export type DashboardRole = "owner" | "admin" | "member";
@@ -79,12 +79,8 @@ export function UsersScreen({
     setBusyId(user.id);
     setError(null);
     try {
-      const res = await fetch(`/api/users/${encodeURIComponent(user.id)}/role`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ role: nextRole }),
-      });
-      if (!res.ok) throw new Error(await readErrorMessage(res));
+      const res = await apiClient.users.changeRole(user.id, nextRole);
+      if (!res.ok) throw new Error(res.errorMessage);
       setUsers((current) =>
         current.map((row) =>
           row.id === user.id
@@ -111,11 +107,9 @@ export function UsersScreen({
     setBusyId(invite.id);
     setError(null);
     try {
-      const res = await fetch(`/api/invites/${encodeURIComponent(invite.id)}/resend`, {
-        method: "POST",
-      });
-      if (!res.ok) throw new Error(await readErrorMessage(res));
-      const updated = (await res.json()) as DashboardInviteRow;
+      const res = await apiClient.invites.resend(invite.id);
+      if (!res.ok) throw new Error(res.errorMessage);
+      const updated = res.data;
       setInvites((current) =>
         current.map((row) => (row.id === updated.id ? { ...row, ...updated } : row)),
       );
@@ -134,10 +128,8 @@ export function UsersScreen({
     setBusyId(invite.id);
     setError(null);
     try {
-      const res = await fetch(`/api/invites/${encodeURIComponent(invite.id)}/cancel`, {
-        method: "POST",
-      });
-      if (!res.ok) throw new Error(await readErrorMessage(res));
+      const res = await apiClient.invites.cancel(invite.id);
+      if (!res.ok) throw new Error(res.errorMessage);
       setInvites((current) => current.filter((row) => row.id !== invite.id));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to cancel invite");
@@ -486,13 +478,9 @@ function InviteModal({
     setPending(true);
     setError(null);
     try {
-      const res = await fetch("/api/invites", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email, role: "member" }),
-      });
-      if (!res.ok) throw new Error(await readErrorMessage(res));
-      onCreated((await res.json()) as DashboardInviteRow);
+      const res = await apiClient.invites.create(email);
+      if (!res.ok) throw new Error(res.errorMessage);
+      onCreated(res.data);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to create invite");
     } finally {

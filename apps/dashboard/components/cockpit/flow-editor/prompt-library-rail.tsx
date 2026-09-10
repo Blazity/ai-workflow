@@ -18,6 +18,7 @@ import {
   resolvePreviewSelection,
   type PromptPreviewRequest,
 } from "@/lib/prompt-library/reference-navigation";
+import { apiClient } from "@/lib/api/client";
 
 const pressable = "transition-transform duration-150 ease-standard active:scale-[0.96]";
 const primaryBtn = `flex-1 appearance-none cursor-pointer inline-flex items-center justify-center border border-mariner bg-mariner text-white py-1.5 px-2 rounded-[3px] font-mono text-[10px] tracking-[0.04em] uppercase ${pressable}`;
@@ -143,8 +144,8 @@ export function PromptLibraryRail({
     setMissingVersion(false);
     if (id === null || detailCache.has(id)) return;
     let alive = true;
-    fetch(`/api/prompt-library/${id}`)
-      .then((res) => (res.ok ? (res.json() as Promise<PromptLibraryDetailResponse>) : Promise.reject()))
+    apiClient.prompts.detail(id)
+      .then((res) => (res.ok ? res.data : Promise.reject()))
       .then((detail) => {
         if (alive) setDetailCache((m) => new Map(m).set(id, detail));
       })
