@@ -1,8 +1,9 @@
 /**
  * Deployment identity and system-health probes, observations and scan storage.
  *
- * The interface of this cluster: every module outside it consumes the cluster
- * through this file, and another services cluster may import nothing else here.
+ * The declared interface of this cluster. Cross-cluster imports must target
+ * this file; the deep imports that predate the rule are listed in
+ * scripts/gates/cluster-deep-imports.json and that list only shrinks.
  */
 export {
   deploymentIdentity,

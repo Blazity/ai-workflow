@@ -67,7 +67,10 @@ import fails the gate, and an entry that no longer exists must be removed from
 the list. Two things are outside the rule by design. A lazy `import()` keeps its
 deep path, because a cluster interface would load the whole cluster where the
 code deliberately loads one module. Test files are outside it too, because the
-boundary gate never analyzes them.
+boundary gate never analyzes them. Because no module imports an interface
+file yet, `knip.json` lists `src/services/*/index.ts` as entries so the
+unused-code gate does not count them as dead files; that entry goes away once
+consumers import through the interfaces.
 
 Consumers in other tiers (`routes/`, `mcp/`, `engine/`, `adapters/`, `db/`)
 still import cluster files directly. Routing them through the interface would

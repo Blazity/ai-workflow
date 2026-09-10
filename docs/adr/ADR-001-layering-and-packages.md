@@ -134,8 +134,8 @@ The 8 root files:
 | `auth.ts` | app | |
 | `auth-instance.ts` | app | |
 | `auth.test.ts` | testing | colocated test of `auth.ts`; stays next to its subject |
-| `deployment-identity.ts` | services (`services/system`) | |
-| `deployment-identity.test.ts` | testing | colocated test of `deployment-identity.ts`; stays next to its subject |
+| `deployment-identity.ts` | services (`services/system`) | moved to `services/system/` in stage 6b |
+| `deployment-identity.test.ts` | testing | colocated test of `deployment-identity.ts`; stays next to its subject; moved with it to `services/system/` in stage 6b |
 | `nitro.d.ts` | app | |
 | `preview-harness-canary.test.ts` | testing | |
 | `preview-replay-canary.test.ts` | testing | |
@@ -144,7 +144,9 @@ Stage 6b has landed the services tier: `apps/worker/src/lib/` is gone,
 `dispatch-queue/`, `repository-discovery/` and `system-health/` are gone, and
 the five directories that still hold a stage 7 store keep their names.
 [docs/architecture/overview.md](../architecture/overview.md) is the map of the
-clusters that replaced them.
+clusters that replaced them. The root now holds 6 files (`deployment-identity.ts`
+and its test moved to `services/system/`), and 27 top-level directories
+remain, `services/` among them.
 
 `auth.test.ts` and `deployment-identity.test.ts` are the two entries D3 does
 not name. They are assigned here by the rule D3 already applies to the two
