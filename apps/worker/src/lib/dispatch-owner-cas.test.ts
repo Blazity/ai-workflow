@@ -7,8 +7,25 @@ import type {
 vi.mock("../../env.js", () => ({
   env: { JIRA_PROJECT_KEY: "PROJ", COLUMN_AI: "AI" },
 }));
-vi.mock("workflow/api", () => ({ start: vi.fn(), getRun: vi.fn() }));
-vi.mock("../workflows/agent.js", () => ({ agentWorkflow: vi.fn() }));
+const { hostedStart } = vi.hoisted(() => ({ hostedStart: vi.fn() }));
+vi.mock("workflow/api", () => ({ start: hostedStart, getRun: vi.fn() }));
+vi.mock("../engine/index.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
+vi.mock("../db/client.js", () => ({ getDb: () => ({}) }));
+vi.mock("../approvals/store.js", () => ({
+  hasDispatchBlockingApprovalForTicket: vi.fn(() => Promise.resolve(false)),
+}));
+vi.mock("../workflow-definition/store.js", () => ({
+  getEnabledWorkflowDefinitionForTrigger: vi.fn(() => Promise.resolve({
+    definition: { id: 9 },
+    current: {
+      schema: "v2",
+      version: 3,
+      definition: { version: 2, nodes: [], edges: [] },
+    },
+  })),
+  runnableDefinitionOf: (row: { schema?: string; definition?: unknown } | null) =>
+    row?.schema === "v2" ? row.definition : undefined,
+}));
 const recordAndCancelOrphanStartedRun = vi.hoisted(() => vi.fn());
 vi.mock("./run-start-lifecycle.js", () => ({
   commitHostedStart: async (
@@ -75,6 +92,39 @@ function registry(): RunRegistryAdapter {
 }
 
 describe("claimSubjectRun", () => {
+  it("starts the exact workflow exported by the engine entrypoint", async () => {
+    const { dispatchTicket } = await import("./dispatch.js");
+    const runRegistry = registry();
+    hostedStart.mockResolvedValueOnce({ runId: "run-hosted" });
+    const adapters = {
+      issueTracker: {
+        fetchTicket: vi.fn(() => Promise.resolve({
+          id: "1",
+          identifier: "PROJ-1",
+          title: "Move engine",
+          trackerStatus: "AI",
+        })),
+      },
+      runRegistry,
+    } as never;
+
+    await expect(dispatchTicket("PROJ-1", adapters, 2)).resolves.toEqual({
+      started: true,
+      runId: "run-hosted",
+    });
+    expect(hostedStart).toHaveBeenCalledWith(
+      "agentWorkflow_sentinel",
+      [
+        expect.objectContaining({
+          kind: "ticket",
+          ticketKey: "PROJ-1",
+          definitionId: 9,
+          definitionVersion: 3,
+        }),
+      ],
+    );
+  });
+
   it("reserves before start and passes the immutable owner token to the workflow input", async () => {
     const { claimSubjectRun } = await import("./dispatch.js");
     const runRegistry = registry();

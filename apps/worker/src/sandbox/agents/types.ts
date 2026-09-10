@@ -18,9 +18,9 @@ export interface RunnableSandbox {
 
 // Review ledger: per-thread dispositions an agent returns alongside its normal
 // output. Frozen contract (types, schema, JSON twin); the field is read out of
-// the agent's output in src/workflows/agent.ts, verified in
-// src/workflows/review-ledger.ts and answered back into the provider's threads
-// by src/workflows/review-ledger-settle.ts.
+// the agent's output in src/engine/agent-workflow.ts, verified in
+// src/engine/helpers/review-ledger.ts and answered back into the provider's threads
+// by src/engine/steps/review-ledger-settle.ts.
 /** Structural cap mirroring REVIEW_LEDGER_MAX_WORK_ITEMS in adapters/vcs/types.ts. */
 const MAX_REVIEW_THREADS = 20;
 

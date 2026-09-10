@@ -22,7 +22,7 @@ import {
   resolveHarnessRuntime,
   type ResolvedHarnessRuntime,
 } from "../../../sandbox/harness-runtime.js";
-import type { PrTriggerPayload } from "../../../workflows/agent-input.js";
+import type { PrTriggerPayload } from "../../agent-input.js";
 import type { EngineCtx } from "./types.js";
 
 const registryContext: WorkflowBlockRegistryContext = {

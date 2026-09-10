@@ -1,7 +1,7 @@
 import type { IssueTrackerMoveTarget } from "../../../adapters/issue-tracker/types.js";
 import type { ActiveRunOwner } from "../../../lib/active-run-owner.js";
 import type { TicketTransitionOwner } from "../../../lib/ticket-transition.js";
-import { isRunControlError } from "../../../workflows/run-control-error.js";
+import { isRunControlError } from "../../helpers/run-control-error.js";
 import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "../support/types.js";
 import type { ApprovedRepositoryScope } from "@shared/contracts";
 import type { WorkspaceManifest } from "../../../sandbox/repo-workspace.js";

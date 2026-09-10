@@ -1,6 +1,6 @@
 import type { ActiveRunOwner } from "../../../lib/active-run-owner.js";
 import { scrubForPublication } from "../../../lib/publication-scrub.js";
-import { isRunControlError } from "../../../workflows/run-control-error.js";
+import { isRunControlError } from "../../helpers/run-control-error.js";
 import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "../support/types.js";
 
 async function blockPostTicketCommentStep(

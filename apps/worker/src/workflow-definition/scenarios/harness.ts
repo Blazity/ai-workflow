@@ -6,14 +6,11 @@ import type {
   WorkflowDefinitionV2Node,
   WorkflowParamValue,
 } from "@shared/contracts";
-import type { AgentWorkflowInput } from "../../workflows/agent-input.js";
-import {
-  triggerOutputWithTicketContext,
-  triggerTypeFor,
-  v2TerminalBlockResult,
-  type TerminalStatus,
-} from "../../workflows/agent.js";
-import { isRunControlError } from "../../workflows/run-control-error.js";
+import type { AgentWorkflowInput } from "../../engine/agent-input.js";
+import { triggerOutputWithTicketContext, triggerTypeFor } from "../../engine/helpers/trigger-input.js";
+import { v2TerminalBlockResult } from "../../engine/helpers/prompt-output.js";
+import { type TerminalStatus } from "../../engine/helpers/review-ledger.js";
+import { isRunControlError } from "../../engine/helpers/run-control-error.js";
 import {
   validateBlockOutputForDefinition,
   type WorkflowBlockRegistryContext,

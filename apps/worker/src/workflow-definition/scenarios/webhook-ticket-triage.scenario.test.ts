@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BlockOutput, JsonValue, WorkflowDefinitionV2 } from "@shared/contracts";
-import type { AgentWorkflowInput } from "../../workflows/agent-input.js";
+import type { AgentWorkflowInput } from "../../engine/agent-input.js";
 import type { WorkflowBlockRegistryContext } from "../block-registry.js";
 import { validateWorkflowDefinitionIssuesForDeployment } from "../schema.js";
 import { workflowDefinitionTemplate } from "../templates.js";

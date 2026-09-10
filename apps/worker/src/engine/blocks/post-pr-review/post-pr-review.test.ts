@@ -10,8 +10,8 @@ vi.mock("../../../db/queries/workflow-owned-branches.js", () => ({
   findWorkflowOwnedPullRequestIdentity: (...args: unknown[]) =>
     mocks.findWorkflowOwnedPullRequestIdentity(...args),
 }));
-vi.mock("../../../workflows/pr-external-resources.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../workflows/pr-external-resources.js")>()),
+vi.mock("../../runtime/pr-external-resources.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime/pr-external-resources.js")>()),
   publishRunOwnedPrReview: (...args: unknown[]) =>
     mocks.publishRunOwnedPrReview(...args),
 }));

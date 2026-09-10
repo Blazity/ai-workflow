@@ -160,12 +160,12 @@ test("rejects a manifest that requires a runtime module", async () => {
       (await readFile(manifestPath, "utf8"))
         .replace(
           'import type { BlockManifest } from "@shared/contracts";',
-          'const runtime = require("../workflows/agent.js");',
+          'const runtime = require("../../agent-workflow.js");',
         ),
     );
     assert.throws(
       () => renderGeneratedFiles({ root }),
-      /forbidden runtime import.*\.\.\/workflows\/agent\.js/u,
+      /forbidden runtime import.*\.\.\/\.\.\/agent-workflow\.js/u,
     );
   } finally {
     await rm(root, { recursive: true, force: true });

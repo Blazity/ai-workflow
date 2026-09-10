@@ -3,12 +3,12 @@ import {
   buildReviewLedgerDurableState,
   buildReviewLedgerGuardSummaryFromDurable,
   parseReviewLedgerDurableState,
-} from "../../../workflows/review-ledger.js";
-import { settleReviewLedgerStep, type SettledThread } from "../../../workflows/review-ledger-settle.js";
-import { isRunControlError } from "../../../workflows/run-control-error.js";
-import { isSourcePullRequestRepository } from "../../../workflows/source-pull-request.js";
-import type { WorkspaceGate, WorkspaceScriptDrift } from "../../../workflows/workspace-gate.js";
-import type { FinalizedBranch } from "../../../workflows/workspace-publication.js";
+} from "../../helpers/review-ledger.js";
+import { settleReviewLedgerStep, type SettledThread } from "../../steps/review-ledger-settle.js";
+import { isRunControlError } from "../../helpers/run-control-error.js";
+import { isSourcePullRequestRepository } from "../../helpers/source-pull-request.js";
+import type { WorkspaceGate, WorkspaceScriptDrift } from "../../steps/workspace-gate.js";
+import type { FinalizedBranch } from "../../steps/workspace-publication.js";
 import {
   asRepositoryScriptsOutput,
   isRepositoryScriptsRefusal,
@@ -343,7 +343,7 @@ export const execute: BlockExecuteFn = async (
       : null;
 
   try {
-    const { finalizeWorkspacePublication } = await import("../../../workflows/workspace-publication.js");
+    const { finalizeWorkspacePublication } = await import("../../steps/workspace-publication.js");
     const publication = await finalizeWorkspacePublication({
       runId: ctx.runId,
       subjectKey: ctx.entry.subjectKey,

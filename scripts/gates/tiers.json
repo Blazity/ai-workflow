@@ -14,16 +14,7 @@
   "testFilePattern": "\\.(?:test|spec)\\.[cm]?[jt]sx?$",
   "stepDirective": {
     "tier": "engine",
-    "directories": [
-      "approvals",
-      "clarifications",
-      "dispatch-queue",
-      "manual-dispatch",
-      "repository-discovery",
-      "schedule-trigger",
-      "system-health",
-      "webhook-trigger"
-    ],
+    "directories": [],
     "value": "use step"
   },
   "classificationOrder": [
@@ -99,7 +90,7 @@
     "infra": []
   },
   "edgeExceptions": {
-    "app->engine": ["apps/worker/src/workflows/agent.ts"]
+    "app->engine": ["apps/worker/src/engine/index.ts"]
   },
   "packageEdges": {
     "default": ["contracts"],

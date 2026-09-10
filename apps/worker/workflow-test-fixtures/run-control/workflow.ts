@@ -1,11 +1,11 @@
 import { getStepMetadata } from "workflow";
 import { ActiveRunOwnerError } from "../../src/lib/run-control-errors.js";
-import { isRunControlError } from "../../src/workflows/run-control-error.js";
+import { isRunControlError } from "../../src/engine/helpers/run-control-error.js";
 import { WorkflowExecutionError } from "../../src/workflow-definition/interpreter.js";
 import {
   RunBudgetError,
   runBudgetFailureFromError,
-} from "../../src/workflows/run-budget.js";
+} from "../../src/engine/helpers/run-budget.js";
 
 type ProbeKind =
   | "owner_no_retries"

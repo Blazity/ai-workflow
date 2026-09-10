@@ -1,4 +1,4 @@
-import type { PrTriggerPayload } from "../workflows/agent-input.js";
+import type { PrTriggerPayload, PrTriggerType } from "../engine/agent-input.js";
 import { hasAiWorkflowCommentMarker, vcsLoginsMatch } from "./vcs-bot-identity.js";
 import { isManagedGateCheckName } from "./workflow-naming.js";
 
@@ -6,14 +6,6 @@ export {
   GATE_CHECK_NAME_PREFIX,
   LEGACY_GATE_CHECK_NAME_PREFIX,
 } from "./workflow-naming.js";
-
-export type PrTriggerType =
-  | "trigger_pr_created"
-  | "trigger_pr_ready"
-  | "trigger_pr_updated"
-  | "trigger_pr_checks_failed"
-  | "trigger_pr_review"
-  | "trigger_pr_merged";
 
 export interface TriggerEvent {
   delivery: {

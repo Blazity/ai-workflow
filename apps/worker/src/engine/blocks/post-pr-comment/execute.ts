@@ -7,8 +7,8 @@ import {
   AI_WORKFLOW_COMMENT_MARKER,
   hasAiWorkflowCommentMarker,
 } from "../../../lib/vcs-bot-identity.js";
-import type { SettledThread } from "../../../workflows/review-ledger-settle.js";
-import { isRunControlError } from "../../../workflows/run-control-error.js";
+import type { SettledThread } from "../../steps/review-ledger-settle.js";
+import { isRunControlError } from "../../helpers/run-control-error.js";
 import {
   executionError,
   type BlockExecuteFn,

@@ -67,7 +67,7 @@ vi.mock("./stop-ticket-sandboxes.js", () => ({
 import {
   provisionDisposableReviewWorkspaceStep,
   verifyDisposableReviewWorkspaceStep,
-} from "./disposable-review-workspace.js";
+} from "../engine/steps/disposable-review-workspace.js";
 
 function command(stdout = "", stderr = "", exitCode = 0) {
   return {

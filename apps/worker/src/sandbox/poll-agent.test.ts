@@ -145,7 +145,7 @@ import {
   collectPhaseOutput,
   teardownSandbox,
   teardownSandboxes,
-} from "./poll-agent.js";
+} from "../engine/steps/sandbox-poll-agent.js";
 
 function result(stdout = "", stderr = "", exitCode = 0) {
   return {

@@ -8,7 +8,7 @@ vi.mock("@vercel/sandbox", () => ({
   Sandbox: { get: mocks.getSandbox },
 }));
 
-import { writeHumanDecisionsMemory } from "./write-human-decisions-memory.js";
+import { writeHumanDecisionsMemory } from "../engine/steps/write-human-decisions-memory.js";
 
 function result(exitCode: number, stdout = "", stderr = "") {
   return {

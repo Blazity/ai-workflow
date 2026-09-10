@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceManifest } from "../../../sandbox/repo-workspace.js";
-import { RunBudgetError } from "../../../workflows/run-budget.js";
+import { RunBudgetError } from "../../helpers/run-budget.js";
 
 const mocks = vi.hoisted(() => ({
   sandboxGet: vi.fn(),

@@ -23,7 +23,7 @@ const testEnv = vi.hoisted(() => ({
 vi.mock("../../env.js", () => ({ env: testEnv }));
 const mockStart = vi.fn();
 vi.mock("workflow/api", () => ({ start: (...args: any[]) => mockStart(...args) }));
-vi.mock("../workflows/agent.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
+vi.mock("../engine/index.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
 
 // A real in-memory Postgres: the no-definition skip now writes a durable run
 // row, and its anti-spam guard is a query the fake object could not answer.

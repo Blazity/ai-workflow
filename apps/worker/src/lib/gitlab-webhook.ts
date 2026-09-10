@@ -1,5 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
-import type { PostPrGateWorkflowInput } from "../workflows/post-pr-gate.js";
+import type { PostPrGateWorkflowInput } from "../engine/index.js";
 
 interface GitLabUser {
   username?: string;

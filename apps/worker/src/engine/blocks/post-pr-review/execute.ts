@@ -1,8 +1,8 @@
-import { isRunControlError } from "../../../workflows/run-control-error.js";
+import { isRunControlError } from "../../helpers/run-control-error.js";
 import {
   normalizeReviewResultsInput,
-} from "../../../workflows/review-results.js";
-import type { PrTriggerPayload } from "../../../workflows/agent-input.js";
+} from "../../helpers/review-results.js";
+import type { PrTriggerPayload } from "../../agent-input.js";
 import type { ReviewResult } from "@shared/contracts";
 import type { WorkflowOwnedBranchRecord } from "../../../db/queries/workflow-owned-branches.js";
 import { prSubjectKey } from "../../../lib/subject-key.js";
@@ -57,7 +57,7 @@ export async function postPrReviewStep(
   const {
     prRunTarget,
     publishRunOwnedPrReview,
-  } = await import("../../../workflows/pr-external-resources.js");
+  } = await import("../../runtime/pr-external-resources.js");
   const db = getDb();
   const owned = await findWorkflowOwnedPullRequestIdentity(db, {
     provider: args.pr.provider,

@@ -47,7 +47,7 @@ import {
   setupMarkerPath,
   startRepoCheckBatchStep,
   type RepoCheckBatchPaths,
-} from "./runner.js";
+} from "../engine/steps/pre-pr-checks-runner.js";
 
 const manifest = {
   version: 1,
@@ -2057,7 +2057,7 @@ describe("collectRepoCheckBatchStep, repository scripts", () => {
 
 describe("the repair machinery", () => {
   it("is gone: a repository script batch can no longer launch an agent", async () => {
-    const runner = await import("./runner.js");
+    const runner = await import("../engine/steps/pre-pr-checks-runner.js");
 
     expect(runner).not.toHaveProperty("startPrePrRepairStep");
     expect(runner).not.toHaveProperty("collectPrePrRepairStep");

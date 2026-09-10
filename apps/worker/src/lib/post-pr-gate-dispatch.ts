@@ -11,7 +11,7 @@ import { getEnabledWorkflowDefinitionForTrigger } from "../workflow-definition/s
 import {
   postPrGateWorkflow,
   type PostPrGateWorkflowInput,
-} from "../workflows/post-pr-gate.js";
+} from "../engine/index.js";
 
 // Observability only: consumed solely by warnIfSupersededByDefinition, which
 // logs. Omitting trigger_pr_ready / trigger_pr_updated hid the overlap for the

@@ -4,7 +4,7 @@ import {
   AgentRuntimeError,
   isAgentRuntimeError,
 } from "../../sandbox/agents/runtime-error.js";
-import { isRunControlError } from "../../workflows/run-control-error.js";
+import { isRunControlError } from "../helpers/run-control-error.js";
 import type { EngineCtx } from "./support/types.js";
 import {
   ensureArthurTask,

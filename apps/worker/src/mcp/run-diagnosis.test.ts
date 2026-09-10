@@ -256,7 +256,7 @@ describe("diagnoseRun", () => {
   });
 
   // Real shape: the scripts block could not run at all and threw
-  // (workflows/agent.ts prePrChecksFailureReport), wrapped by the scheduler in
+  // (engine/agent-workflow.ts prePrChecksFailureReport), wrapped by the scheduler in
   // the unknown-category lead.
   it("classifies a scripts block that could not run as repository_scripts_failed", () => {
     const result = diagnoseRun({
@@ -271,7 +271,7 @@ describe("diagnoseRun", () => {
   });
 
   // Real shape: recordRunUsage's statusReason for a budget stop
-  // (workflows/agent.ts:2537-2543): "Run stopped on budget: <budgetFailure.reason>".
+  // (engine/agent-workflow.ts): "Run stopped on budget: <budgetFailure.reason>".
   it("classifies a budget-stop message as budget_exhausted, with low confidence", () => {
     const result = diagnoseRun({
       status: "failed",
@@ -525,7 +525,7 @@ describe("diagnoseRun", () => {
   // Real shape: SAFE_EXECUTION_ERROR_MESSAGES.timeout (workflow-definition/
   // interpreter.ts:92) composed with a "phase timed out" detail, e.g.
   // workflows/blocks/generic-agent.ts:470 ("agent phase timed out") or
-  // workflows/agent.ts:4396-4398 ("phase timed out").
+  // engine/agent-workflow.ts ("phase timed out").
   it("classifies a phase-timeout message as sandbox_timeout, with low confidence", () => {
     const result = diagnoseRun({
       status: "failed",

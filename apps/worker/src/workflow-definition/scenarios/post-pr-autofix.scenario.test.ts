@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BlockOutput, ReviewResultFinding } from "@shared/contracts";
-import type { AgentWorkflowInput } from "../../workflows/agent-input.js";
-import { buildReviewAgentSuccessOutput } from "../../workflows/agent.js";
+import type { AgentWorkflowInput } from "../../engine/agent-input.js";
+import { buildReviewAgentSuccessOutput } from "../../engine/helpers/prompt-output.js";
 import {
   executorRunsOf,
   expectNeverInvoked,

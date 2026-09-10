@@ -8,8 +8,8 @@ import {
 } from "./collect-run-detail.js";
 
 const RUN_START = new Date("2026-06-02T11:00:00.000Z");
-const AGENT = "workflow//./src/workflows/agent//agentWorkflow";
-const STEP = (fn: string) => `step//./src/workflows/agent//${fn}`;
+const AGENT = "workflow//./src/engine/agent-workflow//agentWorkflow";
+const STEP = (fn: string) => `step//./src/engine/agent-workflow//${fn}`;
 
 function makeSource(
   run: Partial<WorkflowRunRecord>,

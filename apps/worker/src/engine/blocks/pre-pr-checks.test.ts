@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrePrCheckConfig } from "../../pre-pr-checks/config.js";
-import type { RunBudgetObservation } from "../../workflows/run-budget.js";
+import type { RunBudgetObservation } from "../helpers/run-budget.js";
 
 const mocks = vi.hoisted(() => ({
   startRepoCheckBatchStep: vi.fn(),
@@ -20,8 +20,8 @@ vi.mock("../../pre-pr-checks/store.js", () => ({
 vi.mock("../../lib/logger.js", () => ({
   logger: { info: mocks.loggerInfo, warn: vi.fn(), error: vi.fn() },
 }));
-vi.mock("../../pre-pr-checks/runner.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../pre-pr-checks/runner.js")>()),
+vi.mock("../steps/pre-pr-checks-runner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../steps/pre-pr-checks-runner.js")>()),
   startRepoCheckBatchStep: mocks.startRepoCheckBatchStep,
   collectRepoCheckBatchStep: mocks.collectRepoCheckBatchStep,
 }));
@@ -31,7 +31,7 @@ vi.mock("./poll-phase.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./poll-phase.js")>()),
   pollPhaseUntilDone: mocks.pollPhaseUntilDone,
 }));
-vi.mock("../../sandbox/poll-agent.js", () => ({ checkPhaseDone: mocks.checkPhaseDone }));
+vi.mock("../steps/sandbox-poll-agent.js", () => ({ checkPhaseDone: mocks.checkPhaseDone }));
 
 import {
   loadPrePrCheckConfigStep,

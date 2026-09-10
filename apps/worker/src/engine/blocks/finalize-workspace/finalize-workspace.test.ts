@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   createRepositoryVCS: vi.fn(),
 }));
 
-vi.mock("../../../workflows/workspace-publication.js", () => ({
+vi.mock("../../steps/workspace-publication.js", () => ({
   finalizeWorkspacePublication: mocks.finalizeWorkspacePublication,
 }));
 

@@ -3,7 +3,7 @@ import { createAdapters } from "./adapters.js";
 import { logger } from "./logger.js";
 import { AI_WORKFLOW_COMMENT_MARKER } from "./vcs-bot-identity.js";
 import type { PrAutofixCapDecision } from "./pr-autofix-cap.js";
-import type { PrTriggerType } from "./trigger-events.js";
+import type { PrTriggerType } from "../engine/index.js";
 
 export interface PrAutofixExhaustionNotice {
   provider: VcsProviderKind;

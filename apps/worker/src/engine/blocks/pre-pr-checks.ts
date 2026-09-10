@@ -8,7 +8,7 @@ import type {
   RepoScriptsConfig,
   RepoScriptsRepositoryConfig,
 } from "../../pre-pr-checks/config.js";
-export { MAX_PRE_PR_FIX_CYCLES } from "../../pre-pr-checks/runner.js";
+export { MAX_PRE_PR_FIX_CYCLES } from "../steps/pre-pr-checks-runner.js";
 import {
   PRE_PR_CHECK_BATCH_MAX_MINUTES,
   collectRepoCheckBatchStep,
@@ -26,7 +26,7 @@ import {
   type RepoScriptsGroupCoverage,
   type RepoScriptsGroupStatus,
   type RepoScriptsGroupStatusEntry,
-} from "../../pre-pr-checks/runner.js";
+} from "../steps/pre-pr-checks-runner.js";
 import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
 import type {
   V2InvocationCancellation,
@@ -42,7 +42,7 @@ import {
   type ChecksCeilingExceededError,
   type RunBudgetAttribution,
   type RunBudgetObservation,
-} from "../../workflows/run-budget.js";
+} from "../helpers/run-budget.js";
 import {
   PHASE_POLL_TICK_MAX_MS,
   pollPhaseUntilDone,
@@ -1612,7 +1612,7 @@ export async function resolvePhaseStall(
   sentinelFile: string,
   outcome: PhasePollOutcome,
 ): Promise<PrePrPhaseStall> {
-  const { checkPhaseDone } = await import("../../sandbox/poll-agent.js");
+  const { checkPhaseDone } = await import("../steps/sandbox-poll-agent.js");
   if ((await checkPhaseDone(sandboxId, sentinelFile)) === true) return "none";
   return outcome.reason === "sandbox_stopped" ? "sandbox_stopped" : "timed_out";
 }

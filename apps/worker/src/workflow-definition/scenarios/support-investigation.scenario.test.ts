@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BlockOutput, JsonValue } from "@shared/contracts";
-import type { AgentWorkflowInput } from "../../workflows/agent-input.js";
+import type { AgentWorkflowInput } from "../../engine/agent-input.js";
 import {
   executorRunsOf,
   expectNeverInvoked,

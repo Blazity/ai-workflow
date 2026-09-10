@@ -23,17 +23,21 @@ import {
   type TriggerRateLimitWindow,
 } from "./trigger-rate-limit.js";
 import {
-  BUILTIN_FALLBACK_DEFINITION_VERSION,
   type AgentWorkflowInput,
-  type WorkflowDefinitionVersionPin,
-} from "../workflows/agent-input.js";
-import { agentWorkflow } from "../workflows/agent.js";
+} from "../engine/index.js";
+import { BUILTIN_FALLBACK_DEFINITION_VERSION } from "../engine/agent-input.js";
+import { agentWorkflow } from "../engine/index.js";
 import { hasDispatchBlockingApprovalForTicket } from "../approvals/store.js";
 import type { Adapters } from "./adapters.js";
 import { logger } from "./logger.js";
 import { ticketSubjectKey } from "./subject-key.js";
 
 export const STALE_CLAIM_MS = RESERVATION_BIND_GRACE_MS;
+
+type WorkflowDefinitionVersionPin = Extract<
+  AgentWorkflowInput,
+  { kind: "ticket" }
+>["definitionVersion"];
 
 export interface DispatchResult {
   started: boolean;

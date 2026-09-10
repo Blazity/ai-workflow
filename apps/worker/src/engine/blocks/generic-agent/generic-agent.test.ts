@@ -21,7 +21,7 @@ vi.mock("workflow", async (importOriginal) => ({
   ...(await importOriginal<typeof import("workflow")>()),
   sleep: mocks.sleep,
 }));
-vi.mock("../../../sandbox/poll-agent.js", () => ({
+vi.mock("../../steps/sandbox-poll-agent.js", () => ({
   checkPhaseDone: mocks.checkPhaseDone,
   collectPhase: mocks.collectPhase,
   collectPhaseReplayDiagnostics: mocks.collectPhase,

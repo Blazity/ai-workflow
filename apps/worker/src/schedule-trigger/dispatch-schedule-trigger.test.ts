@@ -18,8 +18,9 @@ const { testEnv } = vi.hoisted(() => ({
   } as Record<string, unknown>,
 }));
 vi.mock("../../env.js", () => ({ env: testEnv }));
-vi.mock("workflow/api", () => ({ start: vi.fn(), getRun: vi.fn() }));
-vi.mock("../workflows/agent.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
+const { hostedStart } = vi.hoisted(() => ({ hostedStart: vi.fn() }));
+vi.mock("workflow/api", () => ({ start: hostedStart, getRun: vi.fn() }));
+vi.mock("../engine/index.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
 // Reachable only from ticket dispatch in this module's import graph.
 vi.mock("../workflow-definition/store.js", () => ({
   getEnabledWorkflowDefinitionForTrigger: vi.fn(async () => null),
@@ -32,6 +33,7 @@ const { loggerMock } = vi.hoisted(() => ({
 vi.mock("../lib/logger.js", () => ({ logger: loggerMock }));
 
 const {
+  createScheduleDispatchDeps,
   dispatchScheduleOccurrence,
   drainPendingScheduleOccurrences,
   evaluateDueSchedules,
@@ -381,6 +383,7 @@ beforeEach(() => {
   delete testEnv.TRIGGER_RATE_LIMIT_WINDOW;
   loggerMock.warn.mockClear();
   loggerMock.info.mockClear();
+  hostedStart.mockReset();
 });
 
 function params(overrides: Partial<DispatchParams> = {}): DispatchParams {
@@ -425,6 +428,20 @@ function deps(overrides: Partial<DispatchDeps> = {}): DispatchDeps {
 }
 
 describe("schedule occurrence dispatch", () => {
+  it("starts the exact workflow exported by the engine entrypoint", async () => {
+    const input = {
+      kind: "ticket",
+      subjectKey: "ticket:jira:PROJ-1",
+      ticketKey: "PROJ-1",
+      ownerToken: "owner:1",
+    } as Parameters<DispatchDeps["startWorkflow"]>[0];
+    hostedStart.mockResolvedValueOnce({ runId: "run-hosted" });
+    const realDeps = createScheduleDispatchDeps({} as never, {} as never, 1);
+
+    await expect(realDeps.startWorkflow(input)).resolves.toBe("run-hosted");
+    expect(hostedStart).toHaveBeenCalledWith("agentWorkflow_sentinel", [input]);
+  });
+
   it("admits the occurrence, starts one run and publishes the start", async () => {
     await expect(dispatchScheduleOccurrence(params(), deps())).resolves.toEqual({
       result: "started",

@@ -11,7 +11,7 @@ import {
 import {
   PRE_PR_ALLOWED_ENV_VAR,
   allowedRepoEnvNames,
-} from "../../../pre-pr-checks/runner.js";
+} from "../../../engine/steps/pre-pr-checks-runner.js";
 import {
   dashboardUserLabel,
   getCurrentPrePrCheckConfig,

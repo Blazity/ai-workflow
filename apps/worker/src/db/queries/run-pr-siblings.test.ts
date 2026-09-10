@@ -3,7 +3,7 @@ import type { RunPullRequest } from "@shared/contracts";
 import { createTestDb } from "../test-db.js";
 import type { Db } from "../client.js";
 import { workflowRuns } from "../schema.js";
-import { publicationPrsForTelemetry } from "../../workflows/publication-prs-for-telemetry.js";
+import { publicationPrsForTelemetry } from "../../engine/helpers/publication-prs-for-telemetry.js";
 import { findRunPrSiblings } from "./run-pr-siblings.js";
 
 let db: Db;

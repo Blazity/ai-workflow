@@ -55,7 +55,7 @@ moves them.
 | `mcp/` | app | MCP tools, auth, catalog, contract |
 | `approvals/`, `clarifications/`, `dispatch-queue/`, `manual-dispatch/`, `repository-discovery/`, `schedule-trigger/`, `system-health/`, `webhook-trigger/` | services | mixed today: `store.ts` files belong to db, files carrying `"use step"` belong to engine |
 | `deployment-identity.ts` | services | |
-| `workflows/`, `workflow-definition/`, `memory/`, `post-pr-gate/`, `pre-pr-checks/`, `pre-sandbox/`, `run-analysis/`, `run-observability/`, `sandbox/` | engine | the runtime: the `"use workflow"` body, the `"use step"` functions, blocks, definition handling |
+| `engine/`, `workflow-definition/`, `memory/`, `post-pr-gate/`, `pre-pr-checks/`, `pre-sandbox/`, `run-analysis/`, `run-observability/`, `sandbox/` | engine | the runtime: the `"use workflow"` body, the `"use step"` functions, blocks, definition handling |
 | `harness-profiles/`, `prompt-library/` | engine (runtime) | their `store.ts` moves to db, their pure parts to packages |
 | `adapters/` | adapters | `adapters/vcs`, `adapters/issue-tracker`, `adapters/messaging`; `adapters/run-registry` is db, because it is one repository implementation |
 | `db/` | db | the only tier that knows the driver |
@@ -68,11 +68,11 @@ moves them.
 - **The Workflow DevKit finds steps by reading files, not by imports.** A
   `"use step"` or `"use workflow"` file the builder does not scan fails at
   runtime with "is not registered in the current deployment", never at build.
-  `src/workflows/workflow-import-boundary.test.ts` and
-  `src/workflows/step-registration-coverage.test.ts` are the guards; run both
+  `src/engine/workflow-import-boundary.test.ts` and
+  `src/engine/step-registration-coverage.test.ts` are the guards; run both
   when you move, rename or add such a file. A stray backtick in a comment can
   hide every directive below it, which is why the detector is content-based.
-- **`agent.ts` has no top-level adapter or logger imports.** Inside a step,
+- **`engine/agent-workflow.ts` has no top-level adapter or logger imports.** Inside a step,
   `logger` and adapters are deferred `await import(...)` calls. Do not add a
   top-level import to that module, and do not assume one exists.
 - **`build` writes to the database.** It calls `db:migrate` against whatever

@@ -3,8 +3,8 @@ import { env } from "../../env.js";
 import type { Db } from "../db/client.js";
 import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
-import type { AgentWorkflowInput } from "../workflows/agent-input.js";
-import { agentWorkflow } from "../workflows/agent.js";
+import type { AgentWorkflowInput } from "../engine/index.js";
+import { agentWorkflow } from "../engine/index.js";
 import {
   getDeployedWorkflowDefinitionVersion,
   getWorkflowDefinition,

@@ -2,9 +2,9 @@ import type { WorkflowRepositoryScope } from "@shared/contracts";
 import type { SelectedRepository } from "../../../adapters/vcs/repository-directory.js";
 import type { ReviewThreadFeed } from "../../../adapters/vcs/types.js";
 import type { SelectedRepositoryPromptContext } from "../../../sandbox/context.js";
-import type { PrTriggerPayload } from "../../../workflows/agent-input.js";
-import { selectWorkItems } from "../../../workflows/review-ledger.js";
-import { isRunControlError } from "../../../workflows/run-control-error.js";
+import type { PrTriggerPayload } from "../../agent-input.js";
+import { selectWorkItems } from "../../helpers/review-ledger.js";
+import { isRunControlError } from "../../helpers/run-control-error.js";
 import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "../support/types.js";
 
 /**

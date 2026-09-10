@@ -48,7 +48,7 @@ import {
   createScheduleDispatchDeps,
   runScheduleTriggerPass,
 } from "../../schedule-trigger/dispatch-schedule-trigger.js";
-import { reconcilePendingPrChecks } from "../../workflows/pr-external-resources.js";
+import { reconcilePendingPrChecks } from "../../engine/runtime/pr-external-resources.js";
 import { createWebhookDispatchDeps } from "../webhooks/custom/[endpointId].post.js";
 
 const PENDING_TRIGGER_RECOVERY_SCAN_LIMIT = 20;

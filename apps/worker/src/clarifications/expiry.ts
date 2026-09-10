@@ -2,7 +2,7 @@ import { and, eq, isNotNull, lte } from "drizzle-orm";
 import { getHookByToken, resumeHook } from "workflow/api";
 import type { Db } from "../db/client.js";
 import { clarificationRequests } from "../db/schema.js";
-import { deleteClarificationSnapshotStep } from "../workflows/clarification-snapshot-steps.js";
+import { deleteClarificationSnapshotStep } from "../engine/steps/clarification-snapshot-steps.js";
 
 export async function expireHookClarifications(
   db: Db,

@@ -5,8 +5,8 @@ import type {
   RunRegistryAdapter,
   StartedRunRecord,
 } from "../adapters/run-registry/types.js";
-import type { AgentWorkflowInput } from "../workflows/agent-input.js";
-import { agentWorkflow } from "../workflows/agent.js";
+import type { AgentWorkflowInput } from "../engine/index.js";
+import { agentWorkflow } from "../engine/index.js";
 import { claimSubjectRun, envTriggerRateLimitDefault } from "../lib/dispatch.js";
 import { logger } from "../lib/logger.js";
 import {

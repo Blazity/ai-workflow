@@ -1,0 +1,54 @@
+import { isRunControlError } from "../helpers/run-control-error.js";
+
+export interface WorkflowFailureExitDeps {
+  logFailure(): Promise<void>;
+  /** State the reason on the ticket. Runs BEFORE the backlog move: that move
+   *  fires the self-triggered "ticket left the AI column" webhook, and a comment
+   *  attempted after it races the ownership CAS the webhook trips. */
+  commentFailure(): Promise<void>;
+  moveTicket(): Promise<void>;
+  notifyTicket(): Promise<void>;
+}
+
+export interface UnhandledWorkflowErrorDeps {
+  recordBlockFailure(error: unknown): Promise<void>;
+  applyDefaultFailure(error: unknown): Promise<void>;
+}
+
+/**
+ * Preserve ticket failure side effects for correlated runs while keeping a
+ * review-safe PR-only subject completely outside issue tracking and messaging.
+ */
+export async function handleWorkflowFailureExit(
+  ticketKey: string | undefined,
+  deps: WorkflowFailureExitDeps,
+): Promise<void> {
+  const runOnce = async (label: string, task: () => Promise<void>) => {
+    try {
+      await task();
+    } catch (error) {
+      if (isRunControlError(error)) throw error;
+      console.error(`Workflow failure ${label} failed:`, error);
+    }
+  };
+
+  await runOnce("logging", deps.logFailure);
+  if (!ticketKey) return;
+  await runOnce("ticket comment", deps.commentFailure);
+  await runOnce("ticket parking", deps.moveTicket);
+  await runOnce("notification", deps.notifyTicket);
+}
+
+/**
+ * Run-control signals stop the run itself. They must not be rewritten as a
+ * failure of whichever authored block happened to be active, nor execute the
+ * ordinary backlog/notification failure policy.
+ */
+export async function handleUnhandledWorkflowError(
+  error: unknown,
+  deps: UnhandledWorkflowErrorDeps,
+): Promise<void> {
+  if (isRunControlError(error)) return;
+  await deps.recordBlockFailure(error);
+  await deps.applyDefaultFailure(error);
+}

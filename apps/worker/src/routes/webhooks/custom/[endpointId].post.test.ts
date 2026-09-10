@@ -40,7 +40,7 @@ const mockStart = vi.hoisted(() => vi.fn());
 vi.mock("../../../../env.js", () => ({ env: state.env }));
 vi.mock("../../../db/client.js", () => ({ getDb: () => state.db }));
 vi.mock("workflow/api", () => ({ start: (...args: unknown[]) => mockStart(...args) }));
-vi.mock("../../../workflows/agent.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
+vi.mock("../../../engine/index.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
 
 const route = (await import("./[endpointId].post.js")).default;
 
@@ -236,6 +236,7 @@ describe("POST /webhooks/custom/:endpointId", () => {
       status: "dispatched",
       runId: "run-1",
     });
+    expect(mockStart.mock.calls[0]?.[0]).toBe("agentWorkflow_sentinel");
     expect(mockStart.mock.calls[0]?.[1]?.[0]).toMatchObject({
       kind: "webhook_trigger",
       endpointId,

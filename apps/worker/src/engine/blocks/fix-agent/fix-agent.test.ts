@@ -31,7 +31,7 @@ vi.mock("workflow", async (importOriginal) => ({
   ...(await importOriginal<typeof import("workflow")>()),
   sleep: mocks.sleep,
 }));
-vi.mock("../../../sandbox/poll-agent.js", () => ({
+vi.mock("../../steps/sandbox-poll-agent.js", () => ({
   checkPhaseDone: mocks.checkPhaseDone,
   collectPhase: mocks.collectPhase,
   collectPhaseReplayDiagnostics: mocks.collectPhase,
@@ -81,7 +81,7 @@ vi.mock("../../../db/client.js", () => ({ getDb: () => ({}) }));
 vi.mock("../../../db/queries/run-pr-siblings.js", () => ({
   findRunPrSiblings: mocks.findRunPrSiblings,
 }));
-vi.mock("../../../sandbox/trusted-workspace-publisher.js", () => ({
+vi.mock("../../steps/trusted-workspace-publisher.js", () => ({
   publishTrustedWorkspaceFromSandbox: (...args: any[]) =>
     mocks.publishTrustedWorkspaceFromSandbox(...args),
 }));

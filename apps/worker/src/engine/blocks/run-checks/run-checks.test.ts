@@ -16,8 +16,8 @@ vi.mock("../../../sandbox/credentials.js", () => ({ getSandboxCredentials: () =>
 // them across ticks, so the block is exercised against the steps it drives.
 // Only the steps are replaced: the bounding, the derived cap and the stall
 // sentence stay real, because those are what this block is now made of.
-vi.mock("../../../pre-pr-checks/runner.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../pre-pr-checks/runner.js")>()),
+vi.mock("../../steps/pre-pr-checks-runner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../steps/pre-pr-checks-runner.js")>()),
   listWorkspaceRepositoriesStep: mocks.listWorkspaceRepositoriesStep,
   startRepoCheckBatchStep: mocks.startRepoCheckBatchStep,
   collectRepoCheckBatchStep: mocks.collectRepoCheckBatchStep,
@@ -36,7 +36,7 @@ vi.mock("../pre-pr-checks.js", async (importOriginal) => ({
 }));
 // Isolate the gate-emission behavior from real sandbox inspection: keep the
 // invalidate mutator faithful (nulls the heap gate) and stub the recorder.
-vi.mock("../../../workflows/workspace-gate.js", () => ({
+vi.mock("../../steps/workspace-gate.js", () => ({
   invalidateWorkspaceGate: (state: { prePrGate: unknown }) => {
     state.prePrGate = null;
   },

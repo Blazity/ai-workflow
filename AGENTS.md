@@ -125,8 +125,8 @@ support transactions, so unit tests will not catch this.
 > Moving a `"use step"` file to a path the builder does not scan fails at
 > runtime, not at build.
 
-`apps/worker/src/workflows/workflow-import-boundary.test.ts` and
-`step-registration-coverage.test.ts` are the guards. Run them in any change
+`apps/worker/src/engine/workflow-import-boundary.test.ts` and
+`apps/worker/src/engine/step-registration-coverage.test.ts` are the guards. Run them in any change
 that moves engine files.
 A step's identity is its module path plus its function name, so moving or renaming a `"use step"` function also strands every run suspended inside it, and such a change merges only after the [drain described in the plan](docs/plans/2026-09-09-architecture-restructure.md).
 

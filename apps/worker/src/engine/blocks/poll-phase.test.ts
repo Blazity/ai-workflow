@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
 // Substituting it keeps these tests instant and lets them assert the requested
 // delay in milliseconds.
 vi.mock("./support/poll-delay.js", () => ({ delayPhasePollStep: mocks.delay }));
-vi.mock("../../sandbox/poll-agent.js", () => ({ checkPhaseDone: mocks.checkPhaseDone }));
+vi.mock("../steps/sandbox-poll-agent.js", () => ({ checkPhaseDone: mocks.checkPhaseDone }));
 vi.mock("../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
 vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.sandboxGet } }));
 

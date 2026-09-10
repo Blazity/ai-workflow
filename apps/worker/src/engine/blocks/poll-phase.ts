@@ -2,7 +2,7 @@ import {
   durationBudgetFailure,
   RunBudgetError,
   type RunBudgetObservation,
-} from "../../workflows/run-budget.js";
+} from "../helpers/run-budget.js";
 import {
   V2InvocationCancelledError,
   type V2InvocationCancellation,
@@ -135,7 +135,7 @@ export async function pollPhaseUntilDone(
   tuning: PhasePollTuning = {},
 ): Promise<boolean> {
   const { delayPhasePollStep } = await import("./support/poll-delay.js");
-  const { checkPhaseDone } = await import("../../sandbox/poll-agent.js");
+  const { checkPhaseDone } = await import("../steps/sandbox-poll-agent.js");
   const phaseLimitMs = tuning.phaseLimitMs ?? maxMinutes * 60_000;
   const maxTicks = tuning.maxTicks ?? Number.POSITIVE_INFINITY;
   const tickGrowthFactor = tuning.tickGrowthFactor ?? 1;

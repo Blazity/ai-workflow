@@ -16,7 +16,7 @@ vi.mock("workflow/api", () => ({
   resumeHook: (...args: unknown[]) => mocks.resumeHook(...args),
   getHookByToken: (...args: unknown[]) => mocks.getHookByToken(...args),
 }));
-vi.mock("../workflows/clarification-snapshot-steps.js", () => ({
+vi.mock("../engine/steps/clarification-snapshot-steps.js", () => ({
   deleteClarificationSnapshotStep: (...args: unknown[]) => mocks.deleteSnapshot(...args),
 }));
 

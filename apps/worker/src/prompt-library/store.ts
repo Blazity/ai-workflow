@@ -24,7 +24,7 @@ import {
 } from "@shared/contracts";
 import { canEditPromptLibrary, type DashboardRole } from "../lib/auth/roles.js";
 import { DashboardAuthError } from "../lib/auth/users-read.js";
-import type { PromptReferenceLoader } from "../workflows/prompt-references.js";
+import type { PromptReferenceLoader } from "../engine/helpers/prompt-references.js";
 import {
   inspectJsonSchema202012,
   validateJsonSchemaValue,

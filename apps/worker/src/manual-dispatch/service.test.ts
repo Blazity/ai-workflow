@@ -36,7 +36,7 @@ vi.mock("../lib/ticket-transition.js", () => ({
 vi.mock("workflow/api", () => ({
   start: (...args: unknown[]) => mockStart(...args),
 }));
-vi.mock("../workflows/agent.js", () => ({
+vi.mock("../engine/index.js", () => ({
   agentWorkflow: "agent-workflow",
 }));
 vi.mock("./resolve.js", () => ({
@@ -44,10 +44,12 @@ vi.mock("./resolve.js", () => ({
 }));
 
 const {
-  acknowledgeManualDispatchWorkflow,
   dispatchManualWorkflow,
   recoverManualDispatches,
 } = await import("./service.js");
+const { acknowledgeManualDispatchWorkflow } = await import(
+  "./acknowledge-workflow.js"
+);
 
 let db: Db;
 let runRegistry: {
@@ -188,6 +190,7 @@ describe("manual dispatch durability", () => {
       "start",
       "commit",
     ]);
+    expect(mockStart.mock.calls[0]?.[0]).toBe("agent-workflow");
     expect(await getManualDispatchRequest(db, request().requestId)).toMatchObject({
       status: "candidate_started",
       runId: "run-1",

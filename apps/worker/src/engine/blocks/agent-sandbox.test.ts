@@ -50,7 +50,7 @@ import {
   ensureAgentSandbox,
   prepareHarnessAgentInvocationStep,
 } from "./agent-sandbox.js";
-import { teardownSandboxes } from "../../sandbox/poll-agent.js";
+import { teardownSandboxes } from "../steps/sandbox-poll-agent.js";
 import {
   makeCtx,
   makeHarnessRuntime,

@@ -12,7 +12,7 @@ import type {
 } from "../../../sandbox/agents/types.js";
 import type { CheckRunResult, PRComment } from "../../../adapters/vcs/types.js";
 import type { WorkspaceManifestV2 } from "../../../sandbox/repo-workspace.js";
-import type { PrTriggerPayload } from "../../../workflows/agent-input.js";
+import type { PrTriggerPayload } from "../../agent-input.js";
 import { resolveBlockAgent } from "../../../workflow-definition/resolve-agent.js";
 import {
   buildReviewLedgerDurableState,
@@ -20,15 +20,15 @@ import {
   selectWorkItems,
   verifyDispositions,
   type ReviewLedgerGuardSummary,
-} from "../../../workflows/review-ledger.js";
+} from "../../helpers/review-ledger.js";
 import type { ResolvedHarnessRuntime } from "../../../sandbox/harness-runtime.js";
-import { isRunControlError } from "../../../workflows/run-control-error.js";
+import { isRunControlError } from "../../helpers/run-control-error.js";
 import { pollPhaseUntilDone, stopPhaseCommand } from "../poll-phase.js";
 import {
   emitAgentInvocationObservations,
   emitTimedOutAgentInvocationObservations,
 } from "../../../run-observability/agent-observations.js";
-import { resolveAgentInput } from "../../../workflows/resolve-agent-input.js";
+import { resolveAgentInput } from "../../helpers/resolve-agent-input.js";
 import { prepareHarnessAgentInvocationStep } from "../agent-sandbox.js";
 import {
   ensureWorkspace,
@@ -56,11 +56,11 @@ import {
   appendReviewFeedbackComment,
   resolveReviewFeedbackInput,
   type ReviewFeedback,
-} from "../../../workflows/review-feedback.js";
+} from "../../helpers/review-feedback.js";
 import {
   normalizeReviewResultsInput,
   type ReviewResultsResolution,
-} from "../../../workflows/review-results.js";
+} from "../../helpers/review-results.js";
 
 const DEFAULT_MAX_MINUTES = 25;
 const usageLabel = (blockId: string) => `Fix ${blockId}`;
@@ -189,7 +189,7 @@ async function publishPrFixStep(input: PrFixPublicationInput): Promise<string | 
     });
   }
   const { publishTrustedWorkspaceFromSandbox } = await import(
-    "../../../sandbox/trusted-workspace-publisher.js",
+    "../../steps/trusted-workspace-publisher.js",
   );
   const result = await publishTrustedWorkspaceFromSandbox({
     sourceSandboxId: input.sandboxId,
@@ -369,7 +369,7 @@ async function blockFixAgentStartPhaseStep(
     }
     return { ok: true, commandId: command.cmdId };
   } catch (error) {
-    const { isRunControlError } = await import("../../../workflows/run-control-error.js");
+    const { isRunControlError } = await import("../../helpers/run-control-error.js");
     if (isRunControlError(error)) throw error;
     const failure = protocolFailure({
       spec,
@@ -790,7 +790,7 @@ export const execute: BlockExecuteFn = async (
     );
     if (!done) {
       const { collectPhaseReplayDiagnostics } = await import(
-        "../../../sandbox/poll-agent.js"
+        "../../steps/sandbox-poll-agent.js"
       );
       await emitTimedOutAgentInvocationObservations({
         observations: execution?.observations,
@@ -804,7 +804,7 @@ export const execute: BlockExecuteFn = async (
       return executionError("fix phase timed out", { category: "timeout" });
     }
 
-    const { collectPhase } = await import("../../../sandbox/poll-agent.js");
+    const { collectPhase } = await import("../../steps/sandbox-poll-agent.js");
     const artifacts = await collectPhase(sandboxId, paths);
     const { result, usage } = await blockFixAgentParseStep(
       kind,
