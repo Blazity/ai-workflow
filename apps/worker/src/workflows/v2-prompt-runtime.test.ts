@@ -3,10 +3,8 @@ import type {
   WorkflowDefinitionNode,
   WorkflowParamValue,
 } from "@shared/contracts";
-import {
-  substituteNodePromptParamsForSchema,
-  v2NonAgentPromptPlaceholderIssue,
-} from "./agent.js";
+import { v2NonAgentPromptPlaceholderIssue } from "./agent.js";
+import { substituteNodePromptParams } from "./prompt-vars.js";
 
 const node = (
   type: WorkflowDefinitionNode["type"],
@@ -30,49 +28,40 @@ const V2_NON_AGENT_PROMPT_CASES: Array<[
 ];
 
 describe("v2 prompt runtime boundaries", () => {
-  it("does not apply legacy flat variables to v2 agent prompt fields", () => {
+  it("substitutes known variables in agent prompt fields", () => {
     const authored = node("implementation_agent", {
       prompt: "Implement {{plan_markdown}}",
     });
 
     expect(
-      substituteNodePromptParamsForSchema(
+      substituteNodePromptParams(
         authored,
         { plan_markdown: "the plan" },
-        2,
-      ).params.prompt,
-    ).toBe("Implement {{plan_markdown}}");
-    expect(
-      substituteNodePromptParamsForSchema(
-        authored,
-        { plan_markdown: "the plan" },
-        1,
       ).params.prompt,
     ).toBe("Implement the plan");
   });
 
-  it("does not apply legacy flat variables to v2 Call LLM prompt or system fields", () => {
+  it("substitutes known variables in Call LLM prompt or system fields", () => {
     const authored = node("call_llm", {
       prompt: "Prompt {{plan_markdown}}",
       system: "System {{ticket_key}}",
     });
-    const resolved = substituteNodePromptParamsForSchema(
+    const resolved = substituteNodePromptParams(
       authored,
       { plan_markdown: "the plan", ticket_key: "AIW-124" },
-      2,
     );
 
     expect(resolved.params).toMatchObject({
-      prompt: "Prompt {{plan_markdown}}",
-      system: "System {{ticket_key}}",
+      prompt: "Prompt the plan",
+      system: "System AIW-124",
     });
   });
 
   it.each(V2_NON_AGENT_PROMPT_CASES)(
-    "does not apply legacy flat variables to v2 %s fields",
+    "substitutes known variables in %s fields",
     (type, params) => {
       const authored = node(type, params);
-      const resolved = substituteNodePromptParamsForSchema(
+      const resolved = substituteNodePromptParams(
         authored,
         {
           ticket_key: "AIW-124",
@@ -81,23 +70,12 @@ describe("v2 prompt runtime boundaries", () => {
           pr_url: "https://example.test/pr/1",
           plan_markdown: "the plan",
         },
-        2,
       );
 
-      expect(resolved).toBe(authored);
-      expect(resolved.params).toEqual(params);
+      expect(resolved).not.toBe(authored);
+      expect(resolved.params).not.toEqual(params);
     },
   );
-
-  it("keeps legacy flat substitution for v1 non-agent fields", () => {
-    expect(
-      substituteNodePromptParamsForSchema(
-        node("send_slack_message", { message: "Ready: {{pr_url}}" }),
-        { pr_url: "https://example.test/pr/1" },
-        1,
-      ).params.message,
-    ).toBe("Ready: https://example.test/pr/1");
-  });
 
   it.each(["{{plan}}", "{{unknown}}"])(
     "fails Call LLM immediately for residual placeholder %s",

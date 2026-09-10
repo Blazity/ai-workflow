@@ -3,15 +3,12 @@ import type {
   JsonSchema202012,
   JsonValue,
   TransformConfiguration,
-  WorkflowBindingSource,
   WorkflowBlockType,
   WorkflowBlockTypeV1,
   WorkflowDataCatalogEntry,
   WorkflowDataReferenceV2,
   WorkflowDefinition,
-  WorkflowDefinitionV1,
-  WorkflowDefinitionV1Edge,
-  WorkflowDefinitionV1Node,
+  WorkflowDefinitionNode,
   WorkflowDefinitionV2,
   WorkflowDefinitionV2Node,
   WorkflowDefinitionValidationIssue,
@@ -28,10 +25,8 @@ import {
   isV2AgentBlockType,
   isWorkflowAddressablePathSegment,
   resolveBuiltinHarnessProfile,
-  wirablePorts,
   evaluateWorkflowValueCompatibility,
 } from "@shared/contracts";
-import { parseCondition } from "@shared/conditions";
 import { paramsSchema as prepareWorkspaceParams } from "../workflows/blocks/prepare-workspace.js";
 import { paramsSchema as finalizeWorkspaceParams } from "../workflows/blocks/finalize-workspace.js";
 import { paramsSchema as fixAgentParams } from "../workflows/blocks/fix-agent.js";
@@ -55,16 +50,11 @@ import {
   violatesMinimumPeriod,
 } from "../schedule-trigger/occurrence.js";
 import {
-  buildWorkflowBindingGraphContext,
   isSafeWorkflowInputName,
-  isWorkflowBindingSource,
-  validateWorkflowBindingIssues,
-  type WorkflowBindingGraphContext,
 } from "./bindings.js";
 import {
   resolveWorkflowBlockContract,
   workflowBlockDeploymentDefinitionIssues,
-  workflowBlockDefinitionIssues,
   workflowRepositoryScopeIssues,
   type WorkflowBlockRegistryContext,
 } from "./block-registry.js";
@@ -74,34 +64,12 @@ import {
 } from "./available-values.js";
 import { validateTransformDefinition } from "./transform.js";
 import { validateWorkflowV2WorkspaceAccessIssues } from "./workspace-access.js";
-
 const nodeId = z.string().trim().min(1);
 const coordinate = z.number().finite();
-const bindingSource = z.custom<WorkflowBindingSource>(
-  (source) => typeof source === "string" && isWorkflowBindingSource(source),
-  { message: "Binding source must start with trigger.*, steps.<nodeId>.output.*, or run.*." },
-);
 const bindingInputName = z.custom<string>(
   (name) => typeof name === "string" && isSafeWorkflowInputName(name),
   { message: "Input name contains an empty or unsafe path segment." },
 );
-
-const promptSourceRefSchema = z
-  .object({
-    promptId: z.number().int().positive(),
-    version: z.number().int().positive(),
-    insertedHash: z.string().max(16).optional(),
-  })
-  .strict();
-
-const baseNodeFields = {
-  id: nodeId,
-  name: z.string().optional(),
-  x: coordinate,
-  y: coordinate,
-  promptRefs: z.record(z.string().min(1).max(64), promptSourceRefSchema).optional(),
-  inputs: z.record(bindingInputName, bindingSource).default({}),
-};
 
 const emptyParams = z.object({}).strict();
 const agentParams = z
@@ -123,279 +91,6 @@ const triggerRateLimitParams = {
   rateLimitMax: z.number().int().min(1).optional(),
   rateLimitWindow: z.enum(["minute", "hour", "day", "month"]).optional(),
 };
-
-const triggerNode = z
-  .object({
-    ...baseNodeFields,
-    type: z.literal("trigger_ticket_ai"),
-    params: z.object(triggerRateLimitParams).strict(),
-  })
-  .strict();
-
-const triggerPlanApprovedNode = z
-  .object({ ...baseNodeFields, type: z.literal("trigger_plan_approved"), params: emptyParams })
-  .strict();
-
-const triggerPrCreatedNode = z
-  .object({
-    ...baseNodeFields,
-    type: z.literal("trigger_pr_created"),
-    params: z
-      .object({
-        providers: vcsProviderSelection.default(["github", "gitlab"]),
-        scope: prTriggerScope.default("workflow_owned"),
-        ...triggerRateLimitParams,
-      })
-      .strict(),
-  })
-  .strict();
-
-const triggerPrChecksFailedNode = z
-  .object({
-    ...baseNodeFields,
-    type: z.literal("trigger_pr_checks_failed"),
-    params: z
-      .object({
-        providers: vcsProviderSelection.default(["github", "gitlab"]),
-        scope: prTriggerScope.default("workflow_owned"),
-        checkNames: z.array(z.string().trim().min(1).max(255)).max(100).default([]),
-        ignoreCheckNames: z.array(z.string().trim().min(1).max(255)).max(100).default([]),
-        githubAppSlugs: z
-          .array(z.string().trim().min(1).max(100))
-          .min(1)
-          .max(20)
-          .default(["github-actions"]),
-        gitlabPipelineSources: z
-          .array(z.string().trim().min(1).max(100))
-          .min(1)
-          .max(20)
-          .default(["merge_request_event"]),
-        maxFixAttemptsPerPr: z.number().int().min(1).max(10).default(2),
-        ...triggerRateLimitParams,
-      })
-      .strict(),
-  })
-  .strict();
-
-// on: which submitted review states may trigger a run. Defaults to GitHub
-// ["changes_requested"] only — a "commented" review carries an untrusted body
-// that fix_agent would feed to a full-permission agent, so operators must opt in
-// to "commented" explicitly.
-const triggerPrReviewNode = z
-  .object({
-    ...baseNodeFields,
-    type: z.literal("trigger_pr_review"),
-    params: z
-      .object({
-        providers: vcsProviderSelection.default(["github"]),
-        on: z.array(reviewStates).min(1).default(["changes_requested"]),
-        scope: prTriggerScope.default("workflow_owned"),
-        maxRunsPerPr: z.number().int().min(1).max(30).default(10),
-        ...triggerRateLimitParams,
-      })
-      .strict(),
-  })
-  .strict();
-
-const triggerPrMergedNode = z
-  .object({
-    ...baseNodeFields,
-    type: z.literal("trigger_pr_merged"),
-    params: z
-      .object({
-        providers: vcsProviderSelection.default(["github", "gitlab"]),
-        scope: prTriggerScope.default("workflow_owned"),
-        ...triggerRateLimitParams,
-      })
-      .strict(),
-  })
-  .strict();
-
-const planningNode = z
-  .object({ ...baseNodeFields, type: z.literal("planning_agent"), params: agentParams })
-  .strict();
-
-const implementationNode = z
-  .object({ ...baseNodeFields, type: z.literal("implementation_agent"), params: agentParams })
-  .strict();
-
-const reviewNode = z
-  .object({ ...baseNodeFields, type: z.literal("review_agent"), params: agentParams })
-  .strict();
-
-const runPrePrChecksNode = z
-  .object({
-    ...baseNodeFields,
-    type: z.literal("run_pre_pr_checks"),
-    params: z
-      .object({ maxFixCycles: z.number().int().min(0).max(5).optional() })
-      .strict(),
-  })
-  .strict();
-
-const openPrNode = z
-  .object({ ...baseNodeFields, type: z.literal("open_pr"), params: emptyParams })
-  .strict();
-
-const updateTicketStatusNode = z
-  .object({
-    ...baseNodeFields,
-    type: z.literal("update_ticket_status"),
-    params: z.object({ target: z.string().trim().min(1).max(200) }).strict(),
-  })
-  .strict();
-
-const prepareWorkspaceNode = z
-  .object({ ...baseNodeFields, type: z.literal("prepare_workspace"), params: prepareWorkspaceParams })
-  .strict();
-
-const finalizeWorkspaceNode = z
-  .object({ ...baseNodeFields, type: z.literal("finalize_workspace"), params: finalizeWorkspaceParams })
-  .strict();
-
-const fixAgentNode = z
-  .object({ ...baseNodeFields, type: z.literal("fix_agent"), params: fixAgentParams })
-  .strict();
-
-const genericAgentNode = z
-  .object({ ...baseNodeFields, type: z.literal("generic_agent"), params: genericAgentParams })
-  .strict();
-
-const callLlmNode = z
-  .object({ ...baseNodeFields, type: z.literal("call_llm"), params: callLlmParams })
-  .strict();
-
-const fetchPrContextNode = z
-  .object({ ...baseNodeFields, type: z.literal("fetch_pr_context"), params: fetchPrContextParams })
-  .strict();
-
-const investigateNode = z
-  .object({ ...baseNodeFields, type: z.literal("investigate"), params: investigateParams })
-  .strict();
-
-const runChecksNode = z
-  .object({ ...baseNodeFields, type: z.literal("run_checks"), params: runChecksParams })
-  .strict();
-
-const postTicketCommentNode = z
-  .object({ ...baseNodeFields, type: z.literal("post_ticket_comment"), params: postTicketCommentParams })
-  .strict();
-
-const postPrCommentNode = z
-  .object({ ...baseNodeFields, type: z.literal("post_pr_comment"), params: postPrCommentParams })
-  .strict();
-
-const humanQuestionNode = z
-  .object({ ...baseNodeFields, type: z.literal("human_question"), params: humanQuestionParams })
-  .strict();
-
-const arthurInjectionCheckNode = z
-  .object({
-    ...baseNodeFields,
-    type: z.literal("arthur_injection_check"),
-    params: arthurInjectionCheckParams,
-  })
-  .strict();
-
-const leakReviewNode = z
-  .object({
-    ...baseNodeFields,
-    type: z.literal("leak_review"),
-    params: leakReviewParams,
-  })
-  .strict();
-
-const sendSlackMessageNode = z
-  .object({
-    ...baseNodeFields,
-    type: z.literal("send_slack_message"),
-    params: z
-      .object({
-        message: z.string().trim().max(2000).optional(),
-        sendOn: z.enum(["pr_ready", "always"]).optional(),
-      })
-      .strict(),
-  })
-  .strict();
-
-const sendPlanApprovalNode = z
-  .object({ ...baseNodeFields, type: z.literal("send_plan_approval"), params: sendPlanApprovalParams })
-  .strict();
-
-const branchNode = z
-  .object({
-    ...baseNodeFields,
-    type: z.literal("branch"),
-    params: z.object({ condition: z.string().trim().min(1).max(1000) }).strict(),
-  })
-  .strict();
-
-const loopNode = z
-  .object({
-    ...baseNodeFields,
-    type: z.literal("loop"),
-    params: z
-      .object({
-        maxAttempts: z.number().int().min(1).max(20),
-        onExhaust: z.enum(["fail", "human", "continue"]),
-      })
-      .strict(),
-  })
-  .strict();
-
-const terminateNode = z
-  .object({
-    ...baseNodeFields,
-    type: z.literal("terminate"),
-    params: z
-      .object({
-        terminalStatus: z.enum(["waiting_for_human", "failed", "skipped", "done"]),
-        postComment: z.string().trim().min(1).max(2000).optional(),
-      })
-      .strict(),
-  })
-  .strict();
-
-const nodeSchema = z.discriminatedUnion("type", [
-  triggerNode,
-  triggerPlanApprovedNode,
-  triggerPrCreatedNode,
-  triggerPrChecksFailedNode,
-  triggerPrReviewNode,
-  triggerPrMergedNode,
-  planningNode,
-  implementationNode,
-  reviewNode,
-  fixAgentNode,
-  genericAgentNode,
-  prepareWorkspaceNode,
-  finalizeWorkspaceNode,
-  runPrePrChecksNode,
-  runChecksNode,
-  callLlmNode,
-  fetchPrContextNode,
-  investigateNode,
-  openPrNode,
-  updateTicketStatusNode,
-  postTicketCommentNode,
-  postPrCommentNode,
-  sendSlackMessageNode,
-  sendPlanApprovalNode,
-  humanQuestionNode,
-  arthurInjectionCheckNode,
-  leakReviewNode,
-  branchNode,
-  loopNode,
-  terminateNode,
-]);
-
-const edgeSchema = z
-  .object({
-    from: z.string().trim().min(1),
-    to: z.string().trim().min(1),
-    fromPort: z.string().trim().min(1).optional(),
-  })
-  .strict();
 
 // Sized far above any hand-drawn workflow (the built-in default is 8 blocks/7
 // connections) but low enough to bound validateWorkflowGraph, whose dominator
@@ -455,18 +150,6 @@ const repositoryScopeSchema = z
       )
       .optional(),
     providers: vcsProviderSelection.optional(),
-  })
-  .strict();
-
-export const workflowDefinitionV1Schema = z
-  .object({
-    schemaVersion: z.literal(1),
-    budgets: executionBudgetsSchema.optional(),
-    repositoryScope: repositoryScopeSchema.optional(),
-    nodes: z.array(nodeSchema).max(MAX_NODES, `Workflow cannot have more than ${MAX_NODES} blocks.`),
-    edges: z
-      .array(edgeSchema)
-      .max(MAX_EDGES, `Workflow cannot have more than ${MAX_EDGES} connections.`),
   })
   .strict();
 
@@ -1007,18 +690,8 @@ export const workflowDefinitionV2Schema = z.preprocess(
   workflowDefinitionV2ParsedSchema,
 );
 
-export const workflowDefinitionSchema = z.union([
-  workflowDefinitionV1Schema,
-  workflowDefinitionV2Schema,
-]);
-
 function normalizeV2AgentProfileConfiguration(value: unknown): unknown {
-  if (
-    value === null ||
-    typeof value !== "object" ||
-    Array.isArray(value) ||
-    (value as { schemaVersion?: unknown }).schemaVersion !== 2
-  ) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return value;
   }
   const definition = value as Record<string, unknown>;
@@ -1055,342 +728,11 @@ function normalizeV2AgentProfileConfiguration(value: unknown): unknown {
   return changed ? { ...definition, nodes } : value;
 }
 
-// Ordinary version reads deliberately do not apply current block-param or
-// graph rules: operators must be able to open and repair an old invalid graph.
-// This narrower schema validates only the stable persisted envelope and
-// performs deterministic shape upgrades such as adding node.inputs.
-const storedWorkflowParamValue = z.union([
-  z.string(),
-  z.number(),
-  z.boolean(),
-  z.array(z.string()),
-]);
-type StoredWorkflowBlockType = WorkflowBlockTypeV1 | "arthur_trace";
-
-const storedWorkflowBlockType = z.custom<StoredWorkflowBlockType>(
-  (type) =>
-    type === "arthur_trace" ||
-    (typeof type === "string" &&
-      type !== "transform" &&
-      Object.prototype.hasOwnProperty.call(BLOCK_TYPE_SPECS, type)),
-  { message: "Unknown workflow block type." },
-);
-const storedWorkflowNode = z
-  .object({
-    id: nodeId,
-    type: storedWorkflowBlockType,
-    name: z.string().optional(),
-    x: coordinate,
-    y: coordinate,
-    // Two-arg record: the nitro bundle resolves bare "zod" to zod 4, where a
-    // single-arg record means record(KEY) with an undefined value schema that
-    // only crashes at parse time (500 on every stored-definition read).
-    params: z.record(z.string(), storedWorkflowParamValue),
-    inputs: z.record(bindingInputName, bindingSource).optional(),
-  })
-  .passthrough();
-const storedWorkflowDefinitionV1 = z
-  .object({
-    schemaVersion: z.literal(1),
-    budgets: executionBudgetsSchema.optional(),
-    repositoryScope: repositoryScopeSchema.optional(),
-    nodes: z.array(storedWorkflowNode),
-    edges: z.array(edgeSchema),
-  })
-  .passthrough();
-
-function legacyFinalizeIdBase(openPrId: string): string {
-  const safeOpenPrId = openPrId
-    .replace(/[^A-Za-z0-9_-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return `${safeOpenPrId || "open-pr"}-finalize`;
-}
-
-function insertLegacyOpenPrFinalizers(
-  nodes: WorkflowDefinitionV1Node[],
-  edges: WorkflowDefinitionV1Edge[],
-): { nodes: WorkflowDefinitionV1Node[]; edges: WorkflowDefinitionV1Edge[] } {
-  const usedIds = new Set(nodes.map((node) => node.id));
-  const finalizeByOpenPr = new Map<string, string>();
-  const upgradedNodes: WorkflowDefinitionV1Node[] = [];
-
-  for (const node of nodes) {
-    if (
-      node.type !== "open_pr" ||
-      Object.prototype.hasOwnProperty.call(node.inputs, "repositories")
-    ) {
-      upgradedNodes.push(node);
-      continue;
-    }
-
-    const base = legacyFinalizeIdBase(node.id);
-    let finalizeId = base;
-    for (let suffix = 2; usedIds.has(finalizeId); suffix += 1) {
-      finalizeId = `${base}-${suffix}`;
-    }
-    usedIds.add(finalizeId);
-    finalizeByOpenPr.set(node.id, finalizeId);
-    upgradedNodes.push(
-      {
-        id: finalizeId,
-        type: "finalize_workspace",
-        x: node.x - 220,
-        y: node.y,
-        params: {},
-        inputs: {},
-      },
-      {
-        ...node,
-        inputs: {
-          ...node.inputs,
-          repositories: `steps.${finalizeId}.output.repositories`,
-        },
-      },
-    );
-  }
-
-  if (finalizeByOpenPr.size === 0) return { nodes, edges };
-  return {
-    nodes: upgradedNodes,
-    edges: [
-      ...edges.map((edge) => {
-        const finalizeId = finalizeByOpenPr.get(edge.to);
-        return finalizeId ? { ...edge, to: finalizeId } : edge;
-      }),
-      ...[...finalizeByOpenPr].map(([openPrId, finalizeId]) => ({
-        from: finalizeId,
-        to: openPrId,
-      })),
-    ],
-  };
-}
-
-function upgradeStoredWorkflowDefinitionV1(raw: unknown): WorkflowDefinitionV1 {
-  const parsed = storedWorkflowDefinitionV1.parse(raw);
-  const storedNodeById = new Map(parsed.nodes.map((node) => [node.id, node]));
-  const retiredNodeIds = new Set(
-    parsed.nodes.filter((node) => node.type === "arthur_trace").map((node) => node.id),
-  );
-
-  const resolveNormalTargets = (nodeId: string, seen: Set<string>): string[] => {
-    if (!retiredNodeIds.has(nodeId)) return [nodeId];
-    if (seen.has(nodeId)) return [];
-
-    const nextSeen = new Set(seen).add(nodeId);
-    return parsed.edges
-      .filter(
-        (edge) =>
-          edge.from === nodeId && (edge.fromPort === undefined || edge.fromPort === "out"),
-      )
-      .flatMap((edge) => resolveNormalTargets(edge.to, nextSeen));
-  };
-
-  const edges = parsed.edges.flatMap((edge) => {
-    if (retiredNodeIds.has(edge.from)) return [];
-    return resolveNormalTargets(edge.to, new Set()).map((to) => ({
-      from: edge.from,
-      to,
-      ...(edge.fromPort === undefined ? {} : { fromPort: edge.fromPort }),
-    }));
-  });
-
-  const nodes: WorkflowDefinitionV1Node[] = [];
-  const requiredChecksByFinalize = new Map<string, string[]>();
-  for (const node of parsed.nodes) {
-    if (node.type === "arthur_trace") continue;
-    const params = { ...node.params };
-    const inputs = { ...(node.inputs ?? {}) };
-    if (node.type === "generic_agent" && params.workspaceMode === undefined) {
-      params.workspaceMode = "read_write";
-    }
-    if (
-      node.type === "trigger_pr_created" ||
-      node.type === "trigger_pr_checks_failed" ||
-      node.type === "trigger_pr_review" ||
-      node.type === "trigger_pr_merged"
-    ) {
-      if (params.scope !== "workflow_owned" && params.scope !== "any") {
-        params.scope = params.onlyWorkflowOwned === false ? "any" : "workflow_owned";
-      }
-      delete params.onlyWorkflowOwned;
-    }
-    if (
-      node.type === "trigger_pr_review" &&
-      Array.isArray(params.on) &&
-      params.on.length === 0
-    ) {
-      params.on = ["changes_requested"];
-    }
-    if (node.type === "send_plan_approval") {
-      const sourceId = params.planFromStep;
-      if (typeof sourceId === "string" && sourceId.length > 0) {
-        inputs.plan ??= `steps.${sourceId}.output.plan`;
-      }
-      delete params.planFromStep;
-    }
-    if (node.type === "arthur_injection_check") {
-      delete params.legacyContentFromStep;
-      const sourceId = params.contentFromStep;
-      if (typeof sourceId === "string" && sourceId.length > 0 && inputs.content === undefined) {
-        const sourceNode = storedNodeById.get(sourceId);
-        const sourceType = sourceNode?.type;
-        const declaredOutputSchema = sourceNode?.params.outputSchema;
-        const usesDeclaredOutputSchema =
-          (sourceType === "generic_agent" || sourceType === "call_llm") &&
-          typeof declaredOutputSchema === "string" &&
-          declaredOutputSchema.trim().length > 0;
-        const field =
-          sourceType === "planning_agent"
-            ? "plan"
-            : sourceType === "generic_agent" && !usesDeclaredOutputSchema
-              ? "body"
-              : sourceType === "call_llm" && !usesDeclaredOutputSchema
-                ? "output"
-                : null;
-        if (field) {
-          inputs.content = `steps.${sourceId}.output.${field}`;
-        }
-      }
-      delete params.contentFromStep;
-    }
-    if (node.type === "finalize_workspace") {
-      const requiredChecks = params.requiredChecks;
-      if (Array.isArray(requiredChecks)) {
-        requiredChecksByFinalize.set(node.id, requiredChecks);
-      }
-      delete params.requiredChecks;
-    }
-    nodes.push({
-      id: node.id,
-      type: node.type,
-      ...(node.name === undefined ? {} : { name: node.name }),
-      x: node.x,
-      y: node.y,
-      params,
-      inputs,
-    });
-  }
-
-  const nodeById = new Map(nodes.map((node) => [node.id, node]));
-  const normalPredecessors = new Map<string, string[]>();
-  for (const edge of edges) {
-    if (edge.fromPort !== undefined && edge.fromPort !== "out") continue;
-    const predecessors = normalPredecessors.get(edge.to) ?? [];
-    predecessors.push(edge.from);
-    normalPredecessors.set(edge.to, predecessors);
-  }
-  const onlyNormalPredecessor = (nodeId: string): WorkflowDefinitionV1Node | undefined => {
-    const predecessors = normalPredecessors.get(nodeId) ?? [];
-    return predecessors.length === 1 ? nodeById.get(predecessors[0]) : undefined;
-  };
-  const canonicalBindingNodes = nodes.map((node): WorkflowDefinitionV1Node => {
-    const predecessor = onlyNormalPredecessor(node.id);
-    if (node.type === "planning_agent" && predecessor?.type === "trigger_ticket_ai") {
-      return {
-        ...node,
-        inputs: {
-          ticket: "trigger.ticket",
-          comments: "trigger.comments",
-          priorAnswers: "trigger.priorAnswers",
-          ...node.inputs,
-        },
-      };
-    }
-    if (node.type !== "implementation_agent") return node;
-
-    if (predecessor?.type === "trigger_plan_approved") {
-      return {
-        ...node,
-        inputs: {
-          ticket: "trigger.ticket",
-          plan: "trigger.approvedPlan",
-          ...node.inputs,
-        },
-      };
-    }
-    if (predecessor?.type !== "planning_agent") return node;
-
-    const planningTrigger = onlyNormalPredecessor(predecessor.id);
-    return {
-      ...node,
-      inputs: {
-        ...(planningTrigger?.type === "trigger_ticket_ai"
-          ? { ticket: "trigger.ticket" as const }
-          : {}),
-        plan: `steps.${predecessor.id}.output.plan`,
-        ...node.inputs,
-      },
-    };
-  });
-
-  const publicationUpgraded = insertLegacyOpenPrFinalizers(canonicalBindingNodes, edges);
-  const intermediate: WorkflowDefinitionV1 = {
-    schemaVersion: 1,
-    nodes: publicationUpgraded.nodes,
-    edges: publicationUpgraded.edges,
-  };
-  const graphContext = buildWorkflowBindingGraphContext(intermediate);
-  const upgradedNodes = publicationUpgraded.nodes.map((node): WorkflowDefinitionV1Node => {
-    if (node.type !== "finalize_workspace") return node;
-
-    const params = { ...node.params };
-    const inputs = { ...node.inputs };
-    delete params.legacyRequiredChecks;
-
-    for (const sourceId of requiredChecksByFinalize.get(node.id) ?? []) {
-      const inputName = `checks.${sourceId}`;
-      const source = `steps.${sourceId}.output.status`;
-      const canBind =
-        sourceId !== node.id &&
-        graphContext.nodeById.has(sourceId) &&
-        (graphContext.dominators.get(node.id)?.has(sourceId) ?? false) &&
-        isSafeWorkflowInputName(inputName) &&
-        isWorkflowBindingSource(source) &&
-        (inputs[inputName] === undefined || inputs[inputName] === source);
-      if (canBind) {
-        inputs[inputName] ??= source;
-      }
-    }
-
-    return { ...node, params, inputs };
-  });
-
-  return {
-    schemaVersion: 1,
-    ...(parsed.budgets === undefined ? {} : { budgets: parsed.budgets }),
-    ...(parsed.repositoryScope === undefined
-      ? {}
-      : { repositoryScope: parsed.repositoryScope }),
-    nodes: upgradedNodes,
-    edges: publicationUpgraded.edges,
-  };
-}
-
-/** Reads preserve the stored schema version. Only v1 snapshots receive the
- * deterministic compatibility upgrades required by the legacy interpreter. */
-export function upgradeStoredWorkflowDefinition(
-  raw: WorkflowDefinitionV1,
-): WorkflowDefinitionV1;
-export function upgradeStoredWorkflowDefinition(
-  raw: WorkflowDefinitionV2,
-): WorkflowDefinitionV2;
-export function upgradeStoredWorkflowDefinition(
-  raw: { schemaVersion: 1; nodes: unknown; edges: unknown },
-): WorkflowDefinitionV1;
-export function upgradeStoredWorkflowDefinition(
-  raw: { schemaVersion: 2; nodes: unknown; edges: unknown },
-): WorkflowDefinitionV2;
-export function upgradeStoredWorkflowDefinition(raw: unknown): WorkflowDefinition;
+/** Parses a stored row into the runnable graph, applying the deterministic
+ * normalizations the live schema owns. Throws on anything it cannot read, so
+ * stored-definition.ts settles the retired schema before calling this. */
 export function upgradeStoredWorkflowDefinition(raw: unknown): WorkflowDefinition {
-  if (
-    raw !== null &&
-    typeof raw === "object" &&
-    "schemaVersion" in raw &&
-    (raw as { schemaVersion?: unknown }).schemaVersion === 2
-  ) {
-    return workflowDefinitionV2Schema.parse(raw);
-  }
-  return upgradeStoredWorkflowDefinitionV1(raw);
+  return workflowDefinitionV2Schema.parse(raw);
 }
 
 export function describeWorkflowDefinitionIssues(error: z.ZodError): string {
@@ -1514,348 +856,10 @@ function reachableFrom(seeds: string[], adjacency: Map<string, string[]>): Set<s
   return seen;
 }
 
-/**
- * Compute the dominator set of every node reachable from a trigger.
- *
- * D dominates N when every path from the entry to N passes through D. The
- * multiple triggers are modelled as a single virtual entry (each trigger's only
- * predecessor), so a block dominates N only if it lies on every path from *any*
- * trigger to N. Loop back-edges are left in `predecessors` (they arrive via the
- * reverse adjacency); the classic iterative fixpoint below handles the resulting
- * cycles, so a block inside a loop dominates a later node only when it is
- * unavoidable regardless of how many times the loop iterates.
- *
- * Returns a map from node id to its dominators (always including the node
- * itself). Nodes unreachable from a trigger are omitted.
- */
-function computeDominators(
-  entries: string[],
-  reachable: Set<string>,
-  predecessors: Map<string, string[]>,
-): Map<string, Set<string>> {
-  const entrySet = new Set(entries.filter((id) => reachable.has(id)));
-  const universe = [...reachable];
-  const dominators = new Map<string, Set<string>>();
-  for (const id of universe) {
-    // An entry is dominated only by itself; every other node starts with the
-    // full universe and is narrowed by intersecting its predecessors' sets.
-    dominators.set(id, entrySet.has(id) ? new Set([id]) : new Set(universe));
-  }
-
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const id of universe) {
-      if (entrySet.has(id)) continue;
-      const preds = (predecessors.get(id) ?? []).filter((pred) => reachable.has(pred));
-      let next: Set<string> | null = null;
-      for (const pred of preds) {
-        const predDom = dominators.get(pred)!;
-        if (next === null) {
-          next = new Set(predDom);
-        } else {
-          for (const candidate of [...next]) {
-            if (!predDom.has(candidate)) next.delete(candidate);
-          }
-        }
-      }
-      if (next === null) next = new Set();
-      next.add(id);
-      const current = dominators.get(id)!;
-      if (next.size !== current.size || [...next].some((entry) => !current.has(entry))) {
-        dominators.set(id, next);
-        changed = true;
-      }
-    }
-  }
-
-  return dominators;
-}
-
-export function validateWorkflowGraph(
-  def: WorkflowDefinition,
-  bindingGraphContext?: WorkflowBindingGraphContext,
-): string[] {
-  return validateWorkflowGraphIssues(def, bindingGraphContext).map(({ message }) => message);
-}
-
 export function validateWorkflowGraphIssues(
   def: WorkflowDefinition,
-  bindingGraphContext?: WorkflowBindingGraphContext,
 ): WorkflowDefinitionValidationIssue[] {
-  return def.schemaVersion === 1
-    ? validateWorkflowGraphV1Issues(def, bindingGraphContext)
-    : validateWorkflowGraphV2Issues(def);
-}
-
-function validateWorkflowGraphV1Issues(
-  def: WorkflowDefinitionV1,
-  bindingGraphContext?: WorkflowBindingGraphContext,
-): WorkflowDefinitionValidationIssue[] {
-  const issues: WorkflowDefinitionValidationIssue[] = [];
-  const addIssue = (message: string, nodeId: string | null = null, path?: string) => {
-    issues.push({
-      code: "deployment",
-      severity: "error",
-      nodeId,
-      ...(path ? { path } : {}),
-      message,
-    });
-  };
-  const { nodes, edges } = def;
-
-  const nodeById = new Map<string, WorkflowDefinitionV1Node>();
-  for (const [nodeIndex, node] of nodes.entries()) {
-    if (nodeById.has(node.id)) {
-      addIssue(
-        `Block id "${node.id}" is used more than once.`,
-        node.id,
-        `/nodes/${nodeIndex}/id`,
-      );
-    }
-    nodeById.set(node.id, node);
-  }
-
-  const nodeIds = nodes.map((node) => node.id);
-  const triggerNodes = nodes.filter((node) => isTriggerBlockType(node.type));
-
-  if (triggerNodes.length === 0) {
-    addIssue("Workflow must contain at least one trigger block.", null, "/nodes");
-  }
-
-  const triggerTypeCounts = new Map<WorkflowBlockType, number>();
-  for (const node of triggerNodes) {
-    triggerTypeCounts.set(node.type, (triggerTypeCounts.get(node.type) ?? 0) + 1);
-  }
-  for (const [type, count] of triggerTypeCounts) {
-    if (count > 1) {
-      addIssue(`Workflow contains more than one ${type} trigger block.`, null, "/nodes");
-    }
-  }
-
-  const graphEdges: GraphEdge[] = [];
-  for (const [edgeIndex, edge] of edges.entries()) {
-    const fromNode = nodeById.get(edge.from);
-    const toNode = nodeById.get(edge.to);
-    if (!fromNode) {
-      addIssue(
-        `Connection references an unknown source block "${edge.from}".`,
-        null,
-        `/edges/${edgeIndex}/from`,
-      );
-    }
-    if (!toNode) {
-      addIssue(
-        `Connection references an unknown target block "${edge.to}".`,
-        null,
-        `/edges/${edgeIndex}/to`,
-      );
-    }
-    if (edge.from === edge.to) {
-      addIssue(`Block "${edge.from}" cannot connect to itself.`, edge.from, `/edges/${edgeIndex}`);
-    }
-    if (!fromNode || !toNode || edge.from === edge.to) continue;
-
-    const spec = BLOCK_TYPE_SPECS[fromNode.type];
-    if (spec.ports.length === 0) {
-      addIssue(
-        `Terminal block "${edge.from}" (${fromNode.type}) cannot have outgoing connections.`,
-        edge.from,
-        `/edges/${edgeIndex}`,
-      );
-      continue;
-    }
-    const resolvedPort = edge.fromPort ?? spec.ports[0];
-    if (!wirablePorts(fromNode.type).includes(resolvedPort)) {
-      addIssue(
-        `Connection from "${edge.from}" uses unknown port "${resolvedPort}" of block type ${fromNode.type}.`,
-        edge.from,
-        `/edges/${edgeIndex}/fromPort`,
-      );
-    } else if (edge.fromPort === undefined && spec.ports.length > 1) {
-      const label = fromNode.type === "loop" ? "loop" : "branch";
-      addIssue(
-        `Connection from ${label} "${edge.from}" must specify a port (${spec.ports.join("/")}).`,
-        edge.from,
-        `/edges/${edgeIndex}/fromPort`,
-      );
-    }
-    graphEdges.push({ from: edge.from, to: edge.to, port: resolvedPort, fromType: fromNode.type });
-  }
-
-  const exactSeen = new Set<string>();
-  const portTargets = new Map<string, Set<string>>();
-  for (const edge of graphEdges) {
-    const portKey = `${edge.from}\0${edge.port}`;
-    const exactKey = `${portKey}\0${edge.to}`;
-    if (exactSeen.has(exactKey)) {
-      addIssue(`Duplicate connection from "${edge.from}" to "${edge.to}".`, edge.from, "/edges");
-      continue;
-    }
-    exactSeen.add(exactKey);
-    const targets = portTargets.get(portKey);
-    if (targets) {
-      addIssue(
-        `Block "${edge.from}" has multiple connections from port "${edge.port}".`,
-        edge.from,
-        "/edges",
-      );
-      targets.add(edge.to);
-    } else {
-      portTargets.set(portKey, new Set([edge.to]));
-    }
-  }
-
-  const incoming = new Map<string, number>();
-  for (const edge of graphEdges) {
-    incoming.set(edge.to, (incoming.get(edge.to) ?? 0) + 1);
-  }
-  for (const node of triggerNodes) {
-    if ((incoming.get(node.id) ?? 0) > 0) {
-      addIssue(`The trigger block "${node.id}" must not have incoming connections.`, node.id);
-    }
-  }
-
-  const forward = new Map<string, string[]>();
-  const reverse = new Map<string, string[]>();
-  const forwardNoLoopBack = new Map<string, string[]>();
-  const portsOut = new Map<string, Set<string>>();
-  for (const id of nodeIds) {
-    forward.set(id, []);
-    reverse.set(id, []);
-    forwardNoLoopBack.set(id, []);
-  }
-  for (const edge of graphEdges) {
-    forward.get(edge.from)!.push(edge.to);
-    reverse.get(edge.to)!.push(edge.from);
-    if (!(edge.fromType === "loop" && edge.port === "continue")) {
-      forwardNoLoopBack.get(edge.from)!.push(edge.to);
-    }
-    const used = portsOut.get(edge.from) ?? new Set<string>();
-    used.add(edge.port);
-    portsOut.set(edge.from, used);
-  }
-
-  const reachable = reachableFrom(
-    triggerNodes.map((node) => node.id),
-    forward,
-  );
-  for (const node of nodes) {
-    if (!isTriggerBlockType(node.type) && !reachable.has(node.id)) {
-      addIssue(`Block "${node.id}" is not reachable from a trigger.`, node.id);
-    }
-  }
-
-  for (const node of nodes) {
-    if (node.type === "branch") {
-      const used = portsOut.get(node.id) ?? new Set<string>();
-      if (!used.has("true")) {
-        addIssue(`Branch "${node.id}" must have its "true" port connected.`, node.id);
-      }
-      if (!used.has("false")) {
-        addIssue(`Branch "${node.id}" must have its "false" port connected.`, node.id);
-      }
-    } else if (node.type === "loop") {
-      const used = portsOut.get(node.id) ?? new Set<string>();
-      if (!used.has("continue")) {
-        addIssue(`Loop "${node.id}" must have its "continue" port connected.`, node.id);
-      }
-      if (node.params.onExhaust === "continue" && !used.has("exhausted")) {
-        addIssue(
-          `Loop "${node.id}" with onExhaust "continue" must have its "exhausted" port connected.`,
-          node.id,
-        );
-      }
-      const continueTargets = graphEdges
-        .filter((edge) => edge.from === node.id && edge.port === "continue")
-        .map((edge) => edge.to);
-      if (continueTargets.length > 0) {
-        const downstream = reachableFrom(continueTargets, forward);
-        if (!downstream.has(node.id)) {
-          addIssue(`Loop "${node.id}"'s continue port must lead back to it.`, node.id);
-        }
-      }
-    }
-  }
-
-  const acyclicCycle = findCycle(forwardNoLoopBack, nodeIds);
-  if (acyclicCycle) {
-    const rendered = acyclicCycle.map((id) => `"${id}"`).join(" -> ");
-    addIssue(`Blocks ${rendered} form a cycle that does not pass through a Loop block.`);
-  }
-
-  for (const component of stronglyConnectedComponents(forward, nodeIds)) {
-    if (component.length <= 1) continue;
-    const loopCount = component.filter((id) => nodeById.get(id)?.type === "loop").length;
-    if (loopCount > 0) {
-      for (const finalizeId of component.filter(
-        (id) => nodeById.get(id)?.type === "finalize_workspace",
-      )) {
-        addIssue(
-          `Finalize Workspace block "${finalizeId}" cannot execute inside a Loop cycle.`,
-          finalizeId,
-        );
-      }
-    }
-    if (loopCount >= 2) {
-      const rendered = component.map((id) => `"${id}"`).join(", ");
-      addIssue(
-        `Blocks [${rendered}] form a cycle region with ${loopCount} Loop blocks; each cycle region must contain exactly one.`,
-      );
-    }
-  }
-
-  const finalizeNodes = nodes.filter((node) => node.type === "finalize_workspace");
-  for (const finalize of finalizeNodes) {
-    const downstream = reachableFrom(forward.get(finalize.id) ?? [], forward);
-    for (const laterFinalize of finalizeNodes) {
-      if (laterFinalize.id === finalize.id || !downstream.has(laterFinalize.id)) continue;
-      addIssue(
-        `Finalize Workspace block "${finalize.id}" can reach Finalize Workspace block "${laterFinalize.id}"; a workflow path may publish at most once.`,
-        finalize.id,
-      );
-    }
-  }
-
-  const dominators =
-    bindingGraphContext?.dominators ??
-    computeDominators(
-      triggerNodes.map((node) => node.id),
-      reachable,
-      reverse,
-    );
-  for (const node of nodes) {
-    if (node.type !== "branch") continue;
-    const condition = node.params.condition;
-    if (typeof condition !== "string") continue;
-    const parsed = parseCondition(condition);
-    if (!parsed.ok) {
-      addIssue(
-        `Branch "${node.id}" has an invalid condition: ${parsed.error}.`,
-        node.id,
-        `/nodes/${nodes.indexOf(node)}/params/condition`,
-      );
-      continue;
-    }
-    // A referenced block must dominate this branch: every path from a trigger to
-    // the branch has to pass through it, otherwise a run could reach the branch
-    // without the block having produced an output. "An ancestor on some path" is
-    // not enough (that was the bug) -- it has to be a strict dominator.
-    const nodeDominators = dominators.get(node.id);
-    for (const ref of parsed.refs) {
-      const dominates =
-        ref !== node.id && nodeById.has(ref) && (nodeDominators?.has(ref) ?? false);
-      if (!dominates) {
-        addIssue(
-          `Branch "${node.id}" condition references block "${ref}" which does not run before it.`,
-          node.id,
-          `/nodes/${nodes.indexOf(node)}/params/condition`,
-        );
-      }
-    }
-  }
-
-  return issues;
+  return validateWorkflowGraphV2Issues(def);
 }
 
 function jsonPointerSegment(value: string | number): string {
@@ -2874,88 +1878,29 @@ export function validateWorkflowDefinitionIssuesForDeployment(
     checkEnvironmentAvailability?: boolean;
   } = {},
 ): WorkflowDefinitionValidationIssue[] {
-  if (def.schemaVersion === 2) {
-    const bindingAnalysis = analyzeWorkflowV2Bindings(def, registryContext);
-    const catalogAnalysis = analyzeWorkflowV2Catalog(def, registryContext);
-    const issues = dedupeDeploymentIssues([
-      ...validateWorkflowGraphV2Issues(def),
-      ...validateWorkflowV2ConfigurationIssues(def),
-      ...validateWorkflowV2BlockDeploymentIssues(
-        def,
-        registryContext,
-        options,
-      ),
-      ...bindingAnalysis.issues,
-      ...validateWorkflowV2BranchConditionIssues(
-        def,
-        catalogAnalysis.catalogByNode,
-      ),
-      ...validateWorkflowV2TransformReferenceIssues(
-        def,
-        catalogAnalysis.catalogByNode,
-      ),
-      ...validateWorkflowV2WorkspaceAccessIssues(def),
-      ...repositoryScopePinIssues(def, registryContext, options),
-    ]);
-    return issues;
-  }
-
-  const graphContext = buildWorkflowBindingGraphContext(def);
-  const issues = [
-    ...validateWorkflowGraphIssues(def, graphContext),
-    ...validateWorkflowBindingIssues(def, registryContext, graphContext),
-    ...validateStaticFallbackInputIssues(def),
-    // Existing deployed snapshots predate workspace-capability validation.
-    // Keep those snapshots loadable; the affected executors still fail closed
-    // before side effects when no workspace exists. New deployments retain the
-    // strict producer requirement through the default validation path.
-    ...(options.allowLegacyCompatibility
-      ? []
-      : validateWorkspaceCapabilityIssues(def, graphContext)),
-    ...validateAnyScopeReviewSafetyIssues(def),
+  const bindingAnalysis = analyzeWorkflowV2Bindings(def, registryContext);
+  const catalogAnalysis = analyzeWorkflowV2Catalog(def, registryContext);
+  const issues = dedupeDeploymentIssues([
+    ...validateWorkflowGraphV2Issues(def),
+    ...validateWorkflowV2ConfigurationIssues(def),
+    ...validateWorkflowV2BlockDeploymentIssues(
+      def,
+      registryContext,
+      options,
+    ),
+    ...bindingAnalysis.issues,
+    ...validateWorkflowV2BranchConditionIssues(
+      def,
+      catalogAnalysis.catalogByNode,
+    ),
+    ...validateWorkflowV2TransformReferenceIssues(
+      def,
+      catalogAnalysis.catalogByNode,
+    ),
+    ...validateWorkflowV2WorkspaceAccessIssues(def),
     ...repositoryScopePinIssues(def, registryContext, options),
-  ];
-  for (const [nodeIndex, node] of def.nodes.entries()) {
-    if (!isWorkflowAddressablePathSegment(node.id)) {
-      issues.push(
-        deploymentIssue(
-          `Block id "${node.id}" is not addressable; use a letter or underscore followed by letters, numbers, underscores, or hyphens.`,
-          node.id,
-          `/nodes/${nodeIndex}/id`,
-        ),
-      );
-    }
-    const definitionIssues = options.allowLegacyCompatibility
-      ? workflowBlockDefinitionIssues(node.type, node.params)
-      : workflowBlockDeploymentDefinitionIssues(node.type, node.params);
-    if (definitionIssues.length > 0) {
-      issues.push(
-        ...definitionIssues.map((issue) => ({
-          code: issue.code,
-          severity: "error" as const,
-          nodeId: node.id,
-          path: `/nodes/${nodeIndex}/params/outputSchema${issue.path}`,
-          message: `Block "${node.id}" (${node.type}) is unavailable: ${issue.message}`,
-        })),
-      );
-    } else if (options.checkEnvironmentAvailability !== false) {
-      const availability = resolveWorkflowBlockContract(
-        node.type,
-        node.params,
-        registryContext,
-      ).availability;
-      if (!availability.available) {
-        issues.push(
-          deploymentIssue(
-            `Block "${node.id}" (${node.type}) is unavailable: ${availability.unavailableReason}`,
-            node.id,
-            `/nodes/${nodeIndex}/params`,
-          ),
-        );
-      }
-    }
-  }
-  return dedupeDeploymentIssues(issues);
+  ]);
+  return issues;
 }
 
 /**
@@ -3004,88 +1949,7 @@ function dedupeDeploymentIssues(
   );
 }
 
-const STATIC_FALLBACK_INPUTS = {
-  call_llm: "prompt",
-  generic_agent: "prompt",
-  post_ticket_comment: "body",
-  post_pr_comment: "body",
-} as const satisfies Partial<Record<WorkflowBlockType, string>>;
-
-function validateStaticFallbackInputIssues(
-  def: WorkflowDefinitionV1,
-): WorkflowDefinitionValidationIssue[] {
-  const issues: WorkflowDefinitionValidationIssue[] = [];
-  for (const [nodeIndex, node] of def.nodes.entries()) {
-    const inputName = STATIC_FALLBACK_INPUTS[node.type as keyof typeof STATIC_FALLBACK_INPUTS];
-    if (inputName === undefined) continue;
-    const staticValue = node.params[inputName];
-    const hasStaticValue = typeof staticValue === "string" && staticValue.trim().length > 0;
-    const hasBinding = Object.prototype.hasOwnProperty.call(node.inputs, inputName);
-    if (!hasStaticValue && !hasBinding) {
-      issues.push(
-        deploymentIssue(
-          `Block "${node.id}" (${node.type}) requires either a non-empty "${inputName}" parameter or a compatible "${inputName}" input binding.`,
-          node.id,
-          `/nodes/${nodeIndex}/params/${inputName}`,
-        ),
-      );
-    }
-  }
-  return issues;
-}
-
-const WORKSPACE_PRODUCERS = new Set<WorkflowBlockType>([
-  "prepare_workspace",
-  "implementation_agent",
-  "review_agent",
-  "fix_agent",
-]);
-
-function requiresWorkspaceProducer(node: WorkflowDefinitionV1Node): boolean {
-  return (
-    node.type === "run_checks" ||
-    node.type === "run_pre_pr_checks" ||
-    node.type === "finalize_workspace" ||
-    (node.type === "generic_agent" && node.params.workspaceMode !== "none")
-  );
-}
-
-function validateWorkspaceCapabilityIssues(
-  def: WorkflowDefinitionV1,
-  graphContext: WorkflowBindingGraphContext,
-): WorkflowDefinitionValidationIssue[] {
-  const issues: WorkflowDefinitionValidationIssue[] = [];
-  for (const [nodeIndex, consumer] of def.nodes.entries()) {
-    if (!requiresWorkspaceProducer(consumer)) continue;
-    const dominators = graphContext.dominators.get(consumer.id);
-    const hasGuaranteedProducer = def.nodes.some((producer) => {
-      if (!WORKSPACE_PRODUCERS.has(producer.type) || !dominators?.has(producer.id)) return false;
-      const pathsToConsumer = (graphContext.outgoing.get(producer.id) ?? []).filter(({ to }) =>
-        graphContext.reachableFromNode.get(to)?.has(consumer.id),
-      );
-      return pathsToConsumer.length > 0 && pathsToConsumer.every(({ port }) => port !== FAILURE_PORT);
-    });
-    if (!hasGuaranteedProducer) {
-      issues.push(
-        deploymentIssue(
-          `Block "${consumer.id}" (${consumer.type}) requires a workspace-producing block to run before it on every path.`,
-          consumer.id,
-          `/nodes/${nodeIndex}`,
-        ),
-      );
-    }
-  }
-  return issues;
-}
-
-/**
- * Arbitrary-provider PR subjects have no trusted ticket or owned workspace.
- * They may materialize a checkout for review, but repository-owned commands
- * must never run in the credential-bearing agent sandbox.
- * This same function is called at runtime so definitions deployed before this
- * rule fail closed instead of gaining mutation privileges.
- */
-export const ANY_SCOPE_BLOCK_POLICY = {
+const ANY_SCOPE_BLOCK_POLICY = {
   trigger_ticket_ai: "deny",
   trigger_plan_approved: "deny",
   trigger_pr_created: "entry",
@@ -3125,12 +1989,18 @@ export const ANY_SCOPE_BLOCK_POLICY = {
   terminate: "deny",
 } as const satisfies Record<WorkflowBlockTypeV1, "entry" | "safe" | "deny">;
 
-export function validateAnyScopeReviewSafety(def: WorkflowDefinitionV1): string[] {
+/** The flattened runtime shape a run walks, which is what the check reads. */
+export interface ReviewSafetyGraph {
+  nodes: WorkflowDefinitionNode[];
+  edges: Array<{ from: string; to: string; fromPort?: string }>;
+}
+
+export function validateAnyScopeReviewSafety(def: ReviewSafetyGraph): string[] {
   return validateAnyScopeReviewSafetyIssues(def).map(({ message }) => message);
 }
 
 export function validateAnyScopeReviewSafetyIssues(
-  def: WorkflowDefinitionV1,
+  def: ReviewSafetyGraph,
 ): WorkflowDefinitionValidationIssue[] {
   const nodes = new Map(def.nodes.map((node) => [node.id, node]));
   const outgoing = new Map<string, string[]>();

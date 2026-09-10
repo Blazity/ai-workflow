@@ -4,7 +4,6 @@ import type {
   WorkflowEditorOptions,
   WorkflowParamValue,
 } from "@shared/contracts";
-import { isV2OnlyBlockType } from "@shared/contracts";
 import {
   WORKFLOW_EDITOR_BLOCK_TEMPLATES,
   type WorkflowEditorBlockTemplateId,
@@ -239,14 +238,12 @@ const GROUP_LABELS: Record<string, string> = {
 
 function paletteDefaults(
   contract: WorkflowEditorOptions["blockRegistry"][WorkflowBlockType],
-  schemaVersion: 1 | 2,
 ): Record<string, WorkflowParamValue> {
   const defaults = { ...contract.defaults };
-  if (schemaVersion === 2 && contract.type === "open_pr") {
-    // The registry's Open PR prose templates are the v1 compatibility
-    // templates and contain flat {{ticket_*}} variables. V2 leaves these
-    // fields absent so it cannot seed placeholders that its canonical data
-    // authoring/runtime deliberately rejects.
+  if (contract.type === "open_pr") {
+    // The registry's Open PR prose templates contain flat {{ticket_*}}
+    // variables. The editor leaves these fields absent so it cannot seed
+    // placeholders that canonical data authoring deliberately rejects.
     delete defaults.title;
     delete defaults.body;
   }
@@ -255,10 +252,7 @@ function paletteDefaults(
 
 export function buildPaletteItems(
   options: WorkflowEditorOptions,
-  schemaVersion: 1 | 2 = 1,
 ): PaletteGroup[] {
-  // trigger_schedule (and other v2-only block types) never belong in a v1
-  // palette: v1 has no executor for them and the schema forbids the type.
   const contracts = Object.values(options.blockRegistry).filter(
     (contract) =>
       // run_checks is retired from the palette: run_scripts covers the named
@@ -266,8 +260,7 @@ export function buildPaletteItems(
       // modes (commands vs groups) are the thing authors kept getting wrong.
       // Existing run_checks nodes still render, edit and deploy: only the
       // "add a new one" affordance is gone.
-      contract.type !== "run_checks" &&
-      (schemaVersion === 2 || !isV2OnlyBlockType(contract.type)),
+      contract.type !== "run_checks",
   );
   const groups: PaletteGroup[] = GROUP_ORDER.flatMap((group) => {
     const groupContracts = contracts.filter((contract) => contract.presentation.group === group);
@@ -280,15 +273,13 @@ export function buildPaletteItems(
         id: `block:${contract.type}`,
         type: contract.type,
         name: contract.presentation.label,
-        params: paletteDefaults(contract, schemaVersion),
+        params: paletteDefaults(contract),
         presentation: contract.presentation,
         available: contract.availability.available,
         unavailableReason: contract.availability.unavailableReason,
       })),
     }];
   });
-  if (schemaVersion === 1) return groups;
-
   for (const template of WORKFLOW_EDITOR_BLOCK_TEMPLATES) {
     // A composite whose source block left the palette would put it back, which
     // is the one thing retiring run_checks from the palette has to prevent.
@@ -307,7 +298,7 @@ export function buildPaletteItems(
       templateId: template.id,
       type: template.sourceType,
       name: template.name,
-      params: paletteDefaults(source, schemaVersion),
+      params: paletteDefaults(source),
       presentation: {
         ...source.presentation,
         description: template.description,

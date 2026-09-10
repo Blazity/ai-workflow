@@ -22,6 +22,7 @@ import {
   workflowDefinitionVersions,
 } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
+import { listHarnessProfileUsage } from "../db/harness-profile-usage-store.js";
 import { DashboardAuthError } from "../lib/auth/users-read.js";
 import { hashHarnessSkillArtifact } from "./skill-artifact.js";
 import {
@@ -482,6 +483,7 @@ describe("organization profiles", () => {
       profileId: fork.id,
       expectedRevision: fork.draftRevision,
       actor: ADMIN,
+      usage: [],
     });
     expect(
       await getHarnessProfile(db, {
@@ -494,6 +496,7 @@ describe("organization profiles", () => {
         profileId: created.id,
         expectedRevision: unarchived.draftRevision,
         actor: ADMIN,
+        usage: [],
       }),
     ).rejects.toMatchObject({
       statusCode: 409,
@@ -548,6 +551,7 @@ describe("organization profiles", () => {
       organizationId: ADMIN.organizationId,
       profileId: created.id,
       actorRole: ADMIN.role,
+      usage: await listHarnessProfileUsage(db, created.id),
     });
     expect(detail).toMatchObject({
       canDeleteProfile: false,

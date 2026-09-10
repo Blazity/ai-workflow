@@ -2606,6 +2606,13 @@ function schedulePendingMeaning(occurrence: ScheduleOccurrenceEntry): string {
  *  the second sends them looking for a run that never existed, in the one panel
  *  they open to find out what went wrong. */
 function scheduleOutcomeMeaning(occurrence: ScheduleOccurrenceEntry): string {
+  if (
+    occurrence.outcome === "cancelled" &&
+    occurrence.skipReason !== null &&
+    occurrence.skipReason !== ""
+  ) {
+    return occurrence.skipReason;
+  }
   if (occurrence.outcome === "skipped_overlap" && occurrence.blockingRunId === null) {
     // A third producer, and the reason column is the only thing that separates
     // it: the dispatcher settles an occurrence its trigger's rate limit refused,

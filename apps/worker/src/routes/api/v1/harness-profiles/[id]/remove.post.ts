@@ -1,6 +1,6 @@
 import { defineEventHandler, readBody } from "h3";
 import { getDb } from "../../../../../db/client.js";
-import { deleteHarnessProfile } from "../../../../../harness-profiles/store.js";
+import { deleteHarnessProfileWithUsage } from "../../../../../db/harness-profile-detail-store.js";
 import { requireDashboardActor } from "../../../../../lib/auth/request-context.js";
 import {
   parseHarnessProfileId,
@@ -13,8 +13,10 @@ export default defineEventHandler(async (event) => {
     setHarnessApiNoStore(event);
     const actor = await requireDashboardActor(event);
     const body = await readBody<{ expectedRevision?: number }>(event);
-    await deleteHarnessProfile(getDb(), {
-      profileId: parseHarnessProfileId(event),
+    const db = getDb();
+    const profileId = parseHarnessProfileId(event);
+    await deleteHarnessProfileWithUsage(db, {
+      profileId,
       expectedRevision: body.expectedRevision ?? Number.NaN,
       actor: {
         organizationId: actor.organizationId,

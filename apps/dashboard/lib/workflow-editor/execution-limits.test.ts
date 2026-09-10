@@ -3,12 +3,12 @@ import { test } from "node:test";
 import { executionLimitsFromDefinition, setExecutionLimit } from "./execution-limits.ts";
 
 test("execution limits can be set, changed, and cleared without defaults", () => {
-  const empty = executionLimitsFromDefinition({ schemaVersion: 1, nodes: [], edges: [] });
+  const empty = executionLimitsFromDefinition({ schemaVersion: 2, nodes: [], edges: [] });
   assert.deepEqual(empty, {});
 
   assert.deepEqual(
     executionLimitsFromDefinition({
-      schemaVersion: 1,
+      schemaVersion: 2,
       budgets: { maxDurationMs: 120_000, maxTokens: 25_000, maxCostUsd: 4.5 },
       nodes: [],
       edges: [],

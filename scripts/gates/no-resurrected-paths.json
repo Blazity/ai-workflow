@@ -1,3 +1,12 @@
 [
-  "apps/shared"
+  "apps/shared",
+  "apps/worker/src/routes/api/v1/workflow-definition.get.ts",
+  "apps/worker/src/routes/api/v1/workflow-definition.put.ts",
+  "apps/worker/src/routes/api/v1/workflow-definition/restore.post.ts",
+  "apps/worker/src/routes/api/v1/workflow-definitions/[id]/migrate.post.ts",
+  "apps/worker/src/workflow-definition/v2-converter.ts",
+  "apps/worker/src/workflow-definition/v2-migration.ts",
+  "apps/worker/src/workflow-definition/v2-migration-prompts.ts",
+  "apps/worker/src/workflow-definition/v2-migration-harness-profiles.ts",
+  "apps/dashboard/components/cockpit/flow-editor/workflow-migration-drawer.tsx"
 ]

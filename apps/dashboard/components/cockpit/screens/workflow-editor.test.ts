@@ -2,11 +2,81 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { FlowNodeDef } from "@/lib/flows";
-import { nodeSaveIssues, nodesValid } from "./workflow-editor";
+import {
+  RETIRED_DEPLOYED_NOTE,
+  initialEditorSavedSemanticKey,
+  legacyVersionDisclosureKey,
+  legacyVersionToggleLabel,
+  nodeSaveIssues,
+  nodesValid,
+  prettyStoredWorkflowDefinition,
+} from "./workflow-editor";
+import { createEditorHistory, editorHistoryIsDirty } from "@/lib/workflow-editor/history";
 
 function trigger(): FlowNodeDef {
   return { id: "t1", type: "trigger_ticket_ai", name: "Ticket", x: 0, y: 0, params: {}, inputs: {} };
 }
+test("the retired deployment note names the built-in recovery draft", () => {
+  assert.equal(
+    RETIRED_DEPLOYED_NOTE,
+    "The deployed version of this definition uses the retired schema v1 and cannot run. The editor shows the built-in ticket workflow as a starting draft; nothing is saved until you save, and publishing the new draft replaces the retired version.",
+  );
+});
+
+test("the built-in recovery draft starts clean and becomes dirty only after an edit", () => {
+  const seed = { schemaVersion: 2 as const, nodes: [], edges: [] };
+  const detail = {
+    meta: {
+      id: 7,
+      name: "Retired",
+      enabled: true,
+      deployedSchema: "legacy-v1" as const,
+      retiredMessage: "retired",
+      triggerTypes: [],
+      currentVersion: 1,
+      draftRevision: 1,
+      layoutRevision: 1,
+      deployedVersion: 1,
+      createdAt: "2026-09-10T00:00:00.000Z",
+      updatedAt: "2026-09-10T00:00:00.000Z",
+    },
+    draft: null,
+    layout: { nodes: {}, edges: {} },
+    deployed: {
+      definitionId: 7,
+      version: 1,
+      createdAt: "2026-09-10T00:00:00.000Z",
+      createdById: "admin",
+      createdByLabel: "Admin",
+      restoredFromVersion: null,
+      schema: "legacy-v1" as const,
+      definition: { schemaVersion: 1 },
+    },
+    current: null,
+    versions: [],
+  };
+  const saved = initialEditorSavedSemanticKey(detail, seed);
+  const history = createEditorHistory(seed, { savedSemanticKey: saved });
+
+  assert.equal(editorHistoryIsDirty(history, saved!), false);
+  assert.equal(editorHistoryIsDirty(history, saved! + ":edited"), true);
+});
+
+test("legacy disclosure identity includes the definition id", () => {
+  assert.equal(legacyVersionDisclosureKey(7, 1), "7:1");
+  assert.equal(legacyVersionDisclosureKey(8, 1), "8:1");
+});
+
+test("the legacy history toggle exposes the stored JSON without rewriting it", () => {
+  const stored = { schemaVersion: 1, broken: true };
+  assert.equal(legacyVersionToggleLabel(false), "Show stored JSON");
+  assert.equal(legacyVersionToggleLabel(true), "Hide stored JSON");
+  assert.equal(
+    prettyStoredWorkflowDefinition(stored),
+    '{\n  "schemaVersion": 1,\n  "broken": true\n}',
+  );
+});
+
 
 test("an out-of-range legacy maxFixCycles no longer disables Save: the repair loop it configured is gone", () => {
   const node: FlowNodeDef = {

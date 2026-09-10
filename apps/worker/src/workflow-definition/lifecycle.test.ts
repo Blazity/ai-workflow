@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import type {
-  WorkflowBlockTypeV1,
-  WorkflowDefinitionV1,
+  WorkflowBlockType,
+  WorkflowDefinitionV2,
 } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 
@@ -48,10 +48,18 @@ import {
 
 const ADMIN: WorkflowDefinitionActor = { role: "admin", id: "u_admin", label: "Admin" };
 
-function graph(trigger: WorkflowBlockTypeV1, x = 10): WorkflowDefinitionV1 {
+function graph(trigger: WorkflowBlockType, x = 10): WorkflowDefinitionV2 {
   return {
-    schemaVersion: 1,
-    nodes: [{ id: "trigger", type: trigger, x, y: 20, params: {}, inputs: {} }],
+    schemaVersion: 2,
+    nodes: [{
+      id: "trigger",
+      type: trigger,
+      x,
+      y: 20,
+      configuration: {},
+      inputs: {},
+      additionalInputs: [],
+    }],
     edges: [],
   };
 }

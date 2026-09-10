@@ -162,6 +162,6 @@ describe("v2 workflow definition storage", () => {
 
     expect(restored.version).toBe(2);
     expect(restored.restoredFromVersion).toBe(1);
-    expect(restored.definition.schemaVersion).toBe(2);
+    expect(restored.definition).toMatchObject({ schemaVersion: 2 });
   });
 });

@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResearchResult } from "../sandbox/agents/types.js";
@@ -15,10 +16,13 @@ import {
   buildResolutionEvidenceComment,
   countSettleOutcomes,
   entryNeedsTicketStatusReplay,
+  entryOwnsClarificationThread,
   postReviewLedgerFailureNoteStep,
   resolveNoChangeAction,
   runLedgerEvidenceSecondPass,
   settledAnswerCount,
+  loadWorkflowPlanWithRetirementExit,
+  runRetiredWorkflowFailureExit,
   settleReviewLedgerThreads,
   unsettledWorkItemAliases,
   type ReviewLedgerMetrics,
@@ -733,6 +737,74 @@ describe("entryNeedsTicketStatusReplay", () => {
     expect(entryNeedsTicketStatusReplay("plan_approved")).toBe(false);
     expect(entryNeedsTicketStatusReplay("webhook_trigger")).toBe(false);
     expect(entryNeedsTicketStatusReplay("schedule")).toBe(false);
+  });
+});
+
+describe("re-pickup clarification housekeeping gate", () => {
+  it("runs only for ticket pickups", () => {
+    expect(entryOwnsClarificationThread("ticket")).toBe(true);
+    expect(entryOwnsClarificationThread("pr_trigger")).toBe(false);
+    expect(entryOwnsClarificationThread("plan_approved")).toBe(false);
+    expect(entryOwnsClarificationThread({
+      kind: "ticket",
+      subjectKey: "ticket:jira:AIW-96",
+      ticketKey: "AIW-96",
+      ownerToken: "owner-successor",
+      continuation: { kind: "clarification", clarificationRequestId: "clar-1" },
+    })).toBe(false);
+  });
+});
+
+describe("retired workflow plan replay", () => {
+  it.each([
+    ["loader rejection", () => Promise.reject(new Error(RETIRED_SCHEMA_MESSAGE))],
+    [
+      "replayed v1 snapshot",
+      () =>
+        Promise.resolve({
+          definition: {
+            schemaVersion: 1,
+            nodes: [{ id: "historical node", type: "unknown" }],
+            edges: [{ from: "", to: 42 }],
+          },
+        }),
+    ],
+  ])("takes a %s through the executable standard failure exit", async (_case, load) => {
+    const order: string[] = [];
+    const recordedReasons: string[] = [];
+    const jiraComments: string[] = [];
+    const retire = (reason: typeof RETIRED_SCHEMA_MESSAGE) =>
+      runRetiredWorkflowFailureExit(reason, {
+        ticketKey: "AIW-343",
+        cleanupClarifications: vi.fn(async () => { order.push("clarification_cleanup"); }),
+        markRunFailed: vi.fn(async () => { order.push("failed_state"); }),
+        recordFailureReason: vi.fn(async (failureReason) => {
+          order.push("failure_reason");
+          recordedReasons.push(failureReason);
+        }),
+        logFailure: vi.fn(async () => { order.push("failure_log"); }),
+        commentFailure: vi.fn(async (failureReason) => {
+          order.push("jira_comment");
+          jiraComments.push(failureReason);
+        }),
+        moveTicket: vi.fn(async () => { order.push("ticket_move"); }),
+        notifyTicket: vi.fn(async () => { order.push("ticket_notify"); }),
+      });
+
+    await expect(
+      loadWorkflowPlanWithRetirementExit({ load, retire }),
+    ).resolves.toBe("failed");
+    expect(recordedReasons).toEqual([RETIRED_SCHEMA_MESSAGE]);
+    expect(jiraComments).toEqual([RETIRED_SCHEMA_MESSAGE]);
+    expect(order).toEqual([
+      "clarification_cleanup",
+      "failed_state",
+      "failure_reason",
+      "failure_log",
+      "jira_comment",
+      "ticket_move",
+      "ticket_notify",
+    ]);
   });
 });
 

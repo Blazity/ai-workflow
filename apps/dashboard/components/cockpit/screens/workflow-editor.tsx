@@ -12,15 +12,13 @@ import { CircleIcon } from "@phosphor-icons/react/dist/csr/Circle";
 import {
   isManuallyDispatchableTrigger,
   isTriggerBlockType,
+  RETIRED_SCHEMA_MESSAGE,
   type RunBlockStatusesResponse,
   type WorkflowDefinition,
-  type WorkflowDefinitionV2,
   type WorkflowDefinitionDeploymentResponse,
   type WorkflowDefinitionDeploymentValidationResponse,
   type WorkflowDefinitionDetailResponse,
   type WorkflowDefinitionLayoutResponse,
-  type WorkflowDefinitionMigrationPreview,
-  type WorkflowDefinitionMigrationResponse,
   type WorkflowDefinitionMeta,
   type WorkflowDefinitionTemplate,
   type WorkflowDefinitionSaveResponse,
@@ -32,17 +30,13 @@ import {
   type WorkflowRepositoryScope,
 } from "@shared/contracts";
 import { FlowEditor } from "@/components/cockpit/flow-editor/flow-editor";
-import {
-  WorkflowMigrationDrawer,
-  type WorkflowMigrationDrawerState,
-  workflowMigrationVisibility,
-} from "@/components/cockpit/flow-editor/workflow-migration-drawer";
 import { PromptLibraryProvider } from "@/components/cockpit/flow-editor/prompt-library-context";
 import { HarnessProfileCatalogProvider } from "@/components/cockpit/flow-editor/harness-profile-context";
 import { RepositoryCatalogProvider } from "@/components/cockpit/flow-editor/repository-catalog-context";
 import { Listbox } from "@/components/cockpit/listbox";
 import { ManualDispatchModal } from "@/components/cockpit/manual-dispatch-modal";
 import {
+  runnableVersionDefinition,
   toFlowDefinition,
   type FlowEdgeDef,
   type FlowNodeDef,
@@ -114,25 +108,48 @@ function semanticKeyForDefinition(definition: WorkflowDefinition): string {
       flow.nodes,
       flow.edges,
       executionLimitsFromDefinition(definition),
-      definition.schemaVersion,
       repositoryScopeFromDefinition(definition),
     ),
   );
 }
 
-function semanticKeyForDocument(
-  document: WorkflowEditorDocument,
-  schemaVersion: 1 | 2,
-): string {
+function semanticKeyForDocument(document: WorkflowEditorDocument): string {
   return JSON.stringify(
     serializeSemanticWorkflowDefinition(
       document.nodes,
       document.edges,
       document.budgets,
-      schemaVersion,
       document.repositoryScope,
     ),
   );
+}
+
+export const RETIRED_DEPLOYED_NOTE =
+  "The deployed version of this definition uses the retired schema v1 and cannot run. The editor shows the built-in ticket workflow as a starting draft; nothing is saved until you save, and publishing the new draft replaces the retired version.";
+
+export function legacyVersionDisclosureKey(
+  definitionId: number,
+  version: number,
+): string {
+  return `${definitionId}:${version}`;
+}
+
+export function initialEditorSavedSemanticKey(
+  detail: WorkflowDefinitionDetailResponse,
+  seed: WorkflowDefinition,
+): string | null {
+  if (detail.draft) return semanticKeyForDefinition(detail.draft);
+  return detail.deployed?.schema === "legacy-v1"
+    ? semanticKeyForDefinition(seed)
+    : null;
+}
+
+export function legacyVersionToggleLabel(expanded: boolean): string {
+  return expanded ? "Hide stored JSON" : "Show stored JSON";
+}
+
+export function prettyStoredWorkflowDefinition(raw: unknown): string {
+  return JSON.stringify(raw, null, 2) ?? String(raw);
 }
 
 export interface WorkflowNodeSaveIssue {
@@ -226,14 +243,16 @@ export function WorkflowEditorScreen({
   actorLabel: string;
   initialNodeId?: string;
 }) {
-  const seed = initialDetail.draft ?? initialDetail.deployed?.definition ?? defaultDefinition;
+  const seed =
+    initialDetail.draft ??
+    runnableVersionDefinition(initialDetail.deployed) ??
+    defaultDefinition;
   const seedFlow = toFlowDefinition(seed);
   const [metas, setMetas] = useState<WorkflowDefinitionMeta[]>(definitions);
   const [selectedId, setSelectedId] = useState(initialDetail.meta.id);
   const [versions, setVersions] = useState<WorkflowDefinitionVersion[]>(initialDetail.versions);
   const [deployed, setDeployed] = useState<WorkflowDefinitionVersion | null>(initialDetail.deployed);
   const [baselineDraft, setBaselineDraft] = useState<WorkflowDefinition | null>(initialDetail.draft);
-  const [schemaVersion, setSchemaVersion] = useState<1 | 2>(seed.schemaVersion);
   const [editorHistory, dispatchEditorHistory] = useReducer(
     (
       state: EditorHistoryState<WorkflowEditorDocument>,
@@ -252,7 +271,7 @@ export function WorkflowEditorScreen({
         {
           savedSemanticKey: initialDetail.draft
             ? semanticKeyForDefinition(initialDetail.draft)
-            : null,
+            : initialEditorSavedSemanticKey(initialDetail, seed),
         },
       ),
   );
@@ -263,14 +282,15 @@ export function WorkflowEditorScreen({
   const [error, setError] = useState<string | null>(null);
   const [confirmRestore, setConfirmRestore] = useState<number | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [expandedLegacyVersions, setExpandedLegacyVersions] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [fitSignal, setFitSignal] = useState(0);
   const [editorGeneration, setEditorGeneration] = useState(0);
-  const [selectionRequest, setSelectionRequest] = useState<{
+  const [selectionRequest] = useState<{
     nodeId: string;
     requestId: number;
   } | null>(null);
-  const [migrationState, setMigrationState] =
-    useState<WorkflowMigrationDrawerState | null>(null);
   const [switchState, setSwitchState] = useState<DefinitionSwitchState>({ kind: "idle" });
   const [defsOpen, setDefsOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
@@ -417,39 +437,39 @@ export function WorkflowEditorScreen({
     if (before) editorDocumentRef.current = before;
     if (
       before &&
-      semanticKeyForDocument(before, schemaVersion) !==
-        semanticKeyForDocument(state.present, schemaVersion)
+      semanticKeyForDocument(before) !==
+        semanticKeyForDocument(state.present)
     ) {
       editorResponseGuard.invalidate();
     }
     dispatchEditorHistory({ type: "cancel_transaction" });
-  }, [editorResponseGuard, schemaVersion]);
+  }, [editorResponseGuard]);
   const undoEditor = useCallback(() => {
     const state = editorHistoryRef.current;
     const previous = state.past.at(-1);
     if (previous) editorDocumentRef.current = previous;
     if (
       previous &&
-      semanticKeyForDocument(previous, schemaVersion) !==
-        semanticKeyForDocument(state.present, schemaVersion)
+      semanticKeyForDocument(previous) !==
+        semanticKeyForDocument(state.present)
     ) {
       editorResponseGuard.invalidate();
     }
     dispatchEditorHistory({ type: "undo" });
-  }, [editorResponseGuard, schemaVersion]);
+  }, [editorResponseGuard]);
   const redoEditor = useCallback(() => {
     const state = editorHistoryRef.current;
     const next = state.future[0];
     if (next) editorDocumentRef.current = next;
     if (
       next &&
-      semanticKeyForDocument(next, schemaVersion) !==
-        semanticKeyForDocument(state.present, schemaVersion)
+      semanticKeyForDocument(next) !==
+        semanticKeyForDocument(state.present)
     ) {
       editorResponseGuard.invalidate();
     }
     dispatchEditorHistory({ type: "redo" });
-  }, [editorResponseGuard, schemaVersion]);
+  }, [editorResponseGuard]);
   const validationKeyRef = useRef<string | null>(null);
   const validationControllerRef =
     useWorkflowValidationController<ValidationRequest>({
@@ -486,41 +506,41 @@ export function WorkflowEditorScreen({
         nodes,
         edges,
         budgets,
-        schemaVersion,
         repositoryScope,
       ),
-    [budgets, edges, nodes, repositoryScope, schemaVersion],
+    [budgets, edges, nodes, repositoryScope],
   );
   const semanticDefinitionRef = useRef(semanticDefinition);
   semanticDefinitionRef.current = semanticDefinition;
   const semanticKey = JSON.stringify(semanticDefinition);
   const validationTargetKey = `${selectedId}:${semanticKey}`;
   const validationIsCurrent = validation.key === validationTargetKey;
-  const dataCatalog = useWorkflowDataCatalog(
-    selectedId,
-    schemaVersion === 2
-      ? (semanticDefinition as WorkflowDefinitionV2)
-      : null,
-  );
+  const dataCatalog = useWorkflowDataCatalog(selectedId, semanticDefinition);
   const dirty = editorHistoryIsDirty(editorHistory, semanticKey);
   // Independent of `dirty` (canvas vs. saved draft): flags the saved draft no
   // longer matching what is deployed, which a rollback produces without ever
   // touching the canvas or the draft, so `dirty` alone would stay false.
   const deployedSemanticKey = useMemo(
-    () => (deployed ? semanticKeyForDefinition(deployed.definition) : null),
+    () => {
+      const graph = runnableVersionDefinition(deployed);
+      return graph ? semanticKeyForDefinition(graph) : null;
+    },
     [deployed],
   );
   const draftSemanticKey = baselineDraft
     ? semanticKeyForDefinition(baselineDraft)
     : null;
+  const displayingLegacyRecoverySeed =
+    baselineDraft === null && deployed?.schema === "legacy-v1";
   const showDraftDiffersFromDeployed = draftDiffersFromDeployed(
     draftSemanticKey,
     deployedSemanticKey,
   );
   const runnableTriggerIds = useMemo(() => {
-    if (!canDispatch || !deployed) return new Set<string>();
+    const deployedDefinition = runnableVersionDefinition(deployed);
+    if (!canDispatch || !deployedDefinition) return new Set<string>();
     const deployedTypes = new Map(
-      deployed.definition.nodes.map((node) => [node.id, node.type]),
+      deployedDefinition.nodes.map((node) => [node.id, node.type]),
     );
     return new Set(
       nodes
@@ -572,7 +592,12 @@ export function WorkflowEditorScreen({
   }, [pendingLayoutSave, selectedId, selectedMeta]);
 
   useEffect(() => {
-    if (!canEdit || !selectedMeta || editorHistory.transaction !== null) {
+    if (
+      !canEdit ||
+      !selectedMeta ||
+      editorHistory.transaction !== null ||
+      displayingLegacyRecoverySeed
+    ) {
       pendingLayoutSave.discard();
       return;
     }
@@ -609,6 +634,7 @@ export function WorkflowEditorScreen({
     });
   }, [
     canEdit,
+    displayingLegacyRecoverySeed,
     edgeGeometry,
     editorHistory.transaction,
     layoutBaseline,
@@ -716,7 +742,6 @@ export function WorkflowEditorScreen({
       nodes,
       edges,
       budgets,
-      schemaVersion,
       repositoryScope,
     );
     setBusy("save");
@@ -757,190 +782,6 @@ export function WorkflowEditorScreen({
     }
   }
 
-  async function saveForMigration(): Promise<WorkflowDefinitionSaveResponse | null> {
-    const requestRevision = editorResponseGuard.capture();
-    const definition = serializeWorkflowDefinition(
-      nodes,
-      edges,
-      budgets,
-      schemaVersion,
-      repositoryScope,
-    );
-    setBusy("migration-save");
-    setError(null);
-    try {
-      let saved: WorkflowDefinitionSaveResponse | null = null;
-      const layoutSaved = await afterPendingLayoutSave(
-        pendingLayoutSave,
-        async () => {
-          const response = await fetch(
-            `/api/workflow-definitions/${selectedId}`,
-            {
-              method: "PUT",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({
-                definition,
-                expectedDraftRevision: selectedMeta?.draftRevision ?? 0,
-              }),
-            },
-          );
-          if (!response.ok) {
-            throw new Error(await readErrorMessage(response));
-          }
-          saved = (await response.json()) as WorkflowDefinitionSaveResponse;
-        },
-      );
-      if (!layoutSaved || !saved) {
-        throw new Error("Unable to save the latest workflow layout");
-      }
-      if (!editorResponseGuard.isCurrent(requestRevision)) {
-        throw new Error(
-          "The workflow changed while it was being saved. Save and preview again.",
-        );
-      }
-      applySave(saved, false, true);
-      return saved;
-    } catch (err) {
-      setMigrationState({
-        kind: "error",
-        stale: false,
-        message:
-          err instanceof Error ? err.message : "Unable to save the workflow",
-      });
-      return null;
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function previewMigration(
-    meta: WorkflowDefinitionMeta | undefined = selectedMeta,
-  ) {
-    if (!meta?.currentVersion) {
-      setMigrationState({ kind: "save_required" });
-      return;
-    }
-    setDefsOpen(false);
-    setHistoryOpen(false);
-    setMigrationState({ kind: "loading" });
-    try {
-      const response = await fetch(
-        `/api/workflow-definitions/${meta.id}/migrate`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            mode: "preview",
-            sourceVersion: meta.currentVersion,
-            targetSchemaVersion: 2,
-            expectedDraftRevision: meta.draftRevision,
-          }),
-        },
-      );
-      if (!response.ok) {
-        throw Object.assign(new Error(await readErrorMessage(response)), {
-          stale: response.status === 409,
-        });
-      }
-      const preview =
-        (await response.json()) as WorkflowDefinitionMigrationResponse;
-      setMigrationState({
-        kind: "preview",
-        preview: preview as WorkflowDefinitionMigrationPreview,
-      });
-    } catch (err) {
-      setMigrationState({
-        kind: "error",
-        stale:
-          typeof err === "object" &&
-          err !== null &&
-          "stale" in err &&
-          err.stale === true,
-        message:
-          err instanceof Error
-            ? err.message
-            : "Unable to preview this migration",
-      });
-    }
-  }
-
-  function openMigration() {
-    if (dirty || !selectedMeta?.currentVersion) {
-      setMigrationState({ kind: "save_required" });
-      return;
-    }
-    void previewMigration();
-  }
-
-  async function saveAndPreviewMigration() {
-    const saved = await saveForMigration();
-    if (saved) await previewMigration(saved.meta);
-  }
-
-  async function applyMigration() {
-    if (
-      migrationState?.kind !== "preview" ||
-      !migrationState.preview.conversionHash ||
-      !migrationState.preview.definition ||
-      migrationState.preview.blockers.length > 0 ||
-      !selectedMeta
-    ) {
-      return;
-    }
-    const preview = migrationState.preview;
-    setMigrationState({ kind: "applying", preview });
-    try {
-      const response = await fetch(
-        `/api/workflow-definitions/${selectedId}/migrate`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            mode: "apply",
-            sourceVersion: preview.sourceVersion,
-            targetSchemaVersion: 2,
-            expectedDraftRevision: selectedMeta.draftRevision,
-            expectedConversionHash: preview.conversionHash,
-          }),
-        },
-      );
-      if (!response.ok) {
-        throw Object.assign(new Error(await readErrorMessage(response)), {
-          stale: response.status === 409,
-        });
-      }
-      const detailResponse = await fetch(
-        `/api/workflow-definitions/${selectedId}`,
-      );
-      if (!detailResponse.ok) {
-        throw new Error(await readErrorMessage(detailResponse));
-      }
-      const detail =
-        (await detailResponse.json()) as WorkflowDefinitionDetailResponse;
-      applyAuthoritativeDetail(detail, true);
-      setMigrationState({
-        kind: "success",
-        deployedVersion:
-          detail.deployed?.definition.schemaVersion === 1
-            ? detail.deployed.version
-            : null,
-      });
-    } catch (err) {
-      setMigrationState({
-        kind: "error",
-        stale:
-          typeof err === "object" &&
-          err !== null &&
-          "stale" in err &&
-          err.stale === true,
-        message:
-          err instanceof Error
-            ? err.message
-            : "Unable to create the v2 draft",
-      });
-    }
-  }
-
   async function deploy() {
     if (!selectedMeta) return;
     const requestRevision = editorResponseGuard.capture();
@@ -948,7 +789,6 @@ export function WorkflowEditorScreen({
       nodes,
       edges,
       budgets,
-      schemaVersion,
       repositoryScope,
     );
     const candidateKey = validationTargetKey;
@@ -1062,7 +902,6 @@ export function WorkflowEditorScreen({
       repositoryScope: repositoryScopeFromDefinition(definition),
       edgeGeometry: structuredClone(edgeGeometry),
     };
-    setSchemaVersion(flow.schemaVersion);
     editorDocumentRef.current = nextDocument;
     dispatchEditorHistory({
       type: "reset",
@@ -1073,8 +912,9 @@ export function WorkflowEditorScreen({
   }
 
   function resetToDeployed() {
-    if (!deployed) return;
-    loadDefinitionIntoCanvas(deployed.definition);
+    const graph = runnableVersionDefinition(deployed);
+    if (!graph) return;
+    loadDefinitionIntoCanvas(graph);
   }
 
   async function rollback(version: number) {
@@ -1093,7 +933,8 @@ export function WorkflowEditorScreen({
       const body = (await res.json()) as WorkflowDefinitionDeploymentResponse;
       setDeployed(body.deployed);
       setMetas((prev) => prev.map((meta) => (meta.id === body.meta.id ? body.meta : meta)));
-      loadDefinitionIntoCanvas(body.deployed.definition);
+      const rolledBackTo = runnableVersionDefinition(body.deployed);
+      if (rolledBackTo) loadDefinitionIntoCanvas(rolledBackTo);
       setConfirmRestore(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to roll back version");
@@ -1115,7 +956,9 @@ export function WorkflowEditorScreen({
     setBaselineDraft(detail.draft);
     setLayoutBaseline(JSON.stringify(detail.layout));
     const definition =
-      detail.draft ?? detail.deployed?.definition ?? defaultDefinition;
+      detail.draft ??
+      runnableVersionDefinition(detail.deployed) ??
+      defaultDefinition;
     const flow = toFlowDefinition(definition);
     const nextDocument: WorkflowEditorDocument = {
       nodes: flow.nodes,
@@ -1124,16 +967,14 @@ export function WorkflowEditorScreen({
       repositoryScope: repositoryScopeFromDefinition(definition),
       edgeGeometry: structuredClone(detail.layout.edges),
     };
-    setSchemaVersion(flow.schemaVersion);
     editorDocumentRef.current = nextDocument;
     dispatchEditorHistory({
       type: "reset",
       value: nextDocument,
-      savedSemanticKey: detail.draft
-        ? semanticKeyForDefinition(detail.draft)
-        : null,
+      savedSemanticKey: initialEditorSavedSemanticKey(detail, definition),
     });
     setConfirmRestore(null);
+    setExpandedLegacyVersions(new Set());
     setFitSignal((signal) => signal + 1);
     if (forceRemount) setEditorGeneration((generation) => generation + 1);
   }
@@ -1155,7 +996,6 @@ export function WorkflowEditorScreen({
         return;
       }
       applyAuthoritativeDetail(detail);
-      setMigrationState(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to load definition");
     } finally {
@@ -1275,23 +1115,22 @@ export function WorkflowEditorScreen({
 
   const triggerLabel = (type: WorkflowDefinitionMeta["triggerTypes"][number]) =>
     options.blockRegistry[type]?.presentation.label ?? type;
-  const migrationVisibility = workflowMigrationVisibility(
-    schemaVersion,
-    canEdit,
-  );
-  const isV2DraftWithV1Live =
-    schemaVersion === 2 && deployed?.definition.schemaVersion === 1;
+  const deployedIsRetiredSchema = deployed !== null && deployed.schema !== "v2";
 
   return (
     <HarnessProfileCatalogProvider>
     <RepositoryCatalogProvider>
     <PromptLibraryProvider>
     <div className="flex flex-col h-full min-h-0">
-      {deployed === null && (
+      {deployedIsRetiredSchema ? (
+        <div className="px-6 py-2 border-b border-neutral-200 bg-amber-50 font-body text-[12px] text-amber-900">
+          {RETIRED_DEPLOYED_NOTE}
+        </div>
+      ) : deployed === null ? (
         <div className="px-6 py-2 border-b border-neutral-200 bg-app-bg font-body text-[12px] text-neutral-600">
           No deployed version selected. Save a draft, then deploy it when it is ready.
         </div>
-      )}
+      ) : null}
       {switchState.kind === "confirming" && (
         <div className="flex items-center gap-3 px-6 py-2 border-b border-neutral-200 bg-app-bg font-body text-[12px] text-neutral-700">
           <span>Discard unsaved changes and switch?</span>
@@ -1317,7 +1156,6 @@ export function WorkflowEditorScreen({
           definitionId={selectedId}
           nodes={nodes}
           edges={edges}
-          schemaVersion={schemaVersion}
           limits={budgets}
           repositoryScope={repositoryScope}
           edgeGeometry={edgeGeometry}
@@ -1378,26 +1216,12 @@ export function WorkflowEditorScreen({
                   {repositoryScopeSummary}
                 </span>
               )}
-              {migrationVisibility.showLegacyStatus && (
+              {deployedIsRetiredSchema && (
                 <span
-                  title="Legacy v1 workflows keep FAILED ports for compatibility. Migrate to v2 to make execution errors fail the whole workflow automatically."
+                  title={RETIRED_DEPLOYED_NOTE}
                   className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-amber-800"
                 >
-                  Legacy v1
-                </span>
-              )}
-              {migrationVisibility.showMigrationAction && (
-                <button
-                  type="button"
-                  onClick={openMigration}
-                  className="appearance-none rounded-[3px] border border-mariner bg-panel px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.04em] text-mariner hover:bg-mariner-100"
-                >
-                  Migrate to v2
-                </button>
-              )}
-              {isV2DraftWithV1Live && (
-                <span className="rounded-full border border-mariner-200 bg-mariner-100 px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-mariner">
-                  v2 draft · v1 live
+                  Deployed version is schema v1
                 </span>
               )}
             </>
@@ -1465,22 +1289,6 @@ export function WorkflowEditorScreen({
             onClose={() => setManualDispatchTrigger(null)}
           />
         )}
-        <WorkflowMigrationDrawer
-          open={migrationState !== null}
-          state={migrationState ?? { kind: "loading" }}
-          workflowName={selectedMeta?.name ?? "workflow"}
-          onClose={() => setMigrationState(null)}
-          onSaveAndPreview={() => void saveAndPreviewMigration()}
-          onRetry={() => void previewMigration()}
-          onApply={() => void applyMigration()}
-          onOpenNode={(nodeId) => {
-            setMigrationState(null);
-            setSelectionRequest((current) => ({
-              nodeId,
-              requestId: (current?.requestId ?? 0) + 1,
-            }));
-          }}
-        />
         {defsOpen && (
           <div className="absolute right-4 top-[56px] z-[60] w-[440px] max-h-[70vh] overflow-y-auto bg-panel border border-neutral-200 rounded-[4px] shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] px-4 py-3">
             <div className="flex items-center justify-between mb-1">
@@ -1520,7 +1328,14 @@ export function WorkflowEditorScreen({
                       )}
                     </span>
                     <span className="mt-1 flex flex-wrap gap-1">
-                      {m.triggerTypes.length === 0 ? (
+                      {m.deployedSchema === "legacy-v1" ? (
+                        <span
+                          title={m.retiredMessage}
+                          className="rounded-[3px] border border-amber-200 bg-amber-50 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.04em] text-amber-800"
+                        >
+                          Retired schema
+                        </span>
+                      ) : m.triggerTypes.length === 0 ? (
                         <span className="text-[11px] text-neutral-500">No active triggers</span>
                       ) : (
                         m.triggerTypes.map((trigger) => (
@@ -1534,7 +1349,11 @@ export function WorkflowEditorScreen({
                       )}
                     </span>
                   </button>
-                  {canEdit ? (
+                  {m.deployedSchema === "legacy-v1" ? (
+                    <span className="shrink-0 text-right font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-500">
+                      Stored enabled: {m.enabled ? "yes" : "no"}
+                    </span>
+                  ) : canEdit ? (
                     <button
                       onClick={() => void patchDefinition(m.id, { enabled: !m.enabled })}
                       disabled={busy !== null}
@@ -1675,14 +1494,18 @@ export function WorkflowEditorScreen({
               >
                 <span className="shrink-0 font-mono text-neutral-900">v{v.version}</span>
                 <span
-                  title={`Workflow definition schema v${v.definition.schemaVersion}`}
+                  title={
+                    v.schema === "v2"
+                      ? "Workflow definition schema v2"
+                      : RETIRED_SCHEMA_MESSAGE
+                  }
                   className={`shrink-0 rounded-[3px] border px-[6px] py-[2px] font-mono text-[9px] uppercase tracking-[0.04em] ${
-                    v.definition.schemaVersion === 1
-                      ? "border-amber-200 bg-amber-50 text-amber-800"
-                      : "border-mariner-200 bg-mariner-100 text-mariner"
+                    v.schema === "v2"
+                      ? "border-mariner-200 bg-mariner-100 text-mariner"
+                      : "border-amber-200 bg-amber-50 text-amber-800"
                   }`}
                 >
-                  schema v{v.definition.schemaVersion}
+                  {v.schema === "v2" ? "schema v2" : "schema v1 · read only"}
                 </span>
                 {v.version === deployed?.version && (
                   <span
@@ -1714,7 +1537,47 @@ export function WorkflowEditorScreen({
                     restored from v{v.restoredFromVersion}
                   </span>
                 )}
-                {canEdit && v.version !== deployed?.version && (
+                {v.schema !== "v2" && (
+                  <div className="basis-full pl-7">
+                    <button
+                      type="button"
+                      aria-expanded={expandedLegacyVersions.has(
+                        legacyVersionDisclosureKey(selectedId, v.version),
+                      )}
+                      aria-controls={`legacy-version-${selectedId}-${v.version}-json`}
+                      onClick={() =>
+                        setExpandedLegacyVersions((previous) => {
+                          const disclosureKey = legacyVersionDisclosureKey(
+                            selectedId,
+                            v.version,
+                          );
+                          const next = new Set(previous);
+                          if (next.has(disclosureKey)) next.delete(disclosureKey);
+                          else next.add(disclosureKey);
+                          return next;
+                        })
+                      }
+                      className="appearance-none border-none bg-transparent p-0 font-body text-[12px] text-mariner cursor-pointer"
+                    >
+                      {legacyVersionToggleLabel(
+                        expandedLegacyVersions.has(
+                          legacyVersionDisclosureKey(selectedId, v.version),
+                        ),
+                      )}
+                    </button>
+                    {expandedLegacyVersions.has(
+                      legacyVersionDisclosureKey(selectedId, v.version),
+                    ) && (
+                      <pre
+                        id={`legacy-version-${selectedId}-${v.version}-json`}
+                        className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-[3px] bg-app-bg p-3 font-mono text-[10px] text-neutral-700"
+                      >
+                        {prettyStoredWorkflowDefinition(v.definition)}
+                      </pre>
+                    )}
+                  </div>
+                )}
+                {canEdit && v.schema === "v2" && v.version !== deployed?.version && (
                   <span className="ml-auto">
                     {confirmRestore === v.version ? (
                       <>

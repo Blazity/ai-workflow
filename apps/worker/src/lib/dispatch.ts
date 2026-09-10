@@ -9,7 +9,10 @@ import {
 } from "../adapters/run-registry/types.js";
 import type { TicketContent } from "../adapters/issue-tracker/types.js";
 import { getDb } from "../db/client.js";
-import { getEnabledWorkflowDefinitionForTrigger } from "../workflow-definition/store.js";
+import {
+  getEnabledWorkflowDefinitionForTrigger,
+  runnableDefinitionOf,
+} from "../workflow-definition/store.js";
 import {
   enforceTriggerRateLimit,
   resolveTriggerRateLimitForType,
@@ -178,19 +181,18 @@ export function envTriggerRateLimitDefault(source: {
   return max !== undefined && windowKind !== undefined ? { max, windowKind } : null;
 }
 
-/** The rate-limit params authored on one graph node, across the v1 (params)
- *  and v2 (configuration) shapes. Unknown or mistyped values are dropped: the
- *  definition schema validates them at save time, and a value that cannot be
- *  read here must not turn into a limit nobody configured. */
+/** The rate-limit params authored on one graph node. Unknown or mistyped
+ *  values are dropped: the definition schema validates them at save time, and
+ *  a value that cannot be read here must not turn into a limit nobody
+ *  configured. */
 export function triggerNodeRateLimitParams(
   definition: WorkflowDefinition | undefined,
   nodeId: string,
 ): TriggerRateLimitNodeParams | undefined {
   if (!definition) return undefined;
-  const raw: Record<string, unknown> | undefined =
-    definition.schemaVersion === 1
-      ? definition.nodes.find((node) => node.id === nodeId)?.params
-      : definition.nodes.find((node) => node.id === nodeId)?.configuration;
+  const raw: Record<string, unknown> | undefined = definition.nodes.find(
+    (node) => node.id === nodeId,
+  )?.configuration;
   if (!raw) return undefined;
   const windowKind = raw.rateLimitWindow;
   return {
@@ -238,7 +240,7 @@ async function ticketTriggerRateLimited(
   ticketKey: string,
 ): Promise<boolean> {
   const limit = resolveTriggerRateLimitForType(
-    triggerRateLimitNodes(enabled.current?.definition, "trigger_ticket_ai"),
+    triggerRateLimitNodes(runnableDefinitionOf(enabled.current), "trigger_ticket_ai"),
     envTriggerRateLimitDefault(env),
   );
   if (!limit) return false;

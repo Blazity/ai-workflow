@@ -4,7 +4,10 @@ import type {
   ManuallyDispatchableTrigger,
   WorkflowBlockType,
 } from "@shared/contracts";
-import { isManuallyDispatchableTrigger } from "@shared/contracts";
+import {
+  isManuallyDispatchableTrigger,
+  RETIRED_SCHEMA_MESSAGE,
+} from "@shared/contracts";
 import { eq } from "drizzle-orm";
 import { env, getConfiguredVcsProviders, getVcsBotLogin } from "../../env.js";
 import {
@@ -36,6 +39,7 @@ import { loadPostPrGateConfig } from "../post-pr-gate/config.js";
 import {
   getDeployedWorkflowDefinitionVersion,
   getWorkflowDefinitionVersion,
+  runnableDefinitionOf,
   type WorkflowDefinitionVersionRow,
 } from "../workflow-definition/store.js";
 import type { PrTriggerPayload } from "../workflows/agent-input.js";
@@ -141,7 +145,11 @@ async function loadDeployedTrigger(
   if (!deployed) {
     throw new ManualDispatchError(422, "not_eligible", "This workflow has no deployed version.");
   }
-  const node = deployed.definition.nodes.find((candidate) => candidate.id === triggerNodeId);
+  const deployedGraph = runnableDefinitionOf(deployed);
+  if (!deployedGraph) {
+    throw new ManualDispatchError(422, "not_eligible", RETIRED_SCHEMA_MESSAGE);
+  }
+  const node = deployedGraph.nodes.find((candidate) => candidate.id === triggerNodeId);
   if (!node || !isDispatchableTriggerType(node.type)) {
     throw new ManualDispatchError(
       422,
@@ -292,7 +300,7 @@ async function resolvePullRequestDispatch(
     );
   }
   const params = triggerNodeParams(
-    deployed.definition.definition,
+    runnableDefinitionOf(deployed.definition),
     deployed.triggerType,
   );
   const providers = Array.isArray(params.providers) ? params.providers : [];
@@ -304,7 +312,7 @@ async function resolvePullRequestDispatch(
     );
   }
   const scope = params.scope === "any" ? "any" : "workflow_owned";
-  const pinnedScope = deployed.definition.definition.repositoryScope;
+  const pinnedScope = runnableDefinitionOf(deployed.definition)?.repositoryScope;
   if (
     scope === "any" &&
     !isRepoAllowedForScope(

@@ -122,7 +122,6 @@ import type { WorkspaceManifestV2 } from "../../sandbox/repo-workspace.js";
 import { teardownSandboxes } from "../../sandbox/poll-agent.js";
 import { checksCeilingExceededError } from "../run-budget.js";
 import {
-  expectOutputConformsToRegistry,
   makeCtx,
   makeNode,
   makePrPayload,
@@ -283,99 +282,6 @@ describe("prepare_workspace execute", () => {
         },
       };
     });
-  });
-
-  it("selects repos, provisions the sandbox, registers it, and mutates the ctx", async () => {
-    const promptAdditions = {
-      research: [
-        { target: ["research"], title: "Selected Repositories", content: "- github:acme/api" },
-      ],
-      implementation: [],
-      review: [],
-    };
-    mocks.runPreSandboxPhase.mockResolvedValue({
-      status: "continue",
-      promptAdditions,
-      selectedRepositories: [repo],
-    });
-    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
-    const ctx = makeCtx({ sandboxId: null });
-
-    const result = await execute(makeNode("prepare_workspace"), {}, ctx);
-
-    expect(mocks.runPreSandboxPhase).toHaveBeenCalledWith({
-      ticket: expect.objectContaining({ identifier: "AWT-1" }),
-      run: { branchName: "blazebot/awt-1" },
-    });
-    expect(mocks.provisionMultiRepo).toHaveBeenCalledWith(
-      expect.objectContaining({ access: "read" }),
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
-      undefined,
-    );
-    expect(mocks.registerSandbox).toHaveBeenCalledWith(
-      "ticket:jira:AWT-1",
-      "owner:test",
-      "sbx-9",
-    );
-    expect(ctx.sandboxId).toBe("sbx-9");
-    expect(ctx.workspaceManifest).toEqual({
-      version: 1,
-      repositories: [expect.objectContaining({
-        repoPath: "acme/api",
-        branchName: "blazebot/awt-1",
-        preAgentSha: "trusted-sha",
-      })],
-    });
-    expect(ctx.selectedRepositories).toEqual([repo]);
-    expect(ctx.repositoryContexts).toEqual(contextsFor(repo));
-    expect(ctx.preSandboxAdditions).toEqual(promptAdditions);
-    // Memory hydration runs once, against the manifest the ctx now carries.
-    expect(mocks.hydrateWorkspaceMemoryStep).toHaveBeenCalledTimes(1);
-    expect(mocks.hydrateWorkspaceMemoryStep).toHaveBeenCalledWith({
-      sandboxId: "sbx-9",
-      subjectKey: "ticket:jira:AWT-1",
-      ticketKey: "AWT-1",
-      taskId: "AWT-1",
-      workspaceManifest: ctx.workspaceManifest,
-      runId: "run-1",
-    });
-    // Repo memory seeding runs once, over the manifest's repositories reduced to
-    // the fields the step addresses a document with plus the branch identity its
-    // retraction gate turns on. Those come from this trusted in-memory manifest,
-    // never from the sandbox's copy of it: a promoted discovery sandbox has
-    // already run agent code, and a rewritten branchName there would switch a
-    // destructive prune on over a pull request head.
-    expect(mocks.seedRepoMemoryStep).toHaveBeenCalledTimes(1);
-    expect(mocks.seedRepoMemoryStep).toHaveBeenCalledWith({
-      sandboxId: "sbx-9",
-      runId: "run-1",
-      repositories: [
-        {
-          provider: "github",
-          repoPath: "acme/api",
-          localPath: "/vercel/sandbox",
-          branchName: "blazebot/awt-1",
-          defaultBranch: "main",
-          workflowOwnedBranch: "blazebot/awt-1",
-        },
-      ],
-    });
-    expect(result).toEqual({
-      kind: "next",
-      output: {
-        status: "ok",
-        sandboxId: "sbx-9",
-        repositories: ["github:acme/api"],
-        workspace: { id: "sbx-9", repositories: ["github:acme/api"] },
-        // Published so the checks blocks bound their batches by the same
-        // number the sandbox lifetime above was sized against.
-        checksCeilingMs: 60 * 60_000,
-      },
-    });
-    expectOutputConformsToRegistry("prepare_workspace", result.output!);
   });
 
   // Memory is an optimization. Even an error crossing the step boundary must not
@@ -719,73 +625,6 @@ describe("prepare_workspace execute", () => {
     expect(result.kind).toBe("next");
   });
 
-  // IM-8: the promoted discovery sandbox only carries the run-default CLI. Install
-  // every agent kind the definition needs into it, the same install/configure the
-  // provision path performs, or a later different-kind block fails with cli_exit.
-  it("installs every required agent kind into the promoted discovery sandbox", async () => {
-    const discovery = {
-      catalog: [{
-        provider: "github" as const,
-        repoPath: "acme/api",
-        name: "api",
-        defaultBranch: "main",
-        description: "",
-        topics: [],
-        usable: true,
-      }],
-      mandatoryRepositories: [],
-    };
-    mocks.runPreSandboxPhase.mockResolvedValue({
-      status: "continue",
-      repositoryDiscovery: discovery,
-    });
-    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
-    const discoverRepositories = vi.fn().mockResolvedValue({
-      repositories: [repo],
-      sandboxId: "sbx-discovery",
-    });
-    const manifest = {
-      version: 2 as const,
-      repositories: [{
-        ...repo,
-        slug: "github__acme__api",
-        localPath: "/vercel/sandbox/repos/github__acme__api",
-        branchName: "main",
-        access: "read" as const,
-        researchBaseSha: "base-sha",
-      }],
-    };
-    const hydrateDiscoveredWorkspace = vi.fn().mockResolvedValue(manifest);
-    const ctx = makeCtx({
-      sandboxId: null,
-      agentSandboxIds: { discovery: "sbx-discovery" },
-      sandboxIds: new Set(["sbx-discovery"]),
-      // Default run kind is claude; a codex review_agent forces a second CLI.
-      definitionNodes: [
-        makeNode("planning_agent", {}, "plan-1"),
-        makeNode("review_agent", { provider: "codex" }, "rev-1"),
-      ],
-    });
-
-    const result = await ensureWorkspace(ctx, undefined, {
-      discoverRepositories,
-      hydrateDiscoveredWorkspace,
-    });
-
-    expect(result.kind).toBe("next");
-    expect(mocks.provisionMultiRepo).not.toHaveBeenCalled();
-    expect(mocks.sandboxGet).toHaveBeenCalledWith(
-      expect.objectContaining({ sandboxId: "sbx-discovery" }),
-    );
-    const installedKinds = mocks.createAgentAdapter.mock.calls.map(
-      (call) => call[0],
-    );
-    expect(installedKinds).toContain("claude");
-    expect(installedKinds).toContain("codex");
-    expect(mocks.agentInstall).toHaveBeenCalledTimes(2);
-    expect(mocks.agentConfigure).toHaveBeenCalledTimes(2);
-  });
-
   it("asks for a narrower scope before provisioning more than 8 repositories", async () => {
     mocks.runPreSandboxPhase.mockResolvedValue({
       status: "continue",
@@ -806,55 +645,6 @@ describe("prepare_workspace execute", () => {
     expect(result.kind).toBe("needs_human_input");
     expect(mocks.blockFetchPrContextsStep).not.toHaveBeenCalled();
     expect(mocks.provisionMultiRepo).not.toHaveBeenCalled();
-  });
-
-  it("provisions every agent kind the definition resolves to", async () => {
-    mocks.runPreSandboxPhase.mockResolvedValue({
-      status: "continue",
-      selectedRepositories: [repo],
-    });
-    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
-    const ctx = makeCtx({
-      sandboxId: null,
-      definitionNodes: [
-        makeNode("fix_agent", { provider: "codex" }, "fix-1"),
-        makeNode("open_pr", {}, "pr-1"),
-      ],
-    });
-
-    await execute(makeNode("prepare_workspace"), {}, ctx);
-
-    const kinds = mocks.createAgentAdapter.mock.calls.map((call) => call[0]);
-    expect(kinds).toContain("claude");
-    expect(kinds).toContain("codex");
-  });
-
-  it("installs planning but not workspace-free Generic providers into the shared workspace", async () => {
-    mocks.runPreSandboxPhase.mockResolvedValue({
-      status: "continue",
-      selectedRepositories: [repo],
-    });
-    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
-    const ctx = makeCtx({
-      sandboxId: null,
-      definitionNodes: [
-        makeNode("planning_agent", { provider: "codex" }, "plan-1"),
-        makeNode(
-          "generic_agent",
-          { provider: "codex", prompt: "Summarize", workspaceMode: "none" },
-          "generic-1",
-        ),
-        makeNode("implementation_agent", { provider: "claude" }, "impl-1"),
-      ],
-    });
-
-    await execute(makeNode("prepare_workspace"), {}, ctx);
-
-    expect(mocks.createAgentAdapter).toHaveBeenCalledWith("codex", undefined);
-    expect(mocks.createAgentAdapter).toHaveBeenCalledWith(
-      "claude",
-      undefined,
-    );
   });
 
   it("gives the workspace sandbox a lifetime that covers the checks phase too", async () => {

@@ -1,5 +1,7 @@
 import {
   isWorkflowAddressablePathSegment,
+  workflowDefinitionSchemaVersionOf,
+  WORKFLOW_SCHEMA_VERSION,
   type JsonValue,
   type WorkflowDefinitionValidationIssue,
 } from "@shared/contracts";
@@ -21,7 +23,10 @@ export interface WorkflowClipboardEdge<TGeometry = JsonValue> {
 
 export interface WorkflowClipboardPayload<TGeometry = JsonValue> {
   version: 1;
-  schemaVersion: 1 | 2;
+  /** The definition schema the copied blocks were authored under. A payload
+   *  written by a build that still had schema v1 keeps that number, which is
+   *  what lets the paste refuse it by name instead of pasting v1 blocks. */
+  schemaVersion: number;
   nodes: FlowNodeDef[];
   edges: WorkflowClipboardEdge<TGeometry>[];
   pasteCount: number;
@@ -59,7 +64,6 @@ function clone<T>(value: T): T {
 }
 
 export function createWorkflowClipboardPayload<TGeometry = JsonValue>(input: {
-  schemaVersion: 1 | 2;
   nodes: readonly FlowNodeDef[];
   edges: readonly FlowEdgeDef[];
   selectedNodeIds: Iterable<string>;
@@ -81,7 +85,7 @@ export function createWorkflowClipboardPayload<TGeometry = JsonValue>(input: {
   }
   return {
     version: 1,
-    schemaVersion: input.schemaVersion,
+    schemaVersion: WORKFLOW_SCHEMA_VERSION,
     nodes: clone(nodes),
     edges,
     pasteCount: 0,
@@ -93,7 +97,7 @@ function isClipboardPayload(value: unknown): value is WorkflowClipboardPayload {
   const record = value as Record<string, unknown>;
   if (
     record.version !== 1 ||
-    (record.schemaVersion !== 1 && record.schemaVersion !== 2) ||
+    typeof workflowDefinitionSchemaVersionOf(record) !== "number" ||
     !Array.isArray(record.nodes) ||
     record.nodes.length === 0 ||
     !Array.isArray(record.edges) ||
@@ -252,7 +256,6 @@ function unavailableExternalSourceIds(
 
 export function planWorkflowClipboardPaste<TGeometry = JsonValue>(input: {
   payload: WorkflowClipboardPayload<TGeometry>;
-  schemaVersion: 1 | 2;
   destinationNodes: readonly FlowNodeDef[];
   destinationEdges: readonly FlowEdgeDef[];
   destinationEdgeGeometry?: Readonly<Record<string, TGeometry>>;
@@ -262,7 +265,7 @@ export function planWorkflowClipboardPaste<TGeometry = JsonValue>(input: {
     delta: { x: number; y: number },
   ) => TGeometry;
 }): WorkflowClipboardPasteResult<TGeometry> {
-  if (input.payload.schemaVersion !== input.schemaVersion) {
+  if (workflowDefinitionSchemaVersionOf(input.payload) !== WORKFLOW_SCHEMA_VERSION) {
     return { ok: false, reason: "schema_version_mismatch" };
   }
   if (input.payload.nodes.length === 0) {
@@ -306,11 +309,7 @@ export function planWorkflowClipboardPaste<TGeometry = JsonValue>(input: {
   );
   const generateEdgeId = input.generateEdgeId ?? defaultGenerateEdgeId;
   const addedEdges = input.payload.edges.map(({ edge }) => ({
-    ...(input.schemaVersion === 2
-      ? {
-          id: allocateEdgeId(unavailableEdgeIds, generateEdgeId),
-        }
-      : {}),
+    id: allocateEdgeId(unavailableEdgeIds, generateEdgeId),
     from: nodeIdMap.get(edge.from)!,
     to: nodeIdMap.get(edge.to)!,
     ...(edge.fromPort === undefined ? {} : { fromPort: edge.fromPort }),

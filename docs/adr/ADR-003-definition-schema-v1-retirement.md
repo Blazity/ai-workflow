@@ -6,7 +6,8 @@ Last-verified: 2026-09-09
 Decision status: Accepted
 
 Acceptance is conditional on the two counts named under Evidence, Not measured.
-Stage 3b runs them before it deletes anything.
+As of 2026-09-09, those counts are pending: the owner runs the SQL in ADR-003
+section 9 of the recon.
 
 Source: decision D12 and assumption A11 of
 [docs/plans/2026-09-09-architecture-restructure.md](../plans/2026-09-09-architecture-restructure.md).
@@ -39,10 +40,15 @@ measured.
 - Production holds zero deployed and zero draft v1 definitions across its nine
   non-archived definitions, measured through `workflows.get_graph` on
   2026-09-09.
+- 2026-09-09, v1 rows in version history: count pending, owner runs the SQL in
+  ADR-003 section 9 of the recon.
+- 2026-09-09, deployed v1 rows among archived definitions: count pending,
+  owner runs the SQL in ADR-003 section 9 of the recon.
 - Nothing creates v1 any more. The definition POST route and the templates emit
-  v2; only the three singular shim routes still serve the v1 default, and only
-  their own tests call them.
+  v2; the three singular shim routes that served the v1 default were removed.
 - The eight scenario snapshots that pin runtime behaviour are v2.
+
+The deleted stall-repro test and fixture are covered by the surviving `apps/worker/workflow-sdk-tests/v2-concurrent.test.ts` coverage.
 
 ### Not measured
 
@@ -117,14 +123,17 @@ The fresh-install default is a live path, not shim filler. Its five consumers
 `carry-schema-drift.ts`) move to `defaultWorkflowDefinitionV2` first, and only
 then is the v1 default deleted.
 
+The zero-definition database keeps the pre-existing `no_definition` dispatch contract; 3b changes the v1 default only where that default already applied: a definition without a deployed graph, clone and seed fallbacks.
+
 The runtime plan shape that `toLegacyRuntimeShape` produces is internal, still
 used by the v2 walker, and is kept under the name `toRuntimeShape`.
 
 ### 3. Stored v1 rows stay readable
 
-`WorkflowDefinitionV1` survives as a stored type. The runnable
-`WorkflowDefinition` type narrows to v2, and the version-history read returns a
-`v2 | legacy-v1` result so an operator can still open what was stored.
+Legacy rows survive as a raw `unknown` value preserved by the discriminator-only
+history parser. The runnable `WorkflowDefinition` type is v2, and the
+version-history read returns a `v2 | legacy-v1` result so an operator can still
+open what was stored.
 
 ### 4. What a v1 row can no longer do
 

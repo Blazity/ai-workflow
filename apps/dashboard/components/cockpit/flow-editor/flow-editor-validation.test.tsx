@@ -159,7 +159,6 @@ function renderEditor(
       nodes={[node]}
       edges={[]}
       {...editorInteractionProps}
-      schemaVersion={1}
       limits={{}}
       repositoryScope={{}}
       onLimitsChange={() => undefined}
@@ -257,7 +256,6 @@ test("a runnable deployed trigger shows the circular play button beside the node
       nodes={[node]}
       edges={[]}
       {...editorInteractionProps}
-      schemaVersion={1}
       limits={{}}
       repositoryScope={{}}
       onLimitsChange={() => undefined}
@@ -353,7 +351,6 @@ test("a selected v2 Transform exposes the seven-action editor without generic in
       nodes={[node, transformNode]}
       edges={[{ id: "edge-1", from: "entry", to: "map" }]}
       {...editorInteractionProps}
-      schemaVersion={2}
       limits={{}}
       repositoryScope={{}}
       onLimitsChange={() => undefined}
@@ -396,34 +393,27 @@ test("a selected v2 Transform exposes the seven-action editor without generic in
   assert.match(html, /Output shape/);
 });
 
-function renderSelectedBranch(schemaVersion: 1 | 2): string {
+function renderSelectedBranch(): string {
   const branchNode: FlowNodeDef = {
     id: "decision",
     type: "branch",
     name: "Review decision",
     x: 240,
     y: 40,
-    params:
-      schemaVersion === 1
-        ? { condition: "steps.review.output.ok == true" }
-        : {},
+    params: {},
     inputs: {},
-    ...(schemaVersion === 2
-      ? {
-          v2: {
-            configuration: {
-              combinator: "all",
-              conditions: [{
-                reference: "steps.review.output.ok",
-                operator: "equals",
-                value: true,
-              }],
-            },
-            inputs: {},
-            additionalInputs: [],
-          },
-        }
-      : {}),
+    v2: {
+      configuration: {
+        combinator: "all",
+        conditions: [{
+          reference: "steps.review.output.ok",
+          operator: "equals",
+          value: true,
+        }],
+      },
+      inputs: {},
+      additionalInputs: [],
+    },
   };
 
   return renderToStaticMarkup(
@@ -431,13 +421,12 @@ function renderSelectedBranch(schemaVersion: 1 | 2): string {
       nodes={[node, branchNode]}
       edges={[
         {
-          ...(schemaVersion === 2 ? { id: "edge-entry-decision" } : {}),
+          id: "edge-entry-decision",
           from: "entry",
           to: "decision",
         },
       ]}
       {...editorInteractionProps}
-      schemaVersion={schemaVersion}
       limits={{}}
       repositoryScope={{}}
       onLimitsChange={() => undefined}
@@ -475,20 +464,16 @@ function renderSelectedBranch(schemaVersion: 1 | 2): string {
   );
 }
 
-test("v2 Branch replaces the legacy expression field with a typed visual editor", () => {
-  assert.match(
-    renderSelectedBranch(1),
-    /placeholder="steps\.review\.output\.ok == true"/,
-  );
-  const v2 = renderSelectedBranch(2);
-  assert.doesNotMatch(v2, /placeholder="steps\.review\.output\.ok == true"/);
-  assert.match(v2, /Branch decision/);
-  assert.match(v2, /all conditions \(AND\)/);
-  assert.match(v2, /The saved value is unavailable in the current workflow/);
-  assert.doesNotMatch(v2, /steps\.review\.output\.ok/);
+test("Branch uses the typed visual editor", () => {
+  const html = renderSelectedBranch();
+  assert.doesNotMatch(html, /placeholder="steps\.review\.output\.ok == true"/);
+  assert.match(html, /Branch decision/);
+  assert.match(html, /all conditions \(AND\)/);
+  assert.match(html, /The saved value is unavailable in the current workflow/);
+  assert.doesNotMatch(html, /steps\.review\.output\.ok/);
 });
 
-function renderSelectedOpenPr(schemaVersion: 1 | 2): string {
+function renderSelectedOpenPr(): string {
   const openPrNode: FlowNodeDef = {
     id: "publish",
     type: "open_pr",
@@ -497,15 +482,7 @@ function renderSelectedOpenPr(schemaVersion: 1 | 2): string {
     y: 40,
     params: {},
     inputs: {},
-    ...(schemaVersion === 2
-      ? {
-          v2: {
-            configuration: {},
-            inputs: {},
-            additionalInputs: [],
-          },
-        }
-      : {}),
+    v2: { configuration: {}, inputs: {}, additionalInputs: [] },
   };
 
   return renderToStaticMarkup(
@@ -513,13 +490,12 @@ function renderSelectedOpenPr(schemaVersion: 1 | 2): string {
       nodes={[node, openPrNode]}
       edges={[
         {
-          ...(schemaVersion === 2 ? { id: "edge-entry-publish" } : {}),
+          id: "edge-entry-publish",
           from: "entry",
           to: "publish",
         },
       ]}
       {...editorInteractionProps}
-      schemaVersion={schemaVersion}
       limits={{}}
       repositoryScope={{}}
       onLimitsChange={() => undefined}
@@ -557,9 +533,8 @@ function renderSelectedOpenPr(schemaVersion: 1 | 2): string {
   );
 }
 
-test("v2 canvas never exposes an execution-failure port", () => {
-  assert.match(renderSelectedOpenPr(1), />failed<\/span>/);
-  assert.doesNotMatch(renderSelectedOpenPr(2), />failed<\/span>/);
+test("canvas never exposes an execution-failure port", () => {
+  assert.doesNotMatch(renderSelectedOpenPr(), />failed<\/span>/);
 });
 
 function renderEditorWithRepositoryPin(
@@ -587,7 +562,6 @@ function renderEditorWithRepositoryPin(
         nodes={[node]}
         edges={[]}
         {...editorInteractionProps}
-        schemaVersion={1}
         limits={{}}
         repositoryScope={repositoryScope}
         onLimitsChange={() => undefined}

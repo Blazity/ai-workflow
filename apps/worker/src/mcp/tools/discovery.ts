@@ -4,9 +4,11 @@ import { z } from "zod";
 
 import {
   isManuallyDispatchableTrigger,
+  RETIRED_SCHEMA_MESSAGE,
   TRIGGER_BLOCK_TYPES,
   type WorkflowBlockType,
 } from "@shared/contracts";
+import { isLegacyStoredWorkflowDefinition } from "../../workflow-definition/stored-definition.js";
 
 import {
   promptLibrary,
@@ -48,6 +50,8 @@ type WorkflowListData = {
     name: string;
     enabled: boolean;
     deployedVersion: number | null;
+    deployedSchema: "v2" | "legacy-v1";
+    retiredMessage?: typeof RETIRED_SCHEMA_MESSAGE;
     triggers: WorkflowTrigger[];
   }>;
   // Page-local, exactly as tickets.list_runs uses it: the page never claims to
@@ -160,8 +164,30 @@ export function registerDiscoveryTools(server: McpServer, deps: McpToolDependenc
                       ),
                     ),
                   );
-          const triggersByDefinition = new Map(
-            versionRows.map((row) => [row.definitionId, triggersOf(row.definition)]),
+          const deploymentByDefinition = new Map<
+            number,
+            {
+              deployedSchema: "v2" | "legacy-v1";
+              retiredMessage?: typeof RETIRED_SCHEMA_MESSAGE;
+              triggers: WorkflowTrigger[];
+            }
+          >(
+            versionRows.map((row) => {
+              const retired = isLegacyStoredWorkflowDefinition(row.definition);
+              return [
+                row.definitionId,
+                retired
+                  ? {
+                      deployedSchema: "legacy-v1" as const,
+                      retiredMessage: RETIRED_SCHEMA_MESSAGE,
+                      triggers: [],
+                    }
+                  : {
+                      deployedSchema: "v2" as const,
+                      triggers: triggersOf(row.definition),
+                    },
+              ];
+            }),
           );
 
           return {
@@ -170,10 +196,18 @@ export function registerDiscoveryTools(server: McpServer, deps: McpToolDependenc
               name: row.name,
               enabled: row.enabled,
               deployedVersion: row.deployedVersion,
+              deployedSchema:
+                deploymentByDefinition.get(row.id)?.deployedSchema ?? "v2",
+              ...(deploymentByDefinition.get(row.id)?.retiredMessage
+                ? {
+                    retiredMessage:
+                      deploymentByDefinition.get(row.id)!.retiredMessage,
+                  }
+                : {}),
               // Empty for a definition with no deployed version, and also for a
               // deployed pointer with no readable row behind it: both mean there
               // is nothing an agent can dispatch today.
-              triggers: triggersByDefinition.get(row.id) ?? [],
+              triggers: deploymentByDefinition.get(row.id)?.triggers ?? [],
             })),
             truncated,
           };

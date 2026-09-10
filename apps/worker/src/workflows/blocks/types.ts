@@ -77,7 +77,6 @@ export interface EngineCtx {
    * unconditionally rather than appending.
    */
   setupFailures?: PrePrCheckFailure[];
-  schemaVersion: 1 | 2;
   definitionId: number | null;
   definitionVersion: number | null;
   /**

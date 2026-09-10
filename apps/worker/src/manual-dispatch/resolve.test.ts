@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import type { ManualDispatchPullRequestSnapshot } from "../adapters/vcs/types.js";
 import type { PrTriggerPayload } from "../workflows/agent-input.js";
 
@@ -29,7 +30,8 @@ const mocks = vi.hoisted(() => ({
   hasDispatchBlockingApprovalForTicket: vi.fn(),
 }));
 
-vi.mock("../workflow-definition/store.js", () => ({
+vi.mock("../workflow-definition/store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workflow-definition/store.js")>()),
   getDeployedWorkflowDefinitionVersion: mocks.getDeployedWorkflowDefinitionVersion,
   getWorkflowDefinitionVersion: vi.fn(),
 }));
@@ -214,8 +216,9 @@ describe("manual dispatch against a definition repository pin", () => {
     return {
       definitionId: 5,
       version: 12,
+      schema: "v2" as const,
       definition: {
-        schemaVersion: 1,
+        schemaVersion: 2,
         repositoryScope,
         nodes: [
           {
@@ -223,8 +226,9 @@ describe("manual dispatch against a definition repository pin", () => {
             type: "trigger_pr_created",
             x: 0,
             y: 0,
-            params: { scope },
+            configuration: { scope },
             inputs: {},
+            additionalInputs: [],
           },
         ],
         edges: [],
@@ -338,6 +342,29 @@ describe("manual dispatch against a definition repository pin", () => {
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
       }),
     ).rejects.toThrow("not present in the deployed workflow");
+  });
+
+  it("rejects a retired deployed definition with the retirement reason", async () => {
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue({
+      definitionId: 5,
+      version: 12,
+      schema: "legacy-v1",
+      raw: { schemaVersion: 1, nodes: [], edges: [] },
+    });
+
+    await expect(
+      resolveManualDispatch({
+        db: definitionDb,
+        issueTracker,
+        definitionId: 5,
+        triggerNodeId: "trigger",
+        dispatchInput: { kind: "pull_request", url: pr.prUrl },
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 422,
+      code: "not_eligible",
+      message: RETIRED_SCHEMA_MESSAGE,
+    });
   });
 
   it("still accepts a workflow-owned pull request outside the pin", async () => {

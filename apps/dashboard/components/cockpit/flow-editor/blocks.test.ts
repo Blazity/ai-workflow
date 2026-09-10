@@ -8,7 +8,6 @@ import type {
 import {
   DEFAULT_OPEN_PR_BODY,
   DEFAULT_OPEN_PR_TITLE,
-  V2_ONLY_BLOCK_TYPES,
 } from "@shared/contracts";
 import type { FlowNodeDef } from "@/lib/flows";
 import { buildPaletteItems, CONNECTED_CARD_TEXT_CLASS, nodeSummary } from "./blocks.ts";
@@ -252,9 +251,7 @@ test("the v2 palette offers the composite Review helper without replacing the ba
     },
   } as WorkflowEditorOptions;
 
-  const v1Items = buildPaletteItems(v2Options, 1).flatMap((group) => group.items);
-  const v2Items = buildPaletteItems(v2Options, 2).flatMap((group) => group.items);
-  assert.equal(v1Items.some((item) => item.templateId), false);
+  const v2Items = buildPaletteItems(v2Options).flatMap((group) => group.items);
   assert.deepEqual(
     v2Items
       .filter((item) => item.type === "review_agent" || item.type === "run_checks")
@@ -286,16 +283,10 @@ test("run_checks is retired from the palette, bare block and composite alike", (
     blockRegistry: { ...options.blockRegistry, run_checks: checks },
   } as WorkflowEditorOptions;
 
-  for (const schemaVersion of [1, 2] as const) {
-    const items = buildPaletteItems(withChecks, schemaVersion).flatMap((group) => group.items);
-    // Existing run_checks nodes keep rendering and editing; only the way to add
-    // a new one is gone, and the composite would have been a back door.
-    assert.deepEqual(
-      items.filter((item) => item.type === "run_checks"),
-      [],
-      `run_checks reachable in the v${schemaVersion} palette`,
-    );
-  }
+  const items = buildPaletteItems(withChecks).flatMap((group) => group.items);
+  // Existing run_checks nodes keep rendering and editing; only the way to add
+  // a new one is gone, and the composite would have been a back door.
+  assert.deepEqual(items.filter((item) => item.type === "run_checks"), []);
 });
 
 test("the publication gate is named and drawn apart from run_scripts", () => {
@@ -330,7 +321,7 @@ test("the publication gate is named and drawn apart from run_scripts", () => {
   assert.notEqual(gateItem?.presentation.glyph, scriptsItem?.presentation.glyph);
 });
 
-test("the schedule trigger is v2-only and never offered in a v1 palette", () => {
+test("the schedule trigger is offered in the v2 palette", () => {
   const schedule = contract(
     "trigger_schedule",
     "Schedule",
@@ -346,35 +337,11 @@ test("the schedule trigger is v2-only and never offered in a v1 palette", () => 
     },
   } as WorkflowEditorOptions;
 
-  const v1Items = buildPaletteItems(scheduleOptions, 1).flatMap((group) => group.items);
-  const v2Items = buildPaletteItems(scheduleOptions, 2).flatMap((group) => group.items);
-  assert.equal(v1Items.some((item) => item.type === "trigger_schedule"), false);
+  const v2Items = buildPaletteItems(scheduleOptions).flatMap((group) => group.items);
   assert.equal(v2Items.some((item) => item.type === "trigger_schedule"), true);
 });
 
-test("every v2-only block type is excluded from the v1 palette and offered in v2", () => {
-  const v2OnlyOptions = {
-    ...options,
-    blockRegistry: {
-      ...options.blockRegistry,
-      ...Object.fromEntries(
-        V2_ONLY_BLOCK_TYPES.map((type) => [
-          type,
-          contract(type, type, {}, { available: true, unavailableReason: null }),
-        ]),
-      ),
-    },
-  } as WorkflowEditorOptions;
-
-  const v1Items = buildPaletteItems(v2OnlyOptions, 1).flatMap((group) => group.items);
-  const v2Items = buildPaletteItems(v2OnlyOptions, 2).flatMap((group) => group.items);
-  for (const type of V2_ONLY_BLOCK_TYPES) {
-    assert.equal(v1Items.some((item) => item.type === type), false, `${type} should not be in v1`);
-    assert.equal(v2Items.some((item) => item.type === type), true, `${type} should be in v2`);
-  }
-});
-
-test("new v2 Open PR blocks do not inherit legacy flat-variable templates", () => {
+test("new Open PR blocks do not inherit legacy flat-variable templates", () => {
   const openPr = contract(
     "open_pr",
     "Open PR/MR",
@@ -392,17 +359,10 @@ test("new v2 Open PR blocks do not inherit legacy flat-variable templates", () =
     },
   } as WorkflowEditorOptions;
 
-  const v1OpenPr = buildPaletteItems(withOpenPr, 1)
-    .flatMap((group) => group.items)
-    .find((item) => item.type === "open_pr");
-  const v2OpenPr = buildPaletteItems(withOpenPr, 2)
+  const v2OpenPr = buildPaletteItems(withOpenPr)
     .flatMap((group) => group.items)
     .find((item) => item.type === "open_pr");
 
-  assert.deepEqual(v1OpenPr?.params, {
-    title: DEFAULT_OPEN_PR_TITLE,
-    body: DEFAULT_OPEN_PR_BODY,
-  });
   assert.deepEqual(v2OpenPr?.params, {});
   assert.doesNotMatch(JSON.stringify(v2OpenPr?.params), /\{\{ticket_/);
   assert.doesNotMatch(JSON.stringify(v2OpenPr?.params), /\{\{change_summary\}\}/);

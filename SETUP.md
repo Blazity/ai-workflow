@@ -682,7 +682,7 @@ trigger_ticket_ai -> planning_agent -> branch(gate)
     verdict --false--> loop(retry) --continue--> review_agent(fix) -> back to run_pre_pr_checks
 ```
 
-`branch` reads a `condition` param and fires its `true` or `false` port; `loop` re-enters its `continue` port up to `maxAttempts` times before taking `onExhaust`. To try it against a real deployment, hand the file to `workflows.create` + `workflows.save_draft` (the same graph the dashboard editor would save), then `workflows.publish` when ready to go live — publishing arms whatever triggers the graph contains, so read each tool's description before calling it against anything but a scratch definition.
+`branch` reads its typed `conditions` configuration and fires its `true` or `false` port; `loop` re-enters its `continue` port up to `maxAttempts` times before taking `onExhaust`. To try it against a real deployment, hand the file to `workflows.create` + `workflows.save_draft` (the same graph the dashboard editor would save), then `workflows.publish` when ready to go live. Publishing arms whatever triggers the graph contains, so read each tool's description before calling it against anything but a scratch definition.
 
 ---
 

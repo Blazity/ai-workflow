@@ -4,12 +4,7 @@ import type {
   WorkflowDefinitionNode,
   WorkflowParamValue,
 } from "@shared/contracts";
-import {
-  containsMalformedPromptSlotToken,
-  DEFAULT_PROMPT_NAME_BY_AGENT,
-  formatPromptReferenceToken,
-  parsePromptSlotTokens,
-} from "@shared/contracts";
+
 import { VARIABLE_PARAM_KEYS } from "./prompt-vars.js";
 import {
   coalescePromptSlotDefinitions,
@@ -27,40 +22,6 @@ export interface ResolvedWorkflowPromptReferences {
 
 export interface ResolvePromptReferencesInNodesOptions {
   requirePinned?: boolean;
-  rejectSlotTokens?: boolean;
-}
-
-export interface ImplicitDefaultPromptRow {
-  id: number;
-  slug: string;
-  name: string;
-  archivedAt: Date | null;
-}
-
-export function materializeImplicitDefaultPromptReferences(
-  nodes: readonly WorkflowDefinitionNode[],
-  promptRows: readonly ImplicitDefaultPromptRow[],
-): WorkflowDefinitionNode[] {
-  return nodes.map((node) => {
-    const name = DEFAULT_PROMPT_NAME_BY_AGENT[node.type];
-    if (!name) return node;
-    const current = node.params.prompt;
-    if (typeof current === "string" && current.trim().length > 0) return node;
-
-    const matchingRows = promptRows.filter((candidate) => candidate.name === name);
-    const activeRow = matchingRows.find((candidate) => candidate.archivedAt === null);
-    if (!activeRow) {
-      const state = matchingRows.length > 0 ? "archived" : "missing";
-      throw new Error(`Default prompt "${name}" is ${state}`);
-    }
-    return {
-      ...node,
-      params: {
-        ...node.params,
-        prompt: formatPromptReferenceToken({ slug: activeRow.slug, version: "latest" }),
-      },
-    };
-  });
 }
 
 export async function resolvePromptReferencesInNodes(
@@ -110,7 +71,6 @@ export async function resolvePromptReferencesInNodes(
           ...nodeSlots,
           ...resolved.slots,
         ]);
-        assertAllowedSlotTokens(resolved.text, options);
         if (resolved.text !== value) {
           params[key] = resolved.text;
           changed = true;
@@ -133,7 +93,6 @@ export async function resolvePromptReferencesInNodes(
             ...nodeSlots,
             ...resolved.slots,
           ]);
-          assertAllowedSlotTokens(resolved.text, options);
           next.push(resolved.text);
           if (resolved.text !== item) arrayChanged = true;
         }
@@ -157,54 +116,18 @@ export async function resolvePromptReferencesInNodes(
 
 export async function resolvePromptReferencesForRun(
   nodes: WorkflowDefinitionNode[],
-  schemaVersion: 1 | 2 = 1,
 ): Promise<ResolvedWorkflowPromptReferences> {
   "use step";
   const { getDb } = await import("../db/client.js");
-  const { createPromptReferenceLoader, findPromptRowsByNames } =
-    await import("../prompt-library/store.js");
+  const { createPromptReferenceLoader } = await import(
+    "../prompt-library/store.js"
+  );
   const db = getDb();
 
-  const requiredDefaultNames = schemaVersion === 1
-    ? [...new Set(
-        nodes
-          .filter((node) => {
-            const current = node.params.prompt;
-            return DEFAULT_PROMPT_NAME_BY_AGENT[node.type]
-              && !(typeof current === "string" && current.trim().length > 0);
-          })
-          .map((node) => DEFAULT_PROMPT_NAME_BY_AGENT[node.type]!),
-      )]
-    : [];
-  const promptRows = await findPromptRowsByNames(db, requiredDefaultNames);
-  const materializedNodes =
-    schemaVersion === 1
-      ? materializeImplicitDefaultPromptReferences(nodes, promptRows)
-      : nodes;
-
   return resolvePromptReferencesInNodes(
-    materializedNodes,
+    nodes,
     createPromptReferenceLoader(db),
-    schemaVersion === 2
-      ? { requirePinned: true }
-      : { rejectSlotTokens: true },
+    { requirePinned: true },
   );
 }
 resolvePromptReferencesForRun.maxRetries = 0;
-
-function assertAllowedSlotTokens(
-  text: string,
-  options: ResolvePromptReferencesInNodesOptions,
-): void {
-  if (
-    options.rejectSlotTokens &&
-    (
-      containsMalformedPromptSlotToken(text) ||
-      parsePromptSlotTokens(text).length > 0
-    )
-  ) {
-    throw new Error(
-      "Prompt slot tokens require a v2 workflow with explicit slot bindings",
-    );
-  }
-}

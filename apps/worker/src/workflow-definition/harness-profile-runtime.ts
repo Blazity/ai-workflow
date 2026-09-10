@@ -4,9 +4,7 @@ import type {
   HarnessProfileResolvedVersion,
   WorkflowBlockType,
   WorkflowDefinition,
-  WorkflowDefinitionNode,
   WorkflowDefinitionValidationIssue,
-  WorkflowDefinitionV2Node,
 } from "@shared/contracts";
 import {
   BUILTIN_HARNESS_PROFILE_MANIFESTS,
@@ -105,54 +103,11 @@ export async function resolveHarnessRuntimesWithLoader(
   const runtimes: Record<string, ResolvedHarnessRuntime> = {};
   for (const node of definition.nodes) {
     if (!AGENT_BLOCK_TYPES.has(node.type)) continue;
-    const configuration: Record<string, unknown> =
-      definition.schemaVersion === 2
-        ? (node as WorkflowDefinitionV2Node).configuration
-        : (node as WorkflowDefinitionNode).params;
+    const configuration: Record<string, unknown> = node.configuration;
     const workspaceMode =
       node.type === "generic_agent"
         ? configuration.workspaceMode
         : "read_write";
-
-    if (definition.schemaVersion === 1) {
-      // V1 keeps its current shared-home interpreter. This virtual manifest is
-      // captured for auditability only; execution deliberately does not consume
-      // its hash-addressed paths or disable the historical skills.sh setup.
-      const provider =
-        configuration.provider === "claude" ||
-        configuration.provider === "codex"
-          ? configuration.provider
-          : defaultProvider;
-      const codeOwned =
-        provider === "claude"
-          ? BUILTIN_HARNESS_PROFILE_MANIFESTS["builtin-claude"]
-          : BUILTIN_HARNESS_PROFILE_MANIFESTS["builtin-codex"];
-      const model =
-        typeof configuration.model === "string" &&
-        configuration.model.trim().length > 0
-          ? configuration.model.trim()
-          : codeOwned.model.id;
-      const manifest = {
-        ...structuredClone(codeOwned),
-        profileId: `virtual-v1-${provider}`,
-        slug: `virtual-v1-${provider}`,
-        displayName: `V1 ${codeOwned.displayName} compatibility`,
-        model: { id: model, options: {} },
-      };
-      const resolved: HarnessProfileResolvedVersion = {
-        manifest,
-        manifestHash: hashHarnessProfileManifest(manifest),
-        skillArtifacts: [],
-      };
-      runtimes[node.id] = resolveHarnessRuntime({
-        nodeId: node.id,
-        nodeType: node.type,
-        workspaceMode,
-        resolved,
-        legacyDynamicSkills: true,
-      });
-      continue;
-    }
 
     const reference = isHarnessProfileReference(
       configuration.harnessProfile,
@@ -216,7 +171,6 @@ export async function validateHarnessProfileReferences(
     organizationId: string;
   },
 ): Promise<WorkflowDefinitionValidationIssue[]> {
-  if (input.definition.schemaVersion !== 2) return [];
   return validateHarnessProfileReferencesWithLoader(
     input.definition,
     ({ profileId, version }) =>
@@ -229,7 +183,7 @@ export async function validateHarnessProfileReferences(
 }
 
 export async function validateHarnessProfileReferencesWithLoader(
-  definition: Extract<WorkflowDefinition, { schemaVersion: 2 }>,
+  definition: WorkflowDefinition,
   load: HarnessProfileVersionLoader,
 ): Promise<WorkflowDefinitionValidationIssue[]> {
   const issues: WorkflowDefinitionValidationIssue[] = [];

@@ -80,6 +80,7 @@ function row(definition: WorkflowDefinition, version = 3, definitionId = 1) {
   return {
     definitionId,
     version,
+    schema: "v2" as const,
     definition,
     createdAt: new Date(),
     createdById: "u1",
@@ -140,12 +141,28 @@ describe("loadWorkflowDefinitionFor edge cases", () => {
 
   it("loads a valid stored ticket definition without injecting Prepare", async () => {
     const validNoPrepare: WorkflowDefinition = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       nodes: [
-        { id: "t", type: "trigger_ticket_ai", x: 0, y: 0, params: {}, inputs: {} },
-        { id: "planning", type: "planning_agent", x: 100, y: 0, params: {}, inputs: {} },
+        {
+          id: "t",
+          type: "trigger_ticket_ai",
+          x: 0,
+          y: 0,
+          configuration: {},
+          inputs: {},
+          additionalInputs: [],
+        },
+        {
+          id: "planning",
+          type: "planning_agent",
+          x: 100,
+          y: 0,
+          configuration: {},
+          inputs: {},
+          additionalInputs: [],
+        },
       ],
-      edges: [{ from: "t", to: "planning" }],
+      edges: [{ id: "t-planning", from: "t", to: "planning" }],
     };
     mockGetEnabled.mockResolvedValue(enabled(validNoPrepare, 8, 4));
 

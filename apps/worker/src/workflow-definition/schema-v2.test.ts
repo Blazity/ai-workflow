@@ -1,18 +1,20 @@
 import { describe, expect, it } from "vitest";
 import type {
   JsonValue,
-  WorkflowDefinitionV1,
+  WorkflowBlockType,
   WorkflowDefinitionV2,
+  WorkflowDefinitionV2ControlEdge,
+  WorkflowDefinitionV2Node,
 } from "@shared/contracts";
 import type { WorkflowBlockRegistryContext } from "./block-registry.js";
 import {
   isWorkflowDataReferenceV2,
   upgradeStoredWorkflowDefinition,
   validateWorkflowDefinitionIssuesForDeployment,
-  workflowDefinitionSchema,
-  workflowDefinitionV1Schema,
+  validateWorkflowDefinitionForDeployment,
   workflowDefinitionV2Schema,
 } from "./schema.js";
+import { parseStoredWorkflowDefinition } from "./stored-definition.js";
 import { validateWorkflowDefinitionCandidate } from "./validation.js";
 
 const registryContext: WorkflowBlockRegistryContext = {
@@ -141,27 +143,8 @@ function loopBodyNode(id: string): WorkflowDefinitionV2["nodes"][number] {
 }
 
 describe("Workflow Definition v2 schema", () => {
-  it("parses v1 and v2 through a discriminated public contract", () => {
-    const v1: WorkflowDefinitionV1 = {
-      schemaVersion: 1,
-      nodes: [
-        {
-          id: "ticket",
-          type: "trigger_ticket_ai",
-          x: 0,
-          y: 0,
-          params: {},
-          inputs: {},
-        },
-      ],
-      edges: [],
-    };
-    const v2 = v2Definition();
-
-    expect(workflowDefinitionSchema.parse(v1).schemaVersion).toBe(1);
-    expect(workflowDefinitionSchema.parse(v2).schemaVersion).toBe(2);
-    expect(workflowDefinitionV1Schema.safeParse(v2).success).toBe(false);
-    expect(workflowDefinitionV2Schema.safeParse(v1).success).toBe(false);
+  it("parses the runnable definition as v2", () => {
+    expect(workflowDefinitionV2Schema.parse(v2Definition()).schemaVersion).toBe(2);
   });
 
   it("round-trips a pinned repository scope and rejects an invalid one", () => {
@@ -317,15 +300,6 @@ describe("Workflow Definition v2 schema", () => {
     };
     expect(workflowDefinitionV2Schema.safeParse(definition).success).toBe(false);
 
-    expect(
-      workflowDefinitionV1Schema.safeParse({
-        schemaVersion: 1,
-        nodes: [
-          { id: "ticket", type: "transform", x: 0, y: 0, params: {}, inputs: {} },
-        ],
-        edges: [],
-      }).success,
-    ).toBe(false);
   });
 
   it("accepts a valid v2 definition and still reports real deployment issues", () => {
@@ -1120,5 +1094,775 @@ describe("Workflow Definition v2 schema", () => {
       model: "claude-opus-4-6",
       prompt: "Implement the ticket.",
     });
+  });
+});
+
+describe("repository script node configuration", () => {
+  const scriptsDefinition = (
+    type: "run_scripts" | "run_pre_pr_checks",
+    configuration: Record<string, JsonValue>,
+  ): WorkflowDefinitionV2 => ({
+    schemaVersion: 2,
+    nodes: [
+      {
+        id: "entry",
+        type: "trigger_ticket_ai",
+        x: 0,
+        y: 0,
+        configuration: {},
+        inputs: {},
+        additionalInputs: [],
+      },
+      {
+        id: "workspace",
+        type: "prepare_workspace",
+        x: 1,
+        y: 0,
+        configuration: {},
+        inputs: {},
+        additionalInputs: [],
+      },
+      {
+        id: "scripts",
+        type,
+        x: 2,
+        y: 0,
+        configuration,
+        inputs: {},
+        additionalInputs: [],
+      },
+    ],
+    edges: [
+      { from: "entry", fromPort: "out", to: "workspace" },
+      { from: "workspace", fromPort: "out", to: "scripts" },
+    ] as WorkflowDefinitionV2ControlEdge[],
+  });
+
+  const configurationIssues = (
+    type: "run_scripts" | "run_pre_pr_checks",
+    configuration: Record<string, JsonValue>,
+  ) =>
+    validateWorkflowDefinitionIssuesForDeployment(
+      scriptsDefinition(type, configuration),
+      registryContext,
+    ).filter((issue) => issue.code === "invalid_configuration");
+
+  it("accepts one or many named groups on run_scripts", () => {
+    expect(configurationIssues("run_scripts", { groups: ["checks"] })).toEqual([]);
+    expect(
+      configurationIssues("run_scripts", { groups: ["test", "lint", "type-check"] }),
+    ).toEqual([]);
+  });
+
+  it("refuses a run_scripts node that selects nothing", () => {
+    // A block that runs no group would report a green verdict for a repository
+    // nothing verified, which is the exact failure the outcome enum exists to
+    // make visible. It is refused at deployment instead.
+    expect(configurationIssues("run_scripts", { groups: [] })).not.toEqual([]);
+    expect(configurationIssues("run_scripts", {})).not.toEqual([]);
+  });
+
+  it("holds group names to the shape the scripts configuration stores", () => {
+    expect(configurationIssues("run_scripts", { groups: ["Checks"] })).not.toEqual([]);
+    expect(configurationIssues("run_scripts", { groups: ["pnpm test"] })).not.toEqual([]);
+    expect(configurationIssues("run_scripts", { groups: ["9lives"] })).not.toEqual([]);
+    expect(configurationIssues("run_scripts", { groups: ["a".repeat(41)] })).not.toEqual([]);
+    expect(configurationIssues("run_scripts", { groups: ["a".repeat(40)] })).toEqual([]);
+  });
+
+  it("rejects any key beyond groups", () => {
+    expect(
+      configurationIssues("run_scripts", { groups: ["checks"], maxFixCycles: 1 }),
+    ).not.toEqual([]);
+  });
+
+  it("still accepts maxFixCycles on a gate node deployed before the repair loop went", () => {
+    // Every stored definition that carries the key has to keep validating: the
+    // parameter is accepted and ignored, never removed from the strict schema.
+    expect(configurationIssues("run_pre_pr_checks", { maxFixCycles: 3 })).toEqual([]);
+    expect(configurationIssues("run_pre_pr_checks", { maxFixCycles: 0 })).toEqual([]);
+    expect(configurationIssues("run_pre_pr_checks", {})).toEqual([]);
+    // The bound it was authored under is unchanged, so a definition that was
+    // invalid before this change is still invalid.
+    expect(configurationIssues("run_pre_pr_checks", { maxFixCycles: 6 })).not.toEqual([]);
+  });
+});
+
+describe("webhook trigger configuration", () => {
+  const webhookDefinition = (configuration: Record<string, JsonValue>) => ({
+    schemaVersion: 2 as const,
+    nodes: [
+      {
+        id: "entry",
+        type: "trigger_webhook" as const,
+        x: 0,
+        y: 0,
+        configuration,
+        inputs: {},
+        additionalInputs: [],
+      },
+    ],
+    edges: [],
+  });
+
+  const configurationIssues = (configuration: Record<string, JsonValue>) =>
+    validateWorkflowDefinitionIssuesForDeployment(
+      webhookDefinition(configuration),
+      registryContext,
+    ).filter((issue) => issue.code === "invalid_configuration");
+
+  it("accepts an empty configuration so a freshly dropped block deploys", () => {
+    expect(configurationIssues({})).toEqual([]);
+  });
+
+  it("accepts every supported key", () => {
+    expect(
+      configurationIssues({
+        authScheme: "shared_token",
+        headerName: "X-Zendesk-Token",
+        subjectPath: "ticket.id",
+        mapSubject: "ticket.subject",
+        mapDescription: "ticket.description",
+        mapRequester: "ticket.requester.email",
+        mapPriority: "ticket.priority",
+      }),
+    ).toEqual([]);
+  });
+
+  it("rejects an unknown auth scheme", () => {
+    expect(configurationIssues({ authScheme: "basic" })).toEqual([
+      expect.objectContaining({
+        code: "invalid_configuration",
+        nodeId: "entry",
+        path: "/nodes/0/configuration/authScheme",
+      }),
+    ]);
+  });
+
+  it("rejects an empty header name", () => {
+    expect(configurationIssues({ headerName: "" })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: "/nodes/0/configuration/headerName" }),
+      ]),
+    );
+  });
+
+  it("rejects a header name that is not an HTTP header token", () => {
+    for (const headerName of ["X Workflow Signature", "X-Signature:", "X-Sig\nInjected"]) {
+      expect(configurationIssues({ headerName }), headerName).toEqual([
+        expect.objectContaining({
+          path: "/nodes/0/configuration/headerName",
+          message: expect.stringContaining("valid HTTP header token"),
+        }),
+      ]);
+    }
+  });
+
+  it("accepts the timestamp replay-protection keys", () => {
+    expect(
+      configurationIssues({
+        requireTimestamp: true,
+        timestampHeader: "X-Zendesk-Timestamp",
+        timestampToleranceSeconds: 600,
+      }),
+    ).toEqual([]);
+  });
+
+  it("accepts requireTimestamp with the HMAC scheme, explicit or defaulted", () => {
+    expect(
+      configurationIssues({ authScheme: "hmac_sha256", requireTimestamp: true }),
+    ).toEqual([]);
+    // hmac_sha256 is the default, so an absent scheme is fine too.
+    expect(configurationIssues({ requireTimestamp: true })).toEqual([]);
+  });
+
+  it("rejects requireTimestamp with the shared_token scheme", () => {
+    // Silently no-opping would give a false sense of protection; the deploy fails.
+    expect(
+      configurationIssues({ authScheme: "shared_token", requireTimestamp: true }),
+    ).toEqual([
+      expect.objectContaining({
+        path: "/nodes/0/configuration/requireTimestamp",
+        message: expect.stringContaining("HMAC SHA-256 scheme"),
+      }),
+    ]);
+  });
+
+  it("rejects a tolerance below the minimum or above the maximum", () => {
+    for (const timestampToleranceSeconds of [5, 100000]) {
+      expect(
+        configurationIssues({ timestampToleranceSeconds }),
+        String(timestampToleranceSeconds),
+      ).toEqual([
+        expect.objectContaining({
+          path: "/nodes/0/configuration/timestampToleranceSeconds",
+        }),
+      ]);
+    }
+  });
+
+  it("accepts a tolerance at the 900s ceiling and rejects 901", () => {
+    expect(configurationIssues({ timestampToleranceSeconds: 900 })).toEqual([]);
+    expect(configurationIssues({ timestampToleranceSeconds: 901 })).toEqual([
+      expect.objectContaining({
+        path: "/nodes/0/configuration/timestampToleranceSeconds",
+      }),
+    ]);
+  });
+
+  it("rejects a timestamp header that is not an HTTP header token", () => {
+    expect(configurationIssues({ timestampHeader: "X Timestamp Header" })).toEqual([
+      expect.objectContaining({
+        path: "/nodes/0/configuration/timestampHeader",
+        message: expect.stringContaining("valid HTTP header token"),
+      }),
+    ]);
+  });
+
+  it("rejects payload paths with empty, unsafe, or prototype-mutating segments", () => {
+    for (const path of ["", "ticket..id", "ticket.", ".id", "ticket.sub ject"]) {
+      // An empty string trips both the length and the shape rule, so assert the
+      // offending path rather than an exact issue count.
+      expect(configurationIssues({ mapSubject: path }), path).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: "/nodes/0/configuration/mapSubject" }),
+        ]),
+      );
+    }
+    expect(configurationIssues({ subjectPath: "__proto__.id" })).toEqual([
+      expect.objectContaining({ path: "/nodes/0/configuration/subjectPath" }),
+    ]);
+  });
+
+  it("rejects a key the block does not own", () => {
+    expect(configurationIssues({ secret: "whsec_leak" })).toEqual([
+      expect.objectContaining({ path: "/nodes/0/configuration/secret" }),
+    ]);
+  });
+
+  it("is unavailable for deployment without a configured encryption key", () => {
+    expect(
+      validateWorkflowDefinitionForDeployment(webhookDefinition({}), {
+        ...registryContext,
+        webhookTriggerConfigured: false,
+      }),
+    ).toContain(
+      'Block "entry" (trigger_webhook) is unavailable: Webhook trigger encryption is not configured.',
+    );
+  });
+});
+
+describe("schedule trigger configuration", () => {
+  // "entry" is a reserved block id (see validateWorkflowGraphV2Issues), so the
+  // full-deployment-issues assertions below stay clean with a plain id.
+  const scheduleDefinition = (configuration: Record<string, JsonValue>) => ({
+    schemaVersion: 2 as const,
+    nodes: [
+      {
+        id: "schedule",
+        type: "trigger_schedule" as const,
+        x: 0,
+        y: 0,
+        configuration,
+        inputs: {},
+        additionalInputs: [],
+      },
+    ],
+    edges: [],
+  });
+
+  const configurationIssues = (configuration: Record<string, JsonValue>) =>
+    validateWorkflowDefinitionIssuesForDeployment(
+      scheduleDefinition(configuration),
+      registryContext,
+    ).filter((issue) => issue.code === "invalid_configuration");
+
+  const deploymentIssues = (configuration: Record<string, JsonValue>) =>
+    validateWorkflowDefinitionForDeployment(scheduleDefinition(configuration), registryContext);
+
+  it("applies defaults for an empty configuration so a freshly dropped block still saves", () => {
+    expect(configurationIssues({})).toEqual([]);
+  });
+
+  it("accepts every supported key", () => {
+    expect(
+      configurationIssues({
+        cron: "0 9 * * 1",
+        timezone: "Europe/Warsaw",
+        overlapPolicy: "queue",
+        catchUpGraceMinutes: 30,
+        taskTitle: "Weekly dependency refresh",
+        taskDescription: "Check and update outdated dependencies.",
+      }),
+    ).toEqual([]);
+  });
+
+  it("rejects a key the block does not own", () => {
+    expect(configurationIssues({ secret: "whsec_leak" })).toEqual([
+      expect.objectContaining({ path: "/nodes/0/configuration/secret" }),
+    ]);
+  });
+
+  it("rejects an unknown overlap policy", () => {
+    expect(configurationIssues({ overlapPolicy: "retry" })).toEqual([
+      expect.objectContaining({
+        code: "invalid_configuration",
+        nodeId: "schedule",
+        path: "/nodes/0/configuration/overlapPolicy",
+      }),
+    ]);
+  });
+
+  it("rejects a non-positive catch-up grace period", () => {
+    for (const catchUpGraceMinutes of [0, -5]) {
+      expect(
+        configurationIssues({ catchUpGraceMinutes }),
+        String(catchUpGraceMinutes),
+      ).toEqual([
+        expect.objectContaining({ path: "/nodes/0/configuration/catchUpGraceMinutes" }),
+      ]);
+    }
+  });
+
+  it("rejects a non-integer catch-up grace period", () => {
+    // Deliberately above the five-minute floor so this keeps testing integrality
+    // on its own. 1.5 would now trip the floor as well and the single-issue
+    // assertion would stop telling us which rule fired.
+    expect(configurationIssues({ catchUpGraceMinutes: 7.5 })).toEqual([
+      expect.objectContaining({ path: "/nodes/0/configuration/catchUpGraceMinutes" }),
+    ]);
+  });
+
+  it("blocks deployment of an empty or whitespace-only cron before deployment", () => {
+    for (const cron of ["", "   "]) {
+      expect(deploymentIssues({ cron, taskTitle: "t", taskDescription: "d" }), cron).toContain(
+        'Block "schedule" (trigger_schedule) must configure a cron schedule before deployment.',
+      );
+    }
+  });
+
+  it("blocks deployment of an empty or whitespace-only task title before deployment", () => {
+    for (const taskTitle of ["", "   "]) {
+      expect(
+        deploymentIssues({ cron: "0 9 * * 1", taskTitle, taskDescription: "d" }),
+        taskTitle,
+      ).toContain(
+        'Block "schedule" (trigger_schedule) must configure a task title before deployment.',
+      );
+    }
+  });
+
+  it("blocks deployment of an empty or whitespace-only task description before deployment", () => {
+    for (const taskDescription of ["", "   "]) {
+      expect(
+        deploymentIssues({ cron: "0 9 * * 1", taskTitle: "t", taskDescription }),
+        taskDescription,
+      ).toContain(
+        'Block "schedule" (trigger_schedule) must configure a task description before deployment.',
+      );
+    }
+  });
+
+  it("deploys once cron, task title, and task description are all set", () => {
+    expect(
+      deploymentIssues({
+        cron: "0 9 * * 1",
+        taskTitle: "Weekly dependency refresh",
+        taskDescription: "Check and update outdated dependencies.",
+      }),
+    ).toEqual([]);
+  });
+
+  // The three checks below delegate to the schedule-trigger evaluator, so these
+  // assert the wiring and the field each problem points at, not the time
+  // arithmetic itself, which is covered in schedule-trigger/occurrence.test.ts.
+  const scheduleDeploymentIssues = (configuration: Record<string, JsonValue>) =>
+    validateWorkflowDefinitionIssuesForDeployment(
+      scheduleDefinition(configuration),
+      registryContext,
+    ).filter((issue) => issue.code === "deployment");
+
+  const configured = (configuration: Record<string, JsonValue>) => ({
+    taskTitle: "Weekly dependency refresh",
+    taskDescription: "Check and update outdated dependencies.",
+    ...configuration,
+  });
+
+  it("blocks deployment of a syntactically invalid cron expression", () => {
+    for (const cron of ["every monday", "0 9 * *", "99 9 * * *"]) {
+      expect(scheduleDeploymentIssues(configured({ cron })), cron).toEqual([
+        expect.objectContaining({
+          nodeId: "schedule",
+          path: "/nodes/0/configuration/cron",
+          message: expect.stringContaining(
+            'Block "schedule" (trigger_schedule) must configure a valid cron expression before deployment:',
+          ),
+        }),
+      ]);
+    }
+  });
+
+  it("blocks deployment of an unknown timezone and points at the timezone field", () => {
+    // A schedule that quietly ran in UTC because the zone was misspelled would
+    // look correct in every log line and be an hour out for half the year.
+    expect(
+      scheduleDeploymentIssues(
+        configured({ cron: "0 9 * * 1", timezone: "Europe/Warszawa" }),
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        nodeId: "schedule",
+        path: "/nodes/0/configuration/timezone",
+        message: expect.stringContaining(
+          'Block "schedule" (trigger_schedule) must configure a known IANA timezone before deployment:',
+        ),
+      }),
+    ]);
+  });
+
+  it("blocks deployment of a schedule that fires more often than the floor", () => {
+    const [issue] = scheduleDeploymentIssues(
+      configured({ cron: "*/5 * * * *", timezone: "Europe/Warsaw" }),
+    );
+    expect(issue).toMatchObject({
+      nodeId: "schedule",
+      path: "/nodes/0/configuration/cron",
+    });
+    expect(issue?.message).toContain(
+      'Block "schedule" (trigger_schedule) must leave at least 15 minutes between runs before deployment:',
+    );
+    expect(issue?.message).toContain(
+      "Agent runs occupy a small shared pool, so a schedule firing faster than that can starve the rest of the queue.",
+    );
+  });
+
+  it("deploys a schedule sitting exactly on the fifteen-minute floor", () => {
+    expect(
+      deploymentIssues(
+        configured({ cron: "*/15 * * * *", timezone: "Europe/Warsaw" }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("deploys a valid weekly schedule in a named timezone", () => {
+    expect(
+      deploymentIssues(
+        configured({ cron: "30 9 * * 1-5", timezone: "Asia/Kolkata" }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("reports an empty cron once, without also calling it invalid syntax", () => {
+    // Two issues on one field in one deploy is noise: the emptiness issue
+    // already tells the user exactly what to do.
+    for (const cron of ["", "   "]) {
+      expect(deploymentIssues(configured({ cron })), cron).toEqual([
+        'Block "schedule" (trigger_schedule) must configure a cron schedule before deployment.',
+      ]);
+    }
+  });
+
+  it("blocks deployment of a present but empty timezone instead of reading it as UTC", () => {
+    // The gap this closes: `timezone: z.string().default("UTC")` only fills in a
+    // *missing* key, so an empty string parses fine and reaches the evaluator,
+    // which refuses it. Substituting UTC here would let the definition deploy
+    // clean and then have every tick of the dispatcher come back invalid, and this
+    // validator is the last place able to catch it before shipping.
+    for (const timezone of ["", "   "]) {
+      const issues = scheduleDeploymentIssues(
+        configured({ cron: "0 9 * * *", timezone }),
+      );
+      expect(issues, JSON.stringify(timezone)).toEqual([
+        expect.objectContaining({
+          nodeId: "schedule",
+          path: "/nodes/0/configuration/timezone",
+          message: expect.stringContaining(
+            'Block "schedule" (trigger_schedule) must configure a known IANA timezone before deployment:',
+          ),
+        }),
+      ]);
+    }
+  });
+
+  it("still treats an absent timezone key as the schema default", () => {
+    // Only a genuinely missing key gets UTC, because that is what the runtime
+    // reads too. An author who never touched the field is not making a mistake.
+    expect(deploymentIssues(configured({ cron: "0 9 * * *" }))).toEqual([]);
+  });
+
+  it("blocks deployment of a fixed-offset timezone, which does not follow daylight saving", () => {
+    for (const timezone of ["+02:00", "Etc/GMT+5"]) {
+      const [issue] = scheduleDeploymentIssues(
+        configured({ cron: "0 9 * * *", timezone }),
+      );
+      expect(issue, timezone).toMatchObject({
+        path: "/nodes/0/configuration/timezone",
+      });
+      expect(issue?.message, timezone).toContain("daylight saving");
+    }
+  });
+
+  it("blocks deployment of an expression that will never fire, with its own message", () => {
+    // 30 February. Distinct wording on purpose: the floor message would tell an
+    // author their never-firing schedule is too frequent, sending them to look at
+    // the wrong thing entirely.
+    const [issue] = scheduleDeploymentIssues(
+      configured({ cron: "0 0 30 2 *", timezone: "Europe/Warsaw" }),
+    );
+    expect(issue).toMatchObject({
+      nodeId: "schedule",
+      path: "/nodes/0/configuration/cron",
+    });
+    expect(issue?.message).toContain(
+      'Block "schedule" (trigger_schedule) must configure a cron expression with upcoming occurrences before deployment:',
+    );
+    expect(issue?.message).not.toContain("minutes between runs");
+  });
+
+  it("rejects a catch-up grace below five minutes, because the scheduler ticks once a minute", () => {
+    // The dial reads like "how stale a run may be" but buys "how many missed
+    // ticks I tolerate". At 1 minute a single two-minute stall of the platform
+    // cron loses the run outright, so an author tightening this to avoid stale
+    // work would instead be trading away runs silently.
+    for (const catchUpGraceMinutes of [1, 2, 3, 4]) {
+      expect(
+        configurationIssues({ catchUpGraceMinutes }),
+        String(catchUpGraceMinutes),
+      ).toEqual([
+        expect.objectContaining({
+          path: "/nodes/0/configuration/catchUpGraceMinutes",
+          message: expect.stringContaining("evaluates once a minute"),
+        }),
+      ]);
+    }
+  });
+
+  it("accepts a catch-up grace at the five-minute floor and above", () => {
+    for (const catchUpGraceMinutes of [5, 30, 60, 720]) {
+      expect(
+        configurationIssues({ catchUpGraceMinutes }),
+        String(catchUpGraceMinutes),
+      ).toEqual([]);
+    }
+  });
+});
+
+describe("schedule graphs run unattended", () => {
+  const node = (
+    id: string,
+    type: WorkflowBlockType,
+    configuration: Record<string, JsonValue> = {},
+  ): WorkflowDefinitionV2Node => ({
+    id,
+    type,
+    x: 0,
+    y: 0,
+    configuration,
+    inputs: {},
+    additionalInputs: [],
+  });
+
+  const edge = (from: string, to: string): WorkflowDefinitionV2ControlEdge => ({
+    id: `${from}-${to}`,
+    from,
+    to,
+  });
+
+  const scheduleTrigger = (id = "schedule") =>
+    node(id, "trigger_schedule", {
+      cron: "*/15 * * * *",
+      timezone: "UTC",
+      taskTitle: "Weekly dependency refresh",
+      taskDescription: "Check and update outdated dependencies.",
+    });
+
+  const graph = (
+    nodes: WorkflowDefinitionV2["nodes"],
+    edges: WorkflowDefinitionV2["edges"],
+  ): WorkflowDefinitionV2 => ({ schemaVersion: 2, nodes, edges });
+
+  const unattendedIssues = (definition: WorkflowDefinitionV2) =>
+    validateWorkflowDefinitionIssuesForDeployment(definition, registryContext).filter(
+      (issue) => issue.message.includes("waits for a person"),
+    );
+
+  // A parked subject is protected from reconciliation, so under skip and queue one
+  // run stopped on a decision holds the schedule's turn forever, and no product
+  // surface can cancel a scheduled run (Slack cancellation addresses runs by ticket
+  // key, and this one has no ticket). The price of the rule is real and deliberate:
+  // no recurring workflow can ask for plan approval.
+  it.each(["human_question", "send_plan_approval"] as const)(
+    "refuses to deploy a schedule graph that can reach %s",
+    (blockType) => {
+      const issues = unattendedIssues(
+        graph(
+          [scheduleTrigger(), node("waiter", blockType)],
+          [edge("schedule", "waiter")],
+        ),
+      );
+
+      expect(issues).toEqual([
+        expect.objectContaining({
+          code: "deployment",
+          // Names the exact block, because that is the one the author has to remove.
+          nodeId: "waiter",
+          path: "/nodes/1",
+          message: expect.stringContaining(`Block "waiter" (${blockType})`),
+        }),
+      ]);
+      expect(issues[0]?.message).toContain("recurring trigger runs unattended");
+    },
+  );
+
+  it("catches a human wait several blocks downstream of the schedule", () => {
+    expect(
+      unattendedIssues(
+        graph(
+          [
+            scheduleTrigger(),
+            node("prepare", "prepare_workspace"),
+            node("waiter", "human_question"),
+          ],
+          [edge("schedule", "prepare"), edge("prepare", "waiter")],
+        ),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("leaves an unattended schedule graph alone", () => {
+    expect(
+      unattendedIssues(
+        graph(
+          [scheduleTrigger(), node("prepare", "prepare_workspace")],
+          [edge("schedule", "prepare")],
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  // The rule is about the schedule's own path, not about the block existing in the
+  // product: a ticket graph may still park on a question.
+  it("leaves a human wait reachable only from a ticket trigger alone", () => {
+    expect(
+      unattendedIssues(
+        graph(
+          [node("ticket", "trigger_ticket_ai"), node("waiter", "human_question")],
+          [edge("ticket", "waiter")],
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  // A scheduled occurrence has no ticket, no labels and a fresh subject, so nothing
+  // in it names a repository. Without a pin the discovery agent guesses from the
+  // task description, the input is identical every occurrence, and an uncertain
+  // guess fails the run with no ticket to report the failure on.
+  describe("and must know which repository they work in", () => {
+    const pinnedIssues = (definition: WorkflowDefinitionV2) =>
+      validateWorkflowDefinitionIssuesForDeployment(definition, registryContext).filter(
+        (issue) => issue.message.includes("pins no repository"),
+      );
+
+    const pinned = (definition: WorkflowDefinitionV2): WorkflowDefinitionV2 => ({
+      ...definition,
+      repositoryScope: { repositories: [{ provider: "github", repoPath: "acme/app" }] },
+    });
+
+    const scheduleToWorkspace = () =>
+      graph(
+        [scheduleTrigger(), node("prepare", "prepare_workspace")],
+        [edge("schedule", "prepare")],
+      );
+
+    it("refuses a schedule graph that prepares a workspace with no pinned repository", () => {
+      const issues = pinnedIssues(scheduleToWorkspace());
+
+      expect(issues).toEqual([
+        expect.objectContaining({
+          code: "deployment",
+          // The fix is the definition's pin, so the issue points at the pin the way
+          // every other definition-wide issue does, not at a block's configuration.
+          nodeId: null,
+          path: "/repositoryScope",
+          message: expect.stringContaining(
+            'Block "prepare" (prepare_workspace) is reachable from schedule trigger "schedule"',
+          ),
+        }),
+      ]);
+      // The message has to say why, or an operator reads it as red tape and pins the
+      // first repository in the list.
+      expect(issues[0]?.message).toContain("carries no ticket");
+      expect(issues[0]?.message).toContain("nowhere to report the failure");
+    });
+
+    it("catches a workspace several blocks downstream of the schedule", () => {
+      expect(
+        pinnedIssues(
+          graph(
+            [
+              scheduleTrigger(),
+              node("hop", "fetch_pr_context"),
+              node("prepare", "prepare_workspace"),
+            ],
+            [edge("schedule", "hop"), edge("hop", "prepare")],
+          ),
+        ),
+      ).toHaveLength(1);
+    });
+
+    it("accepts the same graph once the definition pins a repository", () => {
+      expect(pinnedIssues(pinned(scheduleToWorkspace()))).toEqual([]);
+    });
+
+    // A provider list narrows a pin, it is not one: it names no repository, so the
+    // agent is still guessing which one to work in.
+    it("does not accept a pinned provider list as a repository pin", () => {
+      expect(
+        pinnedIssues({
+          ...scheduleToWorkspace(),
+          repositoryScope: { providers: ["github"] },
+        }),
+      ).toHaveLength(1);
+    });
+
+    // The rule is about the schedule's own path. A schedule that never touches a
+    // repository has nothing to guess at, and a ticket graph brings its own routing.
+    it("leaves a schedule that never prepares a workspace alone", () => {
+      expect(
+        pinnedIssues(
+          graph(
+            [scheduleTrigger(), node("done", "terminate", { terminalStatus: "done" })],
+            [edge("schedule", "done")],
+          ),
+        ),
+      ).toEqual([]);
+    });
+
+    it("leaves a workspace reachable only from a ticket trigger alone", () => {
+      expect(
+        pinnedIssues(
+          graph(
+            [node("ticket", "trigger_ticket_ai"), node("prepare", "prepare_workspace")],
+            [edge("ticket", "prepare")],
+          ),
+        ),
+      ).toEqual([]);
+    });
+  });
+});
+
+describe("stored definition reader", () => {
+  it("returns malformed historical v1 content exactly as stored", () => {
+    const stored = {
+      schemaVersion: 1,
+      nodes: [{ id: "  historical node  ", type: "removed_block", params: { broken: true } }],
+      edges: [{ from: "", to: 42 }],
+      unexpected: "kept for operator inspection",
+    };
+
+    const parsed = parseStoredWorkflowDefinition(stored);
+
+    expect(parsed).toEqual({ schema: "legacy-v1", definition: stored });
+    expect(parsed.definition).toBe(stored);
   });
 });

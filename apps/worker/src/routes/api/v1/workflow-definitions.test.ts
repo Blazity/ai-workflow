@@ -1,29 +1,20 @@
 import { createApp, createRouter, toWebHandler } from "h3";
+import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
-  WorkflowDefinition,
-  WorkflowDefinitionV1,
+  WorkflowDefinitionV2,
 } from "@shared/contracts";
-import { BUILTIN_HARNESS_PROFILE_IDS } from "@shared/contracts";
+import { BUILTIN_HARNESS_PROFILE_IDS, RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import type { Db } from "../../../db/client.js";
 import {
-  harnessProfiles,
-  harnessProfileVersions,
   member,
   organization,
   user,
+  workflowDefinitions,
   workflowDefinitionVersions,
 } from "../../../db/schema.js";
 import { createTestDb } from "../../../db/test-db.js";
-import {
-  createPrompt,
-  getPromptVersion,
-  savePromptVersion,
-} from "../../../prompt-library/store.js";
-import {
-  defaultWorkflowDefinition,
-  defaultWorkflowDefinitionV2,
-} from "../../../workflow-definition/default.js";
+import { defaultWorkflowDefinitionV2 } from "../../../workflow-definition/default.js";
 import {
   deployWorkflowDefinition,
   saveWorkflowDefinitionDraft,
@@ -106,113 +97,11 @@ const detailCatalog = (await import("./workflow-definitions/[id]/catalog.post.js
 const detailPromptPreview = (
   await import("./workflow-definitions/[id]/prompt-preview.post.js")
 ).default;
-const detailMigrate = (await import("./workflow-definitions/[id]/migrate.post.js")).default;
-const shimGet = (await import("./workflow-definition.get.js")).default;
-const shimPut = (await import("./workflow-definition.put.js")).default;
-const shimRestore = (await import("./workflow-definition/restore.post.js")).default;
 const sessionGet = (await import("./session.get.js")).default;
 
-const VALID_DEFINITION = defaultWorkflowDefinition({ includeReview: false });
-const OTHER_DEFINITION = defaultWorkflowDefinition({ includeReview: true });
+const VALID_DEFINITION = defaultWorkflowDefinitionV2({ includeReview: false });
+const OTHER_DEFINITION = defaultWorkflowDefinitionV2({ includeReview: true });
 const STORE_ACTOR = { role: "admin" as const, id: "user_admin", label: "Admin" };
-
-function migratableV1Definition(prompt?: string): WorkflowDefinitionV1 {
-  const nodes: WorkflowDefinitionV1["nodes"] = [
-    {
-      id: "trigger",
-      type: "trigger_ticket_ai",
-      x: 0,
-      y: 0,
-      params: {},
-      inputs: {},
-    },
-    prompt === undefined
-      ? {
-          id: "finish",
-          type: "terminate",
-          x: 240,
-          y: 0,
-          params: { terminalStatus: "done" },
-          inputs: {},
-        }
-      : {
-          id: "llm",
-          type: "call_llm",
-          x: 240,
-          y: 0,
-          params: { prompt },
-          inputs: {},
-        },
-  ];
-  return {
-    schemaVersion: 1,
-    nodes,
-    edges: [{ from: "trigger", to: nodes[1]!.id }],
-  };
-}
-
-function migratableImplementationDefinition(
-  agent?: { provider: "claude" | "codex"; model: string },
-): WorkflowDefinitionV1 {
-  return {
-    schemaVersion: 1,
-    nodes: [
-      {
-        id: "trigger",
-        type: "trigger_ticket_ai",
-        x: 0,
-        y: 0,
-        params: {},
-        inputs: {},
-      },
-      {
-        id: "implementation",
-        type: "implementation_agent",
-        x: 240,
-        y: 0,
-        params: agent ?? {},
-        inputs: {},
-      },
-    ],
-    edges: [{ from: "trigger", to: "implementation" }],
-  };
-}
-
-function blockedV1MigrationDefinition(): WorkflowDefinitionV1 {
-  return {
-    schemaVersion: 1,
-    nodes: [
-      {
-        id: "trigger",
-        type: "trigger_ticket_ai",
-        x: 0,
-        y: 0,
-        params: {},
-        inputs: {},
-      },
-      {
-        id: "llm",
-        type: "call_llm",
-        x: 240,
-        y: 0,
-        params: { prompt: "{{ticket_url}} {{unknown_variable}}" },
-        inputs: { prompt: "steps.missing.output.output" },
-      },
-      {
-        id: "decision",
-        type: "branch",
-        x: 480,
-        y: 0,
-        params: { condition: "steps.missing.output.ok === true" },
-        inputs: {},
-      },
-    ],
-    edges: [
-      { from: "trigger", to: "llm", fromPort: "failed" },
-      { from: "llm", to: "decision" },
-    ],
-  };
-}
 
 let db: Db;
 
@@ -244,16 +133,14 @@ function jsonRequest(method: string, body: unknown, url = "http://worker.test/")
   });
 }
 
-function withBadParam(def: WorkflowDefinitionV1): WorkflowDefinitionV1 {
+function withBadParam(def: WorkflowDefinitionV2): WorkflowDefinitionV2 {
   return {
     ...def,
-    nodes: def.nodes.map((node) =>
-      node.type === "planning_agent" ? { ...node, params: { bogus: "x" } } : node,
-    ),
+    edges: "bad" as never,
   };
 }
 
-function withUnreachableNode(def: WorkflowDefinitionV1): WorkflowDefinitionV1 {
+function withUnreachableNode(def: WorkflowDefinitionV2): WorkflowDefinitionV2 {
   const statusId = def.nodes.find((node) => node.type === "update_ticket_status")!.id;
   return {
     ...def,
@@ -261,18 +148,26 @@ function withUnreachableNode(def: WorkflowDefinitionV1): WorkflowDefinitionV1 {
   };
 }
 
-function withInvalidBinding(def: WorkflowDefinitionV1): WorkflowDefinitionV1 {
+function withInvalidBinding(def: WorkflowDefinitionV2): WorkflowDefinitionV2 {
   return {
     ...def,
     nodes: def.nodes.map((node) =>
       node.type === "update_ticket_status"
-        ? { ...node, inputs: { target: "steps.ghost.output.target" } }
+        ? {
+            ...node,
+            inputs: {
+              target: {
+                kind: "reference",
+                reference: "steps.ghost.output.target",
+              },
+            },
+          }
         : node,
     ),
   };
 }
 
-function semantic(definition: WorkflowDefinitionV1): WorkflowDefinitionV1 {
+function semantic(definition: WorkflowDefinitionV2): WorkflowDefinitionV2 {
   return {
     ...definition,
     nodes: definition.nodes.map((node) => ({ ...node, x: 0, y: 0 })),
@@ -280,7 +175,7 @@ function semantic(definition: WorkflowDefinitionV1): WorkflowDefinitionV1 {
 }
 
 async function saveDraft(
-  definition: WorkflowDefinitionV1,
+  definition: WorkflowDefinitionV2,
   expectedDraftRevision: number,
   definitionId = 1,
 ) {
@@ -306,7 +201,7 @@ async function deployDraft(
 }
 
 async function saveAndDeploy(
-  definition: WorkflowDefinitionV1,
+  definition: WorkflowDefinitionV2,
   expectedDraftRevision: number,
   expectedDeployedVersion: number | null,
   definitionId = 1,
@@ -387,6 +282,39 @@ describe("GET /api/v1/workflow-definitions", () => {
     const res = await handlerFor(definitionsGet)(new Request("http://worker.test/"));
     const body = await res.json();
     expect(body.definitions[0]).toMatchObject({ currentVersion: 1, deployedVersion: 1 });
+  });
+
+  it("lists a retired deployment with effective status and no active triggers", async () => {
+    await db.insert(workflowDefinitionVersions).values({
+      definitionId: 1,
+      version: 1,
+      definition: {
+        schemaVersion: 1,
+        nodes: [{ id: "legacy-trigger", type: "trigger_ticket_ai" }],
+        edges: [],
+      },
+      createdById: "user_admin",
+      createdByLabel: "Admin",
+    });
+    await db
+      .update(workflowDefinitions)
+      .set({
+        deployedVersion: 1,
+        enabled: true,
+        triggerTypes: ["trigger_ticket_ai"],
+      })
+      .where(eq(workflowDefinitions.id, 1));
+
+    const res = await handlerFor(definitionsGet)(new Request("http://worker.test/"));
+    const body = await res.json();
+
+    expect(body.definitions[0]).toMatchObject({
+      enabled: true,
+      deployedVersion: 1,
+      deployedSchema: "legacy-v1",
+      retiredMessage: RETIRED_SCHEMA_MESSAGE,
+      triggerTypes: [],
+    });
   });
 
   it("pins the installation's configured built-in profile in new authoring choices", async () => {
@@ -511,90 +439,6 @@ describe("POST /api/v1/workflow-definitions", () => {
     expect(body.draft).toEqual(createdBody.draft);
   });
 
-  it("duplicates a v1 source as v2 through the deterministic converter", async () => {
-    await saveDraft(migratableV1Definition(), 0);
-
-    const res = await handlerFor(definitionsPost)(
-      jsonRequest("POST", {
-        name: "V2 copy",
-        source: { kind: "duplicate", definitionId: 1 },
-        targetSchemaVersion: 2,
-      }),
-    );
-
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.meta).toMatchObject({
-      id: 2,
-      name: "V2 copy",
-      deployedVersion: null,
-      draftRevision: 1,
-    });
-    expect(body.draft).toMatchObject({
-      schemaVersion: 2,
-      nodes: [
-        { id: "trigger", configuration: {}, inputs: {}, additionalInputs: [] },
-        {
-          id: "finish",
-          configuration: { terminalStatus: "done" },
-          inputs: {},
-          additionalInputs: [],
-        },
-      ],
-    });
-    expect(body.draft.edges[0].id).toMatch(/^edge-[a-f0-9]{24}$/);
-
-    const sourceRes = await paramHandler("get", "/d/:id", detailGet)(
-      new Request("http://worker.test/d/1"),
-    );
-    expect((await sourceRes.json()).draft.schemaVersion).toBe(1);
-  });
-
-  it("reports every duplicate-as-v2 blocker without creating a destination", async () => {
-    await saveDraft(blockedV1MigrationDefinition(), 0);
-    const before = await handlerFor(definitionsGet)(
-      new Request("http://worker.test/"),
-    );
-    expect((await before.json()).definitions).toHaveLength(1);
-
-    const res = await handlerFor(definitionsPost)(
-      jsonRequest("POST", {
-        name: "Must not exist",
-        source: { kind: "duplicate", definitionId: 1 },
-        targetSchemaVersion: 2,
-      }),
-    );
-
-    expect(res.status).toBe(422);
-    const body = await res.json();
-    expect(body.definition).toBeNull();
-    expect(body.conversionHash).toBeNull();
-    expect(body.blockers.map(({ code }: { code: string }) => code)).toEqual(
-      expect.arrayContaining([
-        "migration.edge.failure_port",
-        "migration.binding.unprovable",
-        "migration.branch.unparseable_condition",
-        "migration.prompt.unsafe_variable",
-        "migration.prompt.unresolved_placeholder",
-      ]),
-    );
-    const after = await handlerFor(definitionsGet)(
-      new Request("http://worker.test/"),
-    );
-    expect((await after.json()).definitions).toHaveLength(1);
-  });
-
-  it("rejects target schema selection outside duplication", async () => {
-    const res = await handlerFor(definitionsPost)(
-      jsonRequest("POST", {
-        name: "Invalid v2 create",
-        source: { kind: "default" },
-        targetSchemaVersion: 2,
-      }),
-    );
-    expect(res.status).toBe(400);
-  });
-
   it("duplicating the fresh built-in fallback seeds an editable default draft", async () => {
     const res = await handlerFor(definitionsPost)(
       jsonRequest("POST", { name: "Copy of seed", source: { kind: "duplicate", definitionId: 1 } }),
@@ -604,6 +448,31 @@ describe("POST /api/v1/workflow-definitions", () => {
     expect(body.deployed).toBeNull();
     expect(body.draft.nodes.some((n: { type: string }) => n.type === "trigger_ticket_ai")).toBe(true);
     expect(body.draft.nodes.some((n: { type: string }) => n.type === "implementation_agent")).toBe(true);
+  });
+
+  it("refuses to duplicate a retired definition instead of substituting a default", async () => {
+    await db.insert(workflowDefinitionVersions).values({
+      definitionId: 1,
+      version: 1,
+      definition: { schemaVersion: 1, nodes: [], edges: [] },
+      createdById: "user_admin",
+      createdByLabel: "Admin",
+    });
+    await db
+      .update(workflowDefinitions)
+      .set({ deployedVersion: 1 })
+      .where(eq(workflowDefinitions.id, 1));
+
+    const res = await handlerFor(definitionsPost)(
+      jsonRequest("POST", {
+        name: "Retired copy",
+        source: { kind: "duplicate", definitionId: 1 },
+      }),
+    );
+
+    expect(res.status).toBe(409);
+    expect(res.statusText).toBe(RETIRED_SCHEMA_MESSAGE);
+    expect(await res.json()).toMatchObject({ statusMessage: RETIRED_SCHEMA_MESSAGE });
   });
 
   it("rejects an empty name with 400", async () => {
@@ -669,7 +538,7 @@ describe("PUT /api/v1/workflow-definitions/:id", () => {
   const put = paramHandler("put", "/d/:id", detailPut);
 
   it("saves semantic drafts as immutable versions without changing deployment", async () => {
-    const limitedDefinition: WorkflowDefinitionV1 = {
+    const limitedDefinition: WorkflowDefinitionV2 = {
       ...VALID_DEFINITION,
       budgets: {
         maxDurationMs: 120_000,
@@ -726,14 +595,15 @@ describe("PUT /api/v1/workflow-definitions/:id", () => {
     expect(body.meta.draftRevision).toBe(1);
     expect(body.validation).toMatchObject({
       valid: false,
-      issues: [
+      issues: expect.arrayContaining([
         expect.objectContaining({
           code: "deployment",
           severity: "error",
           nodeId: expect.any(String),
-          path: expect.stringContaining("/inputs/target"),
+          path: expect.any(String),
+          message: expect.stringContaining("unknown block"),
         }),
-      ],
+      ]),
     });
   });
 
@@ -816,931 +686,6 @@ describe("PUT /api/v1/workflow-definitions/:id", () => {
       ),
     );
     expect(res.status).toBe(409);
-  });
-});
-
-describe("POST /api/v1/workflow-definitions/:id/migrate", () => {
-  const migrate = paramHandler("post", "/d/:id/migrate", detailMigrate);
-
-  it("materializes the exact pinned v1 default prompt before validating v2", async () => {
-    await saveDraft(migratableImplementationDefinition(), 0);
-
-    const previewRes = await migrate(
-      jsonRequest(
-        "POST",
-        {
-          mode: "preview",
-          sourceVersion: 1,
-          targetSchemaVersion: 2,
-          expectedDraftRevision: 1,
-        },
-        "http://worker.test/d/1/migrate",
-      ),
-    );
-
-    expect(previewRes.status).toBe(200);
-    const preview = await previewRes.json();
-    expect(preview.blockers).toEqual([]);
-    expect(
-      preview.definition.nodes.find(
-        ({ id }: { id: string }) => id === "implementation",
-      ).configuration.prompt,
-    ).toBe("{{prompt:implement@1}}");
-    expect(preview.conversions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "migration.prompt.default_materialized",
-          nodeId: "implementation",
-        }),
-        expect.objectContaining({
-          code: "migration.prompt.reference_pinned",
-          nodeId: "implementation",
-        }),
-      ]),
-    );
-  });
-
-  it("previews models without writes and creates one exact compatibility profile on apply", async () => {
-    await saveDraft(
-      migratableImplementationDefinition({
-        provider: "codex",
-        model: "gpt-custom",
-      }),
-      0,
-    );
-
-    const previewRes = await migrate(
-      jsonRequest(
-        "POST",
-        {
-          mode: "preview",
-          sourceVersion: 1,
-          targetSchemaVersion: 2,
-          expectedDraftRevision: 1,
-        },
-        "http://worker.test/d/1/migrate",
-      ),
-    );
-    expect(previewRes.status).toBe(200);
-    const preview = await previewRes.json();
-    expect(preview.blockers).toEqual([]);
-    const profileReference = preview.definition.nodes.find(
-      ({ id }: { id: string }) => id === "implementation",
-    ).configuration.harnessProfile;
-    expect(profileReference).toMatchObject({ version: 1 });
-    expect(profileReference.profileId).toMatch(/^migration-/);
-    expect(preview.conversions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "migration.agent.profile_materialized",
-          nodeId: "implementation",
-        }),
-      ]),
-    );
-    expect(
-      (await db.select().from(harnessProfiles)).filter(
-        (profile) => !profile.system,
-      ),
-    ).toEqual([]);
-
-    const applyRes = await migrate(
-      jsonRequest(
-        "POST",
-        {
-          mode: "apply",
-          sourceVersion: 1,
-          targetSchemaVersion: 2,
-          expectedDraftRevision: 1,
-          expectedConversionHash: preview.conversionHash,
-        },
-        "http://worker.test/d/1/migrate",
-      ),
-    );
-    expect(applyRes.status).toBe(200);
-    const createdProfiles = (await db.select().from(harnessProfiles)).filter(
-      (profile) => !profile.system,
-    );
-    expect(createdProfiles).toHaveLength(1);
-    expect(createdProfiles[0]).toMatchObject({
-      id: profileReference.profileId,
-      publishedVersion: 1,
-      draftManifest: {
-        harness: { provider: "codex" },
-        model: { id: "gpt-custom" },
-      },
-    });
-    expect(
-      (await db.select().from(harnessProfileVersions)).filter(
-        (version) => version.profileId === profileReference.profileId,
-      ),
-    ).toHaveLength(1);
-  });
-
-  it("uses the current GPT-5.4 built-in profile without creating a compatibility profile", async () => {
-    await saveDraft(
-      migratableImplementationDefinition({
-        provider: "codex",
-        model: "gpt-5.4",
-      }),
-      0,
-    );
-
-    const previewRes = await migrate(
-      jsonRequest(
-        "POST",
-        {
-          mode: "preview",
-          sourceVersion: 1,
-          targetSchemaVersion: 2,
-          expectedDraftRevision: 1,
-        },
-        "http://worker.test/d/1/migrate",
-      ),
-    );
-    const preview = await previewRes.json();
-
-    expect(preview.blockers).toEqual([]);
-    expect(
-      preview.definition.nodes.find(
-        ({ id }: { id: string }) => id === "implementation",
-      ).configuration.harnessProfile,
-    ).toEqual({ profileId: "builtin-codex", version: 2 });
-    expect(
-      preview.conversions.some(
-        ({ code }: { code: string }) =>
-          code === "migration.agent.profile_materialized",
-      ),
-    ).toBe(false);
-  });
-
-  it("produces a deployable v2 candidate for the legacy Ticket workflow", async () => {
-    await saveDraft(defaultWorkflowDefinition({ includeReview: true }), 0);
-
-    const previewRes = await migrate(
-      jsonRequest(
-        "POST",
-        {
-          mode: "preview",
-          sourceVersion: 1,
-          targetSchemaVersion: 2,
-          expectedDraftRevision: 1,
-        },
-        "http://worker.test/d/1/migrate",
-      ),
-    );
-    const preview = await previewRes.json();
-
-    expect(preview.blockers).toEqual([]);
-    expect(preview.conversionHash).toMatch(/^[a-f0-9]{64}$/);
-    expect(preview.definition).toMatchObject({ schemaVersion: 2 });
-  });
-
-  it("snapshots only legacy nested prompt composition without changing the library", async () => {
-    const leaf = await createPrompt(db, {
-      name: "Migration nested leaf",
-      body: "Leaf body",
-      actor: STORE_ACTOR,
-    });
-    const outer = await createPrompt(db, {
-      name: "Migration nested outer",
-      body: `Outer {{prompt:${leaf.prompt.id}}}`,
-      actor: STORE_ACTOR,
-    });
-    await saveDraft(
-      migratableV1Definition(
-        `Use {{prompt:${outer.prompt.id}}}`,
-      ),
-      0,
-    );
-
-    const previewRes = await migrate(
-      jsonRequest(
-        "POST",
-        {
-          mode: "preview",
-          sourceVersion: 1,
-          targetSchemaVersion: 2,
-          expectedDraftRevision: 1,
-        },
-        "http://worker.test/d/1/migrate",
-      ),
-    );
-
-    expect(previewRes.status).toBe(200);
-    const preview = await previewRes.json();
-    expect(preview.blockers).toEqual([]);
-    expect(
-      preview.definition.nodes.find(({ id }: { id: string }) => id === "llm")
-        .configuration.prompt,
-    ).toBe("Use Outer {{prompt:migration-nested-leaf@1}}");
-    expect(preview.conversions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "migration.prompt.nested_snapshot",
-          nodeId: "llm",
-        }),
-        expect.objectContaining({
-          code: "migration.prompt.reference_pinned",
-          nodeId: "llm",
-        }),
-      ]),
-    );
-    expect(
-      (await getPromptVersion(db, outer.prompt.id, 1))?.body,
-    ).toBe(`Outer {{prompt:${leaf.prompt.id}}}`);
-  });
-
-  it("blocks missing, malformed, and cyclic prompt trees at their exact workflow paths", async () => {
-    const cycleA = await createPrompt(db, {
-      name: "Migration cycle A",
-      body: "Initial A",
-      actor: STORE_ACTOR,
-    });
-    const cycleB = await createPrompt(db, {
-      name: "Migration cycle B",
-      body: "{{prompt:migration-cycle-a@2}}",
-      actor: STORE_ACTOR,
-    });
-    await savePromptVersion(db, {
-      promptId: cycleA.prompt.id,
-      body: `{{prompt:${cycleB.prompt.id}@1}}`,
-      actor: STORE_ACTOR,
-    });
-    const invalidPrompts: WorkflowDefinitionV1 = {
-      schemaVersion: 1,
-      nodes: [
-        {
-          id: "trigger",
-          type: "trigger_ticket_ai",
-          x: 0,
-          y: 0,
-          params: {},
-          inputs: {},
-        },
-        ...[
-          ["missing", "{{prompt:migration-does-not-exist@1}}"],
-          ["malformed", "{{prompt:}}"],
-          ["cyclic", "{{prompt:migration-cycle-a@2}}"],
-        ].map(([id, prompt], index) => ({
-          id: id!,
-          type: "call_llm" as const,
-          x: 240,
-          y: index * 160,
-          params: { prompt: prompt! },
-          inputs: {},
-        })),
-      ],
-      edges: [
-        { from: "trigger", to: "missing" },
-        { from: "trigger", to: "malformed" },
-        { from: "trigger", to: "cyclic" },
-      ],
-    };
-    await saveDraft(invalidPrompts, 0);
-
-    const previewRes = await migrate(
-      jsonRequest(
-        "POST",
-        {
-          mode: "preview",
-          sourceVersion: 1,
-          targetSchemaVersion: 2,
-          expectedDraftRevision: 1,
-        },
-        "http://worker.test/d/1/migrate",
-      ),
-    );
-    const preview = await previewRes.json();
-
-    expect(preview.definition).toBeNull();
-    expect(preview.conversionHash).toBeNull();
-    expect(preview.blockers).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "migration.prompt.resolution_failed",
-          nodeId: "missing",
-          path: "/nodes/1/params/prompt",
-        }),
-        expect.objectContaining({
-          code: "migration.prompt.resolution_failed",
-          nodeId: "malformed",
-          path: "/nodes/2/params/prompt",
-        }),
-        expect.objectContaining({
-          code: "migration.prompt.resolution_failed",
-          nodeId: "cyclic",
-          path: "/nodes/3/params/prompt",
-        }),
-      ]),
-    );
-  });
-
-  it("turns asynchronous v2 prompt validation failures into apply blockers", async () => {
-    const invalid: WorkflowDefinitionV1 = {
-      schemaVersion: 1,
-      nodes: [
-        {
-          id: "trigger",
-          type: "trigger_ticket_ai",
-          x: 0,
-          y: 0,
-          params: {},
-          inputs: {},
-        },
-        {
-          id: "generic",
-          type: "generic_agent",
-          x: 240,
-          y: 0,
-          params: { workspaceMode: "none" },
-          inputs: {},
-        },
-      ],
-      edges: [{ from: "trigger", to: "generic" }],
-    };
-    await saveDraft(invalid, 0);
-
-    const previewRes = await migrate(
-      jsonRequest(
-        "POST",
-        {
-          mode: "preview",
-          sourceVersion: 1,
-          targetSchemaVersion: 2,
-          expectedDraftRevision: 1,
-        },
-        "http://worker.test/d/1/migrate",
-      ),
-    );
-    const preview = await previewRes.json();
-
-    expect(preview.definition).toBeNull();
-    expect(preview.conversionHash).toBeNull();
-    expect(preview.blockers).toContainEqual(
-      expect.objectContaining({
-        code: "migration.target.prompt_empty",
-        nodeId: "generic",
-        path: "/nodes/1/configuration/prompt",
-      }),
-    );
-  });
-
-  it("previews and applies an exact immutable source without changing deployment", async () => {
-    await saveDraft(migratableV1Definition(), 0);
-    await deployDraft(1, null);
-    await saveDraft(migratableV1Definition("This is the newer v1 draft."), 1);
-
-    const previewRes = await migrate(
-      jsonRequest(
-        "POST",
-        {
-          mode: "preview",
-          sourceVersion: 1,
-          targetSchemaVersion: 2,
-          expectedDraftRevision: 2,
-        },
-        "http://worker.test/d/1/migrate",
-      ),
-    );
-
-    expect(previewRes.status).toBe(200);
-    const preview = await previewRes.json();
-    expect(preview).toMatchObject({
-      mode: "preview",
-      sourceDefinitionId: 1,
-      sourceVersion: 1,
-      targetSchemaVersion: 2,
-      blockers: [],
-      definition: {
-        schemaVersion: 2,
-        nodes: [
-          { id: "trigger" },
-          { id: "finish", type: "terminate" },
-        ],
-      },
-    });
-    expect(preview.conversionHash).toMatch(/^[a-f0-9]{64}$/);
-    expect(preview.definition.edges[0].id).toMatch(/^edge-[a-f0-9]{24}$/);
-
-    const applyRes = await migrate(
-      jsonRequest(
-        "POST",
-        {
-          mode: "apply",
-          sourceVersion: 1,
-          targetSchemaVersion: 2,
-          expectedDraftRevision: 2,
-          expectedConversionHash: preview.conversionHash,
-        },
-        "http://worker.test/d/1/migrate",
-      ),
-    );
-
-    expect(applyRes.status).toBe(200);
-    const applied = await applyRes.json();
-    expect(applied).toMatchObject({
-      mode: "apply",
-      conversionHash: preview.conversionHash,
-      meta: {
-        draftRevision: 3,
-        deployedVersion: 1,
-      },
-      draft: {
-        schemaVersion: 2,
-        nodes: [
-          { id: "trigger" },
-          { id: "finish", type: "terminate" },
-        ],
-      },
-    });
-    expect(applied.draft.edges).toEqual(preview.definition.edges);
-
-    const detailRes = await paramHandler("get", "/d/:id", detailGet)(
-      new Request("http://worker.test/d/1"),
-    );
-    const detail = await detailRes.json();
-    expect(detail.draft.schemaVersion).toBe(2);
-    expect(detail.deployed).toMatchObject({
-      version: 1,
-      definition: { schemaVersion: 1 },
-    });
-    expect(
-      detail.versions.map(
-        ({ version, definition }: { version: number; definition: WorkflowDefinition }) => [
-          version,
-          definition.schemaVersion,
-        ],
-      ),
-    ).toEqual([
-      [3, 2],
-      [2, 1],
-      [1, 1],
-    ]);
-  });
-
-  it("rejects apply when the draft CAS revision changed after preview", async () => {
-    await saveDraft(migratableV1Definition(), 0);
-    const previewRes = await migrate(
-      jsonRequest(
-        "POST",
-        {
-          mode: "preview",
-          sourceVersion: 1,
-          targetSchemaVersion: 2,
-          expectedDraftRevision: 1,
-        },
-        "http://worker.test/d/1/migrate",
-      ),
-    );
-    const preview = await previewRes.json();
-    await saveDraft(migratableV1Definition("A concurrent edit."), 1);
-
-    const applyRes = await migrate(
-      jsonRequest(
-        "POST",
-        {
-          mode: "apply",
-          sourceVersion: 1,
-          targetSchemaVersion: 2,
-          expectedDraftRevision: 1,
-          expectedConversionHash: preview.conversionHash,
-        },
-        "http://worker.test/d/1/migrate",
-      ),
-    );
-
-    expect(applyRes.status).toBe(409);
-    const detailRes = await paramHandler("get", "/d/:id", detailGet)(
-      new Request("http://worker.test/d/1"),
-    );
-    expect(await detailRes.json()).toMatchObject({
-      meta: { draftRevision: 2 },
-      draft: { schemaVersion: 1 },
-    });
-  });
-
-  it("rejects a stale conversion hash when a referenced prompt head moves", async () => {
-    const prompt = await createPrompt(db, {
-      name: "Migration hash drift unique",
-      body: "Version one",
-      actor: STORE_ACTOR,
-    });
-    await saveDraft(
-      migratableV1Definition(
-        "Use {{prompt:migration-hash-drift-unique}}",
-      ),
-      0,
-    );
-
-    const previewRes = await migrate(
-      jsonRequest(
-        "POST",
-        {
-          mode: "preview",
-          sourceVersion: 1,
-          targetSchemaVersion: 2,
-          expectedDraftRevision: 1,
-        },
-        "http://worker.test/d/1/migrate",
-      ),
-    );
-    expect(previewRes.status).toBe(200);
-    const preview = await previewRes.json();
-    expect(
-      preview.definition.nodes.find(({ id }: { id: string }) => id === "llm")
-        .configuration.prompt,
-    ).toBe("Use {{prompt:migration-hash-drift-unique@1}}");
-
-    const newPromptVersion = await savePromptVersion(db, {
-      promptId: prompt.prompt.id,
-      body: "Version two",
-      actor: STORE_ACTOR,
-    });
-    expect(newPromptVersion).toMatchObject({
-      changed: true,
-      version: { version: 2 },
-    });
-    const refreshedPreviewRes = await migrate(
-      jsonRequest(
-        "POST",
-        {
-          mode: "preview",
-          sourceVersion: 1,
-          targetSchemaVersion: 2,
-          expectedDraftRevision: 1,
-        },
-        "http://worker.test/d/1/migrate",
-      ),
-    );
-    const refreshedPreview = await refreshedPreviewRes.json();
-    expect(
-      refreshedPreview.definition.nodes.find(
-        ({ id }: { id: string }) => id === "llm",
-      ).configuration.prompt,
-    ).toBe("Use {{prompt:migration-hash-drift-unique@2}}");
-    expect(refreshedPreview.conversionHash).not.toBe(preview.conversionHash);
-
-    const applyRes = await migrate(
-      jsonRequest(
-        "POST",
-        {
-          mode: "apply",
-          sourceVersion: 1,
-          targetSchemaVersion: 2,
-          expectedDraftRevision: 1,
-          expectedConversionHash: preview.conversionHash,
-        },
-        "http://worker.test/d/1/migrate",
-      ),
-    );
-
-    expect(applyRes.status).toBe(409);
-    const detailRes = await paramHandler("get", "/d/:id", detailGet)(
-      new Request("http://worker.test/d/1"),
-    );
-    expect(await detailRes.json()).toMatchObject({
-      meta: { draftRevision: 1 },
-      draft: { schemaVersion: 1 },
-    });
-  });
-
-  it("returns all blockers and never appends a partial migration", async () => {
-    await saveDraft(blockedV1MigrationDefinition(), 0);
-    const previewRes = await migrate(
-      jsonRequest(
-        "POST",
-        {
-          mode: "preview",
-          sourceVersion: 1,
-          targetSchemaVersion: 2,
-          expectedDraftRevision: 1,
-        },
-        "http://worker.test/d/1/migrate",
-      ),
-    );
-
-    expect(previewRes.status).toBe(200);
-    const preview = await previewRes.json();
-    expect(preview.definition).toBeNull();
-    expect(preview.conversionHash).toBeNull();
-    expect(preview.blockers.map(({ code }: { code: string }) => code)).toEqual(
-      expect.arrayContaining([
-        "migration.edge.failure_port",
-        "migration.binding.unprovable",
-        "migration.branch.unparseable_condition",
-        "migration.prompt.unsafe_variable",
-        "migration.prompt.unresolved_placeholder",
-      ]),
-    );
-
-    const applyRes = await migrate(
-      jsonRequest(
-        "POST",
-        {
-          mode: "apply",
-          sourceVersion: 1,
-          targetSchemaVersion: 2,
-          expectedDraftRevision: 1,
-          expectedConversionHash: "0".repeat(64),
-        },
-        "http://worker.test/d/1/migrate",
-      ),
-    );
-    expect(applyRes.status).toBe(422);
-    expect(await applyRes.json()).toMatchObject({
-      mode: "apply",
-      error: "Workflow migration is blocked",
-      definition: null,
-      conversionHash: null,
-    });
-
-    const detailRes = await paramHandler("get", "/d/:id", detailGet)(
-      new Request("http://worker.test/d/1"),
-    );
-    const detail = await detailRes.json();
-    expect(detail.meta.draftRevision).toBe(1);
-    expect(detail.versions).toHaveLength(1);
-    expect(detail.draft.schemaVersion).toBe(1);
-  });
-
-  it("preserves raw historical blockers while reporting safe converter blockers", async () => {
-    await db.insert(workflowDefinitionVersions).values({
-      definitionId: 1,
-      version: 1,
-      definition: {
-        schemaVersion: 1,
-        hiddenTopLevel: { mode: "legacy" },
-        nodes: [
-          {
-            id: "trigger",
-            type: "trigger_ticket_ai",
-            x: 0,
-            y: 0,
-            params: {},
-            inputs: {},
-            hiddenNodeBehavior: true,
-          },
-          {
-            id: "finish",
-            type: "terminate",
-            x: 240,
-            y: 0,
-            params: {
-              terminalStatus: "done",
-              hiddenMode: "legacy",
-            },
-            inputs: {},
-          },
-        ],
-        edges: [
-          {
-            from: "trigger",
-            to: "finish",
-            fromPort: "failed",
-            hiddenEdgeBehavior: "legacy",
-          },
-        ],
-      },
-      createdById: "legacy",
-      createdByLabel: "Legacy",
-      restoredFromVersion: null,
-    });
-
-    const previewRes = await migrate(
-      jsonRequest(
-        "POST",
-        {
-          mode: "preview",
-          sourceVersion: 1,
-          targetSchemaVersion: 2,
-          expectedDraftRevision: 1,
-        },
-        "http://worker.test/d/1/migrate",
-      ),
-    );
-    expect(previewRes.status).toBe(200);
-    const preview = await previewRes.json();
-    expect(preview.definition).toBeNull();
-    expect(preview.blockers).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "migration.source.unknown_top_level_field",
-          path: "/hiddenTopLevel",
-        }),
-        expect.objectContaining({
-          code: "migration.source.unknown_node_field",
-          nodeId: "trigger",
-          path: "/nodes/0/hiddenNodeBehavior",
-        }),
-        expect.objectContaining({
-          code: "migration.source.unknown_edge_field",
-          nodeId: "trigger",
-          path: "/edges/0/hiddenEdgeBehavior",
-        }),
-        expect.objectContaining({
-          code: "migration.node.unknown_parameter",
-          nodeId: "finish",
-          path: "/nodes/1/params/hiddenMode",
-        }),
-        expect.objectContaining({
-          code: "migration.edge.failure_port",
-          nodeId: "trigger",
-          path: "/edges/0/fromPort",
-        }),
-      ]),
-    );
-    expect(preview.conversions).not.toContainEqual(
-      expect.objectContaining({
-        code: "migration.source.compatibility_normalized",
-      }),
-    );
-
-    const applyRes = await migrate(
-      jsonRequest(
-        "POST",
-        {
-          mode: "apply",
-          sourceVersion: 1,
-          targetSchemaVersion: 2,
-          expectedDraftRevision: 1,
-          expectedConversionHash: "0".repeat(64),
-        },
-        "http://worker.test/d/1/migrate",
-      ),
-    );
-    expect(applyRes.status).toBe(422);
-    expect(
-      (
-        await db.select().from(workflowDefinitionVersions)
-      ).filter(({ definitionId }) => definitionId === 1),
-    ).toHaveLength(1);
-
-    const duplicateRes = await handlerFor(definitionsPost)(
-      jsonRequest("POST", {
-        name: "Unsafe historical copy",
-        source: { kind: "duplicate", definitionId: 1 },
-        targetSchemaVersion: 2,
-      }),
-    );
-    expect(duplicateRes.status).toBe(422);
-    const definitionsRes = await handlerFor(definitionsGet)(
-      new Request("http://worker.test/"),
-    );
-    expect((await definitionsRes.json()).definitions).toHaveLength(1);
-  });
-
-  it("keeps retired historical behavior as an explicit migration blocker", async () => {
-    await db.insert(workflowDefinitionVersions).values({
-      definitionId: 1,
-      version: 1,
-      definition: {
-        schemaVersion: 1,
-        nodes: [
-          {
-            id: "trigger",
-            type: "trigger_ticket_ai",
-            x: 0,
-            y: 0,
-            params: {},
-            inputs: {},
-          },
-          {
-            id: "trace",
-            type: "arthur_trace",
-            x: 240,
-            y: 0,
-            params: {},
-            inputs: {},
-          },
-          {
-            id: "finish",
-            type: "terminate",
-            x: 480,
-            y: 0,
-            params: { terminalStatus: "done" },
-            inputs: {},
-          },
-        ],
-        edges: [
-          { from: "trigger", to: "trace" },
-          { from: "trace", to: "finish", fromPort: "out" },
-        ],
-      },
-      createdById: "legacy",
-      createdByLabel: "Legacy",
-      restoredFromVersion: null,
-    });
-
-    const previewRes = await migrate(
-      jsonRequest(
-        "POST",
-        {
-          mode: "preview",
-          sourceVersion: 1,
-          targetSchemaVersion: 2,
-          expectedDraftRevision: 1,
-        },
-        "http://worker.test/d/1/migrate",
-      ),
-    );
-
-    expect(previewRes.status).toBe(200);
-    const preview = await previewRes.json();
-    expect(preview.definition).toBeNull();
-    expect(preview.conversionHash).toBeNull();
-    expect(preview.blockers).toContainEqual(
-      expect.objectContaining({
-        code: "migration.source.retired_arthur_trace",
-        nodeId: "trace",
-        path: "/nodes/1/type",
-      }),
-    );
-  });
-
-  it("feeds benign missing-input compatibility upgrades into the converter", async () => {
-    await db.insert(workflowDefinitionVersions).values({
-      definitionId: 1,
-      version: 1,
-      definition: {
-        schemaVersion: 1,
-        nodes: [
-          {
-            id: "trigger",
-            type: "trigger_ticket_ai",
-            x: 0,
-            y: 0,
-            params: {},
-          },
-          {
-            id: "finish",
-            type: "terminate",
-            x: 240,
-            y: 0,
-            params: { terminalStatus: "done" },
-          },
-        ],
-        edges: [{ from: "trigger", to: "finish" }],
-      },
-      createdById: "legacy",
-      createdByLabel: "Legacy",
-      restoredFromVersion: null,
-    });
-
-    const previewRes = await migrate(
-      jsonRequest(
-        "POST",
-        {
-          mode: "preview",
-          sourceVersion: 1,
-          targetSchemaVersion: 2,
-          expectedDraftRevision: 1,
-        },
-        "http://worker.test/d/1/migrate",
-      ),
-    );
-    expect(previewRes.status).toBe(200);
-    const preview = await previewRes.json();
-    expect(preview.blockers).toEqual([]);
-    expect(preview.definition).toMatchObject({ schemaVersion: 2 });
-    expect(preview.conversions).toContainEqual(
-      expect.objectContaining({
-        code: "migration.source.compatibility_normalized",
-      }),
-    );
-  });
-
-  it("allows members to preview but not apply", async () => {
-    await saveDraft(migratableV1Definition(), 0);
-    state.sessionUserId = "user_member";
-    const previewRes = await migrate(
-      jsonRequest(
-        "POST",
-        {
-          mode: "preview",
-          sourceVersion: 1,
-          targetSchemaVersion: 2,
-          expectedDraftRevision: 1,
-        },
-        "http://worker.test/d/1/migrate",
-      ),
-    );
-    expect(previewRes.status).toBe(200);
-    const preview = await previewRes.json();
-
-    const applyRes = await migrate(
-      jsonRequest(
-        "POST",
-        {
-          mode: "apply",
-          sourceVersion: 1,
-          targetSchemaVersion: 2,
-          expectedDraftRevision: 1,
-          expectedConversionHash: preview.conversionHash,
-        },
-        "http://worker.test/d/1/migrate",
-      ),
-    );
-    expect(applyRes.status).toBe(403);
   });
 });
 
@@ -2143,6 +1088,31 @@ describe("DELETE /api/v1/workflow-definitions/:id", () => {
 describe("POST /api/v1/workflow-definitions/:id/rollback", () => {
   const rollback = paramHandler("post", "/d/:id/rollback", detailRollback);
 
+  it("returns 409 when the selected version is a stored legacy definition", async () => {
+    await db.insert(workflowDefinitionVersions).values({
+      definitionId: 1,
+      version: 1,
+      definition: { schemaVersion: 1, nodes: [], edges: [] },
+      createdById: "user_admin",
+      createdByLabel: "Admin",
+    });
+
+    const res = await rollback(
+      jsonRequest(
+        "POST",
+        { version: 1, expectedDeployedVersion: null },
+        "http://worker.test/d/1/rollback",
+      ),
+    );
+
+    expect(res.status).toBe(409);
+    expect(res.statusText).toBe(RETIRED_SCHEMA_MESSAGE);
+    expect(await res.json()).toMatchObject({
+      statusCode: 409,
+      statusMessage: RETIRED_SCHEMA_MESSAGE,
+    });
+  });
+
   it("selects an existing immutable version without copying it", async () => {
     await saveAndDeploy(VALID_DEFINITION, 0, null);
     await saveAndDeploy(OTHER_DEFINITION, 1, 1);
@@ -2272,182 +1242,6 @@ describe("POST /api/v1/workflow-definitions/:id/restore (compatibility alias)", 
         }),
       ],
     });
-  });
-});
-
-// --- Legacy single-definition shims (removed once the dashboard migrates) ---
-
-describe("GET /api/v1/workflow-definition (shim)", () => {
-  it("returns empty state with default definition and editor options", async () => {
-    const res = await handlerFor(shimGet)(new Request("http://worker.test/"));
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.current).toBeNull();
-    expect(body.versions).toEqual([]);
-    expect(body.defaultDefinition.schemaVersion).toBe(1);
-    expect(body.defaultDefinition.nodes.some((n: { type: string }) => n.type === "review_agent")).toBe(
-      true,
-    );
-    expect(body.options.agentKind).toBe("claude");
-    expect(body.options.defaultModel).toBe("claude-test-default");
-    expect(body.options.models.claude).toEqual([
-      "claude-test-default",
-      "claude-opus-4-8",
-      "claude-sonnet-5",
-    ]);
-    expect(body.options.models.codex).toEqual(["gpt-5-codex", "gpt-5"]);
-    expect(body.options.ticketStatusTargets).toEqual([
-      { value: "10010", label: "AI Review" },
-      { value: "10011", label: "Done" },
-    ]);
-  });
-
-  it("omits the review block when the review phase is disabled", async () => {
-    state.env.ENABLE_REVIEW_PHASE = false;
-    try {
-      const res = await handlerFor(shimGet)(new Request("http://worker.test/"));
-      const body = await res.json();
-      expect(
-        body.defaultDefinition.nodes.some((n: { type: string }) => n.type === "review_agent"),
-      ).toBe(false);
-    } finally {
-      state.env.ENABLE_REVIEW_PHASE = true;
-    }
-  });
-});
-
-describe("PUT /api/v1/workflow-definition (shim)", () => {
-  it("saves mutable drafts against the default definition", async () => {
-    let res = await handlerFor(shimPut)(
-      jsonRequest("PUT", { definition: VALID_DEFINITION, expectedDraftRevision: 0 }),
-    );
-    expect(res.status).toBe(200);
-    let body = await res.json();
-    expect(body.draft).toEqual(semantic(VALID_DEFINITION));
-    expect(body.meta).toMatchObject({ id: 1, draftRevision: 1, deployedVersion: null });
-
-    res = await handlerFor(shimPut)(
-      jsonRequest("PUT", { definition: OTHER_DEFINITION, expectedDraftRevision: 1 }),
-    );
-    body = await res.json();
-    expect(body.draft).toEqual(semantic(OTHER_DEFINITION));
-    expect(body.meta.draftRevision).toBe(2);
-
-    const getRes = await handlerFor(shimGet)(new Request("http://worker.test/"));
-    const getBody = await getRes.json();
-    expect(getBody.current.version).toBe(2);
-    expect(getBody.versions.map((v: { version: number }) => v.version)).toEqual([2, 1]);
-  });
-
-  it("accepts a deploy-invalid graph as a draft", async () => {
-    const res = await handlerFor(shimPut)(
-      jsonRequest("PUT", {
-        definition: withInvalidBinding(VALID_DEFINITION),
-        expectedDraftRevision: 0,
-      }),
-    );
-    expect(res.status).toBe(200);
-  });
-
-  it("accepts and round-trips a provider on an agent node", async () => {
-    const def = {
-      ...VALID_DEFINITION,
-      nodes: VALID_DEFINITION.nodes.map((node) =>
-        node.type === "planning_agent"
-          ? { ...node, params: { ...node.params, provider: "codex" } }
-          : node,
-      ),
-    };
-    const res = await handlerFor(shimPut)(
-      jsonRequest("PUT", { definition: def, expectedDraftRevision: 0 }),
-    );
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.draft).toEqual(semantic(def));
-  });
-
-  it("rejects members with 403", async () => {
-    state.sessionUserId = "user_member";
-    const res = await handlerFor(shimPut)(
-      jsonRequest("PUT", { definition: VALID_DEFINITION, expectedDraftRevision: 0 }),
-    );
-    expect(res.status).toBe(403);
-  });
-
-  it("rejects a definition that fails the schema with 400 Invalid definition", async () => {
-    const res = await handlerFor(shimPut)(
-      jsonRequest("PUT", {
-        definition: withBadParam(VALID_DEFINITION),
-        expectedDraftRevision: 0,
-      }),
-    );
-    expect(res.status).toBe(400);
-    expect(res.statusText).toMatch(/^Invalid definition:/);
-  });
-
-  it("accepts an unreachable graph as a draft", async () => {
-    const res = await handlerFor(shimPut)(
-      jsonRequest("PUT", {
-        definition: withUnreachableNode(VALID_DEFINITION),
-        expectedDraftRevision: 0,
-      }),
-    );
-    expect(res.status).toBe(200);
-  });
-});
-
-describe("POST /api/v1/workflow-definition/restore (shim)", () => {
-  it("selects the requested immutable version", async () => {
-    await saveAndDeploy(VALID_DEFINITION, 0, null);
-    await saveAndDeploy(OTHER_DEFINITION, 1, 1);
-    const res = await handlerFor(shimRestore)(
-      jsonRequest("POST", { version: 1, expectedDeployedVersion: 2 }),
-    );
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.deployed).toMatchObject({ version: 1, definition: semantic(VALID_DEFINITION) });
-  });
-
-  it("404s on an unknown version", async () => {
-    const res = await handlerFor(shimRestore)(
-      jsonRequest("POST", { version: 42, expectedDeployedVersion: null }),
-    );
-    expect(res.status).toBe(404);
-  });
-
-  it("returns structured 422 issues for an invalid v2 version", async () => {
-    await saveAndDeploy(VALID_DEFINITION, 0, null);
-    const invalid = defaultWorkflowDefinitionV2({ includeReview: false });
-    invalid.nodes.find((node) => node.id === "planning")!.configuration.prompt =
-      "{{unknown}}";
-    await saveWorkflowDefinitionDraft(db, {
-      definitionId: 1,
-      definition: invalid,
-      expectedDraftRevision: 1,
-      actor: STORE_ACTOR,
-    });
-
-    const res = await handlerFor(shimRestore)(
-      jsonRequest("POST", { version: 2, expectedDeployedVersion: 1 }),
-    );
-    expect(res.status).toBe(422);
-    expect(await res.json()).toMatchObject({
-      issues: [
-        expect.objectContaining({
-          code: "prompt_placeholder_unresolved",
-          nodeId: "planning",
-        }),
-      ],
-    });
-  });
-
-  it("rejects members with 403", async () => {
-    await saveAndDeploy(VALID_DEFINITION, 0, null);
-    state.sessionUserId = "user_member";
-    const res = await handlerFor(shimRestore)(
-      jsonRequest("POST", { version: 1, expectedDeployedVersion: 1 }),
-    );
-    expect(res.status).toBe(403);
   });
 });
 

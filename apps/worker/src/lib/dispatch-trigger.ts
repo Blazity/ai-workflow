@@ -18,7 +18,11 @@ import {
   findWorkflowOwnedPullRequest,
   findWorkflowOwnedPullRequestIntent,
 } from "../db/queries/workflow-owned-branches.js";
-import { getEnabledWorkflowDefinitionForTrigger, getWorkflowDefinitionVersion } from "../workflow-definition/store.js";
+import {
+  getEnabledWorkflowDefinitionForTrigger,
+  getWorkflowDefinitionVersion,
+  runnableDefinitionOf,
+} from "../workflow-definition/store.js";
 import { createAdapters } from "./adapters.js";
 import { claimSubjectRun, envTriggerRateLimitDefault, triggerRateLimitNodes } from "./dispatch.js";
 import { recordIngestionFailure } from "./ingestion-diagnostic.js";
@@ -83,12 +87,10 @@ export interface DispatchTriggerDeps {
 }
 
 export function triggerNodeParams(
-  definition: WorkflowDefinition,
+  definition: WorkflowDefinition | undefined,
   triggerType: string,
 ): Record<string, unknown> {
-  if (definition.schemaVersion === 1) {
-    return definition.nodes.find((node) => node.type === triggerType)?.params ?? {};
-  }
+  if (!definition) return {};
   return definition.nodes.find((node) => node.type === triggerType)?.configuration ?? {};
 }
 
@@ -99,7 +101,10 @@ export async function resolveEnabledReviewStates(
 ): Promise<string[]> {
   const enabled = await getEnabledWorkflowDefinitionForTrigger(db, "trigger_pr_review");
   if (!enabled?.current) return provider === "github" ? ["changes_requested"] : [];
-  const params = triggerNodeParams(enabled.current.definition, "trigger_pr_review");
+  const params = triggerNodeParams(
+    runnableDefinitionOf(enabled.current),
+    "trigger_pr_review",
+  );
   const providers = Array.isArray(params.providers) ? params.providers : ["github"];
   if (!providers.includes(provider)) return [];
   return selectedReviewStates(params, provider, botLogin);
@@ -146,7 +151,8 @@ export async function dispatchTriggerEvent(
     const enabled = await getEnabledWorkflowDefinitionForTrigger(deps.db, event.triggerType);
     if (!enabled?.current) return { result: "no_definition" };
 
-    const params = triggerNodeParams(enabled.current.definition, event.triggerType);
+    const deployedGraph = runnableDefinitionOf(enabled.current);
+    const params = triggerNodeParams(deployedGraph, event.triggerType);
     const providers = params.providers;
     if (
       Array.isArray(providers) &&
@@ -156,7 +162,7 @@ export async function dispatchTriggerEvent(
       return { result: "ignored_provider" };
     }
     const scope: TriggerScope = params.scope === "any" ? "any" : "workflow_owned";
-    const pinnedScope = enabled.current.definition.repositoryScope;
+    const pinnedScope = deployedGraph?.repositoryScope;
     if (
       scope === "any" &&
       !isRepoAllowedForScope(event.pr, pinnedScope)
@@ -431,7 +437,7 @@ async function prTriggerRateLimited(
   );
   const { env } = await import("../../env.js");
   const limit = resolveTriggerRateLimitForType(
-    triggerRateLimitNodes(pinned?.definition, accepted.triggerType),
+    triggerRateLimitNodes(runnableDefinitionOf(pinned), accepted.triggerType),
     envTriggerRateLimitDefault(env),
   );
   if (!limit) return false;
@@ -470,19 +476,13 @@ const PR_TRIGGER_CAP_FIELD: Record<string, { field: string; fallback: number; ma
 };
 
 /**
- * Sibling trigger nodes of this type with the values authored on them. v1 keeps
- * those under params and v2 under configuration, and neither is run through the
- * schema's defaults on the way out of storage.
+ * Sibling trigger nodes of this type with the values authored on them, which
+ * are not run through the schema's defaults on the way out of storage.
  */
 function pinnedTriggerNodes(
   definition: WorkflowDefinition,
   triggerType: string,
 ): Array<{ nodeId: string; params: Record<string, unknown> }> {
-  if (definition.schemaVersion === 1) {
-    return definition.nodes
-      .filter((node) => node.type === triggerType)
-      .map((node) => ({ nodeId: node.id, params: node.params }));
-  }
   return definition.nodes
     .filter((node) => node.type === triggerType)
     .map((node) => ({ nodeId: node.id, params: node.configuration }));
@@ -565,9 +565,10 @@ async function prAutofixCapReached(
     accepted.definitionId,
     accepted.definitionVersion,
   );
-  const cap = pinned
+  const pinnedGraph = runnableDefinitionOf(pinned);
+  const cap = pinnedGraph
     ? restrictivePrAutofixCap(
-        pinned.definition,
+        pinnedGraph,
         accepted.triggerType,
         capField.field,
         capField.fallback,

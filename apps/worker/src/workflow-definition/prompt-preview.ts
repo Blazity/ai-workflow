@@ -48,7 +48,7 @@ export async function previewWorkflowPromptCandidate(
     candidate,
     registryContext,
   );
-  if (validated.parsed?.schemaVersion !== 2) {
+  if (!validated.parsed) {
     return {
       ok: false,
       statusCode: 422,

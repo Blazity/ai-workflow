@@ -13,10 +13,9 @@
  * src/prompt-library/builtin-prompt-drift.test.ts (every version an active
  * definition actually pins).
  *
- * N is not always 1. The v1 to v2 migration canonicalizer
- * (src/workflow-definition/v2-migration-prompts.ts) and the flow editor both
- * pin the version that was current when the definition was saved, so this
- * migration must reach platform-authored versions above 1 as well.
+ * N is not always 1. The flow editor pins the version that was current when the
+ * definition was saved, so this migration must reach platform-authored versions
+ * above 1 as well.
  *
  * Usage, from apps/worker (the bodies are read from @shared/contracts, which is
  * consumed as TypeScript source, so nothing has to be built first):

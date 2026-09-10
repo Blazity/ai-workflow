@@ -33,6 +33,7 @@ const mockGetEnabled = vi.fn();
 const mockHasBlockingApproval = vi.fn();
 vi.mock("../workflow-definition/store.js", () => ({
   getEnabledWorkflowDefinitionForTrigger: (...args: any[]) => mockGetEnabled(...args),
+  runnableDefinitionOf: (row: any) => row?.schema === "v2" ? row.definition : undefined,
 }));
 vi.mock("../approvals/store.js", () => ({
   hasDispatchBlockingApprovalForTicket: (...args: any[]) =>
@@ -159,7 +160,12 @@ describe("dispatchTicket owner reservation", () => {
     mockStart.mockResolvedValue({ runId: "run-started" });
     mockGetEnabled.mockResolvedValue({
       definition: { id: 7 },
-      current: { definitionId: 7, version: 4 },
+      current: {
+        definitionId: 7,
+        version: 4,
+        schema: "v2",
+        definition: { schemaVersion: 2, nodes: [], edges: [] },
+      },
     });
   });
 
@@ -480,6 +486,7 @@ describe("dispatchTicket trigger rate limit", () => {
       current: {
         definitionId: 7,
         version: 4,
+        schema: "v2",
         definition: {
           schemaVersion: 2,
           nodes: [
@@ -557,7 +564,12 @@ describe("dispatchTicket trigger rate limit", () => {
   it("writes nothing when no limit is configured", async () => {
     mockGetEnabled.mockResolvedValue({
       definition: { id: 7 },
-      current: { definitionId: 7, version: 4 },
+      current: {
+        definitionId: 7,
+        version: 4,
+        schema: "v2",
+        definition: { schemaVersion: 2, nodes: [], edges: [] },
+      },
     });
 
     await expect(dispatchTicket("PROJ-42", adapters(), 3)).resolves.toEqual({

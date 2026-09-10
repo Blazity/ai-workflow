@@ -1,25 +1,20 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type {
-  PromptSlotDefinition,
-  WorkflowDefinition,
-} from "@shared/contracts";
+import type { PromptSlotDefinition } from "@shared/contracts";
 import { DEFAULT_AGENT_PROMPTS } from "@shared/contracts";
 import type { Db } from "../db/client.js";
-import { promptLibrary, promptLibraryVersions, workflowDefinitionVersions } from "../db/schema.js";
+import { promptLibrary, promptLibraryVersions } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
 import { DashboardAuthError } from "../lib/auth/users-read.js";
 import {
   archivePrompt,
   createPrompt,
   findPromptRowsByNames,
-  findPromptUsage,
   findPromptUsageInPrompts,
   getCurrentPromptVersion,
   getPrompt,
   getPromptVersion,
   listPrompts,
   listPromptVersionRows,
-  PromptLibraryStoreError,
   restorePromptVersion,
   retryOnUniqueViolation,
   savePromptVersion,
@@ -558,249 +553,6 @@ describe("listPromptVersionRows cap", () => {
     expect(rows).toHaveLength(50);
     expect(rows[0].version).toBe(56);
     expect(rows[49].version).toBe(7);
-  });
-});
-
-describe("findPromptUsage", () => {
-  it("reports current / behind / modified per referencing block param", async () => {
-    const { prompt } = await createPrompt(db, { name: "Used", body: "V1BODY", actor: ADMIN });
-    await savePromptVersion(db, { promptId: prompt.id, body: "V2BODY", actor: ADMIN });
-    // Head is now version 2.
-
-    const definition: WorkflowDefinition = {
-      schemaVersion: 1,
-      nodes: [
-        {
-          id: "cur",
-          type: "planning_agent",
-          name: "Plan node",
-          x: 0,
-          y: 0,
-          inputs: {},
-          params: { prompt: "V2BODY" },
-          promptRefs: { prompt: { promptId: prompt.id, version: 2 } },
-        },
-        {
-          id: "beh",
-          type: "implementation_agent",
-          x: 0,
-          y: 0,
-          inputs: {},
-          params: { prompt: "V1BODY" },
-          promptRefs: { prompt: { promptId: prompt.id, version: 1 } },
-        },
-        {
-          id: "mod",
-          type: "review_agent",
-          x: 0,
-          y: 0,
-          inputs: {},
-          params: { prompt: "EDITED LOCALLY" },
-          promptRefs: { prompt: { promptId: prompt.id, version: 2 } },
-        },
-        {
-          id: "gone",
-          type: "open_pr",
-          x: 0,
-          y: 0,
-          inputs: {},
-          params: { prompt: "whatever" },
-          promptRefs: { prompt: { promptId: prompt.id, version: 99 } },
-        },
-        { id: "unref", type: "update_ticket_status", x: 0, y: 0, inputs: {}, params: {} },
-      ],
-      edges: [],
-    };
-    // Seed a head version for the migration's default definition (id 1).
-    await db.insert(workflowDefinitionVersions).values({
-      definitionId: 1,
-      version: 1,
-      definition,
-      createdById: "u_admin",
-      createdByLabel: "Admin",
-      restoredFromVersion: null,
-    });
-
-    const rows = await findPromptUsage(db, prompt.id);
-    const byNode = new Map(rows.map((r) => [r.nodeId, r]));
-
-    expect(byNode.get("cur")).toMatchObject({
-      definitionId: 1,
-      definitionName: "Ticket workflow",
-      nodeName: "Plan node",
-      blockType: "planning_agent",
-      paramKey: "prompt",
-      version: 2,
-      state: "current",
-    });
-    expect(byNode.get("beh")).toMatchObject({ nodeName: null, version: 1, state: "behind" });
-    expect(byNode.get("mod")).toMatchObject({ version: 2, state: "modified" });
-    expect(byNode.get("gone")).toMatchObject({ version: 99, state: "modified" });
-    expect(byNode.has("unref")).toBe(false);
-    expect(rows).toHaveLength(4);
-  });
-
-  it("ignores archived definitions and refs to other prompts", async () => {
-    const target = await createPrompt(db, { name: "Target", body: "T", actor: ADMIN });
-    const other = await createPrompt(db, { name: "Other", body: "O", actor: ADMIN });
-
-    const definition: WorkflowDefinition = {
-      schemaVersion: 1,
-      nodes: [
-        {
-          id: "n",
-          type: "planning_agent",
-          x: 0,
-          y: 0,
-          inputs: {},
-          params: { prompt: "O" },
-          promptRefs: { prompt: { promptId: other.prompt.id, version: 1 } },
-        },
-      ],
-      edges: [],
-    };
-    await db.insert(workflowDefinitionVersions).values({
-      definitionId: 1,
-      version: 1,
-      definition,
-      createdById: "u_admin",
-      createdByLabel: "Admin",
-      restoredFromVersion: null,
-    });
-
-    expect(await findPromptUsage(db, target.prompt.id)).toHaveLength(0);
-  });
-
-  it("marks a ref as modified when its paramKey is missing or holds a non-string value", async () => {
-    const { prompt } = await createPrompt(db, { name: "Edge", body: "BODY", actor: ADMIN });
-    // Head is version 1 with body "BODY"; both refs point at it, so any
-    // "modified" verdict comes from the param text, not a missing version.
-
-    const definition: WorkflowDefinition = {
-      schemaVersion: 1,
-      nodes: [
-        {
-          id: "missing",
-          type: "planning_agent",
-          x: 0,
-          y: 0,
-          inputs: {},
-          params: {}, // paramKey "prompt" absent entirely
-          promptRefs: { prompt: { promptId: prompt.id, version: 1 } },
-        },
-        {
-          id: "nonstring",
-          type: "implementation_agent",
-          x: 0,
-          y: 0,
-          inputs: {},
-          params: { prompt: 42 }, // present but not a string
-          promptRefs: { prompt: { promptId: prompt.id, version: 1 } },
-        },
-      ],
-      edges: [],
-    };
-    await db.insert(workflowDefinitionVersions).values({
-      definitionId: 1,
-      version: 1,
-      definition,
-      createdById: "u_admin",
-      createdByLabel: "Admin",
-      restoredFromVersion: null,
-    });
-
-    const rows = await findPromptUsage(db, prompt.id);
-    const byNode = new Map(rows.map((r) => [r.nodeId, r]));
-    expect(byNode.get("missing")).toMatchObject({ version: 1, state: "modified" });
-    expect(byNode.get("nonstring")).toMatchObject({ version: 1, state: "modified" });
-    expect(rows).toHaveLength(2);
-  });
-
-  it("counts live {{prompt:...}} token references (slug and legacy id) without provenance refs", async () => {
-    const { prompt } = await createPrompt(db, { name: "Live ref", body: "V1", actor: ADMIN });
-    await savePromptVersion(db, { promptId: prompt.id, body: "V2", actor: ADMIN });
-    // Head is now version 2; slug is "live-ref".
-
-    const definition: WorkflowDefinition = {
-      schemaVersion: 1,
-      nodes: [
-        {
-          id: "latest",
-          type: "planning_agent",
-          x: 0,
-          y: 0,
-          inputs: {},
-          params: { prompt: "Intro\n{{prompt:live-ref}}" },
-        },
-        {
-          id: "pinned",
-          type: "call_llm",
-          x: 0,
-          y: 0,
-          inputs: {},
-          params: { prompt: "{{prompt:live-ref@1}}" },
-        },
-        {
-          id: "legacy",
-          type: "review_agent",
-          x: 0,
-          y: 0,
-          inputs: {},
-          params: { prompt: `{{prompt:${prompt.id}}}` },
-        },
-      ],
-      edges: [],
-    };
-    await db.insert(workflowDefinitionVersions).values({
-      definitionId: 1,
-      version: 1,
-      definition,
-      createdById: "u_admin",
-      createdByLabel: "Admin",
-      restoredFromVersion: null,
-    });
-
-    const rows = await findPromptUsage(db, prompt.id);
-    const byNode = new Map(rows.map((r) => [r.nodeId, r]));
-    expect(byNode.get("latest")).toMatchObject({ version: 2, state: "current" });
-    expect(byNode.get("pinned")).toMatchObject({ version: 1, state: "behind" });
-    expect(byNode.get("legacy")).toMatchObject({ version: 2, state: "current" });
-    expect(rows).toHaveLength(3);
-  });
-
-  it("finds usage on a node whose params and promptRefs are populated multi-key records", async () => {
-    const { prompt } = await createPrompt(db, { name: "Records", body: "BODY", actor: ADMIN });
-
-    const definition: WorkflowDefinition = {
-      schemaVersion: 1,
-      nodes: [
-        {
-          id: "multi",
-          type: "planning_agent",
-          x: 0,
-          y: 0,
-          inputs: {},
-          params: { prompt: "BODY", model: "gpt-4", temperature: 0.2 },
-          promptRefs: {
-            prompt: { promptId: prompt.id, version: 1 },
-          },
-        },
-      ],
-      edges: [],
-    };
-    await db.insert(workflowDefinitionVersions).values({
-      definitionId: 1,
-      version: 1,
-      definition,
-      createdById: "u_admin",
-      createdByLabel: "Admin",
-      restoredFromVersion: null,
-    });
-
-    const rows = await findPromptUsage(db, prompt.id);
-    expect(rows).toEqual([
-      expect.objectContaining({ nodeId: "multi", paramKey: "prompt", version: 1, state: "current" }),
-    ]);
   });
 });
 

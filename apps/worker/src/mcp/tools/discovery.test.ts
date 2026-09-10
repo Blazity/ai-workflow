@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 
 vi.mock("../../../env.js", () => ({
   env: {
@@ -159,6 +160,8 @@ type ListedWorkflow = {
   name: string;
   enabled: boolean;
   deployedVersion: number | null;
+  deployedSchema: "v2" | "legacy-v1";
+  retiredMessage?: string;
   triggers: Array<{
     triggerNodeId: string;
     triggerType: string;
@@ -211,6 +214,7 @@ describe("workflows.list", () => {
         name: "Ticket workflow",
         enabled: true,
         deployedVersion: 1,
+        deployedSchema: "v2",
         // Only the trigger node: an agent block is not something a dispatch can
         // be aimed at.
         triggers: [
@@ -288,6 +292,7 @@ describe("workflows.list", () => {
         name: "Never deployed",
         enabled: false,
         deployedVersion: null,
+        deployedSchema: "v2",
         triggers: [],
       },
     ]);
@@ -364,6 +369,36 @@ describe("workflows.list", () => {
     expect(workflows[0]?.triggers).toEqual([]);
     expect(workflows[1]?.triggers).toEqual([
       { triggerNodeId: "ok-1", triggerType: "trigger_ticket_ai", manuallyDispatchable: true },
+    ]);
+  });
+
+  it("marks a retired deployment explicitly and advertises no triggers", async () => {
+    const definitionId = await seedDefinition({
+      name: "Retired workflow",
+      enabled: true,
+      versions: [
+        {
+          version: 1,
+          definition: {
+            schemaVersion: 1,
+            nodes: [{ id: "legacy-trigger", type: "trigger_ticket_ai" }],
+            edges: [],
+          },
+        },
+      ],
+      deployedVersion: 1,
+    });
+
+    expect(workflowsOf(await listWorkflows())).toEqual([
+      {
+        definitionId,
+        name: "Retired workflow",
+        enabled: true,
+        deployedVersion: 1,
+        deployedSchema: "legacy-v1",
+        retiredMessage: RETIRED_SCHEMA_MESSAGE,
+        triggers: [],
+      },
     ]);
   });
 });

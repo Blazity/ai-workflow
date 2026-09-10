@@ -23,7 +23,7 @@ import type { V2InvocationContext } from "../invocation-context.js";
 import {
   describeWorkflowDefinitionIssues,
   validateWorkflowDefinitionIssuesForDeployment,
-  workflowDefinitionSchema,
+  workflowDefinitionV2Schema,
 } from "../schema.js";
 import { workflowDefinitionTemplate } from "../templates.js";
 import { executeTransform } from "../transform.js";
@@ -294,11 +294,6 @@ function loadTemplateGraph(
       `Unknown workflow ${source}. A scenario may only run a template that templates.ts ships.`,
     );
   }
-  if (template.definition.schemaVersion !== 2) {
-    throw new ScenarioViolation(
-      `Workflow ${source} is not a v2 definition, and the harness drives the v2 scheduler.`,
-    );
-  }
   return { source, definition: template.definition };
 }
 
@@ -322,15 +317,10 @@ function loadSnapshotGraph(path: string): ScenarioGraph {
       `Workflow ${source} could not be read as JSON: ${error instanceof Error ? error.message : String(error)}.`,
     );
   }
-  const parsed = workflowDefinitionSchema.safeParse(raw);
+  const parsed = workflowDefinitionV2Schema.safeParse(raw);
   if (!parsed.success) {
     throw new ScenarioViolation(
       `Workflow ${source} is not a valid workflow definition: ${describeWorkflowDefinitionIssues(parsed.error)}.`,
-    );
-  }
-  if (parsed.data.schemaVersion !== 2) {
-    throw new ScenarioViolation(
-      `Workflow ${source} is not a v2 definition, and the harness drives the v2 scheduler.`,
     );
   }
   const deploymentIssues = validateWorkflowDefinitionIssuesForDeployment(

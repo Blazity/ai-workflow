@@ -22,20 +22,24 @@ export const REVOKED_SCHEDULE_REASON = "schedule_revoked";
  * cycle.
  *
  * 'cancelled' rather than a skip outcome: no policy decided this and no run
- * blocked it, a human removed the node. The reason is coalesced, so an occurrence
- * that already carries a provider message keeps it.
+ * blocked it, a human removed the node. Ordinary revocation preserves an existing
+ * provider message. Schema retirement instead replaces it so the durable row
+ * states why the occurrence can never run.
  */
 export async function cancelWaitingOccurrences(
   db: Db,
   scheduleId: string,
   reason: string = REVOKED_SCHEDULE_REASON,
+  overwriteReason = false,
 ): Promise<number> {
   const rows = await db
     .update(scheduleOccurrences)
     .set({
       outcome: "cancelled",
       pending: false,
-      skipReason: sql`coalesce(${scheduleOccurrences.skipReason}, ${reason})`,
+      skipReason: overwriteReason
+        ? reason
+        : sql`coalesce(${scheduleOccurrences.skipReason}, ${reason})`,
       updatedAt: sql`now()`,
     })
     .where(

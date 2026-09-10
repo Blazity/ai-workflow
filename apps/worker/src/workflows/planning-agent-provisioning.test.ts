@@ -10,12 +10,6 @@ vi.mock("./blocks/agent-sandbox.js", () => ({
 }));
 
 import {
-  buildRuntimeGraph,
-  executeGraph,
-  type BlockExecutor,
-  type ExecuteGraphHooks,
-} from "../workflow-definition/interpreter.js";
-import {
   ensurePlanningAgentSandboxForBlock,
   shouldPromoteResearchWriteScope,
 } from "./agent.js";
@@ -39,7 +33,7 @@ describe("planning agent scratch provisioning", () => {
 
   it("requests an unshared scratch sandbox for a v2 planning invocation", async () => {
     mocks.ensureAgentSandbox.mockResolvedValueOnce("scratch-v2");
-    const ctx = makeCtx({ schemaVersion: 2 });
+    const ctx = makeCtx();
 
     await expect(
       ensurePlanningAgentSandboxForBlock(
@@ -56,76 +50,6 @@ describe("planning agent scratch provisioning", () => {
       "claude-model",
       { reuse: false },
     );
-  });
-
-  it("retains provider-keyed scratch reuse for v1 planning", async () => {
-    mocks.ensureAgentSandbox.mockResolvedValueOnce("scratch-v1");
-    const ctx = makeCtx({ schemaVersion: 1 });
-
-    await ensurePlanningAgentSandboxForBlock(ctx, "claude", "claude-model");
-
-    expect(mocks.ensureAgentSandbox).toHaveBeenCalledWith(
-      ctx,
-      "claude",
-      "claude-model",
-    );
-  });
-
-  it("routes a provisioning failure through the authored failed edge", async () => {
-    mocks.ensureAgentSandbox.mockRejectedValueOnce(new Error("registry unavailable"));
-    const ctx = makeCtx({ sandboxId: null, agentSandboxIds: {}, sandboxIds: new Set() });
-    const calls: string[] = [];
-    const executor: BlockExecutor = async (block) => {
-      calls.push(block.id);
-      if (block.type === "planning_agent") {
-        const provisioned = await ensurePlanningAgentSandboxForBlock(
-          ctx,
-          "claude",
-          "claude-model",
-        );
-        if (provisioned.kind === "execution_error") return provisioned;
-      }
-      return { kind: "next", output: { status: "ok" } };
-    };
-    const failures: string[] = [];
-    const hooks: ExecuteGraphHooks = {
-      onBlockStart: async () => {},
-      onBlockFinish: async () => {},
-      clarificationExit: async () => {},
-      failureExit: async (_phase, reason) => {
-        failures.push(reason);
-      },
-      terminate: async () => {},
-    };
-
-    const result = await executeGraph({
-      graph: buildRuntimeGraph({
-        nodes: [
-          node("trigger", "trigger_ticket_ai"),
-          node("plan", "planning_agent"),
-          node("recover", "post_ticket_comment"),
-        ],
-        edges: [
-          { from: "trigger", to: "plan" },
-          { from: "plan", to: "recover", fromPort: "failed" },
-        ],
-      }),
-      entryTriggerId: "trigger",
-      triggerOutput: { status: "ok" },
-      executeBlock: executor,
-      hooks,
-      outputValidator: () => [],
-    });
-
-    expect(result.outcome).toBe("completed");
-    expect(calls).toEqual(["plan", "recover"]);
-    expect(result.steps.plan).toBeUndefined();
-    expect(result.executionError?.diagnosticId).toBe(
-      "AIW-DIAG-test-run-plan-1",
-    );
-    expect(failures).toEqual([
-      "The workspace environment could not complete this block. (registry unavailable) Diagnostic ID: AIW-DIAG-test-run-plan-1",
-    ]);
   });
 
   it.each(runControlErrorCases())(

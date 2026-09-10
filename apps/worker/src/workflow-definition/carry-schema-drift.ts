@@ -11,7 +11,7 @@ import {
   workflowDefinitions,
   workflowDefinitionVersions,
 } from "../db/schema.js";
-import { defaultWorkflowDefinition } from "./default.js";
+import { defaultWorkflowDefinitionV2 } from "./default.js";
 import { PR_CHECK_OUTPUT_SCHEMA } from "./templates.js";
 
 /**
@@ -412,7 +412,7 @@ async function collectWalkTargets(
       definitionName: row.name,
       definitionVersion: null,
       source: "fresh_install_default",
-      definition: defaultWorkflowDefinition({
+      definition: defaultWorkflowDefinitionV2({
         includeReview: options.includeReview ?? true,
         includeLeakReview: false,
       }),
@@ -606,7 +606,7 @@ export function collectDefinitionEmbeds(
     });
   };
 
-  const value = definition as { schemaVersion?: unknown; nodes?: unknown } | null;
+  const value = definition as { nodes?: unknown } | null;
   if (value === null || typeof value !== "object" || !Array.isArray(value.nodes)) {
     shapeSkip(
       "definition_shape",
@@ -619,7 +619,7 @@ export function collectDefinitionEmbeds(
     shapeSkip("definition_has_no_nodes", null, "stored definition has an empty nodes array");
     return { embeds, skipped };
   }
-  const containerKey = value.schemaVersion === 2 ? "configuration" : "params";
+  const containerKey = "configuration";
 
   const record = (
     nodeId: string,
@@ -658,11 +658,7 @@ export function collectDefinitionEmbeds(
     }
     const config = container as Record<string, unknown>;
 
-    // Carries are a v2-only construct, and the resync migration only rewrites
-    // configuration.carry. Surfacing a v1 params carry the migration could never
-    // clear would be a permanent false red, so the gate and the migration agree:
-    // carry drift is checked on v2 configuration only.
-    if (value.schemaVersion === 2 && Array.isArray(config.carry)) {
+    if (Array.isArray(config.carry)) {
       config.carry.forEach((entry, index) => {
         if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
           return;

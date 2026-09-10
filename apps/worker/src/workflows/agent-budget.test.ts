@@ -5,12 +5,9 @@ import {
   blockRunStateSummary,
   createHarnessInvocationBudget,
   modelsRequiringPriceLookup,
-  modelsRequiringPriceLookupForRun,
   recordPrePrFixCycleUsages,
-  shouldReconcilePhaseUsageOnBlockFinish,
   soleActiveBlockId,
 } from "./agent.js";
-import { buildRuntimeGraph } from "../workflow-definition/interpreter.js";
 import {
   checkRunBudget,
   createRunBudgetState,
@@ -176,11 +173,6 @@ describe("agent workflow budget integration", () => {
     },
   );
 
-  it("does not reconcile still-running sibling usage on v2 block finishes", () => {
-    expect(shouldReconcilePhaseUsageOnBlockFinish(1)).toBe(true);
-    expect(shouldReconcilePhaseUsageOnBlockFinish(2)).toBe(false);
-  });
-
   it("blames a run-level failure on the only block in flight, and the engine otherwise", () => {
     // One block in flight: it owns the failure, which is the serial behaviour.
     expect(soleActiveBlockId(new Set(["security-review"]))).toBe(
@@ -225,76 +217,6 @@ describe("agent workflow budget integration", () => {
     );
 
     expect(models).toEqual(new Set(["gpt-agent", "claude-haiku", "codex-default"]));
-  });
-
-  it("prices only nodes reachable from the selected trigger", () => {
-    const ticketTrigger = node("ticket", "trigger_ticket_ai", {});
-    const prTrigger = node("pr", "trigger_pr_review", {});
-    const ticketAgent = node("ticket-agent", "generic_agent", {
-      prompt: "implement",
-      provider: "codex",
-      model: "gpt-ticket-only",
-    });
-    const prComment = node("pr-comment", "post_pr_comment", { body: "review received" });
-    const graph = buildRuntimeGraph({
-      nodes: [ticketTrigger, prTrigger, ticketAgent, prComment],
-      edges: [
-        { from: "ticket", to: "ticket-agent" },
-        { from: "pr", to: "pr-comment" },
-      ],
-    });
-
-    expect(
-      modelsRequiringPriceLookupForRun(
-        graph,
-        "pr",
-        "codex",
-        { claude: "claude-default", codex: "codex-default" },
-      ),
-    ).toEqual(new Set());
-  });
-
-  it("prices the default Codex model only for reachable compatibility blocks that can launch it", () => {
-    const trigger = node("ticket", "trigger_ticket_ai", {});
-    const finalize = node("finalize", "finalize_workspace", {});
-    const graph = buildRuntimeGraph({
-      nodes: [trigger, finalize],
-      edges: [{ from: "ticket", to: "finalize" }],
-    });
-
-    expect(
-      modelsRequiringPriceLookupForRun(
-        graph,
-        "ticket",
-        "codex",
-        { claude: "claude-default", codex: "codex-default" },
-      ),
-    ).toEqual(new Set(["codex-default"]));
-  });
-
-  it("does not price the run default when a different implementation model replaces it on every path", () => {
-    const trigger = node("ticket", "trigger_ticket_ai", {});
-    const implementation = node("implementation", "implementation_agent", {
-      provider: "claude",
-      model: "claude-implementation",
-    });
-    const checks = node("checks", "run_pre_pr_checks", {});
-    const graph = buildRuntimeGraph({
-      nodes: [trigger, implementation, checks],
-      edges: [
-        { from: "ticket", to: "implementation" },
-        { from: "implementation", to: "checks" },
-      ],
-    });
-
-    expect(
-      modelsRequiringPriceLookupForRun(
-        graph,
-        "ticket",
-        "codex",
-        { claude: "claude-default", codex: "codex-default" },
-      ),
-    ).toEqual(new Set());
   });
 
   it("fails a configured cost budget before a required unpriced model can launch", () => {

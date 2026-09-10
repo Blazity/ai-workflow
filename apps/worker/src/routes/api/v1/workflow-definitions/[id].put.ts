@@ -1,13 +1,15 @@
 import { createError, defineEventHandler, readBody } from "h3";
 import type { WorkflowDefinitionSaveResponse } from "@shared/contracts";
+import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import { getDb } from "../../../../db/client.js";
 import { requireDashboardActor } from "../../../../lib/auth/request-context.js";
 import { logger } from "../../../../lib/logger.js";
 import { dashboardUserLabel } from "../../../../pre-pr-checks/store.js";
 import {
   describeWorkflowDefinitionIssues,
-  workflowDefinitionSchema,
+  workflowDefinitionV2Schema,
 } from "../../../../workflow-definition/schema.js";
+import { declaresRetiredSchema } from "../../../../workflow-definition/validation.js";
 import { workflowBlockRegistryContextFromEnv } from "../../../../workflow-definition/models.js";
 import {
   saveWorkflowDefinitionDraft,
@@ -25,11 +27,13 @@ export default defineEventHandler(
       const actor = await requireDashboardActor(event);
       const id = parseDefinitionId(event);
       const body = (await readBody<{ definition?: unknown; expectedDraftRevision?: unknown }>(event).catch(() => null)) ?? {};
-      const parsed = workflowDefinitionSchema.safeParse(body.definition);
+      const parsed = workflowDefinitionV2Schema.safeParse(body.definition);
       if (!parsed.success) {
         throw createError({
           statusCode: 400,
-          statusMessage: `Invalid definition: ${describeWorkflowDefinitionIssues(parsed.error)}`,
+          statusMessage: declaresRetiredSchema(body.definition)
+            ? RETIRED_SCHEMA_MESSAGE
+            : `Invalid definition: ${describeWorkflowDefinitionIssues(parsed.error)}`,
         });
       }
       if (
