@@ -63,7 +63,7 @@ import {
 import {
   HarnessSkillArtifactIntegrityError,
   verifyHarnessSkillArtifact,
-} from "./skill-artifact.js";
+} from "./skill-validation.js";
 
 const VERSION_LIST_LIMIT = 50;
 const SYSTEM_ACTOR_ID = "system:harness-profiles";

@@ -11,7 +11,8 @@ import {
   BUILTIN_HARNESS_PROFILE_IDS,
 } from "@shared/contracts";
 import { hashHarnessProfileManifest } from "../harness-profiles/manifest.js";
-import { hashHarnessSkillArtifact } from "../harness-profiles/skill-artifact.js";
+import { hashHarnessSkillArtifact } from "@shared/skills";
+import { sha256Digest } from "../harness-profiles/skill-artifact-digest.js";
 import {
   materializePinnedHarnessFiles,
   resolveHarnessCapabilities,
@@ -53,7 +54,7 @@ function resolvedSkillArtifact(
   };
   return {
     ...hashInput,
-    artifactHash: hashHarnessSkillArtifact(hashInput),
+    artifactHash: hashHarnessSkillArtifact(hashInput, sha256Digest),
     organizationId: "org-1",
     createdAt: "2026-07-23T00:00:00.000Z",
     createdById: "user-1",

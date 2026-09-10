@@ -10,6 +10,7 @@ import {
   SkillReplacementNotice,
 } from "./skill-import";
 import type { HarnessLocalSkillDiscoveryResponse } from "@shared/contracts";
+import { SKILL_SOURCE_KINDS } from "@shared/skills";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
@@ -46,6 +47,7 @@ test("GitHub skill import opens as the approved three-step exact-pin drawer", ()
 });
 
 test("the drawer offers both skill sources", () => {
+  assert.deepEqual(SKILL_SOURCE_KINDS, ["github", "local"]);
   const html = renderToStaticMarkup(
     <SkillImport
       open

@@ -9,13 +9,15 @@ import type {
   HarnessSkillArtifact,
   HarnessSkillDiscoveryResponse,
 } from "@shared/contracts";
+import {
+  SKILL_SOURCE_KINDS,
+  type SkillSourceKind,
+} from "@shared/skills";
 
 const primaryButtonClass =
   "appearance-none rounded-[3px] border border-mariner bg-mariner px-4 py-2 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-white cursor-pointer disabled:cursor-default disabled:opacity-40";
 const secondaryButtonClass =
   "appearance-none rounded-[3px] border border-neutral-300 bg-panel px-4 py-2 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-coal cursor-pointer disabled:cursor-default disabled:opacity-40";
-
-type SkillSourceKind = "github" | "local";
 
 /**
  * Says what the deployment source does and, as importantly, what it does not:
@@ -443,12 +445,7 @@ export function SkillImport({
           aria-label="Skill source"
           className="flex gap-2 border-b border-neutral-200 px-5 py-3"
         >
-          {(
-            [
-              ["github", "GitHub repository"],
-              ["local", "This deployment"],
-            ] as Array<[SkillSourceKind, string]>
-          ).map(([kind, label]) => (
+          {SKILL_SOURCE_KINDS.map((kind) => (
             <button
               key={kind}
               type="button"
@@ -462,7 +459,7 @@ export function SkillImport({
                   : "border-neutral-300 bg-panel text-neutral-600"
               }`}
             >
-              {label}
+              {kind === "github" ? "GitHub repository" : "This deployment"}
             </button>
           ))}
         </div>
