@@ -31,6 +31,11 @@ each `apps/*/AGENTS.md`, and `README.md`, `AGENTS.md`, `SETUP.md` and
 | [architecture/workflow-definition.md](./architecture/workflow-definition.md) | The definition schema v2: nodes, edges, bindings, triggers, harness profiles, loops, validation, deployment, the MCP authoring surface |
 | [architecture/repository-scripts.md](./architecture/repository-scripts.md) | The repository scripts config contract: named command groups, how a block selects them |
 | [architecture/blocks.md](./architecture/blocks.md) | How block manifests, executor modules, generated catalogs, and the reviewer walkthrough fit together |
+| [architecture/skills.md](./architecture/skills.md) | Product skill manifests, artifact integrity, source boundaries, and the repository-root `skills/` convention |
+
+Stage 4 and later stages of the restructure plan add `architecture/blocks.md`,
+`architecture/overview.md`, `architecture/data-model.md` and
+`architecture/gates.md` to this group.
 
 ## Decision records
 

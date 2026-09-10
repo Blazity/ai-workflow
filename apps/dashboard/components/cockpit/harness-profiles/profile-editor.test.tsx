@@ -19,6 +19,7 @@ import {
   BUILTIN_HARNESS_PROFILE_IDS,
   BUILTIN_HARNESS_PROFILE_MANIFESTS,
 } from "@shared/contracts";
+import { isGitHubSkillSource } from "@shared/skills";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
@@ -381,6 +382,9 @@ test("only a profile pinning a deployment skill has the deployment to ask", () =
     ["b".repeat(64), local],
   ]);
   const lookup = (artifactHash: string) => sources.get(artifactHash);
+
+  assert.equal(isGitHubSkillSource(github), true);
+  assert.equal(isGitHubSkillSource(local), false);
 
   assert.equal(pinsDeploymentSkill([], lookup), false);
   assert.equal(

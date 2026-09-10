@@ -17,6 +17,7 @@ import {
 } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
 import { HarnessSkillImportError } from "./github-skills.js";
+import { hashHarnessSkillArtifact } from "@shared/skills";
 import {
   checkLocalSkills,
   defaultLocalSkillsDirectory,
@@ -25,7 +26,7 @@ import {
   readLocalSkills,
   refreshLocalSkillArtifact,
 } from "./local-skills.js";
-import { hashHarnessSkillArtifact } from "./skill-artifact.js";
+import { sha256Digest } from "./skill-artifact-digest.js";
 
 const roots: string[] = [];
 
@@ -93,7 +94,7 @@ describe("deployment-local skills", () => {
     expect(
       Buffer.from(skill!.files[1]!.contentBase64, "base64").toString("utf8"),
     ).toBe(skillDocument());
-    expect(hashHarnessSkillArtifact(skill!)).toMatch(/^[a-f0-9]{64}$/);
+    expect(hashHarnessSkillArtifact(skill!, sha256Digest)).toMatch(/^[a-f0-9]{64}$/);
   });
 
   it("offers a skill whose files all arrived executable, as a bundle delivers them", async () => {

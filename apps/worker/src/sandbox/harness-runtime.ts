@@ -20,7 +20,8 @@ import type {
 } from "./agents/types.js";
 import { AGENT_CLI_SPEC_CATALOG } from "./agents/protocol.js";
 import { hashHarnessProfileManifest } from "../harness-profiles/manifest.js";
-import { verifyHarnessSkillArtifact } from "../harness-profiles/skill-artifact.js";
+import { verifyHarnessSkillArtifact } from "@shared/skills";
+import { sha256Digest } from "../harness-profiles/skill-artifact-digest.js";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const SEMVER_PATTERN = /^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/;
@@ -396,7 +397,7 @@ export async function materializePinnedHarnessFiles(
         `Pinned skill "${skill.name}" does not match its canonical artifact name.`,
       );
     }
-    verifyHarnessSkillArtifact(artifact);
+    verifyHarnessSkillArtifact(artifact, sha256Digest);
     const skillName = validatePathSegment(skill.name, "skill name");
     for (const file of artifact.files) {
       const relativePath = validateRelativeFilePath(file.path);

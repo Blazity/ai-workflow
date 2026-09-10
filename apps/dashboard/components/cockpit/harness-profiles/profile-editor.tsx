@@ -28,9 +28,9 @@ import type {
 } from "@shared/contracts";
 import {
   HARNESS_TOOL_IDS,
-  isHarnessGitHubSkillSource,
   stableJson,
 } from "@shared/contracts";
+import { isGitHubSkillSource } from "@shared/skills";
 
 const inputClass =
   "h-[30px] w-full rounded-[3px] border border-neutral-200 bg-white px-2 font-mono text-[11px] text-coal outline-none focus:border-mariner disabled:bg-app-bg disabled:opacity-70";
@@ -173,7 +173,7 @@ function nullableNumber(value: string): number | null {
  * deployment, which is what a local skill has instead of a commit.
  */
 function skillSourceLabel(source: HarnessSkillSource): string {
-  return isHarnessGitHubSkillSource(source)
+  return isGitHubSkillSource(source)
     ? `${source.owner}/${source.repository} @ ${source.commitSha.slice(0, 12)}`
     : `This deployment · skills/${source.path} @ ${source.contentSha256.slice(0, 12)}`;
 }
@@ -188,7 +188,7 @@ export function pinsDeploymentSkill(
 ): boolean {
   return skills.some((skill) => {
     const pinned = source(skill.artifactHash);
-    return pinned !== undefined && !isHarnessGitHubSkillSource(pinned);
+    return pinned !== undefined && !isGitHubSkillSource(pinned);
   });
 }
 
@@ -211,7 +211,7 @@ export function LocalSkillPinNotice({
   source: HarnessSkillSource | undefined;
   discovery: HarnessLocalSkillDiscoveryResponse | null;
 }) {
-  if (!source || isHarnessGitHubSkillSource(source) || !discovery) return null;
+  if (!source || isGitHubSkillSource(source) || !discovery) return null;
   if (discovery.skills.some((skill) => skill.artifactHash === artifactHash)) {
     return (
       <div className="mt-1 font-body text-[10px] text-neutral-600">
@@ -1782,7 +1782,7 @@ export function ProfileEditor({
               const artifact = importedArtifacts.get(skill.artifactHash);
               const source = skillSource(skill.artifactHash);
               const local =
-                source !== undefined && !isHarnessGitHubSkillSource(source);
+                source !== undefined && !isGitHubSkillSource(source);
               return (
                 <div
                   key={skill.artifactHash}

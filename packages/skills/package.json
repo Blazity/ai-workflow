@@ -1,0 +1,28 @@
+{
+  "name": "@shared/skills",
+  "description": "Pure browser-safe product skill contracts and validation that may import shared contracts, and may not access application infrastructure, filesystems, networks, databases, environment configuration, or Node-only APIs.",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "default": "./index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test \"*.test.ts\""
+  },
+  "dependencies": {
+    "@shared/contracts": "workspace:*",
+    "yaml": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:"
+  }
+}

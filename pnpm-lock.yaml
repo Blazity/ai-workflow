@@ -77,6 +77,9 @@ importers:
       '@shared/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@shared/skills':
+        specifier: workspace:*
+        version: link:../../packages/skills
       '@tiptap/core':
         specifier: ^3.31.3
         version: 3.31.3(@tiptap/pm@3.31.3)
@@ -180,6 +183,9 @@ importers:
       '@shared/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@shared/skills':
+        specifier: workspace:*
+        version: link:../../packages/skills
       '@t3-oss/env-core':
         specifier: ^0.13.10
         version: 0.13.10(typescript@5.9.3)(zod@3.25.76)
@@ -273,6 +279,25 @@ importers:
         version: link:../contracts
 
   packages/contracts: {}
+
+  packages/skills:
+    dependencies:
+      '@shared/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      yaml:
+        specifier: 'catalog:'
+        version: 2.9.0
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.19.15
+      tsx:
+        specifier: 'catalog:'
+        version: 4.23.13
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
 
 packages:
 

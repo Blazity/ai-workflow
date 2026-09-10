@@ -5,7 +5,6 @@ import type {
 } from "@shared/contracts";
 import { getDb } from "../../../../../../db/client.js";
 import { refreshHarnessSkillArtifact } from "../../../../../../harness-profiles/skill-refresh.js";
-import { createConfiguredGitHubSkillRepository } from "../../../../../../harness-profiles/configured-github-skills.js";
 import {
   HarnessProfileStoreError,
   replaceHarnessProfileSkillArtifact,
@@ -18,7 +17,10 @@ import {
   setHarnessApiNoStore,
   toHarnessProfileHttpError,
 } from "../../../harness-profiles.get.js";
-import { toHarnessSkillHttpError } from "../../../harness-skills/discover.post.js";
+import {
+  configuredGitHubSkillRepository,
+  toHarnessSkillHttpError,
+} from "../../../harness-skills/discover.post.js";
 
 export default defineEventHandler(
   async (event): Promise<HarnessSkillRefreshResponse | undefined> => {
@@ -45,7 +47,7 @@ export default defineEventHandler(
       const artifact = await refreshHarnessSkillArtifact(db, {
         // Passed unbuilt: a deployment-local refresh must not need a GitHub
         // installation the tenant may not have.
-        githubRepository: createConfiguredGitHubSkillRepository,
+        githubRepository: configuredGitHubSkillRepository,
         organizationId: actor.organizationId,
         actorId: actor.userId,
         artifactHash: body.artifactHash,

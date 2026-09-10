@@ -7,12 +7,14 @@ import { getDb } from "../../../../db/client.js";
 import {
   importGitHubSkills,
 } from "../../../../harness-profiles/github-skills.js";
-import { createConfiguredGitHubSkillRepository } from "../../../../harness-profiles/configured-github-skills.js";
 import { requireDashboardActor } from "../../../../lib/auth/request-context.js";
 import { canManageHarnessProfiles } from "../../../../lib/auth/roles.js";
 import { DashboardAuthError } from "../../../../lib/auth/users-read.js";
 import { setHarnessApiNoStore } from "../harness-profiles.get.js";
-import { toHarnessSkillHttpError } from "./discover.post.js";
+import {
+  configuredGitHubSkillRepository,
+  toHarnessSkillHttpError,
+} from "./discover.post.js";
 
 export default defineEventHandler(
   async (event): Promise<HarnessSkillImportResponse | undefined> => {
@@ -38,7 +40,7 @@ export default defineEventHandler(
       }
       return {
         artifacts: await importGitHubSkills(getDb(), {
-          repository: createConfiguredGitHubSkillRepository(),
+          repository: configuredGitHubSkillRepository(),
           organizationId: actor.organizationId,
           actorId: actor.userId,
           request: {

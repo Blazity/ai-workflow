@@ -4,8 +4,10 @@ Last-verified: 2026-09-09
 # packages/AGENTS.md
 
 Workspace packages shared by the worker and the dashboard. `contracts` holds
-cross-application shapes and constants; `conditions` evaluates predicates and
-may import `contracts`. Neither touches infrastructure; ADR-001 owns the tiers.
+cross-application shapes and constants; `conditions` evaluates predicates;
+`skills` owns browser-safe product skill contracts and validation. These pure
+packages may import `contracts` but never application infrastructure. ADR-001
+owns the tiers.
 
 ## The rules that bind
 

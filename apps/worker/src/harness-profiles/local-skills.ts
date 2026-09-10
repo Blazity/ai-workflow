@@ -9,22 +9,24 @@ import type {
   HarnessSkillArtifact,
   HarnessSkillArtifactFile,
 } from "@shared/contracts";
+import { HARNESS_SKILL_IMPORT_LIMITS } from "@shared/contracts";
 import {
-  HARNESS_SKILL_IMPORT_LIMITS,
-  isHarnessGitHubSkillSource,
-} from "@shared/contracts";
+  assertExpectedArtifactHash,
+  HarnessSkillArtifactIntegrityError,
+  hashHarnessSkillArtifact,
+  isGitHubSkillSource,
+  parseHarnessSkillMetadata,
+  SkillValidationError,
+  type SkillSource,
+} from "@shared/skills";
 import { and, eq } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { harnessSkillArtifacts } from "../db/schema.js";
 import {
-  HarnessSkillImportError,
   persistHarnessSkillArtifacts,
-} from "./github-skills.js";
-import {
-  hashHarnessSkillArtifact,
-  HarnessSkillArtifactIntegrityError,
-  parseHarnessSkillMetadata,
-} from "./skill-artifact.js";
+} from "./skill-artifact-persistence.js";
+import { sha256Digest } from "./skill-artifact-digest.js";
+import { HarnessSkillImportError } from "./skill-errors.js";
 import { readHarnessSkillArtifactSource } from "./store.js";
 
 /**
@@ -64,6 +66,12 @@ export interface LocalSkillsRead {
   directoryPresent: boolean;
   skills: LocalSkillArtifact[];
   skipped: LocalSkillSkip[];
+}
+
+export interface LocalSkillSnapshot {
+  directory: string;
+  path: string;
+  artifactHash: string;
 }
 
 interface LocalSkillSkip {
@@ -314,9 +322,89 @@ export async function discoverLocalSkills(
       name: skill.name,
       path: skill.source.path,
       description: skill.description,
-      artifactHash: hashHarnessSkillArtifact(skill),
+      artifactHash: hashHarnessSkillArtifact(skill, sha256Digest),
     })),
     skipped: read.skipped,
+  };
+}
+
+export const localSkillSource = {
+  kind: "local",
+  async discover(input: { directory?: string }) {
+    const result = await discoverLocalSkills(input.directory);
+    const directory = input.directory ?? defaultLocalSkillsDirectory();
+    return result.skills.map((skill) => ({
+      name: skill.name,
+      description: skill.description!,
+      path: skill.path,
+      artifactHash: skill.artifactHash,
+      snapshot: {
+        path: skill.path,
+        artifactHash: skill.artifactHash,
+        directory,
+      },
+    }));
+  },
+  async read(
+    snapshot: LocalSkillSnapshot,
+    context: { resolvedArtifact?: LocalSkillArtifact } = {},
+  ) {
+    if (
+      context.resolvedArtifact &&
+      context.resolvedArtifact.source.path !== snapshot.path
+    ) {
+      throw new HarnessSkillImportError(
+        400,
+        "Resolved deployment skill does not match the selected path",
+      );
+    }
+    const artifact =
+      context.resolvedArtifact ?? (await readLocalSkillSnapshot(snapshot));
+    const artifactHash = hashHarnessSkillArtifact(artifact, sha256Digest);
+    assertExpectedArtifactHash(snapshot.artifactHash, artifactHash);
+    return { ...artifact, artifactHash };
+  },
+} satisfies SkillSource<
+  { directory?: string },
+  LocalSkillSnapshot,
+  { resolvedArtifact?: LocalSkillArtifact }
+>;
+
+async function readLocalSkillSnapshot(
+  snapshot: LocalSkillSnapshot,
+): Promise<LocalSkillArtifact> {
+  assertSafePath(snapshot.path, snapshot.path);
+  const root = join(snapshot.directory, snapshot.path);
+  const rootEntry = await lstatOrNull(root);
+  if (
+    rootEntry === null ||
+    !rootEntry.isDirectory() ||
+    rootEntry.isSymbolicLink()
+  ) {
+    throw new HarnessSkillImportError(
+      400,
+      `Selected path "${snapshot.path}" is not a deployment skill`,
+    );
+  }
+  const files = await readSkillFiles(root, snapshot.path, { spent: 0 });
+  const document = files.find((file) => file.path === SKILL_DOCUMENT);
+  if (!document) {
+    throw new HarnessSkillImportError(
+      400,
+      `Selected path "${snapshot.path}" is not a deployment skill`,
+    );
+  }
+  const metadata = parseHarnessSkillMetadata(
+    Buffer.from(document.contentBase64, "base64"),
+  );
+  return {
+    name: metadata.name,
+    description: metadata.description,
+    source: {
+      path: snapshot.path,
+      contentSha256: hashSkillContent(files),
+    },
+    files,
   };
 }
 
@@ -339,34 +427,48 @@ export async function importLocalSkills(
   },
 ): Promise<HarnessSkillArtifact[]> {
   const selections = validateSelections(input.skills);
-  const read = await readLocalSkills(input.directory);
+  const directory = input.directory ?? defaultLocalSkillsDirectory();
+  const read = await readLocalSkills(directory);
   const available = new Map(
     read.skills.map((skill) => [skill.source.path, skill]),
   );
   const skipped = new Map(read.skipped.map((skip) => [skip.path, skip.reason]));
-  const artifacts = selections.map((selection) => {
-    const skill = available.get(selection.path);
-    if (!skill) {
-      // Only the selected entry's own failure is fatal here; the rest of the
-      // directory being unusable is discovery's problem to report, not this
-      // import's problem to refuse over.
-      const reason = skipped.get(selection.path);
-      throw new HarnessSkillImportError(
-        400,
-        reason === undefined
-          ? `Selected path "${selection.path}" is not a deployment skill`
-          : `Skill "${selection.path}" cannot be imported: ${reason}`,
-      );
-    }
-    const artifactHash = hashHarnessSkillArtifact(skill);
-    if (artifactHash !== selection.artifactHash) {
-      throw new HarnessSkillImportError(
-        409,
-        `Skill "${selection.path}" changed since the list was loaded, which means the deployment was replaced. Reload the deployment skills and select again.`,
-      );
-    }
-    return { ...skill, artifactHash };
-  });
+  const artifacts = await Promise.all(
+    selections.map(async (selection) => {
+      try {
+        const skill = available.get(selection.path);
+        if (!skill) {
+          const reason = skipped.get(selection.path);
+          throw new HarnessSkillImportError(
+            400,
+            reason === undefined
+              ? `Selected path "${selection.path}" is not a deployment skill`
+              : `Skill "${selection.path}" cannot be imported: ${reason}`,
+          );
+        }
+        return await localSkillSource.read(
+          {
+            directory,
+            path: selection.path,
+            artifactHash: selection.artifactHash,
+          },
+          { resolvedArtifact: skill },
+        );
+      } catch (error) {
+        if (!(error instanceof SkillValidationError)) throw error;
+        if (error.code !== "artifact_drift") {
+          throw new HarnessSkillImportError(
+            400,
+            `Skill "${selection.path}" cannot be imported: ${error.reason.replace(/\.$/u, "")}`,
+          );
+        }
+        throw new HarnessSkillImportError(
+          409,
+          `Skill "${selection.path}" changed since the list was loaded, which means the deployment was replaced. Reload the deployment skills and select again.`,
+        );
+      }
+    }),
+  );
   return persistHarnessSkillArtifacts(db, {
     organizationId: input.organizationId,
     actorId: input.actorId,
@@ -409,7 +511,7 @@ export async function refreshLocalSkillArtifact(
     if (!(error instanceof HarnessSkillArtifactIntegrityError)) throw error;
     throw new HarnessSkillImportError(400, "Skill artifact source is unreadable");
   }
-  if (isHarnessGitHubSkillSource(source)) {
+  if (isGitHubSkillSource(source)) {
     throw new HarnessSkillImportError(
       400,
       "Only a deployment skill can be refreshed from the deployment",
@@ -432,7 +534,7 @@ export async function refreshLocalSkillArtifact(
   const [artifact] = await persistHarnessSkillArtifacts(db, {
     organizationId: input.organizationId,
     actorId: input.actorId,
-    artifacts: [{ ...skill, artifactHash: hashHarnessSkillArtifact(skill) }],
+    artifacts: [{ ...skill, artifactHash: hashHarnessSkillArtifact(skill, sha256Digest) }],
   });
   return artifact!;
 }

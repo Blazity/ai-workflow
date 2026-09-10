@@ -4,10 +4,12 @@ import type {
   HarnessSkillDiscoveryResponse,
 } from "@shared/contracts";
 import {
+  createGitHubSkillRepository,
   discoverGitHubSkills,
   HarnessSkillImportError,
 } from "../../../../harness-profiles/github-skills.js";
 import { createConfiguredGitHubSkillRepository } from "../../../../harness-profiles/configured-github-skills.js";
+import { getVcsProviderConfig } from "../../../../../env.js";
 import {
   requireDashboardActor,
   toHttpError,
@@ -24,6 +26,16 @@ export function toHarnessSkillHttpError(error: unknown): never {
     });
   }
   toHttpError(error);
+}
+
+export function configuredGitHubSkillRepository() {
+  return createConfiguredGitHubSkillRepository(() => {
+    const provider = getVcsProviderConfig("github");
+    if (provider.kind !== "github") {
+      throw new Error("Configured provider is not GitHub");
+    }
+    return createGitHubSkillRepository(provider.auth);
+  });
 }
 
 export default defineEventHandler(
@@ -45,7 +57,7 @@ export default defineEventHandler(
         });
       }
       return discoverGitHubSkills({
-        repository: createConfiguredGitHubSkillRepository(),
+        repository: configuredGitHubSkillRepository(),
         source: body.source,
       });
     } catch (error) {

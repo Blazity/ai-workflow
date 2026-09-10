@@ -6,30 +6,34 @@ import { createGunzip } from "node:zlib";
 import type {
   HarnessGitHubSkillSource,
   HarnessSkillArtifact,
-  HarnessSkillArtifactFile,
   HarnessSkillDiscoveryResponse,
   HarnessSkillImportRequest,
   HarnessSkillSource,
 } from "@shared/contracts";
+import { HARNESS_SKILL_IMPORT_LIMITS } from "@shared/contracts";
 import {
-  HARNESS_SKILL_IMPORT_LIMITS,
-  isHarnessGitHubSkillSource,
-} from "@shared/contracts";
-import { and, eq, inArray, sql } from "drizzle-orm";
-import { extract } from "tar-stream";
-import type { Db } from "../db/client.js";
-import {
-  harnessSkillArtifactFiles,
-  harnessSkillArtifacts,
-} from "../db/schema.js";
-import { buildOctokit, type GitHubAppAuth } from "../lib/github-auth.js";
-import {
+  assertExpectedArtifactHash,
   HarnessSkillArtifactIntegrityError,
   hashHarnessSkillArtifact,
+  isGitHubSkillSource,
   parseHarnessSkillMetadata,
-  verifyHarnessSkillArtifact,
-} from "./skill-artifact.js";
+  SkillValidationError,
+  type SkillSource,
+} from "@shared/skills";
+import { and, eq } from "drizzle-orm";
+import { extract } from "tar-stream";
+import type { Db } from "../db/client.js";
+import { harnessSkillArtifacts } from "../db/schema.js";
+import { buildOctokit, type GitHubAppAuth } from "../lib/github-auth.js";
+import { sha256Digest } from "./skill-artifact-digest.js";
+import {
+  persistHarnessSkillArtifacts,
+  type PersistableSkillArtifact,
+} from "./skill-artifact-persistence.js";
+import { HarnessSkillImportError } from "./skill-errors.js";
 import { readHarnessSkillArtifactSource } from "./store.js";
+
+export { HarnessSkillImportError } from "./skill-errors.js";
 
 const COMMIT_SHA_PATTERN = /^[a-f0-9]{40}$/i;
 const MAX_REPOSITORY_ARCHIVE_BYTES = 50 * 1024 * 1024;
@@ -82,15 +86,6 @@ export interface ParsedGitHubSkillLocator {
   repository: string;
   ref: string | null;
   path: string;
-}
-
-export class HarnessSkillImportError extends Error {
-  constructor(
-    public readonly statusCode: number,
-    message: string,
-  ) {
-    super(message);
-  }
 }
 
 export function createGitHubSkillRepository(
@@ -520,12 +515,7 @@ export async function importGitHubSkills(
       ref: source.commitSha,
     }),
   );
-  if (resolved.commitSha.toLowerCase() !== source.commitSha.toLowerCase()) {
-    throw new HarnessSkillImportError(
-      409,
-      "GitHub commit changed between discovery and import",
-    );
-  }
+  assertExactCommit(source.commitSha, resolved.commitSha);
   const tree = await readProvider(() =>
     input.repository.getTree({
       owner: source.owner,
@@ -540,7 +530,6 @@ export async function importGitHubSkills(
     );
   }
   validateTreeEntries(tree.entries);
-
   const wantedPaths = [
     ...new Set(
       tree.entries
@@ -566,11 +555,22 @@ export async function importGitHubSkills(
   const artifacts: BuiltArtifact[] = [];
   const names = new Set<string>();
   for (const selectedPath of selectedPaths) {
-    const artifact = await buildArtifact({
-      source: { ...source, path: selectedPath },
-      entries: tree.entries,
-      contents,
-    });
+    let artifact: BuiltArtifact;
+    try {
+      artifact = await githubSkillSource.read(
+        { ...source, path: selectedPath },
+        {
+          resolvedSnapshot: {
+            commitSha: resolved.commitSha,
+            entries: tree.entries,
+            contents,
+          },
+        },
+      );
+    } catch (error) {
+      if (!(error instanceof SkillValidationError)) throw error;
+      throw new HarnessSkillImportError(400, error.reason.replace(/\.$/, ""));
+    }
     if (names.has(artifact.name)) {
       throw new HarnessSkillImportError(
         400,
@@ -625,7 +625,7 @@ export async function refreshGitHubSkillArtifact(
   // Narrowed before the first provider call. Callers reach the right variant
   // through refreshHarnessSkillArtifact, so this guard catches a miswired
   // caller rather than an operator: a deployment skill refreshes from disk.
-  if (!isHarnessGitHubSkillSource(stored)) {
+  if (!isGitHubSkillSource(stored)) {
     throw new HarnessSkillImportError(
       400,
       "Only a GitHub-sourced skill artifact can be refreshed from GitHub",
@@ -661,21 +661,129 @@ export async function refreshGitHubSkillArtifact(
   return artifact!;
 }
 
-/**
- * An artifact ready to be written, from either source. The deployment-local
- * importer builds these too, which is why the write below takes the whole
- * union rather than the GitHub variant.
- */
-export interface PersistableSkillArtifact {
-  artifactHash: string;
-  name: string;
-  description: string;
-  source: HarnessSkillSource;
-  files: Array<HarnessSkillArtifactFile & { contentBase64: string }>;
-}
-
 interface BuiltArtifact extends PersistableSkillArtifact {
   source: HarnessGitHubSkillSource;
+}
+
+interface ResolvedGitHubSkillSnapshot {
+  commitSha: string;
+  entries: GitHubSkillTreeEntry[];
+  contents: Map<string, Buffer>;
+}
+
+export type GitHubSkillReadContext =
+  | {
+      repository: GitHubSkillRepository;
+      expectedArtifactHash?: string;
+    }
+  | {
+      resolvedSnapshot: ResolvedGitHubSkillSnapshot;
+      expectedArtifactHash?: string;
+    };
+
+export const githubSkillSource = {
+  kind: "github",
+  async discover(input: {
+    repository: GitHubSkillRepository;
+    source: string;
+  }) {
+    const result = await discoverGitHubSkills(input);
+    return result.skills.map((skill) => ({
+      name: skill.name,
+      path: skill.path,
+      description: skill.description!,
+      snapshot: { ...result.source, path: skill.path },
+    }));
+  },
+  async read(
+    snapshot: HarnessGitHubSkillSource,
+    context: GitHubSkillReadContext,
+  ) {
+    const source = exactGitHubSkillSource(snapshot);
+    const resolvedSnapshot = await resolveGitHubSkillSnapshot(source, context);
+    const artifact = await buildArtifact({
+      source,
+      entries: resolvedSnapshot.entries,
+      contents: resolvedSnapshot.contents,
+    });
+    assertExpectedArtifactHash(
+      context.expectedArtifactHash,
+      artifact.artifactHash,
+    );
+    return artifact;
+  },
+} satisfies SkillSource<
+  { repository: GitHubSkillRepository; source: string },
+  HarnessGitHubSkillSource,
+  GitHubSkillReadContext
+>;
+
+async function resolveGitHubSkillSnapshot(
+  source: HarnessGitHubSkillSource,
+  context: GitHubSkillReadContext,
+): Promise<ResolvedGitHubSkillSnapshot> {
+  if ("resolvedSnapshot" in context) {
+    assertExactCommit(source.commitSha, context.resolvedSnapshot.commitSha);
+    validateTreeEntries(context.resolvedSnapshot.entries);
+    return context.resolvedSnapshot;
+  }
+  const resolved = await readProvider(() =>
+    context.repository.resolveCommit({
+      owner: source.owner,
+      repository: source.repository,
+      ref: source.commitSha,
+    }),
+  );
+  assertExactCommit(source.commitSha, resolved.commitSha);
+  const tree = await readProvider(() =>
+    context.repository.getTree({
+      owner: source.owner,
+      repository: source.repository,
+      treeSha: resolved.treeSha,
+    }),
+  );
+  if (tree.truncated) {
+    throw new HarnessSkillImportError(
+      422,
+      "GitHub repository tree is too large to import safely",
+    );
+  }
+  validateTreeEntries(tree.entries);
+  const paths = tree.entries
+    .filter(
+      (entry) =>
+        entry.type === "blob" &&
+        (entry.mode === "100644" || entry.mode === "100755") &&
+        pathWithin(source.path, entry.path),
+    )
+    .map((entry) => entry.path);
+  const contents = await readProvider(() =>
+    context.repository.getFiles({
+      owner: source.owner,
+      repository: source.repository,
+      commitSha: source.commitSha,
+      paths,
+    }),
+  );
+  return { commitSha: resolved.commitSha, entries: tree.entries, contents };
+}
+
+function exactGitHubSkillSource(
+  source: HarnessGitHubSkillSource,
+): HarnessGitHubSkillSource {
+  return {
+    ...validateExactSource(source),
+    path: normalizeRepositoryPath(source.path, true),
+  };
+}
+
+function assertExactCommit(expected: string, resolved: string): void {
+  if (resolved.toLowerCase() !== expected) {
+    throw new HarnessSkillImportError(
+      409,
+      "GitHub commit changed between discovery and import",
+    );
+  }
 }
 
 async function buildArtifact(input: {
@@ -773,7 +881,7 @@ async function buildArtifact(input: {
     });
   }
   const skillDocument = files.find((file) => file.path === "SKILL.md");
-  const metadata = parseSkillMetadata(
+  const metadata = parseHarnessSkillMetadata(
     Buffer.from(skillDocument!.contentBase64, "base64"),
   );
   const artifact = {
@@ -784,258 +892,10 @@ async function buildArtifact(input: {
   };
   return {
     ...artifact,
-    artifactHash: hashHarnessSkillArtifact(artifact),
+    artifactHash: hashHarnessSkillArtifact(artifact, sha256Digest),
   };
 }
 
-/**
- * The one write both importers go through. Deduplication by hash, reuse of an
- * artifact another import already stored, and the file rows hanging off either
- * outcome are all decided inside the single statement below, so a second copy
- * of it for the local variant would drift the first time either changes.
- *
- * The variant only decides which source columns carry a value and which stay
- * empty; `source_kind` names the choice, and the shape check from migration
- * 0046 rejects the row if the two disagree.
- */
-export async function persistHarnessSkillArtifacts(
-  db: Db,
-  input: {
-    organizationId: string;
-    actorId: string;
-    artifacts: PersistableSkillArtifact[];
-  },
-): Promise<HarnessSkillArtifact[]> {
-  for (const artifact of input.artifacts) {
-    verifyHarnessSkillArtifact({
-      artifactHash: artifact.artifactHash,
-      name: artifact.name,
-      description: artifact.description,
-      source: artifact.source,
-      files: artifact.files,
-    });
-  }
-
-  const artifactRows = input.artifacts.map((artifact) => {
-    const source = artifact.source;
-    const columns = isHarnessGitHubSkillSource(source)
-      ? {
-          kind: "github",
-          owner: source.owner,
-          repository: source.repository,
-          path: source.path,
-          commitSha: source.commitSha,
-          localPath: null,
-          localContentSha256: null,
-        }
-      : {
-          kind: "local",
-          owner: null,
-          repository: null,
-          path: null,
-          commitSha: null,
-          localPath: source.path,
-          localContentSha256: source.contentSha256,
-        };
-    return sql`(
-        ${artifact.artifactHash}::text,
-        ${artifact.name}::text,
-        ${artifact.description}::text,
-        ${columns.kind}::text,
-        ${columns.owner}::text,
-        ${columns.repository}::text,
-        ${columns.path}::text,
-        ${columns.commitSha}::text,
-        ${columns.localPath}::text,
-        ${columns.localContentSha256}::text
-      )`;
-  });
-  const fileRows = input.artifacts.flatMap((artifact) =>
-    artifact.files.map(
-      (file) =>
-        sql`(
-          ${artifact.artifactHash}::text,
-          ${file.path}::text,
-          ${file.mode}::integer,
-          ${file.sizeBytes}::integer,
-          ${file.sha256}::text,
-          ${file.contentBase64}::text
-        )`,
-    ),
-  );
-  await db.execute(sql`
-    WITH imported_artifact (
-      artifact_hash,
-      name,
-      description,
-      source_kind,
-      source_owner,
-      source_repository,
-      source_path,
-      source_commit_sha,
-      local_path,
-      local_content_sha256
-    ) AS (
-      VALUES ${sql.join(artifactRows, sql`, `)}
-    ), inserted_artifact AS (
-      INSERT INTO harness_skill_artifacts (
-        organization_id,
-        artifact_hash,
-        name,
-        description,
-        source_kind,
-        source_owner,
-        source_repository,
-        source_path,
-        source_commit_sha,
-        local_path,
-        local_content_sha256,
-        created_by_id
-      )
-      SELECT
-        ${input.organizationId},
-        artifact_hash,
-        name,
-        description,
-        source_kind,
-        source_owner,
-        source_repository,
-        source_path,
-        source_commit_sha,
-        local_path,
-        local_content_sha256,
-        ${input.actorId}
-      FROM imported_artifact
-      ON CONFLICT (organization_id, artifact_hash) DO NOTHING
-      RETURNING id, artifact_hash
-    ), stored_artifact AS (
-      SELECT inserted.id, inserted.artifact_hash
-      FROM inserted_artifact inserted
-      UNION ALL
-      SELECT artifact.id, artifact.artifact_hash
-      FROM harness_skill_artifacts artifact
-      INNER JOIN imported_artifact imported
-        ON imported.artifact_hash = artifact.artifact_hash
-      WHERE artifact.organization_id = ${input.organizationId}
-        AND NOT EXISTS (
-          SELECT 1
-          FROM inserted_artifact inserted
-          WHERE inserted.artifact_hash = artifact.artifact_hash
-        )
-    ), imported_file (
-      artifact_hash,
-      path,
-      mode,
-      size_bytes,
-      sha256,
-      content_base64
-    ) AS (
-      VALUES ${sql.join(fileRows, sql`, `)}
-    )
-    INSERT INTO harness_skill_artifact_files (
-      artifact_id,
-      path,
-      mode,
-      size_bytes,
-      sha256,
-      content_base64
-    )
-    SELECT
-      stored.id,
-      file.path,
-      file.mode,
-      file.size_bytes,
-      file.sha256,
-      file.content_base64
-    FROM imported_file file
-    INNER JOIN stored_artifact stored
-      ON stored.artifact_hash = file.artifact_hash
-    ON CONFLICT (artifact_id, path) DO NOTHING
-  `);
-
-  const storedArtifacts = await db
-    .select()
-    .from(harnessSkillArtifacts)
-    .where(
-      and(
-        eq(harnessSkillArtifacts.organizationId, input.organizationId),
-        inArray(
-          harnessSkillArtifacts.artifactHash,
-          input.artifacts.map((artifact) => artifact.artifactHash),
-        ),
-      ),
-    );
-  if (storedArtifacts.length !== input.artifacts.length) {
-    throw new HarnessSkillImportError(
-      409,
-      "Could not persist all skill artifacts",
-    );
-  }
-
-  const storedByHash = new Map(
-    storedArtifacts.map((artifact) => [artifact.artifactHash, artifact]),
-  );
-  const storedFiles = await db
-    .select()
-    .from(harnessSkillArtifactFiles)
-    .where(
-      inArray(
-        harnessSkillArtifactFiles.artifactId,
-        storedArtifacts.map((artifact) => artifact.id),
-      ),
-    );
-  const filesByArtifactId = new Map<number, typeof storedFiles>();
-  for (const file of storedFiles) {
-    const files = filesByArtifactId.get(file.artifactId) ?? [];
-    files.push(file);
-    filesByArtifactId.set(file.artifactId, files);
-  }
-
-  return input.artifacts.map((artifact) => {
-    const stored = storedByHash.get(artifact.artifactHash);
-    if (!stored) {
-      throw new HarnessSkillImportError(
-        409,
-        "Could not persist all skill artifacts",
-      );
-    }
-    const files = filesByArtifactId.get(stored.id) ?? [];
-    let source: HarnessSkillSource;
-    try {
-      source = readHarnessSkillArtifactSource(stored);
-      verifyHarnessSkillArtifact({
-        artifactHash: stored.artifactHash,
-        name: stored.name,
-        description: stored.description,
-        source,
-        files,
-      });
-    } catch (error) {
-      if (!(error instanceof HarnessSkillArtifactIntegrityError)) throw error;
-      throw new HarnessSkillImportError(
-        409,
-        "Stored skill artifact failed integrity verification",
-      );
-    }
-    return {
-      artifactHash: stored.artifactHash,
-      organizationId: stored.organizationId,
-      name: stored.name,
-      description: stored.description,
-      source,
-      files: files
-        .sort((left, right) => left.path.localeCompare(right.path))
-        .map((file) => ({
-          path: file.path,
-          mode: file.mode,
-          sizeBytes: file.sizeBytes,
-          sha256: file.sha256,
-        })),
-      createdAt: stored.createdAt.toISOString(),
-      createdById: stored.createdById,
-    };
-  });
-}
 
 function validateExactSource(
   source: HarnessSkillImportRequest["source"],
