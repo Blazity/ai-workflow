@@ -153,6 +153,7 @@ export const execute: BlockExecuteFn = async (
             num_turns: 1,
           }
         : null,
+      provider,
       model,
       execution,
     );
@@ -186,7 +187,7 @@ export const execute: BlockExecuteFn = async (
     return { kind: "next", output: { status: "ok", output: result.text } };
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    recordBlockPhaseUsage(ctx, usageLabel, null, model, execution);
+    recordBlockPhaseUsage(ctx, usageLabel, null, provider, model, execution);
     const after = await ctx.observeBudget();
     if (after.check.status !== "ok") throw new RunBudgetError(after.check);
     if (after.remainingDurationMs <= 0) {

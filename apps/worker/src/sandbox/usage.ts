@@ -1,84 +1,93 @@
+import {
+  aggregateUsage,
+  type CostProvider,
+  type CostProviderKind,
+  type TokenPrice,
+} from "@shared/costs";
 import type { PhaseUsage } from "./agents/types.js";
-import type { TokenPrice } from "./agents/pricing.js";
 
 export type { PhaseUsage } from "./agents/types.js";
-export type { TokenPrice };
+export type { CostProviderKind } from "@shared/costs";
 
 export type PriceLookup = (model: string) => TokenPrice | null;
+export type PhaseProviders = Record<string, CostProviderKind | undefined>;
 
 /**
- * Slack-friendly usage line. Computes Codex costs from tokens when a price
- * is available; falls back to "cost unknown" for Codex without pricing.
- *
- * For each phase:
- *   - cost_usd != null → use it directly (Claude path)
- *   - tokens != null + priceLookup yields a price → compute cost
- *   - else → tokens-only, marked "cost unknown"
+ * Every phase carries the price of its model, whichever provider ran it and
+ * whether or not the caller could name one: a phase that reports tokens and no
+ * dollar cost is priced from that table, exactly as before the extraction.
+ */
+function resolveCostProvider(
+  kind: CostProviderKind | undefined,
+  priceLookup: PriceLookup | undefined,
+  model: string | undefined,
+): CostProvider {
+  return {
+    kind,
+    price: priceLookup && model ? priceLookup(model) : null,
+  };
+}
+
+function costProvidersForPhases(
+  phases: Record<string, PhaseUsage | null>,
+  providersByPhase: PhaseProviders,
+  priceLookup?: PriceLookup,
+  model?: string,
+  modelsByPhase?: Record<string, string>,
+): Record<string, CostProvider> {
+  return Object.fromEntries(
+    Object.keys(phases).map((name) => [
+      name,
+      resolveCostProvider(
+        providersByPhase[name],
+        priceLookup,
+        modelsByPhase?.[name] ?? model,
+      ),
+    ]),
+  );
+}
+
+/**
+ * Slack-friendly usage line over the canonical provider cost calculation.
  */
 export function formatUsageReport(
   phases: Record<string, PhaseUsage | null>,
+  providersByPhase: PhaseProviders,
   priceLookup?: PriceLookup,
   model?: string,
   modelsByPhase?: Record<string, string>,
 ): string {
   const parts: string[] = [];
-  let totalCost = 0;
-  let anyUnknown = false;
+  const totals = aggregateUsage(
+    phases,
+    costProvidersForPhases(
+      phases,
+      providersByPhase,
+      priceLookup,
+      model,
+      modelsByPhase,
+    ),
+  );
 
   for (const [name, usage] of Object.entries(phases)) {
     if (!usage) { parts.push(`${name}: n/a`); continue; }
     const mins = Math.round(usage.duration_ms / 60_000);
-    const phaseModel = modelsByPhase?.[name] ?? model;
+    const cost = totals.phases[name].cost;
     let costLabel: string;
-    if (usage.cost_usd != null) {
-      totalCost += usage.cost_usd;
-      costLabel = `$${usage.cost_usd.toFixed(2)}`;
-    } else if (usage.tokens && priceLookup && phaseModel) {
-      const price = priceLookup(phaseModel);
-      if (price) {
-        const cost = usage.tokens.input * price.input
-                   + usage.tokens.cached_input * price.cached_input
-                   + usage.tokens.output * price.output;
-        totalCost += cost;
-        costLabel = `$${cost.toFixed(2)}`;
-      } else {
-        anyUnknown = true;
-        costLabel = `${usage.tokens.input}/${usage.tokens.output} tok (cost unknown)`;
-      }
+    if (cost.known) {
+      costLabel = `$${cost.costUsd.toFixed(2)}`;
     } else if (usage.tokens) {
-      anyUnknown = true;
       costLabel = `${usage.tokens.input}/${usage.tokens.output} tok (cost unknown)`;
     } else {
-      anyUnknown = true;
       costLabel = "cost unknown";
     }
     parts.push(`${name}: ${costLabel} (${mins}m)`);
   }
 
-  const total = anyUnknown ? `$${totalCost.toFixed(2)}+ total` : `$${totalCost.toFixed(2)} total`;
+  const total = totals.costKnown
+    ? `$${totals.costUsd.toFixed(2)} total`
+    : `$${totals.costUsd.toFixed(2)}+ total`;
   return `Usage: ${total} | ${parts.join(" | ")}`;
-}
-
-/** Cost of a single phase in USD, or null when it can't be priced. Mirrors the
- * selection rule in formatUsageReport: Claude reports cost_usd directly; Codex
- * is priced from tokens when a lookup is available; otherwise unknown. */
-export function phaseCostUsd(
-  usage: PhaseUsage,
-  priceLookup?: PriceLookup,
-  model?: string,
-): { costUsd: number | null; known: boolean } {
-  if (usage.cost_usd != null) return { costUsd: usage.cost_usd, known: true };
-  if (usage.tokens && priceLookup && model) {
-    const price = priceLookup(model);
-    if (price) {
-      const cost =
-        usage.tokens.input * price.input +
-        usage.tokens.cached_input * price.cached_input +
-        usage.tokens.output * price.output;
-      return { costUsd: cost, known: true };
-    }
-  }
-  return { costUsd: null, known: false };
 }
 
 export interface PhaseTotal {
@@ -106,38 +115,31 @@ export interface UsageTotals {
  * the totals + per-phase breakdown the telemetry table stores. */
 export function computeUsageTotals(
   phases: Record<string, PhaseUsage | null>,
+  providersByPhase: PhaseProviders,
   priceLookup?: PriceLookup,
   model?: string,
   modelsByPhase?: Record<string, string>,
 ): UsageTotals {
-  let costUsd = 0;
-  let tokensInput = 0;
-  let tokensCached = 0;
-  let tokensOutput = 0;
-  let tokensKnown = true;
-  let costKnown = true;
+  const totals = aggregateUsage(
+    phases,
+    costProvidersForPhases(
+      phases,
+      providersByPhase,
+      priceLookup,
+      model,
+      modelsByPhase,
+    ),
+  );
   const breakdown: Record<string, PhaseTotal> = {};
 
   for (const [name, usage] of Object.entries(phases)) {
     const phaseModel = modelsByPhase?.[name] ?? model;
     if (!usage) {
       breakdown[name] = { costUsd: null, tokens: null, durationMs: 0, numTurns: 0, model: phaseModel ?? null };
-      costKnown = false;
-      tokensKnown = false;
       continue;
     }
-    const { costUsd: c, known } = phaseCostUsd(usage, priceLookup, phaseModel);
-    if (c != null) costUsd += c;
-    if (!known) costKnown = false;
-    if (usage.tokens) {
-      tokensInput += usage.tokens.input;
-      tokensCached += usage.tokens.cached_input;
-      tokensOutput += usage.tokens.output;
-    } else {
-      tokensKnown = false;
-    }
     breakdown[name] = {
-      costUsd: c,
+      costUsd: totals.phases[name].cost.costUsd,
       tokens: usage.tokens,
       durationMs: usage.duration_ms,
       numTurns: usage.num_turns,
@@ -146,11 +148,11 @@ export function computeUsageTotals(
   }
 
   return {
-    costUsd,
-    costKnown,
-    tokensInput: tokensKnown ? tokensInput : null,
-    tokensCached: tokensKnown ? tokensCached : null,
-    tokensOutput: tokensKnown ? tokensOutput : null,
+    costUsd: totals.costUsd,
+    costKnown: totals.costKnown,
+    tokensInput: totals.tokensKnown ? totals.tokensInput : null,
+    tokensCached: totals.tokensKnown ? totals.tokensCached : null,
+    tokensOutput: totals.tokensKnown ? totals.tokensOutput : null,
     phases: breakdown,
   };
 }

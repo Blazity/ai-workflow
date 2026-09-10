@@ -1,20 +1,13 @@
-export interface TokenPrice {
-  input: number;
-  cached_input: number;
-  output: number;
-}
+import {
+  normalizeLiteLlmPriceTable,
+  type TokenPrice,
+} from "@shared/costs";
 
 interface CacheEntry {
   fetchedAt: number;
   data: Record<string, TokenPrice>;
 }
 let cache: CacheEntry | null = null;
-
-interface LiteLLMEntry {
-  input_cost_per_token?: number;
-  output_cost_per_token?: number;
-  cache_read_input_token_cost?: number;
-}
 
 async function loadAll(): Promise<Record<string, TokenPrice> | null> {
   const { env } = await import("../../config/env.js");
@@ -24,21 +17,7 @@ async function loadAll(): Promise<Record<string, TokenPrice> | null> {
   try {
     const r = await fetch(env.CODEX_PRICING_URL);
     if (!r.ok) return null;
-    const json = await r.json();
-    const out: Record<string, TokenPrice> = {};
-    for (const [name, entry] of Object.entries(json as Record<string, LiteLLMEntry>)) {
-      if (typeof entry !== "object" || entry === null) continue;
-      const input = entry.input_cost_per_token;
-      const output = entry.output_cost_per_token;
-      if (typeof input !== "number" || typeof output !== "number") continue;
-      out[name] = {
-        input,
-        output,
-        cached_input: typeof entry.cache_read_input_token_cost === "number"
-          ? entry.cache_read_input_token_cost
-          : 0,
-      };
-    }
+    const out = normalizeLiteLlmPriceTable(await r.json());
     cache = { fetchedAt: Date.now(), data: out };
     return out;
   } catch {

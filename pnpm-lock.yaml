@@ -183,6 +183,9 @@ importers:
       '@shared/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@shared/costs':
+        specifier: workspace:*
+        version: link:../../packages/costs
       '@shared/skills':
         specifier: workspace:*
         version: link:../../packages/skills
@@ -279,6 +282,18 @@ importers:
         version: link:../contracts
 
   packages/contracts: {}
+
+  packages/costs:
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.19.15
+      tsx:
+        specifier: 'catalog:'
+        version: 4.23.13
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
 
   packages/skills:
     dependencies:

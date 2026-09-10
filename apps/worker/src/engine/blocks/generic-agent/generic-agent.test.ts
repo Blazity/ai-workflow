@@ -410,6 +410,7 @@ describe("generic_agent execute", () => {
       1,
       "Agent Blk_One",
       null,
+      "claude",
       "claude-model",
       1,
     );
@@ -417,6 +418,7 @@ describe("generic_agent execute", () => {
       2,
       "Agent blk-one",
       null,
+      "claude",
       "claude-model",
       1,
     );

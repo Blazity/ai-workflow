@@ -1,0 +1,24 @@
+{
+  "name": "@shared/costs",
+  "description": "Pure shared provider cost calculation, price normalization and usage aggregation that may not access application infrastructure, filesystems, networks, databases or environment configuration.",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "default": "./index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test \"*.test.ts\""
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:"
+  }
+}

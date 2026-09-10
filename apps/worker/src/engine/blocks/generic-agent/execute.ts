@@ -481,6 +481,7 @@ export const execute: BlockExecuteFn = async (
       ctx,
       usageLabel,
       usage,
+      kind,
       model,
       execution,
     );

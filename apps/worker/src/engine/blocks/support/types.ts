@@ -4,6 +4,7 @@ import type {
   WorkflowRepositoryScope,
   RunAnalysisReport,
 } from "@shared/contracts";
+import type { CostProviderKind } from "@shared/costs";
 import type {
   BlockExecutionContext,
   BlockExecutionResult,
@@ -242,6 +243,7 @@ export interface EngineCtx {
   recordUsage(
     label: string,
     usage: PhaseUsage | null,
+    provider: CostProviderKind | undefined,
     model: string,
     attempt?: number,
   ): void;
@@ -340,13 +342,14 @@ export function recordBlockPhaseUsage(
   ctx: Pick<EngineCtx, "recordUsage">,
   label: string,
   usage: PhaseUsage | null,
+  provider: CostProviderKind | undefined,
   model: string,
   execution?: BlockExecutionContext,
 ): void {
   if (execution?.attempt === undefined) {
-    ctx.recordUsage(label, usage, model);
+    ctx.recordUsage(label, usage, provider, model);
   } else {
-    ctx.recordUsage(label, usage, model, execution.attempt);
+    ctx.recordUsage(label, usage, provider, model, execution.attempt);
   }
   execution?.recordBudgetUsage?.(usage, model);
 }

@@ -33,6 +33,7 @@ const C = {
   mcp: ["pnpm", "--dir", "apps/worker", "run", "mcp:contract:check"],
   blockCatalog: ["pnpm", "run", "gen:blocks", "--check"],
   ci: ["pnpm", "run", "test:ci"],
+  packages: ["pnpm", "run", "test:packages"],
   releaseType: ["pnpm", "run", "typecheck:release-notes"],
   releaseTest: ["pnpm", "run", "test:release-notes"],
   gates: ["pnpm", "run", "gates"],
@@ -210,6 +211,9 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
       ...[...dashboardTests].map((path) => `./${path}`),
     ]);
   }
+  // Nothing else runs a package's own tests: the worker vitest run and the
+  // dashboard node runner never reach packages/*.
+  if (shared) add(C.packages);
   if (gates) add(C.gates);
   return { scopes: scopes.length ? scopes : ["unclassified"], commands };
 }

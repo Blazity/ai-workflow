@@ -18,6 +18,7 @@
     "test:e2e:orchestration": "pnpm --filter worker test:e2e:orchestration",
     "test:e2e:capacity": "pnpm --filter worker test:e2e:capacity",
     "test:ci": "node --import tsx --test \"scripts/ci/*.test.ts\"",
+    "test:packages": "pnpm -r --filter \"./packages/*\" run --if-present test",
     "verify:changed": "node --import tsx scripts/ci/verify-changed.ts",
     "test:e2e:harness-profiles": "pnpm --filter worker test:e2e:harness-profiles",
     "test:e2e:harness-profiles:dry": "pnpm --filter worker test:e2e:harness-profiles:dry",

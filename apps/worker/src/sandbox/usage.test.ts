@@ -7,7 +7,10 @@ const u = (over: Partial<PhaseUsage> = {}): PhaseUsage => ({
 
 describe("formatUsageReport", () => {
   it("uses cost_usd when present", () => {
-    const out = formatUsageReport({ Impl: u({ cost_usd: 1.23 }) });
+    const out = formatUsageReport(
+      { Impl: u({ cost_usd: 1.23 }) },
+      { Impl: "claude" },
+    );
     expect(out).toContain("$1.23");
     expect(out).toContain("$1.23 total");
   });
@@ -15,6 +18,7 @@ describe("formatUsageReport", () => {
   it("computes cost from tokens + priceLookup when cost_usd is null", () => {
     const out = formatUsageReport(
       { Impl: u({ tokens: { input: 1000, cached_input: 0, output: 500 } }) },
+      { Impl: "codex" },
       () => ({ input: 0.000003, cached_input: 0, output: 0.000015 }),
       "gpt-5-codex",
     );
@@ -25,6 +29,7 @@ describe("formatUsageReport", () => {
   it("falls back to tokens-only when no price and tokens are present", () => {
     const out = formatUsageReport(
       { Impl: u({ tokens: { input: 100, cached_input: 0, output: 50 } }) },
+      { Impl: "codex" },
       () => null,
       "unknown-model",
     );
@@ -33,7 +38,7 @@ describe("formatUsageReport", () => {
   });
 
   it("shows n/a for null phases", () => {
-    const out = formatUsageReport({ Impl: null });
+    const out = formatUsageReport({ Impl: null }, {});
     expect(out).toContain("Impl: n/a");
   });
 
@@ -43,6 +48,7 @@ describe("formatUsageReport", () => {
         Research: u({ tokens: { input: 1000, cached_input: 0, output: 1000 } }),
         Impl: u({ tokens: { input: 1000, cached_input: 0, output: 1000 } }),
       },
+      { Research: "codex", Impl: "codex" },
       (m) =>
         m === "cheap"
           ? { input: 0, cached_input: 0, output: 0 }
@@ -63,6 +69,7 @@ describe("computeUsageTotals", () => {
         Research: u({ cost_usd: 0.5 }),
         Impl: u({ tokens: { input: 1000, cached_input: 0, output: 500 } }),
       },
+      { Research: "claude", Impl: "codex" },
       (m) => (m === "codex-model" ? { input: 0.001, cached_input: 0, output: 0.002 } : null),
       "claude-model",
       { Research: "claude-model", Impl: "codex-model" },
@@ -78,6 +85,7 @@ describe("computeUsageTotals", () => {
         Research: u({ cost_usd: 0.5 }),
         Impl: u({ tokens: { input: 1000, cached_input: 0, output: 500 } }),
       },
+      { Research: "claude", Impl: "codex" },
       () => null,
       "claude-model",
       { Research: "claude-model", Impl: "codex-model" },
@@ -90,6 +98,7 @@ describe("computeUsageTotals", () => {
   it("records the resolved per-phase model in the breakdown", () => {
     const totals = computeUsageTotals(
       { Research: u({ tokens: { input: 10, cached_input: 0, output: 10 } }), Impl: null },
+      { Research: "codex" },
       () => ({ input: 0, cached_input: 0, output: 0 }),
       "default-model",
       { Research: "phase-model" },
@@ -99,13 +108,59 @@ describe("computeUsageTotals", () => {
   });
 
   it("returns null aggregate tokens when any launched phase has unknown usage", () => {
-    const totals = computeUsageTotals({
-      Research: u({ tokens: { input: 10, cached_input: 2, output: 3 } }),
-      Impl: null,
-    });
+    const totals = computeUsageTotals(
+      {
+        Research: u({ tokens: { input: 10, cached_input: 2, output: 3 } }),
+        Impl: null,
+      },
+      { Research: "codex" },
+    );
 
     expect(totals.tokensInput).toBeNull();
     expect(totals.tokensCached).toBeNull();
     expect(totals.tokensOutput).toBeNull();
+  });
+
+  // A call_llm block with an explicit model and no provider records no kind,
+  // and every in-process LLM call reports tokens with a null cost_usd. Both
+  // stay priced by model id, so the run's cost stays known.
+  it("prices token-only phases whose provider is Claude or unstated", () => {
+    const tokens = { input: 1_000, cached_input: 0, output: 500 };
+    const totals = computeUsageTotals(
+      { Distill: u({ tokens }), LLM: u({ tokens }) },
+      { Distill: "claude", LLM: undefined },
+      () => ({ input: 0.001, cached_input: 0, output: 0.002 }),
+      undefined,
+      { Distill: "claude-haiku-4-5", LLM: "gpt-5-codex" },
+    );
+
+    expect(totals.costKnown).toBe(true);
+    expect(totals.phases.Distill.costUsd).toBeCloseTo(2, 8);
+    expect(totals.phases.LLM.costUsd).toBeCloseTo(2, 8);
+    expect(totals.costUsd).toBeCloseTo(4, 8);
+  });
+
+  it("matches the canonical Claude and Codex fixtures", () => {
+    const totals = computeUsageTotals(
+      {
+        Claude: u({ cost_usd: 1.234_567_891 }),
+        Codex: u({
+          tokens: { input: 1_000, cached_input: 400, output: 500 },
+        }),
+      },
+      { Claude: "claude", Codex: "codex" },
+      () => ({
+        input: 0.000_003,
+        cached_input: 0.000_000_7,
+        output: 0.000_015,
+      }),
+      undefined,
+      { Codex: "gpt-5-codex" },
+    );
+
+    expect(totals.costKnown).toBe(true);
+    expect(totals.phases.Claude.costUsd).toBe(1.234_567_891);
+    expect(totals.phases.Codex.costUsd).toBe(0.010_78);
+    expect(totals.costUsd).toBe(1.245_347_891);
   });
 });

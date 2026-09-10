@@ -11,7 +11,7 @@ import type {
   PhaseUsage,
   RunnableSandbox,
 } from "../../sandbox/agents/types.js";
-import type { TokenPrice } from "../../sandbox/agents/pricing.js";
+import type { TokenPrice } from "@shared/costs";
 import type {
   RunBudgetFailure,
   RunBudgetLimits,
