@@ -23,11 +23,9 @@ vi.mock("../auth-instance.js", () => ({
 }));
 
 import {
-  createOAuthFlowCookie,
   isOAuthAuthorizationQuery,
   isOpaqueHandoffToken,
   oauthConsentUrl,
-  readOAuthFlowCookie,
   renderMcpConsentPage,
   renderMcpLoginPage,
   isSameOriginPost,
@@ -36,8 +34,6 @@ import {
 
 const consentGetRoute = (await import("../routes/mcp-auth/consent.get.js")).default;
 const consentPostRoute = (await import("../routes/mcp-auth/consent.post.js")).default;
-
-const SECRET = "s".repeat(32);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -129,18 +125,6 @@ describe("MCP auth pages", () => {
     expect(html).not.toContain("offline_access");
     expect(html).not.toContain("Stay signed in");
     expect(html).toContain('name="scope" value="mcp:read runs:dispatch"');
-  });
-
-  it("keeps signed oauth_query state HttpOnly and rejects missing, expired, or tampered state", () => {
-    const now = new Date("2026-08-11T12:00:00.000Z");
-    const cookie = createOAuthFlowCookie("client_id=abc&sig=opaque", SECRET, now);
-
-    expect(cookie).toContain("HttpOnly");
-    expect(cookie).toContain("SameSite=Lax");
-    expect(readOAuthFlowCookie(cookie, SECRET, now)).toBe("client_id=abc&sig=opaque");
-    expect(readOAuthFlowCookie(null, SECRET, now)).toBeNull();
-    expect(readOAuthFlowCookie(cookie, SECRET, new Date(now.getTime() + 11 * 60_000))).toBeNull();
-    expect(readOAuthFlowCookie(cookie.replace("mcp_oauth=", "mcp_oauth=x"), SECRET, now)).toBeNull();
   });
 
   it("accepts auth POSTs only from the configured worker origin", () => {

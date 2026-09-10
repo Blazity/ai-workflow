@@ -2,8 +2,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { CostResponse, RunStatus } from "@shared/contracts";
 
-import { env } from "../../config/env.js";
-import { costAgg, listRuns, type TimeWindow } from "../../db/queries/runs-read.js";
+
+import type { McpStatsWindow } from "../../services/mcp/index.js";
+import { issueTrackerBaseUrl } from "../../services/settings/index.js";
 import { isTerminalRunStatus, type McpToolDependencies } from "../contracts.js";
 import { executeMcpRead } from "../execute-tool.js";
 import { registerCatalogTool } from "../tool-catalog.js";
@@ -11,7 +12,7 @@ import { registerCatalogTool } from "../tool-catalog.js";
 // Mirrors the dashboard's own default (parseWindow's fallback, db/queries/
 // runs-read.ts:45-49): a caller that sends no window sees the same "last 24h"
 // slice the cost view opens on.
-const DEFAULT_RUNS_STATS_WINDOW: TimeWindow = "24h";
+const DEFAULT_RUNS_STATS_WINDOW: McpStatsWindow = "24h";
 const DEFAULT_RUNS_STATS_LIMIT = 20;
 
 type RunOutcome = {
@@ -55,15 +56,14 @@ export function registerRunStatsTools(server: McpServer, deps: McpToolDependenci
           const limit = input.limit ?? DEFAULT_RUNS_STATS_LIMIT;
           const now = deps.now();
           const [runsResult, cost] = await Promise.all([
-            listRuns({
-              db: deps.db,
+            deps.services.listRuns({
               window,
               q: null,
               now,
-              jiraBaseUrl: env.JIRA_BASE_URL,
+              jiraBaseUrl: issueTrackerBaseUrl(),
               limit,
             }),
-            costAgg({ db: deps.db, window, now }),
+            deps.services.costAgg({ window, now }),
           ]);
           return {
             runs: runsResult.rows.map((run) => ({

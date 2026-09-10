@@ -1,11 +1,4 @@
 import { defineEventHandler } from "h3";
-import { getDb } from "../db/client.js";
-import { deploymentIdentity } from "../services/system/deployment-identity.js";
+import { healthResponse } from "../services/system/index.js";
 
-export default defineEventHandler(async () => {
-  return {
-    status: "ok",
-    timestamp: new Date().toISOString(),
-    ...(await deploymentIdentity(getDb)),
-  };
-});
+export default defineEventHandler(() => healthResponse());

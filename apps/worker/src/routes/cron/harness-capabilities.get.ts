@@ -4,16 +4,24 @@ import {
   getHeader,
   setResponseHeader,
 } from "h3";
-import { env } from "../../config/env.js";
-import { getDb } from "../../db/client.js";
-import { prewarmHarnessCapabilityCatalogs } from "../../harness-profiles/capability-catalog.js";
 import { logger } from "../../infra/logger.js";
+import { prewarmHarnessCapabilities } from "../../services/harness/index.js";
+import { cronRequestIsAuthorized } from "../../services/triggers/index.js";
 
+/**
+ * The scheduled capability prewarm.
+ *
+ * Same two protocol facts as the poll: the platform sends its shared secret as a
+ * bearer token, and the pass reports as JSON. What a prewarm does is the harness
+ * cluster's.
+ */
 export default defineEventHandler(async (event) => {
-  verifyCronAuth(getHeader(event, "authorization"));
+  if (!cronRequestIsAuthorized(getHeader(event, "authorization"))) {
+    throw createError({ statusCode: 401, statusMessage: "Unauthorized" });
+  }
   setResponseHeader(event, "Cache-Control", "private, no-store");
 
-  const result = await prewarmHarnessCapabilityCatalogs(getDb());
+  const result = await prewarmHarnessCapabilities();
   logger.info(
     {
       event: "harness_capability_prewarm",
@@ -23,9 +31,3 @@ export default defineEventHandler(async (event) => {
   );
   return { status: "ok", ...result };
 });
-
-function verifyCronAuth(authHeader: string | undefined): void {
-  if (!env.CRON_SECRET) return;
-  if (authHeader === `Bearer ${env.CRON_SECRET}`) return;
-  throw createError({ statusCode: 401, statusMessage: "Unauthorized" });
-}

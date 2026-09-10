@@ -3,23 +3,12 @@ import type {
   JsonValue,
   WebhookTestDeliveryResponse,
 } from "@shared/contracts";
+import { parseRequestBody, webhookTestDeliveryRequestSchema } from "@shared/contracts";
 import { createError, defineEventHandler, readBody } from "h3";
-import { getDb } from "../../../../../../../../db/client.js";
-import { toHttpError } from "../../../../../../../../services/auth/request-context.js";
-import { webhookSubjectKey } from "../../../../../../../../services/run-lifecycle/subject-key.js";
+import { toHttpError } from "../../../../../../../../services/auth/index.js";
+import { WEBHOOK_MAX_BODY_BYTES } from "../../../../../../../../services/triggers/index.js";
+import { runWebhookTestDelivery } from "../../../../../../../../services/workflow-definitions/index.js";
 import {
-  acceptWebhookDelivery,
-  completeWebhookDelivery,
-} from "../../../../../../../../webhook-trigger/delivery-store.js";
-import {
-  mapWebhookPayload,
-  type WebhookMappingConfig,
-} from "../../../../../../../../services/webhook-trigger/payload-mapping.js";
-import { getEnabledDeployedDefinition } from "../../../../../../../../workflow-definition/store.js";
-import { WEBHOOK_MAX_BODY_BYTES } from "../../../../../../../webhooks/custom/[endpointId].post.js";
-import {
-  auditWebhookAction,
-  findDeployedWebhookNode,
   parseWebhookEndpointTarget,
   requireWebhookActor,
   requireWebhookEncryptionKey,
@@ -47,76 +36,49 @@ export default defineEventHandler(
       const actor = await requireWebhookActor(event, true);
       const target = parseWebhookEndpointTarget(event);
       requireWebhookEncryptionKey();
-      const db = getDb();
-      const endpoint = await requireWebhookEndpoint(db, target);
+      const endpoint = await requireWebhookEndpoint(target);
       if (endpoint.revokedAt) {
         throw createError({ statusCode: 409, statusMessage: "Endpoint is revoked" });
       }
 
-      const body = await readBody<{ payload?: JsonValue } | null>(event).catch(() => null);
-      if (!body || typeof body !== "object" || !("payload" in body)) {
-        throw createError({ statusCode: 400, statusMessage: "payload is required" });
+      const parsed = parseRequestBody(
+        webhookTestDeliveryRequestSchema,
+        await readBody(event).catch(() => null),
+      );
+      if (!parsed.ok) {
+        throw createError({ statusCode: 400, statusMessage: parsed.message });
       }
-      const payload = body.payload as JsonValue;
+      const payload = parsed.value.payload as JsonValue;
       // The same size ceiling the public delivery route enforces, so a probe
       // cannot green-light a payload a real delivery would refuse with 413.
       if (Buffer.byteLength(JSON.stringify(payload) ?? "", "utf8") > WEBHOOK_MAX_BODY_BYTES) {
         throw createError({ statusCode: 413, statusMessage: "payload_too_large" });
       }
 
-      // The log row pins a definition version, and the version is also where the
-      // mappings live. findDeployedWebhookNode also gates enabled + not archived,
-      // so a disabled or draft definition has nothing to test against.
-      const deployed = await findDeployedWebhookNode(db, target);
-      if (!deployed) {
-        throw createError({
-          statusCode: 409,
-          statusMessage: "Deploy the definition before testing this endpoint",
-        });
-      }
-
-      // A live delivery to this endpoint is refused unless this definition is
-      // enabled with a readable deployed head, so the probe must be too.
-      const live = await getEnabledDeployedDefinition(db, target.definitionId);
-      if (!live || !live.current) {
-        throw createError({
-          statusCode: 409,
-          statusMessage: "This definition is not the enabled webhook owner",
-        });
-      }
-
-      const mapped = mapWebhookPayload(
-        deployed.node.configuration as WebhookMappingConfig,
-        payload,
-      );
-      const deliveryId = `test:${randomUUID()}`;
-      await acceptWebhookDelivery(db, {
+      const result = await runWebhookTestDelivery({
+        target,
         endpointId: endpoint.id,
-        deliveryId,
-        // Its own subject too, so a probe never queues behind (or ahead of) real
-        // traffic about the same external subject.
-        subjectKey: webhookSubjectKey(endpoint.id, deliveryId),
-        definitionId: target.definitionId,
-        definitionVersion: deployed.definitionVersion,
-        nodeId: target.nodeId,
-        entry: mapped.entry,
-        verifiedWith: null,
+        payload,
+        deliveryId: `test:${randomUUID()}`,
+        actorId: actor.userId,
       });
-      await completeWebhookDelivery(db, endpoint.id, deliveryId, {
-        outcome: "test",
-        reason: null,
-        runId: null,
-        verifiedWith: null,
-      });
+      if (!result.ok) {
+        throw createError({
+          statusCode: 409,
+          statusMessage:
+            result.reason === "not_deployed"
+              ? "Deploy the definition before testing this endpoint"
+              : "This definition is not the enabled webhook owner",
+        });
+      }
 
-      auditWebhookAction(actor.userId, endpoint.id, "tested");
       return {
         outcome: "test",
         reason: null,
         runId: null,
-        deliveryId,
-        entry: mapped.entry,
-        subjectId: mapped.subjectId,
+        deliveryId: result.deliveryId,
+        entry: result.entry,
+        subjectId: result.subjectId,
       };
     } catch (error) {
       toHttpError(error);

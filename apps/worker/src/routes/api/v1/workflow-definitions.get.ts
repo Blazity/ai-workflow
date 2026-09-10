@@ -10,23 +10,13 @@ import type {
   WorkflowDefinitionMeta,
   WorkflowDefinitionsResponse,
 } from "@shared/contracts";
-import { env } from "../../../config/env.js";
-import { getDb } from "../../../db/client.js";
-import { getCurrentSystemHarnessProfileReference } from "../../../harness-profiles/store.js";
-import { requireDashboardActor, toHttpError } from "../../../services/auth/request-context.js";
-import { defaultWorkflowDefinitionV2 } from "../../../workflow-definition/default.js";
-import { workflowDefinitionTemplates } from "../../../workflow-definition/templates.js";
+import { requireDashboardActor, toHttpError } from "../../../services/auth/index.js";
 import {
-  buildWorkflowEditorOptions,
-  fetchAvailableModels,
-  fetchTicketStatuses,
-} from "../../../workflow-definition/models.js";
-import {
-  listWorkflowDefinitions,
+  readWorkflowDefinitionsOverview,
   WorkflowDefinitionStoreError,
   WorkflowDefinitionValidationError,
   type WorkflowDefinitionRow,
-} from "../../../workflow-definition/store.js";
+} from "../../../services/workflow-definitions/index.js";
 
 /** Serializes a definition row into the dashboard-facing meta. Shared with the
  *  detail/save/patch routes and the legacy shims. */
@@ -80,30 +70,12 @@ export default defineEventHandler(
   async (event): Promise<WorkflowDefinitionsResponse | undefined> => {
     try {
       await requireDashboardActor(event);
-      const db = getDb();
-      const definitions = (await listWorkflowDefinitions(db)).map((row) =>
-        serializeDefinitionMeta(row),
-      );
-      const [models, ticketStatuses, profileReference] = await Promise.all([
-        fetchAvailableModels(),
-        fetchTicketStatuses(),
-        getCurrentSystemHarnessProfileReference(db, env.AGENT_KIND),
-      ]);
+      const overview = await readWorkflowDefinitionsOverview();
       return {
-        definitions,
-        templates: workflowDefinitionTemplates({
-          includeReview: env.ENABLE_REVIEW_PHASE,
-          includeLeakReview: env.ENABLE_LEAK_REVIEW,
-          provider: env.AGENT_KIND,
-          profileReference,
-        }),
-        defaultDefinition: defaultWorkflowDefinitionV2({
-          includeReview: env.ENABLE_REVIEW_PHASE,
-          includeLeakReview: env.ENABLE_LEAK_REVIEW,
-          provider: env.AGENT_KIND,
-          profileReference,
-        }),
-        options: buildWorkflowEditorOptions(models, ticketStatuses),
+        definitions: overview.definitions.map((row) => serializeDefinitionMeta(row)),
+        templates: overview.templates,
+        defaultDefinition: overview.defaultDefinition,
+        options: overview.options,
       };
     } catch (error) {
       toHttpError(error);

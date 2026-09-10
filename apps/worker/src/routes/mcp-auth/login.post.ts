@@ -9,19 +9,16 @@ import {
   toWebRequest,
 } from "h3";
 
-import { env } from "../../config/env.js";
 import { auth } from "../../auth-instance.js";
-import { isSameOriginPost, readOAuthFlowCookie } from "../../mcp/auth-pages.js";
+import { readOAuthFlowCookie, workerOriginUrl } from "../../services/auth/index.js";
+import { isSameOriginPost } from "../../mcp/auth-pages.js";
 
 export default defineEventHandler(async (event) => {
   const incoming = toWebRequest(event);
-  if (!isSameOriginPost(incoming, env.BETTER_AUTH_URL)) {
+  if (!isSameOriginPost(incoming, workerOriginUrl())) {
     throw createError({ statusCode: 403, statusMessage: "Invalid request origin" });
   }
-  const oauthQuery = readOAuthFlowCookie(
-    getHeader(event, "cookie") ?? null,
-    env.BETTER_AUTH_SECRET,
-  );
+  const oauthQuery = readOAuthFlowCookie(getHeader(event, "cookie") ?? null);
   if (!oauthQuery) {
     throw createError({ statusCode: 400, statusMessage: "OAuth request expired" });
   }
@@ -33,7 +30,7 @@ export default defineEventHandler(async (event) => {
   }
 
   const response = await auth.handler(
-    new Request(`${env.BETTER_AUTH_URL.replace(/\/$/, "")}/api/auth/sign-in/email`, {
+    new Request(`${workerOriginUrl()}/api/auth/sign-in/email`, {
       method: "POST",
       headers: {
         accept: "text/html",

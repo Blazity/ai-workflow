@@ -1,8 +1,7 @@
 import { createError, defineEventHandler, getQuery } from "h3";
 import type { HarnessProfileDetailResponse } from "@shared/contracts";
-import { getDb } from "../../../../db/client.js";
-import { getHarnessProfileDetailWithUsage } from "../../../../db/harness-profile-detail-store.js";
-import { requireDashboardActor } from "../../../../services/auth/request-context.js";
+import { requireDashboardActor } from "../../../../services/auth/index.js";
+import { readHarnessProfileDetail } from "../../../../services/harness/index.js";
 import {
   parseHarnessProfileId,
   setHarnessApiNoStore,
@@ -29,9 +28,8 @@ export default defineEventHandler(
           statusMessage: "Invalid profile version",
         });
       }
-      const db = getDb();
       const profileId = parseHarnessProfileId(event);
-      const detail = await getHarnessProfileDetailWithUsage(db, {
+      const detail = await readHarnessProfileDetail({
         organizationId: actor.organizationId,
         profileId,
         actorRole: actor.role,

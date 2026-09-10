@@ -1,8 +1,11 @@
 import { createError, defineEventHandler, readBody } from "h3";
-import type { HarnessProfileMutationResponse } from "@shared/contracts";
-import { getDb } from "../../../../db/client.js";
-import { updateHarnessProfileDraft } from "../../../../harness-profiles/store.js";
-import { requireDashboardActor } from "../../../../services/auth/request-context.js";
+import {
+  harnessProfileDraftUpdateRequestSchema,
+  parseRequestBody,
+  type HarnessProfileMutationResponse,
+} from "@shared/contracts";
+import { requireDashboardActor } from "../../../../services/auth/index.js";
+import { saveHarnessProfileDraft } from "../../../../services/harness/index.js";
 import {
   parseHarnessProfileId,
   setHarnessApiNoStore,
@@ -14,25 +17,18 @@ export default defineEventHandler(
     try {
       setHarnessApiNoStore(event);
       const actor = await requireDashboardActor(event);
-      const body =
-        (await readBody<{
-          expectedRevision?: unknown;
-          draft?: unknown;
-        }>(event).catch(() => null)) ?? {};
-      if (
-        typeof body.expectedRevision !== "number" ||
-        body.draft === undefined
-      ) {
-        throw createError({
-          statusCode: 400,
-          statusMessage: "Draft and expectedRevision are required",
-        });
+      const parsed = parseRequestBody(
+        harnessProfileDraftUpdateRequestSchema,
+        (await readBody(event).catch(() => null)) ?? {},
+      );
+      if (!parsed.ok) {
+        throw createError({ statusCode: 400, statusMessage: parsed.message });
       }
       return {
-        profile: await updateHarnessProfileDraft(getDb(), {
+        profile: await saveHarnessProfileDraft({
           profileId: parseHarnessProfileId(event),
-          expectedRevision: body.expectedRevision,
-          draft: body.draft,
+          expectedRevision: parsed.value.expectedRevision,
+          draft: parsed.value.draft,
           actor: {
             organizationId: actor.organizationId,
             role: actor.role,

@@ -28,6 +28,11 @@ const state = vi.hoisted(() => ({
   getRunReplayAttempt: vi.fn(),
 }));
 
+// The routes now reach their services through the cluster interface files, so
+// the settings module (and with it config/env) is loaded even though nothing
+// under test reads a deployment setting. Stub it so importing does not demand a
+// configured deployment.
+vi.mock("../../../../config/env.js", () => ({ env: {} }));
 vi.mock("../../../../db/client.js", () => ({ getDb: () => ({}) }));
 vi.mock("../../../../services/auth/request-context.js", () => ({
   requireDashboardActor: vi.fn(async () => {

@@ -1,31 +1,18 @@
 import { createError, defineEventHandler, getQuery, getRouterParam, type H3Event } from "h3";
-import type {
-  PromptLibraryListResponse,
-  PromptLibraryListRowDto,
-} from "@shared/contracts";
-import { getDb } from "../../../db/client.js";
-import { requireDashboardActor, toHttpError } from "../../../services/auth/request-context.js";
+import type { PromptLibraryListResponse } from "@shared/contracts";
+import { requireDashboardActor, toHttpError } from "../../../services/auth/index.js";
 import {
-  listPrompts,
-  PromptLibraryStoreError,
-  serializePromptMeta,
-  type PromptLibraryListRow,
-} from "../../../prompt-library/store.js";
+  isStorablePromptId,
+  listPromptLibrary,
+  promptLibraryFailure,
+} from "../../../services/prompts/index.js";
 
-/** Serializes a list row into its DTO (meta + head body and slot contract). */
-export function serializeListRow(row: PromptLibraryListRow): PromptLibraryListRowDto {
-  return {
-    ...serializePromptMeta(row, row.currentVersion),
-    body: row.body,
-    slots: structuredClone(row.slots),
-  };
-}
-
-/** Maps a store write failure (400/404/409) to its HTTP error, then defers the
- *  rest (403 DashboardAuthError, etc.) to the shared toHttpError. */
+/** Maps a prompt library write failure (400/404/409) to its HTTP error, then
+ *  defers the rest (403 DashboardAuthError, etc.) to the shared toHttpError. */
 export function toPromptLibraryHttpError(error: unknown): never {
-  if (error instanceof PromptLibraryStoreError) {
-    throw createError({ statusCode: error.statusCode, statusMessage: error.message });
+  const failure = promptLibraryFailure(error);
+  if (failure) {
+    throw createError({ statusCode: failure.statusCode, statusMessage: failure.message });
   }
   toHttpError(error);
 }
@@ -33,7 +20,7 @@ export function toPromptLibraryHttpError(error: unknown): never {
 /** Reads and validates the `[id]` route segment shared by the detail routes. */
 export function parsePromptId(event: H3Event): number {
   const id = Number(getRouterParam(event, "id"));
-  if (!Number.isInteger(id) || id <= 0 || id > 2147483647) {
+  if (!isStorablePromptId(id)) {
     throw createError({ statusCode: 404, statusMessage: "Unknown prompt" });
   }
   return id;
@@ -47,16 +34,11 @@ export default defineEventHandler(async (event): Promise<PromptLibraryListRespon
   try {
     await requireDashboardActor(event);
     const query = getQuery(event);
-    const includeArchived = query.includeArchived === "1" || query.includeArchived === "true";
-    const rows = await listPrompts(getDb(), {
+    return await listPromptLibrary({
       q: stringParam(query.q),
       tag: stringParam(query.tag),
-      includeArchived,
+      includeArchived: query.includeArchived === "1" || query.includeArchived === "true",
     });
-
-    const prompts = rows.map(serializeListRow);
-    const tags = [...new Set(prompts.flatMap((p) => p.tags))].sort();
-    return { prompts, tags };
   } catch (error) {
     toHttpError(error);
   }

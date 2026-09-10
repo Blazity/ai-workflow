@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { env } from "../../config/env.js";
+import { deploymentSettings } from "../settings/index.js";
 import type { Db } from "../../db/client.js";
 import { databaseFingerprint } from "../../db/database-fingerprint.js";
 import { envMarker } from "../../db/schema.js";
@@ -82,9 +82,10 @@ async function readMarker(openDb: () => Db): Promise<Marker> {
  */
 export async function deploymentIdentity(openDb: () => Db): Promise<DeploymentIdentity> {
   const marker = await readMarker(openDb);
+  const deployment = deploymentSettings();
   return {
-    commit: env.VERCEL_GIT_COMMIT_SHA ?? null,
-    env: env.VERCEL_ENV ?? null,
+    commit: deployment.commitSha ?? null,
+    env: deployment.vercelEnv ?? null,
     databaseEnv: marker.env,
     databaseFingerprint: marker.fingerprint,
   };

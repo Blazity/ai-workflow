@@ -1,6 +1,7 @@
 import type { Db } from "../db/client.js";
-import type { Adapters } from "../services/vcs/adapters.js";
-import type { McpActorContext, McpToolDependencies } from "./contracts.js";
+import type { McpActorContext, McpToolDependencies } from "../mcp/contracts.js";
+import { createMcpToolServices } from "../services/mcp/tool-services.js";
+import type { Adapters } from "../services/vcs/index.js";
 
 export function actorFor(overrides: Partial<McpActorContext> = {}): McpActorContext {
   return {
@@ -17,13 +18,20 @@ export function actorFor(overrides: Partial<McpActorContext> = {}): McpActorCont
   };
 }
 
+/**
+ * Tool dependencies bound to a test database.
+ *
+ * Production builds the same services from the request's handle; a test passes
+ * its own pglite handle here, which is the only reason `createMcpToolServices`
+ * takes one at all.
+ */
 export function depsFor(
   db: Db,
   now: () => Date,
   overrides: Partial<McpToolDependencies> = {},
 ): McpToolDependencies {
   return {
-    db,
+    services: createMcpToolServices(db),
     adapters: {} as Adapters,
     actor: actorFor(),
     requestId: "request-execute",

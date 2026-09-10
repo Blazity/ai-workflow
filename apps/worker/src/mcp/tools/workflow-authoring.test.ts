@@ -62,7 +62,7 @@ import {
   workflowSchedules,
 } from "../../db/schema.js";
 import type { McpActorContext, McpScope } from "../contracts.js";
-import { actorFor, depsFor } from "../test-support.js";
+import { actorFor, depsFor } from "../../test-support/mcp.js";
 import { WORKFLOW_MAX_EDGES, WORKFLOW_MAX_NODES } from "../tool-catalog.js";
 import {
   registerWorkflowAuthoringTools,

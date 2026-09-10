@@ -8,15 +8,14 @@ import type {
   HarnessCapabilitiesResponse,
   HarnessProvider,
 } from "@shared/contracts";
-import { getDb } from "../../../db/client.js";
-import {
-  getCachedHarnessCapabilities,
-  HarnessCapabilityCatalogError,
-} from "../../../harness-profiles/capability-catalog.js";
 import {
   requireDashboardActor,
   toHttpError,
-} from "../../../services/auth/request-context.js";
+} from "../../../services/auth/index.js";
+import {
+  HarnessCapabilityCatalogError,
+  readCachedHarnessCapabilities,
+} from "../../../services/harness/index.js";
 
 export default defineEventHandler(
   async (event): Promise<HarnessCapabilitiesResponse | undefined> => {
@@ -26,7 +25,7 @@ export default defineEventHandler(
       const query = getQuery(event);
       const provider = parseProvider(query.provider);
       const cliVersion = parseCliVersion(query.cliVersion);
-      return await getCachedHarnessCapabilities(getDb(), {
+      return await readCachedHarnessCapabilities({
         organizationId: actor.organizationId,
         provider,
         cliVersion,

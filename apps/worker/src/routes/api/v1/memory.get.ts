@@ -3,9 +3,11 @@ import type {
   MemoryDocumentResponse,
   MemoryDocumentsResponse,
 } from "@shared/contracts";
-import { getDb } from "../../../db/client.js";
-import { requireDashboardActor, toHttpError } from "../../../services/auth/request-context.js";
-import { getMemoryDocument, listMemoryDocuments } from "../../../memory/store.js";
+import { requireDashboardActor, toHttpError } from "../../../services/auth/index.js";
+import {
+  listMemoryDocumentSummaries,
+  readMemoryDocument,
+} from "../../../services/memory/index.js";
 
 function stringParam(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
@@ -25,7 +27,7 @@ export default defineEventHandler(
       const docPath = stringParam(query.docPath);
 
       if (subjectKey !== undefined && docPath !== undefined) {
-        const document = await getMemoryDocument(getDb(), subjectKey, docPath);
+        const document = await readMemoryDocument(subjectKey, docPath);
         if (!document) {
           throw createError({
             statusCode: 404,
@@ -50,7 +52,7 @@ export default defineEventHandler(
         });
       }
 
-      const rows = await listMemoryDocuments(getDb(), {
+      const rows = await listMemoryDocumentSummaries({
         ticketKey: stringParam(query.ticketKey),
       });
       return {

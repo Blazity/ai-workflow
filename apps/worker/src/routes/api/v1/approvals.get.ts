@@ -1,12 +1,7 @@
 import { createError, defineEventHandler, getQuery } from "h3";
 import type { ApprovalsResponse } from "@shared/contracts";
-import { getDb } from "../../../db/client.js";
-import { requireDashboardActor, toHttpError } from "../../../services/auth/request-context.js";
-import {
-  ApprovalStoreError,
-  listApprovals,
-  serializeApproval,
-} from "../../../approvals/store.js";
+import { requireDashboardActor, toHttpError } from "../../../services/auth/index.js";
+import { ApprovalStoreError, listDashboardApprovals } from "../../../services/approvals/index.js";
 
 /** Maps an approval store write failure (409) to its HTTP error, then defers the
  *  rest (403 DashboardAuthError, etc.) to the shared toHttpError. */
@@ -21,8 +16,10 @@ export default defineEventHandler(async (event): Promise<ApprovalsResponse | und
   try {
     await requireDashboardActor(event);
     const status = getQuery(event).status === "all" ? "all" : "pending";
-    const approvals = (await listApprovals(getDb(), { status })).map(serializeApproval);
-    return { generatedAt: new Date().toISOString(), approvals };
+    return {
+      generatedAt: new Date().toISOString(),
+      approvals: await listDashboardApprovals(status),
+    };
   } catch (error) {
     toApprovalHttpError(error);
   }

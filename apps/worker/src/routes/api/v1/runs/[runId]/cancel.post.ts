@@ -5,23 +5,18 @@ import {
   getRouterParam,
   setResponseStatus,
 } from "h3";
-import { getDb } from "../../../../../db/client.js";
-import { createAdapters } from "../../../../../services/vcs/adapters.js";
 import {
+  canDispatchWorkflowRuns,
   requireDashboardActor,
   toHttpError,
-} from "../../../../../services/auth/request-context.js";
-import { canDispatchWorkflowRuns } from "../../../../../services/auth/roles.js";
-import { cancelRunForOperator } from "../../../../../services/run-lifecycle/cancel-run.js";
-import { dashboardUserLabel } from "../../../../../pre-pr-checks/store.js";
+} from "../../../../../services/auth/index.js";
+import { cancelRunAsOperator } from "../../../../../services/run-lifecycle/index.js";
 
 /**
  * Operator cancel-by-id: an authenticated dispatcher stops ANY in-flight run,
  * including a ticketless webhook or schedule run no ticket-column cancel path can
- * reach. The heavy lifting (Workflow cancel, sandbox cleanup, exact claim
- * release, blocked settle) lives in the frozen cancelRunById; this route only
- * gates on the dispatch role, drives it, best-effort settles the schedule ledger,
- * and maps the outcome to an honest HTTP response.
+ * reach. This route only gates on the dispatch role, drives the cancel, and maps
+ * the outcome to an honest HTTP response.
  */
 export default defineEventHandler(
   async (event): Promise<RunCancelResponse | undefined> => {
@@ -35,19 +30,7 @@ export default defineEventHandler(
         throw createError({ statusCode: 404, statusMessage: "Unknown run" });
       }
 
-      const db = getDb();
-      const adapters = createAdapters();
-      const actorLabel = await dashboardUserLabel(db, actor.userId);
-      // The cancel AND the schedule-ledger settle: both live in cancelRunForOperator
-      // so this route and the MCP tool cannot drift on what an operator cancel means.
-      // The settle is best-effort in there, for the reason it always was: the run is
-      // already torn down, so a failed ledger write must never turn a confirmed
-      // cancel into an error.
-      const result = await cancelRunForOperator(db, runId, {
-        actorLabel,
-        runRegistry: adapters.runRegistry,
-        issueTracker: adapters.issueTracker,
-      });
+      const result = await cancelRunAsOperator(runId, { userId: actor.userId });
 
       switch (result.outcome) {
         case "cancelled": {

@@ -1,7 +1,6 @@
 import { defineEventHandler, getQuery, setResponseHeader } from "h3";
 import type { KpisResponse } from "@shared/contracts";
-import { getDb } from "../../../../db/client.js";
-import { parseWindow, runKpis } from "../../../../db/queries/runs-read.js";
+import { collectRunKpis } from "../../../../services/overview/index.js";
 import { logger } from "../../../../infra/logger.js";
 
 export default defineEventHandler(async (event): Promise<KpisResponse> => {
@@ -13,11 +12,10 @@ export default defineEventHandler(async (event): Promise<KpisResponse> => {
 
   const generatedAt = new Date().toISOString();
   try {
-    const window = parseWindow(getQuery(event).window);
-    const kpis = await runKpis({ db: getDb(), window, now: new Date() });
+    const kpis = await collectRunKpis(getQuery(event).window, new Date());
     return { generatedAt, ...kpis };
   } catch (err) {
-    // DB unreachable — degrade to the documented N/A state instead of erroring.
+    // DB unreachable, degrade to the documented N/A state instead of erroring.
     logger.warn({ err: (err as Error).message }, "kpis_collect_failed");
     return { generatedAt, runs24h: null, p95: null, errors24h: null, cost24h: null };
   }

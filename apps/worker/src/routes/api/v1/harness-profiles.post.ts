@@ -1,10 +1,11 @@
 import { createError, defineEventHandler, readBody } from "h3";
-import type {
-  HarnessProfileMutationResponse,
+import {
+  harnessProfileCreateRequestSchema,
+  parseRequestBody,
+  type HarnessProfileMutationResponse,
 } from "@shared/contracts";
-import { getDb } from "../../../db/client.js";
-import { createHarnessProfile } from "../../../harness-profiles/store.js";
-import { requireDashboardActor } from "../../../services/auth/request-context.js";
+import { requireDashboardActor } from "../../../services/auth/index.js";
+import { createHarnessProfileDraft } from "../../../services/harness/index.js";
 import {
   setHarnessApiNoStore,
   toHarnessProfileHttpError,
@@ -15,20 +16,17 @@ export default defineEventHandler(
     try {
       setHarnessApiNoStore(event);
       const actor = await requireDashboardActor(event);
-      const body =
-        (await readBody<{ slug?: unknown; draft?: unknown }>(event).catch(
-          () => null,
-        )) ?? {};
-      if (body.draft === undefined) {
-        throw createError({
-          statusCode: 400,
-          statusMessage: "Profile draft is required",
-        });
+      const parsed = parseRequestBody(
+        harnessProfileCreateRequestSchema,
+        (await readBody(event).catch(() => null)) ?? {},
+      );
+      if (!parsed.ok) {
+        throw createError({ statusCode: 400, statusMessage: parsed.message });
       }
       return {
-        profile: await createHarnessProfile(getDb(), {
-          slug: body.slug,
-          draft: body.draft,
+        profile: await createHarnessProfileDraft({
+          slug: parsed.value.slug,
+          draft: parsed.value.draft,
           actor: {
             organizationId: actor.organizationId,
             role: actor.role,

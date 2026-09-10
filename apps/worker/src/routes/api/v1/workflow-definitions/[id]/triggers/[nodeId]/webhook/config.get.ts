@@ -1,22 +1,15 @@
 import type { WebhookEndpointConfigResponse } from "@shared/contracts";
 import { defineEventHandler } from "h3";
-import { env } from "../../../../../../../../config/env.js";
-import { getDb, type Db } from "../../../../../../../../db/client.js";
-import { toHttpError } from "../../../../../../../../services/auth/request-context.js";
-import { canDispatchWorkflowRuns } from "../../../../../../../../services/auth/roles.js";
 import {
-  getWebhookEndpointForNode,
-  mintWebhookEndpointsForDefinition,
-  type WebhookEndpointRow,
-} from "../../../../../../../../webhook-trigger/endpoint-store.js";
-import { getEnabledDeployedDefinition } from "../../../../../../../../workflow-definition/store.js";
+  canDispatchWorkflowRuns,
+  toHttpError,
+} from "../../../../../../../../services/auth/index.js";
+import { webhookTriggerEncryptionKey } from "../../../../../../../../services/settings/index.js";
+import { readWebhookEndpointState } from "../../../../../../../../services/workflow-definitions/index.js";
 import {
-  auditWebhookAction,
-  findDeployedWebhookNode,
   parseWebhookEndpointTarget,
   requireWebhookActor,
   serializeWebhookEndpointConfig,
-  type WebhookEndpointTarget,
 } from "./endpoint-route.js";
 
 /**
@@ -35,55 +28,19 @@ export default defineEventHandler(
     try {
       const actor = await requireWebhookActor(event, false);
       const target = parseWebhookEndpointTarget(event);
-      const db = getDb();
 
-      const keyHex = env.WEBHOOK_TRIGGER_ENCRYPTION_KEY;
-      if (!keyHex) return { state: "unconfigured", endpoint: null };
-
-      let endpoint = await getWebhookEndpointForNode(db, target.definitionId, target.nodeId);
-      if (!endpoint && canDispatchWorkflowRuns(actor.role)) {
-        endpoint = await mintMissingEndpoint(db, keyHex, target);
-        if (endpoint) auditWebhookAction(actor.userId, endpoint.id, "minted");
-      }
-      if (!endpoint) return { state: "await_deploy", endpoint: null };
-
-      if (endpoint.revokedAt) {
-        return {
-          state: "revoked",
-          endpoint: await serializeWebhookEndpointConfig(db, event, endpoint),
-        };
-      }
-
-      // Present and live, but is THIS definition currently receiving deliveries?
-      // Routing is per endpoint, so its own definition must be enabled with a
-      // readable deployed head; otherwise the endpoint exists but every delivery
-      // to it is refused.
-      const live = await getEnabledDeployedDefinition(db, target.definitionId);
-      const isActive = Boolean(live?.current);
+      const read = await readWebhookEndpointState(target, {
+        actorId: actor.userId,
+        mayMint: canDispatchWorkflowRuns(actor.role),
+        encryptionKey: webhookTriggerEncryptionKey(),
+      });
+      if (!read.endpoint) return { state: read.state, endpoint: null };
       return {
-        state: isActive ? "active" : "inactive",
-        endpoint: await serializeWebhookEndpointConfig(db, event, endpoint),
+        state: read.state,
+        endpoint: await serializeWebhookEndpointConfig(event, read.endpoint),
       };
     } catch (error) {
       toHttpError(error);
     }
   },
 );
-
-/** Mint only for a node that is genuinely live (enabled, not archived, deployed
- *  head declares it): findDeployedWebhookNode enforces all three, so a draft or a
- *  disabled definition never gets a URL a sender could rely on. */
-async function mintMissingEndpoint(
-  db: Db,
-  keyHex: string,
-  target: WebhookEndpointTarget,
-): Promise<WebhookEndpointRow | null> {
-  const deployed = await findDeployedWebhookNode(db, target);
-  if (!deployed) return null;
-
-  await mintWebhookEndpointsForDefinition(db, keyHex, {
-    definitionId: target.definitionId,
-    nodes: [deployed.node],
-  });
-  return getWebhookEndpointForNode(db, target.definitionId, target.nodeId);
-}

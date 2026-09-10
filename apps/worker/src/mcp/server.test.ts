@@ -63,7 +63,7 @@ const PUBLISHED: McpToolName[] = [
 const cleanups: Array<() => Promise<void>> = [];
 
 const deps = {
-  db: {} as McpToolDependencies["db"],
+  services: {} as McpToolDependencies["services"],
   adapters: {} as McpToolDependencies["adapters"],
   actor: {
     kind: "user",

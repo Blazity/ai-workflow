@@ -1,11 +1,7 @@
 import { defineEventHandler, setResponseHeader } from "h3";
 import type { EvalsResponse } from "@shared/contracts";
-import { env } from "../../../config/env.js";
-import { ArthurClient } from "../../../sandbox/arthur-client.js";
-import { collectEvals } from "../../../services/overview/collect-evals.js";
+import { collectEvalSummary } from "../../../services/overview/index.js";
 import { logger } from "../../../infra/logger.js";
-
-const WINDOW_HOURS = 24;
 
 export default defineEventHandler(async (event): Promise<EvalsResponse> => {
   setResponseHeader(
@@ -16,28 +12,16 @@ export default defineEventHandler(async (event): Promise<EvalsResponse> => {
 
   const generatedAt = new Date().toISOString();
 
-  if (!env.GENAI_ENGINE_API_KEY || !env.GENAI_ENGINE_TRACE_ENDPOINT) {
-    return {
-      available: false,
-      generatedAt,
-      reason: "Arthur GenAI Engine not configured.",
-    };
-  }
-
   try {
-    const client = ArthurClient.fromTraceEndpoint(
-      env.GENAI_ENGINE_TRACE_ENDPOINT,
-      env.GENAI_ENGINE_API_KEY,
-    );
-
-    const { windowHours, score, spansGraded, traceCount } =
-      await collectEvals({
-        client,
-        windowHours: WINDOW_HOURS,
-        now: new Date(),
-      });
-
-    if (spansGraded === 0) {
+    const summary = await collectEvalSummary(new Date());
+    if (summary.kind === "not_configured") {
+      return {
+        available: false,
+        generatedAt,
+        reason: "Arthur GenAI Engine not configured.",
+      };
+    }
+    if (summary.kind === "nothing_graded") {
       return {
         available: false,
         generatedAt,
@@ -48,10 +32,10 @@ export default defineEventHandler(async (event): Promise<EvalsResponse> => {
     return {
       available: true,
       generatedAt,
-      windowHours,
-      score,
-      spansGraded,
-      traceCount,
+      windowHours: summary.windowHours,
+      score: summary.score,
+      spansGraded: summary.spansGraded,
+      traceCount: summary.traceCount,
     };
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "evals_list_failed");

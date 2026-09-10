@@ -1,13 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { createError, defineEventHandler, setResponseHeader, toWebRequest } from "h3";
 
-import { env } from "../../config/env.js";
 import { auth } from "../../auth-instance.js";
-import {
-  allowedScopes,
-  createOAuthFlowCookie,
-  renderMcpConsentPage,
-} from "../../mcp/auth-pages.js";
+import { createOAuthFlowCookie } from "../../services/auth/index.js";
+import { allowedScopes, renderMcpConsentPage } from "../../mcp/auth-pages.js";
 
 export default defineEventHandler(async (event) => {
   const request = toWebRequest(event);
@@ -52,7 +48,7 @@ export default defineEventHandler(async (event) => {
   setResponseHeader(
     event,
     "set-cookie",
-    createOAuthFlowCookie(oauthQuery, env.BETTER_AUTH_SECRET, new Date(), flowId),
+    createOAuthFlowCookie(oauthQuery, new Date(), flowId),
   );
   setResponseHeader(event, "content-type", "text/html; charset=utf-8");
   return renderMcpConsentPage({

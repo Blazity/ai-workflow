@@ -5,26 +5,20 @@ import {
   getRouterParam,
   type H3Event,
 } from "h3";
-import { env } from "../../../../../../../../config/env.js";
-import type { Db } from "../../../../../../../../db/client.js";
-import { requireDashboardActor } from "../../../../../../../../services/auth/request-context.js";
-import { canDispatchWorkflowRuns } from "../../../../../../../../services/auth/roles.js";
-import { logger } from "../../../../../../../../infra/logger.js";
 import {
-  getWebhookEndpointForNode,
-  type MintableWebhookNode,
-  type WebhookEndpointRow,
-} from "../../../../../../../../webhook-trigger/endpoint-store.js";
-import { getWebhookRejectionsToday } from "../../../../../../../../services/webhook-trigger/rejection-counters.js";
+  canDispatchWorkflowRuns,
+  requireDashboardActor,
+} from "../../../../../../../../services/auth/index.js";
+import { webhookTriggerEncryptionKey } from "../../../../../../../../services/settings/index.js";
 import {
   resolveWebhookHeaderName,
   resolveWebhookTimestampHeaderName,
-} from "../../../../../../../../services/webhook-trigger/verify.js";
+} from "../../../../../../../../services/webhook-trigger/index.js";
 import {
-  getDeployedWorkflowDefinitionVersion,
-  runnableDefinitionOf,
-  getWorkflowDefinition,
-} from "../../../../../../../../workflow-definition/store.js";
+  findWebhookEndpoint,
+  webhookRejectionsToday,
+  type WebhookEndpointTarget,
+} from "../../../../../../../../services/workflow-definitions/index.js";
 import { parseDefinitionId } from "../../../../../workflow-definitions.get.js";
 
 /**
@@ -40,10 +34,7 @@ import { parseDefinitionId } from "../../../../../workflow-definitions.get.js";
  */
 export const MASKED_WEBHOOK_SECRET = `whsec_${"•".repeat(64)}`;
 
-export interface WebhookEndpointTarget {
-  definitionId: number;
-  nodeId: string;
-}
+export type { WebhookEndpointTarget };
 
 export function parseWebhookEndpointTarget(event: H3Event): WebhookEndpointTarget {
   const definitionId = parseDefinitionId(event);
@@ -67,7 +58,7 @@ export async function requireWebhookActor(event: H3Event, mutation: boolean) {
 /** Without a key nothing can be decrypted or minted, which is a deployment
  *  configuration problem rather than anything the caller did wrong. */
 export function requireWebhookEncryptionKey(): string {
-  const keyHex = env.WEBHOOK_TRIGGER_ENCRYPTION_KEY;
+  const keyHex = webhookTriggerEncryptionKey();
   if (!keyHex) {
     throw createError({
       statusCode: 503,
@@ -77,41 +68,12 @@ export function requireWebhookEncryptionKey(): string {
   return keyHex;
 }
 
-export async function requireWebhookEndpoint(
-  db: Db,
-  target: WebhookEndpointTarget,
-): Promise<WebhookEndpointRow> {
-  const endpoint = await getWebhookEndpointForNode(db, target.definitionId, target.nodeId);
+export async function requireWebhookEndpoint(target: WebhookEndpointTarget) {
+  const endpoint = await findWebhookEndpoint(target);
   if (!endpoint) {
     throw createError({ statusCode: 404, statusMessage: "Unknown webhook endpoint" });
   }
   return endpoint;
-}
-
-/**
- * The endpoint's node in the definition's live deployed head, with the version
- * it belongs to. Null unless the definition is enabled, not archived, has a
- * deployed head, and that head declares this webhook node: anything short of all
- * four is the "authored but not live" case, which must never mint a URL a sender
- * could rely on nor let a dead endpoint be tested green.
- */
-export async function findDeployedWebhookNode(
-  db: Db,
-  target: WebhookEndpointTarget,
-): Promise<{ definitionVersion: number; node: MintableWebhookNode } | null> {
-  const definition = await getWorkflowDefinition(db, target.definitionId);
-  if (!definition || !definition.enabled || definition.archivedAt) return null;
-  const head = await getDeployedWorkflowDefinitionVersion(db, target.definitionId);
-  const graph = runnableDefinitionOf(head);
-  if (!head || !graph) return null;
-  const node = graph.nodes.find(
-    (n) => n.id === target.nodeId && n.type === "trigger_webhook",
-  );
-  if (!node) return null;
-  return {
-    definitionVersion: head.version,
-    node: { id: node.id, type: "trigger_webhook", configuration: node.configuration ?? {} },
-  };
 }
 
 /**
@@ -120,9 +82,8 @@ export async function findDeployedWebhookNode(
  * baked-in one, and the delivery path it names is the route that serves it.
  */
 export async function serializeWebhookEndpointConfig(
-  db: Db,
   event: H3Event,
-  endpoint: WebhookEndpointRow,
+  endpoint: Awaited<ReturnType<typeof requireWebhookEndpoint>>,
   now: Date = new Date(),
 ): Promise<WebhookEndpointConfig> {
   const hasPendingRotation = Boolean(
@@ -144,23 +105,6 @@ export async function serializeWebhookEndpointConfig(
     previousExpiresAt: hasPendingRotation
       ? endpoint.previousExpiresAt!.toISOString()
       : null,
-    rejectionsToday: await getWebhookRejectionsToday(db, endpoint.id, now),
+    rejectionsToday: await webhookRejectionsToday(endpoint.id, now),
   };
-}
-
-/** Who did what to which endpoint. Never the secret, and never the payload of
- *  anything the endpoint received. */
-export function auditWebhookAction(
-  actorId: string,
-  endpointId: string,
-  action:
-    | "minted"
-    | "rotated"
-    | "secret_imported"
-    | "revealed"
-    | "revoked"
-    | "unrevoked"
-    | "tested",
-): void {
-  logger.info({ actorId, endpointId, action }, "webhook_endpoint_action");
 }

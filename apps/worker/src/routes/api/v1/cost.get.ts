@@ -1,7 +1,6 @@
 import { defineEventHandler, getQuery, setResponseHeader } from "h3";
 import type { CostResponse } from "@shared/contracts";
-import { getDb } from "../../../db/client.js";
-import { costAgg, parseWindow } from "../../../db/queries/runs-read.js";
+import { collectCostAggregate } from "../../../services/overview/index.js";
 import { logger } from "../../../infra/logger.js";
 
 const EMPTY: Omit<CostResponse, "generatedAt" | "available" | "window"> = {
@@ -19,12 +18,11 @@ export default defineEventHandler(async (event): Promise<CostResponse> => {
 
   const generatedAt = new Date().toISOString();
   try {
-    const window = parseWindow(getQuery(event).window);
-    const data = await costAgg({ db: getDb(), window, now: new Date() });
-    // Empty window → documented empty state (matches the prior Arthur behaviour).
+    const data = await collectCostAggregate(getQuery(event).window, new Date());
+    // Empty window: documented empty state (matches the prior Arthur behaviour).
     return { generatedAt, available: data.totals.traceCount > 0, ...data };
   } catch (err) {
-    // DB unreachable — degrade like the other collectors.
+    // DB unreachable, degrade like the other collectors.
     logger.warn({ err: (err as Error).message }, "cost_collect_failed");
     return {
       generatedAt,

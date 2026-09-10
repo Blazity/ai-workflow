@@ -1,21 +1,25 @@
-import { defineEventHandler, readBody, setResponseHeader } from "h3";
+import { createError, defineEventHandler, readBody, setResponseHeader } from "h3";
 import type { WorkflowDefinitionValidationResponse } from "@shared/contracts";
-import { getDb } from "../../../../../db/client.js";
-import { requireDashboardActor, toHttpError } from "../../../../../services/auth/request-context.js";
-import { workflowBlockRegistryContextFromEnv } from "../../../../../workflow-definition/models.js";
-import { validateWorkflowDefinitionCandidateWithPromptAuthoring } from "../../../../../workflow-definition/prompt-authoring.js";
+import {
+  parseRequestBody,
+  workflowDefinitionCandidateRequestSchema,
+} from "@shared/contracts";
+import { requireDashboardActor, toHttpError } from "../../../../../services/auth/index.js";
+import { validateWorkflowDefinitionDraftCandidate } from "../../../../../services/workflow-definitions/index.js";
 
 export default defineEventHandler(
   async (event): Promise<WorkflowDefinitionValidationResponse | undefined> => {
     try {
       setResponseHeader(event, "Cache-Control", "private, no-store");
       await requireDashboardActor(event);
-      const body = (await readBody<{ definition?: unknown }>(event).catch(() => null)) ?? {};
-      return (await validateWorkflowDefinitionCandidateWithPromptAuthoring(
-        getDb(),
-        body.definition,
-        workflowBlockRegistryContextFromEnv(),
-      )).response;
+      const parsed = parseRequestBody(
+        workflowDefinitionCandidateRequestSchema,
+        (await readBody(event).catch(() => null)) ?? {},
+      );
+      if (!parsed.ok) {
+        throw createError({ statusCode: 400, statusMessage: parsed.message });
+      }
+      return await validateWorkflowDefinitionDraftCandidate(parsed.value.definition);
     } catch (error) {
       if (error instanceof Error && "statusCode" in error) throw error;
       toHttpError(error);

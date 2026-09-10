@@ -6,5 +6,14 @@
  * scripts/gates/cluster-deep-imports.json and that list only shrinks.
  */
 export {
+  ApprovalStoreError,
+  approveApproval,
+  listDashboardApprovals,
+  rejectApproval,
+} from "./approval-decisions.js";
+export type {
+  ApprovalDecisionOutcome,
+} from "./approval-decisions.js";
+export {
   dispatchPlanApproved,
 } from "./dispatch.js";

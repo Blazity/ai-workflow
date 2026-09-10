@@ -9,14 +9,17 @@ import {
   toWebRequest,
 } from "h3";
 
-import { env } from "../../config/env.js";
 import { auth } from "../../auth-instance.js";
 import {
   createOAuthFlowCookie,
+  dashboardOriginUrl,
+  readOAuthFlowCookie,
+  workerOriginUrl,
+} from "../../services/auth/index.js";
+import {
   isOAuthAuthorizationQuery,
   isOpaqueHandoffToken,
   oauthConsentUrl,
-  readOAuthFlowCookie,
   renderMcpLoginPage,
 } from "../../mcp/auth-pages.js";
 
@@ -34,13 +37,13 @@ export default defineEventHandler(async (event) => {
     setResponseHeader(
       event,
       "set-cookie",
-      createOAuthFlowCookie(oauthQuery, env.BETTER_AUTH_SECRET),
+      createOAuthFlowCookie(oauthQuery),
     );
   }
 
   const flowQuery =
     oauthQuery ??
-    readOAuthFlowCookie(getHeader(event, "cookie") ?? null, env.BETTER_AUTH_SECRET);
+    readOAuthFlowCookie(getHeader(event, "cookie") ?? null);
 
   if (handoffToken) {
     if (!isOpaqueHandoffToken(handoffToken) || !flowQuery) {
@@ -57,18 +60,18 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 401, statusMessage: "Invalid login handoff" });
     }
     forwardCookies(event, verification.headers);
-    return sendRedirect(event, oauthConsentUrl(flowQuery, env.BETTER_AUTH_URL), 302);
+    return sendRedirect(event, oauthConsentUrl(flowQuery, workerOriginUrl()), 302);
   }
 
   const session = await auth.api.getSession({ headers: request.headers });
   if (session && flowQuery) {
-    return sendRedirect(event, oauthConsentUrl(flowQuery, env.BETTER_AUTH_URL), 302);
+    return sendRedirect(event, oauthConsentUrl(flowQuery, workerOriginUrl()), 302);
   }
 
   if (oauthQuery && !session) {
     const dashboardBridge = new URL(
       "/api/auth/sso/mcp-session",
-      env.DASHBOARD_ORIGIN,
+      dashboardOriginUrl(),
     );
     return sendRedirect(event, dashboardBridge.href, 302);
   }

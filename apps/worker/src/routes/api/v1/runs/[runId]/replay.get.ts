@@ -5,15 +5,14 @@ import {
 } from "h3";
 import type { WorkflowRunReplayResponse } from "@shared/contracts";
 
-import { getDb } from "../../../../../db/client.js";
 import {
   requireDashboardActor,
   toHttpError,
-} from "../../../../../services/auth/request-context.js";
+} from "../../../../../services/auth/index.js";
 import {
-  getRunReplay,
   RunObservationStoreError,
-} from "../../../../../run-observability/store.js";
+  readRunReplay,
+} from "../../../../../services/run-lifecycle/index.js";
 import { parseReplayPageQuery } from "../replay-query.js";
 import {
   parseReplayRunId,
@@ -26,12 +25,10 @@ export default defineEventHandler(
     try {
       const actor = await requireDashboardActor(event);
       const runId = parseReplayRunId(event);
-      const page = parseReplayPageQuery(getQuery(event));
-      return getRunReplay({
-        db: getDb(),
+      return await readRunReplay({
         organizationId: actor.organizationId,
         runId,
-        ...page,
+        ...parseReplayPageQuery(getQuery(event)),
       });
     } catch (error) {
       if (error instanceof RunObservationStoreError) {

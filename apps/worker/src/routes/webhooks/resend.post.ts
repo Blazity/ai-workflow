@@ -1,51 +1,32 @@
 import { createError, defineEventHandler, getHeader, readRawBody } from "h3";
-import { Webhook } from "svix";
-import { env } from "../../config/env.js";
-import { getDb } from "../../db/client.js";
-import {
-  applyInviteEmailDeliveryEvent,
-  type ResendEmailDeliveryEvent,
-} from "../../services/email/invite-delivery.js";
-import { observeProviderWebhook } from "../../services/system/provider-webhook-observation.js";
+import { handleResendWebhook } from "../../services/email/index.js";
+import { TriggerHttpError } from "../../services/triggers/index.js";
 
+/**
+ * Resend delivery webhook: what became of an invite email we sent.
+ *
+ * This file is the transport adapter: raw bytes and the Svix headers in, the
+ * service's answer out. Signature verification runs on those exact bytes inside
+ * the service, before anything parses them.
+ */
 export default defineEventHandler(async (event) => {
   const rawBody = (await readRawBody(event, "utf8")) ?? "";
-  const secret = env.RESEND_WEBHOOK_SECRET;
-  if (!secret) {
-    observeProviderWebhook("email", "rejected", "secret_not_configured");
-    throw createError({
-      statusCode: 500,
-      statusMessage: "Resend webhook secret is not configured",
-    });
-  }
 
-  let payload: unknown;
   try {
-    payload = new Webhook(secret).verify(rawBody, {
-      "svix-id": getHeader(event, "svix-id") ?? "",
-      "svix-signature": getHeader(event, "svix-signature") ?? "",
-      "svix-timestamp": getHeader(event, "svix-timestamp") ?? "",
+    return await handleResendWebhook({
+      rawBody,
+      svixId: getHeader(event, "svix-id"),
+      svixSignature: getHeader(event, "svix-signature"),
+      svixTimestamp: getHeader(event, "svix-timestamp"),
     });
-  } catch {
-    observeProviderWebhook("email", "rejected", "invalid_signature");
-    throw createError({ statusCode: 401, statusMessage: "Invalid webhook signature" });
-  }
-  try {
-    await applyInviteEmailDeliveryEvent(getDb(), asResendEvent(payload, rawBody));
-    observeProviderWebhook("email", "accepted", "request_succeeded");
-    return { status: "ok" };
   } catch (error) {
-    observeProviderWebhook("email", "rejected", "handler_failed");
+    if (error instanceof TriggerHttpError) {
+      throw createError({
+        statusCode: error.statusCode,
+        statusMessage: error.statusMessage,
+        ...(error.data ? { data: error.data } : {}),
+      });
+    }
     throw error;
   }
 });
-
-function asResendEvent(
-  payload: unknown,
-  rawBody: string,
-): ResendEmailDeliveryEvent {
-  if (payload && typeof payload === "object") {
-    return payload as ResendEmailDeliveryEvent;
-  }
-  return JSON.parse(rawBody) as ResendEmailDeliveryEvent;
-}

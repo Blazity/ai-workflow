@@ -1,18 +1,16 @@
 import { createError, defineEventHandler, getQuery } from "h3";
-import { getDb } from "../../../db/client.js";
-import { requireDashboardActor, toHttpError } from "../../../services/auth/request-context.js";
-import { canDeleteAgentMemory } from "../../../services/auth/roles.js";
-import { deleteMemoryDocument } from "../../../memory/store.js";
-
-/** Subject keys and doc paths the agent writes are short identifiers, so a
- *  longer value is a malformed or hostile request and is rejected before it
- *  reaches the database. */
-const MAX_KEY_LENGTH = 512;
+import {
+  canDeleteAgentMemory,
+  requireDashboardActor,
+  toHttpError,
+} from "../../../services/auth/index.js";
+import {
+  eraseMemoryDocument,
+  isUsableMemoryKeyPart,
+} from "../../../services/memory/index.js";
 
 function keyParam(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 && value.length <= MAX_KEY_LENGTH
-    ? value
-    : undefined;
+  return isUsableMemoryKeyPart(value) ? value : undefined;
 }
 
 /** Hard delete of one agent memory document, for erasure requests and for the
@@ -37,7 +35,7 @@ export default defineEventHandler(
         });
       }
 
-      const deleted = await deleteMemoryDocument(getDb(), subjectKey, docPath);
+      const deleted = await eraseMemoryDocument(subjectKey, docPath);
       if (!deleted) {
         throw createError({
           statusCode: 404,

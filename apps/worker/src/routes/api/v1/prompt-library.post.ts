@@ -1,64 +1,34 @@
 import { createError, defineEventHandler, readBody } from "h3";
-import type {
-  PromptLibraryDetailResponse,
-  PromptSlotDefinition,
+import {
+  parseRequestBody,
+  promptLibraryCreateRequestSchema,
+  type PromptLibraryDetailResponse,
 } from "@shared/contracts";
-import { getDb } from "../../../db/client.js";
-import { requireDashboardActor } from "../../../services/auth/request-context.js";
-import { dashboardUserLabel } from "../../../pre-pr-checks/store.js";
-import { createPrompt } from "../../../services/prompts/prompt-library-service.js";
-import { serializePromptMeta, serializePromptVersion } from "../../../prompt-library/store.js";
+import { requireDashboardActor } from "../../../services/auth/index.js";
+import { createPromptEntry } from "../../../services/prompts/index.js";
 import { toPromptLibraryHttpError } from "./prompt-library.get.js";
-
-interface CreateBody {
-  name?: unknown;
-  body?: unknown;
-  slots?: unknown;
-  description?: unknown;
-  tags?: unknown;
-}
 
 export default defineEventHandler(
   async (event): Promise<PromptLibraryDetailResponse | undefined> => {
     try {
       const actor = await requireDashboardActor(event);
-      const body = (await readBody<CreateBody>(event).catch(() => null)) ?? {};
-      if (typeof body.name !== "string") {
-        throw createError({ statusCode: 400, statusMessage: "Invalid name" });
+      const parsed = parseRequestBody(
+        promptLibraryCreateRequestSchema,
+        (await readBody(event).catch(() => null)) ?? {},
+      );
+      if (!parsed.ok) {
+        throw createError({ statusCode: 400, statusMessage: parsed.message });
       }
-      if (typeof body.body !== "string") {
-        throw createError({ statusCode: 400, statusMessage: "Invalid body" });
-      }
-      if (body.slots !== undefined && !Array.isArray(body.slots)) {
-        throw createError({ statusCode: 400, statusMessage: "Invalid slots" });
-      }
-      if (body.description !== undefined && body.description !== null && typeof body.description !== "string") {
-        throw createError({ statusCode: 400, statusMessage: "Invalid description" });
-      }
-      if (body.tags !== undefined && !Array.isArray(body.tags)) {
-        throw createError({ statusCode: 400, statusMessage: "Invalid tags" });
-      }
+      const body = parsed.value;
 
-      const dbHandle = getDb();
-      const { prompt, current } = await createPrompt(dbHandle, {
+      return await createPromptEntry({
         name: body.name,
         body: body.body,
-        slots: body.slots as PromptSlotDefinition[] | undefined,
-        description: body.description as string | null | undefined,
-        tags: body.tags as string[] | undefined,
-        actor: {
-          role: actor.role,
-          id: actor.userId,
-          label: await dashboardUserLabel(dbHandle, actor.userId),
-        },
+        slots: body.slots,
+        description: body.description,
+        tags: body.tags,
+        writer: { role: actor.role, userId: actor.userId },
       });
-
-      const version = serializePromptVersion(current);
-      return {
-        meta: serializePromptMeta(prompt, current.version),
-        current: version,
-        versions: [version],
-      };
     } catch (error) {
       toPromptLibraryHttpError(error);
     }

@@ -1,21 +1,19 @@
 import { createError, defineEventHandler, readBody } from "h3";
-import type {
-  HarnessSkillDiscoverRequest,
-  HarnessSkillDiscoveryResponse,
+import {
+  harnessSkillDiscoverBodySchema,
+  parseRequestBody,
+  type HarnessSkillDiscoveryResponse,
 } from "@shared/contracts";
 import {
-  createGitHubSkillRepository,
-  discoverGitHubSkills,
-  HarnessSkillImportError,
-} from "../../../../harness-profiles/github-skills.js";
-import { createConfiguredGitHubSkillRepository } from "../../../../harness-profiles/configured-github-skills.js";
-import { getVcsProviderConfig } from "../../../../config/env.js";
-import {
+  canManageHarnessProfiles,
+  DashboardAuthError,
   requireDashboardActor,
   toHttpError,
-} from "../../../../services/auth/request-context.js";
-import { canManageHarnessProfiles } from "../../../../services/auth/roles.js";
-import { DashboardAuthError } from "../../../../services/auth/users-read.js";
+} from "../../../../services/auth/index.js";
+import {
+  discoverGitHubSkillSource,
+  HarnessSkillImportError,
+} from "../../../../services/harness/index.js";
 import { setHarnessApiNoStore } from "../harness-profiles.get.js";
 
 export function toHarnessSkillHttpError(error: unknown): never {
@@ -28,16 +26,6 @@ export function toHarnessSkillHttpError(error: unknown): never {
   toHttpError(error);
 }
 
-export function configuredGitHubSkillRepository() {
-  return createConfiguredGitHubSkillRepository(() => {
-    const provider = getVcsProviderConfig("github");
-    if (provider.kind !== "github") {
-      throw new Error("Configured provider is not GitHub");
-    }
-    return createGitHubSkillRepository(provider.auth);
-  });
-}
-
 export default defineEventHandler(
   async (event): Promise<HarnessSkillDiscoveryResponse | undefined> => {
     try {
@@ -46,20 +34,14 @@ export default defineEventHandler(
       if (!canManageHarnessProfiles(actor.role)) {
         throw new DashboardAuthError(403, "Forbidden");
       }
-      const body =
-        (await readBody<Partial<HarnessSkillDiscoverRequest>>(event).catch(
-          () => null,
-        )) ?? {};
-      if (typeof body.source !== "string") {
-        throw createError({
-          statusCode: 400,
-          statusMessage: "GitHub skill source is required",
-        });
+      const parsed = parseRequestBody(
+        harnessSkillDiscoverBodySchema,
+        (await readBody(event).catch(() => null)) ?? {},
+      );
+      if (!parsed.ok) {
+        throw createError({ statusCode: 400, statusMessage: parsed.message });
       }
-      return discoverGitHubSkills({
-        repository: configuredGitHubSkillRepository(),
-        source: body.source,
-      });
+      return await discoverGitHubSkillSource(parsed.value.source);
     } catch (error) {
       toHarnessSkillHttpError(error);
     }

@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-import { env } from "../config/env.js";
+import { mcpSettings } from "../services/settings/index.js";
 import type { McpToolDependencies } from "./contracts.js";
 import { executeMcpRead } from "./execute-tool.js";
 import { MCP_CONTRACT_HASH } from "./sanitize-result.js";
@@ -29,7 +29,7 @@ export const MCP_SUPPORTED_PROTOCOL_VERSIONS = [
 export function createMcpServer(deps: McpToolDependencies): McpServer {
   const server = new McpServer({
     name: "ai-workflow-worker",
-    version: env.MCP_SERVER_VERSION,
+    version: mcpSettings().serverVersion,
   });
 
   // Registered in FIRST_SLICE_TOOLS order, so tools/list enumerates the surface
@@ -41,7 +41,7 @@ export function createMcpServer(deps: McpToolDependencies): McpServer {
       targetRefs: [],
       operation: async () => ({
         protocolVersions: [...MCP_SUPPORTED_PROTOCOL_VERSIONS],
-        serverVersion: env.MCP_SERVER_VERSION,
+        serverVersion: mcpSettings().serverVersion,
         contractHash: MCP_CONTRACT_HASH,
         deploymentClass: "dedicated-worker",
         enabledDomains: [...MCP_ENABLED_DOMAINS],

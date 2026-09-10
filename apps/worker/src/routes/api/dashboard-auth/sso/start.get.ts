@@ -9,19 +9,23 @@ import {
   type H3Event,
 } from "h3";
 
-import { env } from "../../../../config/env.js";
 import { DASHBOARD_SSO_PROVIDER_ID } from "../../../../auth.js";
 import { auth } from "../../../../auth-instance.js";
-import { readOAuthFlowCookie, safeOAuthReturnPath } from "../../../../mcp/auth-pages.js";
+import {
+  dashboardOriginUrl,
+  readOAuthFlowCookie,
+  workerOriginUrl,
+} from "../../../../services/auth/index.js";
+import { safeOAuthReturnPath } from "../../../../mcp/auth-pages.js";
 
 export default defineEventHandler(async (event) => {
-  const workerOrigin = env.BETTER_AUTH_URL.replace(/\/$/, "");
-  const dashboardOrigin = env.DASHBOARD_ORIGIN.replace(/\/$/, "");
+  const workerOrigin = workerOriginUrl();
+  const dashboardOrigin = dashboardOriginUrl();
   const inviteId = inviteIdFromQuery(getQuery(event).inviteId);
   const query = getQuery(event);
   const oauthQuery =
     query.oauth === "1"
-      ? readOAuthFlowCookie(getHeader(event, "cookie") ?? null, env.BETTER_AUTH_SECRET)
+      ? readOAuthFlowCookie(getHeader(event, "cookie") ?? null)
       : null;
   const returnTo =
     safeOAuthReturnPath(query.returnTo) ??

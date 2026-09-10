@@ -1,17 +1,12 @@
 import type { WebhookDeliveriesResponse } from "@shared/contracts";
 import { defineEventHandler } from "h3";
-import { getDb } from "../../../../../../../../db/client.js";
-import { toHttpError } from "../../../../../../../../services/auth/request-context.js";
-import { listRecentWebhookDeliveries } from "../../../../../../../../webhook-trigger/delivery-store.js";
+import { toHttpError } from "../../../../../../../../services/auth/index.js";
+import { listWebhookEndpointDeliveries } from "../../../../../../../../services/workflow-definitions/index.js";
 import {
   parseWebhookEndpointTarget,
   requireWebhookActor,
   requireWebhookEndpoint,
 } from "./endpoint-route.js";
-
-/** How much history the endpoint panel shows. Enough to see a pattern, small
- *  enough to stay one query and one render. */
-const DELIVERY_LOG_LIMIT = 50;
 
 /** Recent deliveries for one endpoint, newest first. Carries no payload and no
  *  signature: only what happened to each delivery and which secret authenticated
@@ -21,14 +16,9 @@ export default defineEventHandler(
     try {
       await requireWebhookActor(event, false);
       const target = parseWebhookEndpointTarget(event);
-      const db = getDb();
-      const endpoint = await requireWebhookEndpoint(db, target);
+      const endpoint = await requireWebhookEndpoint(target);
 
-      const deliveries = await listRecentWebhookDeliveries(
-        db,
-        endpoint.id,
-        DELIVERY_LOG_LIMIT,
-      );
+      const deliveries = await listWebhookEndpointDeliveries(endpoint.id);
       return {
         deliveries: deliveries.map((delivery) => ({
           ...delivery,

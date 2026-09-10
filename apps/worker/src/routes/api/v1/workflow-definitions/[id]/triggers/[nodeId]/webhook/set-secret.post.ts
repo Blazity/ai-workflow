@@ -1,13 +1,9 @@
-import type { WebhookSetSecretRequest, WebhookSetSecretResponse } from "@shared/contracts";
+import type { WebhookSetSecretResponse } from "@shared/contracts";
+import { parseRequestBody, webhookSetSecretBodySchema } from "@shared/contracts";
 import { createError, defineEventHandler, readBody } from "h3";
-import { getDb } from "../../../../../../../../db/client.js";
-import { toHttpError } from "../../../../../../../../services/auth/request-context.js";
+import { toHttpError } from "../../../../../../../../services/auth/index.js";
+import { importWebhookSecret } from "../../../../../../../../services/workflow-definitions/index.js";
 import {
-  setWebhookEndpointSecret,
-  WebhookSecretInvalidError,
-} from "../../../../../../../../webhook-trigger/endpoint-store.js";
-import {
-  auditWebhookAction,
   parseWebhookEndpointTarget,
   requireWebhookActor,
   requireWebhookEncryptionKey,
@@ -32,29 +28,29 @@ export default defineEventHandler(
       const actor = await requireWebhookActor(event, true);
       const target = parseWebhookEndpointTarget(event);
       const keyHex = requireWebhookEncryptionKey();
-      const db = getDb();
-      const endpoint = await requireWebhookEndpoint(db, target);
+      const endpoint = await requireWebhookEndpoint(target);
       if (endpoint.revokedAt) {
         throw createError({ statusCode: 409, statusMessage: "Endpoint is revoked" });
       }
-      const body = await readBody<WebhookSetSecretRequest | null>(event).catch(() => null);
-      const secret = typeof body?.secret === "string" ? body.secret : "";
-
-      const updated = await setWebhookEndpointSecret(db, keyHex, endpoint.id, secret).catch(
-        (error: unknown) => {
-          if (error instanceof WebhookSecretInvalidError) {
-            throw createError({ statusCode: 400, statusMessage: error.message });
-          }
-          throw error;
-        },
+      const parsed = parseRequestBody(
+        webhookSetSecretBodySchema,
+        (await readBody(event).catch(() => null)) ?? {},
       );
-      if (!updated) {
-        throw createError({ statusCode: 404, statusMessage: "Unknown webhook endpoint" });
+      if (!parsed.ok) {
+        throw createError({ statusCode: 400, statusMessage: parsed.message });
+      }
+      // A non-string becomes the empty string so the store, not this route,
+      // says what a secret has to look like.
+      const secret = typeof parsed.value.secret === "string" ? parsed.value.secret : "";
+
+      const updated = await importWebhookSecret(keyHex, endpoint.id, secret, actor.userId);
+      if (!updated.ok) {
+        throw updated.reason === "invalid"
+          ? createError({ statusCode: 400, statusMessage: updated.message })
+          : createError({ statusCode: 404, statusMessage: "Unknown webhook endpoint" });
       }
 
-      // Actor and endpoint id only: never the imported secret.
-      auditWebhookAction(actor.userId, updated.id, "secret_imported");
-      return await serializeWebhookEndpointConfig(db, event, updated);
+      return await serializeWebhookEndpointConfig(event, updated.endpoint);
     } catch (error) {
       toHttpError(error);
     }

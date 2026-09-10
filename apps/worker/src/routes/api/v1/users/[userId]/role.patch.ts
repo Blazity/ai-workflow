@@ -1,8 +1,13 @@
 import { createError, defineEventHandler, getRouterParam, readBody } from "h3";
-import { env } from "../../../../../config/env.js";
-import { getDb } from "../../../../../db/client.js";
-import { requireDashboardActor, toHttpError } from "../../../../../services/auth/request-context.js";
-import { updateDashboardUserRole } from "../../../../../services/auth/users-read.js";
+import {
+  dashboardUserRoleUpdateRequestSchema,
+  parseRequestBody,
+} from "@shared/contracts";
+import {
+  changeDashboardUserRole,
+  requireDashboardActor,
+  toHttpError,
+} from "../../../../../services/auth/index.js";
 
 export default defineEventHandler(async (event) => {
   try {
@@ -12,16 +17,18 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 400, statusMessage: "Missing user id" });
     }
 
-    const body = (await readBody<{ role?: string }>(event).catch(() => null)) ?? {};
-    if (body.role !== "admin" && body.role !== "member") {
-      throw createError({ statusCode: 400, statusMessage: "Invalid role" });
+    const parsed = parseRequestBody(
+      dashboardUserRoleUpdateRequestSchema,
+      (await readBody(event).catch(() => null)) ?? {},
+    );
+    if (!parsed.ok) {
+      throw createError({ statusCode: 400, statusMessage: parsed.message });
     }
 
-    return await updateDashboardUserRole(getDb(), {
-      organizationSlug: env.DASHBOARD_ORG_SLUG,
+    return await changeDashboardUserRole({
       actorRole: actor.role,
       targetUserId: userId,
-      nextRole: body.role,
+      nextRole: parsed.value.role,
     });
   } catch (error) {
     toHttpError(error);

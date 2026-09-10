@@ -1,13 +1,8 @@
 import type { WebhookRevokeResponse } from "@shared/contracts";
 import { createError, defineEventHandler } from "h3";
-import { getDb } from "../../../../../../../../db/client.js";
-import { toHttpError } from "../../../../../../../../services/auth/request-context.js";
+import { toHttpError } from "../../../../../../../../services/auth/index.js";
+import { revokeWebhookEndpointForNode } from "../../../../../../../../services/workflow-definitions/index.js";
 import {
-  getWebhookEndpointById,
-  revokeWebhookEndpoint,
-} from "../../../../../../../../webhook-trigger/endpoint-store.js";
-import {
-  auditWebhookAction,
   parseWebhookEndpointTarget,
   requireWebhookActor,
   requireWebhookEndpoint,
@@ -26,19 +21,14 @@ export default defineEventHandler(
     try {
       const actor = await requireWebhookActor(event, true);
       const target = parseWebhookEndpointTarget(event);
-      const db = getDb();
-      const endpoint = await requireWebhookEndpoint(db, target);
+      const endpoint = await requireWebhookEndpoint(target);
 
-      await revokeWebhookEndpoint(db, endpoint.id);
-      // Re-read: the revocation instant is the database clock's, and an endpoint
-      // that was already revoked keeps its original one.
-      const revoked = await getWebhookEndpointById(db, endpoint.id);
-      if (!revoked?.revokedAt) {
+      const revokedAt = await revokeWebhookEndpointForNode(endpoint.id, actor.userId);
+      if (!revokedAt) {
         throw createError({ statusCode: 404, statusMessage: "Unknown webhook endpoint" });
       }
 
-      auditWebhookAction(actor.userId, endpoint.id, "revoked");
-      return { endpointId: endpoint.id, revokedAt: revoked.revokedAt.toISOString() };
+      return { endpointId: endpoint.id, revokedAt: revokedAt.toISOString() };
     } catch (error) {
       toHttpError(error);
     }

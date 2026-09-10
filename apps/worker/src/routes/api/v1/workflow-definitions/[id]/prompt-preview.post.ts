@@ -4,56 +4,44 @@ import {
   readBody,
   setResponseHeader,
 } from "h3";
-import { getDb } from "../../../../../db/client.js";
+import {
+  parseRequestBody,
+  workflowDefinitionPromptPreviewRequestSchema,
+} from "@shared/contracts";
 import {
   requireDashboardActor,
   toHttpError,
-} from "../../../../../services/auth/request-context.js";
-import { workflowBlockRegistryContextFromEnv } from "../../../../../workflow-definition/models.js";
-import { previewWorkflowPromptCandidate } from "../../../../../workflow-definition/prompt-preview.js";
-import { getWorkflowDefinition } from "../../../../../workflow-definition/store.js";
+} from "../../../../../services/auth/index.js";
 import {
-  parseDefinitionId,
-} from "../../workflow-definitions.get.js";
-
-interface PromptPreviewBody {
-  definition?: unknown;
-  blockId?: unknown;
-}
+  activeWorkflowDefinitionExists,
+  previewWorkflowDefinitionPrompt,
+} from "../../../../../services/workflow-definitions/index.js";
+import { parseDefinitionId } from "../../workflow-definitions.get.js";
 
 export default defineEventHandler(async (event) => {
   try {
     setResponseHeader(event, "Cache-Control", "private, no-store");
     const actor = await requireDashboardActor(event);
     const definitionId = parseDefinitionId(event);
-    const body =
-      (await readBody<PromptPreviewBody>(event).catch(() => null)) ?? {};
-    if (
-      typeof body.blockId !== "string" ||
-      body.blockId.trim() !== body.blockId ||
-      body.blockId.length === 0
-    ) {
-      throw createError({
-        statusCode: 400,
-        statusMessage: "Invalid block id",
-      });
+    const parsed = parseRequestBody(
+      workflowDefinitionPromptPreviewRequestSchema,
+      (await readBody(event).catch(() => null)) ?? {},
+    );
+    if (!parsed.ok) {
+      throw createError({ statusCode: 400, statusMessage: parsed.message });
     }
 
-    const db = getDb();
-    const stored = await getWorkflowDefinition(db, definitionId);
-    if (!stored || stored.archivedAt !== null) {
+    if (!(await activeWorkflowDefinitionExists(definitionId))) {
       throw createError({
         statusCode: 404,
         statusMessage: "Unknown definition",
       });
     }
-    const result = await previewWorkflowPromptCandidate(
-      db,
-      body.definition,
-      body.blockId,
-      workflowBlockRegistryContextFromEnv(),
-      { organizationId: actor.organizationId },
-    );
+    const result = await previewWorkflowDefinitionPrompt({
+      candidate: parsed.value.definition,
+      blockId: parsed.value.blockId,
+      organizationId: actor.organizationId,
+    });
     if (!result.ok) {
       throw createError({
         statusCode: result.statusCode,

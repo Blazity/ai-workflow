@@ -1,54 +1,21 @@
-export type DashboardRole = "owner" | "admin" | "member";
-
-export function canInvite(role: DashboardRole): boolean {
-  return role === "owner" || role === "admin";
-}
-
-export function canChangeRole(input: {
-  actor: DashboardRole;
-  target: DashboardRole;
-  next: DashboardRole;
-}): boolean {
-  if (input.actor !== "owner") return false;
-  if (input.target === "owner" || input.next === "owner") return false;
-  return input.next === "admin" || input.next === "member";
-}
-
-export function normalizeDashboardRole(role: string): DashboardRole | null {
-  const roles = role.split(",").map((part) => part.trim());
-  if (roles.includes("owner")) return "owner";
-  if (roles.includes("admin")) return "admin";
-  if (roles.includes("member")) return "member";
-  return null;
-}
-
-export function canEditPrePrChecks(role: DashboardRole): boolean {
-  return role === "owner" || role === "admin";
-}
-
-export function canEditWorkflowDefinitions(role: DashboardRole): boolean {
-  return role === "owner" || role === "admin";
-}
-
-export function canDispatchWorkflowRuns(role: DashboardRole): boolean {
-  return role === "owner" || role === "admin";
-}
-
-export function canApproveWorkflowPlans(role: DashboardRole): boolean {
-  return role === "owner" || role === "admin";
-}
-
-export function canEditPromptLibrary(role: DashboardRole): boolean {
-  return role === "owner" || role === "admin";
-}
-
-export function canManageHarnessProfiles(role: DashboardRole): boolean {
-  return role === "owner" || role === "admin";
-}
-
-/** Reading agent memory is open to every member; erasing it is a hard delete
- *  nobody can undo, so it follows the same owner/admin rule as every other
- *  cockpit mutation. */
-export function canDeleteAgentMemory(role: DashboardRole): boolean {
-  return role === "owner" || role === "admin";
-}
+/**
+ * The dashboard role vocabulary, re-published for this cluster's callers.
+ *
+ * The definitions moved to `@shared/contracts` in stage 6c so the MCP actor path
+ * can normalize a membership row without importing this cluster (and, through
+ * it, the Better Auth instance). Nothing here is a second copy: this file is one
+ * line of re-export.
+ */
+export type { DashboardRole } from "@shared/contracts";
+export {
+  canApproveWorkflowPlans,
+  canChangeRole,
+  canDeleteAgentMemory,
+  canDispatchWorkflowRuns,
+  canEditPrePrChecks,
+  canEditPromptLibrary,
+  canEditWorkflowDefinitions,
+  canInvite,
+  canManageHarnessProfiles,
+  normalizeDashboardRole,
+} from "@shared/contracts";
