@@ -8,13 +8,23 @@
     "apps/worker/src/sandbox/agents/fixtures/**",
     "apps/worker/workflow-test-fixtures/**"
   ],
-  "entry": [
-    "apps/worker/src/engine/blocks/*/manifest.ts",
-    "apps/worker/src/engine/blocks/*/execute.ts"
-  ],
+  "ignoreDependencies": ["dependency-cruiser", "oxlint"],
   "workspaces": {
+    ".": {
+      "entry": [
+        "apps/worker/src/engine/blocks/*/manifest.ts",
+        "apps/worker/src/engine/blocks/*/execute.ts",
+        "docs/research/2026-09-09-import-graph.mjs"
+      ]
+    },
+    "apps/dashboard": {
+      "entry": ["**/*.test.ts", "**/*.test.tsx"]
+    },
     "apps/worker": {
       "entry": ["src/services/*/index.ts"]
+    },
+    "packages/*": {
+      "entry": ["index.ts", "*.test.ts"]
     }
   },
   "ignoreIssues": {

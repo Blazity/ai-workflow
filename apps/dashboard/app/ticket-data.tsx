@@ -44,7 +44,7 @@ export async function RunDetailData({
   let runId = run ?? null;
   if (!runId) {
     const data = await getTicketRuns(ticketKey);
-    runId = pickSelectedRunId(data.runs, undefined);
+    runId = pickSelectedRunId(data.runs);
   }
   if (!runId) {
     return (

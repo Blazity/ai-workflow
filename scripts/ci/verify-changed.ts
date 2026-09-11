@@ -1,7 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 
 export type Cmd = readonly [string, ...string[]];
 export type Git = (args: readonly string[]) => Promise<Buffer>;
@@ -209,14 +208,14 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
     add(C.releaseTest);
   }
   if (ci) add(C.ci);
-  if (workerTests.size) {
+  if (workerTests.size > 0) {
     const args = [...workerTests].map((path) =>
       FIXED_TESTS.has(path) ? path : `./${path}`,
     );
     add(["pnpm", "--dir", "apps/worker", "exec", "vitest", "run", ...args]);
   }
   if (blockCatalog) add(C.blockCatalog);
-  if (dashboardTests.size) {
+  if (dashboardTests.size > 0) {
     add([
       "pnpm",
       "--dir",
@@ -234,7 +233,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
   // dashboard node runner never reach packages/*.
   if (shared) add(C.packages);
   if (gates) add(C.gates);
-  return { scopes: scopes.length ? scopes : ["unclassified"], commands };
+  return { scopes: scopes.length > 0 ? scopes : ["unclassified"], commands };
 }
 
 const fullSha = (output: Buffer, label: string) => {
@@ -365,14 +364,14 @@ export async function main(input = process.argv.slice(2)) {
   console.log(`[verify:changed] changed files: ${JSON.stringify(paths)}`);
   console.log(`[verify:changed] scopes: ${next.scopes.join(", ")}`);
   console.log(
-    next.commands.length
+    next.commands.length > 0
       ? `[verify:changed] commands:\n${next.commands.map((cmd) => `  $ ${show(cmd)}`).join("\n")}`
       : "[verify:changed] commands: none (diff checks only)",
   );
   for (const cmd of next.commands) await execute(cmd);
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && resolve(process.argv[1]) === import.meta.filename) {
   main().catch((error) => {
     console.error(`[verify:changed] FAIL: ${error instanceof Error ? error.message : error}`);
     process.exitCode = 1;

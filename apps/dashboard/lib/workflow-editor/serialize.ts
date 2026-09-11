@@ -118,7 +118,7 @@ export function serializeSemanticWorkflowDefinition(
   );
   return {
     ...definition,
-    nodes: definition.nodes.map((node) => ({ ...node, x: 0, y: 0 })),
+    nodes: definition.nodes.map((node) => Object.assign({}, node, { x: 0, y: 0 })),
   };
 }
 

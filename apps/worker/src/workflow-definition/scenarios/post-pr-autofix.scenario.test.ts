@@ -192,7 +192,7 @@ describe("post-PR autofix workflow", () => {
     expect(
       executorRunsOf(outcome, "post-review-approved")[0].resolvedInputs?.reviewResults,
     ).toEqual(
-      REVIEWS.map((nodeId) =>
+      REVIEWS.map(() =>
         expect.objectContaining({ decision: "approve" }),
       ),
     );

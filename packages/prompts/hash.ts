@@ -7,6 +7,8 @@ export function fnv1a(text: string): string {
   for (let i = 0; i < text.length; i++) {
     // XOR the current 16-bit code unit, then multiply by the 32-bit FNV prime.
     // Math.imul keeps the multiply in 32-bit two's-complement space.
+    // Preserve FNV-1a's defined UTF-16 code-unit input.
+    // eslint-disable-next-line unicorn/prefer-code-point -- FNV uses UTF-16 code units.
     hash ^= text.charCodeAt(i);
     hash = Math.imul(hash, 0x01000193);
   }

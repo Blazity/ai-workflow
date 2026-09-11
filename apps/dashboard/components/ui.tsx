@@ -268,7 +268,7 @@ export function CkPagination({
   const pages: (number | "…")[] = [];
   for (let i = 0; i < totalPages; i++) {
     if (i === 0 || i === totalPages - 1 || Math.abs(i - page) <= 1) pages.push(i);
-    else if (pages[pages.length - 1] !== "…") pages.push("…");
+    else if (pages.at(-1) !== "…") pages.push("…");
   }
   return (
     <div className="flex items-center gap-2 py-3 px-5 border-t border-neutral-200 bg-[#FBFBFC]">
@@ -322,7 +322,7 @@ export function TicketLink({ ticket, url, size = "sm" }: { ticket: string; url: 
   );
 }
 
-export function PRLink({
+function PRLink({
   pr,
   repoLabel,
   size = "sm",

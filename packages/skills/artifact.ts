@@ -56,7 +56,7 @@ export function verifyHarnessSkillArtifact(
     throw invalidArtifact("Skill artifact hash is invalid.");
   }
   if (
-    artifact.files.length < 1 ||
+    artifact.files.length === 0 ||
     artifact.files.length > HARNESS_SKILL_IMPORT_LIMITS.maxFiles
   ) {
     throw invalidArtifact("Skill artifact file count is invalid.");

@@ -65,13 +65,13 @@ export function RepositoryCatalogProvider({
         // every consumer maps over `repositories`, so anything but an array has
         // to fail rather than land as a `ready` catalog that throws on render.
         const response = result as Partial<RepositoriesResponse> | null;
-        const repositories = response?.repositories;
-        const providers = response?.providers;
-        if (!Array.isArray(repositories) || !Array.isArray(providers)) {
-          throw new Error("malformed repository catalog");
+        const nextRepositories = response?.repositories;
+        const nextProviders = response?.providers;
+        if (!Array.isArray(nextRepositories) || !Array.isArray(nextProviders)) {
+          throw new TypeError("malformed repository catalog");
         }
-        setRepositories(repositories);
-        setProviders(providers);
+        setRepositories(nextRepositories);
+        setProviders(nextProviders);
         setStatus("ready");
       })
       .catch(() => {

@@ -457,8 +457,7 @@ function repoSummary(repo: PrePrCheckRepositoryConfig): string {
   const groupNames = Object.keys(repo.groups ?? {});
   const segments: string[] = [];
   if (groupNames.length > 0) {
-    segments.push(countLabel(groupNames.length, "group"));
-    segments.push(`gate: ${gateSummary(repo)}`);
+    segments.push(countLabel(groupNames.length, "group"), `gate: ${gateSummary(repo)}`);
   } else {
     segments.push(countLabel((repo.commands ?? []).length, "command"));
   }
@@ -736,7 +735,7 @@ function sectionKeyOf(repoKeyValue: string, id: string): string {
  *  that is not on screen yet has no element until React has painted it. */
 function scrollIntoView(domId: string): void {
   if (typeof document === "undefined") return;
-  document.getElementById(domId)?.scrollIntoView({ block: "center" });
+  document.querySelector<HTMLElement>(`#${domId}`)?.scrollIntoView({ block: "center" });
 }
 
 /**
@@ -817,7 +816,7 @@ export function RepositoryScriptsScreen({
   // "the user has not chosen yet", which auto-expands a lone repository;
   // removing a repository resets to it, so the survivor of a two-repo config
   // opens on its own.
-  const [openRepo, setOpenRepo] = useState<string | null | undefined>(undefined);
+  const [openRepo, setOpenRepo] = useState<string | null | undefined>();
   // Group cards and secondary sections that are open, and groups the last add
   // put into the gate selection. Both keyed by repository and name (see
   // uiKey), both here rather than inside the cards, so closing a repository or
@@ -1525,6 +1524,8 @@ function TimeoutMinutesField({
       placeholder={placeholder}
       onChange={(e) => {
         if (e.target.value === "") {
+          // The undefined value clears the optional timeout.
+          // eslint-disable-next-line unicorn/no-useless-undefined -- Clear the timeout field.
           onChange(undefined);
           return;
         }
@@ -1868,7 +1869,11 @@ function GateGroupsEditor({
           aria-label="Every group (default)"
           checked={allSelected}
           disabled={disabled}
-          onChange={() => onChange(undefined)}
+          onChange={() => {
+            // Undefined selects the default of all groups.
+            // eslint-disable-next-line unicorn/no-useless-undefined -- Clear the selected group list.
+            onChange(undefined);
+          }}
           className="w-3.5 h-3.5 accent-mariner"
         />
         Every group (default)
@@ -2716,7 +2721,7 @@ const REPO_PATH_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 /** GitHub is always owner/repo. GitLab allows subgroups, so two segments or
  *  more. Exported for the tests, which is cheaper than proving the shape
  *  through the picker. */
-export function isValidRepoPath(provider: "github" | "gitlab", path: string): boolean {
+function isValidRepoPath(provider: "github" | "gitlab", path: string): boolean {
   const segments = path.split("/");
   if (!segments.every((segment) => REPO_PATH_SEGMENT.test(segment))) return false;
   return provider === "github" ? segments.length === 2 : segments.length >= 2;
@@ -2725,7 +2730,7 @@ export function isValidRepoPath(provider: "github" | "gitlab", path: string): bo
 /** A pasted browser URL reduced to the path the config stores. Anything that is
  *  not an http(s) URL is returned untouched, so typing is never fought: the
  *  rewrite only fires once a value actually carries a scheme and a host. */
-export function stripRepoUrl(value: string): string {
+function stripRepoUrl(value: string): string {
   const match = /^https?:\/\/[^/]+\/(.+)$/.exec(value.trim());
   if (match === null) return value;
   const path = match[1]

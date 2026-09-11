@@ -81,7 +81,7 @@ export const PromptTokenNode = TiptapNode.create({
     },
     tokenize(source: string) {
       const parsed = parseCanonicalPromptToken(source);
-      if (!parsed || parsed.start !== 0) return undefined;
+      if (!parsed || parsed.start !== 0) return;
       return {
         type: "promptToken",
         raw: parsed.raw,

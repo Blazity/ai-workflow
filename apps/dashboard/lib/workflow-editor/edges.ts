@@ -94,7 +94,7 @@ function allocateV2EdgeId(
     return requireUsableEdgeId(options.edgeId, usedIds);
   }
   if (typeof options.generateEdgeId !== "function") {
-    throw new Error("V2 edge creation requires an edge id or id generator.");
+    throw new TypeError("V2 edge creation requires an edge id or id generator.");
   }
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const candidate = options.generateEdgeId();
@@ -145,7 +145,7 @@ export function isBackEdge(edges: readonly FlowEdgeDef[], edge: FlowEdgeDef): bo
   }
   const stack = [edge.to];
   const seen = new Set<string>();
-  while (stack.length) {
+  while (stack.length > 0) {
     const node = stack.pop() as string;
     if (node === edge.from) return true;
     if (seen.has(node)) continue;

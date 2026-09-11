@@ -456,7 +456,7 @@ describe("recordOccurrenceStarted", () => {
   // Settled is terminal. Each of these would otherwise let a run be published
   // over a decision that was already made, and the cancelled case is what makes
   // pausing a schedule a real stop rather than a delay.
-  for (const outcome of ["cancelled", "expired", "superseded"] as const) {
+  (["cancelled", "expired", "superseded"] as const).forEach((outcome) => {
     it(`refuses to resurrect a ${outcome} occurrence into a run`, async () => {
       await acceptOccurrence(db, admitted(AT_10));
       await settle(AT_10, outcome);
@@ -470,7 +470,7 @@ describe("recordOccurrenceStarted", () => {
         runId: null,
       });
     });
-  }
+  });
 
   it("still starts an occurrence that failed an earlier attempt", async () => {
     // An errored row is pending, so it is NOT settled and the drain must be able

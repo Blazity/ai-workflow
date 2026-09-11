@@ -9,7 +9,7 @@ import { useSyncExternalStore } from "react";
  * runtime branching (e.g. the editor's touch affordances), never for the
  * desktop/mobile *layout* split (that's CSS `lg:` visibility).
  */
-export function useMediaQuery(query: string): boolean {
+function useMediaQuery(query: string): boolean {
   const subscribe = (cb: () => void) => {
     if (typeof window === "undefined") return () => {};
     const mql = window.matchMedia(query);

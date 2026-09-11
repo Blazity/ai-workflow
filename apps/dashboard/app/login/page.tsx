@@ -98,7 +98,7 @@ export default function LoginPage() {
               if (e.key !== "Enter") return;
               if (!e.currentTarget.checkValidity()) return;
               e.preventDefault();
-              document.getElementById("login-password")?.focus();
+              document.querySelector<HTMLElement>("#login-password")?.focus();
             }}
           />
 

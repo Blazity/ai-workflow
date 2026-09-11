@@ -15,7 +15,6 @@ import {
   organization,
 } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
-import { listHarnessProfileUsage } from "../db/harness-profile-usage-store.js";
 import {
   compileHarnessProfileManifest,
   hashHarnessProfileManifest,

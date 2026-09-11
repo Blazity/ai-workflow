@@ -13,7 +13,7 @@ interface PopupPosition {
   openUp: boolean;
 }
 
-export interface ListboxOption {
+interface ListboxOption {
   value: string;
   label: string;
   hint?: string;

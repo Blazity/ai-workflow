@@ -291,8 +291,7 @@ export async function compileEffectivePrompt(
         version: null,
         hash: await hashText(MEMORY_CAVEAT),
       }],
-    ));
-    sections.push(...memorySections);
+    ), ...memorySections);
   }
   for (const reference of input.unresolvedRepositorySources ?? []) {
     unresolvedSources.push({
@@ -624,11 +623,11 @@ function containsResidualMustache(content: string): boolean {
   return content.includes("{{") || content.includes("}}");
 }
 
-function renderSection(section: EffectivePromptSection): string {
-  const marker = section.kind.toUpperCase();
+function renderSection(sectionData: EffectivePromptSection): string {
+  const marker = sectionData.kind.toUpperCase();
   return [
-    `<<<AI_WORKFLOW_${marker}_BEGIN: ${section.title}>>>`,
-    section.content,
+    `<<<AI_WORKFLOW_${marker}_BEGIN: ${sectionData.title}>>>`,
+    sectionData.content,
     `<<<AI_WORKFLOW_${marker}_END>>>`,
   ].join("\n");
 }

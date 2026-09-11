@@ -393,7 +393,7 @@ export function ProfileEditor({
       .then((listing) => {
         if (listing && !controller.signal.aborted) setDeploymentSkills(listing);
       })
-      .catch(() => undefined);
+      .catch(() => {});
     return () => controller.abort();
   }, [comparesDeployment]);
   const hasCompleteRuntimeToolSet =
@@ -1436,7 +1436,7 @@ export function ProfileEditor({
                 label="Always include repository AGENTS.md / CLAUDE.md instructions"
                 checked={draft.context.includeRepositoryInstructions}
                 disabled
-                onChange={() => undefined}
+                onChange={() => {}}
               />
               <div className="mt-1 font-body text-[10px] text-neutral-500">
                 Fixed by the current CLI contract; profiles cannot disable
@@ -1592,7 +1592,7 @@ export function ProfileEditor({
                 label="Profile requests subagents"
                 checked={draft.subagents.enabled}
                 disabled
-                onChange={() => undefined}
+                onChange={() => {}}
               />
               <div className="mt-1 font-body text-[10px] text-neutral-500">
                 Read-only declaration. Current provider adapters always clip
@@ -1726,7 +1726,7 @@ export function ProfileEditor({
                     label={tool}
                     checked={draft.tools.includes(tool)}
                     disabled
-                    onChange={() => undefined}
+                    onChange={() => {}}
                   />
                 ))}
               </div>

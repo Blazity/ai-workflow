@@ -3,9 +3,8 @@
 // Regenerate whenever arthur-engine/integrations/claude-code/claude_code_tracer.py changes.
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const __dirname = import.meta.dirname;
 const workerRoot = path.resolve(__dirname, "..");
 // arthur-engine lives as a sibling of the monorepo root (apps/worker → apps → repo → arthur-engine)
 const monorepoRoot = path.resolve(workerRoot, "..", "..");

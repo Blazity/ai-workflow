@@ -68,7 +68,8 @@ async function drainFixturePromises() {
 }
 
 async function cleanupFixtures() {
-  for (const cleanup of [...fixtureCleanups]) cleanup();
+  const cleanups = [...fixtureCleanups];
+  for (const cleanup of cleanups) cleanup();
   if (vi.isFakeTimers()) await vi.runAllTimersAsync();
   await drainFixturePromises();
   trackedFixturePromises.clear();
@@ -116,7 +117,7 @@ function expectCurrentArtifactRead(stdout?: ReturnType<typeof vi.fn>) {
 }
 
 function resetSandboxMocks() {
-  if (trackedFixturePromises.size !== 0 || fixtureCleanups.size !== 0) {
+  if (trackedFixturePromises.size > 0 || fixtureCleanups.size > 0) {
     throw new Error("sandbox fixtures must be drained before mock reset");
   }
   vi.clearAllMocks();

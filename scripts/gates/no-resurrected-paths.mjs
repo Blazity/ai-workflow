@@ -4,9 +4,31 @@
  * by appending paths removed by an approved architecture stage.
  */
 import { existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseOptions, printTable, readJson } from "./shared.mjs";
+
+function repositoryFiles(root) {
+  const result = spawnSync(
+    "/usr/bin/git",
+    ["ls-files", "--cached", "--others", "--exclude-standard"],
+    { cwd: root, encoding: "utf8" },
+  );
+  if (result.status !== 0) return null;
+  return new Set(result.stdout.split(/\r?\n/u).filter(Boolean));
+}
+
+function pathState(root, retiredPath, files) {
+  if (files === null) {
+    return existsSync(join(root, retiredPath)) ? "exists" : "absent";
+  }
+  const hasActiveFile = [...files].some(
+    (file) => file === retiredPath || file.startsWith(`${retiredPath}/`),
+  );
+  if (hasActiveFile) return "exists";
+  return existsSync(join(root, retiredPath)) ? "ignored residue" : "absent";
+}
 
 function main() {
   const options = parseOptions(process.argv.slice(2), {
@@ -18,10 +40,16 @@ function main() {
   if (!Array.isArray(paths) || paths.some((path) => typeof path !== "string" || !path)) {
     throw new Error("The resurrected path baseline must be a list of non-empty strings.");
   }
-  const rows = paths.map((path) => [path, existsSync(join(options.root, path)) ? "exists" : "absent"]);
+  const files = repositoryFiles(options.root);
+  const rows = paths.map((path) => [path, pathState(options.root, path, files)]);
   console.log("Retired paths");
   printTable(["path", "state"], rows);
-  const failed = rows.some((row) => row[1] === "exists");
+  for (const [path, state] of rows) {
+    if (state === "ignored residue") {
+      console.log(`${path}: ignored residue only; delete directory ${path}`);
+    }
+  }
+  const failed = rows.some((row) => row[1] !== "absent");
   console.log(failed ? "no-resurrected-paths FAIL" : "no-resurrected-paths PASS");
   process.exitCode = failed ? 1 : 0;
 }

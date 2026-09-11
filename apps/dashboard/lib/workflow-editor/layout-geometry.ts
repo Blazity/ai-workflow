@@ -3,7 +3,7 @@ import type {
   WorkflowLayoutPoint,
 } from "@shared/contracts";
 
-export const DEFAULT_CANVAS_GRID_SIZE = 20;
+const DEFAULT_CANVAS_GRID_SIZE = 20;
 
 export function automaticEdgeBendPoint(
   from: WorkflowLayoutPoint,

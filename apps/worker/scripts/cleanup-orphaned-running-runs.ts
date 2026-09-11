@@ -1,4 +1,3 @@
-import { fileURLToPath } from "node:url";
 import { asc, and, eq, isNotNull, sql } from "drizzle-orm";
 import type { Db } from "../src/db/client.js";
 import { activeRuns, workflowRuns } from "../src/db/schema.js";
@@ -97,7 +96,7 @@ export async function runCleanup(
 
   await sweep(db);
   const remainingCandidates = await listOrphanedRunningRuns(db);
-  if (remainingCandidates.length !== 0) {
+  if (remainingCandidates.length > 0) {
     throw new Error(
       `Orphan cleanup postcondition failed: ${remainingCandidates.length} eligible run(s) remain.`,
     );
@@ -130,11 +129,11 @@ export async function runCleanupCli(
     ? await dependencies.getDb()
     : (await import("../src/db/client.js")).getDb();
   const result = await runCleanup(db, options, dependencies.sweep);
-  (dependencies.write ?? ((text: string) => process.stdout.write(text)))
-    (formatCleanupResult(result));
+  const write = dependencies.write ?? ((text: string) => process.stdout.write(text));
+  write(formatCleanupResult(result));
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (process.argv[1] === import.meta.filename) {
   try {
     await runCleanupCli();
   } catch (error) {

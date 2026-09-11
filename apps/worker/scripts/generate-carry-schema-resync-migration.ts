@@ -176,8 +176,7 @@ for (const source of RESYNC_TARGETS) {
   const priorList = priors.map((prior) => `${TAG}${prior}${TAG}::jsonb`).join(", ");
   // Capture MUST precede rewrite: the pre-image is only recoverable while the
   // carry still holds the prior shape.
-  statements.push(buildAuditInsert(source.key, priorList));
-  statements.push(buildUpdate(current, priorList));
+  statements.push(buildAuditInsert(source.key, priorList), buildUpdate(current, priorList));
   console.log(
     `${source.key}: ${priors.length} prior shape(s), ${Buffer.byteLength(current, "utf8")} bytes current, quoting is safe`,
   );

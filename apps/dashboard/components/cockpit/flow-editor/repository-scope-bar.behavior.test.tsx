@@ -47,7 +47,7 @@ function gl(repoPath: string, defaultBranch = "main"): RepositoryOption {
   return {
     provider: "gitlab",
     repoPath,
-    name: segments[segments.length - 1],
+    name: segments.at(-1) ?? "",
     owner: segments.slice(0, -1).join("/"),
     defaultBranch,
     private: true,

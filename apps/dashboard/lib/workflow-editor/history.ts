@@ -1,4 +1,4 @@
-export interface EditorHistoryTransaction<T> {
+interface EditorHistoryTransaction<T> {
   before: T;
 }
 
@@ -115,7 +115,7 @@ export function reduceEditorHistory<T>(
         : state;
     case "undo": {
       if (state.transaction || state.past.length === 0) return state;
-      const previous = state.past[state.past.length - 1]!;
+      const previous = state.past.at(-1)!;
       return {
         ...state,
         past: state.past.slice(0, -1),

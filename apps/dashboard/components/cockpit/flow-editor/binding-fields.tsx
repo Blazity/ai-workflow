@@ -8,7 +8,6 @@ import {
   type WorkflowAdditionalInputV2,
   type WorkflowDataCatalogEntry,
   type WorkflowBlockContract,
-  type WorkflowDataReferenceV2,
   type WorkflowDefinitionV2Node,
   type WorkflowInputBindingV2,
   type WorkflowInputBindings,
@@ -239,7 +238,11 @@ function V2BindingEditor({
         value={binding?.kind ?? ""}
         disabled={!canEdit}
         onChange={(event) => {
-          if (event.target.value === "") onChange(undefined);
+          if (event.target.value === "") {
+            // Explicitly clear the binding; the callback's single argument is meaningful.
+            // eslint-disable-next-line unicorn/no-useless-undefined -- Clear the binding value.
+            onChange(undefined);
+          }
           else if (event.target.value === "reference") {
             openReferencePicker();
           } else if (event.target.value === "reference_list") {
@@ -267,7 +270,11 @@ function V2BindingEditor({
           invalidReason={compatibilityInvalidReason(currentCompatibility)}
           disabled={!canEdit}
           onOpen={openReferencePicker}
-          onClear={() => onChange(undefined)}
+          onClear={() => {
+            // Explicitly clear the binding; the callback's single argument is meaningful.
+            // eslint-disable-next-line unicorn/no-useless-undefined -- Clear the binding value.
+            onChange(undefined);
+          }}
         />
       )}
       {binding?.kind === "reference_list" && (
