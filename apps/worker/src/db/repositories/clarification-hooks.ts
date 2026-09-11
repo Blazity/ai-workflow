@@ -174,9 +174,21 @@ export async function claimAnsweredClarificationResume(
       AND NOT EXISTS (SELECT 1 FROM inserted)
     LIMIT 1
   `);
-  return (
-    (result as { rows?: Array<{ outcome?: string }> }).rows?.[0]?.outcome ?? "in_progress"
-  ) as "claimed" | "in_progress" | "resumed" | "settled";
+  const outcome = (result as { rows?: Array<{ outcome?: string }> }).rows?.[0]?.outcome;
+  if (outcome) {
+    return outcome as "claimed" | "in_progress" | "resumed" | "settled";
+  }
+
+  const current = await db.execute(sql`
+    SELECT status
+    FROM ${workflowRuns}
+    WHERE run_id = ${row.runId}
+    LIMIT 1
+  `);
+  const status = (current as { rows?: Array<{ status?: string | null }> }).rows?.[0]?.status;
+  if (status === "running") return "resumed";
+  if (status === "resuming") return "in_progress";
+  return "settled";
 }
 
 export function claimConnectedAnsweredClarificationResume(

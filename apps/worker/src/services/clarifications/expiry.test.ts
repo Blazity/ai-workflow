@@ -1,5 +1,7 @@
+import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestDb } from "../../db/test-db.js";
+import { clarificationRequests } from "../../db/schema.js";
 import {
   getHookClarification,
   prepareHookClarification,
@@ -79,7 +81,7 @@ describe("clarification hook expiry", () => {
     expect((await getHookClarification(db, prepared.id))?.status).toBe("pending");
   });
 
-  it("retires a snapshotted question and records cleanup in one repository call", async () => {
+  it("retires a snapshotted question before deleting and recording cleanup", async () => {
     const db = await createTestDb();
     const prepared = await prepareHookClarification(db, {
       ticketKey: "AWT-3",
@@ -105,6 +107,76 @@ describe("clarification hook expiry", () => {
     expect(await getHookClarification(db, prepared.id)).toMatchObject({
       status: "superseded",
       cleanupState: "deleted",
+    });
+  });
+
+  it("does not delete the snapshot when another caller wins the retirement CAS", async () => {
+    const db = await createTestDb();
+    const prepared = await prepareHookClarification(db, {
+      ticketKey: "AWT-4",
+      subjectKey: "ticket:jira:AWT-4",
+      runId: "run-4",
+      blockId: "question",
+      definitionId: 1,
+      definitionVersion: 1,
+      questions: ["Continue?"],
+    });
+    await recordHookClarificationSnapshot(db, prepared.id, {
+      snapshotId: "snapshot-4",
+      sourceSandboxId: "sandbox-4",
+      expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1_000),
+    });
+    await publishHookClarification(db, prepared.id);
+    mocks.resumeHook.mockImplementation(async () => {
+      await db
+        .update(clarificationRequests)
+        .set({ status: "superseded" })
+        .where(eq(clarificationRequests.id, prepared.id));
+      return { runId: "run-4" };
+    });
+
+    await expect(
+      expireHookClarifications(db, new Date(Date.now() + 8 * 24 * 60 * 60 * 1_000)),
+    ).resolves.toEqual({ expired: 0, retryable: 0, cleanupFailed: 0 });
+
+    expect(mocks.deleteSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("records snapshot deletion failure after retiring the question", async () => {
+    const db = await createTestDb();
+    const prepared = await prepareHookClarification(db, {
+      ticketKey: "AWT-5",
+      subjectKey: "ticket:jira:AWT-5",
+      runId: "run-5",
+      blockId: "question",
+      definitionId: 1,
+      definitionVersion: 1,
+      questions: ["Continue?"],
+    });
+    await recordHookClarificationSnapshot(db, prepared.id, {
+      snapshotId: "snapshot-5",
+      sourceSandboxId: "sandbox-5",
+      expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1_000),
+    });
+    await publishHookClarification(db, prepared.id);
+    mocks.deleteSnapshot.mockRejectedValue(new Error("snapshot deletion failed"));
+
+    await expect(
+      expireHookClarifications(db, new Date(Date.now() + 8 * 24 * 60 * 60 * 1_000)),
+    ).resolves.toEqual({ expired: 1, retryable: 0, cleanupFailed: 1 });
+
+    const [row] = await db
+      .select({
+        status: clarificationRequests.status,
+        cleanupState: clarificationRequests.cleanupState,
+        cleanupError: clarificationRequests.cleanupError,
+      })
+      .from(clarificationRequests)
+      .where(eq(clarificationRequests.id, prepared.id));
+    expect(row).toEqual({
+      status: "superseded",
+      cleanupState: "failed",
+      cleanupError: "snapshot deletion failed",
     });
   });
 });

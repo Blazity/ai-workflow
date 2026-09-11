@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
@@ -37,6 +37,20 @@ function input(overrides: Partial<IdempotencyInput> = {}): IdempotencyInput {
   };
 }
 
+function hideBeginStatementResult(target: Db): { db: Db; execute: ReturnType<typeof vi.fn> } {
+  const execute = vi.fn().mockResolvedValue({ rows: [] });
+  return {
+    db: new Proxy(target, {
+      get(db, property, receiver) {
+        if (property === "execute") return execute;
+        const value = Reflect.get(db, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(db) : value;
+      },
+    }) as Db,
+    execute,
+  };
+}
+
 beforeEach(async () => {
   db = await createTestDb();
   await db.insert(organization).values([
@@ -61,6 +75,57 @@ describe("MCP mutation idempotency", () => {
       input({ now: new Date(now.getTime() + LEASE_MS) }),
     );
     expect(reclaimed?.outcome).toBe("reclaimed");
+  });
+
+  it("classifies a no-row acquisition from the winner's different payload", async () => {
+    await db.insert(mcpIdempotencyKeys).values({
+      ...input(),
+      payloadHash: "payload-hash-b",
+      state: "started",
+      safeResponse: null,
+      errorCode: null,
+    });
+    const raced = hideBeginStatementResult(db);
+
+    await expect(beginMcpMutation(raced.db, input())).rejects.toMatchObject({
+      code: "IDEMPOTENCY_CONFLICT",
+      retryable: false,
+    });
+    expect(raced.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("replays the winner's completed result after a no-row acquisition", async () => {
+    await db.insert(mcpIdempotencyKeys).values({
+      ...input(),
+      state: "completed",
+      safeResponse: { runId: "race-winner" },
+      errorCode: null,
+      expiresAt: new Date(now.getTime() + RESPONSE_TTL_MS),
+    });
+    const raced = hideBeginStatementResult(db);
+
+    await expect(
+      beginMcpMutation<{ runId: string }>(raced.db, input()),
+    ).resolves.toEqual({ kind: "replay", response: { runId: "race-winner" } });
+    expect(raced.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("replays the winner's stored failure after a no-row acquisition", async () => {
+    await db.insert(mcpIdempotencyKeys).values({
+      ...input(),
+      state: "failed",
+      safeResponse: null,
+      errorCode: "VALIDATION_FAILED",
+      expiresAt: new Date(now.getTime() + RESPONSE_TTL_MS),
+    });
+    const raced = hideBeginStatementResult(db);
+
+    await expect(beginMcpMutation(raced.db, input())).rejects.toMatchObject({
+      code: "VALIDATION_FAILED",
+      retryable: false,
+      message: expect.stringContaining("new idempotency key"),
+    });
+    expect(raced.execute).toHaveBeenCalledTimes(1);
   });
 
   it("normalizes begin database failures without exposing driver details", async () => {

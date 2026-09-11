@@ -10,6 +10,8 @@ import {
   failMcpIdempotencyLease,
   releaseConnectedMcpIdempotencyLease,
   releaseMcpIdempotencyLease,
+  readConnectedMcpIdempotencyLease,
+  readMcpIdempotencyLease,
   sweepConnectedExpiredMcpIdempotencyKeys,
   sweepExpiredMcpIdempotencyKeys,
 } from "../../db/repositories/mcp.js";
@@ -39,6 +41,7 @@ const SWEEP_BATCH_LIMIT = 100;
 
 interface McpIdempotencyStore {
   begin: (input: Parameters<typeof beginMcpIdempotencyLease>[1]) => ReturnType<typeof beginMcpIdempotencyLease>;
+  read: (input: Parameters<typeof readMcpIdempotencyLease>[1]) => ReturnType<typeof readMcpIdempotencyLease>;
   complete: (input: Parameters<typeof completeMcpIdempotencyLease>[1]) => ReturnType<typeof completeMcpIdempotencyLease>;
   fail: (input: Parameters<typeof failMcpIdempotencyLease>[1]) => ReturnType<typeof failMcpIdempotencyLease>;
   release: (input: Parameters<typeof releaseMcpIdempotencyLease>[1]) => ReturnType<typeof releaseMcpIdempotencyLease>;
@@ -48,6 +51,7 @@ interface McpIdempotencyStore {
 function mcpIdempotencyStore(db: Db): McpIdempotencyStore {
   return {
     begin: (input) => beginMcpIdempotencyLease(db, input),
+    read: (input) => readMcpIdempotencyLease(db, input),
     complete: (input) => completeMcpIdempotencyLease(db, input),
     fail: (input) => failMcpIdempotencyLease(db, input),
     release: (input) => releaseMcpIdempotencyLease(db, input),
@@ -57,6 +61,7 @@ function mcpIdempotencyStore(db: Db): McpIdempotencyStore {
 
 const connectedMcpIdempotencyStore: McpIdempotencyStore = {
   begin: beginConnectedMcpIdempotencyLease,
+  read: readConnectedMcpIdempotencyLease,
   complete: completeConnectedMcpIdempotencyLease,
   fail: failConnectedMcpIdempotencyLease,
   release: releaseConnectedMcpIdempotencyLease,
@@ -212,13 +217,13 @@ async function beginMcpMutationWithStore<T>(
 ): Promise<{ kind: "execute"; leaseId: string } | { kind: "replay"; response: T }> {
   return withSafeStoreErrors(async () => {
     const decision = await store.begin(input);
-    if (!decision) {
-      throw new McpPublicError("CONFLICT", "Concurrent mutation, retry", true);
-    }
-    if (decision.outcome !== "refused") {
+    if (decision && decision.outcome !== "refused") {
       return { kind: "execute", leaseId: leaseFor(input) };
     }
-    const existing = decision.row;
+    const existing = decision?.row ?? await store.read(input);
+    if (!existing) {
+      throw new McpPublicError("CONFLICT", "Concurrent mutation, retry", true);
+    }
     // Checked before anything is overwritten, because taking a row over is a
     // retry of the request it names and the payload is what says whether this
     // is that request. A "started" row is protected even once its lease is
