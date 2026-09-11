@@ -19,11 +19,13 @@ import {
   resolveWebhookTimestampHeaderName,
 } from "../../../../../../../../services/webhook-trigger/verify.js";
 import {
-  findWebhookEndpoint,
   webhookRejectionsToday,
-} from "../../../../../../../../services/workflow-definitions/trigger-webhooks.js";
+} from "../../../../../../../../services/workflow-definitions/trigger-rejection-counts.js";
 import {
-  type WebhookEndpointTarget,
+  findWebhookEndpoint,
+} from "../../../../../../../../services/workflow-definitions/trigger-webhooks.js";
+import type {
+  WebhookEndpointTarget,
 } from "../../../../../../../../services/workflow-definitions/webhook-endpoint-nodes.js";
 import { parseDefinitionId } from "../../../../../workflow-definitions.get.js";
 

@@ -10,11 +10,13 @@ import {
   nextRuns,
   suggestedGraceMinutes,
   violatesMinimumPeriod,
-  type EveryNHoursStep,
-  type EveryNMinutesStep,
-  type SchedulePreset as OccurrenceSchedulePreset,
-  type Weekday as OccurrenceWeekday,
-} from "../../../../../../../../services/schedule-trigger/index.js";
+} from "../../../../../../../../services/schedule-trigger/occurrence.js";
+import type {
+  EveryNHoursStep,
+  EveryNMinutesStep,
+  SchedulePreset as OccurrenceSchedulePreset,
+  Weekday as OccurrenceWeekday,
+} from "../../../../../../../../services/schedule-trigger/occurrence.js";
 import { parseScheduleTarget, requireScheduleActor } from "./config.get.js";
 
 /** How many upcoming occurrences the editor shows. Fixed, not client-supplied:

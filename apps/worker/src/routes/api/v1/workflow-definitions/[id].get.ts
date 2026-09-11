@@ -6,8 +6,10 @@ import {
 } from "../../../../services/auth/request-context.js";
 import {
   readWorkflowDefinitionDetail,
+} from "../../../../services/workflow-definitions/definition-reads.js";
+import {
   serializeWorkflowDefinitionVersion,
-} from "../../../../services/workflow-definitions/index.js";
+} from "../../../../services/workflow-definitions/definition-store.js";
 import {
   parseDefinitionId,
   serializeDefinitionMeta,

@@ -4,8 +4,10 @@ import {
   parseRequestBody,
   type HarnessProfileMutationResponse,
 } from "@shared/contracts";
-import { requireDashboardActor } from "../../../../../services/auth/index.js";
-import { unarchiveHarnessProfileDraft } from "../../../../../services/harness/index.js";
+import { requireDashboardActor } from "../../../../../services/auth/request-context.js";
+import {
+  unarchiveHarnessProfileDraft,
+} from "../../../../../services/harness/profile-authoring.js";
 import {
   parseHarnessProfileId,
   setHarnessApiNoStore,

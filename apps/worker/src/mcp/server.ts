@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-import { mcpSettings } from "../services/settings/index.js";
+import { mcpSettings } from "../services/settings/runtime-settings.js";
 import type { McpToolDependencies } from "./contracts.js";
 import { executeMcpRead } from "./execute-tool.js";
 import { MCP_CONTRACT_HASH } from "./sanitize-result.js";

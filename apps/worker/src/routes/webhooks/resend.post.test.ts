@@ -286,4 +286,14 @@ describe("POST /webhooks/resend", () => {
     await expect(res.json()).resolves.toEqual({ status: "ok" });
     await expect(delivery()).resolves.toEqual({ status: "sent", error: null });
   });
+
+  it("answers 200 without moving the ledger when the envelope is wrong", async () => {
+    // A signed payload whose `type` or Resend id is not a string becomes an
+    // empty event, not a refusal: the sender must not retry what we cannot read.
+    const app = makeApp();
+    const wrongType = await app(signedRequest({ type: 3, data: { email_id: "e" } }));
+    const wrongId = await app(signedRequest({ type: "email.sent", data: { email_id: 7 } }));
+    expect([wrongType.status, wrongId.status]).toEqual([200, 200]);
+    await expect(delivery()).resolves.toEqual({ status: "sent", error: null });
+  });
 });

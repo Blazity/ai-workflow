@@ -12,8 +12,11 @@ import type {
   WorkflowReplayAttemptSummary,
 } from "@shared/contracts";
 
-import { sanitizeRunDetailForResponse } from "../../services/overview/index.js";
-import { issueTrackerBaseUrl, mcpSettings } from "../../services/settings/index.js";
+import {
+  sanitizeRunDetailForResponse,
+} from "../../services/overview/sanitize-run-detail.js";
+import { issueTrackerBaseUrl } from "../../services/settings/integration-settings.js";
+import { mcpSettings } from "../../services/settings/runtime-settings.js";
 import {
   MAX_REPLAY_PAGE_LIMIT,
   RunObservationStoreError,

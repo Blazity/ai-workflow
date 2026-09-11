@@ -4,8 +4,10 @@ import {
   promptLibraryUpdateMetaRequestSchema,
   type PromptLibraryDetailResponse,
 } from "@shared/contracts";
-import { requireDashboardActor } from "../../../../services/auth/index.js";
-import { updatePromptEntryMeta } from "../../../../services/prompts/index.js";
+import { requireDashboardActor } from "../../../../services/auth/request-context.js";
+import {
+  updatePromptEntryMeta,
+} from "../../../../services/prompts/prompt-library-writes.js";
 import { parsePromptId, toPromptLibraryHttpError } from "../prompt-library.get.js";
 
 export default defineEventHandler(

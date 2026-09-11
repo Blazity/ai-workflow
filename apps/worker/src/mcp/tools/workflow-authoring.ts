@@ -9,10 +9,10 @@ import type {
   WorkflowDefinition,
   WorkflowDefinitionValidationIssue,
 } from "@shared/contracts";
-import { workflowDefinitionUrl } from "../../services/publication/index.js";
-import { dashboardOrigin } from "../../services/settings/index.js";
+import { workflowDefinitionUrl } from "../../services/publication/dashboard-links.js";
+import { dashboardOrigin } from "../../services/settings/runtime-settings.js";
 import { logger } from "../../infra/logger.js";
-import { isRepoAllowed } from "../../services/dispatch/index.js";
+import { isRepoAllowed } from "../../services/dispatch/repo-allowlist.js";
 import { workflowBlockRegistryContextFromEnv } from "../../workflow-definition/models.js";
 import {
   createWorkflowDefinition,

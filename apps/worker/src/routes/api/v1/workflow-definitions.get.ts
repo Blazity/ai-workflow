@@ -16,10 +16,14 @@ import {
 } from "../../../services/auth/request-context.js";
 import {
   readWorkflowDefinitionsOverview,
+} from "../../../services/workflow-definitions/definition-reads.js";
+import {
   WorkflowDefinitionStoreError,
   WorkflowDefinitionValidationError,
-  type WorkflowDefinitionRow,
-} from "../../../services/workflow-definitions/index.js";
+} from "../../../services/workflow-definitions/definition-store.js";
+import type {
+  WorkflowDefinitionRow,
+} from "../../../services/workflow-definitions/definition-store.js";
 
 /** Serializes a definition row into the dashboard-facing meta. Shared with the
  *  detail/save/patch routes and the legacy shims. */

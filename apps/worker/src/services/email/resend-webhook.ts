@@ -15,7 +15,7 @@ import { resendWebhookEventSchema, type ResendWebhookEvent } from "@shared/contr
 import { getDb } from "../../db/client.js";
 import { resendWebhookSecret } from "../settings/index.js";
 import { observeProviderWebhook } from "../system/index.js";
-import { TriggerHttpError } from "../triggers/index.js";
+import { TriggerHttpError } from "../../infra/trigger-http-error.js";
 import {
   applyInviteEmailDeliveryEvent,
   type ResendEmailDeliveryEvent,

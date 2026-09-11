@@ -1,6 +1,6 @@
 import { defineEventHandler, getQuery, setResponseHeader } from "h3";
 import type { RunsResponse } from "@shared/contracts";
-import { listDashboardRuns } from "../../../services/run-lifecycle/index.js";
+import { listDashboardRuns } from "../../../services/run-lifecycle/run-reads.js";
 
 export default defineEventHandler(async (event): Promise<RunsResponse> => {
   setResponseHeader(

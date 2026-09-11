@@ -1,7 +1,9 @@
 import { createError, defineEventHandler } from "h3";
 import type { PromptLibraryDetailResponse } from "@shared/contracts";
-import { requireDashboardActor } from "../../../../services/auth/index.js";
-import { archivePromptEntry } from "../../../../services/prompts/index.js";
+import { requireDashboardActor } from "../../../../services/auth/request-context.js";
+import {
+  archivePromptEntry,
+} from "../../../../services/prompts/prompt-library-writes.js";
 import { parsePromptId, toPromptLibraryHttpError } from "../prompt-library.get.js";
 
 export default defineEventHandler(

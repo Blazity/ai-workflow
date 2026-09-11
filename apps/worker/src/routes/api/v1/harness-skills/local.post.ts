@@ -5,12 +5,10 @@ import {
   type HarnessLocalSkillImportRequest,
   type HarnessSkillImportResponse,
 } from "@shared/contracts";
-import {
-  canManageHarnessProfiles,
-  DashboardAuthError,
-  requireDashboardActor,
-} from "../../../../services/auth/index.js";
-import { importDeploymentSkills } from "../../../../services/harness/index.js";
+import { requireDashboardActor } from "../../../../services/auth/request-context.js";
+import { canManageHarnessProfiles } from "../../../../services/auth/roles.js";
+import { DashboardAuthError } from "../../../../services/auth/users-read.js";
+import { importDeploymentSkills } from "../../../../services/harness/skill-sources.js";
 import { setHarnessApiNoStore } from "../harness-profiles.get.js";
 import { toHarnessSkillHttpError } from "./discover.post.js";
 

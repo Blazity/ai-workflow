@@ -3,11 +3,11 @@ import {
   dashboardInviteCreateRequestSchema,
   parseRequestBody,
 } from "@shared/contracts";
+import { createInviteForActor } from "../../../services/auth/dashboard-invites.js";
 import {
-  createInviteForActor,
   requireDashboardActor,
   toHttpError,
-} from "../../../services/auth/index.js";
+} from "../../../services/auth/request-context.js";
 
 export default defineEventHandler(async (event) => {
   const actor = await requireDashboardActor(event);

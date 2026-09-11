@@ -1,9 +1,11 @@
 import { createError, defineEventHandler, getRouterParam } from "h3";
 import {
-  requireDashboardActor,
   resendInviteForActor,
+} from "../../../../../services/auth/dashboard-invites.js";
+import {
+  requireDashboardActor,
   toHttpError,
-} from "../../../../../services/auth/index.js";
+} from "../../../../../services/auth/request-context.js";
 
 export default defineEventHandler(async (event) => {
   const actor = await requireDashboardActor(event);

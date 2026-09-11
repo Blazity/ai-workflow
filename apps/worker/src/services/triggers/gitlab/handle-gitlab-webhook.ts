@@ -39,7 +39,7 @@ import {
   verifyGitLabWebhookToken,
   type GitLabProject,
 } from "../../vcs/index.js";
-import { TriggerHttpError } from "../trigger-http-error.js";
+import { TriggerHttpError } from "../../../infra/trigger-http-error.js";
 
 const ALLOWED_ACTIONS = new Set(["opened", "update", "reopened"]);
 
