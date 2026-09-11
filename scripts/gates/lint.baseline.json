@@ -33,7 +33,7 @@
     "eslint(prefer-promise-reject-errors)": 2,
     "eslint(preserve-caught-error)": 13,
     "eslint(require-await)": 1370,
-    "eslint(require-unicode-regexp)": 2020,
+    "eslint(require-unicode-regexp)": 2023,
     "eslint(sort-vars)": 5,
     "oxc(branches-sharing-code)": 2,
     "oxc(no-map-spread)": 32,
