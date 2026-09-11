@@ -89,6 +89,8 @@ research file records what was true on its date.
 |---|---|
 | [plans/2026-09-09-architecture-restructure.md](./plans/2026-09-09-architecture-restructure.md) | The restructure being executed now: stages, decisions, assumptions, freezes |
 | [plans/2026-09-09-architecture-restructure-tickets.md](./plans/2026-09-09-architecture-restructure-tickets.md) | The Jira drafts for those stages |
+| [plans/2026-09-11-workflow-graph-package.md](./plans/2026-09-11-workflow-graph-package.md) | Stage 12 of the restructure: the workflow graph rules extracted into `packages/workflow-graph` |
+| [plans/2026-09-11-repository-catalog-and-settings.md](./plans/2026-09-11-repository-catalog-and-settings.md) | Repository catalog and dashboard settings replacing the product-behaviour environment variables |
 
 Every other file in `plans/` is a historical delivery plan. It stays in place
 for provenance and carries `superseded-by docs/index.md`: read it as a record
