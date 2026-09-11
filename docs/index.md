@@ -11,8 +11,8 @@ Every document outside `archive/` and `research/` starts with two lines,
 `Status:` and `Last-verified:`. The rules and the reasoning are
 [ADR-005](./adr/ADR-005-documentation-taxonomy.md), and
 `scripts/gates/docs-status.mjs` enforces them over `docs/`, `apps/*/docs/`,
-each `apps/*/AGENTS.md`, and `README.md`, `AGENTS.md`, `SETUP.md` and
-`CONTEXT.md` at the root.
+each `apps/*/AGENTS.md`, `packages/AGENTS.md`, and `README.md`, `AGENTS.md`,
+`SETUP.md` and `CONTEXT.md` at the root.
 
 ## Start here
 

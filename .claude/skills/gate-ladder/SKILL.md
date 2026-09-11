@@ -9,11 +9,8 @@ Read [G0 through G6 and the evidence authority](../../../docs/delivery-gates.md)
 
 Read the [static ladder and required CI rules](../../../docs/adr/ADR-004-gates-and-required-ci.md) before deciding which checks are required.
 
-Use the repository commands for execution:
+Follow the [repository evidence rules](../../../AGENTS.md), including the
+candidate SHA, exact commands, and observed outcomes.
 
-- `pnpm run verify:changed -- --base <ref>` for the scope-aware check.
-- `pnpm run gates` for the static gate ladder.
-- `pnpm run test:ci` for the focused CI gate tests.
-- `git diff --check` for whitespace errors.
-
-Keep the evidence bundle and pass or fail interpretation in the authoritative documents linked above. This skill is only the routing point for those procedures.
+Use the linked documents to select and run gates. Keep the ladder and its
+pass or fail interpretation in those authoritative documents.

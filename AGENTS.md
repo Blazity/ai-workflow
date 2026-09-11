@@ -112,13 +112,13 @@ not on every edit.
 
 Each is quoted verbatim from the file that owns it.
 
-**Transactions stay inside repositories** (`apps/worker/src/db/repositories/`):
+**neon-http has no transactions** (`apps/worker/src/approvals/store.ts`):
 
-> Database transactions belong inside repositories; service and engine code calls repository methods.
+> Production uses neon-http and cannot open an interactive transaction.
 
-Repository operations own multi-row writes and transaction boundaries. Keep
-the repository boundary intact when changing a write, because a test driver
-can support transactions even when the deployed driver contract differs.
+Write multi-row changes as one statement (a data-modifying CTE, an
+insert-on-conflict) rather than `db.transaction`. The pglite test driver does
+support transactions, so unit tests will not catch this.
 
 **The Workflow DevKit discovers steps by file content**
 (`docs/research/2026-09-09-architecture-audit.md`, section 10):

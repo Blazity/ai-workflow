@@ -66,9 +66,10 @@ boundary instead of copying their ownership tables here.
 - **`build` writes to the database.** It calls `db:migrate` against whatever
   `DATABASE_URL` is in the environment. Never run `pnpm run build` pointed at
   production data by accident, and keep that path working when you touch `db/`.
-- **Database writes follow the repository boundary.** Read the transaction
-  gotcha in [the root instructions](../../AGENTS.md) before changing data
-  access; service and engine code must not own transaction boundaries.
+- **Production has no interactive transactions.** The Neon HTTP driver cannot
+  open one; the pglite test driver can, so a `db.transaction` call passes every
+  unit test and fails in production. Write one statement (a data-modifying CTE,
+  an insert-on-conflict) instead.
 - **Invocation ceilings are real.** A plain function is killed at 300 s; the
   deployed step function ships `maxDuration` `"max"` and is killed at 800 s on
   Pro. Anything long has to be resumable across invocations. See
