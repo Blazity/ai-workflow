@@ -69,7 +69,8 @@ export function createDefinitionsRepository(db: Db) {
 
     /**
      * Revokes only a live schedule and settles its waiting occurrences in the
-     * same statement. A repeated revocation is intentionally a no-op.
+     * same statement. A repeated revocation returns false and still settles any
+     * pending occurrence left by an interrupted earlier call.
      */
     async revokeScheduleAndCancelWaiting(
       scheduleId: string,
@@ -88,8 +89,10 @@ export function createDefinitionsRepository(db: Db) {
               pending = false,
               skip_reason = coalesce(occurrence.skip_reason, 'schedule_revoked'),
               updated_at = now()
-          FROM revoked
-          WHERE occurrence.schedule_id = revoked.id
+          FROM workflow_schedules schedule
+          WHERE schedule.id = ${scheduleId}
+            AND (schedule.revoked_at IS NOT NULL OR EXISTS (SELECT 1 FROM revoked))
+            AND occurrence.schedule_id = schedule.id
             AND occurrence.pending = true
           RETURNING occurrence.schedule_id
         )

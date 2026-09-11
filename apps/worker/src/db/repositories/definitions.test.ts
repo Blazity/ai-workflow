@@ -121,4 +121,58 @@ describe("definitions repository", () => {
     expect(schedule?.revokedAt).toEqual(first);
     expect(occurrence).toMatchObject({ pending: false, outcome: "cancelled", skipReason: "schedule_revoked" });
   });
+
+  it("settles a pending occurrence when the schedule was already revoked", async () => {
+    const revokedAt = new Date("2026-09-10T10:05:00.000Z");
+    await db.insert(workflowDefinitions).values({
+      id: 872,
+      name: "Already revoked schedule definition",
+      createdById: "author",
+      createdByLabel: "Author",
+    });
+    await db.insert(workflowDefinitionVersions).values({
+      definitionId: 872,
+      version: 1,
+      definition: {},
+      createdById: "author",
+      createdByLabel: "Author",
+    });
+    await db.insert(workflowSchedules).values({
+      id: "schedule-872",
+      definitionId: 872,
+      nodeId: "schedule-node",
+      cron: "0 * * * *",
+      evaluationWatermarkAt: new Date("2026-09-10T09:00:00.000Z"),
+      revokedAt,
+    });
+    await db.insert(scheduleOccurrences).values({
+      scheduleId: "schedule-872",
+      occurrenceAt: new Date("2026-09-10T10:00:00.000Z"),
+      definitionId: 872,
+      definitionVersion: 1,
+      pending: true,
+    });
+
+    await expect(
+      createDefinitionsRepository(db).revokeScheduleAndCancelWaiting(
+        "schedule-872",
+        new Date("2026-09-10T11:05:00.000Z"),
+      ),
+    ).resolves.toEqual({ revoked: false });
+
+    const [schedule] = await db
+      .select()
+      .from(workflowSchedules)
+      .where(eq(workflowSchedules.id, "schedule-872"));
+    const [occurrence] = await db
+      .select()
+      .from(scheduleOccurrences)
+      .where(eq(scheduleOccurrences.scheduleId, "schedule-872"));
+    expect(schedule?.revokedAt).toEqual(revokedAt);
+    expect(occurrence).toMatchObject({
+      pending: false,
+      outcome: "cancelled",
+      skipReason: "schedule_revoked",
+    });
+  });
 });

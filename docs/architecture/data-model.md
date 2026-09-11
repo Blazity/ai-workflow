@@ -7,8 +7,12 @@ The stable `db/schema.ts` barrel exposes 62 `pgTable` declarations. Production
 worker source has zero executable `.transaction(` calls; tests and test support
 are excluded from that production-only check.
 
-Domain table declarations live under `db/schema/`. Mutually dependent tables
-share a domain module, and cross-domain foreign keys import their owning module
+Of those declarations, 45 live in the 13 domain modules under `db/schema/`.
+The other 17 remain in five pre-existing single-purpose files beside the
+barrel: `auth-schema.ts` has 13, while `approvals-schema.ts`,
+`clarifications-schema.ts`, `email-delivery-schema.ts`, and `memory-schema.ts`
+have one each. The barrel re-exports all 18 modules. Mutually dependent tables
+share a module, and cross-domain foreign keys import their owning module
 directly so initialization order remains explicit.
 
 | TypeScript export | SQL table | Domain | Owner | Principal callers |

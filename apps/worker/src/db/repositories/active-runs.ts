@@ -1,4 +1,14 @@
 import { and, eq, isNull, or, sql } from "drizzle-orm";
+import {
+  RESERVATION_BIND_GRACE_MS,
+  type ActiveRunEntry,
+  type FailedTicketMeta,
+  type FailedTicketOwner,
+  type RunRegistryAdapter,
+  type RunReservation,
+  type StartedRunRecord,
+  type ThreadStore,
+} from "@shared/contracts";
 import type { Db } from "../client.js";
 import { ActiveRunOwnerError } from "./active-run-owner-error.js";
 import {
@@ -7,28 +17,9 @@ import {
   failedTickets,
   threadParents,
 } from "../schema.js";
-const RESERVATION_BIND_GRACE_MS = 5 * 60 * 1000;
 export const STARTUP_DEADLINE_MS = 10 * 60 * 1000;
 
-type RunKind = "ticket" | "pr_trigger" | "webhook_trigger" | "schedule" |
-  "manual_ticket" | "manual_pr_trigger";
-interface RunReservation {
-  subjectKey: string;
-  ticketKey: string | null;
-  ownerToken: string;
-  kind: RunKind;
-}
-interface StartedRunRecord extends RunReservation { runId: string }
-interface ActiveRunEntry extends RunReservation {
-  runId: string | null;
-  state: "reserved" | "bound" | "parking" | "parked" | "cancelling";
-  createdAt: number;
-  updatedAt: number;
-}
-interface FailedTicketMeta { runId: string; error: string; failedAt: string }
-interface FailedTicketOwner { subjectKey: string; ownerToken: string; runId: string }
-
-export class PostgresRunRegistry {
+export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
   constructor(private db: Db) {}
 
   async reserve(reservation: RunReservation): Promise<boolean> {

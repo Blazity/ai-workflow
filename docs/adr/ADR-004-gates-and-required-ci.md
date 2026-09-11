@@ -65,7 +65,7 @@ One line per gate: what it observes, and whether it carries a baseline.
 | `docs-status` | `Status:` and `Last-verified:` headers, a `current` file older than 90 days, a current file unreachable in two hops | no | stage 2 |
 | `check-deps-consistency` | the pnpm catalog and the four dependency rules | no | stage 3 |
 | `single-schema-version` | a reinstated `schemaVersion === 1` branch | no | stage 3b |
-| `transactions-in-repositories` | `.transaction(` outside `db/repositories` | no | stage 7 |
+| `transactions-in-repositories` | `.transaction(` in every non-test file under `apps/worker/src` | no | stage 7 |
 | `db-client-fence` | `db/client` imports outside `db/` | yes, 357 ratcheted down | stage 7 |
 
 Baselines that ratchet are driven to zero and deleted in stage 11, at which

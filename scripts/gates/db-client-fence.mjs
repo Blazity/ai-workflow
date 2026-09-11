@@ -13,7 +13,7 @@ import { parseOptions, printTable, readJson, writeJson } from "./shared.mjs";
 
 const productionTypeScript = /\.[cm]?[jt]sx?$/u;
 const testPath = /(?:\.(?:test|spec)\.[cm]?[jt]sx?$|\/(?:test-support|e2e|fixtures)\/|\/test-db\.[cm]?[jt]s$)/u;
-const importPattern = /\b(?:import|export)\s+(?:type\s+)?[^\n;]*?\s+from\s+["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)|\b(?:vi\.)?(?:mock|doMock)\s*\(\s*["']([^"']+)["']/gu;
+const mockPattern = /\b(?:vi\.)?(?:mock|doMock)\s*\(\s*["']([^"']+)["']/gu;
 
 function sourceFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -38,14 +38,76 @@ function withoutComments(source) {
   return output;
 }
 
+function moduleTokens(source) {
+  const tokens = [];
+  for (let index = 0; index < source.length;) {
+    const character = source[index];
+    if (/\s/u.test(character)) { index += 1; continue; }
+    if (character === "'" || character === '"' || character === "`") {
+      const quote = character;
+      let value = "", escaped = false;
+      index += 1;
+      while (index < source.length) {
+        const current = source[index];
+        if (escaped) { value += current; escaped = false; index += 1; continue; }
+        if (current === "\\") { value += current; escaped = true; index += 1; continue; }
+        if (current === quote) { index += 1; break; }
+        value += current;
+        index += 1;
+      }
+      tokens.push({ kind: quote === "`" ? "template" : "string", value });
+      continue;
+    }
+    if (/[A-Za-z_$]/u.test(character)) {
+      const start = index;
+      index += 1;
+      while (index < source.length && /[\w$]/u.test(source[index])) index += 1;
+      tokens.push({ kind: "word", value: source.slice(start, index) });
+      continue;
+    }
+    tokens.push({ kind: "punctuation", value: character });
+    index += 1;
+  }
+  return tokens;
+}
+
+function staticAndDynamicImports(source) {
+  const tokens = moduleTokens(source), found = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token.kind !== "word" || (token.value !== "import" && token.value !== "export")) continue;
+    const reexport = token.value === "export", next = tokens[index + 1];
+    if (!reexport && next?.kind === "string") {
+      found.push({ reexport: false, specifier: next.value });
+      continue;
+    }
+    if (
+      !reexport && next?.value === "(" &&
+      tokens[index + 2]?.kind === "string" && tokens[index + 3]?.value === ")"
+    ) {
+      found.push({ reexport: false, specifier: tokens[index + 2].value });
+      continue;
+    }
+    for (let cursor = index + 1; cursor < tokens.length; cursor += 1) {
+      const candidate = tokens[cursor];
+      if (candidate.value === ";") break;
+      if (
+        candidate.kind === "word" && candidate.value === "from" &&
+        tokens[cursor + 1]?.kind === "string"
+      ) {
+        found.push({ reexport, specifier: tokens[cursor + 1].value });
+        break;
+      }
+    }
+  }
+  return found;
+}
+
 function imports(file) {
-  const source = withoutComments(readFileSync(file, "utf8")), found = [];
-  for (const match of source.matchAll(importPattern)) {
-    const specifier = match[1] ?? match[2] ?? match[3];
-    if (specifier) found.push({
-      reexport: match[0].trimStart().startsWith("export"),
-      specifier,
-    });
+  const source = withoutComments(readFileSync(file, "utf8"));
+  const found = staticAndDynamicImports(source);
+  for (const match of source.matchAll(mockPattern)) {
+    if (match[1]) found.push({ reexport: false, specifier: match[1] });
   }
   return found;
 }

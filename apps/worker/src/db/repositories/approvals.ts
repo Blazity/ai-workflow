@@ -98,6 +98,8 @@ export async function createApprovalRequest(
       where ${approvalRequests.ticketKey} = ${input.ticketKey}
         and ${approvalRequests.status} = 'pending'
       returning ${approvalRequests.id}
+    -- Folding this update into the insert closes the superseded-plan window,
+    -- but a workflow_runs lock conflict now fails the approval statement too.
     ), resolved_awaiting as (
       update ${workflowRuns}
       set status = 'blocked', updated_at = now()

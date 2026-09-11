@@ -109,7 +109,7 @@ export async function fetchRunDetailFromDb(
   const run: RunDetail = {
     id: row.runId,
     workflow: row.workflowId ?? "wf_unknown",
-    workflowName: row.workflowName ?? row.workflowId ?? "-",
+    workflowName: row.workflowName ?? row.workflowId ?? "—",
     status,
     ticket: row.ticketKey ?? "",
     ticketTitle: row.ticketTitle ?? row.ticketKey ?? "",
@@ -125,7 +125,7 @@ export async function fetchRunDetailFromDb(
     durationSec: row.durationSec,
     // The durable reason doubles as the rendered error for blocked/failed runs
     // so the trace screen always shows a cause (the world has none for
-    // cancelled runs - its error is always undefined there).
+    // cancelled runs — its error is always undefined there).
     error:
       row.statusReason && (status === "blocked" || status === "failed")
         ? { message: row.statusReason }

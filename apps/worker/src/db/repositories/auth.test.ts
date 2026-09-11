@@ -1,3 +1,4 @@
+/* oxlint-disable eslint/max-lines */
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "../client.js";
@@ -116,6 +117,8 @@ describe("auth repository atomic writes", () => {
       membershipId: "password-member",
     });
     expect(accepted).toBe(true);
+    expect(await db.select().from(user).where(eq(user.id, "password-user")))
+      .toHaveLength(1);
     expect(await db.select().from(account).where(eq(account.id, "password-account")))
       .toHaveLength(1);
     expect(await db.select().from(member).where(eq(member.id, "password-member")))
@@ -142,6 +145,36 @@ describe("auth repository atomic writes", () => {
     expect(invite?.status).toBe("pending");
   });
 
+  it("rolls back password acceptance when membership creation fails", async () => {
+    await seedInvite("membership-rollback", "membership-rollback@example.com");
+    await db.insert(member).values({
+      id: "duplicate-member",
+      organizationId: "org",
+      userId: "owner",
+      role: "owner",
+    });
+
+    await expect(createAuthRepository(db).acceptPasswordInvite({
+      organizationId: "org",
+      inviteId: "membership-rollback",
+      now,
+      userId: "membership-rollback-user",
+      userEmail: "membership-rollback@example.com",
+      userName: "Membership Rollback",
+      newPasswordHash: "hash:scrypt:test",
+      accountId: "membership-rollback-account",
+      membershipId: "duplicate-member",
+    })).rejects.toThrow();
+
+    expect(await db.select().from(user).where(eq(user.id, "membership-rollback-user")))
+      .toHaveLength(0);
+    expect(await db.select().from(account).where(eq(account.id, "membership-rollback-account")))
+      .toHaveLength(0);
+    const [invite] = await db.select().from(invitation)
+      .where(eq(invitation.id, "membership-rollback"));
+    expect(invite?.status).toBe("pending");
+  });
+
   it("accepts an SSO invite with its membership", async () => {
     await seedInvite("sso", "sso@example.com");
     await db.insert(user).values({
@@ -155,10 +188,36 @@ describe("auth repository atomic writes", () => {
       inviteId: "sso",
       now,
       userId: "sso-user",
+      userEmail: "sso@example.com",
       membershipId: "sso-member",
     })).toBe(true);
     expect(await db.select().from(member).where(eq(member.id, "sso-member")))
       .toHaveLength(1);
+  });
+
+  it("rejects an SSO invite when the locked email does not match", async () => {
+    await seedInvite("sso-mismatch", "invited@example.com");
+    await db.insert(user).values({
+      id: "other-sso-user",
+      name: "Other SSO User",
+      email: "other@example.com",
+      emailVerified: true,
+    });
+
+    await expect(createAuthRepository(db).acceptSsoInvite({
+      organizationId: "org",
+      inviteId: "sso-mismatch",
+      now,
+      userId: "other-sso-user",
+      userEmail: "other@example.com",
+      membershipId: "sso-mismatch-member",
+    })).resolves.toBe(false);
+
+    expect(await db.select().from(member).where(eq(member.id, "sso-mismatch-member")))
+      .toHaveLength(0);
+    const [invite] = await db.select().from(invitation)
+      .where(eq(invitation.id, "sso-mismatch"));
+    expect(invite?.status).toBe("pending");
   });
 
   it("rolls back SSO acceptance when membership creation fails", async () => {
@@ -168,10 +227,103 @@ describe("auth repository atomic writes", () => {
       inviteId: "sso-rollback",
       now,
       userId: "missing-user",
+      userEmail: "sso-rollback@example.com",
       membershipId: "invalid-member",
     })).rejects.toThrow();
     const [invite] = await db.select().from(invitation)
       .where(eq(invitation.id, "sso-rollback"));
     expect(invite?.status).toBe("pending");
+  });
+
+  it("returns false on a second acceptance and leaves membership byte-identical", async () => {
+    await seedInvite("sso-repeat", "sso-repeat@example.com");
+    await db.insert(user).values({
+      id: "sso-repeat-user",
+      name: "SSO Repeat User",
+      email: "sso-repeat@example.com",
+      emailVerified: true,
+    });
+    const repository = createAuthRepository(db);
+    const first = {
+      organizationId: "org",
+      inviteId: "sso-repeat",
+      now,
+      userId: "sso-repeat-user",
+      userEmail: "sso-repeat@example.com",
+      membershipId: "sso-repeat-member",
+    };
+    await expect(repository.acceptSsoInvite(first)).resolves.toBe(true);
+    const [before] = await db.select().from(member)
+      .where(eq(member.id, "sso-repeat-member"));
+
+    await expect(repository.acceptSsoInvite({
+      ...first,
+      membershipId: "unused-repeat-member",
+    })).resolves.toBe(false);
+
+    const [after] = await db.select().from(member)
+      .where(eq(member.id, "sso-repeat-member"));
+    expect(after).toEqual(before);
+    expect(await db.select().from(member).where(eq(member.id, "unused-repeat-member")))
+      .toHaveLength(0);
+  });
+
+  it("returns false for a canceled invite without creating acceptance rows", async () => {
+    await seedInvite("canceled", "canceled@example.com");
+    await db.update(invitation).set({ status: "canceled" })
+      .where(eq(invitation.id, "canceled"));
+
+    await expect(createAuthRepository(db).acceptPasswordInvite({
+      organizationId: "org",
+      inviteId: "canceled",
+      now,
+      userId: "canceled-user",
+      userEmail: "canceled@example.com",
+      userName: "Canceled User",
+      newPasswordHash: "hash:scrypt:test",
+      accountId: "canceled-account",
+      membershipId: "canceled-member",
+    })).resolves.toBe(false);
+
+    expect(await db.select().from(user).where(eq(user.id, "canceled-user")))
+      .toHaveLength(0);
+    expect(await db.select().from(account).where(eq(account.id, "canceled-account")))
+      .toHaveLength(0);
+    expect(await db.select().from(member).where(eq(member.id, "canceled-member")))
+      .toHaveLength(0);
+  });
+
+  it("does not demote an owner who accepts an admin invite", async () => {
+    await seedInvite("owner-admin", "owner-admin@example.com");
+    await db.update(invitation).set({ role: "admin" })
+      .where(eq(invitation.id, "owner-admin"));
+    await db.insert(user).values({
+      id: "owner-admin-user",
+      name: "Existing Owner",
+      email: "owner-admin@example.com",
+      emailVerified: true,
+    });
+    await db.insert(member).values({
+      id: "owner-admin-member",
+      organizationId: "org",
+      userId: "owner-admin-user",
+      role: "owner",
+    });
+
+    await expect(createAuthRepository(db).acceptPasswordInvite({
+      organizationId: "org",
+      inviteId: "owner-admin",
+      now,
+      userId: "owner-admin-user",
+      userEmail: "owner-admin@example.com",
+      userName: "Existing Owner",
+      newPasswordHash: null,
+      accountId: null,
+      membershipId: "unused-owner-admin-member",
+    })).resolves.toBe(true);
+
+    const [membership] = await db.select({ role: member.role }).from(member)
+      .where(eq(member.id, "owner-admin-member"));
+    expect(membership).toEqual({ role: "owner" });
   });
 });

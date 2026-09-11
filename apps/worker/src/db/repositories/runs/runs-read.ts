@@ -11,14 +11,14 @@ import type {
   WorkflowRow,
 } from "@shared/contracts";
 import type { Db } from "../../client.js";
-import type { RunKind } from "../../../adapters/run-registry/types.js";
+import type { RunKind } from "@shared/contracts";
 import { activeRuns, workflowOwnedBranches, workflowRuns } from "../../schema.js";
 import { attributeRunModel } from "../../../services/overview/attribute-run-model.js";
 
 /**
  * Postgres read path for the dashboard. Replaces the Vercel Workflow `world.runs`
  * collectors for the recent-runs list, the overview KPIs, the workflows table,
- * and the cost view - sourcing from the durable `workflow_runs` telemetry table
+ * and the cost view — sourcing from the durable `workflow_runs` telemetry table
  * instead. Three things this unlocks that the world API could not:
  *   - per-run cost/tokens (persisted by recordRunUsage; the world API has neither)
  *   - real time-window filtering on `started_at` (the world API caps at 100 rows)
@@ -84,7 +84,7 @@ function likeParam(q: string): string {
   return `%${q.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
 }
 
-/** `(ticket_key ILIKE $1 OR ticket_title ILIKE $1)` - $1 bound, never interpolated. */
+/** `(ticket_key ILIKE $1 OR ticket_title ILIKE $1)` — $1 bound, never interpolated. */
 function searchCondition(q: string): SQL {
   const pat = likeParam(q);
   return sql`(${workflowRuns.ticketKey} ilike ${pat} or ${workflowRuns.ticketTitle} ilike ${pat})`;
@@ -275,7 +275,7 @@ const RUN_STATUSES = new Set<RunStatus>([
 /**
  * `workflow_runs.status` already stores a mapped RunStatus (see
  * collect-snapshots), so it is used as-is. A null status means usage was
- * recorded before the cron snapshot landed - treat it as in-flight.
+ * recorded before the cron snapshot landed — treat it as in-flight.
  */
 export function coerceStatus(status: string | null): RunStatus {
   return status && RUN_STATUSES.has(status as RunStatus)
@@ -391,7 +391,7 @@ function mapRun(r: RunRow, now: Date, tenantOrigin: string): Run {
   return {
     id: r.runId,
     workflow: r.workflowId ?? "wf_unknown",
-    workflowName: r.workflowName ?? r.workflowId ?? "-",
+    workflowName: r.workflowName ?? r.workflowId ?? "—",
     status: coerceStatus(r.status),
     statusReason: r.statusReason,
     ticket: r.ticketKey ?? "",
@@ -670,7 +670,7 @@ export async function costAgg(
 
   const enriched = rows.map((r) => ({
     workflowId: r.workflowId ?? "wf_unknown",
-    workflowName: r.workflowName ?? r.workflowId ?? "-",
+    workflowName: r.workflowName ?? r.workflowId ?? "—",
     cost: r.costUsd ?? 0,
     tokens: (r.tokensInput ?? 0) + (r.tokensOutput ?? 0),
     t: r.startedAt ?? r.firstSeenAt,

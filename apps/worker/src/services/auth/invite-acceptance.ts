@@ -16,6 +16,7 @@ type ExistingUserWithAccounts = NonNullable<
   Awaited<ReturnType<AuthContext["internalAdapter"]["findUserByEmail"]>>
 >;
 type InviteAcceptanceReadDb = Pick<Db, "select">;
+type InvitationRow = typeof invitation.$inferSelect;
 
 type AcceptedPasswordUserBase = {
   id: string;
@@ -104,7 +105,7 @@ export async function acceptDashboardInvite(
 ): Promise<AcceptDashboardInviteResult> {
   const now = input.now ?? new Date();
   const org = await requireOrganization(db, input.organizationSlug);
-  const invite = await requirePendingInvite(db, org.id, input.inviteId, now);
+  const invite = await requireInviteForAcceptance(db, org.id, input.inviteId, now);
   const ctx = await auth.$context;
 
   assertPasswordLength(input.password, ctx.password.config);
@@ -131,7 +132,9 @@ export async function acceptDashboardInvite(
     accountId: acceptedUser.kind === "new" ? randomUUID() : null,
     membershipId: randomUUID(),
   });
-  if (!accepted) throw new DashboardAuthError(404, "Invite not found");
+  if (!accepted) {
+    await throwInviteAcceptanceFailure(db, org.id, invite.id, now);
+  }
 
   const signIn = await auth.api.signInEmail({
     body: { email: invite.email, password: input.password },
@@ -159,8 +162,9 @@ export async function acceptDashboardSsoInvite(
 ): Promise<void> {
   const now = input.now ?? new Date();
   const org = await requireOrganization(db, input.organizationSlug);
-  const invite = await requirePendingInvite(db, org.id, input.inviteId, now);
-  if (normalizeEmail(invite.email) !== normalizeEmail(input.user.email)) {
+  const invite = await requireInviteForAcceptance(db, org.id, input.inviteId, now);
+  const normalizedUserEmail = normalizeEmail(input.user.email);
+  if (normalizeEmail(invite.email) !== normalizedUserEmail) {
     throw new DashboardAuthError(403, "Invite does not match signed-in user");
   }
 
@@ -169,9 +173,18 @@ export async function acceptDashboardSsoInvite(
     inviteId: invite.id,
     now,
     userId: input.user.id,
+    userEmail: normalizedUserEmail,
     membershipId: randomUUID(),
   });
-  if (!accepted) throw new DashboardAuthError(404, "Invite not found");
+  if (!accepted) {
+    await throwInviteAcceptanceFailure(
+      db,
+      org.id,
+      invite.id,
+      now,
+      normalizedUserEmail,
+    );
+  }
 }
 
 function requireInviteRole(role: string): DashboardRole {
@@ -195,15 +208,77 @@ async function requirePendingInvite(
   inviteId: string,
   now: Date,
 ) {
+  const invite = await findInvite(db, organizationId, inviteId);
+  if (!invite || invite.status !== "pending" || invite.expiresAt.getTime() <= now.getTime()) {
+    throw new DashboardAuthError(404, "Invite not found");
+  }
+  return invite;
+}
+
+async function requireInviteForAcceptance(
+  db: InviteAcceptanceReadDb,
+  organizationId: string,
+  inviteId: string,
+  now: Date,
+): Promise<InvitationRow> {
+  const invite = await findInvite(db, organizationId, inviteId);
+  const stateError = inviteAcceptanceStateError(invite, now);
+  if (stateError) throw stateError;
+  requireInviteRole(invite!.role);
+  return invite!;
+}
+
+async function throwInviteAcceptanceFailure(
+  db: InviteAcceptanceReadDb,
+  organizationId: string,
+  inviteId: string,
+  now: Date,
+  normalizedUserEmail?: string,
+): Promise<never> {
+  const invite = await findInvite(db, organizationId, inviteId);
+  const stateError = inviteAcceptanceStateError(invite, now);
+  if (stateError) throw stateError;
+  requireInviteRole(invite!.role);
+  if (
+    normalizedUserEmail !== undefined &&
+    normalizeEmail(invite!.email) !== normalizedUserEmail
+  ) {
+    throw new DashboardAuthError(403, "Invite does not match signed-in user");
+  }
+  throw new DashboardAuthError(409, "Invite is no longer pending");
+}
+
+function inviteAcceptanceStateError(
+  invite: InvitationRow | null,
+  now: Date,
+): DashboardAuthError | null {
+  if (!invite) return new DashboardAuthError(404, "Invite not found");
+  if (invite.status === "accepted") {
+    return new DashboardAuthError(409, "Invite already accepted");
+  }
+  if (invite.status === "canceled") {
+    return new DashboardAuthError(409, "Invite was revoked");
+  }
+  if (invite.expiresAt.getTime() <= now.getTime()) {
+    return new DashboardAuthError(410, "Invite expired");
+  }
+  if (invite.status !== "pending") {
+    return new DashboardAuthError(409, "Invite is no longer pending");
+  }
+  return null;
+}
+
+async function findInvite(
+  db: InviteAcceptanceReadDb,
+  organizationId: string,
+  inviteId: string,
+): Promise<InvitationRow | null> {
   const [invite] = await db
     .select()
     .from(invitation)
     .where(and(eq(invitation.organizationId, organizationId), eq(invitation.id, inviteId)))
     .limit(1);
-  if (!invite || invite.status !== "pending" || invite.expiresAt.getTime() <= now.getTime()) {
-    throw new DashboardAuthError(404, "Invite not found");
-  }
-  return invite;
+  return invite ?? null;
 }
 
 function assertPasswordLength(

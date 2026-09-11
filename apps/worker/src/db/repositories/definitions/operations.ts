@@ -822,7 +822,11 @@ export async function createWorkflowDefinition(
       .from(workflowDefinitions)
       .where(eq(workflowDefinitions.id, inserted.definitionId))
       .limit(1);
-    created = rows[0]!;
+    const readable = rows[0];
+    if (!readable) {
+      throw new WorkflowDefinitionStoreError(500, "Created definition was not readable");
+    }
+    created = readable;
   } catch (error) {
     if (isUniqueViolation(error)) {
       throw new WorkflowDefinitionStoreError(409, "Name already in use");

@@ -195,28 +195,49 @@ export function createAuthRepository(db: Db) {
             and organization_id = ${input.organizationId}
             and status = 'pending'
             and expires_at > ${input.now}
+            and role in ('owner', 'admin', 'member')
           for update
         ), created_user as (
           insert into "user" (id, email, name, email_verified)
           select ${input.userId}, ${input.userEmail}, ${input.userName}, true
           from pending
           where ${input.newPasswordHash}::text is not null
+          returning id
+        ), accepted_user as (
+          select id from created_user
+          union all
+          select existing.id
+          from pending
+          inner join "user" existing on existing.id = ${input.userId}
+          where ${input.newPasswordHash}::text is null
         ), created_account as (
           insert into account (id, user_id, account_id, provider_id, password)
-          select ${input.accountId}, ${input.userId}, ${input.userId}, 'credential', ${input.newPasswordHash}
-          from pending
+          select ${input.accountId}, accepted_user.id, accepted_user.id, 'credential', ${input.newPasswordHash}
+          from accepted_user
           where ${input.newPasswordHash}::text is not null
+          returning user_id
+        ), credential_ready as (
+          select user_id from created_account
+          union all
+          select id from accepted_user
+          where ${input.newPasswordHash}::text is null
         ), membership as (
           insert into member (id, organization_id, user_id, role)
-          select ${input.membershipId}, organization_id, ${input.userId}, role from pending
+          select ${input.membershipId}, pending.organization_id, credential_ready.user_id, pending.role
+          from pending
+          inner join credential_ready on credential_ready.user_id = ${input.userId}
           on conflict (organization_id, user_id) do update set role = case
             when excluded.role = 'owner' then 'owner'
             when excluded.role = 'admin' and member.role <> 'owner' then 'admin'
             else member.role
           end
+          returning user_id
         ), accepted as (
           update invitation i set status = 'accepted'
-          from pending p where i.id = p.id and i.status = 'pending'
+          from pending p, membership m
+          where i.id = p.id
+            and i.status = 'pending'
+            and m.user_id = ${input.userId}
           returning i.id
         )
         select exists(select 1 from accepted) as accepted
@@ -229,16 +250,19 @@ export function createAuthRepository(db: Db) {
       inviteId: string;
       now: Date;
       userId: string;
+      userEmail: string;
       membershipId: string;
     }): Promise<boolean> {
       const result = await db.execute(sql`
         with pending as (
-          select id, organization_id, role
+          select id, organization_id, role, email
           from invitation
           where id = ${input.inviteId}
             and organization_id = ${input.organizationId}
             and status = 'pending'
             and expires_at > ${input.now}
+            and role in ('owner', 'admin', 'member')
+            and lower(btrim(email)) = ${input.userEmail}
           for update
         ), membership as (
           insert into member (id, organization_id, user_id, role)
@@ -248,9 +272,13 @@ export function createAuthRepository(db: Db) {
             when excluded.role = 'admin' and member.role <> 'owner' then 'admin'
             else member.role
           end
+          returning user_id
         ), accepted as (
           update invitation i set status = 'accepted'
-          from pending p where i.id = p.id and i.status = 'pending'
+          from pending p, membership m
+          where i.id = p.id
+            and i.status = 'pending'
+            and m.user_id = ${input.userId}
           returning i.id
         )
         select exists(select 1 from accepted) as accepted
