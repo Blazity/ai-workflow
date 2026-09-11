@@ -45,7 +45,7 @@ export async function loadRepositoryInstructionSources(
   const [{ Sandbox }, { getSandboxCredentials }, { env }] = await Promise.all([
     import("@vercel/sandbox"),
     import("../../sandbox/credentials.js"),
-    import("../../config/env.js"),
+    import("../../infra/vcs-config.js"),
   ]);
   const sandbox = await Sandbox.get({
     sandboxId,

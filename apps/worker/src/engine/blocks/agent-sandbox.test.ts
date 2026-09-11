@@ -27,7 +27,7 @@ const mocks = vi.hoisted(() => ({
   resolveHarnessProfileVersion: vi.fn(),
 }));
 
-vi.mock("../../config/env.js", () => ({ env: mocks.env }));
+vi.mock("../../infra/vcs-config.js", () => ({ env: mocks.env }));
 vi.mock("@vercel/sandbox", () => ({
   Sandbox: { create: mocks.sandboxCreate, get: mocks.sandboxGet },
 }));
@@ -42,7 +42,7 @@ vi.mock("../../db/repositories/harness-profiles.js", () => ({
 vi.mock("../../sandbox/agents/index.js", () => ({
   createAgentAdapter: mocks.createAgentAdapter,
 }));
-vi.mock("../../services/vcs/adapters.js", () => ({
+vi.mock("../../engine/support/adapters.js", () => ({
   createAdapters: () => ({ runRegistry: { registerSandbox: mocks.registerSandbox } }),
 }));
 

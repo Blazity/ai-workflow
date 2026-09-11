@@ -25,9 +25,8 @@ describe("canonical run budget aggregation", () => {
   // would halt runs that the same definition completed before.
   it("prices Claude token-only usage from the model price under a cost cap", () => {
     const state = recordBudgetUsage(createRunBudgetState(), usage(), {
-      kind: "claude",
       price: PRICE,
-    });
+    }, "call-llm");
 
     expect(state.costKnown).toBe(true);
     expect(state.costUsd).toBeCloseTo(PRICED_USD, 8);
@@ -41,7 +40,7 @@ describe("canonical run budget aggregation", () => {
   it("prices a phase whose provider was never stated", () => {
     const state = recordBudgetUsage(createRunBudgetState(), usage(), {
       price: PRICE,
-    });
+    }, "call-llm");
 
     expect(state.costKnown).toBe(true);
     expect(state.costUsd).toBeCloseTo(PRICED_USD, 8);
@@ -56,9 +55,9 @@ describe("canonical run budget aggregation", () => {
       initial,
       usage({ tokens: { input: 1, cached_input: 0, output: 0 } }),
       {
-        kind: "codex",
         price: { input: 0, cached_input: 0, output: 0 },
       },
+      "implementation",
     );
 
     expect(state.tokensInput).toBe(Number.MAX_SAFE_INTEGER);

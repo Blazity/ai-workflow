@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import type { WorkflowDefinitionV2 } from "@shared/contracts";
 
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: {
     ENABLE_REVIEW_PHASE: false,
     AGENT_KIND: "claude",
@@ -48,7 +48,7 @@ import { loadWorkflowDefinitionFor } from "./definition-step.js";
 import { defaultWorkflowDefinitionV2 } from "../../workflow-definition/default.js";
 
 async function setEnv(partial: Record<string, unknown>) {
-  const mod = (await import("../../config/env.js")) as unknown as { env: Record<string, unknown> };
+  const mod = (await import("../../infra/vcs-config.js")) as unknown as { env: Record<string, unknown> };
   mod.env = { ...mod.env, ...partial };
 }
 

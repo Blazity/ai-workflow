@@ -1,5 +1,5 @@
 import { start } from "workflow/api";
-import { env } from "../../config/env.js";
+import { env } from "../../infra/vcs-config.js";
 import type { Db } from "../../db/client.js";
 import type { RunRegistryAdapter } from "../../adapters/run-registry/types.js";
 import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
@@ -10,14 +10,13 @@ import {
   getWorkflowDefinition,
   getWorkflowDefinitionVersion,
 } from "../../db/repositories/definitions.js";
-import { aiColumnMoveTarget } from "../tickets/move-targets.js";
-import { AWAITING_APPROVAL_LABEL } from "../tickets/labels.js";
+import { aiColumnMoveTarget } from "../tickets/index.js";
+import { AWAITING_APPROVAL_LABEL } from "../../engine/support/ticket-labels.js";
 import { logger } from "../../infra/logger.js";
-import { isActiveRunOwnerError } from "../run-lifecycle/run-control-errors.js";
-import { claimTicketRun } from "../dispatch/dispatch.js";
-import { ticketSubjectKey } from "../run-lifecycle/subject-key.js";
-import { updateTicketLabelsForRun } from "../tickets/ticket-label-mutation.js";
-import { moveTicketForRun } from "../tickets/ticket-transition.js";
+import { isActiveRunOwnerError } from "../../engine/support/run-control-errors.js";
+import { ticketSubjectKey } from "../../engine/support/subject-key.js";
+import { claimTicketRun } from "../dispatch/index.js";
+import { updateTicketLabelsForRun, moveTicketForRun } from "../tickets/index.js";
 import type { ApprovalRow } from "../../db/repositories/approvals.js";
 
 export type DispatchPlanApprovedResult =

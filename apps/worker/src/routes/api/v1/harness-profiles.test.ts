@@ -23,9 +23,9 @@ const state = vi.hoisted(() => ({
   repository: undefined as unknown,
 }));
 
-vi.mock("../../../config/env.js", () => ({ env: state.env }));
+vi.mock("../../../infra/vcs-config.js", () => ({ env: state.env }));
 vi.mock("../../../db/client.js", () => ({ getDb: () => state.db }));
-vi.mock("../../../auth-instance.js", () => ({
+vi.mock("../../../services/auth/auth-instance.js", () => ({
   auth: {
     api: {
       getSession: vi.fn(async () =>

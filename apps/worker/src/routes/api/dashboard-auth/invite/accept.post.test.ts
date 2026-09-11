@@ -15,7 +15,7 @@ const state = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../../../../config/env.js", () => ({
+vi.mock("../../../../infra/vcs-config.js", () => ({
   env: state.env,
 }));
 

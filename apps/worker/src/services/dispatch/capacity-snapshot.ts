@@ -10,7 +10,7 @@ import type { DispatchCapacityResponse } from "@shared/contracts";
 import { getDb } from "../../db/client.js";
 import { listQueued } from "../dispatch-queue/index.js";
 import { maxConcurrentAgents } from "../settings/index.js";
-import { createAdapters } from "../vcs/index.js";
+import { createAdapters } from "../../engine/support/adapters.js";
 import { capacityConsumerCount } from "./dispatch.js";
 
 export async function readDispatchCapacity(): Promise<DispatchCapacityResponse> {

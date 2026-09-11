@@ -38,7 +38,7 @@ import type { ResolvedHarnessRuntime } from "../../../sandbox/harness-runtime.js
 import type {
   PreSandboxRepositoryDiscovery,
   PreSandboxRepositoryScopeNarrowing,
-} from "../../../pre-sandbox/types.js";
+} from "../../pre-sandbox/types.js";
 import type { ResearchRepository } from "../../../sandbox/agents/types.js";
 import type { ReviewLedgerState } from "../../../adapters/vcs/types.js";
 import type { SettledThread } from "../../steps/review-ledger-settle.js";
@@ -243,8 +243,7 @@ export interface EngineCtx {
   recordUsage(
     label: string,
     usage: PhaseUsage | null,
-    provider: CostProviderKind | undefined,
-    model: string,
+    source: { provider: CostProviderKind | undefined; model: string },
     attempt?: number,
   ): void;
   /**
@@ -346,10 +345,11 @@ export function recordBlockPhaseUsage(
   model: string,
   execution?: BlockExecutionContext,
 ): void {
+  const source = { provider, model };
   if (execution?.attempt === undefined) {
-    ctx.recordUsage(label, usage, provider, model);
+    ctx.recordUsage(label, usage, source);
   } else {
-    ctx.recordUsage(label, usage, provider, model, execution.attempt);
+    ctx.recordUsage(label, usage, source, execution.attempt);
   }
   execution?.recordBudgetUsage?.(usage, model);
 }

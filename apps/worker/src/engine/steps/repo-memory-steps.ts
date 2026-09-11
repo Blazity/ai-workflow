@@ -9,7 +9,7 @@ import {
   type RepoMemoryDocKind,
   type RepoMemoryItem,
 } from "../../memory/repo-memory.js";
-import { orgSubjectKey, repoOwner, repoSubjectKey } from "../../services/run-lifecycle/subject-key.js";
+import { orgSubjectKey, repoOwner, repoSubjectKey } from "../support/subject-key.js";
 import { WORKSPACE_ROOT_DIR } from "../../sandbox/repo-workspace.js";
 import { configuredReplaySecrets } from "../../run-observability/configured-secrets.js";
 import { redactConfiguredSecretsInText } from "../../run-observability/sanitizer.js";
@@ -1065,7 +1065,7 @@ export async function distillRepoMemoryStep(
     // the read path keeps injecting an owner document that already exists,
     // because flipping a flag must not silently hide knowledge that is already
     // stored and already correct.
-    const { env } = await import("../../config/env.js");
+    const { env } = await import("../../infra/vcs-config.js");
     for (const group of env.ENABLE_ORG_MEMORY_PROMOTION ? groupByOwner(states) : []) {
       if (group.members.length < PROMOTION_MIN_REPOSITORIES) continue;
       // Re-read rather than reuse the merge results above, so promotion
@@ -1407,7 +1407,7 @@ export async function captureDefaultBranchFilesStep(
      * rather than carried in the step input, so no credential crosses a step
      * boundary. */
     let providers: Awaited<
-      ReturnType<typeof import("../../services/vcs/vcs-runtime.js")["buildSandboxProviderConfigs"]>
+      ReturnType<typeof import("../support/vcs-runtime.js")["buildSandboxProviderConfigs"]>
     > | null = null;
     const listTree = async (localPath: string, ref: string) =>
       sandbox.runCommand("git", [
@@ -1462,7 +1462,7 @@ export async function captureDefaultBranchFilesStep(
           // first agent block, so that damage would stand for the whole run, and
           // reading history is exactly how a coding agent understands a
           // repository. A memory-quality fix must not degrade the agent.
-          const { buildSandboxProviderConfigs } = await import("../../services/vcs/vcs-runtime.js");
+          const { buildSandboxProviderConfigs } = await import("../support/vcs-runtime.js");
           if (providers === null) {
             // Inside the deadline like every other round trip here: for GitHub
             // this resolves the commit identity over two API calls, and a hung

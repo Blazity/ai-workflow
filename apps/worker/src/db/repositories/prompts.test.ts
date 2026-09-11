@@ -4,7 +4,7 @@ import { DEFAULT_AGENT_PROMPTS } from "@shared/prompts";
 import type { Db } from "../client.js";
 import { promptLibrary, promptLibraryVersions } from "../schema.js";
 import { createTestDb } from "../test-db.js";
-import { DashboardAuthError } from "../../services/auth/users-read.js";
+import { DashboardAuthError } from "@shared/contracts";
 import {
   archivePrompt,
   createPrompt,

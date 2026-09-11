@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
   notifyForTicket: vi.fn(),
 }));
 
-vi.mock("../vcs/adapters.js", () => ({
+vi.mock("../../engine/support/adapters.js", () => ({
   createAdapters: (...args: unknown[]) => mocks.createAdapters(...args),
 }));
 

@@ -1,14 +1,17 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+
+// Verification is deterministic engine support shared by delivery services.
 import {
   DEFAULT_WEBHOOK_SIGNATURE_HEADER,
   DEFAULT_WEBHOOK_TIMESTAMP_HEADER,
   DEFAULT_WEBHOOK_TOKEN_HEADER,
   type WebhookAuthScheme,
+  type WebhookVerifiedWith,
 } from "@shared/contracts";
 
 /** Which of an endpoint's two live secrets authenticated a delivery. Surfaced to
  *  the operator so a rotation window can be watched to completion. */
-export type WebhookVerifiedWith = "current" | "previous";
+export type { WebhookVerifiedWith } from "@shared/contracts";
 
 /** One secret the endpoint currently accepts. Structurally identical to what the
  *  endpoint store's decryptCandidateSecrets returns; declared here so signature

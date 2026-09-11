@@ -17,7 +17,7 @@ vi.mock("../../db/repositories/runs/telemetry.js", () => ({
 vi.mock("../../db/repositories/clarifications.js", () => ({
   getClarification: (...args: unknown[]) => mocks.getClarification(...args),
 }));
-vi.mock("../../services/overview/collect-run-detail.js", () => ({
+vi.mock("../../engine/support/collect-run-detail.js", () => ({
   captureRunStepsBestEffort: (...args: unknown[]) => mocks.captureRunSteps(...args),
   sanitizeRunStepsForDiagnosticError: (steps: unknown) => steps,
 }));

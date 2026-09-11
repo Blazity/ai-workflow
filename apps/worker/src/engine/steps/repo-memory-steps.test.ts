@@ -57,7 +57,7 @@ vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.getSandbox } }));
 vi.mock("../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
 // vcs-urls.js stays real: it is pure string building, and asserting the argv the
 // fetch actually issues is the point of the fallback tests.
-vi.mock("../../services/vcs/vcs-runtime.js", () => ({
+vi.mock("../../engine/support/vcs-runtime.js", () => ({
   buildSandboxProviderConfigs: mocks.buildSandboxProviderConfigs,
 }));
 
@@ -69,7 +69,7 @@ vi.mock("../../infra/logger.js", () => ({
   },
 }));
 vi.mock("../../db/client.js", () => ({ getDb: () => mocks.db }));
-vi.mock("../../config/env.js", () => ({ env: mocks.env }));
+vi.mock("../../infra/vcs-config.js", () => ({ env: mocks.env }));
 vi.mock("../llm.js", () => ({ generateStructured: mocks.generateStructured }));
 // Passthrough by default. `prepareMemoryContent` wraps its whole redaction call,
 // this one included, so failing it here is what drives the null-result branch.
@@ -120,7 +120,7 @@ import { and, eq } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import { agentMemoryDocuments } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
-import { orgSubjectKey, repoOwner, repoSubjectKey } from "../../services/run-lifecycle/subject-key.js";
+import { orgSubjectKey, repoOwner, repoSubjectKey } from "../../engine/support/subject-key.js";
 import {
   parseRepoMemoryDocument,
   renderRepoMemoryDocument,

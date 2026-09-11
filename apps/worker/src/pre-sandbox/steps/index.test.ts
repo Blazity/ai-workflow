@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({
   repoSelectionStep: vi.fn(),
 }));
 
-vi.mock("./repo-selection.js", () => ({
+vi.mock("../../engine/pre-sandbox/steps/repo-selection.js", () => ({
   repoSelectionStep: mocks.repoSelectionStep,
 }));
 

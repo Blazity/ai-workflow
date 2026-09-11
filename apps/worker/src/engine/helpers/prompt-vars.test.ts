@@ -1,12 +1,14 @@
 import { describe, it, expect } from "vitest";
 import {
   buildPromptVariables,
+} from "./prompt-output.js";
+import type { WorkflowDefinitionNode } from "@shared/contracts";
+import {
+  PROMPT_VARIABLES,
   substitutePromptVariables,
   substituteNodePromptParams,
   VARIABLE_PARAM_KEYS,
-} from "./prompt-vars.js";
-import type { WorkflowDefinitionNode } from "@shared/contracts";
-import { PROMPT_VARIABLES } from "@shared/prompts";
+} from "@shared/prompts";
 import type { AgentWorkflowInput } from "../agent-input.js";
 import type { WorkspacePublicationResult } from "../steps/workspace-publication.js";
 import type { WorkspaceRepositoryInput } from "../../sandbox/repo-workspace.js";

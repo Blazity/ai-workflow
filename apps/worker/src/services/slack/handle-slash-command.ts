@@ -19,7 +19,7 @@ import {
 } from "../settings/index.js";
 import { observeProviderWebhook } from "../system/index.js";
 import { TriggerHttpError } from "../../infra/trigger-http-error.js";
-import { createAdapters } from "../vcs/index.js";
+import { createAdapters } from "../../engine/support/adapters.js";
 import { parseCommand, type ParsedCommand } from "./commands.js";
 import { HELP_TEXT } from "./format.js";
 import {

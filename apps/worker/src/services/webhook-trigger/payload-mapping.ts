@@ -1,5 +1,8 @@
-import { isSafeWorkflowInputName, type JsonValue } from "@shared/contracts";
-import type { SupportCase } from "../../engine/agent-input.js";
+import {
+  isSafeWorkflowInputName,
+  type JsonValue,
+  type WebhookTriggerEntry,
+} from "@shared/contracts";
 
 /**
  * Block-facing shape of one webhook delivery. Every field is a string because
@@ -7,19 +10,7 @@ import type { SupportCase } from "../../engine/agent-input.js";
  * sends a number, a boolean, an object or nothing at all must still produce a
  * usable entry instead of failing the delivery.
  */
-export interface WebhookTriggerEntry {
-  subject: string;
-  description: string;
-  requester: string;
-  priority: string;
-  /** Optional provider-normalized support case. Generic webhooks omit this
-   * field, preserving the original trigger contract. */
-  supportCase?: SupportCase;
-  /** The delivered body, unchanged, so a workflow can read anything the
-   *  configured mappings did not name. JSON-shaped because it is persisted as
-   *  jsonb and carried through a Workflow input, both of which must serialize. */
-  payload: JsonValue;
-}
+export type { WebhookTriggerEntry } from "@shared/contracts";
 
 /** Payload-shaped node-config keys. The endpoint row owns the auth keys, which
  * have no meaning for mapping. */

@@ -3,7 +3,7 @@ import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import type { ManualDispatchPullRequestSnapshot } from "../../adapters/vcs/types.js";
 import type { PrTriggerPayload } from "../../engine/agent-input.js";
 
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: {},
   getConfiguredVcsProviders: () => [
     {
@@ -21,7 +21,7 @@ vi.mock("../../config/env.js", () => ({
   ],
 }));
 
-vi.mock("../vcs/vcs-bot-login.js", () => ({
+vi.mock("../vcs/index.js", () => ({
   getVcsBotLogin: () => "workflow-bot",
 }));
 
@@ -38,7 +38,7 @@ vi.mock("../../db/repositories/definitions.js", async (importOriginal) => ({
   getDeployedWorkflowDefinitionVersion: mocks.getDeployedWorkflowDefinitionVersion,
   getWorkflowDefinitionVersion: vi.fn(),
 }));
-vi.mock("../vcs/vcs-runtime.js", () => ({
+vi.mock("../../engine/support/vcs-runtime.js", () => ({
   createRepositoryVCS: () => ({
     getManualDispatchPullRequest: mocks.getManualDispatchPullRequest,
   }),

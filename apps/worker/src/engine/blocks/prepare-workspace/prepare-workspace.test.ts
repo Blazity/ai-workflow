@@ -38,7 +38,7 @@ const mocks = vi.hoisted(() => ({
   runRepositorySetup: vi.fn(),
 }));
 
-vi.mock("../../../config/env.js", () => ({
+vi.mock("../../../infra/vcs-config.js", () => ({
   env: mocks.env,
   getConfiguredVcsProviders: () => [{ kind: "github" }],
 }));
@@ -79,7 +79,7 @@ vi.mock("../pre-pr-checks.js", async (importOriginal) => ({
 vi.mock("../../../sandbox/agents/index.js", () => ({
   createAgentAdapter: mocks.createAgentAdapter,
 }));
-vi.mock("../../../services/vcs/vcs-runtime.js", () => ({
+vi.mock("../../../engine/support/vcs-runtime.js", () => ({
   buildSandboxProviderConfigs: mocks.buildSandboxProviderConfigs,
   createRepositoryVCS: () => ({
     getBranchSha: mocks.getBranchSha,
@@ -100,7 +100,7 @@ vi.mock("../../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
 vi.mock("../../../db/repositories/runs.js", () => ({
   listWorkflowOwnedBranchesForTicket: mocks.listWorkflowOwnedBranchesForTicket,
 }));
-vi.mock("../../../services/vcs/adapters.js", () => ({
+vi.mock("../../../engine/support/adapters.js", () => ({
   createAdapters: () => ({ runRegistry: { registerSandbox: mocks.registerSandbox } }),
 }));
 vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.sandboxGet } }));

@@ -9,7 +9,7 @@ import {
   RETIRED_SCHEMA_MESSAGE,
 } from "@shared/contracts";
 import { eq } from "drizzle-orm";
-import { env, getConfiguredVcsProviders } from "../../config/env.js";
+import { env, getConfiguredVcsProviders } from "../../infra/vcs-config.js";
 import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
@@ -23,18 +23,16 @@ import type { Db } from "../../db/client.js";
 import { workflowDefinitions } from "../../db/schema.js";
 import { findWorkflowOwnedPullRequest } from "../../db/repositories/runs.js";
 import {
+  isGateCheckName,
   isConfiguredTriggerRepository,
+  isRepoAllowedForScope,
   selectEligibleEvent,
   triggerNodeParams,
-} from "../dispatch/dispatch-trigger.js";
-import { isRepoAllowedForScope } from "../dispatch/repo-allowlist.js";
-import { prSubjectKey, ticketSubjectKey } from "../run-lifecycle/subject-key.js";
-import { getVcsBotLogin } from "../vcs/vcs-bot-login.js";
-import type {
-  TriggerEvent,
-} from "../dispatch/trigger-events.js";
-import { isGateCheckName } from "../dispatch/trigger-events.js";
-import { createRepositoryVCS } from "../vcs/vcs-runtime.js";
+  type TriggerEvent,
+} from "../dispatch/index.js";
+import { prSubjectKey, ticketSubjectKey } from "../../engine/support/subject-key.js";
+import { createRepositoryVCS } from "../../engine/support/vcs-runtime.js";
+import { getVcsBotLogin } from "../vcs/index.js";
 import { loadPostPrGateConfig } from "../../post-pr-gate/config.js";
 import {
   getDeployedWorkflowDefinitionVersion,

@@ -1,4 +1,4 @@
-import { env } from "../../config/env.js";
+import { env } from "../../infra/vcs-config.js";
 import { and, eq, isNull, or, sql } from "drizzle-orm";
 import {
   IssueTrackerNotFoundError,
@@ -6,13 +6,13 @@ import {
 } from "../../adapters/issue-tracker/types.js";
 import type { Db } from "../../db/client.js";
 import { workflowRuns } from "../../db/schema.js";
-import { ticketPageUrl } from "../publication/dashboard-links.js";
+import { ticketPageUrl } from "../../engine/support/dashboard-links.js";
 import { logger } from "../../infra/logger.js";
 import {
   answerClarificationAndResume,
   MAX_ANSWER_LENGTH,
-  retireClarificationForGoneTicket,
 } from "./answer-core.js";
+import { retireClarificationForGoneTicket } from "./retirement.js";
 import {
   CLARIFICATION_NUDGE_MARKER,
   formatAlreadyAnsweredComment,

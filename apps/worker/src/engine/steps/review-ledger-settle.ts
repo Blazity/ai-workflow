@@ -173,7 +173,7 @@ export async function settleReviewLedgerStep(
   input: SettleReviewLedgerStepInput,
 ): Promise<SettledThread[]> {
   "use step";
-  const { createRepositoryVCS } = await import("../../services/vcs/vcs-runtime.js");
+  const { createRepositoryVCS } = await import("../support/vcs-runtime.js");
   // Absent threadIds mean the second verification pass never ran, so the default
   // (trust every quote) applies. A present list is that pass's verdict against
   // the tree that was pushed: anything outside it gets the degraded reply

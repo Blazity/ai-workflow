@@ -1,8 +1,9 @@
 import { createError, getHeaders, type H3Event } from "h3";
+import { DashboardAuthError } from "@shared/contracts";
 import { dashboardOrganizationSettings } from "../settings/index.js";
-import { auth } from "../../auth-instance.js";
+import { auth } from "./auth-instance.js";
 import { getDb } from "../../db/client.js";
-import { getDashboardActor, DashboardAuthError } from "./users-read.js";
+import { getDashboardActor } from "./users-read.js";
 
 export async function requireDashboardActor(event: H3Event) {
   const session = await auth.api.getSession({ headers: headersFromEvent(event) });

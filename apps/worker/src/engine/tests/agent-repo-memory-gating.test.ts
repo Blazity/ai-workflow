@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 // models.ts validates the worker env at module scope and the test process has no
 // deployment env. Only FALLBACK_MODELS is read here and it is a plain const.
-vi.mock("../../config/env.js", () => ({ env: {} }));
+vi.mock("../../infra/vcs-config.js", () => ({ env: {} }));
 
 import { FALLBACK_MODELS } from "../../workflow-definition/models.js";
 import { computeUsageTotals, type PhaseUsage } from "../../sandbox/usage.js";

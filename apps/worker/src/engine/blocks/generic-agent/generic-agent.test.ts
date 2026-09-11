@@ -410,16 +410,14 @@ describe("generic_agent execute", () => {
       1,
       "Agent Blk_One",
       null,
-      "claude",
-      "claude-model",
+      { provider: "claude", model: "claude-model" },
       1,
     );
     expect(ctx.recordUsage).toHaveBeenNthCalledWith(
       2,
       "Agent blk-one",
       null,
-      "claude",
-      "claude-model",
+      { provider: "claude", model: "claude-model" },
       1,
     );
   });

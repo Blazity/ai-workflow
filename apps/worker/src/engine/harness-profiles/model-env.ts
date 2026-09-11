@@ -1,5 +1,5 @@
 import { resolveModelDefaults } from "@shared/harness";
-import { env as parsedEnv } from "../../config/env.js";
+import { env as parsedEnv } from "../../infra/vcs-config.js";
 
 const modelDefaults = resolveModelDefaults({
   claude: parsedEnv.CLAUDE_MODEL,

@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // exercise multi-page pagination with a handful of seeded attempts instead
 // of hundreds, while staying well above what any other tool in this file
 // returns.
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: {
     MCP_SERVER_VERSION: "0.1.0",
     MCP_MAX_RESULT_BYTES: 65_536,

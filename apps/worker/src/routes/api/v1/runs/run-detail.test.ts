@@ -10,7 +10,7 @@ const state = vi.hoisted(() => ({
   storedReport: null as RunAnalysisReport | null,
 }));
 
-vi.mock("../../../../config/env.js", () => ({ env: { JIRA_BASE_URL: "https://jira.example", DASHBOARD_ORIGIN: "https://dash.example" } }));
+vi.mock("../../../../infra/vcs-config.js", () => ({ env: { JIRA_BASE_URL: "https://jira.example", DASHBOARD_ORIGIN: "https://dash.example" } }));
 vi.mock("../../../../db/client.js", () => ({ getDb: () => ({}) }));
 vi.mock("../../../../services/auth/request-context.js", () => ({
   requireDashboardActor: vi.fn(async () => {
@@ -29,7 +29,7 @@ vi.mock("../../../../services/overview/resolve-run-detail.js", () => ({
     return state.worldResult;
   }),
 }));
-vi.mock("../../../../services/overview/collect-run-detail.js", () => ({ collectRunDetail: vi.fn() }));
+vi.mock("../../../../engine/support/collect-run-detail.js", () => ({ collectRunDetail: vi.fn() }));
 vi.mock("../../../../db/repositories/clarifications.js", () => ({ getClarificationForRun: vi.fn(async () => null), serializeClarification: vi.fn() }));
 vi.mock("../../../../db/repositories/runs/run-analysis.js", () => ({ getRunAnalysisReport: vi.fn(async () => state.storedReport) }));
 

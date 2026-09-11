@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
+import { DashboardAuthError } from "@shared/contracts";
 
-import type { Auth } from "../../auth.js";
+import type { Auth } from "./auth-core.js";
 import type { Db } from "../../db/client.js";
 import { createAuthRepository } from "../../db/repositories/auth.js";
 import {
@@ -9,7 +10,6 @@ import {
   organization,
 } from "../../db/schema.js";
 import type { DashboardRole } from "./roles.js";
-import { DashboardAuthError } from "./users-read.js";
 
 type AuthContext = Awaited<Auth["$context"]>;
 type ExistingUserWithAccounts = NonNullable<

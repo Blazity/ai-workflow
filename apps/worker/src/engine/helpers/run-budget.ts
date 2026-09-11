@@ -246,10 +246,11 @@ export function recordBudgetUsage(
   state: RunBudgetState,
   usage: PhaseUsage | null,
   provider: CostProvider | null,
+  phase: string,
 ): RunBudgetState {
   const totals = aggregateUsage(
-    { usage },
-    { usage: provider ?? undefined },
+    { [phase]: usage },
+    { [phase]: provider ?? undefined },
     {
       costNanos: state.costNanos,
       costKnown: state.costKnown,

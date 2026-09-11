@@ -1,6 +1,5 @@
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
 import { buildVcsUrls, gitAuthArgs } from "../infra/vcs-urls.js";
-import type { EngineCtx } from "../engine/blocks/support/types.js";
 import type { SelectedRepositoryPromptContext } from "./context.js";
 import {
   configureRepositoryExcludes,
@@ -11,6 +10,7 @@ import {
   WORKSPACE_MANIFEST_PATH,
   WORKSPACE_REPOS_DIR,
   buildProviderRepoSlug,
+  type WorkspaceManifest,
   type WorkspaceManifestV2,
   type WorkspaceRepoV2,
   type WorkspaceRepositoryInput,
@@ -198,15 +198,14 @@ export async function materializeResearchRepositories(input: {
 }
 
 export function promoteAgentSandboxToWorkspace(
-  ctx: Pick<
-    EngineCtx,
-    | "agentSandboxIds"
-    | "sandboxIds"
-    | "sandboxId"
-    | "workspaceManifest"
-    | "selectedRepositories"
-    | "repositoryContexts"
-  >,
+  ctx: {
+    agentSandboxIds: Record<string, string>;
+    sandboxIds: Set<string>;
+    sandboxId: string | null;
+    workspaceManifest: WorkspaceManifest | null;
+    selectedRepositories: WorkspaceRepositoryInput[];
+    repositoryContexts: SelectedRepositoryPromptContext[];
+  },
   sandboxId: string,
   state: {
     manifest: WorkspaceManifestV2;

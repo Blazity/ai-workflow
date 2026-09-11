@@ -15,7 +15,7 @@ import {
   workflowDefinitionVersions,
 } from "../schema.js";
 import { canEditPromptLibrary, type DashboardRole } from "../../services/auth/roles.js";
-import { DashboardAuthError } from "../../services/auth/users-read.js";
+import { DashboardAuthError } from "@shared/contracts";
 import {
   inspectJsonSchema202012,
   validateJsonSchemaValue,

@@ -1,68 +1,35 @@
-/**
- * A run's life from reservation to cancellation: ownership, start, stall watchdog, drain and reconcile.
- *
- * The declared interface of this cluster. Cross-cluster imports must target
- * this file; the deep imports that predate the rule are listed in
- * scripts/gates/cluster-deep-imports.json and that list only shrinks.
- */
-export {
-  ActiveRunOwnerError,
-  assertActiveRunOwner,
-  assertActiveRunOwnerState,
-} from "./active-run-owner.js";
-export type {
-  ActiveRunOwner,
-} from "./active-run-owner.js";
-export {
-  cancelRun,
-  cancelRunDetailed,
-  cancelRunForOperator,
-  cancelSubjectRun,
-} from "./cancel-run.js";
+/** Cross-cluster cancellation surface. Load the stateful implementation only on use. */
 export type {
   CancelRunForOperatorResult,
   CancelRunTarget,
 } from "./cancel-run.js";
-export {
-  cancelRunAsOperator,
-} from "./cancel-run-request.js";
-export {
-  reconcileRuns,
-} from "./reconcile.js";
-export {
-  ACTIVE_RUN_OWNER_ERROR_SENTINEL,
-  isActiveRunOwnerError,
-} from "./run-control-errors.js";
-export {
-  emptyRunDetail,
-  readRunDetail,
-} from "./run-detail-read.js";
-export type {
-  RunDetailPayload,
-} from "./run-detail-read.js";
-export {
-  listDashboardRuns,
-  listLiveRuns,
-  listWorkflowAggregates,
-  readRunBlockStatuses,
-} from "./run-reads.js";
-export type {
-  DashboardRunsPage,
-} from "./run-reads.js";
-export {
-  RunObservationStoreError,
-  readRunReplay,
-  readRunReplayAttempt,
-} from "./run-replay-read.js";
-export {
-  STARTUP_DEADLINE_MS,
-} from "./run-start-constants.js";
-export {
-  orgSubjectKey,
-  prSubjectKey,
-  repoOwner,
-  repoSubjectKey,
-  scheduleSubjectKey,
-  ticketSubjectKey,
-  webhookSubjectKey,
-} from "./subject-key.js";
+
+export async function cancelRun(
+  ...args: Parameters<typeof import("./cancel-run.js").cancelRun>
+) {
+  return (await import("./cancel-run.js")).cancelRun(...args);
+}
+
+export async function cancelRunForOperator(
+  ...args: Parameters<typeof import("./cancel-run.js").cancelRunForOperator>
+) {
+  return (await import("./cancel-run.js")).cancelRunForOperator(...args);
+}
+
+export async function cancelRunDetailed(
+  ...args: Parameters<typeof import("./cancel-run.js").cancelRunDetailed>
+) {
+  return (await import("./cancel-run.js")).cancelRunDetailed(...args);
+}
+
+export async function cancelSubjectRun(
+  ...args: Parameters<typeof import("./cancel-run.js").cancelSubjectRun>
+) {
+  return (await import("./cancel-run.js")).cancelSubjectRun(...args);
+}
+
+export async function reconcileRuns(
+  ...args: Parameters<typeof import("./reconcile.js").reconcileRuns>
+) {
+  return (await import("./reconcile.js")).reconcileRuns(...args);
+}

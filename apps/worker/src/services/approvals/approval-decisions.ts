@@ -22,7 +22,7 @@ import {
 import { dashboardUserLabel } from "../../pre-pr-checks/store.js";
 import { resolveAwaitingRun } from "../telemetry/index.js";
 import { maxConcurrentAgents } from "../settings/index.js";
-import { createAdapters } from "../vcs/index.js";
+import { createAdapters } from "../../engine/support/adapters.js";
 import { dispatchPlanApproved } from "./dispatch.js";
 
 /**

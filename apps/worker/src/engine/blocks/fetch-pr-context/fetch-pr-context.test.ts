@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   env: { REVIEW_LEDGER_ENABLED: false },
 }));
 
-vi.mock("../../../services/vcs/vcs-runtime.js", () => ({
+vi.mock("../../../engine/support/vcs-runtime.js", () => ({
   createRepositoryVCS: mocks.createRepositoryVCS,
 }));
 
@@ -28,7 +28,7 @@ vi.mock("../../../adapters/vcs/repository-directory.js", () => ({
   }),
 }));
 
-vi.mock("../../../config/env.js", () => ({
+vi.mock("../../../infra/vcs-config.js", () => ({
   getConfiguredVcsProviders: () => [{ kind: "github" }, { kind: "gitlab" }],
   env: mocks.env,
 }));

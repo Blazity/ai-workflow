@@ -5,8 +5,8 @@ import {
   selectable,
 } from "@shared/harness";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
-import { env } from "../config/env.js";
-import { resolveVcsBotLogin } from "../services/vcs/vcs-bot-identity.js";
+import { env } from "../infra/vcs-config.js";
+import { resolveVcsBotLogin } from "../adapters/vcs/vcs-bot-identity.js";
 import {
   buildWorkflowBlockRegistry,
   type WorkflowBlockRegistryContext,
@@ -43,7 +43,7 @@ export async function fetchTicketStatuses(
 ): Promise<Array<{ id: string; name: string }>> {
   try {
     const adapter =
-      issueTracker ?? (await import("../services/vcs/adapters.js")).createAdapters().issueTracker;
+      issueTracker ?? (await import("../engine/support/adapters.js")).createAdapters().issueTracker;
     return (await adapter.listStatuses?.()) ?? [];
   } catch {
     // The editor remains usable during provider outages. Passing an empty list

@@ -4,7 +4,7 @@ import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js"
 import { PostgresRunRegistry } from "../../db/repositories/active-runs.js";
 import type { Db } from "../../db/client.js";
 import { clarificationRequests } from "../../db/schema.js";
-import { cancelRunForOperator } from "../run-lifecycle/cancel-run.js";
+import { cancelRunForOperator } from "../run-lifecycle/index.js";
 import { logger } from "../../infra/logger.js";
 import { formatClarificationResumeFailedComment } from "./comment-format.js";
 

@@ -19,7 +19,7 @@ import {
   preflightManualDispatch,
 } from "../manual-dispatch/index.js";
 import { maxConcurrentAgents } from "../settings/index.js";
-import { createAdapters } from "../vcs/index.js";
+import { createAdapters } from "../../engine/support/adapters.js";
 import { resolveWorkflowDefinitionActor } from "./definition-authoring.js";
 
 /** Would this dispatch start, and what would it start against? No run, no

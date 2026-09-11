@@ -1,8 +1,9 @@
 import { createAppAuth } from "@octokit/auth-app";
 import { and, desc, eq, gte, isNull, sql } from "drizzle-orm";
 import type { SystemHealthResponse } from "@shared/contracts";
+import { FIRST_SLICE_TOOLS } from "@shared/contracts";
 import { resolveModelDefaults } from "@shared/harness";
-import { env } from "../../config/env.js";
+import { env } from "../../infra/vcs-config.js";
 import { JiraAdapter } from "../../adapters/issue-tracker/jira.js";
 import { getDb } from "../../db/client.js";
 import {
@@ -10,8 +11,7 @@ import {
   webhookTriggerEndpoints,
   webhookTriggerRejectionCounters,
 } from "../../db/schema.js";
-import { buildOctokit } from "../vcs/github-auth.js";
-import { MCP_CONTRACT_ARTIFACT } from "../../mcp/contract-artifact.js";
+import { buildOctokit } from "../../adapters/vcs/github-auth.js";
 import {
   collectSystemHealth,
   PublicHealthProbeError,
@@ -257,7 +257,8 @@ export function probesForEnvironment(config: SystemHealthConfig): SystemHealthPr
 
   if (config.mcpEnabled) {
     probes["mcp.contract"] = async () => {
-      if (MCP_CONTRACT_ARTIFACT.tools.length === 0) {
+      const toolCount: number = FIRST_SLICE_TOOLS.length;
+      if (toolCount === 0) {
         throw new PublicHealthProbeError("MCP contract has no tools.");
       }
     };

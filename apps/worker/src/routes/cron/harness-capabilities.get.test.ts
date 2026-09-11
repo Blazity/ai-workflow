@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   prewarm: vi.fn(),
 }));
 
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: { CRON_SECRET: "cron-secret" },
 }));
 vi.mock("../../db/client.js", () => ({

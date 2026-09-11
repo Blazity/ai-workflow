@@ -1,5 +1,5 @@
 import type { IssueTrackerMoveTarget } from "../../adapters/issue-tracker/types.js";
-import type { TicketTransitionOwner } from "../../services/tickets/ticket-transition.js";
+import type { TicketTransitionOwner } from "../support/ticket-transition.js";
 
 export async function moveTicketStep(
   ticketKey: string,
@@ -8,8 +8,8 @@ export async function moveTicketStep(
 ): Promise<void> {
   "use step";
   const { getDb } = await import("../../db/client.js");
-  const { createAdapters } = await import("../../services/vcs/adapters.js");
-  const { moveTicketForRun } = await import("../../services/tickets/ticket-transition.js");
+  const { createAdapters } = await import("../support/adapters.js");
+  const { moveTicketForRun } = await import("../support/ticket-transition.js");
   await moveTicketForRun({
     db: getDb(),
     issueTracker: createAdapters().issueTracker,

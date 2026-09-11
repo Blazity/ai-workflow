@@ -24,10 +24,10 @@ const mocks = vi.hoisted(() => ({
   assertActiveRunOwner: vi.fn(),
 }));
 
-vi.mock("../../services/vcs/adapters.js", () => ({
+vi.mock("../../engine/support/adapters.js", () => ({
   createAdapters: () => ({ issueTracker: { postComment: mocks.postComment } }),
 }));
-vi.mock("../../services/vcs/vcs-runtime.js", () => ({ createRepositoryVCS: mocks.createRepositoryVCS }));
+vi.mock("../../engine/support/vcs-runtime.js", () => ({ createRepositoryVCS: mocks.createRepositoryVCS }));
 vi.mock("../../db/client.js", () => ({ getDb: mocks.getDb }));
 vi.mock("../../db/repositories/runs.js", () => ({
   listWorkflowOwnedBranchesForTicket: mocks.listWorkflowOwnedBranchesForTicket,
@@ -67,9 +67,9 @@ vi.mock("../../infra/logger.js", () => ({
 // fetch_pr_context reads the review ledger flag inside its step, and the real
 // env module validates every Jira/VCS variable on import, which this suite does
 // not set.
-vi.mock("../../config/env.js", () => ({ env: { REVIEW_LEDGER_ENABLED: false } }));
-vi.mock("../../services/vcs/github-auth.js", () => ({ buildOctokit: mocks.buildOctokit }));
-vi.mock("../../services/run-lifecycle/active-run-owner.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({ env: { REVIEW_LEDGER_ENABLED: false } }));
+vi.mock("../../adapters/vcs/github-auth.js", () => ({ buildOctokit: mocks.buildOctokit }));
+vi.mock("../../engine/support/active-run-owner.js", () => ({
   assertActiveRunOwner: (...args: any[]) => mocks.assertActiveRunOwner(...args),
 }));
 
@@ -78,8 +78,8 @@ import type {
   WorkspaceRepositoryInput,
 } from "../../sandbox/repo-workspace.js";
 import { emptyPrePrCheckConfig } from "../../pre-pr-checks/config.js";
-import { isRepoAllowed, filterAllowedRepositories } from "../../services/dispatch/repo-allowlist.js";
-import { AI_WORKFLOW_COMMENT_MARKER } from "../../services/vcs/vcs-bot-identity.js";
+import { isRepoAllowed, filterAllowedRepositories } from "../../engine/support/repo-allowlist.js";
+import { AI_WORKFLOW_COMMENT_MARKER } from "../../adapters/vcs/vcs-bot-identity.js";
 import {
   createRepositoryDirectory,
   createRepositoryDirectoryForProviders,

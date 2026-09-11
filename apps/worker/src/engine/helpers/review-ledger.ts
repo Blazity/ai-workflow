@@ -10,7 +10,12 @@ import type {
   ReviewThreadTarget,
   SettleReviewThreadAction,
 } from "../../adapters/vcs/types.js";
-import { isReviewLedgerWorkItem, reviewLedgerMarker } from "../../services/vcs/vcs-bot-identity.js";
+import {
+  isReviewLedgerWorkItem,
+  reviewLedgerMarker,
+  selectReviewLedgerWorkItems as selectWorkItems,
+} from "../../adapters/vcs/vcs-bot-identity.js";
+export { selectReviewLedgerWorkItems as selectWorkItems } from "../../adapters/vcs/vcs-bot-identity.js";
 import type { ResearchResult } from "../../sandbox/agents/types.js";
 import type { ExecutionErrorCategory } from "../../workflow-definition/interpreter.js";
 import type { AgentWorkflowInput } from "../agent-input.js";
@@ -32,10 +37,6 @@ import type { JsonValue } from "@shared/contracts";
  * to: that drift is exactly what once made the publish guard demand a
  * disposition for the bot's own run-summary note.
  */
-export function selectWorkItems(feed: ReviewThreadFeed): ReviewThread[] {
-  return feed.threads.filter((thread) => isReviewLedgerWorkItem(thread));
-}
-
 // Inline evidence has to sit near the commented line, so a model cannot point
 // at an unrelated sentence elsewhere in the same file and call it a fix.
 const EVIDENCE_LINE_WINDOW = 40;

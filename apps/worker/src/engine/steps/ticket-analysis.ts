@@ -1,5 +1,5 @@
 /* eslint-disable max-lines, max-lines-per-function */
-import { ticketRunUrl } from "../../services/publication/dashboard-links.js";
+import { ticketRunUrl } from "../support/dashboard-links.js";
 import type { TicketEvent } from "../../adapters/messaging/types.js";
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
 import { type WorkflowExecutionLogEvent } from "../../workflow-definition/interpreter.js";
@@ -7,7 +7,7 @@ import { configuredReplaySecrets } from "../../run-observability/configured-secr
 import { sanitizeReplayValue } from "../../run-observability/sanitizer.js";
 import { type AgentWorkflowInput } from "../agent-input.js";
 import type { ActiveRunOwner, TicketTransitionOwner } from "../internal/ports.js";
-import { analysisCommentMarker, buildApprovedPlanAnalysisReport, buildResearchAnalysisReport, formatPublishedAnalysisComment, formatResearchAnalysisComment, hasAnalysisComment } from "../../run-analysis/report.js";
+import { analysisCommentMarker, buildApprovedPlanAnalysisReport, buildResearchAnalysisReport, formatPublishedAnalysisComment, formatResearchAnalysisComment, hasAnalysisComment } from "../support/run-analysis-report.js";
 import { isRunControlError } from "../helpers/run-control-error.js";
 import { errorMessage } from "../helpers/repository-failure.js";
 import type { RunAnalysisReport } from "@shared/contracts";

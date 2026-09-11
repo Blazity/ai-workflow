@@ -14,7 +14,7 @@ import {
   getVcsProviderConfig,
   type VcsProviderConfig,
   type VcsProviderKind,
-} from "../../config/env.js";
+} from "../../infra/vcs-config.js";
 
 /** Provider ids that carry a signed webhook, as system health observes them. */
 export type WebhookProviderId = "github" | "gitlab" | "jira" | "slack" | "email";

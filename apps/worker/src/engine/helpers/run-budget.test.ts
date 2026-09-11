@@ -181,16 +181,16 @@ describe("checks phase accounting", () => {
 
 describe("run budget accounting", () => {
   it("counts input, cached input, and output tokens", () => {
-    const state = recordBudgetUsage(createRunBudgetState(), usage(), null);
+    const state = recordBudgetUsage(createRunBudgetState(), usage(), null, "agent");
 
     expect(totalBudgetTokens(state)).toBe(60);
   });
-
   it("uses direct phase cost when available", () => {
     const state = recordBudgetUsage(
       createRunBudgetState(),
       usage({ cost_usd: 1.25, tokens: null }),
-      { kind: "claude", price: null },
+      { price: null },
+      "research",
     );
 
     expect(state.costUsd).toBe(1.25);
@@ -199,9 +199,8 @@ describe("run budget accounting", () => {
 
   it("derives phase cost from token pricing when direct cost is absent", () => {
     const state = recordBudgetUsage(createRunBudgetState(), usage(), {
-      kind: "codex",
       price: { input: 0.01, cached_input: 0.001, output: 0.02 },
-    });
+    }, "implementation");
 
     expect(state.costUsd).toBeCloseTo(0.1 + 0.02 + 0.6, 8);
     expect(state.costKnown).toBe(true);
@@ -211,7 +210,8 @@ describe("run budget accounting", () => {
     const exact = recordBudgetUsage(
       createRunBudgetState(),
       usage({ cost_usd: 2 }),
-      { kind: "claude", price: null },
+      { price: null },
+      "implementation",
     );
 
     expect(checkRunBudget(exact, { maxDurationMs: 5_000, maxTokens: 60, maxCostUsd: 2 })).toEqual({
@@ -235,9 +235,10 @@ describe("run budget accounting", () => {
     let state = recordBudgetUsage(
       createRunBudgetState(),
       usage({ cost_usd: 0.1 }),
-      { kind: "claude", price: null },
+      { price: null },
+      "research",
     );
-    state = recordBudgetUsage(state, usage({ cost_usd: 0.2 }), { kind: "claude", price: null });
+    state = recordBudgetUsage(state, usage({ cost_usd: 0.2 }), { price: null }, "review");
 
     expect(checkRunBudget(state, { maxDurationMs: 5_000, maxCostUsd: 0.3 })).toEqual({
       status: "ok",
@@ -256,13 +257,11 @@ describe("run budget accounting", () => {
       tokens: { input: 1, cached_input: 0, output: 0 },
     });
     let state = recordBudgetUsage(createRunBudgetState(), oneInputToken, {
-      kind: "codex",
       price: { input: 0.1, cached_input: 0, output: 0 },
-    });
+    }, "implementation");
     state = recordBudgetUsage(state, oneInputToken, {
-      kind: "codex",
       price: { input: 0.2, cached_input: 0, output: 0 },
-    });
+    }, "review");
 
     expect(checkRunBudget(state, { maxDurationMs: 5_000, maxCostUsd: 0.3 })).toEqual({
       status: "ok",
@@ -270,7 +269,7 @@ describe("run budget accounting", () => {
   });
 
   it("fails closed when token usage is missing under a token cap", () => {
-    const state = recordBudgetUsage(createRunBudgetState(), null, null);
+    const state = recordBudgetUsage(createRunBudgetState(), null, null, "implementation");
 
     expect(checkRunBudget(state, { maxDurationMs: 5_000, maxTokens: 1_000 })).toEqual({
       status: "budget_unverifiable",
@@ -286,7 +285,8 @@ describe("run budget accounting", () => {
     const state = recordBudgetUsage(
       createRunBudgetState(),
       usage(),
-      { kind: "codex", price: null },
+      { price: null },
+      "implementation",
     );
 
     expect(checkRunBudget(state, { maxDurationMs: 5_000, maxCostUsd: 10 })).toEqual({

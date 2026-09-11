@@ -7,6 +7,7 @@
  * line of re-export.
  */
 export type { DashboardRole } from "@shared/contracts";
+
 export {
   canApproveWorkflowPlans,
   canChangeRole,

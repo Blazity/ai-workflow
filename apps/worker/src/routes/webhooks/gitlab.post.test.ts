@@ -21,12 +21,13 @@ const mocks = vi.hoisted(() => ({
 
 global.fetch = mocks.fetch;
 
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: mocks.env,
   getConfiguredVcsProviders: mocks.getConfiguredVcsProviders,
 }));
 
-vi.mock("../../services/vcs/vcs-bot-login.js", () => ({
+vi.mock("../../services/vcs/index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../services/vcs/index.js")>()),
   getVcsBotLogin: mocks.getVcsBotLogin,
 }));
 
@@ -45,7 +46,7 @@ vi.mock("../../db/repositories/runs.js", () => ({
   findWorkflowOwnedPullRequestIdentity: (...args: any[]) =>
     mocks.findWorkflowOwnedPullRequestIdentity(...args),
 }));
-vi.mock("../../services/dispatch/repo-allowlist.js", () => ({
+vi.mock("../../engine/support/repo-allowlist.js", () => ({
   isRepoAllowed: (...args: any[]) => mocks.isRepoAllowed(...args),
 }));
 vi.mock("../../services/system/provider-webhook-observation.js", () => ({

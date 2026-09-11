@@ -226,7 +226,7 @@ The v2 `[OVERRIDE]` ticket-comment convention was never implemented and is liste
 ## 6. Configuration
 
 All runtime config lives in environment variables validated at startup with zod via
-`@t3-oss/env-core` (`apps/worker/env.ts`), including cross-field rules (VCS provider completeness,
+`@t3-oss/env-core` (`apps/worker/src/infra/runtime-env.ts`), including cross-field rules (VCS provider completeness,
 commit author+email set together, agent-kind key requirements, SSO all-or-none, Resend
 dependencies). Missing or invalid required config fails startup with a clear error. The full
 per-variable reference lives in `SETUP.md`; the groups are:

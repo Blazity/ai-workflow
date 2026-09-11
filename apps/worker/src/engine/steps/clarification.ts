@@ -1,4 +1,4 @@
-import { ticketPageUrl } from "../../services/publication/dashboard-links.js";
+import { ticketPageUrl } from "../support/dashboard-links.js";
 import type { AgentKind } from "../../sandbox/agents/index.js";
 import type { IssueTrackerMoveTarget } from "../../adapters/issue-tracker/types.js";
 import type { ActiveRunOwner, TicketTransitionOwner } from "../internal/ports.js";
@@ -19,9 +19,9 @@ export async function parkForClarificationStep(
   );
   const { getDb } = await import("../../db/client.js");
   const { createAdapters } = await loadAdaptersPort();
-  const { NEEDS_CLARIFICATION_LABEL } = await import("../../services/tickets/labels.js");
+  const { NEEDS_CLARIFICATION_LABEL } = await import("../support/ticket-labels.js");
   const { updateTicketLabelsForRun } = await import(
-    "../../services/tickets/ticket-label-mutation.js"
+    "../support/ticket-label-mutation.js"
   );
   const db = getDb();
   const { issueTracker } = createAdapters();
@@ -70,9 +70,9 @@ export async function reconcileClarificationsOnPickup(
   const { loadAdaptersPort } = await import("../internal/ports.js");
   const { getDb } = await import("../../db/client.js");
   const { createAdapters } = await loadAdaptersPort();
-  const { NEEDS_CLARIFICATION_LABEL } = await import("../../services/tickets/labels.js");
+  const { NEEDS_CLARIFICATION_LABEL } = await import("../support/ticket-labels.js");
   const { updateTicketLabelsForRun } = await import(
-    "../../services/tickets/ticket-label-mutation.js"
+    "../support/ticket-label-mutation.js"
   );
   const { reconcileClarificationPickupState } = await import(
     "../../db/repositories/clarifications.js"
@@ -162,7 +162,7 @@ export async function postClarificationQuestionsCommentStep(
   const { createAdapters } = await loadAdaptersPort();
   const { env } = await loadEnvironmentPort();
   const { formatClarificationQuestionsComment } = await import(
-    "../../services/clarifications/comment-format.js"
+    "../support/clarification-comment-format.js"
   );
   const { issueTracker } = createAdapters();
   // Best-effort: surfacing the questions in Jira must never fail the paused run.

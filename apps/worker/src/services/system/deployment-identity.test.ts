@@ -6,7 +6,7 @@ import { logger } from "../../infra/logger.js";
 
 const mockEnv: { VERCEL_GIT_COMMIT_SHA?: string; VERCEL_ENV?: string } = {};
 
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   get env() {
     return mockEnv;
   },

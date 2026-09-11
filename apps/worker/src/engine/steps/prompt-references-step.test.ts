@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WorkflowDefinitionNode } from "@shared/contracts";
 import { resolvePromptReferencesInNodes } from "./prompt-references-step.js";
-import { substituteNodePromptParams } from "../helpers/prompt-vars.js";
+import { substituteNodePromptParams } from "@shared/prompts";
 import type { PromptReferenceTarget } from "@shared/prompts";
 
 function node(

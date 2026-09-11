@@ -167,8 +167,7 @@ describe("leak_review execute", () => {
         cost_usd: null,
         tokens: { input: 10, cached_input: 2, output: 4 },
       }),
-      "claude",
-      "claude-haiku-4-5",
+      { provider: "claude", model: "claude-haiku-4-5" },
     );
     expectOutputConformsToRegistry("leak_review", result.output!);
   });
@@ -456,8 +455,7 @@ describe("leak_review execute", () => {
     expect(ctx.recordUsage).toHaveBeenCalledWith(
       "Leak review leak",
       null,
-      "claude",
-      "claude-haiku-4-5",
+      { provider: "claude", model: "claude-haiku-4-5" },
     );
     expectOutputConformsToRegistry("leak_review", result.output!);
   });
@@ -535,8 +533,7 @@ describe("leak_review execute", () => {
     expect(ctx.recordUsage).toHaveBeenCalledWith(
       "Leak review leak",
       null,
-      "claude",
-      "claude-haiku-4-5",
+      { provider: "claude", model: "claude-haiku-4-5" },
     );
     expectOutputConformsToRegistry("leak_review", result.output!);
   });

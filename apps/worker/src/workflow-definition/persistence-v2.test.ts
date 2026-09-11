@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkflowDefinitionV2 } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 
-vi.mock("../config/env.js", () => ({
+vi.mock("../infra/vcs-config.js", () => ({
   env: {
     AGENT_KIND: "claude",
     CLAUDE_MODEL: "claude-test",

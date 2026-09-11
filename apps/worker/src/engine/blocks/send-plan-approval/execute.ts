@@ -1,6 +1,6 @@
 import type { IssueTrackerMoveTarget } from "../../../adapters/issue-tracker/types.js";
-import type { ActiveRunOwner } from "../../../services/run-lifecycle/active-run-owner.js";
-import type { TicketTransitionOwner } from "../../../services/tickets/ticket-transition.js";
+import type { ActiveRunOwner } from "../../support/active-run-owner.js";
+import type { TicketTransitionOwner } from "../../support/ticket-transition.js";
 import { isRunControlError } from "../../helpers/run-control-error.js";
 import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "../support/types.js";
 import type { ApprovedRepositoryScope } from "@shared/contracts";
@@ -69,8 +69,8 @@ async function mirrorApprovalCommentStep(
 ): Promise<void> {
   "use step";
   const { getDb } = await import("../../../db/client.js");
-  const { assertActiveRunOwner } = await import("../../../services/run-lifecycle/active-run-owner.js");
-  const { createAdapters } = await import("../../../services/vcs/adapters.js");
+  const { assertActiveRunOwner } = await import("../../support/active-run-owner.js");
+  const { createAdapters } = await import("../../support/adapters.js");
   const { issueTracker } = createAdapters();
   await assertActiveRunOwner(getDb(), owner);
   await issueTracker.postComment(ticketId, body);
@@ -83,8 +83,8 @@ async function notifyPlanApprovalStep(
 ): Promise<void> {
   "use step";
   const { getDb } = await import("../../../db/client.js");
-  const { assertActiveRunOwner } = await import("../../../services/run-lifecycle/active-run-owner.js");
-  const { createAdapters } = await import("../../../services/vcs/adapters.js");
+  const { assertActiveRunOwner } = await import("../../support/active-run-owner.js");
+  const { createAdapters } = await import("../../support/adapters.js");
   const { messaging } = createAdapters();
   await assertActiveRunOwner(getDb(), owner);
   await messaging.notifyForTicket(ticketKey, { kind: "plan_approval_requested" });
@@ -98,12 +98,12 @@ async function parkForApprovalStep(
 ): Promise<void> {
   "use step";
   const { getDb } = await import("../../../db/client.js");
-  const { createAdapters } = await import("../../../services/vcs/adapters.js");
-  const { AWAITING_APPROVAL_LABEL } = await import("../../../services/tickets/labels.js");
+  const { createAdapters } = await import("../../support/adapters.js");
+  const { AWAITING_APPROVAL_LABEL } = await import("../../support/ticket-labels.js");
   const { updateTicketLabelsForRun } = await import(
-    "../../../services/tickets/ticket-label-mutation.js"
+    "../../support/ticket-label-mutation.js"
   );
-  const { moveTicketForRun } = await import("../../../services/tickets/ticket-transition.js");
+  const { moveTicketForRun } = await import("../../support/ticket-transition.js");
   const { issueTracker } = createAdapters();
   const db = getDb();
   if (typeof issueTracker.updateLabels === "function") {

@@ -29,7 +29,7 @@ vi.mock("@vercel/sandbox", () => ({
     create: mocks.sandboxCreate,
   },
 }));
-vi.mock("../config/env.js", () => ({
+vi.mock("../infra/vcs-config.js", () => ({
   env: {
     JOB_TIMEOUT_MS: 120_000,
     ANTHROPIC_API_KEY: "anthropic-key",
@@ -52,7 +52,7 @@ vi.mock("./agents/index.js", () => ({
 vi.mock("./agents/protocol.js", () => ({
   isAgentRuntimeError: mocks.isAgentRuntimeError,
 }));
-vi.mock("../services/vcs/adapters.js", () => ({
+vi.mock("../engine/support/adapters.js", () => ({
   createAdapters: () => ({
     runRegistry: {
       registerSandbox: mocks.registerSandbox,

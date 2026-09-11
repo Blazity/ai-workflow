@@ -71,7 +71,7 @@ vi.mock("../../memory/store.js", async (importOriginal) => {
 import type { Db } from "../../db/client.js";
 import { agentMemoryDocuments } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
-import { repoSubjectKey } from "../../services/run-lifecycle/subject-key.js";
+import { repoSubjectKey } from "../../engine/support/subject-key.js";
 import {
   parseRepoMemoryDocument,
   renderRepoMemoryDocument,

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { buildPromptVariables, substituteNodePromptParams } from "../helpers/prompt-vars.js";
-import { resolveSlackMessageInput } from "../helpers/prompt-output.js";
+import { substituteNodePromptParams } from "@shared/prompts";
+import { buildPromptVariables, resolveSlackMessageInput } from "../helpers/prompt-output.js";
 import { formatTicketEvent } from "../../adapters/messaging/format.js";
 import type { WorkflowDefinitionNode } from "@shared/contracts";
 import type { AgentWorkflowInput } from "../agent-input.js";

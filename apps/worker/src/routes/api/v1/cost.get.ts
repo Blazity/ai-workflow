@@ -1,7 +1,7 @@
 import { defineEventHandler, getQuery, setResponseHeader } from "h3";
 import type { CostResponse } from "@shared/contracts";
 import { collectCostAggregate } from "../../../services/overview/collect-cost.js";
-import { logger } from "../../../infra/logger.js";
+import { logger } from "../../../services/system/logger.js";
 
 const EMPTY: Omit<CostResponse, "generatedAt" | "available" | "window"> = {
   totals: { totalTokenCost: 0, totalTokens: 0, traceCount: 0, costPerRun: 0 },

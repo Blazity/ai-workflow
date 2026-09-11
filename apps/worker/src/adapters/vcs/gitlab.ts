@@ -31,7 +31,7 @@ import {
   REVIEW_LEDGER_MAX_CONTEXT_THREADS,
   REVIEW_LEDGER_MAX_WORK_ITEMS,
 } from "./types.js";
-import { clampBothEnds } from "../../workflow-definition/failure-message.js";
+import { clampBothEnds } from "../../infra/clamp-text.js";
 import { logger } from "../../infra/logger.js";
 import {
   AI_WORKFLOW_COMMENT_MARKER,
@@ -44,7 +44,7 @@ import {
   readAnyReviewLedgerMarker,
   readReviewLedgerMarker,
   reviewLedgerFailureMarker,
-} from "../../services/vcs/vcs-bot-identity.js";
+} from "./vcs-bot-identity.js";
 
 /**
  * Posted into a discussion just before it is resolved. GitLab's only way to collapse

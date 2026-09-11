@@ -30,12 +30,12 @@ const state = vi.hoisted(() => ({
   db: undefined as unknown as Db,
 }));
 
-vi.mock("../config/env.js", () => ({ env: state.env }));
+vi.mock("../infra/vcs-config.js", () => ({ env: state.env }));
 vi.mock("./request-context.js", () => ({
   requireMcpActor: state.requireMcpActor,
 }));
 vi.mock("../db/client.js", () => ({ getDb: () => state.db }));
-vi.mock("../services/vcs/adapters.js", () => ({ createAdapters: state.createAdapters }));
+vi.mock("../engine/support/adapters.js", () => ({ createAdapters: state.createAdapters }));
 // Delegates to the real store unless a test makes it fail: the audit assertions
 // elsewhere in this file read actual rows, so a blanket stub would hollow them out.
 vi.mock("../services/mcp/audit-store.js", async (importOriginal) => {

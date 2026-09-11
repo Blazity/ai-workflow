@@ -9,7 +9,7 @@ vi.mock("../../steps/workspace-publication.js", () => ({
   finalizeWorkspacePublication: mocks.finalizeWorkspacePublication,
 }));
 
-vi.mock("../../../services/vcs/vcs-runtime.js", () => ({
+vi.mock("../../../engine/support/vcs-runtime.js", () => ({
   createRepositoryVCS: mocks.createRepositoryVCS,
 }));
 

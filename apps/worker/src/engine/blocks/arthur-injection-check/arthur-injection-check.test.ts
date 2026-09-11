@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
   ensureArthurTask: vi.fn(),
 }));
 
-vi.mock("../../../config/env.js", () => ({ env: mocks.env }));
+vi.mock("../../../infra/vcs-config.js", () => ({ env: mocks.env }));
 
 vi.mock("../../../sandbox/arthur-client.js", () => ({
   ArthurClient: {

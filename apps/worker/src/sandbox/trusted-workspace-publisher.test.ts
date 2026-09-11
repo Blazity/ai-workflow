@@ -26,7 +26,7 @@ vi.mock("@vercel/sandbox", () => ({
   },
 }));
 vi.mock("./credentials.js", () => ({ getSandboxCredentials: () => ({ teamId: "team" }) }));
-vi.mock("../services/vcs/vcs-runtime.js", () => ({
+vi.mock("../engine/support/vcs-runtime.js", () => ({
   createRepositoryVcsRuntime: vi.fn((target: { provider: "github" | "gitlab" }) =>
     target.provider === "gitlab"
       ? {
@@ -49,11 +49,11 @@ vi.mock("../services/vcs/vcs-runtime.js", () => ({
         },
   ),
 }));
-vi.mock("../config/env.js", () => ({ env: { JOB_TIMEOUT_MS: 120_000 } }));
-vi.mock("../services/vcs/adapters.js", () => ({
+vi.mock("../infra/vcs-config.js", () => ({ env: { JOB_TIMEOUT_MS: 120_000 } }));
+vi.mock("../engine/support/adapters.js", () => ({
   createAdapters: () => ({ runRegistry: { registerSandbox: mocks.registerSandbox } }),
 }));
-vi.mock("../services/dispatch/repo-allowlist.js", () => ({
+vi.mock("../engine/support/repo-allowlist.js", () => ({
   isRepoAllowed: mocks.isRepoAllowed,
   isRepoAllowedForScope: (
     repository: { provider: string; repoPath: string },

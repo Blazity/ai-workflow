@@ -1,4 +1,10 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
+import {
+  DashboardAuthError,
+  canChangeRole,
+  normalizeDashboardRole,
+  type DashboardRole,
+} from "@shared/contracts";
 import type { Db } from "../../db/client.js";
 import { createAuthRepository } from "../../db/repositories/auth.js";
 import {
@@ -7,11 +13,6 @@ import {
   organization,
   user,
 } from "../../db/schema.js";
-import {
-  canChangeRole,
-  normalizeDashboardRole,
-  type DashboardRole,
-} from "./roles.js";
 
 export type DashboardAuthMethod = "Password" | "SSO" | "Password + SSO" | "Unknown";
 
@@ -35,15 +36,6 @@ export type DashboardUserRow = {
     canDemote: boolean;
   };
 };
-
-export class DashboardAuthError extends Error {
-  constructor(
-    public readonly statusCode: number,
-    message: string,
-  ) {
-    super(message);
-  }
-}
 
 export async function getDashboardActor(
   db: Db,

@@ -14,7 +14,7 @@ import {
 import type { ZodIssue } from "zod";
 
 import { createAdapters } from "../services/vcs/adapters.js";
-import { logger } from "../infra/logger.js";
+import { logger } from "../services/system/logger.js";
 import { createMcpToolServices } from "../services/mcp/tool-services.js";
 import type { McpToolServices } from "../services/mcp/tool-services.js";
 import {

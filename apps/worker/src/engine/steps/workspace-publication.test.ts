@@ -36,7 +36,7 @@ vi.mock("./repository-prs.js", () => ({
   recordWorkflowOwnedPullRequestIntent: mocks.recordIntent,
   recordWorkflowOwnedPullRequest: mocks.recordPr,
 }));
-vi.mock("../../services/vcs/vcs-runtime.js", () => ({
+vi.mock("../../engine/support/vcs-runtime.js", () => ({
   createRepositoryVcsRuntime: () => ({
     vcs: { getBranchSha: mocks.getBranchSha, getPRHead: mocks.getPrHead },
   }),

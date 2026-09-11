@@ -329,7 +329,7 @@ export async function snapshotClarificationSandboxStep(
       (signal) => Sandbox.get({ sandboxId: input.sandboxId, ...credentials, signal }),
     );
     const { randomUUID } = await import("node:crypto");
-    const { env } = await import("../../config/env.js");
+    const { env } = await import("../../infra/vcs-config.js");
     const credentialValues = [
       env.ANTHROPIC_API_KEY,
       env.CODEX_API_KEY,
@@ -420,7 +420,7 @@ export async function snapshotClarificationSandboxStep(
   // deleted from the compact clarification row.
   const { getDb } = await import("../../db/client.js");
   const { recordHookClarificationSnapshot } = await import(
-    "../../clarifications/hook-store.js"
+    "../support/clarification-hook-store.js"
   );
   await recordHookClarificationSnapshot(getDb(), input.clarificationId, {
     snapshotId: snapshotMetadata.snapshotId,
@@ -461,7 +461,7 @@ export async function snapshotClarificationSandboxStep(
     );
   }
 
-  const { createAdapters } = await import("../../services/vcs/adapters.js");
+  const { createAdapters } = await import("../support/adapters.js");
   const { runRegistry } = createAdapters();
   if (typeof runRegistry.unregisterSandbox === "function") {
     try {
@@ -499,9 +499,9 @@ export async function restoreClarificationSandboxStep(
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
   const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
-  const { createAdapters } = await import("../../services/vcs/adapters.js");
+  const { createAdapters } = await import("../support/adapters.js");
   const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
-  const { env } = await import("../../config/env.js");
+    const { env } = await import("../../infra/vcs-config.js");
 
   let sandbox: Awaited<ReturnType<typeof Sandbox.create>>;
   try {
