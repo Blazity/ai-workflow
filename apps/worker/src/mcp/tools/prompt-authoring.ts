@@ -1,11 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-import { env } from "../../config/env.js";
+import { dashboardOrigin } from "../../services/settings/runtime-settings.js";
 import { promptLibraryUrl } from "../../services/publication/dashboard-links.js";
 import { builtInPromptNameForSlug } from "@shared/prompts";
 import {
-  getCurrentPromptVersion,
-  getPrompt,
   PromptLibraryStoreError,
   savePromptVersion,
 } from "../../prompt-library/store.js";
@@ -109,7 +107,7 @@ export function registerPromptAuthoringTools(
           body: input.body,
         }),
         operation: async (): Promise<PromptUpdateData> => {
-          const prompt = await getPrompt(deps.db, input.promptId);
+          const prompt = await deps.services.getPrompt(input.promptId);
           if (!prompt) throw refusal("NOT_FOUND", "Prompt not found");
 
           // Identity first, before staleness: a built-in prompt is refused for
@@ -137,7 +135,7 @@ export function registerPromptAuthoringTools(
 
           // This read supplies the before-version for the operator announcement;
           // savePromptVersion enforces the expected head atomically below.
-          const head = await getCurrentPromptVersion(deps.db, input.promptId);
+          const head = await deps.services.getCurrentPromptVersion(input.promptId);
           if (!head) throw refusal("NOT_FOUND", "Prompt has no current version");
 
           // Outside the try below, so a refused role cannot be read as a failure
@@ -145,7 +143,7 @@ export function registerPromptAuthoringTools(
           const actor = storeActor(deps.actor);
           let saved: Awaited<ReturnType<typeof savePromptVersion>>;
           try {
-            saved = await savePromptVersion(deps.db, {
+            saved = await deps.services.savePromptVersion({
               promptId: input.promptId,
               body: input.body,
               expectedVersion: input.expectedVersion,
@@ -167,7 +165,7 @@ export function registerPromptAuthoringTools(
             // label: it is chosen by whoever created the prompt, and this message
             // is one an operator is meant to trust.
             const slug = announcementLabel(prompt.slug);
-            const link = `<${promptLibraryUrl(env.DASHBOARD_ORIGIN, prompt.id)}|open the prompt>`;
+            const link = `<${promptLibraryUrl(dashboardOrigin(), prompt.id)}|open the prompt>`;
             await announceAuthoringChange(
               deps,
               // Which prompt and which versions, never the text: the operator

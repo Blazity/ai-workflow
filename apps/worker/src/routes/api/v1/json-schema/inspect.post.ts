@@ -1,24 +1,30 @@
 import { createError, defineEventHandler, readBody, setResponseHeader } from "h3";
-import type { JsonSchemaAuthoringInspectionResponse } from "@shared/contracts";
+import {
+  jsonSchemaInspectRequestSchema,
+  parseRequestBody,
+  type JsonSchemaAuthoringInspectionResponse,
+} from "@shared/contracts";
 import {
   requireDashboardActor,
   toHttpError,
 } from "../../../../services/auth/request-context.js";
-import { inspectAuthoredJsonSchema } from "../../../../workflow-definition/json-schema-authoring.js";
+import {
+  inspectJsonSchemaSource,
+} from "../../../../services/json-schema/schema-inspection.js";
 
 export default defineEventHandler(
   async (event): Promise<JsonSchemaAuthoringInspectionResponse | undefined> => {
     try {
       setResponseHeader(event, "Cache-Control", "private, no-store");
       await requireDashboardActor(event);
-      const body = (await readBody<{ source?: unknown }>(event).catch(() => null)) ?? {};
-      if (typeof body.source !== "string") {
-        throw createError({
-          statusCode: 400,
-          statusMessage: "source must be a JSON Schema string",
-        });
+      const parsed = parseRequestBody(
+        jsonSchemaInspectRequestSchema,
+        (await readBody(event).catch(() => null)) ?? {},
+      );
+      if (!parsed.ok) {
+        throw createError({ statusCode: 400, statusMessage: parsed.message });
       }
-      return inspectAuthoredJsonSchema(body.source);
+      return inspectJsonSchemaSource(parsed.value.source);
     } catch (error) {
       if (error instanceof Error && "statusCode" in error) throw error;
       toHttpError(error);

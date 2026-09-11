@@ -1,8 +1,11 @@
 import { createError, defineEventHandler, getRouterParam } from "h3";
-import { env } from "../../../../../config/env.js";
-import { getDb } from "../../../../../db/client.js";
-import { cancelDashboardInvite } from "../../../../../services/auth/invites.js";
-import { requireDashboardActor, toHttpError } from "../../../../../services/auth/request-context.js";
+import {
+  cancelInviteForActor,
+} from "../../../../../services/auth/dashboard-invites.js";
+import {
+  requireDashboardActor,
+  toHttpError,
+} from "../../../../../services/auth/request-context.js";
 
 export default defineEventHandler(async (event) => {
   try {
@@ -12,11 +15,7 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 400, statusMessage: "Missing invite id" });
     }
 
-    return await cancelDashboardInvite(getDb(), {
-      organizationSlug: env.DASHBOARD_ORG_SLUG,
-      actor,
-      inviteId,
-    });
+    return await cancelInviteForActor({ actor, inviteId });
   } catch (error) {
     toHttpError(error);
   }

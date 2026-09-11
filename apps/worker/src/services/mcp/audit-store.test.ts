@@ -1,15 +1,15 @@
 import { asc, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../config/env.js", () => ({
+vi.mock("../../config/env.js", () => ({
   env: {
     MCP_AUDIT_RETENTION_DAYS: 365,
   },
 }));
 
-import type { Db } from "../db/client.js";
-import { createTestDb } from "../db/test-db.js";
-import { mcpAuditEvents, organization } from "../db/schema.js";
+import type { Db } from "../../db/client.js";
+import { createTestDb } from "../../db/test-db.js";
+import { mcpAuditEvents, organization } from "../../db/schema.js";
 import type { McpActorContext, McpAuditInput } from "./contracts.js";
 import {
   listMcpAuditsForOrganization,
@@ -58,6 +58,7 @@ function event(
           ? "DEPENDENCY_UNAVAILABLE"
           : null,
     latencyMs: outcome === "attempted" ? 0 : 12,
+    contractHash: CONTRACT_HASH,
     occurredAt: at,
   };
 }
@@ -69,6 +70,8 @@ beforeEach(async () => {
     { id: "org-audit-b", name: "Audit B", slug: "audit-b" },
   ]);
 });
+
+const CONTRACT_HASH = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 describe("MCP audit store", () => {
   it("persists every terminal class as metadata and returns only one tenant", async () => {
@@ -89,7 +92,10 @@ describe("MCP audit store", () => {
     ]);
     expect(rows.every((row) => row.organizationId === "org-audit-a")).toBe(true);
     expect(rows.every((row) => row.serverVersion === "0.1.0")).toBe(true);
-    expect(rows.every((row) => /^[a-f0-9]{64}$/.test(row.contractHash))).toBe(true);
+    // The store records the hash it is handed and does not compute one: the
+    // catalog it would have to hash lives above this tier. That the value handed
+    // in is the real artifact hash is pinned in mcp/transport.test.ts instead.
+    expect(rows.every((row) => row.contractHash === CONTRACT_HASH)).toBe(true);
     expect(JSON.stringify(rows)).not.toContain("raw-fixture-payload-4f81");
     expect(Object.keys(rows[0] ?? {}).sort()).not.toContain("data");
   });

@@ -7,16 +7,15 @@ import {
   type H3Event,
 } from "h3";
 import type { HarnessProfilesResponse } from "@shared/contracts";
-import { getDb } from "../../../db/client.js";
-import {
-  HarnessProfileStoreError,
-  listHarnessProfiles,
-} from "../../../harness-profiles/store.js";
 import {
   requireDashboardActor,
   toHttpError,
 } from "../../../services/auth/request-context.js";
 import { canManageHarnessProfiles } from "../../../services/auth/roles.js";
+import { HarnessProfileStoreError } from "../../../services/harness/harness-errors.js";
+import {
+  listHarnessProfilesForOrganization,
+} from "../../../services/harness/profile-reads.js";
 
 export function parseHarnessProfileId(event: H3Event): string {
   const id = getRouterParam(event, "id");
@@ -55,7 +54,7 @@ export default defineEventHandler(
       const includeArchived =
         query.includeArchived === "1" || query.includeArchived === "true";
       return {
-        profiles: await listHarnessProfiles(getDb(), {
+        profiles: await listHarnessProfilesForOrganization({
           organizationId: actor.organizationId,
           includeArchived,
         }),

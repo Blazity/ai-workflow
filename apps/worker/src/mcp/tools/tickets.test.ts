@@ -23,7 +23,7 @@ import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js
 import { createTestDb } from "../../db/test-db.js";
 import { organization, workflowRuns } from "../../db/schema.js";
 import type { Db } from "../../db/client.js";
-import { depsFor } from "../test-support.js";
+import { depsFor } from "../../test-support/mcp.js";
 import { registerTicketTools } from "./tickets.js";
 import type { McpRunSummary } from "../contracts.js";
 

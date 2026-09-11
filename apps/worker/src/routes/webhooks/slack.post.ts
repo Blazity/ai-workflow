@@ -1,22 +1,9 @@
-import { defineEventHandler, readRawBody, getHeader, createError, type H3Event } from "h3";
-import { waitUntil } from "@vercel/functions";
-import { env } from "../../config/env.js";
-import { createAdapters } from "../../services/vcs/adapters.js";
-import { cancelRun } from "../../services/run-lifecycle/cancel-run.js";
-import { logger } from "../../infra/logger.js";
-import { parseCommand, type ParsedCommand } from "../../services/slack/commands.js";
-import { HELP_TEXT } from "../../services/slack/format.js";
-import {
-  handleCancel,
-  handleInspect,
-  handleList,
-  handleReset,
-  handleStatus,
-  handleSummary,
-} from "../../services/slack/handlers.js";
-import { postToResponseUrl } from "../../services/slack/respond.js";
-import { verifySlackSignature } from "../../services/slack/verify.js";
-import { observeProviderWebhook } from "../../services/system/provider-webhook-observation.js";
+import { createError, defineEventHandler, getHeader, readRawBody } from "h3";
+import { handleSlackSlashCommand } from "../../services/slack/handle-slash-command.js";
+// The cluster's name for the refusal, not the barrel: this route dispatches
+// nothing through the trigger cluster, it only maps that refusal to a status.
+// The class itself lives in infra/, which the app tier may not import.
+import { TriggerHttpError } from "../../services/triggers/trigger-http-error.js";
 
 /**
  * Slack slash command webhook.
@@ -29,175 +16,28 @@ import { observeProviderWebhook } from "../../services/system/provider-webhook-o
  * request when a Signing Secret is configured for the app).
  *
  * The 3s ack budget is critical: Slack drops requests that don't respond in
- * time. We verify, parse, schedule the real work via `event.waitUntil`, and
- * return immediately. Results are POSTed back to `response_url`.
+ * time, so this route only captures the raw bytes and the two signed headers
+ * and hands them to the service, which verifies, parses, schedules the real
+ * work and returns the acknowledgement. Results are POSTed back to
+ * `response_url`.
  */
 export default defineEventHandler(async (event) => {
   const rawBody = (await readRawBody(event, "utf8")) ?? "";
 
   try {
-    verifyWebhookAuth(event, rawBody);
+    return await handleSlackSlashCommand({
+      rawBody,
+      signature: getHeader(event, "x-slack-signature"),
+      timestamp: getHeader(event, "x-slack-request-timestamp"),
+    });
   } catch (error) {
-    observeProviderWebhook(
-      "slack",
-      "rejected",
-      env.SLACK_SIGNING_SECRET ? "invalid_signature" : "secret_not_configured",
-    );
-    throw error;
-  }
-  try {
-    const result = await handleVerifiedSlackWebhook(rawBody);
-    observeProviderWebhook("slack", "accepted", "request_succeeded");
-    return result;
-  } catch (error) {
-    observeProviderWebhook("slack", "rejected", "handler_failed");
+    if (error instanceof TriggerHttpError) {
+      throw createError({
+        statusCode: error.statusCode,
+        statusMessage: error.statusMessage,
+        ...(error.data ? { data: error.data } : {}),
+      });
+    }
     throw error;
   }
 });
-
-async function handleVerifiedSlackWebhook(rawBody: string) {
-  const fields = parseFormBody(rawBody);
-  const text = fields.get("text") ?? "";
-  const userId = fields.get("user_id") ?? "";
-  const responseUrl = fields.get("response_url") ?? "";
-  const command = fields.get("command") ?? "/ai-workflow";
-
-  if (!isUserAllowed(userId)) {
-    logger.info({ userId, command }, "slack_command_user_not_allowed");
-    return ephemeral("Not authorized.");
-  }
-
-  const parsed = parseCommand(text);
-
-  if (parsed.kind === "help" || parsed.kind === "unknown") {
-    logger.info({ userId, command, parsedKind: parsed.kind }, "slack_command_help_or_unknown");
-    return ephemeral(parsed.kind === "help" ? HELP_TEXT : `Unknown command. ${HELP_TEXT}`);
-  }
-
-  if (!responseUrl) {
-    // Without response_url we have no way to post the deferred result, so
-    // fail loud rather than silently dropping the user's request.
-    throw createError({ statusCode: 400, statusMessage: "Missing response_url" });
-  }
-
-  logger.info(
-    { userId, command, parsedKind: parsed.kind },
-    "slack_command_dispatching",
-  );
-
-  scheduleHandler(parsed, responseUrl, userId);
-
-  return ephemeral(`Working on \`${command} ${text}\`…`);
-}
-
-// ---------------------------------------------------------------------------
-// Auth
-// ---------------------------------------------------------------------------
-
-function verifyWebhookAuth(event: H3Event, rawBody: string): void {
-  if (!env.SLACK_SIGNING_SECRET) {
-    throw createError({ statusCode: 503, statusMessage: "Slack integration not configured" });
-  }
-  const signature = getHeader(event, "x-slack-signature");
-  const timestamp = getHeader(event, "x-slack-request-timestamp");
-  if (!signature || !timestamp) {
-    throw createError({ statusCode: 401, statusMessage: "Missing Slack signature headers" });
-  }
-  const ok = verifySlackSignature({
-    rawBody,
-    timestamp,
-    signature,
-    signingSecret: env.SLACK_SIGNING_SECRET,
-  });
-  if (!ok) {
-    throw createError({ statusCode: 401, statusMessage: "Invalid Slack signature" });
-  }
-}
-
-function isUserAllowed(userId: string): boolean {
-  if (!env.SLACK_ALLOWED_USER_IDS) return true;
-  const allow = env.SLACK_ALLOWED_USER_IDS
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  if (allow.length === 0) return true;
-  return allow.includes(userId);
-}
-
-// ---------------------------------------------------------------------------
-// Body parsing
-// ---------------------------------------------------------------------------
-
-function parseFormBody(rawBody: string): URLSearchParams {
-  return new URLSearchParams(rawBody);
-}
-
-// ---------------------------------------------------------------------------
-// Response shaping
-// ---------------------------------------------------------------------------
-
-function ephemeral(text: string) {
-  return { response_type: "ephemeral" as const, text };
-}
-
-// ---------------------------------------------------------------------------
-// Deferred work
-// ---------------------------------------------------------------------------
-
-function scheduleHandler(parsed: ParsedCommand, responseUrl: string, userId: string): void {
-  // Attach error logging before handing off — an unhandled rejection inside
-  // the waitUntil-extended invocation would disappear silently otherwise.
-  const promise = runHandler(parsed, responseUrl, userId).catch((err) =>
-    logger.error(
-      { error: (err as Error).message, parsedKind: parsed.kind },
-      "slack_handler_unhandled_error",
-    ),
-  );
-  // @vercel/functions waitUntil is the documented Vercel-native API. It keeps
-  // the serverless invocation alive until the promise resolves, even after
-  // the response is sent. Outside a Vercel runtime (tests, dev), getContext()
-  // returns no waitUntil and this no-ops — the promise still runs in the
-  // microtask queue.
-  waitUntil(promise);
-}
-
-async function runHandler(parsed: ParsedCommand, responseUrl: string, userId: string): Promise<void> {
-  const text = await executeCommand(parsed, userId);
-  await postToResponseUrl(responseUrl, {
-    response_type: "in_channel",
-    text,
-  });
-}
-
-async function executeCommand(parsed: ParsedCommand, userId?: string): Promise<string> {
-  const adapters = createAdapters();
-  const { runRegistry, issueTracker } = adapters;
-  const backlogMoveTarget = env.JIRA_BACKLOG_TRANSITION_ID
-    ? { name: env.COLUMN_BACKLOG, transitionId: env.JIRA_BACKLOG_TRANSITION_ID }
-    : env.COLUMN_BACKLOG;
-  switch (parsed.kind) {
-    case "list":
-      return handleList(runRegistry, env.JIRA_BASE_URL);
-    case "status":
-      return handleStatus(runRegistry, parsed.ticketKey, env.JIRA_BASE_URL);
-    case "cancel":
-      return handleCancel(
-        runRegistry,
-        parsed.ticketKey,
-        cancelRun,
-        issueTracker,
-        backlogMoveTarget,
-        `Cancelled via Slack /ai-workflow cancel${userId ? ` by ${userId}` : ""}`,
-      );
-    case "inspect":
-      return handleInspect(runRegistry, parsed.ticketKey, env.JIRA_BASE_URL);
-    case "summary":
-      return handleSummary(runRegistry, env.JIRA_BASE_URL);
-    case "reset":
-      return handleReset(runRegistry, parsed.ticketKey);
-    case "help":
-    case "unknown":
-      // Already handled synchronously, but exhaustive for type-narrowing.
-      return HELP_TEXT;
-  }
-}

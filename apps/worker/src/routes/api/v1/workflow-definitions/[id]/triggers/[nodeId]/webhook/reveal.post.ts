@@ -1,10 +1,10 @@
 import type { WebhookRevealResponse } from "@shared/contracts";
 import { createError, defineEventHandler } from "h3";
-import { getDb } from "../../../../../../../../db/client.js";
 import { toHttpError } from "../../../../../../../../services/auth/request-context.js";
-import { revealWebhookEndpointSecret } from "../../../../../../../../webhook-trigger/endpoint-store.js";
 import {
-  auditWebhookAction,
+  revealWebhookSecret,
+} from "../../../../../../../../services/workflow-definitions/trigger-webhooks.js";
+import {
   parseWebhookEndpointTarget,
   requireWebhookActor,
   requireWebhookEncryptionKey,
@@ -23,15 +23,13 @@ export default defineEventHandler(
       const actor = await requireWebhookActor(event, true);
       const target = parseWebhookEndpointTarget(event);
       const keyHex = requireWebhookEncryptionKey();
-      const db = getDb();
-      const endpoint = await requireWebhookEndpoint(db, target);
+      const endpoint = await requireWebhookEndpoint(target);
 
-      const secret = await revealWebhookEndpointSecret(db, keyHex, endpoint.id);
+      const secret = await revealWebhookSecret(keyHex, endpoint.id, actor.userId);
       if (!secret) {
         throw createError({ statusCode: 404, statusMessage: "Unknown webhook endpoint" });
       }
 
-      auditWebhookAction(actor.userId, endpoint.id, "revealed");
       return { endpointId: endpoint.id, secret };
     } catch (error) {
       toHttpError(error);

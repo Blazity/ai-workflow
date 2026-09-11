@@ -117,7 +117,6 @@ export function createAuth(db: Db, options: AuthOptions) {
       ? {
           before: createAuthMiddleware(async (ctx) => {
             await validateMcpOAuthHookRequest(
-              db,
               mcpDeployment,
               ctx.path,
               ctx.body as Record<string, unknown> | undefined,

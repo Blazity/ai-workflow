@@ -23,7 +23,7 @@ import { MAX_EDGES, MAX_NODES } from "../workflow-definition/schema.js";
 import { FIRST_SLICE_TOOLS } from "./contracts.js";
 import { policyFor } from "./policy.js";
 import { createMcpServer } from "./server.js";
-import { depsFor } from "./test-support.js";
+import { depsFor } from "../test-support/mcp.js";
 import {
   MCP_ENABLED_DOMAINS,
   MCP_TOOL_CATALOG,

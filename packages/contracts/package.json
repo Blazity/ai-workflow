@@ -12,6 +12,9 @@
       "default": "./index.ts"
     }
   },
+  "dependencies": {
+    "zod": "catalog:"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"
   }

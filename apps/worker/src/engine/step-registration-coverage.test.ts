@@ -4,8 +4,14 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
+import nitroConfig from "../../nitro.config.js";
+
 const workerRoot = fileURLToPath(new URL("../../", import.meta.url));
-const scannedRoots = ["src", "workflow-test-fixtures"];
+// Read from the deployment configuration, never written down again: the builder
+// scans whatever Nitro calls the source root, so a test carrying its own copy of
+// that name would keep passing exactly when the two drift apart.
+const sourceRoot = nitroConfig.srcDir!;
+const scannedRoots = [sourceRoot, "workflow-test-fixtures"];
 
 /**
  * Workflow directives on their own line, matched on the raw source. The builder
@@ -34,8 +40,8 @@ const workflowDirectives = [
 
 describe("step registration coverage", () => {
   it("keeps every production step directive under src/engine", () => {
-    const engineRoot = join(workerRoot, "src/engine/");
-    const stepFiles = typescriptFiles(workerRoot, ["src"])
+    const engineRoot = join(workerRoot, sourceRoot, "engine/");
+    const stepFiles = typescriptFiles(workerRoot, [sourceRoot])
       .filter((path) => !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path))
       .filter((path) => workflowDirectives[0].linePattern.test(readFileSync(path, "utf8")));
 

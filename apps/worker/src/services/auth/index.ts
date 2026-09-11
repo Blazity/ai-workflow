@@ -6,10 +6,26 @@
  * scripts/gates/cluster-deep-imports.json and that list only shrinks.
  */
 export {
+  changeDashboardUserRole,
+  dashboardActorLabel,
+  listDashboardDirectory,
+} from "./dashboard-directory.js";
+export {
+  cancelInviteForActor,
+  createInviteForActor,
+  listInvitesForActor,
+  resendInviteForActor,
+} from "./dashboard-invites.js";
+export {
   acceptDashboardInvite,
   acceptDashboardSsoInvite,
   getDashboardInviteAcceptanceState,
 } from "./invite-acceptance.js";
+export {
+  acceptDashboardInviteWithPassword,
+  acceptDashboardSsoInviteForUser,
+  readDashboardInviteAcceptance,
+} from "./invite-requests.js";
 export {
   cancelDashboardInvite,
   createDashboardInvite,
@@ -19,6 +35,15 @@ export {
 export type {
   SendInviteEmail,
 } from "./invites.js";
+export {
+  clearOAuthFlowCookie,
+  createOAuthFlowCookie,
+  describeOAuthFlowCookie,
+  readOAuthFlowCookie,
+} from "./oauth-flow-cookie.js";
+export type {
+  OAuthFlowCookieReason,
+} from "./oauth-flow-cookie.js";
 export {
   requireDashboardActor,
   toHttpError,
@@ -44,6 +69,16 @@ export {
   consumeDashboardSsoHandoff,
   createDashboardSsoHandoff,
 } from "./sso-handoff.js";
+export {
+  isDashboardSsoProviderRegistered,
+} from "./sso-provider-status.js";
+export {
+  dashboardLoginUrl,
+  dashboardOriginUrl,
+  dashboardSsoCompletionUrl,
+  workerOriginUrl,
+  workerUrlFor,
+} from "./sso-redirects.js";
 export {
   buildTrustedOrigins,
 } from "./trusted-origins.js";

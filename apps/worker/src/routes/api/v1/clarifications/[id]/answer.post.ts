@@ -1,37 +1,17 @@
 import { createError, defineEventHandler, getRouterParam, readBody } from "h3";
-import type { ClarificationAnswerResponse } from "@shared/contracts";
-import { getDb } from "../../../../../db/client.js";
-import { requireDashboardActor, toHttpError } from "../../../../../services/auth/request-context.js";
-import { createAdapters } from "../../../../../services/vcs/adapters.js";
-import { dashboardUserLabel } from "../../../../../pre-pr-checks/store.js";
 import {
-  answerClarificationAndResume,
-  MAX_ANSWER_LENGTH,
-} from "../../../../../services/clarifications/answer-core.js";
+  clarificationAnswerRequestSchema,
+  clarificationAnswerText,
+  parseRequestBody,
+  type ClarificationAnswerResponse,
+} from "@shared/contracts";
 import {
-  getHookClarification,
-  type HookClarificationRow,
-} from "../../../../../clarifications/hook-store.js";
-
-function serialize(row: HookClarificationRow) {
-  return {
-    id: row.id,
-    ticketKey: row.ticketKey,
-    runId: row.runId,
-    blockId: row.blockId,
-    definitionId: row.definitionId,
-    definitionVersion: row.definitionVersion,
-    questions: row.questions,
-    suggestedAnswers: row.suggestedAnswers,
-    status: row.status,
-    askedAt: row.askedAt.toISOString(),
-    answer: row.answer,
-    answeredById: row.answeredById,
-    answeredByLabel: row.answeredByLabel,
-    answeredAt: row.answeredAt?.toISOString() ?? null,
-    dispatchedRunId: null,
-  };
-}
+  requireDashboardActor,
+  toHttpError,
+} from "../../../../../services/auth/request-context.js";
+import {
+  answerClarificationRequest,
+} from "../../../../../services/clarifications/answer-request.js";
 
 export default defineEventHandler(async (event): Promise<ClarificationAnswerResponse | undefined> => {
   try {
@@ -41,29 +21,23 @@ export default defineEventHandler(async (event): Promise<ClarificationAnswerResp
     const id = getRouterParam(event, "id");
     if (!id) throw createError({ statusCode: 404, statusMessage: "Unknown clarification" });
 
-    const body = await readBody(event).catch(() => null);
-    const rawAnswer = typeof body?.answer === "string" ? body.answer : "";
-    const answer = rawAnswer.trim();
-    if (!answer || answer.length > MAX_ANSWER_LENGTH) {
-      throw createError({ statusCode: 400, statusMessage: "invalid_answer" });
+    const parsed = parseRequestBody(
+      clarificationAnswerRequestSchema,
+      (await readBody(event).catch(() => null)) ?? {},
+    );
+    if (!parsed.ok) {
+      throw createError({ statusCode: 400, statusMessage: parsed.message });
     }
 
-    const db = getDb();
-    const row = await getHookClarification(db, id);
-    if (!row) throw createError({ statusCode: 404, statusMessage: "Unknown clarification" });
-
-    const label = await dashboardUserLabel(db, actor.userId);
-    const adapters = createAdapters();
-
-    const outcome = await answerClarificationAndResume({
-      db,
-      row,
-      rawAnswer,
-      actor: { id: actor.userId, label },
-      issueTracker: adapters.issueTracker,
+    const outcome = await answerClarificationRequest({
+      id,
+      rawAnswer: clarificationAnswerText(parsed.value),
+      actor: { userId: actor.userId },
     });
 
     switch (outcome.kind) {
+      case "unknown_clarification":
+        throw createError({ statusCode: 404, statusMessage: "Unknown clarification" });
       case "invalid_answer":
         throw createError({ statusCode: 400, statusMessage: "invalid_answer" });
       case "conflict":
@@ -97,10 +71,7 @@ export default defineEventHandler(async (event): Promise<ClarificationAnswerResp
           cause: outcome.error,
         });
       case "answered":
-        return {
-          clarification: serialize(outcome.row),
-          runId: outcome.row.runId,
-        };
+        return { clarification: outcome.clarification, runId: outcome.runId };
     }
   } catch (error) {
     toHttpError(error);

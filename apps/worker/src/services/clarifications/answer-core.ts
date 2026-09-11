@@ -1,5 +1,6 @@
 // Static import so route tests can vi.mock("workflow/api"): a dynamic import
 // would bypass the module mock and hit the real Workflow runtime.
+import { MAX_CLARIFICATION_ANSWER_LENGTH } from "@shared/contracts";
 import { getHookByToken, resumeHook } from "workflow/api";
 import { and, eq } from "drizzle-orm";
 import { env } from "../../config/env.js";
@@ -24,7 +25,11 @@ import {
 } from "./resume-attempts.js";
 import { supersedeClarification, supersedePendingForTicket } from "../../clarifications/store.js";
 
-export const MAX_ANSWER_LENGTH = 10_000;
+/** Re-exported under the name this cluster has always used. The number itself
+ *  belongs to the contracts package, which is also what the request schema and
+ *  the MCP tool catalogue read, so no channel can judge an answer by a different
+ *  limit than the one a client was told. */
+export const MAX_ANSWER_LENGTH = MAX_CLARIFICATION_ANSWER_LENGTH;
 
 export type AnswerClarificationOutcome =
   | { kind: "answered"; row: HookClarificationRow }

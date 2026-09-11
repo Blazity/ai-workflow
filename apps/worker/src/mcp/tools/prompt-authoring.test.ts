@@ -28,7 +28,7 @@ import {
 } from "../../db/schema.js";
 import { BUILT_IN_PROMPT_SLUG_BY_NAME } from "@shared/prompts";
 import type { McpActorContext, McpScope } from "../contracts.js";
-import { actorFor, depsFor } from "../test-support.js";
+import { actorFor, depsFor } from "../../test-support/mcp.js";
 import { registerPromptAuthoringTools } from "./prompt-authoring.js";
 
 const ORG_ID = "org-execute";

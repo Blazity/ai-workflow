@@ -1,8 +1,13 @@
 import { createError, defineEventHandler, readBody } from "h3";
-import type { HarnessProfileMutationResponse } from "@shared/contracts";
-import { getDb } from "../../../../../db/client.js";
-import { restoreHarnessProfileVersion } from "../../../../../harness-profiles/store.js";
+import {
+  harnessProfileVersionRestoreRequestSchema,
+  parseRequestBody,
+  type HarnessProfileMutationResponse,
+} from "@shared/contracts";
 import { requireDashboardActor } from "../../../../../services/auth/request-context.js";
+import {
+  restoreHarnessProfileDraftVersion,
+} from "../../../../../services/harness/profile-authoring.js";
 import {
   parseHarnessProfileId,
   setHarnessApiNoStore,
@@ -14,25 +19,18 @@ export default defineEventHandler(
     try {
       setHarnessApiNoStore(event);
       const actor = await requireDashboardActor(event);
-      const body =
-        (await readBody<{
-          version?: unknown;
-          expectedRevision?: unknown;
-        }>(event).catch(() => null)) ?? {};
-      if (
-        typeof body.version !== "number" ||
-        typeof body.expectedRevision !== "number"
-      ) {
-        throw createError({
-          statusCode: 400,
-          statusMessage: "version and expectedRevision are required",
-        });
+      const parsed = parseRequestBody(
+        harnessProfileVersionRestoreRequestSchema,
+        (await readBody(event).catch(() => null)) ?? {},
+      );
+      if (!parsed.ok) {
+        throw createError({ statusCode: 400, statusMessage: parsed.message });
       }
       return {
-        profile: await restoreHarnessProfileVersion(getDb(), {
+        profile: await restoreHarnessProfileDraftVersion({
           profileId: parseHarnessProfileId(event),
-          version: body.version,
-          expectedRevision: body.expectedRevision,
+          version: parsed.value.version,
+          expectedRevision: parsed.value.expectedRevision,
           actor: {
             organizationId: actor.organizationId,
             role: actor.role,

@@ -1,20 +1,10 @@
 import { createError, defineEventHandler, getRouterParam } from "h3";
 import type { ApprovalDecisionResponse } from "@shared/contracts";
-import { env } from "../../../../../config/env.js";
-import { getDb } from "../../../../../db/client.js";
 import { requireDashboardActor } from "../../../../../services/auth/request-context.js";
 import { canApproveWorkflowPlans } from "../../../../../services/auth/roles.js";
-import { createAdapters } from "../../../../../services/vcs/adapters.js";
-import { IssueTrackerNotFoundError } from "../../../../../adapters/issue-tracker/types.js";
-import { dashboardUserLabel } from "../../../../../pre-pr-checks/store.js";
-import { resolveAwaitingRun } from "../../../../../services/telemetry/run-telemetry.js";
-import { dispatchPlanApproved } from "../../../../../services/approvals/dispatch.js";
 import {
-  decideApproval,
-  getApproval,
-  rejectUndispatchableApproval,
-  serializeApproval,
-} from "../../../../../approvals/store.js";
+  approveApproval,
+} from "../../../../../services/approvals/approval-decisions.js";
 import { toApprovalHttpError } from "../../approvals.get.js";
 
 export default defineEventHandler(async (event): Promise<ApprovalDecisionResponse | undefined> => {
@@ -26,89 +16,21 @@ export default defineEventHandler(async (event): Promise<ApprovalDecisionRespons
     const id = getRouterParam(event, "id");
     if (!id) throw createError({ statusCode: 404, statusMessage: "Unknown approval" });
 
-    const db = getDb();
-    const row = await getApproval(db, id);
-    if (!row) throw createError({ statusCode: 404, statusMessage: "Unknown approval" });
-    // A dispatch that failed after the approve CAS leaves the row approved with
-    // no dispatched run. Such a row is retryable: the decision stands, only the
-    // run start is redone, so the CAS is replaced by a verify on retry.
-    const isDispatchRetry = row.status === "approved" && row.dispatchedRunId === null;
-    if (row.status !== "pending" && !isDispatchRetry) {
-      throw createError({ statusCode: 409, statusMessage: "already_decided" });
-    }
-
-    const label = await dashboardUserLabel(db, actor.userId);
-    const decider = { id: actor.userId, label };
-    const approver = isDispatchRetry
-      ? { id: row.decidedById ?? actor.userId, label: row.decidedByLabel ?? label }
-      : decider;
-    const adapters = createAdapters();
-
-    // Cheap existence check before reserving anything: a deleted ticket can
-    // never run, so auto-reject and tell the caller it is gone.
-    try {
-      await adapters.issueTracker.fetchTicket(row.ticketKey);
-    } catch (err) {
-      if (err instanceof IssueTrackerNotFoundError) {
-        // Before the decision wins, a gone ticket makes the request
-        // undispatchable. Once approved, however, the human decision is final:
-        // retain it as a protected operational failure instead of silently
-        // replacing the pinned path with generic ticket discovery.
-        if (!isDispatchRetry) await rejectUndispatchableApproval(db, id);
+    const outcome = await approveApproval(id, { userId: actor.userId });
+    switch (outcome.kind) {
+      case "unknown_approval":
+        throw createError({ statusCode: 404, statusMessage: "Unknown approval" });
+      case "already_decided":
+        throw createError({ statusCode: 409, statusMessage: "already_decided" });
+      case "ticket_gone":
         throw createError({ statusCode: 410, statusMessage: "ticket_gone" });
-      }
-      throw err;
+      case "definition_gone":
+        throw createError({ statusCode: 410, statusMessage: "definition_gone" });
+      case "run_in_flight":
+        throw createError({ statusCode: 409, statusMessage: "run_in_flight" });
+      case "decided":
+        return { approval: outcome.approval, runId: outcome.runId };
     }
-
-    // Safe ordering: dispatch claims the ticket first, then runs the CAS approve
-    // via onClaimed, then starts the run. A lost CAS throws inside onClaimed,
-    // which releases the claim, so an already-decided plan never starts a run.
-    // On a dispatch retry the row is already approved; instead of the CAS,
-    // onClaimed re-verifies it is still approved-without-run under the claim,
-    // so a concurrently dispatched run can never be doubled.
-    const result = await dispatchPlanApproved({
-      db,
-      runRegistry: adapters.runRegistry,
-      issueTracker: adapters.issueTracker,
-      approval: row,
-      actor: approver,
-      maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
-      onClaimed: isDispatchRetry
-        ? async () => {
-            const fresh = await getApproval(db, id);
-            if (!fresh || fresh.status !== "approved" || fresh.dispatchedRunId !== null) {
-              throw createError({ statusCode: 409, statusMessage: "already_decided" });
-            }
-          }
-        : async () => {
-            await decideApproval(db, { id, decision: "approved", actor: decider });
-          },
-    });
-
-    if (result.status === "definition_gone") {
-      // A pending request that cannot resolve its version never completed the
-      // approve CAS and may be retired. An already-approved plan is final and
-      // remains protected for operator repair/recovery.
-      if (!isDispatchRetry) await rejectUndispatchableApproval(db, id);
-      throw createError({ statusCode: 410, statusMessage: "definition_gone" });
-    }
-    if (result.status === "run_in_flight") {
-      throw createError({ statusCode: 409, statusMessage: "run_in_flight" });
-    }
-
-    // The run that filed the plan parked itself as "awaiting" and has already
-    // returned, so the decision is the only thing that can end its wait: a new
-    // run implements the plan, it never resumes. Same helper and same
-    // best-effort handling as the clarification path (clarifications/
-    // answer-core.ts), and the helper is a no-op unless the row is awaiting.
-    await resolveAwaitingRun(db, row.runId).catch(() => {});
-
-    await adapters.issueTracker
-      .postComment(row.ticketKey, `Plan approved by ${approver.label}, implementation started.`)
-      .catch(() => {});
-
-    const final = await getApproval(db, id);
-    return { approval: serializeApproval(final ?? row), runId: result.runId };
   } catch (error) {
     toApprovalHttpError(error);
   }

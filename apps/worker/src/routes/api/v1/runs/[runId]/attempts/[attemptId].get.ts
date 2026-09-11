@@ -4,15 +4,14 @@ import {
 } from "h3";
 import type { WorkflowReplayAttemptDetail } from "@shared/contracts";
 
-import { getDb } from "../../../../../../db/client.js";
 import {
   requireDashboardActor,
   toHttpError,
 } from "../../../../../../services/auth/request-context.js";
 import {
-  getRunReplayAttempt,
   RunObservationStoreError,
-} from "../../../../../../run-observability/store.js";
+  readRunReplayAttempt,
+} from "../../../../../../services/run-lifecycle/run-replay-read.js";
 import {
   parseReplayAttemptId,
   parseReplayRunId,
@@ -24,8 +23,7 @@ export default defineEventHandler(
     setReplayNoStore(event);
     try {
       const actor = await requireDashboardActor(event);
-      const attempt = await getRunReplayAttempt({
-        db: getDb(),
+      const attempt = await readRunReplayAttempt({
         organizationId: actor.organizationId,
         runId: parseReplayRunId(event),
         attemptId: parseReplayAttemptId(event),

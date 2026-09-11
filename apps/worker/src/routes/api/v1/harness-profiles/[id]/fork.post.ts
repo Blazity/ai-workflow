@@ -1,8 +1,13 @@
 import { createError, defineEventHandler, readBody } from "h3";
-import type { HarnessProfileMutationResponse } from "@shared/contracts";
-import { getDb } from "../../../../../db/client.js";
-import { forkHarnessProfile } from "../../../../../harness-profiles/store.js";
+import {
+  harnessProfileForkRequestSchema,
+  parseRequestBody,
+  type HarnessProfileMutationResponse,
+} from "@shared/contracts";
 import { requireDashboardActor } from "../../../../../services/auth/request-context.js";
+import {
+  forkHarnessProfileDraft,
+} from "../../../../../services/harness/profile-authoring.js";
 import {
   parseHarnessProfileId,
   setHarnessApiNoStore,
@@ -14,24 +19,18 @@ export default defineEventHandler(
     try {
       setHarnessApiNoStore(event);
       const actor = await requireDashboardActor(event);
-      const body =
-        (await readBody<{
-          slug?: unknown;
-          expectedRevision?: unknown;
-        }>(event).catch(() => null)) ?? {};
-      if (
-        typeof body.expectedRevision !== "number"
-      ) {
-        throw createError({
-          statusCode: 400,
-          statusMessage: "expectedRevision is required",
-        });
+      const parsed = parseRequestBody(
+        harnessProfileForkRequestSchema,
+        (await readBody(event).catch(() => null)) ?? {},
+      );
+      if (!parsed.ok) {
+        throw createError({ statusCode: 400, statusMessage: parsed.message });
       }
       return {
-        profile: await forkHarnessProfile(getDb(), {
+        profile: await forkHarnessProfileDraft({
           profileId: parseHarnessProfileId(event),
-          slug: body.slug,
-          expectedRevision: body.expectedRevision,
+          slug: parsed.value.slug,
+          expectedRevision: parsed.value.expectedRevision,
           actor: {
             organizationId: actor.organizationId,
             role: actor.role,

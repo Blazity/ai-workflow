@@ -1,4 +1,5 @@
 import type { ManualDispatchResponse } from "@shared/contracts";
+import { manualDispatchRequestSchema, parseRequestBody } from "@shared/contracts";
 import {
   createError,
   defineEventHandler,
@@ -6,17 +7,16 @@ import {
   readBody,
   setResponseStatus,
 } from "h3";
-import { env } from "../../../../../../../config/env.js";
-import { getDb } from "../../../../../../../db/client.js";
-import { createAdapters } from "../../../../../../../services/vcs/adapters.js";
-import { requireDashboardActor } from "../../../../../../../services/auth/request-context.js";
+import {
+  requireDashboardActor,
+} from "../../../../../../../services/auth/request-context.js";
 import { canDispatchWorkflowRuns } from "../../../../../../../services/auth/roles.js";
 import {
-  parseManualDispatchRequest,
   toManualDispatchHttpError,
 } from "../../../../../../../services/manual-dispatch/http.js";
-import { dispatchManualWorkflow } from "../../../../../../../services/manual-dispatch/service.js";
-import { dashboardUserLabel } from "../../../../../../../pre-pr-checks/store.js";
+import {
+  dispatchTriggerManually,
+} from "../../../../../../../services/workflow-definitions/trigger-manual-dispatch.js";
 import { parseDefinitionId } from "../../../../workflow-definitions.get.js";
 
 export default defineEventHandler(
@@ -31,21 +31,20 @@ export default defineEventHandler(
       if (!triggerNodeId) {
         throw createError({ statusCode: 404, statusMessage: "Unknown trigger" });
       }
-      const request = parseManualDispatchRequest(
-        await readBody<unknown>(event).catch(() => null),
+      const parsed = parseRequestBody(
+        manualDispatchRequestSchema,
+        await readBody(event).catch(() => null),
       );
-      const db = getDb();
-      const response = await dispatchManualWorkflow({
-        db,
-        adapters: createAdapters(),
+      if (!parsed.ok) {
+        throw createError({ statusCode: 400, statusMessage: parsed.message });
+      }
+      const request = parsed.value;
+      const response = await dispatchTriggerManually({
         definitionId,
         triggerNodeId,
         request,
-        actor: {
-          id: actor.userId,
-          label: await dashboardUserLabel(db, actor.userId),
-        },
-        maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
+        actorId: actor.userId,
+        actorRole: actor.role,
       });
       setResponseStatus(event, response.status === "started" ? 201 : 202);
       return response;

@@ -30,7 +30,7 @@ import {
   serializeMcpContract,
 } from "./contract-artifact.js";
 import { createMcpServer } from "./server.js";
-import { depsFor } from "./test-support.js";
+import { depsFor } from "../test-support/mcp.js";
 
 const committedSnapshot = readFileSync(MCP_CONTRACT_SNAPSHOT_PATH, "utf8");
 const committed = JSON.parse(committedSnapshot) as { contractHash: string };

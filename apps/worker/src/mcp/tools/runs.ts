@@ -12,13 +12,12 @@ import type {
   WorkflowReplayAttemptSummary,
 } from "@shared/contracts";
 
-import { env } from "../../config/env.js";
-import { fetchRunDetailFromDb } from "../../db/queries/run-detail-read.js";
-import { sanitizeRunDetailForResponse } from "../../services/overview/sanitize-run-detail.js";
 import {
-  getRunReplay,
-  getRunReplayAttempt,
-  getRunReplayAvailability,
+  sanitizeRunDetailForResponse,
+} from "../../services/overview/sanitize-run-detail.js";
+import { issueTrackerBaseUrl } from "../../services/settings/integration-settings.js";
+import { mcpSettings } from "../../services/settings/runtime-settings.js";
+import {
   MAX_REPLAY_PAGE_LIMIT,
   RunObservationStoreError,
 } from "../../run-observability/store.js";
@@ -53,18 +52,14 @@ function pollAfterMs(terminal: boolean): number | null {
  * diagnoseRun or hand it back to the agent unredacted.
  */
 async function loadSanitizedRun(
-  db: McpToolDependencies["db"],
+  services: McpToolDependencies["services"],
   runId: string,
 ): Promise<{ run: RunDetail; steps: RunStep[] }> {
   // No model fallback passed any more: AIW-253 made the run's model attribution
   // come from the live harness manifest instead of an env-derived guess, and
   // fetchRunDetailFromDb dropped the option. Passing one here would have been
   // silently ignored at runtime while claiming to influence the answer.
-  const loaded = await fetchRunDetailFromDb({
-    db,
-    runId,
-    jiraBaseUrl: env.JIRA_BASE_URL,
-  });
+  const loaded = await services.fetchRunDetail(runId, issueTrackerBaseUrl());
   if (!loaded) throw new McpPublicError("NOT_FOUND", "Run not found", false);
   return sanitizeRunDetailForResponse({ run: loaded.run, steps: loaded.steps });
 }
@@ -114,7 +109,7 @@ const TRACE_PAGE_LIMIT = Math.max(
   1,
   Math.min(
     MAX_REPLAY_PAGE_LIMIT,
-    Math.floor(env.MCP_MAX_RESULT_BYTES / 2 / TRACE_ATTEMPT_MAX_BYTES),
+    Math.floor(mcpSettings().maxResultBytes / 2 / TRACE_ATTEMPT_MAX_BYTES),
   ),
 );
 
@@ -290,8 +285,7 @@ async function loadRunDebugOverview(
   runId: string,
   run: RunDetail,
 ) {
-  const replay = await getRunReplay({
-    db: deps.db,
+  const replay = await deps.services.getRunReplay({
     runId,
     organizationId: deps.actor.organizationId,
     limit: MAX_REPLAY_PAGE_LIMIT,
@@ -332,14 +326,12 @@ async function loadAttemptDebugDetail(
   attemptId: number,
   run: RunDetail,
 ) {
-  const availability = await getRunReplayAvailability({
-    db: deps.db,
+  const availability = await deps.services.getRunReplayAvailability({
     runId,
     organizationId: deps.actor.organizationId,
     now: deps.now(),
   });
-  const detail: WorkflowReplayAttemptDetail | null = await getRunReplayAttempt({
-    db: deps.db,
+  const detail: WorkflowReplayAttemptDetail | null = await deps.services.getRunReplayAttempt({
     runId,
     organizationId: deps.actor.organizationId,
     attemptId,
@@ -397,7 +389,7 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
         toolName: "runs.get",
         targetRefs: [input.runId],
         operation: async () => {
-          const { run } = await loadSanitizedRun(deps.db, input.runId);
+          const { run } = await loadSanitizedRun(deps.services, input.runId);
           const summary = toRunSummary(run);
           return { ...summary, pollAfterMs: pollAfterMs(summary.terminal) };
         },
@@ -423,11 +415,10 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
           // while runs.get, runs.result and runs.diagnose all answer NOT_FOUND
           // for the same id, so a caller was told the run exists but has no
           // trace. getRunReplay cannot tell those apart on its own.
-          const { run } = await loadSanitizedRun(deps.db, input.runId);
+          const { run } = await loadSanitizedRun(deps.services, input.runId);
           let replay;
           try {
-            replay = await getRunReplay({
-              db: deps.db,
+            replay = await deps.services.getRunReplay({
               runId: input.runId,
               organizationId: deps.actor.organizationId,
               limit: TRACE_PAGE_LIMIT,
@@ -465,7 +456,7 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
           // snapshot with an explicit marker keeps the page and the cursor
           // usable, and says which of the two happened.
           const snapshotBudget =
-            env.MCP_MAX_RESULT_BYTES - jsonByteLength(page) - TRACE_ENVELOPE_HEADROOM_BYTES;
+            mcpSettings().maxResultBytes - jsonByteLength(page) - TRACE_ENVELOPE_HEADROOM_BYTES;
           const snapshotFits =
             replay.snapshot !== null && jsonByteLength(replay.snapshot) <= snapshotBudget;
           return {
@@ -491,7 +482,7 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
         toolName: "runs.result",
         targetRefs: [input.runId],
         operation: async () => {
-          const { run } = await loadSanitizedRun(deps.db, input.runId);
+          const { run } = await loadSanitizedRun(deps.services, input.runId);
           const terminal = isTerminalRunStatus(run.status);
           // "awaiting" is terminal for polling, which contracts.ts freezes so an
           // agent stops instead of spinning to the timeout. It is NOT a finished
@@ -538,7 +529,7 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
         toolName: "runs.diagnose",
         targetRefs: [input.runId],
         operation: async () => {
-          const { run, steps } = await loadSanitizedRun(deps.db, input.runId);
+          const { run, steps } = await loadSanitizedRun(deps.services, input.runId);
           const diagnoseInput: DiagnoseRunInput = {
             status: run.status,
             error: run.error ? { code: run.error.code, message: run.error.message } : null,
@@ -582,11 +573,10 @@ export function registerRunLogsTool(server: McpServer, deps: McpToolDependencies
           // statusReason verbatim from the durable row (the clamp lives only in
           // sanitizeRunDetailForResponse). Resolved first so a bad runId answers
           // NOT_FOUND, exactly like every sibling run read.
-          const loaded = await fetchRunDetailFromDb({
-            db: deps.db,
-            runId: input.runId,
-            jiraBaseUrl: env.JIRA_BASE_URL,
-          });
+          const loaded = await deps.services.fetchRunDetail(
+            input.runId,
+            issueTrackerBaseUrl(),
+          );
           if (!loaded) throw new McpPublicError("NOT_FOUND", "Run not found", false);
           return input.attemptId === undefined
             ? loadRunDebugOverview(deps, input.runId, loaded.run)

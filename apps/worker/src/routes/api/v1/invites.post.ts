@@ -1,60 +1,29 @@
-import { Resend } from "resend";
 import { createError, defineEventHandler, readBody } from "h3";
-import { env } from "../../../config/env.js";
-import { getDb } from "../../../db/client.js";
-import { createDashboardInvite, type SendInviteEmail } from "../../../services/auth/invites.js";
-import { requireDashboardActor, toHttpError } from "../../../services/auth/request-context.js";
-import { DashboardAuthError } from "../../../services/auth/users-read.js";
-import { sendEmail } from "../../../services/email/send-email.js";
+import {
+  dashboardInviteCreateRequestSchema,
+  parseRequestBody,
+} from "@shared/contracts";
+import { createInviteForActor } from "../../../services/auth/dashboard-invites.js";
+import {
+  requireDashboardActor,
+  toHttpError,
+} from "../../../services/auth/request-context.js";
 
 export default defineEventHandler(async (event) => {
   const actor = await requireDashboardActor(event);
-  const body = await readBody<{ email?: string; role?: string }>(event);
-  if (!body?.email) {
-    throw createError({ statusCode: 400, statusMessage: "Missing email" });
+  // Not tolerant of an unreadable body, unlike the other bodies here: a request
+  // whose JSON does not parse is refused by readBody itself, as it always was.
+  const parsed = parseRequestBody(
+    dashboardInviteCreateRequestSchema,
+    (await readBody(event)) ?? {},
+  );
+  if (!parsed.ok) {
+    throw createError({ statusCode: 400, statusMessage: parsed.message });
   }
-  if (body.role && body.role !== "member") {
-    throw createError({ statusCode: 400, statusMessage: "Invites can only create members" });
-  }
-  const sendInviteEmail = createResendInviteSender();
 
   try {
-    return await createDashboardInvite(getDb(), {
-      organizationSlug: env.DASHBOARD_ORG_SLUG,
-      organizationName: env.DASHBOARD_ORG_NAME,
-      dashboardOrigin: env.DASHBOARD_ORIGIN,
-      actor,
-      email: body.email,
-      sendInviteEmail,
-    });
+    return await createInviteForActor({ actor, email: parsed.value.email });
   } catch (error) {
     toHttpError(error);
   }
 });
-
-function createResendInviteSender(): SendInviteEmail {
-  const apiKey = env.RESEND_API_KEY;
-  const from = env.RESEND_FROM_EMAIL;
-  if (!apiKey || !from) {
-    throw createError({ statusCode: 503, statusMessage: "Email is not configured" });
-  }
-
-  const client = new Resend(apiKey);
-  return async ({ to, subject, html, text, deliveryId }) => {
-    try {
-      return await sendEmail(client, {
-        from,
-        to,
-        subject,
-        html,
-        text,
-        tags: [{ name: "invite_delivery_id", value: deliveryId }],
-      });
-    } catch (error) {
-      throw new DashboardAuthError(
-        502,
-        error instanceof Error ? error.message : "Email provider failed",
-      );
-    }
-  };
-}

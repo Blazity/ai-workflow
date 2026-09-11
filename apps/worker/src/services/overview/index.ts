@@ -15,8 +15,21 @@ export {
   collectBlockStatuses,
 } from "./collect-block-statuses.js";
 export {
+  collectCostAggregate,
+} from "./collect-cost.js";
+export {
+  EVAL_WINDOW_HOURS,
+  collectEvalSummary,
+} from "./collect-eval-summary.js";
+export type {
+  EvalSummary,
+} from "./collect-eval-summary.js";
+export {
   collectEvals,
 } from "./collect-evals.js";
+export {
+  collectRunKpis,
+} from "./collect-kpis.js";
 export {
   collectLiveRuns,
 } from "./collect-live-runs.js";

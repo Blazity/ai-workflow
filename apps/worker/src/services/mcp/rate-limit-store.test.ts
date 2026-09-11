@@ -7,11 +7,11 @@ const loggerMock = vi.hoisted(() => ({
   error: vi.fn(),
   debug: vi.fn(),
 }));
-vi.mock("../infra/logger.js", () => ({ logger: loggerMock }));
+vi.mock("../../infra/logger.js", () => ({ logger: loggerMock }));
 
-import type { Db } from "../db/client.js";
-import { createTestDb } from "../db/test-db.js";
-import { mcpRateLimitWindows, organization } from "../db/schema.js";
+import type { Db } from "../../db/client.js";
+import { createTestDb } from "../../db/test-db.js";
+import { mcpRateLimitWindows, organization } from "../../db/schema.js";
 import type { McpActorContext, McpToolName } from "./contracts.js";
 import { consumeMcpRateLimit, sweepMcpRateLimits } from "./rate-limit-store.js";
 

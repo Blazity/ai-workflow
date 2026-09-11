@@ -1,13 +1,14 @@
 import { createError, defineEventHandler, readBody } from "h3";
-import type {
-  HarnessLocalSkillImportRequest,
-  HarnessSkillImportResponse,
+import {
+  harnessLocalSkillImportBodySchema,
+  parseRequestBody,
+  type HarnessLocalSkillImportRequest,
+  type HarnessSkillImportResponse,
 } from "@shared/contracts";
-import { getDb } from "../../../../db/client.js";
-import { importLocalSkills } from "../../../../harness-profiles/local-skills.js";
 import { requireDashboardActor } from "../../../../services/auth/request-context.js";
 import { canManageHarnessProfiles } from "../../../../services/auth/roles.js";
 import { DashboardAuthError } from "../../../../services/auth/users-read.js";
+import { importDeploymentSkills } from "../../../../services/harness/skill-sources.js";
 import { setHarnessApiNoStore } from "../harness-profiles.get.js";
 import { toHarnessSkillHttpError } from "./discover.post.js";
 
@@ -24,21 +25,21 @@ export default defineEventHandler(
       if (!canManageHarnessProfiles(actor.role)) {
         throw new DashboardAuthError(403, "Forbidden");
       }
-      const body =
-        (await readBody<Partial<HarnessLocalSkillImportRequest>>(event).catch(
-          () => null,
-        )) ?? {};
-      if (!Array.isArray(body.skills)) {
-        throw createError({
-          statusCode: 400,
-          statusMessage: "Selected skills are required",
-        });
+      const parsed = parseRequestBody(
+        harnessLocalSkillImportBodySchema,
+        (await readBody(event).catch(() => null)) ?? {},
+      );
+      if (!parsed.ok) {
+        throw createError({ statusCode: 400, statusMessage: parsed.message });
       }
       return {
-        artifacts: await importLocalSkills(getDb(), {
+        artifacts: await importDeploymentSkills({
           organizationId: actor.organizationId,
           actorId: actor.userId,
-          skills: body.skills,
+          // The selection shape is the import's own business: it checks each
+          // entry against what this deployment actually ships.
+          skills: parsed.value
+            .skills as HarnessLocalSkillImportRequest["skills"],
         }),
       };
     } catch (error) {

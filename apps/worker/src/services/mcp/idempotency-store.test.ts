@@ -1,9 +1,9 @@
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import type { Db } from "../db/client.js";
-import { createTestDb } from "../db/test-db.js";
-import { mcpIdempotencyKeys, organization } from "../db/schema.js";
+import type { Db } from "../../db/client.js";
+import { createTestDb } from "../../db/test-db.js";
+import { mcpIdempotencyKeys, organization } from "../../db/schema.js";
 import type { IdempotencyInput } from "./contracts.js";
 import {
   beginMcpMutation,

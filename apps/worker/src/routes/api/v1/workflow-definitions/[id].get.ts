@@ -1,39 +1,39 @@
 import { createError, defineEventHandler } from "h3";
 import type { WorkflowDefinitionDetailResponse } from "@shared/contracts";
-import { getDb } from "../../../../db/client.js";
-import { requireDashboardActor, toHttpError } from "../../../../services/auth/request-context.js";
 import {
-  getWorkflowDefinition,
-  getWorkflowDefinitionDraft,
-  getDeployedWorkflowDefinitionVersion,
-  listWorkflowDefinitionVersionRows,
+  requireDashboardActor,
+  toHttpError,
+} from "../../../../services/auth/request-context.js";
+import {
+  readWorkflowDefinitionDetail,
+} from "../../../../services/workflow-definitions/definition-reads.js";
+import {
   serializeWorkflowDefinitionVersion,
-} from "../../../../workflow-definition/store.js";
-import { parseDefinitionId, serializeDefinitionMeta } from "../workflow-definitions.get.js";
+} from "../../../../services/workflow-definitions/definition-store.js";
+import {
+  parseDefinitionId,
+  serializeDefinitionMeta,
+} from "../workflow-definitions.get.js";
 
 export default defineEventHandler(
   async (event): Promise<WorkflowDefinitionDetailResponse | undefined> => {
     try {
       await requireDashboardActor(event);
       const id = parseDefinitionId(event);
-      const dbHandle = getDb();
 
-      const row = await getWorkflowDefinition(dbHandle, id);
-      if (!row || row.archivedAt) {
+      const detail = await readWorkflowDefinitionDetail(id);
+      if (!detail) {
         throw createError({ statusCode: 404, statusMessage: "Unknown definition" });
       }
 
-      const [draft, deployedRow, versionRows] = await Promise.all([
-        getWorkflowDefinitionDraft(dbHandle, id),
-        getDeployedWorkflowDefinitionVersion(dbHandle, id),
-        listWorkflowDefinitionVersionRows(dbHandle, id),
-      ]);
-      const versions = versionRows.map(serializeWorkflowDefinitionVersion);
-      const deployed = deployedRow ? serializeWorkflowDefinitionVersion(deployedRow) : null;
+      const versions = detail.versionRows.map(serializeWorkflowDefinitionVersion);
+      const deployed = detail.deployedRow
+        ? serializeWorkflowDefinitionVersion(detail.deployedRow)
+        : null;
       return {
-        meta: serializeDefinitionMeta(row),
-        draft: draft?.draft ?? null,
-        layout: row.layout,
+        meta: serializeDefinitionMeta(detail.row),
+        draft: detail.draft?.draft ?? null,
+        layout: detail.row.layout,
         deployed,
         current: deployed,
         versions,

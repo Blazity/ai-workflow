@@ -26,7 +26,7 @@ import {
   workflowDefinitionTriggers,
   workflowDefinitionVersions,
 } from "../../db/schema.js";
-import { depsFor } from "../test-support.js";
+import { depsFor } from "../../test-support/mcp.js";
 import { registerDiscoveryTools } from "./discovery.js";
 
 let db: Db;

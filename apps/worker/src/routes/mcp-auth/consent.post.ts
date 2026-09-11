@@ -9,16 +9,15 @@ import {
 } from "h3";
 import { isAPIError } from "better-auth/api";
 
-import { env } from "../../config/env.js";
 import { auth } from "../../auth-instance.js";
 import { logger } from "../../infra/logger.js";
 import {
-  allowedScopes,
   clearOAuthFlowCookie,
   describeOAuthFlowCookie,
-  isSameOriginPost,
   readOAuthFlowCookie,
-} from "../../mcp/auth-pages.js";
+} from "../../services/auth/oauth-flow-cookie.js";
+import { workerOriginUrl } from "../../services/auth/sso-redirects.js";
+import { allowedScopes, isSameOriginPost } from "../../mcp/auth-pages.js";
 
 const AUTHORIZATION_FAILURE_CODES = new Set([
   "access_denied",
@@ -54,7 +53,7 @@ export default defineEventHandler(async (event) => {
   // (:339-347). The first request here never reads its body, only the method and
   // the origin header, so the stream is still intact for the form read below.
   const request = toWebRequest(event);
-  if (!isSameOriginPost(request, env.BETTER_AUTH_URL)) {
+  if (!isSameOriginPost(request, workerOriginUrl())) {
     throw createError({ statusCode: 403, statusMessage: "Invalid request origin" });
   }
   const form = await readFormData(event);
@@ -71,7 +70,6 @@ export default defineEventHandler(async (event) => {
   }
   const oauthQuery = readOAuthFlowCookie(
     getHeader(event, "cookie") ?? null,
-    env.BETTER_AUTH_SECRET,
     new Date(),
     flowId,
   );
@@ -84,7 +82,6 @@ export default defineEventHandler(async (event) => {
         cookiePresent: (getHeader(event, "cookie") ?? "").includes("mcp_oauth="),
         reason: describeOAuthFlowCookie(
           getHeader(event, "cookie") ?? null,
-          env.BETTER_AUTH_SECRET,
           new Date(),
           flowId,
         ),
@@ -106,13 +103,13 @@ export default defineEventHandler(async (event) => {
   let response: Response;
   try {
     response = await auth.handler(
-      new Request(`${env.BETTER_AUTH_URL.replace(/\/$/, "")}/api/auth/oauth2/consent`, {
+      new Request(`${workerOriginUrl()}/api/auth/oauth2/consent`, {
         method: "POST",
         headers: {
           accept: "application/json",
           "content-type": "application/json",
           cookie: getHeader(event, "cookie") ?? "",
-          origin: new URL(env.BETTER_AUTH_URL).origin,
+          origin: new URL(workerOriginUrl()).origin,
         },
         body: JSON.stringify({ accept, scope: scopes.join(" "), oauth_query: oauthQuery }),
       }),
@@ -150,7 +147,7 @@ export default defineEventHandler(async (event) => {
   const redirect = new URL(location ?? String(result.url));
   redirect.searchParams.set(
     "iss",
-    `${env.BETTER_AUTH_URL.replace(/\/$/, "")}/api/auth`,
+    `${workerOriginUrl()}/api/auth`,
   );
   setResponseHeader(event, "set-cookie", clearOAuthFlowCookie());
   return sendRedirect(event, redirect.href, 302);

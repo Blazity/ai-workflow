@@ -21,7 +21,7 @@ import { BLOCK_TYPE_SPECS } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
 import { organization } from "../../db/schema.js";
-import { depsFor } from "../test-support.js";
+import { depsFor } from "../../test-support/mcp.js";
 import { registerBlockTools } from "./blocks.js";
 
 let db: Db;

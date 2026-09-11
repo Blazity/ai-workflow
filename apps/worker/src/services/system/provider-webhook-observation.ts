@@ -1,7 +1,7 @@
 import { waitUntil } from "@vercel/functions";
-import { env } from "../../config/env.js";
 import { getDb } from "../../db/client.js";
 import { logger } from "../../infra/logger.js";
+import { providerWebhookSecret } from "../settings/index.js";
 import {
   recordSystemHealthObservation,
   systemHealthObservationScope,
@@ -40,23 +40,6 @@ export function observeProviderWebhook(
     logWriteFailure(integrationId, outcome, reason, error);
   });
   waitUntil(write);
-}
-
-function providerWebhookSecret(
-  integrationId: "github" | "gitlab" | "jira" | "slack" | "email",
-): string | undefined {
-  switch (integrationId) {
-    case "github":
-      return env.GITHUB_WEBHOOK_SECRET;
-    case "gitlab":
-      return env.GITLAB_WEBHOOK_SECRET;
-    case "jira":
-      return env.JIRA_WEBHOOK_SECRET;
-    case "slack":
-      return env.SLACK_SIGNING_SECRET;
-    case "email":
-      return env.RESEND_WEBHOOK_SECRET;
-  }
 }
 
 function logWriteFailure(

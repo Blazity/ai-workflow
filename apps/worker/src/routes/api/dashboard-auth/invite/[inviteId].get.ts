@@ -1,9 +1,9 @@
 import { createError, defineEventHandler, getRouterParam } from "h3";
 
-import { env } from "../../../../config/env.js";
 import { auth } from "../../../../auth-instance.js";
-import { getDb } from "../../../../db/client.js";
-import { getDashboardInviteAcceptanceState } from "../../../../services/auth/invite-acceptance.js";
+import {
+  readDashboardInviteAcceptance,
+} from "../../../../services/auth/invite-requests.js";
 import { toHttpError } from "../../../../services/auth/request-context.js";
 
 export default defineEventHandler(async (event) => {
@@ -13,10 +13,7 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 400, statusMessage: "Missing invite id" });
     }
 
-    return await getDashboardInviteAcceptanceState(getDb(), auth, {
-      organizationSlug: env.DASHBOARD_ORG_SLUG,
-      inviteId,
-    });
+    return await readDashboardInviteAcceptance(auth, inviteId);
   } catch (error) {
     toHttpError(error);
   }

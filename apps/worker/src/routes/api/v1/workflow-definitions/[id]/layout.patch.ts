@@ -1,50 +1,37 @@
 import { createError, defineEventHandler, readBody } from "h3";
-import type {
-  WorkflowDefinitionLayoutInput,
-  WorkflowDefinitionLayoutResponse,
+import type { WorkflowDefinitionLayoutResponse } from "@shared/contracts";
+import {
+  parseRequestBody,
+  workflowDefinitionLayoutPatchRequestSchema,
 } from "@shared/contracts";
-import { getDb } from "../../../../../db/client.js";
 import { requireDashboardActor } from "../../../../../services/auth/request-context.js";
-import { dashboardUserLabel } from "../../../../../pre-pr-checks/store.js";
-import { saveWorkflowDefinitionLayout } from "../../../../../workflow-definition/store.js";
+import {
+  saveWorkflowDefinitionLayoutRevision,
+} from "../../../../../services/workflow-definitions/definition-authoring.js";
 import {
   parseDefinitionId,
   serializeDefinitionMeta,
   toWorkflowDefinitionHttpError,
 } from "../../workflow-definitions.get.js";
 
-interface LayoutBody {
-  layout?: unknown;
-  expectedLayoutRevision?: unknown;
-}
-
 export default defineEventHandler(
   async (event): Promise<WorkflowDefinitionLayoutResponse | undefined> => {
     try {
       const actor = await requireDashboardActor(event);
       const id = parseDefinitionId(event);
-      const body = (await readBody<LayoutBody>(event).catch(() => null)) ?? {};
-      if (!body.layout || typeof body.layout !== "object") {
-        throw createError({ statusCode: 400, statusMessage: "Invalid workflow layout" });
-      }
-      if (
-        typeof body.expectedLayoutRevision !== "number" ||
-        !Number.isInteger(body.expectedLayoutRevision) ||
-        body.expectedLayoutRevision < 0
-      ) {
-        throw createError({ statusCode: 400, statusMessage: "Invalid layout revision" });
+      const parsed = parseRequestBody(
+        workflowDefinitionLayoutPatchRequestSchema,
+        (await readBody(event).catch(() => null)) ?? {},
+      );
+      if (!parsed.ok) {
+        throw createError({ statusCode: 400, statusMessage: parsed.message });
       }
 
-      const dbHandle = getDb();
-      const updated = await saveWorkflowDefinitionLayout(dbHandle, {
+      const updated = await saveWorkflowDefinitionLayoutRevision({
         definitionId: id,
-        layout: body.layout as WorkflowDefinitionLayoutInput,
-        expectedLayoutRevision: body.expectedLayoutRevision,
-        actor: {
-          role: actor.role,
-          id: actor.userId,
-          label: await dashboardUserLabel(dbHandle, actor.userId),
-        },
+        layout: parsed.value.layout,
+        expectedLayoutRevision: parsed.value.expectedLayoutRevision,
+        actor: { role: actor.role, userId: actor.userId },
       });
       return {
         meta: serializeDefinitionMeta(updated),

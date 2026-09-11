@@ -2,8 +2,8 @@ import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { and, asc, eq, inArray, lt, lte } from "drizzle-orm";
 
-import type { Db } from "../db/client.js";
-import { mcpIdempotencyKeys } from "../db/schema.js";
+import type { Db } from "../../db/client.js";
+import { mcpIdempotencyKeys } from "../../db/schema.js";
 import {
   McpPublicError,
   type IdempotencyInput,

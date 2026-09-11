@@ -10,7 +10,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 import { McpPublicError, type McpActorContext } from "./contracts.js";
 
-type WriteMcpAudit = (typeof import("./audit-store.js"))["writeMcpAudit"];
+type WriteMcpAudit = (typeof import("../services/mcp/audit-store.js"))["writeMcpAudit"];
 
 const state = vi.hoisted(() => ({
   env: {
@@ -38,8 +38,8 @@ vi.mock("../db/client.js", () => ({ getDb: () => state.db }));
 vi.mock("../services/vcs/adapters.js", () => ({ createAdapters: state.createAdapters }));
 // Delegates to the real store unless a test makes it fail: the audit assertions
 // elsewhere in this file read actual rows, so a blanket stub would hollow them out.
-vi.mock("./audit-store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./audit-store.js")>();
+vi.mock("../services/mcp/audit-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/mcp/audit-store.js")>();
   state.realWriteMcpAudit = actual.writeMcpAudit;
   return { ...actual, writeMcpAudit: state.writeMcpAudit };
 });
@@ -47,6 +47,7 @@ vi.mock("./audit-store.js", async (importOriginal) => {
 import type { Db } from "../db/client.js";
 import { createTestDb } from "../db/test-db.js";
 import { mcpAuditEvents, mcpRateLimitWindows, organization } from "../db/schema.js";
+import { MCP_CONTRACT_HASH } from "./contract-artifact.js";
 
 const mcpPost = (await import("../routes/mcp.post.js")).default;
 const mcpGet = (await import("../routes/mcp.get.js")).default;
@@ -409,6 +410,16 @@ describe("gate before the tool handler", () => {
     ]);
     const trail = await db().select().from(mcpAuditEvents);
     expect(JSON.stringify(trail)).not.toContain("nope");
+  });
+
+  it("stamps the audit row with the contract hash the envelopes advertise", async () => {
+    // The audit store takes this hash as an input now, because the catalog it is
+    // computed from lives above that tier. This is where the value handed down
+    // is checked to be the real one, and the same one the response meta carries.
+    await postToolCall(toolCall(20, "tickets.nope"));
+
+    const [row] = await db().select().from(mcpAuditEvents);
+    expect(row?.contractHash).toBe(MCP_CONTRACT_HASH);
   });
 
   it("charges arguments that miss the schema of a registered tool", async () => {

@@ -4,62 +4,23 @@ import {
   readBody,
   setResponseHeader,
 } from "h3";
-import type {
-  WorkflowDefinition,
-  WorkflowDefinitionDetailResponse,
+import type { WorkflowDefinitionDetailResponse } from "@shared/contracts";
+import {
+  parseRequestBody,
+  workflowDefinitionCreateRequestSchema,
 } from "@shared/contracts";
-import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
-import { env } from "../../../config/env.js";
-import { getDb } from "../../../db/client.js";
-import { getCurrentSystemHarnessProfileReference } from "../../../harness-profiles/store.js";
 import { requireDashboardActor } from "../../../services/auth/request-context.js";
 import { canEditWorkflowDefinitions } from "../../../services/auth/roles.js";
-import { dashboardUserLabel } from "../../../pre-pr-checks/store.js";
-import { defaultWorkflowDefinitionV2 } from "../../../workflow-definition/default.js";
-import { workflowDefinitionTemplate } from "../../../workflow-definition/templates.js";
 import {
-  createWorkflowDefinitionDraft,
-  WorkflowDefinitionStoreError,
-  getCurrentWorkflowDefinitionVersion,
-  getDeployedWorkflowDefinitionVersion,
-  getWorkflowDefinition,
-  getWorkflowDefinitionDraft,
+  createWorkflowDefinitionFromSource,
+} from "../../../services/workflow-definitions/definition-authoring.js";
+import {
   serializeWorkflowDefinitionVersion,
-} from "../../../workflow-definition/store.js";
+} from "../../../services/workflow-definitions/definition-store.js";
 import {
   serializeDefinitionMeta,
   toWorkflowDefinitionHttpError,
 } from "./workflow-definitions.get.js";
-
-type CreateSource =
-  | { kind: "default" }
-  | { kind: "template"; templateId: string }
-  | { kind: "duplicate"; definitionId: number };
-
-interface CreateBody {
-  name?: unknown;
-  source?: unknown;
-}
-
-function parseSource(source: unknown): CreateSource {
-  if (source && typeof source === "object") {
-    const kind = (source as { kind?: unknown }).kind;
-    if (kind === "default") return { kind: "default" };
-    if (kind === "template") {
-      const templateId = (source as { templateId?: unknown }).templateId;
-      if (typeof templateId === "string" && templateId.length > 0) {
-        return { kind: "template", templateId };
-      }
-    }
-    if (kind === "duplicate") {
-      const definitionId = (source as { definitionId?: unknown }).definitionId;
-      if (typeof definitionId === "number" && Number.isInteger(definitionId) && definitionId > 0) {
-        return { kind: "duplicate", definitionId };
-      }
-    }
-  }
-  throw createError({ statusCode: 400, statusMessage: "Invalid source" });
-}
 
 export default defineEventHandler(
   async (
@@ -71,90 +32,24 @@ export default defineEventHandler(
       if (!canEditWorkflowDefinitions(actor.role)) {
         throw createError({ statusCode: 403, statusMessage: "Forbidden" });
       }
-      const body = (await readBody<CreateBody>(event).catch(() => null)) ?? {};
-      const name = typeof body.name === "string" ? body.name.trim() : "";
-      if (name.length === 0) {
-        throw createError({ statusCode: 400, statusMessage: "Invalid name" });
-      }
-      const source = parseSource(body.source);
-
-      const dbHandle = getDb();
-      const currentSystemProfile =
-        await getCurrentSystemHarnessProfileReference(
-          dbHandle,
-          env.AGENT_KIND,
-        );
-
-      let seed: WorkflowDefinition;
-      if (source.kind === "duplicate") {
-        const sourceRow = await getWorkflowDefinition(
-          dbHandle,
-          source.definitionId,
-        );
-        if (!sourceRow || sourceRow.archivedAt) {
-          throw createError({
-            statusCode: 404,
-            statusMessage: "Unknown definition",
-          });
-        }
-        const draft = await getWorkflowDefinitionDraft(
-          dbHandle,
-          source.definitionId,
-        );
-        const deployed = await getDeployedWorkflowDefinitionVersion(
-          dbHandle,
-          source.definitionId,
-        );
-        const current = await getCurrentWorkflowDefinitionVersion(
-          dbHandle,
-          source.definitionId,
-        );
-        const storedSource = deployed ?? current;
-        if (!draft && storedSource?.schema === "legacy-v1") {
-          throw new WorkflowDefinitionStoreError(409, RETIRED_SCHEMA_MESSAGE);
-        }
-        seed =
-          draft?.draft ??
-          (storedSource?.schema === "v2" ? storedSource.definition : undefined) ??
-          defaultWorkflowDefinitionV2({
-            includeReview: env.ENABLE_REVIEW_PHASE,
-            includeLeakReview: env.ENABLE_LEAK_REVIEW,
-            provider: env.AGENT_KIND,
-            profileReference: currentSystemProfile,
-          });
-      } else if (source.kind === "template") {
-        const template = workflowDefinitionTemplate(source.templateId, {
-          includeReview: env.ENABLE_REVIEW_PHASE,
-          includeLeakReview: env.ENABLE_LEAK_REVIEW,
-          provider: env.AGENT_KIND,
-          profileReference: currentSystemProfile,
-        });
-        if (!template) {
-          throw createError({ statusCode: 400, statusMessage: "Unknown template" });
-        }
-        seed = template.definition;
-      } else {
-        seed = defaultWorkflowDefinitionV2({
-          includeReview: env.ENABLE_REVIEW_PHASE,
-          includeLeakReview: env.ENABLE_LEAK_REVIEW,
-          provider: env.AGENT_KIND,
-          profileReference: currentSystemProfile,
-        });
-      }
-
-      const created = await createWorkflowDefinitionDraft(dbHandle, {
-        name,
-        seed,
-        actor: {
-          role: actor.role,
-          id: actor.userId,
-          label: await dashboardUserLabel(dbHandle, actor.userId),
-        },
-      });
-      const current = await getCurrentWorkflowDefinitionVersion(
-        dbHandle,
-        created.definition.id,
+      const parsed = parseRequestBody(
+        workflowDefinitionCreateRequestSchema,
+        (await readBody(event).catch(() => null)) ?? {},
       );
+      if (!parsed.ok) {
+        throw createError({ statusCode: 400, statusMessage: parsed.message });
+      }
+
+      const created = await createWorkflowDefinitionFromSource({
+        name: parsed.value.name,
+        source: parsed.value.source,
+        actor: { role: actor.role, userId: actor.userId },
+      });
+      if (!created.ok) {
+        throw created.reason === "unknown_definition"
+          ? createError({ statusCode: 404, statusMessage: "Unknown definition" })
+          : createError({ statusCode: 400, statusMessage: "Unknown template" });
+      }
 
       return {
         meta: serializeDefinitionMeta(created.definition),
@@ -162,7 +57,9 @@ export default defineEventHandler(
         layout: created.definition.layout,
         deployed: null,
         current: null,
-        versions: current ? [serializeWorkflowDefinitionVersion(current)] : [],
+        versions: created.currentVersion
+          ? [serializeWorkflowDefinitionVersion(created.currentVersion)]
+          : [],
       };
     } catch (error) {
       toWorkflowDefinitionHttpError(error);

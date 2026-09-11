@@ -14,6 +14,12 @@ export type {
   AnswerClarificationOutcome,
 } from "./answer-core.js";
 export {
+  answerClarificationRequest,
+} from "./answer-request.js";
+export type {
+  AnswerClarificationRequestOutcome,
+} from "./answer-request.js";
+export {
   expireHookClarifications,
 } from "./expiry.js";
 export {

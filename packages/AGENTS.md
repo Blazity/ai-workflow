@@ -31,3 +31,22 @@ application infrastructure. ADR-001 owns the tiers.
 - **Shared dependency versions live in the root catalog.** Anything two
   projects declare goes on `catalog:`, enforced by
   `scripts/gates/check-deps-consistency.mjs`.
+
+## Request schemas live here
+
+`contracts` also owns what the worker's HTTP handlers accept. `requests-*.ts`
+holds one runtime zod schema per JSON body a route reads, `request-fields.ts`
+the field builders they share, `dashboard-roles.ts` the role vocabulary the
+admin bodies check against, and `request-parsing.ts` the seam that runs a schema
+over a parsed body: `parseRequestBody` returns a discriminated result rather
+than throwing, and `objectOrEmpty` restores the `readBody(...) ?? {}` reading
+for the handlers that used to tolerate a body that is not an object. Each schema
+answers with the sentence its handler answered with, because moving the check
+here must change where a body is refused and not what a client sees.
+
+Two consequences. The package carries a runtime dependency on zod, not a
+type-only one, so it is listed in `dependencies` and stays on the root catalog
+version. And the tests for these schemas live in the worker, under
+`apps/worker/src/routes/request-schemas/`, next to the routes whose behaviour
+they pin and inside the only project that runs vitest; the packages here test
+with `node:test`, and stage 11 revisits where they belong.

@@ -15,6 +15,12 @@ export type {
   ResendEmailDeliveryEvent,
 } from "./invite-delivery.js";
 export {
+  handleResendWebhook,
+} from "./resend-webhook.js";
+export type {
+  ResendWebhookRequest,
+} from "./resend-webhook.js";
+export {
   sendEmail,
 } from "./send-email.js";
 export {

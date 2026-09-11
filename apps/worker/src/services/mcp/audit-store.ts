@@ -1,11 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gte, inArray, lt } from "drizzle-orm";
 
-import { env } from "../config/env.js";
-import type { Db } from "../db/client.js";
-import { mcpAuditEvents } from "../db/schema.js";
+import type { Db } from "../../db/client.js";
+import { mcpAuditEvents } from "../../db/schema.js";
+import { mcpSettings } from "../settings/index.js";
 import type { McpAuditInput } from "./contracts.js";
-import { MCP_CONTRACT_HASH } from "./sanitize-result.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PRUNE_BATCH_LIMIT = 100;
@@ -19,7 +18,7 @@ export async function pruneMcpAudits(
   now: Date,
   options: { retentionDays?: number; limit?: number } = {},
 ): Promise<{ deleted: number }> {
-  const retentionDays = options.retentionDays ?? env.MCP_AUDIT_RETENTION_DAYS;
+  const retentionDays = options.retentionDays ?? mcpSettings().auditRetentionDays;
   const cutoff = new Date(now.getTime() - retentionDays * DAY_MS);
   const due = await db
     .select({ id: mcpAuditEvents.id })
@@ -63,7 +62,7 @@ export async function writeMcpAudit(db: Db, event: McpAuditInput): Promise<void>
     errorCode: event.errorCode,
     latencyMs: event.latencyMs,
     serverVersion: process.env.MCP_SERVER_VERSION ?? "0.1.0",
-    contractHash: MCP_CONTRACT_HASH,
+    contractHash: event.contractHash,
     occurredAt: event.occurredAt,
   });
 }

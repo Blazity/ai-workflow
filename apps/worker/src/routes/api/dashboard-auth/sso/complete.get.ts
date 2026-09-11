@@ -1,23 +1,25 @@
 import { defineEventHandler, getQuery, sendRedirect, toWebRequest } from "h3";
 
-import { env } from "../../../../config/env.js";
 import { auth } from "../../../../auth-instance.js";
-import { getDb } from "../../../../db/client.js";
-import { acceptDashboardSsoInvite } from "../../../../services/auth/invite-acceptance.js";
-import { createDashboardSsoHandoff } from "../../../../services/auth/sso-handoff.js";
+import {
+  acceptDashboardSsoInviteForUser,
+} from "../../../../services/auth/invite-requests.js";
+import {
+  dashboardLoginUrl,
+  dashboardSsoCompletionUrl,
+  workerUrlFor,
+} from "../../../../services/auth/sso-redirects.js";
 import { safeOAuthReturnPath } from "../../../../mcp/auth-pages.js";
 
 export default defineEventHandler(async (event) => {
-  const dashboardOrigin = env.DASHBOARD_ORIGIN.replace(/\/$/, "");
   const session = await auth.api.getSession({ headers: toWebRequest(event).headers });
   if (!session) {
-    return sendRedirect(event, `${dashboardOrigin}/login`, 302);
+    return sendRedirect(event, dashboardLoginUrl(), 302);
   }
 
   const inviteId = inviteIdFromQuery(getQuery(event).inviteId);
   if (inviteId) {
-    await acceptDashboardSsoInvite(getDb(), auth, {
-      organizationSlug: env.DASHBOARD_ORG_SLUG,
+    await acceptDashboardSsoInviteForUser(auth, {
       inviteId,
       user: { id: session.user.id, email: session.user.email },
     });
@@ -25,13 +27,14 @@ export default defineEventHandler(async (event) => {
 
   const returnTo = safeOAuthReturnPath(getQuery(event).returnTo);
   if (returnTo) {
-    return sendRedirect(event, new URL(returnTo, env.BETTER_AUTH_URL).href, 302);
+    return sendRedirect(event, workerUrlFor(returnTo), 302);
   }
 
-  const handoffToken = await createDashboardSsoHandoff(auth, session.session.token);
-  const redirectUrl = new URL("/api/auth/sso/complete", dashboardOrigin);
-  redirectUrl.searchParams.set("token", handoffToken);
-  return sendRedirect(event, redirectUrl.href, 302);
+  return sendRedirect(
+    event,
+    await dashboardSsoCompletionUrl(auth, session.session.token),
+    302,
+  );
 });
 
 function inviteIdFromQuery(value: unknown): string | null {

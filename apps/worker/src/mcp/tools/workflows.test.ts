@@ -30,7 +30,7 @@ import { createTestDb } from "../../db/test-db.js";
 import { mcpAuditEvents, organization } from "../../db/schema.js";
 import { ManualDispatchError } from "../../services/manual-dispatch/errors.js";
 import type { McpActorContext } from "../contracts.js";
-import { actorFor, depsFor } from "../test-support.js";
+import { actorFor, depsFor } from "../../test-support/mcp.js";
 import { registerWorkflowTools } from "./workflows.js";
 
 const ORG_ID = "org-execute";
