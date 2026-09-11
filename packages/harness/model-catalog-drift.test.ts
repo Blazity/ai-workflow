@@ -44,6 +44,11 @@ test("the drift gate rejects a non-owner literal and honors only reviewed exclus
       "apps/worker/.vercel/output/generated.js",
       'const id = "gpt-5.5";',
     );
+    write(
+      root,
+      "apps/worker/src/product-comment.ts",
+      "// gpt-5.5 is documentation only.\n/* claude-opus-4-8 is documentation only. */",
+    );
     write(root, "apps/worker/src/product.ts", 'const id = "gpt-5.5";');
 
     assert.throws(

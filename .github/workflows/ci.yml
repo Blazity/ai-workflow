@@ -60,7 +60,6 @@ jobs:
       - run: pnpm run typecheck
       - run: pnpm run test:release-notes
       - run: pnpm run test:ci
-      - run: pnpm --filter @shared/harness test
       - run: pnpm run test:packages
       - run: pnpm run gates
       - run: pnpm run build:ci

@@ -63,13 +63,74 @@ function isExcluded(path) {
   );
 }
 
+function withoutComments(source) {
+  let result = "";
+  let state = "code";
+  let quote = "";
+
+  for (let index = 0; index < source.length; index++) {
+    const character = source[index];
+    const next = source[index + 1];
+
+    if (state === "line-comment") {
+      if (character === "\n") {
+        result += character;
+        state = "code";
+      } else {
+        result += " ";
+      }
+      continue;
+    }
+
+    if (state === "block-comment") {
+      if (character === "*" && next === "/") {
+        result += "  ";
+        index++;
+        state = "code";
+      } else {
+        result += character === "\n" ? character : " ";
+      }
+      continue;
+    }
+
+    if (state === "string") {
+      result += character;
+      if (character === "\\") {
+        result += next ?? "";
+        index++;
+      } else if (character === quote) {
+        state = "code";
+      }
+      continue;
+    }
+
+    if (character === "/" && next === "/") {
+      result += "  ";
+      index++;
+      state = "line-comment";
+    } else if (character === "/" && next === "*") {
+      result += "  ";
+      index++;
+      state = "block-comment";
+    } else {
+      result += character;
+      if (character === '"' || character === "'" || character === "`") {
+        quote = character;
+        state = "string";
+      }
+    }
+  }
+
+  return result;
+}
+
 function violations(root) {
   return ["apps", "packages"]
     .flatMap((directory) => walk(join(root, directory)))
     .map((file) => ({ file, path: relative(root, file).replaceAll("\\", "/") }))
     .filter(({ path }) => SOURCE_FILE.test(path) && !isExcluded(path))
     .flatMap(({ file, path }) =>
-      readFileSync(file, "utf8")
+      withoutComments(readFileSync(file, "utf8"))
         .split("\n")
         .flatMap((line, index) =>
           MODEL_LITERAL.test(line) ? [`${path}:${index + 1}:${line.trim()}`] : [],
