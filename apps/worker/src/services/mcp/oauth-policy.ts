@@ -64,8 +64,17 @@ export function validateMcpOAuthRequest(input: McpOAuthRequest): void {
   }
 }
 
+/**
+ * The before hook better-auth runs on every auth request.
+ *
+ * The deployment it validates always carries a database, which is why the
+ * parameter demands one: the handler this replaced took the connection as its
+ * first argument and looked the registered client up unconditionally. Making
+ * the lookup conditional here would turn a client the store knows into an
+ * `invalid_client_metadata` refusal, so the requirement lives in the type.
+ */
 export async function validateMcpOAuthHookRequest(
-  deployment: McpOAuthDeployment,
+  deployment: McpOAuthDeployment & { db: Db },
   path: string,
   body: Record<string, unknown> | undefined,
   authorization?: string | null,
@@ -76,7 +85,7 @@ export async function validateMcpOAuthHookRequest(
   if (path === "/oauth2/token" && body?.grant_type === "client_credentials") {
     organizationId = await deploymentOrganizationId(deployment);
     const clientId = clientIdFromTokenRequest(body, authorization);
-    if (clientId && deployment.db) {
+    if (clientId) {
       serviceClient = await findRegisteredOAuthClient(deployment.db, clientId);
     }
   }

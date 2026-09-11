@@ -33,8 +33,9 @@ import { createWebhookDispatchDeps, webhookNodeOf } from "./dispatch-deps.js";
 /**
  * Public ingress for one webhook trigger endpoint, as a service operation.
  *
- * The route above it owns raw-byte capture and the HTTP answer; everything that
- * decides whether a delivery becomes a run lives here, because the order below
+ * The route above it owns how the bytes are read and the HTTP answer; everything
+ * that decides whether a delivery becomes a run lives here, including when the
+ * body is read at all, because the order below
  * is the security contract, not an implementation detail: identity of the
  * endpoint, then whether it is still live, then rate limiting, then size, then
  * authentication, and only then anything that parses what the sender sent.
@@ -97,8 +98,15 @@ export interface CustomWebhookRequest {
   endpointId: string;
   /** The sender's Content-Length header, verbatim. */
   contentLength: string | undefined;
-  /** The exact bytes the sender posted, as UTF-8. */
-  rawBody: string;
+  /**
+   * Buffers the exact bytes the sender posted and returns them as UTF-8.
+   *
+   * A function, not a string, because the order below is the security contract:
+   * an unknown, disabled or rate-limited endpoint is refused without the body
+   * ever being read, and the declared length is checked before the read too. The
+   * caller is charged for the bytes only once this operation asks for them.
+   */
+  readRawBody: () => Promise<string>;
   /** Every request header, lowercased, as the signature check reads them. */
   headers: Record<string, string | undefined>;
   /** The sender's delivery id header, when it sent one. */
@@ -159,7 +167,7 @@ export async function deliverCustomWebhook(
 
   // Require an honest Content-Length so the cheap refusal below runs before the
   // body is buffered. The post-read cap still holds as defense against a lying
-  // length: a sender controls the header, and the route buffers what arrives.
+  // length: a sender controls the header, and the read buffers what arrives.
   const declaredLength = Number(request.contentLength);
   if (!Number.isFinite(declaredLength)) {
     return refuse(db, endpointId, "length_required");
@@ -167,7 +175,7 @@ export async function deliverCustomWebhook(
   if (declaredLength > WEBHOOK_MAX_BODY_BYTES) {
     return refuse(db, endpointId, "payload_too_large");
   }
-  const rawBody = request.rawBody;
+  const rawBody = await request.readRawBody();
   if (Buffer.byteLength(rawBody, "utf8") > WEBHOOK_MAX_BODY_BYTES) {
     return refuse(db, endpointId, "payload_too_large");
   }

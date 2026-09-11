@@ -1,6 +1,8 @@
 import { createError, defineEventHandler, getHeader, readRawBody } from "h3";
 import { handleResendWebhook } from "../../services/email/index.js";
-import { TriggerHttpError } from "../../services/triggers/index.js";
+// The module that owns the error type, not the barrel: this route dispatches
+// nothing through the trigger cluster, it only maps that refusal to a status.
+import { TriggerHttpError } from "../../services/triggers/trigger-http-error.js";
 
 /**
  * Resend delivery webhook: what became of an invite email we sent.

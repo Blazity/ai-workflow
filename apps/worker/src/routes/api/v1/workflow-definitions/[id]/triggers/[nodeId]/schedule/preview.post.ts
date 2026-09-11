@@ -4,7 +4,7 @@ import type {
 } from "@shared/contracts";
 import { parseRequestBody, schedulePreviewRequestSchema } from "@shared/contracts";
 import { createError, defineEventHandler, readBody } from "h3";
-import { toHttpError } from "../../../../../../../../services/auth/index.js";
+import { toHttpError } from "../../../../../../../../services/auth/request-context.js";
 import {
   compileSchedulePreset,
   nextRuns,

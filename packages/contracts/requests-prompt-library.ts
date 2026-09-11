@@ -7,6 +7,7 @@
  * client sees.
  */
 import { z } from "zod";
+import { objectOrEmpty } from "./request-parsing";
 import type { PromptSlotDefinition } from "./prompt-slots";
 
 /** The handlers only checked that these were arrays and passed the elements
@@ -32,46 +33,54 @@ const descriptionField = z
   .nullable()
   .optional();
 
-export const promptLibraryCreateRequestSchema = z.object({
-  name: nameField,
-  body: bodyField,
-  slots: slotsField,
-  description: descriptionField,
-  tags: tagsField,
-});
+export const promptLibraryCreateRequestSchema = objectOrEmpty(
+  z.object({
+    name: nameField,
+    body: bodyField,
+    slots: slotsField,
+    description: descriptionField,
+    tags: tagsField,
+  }),
+);
 export type PromptLibraryCreateRequest = z.infer<
   typeof promptLibraryCreateRequestSchema
 >;
 
-export const promptLibraryUpdateMetaRequestSchema = z.object({
-  name: nameField.optional(),
-  description: descriptionField,
-  tags: tagsField,
-});
+export const promptLibraryUpdateMetaRequestSchema = objectOrEmpty(
+  z.object({
+    name: nameField.optional(),
+    description: descriptionField,
+    tags: tagsField,
+  }),
+);
 export type PromptLibraryUpdateMetaRequest = z.infer<
   typeof promptLibraryUpdateMetaRequestSchema
 >;
 
-export const promptLibrarySaveVersionRequestSchema = z.object({
-  body: bodyField,
-  slots: slotsField,
-});
+export const promptLibrarySaveVersionRequestSchema = objectOrEmpty(
+  z.object({
+    body: bodyField,
+    slots: slotsField,
+  }),
+);
 export type PromptLibrarySaveVersionRequest = z.infer<
   typeof promptLibrarySaveVersionRequestSchema
 >;
 
 /** Versions start at 1 and the column is int4, so a value outside that range
  *  would overflow the query into a 500 rather than a clean refusal. */
-export const promptLibraryRestoreRequestSchema = z.object({
-  version: z
-    .number({
-      required_error: "Invalid version",
-      invalid_type_error: "Invalid version",
-    })
-    .int({ message: "Invalid version" })
-    .min(1, { message: "Invalid version" })
-    .max(2147483647, { message: "Invalid version" }),
-});
+export const promptLibraryRestoreRequestSchema = objectOrEmpty(
+  z.object({
+    version: z
+      .number({
+        required_error: "Invalid version",
+        invalid_type_error: "Invalid version",
+      })
+      .int({ message: "Invalid version" })
+      .min(1, { message: "Invalid version" })
+      .max(2147483647, { message: "Invalid version" }),
+  }),
+);
 export type PromptLibraryRestoreRequest = z.infer<
   typeof promptLibraryRestoreRequestSchema
 >;

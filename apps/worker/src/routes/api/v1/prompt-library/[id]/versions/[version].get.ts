@@ -1,10 +1,15 @@
 import { createError, defineEventHandler, getRouterParam } from "h3";
 import type { PromptLibraryVersionResponse } from "@shared/contracts";
-import { requireDashboardActor, toHttpError } from "../../../../../../services/auth/index.js";
+import {
+  requireDashboardActor,
+  toHttpError,
+} from "../../../../../../services/auth/request-context.js";
 import {
   isStorablePromptVersion,
+} from "../../../../../../services/prompts/prompt-library-identifiers.js";
+import {
   readPromptVersion,
-} from "../../../../../../services/prompts/index.js";
+} from "../../../../../../services/prompts/prompt-library-reads.js";
 import { parsePromptId } from "../../../prompt-library.get.js";
 
 export default defineEventHandler(

@@ -7,9 +7,14 @@
  * client sees.
  */
 import { z } from "zod";
+import { objectOrEmpty } from "./request-parsing";
 
-// Mirrors MAX_ANSWER_LENGTH in apps/worker/src/services/clarifications/answer-core.ts,
-// which is the authority: this package may not import worker code.
+/**
+ * The longest answer a parked clarification accepts, and the only declaration of
+ * it. The worker's answer path and the MCP tool catalogue both read it from
+ * here, so the number a client is told and the number it is judged by cannot
+ * drift apart.
+ */
 export const MAX_CLARIFICATION_ANSWER_LENGTH = 10_000;
 
 /**
@@ -20,15 +25,17 @@ export const MAX_CLARIFICATION_ANSWER_LENGTH = 10_000;
  * that is what this parses to: the original string, refused as `invalid_answer`
  * when it trims to nothing or is longer than an answer can be.
  */
-export const clarificationAnswerRequestSchema = z
-  .object({ answer: z.unknown() })
-  .refine(
-    (body) => {
-      const trimmed = clarificationAnswerText(body).trim();
-      return trimmed.length > 0 && trimmed.length <= MAX_CLARIFICATION_ANSWER_LENGTH;
-    },
-    { message: "invalid_answer" },
-  );
+export const clarificationAnswerRequestSchema = objectOrEmpty(
+  z
+    .object({ answer: z.unknown() })
+    .refine(
+      (body) => {
+        const trimmed = clarificationAnswerText(body).trim();
+        return trimmed.length > 0 && trimmed.length <= MAX_CLARIFICATION_ANSWER_LENGTH;
+      },
+      { message: "invalid_answer" },
+    ),
+);
 export type ClarificationAnswerRequest = z.infer<typeof clarificationAnswerRequestSchema>;
 
 /** The answer text a parsed body carries: anything that is not a string was

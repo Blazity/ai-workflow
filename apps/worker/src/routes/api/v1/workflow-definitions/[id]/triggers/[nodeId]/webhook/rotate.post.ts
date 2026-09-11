@@ -1,8 +1,10 @@
 import type { WebhookRotateResponse } from "@shared/contracts";
 import { parseRequestBody, webhookRotateSecretRequestSchema } from "@shared/contracts";
 import { createError, defineEventHandler, readBody } from "h3";
-import { toHttpError } from "../../../../../../../../services/auth/index.js";
-import { rotateWebhookSecret } from "../../../../../../../../services/workflow-definitions/index.js";
+import { toHttpError } from "../../../../../../../../services/auth/request-context.js";
+import {
+  rotateWebhookSecret,
+} from "../../../../../../../../services/workflow-definitions/trigger-webhooks.js";
 import {
   parseWebhookEndpointTarget,
   requireWebhookActor,

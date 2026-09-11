@@ -5,8 +5,13 @@ import {
   parseRequestBody,
   type ClarificationAnswerResponse,
 } from "@shared/contracts";
-import { requireDashboardActor, toHttpError } from "../../../../../services/auth/index.js";
-import { answerClarificationRequest } from "../../../../../services/clarifications/index.js";
+import {
+  requireDashboardActor,
+  toHttpError,
+} from "../../../../../services/auth/request-context.js";
+import {
+  answerClarificationRequest,
+} from "../../../../../services/clarifications/answer-request.js";
 
 export default defineEventHandler(async (event): Promise<ClarificationAnswerResponse | undefined> => {
   try {

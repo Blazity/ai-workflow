@@ -1,11 +1,11 @@
 import { createError, defineEventHandler, setResponseHeader } from "h3";
 import type { SystemHealthLastScanResponse } from "@shared/contracts";
 import {
-  canInvite,
   requireDashboardActor,
   toHttpError,
-} from "../../../../services/auth/index.js";
-import { readLastSystemHealthScan } from "../../../../services/system/index.js";
+} from "../../../../services/auth/request-context.js";
+import { canInvite } from "../../../../services/auth/roles.js";
+import { readLastSystemHealthScan } from "../../../../services/system/health-scan.js";
 
 /** Returns the stored result of the last scan. This never probes anything;
  * the only way to refresh it is the POST behind the Scan button. */

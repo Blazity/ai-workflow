@@ -11,11 +11,13 @@ import {
 import {
   requireDashboardActor,
   toHttpError,
-} from "../../../../../services/auth/index.js";
+} from "../../../../../services/auth/request-context.js";
+import {
+  previewWorkflowDefinitionPrompt,
+} from "../../../../../services/workflow-definitions/definition-candidates.js";
 import {
   activeWorkflowDefinitionExists,
-  previewWorkflowDefinitionPrompt,
-} from "../../../../../services/workflow-definitions/index.js";
+} from "../../../../../services/workflow-definitions/definition-reads.js";
 import { parseDefinitionId } from "../../workflow-definitions.get.js";
 
 export default defineEventHandler(async (event) => {

@@ -9,12 +9,6 @@ const state = vi.hoisted(() => ({
   read: vi.fn(),
 }));
 
-// The cluster barrels this route now imports reach the settings module, which
-// validates the deployment environment at import, and the auth barrel reaches
-// the Better Auth instance. Neither is what this file is about, so both are
-// answered here rather than dragged into the test.
-vi.mock("../../../../config/env.js", () => ({ env: {} }));
-vi.mock("../../../../auth-instance.js", () => ({ auth: {} }));
 vi.mock("../../../../services/auth/request-context.js", () => ({
   requireDashboardActor: vi.fn(async () => {
     if (state.role === null) {

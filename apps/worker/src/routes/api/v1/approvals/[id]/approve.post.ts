@@ -1,10 +1,10 @@
 import { createError, defineEventHandler, getRouterParam } from "h3";
 import type { ApprovalDecisionResponse } from "@shared/contracts";
+import { requireDashboardActor } from "../../../../../services/auth/request-context.js";
+import { canApproveWorkflowPlans } from "../../../../../services/auth/roles.js";
 import {
-  canApproveWorkflowPlans,
-  requireDashboardActor,
-} from "../../../../../services/auth/index.js";
-import { approveApproval } from "../../../../../services/approvals/index.js";
+  approveApproval,
+} from "../../../../../services/approvals/approval-decisions.js";
 import { toApprovalHttpError } from "../../approvals.get.js";
 
 export default defineEventHandler(async (event): Promise<ApprovalDecisionResponse | undefined> => {

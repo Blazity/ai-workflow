@@ -1,7 +1,12 @@
 import { defineEventHandler, setResponseHeader } from "h3";
 import type { DispatchCapacityResponse } from "@shared/contracts";
-import { requireDashboardActor, toHttpError } from "../../../../services/auth/index.js";
-import { readDispatchCapacity } from "../../../../services/dispatch/index.js";
+import {
+  requireDashboardActor,
+  toHttpError,
+} from "../../../../services/auth/request-context.js";
+import {
+  readDispatchCapacity,
+} from "../../../../services/dispatch/capacity-snapshot.js";
 
 export default defineEventHandler(
   async (event): Promise<DispatchCapacityResponse | undefined> => {

@@ -3,11 +3,14 @@ import type {
   MemoryDocumentResponse,
   MemoryDocumentsResponse,
 } from "@shared/contracts";
-import { requireDashboardActor, toHttpError } from "../../../services/auth/index.js";
+import {
+  requireDashboardActor,
+  toHttpError,
+} from "../../../services/auth/request-context.js";
 import {
   listMemoryDocumentSummaries,
   readMemoryDocument,
-} from "../../../services/memory/index.js";
+} from "../../../services/memory/memory-documents.js";
 
 function stringParam(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;

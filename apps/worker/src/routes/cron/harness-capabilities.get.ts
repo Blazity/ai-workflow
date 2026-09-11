@@ -5,8 +5,11 @@ import {
   setResponseHeader,
 } from "h3";
 import { logger } from "../../infra/logger.js";
-import { prewarmHarnessCapabilities } from "../../services/harness/index.js";
-import { cronRequestIsAuthorized } from "../../services/triggers/index.js";
+// Cluster modules, not barrels: one auth helper and one prewarm entry point do
+// not need the polling pass, the webhook handlers or the engine graph those
+// barrels re-export.
+import { prewarmHarnessCapabilities } from "../../services/harness/capabilities.js";
+import { cronRequestIsAuthorized } from "../../services/triggers/polling/cron-authorization.js";
 
 /**
  * The scheduled capability prewarm.

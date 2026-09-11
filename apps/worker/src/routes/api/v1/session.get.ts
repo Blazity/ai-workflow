@@ -1,13 +1,15 @@
 import { defineEventHandler } from "h3";
+import { dashboardActorLabel } from "../../../services/auth/dashboard-directory.js";
+import {
+  requireDashboardActor,
+  toHttpError,
+} from "../../../services/auth/request-context.js";
 import {
   canDispatchWorkflowRuns,
   canEditPrePrChecks,
   canEditWorkflowDefinitions,
   canInvite,
-  dashboardActorLabel,
-  requireDashboardActor,
-  toHttpError,
-} from "../../../services/auth/index.js";
+} from "../../../services/auth/roles.js";
 
 export default defineEventHandler(async (event) => {
   try {

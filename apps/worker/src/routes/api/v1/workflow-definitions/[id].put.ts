@@ -4,11 +4,13 @@ import {
   parseRequestBody,
   workflowDefinitionDraftSaveRequestSchema,
 } from "@shared/contracts";
-import { requireDashboardActor } from "../../../../services/auth/index.js";
+import { requireDashboardActor } from "../../../../services/auth/request-context.js";
+import {
+  saveWorkflowDefinitionDraftAndValidate,
+} from "../../../../services/workflow-definitions/definition-authoring.js";
 import {
   parseWorkflowDefinitionCandidate,
-  saveWorkflowDefinitionDraftAndValidate,
-} from "../../../../services/workflow-definitions/index.js";
+} from "../../../../services/workflow-definitions/definition-candidates.js";
 import {
   parseDefinitionId,
   serializeDefinitionMeta,

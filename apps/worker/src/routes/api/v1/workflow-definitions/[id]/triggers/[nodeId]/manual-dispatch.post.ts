@@ -8,11 +8,15 @@ import {
   setResponseStatus,
 } from "h3";
 import {
-  canDispatchWorkflowRuns,
   requireDashboardActor,
-} from "../../../../../../../services/auth/index.js";
-import { toManualDispatchHttpError } from "../../../../../../../services/manual-dispatch/index.js";
-import { dispatchTriggerManually } from "../../../../../../../services/workflow-definitions/index.js";
+} from "../../../../../../../services/auth/request-context.js";
+import { canDispatchWorkflowRuns } from "../../../../../../../services/auth/roles.js";
+import {
+  toManualDispatchHttpError,
+} from "../../../../../../../services/manual-dispatch/http.js";
+import {
+  dispatchTriggerManually,
+} from "../../../../../../../services/workflow-definitions/trigger-manual-dispatch.js";
 import { parseDefinitionId } from "../../../../workflow-definitions.get.js";
 
 export default defineEventHandler(

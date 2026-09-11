@@ -1,13 +1,13 @@
 import { createError, defineEventHandler, getQuery } from "h3";
 import {
-  canDeleteAgentMemory,
   requireDashboardActor,
   toHttpError,
-} from "../../../services/auth/index.js";
+} from "../../../services/auth/request-context.js";
+import { canDeleteAgentMemory } from "../../../services/auth/roles.js";
 import {
   eraseMemoryDocument,
   isUsableMemoryKeyPart,
-} from "../../../services/memory/index.js";
+} from "../../../services/memory/memory-documents.js";
 
 function keyParam(value: unknown): string | undefined {
   return isUsableMemoryKeyPart(value) ? value : undefined;

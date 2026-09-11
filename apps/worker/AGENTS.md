@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-09
+Last-verified: 2026-09-11
 
 # apps/worker
 
@@ -50,10 +50,10 @@ moves them.
 
 | Directory | Tier | Note |
 |---|---|---|
-| `routes/` | app | Nitro scans this path, so it keeps its name |
+| `routes/` | app | Nitro scans this path, so it keeps its name; a handler holds the transport (bytes, headers, status) and a `@shared/contracts` schema for its body, and the branching belongs to a services cluster |
 | `middleware/`, `plugins/`, `auth.ts`, `auth-instance.ts`, `nitro.d.ts` | app | the server surface |
-| `mcp/` | app | MCP tools, auth, catalog, contract |
-| `services/` | services | one directory per domain cluster, each with an `index.ts` interface; [docs/architecture/overview.md](../../docs/architecture/overview.md) lists them |
+| `mcp/` | app | the MCP transport, auth and tool wiring; what a tool does to the database is `services/mcp/` |
+| `services/` | services | one directory per domain cluster, each with an `index.ts` interface that only other clusters import; app-tier files name the cluster module they use ([docs/architecture/overview.md](../../docs/architecture/overview.md) lists the clusters and says why) |
 | `approvals/`, `clarifications/`, `manual-dispatch/`, `schedule-trigger/`, `webhook-trigger/` | services | only the store files are left here; they become db repositories in stage 7 |
 | `engine/`, `workflow-definition/`, `memory/`, `post-pr-gate/`, `pre-pr-checks/`, `pre-sandbox/`, `run-analysis/`, `run-observability/`, `sandbox/` | engine | the runtime: the `"use workflow"` body, the `"use step"` functions, blocks, definition handling |
 | `harness-profiles/`, `prompt-library/` | engine (runtime) | their `store.ts` moves to db, their pure parts to packages |

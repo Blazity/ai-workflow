@@ -1,11 +1,17 @@
 import { createError, defineEventHandler } from "h3";
 import type { WorkflowDefinitionDetailResponse } from "@shared/contracts";
-import { requireDashboardActor, toHttpError } from "../../../../services/auth/index.js";
+import {
+  requireDashboardActor,
+  toHttpError,
+} from "../../../../services/auth/request-context.js";
 import {
   readWorkflowDefinitionDetail,
   serializeWorkflowDefinitionVersion,
 } from "../../../../services/workflow-definitions/index.js";
-import { parseDefinitionId, serializeDefinitionMeta } from "../workflow-definitions.get.js";
+import {
+  parseDefinitionId,
+  serializeDefinitionMeta,
+} from "../workflow-definitions.get.js";
 
 export default defineEventHandler(
   async (event): Promise<WorkflowDefinitionDetailResponse | undefined> => {

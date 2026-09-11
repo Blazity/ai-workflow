@@ -7,20 +7,23 @@ import {
   readRawBody,
 } from "h3";
 import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
+// The cluster module this route delivers through, not the barrel, which also
+// re-exports the polling pass and the other providers' handlers.
 import {
   deliverCustomWebhook,
   type WebhookRejectionReason,
-} from "../../../services/triggers/index.js";
+} from "../../../services/triggers/custom-webhooks/deliver.js";
 
 /**
  * Public ingress for one webhook trigger endpoint. Outside the dashboard session
  * middleware (it only gates /api/v1/*), so the endpoint's own signature or token
  * is the entire authentication story.
  *
- * This file is the transport adapter: it captures the raw bytes and the headers,
- * hands them to the service that owns the ordered decision (lookup, revocation,
+ * This file is the transport adapter: it hands the headers and a reader for the
+ * raw bytes to the service that owns the ordered decision (lookup, revocation,
  * ingress budget, size, authentication, inbox budget, parse, dispatch), and maps
- * the precise answer that comes back to the coarse one the caller may learn.
+ * the precise answer that comes back to the coarse one the caller may learn. The
+ * bytes stay unread until that order reaches them.
  *
  * That collapse is the point: 404 not_found for both unknown and disabled
  * endpoints, 401 unauthorized for both missing and invalid signatures, a generic
@@ -65,7 +68,10 @@ export default defineEventHandler(async (event) => {
   const outcome = await deliverCustomWebhook({
     endpointId: getRouterParam(event, "endpointId")?.trim() ?? "",
     contentLength: getHeader(event, "content-length"),
-    rawBody: (await readRawBody(event, "utf8")) ?? "",
+    // Lazy on purpose: the service refuses an unknown, disabled or rate-limited
+    // endpoint, and a body whose declared length is already over the cap, before
+    // it asks for the bytes. Passing a string here would buffer them first.
+    readRawBody: async () => (await readRawBody(event, "utf8")) ?? "",
     headers: getHeaders(event),
     deliveryIdHeader: getHeader(event, DELIVERY_ID_HEADER),
   });

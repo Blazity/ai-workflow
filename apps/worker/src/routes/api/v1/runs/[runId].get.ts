@@ -1,10 +1,13 @@
 import { defineEventHandler, getRouterParam, setResponseHeader } from "h3";
 import type { RunDetailResponse } from "@shared/contracts";
-import { requireDashboardActor, toHttpError } from "../../../../services/auth/index.js";
+import {
+  requireDashboardActor,
+  toHttpError,
+} from "../../../../services/auth/request-context.js";
 import {
   emptyRunDetail,
   readRunDetail,
-} from "../../../../services/run-lifecycle/index.js";
+} from "../../../../services/run-lifecycle/run-detail-read.js";
 
 export default defineEventHandler(async (event): Promise<RunDetailResponse> => {
   // no-store: the payload carries the clarification Q&A (answer text plus the

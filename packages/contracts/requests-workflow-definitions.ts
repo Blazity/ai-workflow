@@ -8,6 +8,7 @@
  * client sees.
  */
 import { z } from "zod";
+import { objectOrEmpty } from "./request-parsing";
 import type { WorkflowDefinitionLayoutInput } from "./domain";
 import { integerField } from "./request-fields";
 
@@ -50,13 +51,15 @@ export const workflowDefinitionCreateSourceSchema = z.custom<WorkflowDefinitionC
 );
 
 /** POST /api/v1/workflow-definitions */
-export const workflowDefinitionCreateRequestSchema = z.object({
-  name: z
-    .string({ required_error: "Invalid name", invalid_type_error: "Invalid name" })
-    .trim()
-    .min(1, "Invalid name"),
-  source: workflowDefinitionCreateSourceSchema,
-});
+export const workflowDefinitionCreateRequestSchema = objectOrEmpty(
+  z.object({
+    name: z
+      .string({ required_error: "Invalid name", invalid_type_error: "Invalid name" })
+      .trim()
+      .min(1, "Invalid name"),
+    source: workflowDefinitionCreateSourceSchema,
+  }),
+);
 export type WorkflowDefinitionCreateRequest = z.infer<
   typeof workflowDefinitionCreateRequestSchema
 >;
@@ -64,14 +67,16 @@ export type WorkflowDefinitionCreateRequest = z.infer<
 /** PATCH /api/v1/workflow-definitions/:id. Both fields are optional: the
  *  handler applied only what it was given, and a body with neither is a no-op
  *  update rather than a refusal. */
-export const workflowDefinitionMetaPatchRequestSchema = z.object({
-  name: z
-    .string({ invalid_type_error: "Invalid name" })
-    .trim()
-    .min(1, "Invalid name")
-    .optional(),
-  enabled: z.boolean({ invalid_type_error: "Invalid enabled" }).optional(),
-});
+export const workflowDefinitionMetaPatchRequestSchema = objectOrEmpty(
+  z.object({
+    name: z
+      .string({ invalid_type_error: "Invalid name" })
+      .trim()
+      .min(1, "Invalid name")
+      .optional(),
+    enabled: z.boolean({ invalid_type_error: "Invalid enabled" }).optional(),
+  }),
+);
 export type WorkflowDefinitionMetaPatchRequest = z.infer<
   typeof workflowDefinitionMetaPatchRequestSchema
 >;
@@ -83,29 +88,35 @@ export type WorkflowDefinitionMetaPatchRequest = z.infer<
  * the worker's own v2 schema, which is the only thing that can tell a retired
  * v1 definition from a malformed v2 one, and the handler runs that check first.
  */
-export const workflowDefinitionDraftSaveRequestSchema = z.object({
-  definition: z.unknown(),
-  expectedDraftRevision: revisionField("Invalid draft revision"),
-});
+export const workflowDefinitionDraftSaveRequestSchema = objectOrEmpty(
+  z.object({
+    definition: z.unknown(),
+    expectedDraftRevision: revisionField("Invalid draft revision"),
+  }),
+);
 export type WorkflowDefinitionDraftSaveRequest = z.infer<
   typeof workflowDefinitionDraftSaveRequestSchema
 >;
 
 /** POST /api/v1/workflow-definitions/:id/deploy */
-export const workflowDefinitionDeployRequestSchema = z.object({
-  expectedDraftRevision: revisionField("Invalid draft revision"),
-  expectedDeployedVersion: versionField("Invalid deployed version").nullable(),
-});
+export const workflowDefinitionDeployRequestSchema = objectOrEmpty(
+  z.object({
+    expectedDraftRevision: revisionField("Invalid draft revision"),
+    expectedDeployedVersion: versionField("Invalid deployed version").nullable(),
+  }),
+);
 export type WorkflowDefinitionDeployRequest = z.infer<
   typeof workflowDefinitionDeployRequestSchema
 >;
 
 /** POST /api/v1/workflow-definitions/:id/rollback and .../restore, which take
  *  the same body and run the same store operation. */
-export const workflowDefinitionRollbackRequestSchema = z.object({
-  version: versionField("Invalid version"),
-  expectedDeployedVersion: versionField("Invalid deployed version").nullable(),
-});
+export const workflowDefinitionRollbackRequestSchema = objectOrEmpty(
+  z.object({
+    version: versionField("Invalid version"),
+    expectedDeployedVersion: versionField("Invalid deployed version").nullable(),
+  }),
+);
 export type WorkflowDefinitionRollbackRequest = z.infer<
   typeof workflowDefinitionRollbackRequestSchema
 >;
@@ -117,13 +128,15 @@ export type WorkflowDefinitionRollbackRequest = z.infer<
  * handler checked and therefore also accepts an array. Its fields are the
  * store's business, so the whole value is forwarded rather than reshaped.
  */
-export const workflowDefinitionLayoutPatchRequestSchema = z.object({
-  layout: z.custom<WorkflowDefinitionLayoutInput>(
-    (value) => Boolean(value) && typeof value === "object",
-    { message: "Invalid workflow layout" },
-  ),
-  expectedLayoutRevision: revisionField("Invalid layout revision"),
-});
+export const workflowDefinitionLayoutPatchRequestSchema = objectOrEmpty(
+  z.object({
+    layout: z.custom<WorkflowDefinitionLayoutInput>(
+      (value) => Boolean(value) && typeof value === "object",
+      { message: "Invalid workflow layout" },
+    ),
+    expectedLayoutRevision: revisionField("Invalid layout revision"),
+  }),
+);
 export type WorkflowDefinitionLayoutPatchRequest = z.infer<
   typeof workflowDefinitionLayoutPatchRequestSchema
 >;
@@ -132,9 +145,11 @@ export type WorkflowDefinitionLayoutPatchRequest = z.infer<
  *  handler checked the candidate here: the worker's v2 schema does that, and
  *  validate deliberately reports an unparseable candidate as a validation
  *  result rather than as a bad request. */
-export const workflowDefinitionCandidateRequestSchema = z.object({
-  definition: z.unknown(),
-});
+export const workflowDefinitionCandidateRequestSchema = objectOrEmpty(
+  z.object({
+    definition: z.unknown(),
+  }),
+);
 export type WorkflowDefinitionCandidateRequest = z.infer<
   typeof workflowDefinitionCandidateRequestSchema
 >;
@@ -142,16 +157,18 @@ export type WorkflowDefinitionCandidateRequest = z.infer<
 /** POST /api/v1/workflow-definitions/:id/prompt-preview. A block id carrying
  *  surrounding whitespace is refused rather than trimmed: it names a node in a
  *  graph the client already holds, so it is a client bug, not a typo. */
-export const workflowDefinitionPromptPreviewRequestSchema = z.object({
-  blockId: z
-    .string({
-      required_error: "Invalid block id",
-      invalid_type_error: "Invalid block id",
-    })
-    .min(1, "Invalid block id")
-    .refine((value) => value.trim() === value, { message: "Invalid block id" }),
-  definition: z.unknown(),
-});
+export const workflowDefinitionPromptPreviewRequestSchema = objectOrEmpty(
+  z.object({
+    blockId: z
+      .string({
+        required_error: "Invalid block id",
+        invalid_type_error: "Invalid block id",
+      })
+      .min(1, "Invalid block id")
+      .refine((value) => value.trim() === value, { message: "Invalid block id" }),
+    definition: z.unknown(),
+  }),
+);
 export type WorkflowDefinitionPromptPreviewRequest = z.infer<
   typeof workflowDefinitionPromptPreviewRequestSchema
 >;

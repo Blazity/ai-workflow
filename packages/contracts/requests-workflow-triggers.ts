@@ -8,6 +8,7 @@
  * client sees.
  */
 import { z } from "zod";
+import { objectOrEmpty } from "./request-parsing";
 import type { SchedulePreviewRequest } from "./api";
 import { integerField } from "./request-fields";
 
@@ -18,9 +19,11 @@ import { integerField } from "./request-fields";
  * `true` and ignored everything else: making a non-boolean a 400 here would
  * refuse a request that used to rotate normally.
  */
-export const webhookRotateSecretRequestSchema = z.object({
-  force: z.unknown(),
-});
+export const webhookRotateSecretRequestSchema = objectOrEmpty(
+  z.object({
+    force: z.unknown(),
+  }),
+);
 export type WebhookRotateSecretRequest = z.infer<
   typeof webhookRotateSecretRequestSchema
 >;
@@ -31,9 +34,11 @@ export type WebhookRotateSecretRequest = z.infer<
  * Unknown for the same reason: a non-string became the empty string, which the
  * store then refused with its own message about what a secret must look like.
  */
-export const webhookSetSecretBodySchema = z.object({
-  secret: z.unknown(),
-});
+export const webhookSetSecretBodySchema = objectOrEmpty(
+  z.object({
+    secret: z.unknown(),
+  }),
+);
 export type WebhookSetSecretBody = z.infer<typeof webhookSetSecretBodySchema>;
 
 /**

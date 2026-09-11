@@ -1,7 +1,9 @@
 import type { WebhookDeliveriesResponse } from "@shared/contracts";
 import { defineEventHandler } from "h3";
-import { toHttpError } from "../../../../../../../../services/auth/index.js";
-import { listWebhookEndpointDeliveries } from "../../../../../../../../services/workflow-definitions/index.js";
+import { toHttpError } from "../../../../../../../../services/auth/request-context.js";
+import {
+  listWebhookEndpointDeliveries,
+} from "../../../../../../../../services/workflow-definitions/trigger-webhooks.js";
 import {
   parseWebhookEndpointTarget,
   requireWebhookActor,

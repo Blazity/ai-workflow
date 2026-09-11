@@ -219,6 +219,61 @@ describe("POST /webhooks/resend", () => {
     await expect(delivery()).resolves.toEqual({ status: "sent", error: null });
   });
 
+  it("applies a bounce whose subType is a number, not a string", async () => {
+    const res = await makeApp()(
+      signedRequest({
+        type: "email.bounced",
+        data: {
+          email_id: "email_123",
+          bounce: { message: "Mailbox unavailable", type: "hard_bounce", subType: 4 },
+        },
+      }),
+    );
+
+    // Resend shapes the leaves below `data` as it likes. The signature held, so
+    // the ledger has to see the event: dropping it would answer 200, stop the
+    // retry and leave the invite queued forever.
+    expect(res.status).toBe(200);
+    await expect(delivery()).resolves.toEqual({
+      status: "bounced",
+      error: "Mailbox unavailable",
+    });
+  });
+
+  it("applies an event whose tags arrive as an array", async () => {
+    const res = await makeApp()(
+      signedRequest({
+        type: "email.bounced",
+        data: {
+          email_id: "email_123",
+          tags: ["invite"],
+          bounce: { message: "Mailbox unavailable" },
+        },
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    await expect(delivery()).resolves.toEqual({
+      status: "bounced",
+      error: "Mailbox unavailable",
+    });
+  });
+
+  it("applies an event whose delivery id tag is null, matching on the Resend id", async () => {
+    const res = await makeApp()(
+      signedRequest({
+        type: "email.complained",
+        data: { email_id: "email_123", tags: { invite_delivery_id: null } },
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    await expect(delivery()).resolves.toEqual({
+      status: "failed",
+      error: "Recipient complained",
+    });
+  });
+
   it("accepts unrelated signed events without tracking reset password delivery", async () => {
     const res = await makeApp()(
       signedRequest({

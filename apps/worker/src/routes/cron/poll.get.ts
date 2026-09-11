@@ -1,5 +1,8 @@
 import { createError, defineEventHandler, getHeader } from "h3";
-import { cronRequestIsAuthorized, runPollPass } from "../../services/triggers/index.js";
+import {
+  cronRequestIsAuthorized,
+} from "../../services/triggers/polling/cron-authorization.js";
+import { runPollPass } from "../../services/triggers/polling/poll-pass.js";
 
 /**
  * The scheduled poll.

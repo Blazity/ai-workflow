@@ -1,7 +1,9 @@
 import type { WebhookEndpointRevivalResponse } from "@shared/contracts";
 import { createError, defineEventHandler } from "h3";
-import { toHttpError } from "../../../../../../../../services/auth/index.js";
-import { reviveWebhookEndpoint } from "../../../../../../../../services/workflow-definitions/index.js";
+import { toHttpError } from "../../../../../../../../services/auth/request-context.js";
+import {
+  reviveWebhookEndpoint,
+} from "../../../../../../../../services/workflow-definitions/trigger-webhooks.js";
 import {
   parseWebhookEndpointTarget,
   requireWebhookActor,

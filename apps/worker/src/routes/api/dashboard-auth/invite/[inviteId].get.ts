@@ -3,8 +3,8 @@ import { createError, defineEventHandler, getRouterParam } from "h3";
 import { auth } from "../../../../auth-instance.js";
 import {
   readDashboardInviteAcceptance,
-  toHttpError,
-} from "../../../../services/auth/index.js";
+} from "../../../../services/auth/invite-requests.js";
+import { toHttpError } from "../../../../services/auth/request-context.js";
 
 export default defineEventHandler(async (event) => {
   try {

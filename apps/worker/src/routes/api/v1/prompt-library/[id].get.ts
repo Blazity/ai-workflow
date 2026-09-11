@@ -1,7 +1,10 @@
 import { createError, defineEventHandler } from "h3";
 import type { PromptLibraryDetailResponse } from "@shared/contracts";
-import { requireDashboardActor, toHttpError } from "../../../../services/auth/index.js";
-import { readPromptDetail } from "../../../../services/prompts/index.js";
+import {
+  requireDashboardActor,
+  toHttpError,
+} from "../../../../services/auth/request-context.js";
+import { readPromptDetail } from "../../../../services/prompts/prompt-library-reads.js";
 import { parsePromptId } from "../prompt-library.get.js";
 
 export default defineEventHandler(

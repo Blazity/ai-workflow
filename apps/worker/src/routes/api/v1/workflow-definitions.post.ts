@@ -9,10 +9,8 @@ import {
   parseRequestBody,
   workflowDefinitionCreateRequestSchema,
 } from "@shared/contracts";
-import {
-  canEditWorkflowDefinitions,
-  requireDashboardActor,
-} from "../../../services/auth/index.js";
+import { requireDashboardActor } from "../../../services/auth/request-context.js";
+import { canEditWorkflowDefinitions } from "../../../services/auth/roles.js";
 import {
   createWorkflowDefinitionFromSource,
   serializeWorkflowDefinitionVersion,

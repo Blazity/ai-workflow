@@ -9,13 +9,20 @@
 import { z } from "zod";
 
 /**
- * A Resend delivery event, narrowed to the fields the invite delivery ledger
- * reads and no further.
+ * A Resend delivery event, checked down to the envelope the invite delivery
+ * ledger reads and no further.
  *
- * Everything is optional and unknown keys pass through because Resend adds
- * fields to these payloads without warning, and a webhook we already
- * authenticated by signature must not start failing because the provider grew a
- * field. The schema's job is to say what we consume, not to police the sender.
+ * Three things are checked because the ledger reads them as strings: the event
+ * name, the `data` object that carries the event, and the Resend id inside it.
+ * Every other leaf is `unknown` on purpose. Resend shapes those freely (a
+ * bounce subType that arrives as a number, tags that arrive as an array, a tag
+ * whose value is null), the mapper already reads them defensively and answers
+ * "not handled" for what it cannot use, and a delivery we authenticated by
+ * signature must never be dropped because a field we do not read changed shape:
+ * the sender would never retry it and the invite would sit in `queued` forever.
+ *
+ * Unknown keys pass through for the same reason, so the object the mapper reads
+ * carries everything the sender sent.
  */
 export const resendWebhookEventSchema = z
   .object({
@@ -23,26 +30,12 @@ export const resendWebhookEventSchema = z
     data: z
       .object({
         email_id: z.string().optional(),
-        tags: z.record(z.string(), z.string().optional()).optional(),
-        bounce: z
-          .object({
-            message: z.string().optional(),
-            type: z.string().optional(),
-            subType: z.string().optional(),
-          })
-          .passthrough()
-          .optional(),
-        failed: z
-          .object({ reason: z.string().optional() })
-          .passthrough()
-          .optional(),
-        suppressed: z
-          .object({
-            message: z.string().optional(),
-            type: z.string().optional(),
-          })
-          .passthrough()
-          .optional(),
+        // Named to say what the ledger reads, typed unknown to say the provider
+        // decides their shape.
+        tags: z.unknown(),
+        bounce: z.unknown(),
+        failed: z.unknown(),
+        suppressed: z.unknown(),
       })
       .passthrough()
       .optional(),

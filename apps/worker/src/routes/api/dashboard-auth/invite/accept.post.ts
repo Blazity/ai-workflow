@@ -1,11 +1,14 @@
 import { createError, defineEventHandler, readBody } from "h3";
-import { dashboardInviteAcceptRequestSchema, parseRequestBody } from "@shared/contracts";
+import {
+  dashboardInviteAcceptRequestSchema,
+  parseRequestBody,
+} from "@shared/contracts";
 
 import { auth } from "../../../../auth-instance.js";
 import {
   acceptDashboardInviteWithPassword,
-  toHttpError,
-} from "../../../../services/auth/index.js";
+} from "../../../../services/auth/invite-requests.js";
+import { toHttpError } from "../../../../services/auth/request-context.js";
 
 export default defineEventHandler(async (event) => {
   const parsed = parseRequestBody(

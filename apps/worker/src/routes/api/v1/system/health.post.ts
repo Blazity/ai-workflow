@@ -1,11 +1,11 @@
 import { createError, defineEventHandler, setResponseHeader } from "h3";
 import type { SystemHealthResponse } from "@shared/contracts";
 import {
-  canInvite,
   requireDashboardActor,
   toHttpError,
-} from "../../../../services/auth/index.js";
-import { runSystemHealthScan } from "../../../../services/system/index.js";
+} from "../../../../services/auth/request-context.js";
+import { canInvite } from "../../../../services/auth/roles.js";
+import { runSystemHealthScan } from "../../../../services/system/health-scan.js";
 
 /** The only way a scan runs: an explicit request from the Health screen's
  * Scan button. Nothing renders, polls, or schedules this in the background.

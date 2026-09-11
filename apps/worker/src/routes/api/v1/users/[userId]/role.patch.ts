@@ -5,9 +5,11 @@ import {
 } from "@shared/contracts";
 import {
   changeDashboardUserRole,
+} from "../../../../../services/auth/dashboard-directory.js";
+import {
   requireDashboardActor,
   toHttpError,
-} from "../../../../../services/auth/index.js";
+} from "../../../../../services/auth/request-context.js";
 
 export default defineEventHandler(async (event) => {
   try {

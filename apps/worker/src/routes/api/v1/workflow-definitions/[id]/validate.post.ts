@@ -4,8 +4,13 @@ import {
   parseRequestBody,
   workflowDefinitionCandidateRequestSchema,
 } from "@shared/contracts";
-import { requireDashboardActor, toHttpError } from "../../../../../services/auth/index.js";
-import { validateWorkflowDefinitionDraftCandidate } from "../../../../../services/workflow-definitions/index.js";
+import {
+  requireDashboardActor,
+  toHttpError,
+} from "../../../../../services/auth/request-context.js";
+import {
+  validateWorkflowDefinitionDraftCandidate,
+} from "../../../../../services/workflow-definitions/definition-candidates.js";
 
 export default defineEventHandler(
   async (event): Promise<WorkflowDefinitionValidationResponse | undefined> => {

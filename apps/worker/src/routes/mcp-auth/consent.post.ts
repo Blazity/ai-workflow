@@ -15,8 +15,8 @@ import {
   clearOAuthFlowCookie,
   describeOAuthFlowCookie,
   readOAuthFlowCookie,
-  workerOriginUrl,
-} from "../../services/auth/index.js";
+} from "../../services/auth/oauth-flow-cookie.js";
+import { workerOriginUrl } from "../../services/auth/sso-redirects.js";
 import { allowedScopes, isSameOriginPost } from "../../mcp/auth-pages.js";
 
 const AUTHORIZATION_FAILURE_CODES = new Set([

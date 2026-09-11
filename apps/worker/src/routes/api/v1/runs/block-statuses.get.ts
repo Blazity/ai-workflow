@@ -1,7 +1,10 @@
 import { defineEventHandler, getQuery, setResponseHeader } from "h3";
 import type { RunBlockStatusesResponse } from "@shared/contracts";
-import { requireDashboardActor, toHttpError } from "../../../../services/auth/index.js";
-import { readRunBlockStatuses } from "../../../../services/run-lifecycle/index.js";
+import {
+  requireDashboardActor,
+  toHttpError,
+} from "../../../../services/auth/request-context.js";
+import { readRunBlockStatuses } from "../../../../services/run-lifecycle/run-reads.js";
 
 export default defineEventHandler(
   async (event): Promise<RunBlockStatusesResponse | undefined> => {

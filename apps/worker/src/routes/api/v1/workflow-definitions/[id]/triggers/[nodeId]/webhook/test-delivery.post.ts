@@ -5,9 +5,13 @@ import type {
 } from "@shared/contracts";
 import { parseRequestBody, webhookTestDeliveryRequestSchema } from "@shared/contracts";
 import { createError, defineEventHandler, readBody } from "h3";
-import { toHttpError } from "../../../../../../../../services/auth/index.js";
-import { WEBHOOK_MAX_BODY_BYTES } from "../../../../../../../../services/triggers/index.js";
-import { runWebhookTestDelivery } from "../../../../../../../../services/workflow-definitions/index.js";
+import { toHttpError } from "../../../../../../../../services/auth/request-context.js";
+import {
+  WEBHOOK_MAX_BODY_BYTES,
+} from "../../../../../../../../services/triggers/custom-webhooks/deliver.js";
+import {
+  runWebhookTestDelivery,
+} from "../../../../../../../../services/workflow-definitions/webhook-endpoint-nodes.js";
 import {
   parseWebhookEndpointTarget,
   requireWebhookActor,

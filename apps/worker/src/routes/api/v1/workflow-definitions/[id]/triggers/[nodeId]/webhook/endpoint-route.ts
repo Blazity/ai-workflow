@@ -6,19 +6,25 @@ import {
   type H3Event,
 } from "h3";
 import {
-  canDispatchWorkflowRuns,
   requireDashboardActor,
-} from "../../../../../../../../services/auth/index.js";
-import { webhookTriggerEncryptionKey } from "../../../../../../../../services/settings/index.js";
+} from "../../../../../../../../services/auth/request-context.js";
+import {
+  canDispatchWorkflowRuns,
+} from "../../../../../../../../services/auth/roles.js";
+import {
+  webhookTriggerEncryptionKey,
+} from "../../../../../../../../services/settings/integration-settings.js";
 import {
   resolveWebhookHeaderName,
   resolveWebhookTimestampHeaderName,
-} from "../../../../../../../../services/webhook-trigger/index.js";
+} from "../../../../../../../../services/webhook-trigger/verify.js";
 import {
   findWebhookEndpoint,
   webhookRejectionsToday,
+} from "../../../../../../../../services/workflow-definitions/trigger-webhooks.js";
+import {
   type WebhookEndpointTarget,
-} from "../../../../../../../../services/workflow-definitions/index.js";
+} from "../../../../../../../../services/workflow-definitions/webhook-endpoint-nodes.js";
 import { parseDefinitionId } from "../../../../../workflow-definitions.get.js";
 
 /**

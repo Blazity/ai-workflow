@@ -11,7 +11,7 @@ import {
   parseRequestBody,
   workflowDefinitionRollbackRequestSchema,
 } from "@shared/contracts";
-import { requireDashboardActor } from "../../../../../services/auth/index.js";
+import { requireDashboardActor } from "../../../../../services/auth/request-context.js";
 import {
   selectWorkflowDefinitionVersion,
   serializeWorkflowDefinitionVersion,

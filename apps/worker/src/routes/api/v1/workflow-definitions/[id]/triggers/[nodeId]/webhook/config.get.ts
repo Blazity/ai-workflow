@@ -1,11 +1,15 @@
 import type { WebhookEndpointConfigResponse } from "@shared/contracts";
 import { defineEventHandler } from "h3";
+import { toHttpError } from "../../../../../../../../services/auth/request-context.js";
 import {
   canDispatchWorkflowRuns,
-  toHttpError,
-} from "../../../../../../../../services/auth/index.js";
-import { webhookTriggerEncryptionKey } from "../../../../../../../../services/settings/index.js";
-import { readWebhookEndpointState } from "../../../../../../../../services/workflow-definitions/index.js";
+} from "../../../../../../../../services/auth/roles.js";
+import {
+  webhookTriggerEncryptionKey,
+} from "../../../../../../../../services/settings/integration-settings.js";
+import {
+  readWebhookEndpointState,
+} from "../../../../../../../../services/workflow-definitions/trigger-webhooks.js";
 import {
   parseWebhookEndpointTarget,
   requireWebhookActor,

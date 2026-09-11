@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createError, defineEventHandler, setResponseHeader, toWebRequest } from "h3";
 
 import { auth } from "../../auth-instance.js";
-import { createOAuthFlowCookie } from "../../services/auth/index.js";
+import { createOAuthFlowCookie } from "../../services/auth/oauth-flow-cookie.js";
 import { allowedScopes, renderMcpConsentPage } from "../../mcp/auth-pages.js";
 
 export default defineEventHandler(async (event) => {

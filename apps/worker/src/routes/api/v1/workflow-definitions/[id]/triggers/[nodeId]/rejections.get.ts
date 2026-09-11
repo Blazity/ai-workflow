@@ -3,8 +3,10 @@ import { createError, defineEventHandler, getRouterParam } from "h3";
 import {
   requireDashboardActor,
   toHttpError,
-} from "../../../../../../../services/auth/index.js";
-import { readTriggerRejectionsToday } from "../../../../../../../services/workflow-definitions/index.js";
+} from "../../../../../../../services/auth/request-context.js";
+import {
+  readTriggerRejectionsToday,
+} from "../../../../../../../services/workflow-definitions/trigger-schedules.js";
 import { parseDefinitionId } from "../../../../workflow-definitions.get.js";
 
 export interface TriggerRejectionsResponse {

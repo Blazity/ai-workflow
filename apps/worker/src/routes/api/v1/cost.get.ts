@@ -1,6 +1,6 @@
 import { defineEventHandler, getQuery, setResponseHeader } from "h3";
 import type { CostResponse } from "@shared/contracts";
-import { collectCostAggregate } from "../../../services/overview/index.js";
+import { collectCostAggregate } from "../../../services/overview/collect-cost.js";
 import { logger } from "../../../infra/logger.js";
 
 const EMPTY: Omit<CostResponse, "generatedAt" | "available" | "window"> = {

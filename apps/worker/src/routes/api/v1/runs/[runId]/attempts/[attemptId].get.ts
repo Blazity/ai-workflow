@@ -7,11 +7,11 @@ import type { WorkflowReplayAttemptDetail } from "@shared/contracts";
 import {
   requireDashboardActor,
   toHttpError,
-} from "../../../../../../services/auth/index.js";
+} from "../../../../../../services/auth/request-context.js";
 import {
   RunObservationStoreError,
   readRunReplayAttempt,
-} from "../../../../../../services/run-lifecycle/index.js";
+} from "../../../../../../services/run-lifecycle/run-replay-read.js";
 import {
   parseReplayAttemptId,
   parseReplayRunId,

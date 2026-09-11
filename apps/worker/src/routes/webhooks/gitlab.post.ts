@@ -1,5 +1,8 @@
 import { createError, defineEventHandler, getHeader, readRawBody } from "h3";
-import { TriggerHttpError, handleGitLabWebhook } from "../../services/triggers/index.js";
+// Cluster modules, not the barrel: the barrel also re-exports the polling
+// pass and the other providers' handlers, and this route needs neither.
+import { handleGitLabWebhook } from "../../services/triggers/gitlab/handle-gitlab-webhook.js";
+import { TriggerHttpError } from "../../services/triggers/trigger-http-error.js";
 
 /**
  * GitLab webhook ingress.

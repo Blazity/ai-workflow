@@ -1,6 +1,6 @@
 import { defineEventHandler, getQuery, setResponseHeader } from "h3";
 import type { KpisResponse } from "@shared/contracts";
-import { collectRunKpis } from "../../../../services/overview/index.js";
+import { collectRunKpis } from "../../../../services/overview/collect-kpis.js";
 import { logger } from "../../../../infra/logger.js";
 
 export default defineEventHandler(async (event): Promise<KpisResponse> => {

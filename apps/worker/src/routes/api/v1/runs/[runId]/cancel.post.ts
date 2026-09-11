@@ -6,11 +6,13 @@ import {
   setResponseStatus,
 } from "h3";
 import {
-  canDispatchWorkflowRuns,
   requireDashboardActor,
   toHttpError,
-} from "../../../../../services/auth/index.js";
-import { cancelRunAsOperator } from "../../../../../services/run-lifecycle/index.js";
+} from "../../../../../services/auth/request-context.js";
+import { canDispatchWorkflowRuns } from "../../../../../services/auth/roles.js";
+import {
+  cancelRunAsOperator,
+} from "../../../../../services/run-lifecycle/cancel-run-request.js";
 
 /**
  * Operator cancel-by-id: an authenticated dispatcher stops ANY in-flight run,

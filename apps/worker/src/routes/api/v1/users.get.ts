@@ -1,10 +1,10 @@
 import { createError, defineEventHandler } from "h3";
+import { listDashboardDirectory } from "../../../services/auth/dashboard-directory.js";
 import {
-  canInvite,
-  listDashboardDirectory,
   requireDashboardActor,
   toHttpError,
-} from "../../../services/auth/index.js";
+} from "../../../services/auth/request-context.js";
+import { canInvite } from "../../../services/auth/roles.js";
 
 export default defineEventHandler(async (event) => {
   try {

@@ -7,8 +7,10 @@ import {
 import {
   requireDashboardActor,
   toHttpError,
-} from "../../../../services/auth/index.js";
-import { inspectJsonSchemaSource } from "../../../../services/json-schema/index.js";
+} from "../../../../services/auth/request-context.js";
+import {
+  inspectJsonSchemaSource,
+} from "../../../../services/json-schema/schema-inspection.js";
 
 export default defineEventHandler(
   async (event): Promise<JsonSchemaAuthoringInspectionResponse | undefined> => {

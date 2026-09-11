@@ -1,11 +1,22 @@
-import { createError, defineEventHandler, getQuery, getRouterParam, type H3Event } from "h3";
+import {
+  createError,
+  defineEventHandler,
+  getQuery,
+  getRouterParam,
+  type H3Event,
+} from "h3";
 import type { PromptLibraryListResponse } from "@shared/contracts";
-import { requireDashboardActor, toHttpError } from "../../../services/auth/index.js";
+import {
+  requireDashboardActor,
+  toHttpError,
+} from "../../../services/auth/request-context.js";
+import {
+  promptLibraryFailure,
+} from "../../../services/prompts/prompt-library-failures.js";
 import {
   isStorablePromptId,
-  listPromptLibrary,
-  promptLibraryFailure,
-} from "../../../services/prompts/index.js";
+} from "../../../services/prompts/prompt-library-identifiers.js";
+import { listPromptLibrary } from "../../../services/prompts/prompt-library-reads.js";
 
 /** Maps a prompt library write failure (400/404/409) to its HTTP error, then
  *  defers the rest (403 DashboardAuthError, etc.) to the shared toHttpError. */

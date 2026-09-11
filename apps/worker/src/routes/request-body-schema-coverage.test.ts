@@ -11,7 +11,7 @@ import * as contracts from "@shared/contracts";
  * shape they never checked. It cannot prove the opposite, that a body is
  * actually validated, so this table does: every handler that reads a JSON body
  * appears in JSON_BODY_SCHEMAS with the contract schema that parses it, and
- * every handler that reads something else appears in NON_JSON_BODIES with the
+ * every handler that reads something else appears in NO_JSON_BODY with the
  * reason no JSON schema applies. A new route that lands in neither fails here,
  * which is the point: the failure arrives when the route is written, not when a
  * malformed body reaches a service that trusted it.
@@ -64,56 +64,63 @@ const JSON_BODY_SCHEMAS: Record<string, string[]> = {
   "api/v1/workflow-definitions/[id]/validate.post.ts": ["workflowDefinitionCandidateRequestSchema"],
 };
 
-/** Route file to the one line saying why no JSON schema applies to it. */
-const NON_JSON_BODIES: Record<string, string> = {
+/**
+ * Route file to the one line saying why no JSON schema applies to it.
+ *
+ * The classifier behind this table proves one thing only, that the handler
+ * never calls `readBody`, so each reason says which of the two ways that
+ * happens: the route reads the body in another format (raw bytes, form data,
+ * the MCP transport's own framing), or it reads no body at all.
+ */
+const NO_JSON_BODY: Record<string, string> = {
   "api/v1/approvals/[id]/approve.post.ts":
-    "The decision is the route and the approval is named in the path, so there is nothing to send.",
+    "reads no body: the decision is the route and the approval is named in the path, so there is nothing to send.",
   "api/v1/approvals/[id]/reject.post.ts":
-    "The decision is the route and the approval is named in the path, so there is nothing to send.",
+    "reads no body: the decision is the route and the approval is named in the path, so there is nothing to send.",
   "api/v1/invites/[inviteId]/cancel.post.ts":
-    "Acts on the invite named in the path, and the action is the route rather than a field.",
+    "reads no body: acts on the invite named in the path, and the action is the route rather than a field.",
   "api/v1/invites/[inviteId]/resend.post.ts":
-    "Acts on the invite named in the path, and the action is the route rather than a field.",
+    "reads no body: acts on the invite named in the path, and the action is the route rather than a field.",
   "api/v1/memory.delete.ts":
-    "Addressed entirely by query parameters, which the handler reads and checks one by one.",
+    "reads no body: addressed entirely by query parameters, which the handler reads and checks one by one.",
   "api/v1/prompt-library/[id].delete.ts":
-    "Deletes the prompt named in the path and carries nothing besides that identifier.",
+    "reads no body: deletes the prompt named in the path and carries nothing besides that identifier.",
   "api/v1/runs/[runId]/cancel.post.ts":
-    "Cancels the run named in the path; the operator supplies no reason with the request.",
+    "reads no body: cancels the run named in the path; the operator supplies no reason with the request.",
   "api/v1/system/health.post.ts":
-    "Starts a scan of this deployment's own configuration, so the request carries no input.",
+    "reads no body: starts a scan of this deployment's own configuration, so the request carries no input.",
   "api/v1/workflow-definitions/[id].delete.ts":
-    "Deletes the definition named in the path and carries nothing besides that identifier.",
+    "reads no body: deletes the definition named in the path and carries nothing besides that identifier.",
   "api/v1/workflow-definitions/[id]/triggers/[nodeId]/schedule/pause.post.ts":
-    "Flips the schedule named in the path, and the direction of the flip is the route.",
+    "reads no body: flips the schedule named in the path, and the direction of the flip is the route.",
   "api/v1/workflow-definitions/[id]/triggers/[nodeId]/schedule/resume.post.ts":
-    "Flips the schedule named in the path, and the direction of the flip is the route.",
+    "reads no body: flips the schedule named in the path, and the direction of the flip is the route.",
   "api/v1/workflow-definitions/[id]/triggers/[nodeId]/webhook/reveal.post.ts":
-    "Reveals the stored secret of the trigger named in the path and sends nothing up.",
+    "reads no body: reveals the stored secret of the trigger named in the path and sends nothing up.",
   "api/v1/workflow-definitions/[id]/triggers/[nodeId]/webhook/revoke.post.ts":
-    "Flips the revoked flag of the trigger named in the path; the direction is the route.",
+    "reads no body: flips the revoked flag of the trigger named in the path; the direction is the route.",
   "api/v1/workflow-definitions/[id]/triggers/[nodeId]/webhook/unrevoke.post.ts":
-    "Flips the revoked flag of the trigger named in the path; the direction is the route.",
+    "reads no body: flips the revoked flag of the trigger named in the path; the direction is the route.",
   "mcp-auth/consent.post.ts":
-    "An HTML form post from the consent page, read as form data because that is what a browser sends.",
+    "reads another format: an HTML form post from the consent page, read as form data because that is what a browser sends.",
   "mcp-auth/login.post.ts":
-    "An HTML form post from the login page, read as form data because that is what a browser sends.",
+    "reads another format: an HTML form post from the login page, read as form data because that is what a browser sends.",
   "mcp.delete.ts":
-    "Ends the MCP session named by a header; the transport owns that exchange and reads no body.",
+    "reads no body: ends the MCP session named by a header; the transport owns that exchange and reads no body.",
   "mcp.post.ts":
-    "The MCP transport reads a byte-bounded body itself and answers a bad envelope as a JSON-RPC error, checked against the MCP contract rather than an HTTP body schema.",
+    "reads another format: the MCP transport reads a byte-bounded body itself and answers a bad envelope as a JSON-RPC error, checked against the MCP contract rather than an HTTP body schema.",
   "webhooks/custom/[endpointId].post.ts":
-    "Raw bytes, because the endpoint's signature is computed over exactly what arrived.",
+    "reads another format: raw bytes, because the endpoint's signature is computed over exactly what arrived.",
   "webhooks/github.post.ts":
-    "Raw bytes, because the provider's signature is computed over exactly what arrived.",
+    "reads another format: raw bytes, because the provider's signature is computed over exactly what arrived.",
   "webhooks/gitlab.post.ts":
-    "Raw bytes, because the provider's token check reads the body only after the header is trusted.",
+    "reads another format: raw bytes, because the provider's token check reads the body only after the header is trusted.",
   "webhooks/jira.post.ts":
-    "Raw bytes, because the provider's signature is computed over exactly what arrived.",
+    "reads another format: raw bytes, because the provider's signature is computed over exactly what arrived.",
   "webhooks/resend.post.ts":
-    "Raw bytes, because the provider's signature is computed over exactly what arrived.",
+    "reads another format: raw bytes, because the provider's signature is computed over exactly what arrived.",
   "webhooks/slack.post.ts":
-    "Raw bytes, because the provider's signature is computed over exactly what arrived.",
+    "reads another format: raw bytes, because the provider's signature is computed over exactly what arrived.",
 };
 
 const routesRoot = import.meta.dirname;
@@ -152,15 +159,15 @@ describe("request body schema coverage", () => {
     }
   });
 
-  it("accounts for every body this worker reads in another form", () => {
+  it("accounts for every route that reads no JSON body", () => {
     const found = new Set(
       mutatingRouteFiles()
         .filter(({ source }) => !readsJsonBody(source))
         .map(({ path }) => path),
     );
 
-    expect(found).toEqual(new Set(Object.keys(NON_JSON_BODIES)));
-    for (const [path, reason] of Object.entries(NON_JSON_BODIES)) {
+    expect(found).toEqual(new Set(Object.keys(NO_JSON_BODY)));
+    for (const [path, reason] of Object.entries(NO_JSON_BODY)) {
       expect(reason.length, `${path} has no reason recorded`).toBeGreaterThan(20);
     }
   });

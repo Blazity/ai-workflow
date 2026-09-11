@@ -62,15 +62,29 @@ export async function handleResendWebhook(
 }
 
 /**
- * The signed payload, narrowed to the fields the ledger reads.
+ * The signed payload, checked against the shared schema before the ledger reads
+ * it.
  *
- * A payload the schema rejects becomes an empty event rather than a refusal,
- * which is what a signed but unrecognized shape has always produced here: the
- * ledger maps an event it does not recognize to "not handled" and the sender
- * still gets its 200. Answering an error instead would make Resend retry a
- * message we will never understand.
+ * The check is new. The handler this replaced cast the verified payload to the
+ * ledger's event type without looking at it, which is the audited gap this
+ * closes: `type`, `data` and the Resend id are now known to be what the mapper
+ * reads them as.
+ *
+ * The check stops at that envelope, and everything inside `data` is forwarded
+ * exactly as it arrived, because the mapper tolerates an odd leaf and returns
+ * "not handled" rather than throwing. A shape the envelope check rejects (a
+ * body that is not an object, a numeric event name, a non-string email id)
+ * becomes an empty event instead of a refusal: the ledger answers "not handled"
+ * and the sender still gets its 200, because an error would make Resend retry a
+ * message we will never understand. That substitution is new too, and it is the
+ * only case where a signed payload no longer reaches the mapper whole.
  */
 function consumableEvent(payload: unknown): ResendEmailDeliveryEvent {
   const parsed = resendWebhookEventSchema.safeParse(payload);
-  return parsed.success ? (parsed.data satisfies ResendWebhookEvent) : {};
+  if (!parsed.success) return {};
+  // The verified event, with every leaf the schema left unknown still on it: the
+  // cast is what the ledger's own reading of those leaves rests on, exactly as
+  // it did before this file existed.
+  const verified: ResendWebhookEvent = parsed.data;
+  return verified as ResendEmailDeliveryEvent;
 }

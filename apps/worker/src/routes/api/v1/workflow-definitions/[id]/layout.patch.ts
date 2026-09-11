@@ -4,8 +4,10 @@ import {
   parseRequestBody,
   workflowDefinitionLayoutPatchRequestSchema,
 } from "@shared/contracts";
-import { requireDashboardActor } from "../../../../../services/auth/index.js";
-import { saveWorkflowDefinitionLayoutRevision } from "../../../../../services/workflow-definitions/index.js";
+import { requireDashboardActor } from "../../../../../services/auth/request-context.js";
+import {
+  saveWorkflowDefinitionLayoutRevision,
+} from "../../../../../services/workflow-definitions/definition-authoring.js";
 import {
   parseDefinitionId,
   serializeDefinitionMeta,

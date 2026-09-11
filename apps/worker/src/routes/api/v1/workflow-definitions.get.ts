@@ -10,7 +10,10 @@ import type {
   WorkflowDefinitionMeta,
   WorkflowDefinitionsResponse,
 } from "@shared/contracts";
-import { requireDashboardActor, toHttpError } from "../../../services/auth/index.js";
+import {
+  requireDashboardActor,
+  toHttpError,
+} from "../../../services/auth/request-context.js";
 import {
   readWorkflowDefinitionsOverview,
   WorkflowDefinitionStoreError,

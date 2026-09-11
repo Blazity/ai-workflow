@@ -10,7 +10,8 @@ import {
 } from "h3";
 
 import { auth } from "../../auth-instance.js";
-import { readOAuthFlowCookie, workerOriginUrl } from "../../services/auth/index.js";
+import { readOAuthFlowCookie } from "../../services/auth/oauth-flow-cookie.js";
+import { workerOriginUrl } from "../../services/auth/sso-redirects.js";
 import { isSameOriginPost } from "../../mcp/auth-pages.js";
 
 export default defineEventHandler(async (event) => {

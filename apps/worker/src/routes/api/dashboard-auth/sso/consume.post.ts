@@ -1,11 +1,12 @@
 import { createError, defineEventHandler, readBody } from "h3";
-import { dashboardSsoHandoffConsumeRequestSchema, parseRequestBody } from "@shared/contracts";
+import {
+  dashboardSsoHandoffConsumeRequestSchema,
+  parseRequestBody,
+} from "@shared/contracts";
 
 import { auth } from "../../../../auth-instance.js";
-import {
-  consumeDashboardSsoHandoff,
-  toHttpError,
-} from "../../../../services/auth/index.js";
+import { toHttpError } from "../../../../services/auth/request-context.js";
+import { consumeDashboardSsoHandoff } from "../../../../services/auth/sso-handoff.js";
 
 export default defineEventHandler(async (event) => {
   const parsed = parseRequestBody(

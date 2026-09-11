@@ -1,7 +1,9 @@
 import type { SchedulePauseResponse } from "@shared/contracts";
 import { createError, defineEventHandler } from "h3";
-import { toHttpError } from "../../../../../../../../services/auth/index.js";
-import { pauseTriggerSchedule } from "../../../../../../../../services/workflow-definitions/index.js";
+import { toHttpError } from "../../../../../../../../services/auth/request-context.js";
+import {
+  pauseTriggerSchedule,
+} from "../../../../../../../../services/workflow-definitions/trigger-schedules.js";
 import { parseScheduleTarget, requireScheduleActor } from "./config.get.js";
 
 /**

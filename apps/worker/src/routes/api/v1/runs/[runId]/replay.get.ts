@@ -8,11 +8,11 @@ import type { WorkflowRunReplayResponse } from "@shared/contracts";
 import {
   requireDashboardActor,
   toHttpError,
-} from "../../../../../services/auth/index.js";
+} from "../../../../../services/auth/request-context.js";
 import {
   RunObservationStoreError,
   readRunReplay,
-} from "../../../../../services/run-lifecycle/index.js";
+} from "../../../../../services/run-lifecycle/run-replay-read.js";
 import { parseReplayPageQuery } from "../replay-query.js";
 import {
   parseReplayRunId,
@@ -25,6 +25,8 @@ export default defineEventHandler(
     try {
       const actor = await requireDashboardActor(event);
       const runId = parseReplayRunId(event);
+      // Awaited on purpose: the handler this replaced returned the promise from
+      // inside the try, so every store error escaped the catch below as a 500.
       return await readRunReplay({
         organizationId: actor.organizationId,
         runId,

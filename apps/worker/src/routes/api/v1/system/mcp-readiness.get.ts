@@ -1,6 +1,9 @@
 import { defineEventHandler, setResponseHeader } from "h3";
-import { requireDashboardActor, toHttpError } from "../../../../services/auth/index.js";
-import { mcpSettings } from "../../../../services/settings/index.js";
+import {
+  requireDashboardActor,
+  toHttpError,
+} from "../../../../services/auth/request-context.js";
+import { mcpSettings } from "../../../../services/settings/runtime-settings.js";
 import { MCP_CONTRACT_ARTIFACT } from "../../../../mcp/contract-artifact.js";
 import { MCP_PROTOCOL_VERSION } from "../../../../mcp/server.js";
 import { MCP_ENABLED_DOMAINS } from "../../../../mcp/tool-catalog.js";

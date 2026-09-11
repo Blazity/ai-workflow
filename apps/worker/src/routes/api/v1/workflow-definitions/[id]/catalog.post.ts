@@ -12,12 +12,14 @@ import {
 import {
   requireDashboardActor,
   toHttpError,
-} from "../../../../../services/auth/index.js";
+} from "../../../../../services/auth/request-context.js";
 import {
-  activeWorkflowDefinitionExists,
   analyzeWorkflowDefinitionCatalog,
   parseWorkflowDefinitionCandidate,
-} from "../../../../../services/workflow-definitions/index.js";
+} from "../../../../../services/workflow-definitions/definition-candidates.js";
+import {
+  activeWorkflowDefinitionExists,
+} from "../../../../../services/workflow-definitions/definition-reads.js";
 import { parseDefinitionId } from "../../workflow-definitions.get.js";
 
 export default defineEventHandler(

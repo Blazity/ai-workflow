@@ -1,8 +1,10 @@
 import type { WebhookSetSecretResponse } from "@shared/contracts";
 import { parseRequestBody, webhookSetSecretBodySchema } from "@shared/contracts";
 import { createError, defineEventHandler, readBody } from "h3";
-import { toHttpError } from "../../../../../../../../services/auth/index.js";
-import { importWebhookSecret } from "../../../../../../../../services/workflow-definitions/index.js";
+import { toHttpError } from "../../../../../../../../services/auth/request-context.js";
+import {
+  importWebhookSecret,
+} from "../../../../../../../../services/workflow-definitions/trigger-webhooks.js";
 import {
   parseWebhookEndpointTarget,
   requireWebhookActor,

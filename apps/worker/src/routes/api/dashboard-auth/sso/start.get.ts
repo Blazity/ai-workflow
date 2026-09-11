@@ -11,11 +11,11 @@ import {
 
 import { DASHBOARD_SSO_PROVIDER_ID } from "../../../../auth.js";
 import { auth } from "../../../../auth-instance.js";
+import { readOAuthFlowCookie } from "../../../../services/auth/oauth-flow-cookie.js";
 import {
   dashboardOriginUrl,
-  readOAuthFlowCookie,
   workerOriginUrl,
-} from "../../../../services/auth/index.js";
+} from "../../../../services/auth/sso-redirects.js";
 import { safeOAuthReturnPath } from "../../../../mcp/auth-pages.js";
 
 export default defineEventHandler(async (event) => {

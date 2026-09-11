@@ -3,10 +3,12 @@ import { defineEventHandler, getQuery, sendRedirect, toWebRequest } from "h3";
 import { auth } from "../../../../auth-instance.js";
 import {
   acceptDashboardSsoInviteForUser,
+} from "../../../../services/auth/invite-requests.js";
+import {
   dashboardLoginUrl,
   dashboardSsoCompletionUrl,
   workerUrlFor,
-} from "../../../../services/auth/index.js";
+} from "../../../../services/auth/sso-redirects.js";
 import { safeOAuthReturnPath } from "../../../../mcp/auth-pages.js";
 
 export default defineEventHandler(async (event) => {

@@ -1,7 +1,12 @@
 import { defineEventHandler } from "h3";
 import type { RepositoriesResponse } from "@shared/contracts";
-import { requireDashboardActor, toHttpError } from "../../../services/auth/index.js";
-import { listRepositoryDirectory } from "../../../services/repository-discovery/index.js";
+import {
+  requireDashboardActor,
+  toHttpError,
+} from "../../../services/auth/request-context.js";
+import {
+  listRepositoryDirectory,
+} from "../../../services/repository-discovery/directory.js";
 
 const CACHE_TTL_MS = 60_000;
 

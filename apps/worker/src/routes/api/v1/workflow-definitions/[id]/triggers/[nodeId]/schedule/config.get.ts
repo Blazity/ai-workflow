@@ -6,18 +6,20 @@ import type {
 } from "@shared/contracts";
 import { createError, defineEventHandler, getRouterParam, type H3Event } from "h3";
 import {
-  canDispatchWorkflowRuns,
   requireDashboardActor,
   toHttpError,
-} from "../../../../../../../../services/auth/index.js";
+} from "../../../../../../../../services/auth/request-context.js";
 import {
+  canDispatchWorkflowRuns,
+} from "../../../../../../../../services/auth/roles.js";
+import {
+  SCHEDULE_STALE_EVALUATION_MS,
   deriveScheduleState,
   readTriggerScheduleConfig,
-  SCHEDULE_STALE_EVALUATION_MS,
   type OccurrenceRow,
   type ScheduleRow,
   type ScheduleTarget,
-} from "../../../../../../../../services/workflow-definitions/index.js";
+} from "../../../../../../../../services/workflow-definitions/trigger-schedules.js";
 import { parseDefinitionId } from "../../../../../workflow-definitions.get.js";
 
 /**

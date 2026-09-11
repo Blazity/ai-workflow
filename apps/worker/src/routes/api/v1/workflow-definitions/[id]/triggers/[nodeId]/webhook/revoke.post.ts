@@ -1,7 +1,9 @@
 import type { WebhookRevokeResponse } from "@shared/contracts";
 import { createError, defineEventHandler } from "h3";
-import { toHttpError } from "../../../../../../../../services/auth/index.js";
-import { revokeWebhookEndpointForNode } from "../../../../../../../../services/workflow-definitions/index.js";
+import { toHttpError } from "../../../../../../../../services/auth/request-context.js";
+import {
+  revokeWebhookEndpointForNode,
+} from "../../../../../../../../services/workflow-definitions/trigger-webhooks.js";
 import {
   parseWebhookEndpointTarget,
   requireWebhookActor,

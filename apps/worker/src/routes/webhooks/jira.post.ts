@@ -1,5 +1,8 @@
 import { createError, defineEventHandler, getHeader, readRawBody } from "h3";
-import { TriggerHttpError, handleJiraWebhook } from "../../services/triggers/index.js";
+// Cluster modules, not the barrel: the barrel also re-exports the polling
+// pass and the other providers' handlers, and this route needs neither.
+import { handleJiraWebhook } from "../../services/triggers/jira/handle-jira-webhook.js";
+import { TriggerHttpError } from "../../services/triggers/trigger-http-error.js";
 
 /**
  * Jira webhook handler - triggers the same dispatch logic as the cron poller.

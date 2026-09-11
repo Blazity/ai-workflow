@@ -12,10 +12,12 @@ import {
 import { auth } from "../../auth-instance.js";
 import {
   createOAuthFlowCookie,
-  dashboardOriginUrl,
   readOAuthFlowCookie,
+} from "../../services/auth/oauth-flow-cookie.js";
+import {
+  dashboardOriginUrl,
   workerOriginUrl,
-} from "../../services/auth/index.js";
+} from "../../services/auth/sso-redirects.js";
 import {
   isOAuthAuthorizationQuery,
   isOpaqueHandoffToken,

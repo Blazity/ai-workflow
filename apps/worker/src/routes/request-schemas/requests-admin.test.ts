@@ -20,10 +20,21 @@ describe("dashboardInviteCreateRequestSchema", () => {
     });
   });
 
-  it("refuses an email that is not a string", () => {
+  it("refuses an email that is present but not a string", () => {
+    // The deliberate change: the handler passed a truthy non-string straight to
+    // the invite store, so this case gets its own sentence rather than the one
+    // an absent email answers.
     expect(
       parseRequestBody(dashboardInviteCreateRequestSchema, { email: 42 }),
-    ).toEqual({ ok: false, message: "Missing email" });
+    ).toEqual({ ok: false, message: "Invalid email" });
+  });
+
+  it("still calls a falsy email missing, as the handler's one check did", () => {
+    for (const email of [null, "", 0, false]) {
+      expect(
+        parseRequestBody(dashboardInviteCreateRequestSchema, { email }),
+      ).toEqual({ ok: false, message: "Missing email" });
+    }
   });
 
   it("refuses any role other than member", () => {
