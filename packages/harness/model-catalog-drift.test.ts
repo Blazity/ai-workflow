@@ -20,7 +20,7 @@ function write(root: string, path: string, source: string): void {
   writeFileSync(target, source);
 }
 
-test("the drift gate rejects a non-owner literal and honors only reviewed exclusions", () => {
+function assertReviewedExclusions(): void {
   assert.deepEqual(
     execFileSync(process.execPath, [gate, "--print-exclusions"], {
       encoding: "utf8",
@@ -29,6 +29,10 @@ test("the drift gate rejects a non-owner literal and honors only reviewed exclus
       .split("\n"),
     [...exclusions],
   );
+}
+
+test("the drift gate rejects a non-owner literal and honors only reviewed exclusions", () => {
+  assertReviewedExclusions();
 
   const root = mkdtempSync(join(tmpdir(), "model-catalog-drift-"));
   try {

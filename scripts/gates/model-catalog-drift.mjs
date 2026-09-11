@@ -63,62 +63,79 @@ function isExcluded(path) {
   );
 }
 
+function scanLineComment(character) {
+  return character === "\n"
+    ? { output: character, state: "code", advance: 0 }
+    : { output: " ", state: "line-comment", advance: 0 };
+}
+
+function scanBlockComment(character, next) {
+  if (character === "*" && next === "/") {
+    return { output: "  ", state: "code", advance: 1 };
+  }
+  return {
+    output: character === "\n" ? character : " ",
+    state: "block-comment",
+    advance: 0,
+  };
+}
+
+function scanString(character, next, quote) {
+  if (character === "\\") {
+    return {
+      output: character + (next ?? ""),
+      state: "string",
+      advance: 1,
+    };
+  }
+  return {
+    output: character,
+    state: character === quote ? "code" : "string",
+    advance: 0,
+  };
+}
+
+function scanCode(character, next) {
+  if (character === "/" && next === "/") {
+    return { output: "  ", state: "line-comment", advance: 1 };
+  }
+  if (character === "/" && next === "*") {
+    return { output: "  ", state: "block-comment", advance: 1 };
+  }
+  if (character === '"' || character === "'" || character === "`") {
+    return {
+      output: character,
+      state: "string",
+      advance: 0,
+      quote: character,
+    };
+  }
+  return { output: character, state: "code", advance: 0 };
+}
+
+function scanCharacter(state, character, next, quote) {
+  if (state === "line-comment") return scanLineComment(character);
+  if (state === "block-comment") return scanBlockComment(character, next);
+  if (state === "string") return scanString(character, next, quote);
+  return scanCode(character, next);
+}
+
 function withoutComments(source) {
   let result = "";
   let state = "code";
   let quote = "";
 
   for (let index = 0; index < source.length; index++) {
-    const character = source[index];
-    const next = source[index + 1];
-
-    if (state === "line-comment") {
-      if (character === "\n") {
-        result += character;
-        state = "code";
-      } else {
-        result += " ";
-      }
-      continue;
-    }
-
-    if (state === "block-comment") {
-      if (character === "*" && next === "/") {
-        result += "  ";
-        index++;
-        state = "code";
-      } else {
-        result += character === "\n" ? character : " ";
-      }
-      continue;
-    }
-
-    if (state === "string") {
-      result += character;
-      if (character === "\\") {
-        result += next ?? "";
-        index++;
-      } else if (character === quote) {
-        state = "code";
-      }
-      continue;
-    }
-
-    if (character === "/" && next === "/") {
-      result += "  ";
-      index++;
-      state = "line-comment";
-    } else if (character === "/" && next === "*") {
-      result += "  ";
-      index++;
-      state = "block-comment";
-    } else {
-      result += character;
-      if (character === '"' || character === "'" || character === "`") {
-        quote = character;
-        state = "string";
-      }
-    }
+    const scanned = scanCharacter(
+      state,
+      source[index],
+      source[index + 1],
+      quote,
+    );
+    result += scanned.output;
+    index += scanned.advance;
+    state = scanned.state;
+    if (scanned.quote) quote = scanned.quote;
   }
 
   return result;

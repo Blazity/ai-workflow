@@ -436,7 +436,7 @@ describe("Harness capability catalog", () => {
     advertisedOutsidePolicy.models[0]!.id = unknownDraft.model.id;
     expect(() =>
       upgradeHarnessDraftToV2(unknownDraft, advertisedOutsidePolicy),
-    ).toThrow(/no longer available/);
+    ).toThrow(/no longer available/u);
 
     const matching = structuredClone(response);
     matching.models[0]!.id = draft.model.id;
