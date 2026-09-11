@@ -274,12 +274,12 @@ Later: stage 12 (`packages/workflow-graph`: v2 schema, validation, bindings, sch
 - Jira key: AIW-347
 - Parent: the epic above
 - Labels: architecture, restructure, stage-6a
-- Depends on / Related: after stage 5b; opens the second freeze
+- Depends on / Related: after stage 5; opens the second freeze
 - Freeze: second (lib, routes) - opens at the start of this stage
 - Suggested executor: sonnet, skeptic no, TDD no, delegation yes (import sweep)
-- Summary: `config/env.ts` becomes the single importer of the worker's `env.ts`; infra modules named in the D3 table move to `infra/`; every other file gets its `env` import replaced by a parameter or a `config` accessor.
+- Summary: environment validation moves to `src/infra/runtime-env.ts`, VCS configuration moves to `src/infra/vcs-config.ts`, and every other file gets its environment dependency replaced by a parameter or a settings accessor.
 - Scope:
-  - Move `env` access behind `config/env.ts` as the single importer of `apps/worker/env.ts`
+  - Move environment validation to `apps/worker/src/infra/runtime-env.ts` and VCS accessors to `apps/worker/src/infra/vcs-config.ts`
   - Move the infra modules named in the D3 table (logger, telemetry, llm-provider, llm, github-webhook-sig, webhook-crypto, unique-violation, vcs-urls) to `infra/`
   - Replace every other `env` import with a parameter or a `config` accessor
   - Per D3, allowed edges here are `config -> nothing` and `infra -> nothing`: neither tier may import anything else in the worker

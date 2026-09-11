@@ -8,6 +8,7 @@
 export {
   isAiReviewDestination,
 } from "./ai-review-destination.js";
+export { aiColumnMoveTarget } from "./move-targets.js";
 export {
   PREMATURE_AI_REVIEW_CANCELLATION_REASON,
   decideAiReviewRun,

@@ -30,7 +30,7 @@ vi.mock("../../infra/vcs-config.js", () => ({
   env: testEnv,
   getConfiguredVcsProviders: vi.fn(() => []),
 }));
-vi.mock("../../engine/support/vcs-bot-login.js", () => ({
+vi.mock("../vcs/index.js", () => ({
   getVcsBotLogin: vi.fn((provider: "github" | "gitlab") =>
     provider === "github" ? testEnv.GITHUB_BOT_LOGIN : testEnv.GITLAB_BOT_LOGIN),
 }));

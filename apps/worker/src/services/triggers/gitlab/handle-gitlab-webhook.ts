@@ -38,7 +38,7 @@ import {
   verifyGitLabWebhookToken,
   type GitLabProject,
 } from "../../vcs/index.js";
-import { getVcsBotLogin } from "../../../engine/support/vcs-bot-login.js";
+import { getVcsBotLogin } from "../../vcs/index.js";
 import { TriggerHttpError } from "../../../infra/trigger-http-error.js";
 
 const ALLOWED_ACTIONS = new Set(["opened", "update", "reopened"]);

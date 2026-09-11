@@ -1,9 +1,8 @@
 import { and, asc, eq, sql } from "drizzle-orm";
+import type { PrTriggerType, TriggerEvent } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
 import { activeRuns, triggerDeliveries, workflowRuns } from "../../db/schema.js";
 import { isUniqueViolation } from "../../infra/unique-violation.js";
-import type { PrTriggerType } from "../agent-input.js";
-import type { TriggerEvent } from "./trigger-events.js";
 
 export type TriggerScope = "workflow_owned" | "any";
 

@@ -68,10 +68,6 @@ vi.mock("../../clarifications/hook-store.js", () => ({
   getResumableClarificationForRun: (...args: any[]) =>
     mockGetResumableClarificationForRun(...args),
 }));
-vi.mock("../../engine/support/clarification-retirement.js", () => ({
-  retireClarificationForGoneTicket: (...args: any[]) =>
-    mockRetireClarificationForGoneTicket(...args),
-}));
 
 function entry(overrides: Partial<ActiveRunEntry> = {}): ActiveRunEntry {
   return {
@@ -771,6 +767,8 @@ describe("reconcileRuns owner-CAS recovery", () => {
         onReleased,
         new Set([parked.subjectKey]),
         mockDb,
+        undefined,
+        mockRetireClarificationForGoneTicket,
       ),
     ).toEqual({ cancelled: 1, cleaned: 0 });
     expect(mockRetireClarificationForGoneTicket).toHaveBeenCalledWith(mockDb, clarification);
@@ -816,6 +814,8 @@ describe("reconcileRuns owner-CAS recovery", () => {
         undefined,
         new Set([parked.subjectKey]),
         mockDb,
+        undefined,
+        mockRetireClarificationForGoneTicket,
       ),
     ).toEqual({ cancelled: 1, cleaned: 0 });
     expect(onCancelled).not.toHaveBeenCalled();

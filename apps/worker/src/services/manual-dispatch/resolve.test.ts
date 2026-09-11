@@ -21,7 +21,7 @@ vi.mock("../../infra/vcs-config.js", () => ({
   ],
 }));
 
-vi.mock("../../engine/support/vcs-bot-login.js", () => ({
+vi.mock("../vcs/index.js", () => ({
   getVcsBotLogin: () => "workflow-bot",
 }));
 

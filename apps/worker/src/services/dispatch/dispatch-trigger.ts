@@ -1,7 +1,7 @@
 import { start } from "workflow/api";
 import type { VcsProviderKind, WorkflowDefinition } from "@shared/contracts";
 import { createAdapters } from "../../engine/support/adapters.js";
-import { getVcsBotLogin } from "../../engine/support/vcs-bot-login.js";
+import { getVcsBotLogin } from "../vcs/index.js";
 import type { Db } from "../../db/client.js";
 import {
   IssueTrackerNotFoundError,

@@ -3,74 +3,21 @@
  * webhook dispatch layer and carried unchanged through the run so block
  * executors can read PR facts without re-fetching them.
  */
-import type { ApprovedRepositoryScope, JsonValue } from "@shared/contracts";
+import type {
+  ApprovedRepositoryScope,
+  PrTriggerPayload,
+  PrTriggerType,
+  WebhookTriggerEntry,
+} from "@shared/contracts";
 import type { RunKind } from "../adapters/run-registry/types.js";
 
-export type PrTriggerType =
-  | "trigger_pr_created"
-  | "trigger_pr_ready"
-  | "trigger_pr_updated"
-  | "trigger_pr_checks_failed"
-  | "trigger_pr_review"
-  | "trigger_pr_merged";
-
-export interface SupportCase {
-  [key: string]: JsonValue;
-  provider: "zendesk" | "sentry";
-  endpoint: string;
-  sourceId: string;
-  sourceUrl: string;
-  title: string;
-  description: string;
-  severity: string;
-  priority: string;
-  reporter: string;
-  customerContext: JsonValue;
-  metadata: JsonValue;
-}
-
-export interface PrTriggerPayload {
-  provider: "github" | "gitlab";
-  repoPath: string;
-  /** GitLab project identity retained so deferred scope checks can be replayed. */
-  providerProjectId?: number | string;
-  prNumber: number;
-  prUrl: string;
-  headRef: string;
-  headSha: string;
-  baseRef: string;
-  title: string;
-  author: string;
-  isDraft: boolean;
-  mergeSha?: string;
-  mergedAt?: string;
-  /** GitLab pipeline event identity used to reject superseded head pipelines. */
-  pipelineId?: number;
-  failedChecks?: Array<{
-    name: string;
-    conclusion: string;
-    detailsUrl?: string;
-    /** GitHub identity used only by dispatch freshness checks. */
-    checkRunId?: number;
-    appSlug?: string;
-  }>;
-  review?: { state: "changes_requested" | "commented"; author: string; body: string };
-  reviews?: Array<{ state: "changes_requested" | "commented"; author: string; body: string }>;
-}
+export type { PrTriggerPayload, PrTriggerType } from "@shared/contracts";
 
 /**
  * Fields a webhook delivery contributes to the run it starts, already mapped
  * through the endpoint's map* params. `payload` is the raw authenticated body.
  */
-export interface WebhookTriggerEntryPayload {
-  subject: string;
-  description: string;
-  requester: string;
-  priority: string;
-  /** The authenticated request body, already parsed. */
-  payload: JsonValue;
-  supportCase?: SupportCase;
-}
+type WebhookTriggerEntryPayload = WebhookTriggerEntry;
 
 /** Immutable identity for the built-in fresh-install graph, which has no
  * workflow_definition_versions row to pin by number. */

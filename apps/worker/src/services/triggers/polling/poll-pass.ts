@@ -16,6 +16,7 @@ import { sweepWebhookDeliveries } from "../../../webhook-trigger/delivery-store.
 import { dispatchPlanApproved } from "../../approvals/index.js";
 import {
   expireHookClarifications,
+  retireClarificationForGoneTicket,
   resumeClarificationFromComments,
 } from "../../clarifications/index.js";
 import {
@@ -32,7 +33,7 @@ import {
   sweepMcpIdempotencyKeys,
   sweepMcpRateLimits,
 } from "../../mcp/index.js";
-import type { RunsLister } from "../../../engine/support/collect-runs.js";
+import type { RunsLister } from "../../overview/index.js";
 import { ticketSubjectKey } from "../../../engine/support/subject-key.js";
 import { reconcileRuns } from "../../run-lifecycle/index.js";
 import {
@@ -156,6 +157,7 @@ export async function runPollPass() {
     protectedRunSubjects,
     db,
     terminalReconciliationSubjects,
+    retireClarificationForGoneTicket,
   );
 
   const polledTriggerRecovery = await recoverPendingTriggers(

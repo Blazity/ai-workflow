@@ -167,6 +167,20 @@ test("the boundary gate prints forbidden edges on request even when the ratchet 
   );
 });
 
+test("an empty tier-pair baseline is a hard zero", async () => {
+  const root = await mkdtemp(join(tmpdir(), "boundary-hard-zero-gate-"));
+  const baseline = join(root, "boundaries.baseline.json");
+  boundaryFixture(root);
+
+  const result = gate("boundaries.mjs", ["--root", root, "--baseline", baseline]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(result.stdout, /app->db\s+0\s+1/u);
+  assert.match(
+    result.stdout,
+    /apps\/worker\/src\/routes\/entry\.ts -> apps\/worker\/src\/db\/client\.ts  \(app->db\)/u,
+  );
+});
+
 test("file cycle normalization dedupes reports and detects count regression", () => {
   const report = {
     modules: [

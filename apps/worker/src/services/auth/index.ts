@@ -83,7 +83,6 @@ export {
   buildTrustedOrigins,
 } from "./trusted-origins.js";
 export {
-  DashboardAuthError,
   listDashboardUsers,
   updateDashboardUserRole,
 } from "./users-read.js";

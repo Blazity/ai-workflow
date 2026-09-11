@@ -405,7 +405,7 @@ function isGithubProviderConfigured(): boolean {
     );
   }
   // Same rule as isValidWebhookEncryptionKey in src/infra/webhook-crypto.ts, which
-  // cannot be imported here: env.ts must stay dependency-free at boot. Change
+  // cannot be imported here: runtime-env.ts must stay dependency-free at boot. Change
   // both together.
   if (
     env.WEBHOOK_TRIGGER_ENCRYPTION_KEY &&

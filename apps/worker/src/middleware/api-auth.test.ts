@@ -13,7 +13,7 @@ vi.mock("h3", async (importOriginal) => {
   };
 });
 
-vi.mock("../services/auth/auth-instance.js", () => {
+vi.mock("../auth-instance.js", () => {
   const getSession = vi.fn(async () => null);
   return { auth: { api: { getSession } } };
 });
@@ -65,7 +65,7 @@ describe("api-auth middleware routing guard", () => {
   }
 
   it("does NOT gate non-/api/v1/ paths (e.g. /cron/poll)", async () => {
-    const { auth: fakeAuth } = await import("../services/auth/auth-instance.js");
+    const { auth: fakeAuth } = await import("../auth-instance.js");
     const getSession = fakeAuth.api.getSession as unknown as ReturnType<typeof vi.fn>;
     getSession.mockClear();
 
@@ -77,7 +77,7 @@ describe("api-auth middleware routing guard", () => {
   });
 
   it("gates /api/v1/ paths with no session → 401", async () => {
-    const { auth: fakeAuth } = await import("../services/auth/auth-instance.js");
+    const { auth: fakeAuth } = await import("../auth-instance.js");
     const getSession = fakeAuth.api.getSession as unknown as ReturnType<typeof vi.fn>;
     getSession.mockClear();
     getSession.mockResolvedValue(null);
@@ -90,7 +90,7 @@ describe("api-auth middleware routing guard", () => {
   });
 
   it("does not convert body-bearing api requests to Web Requests before downstream body reads", async () => {
-    const { auth: fakeAuth } = await import("../services/auth/auth-instance.js");
+    const { auth: fakeAuth } = await import("../auth-instance.js");
     const getSession = fakeAuth.api.getSession as unknown as ReturnType<typeof vi.fn>;
     getSession.mockClear();
     getSession.mockResolvedValue({ session: { id: "session_1" }, user: { id: "user_1" } });

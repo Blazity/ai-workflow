@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { DashboardAuthError } from "@shared/contracts";
 
 import type { Auth } from "./auth-core.js";
-import { DashboardAuthError } from "./users-read.js";
 
 const HANDOFF_PREFIX = "dashboard-sso-handoff:";
 const HANDOFF_TTL_MS = 60 * 1000;

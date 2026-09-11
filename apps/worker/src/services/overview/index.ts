@@ -8,6 +8,8 @@ export type { EvalSummary } from "./collect-eval-summary.js";
 export { collectEvals } from "./collect-evals.js";
 export { collectRunKpis } from "./collect-kpis.js";
 export { collectLiveRuns } from "./collect-live-runs.js";
+export { mapWorkflow, STATUS_MAP } from "./collect-runs.js";
+export type { RunsLister, WorkflowRunRecord } from "./collect-runs.js";
 export { registryRows } from "./collect-workflows.js";
 export { resolveRunDetail } from "./resolve-run-detail.js";
 export { getWorkflowRegistry } from "./workflow-registry.js";

@@ -22,7 +22,7 @@ import {
   runnableDefinitionOf,
   WorkflowDefinitionStoreError,
   WorkflowDefinitionValidationError,
-} from "../../services/workflow-definitions/index.js";
+} from "../../services/workflow-definitions/definition-store.js";
 import { McpPublicError, type McpToolDependencies } from "../contracts.js";
 import { executeMcpMutation, executeMcpRead } from "../execute-tool.js";
 import { hashCanonicalJson } from "../sanitize-result.js";

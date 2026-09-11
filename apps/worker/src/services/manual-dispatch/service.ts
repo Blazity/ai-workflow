@@ -9,7 +9,7 @@ import type {
 import { env } from "../../infra/vcs-config.js";
 import type { Adapters } from "../../engine/support/adapters.js";
 import { reserveSubjectWithinCapacity } from "../dispatch/index.js";
-import { aiColumnMoveTarget } from "../../engine/support/ticket-move-targets.js";
+import { aiColumnMoveTarget } from "../tickets/index.js";
 import { moveTicketForRun } from "../tickets/index.js";
 import type { Db } from "../../db/client.js";
 import type { AgentWorkflowInput, PrTriggerPayload } from "../../engine/index.js";

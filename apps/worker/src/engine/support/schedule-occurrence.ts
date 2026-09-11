@@ -31,7 +31,7 @@ import { Cron } from "croner";
  *
  * Every occurrence starts a full agent run: 3 to 25 minutes of work that can
  * open pull requests. The sandbox pool is global, MAX_CONCURRENT_AGENTS, default
- * 3 (apps/worker/env.ts:98), and it is shared with the human ticket queue. So a
+ * 3 (apps/worker/src/infra/runtime-env.ts), and it is shared with the human ticket queue. So a
  * schedule that fires faster than its own runs finish does not merely queue
  * behind itself, it occupies the whole pool and starves the tickets people are
  * waiting on. Fifteen minutes keeps even the worst case (one schedule, always

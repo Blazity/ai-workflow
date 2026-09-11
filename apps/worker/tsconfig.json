@@ -12,7 +12,6 @@
   },
   "include": [
     "src/**/*.ts",
-    "env.ts",
     "nitro.config.ts",
     "vitest.config.ts"
   ],

@@ -452,6 +452,7 @@ describe("cron clarification recovery ordering", () => {
       new Set(["ticket:jira:AIW-1"]),
       { db: true },
       new Set(["ticket:jira:AIW-CONTINUATION"]),
+      expect.any(Function),
     );
     await expect(response.json()).resolves.toMatchObject({
       pendingRecovered: 0,
@@ -560,6 +561,7 @@ describe("cron clarification recovery ordering", () => {
       new Set(),
       { db: true },
       new Set(["ticket:jira:AIW-1"]),
+      expect.any(Function),
     );
     expect(mocks.dispatchPlanApproved).toHaveBeenCalledWith(
       expect.objectContaining({

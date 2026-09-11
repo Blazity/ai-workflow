@@ -32,7 +32,7 @@ import {
 } from "../dispatch/index.js";
 import { prSubjectKey, ticketSubjectKey } from "../../engine/support/subject-key.js";
 import { createRepositoryVCS } from "../../engine/support/vcs-runtime.js";
-import { getVcsBotLogin } from "../../engine/support/vcs-bot-login.js";
+import { getVcsBotLogin } from "../vcs/index.js";
 import { loadPostPrGateConfig } from "../../post-pr-gate/config.js";
 import {
   getDeployedWorkflowDefinitionVersion,

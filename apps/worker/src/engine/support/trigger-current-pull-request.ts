@@ -1,6 +1,6 @@
 import type { PullRequestHead } from "../../adapters/vcs/types.js";
+import type { TriggerEvent } from "@shared/contracts";
 import { createRepositoryVCS } from "./vcs-runtime.js";
-import type { TriggerEvent } from "./trigger-events.js";
 
 /** Re-read the provider facts needed to prove that a queued/bound trigger is
  * still the exact event that was accepted. */

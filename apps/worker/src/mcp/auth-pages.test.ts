@@ -13,7 +13,7 @@ vi.mock("../infra/vcs-config.js", () => ({
   },
 }));
 
-vi.mock("../services/auth/auth-instance.js", () => ({
+vi.mock("../auth-instance.js", () => ({
   auth: {
     api: {
       getOAuthClientPublicPrelogin: routeState.getOAuthClientPublicPrelogin,

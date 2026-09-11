@@ -5,7 +5,7 @@ const state = vi.hoisted(() => ({
   generateOneTimeToken: vi.fn(),
 }));
 
-vi.mock("../../../../services/auth/auth-instance.js", () => ({
+vi.mock("../../../../auth-instance.js", () => ({
   auth: { api: { generateOneTimeToken: state.generateOneTimeToken } },
 }));
 

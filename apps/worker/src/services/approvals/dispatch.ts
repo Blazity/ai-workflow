@@ -10,7 +10,7 @@ import {
   getWorkflowDefinition,
   getWorkflowDefinitionVersion,
 } from "../../db/repositories/definitions.js";
-import { aiColumnMoveTarget } from "../../engine/support/ticket-move-targets.js";
+import { aiColumnMoveTarget } from "../tickets/index.js";
 import { AWAITING_APPROVAL_LABEL } from "../../engine/support/ticket-labels.js";
 import { logger } from "../../infra/logger.js";
 import { isActiveRunOwnerError } from "../../engine/support/run-control-errors.js";

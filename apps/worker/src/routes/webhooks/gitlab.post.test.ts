@@ -26,7 +26,8 @@ vi.mock("../../infra/vcs-config.js", () => ({
   getConfiguredVcsProviders: mocks.getConfiguredVcsProviders,
 }));
 
-vi.mock("../../engine/support/vcs-bot-login.js", () => ({
+vi.mock("../../services/vcs/index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../services/vcs/index.js")>()),
   getVcsBotLogin: mocks.getVcsBotLogin,
 }));
 

@@ -20,7 +20,7 @@ vi.mock("../../infra/vcs-config.js", () => ({
   env: mocks.env,
 }));
 
-vi.mock("../../engine/support/vcs-bot-login.js", () => ({
+vi.mock("../../services/vcs/index.js", () => ({
   getVcsBotLogin: mocks.getVcsBotLogin,
 }));
 

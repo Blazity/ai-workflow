@@ -7,3 +7,4 @@ export {
 export type {
   GitLabProject,
 } from "./gitlab-webhook.js";
+export { getVcsBotLogin } from "./vcs-bot-login.js";

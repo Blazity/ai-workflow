@@ -1,5 +1,9 @@
 import { and, asc, desc, eq, isNotNull, lt, sql } from "drizzle-orm";
-import type { WebhookDeliveryOutcome } from "@shared/contracts";
+import type {
+  WebhookDeliveryOutcome,
+  WebhookTriggerEntry,
+  WebhookVerifiedWith,
+} from "@shared/contracts";
 import type { Db } from "../../db/client.js";
 import {
   activeRuns,
@@ -7,8 +11,6 @@ import {
   workflowRuns,
 } from "../../db/schema.js";
 import { isUniqueViolation } from "../../infra/unique-violation.js";
-import type { WebhookTriggerEntry } from "./webhook-payload-mapping.js";
-import type { WebhookVerifiedWith } from "./webhook-verify.js";
 
 /**
  * Durable inbox for authenticated webhook deliveries.

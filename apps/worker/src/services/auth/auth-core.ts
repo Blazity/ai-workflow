@@ -1,22 +1,9 @@
-import { sso } from "@better-auth/sso";
 import { waitUntil } from "@vercel/functions";
-import { betterAuth } from "better-auth";
-import { createAuthMiddleware } from "better-auth/api";
-import {
-  bearer,
-  jwt,
-  oneTimeToken,
-  organization as organizationPlugin,
-} from "better-auth/plugins";
-import { defaultAc } from "better-auth/plugins/organization/access";
+import type { Auth as BetterAuthInstance } from "better-auth";
 import { createError } from "h3";
 
 import type { Db } from "../../db/client.js";
-import {
-  createAuthRepository,
-  createBetterAuthAdapter,
-} from "../../db/repositories/auth.js";
-import { createMcpOAuthProvider, validateMcpOAuthHookRequest } from "./mcp-oauth-provider.js";
+import { createAuthRepository, createBetterAuthAdapter } from "../../db/repositories/auth.js";
 
 export type AuthOptions = {
   secret: string;
@@ -39,127 +26,39 @@ export type AuthOptions = {
 
 export const DASHBOARD_SSO_PROVIDER_ID = "workspace-sso";
 
-const ownerRole = defaultAc.newRole({
-  organization: ["update", "delete"],
-  member: ["create", "update", "delete"],
-  invitation: ["create", "cancel"],
-  team: [],
-  ac: [],
-});
+export type AuthDatabase = Db;
+export type Auth = BetterAuthInstance<any>;
+type AuthContext = Awaited<Auth["$context"]>;
 
-const adminRole = defaultAc.newRole({
-  organization: [],
-  member: [],
-  invitation: ["create", "cancel"],
-  team: [],
-  ac: [],
-});
-
-const memberRole = defaultAc.newRole({
-  organization: [],
-  member: [],
-  invitation: [],
-  team: [],
-  ac: [],
-});
-
-/**
- * Build a Better Auth instance over an existing drizzle/Neon db. Pure and
- * env-free so it can be unit-tested against a pglite db. emailAndPassword is
- * enabled but sign-up is disabled (seeded/invited users only). The bearer
- * plugin lets the dashboard replay the session token as a Bearer.
- */
-export function createAuth(db: Db, options: AuthOptions) {
-  const passwordReset = options.passwordReset;
-  const mcpDeployment = options.mcp
-    ? { ...options.mcp, baseURL: options.baseURL, db }
-    : null;
-
-  return betterAuth({
-    database: createBetterAuthAdapter(db),
-    emailAndPassword: {
-      enabled: true,
-      disableSignUp: true,
-      sendResetPassword: passwordReset
-        ? async ({ user, token }) => {
-            const hasCredential = await userHasCredentialAccount(db, user.id);
-            if (!hasCredential) {
-              await createAuthRepository(db).deleteResetPasswordVerification(token);
-              return;
-            }
-
-            const promise = passwordReset.sendEmail({
-              user,
-              token,
-              resetUrl: dashboardResetPasswordUrl(passwordReset.dashboardOrigin, token),
-            }).catch((error) => {
-              console.warn(
-                "[dashboard-auth] password reset email failed",
-                error instanceof Error ? error.message : error,
-              );
-            });
-            waitUntil(promise);
-          }
-        : undefined,
-    },
-    account: {
-      accountLinking: {
-        enabled: true,
-        disableImplicitLinking: false,
-        allowDifferentEmails: false,
-        requireLocalEmailVerified: true,
-        trustedProviders: [DASHBOARD_SSO_PROVIDER_ID],
-      },
-    },
-    hooks: mcpDeployment
-      ? {
-          before: createAuthMiddleware(async (ctx) => {
-            await validateMcpOAuthHookRequest(
-              mcpDeployment,
-              ctx.path,
-              ctx.body as Record<string, unknown> | undefined,
-              ctx.request?.headers.get("authorization"),
-            );
-          }),
-        }
-      : undefined,
-    plugins: [
-      bearer(),
-      oneTimeToken({
-        disableClientRequest: true,
-        expiresIn: 1,
-        storeToken: "hashed",
-      }),
-      organizationPlugin({
-        allowUserToCreateOrganization: false,
-        creatorRole: "owner",
-        invitationExpiresIn: 60 * 60 * 48,
-        roles: {
-          owner: ownerRole,
-          admin: adminRole,
-          member: memberRole,
-        },
-        disableOrganizationDeletion: true,
-      }),
-      sso({
-        providersLimit: 10,
-        domainVerification: { enabled: true },
-        disableImplicitSignUp: false,
-        trustEmailVerified: true,
-        organizationProvisioning: {
-          defaultRole: "member",
-        },
-      }),
-      ...(mcpDeployment ? [jwt(), createMcpOAuthProvider(mcpDeployment)] : []),
-    ],
-    trustedOrigins: options.trustedOrigins,
-    secret: options.secret,
-    baseURL: options.baseURL,
-  });
+export function createAuthDatabaseAdapter(db: Db) {
+  return createBetterAuthAdapter(db);
 }
 
-export type Auth = ReturnType<typeof createAuth>;
-type AuthContext = Awaited<Auth["$context"]>;
+export async function handleResetPasswordRequest(
+  db: Db,
+  passwordReset: NonNullable<AuthOptions["passwordReset"]>,
+  input: { user: { id: string; email: string; name: string }; token: string },
+): Promise<void> {
+  if (!(await userHasCredentialAccount(db, input.user.id))) {
+    await createAuthRepository(db).deleteResetPasswordVerification(input.token);
+    return;
+  }
+
+  const promise = passwordReset.sendEmail({
+    user: input.user,
+    token: input.token,
+    resetUrl: dashboardResetPasswordUrl(
+      passwordReset.dashboardOrigin,
+      input.token,
+    ),
+  }).catch((error) => {
+    console.warn(
+      "[dashboard-auth] password reset email failed",
+      error instanceof Error ? error.message : error,
+    );
+  });
+  waitUntil(promise);
+}
 
 const AUTH_SEED_MAX_ATTEMPTS = 3;
 

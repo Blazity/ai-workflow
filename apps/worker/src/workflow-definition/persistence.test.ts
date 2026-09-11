@@ -38,7 +38,7 @@ import {
   scheduleOccurrences,
 } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
-import { DashboardAuthError } from "../engine/support/auth-users-read.js";
+import { DashboardAuthError } from "@shared/contracts";
 import {
   archiveWorkflowDefinition,
   createWorkflowDefinition,

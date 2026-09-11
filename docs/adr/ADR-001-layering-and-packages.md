@@ -174,7 +174,8 @@ reject a misplaced file today by citing a document rather than a preference.
 **What moves later.** Stage 5 splits `workflows/agent.ts` into
 `engine/agent-workflow.ts` and `engine/steps/*.ts`, and moves the `"use step"`
 files out of the mixed service directories. Stage 6a creates `config/` and
-`infra/` and makes `config/env.ts` the only importer of `apps/worker/env.ts`.
+`infra/`, with validation in `infra/runtime-env.ts` and VCS accessors in
+`infra/vcs-config.ts`.
 Stage 6b moves the `lib/` clusters and the non-store, non-step files of the
 mixed directories into `services/<cluster>/`. Stage 6c makes the server
 surface thin. Stage 7 creates `db/repositories/<domain>.ts`, moves the

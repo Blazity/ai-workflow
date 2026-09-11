@@ -19,7 +19,8 @@ import {
   type DashboardInviteRow,
   type SendInviteEmail,
 } from "./invites.js";
-import { DashboardAuthError, type DashboardActor } from "./users-read.js";
+import { DashboardAuthError } from "@shared/contracts";
+import type { DashboardActor } from "./users-read.js";
 
 /** Every invite this actor is allowed to see. */
 export function listInvitesForActor(

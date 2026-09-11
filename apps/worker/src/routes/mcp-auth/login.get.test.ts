@@ -12,7 +12,7 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("../../infra/vcs-config.js", () => ({ env: state.env }));
-vi.mock("../../services/auth/auth-instance.js", () => ({
+vi.mock("../../auth-instance.js", () => ({
   auth: {
     api: {
       getSession: state.getSession,

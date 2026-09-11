@@ -23,7 +23,7 @@ vi.mock("../../../../db/client.js", () => ({
   getDb: () => state.db,
 }));
 
-vi.mock("../../../../services/auth/auth-instance.js", () => ({
+vi.mock("../../../../auth-instance.js", () => ({
   get auth() {
     return state.auth;
   },

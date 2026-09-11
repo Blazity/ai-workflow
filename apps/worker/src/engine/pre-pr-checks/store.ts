@@ -1,9 +1,13 @@
-import { withCanonicalGroupOrder, type PrePrCheckConfigVersion } from "@shared/contracts";
+import {
+  DashboardAuthError,
+  canEditPrePrChecks,
+  withCanonicalGroupOrder,
+  type DashboardRole,
+  type PrePrCheckConfigVersion,
+} from "@shared/contracts";
 import { desc, eq } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import { prePrCheckConfigVersions, user } from "../../db/schema.js";
-import { canEditPrePrChecks, type DashboardRole } from "../support/auth-roles.js";
-import { DashboardAuthError } from "../support/auth-users-read.js";
 import type { PrePrCheckConfig } from "./config.js";
 
 const VERSION_LIST_LIMIT = 50;

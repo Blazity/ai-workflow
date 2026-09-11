@@ -99,7 +99,6 @@ function workspacePath(modulePath, root) {
 function isTrackedSource(path) {
   return (
     within(path, tierMap.workerSourceRoot) ||
-    path === "apps/worker/env.ts" ||
     within(path, `${tierMap.dashboardRoot}/app`) ||
     within(path, `${tierMap.dashboardRoot}/components`) ||
     within(path, `${tierMap.dashboardRoot}/lib`) ||

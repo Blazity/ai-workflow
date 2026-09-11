@@ -10,7 +10,7 @@ const state = vi.hoisted(() => ({
 // to stand in for the environment it never needed before.
 vi.mock("../../../../infra/vcs-config.js", () => ({ env: {} }));
 
-vi.mock("../../../../services/auth/auth-instance.js", () => ({
+vi.mock("../../../../auth-instance.js", () => ({
   auth: {},
 }));
 

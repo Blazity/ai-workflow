@@ -11,8 +11,8 @@ import { logger } from "../../infra/logger.js";
 import {
   answerClarificationAndResume,
   MAX_ANSWER_LENGTH,
-  retireClarificationForGoneTicket,
 } from "./answer-core.js";
+import { retireClarificationForGoneTicket } from "./retirement.js";
 import {
   CLARIFICATION_NUDGE_MARKER,
   formatAlreadyAnsweredComment,

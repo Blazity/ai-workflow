@@ -20,7 +20,7 @@ vi.mock("@better-auth/oauth-provider/resource-client", () => ({
     getActions: () => ({ verifyAccessToken: state.verifyAccessToken }),
   }),
 }));
-vi.mock("../services/auth/auth-instance.js", () => ({ auth: {} }));
+vi.mock("../auth-instance.js", () => ({ auth: {} }));
 
 const { requireMcpActor } = await import("./request-context.js");
 

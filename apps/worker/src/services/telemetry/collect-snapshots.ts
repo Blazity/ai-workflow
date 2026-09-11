@@ -1,11 +1,7 @@
 import { and, desc, inArray, isNotNull } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import { activeRunSandboxes, activeRuns, gateCurrent } from "../../db/schema.js";
-import {
-  STATUS_MAP,
-  mapWorkflow,
-  type RunsLister,
-} from "../../engine/support/collect-runs.js";
+import type { RunsLister } from "../overview/index.js";
 import type { RunSnapshot } from "../../db/repositories/runs/telemetry.js";
 
 export interface CollectSnapshotsOptions {
@@ -25,6 +21,7 @@ export interface CollectSnapshotsOptions {
 export async function collectSnapshots(
   opts: CollectSnapshotsOptions,
 ): Promise<RunSnapshot[]> {
+  const { STATUS_MAP, mapWorkflow } = await import("../overview/collect-runs.js");
   const { runsLister, db } = opts;
   const limit = opts.limit ?? 100;
 

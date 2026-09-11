@@ -12,8 +12,10 @@ import {
   type CancelRunResult,
 } from "./cancel-run.js";
 import { logger } from "../../infra/logger.js";
-import { retireClarificationForGoneTicket } from "../../engine/support/clarification-retirement.js";
-import { getResumableClarificationForRun } from "../../clarifications/hook-store.js";
+import {
+  getResumableClarificationForRun,
+  type HookClarificationRow,
+} from "../../clarifications/hook-store.js";
 import { stopSandboxesByIds } from "../../sandbox/stop-ticket-sandboxes.js";
 import {
   IssueTrackerNotFoundError,
@@ -63,6 +65,10 @@ type TicketCancellationCallback = (
   reason: TicketCancellationReason,
 ) => Promise<void> | void;
 type SubjectReleasedCallback = (subjectKey: string) => Promise<void> | void;
+type ClarificationRetirement = (
+  db: Db,
+  row: HookClarificationRow,
+) => Promise<void>;
 
 export async function reconcileRuns(
   aiColumnTickets: Set<string>,
@@ -73,6 +79,7 @@ export async function reconcileRuns(
   parkedSubjects?: ReadonlySet<string>,
   db?: Db,
   terminalReconciliationSubjects?: ReadonlySet<string>,
+  retireClarification?: ClarificationRetirement,
 ): Promise<{ cancelled: number; cleaned: number }> {
   let cancelled = 0;
   if (db) {
@@ -353,6 +360,7 @@ export async function reconcileRuns(
         onTicketCancelled,
         onSubjectReleased,
         db,
+        retireClarification,
       ),
   );
   for (const disposed of parkedDisposals) {
@@ -393,6 +401,7 @@ function disposeParkedSubjectWithMissingTicket(
   onTicketCancelled: TicketCancellationCallback | undefined,
   onSubjectReleased: SubjectReleasedCallback | undefined,
   db: Db | undefined,
+  retireClarification: ClarificationRetirement | undefined,
 ): Promise<boolean> {
   return disposeParkedSubjectWithMissingTicketCore(
     entry,
@@ -401,6 +410,7 @@ function disposeParkedSubjectWithMissingTicket(
     onTicketCancelled,
     onSubjectReleased,
     db,
+    retireClarification,
   ).catch(
     (error: unknown) => {
       logger.warn(
@@ -423,6 +433,7 @@ async function disposeParkedSubjectWithMissingTicketCore(
   onTicketCancelled: TicketCancellationCallback | undefined,
   onSubjectReleased: SubjectReleasedCallback | undefined,
   db: Db | undefined,
+  retireClarification: ClarificationRetirement | undefined,
 ): Promise<boolean> {
   const { runId, ticketKey } = entry;
   if (!db || !issueTracker || !runId || !ticketKey) return false;
@@ -448,7 +459,10 @@ async function disposeParkedSubjectWithMissingTicketCore(
     }
   }
 
-  await retireClarificationForGoneTicket(db, row);
+  if (!retireClarification) {
+    throw new Error("Clarification retirement dependency is unavailable");
+  }
+  await retireClarification(db, row);
   const cancellation = await cancelRunDetailed(
     ticketKey,
     runId,

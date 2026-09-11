@@ -15,7 +15,8 @@ import {
   type InviteEmailDeliveryStatus,
 } from "../email/index.js";
 import { canInvite, type DashboardRole } from "./roles.js";
-import { DashboardAuthError, type DashboardActor } from "./users-read.js";
+import { DashboardAuthError } from "@shared/contracts";
+import type { DashboardActor } from "./users-read.js";
 
 const INVITE_TTL_MS = 48 * 60 * 60 * 1000;
 

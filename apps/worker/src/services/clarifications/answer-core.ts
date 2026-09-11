@@ -12,11 +12,10 @@ import {
   type IssueTrackerAdapter,
 } from "../../adapters/issue-tracker/types.js";
 import { logger } from "../../infra/logger.js";
-import { aiColumnMoveTarget } from "../../engine/support/ticket-move-targets.js";
+import { aiColumnMoveTarget } from "../tickets/index.js";
 import { moveTicketForRun } from "../tickets/index.js";
 import { markRunResumed } from "../../db/repositories/runs/telemetry.js";
-import { retireClarificationForGoneTicket } from "../../engine/support/clarification-retirement.js";
-export { retireClarificationForGoneTicket } from "../../engine/support/clarification-retirement.js";
+import { retireClarificationForGoneTicket } from "./retirement.js";
 import { formatClarificationAnswerComment } from "./comment-format.js";
 import { answerHookClarification, type HookClarificationRow } from "../../clarifications/hook-store.js";
 import {

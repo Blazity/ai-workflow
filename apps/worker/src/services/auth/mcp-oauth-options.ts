@@ -7,14 +7,9 @@
  * and every lookup those answers depend on, is `services/mcp`'s oauth policy,
  * re-exported below so `auth.ts` and this module's tests keep one import.
  */
-import { oauthProvider, type OAuthOptions } from "@better-auth/oauth-provider";
 import { APIError } from "better-auth/api";
 import { MCP_SCOPES } from "@shared/contracts";
 
-// The cluster's own modules and not its index.ts, deliberately: `auth.ts`
-// imports this file and `auth-instance.ts` builds from `auth.ts`, so pulling the
-// barrel (which reaches the actor resolution, which reaches the auth cluster)
-// would close an import cycle through the Better Auth instance itself.
 import {
   findDeploymentOrganizationId,
   findOrganizationMemberRole,
@@ -27,7 +22,6 @@ export {
 } from "./mcp-oauth-policy.js";
 export type {
   McpOAuthDeployment,
-  McpOAuthRequest,
 } from "./mcp-oauth-policy.js";
 
 export function canonicalMcpResource(baseUrl: string): string {
@@ -141,9 +135,4 @@ export function createMcpOAuthOptions(deployment: McpOAuthDeployment) {
   };
 
   return options;
-}
-
-export function createMcpOAuthProvider(deployment: McpOAuthDeployment) {
-  const options = createMcpOAuthOptions(deployment);
-  return oauthProvider(options as OAuthOptions<string[]>);
 }

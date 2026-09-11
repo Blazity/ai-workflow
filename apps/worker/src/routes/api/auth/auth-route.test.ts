@@ -5,7 +5,7 @@ const state = vi.hoisted(() => ({
   authHandler: vi.fn(),
 }));
 
-vi.mock("../../../services/auth/auth-instance.js", () => ({
+vi.mock("../../../auth-instance.js", () => ({
   auth: {
     handler: state.authHandler,
   },
