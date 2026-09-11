@@ -7,7 +7,7 @@ import type {
 import {
   BUILTIN_HARNESS_PROFILE_IDS,
   BUILTIN_HARNESS_PROFILE_MANIFESTS,
-} from "@shared/contracts";
+} from "@shared/harness";
 import type { Db } from "../../../db/client.js";
 import { member, organization, user } from "../../../db/schema.js";
 import { createTestDb } from "../../../db/test-db.js";

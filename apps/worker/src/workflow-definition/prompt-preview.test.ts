@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  builtinHarnessProfileReference,
-  type WorkflowDefinitionV2,
-} from "@shared/contracts";
+import type { WorkflowDefinitionV2 } from "@shared/contracts";
+import { builtinHarnessProfileReference } from "@shared/harness";
 import type { Db } from "../db/client.js";
 import type { WorkflowBlockRegistryContext } from "./block-registry.js";
 

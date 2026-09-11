@@ -15,6 +15,7 @@ import type {
   HarnessProvider,
 } from "@shared/contracts";
 import { buildHarnessProfileDraftV2 } from "@shared/contracts";
+import { isRecognisedModel } from "@shared/harness";
 import type { Db } from "../db/client.js";
 import {
   harnessCapabilityCatalogs,
@@ -355,7 +356,9 @@ export function upgradeHarnessDraftToV2(
   capabilities: HarnessCapabilitiesResponse,
 ): HarnessProfileDraftManifestV2 {
   const model = capabilities.models.find(
-    (candidate) => candidate.id === draft.model.id,
+    (candidate) =>
+      candidate.id === draft.model.id &&
+      isRecognisedModel(capabilities.provider, candidate.id),
   );
   if (!model) {
     throw new HarnessCapabilityCatalogError(

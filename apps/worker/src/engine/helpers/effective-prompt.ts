@@ -1,12 +1,14 @@
 import {
-  builtinHarnessProfileReference,
   isHarnessProfileReference,
-  resolveBuiltinHarnessProfile,
   type JsonSchema202012,
   type JsonValue,
   type WorkflowDefinitionV2Node,
   type WorkflowValueSchema,
 } from "@shared/contracts";
+import {
+  builtinHarnessProfileReference,
+  resolveBuiltinHarnessProfile,
+} from "@shared/harness";
 import {
   compileEffectivePrompt as compileSharedEffectivePrompt,
   type EffectivePromptCompilation,

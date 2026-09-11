@@ -355,7 +355,7 @@ async function agentWorkflowBody(
 > {
   const budgetStartedAtMs = await readRunBudgetClockStep();
 
-  const { env } = await import("../config/env.js");
+  const { env } = await import("./harness-profiles/model-env.js");
   const { assembleResearchPlanContext, assembleImplementationContext, assembleReviewContext } =
     await import("../sandbox/context.js");
   const {
@@ -1304,7 +1304,7 @@ async function agentWorkflowBody(
         }
         // Flag off must reproduce byte-for-byte pre-ledger behavior, and the
         // pre-ledger run never posted a failure note on this path.
-        const { env } = await import("../config/env.js");
+        const { env } = await import("./harness-profiles/model-env.js");
         if (!env.REVIEW_LEDGER_ENABLED) {
           return;
         }

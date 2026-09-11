@@ -77,6 +77,9 @@ importers:
       '@shared/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@shared/harness':
+        specifier: workspace:*
+        version: link:../../packages/harness
       '@shared/prompts':
         specifier: workspace:*
         version: link:../../packages/prompts
@@ -189,6 +192,9 @@ importers:
       '@shared/costs':
         specifier: workspace:*
         version: link:../../packages/costs
+      '@shared/harness':
+        specifier: workspace:*
+        version: link:../../packages/harness
       '@shared/prompts':
         specifier: workspace:*
         version: link:../../packages/prompts
@@ -294,6 +300,22 @@ importers:
         version: 3.25.76
 
   packages/costs:
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.19.15
+      tsx:
+        specifier: 'catalog:'
+        version: 4.23.13
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+
+  packages/harness:
+    dependencies:
+      '@shared/contracts':
+        specifier: workspace:*
+        version: link:../contracts
     devDependencies:
       '@types/node':
         specifier: 'catalog:'

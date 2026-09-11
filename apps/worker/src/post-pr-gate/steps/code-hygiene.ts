@@ -1,6 +1,7 @@
 import { generateText, Output } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
+import { CODE_HYGIENE_DEFAULT_MODEL } from "@shared/harness";
 import type { PostPrGateStepHandler } from "../types.js";
 import {
   hasPRFilesCapability,
@@ -10,7 +11,7 @@ import {
 
 const withSchema = z
   .object({
-    model: z.string().min(1).default("claude-haiku-4-5"),
+    model: z.string().min(1).default(CODE_HYGIENE_DEFAULT_MODEL),
     maxFiles: z.number().int().positive().default(50),
     maxPatchCharsPerFile: z.number().int().positive().default(8_000),
     concurrency: z.number().int().positive().default(5),

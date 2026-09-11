@@ -1,6 +1,7 @@
 import { createAppAuth } from "@octokit/auth-app";
 import { and, desc, eq, gte, isNull, sql } from "drizzle-orm";
 import type { SystemHealthResponse } from "@shared/contracts";
+import { resolveModelDefaults } from "@shared/harness";
 import { env } from "../../config/env.js";
 import { JiraAdapter } from "../../adapters/issue-tracker/jira.js";
 import { getDb } from "../../db/client.js";
@@ -56,6 +57,10 @@ export async function collectDeploymentSystemHealth(): Promise<SystemHealthRespo
 }
 
 export function configFromEnvironment(): SystemHealthConfig {
+  const models = resolveModelDefaults({
+    claude: env.CLAUDE_MODEL,
+    codex: env.CODEX_MODEL,
+  });
   return {
     databaseUrl: env.DATABASE_URL,
     jiraBaseUrl: env.JIRA_BASE_URL,
@@ -72,10 +77,10 @@ export function configFromEnvironment(): SystemHealthConfig {
     gitlabProjectId: env.GITLAB_PROJECT_ID,
     agentKind: env.AGENT_KIND,
     anthropicApiKey: env.ANTHROPIC_API_KEY,
-    anthropicModel: env.CLAUDE_MODEL,
+    anthropicModel: models.claude,
     codexApiKey: env.CODEX_API_KEY,
     codexOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
-    codexModel: env.CODEX_MODEL,
+    codexModel: models.codex,
     betterAuthSecret: env.BETTER_AUTH_SECRET,
     betterAuthUrl: env.BETTER_AUTH_URL,
     dashboardOrigin: env.DASHBOARD_ORIGIN,

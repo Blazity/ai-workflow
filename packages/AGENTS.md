@@ -5,7 +5,8 @@ Last-verified: 2026-09-11
 
 Workspace packages shared by the worker and the dashboard. `contracts` holds
 cross-application shapes and constants; `conditions` evaluates predicates;
-`costs` prices provider usage; `prompts` owns prompt composition; and `skills`
+`costs` prices provider usage; `harness` owns model policy and built-in
+compatibility profiles; `prompts` owns prompt composition; and `skills`
 owns browser-safe product skill contracts and validation. These pure packages
 may import another shared package only through its public entry point and never
 application infrastructure. ADR-001 owns the tiers.

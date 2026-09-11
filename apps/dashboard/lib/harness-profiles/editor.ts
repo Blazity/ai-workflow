@@ -7,10 +7,12 @@ import type {
   HarnessProfileManifest,
   HarnessProvider,
 } from "@shared/contracts";
+import { buildHarnessProfileDraftV2 } from "@shared/contracts";
 import {
   BUILTIN_HARNESS_PROFILE_MANIFESTS,
-  buildHarnessProfileDraftV2,
-} from "@shared/contracts";
+  isRecognisedModel,
+  selectable,
+} from "@shared/harness";
 
 export function draftFromManifest(
   manifest: HarnessProfileManifest,
@@ -80,6 +82,7 @@ export function upgradeProfileDraft(
   draft: HarnessProfileDraftManifestV1,
   capabilities: HarnessCapabilitiesResponse,
 ): HarnessProfileDraftManifestV2 | null {
+  if (!isRecognisedModel(capabilities.provider, draft.model.id)) return null;
   return buildHarnessProfileDraftV2(draft, capabilities);
 }
 
@@ -89,7 +92,9 @@ export function withHarnessModel(
   modelId: string,
 ): HarnessProfileDraftManifestV2 | null {
   const model = capabilities.models.find(
-    (candidate) => candidate.id === modelId,
+    (candidate) =>
+      candidate.id === modelId &&
+      isRecognisedModel(capabilities.provider, candidate.id),
   );
   if (
     capabilities.stale ||
@@ -125,6 +130,18 @@ export function withHarnessModel(
     },
     compaction: { mode: "model_default" },
   };
+}
+
+export function selectableHarnessModels(
+  capabilities: HarnessCapabilitiesResponse,
+): HarnessCapabilitiesResponse["models"] {
+  return selectable({
+    provider: capabilities.provider,
+    modelIds: capabilities.models.map((model) => model.id),
+  }).flatMap((modelId) => {
+    const model = capabilities.models.find((candidate) => candidate.id === modelId);
+    return model ? [model] : [];
+  });
 }
 
 export function isProfileSlug(value: string): boolean {

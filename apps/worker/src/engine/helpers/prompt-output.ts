@@ -15,6 +15,8 @@ import { RunBudgetError, missingRequiredPriceFailure } from "./run-budget.js";
 import { BLOCK_EXECUTORS, INLINE_EXECUTED_BLOCK_TYPES } from "../blocks/executors.generated.js";
 import { BLOCK_CATALOG, BLOCK_TYPE_SPECS } from "@shared/contracts";
 import { DEFAULT_OPEN_PR_BODY, DEFAULT_OPEN_PR_TITLE } from "@shared/prompts";
+import { REPO_MEMORY_DISTILL_CODEX_MODEL } from "@shared/harness";
+export { REPO_MEMORY_DISTILL_CODEX_MODEL } from "@shared/harness";
 import type { BlockOutput, BlockRunState, WorkflowBlockType, WorkflowDefinitionNode, WorkflowDefinitionV2, WorkflowDefinitionV2Node } from "@shared/contracts";
 import type { TerminalStatus } from "./review-ledger.js";
 import type { HumanDecision } from "../../services/publication/human-decisions-memory.js";
@@ -39,7 +41,7 @@ export function appendClarificationRound(
 /**
  * Model the repository-memory distill pins on the codex path. The distill is a
  * structured extraction, not agent work: resolveCallLlmTarget already pins the
- * cheap claude-haiku default on the claude path, but its codex branch returns
+ * the cheap catalog default on the claude path, but its codex branch returns
  * CODEX_MODEL, the full agent model, at roughly ten times the cost for the same
  * job. Not invented here: it is the cheapest codex id the deployment already
  * offers, FALLBACK_MODELS.codex in workflow-definition/models.ts. Only the
@@ -48,8 +50,6 @@ export function appendClarificationRound(
  * wrong id fails every distill on the codex path and the failure is only
  * logged, so nothing else would notice.
  */
-export const REPO_MEMORY_DISTILL_CODEX_MODEL = "gpt-5-mini";
-
 /** The agent-block prompt override: a non-empty `prompt` param replaces the
  *  built-in phase template. Empty / whitespace / non-string falls through to the
  *  built-in prompt. */

@@ -8,7 +8,7 @@ import type {
 import {
   BUILTIN_HARNESS_PROFILE_MANIFESTS,
   builtinHarnessProfileReference,
-} from "@shared/contracts";
+} from "@shared/harness";
 import { parseAgentKindOverride } from "../sandbox/agents/index.js";
 import { hashHarnessProfileManifest } from "../harness-profiles/manifest.js";
 import { resolveHarnessRuntimesWithLoader } from "./harness-profile-runtime.js";
