@@ -1,15 +1,17 @@
 ---
 paths:
-  - "apps/worker/src/workflows/**"
-  - "apps/worker/src/workflow-definition/v2-scheduler.ts"
+  - "apps/worker/src/engine/agent-workflow.ts"
+  - "apps/worker/src/engine/post-pr-gate-workflow.ts"
+  - "apps/worker/src/engine/steps/**"
+  - "apps/worker/src/engine/blocks/**"
 ---
 
 # Workflow and step bodies
 
-- `apps/worker/src/workflows/agent.ts` is a Workflow DevKit `"use workflow"`
+- `apps/worker/src/engine/agent-workflow.ts` is a Workflow DevKit `"use workflow"`
   module with NO top-level adapter or logger imports. Every use of `logger` or
   an adapter inside a `"use step"` is a deferred
-  `await import("../lib/logger.js")` in the step body. Do not add a top-level
+  `await import("../infra/logger.js")` in the step body. Do not add a top-level
   import there, and do not assume a warm module is already imported at the top:
   the module is cache-warm only because an earlier step in the same run
   imported it.

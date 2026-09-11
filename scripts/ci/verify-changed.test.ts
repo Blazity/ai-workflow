@@ -7,12 +7,16 @@ import {
   listDirectory,
   namesDiff,
   parseArgs,
+  parseOptions,
   parseNames,
   plan,
   resolveBase,
   show,
+  stagedNamesDiff,
+  STAGED_WORKTREE_DIFF,
   WORKFLOW_TESTS,
   WORKTREE_DIFF,
+  worktreeNamesDiff,
   type Git,
   type Repo,
 } from "./verify-changed.js";
@@ -103,9 +107,22 @@ test("diff commands freeze the candidate SHA and names stay NUL-safe", () => {
   assert.deepEqual(parseNames(Buffer.from("old\0new\0")), ["old", "new"]);
 });
 
+test("worktree mode checks staged changes and unions all worktree name sources", () => {
+  assert.equal(show(STAGED_WORKTREE_DIFF), "git diff --cached --check");
+  assert.deepEqual(stagedNamesDiff(), [
+    "git", "diff", "--cached", "--name-only", "-z", "--no-renames", "--",
+  ]);
+  assert.deepEqual(worktreeNamesDiff(B, H), [
+    ["git", "diff", "--name-only", "-z", "--no-renames", B, H, "--"],
+    ["git", "diff", "--cached", "--name-only", "-z", "--no-renames", "--"],
+    ["git", "diff", "--name-only", "-z", "--no-renames", "--"],
+    ["git", "ls-files", "--others", "--exclude-standard", "-z", "--"],
+  ]);
+});
+
 test("scope table selects only exact narrow commands", () => {
   const rows: Array<[string[], string[]]> = [
-    [["README.md", "docs/guide.md"], []],
+    [["README.md", "docs/guide.md"], ["pnpm run gate:docs-status"]],
     [["apps/worker/src/lib/value.ts"], [...WB, GATES]],
     [["apps/worker/src/engine/helpers/value.ts"], [...WB, PACK, GATES]],
     [["apps/dashboard/lib/value.ts"], ["pnpm --filter ai-workflow-dashboard run typecheck", GATES]],
@@ -122,8 +139,10 @@ test("scope table selects only exact narrow commands", () => {
     [["docs/releases/artur/next.md"], ["pnpm run typecheck:release-notes", "pnpm run test:release-notes"]],
     [[".github/workflows/prepare-artur-release.yml"], ["pnpm run typecheck:release-notes", "pnpm run test:release-notes", "pnpm run test:ci"]],
     [["skills/ai-workflow-review/SKILL.md"], ["pnpm --dir apps/worker run validate:local-skills"]],
-    [[".claude/skills/init-env/SKILL.md"], []],
-    [["apps/worker/.agents/skills/workflow/SKILL.md"], []],
+    [[".claude/skills/init-env/SKILL.md"], ["pnpm run gate:docs-status"]],
+    [[".claude/settings.json"], ["pnpm run gate:docs-status"]],
+    [[".claude/rules/worker-database.md"], ["pnpm run gate:docs-status"]],
+    [["apps/worker/.agents/skills/workflow/SKILL.md"], ["pnpm run gate:docs-status"]],
     [[".dependency-cruiser.cjs"], [GATES]],
   ];
   for (const [paths, expected] of rows) assert.deepEqual(commands(paths), expected, paths.join(","));
@@ -189,6 +208,10 @@ test("combined plan excludes broad, deployment, network, E2E, and divergence com
 test("CLI, package entry, and executable hook preserve the exact public contract", async () => {
   assert.equal(parseArgs(["--", "--base", "origin/main"]), "origin/main");
   assert.equal(parseArgs(["--base=main"]), "main");
+  assert.deepEqual(parseOptions(["--base", "origin/main", "--worktree"]), {
+    base: "origin/main",
+    worktree: true,
+  });
   assert.throws(() => parseArgs(["--fetch"]), /Unknown/);
   const pkg = JSON.parse(await readFile("package.json", "utf8")) as { scripts: Record<string, string> };
   assert.equal(pkg.scripts["verify:changed"], "node --import tsx scripts/ci/verify-changed.ts");
