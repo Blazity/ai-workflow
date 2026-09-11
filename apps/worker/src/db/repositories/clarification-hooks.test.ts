@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Db } from "../client.js";
 import { activeRuns, clarificationRequests, workflowRuns } from "../schema.js";
 import { createTestDb } from "../test-db.js";
@@ -51,9 +51,17 @@ async function publishPending(db: Db, askedAt?: Date) {
 }
 
 describe("clarification hook store", () => {
-  it("treats an empty claim result as a concurrent resume in progress", async () => {
+  it.each([
+    ["running", "resumed"],
+    ["resuming", "in_progress"],
+    ["completed", "settled"],
+  ] as const)("classifies an empty claim result from follow-up status %s", async (status, expected) => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ status }] });
     const db = {
-      execute: async () => ({ rows: [] }),
+      execute,
     } as unknown as Db;
 
     await expect(
@@ -62,7 +70,8 @@ describe("clarification hook store", () => {
         subjectKey: input.subjectKey,
         ticketKey: input.ticketKey,
       }),
-    ).resolves.toBe("in_progress");
+    ).resolves.toBe(expected);
+    expect(execute).toHaveBeenCalledTimes(2);
   });
 
   it("reports an already-claimed resume without inserting another run", async () => {

@@ -278,13 +278,15 @@ function mcpIdempotencyIdentityWhere(input: McpIdempotencyIdentity) {
 
 export interface McpIdempotencyBeginDecision {
   outcome: "inserted" | "reclaimed" | "refused";
-  row: {
-    payloadHash: string;
-    state: string;
-    safeResponse: unknown;
-    errorCode: string | null;
-    expiresAt: Date;
-  };
+  row: McpIdempotencyRow;
+}
+
+export interface McpIdempotencyRow {
+  payloadHash: string;
+  state: string;
+  safeResponse: unknown;
+  errorCode: string | null;
+  expiresAt: Date;
 }
 
 export async function beginMcpIdempotencyLease(
@@ -359,6 +361,24 @@ export async function beginMcpIdempotencyLease(
         : new Date(row.expires_at),
     },
   };
+}
+
+export async function readMcpIdempotencyLease(
+  db: Db,
+  input: McpIdempotencyIdentity,
+): Promise<McpIdempotencyRow | null> {
+  const [row] = await db
+    .select({
+      payloadHash: mcpIdempotencyKeys.payloadHash,
+      state: mcpIdempotencyKeys.state,
+      safeResponse: mcpIdempotencyKeys.safeResponse,
+      errorCode: mcpIdempotencyKeys.errorCode,
+      expiresAt: mcpIdempotencyKeys.expiresAt,
+    })
+    .from(mcpIdempotencyKeys)
+    .where(mcpIdempotencyIdentityWhere(input))
+    .limit(1);
+  return row ?? null;
 }
 
 export async function completeMcpIdempotencyLease(
@@ -449,6 +469,9 @@ export async function sweepExpiredMcpIdempotencyKeys(
 export const beginConnectedMcpIdempotencyLease = (
   input: Parameters<typeof beginMcpIdempotencyLease>[1],
 ) => beginMcpIdempotencyLease(getDb(), input);
+export const readConnectedMcpIdempotencyLease = (
+  input: Parameters<typeof readMcpIdempotencyLease>[1],
+) => readMcpIdempotencyLease(getDb(), input);
 export const completeConnectedMcpIdempotencyLease = (
   input: Parameters<typeof completeMcpIdempotencyLease>[1],
 ) => completeMcpIdempotencyLease(getDb(), input);

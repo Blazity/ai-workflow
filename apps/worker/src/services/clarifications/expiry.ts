@@ -3,8 +3,10 @@ import type { Db } from "../../db/types.js";
 import {
   listConnectedExpiredPendingHookClarifications,
   listExpiredPendingHookClarifications,
-  retireConnectedExpiredHookClarification,
-  retireExpiredHookClarification,
+  recordConnectedHookClarificationCleanup,
+  recordHookClarificationCleanup,
+  retireConnectedPendingHookClarification,
+  retirePendingHookClarification,
 } from "../../db/repositories/clarifications.js";
 import { deleteClarificationSnapshotStep } from "../../engine/steps/clarification-snapshot-steps.js";
 
@@ -14,7 +16,8 @@ export async function expireHookClarifications(
 ): Promise<{ expired: number; retryable: number; cleanupFailed: number }> {
   return expireHookClarificationsWithStore({
     list: (at) => listExpiredPendingHookClarifications(db, at),
-    retire: (input) => retireExpiredHookClarification(db, input),
+    retire: (id) => retirePendingHookClarification(db, id),
+    recordCleanup: (input) => recordHookClarificationCleanup(db, input),
   }, now);
 }
 
@@ -23,14 +26,16 @@ export function expireConnectedHookClarifications(
 ): Promise<{ expired: number; retryable: number; cleanupFailed: number }> {
   return expireHookClarificationsWithStore({
     list: listConnectedExpiredPendingHookClarifications,
-    retire: retireConnectedExpiredHookClarification,
+    retire: retireConnectedPendingHookClarification,
+    recordCleanup: recordConnectedHookClarificationCleanup,
   }, now);
 }
 
 async function expireHookClarificationsWithStore(
   store: {
     list: typeof listConnectedExpiredPendingHookClarifications;
-    retire: typeof retireConnectedExpiredHookClarification;
+    retire: typeof retireConnectedPendingHookClarification;
+    recordCleanup: typeof recordConnectedHookClarificationCleanup;
   },
   now: Date,
 ): Promise<{ expired: number; retryable: number; cleanupFailed: number }> {
@@ -54,24 +59,28 @@ async function expireHookClarificationsWithStore(
       }
     }
 
-    let cleanup: { state: "deleted" | "failed"; error: string | null } | null = null;
+    if (!(await store.retire(candidate.id))) continue;
+    expired += 1;
+
     if (candidate.snapshotId) {
+      let cleanup: { id: string; state: "deleted" | "failed"; error: string | null };
       try {
         await deleteClarificationSnapshotStep(candidate.snapshotId);
         cleanup = {
+          id: candidate.id,
           state: "deleted",
           error: null,
         };
       } catch (error) {
+        cleanupFailed += 1;
         cleanup = {
+          id: candidate.id,
           state: "failed",
           error: (error instanceof Error ? error.message : String(error)).slice(0, 2000),
         };
       }
+      await store.recordCleanup(cleanup);
     }
-    if (!(await store.retire({ id: candidate.id, cleanup }))) continue;
-    expired += 1;
-    if (cleanup?.state === "failed") cleanupFailed += 1;
   }
   return { expired, retryable, cleanupFailed };
 }
