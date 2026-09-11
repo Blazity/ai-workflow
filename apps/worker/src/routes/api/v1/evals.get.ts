@@ -1,7 +1,7 @@
 import { defineEventHandler, setResponseHeader } from "h3";
 import type { EvalsResponse } from "@shared/contracts";
 import { collectEvalSummary } from "../../../services/overview/collect-eval-summary.js";
-import { logger } from "../../../infra/logger.js";
+import { logger } from "../../../services/system/logger.js";
 
 export default defineEventHandler(async (event): Promise<EvalsResponse> => {
   setResponseHeader(

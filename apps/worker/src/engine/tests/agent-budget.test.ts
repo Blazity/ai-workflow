@@ -57,6 +57,7 @@ describe("agent workflow budget integration", () => {
         maxCostUsd: 10,
       },
       runtime: active,
+      phase: "active",
       observeWorkflowBudget,
       readClock: async () => clock,
       priceLookup: () => ({
@@ -122,6 +123,7 @@ describe("agent workflow budget integration", () => {
         maxDurationSource: "definition",
       },
       runtime: active,
+      phase: "active",
       observeWorkflowBudget,
       readClock: () => Promise.resolve(clock),
     });
@@ -158,6 +160,7 @@ describe("agent workflow budget integration", () => {
           maxDurationSource,
         },
         runtime: active,
+        phase: "active",
         observeWorkflowBudget: vi.fn(),
         readClock: () => Promise.resolve(0),
       });
@@ -269,9 +272,8 @@ describe("agent workflow budget integration", () => {
     let budgetState = createRunBudgetState();
     const recordUsage = vi.fn((_label: string, usage: PhaseUsage | null) => {
       budgetState = recordBudgetUsage(budgetState, usage, {
-        kind: "codex",
         price: { input: 0.001, cached_input: 0.0001, output: 0.002 },
-      });
+      }, "pre-pr-fix");
     });
 
     recordPrePrFixCycleUsages(
@@ -286,8 +288,8 @@ describe("agent workflow budget integration", () => {
       ["Pre-PR Fix 2"],
     ]);
     expect(recordUsage.mock.calls).toEqual([
-      ["Pre-PR Fix 1", knownUsage, "codex", "gpt-5"],
-      ["Pre-PR Fix 2", null, "codex", "gpt-5"],
+      ["Pre-PR Fix 1", knownUsage, { provider: "codex", model: "gpt-5" }],
+      ["Pre-PR Fix 2", null, { provider: "codex", model: "gpt-5" }],
     ]);
     expect(checkRunBudget(budgetState, { maxDurationMs: 1_000, maxTokens: 1_000 })).toMatchObject({
       status: "budget_unverifiable",
@@ -325,8 +327,7 @@ describe("agent workflow budget integration", () => {
     expect(recordUsage).toHaveBeenCalledWith(
       "Pre-PR Fix 1",
       usage,
-      "codex",
-      "gpt-5",
+      { provider: "codex", model: "gpt-5" },
     );
   });
 });

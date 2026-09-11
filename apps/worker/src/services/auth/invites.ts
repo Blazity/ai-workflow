@@ -9,8 +9,11 @@ import {
   organization,
   user,
 } from "../../db/schema.js";
-import { type InviteEmailDeliveryStatus, updateInviteEmailDeliveryById } from "../email/invite-delivery.js";
-import { inviteEmailTemplate } from "../email/templates.js";
+import {
+  inviteEmailTemplate,
+  updateInviteEmailDeliveryById,
+  type InviteEmailDeliveryStatus,
+} from "../email/index.js";
 import { canInvite, type DashboardRole } from "./roles.js";
 import { DashboardAuthError, type DashboardActor } from "./users-read.js";
 

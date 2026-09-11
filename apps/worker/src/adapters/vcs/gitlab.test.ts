@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { GitLabAdapter } from "./gitlab.js";
 import { reviewFindingDigest } from "./types.js";
 import type { ReviewThread } from "./types.js";
-import { AI_WORKFLOW_COMMENT_MARKER } from "../../services/vcs/vcs-bot-identity.js";
+import { AI_WORKFLOW_COMMENT_MARKER } from "../../adapters/vcs/vcs-bot-identity.js";
 import { logger } from "../../infra/logger.js";
 
 vi.mock("../../infra/logger.js", () => ({

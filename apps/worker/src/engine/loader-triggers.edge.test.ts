@@ -18,10 +18,10 @@ const H = vi.hoisted(() => ({
     VCS_BOT_LOGIN: undefined as string | undefined,
   },
 }));
-vi.mock("../config/env.js", () => ({
+vi.mock("../infra/vcs-config.js", () => ({
   env: H.env,
 }));
-vi.mock("../services/vcs/vcs-bot-login.js", () => ({
+vi.mock("./support/vcs-bot-login.js", () => ({
   getVcsBotLogin: () => H.env.VCS_BOT_LOGIN,
 }));
 

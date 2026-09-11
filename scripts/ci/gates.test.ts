@@ -141,6 +141,30 @@ test("the boundary baseline passes and is stable across file renames", async () 
   const regression = gate("boundaries.mjs", common);
   assert.equal(regression.status, 1, regression.stderr || regression.stdout);
   assert.match(regression.stdout, /app->db\s+1\s+2/);
+  assert.match(
+    regression.stdout,
+    /apps\/worker\/src\/routes\/renamed\.ts -> apps\/worker\/src\/db\/client\.ts  \(app->db\)/u,
+  );
+  assert.match(
+    regression.stdout,
+    /apps\/worker\/src\/routes\/second\.ts -> apps\/worker\/src\/db\/client\.ts  \(app->db\)/u,
+  );
+});
+
+test("the boundary gate prints forbidden edges on request even when the ratchet passes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "boundary-print-edges-gate-"));
+  const baseline = join(root, "boundaries.baseline.json");
+  boundaryFixture(root);
+
+  const common = ["--root", root, "--baseline", baseline];
+  const updated = gate("boundaries.mjs", [...common, "--update-baseline"]);
+  assert.equal(updated.status, gateSuccess, updated.stderr || updated.stdout);
+  const printed = gate("boundaries.mjs", [...common, "--print-edges"]);
+  assert.equal(printed.status, gateSuccess, printed.stderr || printed.stdout);
+  assert.match(
+    printed.stdout,
+    /apps\/worker\/src\/routes\/entry\.ts -> apps\/worker\/src\/db\/client\.ts  \(app->db\)/u,
+  );
 });
 
 test("file cycle normalization dedupes reports and detects count regression", () => {

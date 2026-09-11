@@ -41,7 +41,7 @@ const environment = vi.hoisted(() => ({
   WEBHOOK_TRIGGER_ENCRYPTION_KEY: "a".repeat(64),
 }));
 
-vi.mock("../../config/env.js", () => ({ env: environment }));
+vi.mock("../../infra/vcs-config.js", () => ({ env: environment }));
 const getLatestSystemHealthObservations = vi.hoisted(() =>
   vi.fn().mockResolvedValue([]),
 );
@@ -60,7 +60,7 @@ const getInstallation = vi.hoisted(() => vi.fn().mockResolvedValue({ data: {} })
 const listReposAccessibleToInstallation = vi.hoisted(() =>
   vi.fn().mockResolvedValue({ data: { total_count: 3, repositories: [{}] } }),
 );
-vi.mock("../vcs/github-auth.js", () => ({
+vi.mock("../../adapters/vcs/github-auth.js", () => ({
   buildOctokit: () => ({
     apps: { getInstallation, listReposAccessibleToInstallation },
   }),

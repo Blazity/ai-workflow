@@ -20,7 +20,7 @@ import {
   workflowDefinitionTriggers,
   workflowDefinitionVersions,
 } from "../../schema.js";
-import { env } from "../../../config/env.js";
+import { env } from "../../../infra/vcs-config.js";
 import { canEditWorkflowDefinitions, type DashboardRole } from "../../../services/auth/roles.js";
 import { DashboardAuthError } from "../../../services/auth/users-read.js";
 import { logger } from "../../../infra/logger.js";

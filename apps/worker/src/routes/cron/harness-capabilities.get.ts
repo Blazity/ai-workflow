@@ -4,7 +4,7 @@ import {
   getHeader,
   setResponseHeader,
 } from "h3";
-import { logger } from "../../infra/logger.js";
+import { logger } from "../../services/system/logger.js";
 // Cluster modules, not barrels: one auth helper and one prewarm entry point do
 // not need the polling pass, the webhook handlers or the engine graph those
 // barrels re-export.

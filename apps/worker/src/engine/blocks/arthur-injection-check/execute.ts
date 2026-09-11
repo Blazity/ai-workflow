@@ -13,7 +13,7 @@ async function blockArthurValidatePromptStep(
   content: string,
 ): Promise<{ ok: boolean; findings: InjectionCheckFinding[] }> {
   "use step";
-  const { env } = await import("../../../config/env.js");
+  const { env } = await import("../../../infra/vcs-config.js");
   if (!env.GENAI_ENGINE_API_KEY || !env.GENAI_ENGINE_TRACE_ENDPOINT) {
     throw new Error("Arthur is not configured");
   }
@@ -92,7 +92,7 @@ export const execute: BlockExecuteFn = async (
     };
   }
 
-  const { env } = await import("../../../config/env.js");
+  const { env } = await import("../../../infra/vcs-config.js");
   if (!env.GENAI_ENGINE_API_KEY || !env.GENAI_ENGINE_TRACE_ENDPOINT) {
     return {
       kind: "next",

@@ -7,7 +7,7 @@ import type {
   PrePrCheckConfig,
   RepoScriptsConfig,
   RepoScriptsRepositoryConfig,
-} from "../../pre-pr-checks/config.js";
+} from "../pre-pr-checks/config.js";
 export { MAX_PRE_PR_FIX_CYCLES } from "../steps/pre-pr-checks-runner.js";
 import {
   PRE_PR_CHECK_BATCH_MAX_MINUTES,
@@ -392,8 +392,8 @@ export async function resolveChecksProvisioningStep(): Promise<{
   const fallback = PRE_PR_CHECK_BATCH_MAX_MINUTES * 60_000;
   try {
     const { getDb } = await import("../../db/client.js");
-    const { getCurrentPrePrCheckConfig } = await import("../../pre-pr-checks/store.js");
-    const { repoScriptsConfigSchema } = await import("../../pre-pr-checks/config.js");
+    const { getCurrentPrePrCheckConfig } = await import("../pre-pr-checks/store.js");
+    const { repoScriptsConfigSchema } = await import("../pre-pr-checks/config.js");
     const current = await getCurrentPrePrCheckConfig(getDb());
     if (!current) return { ceilingMs: fallback, config: null };
     const parsed = repoScriptsConfigSchema.safeParse(current.config);
@@ -441,8 +441,8 @@ export async function loadPrePrCheckConfigStep(): Promise<{
 }> {
   "use step";
   const { getDb } = await import("../../db/client.js");
-  const { getCurrentPrePrCheckConfig } = await import("../../pre-pr-checks/store.js");
-  const { emptyPrePrCheckConfig } = await import("../../pre-pr-checks/config.js");
+  const { getCurrentPrePrCheckConfig } = await import("../pre-pr-checks/store.js");
+  const { emptyPrePrCheckConfig } = await import("../pre-pr-checks/config.js");
   const { logger } = await import("../../infra/logger.js");
   const current = await getCurrentPrePrCheckConfig(getDb());
   logger.info(
@@ -533,7 +533,7 @@ export async function runRepositorySetup(options: {
    *  an operator watching it has nothing else at all to look at. */
   observations?: V2InvocationObservationHooks;
 }): Promise<RepositorySetupOutcome> {
-  const { repoScriptsConfigSchema } = await import("../../pre-pr-checks/config.js");
+  const { repoScriptsConfigSchema } = await import("../pre-pr-checks/config.js");
   const parsed = repoScriptsConfigSchema.safeParse(options.config);
   if (!parsed.success) {
     return {
@@ -648,7 +648,7 @@ export async function runPrePrChecksWithFixes(
   // and a static import graph that reaches a Node builtin fails the Vercel
   // build alone, never vitest or a local build.
   const { repoScriptsConfigSchema, describePrePrCheckIssues } = await import(
-    "../../pre-pr-checks/config.js"
+    "../pre-pr-checks/config.js"
   );
   const parsed = repoScriptsConfigSchema.safeParse(options.config);
   if (!parsed.success) {
@@ -1209,7 +1209,7 @@ async function selectedGroupsFor(
   repo: RepoScriptsRepositoryConfig,
   selection: RepoScriptsGroupSelection,
 ): Promise<string[]> {
-  const { resolveGateGroups } = await import("../../pre-pr-checks/config.js");
+  const { resolveGateGroups } = await import("../pre-pr-checks/config.js");
   return selection.kind === "gate"
     ? resolveGateGroups(repo)
     : selection.groups.filter((group) => group in repo.groups);

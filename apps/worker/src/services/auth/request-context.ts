@@ -1,6 +1,6 @@
 import { createError, getHeaders, type H3Event } from "h3";
 import { dashboardOrganizationSettings } from "../settings/index.js";
-import { auth } from "../../auth-instance.js";
+import { auth } from "./auth-instance.js";
 import { getDb } from "../../db/client.js";
 import { getDashboardActor, DashboardAuthError } from "./users-read.js";
 

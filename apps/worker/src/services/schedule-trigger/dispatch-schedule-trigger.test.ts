@@ -17,7 +17,7 @@ const { testEnv } = vi.hoisted(() => ({
     MAX_CONCURRENT_AGENTS: 3,
   } as Record<string, unknown>,
 }));
-vi.mock("../../config/env.js", () => ({ env: testEnv }));
+vi.mock("../../infra/vcs-config.js", () => ({ env: testEnv }));
 const { hostedStart } = vi.hoisted(() => ({ hostedStart: vi.fn() }));
 vi.mock("workflow/api", () => ({ start: hostedStart, getRun: vi.fn() }));
 vi.mock("../../engine/index.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));

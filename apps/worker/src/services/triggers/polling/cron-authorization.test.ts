@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({ env: {} as Record<string, unknown> }));
-vi.mock("../../../config/env.js", () => ({ env: state.env }));
+vi.mock("../../../infra/vcs-config.js", () => ({ env: state.env }));
 
 import { cronRequestIsAuthorized } from "./cron-authorization.js";
 

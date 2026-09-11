@@ -23,9 +23,9 @@ import {
 } from "../../dispatch/index.js";
 import {
   isWorkflowGeneratedPush,
-  ticketKeyFromBranch,
   workflowPushNormalizationOptions,
 } from "../../publication/index.js";
+import { ticketKeyFromBranch } from "../../../engine/support/workflow-naming.js";
 import {
   configuredVcsProviders,
   gitlabWebhookSettings,
@@ -33,12 +33,12 @@ import {
 } from "../../settings/index.js";
 import { observeProviderWebhook } from "../../system/index.js";
 import {
-  getVcsBotLogin,
   normalizeGitLabMergeRequestEvent,
   projectMatchesConfiguredId,
   verifyGitLabWebhookToken,
   type GitLabProject,
 } from "../../vcs/index.js";
+import { getVcsBotLogin } from "../../../engine/support/vcs-bot-login.js";
 import { TriggerHttpError } from "../../../infra/trigger-http-error.js";
 
 const ALLOWED_ACTIONS = new Set(["opened", "update", "reopened"]);

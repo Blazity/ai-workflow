@@ -1,7 +1,7 @@
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
 import type { PgDatabase } from "drizzle-orm/pg-core";
-import { env } from "../config/env.js";
+import { env } from "../infra/vcs-config.js";
 import * as schema from "./schema.js";
 
 /**

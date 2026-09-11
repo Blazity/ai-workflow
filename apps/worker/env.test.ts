@@ -3,7 +3,7 @@ import { DEFAULT_MODELS, resolveModelDefaults } from "@shared/harness";
 
 async function importEnvModule() {
   const [config, botIdentity] = await Promise.all([
-    import("./src/config/env.js"),
+    import("./src/infra/vcs-config.js"),
     import("./src/services/vcs/vcs-bot-login.js"),
   ]);
   return { ...config, getVcsBotLogin: botIdentity.getVcsBotLogin };

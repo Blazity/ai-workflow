@@ -31,7 +31,7 @@ export async function prepareClarificationHookStep(input: {
 }) {
   "use step";
   const { getDb } = await import("../../db/client.js");
-  const { prepareHookClarification } = await import("../../clarifications/hook-store.js");
+  const { prepareHookClarification } = await import("../support/clarification-hook-store.js");
   const row = await prepareHookClarification(getDb(), input);
   return {
     id: row.id,
@@ -47,7 +47,7 @@ export async function recordClarificationHookSnapshotStep(
 ): Promise<void> {
   "use step";
   const { getDb } = await import("../../db/client.js");
-  const { recordHookClarificationSnapshot } = await import("../../clarifications/hook-store.js");
+  const { recordHookClarificationSnapshot } = await import("../support/clarification-hook-store.js");
   await recordHookClarificationSnapshot(getDb(), id, {
     snapshotId: snapshot.snapshotId,
     sourceSandboxId: snapshot.sourceSandboxId,
@@ -58,7 +58,7 @@ export async function recordClarificationHookSnapshotStep(
 export async function publishClarificationHookStep(id: string): Promise<void> {
   "use step";
   const { getDb } = await import("../../db/client.js");
-  const { publishHookClarification } = await import("../../clarifications/hook-store.js");
+  const { publishHookClarification } = await import("../support/clarification-hook-store.js");
   await publishHookClarification(getDb(), id);
 }
 
@@ -68,7 +68,7 @@ export async function markClarificationHookCleanupStep(
 ): Promise<void> {
   "use step";
   const { getDb } = await import("../../db/client.js");
-  const { markHookClarificationCleanup } = await import("../../clarifications/hook-store.js");
+  const { markHookClarificationCleanup } = await import("../support/clarification-hook-store.js");
   await markHookClarificationCleanup(getDb(), id, result);
 }
 
@@ -89,6 +89,6 @@ export async function markRunResumedStep(runId: string): Promise<void> {
 export async function supersedeClarificationHookStep(id: string): Promise<void> {
   "use step";
   const { getDb } = await import("../../db/client.js");
-  const { supersedePreparingHookClarification } = await import("../../clarifications/hook-store.js");
+  const { supersedePreparingHookClarification } = await import("../support/clarification-hook-store.js");
   await supersedePreparingHookClarification(getDb(), id);
 }

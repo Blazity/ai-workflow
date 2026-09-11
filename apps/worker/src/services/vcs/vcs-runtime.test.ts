@@ -9,18 +9,18 @@ const mocks = vi.hoisted(() => ({
   loggerWarn: vi.fn(),
 }));
 
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: {},
   getConfiguredVcsProviders: mocks.getConfiguredVcsProviders,
   getVcsProviderConfig: mocks.getVcsProviderConfig,
 }));
 
-vi.mock("./github-auth.js", () => ({
+vi.mock("../../adapters/vcs/github-auth.js", () => ({
   getBotIdentity: mocks.getBotIdentity,
   getVcsToken: mocks.getVcsToken,
 }));
 
-vi.mock("./create-vcs.js", () => ({
+vi.mock("../../adapters/vcs/create-vcs.js", () => ({
   createVCSForRepository: mocks.createVCSForRepository,
 }));
 

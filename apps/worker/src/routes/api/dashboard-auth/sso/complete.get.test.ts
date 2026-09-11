@@ -11,8 +11,8 @@ const state = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../../../../config/env.js", () => ({ env: state.env }));
-vi.mock("../../../../auth-instance.js", () => ({
+vi.mock("../../../../infra/vcs-config.js", () => ({ env: state.env }));
+vi.mock("../../../../services/auth/auth-instance.js", () => ({
   auth: { api: { getSession: state.getSession } },
 }));
 vi.mock("../../../../db/client.js", () => ({ getDb: vi.fn() }));

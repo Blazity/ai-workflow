@@ -7,7 +7,7 @@ import {
   TRIGGER_BLOCK_TYPES,
   type WorkflowBlockType,
 } from "@shared/contracts";
-import { isLegacyStoredWorkflowDefinition } from "../../workflow-definition/stored-definition.js";
+import { isLegacyStoredWorkflowDefinition } from "../../services/mcp/app-dependencies.js";
 
 import { McpPublicError, type McpToolDependencies } from "../contracts.js";
 import { executeMcpRead } from "../execute-tool.js";

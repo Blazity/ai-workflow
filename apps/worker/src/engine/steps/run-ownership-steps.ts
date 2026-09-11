@@ -6,7 +6,7 @@ export async function bindWorkflowCandidateStep(
   kind: import("../../adapters/run-registry/types.js").RunKind = "ticket",
 ): Promise<boolean> {
   "use step";
-  const { createAdapters } = await import("../../services/vcs/adapters.js");
+  const { createAdapters } = await import("../support/adapters.js");
   return createAdapters().runRegistry.markRunEntryStarted({
     subjectKey,
     ticketKey,
@@ -28,7 +28,7 @@ export async function acknowledgeManualDispatchStep(
   if (!("manualDispatchId" in entry) || !entry.manualDispatchId) return;
   const { getDb } = await import("../../db/client.js");
   const { acknowledgeManualDispatchWorkflow } = await import(
-    "../../services/manual-dispatch/acknowledge-workflow.js"
+    "../support/acknowledge-manual-workflow.js"
   );
   const acknowledged = await acknowledgeManualDispatchWorkflow(getDb(), {
     requestId: entry.manualDispatchId,
@@ -69,12 +69,12 @@ export async function acknowledgePrTriggerDispatchStep(
     acknowledgeStartedTriggerDelivery,
     completeTriggerDelivery,
   } = await import(
-    "../../services/dispatch/trigger-delivery-store.js"
+    "../support/trigger-delivery-store.js"
   );
   const {
     bindCurrentPullRequest,
     readProviderCurrentPullRequest,
-  } = await import("../../services/dispatch/trigger-current-pull-request.js");
+  } = await import("../support/trigger-current-pull-request.js");
   const triggerEvent = {
     delivery: entry.delivery,
     triggerType: entry.triggerType,
@@ -121,7 +121,7 @@ export async function acknowledgeWebhookDispatchStep(
   if (entry.kind !== "webhook_trigger") return true;
   const { getDb } = await import("../../db/client.js");
   const { recordWebhookDeliveryStarted } = await import(
-    "../../webhook-trigger/delivery-store.js"
+    "../support/webhook-delivery-store.js"
   );
   return recordWebhookDeliveryStarted(
     getDb(),
@@ -152,7 +152,7 @@ export async function acknowledgeScheduleDispatchStep(
   if (entry.kind !== "schedule") return true;
   const { getDb } = await import("../../db/client.js");
   const { recordOccurrenceStarted } = await import(
-    "../../schedule-trigger/occurrence-store.js"
+    "../support/schedule-occurrence-store.js"
   );
   return recordOccurrenceStarted(
     getDb(),
@@ -171,7 +171,7 @@ export async function acknowledgePendingTriggerStep(
   if ("continuation" in entry && entry.continuation?.kind === "clarification") return;
   if (entry.kind !== "pr_trigger" || !entry.pendingEvent || entry.delivery) return;
   const { getDb } = await import("../../db/client.js");
-  const { deletePendingTrigger } = await import("../../services/dispatch/trigger-delivery-store.js");
+  const { deletePendingTrigger } = await import("../support/trigger-delivery-store.js");
   await deletePendingTrigger(getDb(), {
     subjectKey: entry.subjectKey,
     triggerType: entry.pendingEvent.triggerType,
@@ -192,14 +192,14 @@ acknowledgePendingTriggerStep.maxRetries = 0;
  * cannot supersede a newer question. */
 export async function repairClarificationLabelStep(
   ticketKey: string,
-  owner: import("../../services/run-lifecycle/active-run-owner.js").ActiveRunOwner,
+  owner: import("../support/active-run-owner.js").ActiveRunOwner,
 ): Promise<void> {
   "use step";
   const { getDb } = await import("../../db/client.js");
-  const { createAdapters } = await import("../../services/vcs/adapters.js");
-  const { NEEDS_CLARIFICATION_LABEL } = await import("../../services/tickets/labels.js");
+  const { createAdapters } = await import("../support/adapters.js");
+  const { NEEDS_CLARIFICATION_LABEL } = await import("../support/ticket-labels.js");
   const { updateTicketLabelsForRun } = await import(
-    "../../services/tickets/ticket-label-mutation.js"
+    "../support/ticket-label-mutation.js"
   );
   const { issueTracker } = createAdapters();
   if (typeof issueTracker.updateLabels !== "function") return;

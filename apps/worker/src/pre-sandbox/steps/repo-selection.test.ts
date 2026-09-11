@@ -40,7 +40,7 @@ vi.mock("../../adapters/vcs/repository-directory.js", async (importOriginal) => 
   listRepositoriesAcrossProviders: mocks.listRepositoriesAcrossProviders,
 }));
 
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: mocks.env,
   getConfiguredVcsProviders: mocks.getConfiguredVcsProviders,
 }));
@@ -63,7 +63,7 @@ vi.mock("../../memory/store.js", () => ({
 vi.mock("../../infra/logger.js", () => ({ logger: mocks.logger }));
 
 import { repoSelectionStep, selectRepositoriesFromMetadata } from "./repo-selection.js";
-import { MAX_ACCESSIBLE_REPOSITORIES } from "../../services/repository-discovery/catalog.js";
+import { MAX_ACCESSIBLE_REPOSITORIES } from "../../engine/repository-discovery/catalog.js";
 
 const repos: RepositoryMetadata[] = [
   {

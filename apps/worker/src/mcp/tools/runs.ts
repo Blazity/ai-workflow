@@ -28,7 +28,7 @@ import {
   type McpToolDependencies,
 } from "../contracts.js";
 import { executeMcpRead } from "../execute-tool.js";
-import { diagnoseRun, type DiagnoseRunInput } from "../run-diagnosis.js";
+import { diagnoseRun, type DiagnoseRunInput } from "../../services/mcp/run-diagnosis.js";
 import { registerCatalogTool } from "../tool-catalog.js";
 
 // Flat interval, not a backoff curve: this slice has no per-run ETA to size

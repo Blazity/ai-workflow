@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.sandboxGet } }));
 vi.mock("../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
 vi.mock("../../db/client.js", () => ({ getDb: mocks.getDb }));
-vi.mock("../../pre-pr-checks/store.js", () => ({
+vi.mock("../pre-pr-checks/store.js", () => ({
   getCurrentPrePrCheckConfig: mocks.getCurrentPrePrCheckConfig,
 }));
 

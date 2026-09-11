@@ -9,7 +9,7 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("../db/client.js", () => ({ getDb: () => state.db }));
-vi.mock("../config/env.js", () => ({
+vi.mock("../infra/vcs-config.js", () => ({
   env: {
     BETTER_AUTH_URL: "https://worker.example.com",
     DASHBOARD_ORG_SLUG: "ai-workflow",
@@ -20,7 +20,7 @@ vi.mock("@better-auth/oauth-provider/resource-client", () => ({
     getActions: () => ({ verifyAccessToken: state.verifyAccessToken }),
   }),
 }));
-vi.mock("../auth-instance.js", () => ({ auth: {} }));
+vi.mock("../services/auth/auth-instance.js", () => ({ auth: {} }));
 
 const { requireMcpActor } = await import("./request-context.js");
 

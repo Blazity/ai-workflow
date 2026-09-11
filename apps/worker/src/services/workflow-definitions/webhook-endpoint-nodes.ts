@@ -25,7 +25,7 @@ import {
   getWorkflowDefinition,
   runnableDefinitionOf,
 } from "../../db/repositories/definitions.js";
-import { webhookSubjectKey } from "../run-lifecycle/index.js";
+import { webhookSubjectKey } from "../../engine/support/subject-key.js";
 import {
   mapWebhookPayload,
   type WebhookMappingConfig,

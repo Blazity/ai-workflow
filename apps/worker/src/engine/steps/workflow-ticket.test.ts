@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchTicket = vi.fn();
-vi.mock("../../services/vcs/adapters.js", () => ({
+vi.mock("../../engine/support/adapters.js", () => ({
   createAdapters: () => ({ issueTracker: { fetchTicket } }),
 }));
 
@@ -46,7 +46,7 @@ describe("resolveWorkflowTicketStep", () => {
   });
 
   it("synthesizes a git-ref-safe identifier for webhook deliveries", async () => {
-    const { branchForTicket } = await import("../../services/publication/workflow-naming.js");
+    const { branchForTicket } = await import("../../engine/support/workflow-naming.js");
     const { resolveWorkflowTicketStep } = await import("./workflow-ticket.js");
     const ticket = await resolveWorkflowTicketStep(
       {
@@ -113,7 +113,7 @@ describe("resolveWorkflowTicketStep", () => {
   });
 
   it("synthesizes a git-ref-safe identifier for a schedule occurrence", async () => {
-    const { branchForTicket } = await import("../../services/publication/workflow-naming.js");
+    const { branchForTicket } = await import("../../engine/support/workflow-naming.js");
     const { resolveWorkflowTicketStep } = await import("./workflow-ticket.js");
     const ticket = await resolveWorkflowTicketStep(
       {

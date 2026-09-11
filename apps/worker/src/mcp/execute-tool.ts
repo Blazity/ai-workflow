@@ -7,7 +7,7 @@ import type {
   McpToolName,
 } from "./contracts.js";
 import { McpPublicError } from "./contracts.js";
-import { logger } from "../infra/logger.js";
+import { logger } from "../services/system/logger.js";
 import type { McpRateLimitVerdict } from "../services/mcp/rate-limit-store.js";
 import {
   configuredSecretValues,

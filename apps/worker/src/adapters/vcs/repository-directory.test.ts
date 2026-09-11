@@ -7,7 +7,7 @@ const mockOctokit = {
   paginate: vi.fn(),
 };
 
-vi.mock("../../services/vcs/github-auth.js", () => ({
+vi.mock("../../adapters/vcs/github-auth.js", () => ({
   buildOctokit: vi.fn(() => mockOctokit),
 }));
 

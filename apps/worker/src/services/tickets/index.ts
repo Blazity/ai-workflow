@@ -13,12 +13,6 @@ export {
   decideAiReviewRun,
 } from "./ai-review-transition.js";
 export {
-  AWAITING_APPROVAL_LABEL,
-} from "./labels.js";
-export {
-  aiColumnMoveTarget,
-} from "./move-targets.js";
-export {
   updateTicketLabelsForRun,
 } from "./ticket-label-mutation.js";
 export {

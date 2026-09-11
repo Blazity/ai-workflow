@@ -13,7 +13,6 @@ import {
   resolveWorkflowPromptDataTokensV2,
   type V2BindingResolutionContext,
 } from "./v2-bindings.js";
-import { replaceTextRegexStep } from "../engine/steps/transform-regex-step.js";
 
 const MAX_FIELDS = 100;
 const JSON_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema";
@@ -310,11 +309,14 @@ export function executeTransform(
         configuration.ignoreCase,
       );
     }
-    return replaceTextRegexStep(
-      text,
-      configuration.pattern,
-      configuration.replacement,
-      configuration.ignoreCase,
+    return import("../engine/steps/transform-regex-step.js").then(
+      ({ replaceTextRegexStep }) =>
+        replaceTextRegexStep(
+          text,
+          configuration.pattern,
+          configuration.replacement,
+          configuration.ignoreCase,
+        ),
     );
   }
   if (configuration.operation === "number_to_text") {

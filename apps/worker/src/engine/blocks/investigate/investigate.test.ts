@@ -19,18 +19,18 @@ vi.mock("../../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
 vi.mock("../../llm.js", () => ({
   generateStructured: mocks.generateStructured,
 }));
-vi.mock("../../../services/vcs/adapters.js", () => ({
+vi.mock("../../../engine/support/adapters.js", () => ({
   createAdapters: () => ({
     issueTracker: { searchTicketSummaries: mocks.searchTicketSummaries },
   }),
 }));
-vi.mock("../../../services/slack/slack-search.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../services/slack/slack-search.js")>();
+vi.mock("../../../adapters/messaging/slack-search.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../adapters/messaging/slack-search.js")>();
   // Only the network call is mocked; the failure classifier is the real one, so
   // the block's degradation reasons are the ones production would produce.
   return { ...actual, searchSlackChannels: mocks.searchSlackChannels };
 });
-vi.mock("../../../config/env.js", () => ({ env: mocks.env }));
+vi.mock("../../../infra/vcs-config.js", () => ({ env: mocks.env }));
 vi.mock("../../../run-observability/configured-secrets.js", () => ({
   configuredReplaySecrets: () => mocks.secrets,
 }));

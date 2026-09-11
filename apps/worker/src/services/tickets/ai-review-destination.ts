@@ -1,4 +1,4 @@
-import { env } from "../../config/env.js";
+import { env } from "../../infra/vcs-config.js";
 import type {
   IssueTrackerAdapter,
   IssueTrackerMoveTarget,

@@ -24,7 +24,7 @@ import { and, eq } from "drizzle-orm";
 import { extract } from "tar-stream";
 import type { Db } from "../db/client.js";
 import { harnessSkillArtifacts } from "../db/schema.js";
-import { buildOctokit, type GitHubAppAuth } from "../services/vcs/github-auth.js";
+import { buildOctokit, type GitHubAppAuth } from "../adapters/vcs/github-auth.js";
 import { sha256Digest } from "./skill-artifact-digest.js";
 import {
   persistHarnessSkillArtifacts,

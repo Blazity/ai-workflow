@@ -6,7 +6,7 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("@vercel/functions", () => ({ waitUntil: state.waitUntil }));
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: {
     GITHUB_WEBHOOK_SECRET: "github-secret",
     GITLAB_WEBHOOK_SECRET: "gitlab-secret",

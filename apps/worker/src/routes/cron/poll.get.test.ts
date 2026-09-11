@@ -43,7 +43,7 @@ const mocks = vi.hoisted(() => ({
   createScheduleDispatchDeps: vi.fn(),
 }));
 
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: {
     CRON_SECRET: undefined,
     JIRA_PROJECT_KEY: "AIW",
@@ -56,7 +56,7 @@ vi.mock("../../config/env.js", () => ({
 }));
 vi.mock("workflow/runtime", () => ({ getWorld: () => ({ runs: {} }) }));
 vi.mock("../../db/client.js", () => ({ getDb: () => ({ db: true }) }));
-vi.mock("../../services/vcs/adapters.js", () => ({
+vi.mock("../../engine/support/adapters.js", () => ({
   createAdapters: () => ({
     issueTracker: {
       searchTickets: vi.fn(async () => {
@@ -120,7 +120,7 @@ vi.mock("../../services/dispatch/dispatch-trigger.js", () => ({
   drainOldestPendingTrigger: (...args: any[]) =>
     mocks.drainOldestPendingTrigger(...args),
 }));
-vi.mock("../../services/dispatch/trigger-delivery-store.js", () => ({
+vi.mock("../../engine/support/trigger-delivery-store.js", () => ({
   listPendingTriggers: (...args: any[]) => mocks.listPendingTriggers(...args),
 }));
 vi.mock("../../db/repositories/runs/run-observability.js", () => ({

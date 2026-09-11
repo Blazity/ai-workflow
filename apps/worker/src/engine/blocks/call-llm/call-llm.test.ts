@@ -59,8 +59,7 @@ describe("call_llm execute", () => {
         tokens: { input: 10, cached_input: 2, output: 5 },
         num_turns: 1,
       }),
-      "claude",
-      "claude-haiku-4-5",
+      { provider: "claude", model: "claude-haiku-4-5" },
     );
     expect(ctx.markLaunched).toHaveBeenCalledWith("LLM llm-1");
   });
@@ -74,8 +73,7 @@ describe("call_llm execute", () => {
     expect(ctx.recordUsage).toHaveBeenCalledWith(
       "LLM llm-unknown",
       null,
-      "claude",
-      "claude-haiku-4-5",
+      { provider: "claude", model: "claude-haiku-4-5" },
     );
   });
 
@@ -176,8 +174,7 @@ describe("call_llm execute", () => {
     expect(ctx.recordUsage).toHaveBeenCalledWith(
       "LLM llm-2",
       expect.anything(),
-      "codex",
-      "codex-model",
+      { provider: "codex", model: "codex-model" },
     );
   });
 
@@ -333,8 +330,7 @@ describe("call_llm execute", () => {
     expect(ctx.recordUsage).toHaveBeenCalledWith(
       "LLM blk",
       null,
-      "claude",
-      "claude-haiku-4-5",
+      { provider: "claude", model: "claude-haiku-4-5" },
     );
   });
 
@@ -375,8 +371,7 @@ describe("call_llm execute", () => {
     expect(ctx.recordUsage).toHaveBeenCalledWith(
       "LLM capped",
       null,
-      "claude",
-      "claude-haiku-4-5",
+      { provider: "claude", model: "claude-haiku-4-5" },
     );
   });
 
@@ -397,8 +392,7 @@ describe("call_llm execute", () => {
     expect(ctx.recordUsage).toHaveBeenCalledWith(
       "LLM blk",
       null,
-      "claude",
-      "claude-haiku-4-5",
+      { provider: "claude", model: "claude-haiku-4-5" },
     );
   });
 });

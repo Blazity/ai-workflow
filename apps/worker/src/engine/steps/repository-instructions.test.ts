@@ -30,7 +30,7 @@ vi.mock("../../sandbox/credentials.js", () => ({
   getSandboxCredentials: () => ({ teamId: "team" }),
 }));
 vi.mock("../../infra/logger.js", () => ({ logger: { warn: mocks.warn } }));
-vi.mock("../../config/env.js", () => ({ env: mocks.env }));
+vi.mock("../../infra/vcs-config.js", () => ({ env: mocks.env }));
 
 const manifest: WorkspaceManifest = {
   version: 1,

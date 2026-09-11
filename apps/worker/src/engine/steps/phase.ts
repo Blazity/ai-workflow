@@ -133,7 +133,7 @@ export async function applyHumanRepositoryExpansion(
     return { kind: "noop" };
   }
   const { isExpansionLimitClarification } = await import(
-    "../../services/repository-discovery/runner.js"
+    "../repository-discovery/runner.js"
   );
   if (!isExpansionLimitClarification(latest.questions)) {
     return { kind: "noop" };
@@ -473,10 +473,10 @@ async function listFreshRepositoryCatalogStep(
     "../../adapters/vcs/repository-directory.js"
   );
   const { buildRepositoryCatalog } = await import(
-    "../../services/repository-discovery/catalog.js"
+    "../repository-discovery/catalog.js"
   );
   const { filterRepositoriesForScope } = await import(
-    "../../services/dispatch/repo-allowlist.js"
+    "../support/repo-allowlist.js"
   );
   return buildRepositoryCatalog(
     filterRepositoriesForScope(
@@ -530,7 +530,7 @@ async function attachResearchRepositoriesStep(
   // point every attach path shares, so an allowlist tightened mid-run cuts off
   // new read attaches before any clone happens (the earlier catalog check may be
   // stale by the time this step runs).
-  const { isRepoAllowedForScope } = await import("../../services/dispatch/repo-allowlist.js");
+  const { isRepoAllowedForScope } = await import("../support/repo-allowlist.js");
   for (const repository of repositories) {
     if (!isRepoAllowedForScope(repository, repositoryScope)) {
       throw new Error(
@@ -601,10 +601,10 @@ async function resolveHumanRepositoryExpansionStep(
     "../../adapters/vcs/repository-directory.js"
   );
   const { buildRepositoryCatalog } = await import(
-    "../../services/repository-discovery/catalog.js"
+    "../repository-discovery/catalog.js"
   );
   const { filterRepositoriesForScope } = await import(
-    "../../services/dispatch/repo-allowlist.js"
+    "../support/repo-allowlist.js"
   );
   const { validateHumanRepositoryExpansion } =
     await loadRepositoryDiscoveryPort();
@@ -684,14 +684,14 @@ export async function createHarnessInvocationBudget(input: {
   priceLookup?(
     model: string,
   ): TokenPrice | null;
+  phase: string;
 }): Promise<HarnessInvocationBudget> {
   // readClock is a workflow step. Invoking it as a property of `input`
   // captures `input` as the call receiver, and the Workflow SDK then tries to
   // serialize that receiver, which carries the non-serializable budget
   // observer function. Destructure first so every call is a free-function
   // call with serializable arguments only.
-  const { observeWorkflowBudget, readClock, priceLookup } = input;
-  const providerKind = input.runtime.manifest.harness.provider;
+  const { observeWorkflowBudget, readClock, priceLookup, phase } = input;
   const limits = combineHarnessRuntimeLimits(
     input.workflowLimits,
     input.runtime,
@@ -723,10 +723,9 @@ export async function createHarnessInvocationBudget(input: {
     },
     recordUsage(usage, model) {
       const provider: CostProvider = {
-        kind: providerKind,
         price: priceLookup?.(model) ?? null,
       };
-      state = recordBudgetUsage(state, usage, provider);
+      state = recordBudgetUsage(state, usage, provider, phase);
     },
   };
 }

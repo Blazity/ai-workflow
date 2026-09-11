@@ -31,7 +31,7 @@ import {
   registryRows,
 } from "../overview/index.js";
 import { issueTrackerBaseUrl } from "../settings/index.js";
-import { createAdapters } from "../vcs/index.js";
+import { createAdapters } from "../../engine/support/adapters.js";
 
 /** The runs list as the wire carries it, minus the timestamp the route stamps. */
 export type DashboardRunsPage = Omit<RunsResponse, "generatedAt">;

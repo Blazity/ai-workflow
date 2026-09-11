@@ -9,7 +9,7 @@
  */
 import { getDb } from "../../db/client.js";
 import { dashboardUserLabel } from "../../pre-pr-checks/store.js";
-import { createAdapters } from "../vcs/index.js";
+import { createAdapters } from "../../engine/support/adapters.js";
 import {
   cancelRunForOperator,
   type CancelRunForOperatorResult,

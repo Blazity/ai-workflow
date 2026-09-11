@@ -32,8 +32,9 @@ import {
   sweepMcpIdempotencyKeys,
   sweepMcpRateLimits,
 } from "../../mcp/index.js";
-import type { RunsLister } from "../../overview/index.js";
-import { reconcileRuns, ticketSubjectKey } from "../../run-lifecycle/index.js";
+import type { RunsLister } from "../../../engine/support/collect-runs.js";
+import { ticketSubjectKey } from "../../../engine/support/subject-key.js";
+import { reconcileRuns } from "../../run-lifecycle/index.js";
 import {
   createScheduleDispatchDeps,
   runScheduleTriggerPass,
@@ -45,7 +46,7 @@ import {
   sweepOrphanedRunningRuns,
   upsertRunSnapshots,
 } from "../../telemetry/index.js";
-import { createAdapters } from "../../vcs/index.js";
+import { createAdapters } from "../../../engine/support/adapters.js";
 import {
   redispatchPendingWebhookDeliveries,
   sweepWebhookRateLimits,

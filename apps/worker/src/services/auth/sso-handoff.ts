@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { Auth } from "../../auth.js";
+import type { Auth } from "./auth-core.js";
 import { DashboardAuthError } from "./users-read.js";
 
 const HANDOFF_PREFIX = "dashboard-sso-handoff:";

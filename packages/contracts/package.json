@@ -16,6 +16,7 @@
     "zod": "catalog:"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test \"*.test.ts\""
   }
 }

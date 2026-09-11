@@ -1,17 +1,18 @@
 import { getRun } from "workflow/api";
-import { env } from "../../config/env.js";
-import { isAiReviewDestination } from "../tickets/ai-review-destination.js";
+import { env } from "../../infra/vcs-config.js";
 import {
   decideAiReviewRun,
+  isAiReviewDestination,
   PREMATURE_AI_REVIEW_CANCELLATION_REASON,
-} from "../tickets/ai-review-transition.js";
+  withdrawTicketFromAiForRun,
+} from "../tickets/index.js";
 import {
   cancelRunDetailed,
   cancelSubjectRunDetailed,
   type CancelRunResult,
 } from "./cancel-run.js";
 import { logger } from "../../infra/logger.js";
-import { retireClarificationForGoneTicket } from "../clarifications/answer-core.js";
+import { retireClarificationForGoneTicket } from "../../engine/support/clarification-retirement.js";
 import { getResumableClarificationForRun } from "../../clarifications/hook-store.js";
 import { stopSandboxesByIds } from "../../sandbox/stop-ticket-sandboxes.js";
 import {
@@ -28,7 +29,6 @@ import { confirmWorkflowStepsDrained } from "./workflow-step-drain.js";
 import { reconcileStartupWatchdog } from "./run-start-lifecycle.js";
 import { reconcileStalledRun } from "./run-stall-watchdog.js";
 import { ticketSubjectKey } from "./subject-key.js";
-import { withdrawTicketFromAiForRun } from "../tickets/ticket-transition.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const STALE_RESERVATION_MS = 5 * 60 * 1000;

@@ -3,7 +3,7 @@
 import { MAX_CLARIFICATION_ANSWER_LENGTH } from "@shared/contracts";
 import { getHookByToken, resumeHook } from "workflow/api";
 import { and, eq } from "drizzle-orm";
-import { env } from "../../config/env.js";
+import { env } from "../../infra/vcs-config.js";
 import { HookNotFoundError } from "workflow/errors";
 import type { Db } from "../../db/client.js";
 import { activeRuns } from "../../db/schema.js";
@@ -12,9 +12,11 @@ import {
   type IssueTrackerAdapter,
 } from "../../adapters/issue-tracker/types.js";
 import { logger } from "../../infra/logger.js";
-import { aiColumnMoveTarget } from "../tickets/move-targets.js";
-import { markRunBlockedOnCancel, markRunResumed } from "../../db/repositories/runs/telemetry.js";
-import { moveTicketForRun } from "../tickets/ticket-transition.js";
+import { aiColumnMoveTarget } from "../../engine/support/ticket-move-targets.js";
+import { moveTicketForRun } from "../tickets/index.js";
+import { markRunResumed } from "../../db/repositories/runs/telemetry.js";
+import { retireClarificationForGoneTicket } from "../../engine/support/clarification-retirement.js";
+export { retireClarificationForGoneTicket } from "../../engine/support/clarification-retirement.js";
 import { formatClarificationAnswerComment } from "./comment-format.js";
 import { answerHookClarification, type HookClarificationRow } from "../../clarifications/hook-store.js";
 import {
@@ -23,7 +25,6 @@ import {
   RESUME_FAILED_STATUS,
   type ResumeAttemptReservation,
 } from "./resume-attempts.js";
-import { supersedeClarification, supersedePendingForTicket } from "../../db/repositories/clarifications.js";
 
 /** Re-exported under the name this cluster has always used. The number itself
  *  belongs to the contracts package, which is also what the request schema and
@@ -255,13 +256,3 @@ async function failedResumeOutcome(
  * never reach a PR. Recording success would freeze that dead run into a green
  * result the cron can no longer correct.
  */
-export async function retireClarificationForGoneTicket(
-  db: Db,
-  row: HookClarificationRow,
-): Promise<void> {
-  if (row.ticketKey) {
-    await supersedePendingForTicket(db, row.ticketKey).catch(() => {});
-  }
-  await supersedeClarification(db, row.id).catch(() => {});
-  await markRunBlockedOnCancel(db, row.runId).catch(() => {});
-}

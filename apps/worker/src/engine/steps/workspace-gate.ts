@@ -1,4 +1,4 @@
-import type { PrePrCheckConfig } from "../../pre-pr-checks/config.js";
+import type { PrePrCheckConfig } from "../pre-pr-checks/config.js";
 import {
   WORKSPACE_GATE_NOT_RECORDED_MESSAGE,
   WORKSPACE_NOT_VERIFIABLE_MESSAGE,
@@ -235,7 +235,7 @@ async function loadCurrentPrePrCheckConfigStep(): Promise<{
 } | null> {
   "use step";
   const { getDb } = await import("../../db/client.js");
-  const { getCurrentPrePrCheckConfig } = await import("../../pre-pr-checks/store.js");
+  const { getCurrentPrePrCheckConfig } = await import("../pre-pr-checks/store.js");
   const current = await getCurrentPrePrCheckConfig(getDb());
   return current ? { version: current.version, config: current.config } : null;
 }

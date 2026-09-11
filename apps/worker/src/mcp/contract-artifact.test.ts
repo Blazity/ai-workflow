@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({ executeMcpRead: vi.fn() }));
 
-vi.mock("../config/env.js", () => ({
+vi.mock("../infra/vcs-config.js", () => ({
   env: {
     MCP_SERVER_VERSION: "0.1.0",
     MCP_MAX_RESULT_BYTES: 524_288,

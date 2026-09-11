@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 
-import type { Auth } from "../../auth.js";
+import type { Auth } from "./auth-core.js";
 import type { Db } from "../../db/client.js";
 import { createAuthRepository } from "../../db/repositories/auth.js";
 import {

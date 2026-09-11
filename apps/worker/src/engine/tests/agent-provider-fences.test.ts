@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ActiveRunOwnerError } from "../../services/run-lifecycle/run-control-errors.js";
+import { ActiveRunOwnerError } from "../../engine/support/run-control-errors.js";
 
 const mocks = vi.hoisted(() => ({
   assertActiveRunOwner: vi.fn(),
@@ -20,10 +20,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
-vi.mock("../../services/run-lifecycle/active-run-owner.js", () => ({
+vi.mock("../../engine/support/active-run-owner.js", () => ({
   assertActiveRunOwner: (...args: any[]) => mocks.assertActiveRunOwner(...args),
 }));
-vi.mock("../../services/vcs/adapters.js", () => ({
+vi.mock("../../engine/support/adapters.js", () => ({
   createAdapters: () => ({
     issueTracker: {
       fetchTicket: mocks.fetchTicket,
@@ -48,10 +48,10 @@ vi.mock("../../db/repositories/runs/telemetry.js", () => ({
   resolveAwaitingRunsForTicket: (...args: any[]) =>
     mocks.resolveAwaitingRunsForTicket(...args),
 }));
-vi.mock("../../services/tickets/ticket-transition.js", () => ({
+vi.mock("../../engine/support/ticket-transition.js", () => ({
   moveTicketForRun: (...args: any[]) => mocks.moveTicket(...args),
 }));
-vi.mock("../../services/tickets/ticket-label-mutation.js", () => ({
+vi.mock("../../engine/support/ticket-label-mutation.js", () => ({
   updateTicketLabelsForRun: (...args: any[]) =>
     mocks.updateTicketLabels(...args),
 }));
@@ -60,7 +60,7 @@ vi.mock("../../db/repositories/runs/run-analysis.js", () => ({
   getRunAnalysisReport: (...args: any[]) => mocks.getRunAnalysisReport(...args),
   recordRunAnalysisReport: (...args: any[]) => mocks.recordRunAnalysisReport(...args),
 }));
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: { DASHBOARD_ORIGIN: "https://dashboard.example.com" },
   getConfiguredVcsProviders: vi.fn(),
 }));

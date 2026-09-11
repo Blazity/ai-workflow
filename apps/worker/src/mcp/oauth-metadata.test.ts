@@ -12,8 +12,8 @@ const state = vi.hoisted(() => ({
   auth: {} as Record<PropertyKey, unknown>,
 }));
 
-vi.mock("../config/env.js", () => ({ env: state.env }));
-vi.mock("../auth-instance.js", () => ({
+vi.mock("../infra/vcs-config.js", () => ({ env: state.env }));
+vi.mock("../services/auth/auth-instance.js", () => ({
   auth: new Proxy({}, {
     get: (_target, property) => {
       const value = state.auth[property];

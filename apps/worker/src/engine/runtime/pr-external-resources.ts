@@ -20,7 +20,7 @@ import {
   type PRFile,
   type PRReviewInlineComment,
 } from "../../adapters/vcs/types.js";
-import { assertActiveRunOwner, type ActiveRunOwner } from "../../services/run-lifecycle/active-run-owner.js";
+import { assertActiveRunOwner, type ActiveRunOwner } from "../support/active-run-owner.js";
 import {
   compareMergedFindingsForDisplay,
   compareMergedFindingsForPublication,
@@ -32,7 +32,7 @@ import {
   type MergedReviewFinding,
   type ReviewFindingCandidate,
 } from "../helpers/review-finding-merge.js";
-import { scrubForPublication } from "../../services/publication/publication-scrub.js";
+import { scrubForPublication } from "../support/publication-scrub.js";
 import type { PrTriggerPayload } from "../agent-input.js";
 import { findRunPrSiblings } from "../../db/repositories/runs.js";
 import { logger } from "../../infra/logger.js";
@@ -122,7 +122,7 @@ export async function createRunOwnedPrCheck(args: {
     };
   }
   await assertActiveRunOwner(args.db, args.owner);
-  const { createRepositoryVCS } = await import("../../services/vcs/vcs-runtime.js");
+  const { createRepositoryVCS } = await import("../support/vcs-runtime.js");
   const vcs = createRepositoryVCS({
     provider: args.target.provider,
     repoPath: args.target.repoPath,
@@ -205,7 +205,7 @@ export async function completeRunOwnedPrCheck(args: {
   if (storedCheck.state === "completed") return;
   let check = storedCheck;
   let target = args.target;
-  const { createRepositoryVCS } = await import("../../services/vcs/vcs-runtime.js");
+  const { createRepositoryVCS } = await import("../support/vcs-runtime.js");
   const vcs = createRepositoryVCS({
     provider: args.target.provider,
     repoPath: args.target.repoPath,
@@ -356,7 +356,7 @@ export async function closeRunPrChecks(args: {
       continue;
     }
     try {
-      const { createRepositoryVCS } = await import("../../services/vcs/vcs-runtime.js");
+      const { createRepositoryVCS } = await import("../support/vcs-runtime.js");
       const vcs = createRepositoryVCS({
         provider: check.provider as "github" | "gitlab",
         repoPath: check.repository,
@@ -478,7 +478,7 @@ export async function reconcilePendingPrChecks(
     }
     if (row.state === "creating" && !row.providerReference) {
       try {
-        const { createRepositoryVCS } = await import("../../services/vcs/vcs-runtime.js");
+        const { createRepositoryVCS } = await import("../support/vcs-runtime.js");
         const vcs = createRepositoryVCS({
           provider: row.provider as "github" | "gitlab",
           repoPath: row.repository,
@@ -1020,7 +1020,7 @@ export async function publishRunOwnedPrReview(args: {
   summaryFallbackCount: number;
 }> {
   await assertActiveRunOwner(args.db, args.owner);
-  const { createRepositoryVCS } = await import("../../services/vcs/vcs-runtime.js");
+  const { createRepositoryVCS } = await import("../support/vcs-runtime.js");
   const vcs = createRepositoryVCS({
     provider: args.target.provider,
     repoPath: args.target.repoPath,

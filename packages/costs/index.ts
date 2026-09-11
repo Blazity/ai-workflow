@@ -24,15 +24,12 @@ export interface CostUsage {
 export type CostProviderKind = "claude" | "codex";
 
 /**
- * How one phase can be priced. `kind` records which harness produced the usage
- * and never selects the formula: either harness may report a dollar cost, and
- * either may leave a token-only usage that the model's price turns into one.
- * `kind` is absent when the caller could not state a provider, which still
- * prices from `price`. `price` is the phase model's token price when the price
- * table has one.
+ * How one phase can be priced. Either harness may report a dollar cost, and
+ * either may leave token-only usage that the model's price turns into one.
+ * Provider kind deliberately is not part of this shape because it never
+ * selects the formula. `price` is the phase model's token price when known.
  */
 export interface CostProvider {
-  kind?: CostProviderKind;
   price: TokenPrice | null;
 }
 

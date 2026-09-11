@@ -4,7 +4,7 @@ import type { PullRequestHead } from "../../adapters/vcs/types.js";
 // bindCurrentPullRequest is a pure function, but the module also imports
 // createRepositoryVCS (-> env.js). Mock the runtime so the import chain never
 // validates environment variables during this unit test.
-vi.mock("../vcs/vcs-runtime.js", () => ({
+vi.mock("../../engine/support/vcs-runtime.js", () => ({
   createRepositoryVCS: vi.fn(),
 }));
 

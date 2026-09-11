@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
   cancelRunForOperator: vi.fn(),
 }));
 
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: { COLUMN_AI: "AI", DASHBOARD_ORIGIN: "https://dash.example" },
 }));
 vi.mock("workflow/api", () => ({

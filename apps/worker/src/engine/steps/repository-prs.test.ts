@@ -11,7 +11,7 @@ vi.mock("../../db/client.js", () => ({
   getDb: mocks.getDb,
 }));
 
-vi.mock("../../services/vcs/vcs-runtime.js", () => ({
+vi.mock("../../engine/support/vcs-runtime.js", () => ({
   createRepositoryVCS: mocks.createRepositoryVCS,
 }));
 
@@ -19,7 +19,7 @@ vi.mock("../../db/repositories/runs.js", () => ({
   upsertWorkflowOwnedBranch: mocks.upsertWorkflowOwnedBranch,
 }));
 
-vi.mock("../../services/run-lifecycle/active-run-owner.js", () => ({
+vi.mock("../../engine/support/active-run-owner.js", () => ({
   assertActiveRunOwner: (...args: any[]) => mocks.assertActiveRunOwner(...args),
 }));
 

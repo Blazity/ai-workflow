@@ -13,9 +13,9 @@ const state = vi.hoisted(() => ({
 // The route now reaches the provider lookup through the auth cluster's index,
 // and that barrel loads siblings which read deployment settings, so this test
 // has to stand in for the environment it never needed before.
-vi.mock("../../../../config/env.js", () => ({ env: {} }));
+vi.mock("../../../../infra/vcs-config.js", () => ({ env: {} }));
 
-vi.mock("../../../../auth-instance.js", () => ({ auth: {} }));
+vi.mock("../../../../services/auth/auth-instance.js", () => ({ auth: {} }));
 
 vi.mock("../../../../db/client.js", () => ({
   getDb: () => state.db,

@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
 vi.mock("../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
-vi.mock("../../pre-pr-checks/store.js", () => ({
+vi.mock("../pre-pr-checks/store.js", () => ({
   getCurrentPrePrCheckConfig: (...args: unknown[]) =>
     mocks.getCurrentPrePrCheckConfig(...args),
 }));

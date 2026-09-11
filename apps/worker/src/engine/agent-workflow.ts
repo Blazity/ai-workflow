@@ -1,7 +1,7 @@
 /* eslint-disable require-unicode-regexp */
 import { createHook, getWorkflowMetadata } from "workflow";
-import { branchForTicket } from "../services/publication/workflow-naming.js";
-import { ticketRunUrl, hasDashboardLinkComment } from "../services/publication/dashboard-links.js";
+import { branchForTicket } from "./support/workflow-naming.js";
+import { ticketRunUrl, hasDashboardLinkComment } from "./support/dashboard-links.js";
 import { computeUsageTotals } from "../sandbox/usage.js";
 import type { AgentOutput, PhaseUsage, ResearchResult, ReviewOutput } from "../sandbox/agents/types.js";
 import type { AgentKind } from "../sandbox/agents/index.js";
@@ -27,11 +27,11 @@ import { resolveTicketMoveTarget } from "./helpers/ticket-move-target.js";
 import { runKindForAgentWorkflowInput, type AgentWorkflowInput } from "./agent-input.js";
 import { moveTicketStep } from "./steps/ticket-transition-step.js";
 import { agentArtifactPhase, agentProtocolExecutionError as agentProtocolBlockError, blockBudgetObserver, buildV2AgentArtifactKeys, recordBlockPhaseUsage, type EngineCtx } from "./blocks/support/types.js";
-import { buildPromptVariables, VARIABLE_PARAM_KEYS } from "./helpers/prompt-vars.js";
+import { VARIABLE_PARAM_KEYS } from "@shared/prompts";
 import { compatibilityPromptSourceForV2Node, compileEffectivePrompt, effectivePromptProfileSource } from "./helpers/effective-prompt.js";
 import { loadInvocationRepositoryInstructionSources } from "./steps/repository-instructions.js";
 import { publicationPrsForTelemetry } from "./helpers/publication-prs-for-telemetry.js";
-import { withAnalysisDelivery, withAnalysisPublication } from "../run-analysis/report.js";
+import { withAnalysisDelivery, withAnalysisPublication } from "./support/run-analysis-report.js";
 import { invalidateWorkspaceGate, recordSuccessfulWorkspaceGate } from "./steps/workspace-gate.js";
 import { resolveReviewFeedbackInput } from "./helpers/review-feedback.js";
 import { workspaceRepositoryAccess, type WorkspaceManifest, type WorkspaceRepositoryInput } from "../sandbox/repo-workspace.js";
@@ -56,7 +56,7 @@ import { loadClarificationHistoryStep, logClarificationHistoryFailure, parkForCl
 import { prePrChecksFailureMessage } from "./steps/repository-failure.js";
 import { type SanitizedReplayObservation, captureV2RunObservationStartStep, closeTerminalPrChecksStep, finishV2RunObservationAttemptStep, flushV2RunObservationsStep, markV2RunObservationUnavailableStep, persistRunTelemetryBestEffort, recordBlockStatusesStep, resolveClarificationDecisionObservation, startV2RunObservationAttemptStep, updateV2RunObservationWaitingStep } from "./steps/telemetry.js";
 import { resolveAgentTicketInput, resolveImplementationPlanInput, selectEntryTriggerNode, triggerOutputWithTicketContext, triggerTypeFor } from "./helpers/trigger-input.js";
-import { appendClarificationRound, blockRunStateSummary, buildImplementationAgentSuccessOutput, buildOpenPrSuccessOutput, implementationChangeSummary, optionalPricedModelsForRun, promptOverride, publicationPrForTelemetry, repoMemoryDistillTarget, resolveOpenPrBody, resolveOpenPrTitle, resolveRunPriceLookup, resolveSlackMessageInput, resolveTicketStatusInput, resolveV2PromptDataConfiguration, reviewAgentExecutionResult, shouldPromoteResearchWriteScope, soleActiveBlockId, v2NonAgentPromptPlaceholderIssue, v2OpenPrRepositoriesProvenanceIssue, v2TerminalBlockResult } from "./helpers/prompt-output.js";
+import { appendClarificationRound, blockRunStateSummary, buildImplementationAgentSuccessOutput, buildOpenPrSuccessOutput, buildPromptVariables, implementationChangeSummary, optionalPricedModelsForRun, promptOverride, publicationPrForTelemetry, repoMemoryDistillTarget, resolveOpenPrBody, resolveOpenPrTitle, resolveRunPriceLookup, resolveSlackMessageInput, resolveTicketStatusInput, resolveV2PromptDataConfiguration, reviewAgentExecutionResult, shouldPromoteResearchWriteScope, soleActiveBlockId, v2NonAgentPromptPlaceholderIssue, v2OpenPrRepositoriesProvenanceIssue, v2TerminalBlockResult } from "./helpers/prompt-output.js";
 import { checksBudgetObserver, definitionRequestsRepairCycles, errorMessage, failureExitPhase, isRepositoryScriptsFailurePhase, nodeCanRecordGate, recoverLatestRepositoryScriptsFailureFromSteps, repositoryScriptsFailureComment, truncateError } from "./helpers/repository-failure.js";
 import { postReviewLedgerFailureNoteStep, readLedgerEvidenceFileStep, settleReviewLedgerThreads } from "./steps/review-ledger.js";
 import { applyReviewLedgerGate, buildResolutionEvidenceComment, pendingPrCheckIntent, resolveNoChangeAction, reviewLedgerOutputFields, reviewLedgerRepoLocalPath, runLedgerEvidenceSecondPass, settledAnswerCount, toLedgerGuardWorkItems, toReviewThreadDispositions, unsettledWorkItemAliases } from "./helpers/review-ledger.js";
@@ -78,10 +78,10 @@ export function recordPrePrFixCycleUsages(
       : `Pre-PR Fix ${index + 1}`;
     if (attempt === undefined) {
       ctx.markLaunched(label);
-      ctx.recordUsage(label, usage, provider, model);
+      ctx.recordUsage(label, usage, { provider, model });
     } else {
       ctx.markLaunched(label, attempt);
-      ctx.recordUsage(label, usage, provider, model, attempt);
+      ctx.recordUsage(label, usage, { provider, model }, attempt);
     }
   });
   if (budgetFailure) throw new RunBudgetError(budgetFailure);
@@ -778,7 +778,7 @@ async function agentWorkflowBody(
       if (phase in phaseUsages) continue;
       phaseUsages[phase] = null;
       runPhaseUsages[phase] = null;
-      budgetState = recordBudgetUsage(budgetState, null, null);
+      budgetState = recordBudgetUsage(budgetState, null, null, phase);
     }
   };
   // Captured on the success path; written as run telemetry in the finally.
@@ -800,11 +800,7 @@ async function agentWorkflowBody(
   // The phase's model price rides along whatever provider recorded the usage,
   // and even when no provider was stated: a token-only usage stays priceable,
   // which is what keeps a run under a cost cap verifiable.
-  const costProviderFor = (
-    provider: CostProviderKind | undefined,
-    model: string,
-  ): CostProvider => ({
-    kind: provider,
+  const costProviderFor = (model: string): CostProvider => ({
     price: priceLookup?.(model) ?? null,
   });
   // Returns the formatted usage report when any phase has produced usage,
@@ -994,18 +990,19 @@ async function agentWorkflowBody(
       prePrChecksFailureMessage,
       observeBudget: (requireRemainingDuration = true, attribution, observedAtMs?: number) =>
         observeBudgetAtBoundary(requireRemainingDuration, attribution, observedAtMs),
-      recordUsage: (label, usage, provider, model, attempt) => {
+      recordUsage: (label, usage, source, attempt) => {
         const key = phaseKey(label, attempt ?? state.attempt);
         phaseUsages[key] = usage;
-        phaseProviders[key] = provider;
-        phaseModels[key] = model;
+        phaseProviders[key] = source.provider;
+        phaseModels[key] = source.model;
         runPhaseUsages[key] = usage;
-        runPhaseProviders[key] = provider;
-        runPhaseModels[key] = model;
+        runPhaseProviders[key] = source.provider;
+        runPhaseModels[key] = source.model;
         budgetState = recordBudgetUsage(
           budgetState,
           usage,
-          costProviderFor(provider, model),
+          costProviderFor(source.model),
+          key,
         );
       },
       markLaunched: (label, attempt) => {
@@ -1185,7 +1182,7 @@ async function agentWorkflowBody(
 
           if (snapshot) {
             const { restoreCheckpointSandboxReferences } = await import(
-              "../services/clarifications/checkpoint.js"
+              "./support/clarification-checkpoint.js"
             );
             const { restoreClarificationSandboxStep } = await import(
               "./steps/clarification-snapshot-steps.js"
@@ -1474,7 +1471,7 @@ async function agentWorkflowBody(
         const {
           REPOSITORY_DISCOVERY_SCHEMA,
           assembleRepositoryDiscoveryPrompt,
-        } = await import("../services/repository-discovery/runner.js");
+        } = await import("./repository-discovery/runner.js");
         const { paths, script } = await planPhaseStep(
           ctx.runDefaultKind,
           phase,
@@ -1520,14 +1517,13 @@ async function agentWorkflowBody(
         ctx.recordUsage(
           label,
           parsed.usage,
-          ctx.runDefaultKind,
-          defaultModel,
+          { provider: ctx.runDefaultKind, model: defaultModel },
           execution?.attempt,
         );
         if (!parsed.result.ok) return agentProtocolBlockError(parsed.result);
 
         const { validateRepositoryDiscoveryResult } = await import(
-          "../services/repository-discovery/protocol.js"
+          "./repository-discovery/protocol.js"
         );
         const decision = validateRepositoryDiscoveryResult(
           parsed.result.value,
@@ -1576,7 +1572,7 @@ async function agentWorkflowBody(
           );
         }
         const { validateRepositoryExpansionRequests } = await import(
-          "../services/repository-discovery/runner.js"
+          "./repository-discovery/runner.js"
         );
         const decision = validateRepositoryExpansionRequests({
           requests,
@@ -1926,7 +1922,9 @@ async function agentWorkflowBody(
             const sandboxId = workspace.sandboxId;
             await writeAttachmentsOnce(sandboxId);
             phaseModels[researchPhase] = model;
+            phaseProviders[researchPhase] = kind;
             runPhaseModels[researchPhase] = model;
+            runPhaseProviders[researchPhase] = kind;
             const researchRuntime = await prepareHarnessAgentInvocationStep(
               sandboxId,
               kind,
@@ -2420,7 +2418,9 @@ async function agentWorkflowBody(
             );
             const { kind, model, runtime } = resolveAgentForNode(node);
             phaseModels[implPhase] = model;
+            phaseProviders[implPhase] = kind;
             runPhaseModels[implPhase] = model;
+            runPhaseProviders[implPhase] = kind;
             state.implementationModel = model;
             state.implementationKind = kind;
             state.implementationRuntime = runtime;
@@ -2658,7 +2658,9 @@ async function agentWorkflowBody(
             const reviewArtifactPhase = agentArtifactPhase("review", execution);
             const reviewPhase = phaseKey(reviewLabel, invocationAttempt);
             phaseModels[reviewPhase] = model;
+            phaseProviders[reviewPhase] = kind;
             runPhaseModels[reviewPhase] = model;
+            runPhaseProviders[reviewPhase] = kind;
             try {
               {
                 const activationScopeId =
@@ -3191,6 +3193,7 @@ async function agentWorkflowBody(
           ? await createHarnessInvocationBudget({
               workflowLimits: budgetLimits,
               runtime: harnessRuntime,
+              phase: node.id,
               observeWorkflowBudget: observeBudgetAtBoundary,
               readClock: readRunBudgetClockStep,
               priceLookup,
@@ -3582,7 +3585,7 @@ async function agentWorkflowBody(
             sourceSandboxId !== ctx.sandboxId
           ) {
             const { restoreCheckpointValueSandboxReferences } = await import(
-              "../services/clarifications/checkpoint.js"
+              "./support/clarification-checkpoint.js"
             );
             checkpoint = restoreCheckpointValueSandboxReferences(
               checkpoint,

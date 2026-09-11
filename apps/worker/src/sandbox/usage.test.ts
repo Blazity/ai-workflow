@@ -63,6 +63,19 @@ describe("formatUsageReport", () => {
 });
 
 describe("computeUsageTotals", () => {
+  it("prices Claude and Codex token usage identically", () => {
+    const usage = u({ tokens: { input: 1_000, cached_input: 400, output: 500 } });
+    const totals = computeUsageTotals(
+      { Claude: usage, Codex: usage },
+      { Claude: "claude", Codex: "codex" },
+      () => ({ input: 0.000_003, cached_input: 0.000_000_7, output: 0.000_015 }),
+      "shared-price-model",
+    );
+
+    expect(totals.phases.Claude.costUsd).toBe(0.010_78);
+    expect(totals.phases.Codex.costUsd).toBe(0.010_78);
+  });
+
   it("sums a claude cost_usd phase and a priced codex token phase (costKnown true)", () => {
     const totals = computeUsageTotals(
       {

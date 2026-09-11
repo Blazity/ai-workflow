@@ -10,7 +10,7 @@ import {
 import { isAPIError } from "better-auth/api";
 
 import { auth } from "../../auth-instance.js";
-import { logger } from "../../infra/logger.js";
+import { logger } from "../../services/system/logger.js";
 import {
   clearOAuthFlowCookie,
   describeOAuthFlowCookie,

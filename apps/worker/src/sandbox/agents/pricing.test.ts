@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: {
     CODEX_PRICING_URL: "https://example.test/prices.json",
     CODEX_PRICING_TTL_MS: 3_600_000,

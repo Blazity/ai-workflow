@@ -1,6 +1,18 @@
 import { EXECUTION_DIAGNOSTIC_PREFIX } from "@shared/contracts";
+import { clampBothEnds } from "../infra/clamp-text.js";
 
-import type { ExecutionErrorCategory } from "./interpreter.js";
+export { clampBothEnds } from "../infra/clamp-text.js";
+
+export type ExecutionErrorCategory =
+  | "sandbox"
+  | "provider"
+  | "engine"
+  | "binding"
+  | "timeout"
+  | "parsing"
+  | "schema"
+  | "checks"
+  | "unknown";
 
 /** Longest single-line snippet of raw `detail` we append to a user-facing
  * failure message. Keeps Slack messages and Jira comments compact. Sized so the
@@ -31,14 +43,6 @@ const MESSAGE_MAX_LENGTH = 600;
 const OPERATOR_DETAIL_MAX_LENGTH = 1_000;
 
 const REDACTED = "[redacted]";
-
-/** Stands in for the elided middle of an over-long single line. ASCII only, so
- * it survives every log, Slack and Jira encoding unchanged. */
-const ELISION = " [...] ";
-
-/** Share of the surviving budget handed to the tail. Weighted towards the tail
- * because that is where diagnostics put the verdict. */
-const TAIL_SHARE = 0.6;
 
 /** Longest string we will accept as a diagnostic ID. The execution branch below
  * repeats its segment group, so without an overall cap a chunked payload of any
@@ -318,15 +322,6 @@ function redactSecrets(text: string): string {
  * already-composed message: a head slice there re-creates this same defect one
  * layer down, and it also truncates the trailing diagnostic ID into something
  * that still looks valid but correlates with nothing. */
-export function clampBothEnds(text: string, maxLength: number): string {
-  if (text.length <= maxLength) return text;
-  const budget = maxLength - ELISION.length;
-  const tailLength = Math.ceil(budget * TAIL_SHARE);
-  const head = text.slice(0, budget - tailLength).trimEnd();
-  const tail = text.slice(text.length - tailLength).trimStart();
-  return `${head}${ELISION}${tail}`;
-}
-
 /** Shared single-line pipeline behind every exported sanitizer here: strip
  * stack frames, redact secrets/PII, collapse whitespace to single spaces, then
  * cap. Redaction runs over the whole text BEFORE the cap, so no part that

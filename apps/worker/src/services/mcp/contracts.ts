@@ -8,7 +8,12 @@
  * re-exports every name here, so the transport and the tools keep importing them
  * from one place.
  */
-// Four scopes, because an OAuth consent is granted one scope at a time and these
+import type { McpScope, McpToolName } from "@shared/contracts";
+
+export { FIRST_SLICE_TOOLS, MCP_SCOPES } from "@shared/contracts";
+export type { McpScope, McpToolName } from "@shared/contracts";
+
+// Five scopes, because an OAuth consent is granted one scope at a time and these
 // are four different things to agree to. "prompts:write" is not a subset of the
 // first two and must never be folded into either: the prompt library is the
 // instruction set every future agent run is handed, so a user who agreed to read
@@ -29,15 +34,6 @@
 // into runs:dispatch would be a privilege escalation by naming, because everyone who
 // may fire a run would silently gain the right to write into a customer's tracker, and
 // that is not a grant anybody could later take back one client at a time.
-export const MCP_SCOPES = [
-  "mcp:read",
-  "runs:dispatch",
-  "prompts:write",
-  "workflows:write",
-  "tickets:write",
-] as const;
-export type McpScope = (typeof MCP_SCOPES)[number];
-
 // The list has outgrown the first slice: the three discovery tools below were
 // added after it shipped, because dispatch_preflight demands a definitionId
 // and a triggerNodeId that nothing else could hand out, prompts.update after
@@ -48,72 +44,6 @@ export type McpScope = (typeof MCP_SCOPES)[number];
 // on purpose. It is imported in a dozen places and the order of this array is
 // the order the contract publishes, so renaming it would move a lot of lines
 // without changing a single published byte.
-export const FIRST_SLICE_TOOLS = [
-  "system.capabilities",
-  "tickets.get",
-  "tickets.list_runs",
-  "runs.get",
-  "runs.trace",
-  "runs.result",
-  "runs.diagnose",
-  "workflows.dispatch_preflight",
-  "workflows.dispatch",
-  "workflows.list",
-  "prompts.list",
-  "prompts.get",
-  "prompts.update",
-  "workflows.create",
-  "workflows.save_draft",
-  "workflows.publish",
-  // Run control, appended last for the same reason everything else was: the
-  // published order of what already shipped stays byte-identical. These two are
-  // the other half of a dispatch: an agent that can start a run could not until
-  // now answer the question that run parks on, nor stop one it started.
-  "runs.get_clarification",
-  "runs.answer_clarification",
-  "runs.cancel",
-  // The ticket write side, last: everything above it either reads or drives this
-  // deployment's own machinery, while these three are the first tools whose effect
-  // shows up in a customer's tracker, which is why they sit behind a scope of their
-  // own rather than extending an existing one.
-  "tickets.comment",
-  "tickets.transition",
-  "tickets.create",
-  // A new domain, appended rather than interleaved with the read tools above for
-  // the same reason every earlier addition was: the published order of what
-  // already shipped stays byte-identical. blocks.list/blocks.get close the gap
-  // an authoring agent hit first -- workflows.save_draft takes a graph, but
-  // nothing published what a node's params, inputs or output actually look like,
-  // so a caller could only learn a block's contract by trial and VALIDATION_FAILED.
-  "blocks.list",
-  "blocks.get",
-  // Named under the "runs" domain it belongs to, even though (per the rule above)
-  // it registers last rather than beside runs.get/runs.trace/runs.result/
-  // runs.diagnose: an agent asking "how has this deployment been doing" had
-  // per-run detail and nothing that rolled runs up, the same gap prompts.list
-  // once closed for prompts.get.
-  "runs.stats",
-  // Appended last, again to keep the published order of everything before them
-  // byte-identical. These two close the last gap in authoring a workflow from a
-  // client: workflows.save_draft takes a WHOLE graph, but nothing returned an
-  // existing definition's graph with its per-node configuration and the revision
-  // tokens a save or a publish is gated on, so an agent could only edit a graph it
-  // had itself just composed; and workflows.set_enabled is the definition's own
-  // enable switch, the field workflows.publish inherits rather than sets, so an
-  // agent could deploy a graph but never turn the definition on or off.
-  "workflows.get_graph",
-  "workflows.set_enabled",
-  // The debug counterpart to runs.get/result/diagnose, appended last for the same
-  // byte-identical-order reason as everything above. Those three go through the
-  // sanitized run path, which clamps the failure message and never carries the raw
-  // per-attempt stderr/stdout, step I/O or harness manifest at all. runs.logs lifts
-  // that SUMMARIZATION (the secret redaction still runs unconditionally at the
-  // envelope boundary) so an operator can read the verbatim provider error and the
-  // raw attempt logs. It is a read, so it does not disturb the byte layout of any
-  // mutation contract either.
-  "runs.logs",
-] as const;
-export type McpToolName = (typeof FIRST_SLICE_TOOLS)[number];
 
 // An audit row records an ATTEMPT, and an attempt may name a tool that does not
 // exist, so the type has to say so rather than let a cast smuggle a foreign

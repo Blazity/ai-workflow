@@ -33,7 +33,7 @@ import { createTestDb } from "../../db/test-db.js";
 const { testEnv } = vi.hoisted(() => ({
   testEnv: { MAX_CONCURRENT_AGENTS: 3 } as Record<string, unknown>,
 }));
-vi.mock("../../config/env.js", () => ({ env: testEnv }));
+vi.mock("../../infra/vcs-config.js", () => ({ env: testEnv }));
 
 const { startMock, getRunMock } = vi.hoisted(() => ({
   startMock: vi.fn(),
