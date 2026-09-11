@@ -28,7 +28,6 @@ import {
   getWorkflowDefinition,
   runnableDefinitionOf,
 } from "../../db/repositories/definitions.js";
-import { getTriggerRejectionsToday } from "../dispatch/index.js";
 
 export type { OccurrenceRow, ScheduleRow };
 
@@ -150,17 +149,6 @@ export function deriveScheduleState(row: ScheduleRow, now: Date): ScheduleEvalua
     return "not_evaluated";
   }
   return "evaluating";
-}
-
-/** Today's dispatch-time rejections for one trigger node, grouped by reason,
- *  worst first. The counters are keyed by the definition id as a string, which
- *  is the shape every automatic trigger type writes. */
-export function readTriggerRejectionsToday(target: ScheduleTarget, now: Date) {
-  return getTriggerRejectionsToday(
-    getDb(),
-    { definitionId: String(target.definitionId), nodeId: target.nodeId },
-    now,
-  );
 }
 
 async function findScheduleRow(db: Db, target: ScheduleTarget): Promise<ScheduleRow | null> {

@@ -5,14 +5,14 @@ import {
   type HarnessSkillRefreshResponse,
 } from "@shared/contracts";
 import {
-  canManageHarnessProfiles,
-  DashboardAuthError,
   requireDashboardActor,
-} from "../../../../../../services/auth/index.js";
+} from "../../../../../../services/auth/request-context.js";
+import { canManageHarnessProfiles } from "../../../../../../services/auth/roles.js";
+import { DashboardAuthError } from "../../../../../../services/auth/users-read.js";
+import { HarnessProfileStoreError } from "../../../../../../services/harness/harness-errors.js";
 import {
-  HarnessProfileStoreError,
   refreshHarnessProfileSkill,
-} from "../../../../../../services/harness/index.js";
+} from "../../../../../../services/harness/profile-authoring.js";
 import {
   parseHarnessProfileId,
   setHarnessApiNoStore,

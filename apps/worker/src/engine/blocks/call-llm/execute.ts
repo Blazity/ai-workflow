@@ -18,7 +18,7 @@ import {
   type BlockExecutionResult,
 } from "../support/types.js";
 
-const DEFAULT_MODEL = "claude-haiku-4-5";
+import { CALL_LLM_DEFAULT_MODEL as DEFAULT_MODEL } from "@shared/harness";
 
 export function resolveCallLlmTarget(
   params: Record<string, unknown>,

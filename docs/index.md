@@ -11,8 +11,8 @@ Every document outside `archive/` and `research/` starts with two lines,
 `Status:` and `Last-verified:`. The rules and the reasoning are
 [ADR-005](./adr/ADR-005-documentation-taxonomy.md), and
 `scripts/gates/docs-status.mjs` enforces them over `docs/`, `apps/*/docs/`,
-each `apps/*/AGENTS.md`, and `README.md`, `AGENTS.md`, `SETUP.md` and
-`CONTEXT.md` at the root.
+each `apps/*/AGENTS.md`, `packages/AGENTS.md`, and `README.md`, `AGENTS.md`,
+`SETUP.md` and `CONTEXT.md` at the root.
 
 ## Start here
 
@@ -47,6 +47,7 @@ Later stages of the restructure plan add `architecture/gates.md` to this group.
 | [adr/ADR-003-definition-schema-v1-retirement.md](./adr/ADR-003-definition-schema-v1-retirement.md) | Why schema v1 is retired, what is deleted, and what stays readable |
 | [adr/ADR-004-gates-and-required-ci.md](./adr/ADR-004-gates-and-required-ci.md) | The gate ladder, one shape per gate, and what has to be true before a check can be required |
 | [adr/ADR-005-documentation-taxonomy.md](./adr/ADR-005-documentation-taxonomy.md) | This taxonomy: the status header, the currency rule, the reachability rule, per-app agent files |
+| [adr/ADR-006-model-catalog.md](./adr/ADR-006-model-catalog.md) | The recognised model policy, live-advertisement intersection, stored-ID compatibility, and catalog ownership |
 
 ## Product
 

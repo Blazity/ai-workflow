@@ -48,4 +48,4 @@ export {
 } from "./polling/poll-pass.js";
 export {
   TriggerHttpError,
-} from "./trigger-http-error.js";
+} from "../../infra/trigger-http-error.js";

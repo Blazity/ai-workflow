@@ -5,12 +5,12 @@ import {
   type HarnessSkillImportRequest,
   type HarnessSkillImportResponse,
 } from "@shared/contracts";
+import { requireDashboardActor } from "../../../../services/auth/request-context.js";
+import { canManageHarnessProfiles } from "../../../../services/auth/roles.js";
+import { DashboardAuthError } from "../../../../services/auth/users-read.js";
 import {
-  canManageHarnessProfiles,
-  DashboardAuthError,
-  requireDashboardActor,
-} from "../../../../services/auth/index.js";
-import { importGitHubSkillSelection } from "../../../../services/harness/index.js";
+  importGitHubSkillSelection,
+} from "../../../../services/harness/skill-sources.js";
 import { setHarnessApiNoStore } from "../harness-profiles.get.js";
 import { toHarnessSkillHttpError } from "./discover.post.js";
 

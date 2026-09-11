@@ -1,8 +1,13 @@
 import { createError, defineEventHandler, readBody, setResponseStatus } from "h3";
 import type { PrePrCheckSaveConflict, PrePrCheckSaveResponse } from "@shared/contracts";
 import { parseRequestBody, prePrCheckSaveRequestSchema } from "@shared/contracts";
-import { requireDashboardActor, toHttpError } from "../../../services/auth/index.js";
-import { savePrePrChecksConfiguration } from "../../../services/pre-pr-checks/index.js";
+import {
+  requireDashboardActor,
+  toHttpError,
+} from "../../../services/auth/request-context.js";
+import {
+  savePrePrChecksConfiguration,
+} from "../../../services/pre-pr-checks/check-configuration.js";
 
 export default defineEventHandler(async (
   event,

@@ -1,8 +1,9 @@
 import { oauthProviderResourceClient } from "@better-auth/oauth-provider/resource-client";
 
 import { auth } from "../auth-instance.js";
-import { McpPublicError, resolveMcpActor } from "../services/mcp/index.js";
-import { betterAuthBaseUrl } from "../services/settings/index.js";
+import { resolveMcpActor } from "../services/mcp/actor-resolution.js";
+import { McpPublicError } from "../services/mcp/contracts.js";
+import { betterAuthBaseUrl } from "../services/settings/runtime-settings.js";
 import type { McpActorContext } from "./contracts.js";
 import { canonicalMcpResource } from "./oauth.js";
 

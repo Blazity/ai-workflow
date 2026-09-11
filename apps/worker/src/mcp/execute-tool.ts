@@ -9,7 +9,10 @@ import type {
 import { McpPublicError } from "./contracts.js";
 import { logger } from "../infra/logger.js";
 import type { McpRateLimitVerdict } from "../services/mcp/rate-limit-store.js";
-import { configuredSecretValues, mcpSettings } from "../services/settings/index.js";
+import {
+  configuredSecretValues,
+  mcpSettings,
+} from "../services/settings/runtime-settings.js";
 import { authorizeTool, policyFor } from "./policy.js";
 import {
   MCP_CONTRACT_HASH,

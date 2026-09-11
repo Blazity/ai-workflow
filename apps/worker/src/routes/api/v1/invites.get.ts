@@ -1,9 +1,9 @@
 import { defineEventHandler } from "h3";
+import { listInvitesForActor } from "../../../services/auth/dashboard-invites.js";
 import {
-  listInvitesForActor,
   requireDashboardActor,
   toHttpError,
-} from "../../../services/auth/index.js";
+} from "../../../services/auth/request-context.js";
 
 export default defineEventHandler(async (event) => {
   try {

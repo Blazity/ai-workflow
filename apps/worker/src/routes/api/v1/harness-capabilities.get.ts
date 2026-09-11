@@ -11,11 +11,11 @@ import type {
 import {
   requireDashboardActor,
   toHttpError,
-} from "../../../services/auth/index.js";
+} from "../../../services/auth/request-context.js";
 import {
-  HarnessCapabilityCatalogError,
   readCachedHarnessCapabilities,
-} from "../../../services/harness/index.js";
+} from "../../../services/harness/capabilities.js";
+import { HarnessCapabilityCatalogError } from "../../../services/harness/harness-errors.js";
 
 export default defineEventHandler(
   async (event): Promise<HarnessCapabilitiesResponse | undefined> => {

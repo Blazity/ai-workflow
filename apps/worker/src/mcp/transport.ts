@@ -13,13 +13,14 @@ import {
 } from "h3";
 import type { ZodIssue } from "zod";
 
-import { createAdapters } from "../services/vcs/index.js";
+import { createAdapters } from "../services/vcs/adapters.js";
 import { logger } from "../infra/logger.js";
+import { createMcpToolServices } from "../services/mcp/tool-services.js";
+import type { McpToolServices } from "../services/mcp/tool-services.js";
 import {
-  createMcpToolServices,
-  type McpToolServices,
-} from "../services/mcp/index.js";
-import { betterAuthBaseUrl, mcpSettings } from "../services/settings/index.js";
+  betterAuthBaseUrl,
+  mcpSettings,
+} from "../services/settings/runtime-settings.js";
 import {
   MCP_UNRECOGNIZED_TOOL,
   McpPublicError,

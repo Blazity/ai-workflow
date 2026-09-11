@@ -11,13 +11,9 @@ export {
 } from "./capabilities.js";
 export {
   HarnessCapabilityCatalogError,
-} from "../../harness-profiles/capability-catalog.js";
-export {
-  HarnessSkillImportError,
-} from "../../harness-profiles/github-skills.js";
-export {
   HarnessProfileStoreError,
-} from "../../db/repositories/harness-profiles.js";
+  HarnessSkillImportError,
+} from "./harness-errors.js";
 export {
   archiveHarnessProfileDraft,
   createHarnessProfileDraft,

@@ -1,6 +1,6 @@
 import { defineEventHandler, getQuery, setResponseHeader } from "h3";
 import type { WorkflowsResponse } from "@shared/contracts";
-import { listWorkflowAggregates } from "../../../services/run-lifecycle/index.js";
+import { listWorkflowAggregates } from "../../../services/run-lifecycle/run-reads.js";
 
 export default defineEventHandler(async (event): Promise<WorkflowsResponse> => {
   setResponseHeader(

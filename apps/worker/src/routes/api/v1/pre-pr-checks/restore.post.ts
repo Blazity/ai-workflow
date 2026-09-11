@@ -1,8 +1,13 @@
 import { createError, defineEventHandler, readBody } from "h3";
 import type { PrePrCheckSaveResponse } from "@shared/contracts";
 import { parseRequestBody, prePrCheckRestoreRequestSchema } from "@shared/contracts";
-import { requireDashboardActor, toHttpError } from "../../../../services/auth/index.js";
-import { restorePrePrChecksConfiguration } from "../../../../services/pre-pr-checks/index.js";
+import {
+  requireDashboardActor,
+  toHttpError,
+} from "../../../../services/auth/request-context.js";
+import {
+  restorePrePrChecksConfiguration,
+} from "../../../../services/pre-pr-checks/check-configuration.js";
 
 export default defineEventHandler(async (event): Promise<PrePrCheckSaveResponse | undefined> => {
   try {

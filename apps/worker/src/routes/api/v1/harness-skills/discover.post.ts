@@ -5,15 +5,15 @@ import {
   type HarnessSkillDiscoveryResponse,
 } from "@shared/contracts";
 import {
-  canManageHarnessProfiles,
-  DashboardAuthError,
   requireDashboardActor,
   toHttpError,
-} from "../../../../services/auth/index.js";
+} from "../../../../services/auth/request-context.js";
+import { canManageHarnessProfiles } from "../../../../services/auth/roles.js";
+import { DashboardAuthError } from "../../../../services/auth/users-read.js";
+import { HarnessSkillImportError } from "../../../../services/harness/harness-errors.js";
 import {
   discoverGitHubSkillSource,
-  HarnessSkillImportError,
-} from "../../../../services/harness/index.js";
+} from "../../../../services/harness/skill-sources.js";
 import { setHarnessApiNoStore } from "../harness-profiles.get.js";
 
 export function toHarnessSkillHttpError(error: unknown): never {

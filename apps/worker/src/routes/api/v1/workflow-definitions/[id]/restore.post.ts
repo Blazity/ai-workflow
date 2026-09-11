@@ -14,8 +14,10 @@ import {
 import { requireDashboardActor } from "../../../../../services/auth/request-context.js";
 import {
   selectWorkflowDefinitionVersion,
+} from "../../../../../services/workflow-definitions/deployment.js";
+import {
   serializeWorkflowDefinitionVersion,
-} from "../../../../../services/workflow-definitions/index.js";
+} from "../../../../../services/workflow-definitions/definition-store.js";
 import {
   parseDefinitionId,
   serializeDefinitionMeta,

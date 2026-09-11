@@ -5,7 +5,7 @@ import type {
   WorkflowDefinitionV2,
   WorkflowDefinitionV2Node,
 } from "@shared/contracts";
-import { builtinHarnessProfileReference } from "@shared/contracts";
+import { builtinHarnessProfileReference } from "@shared/harness";
 
 export interface V2BlockSpec {
   id: string;

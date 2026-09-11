@@ -3,8 +3,10 @@ import {
   harnessProfileUncheckedRevisionRequestSchema,
   parseRequestBody,
 } from "@shared/contracts";
-import { requireDashboardActor } from "../../../../../services/auth/index.js";
-import { removeHarnessProfile } from "../../../../../services/harness/index.js";
+import { requireDashboardActor } from "../../../../../services/auth/request-context.js";
+import {
+  removeHarnessProfile,
+} from "../../../../../services/harness/profile-authoring.js";
 import {
   parseHarnessProfileId,
   setHarnessApiNoStore,

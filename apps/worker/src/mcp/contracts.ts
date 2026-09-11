@@ -8,7 +8,7 @@
  * tools keep importing them from one place, and adds the one type that only makes
  * sense up here: what a registered tool is handed when it runs.
  */
-import type { Adapters } from "../services/vcs/index.js";
+import type { Adapters } from "../services/vcs/adapters.js";
 import type { McpActorContext } from "../services/mcp/contracts.js";
 import type { McpToolServices } from "../services/mcp/tool-services.js";
 

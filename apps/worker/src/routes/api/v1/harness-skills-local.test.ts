@@ -7,7 +7,7 @@ import type { HarnessProfileDraftManifestV1 } from "@shared/contracts";
 import {
   BUILTIN_HARNESS_PROFILE_IDS,
   BUILTIN_HARNESS_PROFILE_MANIFESTS,
-} from "@shared/contracts";
+} from "@shared/harness";
 import type { Db } from "../../../db/client.js";
 import {
   harnessSkillArtifacts,

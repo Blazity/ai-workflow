@@ -5,7 +5,16 @@
  * this file; the deep imports that predate the rule are listed in
  * scripts/gates/cluster-deep-imports.json and that list only shrinks.
  */
-export * from "../../db/repositories/definitions.js";
+export {
+  serializeWorkflowDefinitionVersion,
+  WorkflowDefinitionStoreError,
+  WorkflowDefinitionValidationError,
+} from "./definition-store.js";
+export type {
+  WorkflowDefinitionDraftRow,
+  WorkflowDefinitionRow,
+  WorkflowDefinitionVersionRow,
+} from "./definition-store.js";
 export {
   archiveWorkflowDefinitionById,
   createWorkflowDefinitionFromSource,
@@ -23,9 +32,11 @@ export type {
 export {
   analyzeWorkflowDefinitionCatalog,
   parseWorkflowDefinitionCandidate,
-  previewWorkflowDefinitionPrompt,
   validateWorkflowDefinitionDraftCandidate,
 } from "./definition-candidates.js";
+export {
+  previewWorkflowDefinitionPrompt,
+} from "./prompt-preview-candidate.js";
 export type {
   WorkflowDefinitionCandidateParse,
 } from "./definition-candidates.js";
@@ -54,7 +65,6 @@ export {
   deriveScheduleState,
   findTriggerScheduleRow,
   pauseTriggerSchedule,
-  readTriggerRejectionsToday,
   readTriggerScheduleConfig,
   resumeTriggerSchedule,
 } from "./trigger-schedules.js";
@@ -66,6 +76,10 @@ export type {
   TriggerScheduleMutation,
 } from "./trigger-schedules.js";
 export {
+  readTriggerRejectionsToday,
+  webhookRejectionsToday,
+} from "./trigger-rejection-counts.js";
+export {
   findWebhookEndpoint,
   importWebhookSecret,
   listWebhookEndpointDeliveries,
@@ -74,7 +88,6 @@ export {
   reviveWebhookEndpoint,
   revokeWebhookEndpointForNode,
   rotateWebhookSecret,
-  webhookRejectionsToday,
 } from "./trigger-webhooks.js";
 export type {
   WebhookEndpointState,
@@ -90,3 +103,4 @@ export type {
   WebhookEndpointTarget,
   WebhookTestDeliveryResult,
 } from "./webhook-endpoint-nodes.js";
+export { runnableDefinitionOf } from "../../db/repositories/definitions.js";

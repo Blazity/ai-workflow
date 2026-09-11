@@ -6,7 +6,7 @@ import {
 } from "../../../../../../../services/auth/request-context.js";
 import {
   readTriggerRejectionsToday,
-} from "../../../../../../../services/workflow-definitions/trigger-schedules.js";
+} from "../../../../../../../services/workflow-definitions/trigger-rejection-counts.js";
 import { parseDefinitionId } from "../../../../workflow-definitions.get.js";
 
 export interface TriggerRejectionsResponse {

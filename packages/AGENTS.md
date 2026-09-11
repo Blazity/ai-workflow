@@ -5,18 +5,20 @@ Last-verified: 2026-09-11
 
 Workspace packages shared by the worker and the dashboard. `contracts` holds
 cross-application shapes and constants; `conditions` evaluates predicates;
-`costs` prices provider usage and aggregates it; `skills` owns browser-safe
-product skill contracts and validation. These pure packages may import
-`contracts` but never application infrastructure. ADR-001 owns the tiers.
+`costs` prices provider usage; `harness` owns model policy and built-in
+compatibility profiles; `prompts` owns prompt composition; and `skills`
+owns browser-safe product skill contracts and validation. These pure packages
+may import another shared package only through its public entry point and never
+application infrastructure. ADR-001 owns the tiers.
 
 ## The rules that bind
 
 - **Source entry, no build.** `main`, `types` and `exports["."]` all point at
   `index.ts`. There is no `dist`, no `build` script and no `build:shared`
   anywhere. Nitro and Next inline the source into their own bundles.
-- **No app imports a package's internals.** `exports` exposes `.` only, so
-  `@shared/contracts` is the single entry. Add a re-export to `index.ts`
-  instead of deepening an import.
+- **No app imports a package's internals.** Every `exports` map exposes `.`
+  only. Import a package through its public entry and add a re-export to its
+  `index.ts` instead of deepening an import.
 - **Relative specifiers carry no extension.** Write `from "./domain"`, never
   `from "./domain.js"`. Nitro tolerates the `.js` form, webpack does not, and
   the failure appears only in the dashboard build.

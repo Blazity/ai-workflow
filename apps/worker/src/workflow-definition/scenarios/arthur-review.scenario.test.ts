@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-  resolveBuiltinHarnessProfile,
   type BlockOutput,
   type HarnessProfileReference,
   type HarnessProfileResolvedVersion,
@@ -14,6 +13,7 @@ import {
   type WorkflowDefinitionV2,
   type WorkflowDefinitionV2Node,
 } from "@shared/contracts";
+import { resolveBuiltinHarnessProfile } from "@shared/harness";
 import { hashHarnessProfileManifest } from "../../harness-profiles/manifest.js";
 import type { PrTriggerType } from "../../engine/agent-input.js";
 import type { AgentWorkflowInput } from "../../engine/agent-input.js";

@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-import { dashboardOrigin } from "../../services/settings/index.js";
-import { promptLibraryUrl } from "../../services/publication/index.js";
+import { dashboardOrigin } from "../../services/settings/runtime-settings.js";
+import { promptLibraryUrl } from "../../services/publication/dashboard-links.js";
 import { builtInPromptNameForSlug } from "@shared/prompts";
 import {
   PromptLibraryStoreError,

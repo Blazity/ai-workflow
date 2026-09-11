@@ -14,7 +14,7 @@ import {
 } from "../../../../../services/auth/request-context.js";
 import {
   previewWorkflowDefinitionPrompt,
-} from "../../../../../services/workflow-definitions/definition-candidates.js";
+} from "../../../../../services/workflow-definitions/prompt-preview-candidate.js";
 import {
   activeWorkflowDefinitionExists,
 } from "../../../../../services/workflow-definitions/definition-reads.js";

@@ -7,7 +7,6 @@
  * values rather than exceptions, because the same missing row means 404 in one
  * route and 409 in another depending on what the caller was trying to do.
  */
-import type { WebhookRejectionSummaryEntry } from "@shared/contracts";
 import { getDb } from "../../db/client.js";
 import { listRecentWebhookDeliveries } from "../../webhook-trigger/delivery-store.js";
 import {
@@ -23,7 +22,6 @@ import {
   type WebhookEndpointRow,
 } from "../../webhook-trigger/endpoint-store.js";
 import { getEnabledDeployedDefinition } from "../../db/repositories/definitions.js";
-import { getWebhookRejectionsToday } from "../webhook-trigger/index.js";
 import {
   auditWebhookAction,
   mintMissingEndpoint,
@@ -39,14 +37,6 @@ export function findWebhookEndpoint(
   target: WebhookEndpointTarget,
 ): Promise<WebhookEndpointRow | null> {
   return getWebhookEndpointForNode(getDb(), target.definitionId, target.nodeId);
-}
-
-/** Today's pre-dispatch refusals for one endpoint, grouped by reason. */
-export function webhookRejectionsToday(
-  endpointId: string,
-  now: Date,
-): Promise<WebhookRejectionSummaryEntry[]> {
-  return getWebhookRejectionsToday(getDb(), endpointId, now);
 }
 
 /** Recent deliveries for one endpoint, newest first. */

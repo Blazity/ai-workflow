@@ -13,8 +13,10 @@ import { requireDashboardActor } from "../../../services/auth/request-context.js
 import { canEditWorkflowDefinitions } from "../../../services/auth/roles.js";
 import {
   createWorkflowDefinitionFromSource,
+} from "../../../services/workflow-definitions/definition-authoring.js";
+import {
   serializeWorkflowDefinitionVersion,
-} from "../../../services/workflow-definitions/index.js";
+} from "../../../services/workflow-definitions/definition-store.js";
 import {
   serializeDefinitionMeta,
   toWorkflowDefinitionHttpError,

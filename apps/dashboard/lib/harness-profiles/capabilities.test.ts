@@ -3,10 +3,12 @@ import test from "node:test";
 
 import { previewHarnessCapabilities } from "./capabilities";
 import {
-  BUILTIN_HARNESS_PROFILE_IDS,
-  BUILTIN_HARNESS_PROFILE_MANIFESTS,
   type HarnessProfileManifestV1,
 } from "@shared/contracts";
+import {
+  BUILTIN_HARNESS_PROFILE_IDS,
+  BUILTIN_HARNESS_PROFILE_MANIFESTS,
+} from "@shared/harness";
 
 function manifest(
   overrides: Partial<HarnessProfileManifestV1> = {},

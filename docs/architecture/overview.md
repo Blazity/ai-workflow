@@ -93,7 +93,12 @@ engine. A route that imports `services/auth/index.js` for the request actor
 pulls about 400 modules and 51 `"use step"` files where the module it actually
 needs pulls under 30 and none, and `/health` has to answer while the deployment
 is degraded. So a route, an MCP file, middleware or a plugin names the cluster
-module it uses; only clusters name each other's interfaces.
+module it uses; only clusters name each other's interfaces. A symbol more
+than one cluster raises belongs below them for the same reason:
+`TriggerHttpError` lives in `infra/trigger-http-error.ts`, so the email and
+Slack services throw the refusal without importing the trigger cluster's
+interface, and `services/triggers/trigger-http-error.ts` re-exports it for the
+webhook routes, which may import `services` but not `infra`.
 
 ## Where to read next
 

@@ -1,0 +1,15 @@
+export {
+  BUILTIN_HARNESS_PROFILE_IDS,
+  BUILTIN_HARNESS_PROFILE_MANIFESTS,
+  CALL_LLM_DEFAULT_MODEL,
+  CODE_HYGIENE_DEFAULT_MODEL,
+  DEFAULT_MODELS,
+  REPO_MEMORY_DISTILL_CODEX_MODEL,
+  builtinHarnessProfileReference,
+  isRecognisedModel,
+  recognised,
+  resolveModelDefaults,
+  resolveBuiltinHarnessProfile,
+  selectable,
+  type ModelProviderContract,
+} from "./model-catalog";

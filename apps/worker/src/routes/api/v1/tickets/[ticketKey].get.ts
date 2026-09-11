@@ -3,7 +3,7 @@ import type { TicketRunsResponse } from "@shared/contracts";
 import {
   listTicketRuns,
   ticketKeyFromPathSegment,
-} from "../../../../services/tickets/index.js";
+} from "../../../../services/tickets/ticket-runs-read.js";
 
 export default defineEventHandler(async (event): Promise<TicketRunsResponse> => {
   setResponseHeader(

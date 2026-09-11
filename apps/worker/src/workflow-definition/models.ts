@@ -1,4 +1,9 @@
 import type { WorkflowEditorOptions } from "@shared/contracts";
+import {
+  recognised,
+  resolveModelDefaults,
+  selectable,
+} from "@shared/harness";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 import { env } from "../config/env.js";
 import { resolveVcsBotLogin } from "../services/vcs/vcs-bot-identity.js";
@@ -8,10 +13,7 @@ import {
 } from "./block-registry.js";
 import { RUN_BINDING_SCHEMA } from "./bindings.js";
 
-export const FALLBACK_MODELS = {
-  claude: ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"],
-  codex: ["gpt-5.4", "gpt-5", "gpt-5-mini"],
-};
+export const FALLBACK_MODELS = recognised;
 
 export interface AvailableModels {
   claude: string[];
@@ -52,44 +54,51 @@ export async function fetchTicketStatuses(
 
 async function fetchClaudeModels(): Promise<string[]> {
   const apiKey = env.ANTHROPIC_API_KEY;
-  if (!apiKey) return FALLBACK_MODELS.claude;
+  if (!apiKey) return [...FALLBACK_MODELS.claude];
   try {
     const response = await fetch("https://api.anthropic.com/v1/models", {
       headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
-    if (!response.ok) return FALLBACK_MODELS.claude;
+    if (!response.ok) return [...FALLBACK_MODELS.claude];
     const body = (await response.json()) as { data?: { id?: unknown }[] };
     const ids = (body.data ?? [])
       .map((entry) => entry.id)
       .filter((id): id is string => typeof id === "string" && id.length > 0)
       .slice(0, MODEL_LIST_CAP);
-    return ids.length > 0 ? ids : FALLBACK_MODELS.claude;
+    return ids.length > 0 ? ids : [...FALLBACK_MODELS.claude];
   } catch {
-    return FALLBACK_MODELS.claude;
+    return [...FALLBACK_MODELS.claude];
   }
 }
 
 async function fetchCodexModels(): Promise<string[]> {
   const apiKey = env.CODEX_API_KEY;
-  if (!apiKey) return FALLBACK_MODELS.codex;
+  if (!apiKey) return [...FALLBACK_MODELS.codex];
   try {
     const response = await fetch("https://api.openai.com/v1/models", {
       headers: { Authorization: `Bearer ${apiKey}` },
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
-    if (!response.ok) return FALLBACK_MODELS.codex;
+    if (!response.ok) return [...FALLBACK_MODELS.codex];
     const body = (await response.json()) as { data?: { id?: unknown }[] };
     const ids = (body.data ?? [])
       .map((entry) => entry.id)
       .filter((id): id is string => typeof id === "string" && id.length > 0)
-      .filter((id) => (id.startsWith("gpt-5") || id.includes("codex")) && !DATED_SNAPSHOT.test(id))
+      .filter((id) => isCodexDiscoveryModelId(id) && !DATED_SNAPSHOT.test(id))
       .sort((a, b) => b.localeCompare(a))
       .slice(0, MODEL_LIST_CAP);
-    return ids.length > 0 ? ids : FALLBACK_MODELS.codex;
+    return ids.length > 0 ? ids : [...FALLBACK_MODELS.codex];
   } catch {
-    return FALLBACK_MODELS.codex;
+    return [...FALLBACK_MODELS.codex];
   }
+}
+
+function isCodexDiscoveryModelId(modelId: string): boolean {
+  return (
+    recognised.codex.some((catalogId) => modelId.startsWith(catalogId)) ||
+    modelId.includes("codex")
+  );
 }
 
 export function buildWorkflowEditorOptions(
@@ -97,15 +106,25 @@ export function buildWorkflowEditorOptions(
   discoveredTicketStatuses: Array<{ id: string; name: string }> = [],
 ): WorkflowEditorOptions {
   const agentKind = env.AGENT_KIND;
-  const defaultModel = agentKind === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL;
+  const configuredModels = resolveModelDefaults({
+    claude: env.CLAUDE_MODEL,
+    codex: env.CODEX_MODEL,
+  });
+  const defaultModel = configuredModels[agentKind];
   const ticketStatuses = dedupeTicketStatuses(discoveredTicketStatuses);
   return {
     agentKind,
     defaultModel,
-    defaultModels: { claude: env.CLAUDE_MODEL, codex: env.CODEX_MODEL },
+    defaultModels: configuredModels,
     models: {
-      claude: dedupePrepend(env.CLAUDE_MODEL, models.claude),
-      codex: dedupePrepend(env.CODEX_MODEL, models.codex),
+      claude: selectable({
+        provider: "claude",
+        modelIds: dedupePrepend(configuredModels.claude, models.claude),
+      }),
+      codex: selectable({
+        provider: "codex",
+        modelIds: dedupePrepend(configuredModels.codex, models.codex),
+      }),
     },
     ticketStatusTargets:
       ticketStatuses.length > 0
@@ -138,6 +157,10 @@ function dedupeTicketStatuses(
 }
 
 export function workflowBlockRegistryContextFromEnv(): WorkflowBlockRegistryContext {
+  const configuredModels = resolveModelDefaults({
+    claude: env.CLAUDE_MODEL,
+    codex: env.CODEX_MODEL,
+  });
   const vcsProviders: WorkflowBlockRegistryContext["vcsProviders"] = [];
   if (env.GITHUB_APP_ID && env.GITHUB_APP_PRIVATE_KEY && env.GITHUB_INSTALLATION_ID) {
     vcsProviders.push("github");
@@ -156,7 +179,7 @@ export function workflowBlockRegistryContextFromEnv(): WorkflowBlockRegistryCont
     },
     defaultAgent: {
       provider: env.AGENT_KIND,
-      model: env.AGENT_KIND === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL,
+      model: configuredModels[env.AGENT_KIND],
     },
     vcsProviders,
     vcsBotIdentities: vcsProviders.filter((provider) =>

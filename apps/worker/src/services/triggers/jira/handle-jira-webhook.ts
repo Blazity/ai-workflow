@@ -21,7 +21,7 @@ import {
   isAiReviewDestination,
 } from "../../tickets/index.js";
 import { createAdapters } from "../../vcs/index.js";
-import { TriggerHttpError } from "../trigger-http-error.js";
+import { TriggerHttpError } from "../../../infra/trigger-http-error.js";
 
 /**
  * The Jira webhook, from verified bytes to a decision.

@@ -7,8 +7,8 @@ import type {
 import {
   BUILTIN_HARNESS_PROFILE_IDS,
   BUILTIN_HARNESS_PROFILE_MANIFESTS,
-  HARNESS_SKILL_IMPORT_LIMITS,
-} from "@shared/contracts";
+} from "@shared/harness";
+import { HARNESS_SKILL_IMPORT_LIMITS } from "@shared/contracts";
 import { hashHarnessProfileManifest } from "../harness-profiles/manifest.js";
 import { resolveHarnessRuntime } from "./harness-runtime.js";
 

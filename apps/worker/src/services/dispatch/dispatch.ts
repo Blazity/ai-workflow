@@ -22,9 +22,7 @@ import {
   type TriggerRateLimitNodeParams,
   type TriggerRateLimitWindow,
 } from "./trigger-rate-limit.js";
-import {
-  type AgentWorkflowInput,
-} from "../../engine/index.js";
+import type { AgentWorkflowInput } from "../../engine/index.js";
 import { BUILTIN_FALLBACK_DEFINITION_VERSION } from "../../engine/agent-input.js";
 import { agentWorkflow } from "../../engine/index.js";
 import { hasDispatchBlockingApprovalForTicket } from "../../db/repositories/approvals.js";

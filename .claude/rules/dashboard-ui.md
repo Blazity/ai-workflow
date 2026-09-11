@@ -5,6 +5,9 @@ paths:
 
 # Dashboard UI
 
+- Browser requests use `lib/api/client.ts`. Raw `fetch` belongs only in that
+  browser endpoint client and the server-only transports `lib/api/server.ts`,
+  `lib/api/proxy.ts`, and `lib/auth/worker-core.ts`.
 - The worker's store is the authority on run state. The live overlay is a view:
   when a polled overlay and the stored run disagree, the store wins. Making the
   overlay authoritative is what produced phantom "running" runs.

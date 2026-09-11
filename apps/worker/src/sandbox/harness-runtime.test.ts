@@ -9,7 +9,7 @@ import type {
 import {
   BUILTIN_HARNESS_PROFILE_MANIFESTS,
   BUILTIN_HARNESS_PROFILE_IDS,
-} from "@shared/contracts";
+} from "@shared/harness";
 import { hashHarnessProfileManifest } from "../harness-profiles/manifest.js";
 import { hashHarnessSkillArtifact } from "@shared/skills";
 import { sha256Digest } from "../harness-profiles/skill-artifact-digest.js";

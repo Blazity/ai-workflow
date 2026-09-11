@@ -3,8 +3,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CostResponse, RunStatus } from "@shared/contracts";
 
 
-import type { McpStatsWindow } from "../../services/mcp/index.js";
-import { issueTrackerBaseUrl } from "../../services/settings/index.js";
+import type { McpStatsWindow } from "../../services/mcp/tool-services.js";
+import { issueTrackerBaseUrl } from "../../services/settings/integration-settings.js";
 import { isTerminalRunStatus, type McpToolDependencies } from "../contracts.js";
 import { executeMcpRead } from "../execute-tool.js";
 import { registerCatalogTool } from "../tool-catalog.js";

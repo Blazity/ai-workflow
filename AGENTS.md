@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-09
+Last-verified: 2026-09-11
 
 # AGENTS.md
 
@@ -90,7 +90,8 @@ a `PASS`, and a later result does not erase an earlier `FAIL`.
 
 `pnpm run verify:changed` resolves the base from the branch upstream, then
 `origin/HEAD`, then `origin/main`, and never fetches; pass `-- --base <ref>` to
-override. Enable it as a hook once with
+override. The Claude Stop hook adds `--worktree` so committed, staged, unstaged
+and untracked paths are planned together. Enable the pre-push hook once with
 `git config --local core.hooksPath .githooks`, but only if that setting is
 currently empty. The gate is advisory and bypassable: `git push --no-verify` is
 an audited bypass, so record why it was used and do not report the gate as

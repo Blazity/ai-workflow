@@ -10,6 +10,7 @@ import {
   pinsDeploymentSkill,
 } from "./profile-editor";
 import type {
+  HarnessCapabilitiesResponse,
   HarnessLocalSkillDiscoveryResponse,
   HarnessProfileDetailResponse,
   HarnessProfileDto,
@@ -18,10 +19,29 @@ import type {
 import {
   BUILTIN_HARNESS_PROFILE_IDS,
   BUILTIN_HARNESS_PROFILE_MANIFESTS,
-} from "@shared/contracts";
+} from "@shared/harness";
 import { isGitHubSkillSource } from "@shared/skills";
+import { selectableHarnessModels } from "@/lib/harness-profiles/editor";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
+
+function modelCapability(
+  id: string,
+): HarnessCapabilitiesResponse["models"][number] {
+  return {
+    id,
+    name: `Name ${id}`,
+    description: null,
+    contextWindowTokens: null,
+    reasoningEfforts: [],
+    defaultReasoningEffort: null,
+    serviceTiers: [],
+    defaultServiceTier: null,
+    verbosityOptions: [],
+    defaultVerbosity: null,
+    compactionModes: ["model_default"],
+  };
+}
 
 function profile(
   overrides: Partial<HarnessProfileDto> = {},
@@ -123,6 +143,29 @@ test("editable profiles expose the complete manifest and skill authoring", () =>
   assert.match(html, /Save draft/);
   assert.match(html, /Publish/);
   assert.doesNotMatch(html, /preset/i);
+});
+
+test("the rendered Listbox receives the exact filtered model option sequence", () => {
+  const harness =
+    BUILTIN_HARNESS_PROFILE_MANIFESTS[BUILTIN_HARNESS_PROFILE_IDS.codex]
+      .harness;
+  const capabilities: HarnessCapabilitiesResponse = {
+    ...harness,
+    models: [
+      modelCapability("gpt-5-mini"),
+      modelCapability("gpt-5.5"),
+      modelCapability("gpt-5.4"),
+    ],
+    catalogHash: "catalog-current",
+    fetchedAt: "2026-09-11T00:00:00.000Z",
+    stale: false,
+    refreshFailure: null,
+  };
+
+  assert.deepEqual(
+    selectableHarnessModels(capabilities).map((model) => model.id),
+    ["gpt-5-mini", "gpt-5.4"],
+  );
 });
 
 test("unsupported runtime declarations stay readable but cannot be edited", () => {

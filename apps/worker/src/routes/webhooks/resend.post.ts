@@ -1,7 +1,8 @@
 import { createError, defineEventHandler, getHeader, readRawBody } from "h3";
-import { handleResendWebhook } from "../../services/email/index.js";
-// The module that owns the error type, not the barrel: this route dispatches
+import { handleResendWebhook } from "../../services/email/resend-webhook.js";
+// The cluster's name for the refusal, not the barrel: this route dispatches
 // nothing through the trigger cluster, it only maps that refusal to a status.
+// The class itself lives in infra/, which the app tier may not import.
 import { TriggerHttpError } from "../../services/triggers/trigger-http-error.js";
 
 /**

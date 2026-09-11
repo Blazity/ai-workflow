@@ -4,6 +4,7 @@ paths:
   - "apps/worker/drizzle/**"
   - "apps/worker/scripts/db-migrate.ts"
   - "apps/worker/src/**/store.ts"
+  - "apps/worker/src/services/auth/**"
 ---
 
 # Worker database and migrations

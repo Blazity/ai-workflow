@@ -7,10 +7,12 @@ import type {
   WorkflowDefinitionValidationIssue,
 } from "@shared/contracts";
 import {
-  BUILTIN_HARNESS_PROFILE_MANIFESTS,
-  builtinHarnessProfileReference,
   isHarnessProfileReference,
 } from "@shared/contracts";
+import {
+  BUILTIN_HARNESS_PROFILE_MANIFESTS,
+  builtinHarnessProfileReference,
+} from "@shared/harness";
 import type { Db } from "../db/client.js";
 import { organization } from "../db/schema.js";
 import {

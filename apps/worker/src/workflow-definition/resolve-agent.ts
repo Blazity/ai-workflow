@@ -1,8 +1,8 @@
 import type { AgentKind } from "../sandbox/agents/index.js";
 import {
   isHarnessProfileReference,
-  resolveBuiltinHarnessProfile,
 } from "@shared/contracts";
+import { resolveBuiltinHarnessProfile } from "@shared/harness";
 
 export interface ResolvedAgent {
   kind: AgentKind;

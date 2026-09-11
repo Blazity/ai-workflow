@@ -1,6 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-import type { AnswerClarificationOutcome } from "../../services/clarifications/index.js";
+import type {
+  AnswerClarificationOutcome,
+} from "../../services/clarifications/answer-core.js";
 import type { HookClarificationRow } from "../../clarifications/hook-store.js";
 import { McpPublicError, type McpToolDependencies } from "../contracts.js";
 import { executeMcpMutation, executeMcpRead } from "../execute-tool.js";

@@ -1,20 +1,9 @@
 /**
- * A refusal a trigger service decided, carrying the exact HTTP answer the route
- * must send.
+ * The trigger refusal, named inside this cluster for the app tier.
  *
- * The status and message are part of a provider's contract with us: Jira retries
- * a 503 and gives up on a 401, so they are behaviour, not presentation. The route
- * still owns the translation into an H3 error, which is why this is a plain error
- * class and not `createError`: no service reaches for the server runtime.
+ * The class itself lives in `infra/trigger-http-error.ts`, because the email and
+ * Slack services throw it too and must not import this cluster to do so. A route
+ * may import `services`, not `infra` (ADR-001), so the webhook routes that map
+ * the refusal onto a status keep naming this module.
  */
-export class TriggerHttpError extends Error {
-  constructor(
-    readonly statusCode: number,
-    readonly statusMessage: string,
-    /** Body the provider sees alongside the status, when there is one to send. */
-    readonly data?: Record<string, unknown>,
-  ) {
-    super(statusMessage);
-    this.name = "TriggerHttpError";
-  }
-}
+export { TriggerHttpError } from "../../infra/trigger-http-error.js";

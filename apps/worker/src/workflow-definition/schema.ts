@@ -23,9 +23,9 @@ import {
   isTriggerBlockType,
   isV2AgentBlockType,
   isWorkflowAddressablePathSegment,
-  resolveBuiltinHarnessProfile,
   evaluateWorkflowValueCompatibility,
 } from "@shared/contracts";
+import { resolveBuiltinHarnessProfile } from "@shared/harness";
 import { PROMPT_SLOT_NAME_PATTERN } from "@shared/prompts";
 import { parseCondition } from "@shared/conditions";
 import {

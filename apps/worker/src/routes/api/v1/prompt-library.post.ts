@@ -4,8 +4,8 @@ import {
   promptLibraryCreateRequestSchema,
   type PromptLibraryDetailResponse,
 } from "@shared/contracts";
-import { requireDashboardActor } from "../../../services/auth/index.js";
-import { createPromptEntry } from "../../../services/prompts/index.js";
+import { requireDashboardActor } from "../../../services/auth/request-context.js";
+import { createPromptEntry } from "../../../services/prompts/prompt-library-writes.js";
 import { toPromptLibraryHttpError } from "./prompt-library.get.js";
 
 export default defineEventHandler(

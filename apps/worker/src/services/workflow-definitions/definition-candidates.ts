@@ -16,10 +16,6 @@ import { analyzeWorkflowV2Catalog } from "../../workflow-definition/available-va
 import { workflowBlockRegistryContextFromEnv } from "../../workflow-definition/models.js";
 import { validateWorkflowDefinitionCandidateWithPromptAuthoring } from "../../workflow-definition/prompt-authoring.js";
 import {
-  previewWorkflowPromptCandidate,
-  type WorkflowPromptPreviewResult,
-} from "../../workflow-definition/prompt-preview.js";
-import {
   describeWorkflowDefinitionIssues,
   workflowDefinitionV2Schema,
 } from "../../workflow-definition/schema.js";
@@ -67,19 +63,4 @@ export function analyzeWorkflowDefinitionCatalog(
   definition: WorkflowDefinitionV2,
 ): WorkflowDefinitionCatalogResponse {
   return analyzeWorkflowV2Catalog(definition, workflowBlockRegistryContextFromEnv());
-}
-
-/** What one block's prompt would render to, for a candidate the editor holds. */
-export function previewWorkflowDefinitionPrompt(input: {
-  candidate: unknown;
-  blockId: string;
-  organizationId?: string;
-}): Promise<WorkflowPromptPreviewResult> {
-  return previewWorkflowPromptCandidate(
-    getDb(),
-    input.candidate,
-    input.blockId,
-    workflowBlockRegistryContextFromEnv(),
-    { organizationId: input.organizationId },
-  );
 }

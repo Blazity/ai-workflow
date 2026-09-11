@@ -29,7 +29,6 @@ import type {
   HarnessResolvedSkillArtifact,
   HarnessSkillSource,
 } from "@shared/contracts";
-import { BUILTIN_HARNESS_PROFILE_MANIFESTS } from "@shared/contracts";
 import {
   BUILTIN_HARNESS_PROFILE_IDS,
   type HarnessProvider,
@@ -49,6 +48,7 @@ import {
 import { DashboardAuthError } from "../../services/auth/users-read.js";
 import { isUniqueViolation } from "../../infra/unique-violation.js";
 import {
+  BUILTIN_HARNESS_PROFILE_MANIFESTS,
   compileHarnessProfileManifest,
   HarnessProfileManifestError,
   hashHarnessProfileManifest,

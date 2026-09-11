@@ -8,14 +8,14 @@ import {
 } from "h3";
 import type { HarnessProfilesResponse } from "@shared/contracts";
 import {
-  canManageHarnessProfiles,
   requireDashboardActor,
   toHttpError,
-} from "../../../services/auth/index.js";
+} from "../../../services/auth/request-context.js";
+import { canManageHarnessProfiles } from "../../../services/auth/roles.js";
+import { HarnessProfileStoreError } from "../../../services/harness/harness-errors.js";
 import {
-  HarnessProfileStoreError,
   listHarnessProfilesForOrganization,
-} from "../../../services/harness/index.js";
+} from "../../../services/harness/profile-reads.js";
 
 export function parseHarnessProfileId(event: H3Event): string {
   const id = getRouterParam(event, "id");

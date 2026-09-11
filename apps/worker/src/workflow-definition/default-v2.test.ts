@@ -4,7 +4,7 @@ import {
   BUILTIN_HARNESS_PROFILE_MANIFESTS,
   builtinHarnessProfileReference,
   resolveBuiltinHarnessProfile,
-} from "@shared/contracts";
+} from "@shared/harness";
 import type { WorkflowBlockRegistryContext } from "./block-registry.js";
 import { defaultWorkflowDefinitionV2 } from "./default.js";
 import {

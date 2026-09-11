@@ -6,7 +6,7 @@ import type {
   ManualDispatchPreflightResponse,
   ManualDispatchResponse,
 } from "@shared/contracts";
-import { ManualDispatchError } from "../../services/manual-dispatch/index.js";
+import { ManualDispatchError } from "../../services/manual-dispatch/errors.js";
 import {
   McpPublicError,
   type McpErrorCode,
