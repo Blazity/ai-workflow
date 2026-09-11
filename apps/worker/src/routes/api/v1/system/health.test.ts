@@ -103,7 +103,7 @@ describe("POST /api/v1/system/health", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(await response.json()).toEqual(fixture);
     expect(state.collect).toHaveBeenCalledOnce();
-    expect(state.save).toHaveBeenCalledWith({}, fixture);
+    expect(state.save).toHaveBeenCalledWith(fixture);
   });
 });
 

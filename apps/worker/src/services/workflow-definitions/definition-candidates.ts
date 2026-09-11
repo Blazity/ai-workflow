@@ -11,10 +11,9 @@ import type {
   WorkflowDefinitionV2,
 } from "@shared/contracts";
 import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
-import { getDb } from "../../db/client.js";
 import { analyzeWorkflowV2Catalog } from "../../workflow-definition/available-values.js";
 import { workflowBlockRegistryContextFromEnv } from "../../workflow-definition/models.js";
-import { validateWorkflowDefinitionCandidateWithPromptAuthoring } from "../../workflow-definition/prompt-authoring.js";
+import { validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring } from "./policy-operations.js";
 import {
   describeWorkflowDefinitionIssues,
   workflowDefinitionV2Schema,
@@ -49,11 +48,7 @@ export function parseWorkflowDefinitionCandidate(
  *  candidate is a validation result, not a bad request: the editor renders the
  *  issues in the same panel either way. */
 export async function validateWorkflowDefinitionDraftCandidate(candidate: unknown) {
-  const validation = await validateWorkflowDefinitionCandidateWithPromptAuthoring(
-    getDb(),
-    candidate,
-    workflowBlockRegistryContextFromEnv(),
-  );
+  const validation = await validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring(candidate);
   return validation.response;
 }
 

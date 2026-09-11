@@ -80,11 +80,18 @@ vi.mock("../fix-workspace-state.js", async (importOriginal) => ({
 vi.mock("../../../db/client.js", () => ({ getDb: () => ({}) }));
 vi.mock("../../../db/repositories/runs.js", () => ({
   findRunPrSiblings: mocks.findRunPrSiblings,
+  findConnectedRunPrSiblings: mocks.findRunPrSiblings,
   findWorkflowOwnedPullRequestIdentity: (...args: any[]) =>
+    mocks.findWorkflowOwnedPullRequestIdentity(...args),
+  findConnectedWorkflowOwnedPullRequestIdentity: (...args: any[]) =>
     mocks.findWorkflowOwnedPullRequestIdentity(...args),
   upsertWorkflowOwnedBranch: (...args: any[]) =>
     mocks.upsertWorkflowOwnedBranch(...args),
+  upsertConnectedWorkflowOwnedBranch: (...args: any[]) =>
+    mocks.upsertWorkflowOwnedBranch(...args),
   recordWorkflowOwnedPullRequestPublishedHead: (...args: any[]) =>
+    mocks.recordWorkflowOwnedPullRequestPublishedHead(...args),
+  recordConnectedWorkflowOwnedPullRequestPublishedHead: (...args: any[]) =>
     mocks.recordWorkflowOwnedPullRequestPublishedHead(...args),
 }));
 vi.mock("../../steps/trusted-workspace-publisher.js", () => ({

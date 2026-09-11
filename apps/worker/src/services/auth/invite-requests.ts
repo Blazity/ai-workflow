@@ -7,12 +7,11 @@
  * or which database holds them. The Better Auth instance still arrives from the
  * caller: it is built in the app tier, and no service constructs one.
  */
-import { getDb } from "../../db/client.js";
 import { dashboardOrganizationSettings } from "../settings/index.js";
 import {
-  acceptDashboardInvite,
-  acceptDashboardSsoInvite,
-  getDashboardInviteAcceptanceState,
+  acceptConnectedDashboardInvite,
+  acceptConnectedDashboardSsoInvite,
+  getConnectedDashboardInviteAcceptanceState,
   type AcceptDashboardInviteResult,
   type DashboardInviteAcceptanceState,
 } from "./invite-acceptance.js";
@@ -22,14 +21,14 @@ import {
  * to. Naming the type would import the app tier into a service, and this
  * cluster's ceiling on that edge is already at its baseline.
  */
-type Auth = Parameters<typeof acceptDashboardInvite>[1];
+type Auth = Parameters<typeof acceptConnectedDashboardInvite>[0];
 
 /** What the acceptance screen renders: who the invite is for, and how they sign in. */
 export function readDashboardInviteAcceptance(
   auth: Auth,
   inviteId: string,
 ): Promise<DashboardInviteAcceptanceState> {
-  return getDashboardInviteAcceptanceState(getDb(), auth, {
+  return getConnectedDashboardInviteAcceptanceState(auth, {
     organizationSlug: dashboardOrganizationSettings().slug,
     inviteId,
   });
@@ -40,7 +39,7 @@ export function acceptDashboardInviteWithPassword(
   auth: Auth,
   input: { inviteId: string; name?: string; password: string },
 ): Promise<AcceptDashboardInviteResult> {
-  return acceptDashboardInvite(getDb(), auth, {
+  return acceptConnectedDashboardInvite(auth, {
     organizationSlug: dashboardOrganizationSettings().slug,
     inviteId: input.inviteId,
     name: input.name,
@@ -53,7 +52,7 @@ export function acceptDashboardSsoInviteForUser(
   auth: Auth,
   input: { inviteId: string; user: { id: string; email: string } },
 ): Promise<void> {
-  return acceptDashboardSsoInvite(getDb(), auth, {
+  return acceptConnectedDashboardSsoInvite(auth, {
     organizationSlug: dashboardOrganizationSettings().slug,
     inviteId: input.inviteId,
     user: input.user,

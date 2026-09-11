@@ -1,6 +1,6 @@
 import { getRun } from "workflow/api";
 import { logger } from "../../infra/logger.js";
-import type { Db } from "../../db/client.js";
+import type { Db } from "../../db/types.js";
 import type {
   ActiveRunEntry,
   RunRegistryAdapter,
@@ -113,12 +113,8 @@ export async function cancelRunDetailed(
   const subjectKey = ticketSubjectKey("jira", ticketKey);
   const confirmTicketMove = issueTracker && targetColumn
     ? async (owner: { subjectKey: string; ownerToken: string; runId: string | null }) => {
-      const [{ getDb }, { moveTicketForRun }] = await Promise.all([
-        import("../../db/client.js"),
-        import("../tickets/ticket-transition.js"),
-      ]);
-      await moveTicketForRun({
-        db: getDb(),
+      const { moveConnectedTicketForRun } = await import("../tickets/ticket-transition.js");
+      await moveConnectedTicketForRun({
         issueTracker,
         ticketKey,
         target: targetColumn,
@@ -213,16 +209,16 @@ export interface CancelRunByIdDeps {
  * no-op report). Absent from both -> the run id is unknown.
  */
 export async function cancelRunById(
-  db: Db,
+  _db: Db,
   runId: string,
   opts: CancelRunByIdDeps,
 ): Promise<CancelRunByIdResult> {
   const { actorLabel, runRegistry } = opts;
-  const { findLiveRunClaimByRunId, findRunOutcomeByRunId } = await import(
+  const { findConnectedLiveRunClaimByRunId, findConnectedRunOutcomeByRunId } = await import(
     "../../db/repositories/runs.js"
   );
 
-  const claim = await findLiveRunClaimByRunId(db, runId);
+  const claim = await findConnectedLiveRunClaimByRunId(runId);
   if (claim) {
     const reason = `cancelled by ${actorLabel}`;
     if (claim.kind === "manual_ticket" && (!claim.ticketKey || !opts.issueTracker)) {
@@ -239,12 +235,11 @@ export async function cancelRunById(
           runRegistry,
           undefined,
           async (owner) => {
-            const [{ env }, { withdrawTicketFromAiForRun }] = await Promise.all([
+            const [{ env }, { withdrawConnectedTicketFromAiForRun }] = await Promise.all([
               import("../../config/env.js"),
               import("../tickets/ticket-transition.js"),
             ]);
-            await withdrawTicketFromAiForRun({
-              db,
+            await withdrawConnectedTicketFromAiForRun({
               issueTracker: opts.issueTracker!,
               ticketKey: claim.ticketKey!,
               aiColumn: env.COLUMN_AI,
@@ -271,7 +266,7 @@ export async function cancelRunById(
     // reached a terminal Workflow status on its own and keeps that outcome, so
     // no status is written (only the lingering claim was released).
     if (result.alreadyTerminal) {
-      const outcome = await findRunOutcomeByRunId(db, runId);
+      const outcome = await findConnectedRunOutcomeByRunId(runId);
       return {
         outcome: "already_terminal",
         subjectKey: claim.subjectKey,
@@ -305,11 +300,11 @@ export async function cancelRunById(
       // cancel leaves the claim in "cancelling"; reconcileRuns picks that state
       // up on the one-minute poll cron and converges it through
       // retryCancellingClaim, which is what actually releases it.
-      const { markRunBlockedByOperator } = await import(
+      const { markConnectedRunBlockedByOperator } = await import(
         "../../db/repositories/runs/telemetry.js"
       );
       try {
-        await markRunBlockedByOperator(db, runId, reason);
+        await markConnectedRunBlockedByOperator(runId, reason);
       } catch (error) {
         logger.warn(
           {
@@ -328,11 +323,18 @@ export async function cancelRunById(
   }
 
   // Not live: the run has already left active_runs (terminal) or never existed.
-  const outcome = await findRunOutcomeByRunId(db, runId);
+  const outcome = await findConnectedRunOutcomeByRunId(runId);
   if (outcome) {
     return { outcome: "already_terminal", status: outcome.status ?? undefined };
   }
   return { outcome: "not_found" };
+}
+
+export function cancelConnectedRunById(
+  runId: string,
+  opts: CancelRunByIdDeps,
+): Promise<CancelRunByIdResult> {
+  return cancelRunById(undefined as unknown as Db, runId, opts);
 }
 
 /**
@@ -375,11 +377,11 @@ export async function cancelRunForOperator(
   // Imported here rather than at module scope, like every other value this module
   // reaches for: cancel-run.ts is pulled in from paths that must not drag the
   // schedule store behind them.
-  const { settleScheduleOccurrenceOnCancel } = await import(
-    "../../schedule-trigger/occurrence-store.js"
+  const { settleConnectedScheduleOccurrenceOnCancel } = await import(
+    "../../db/repositories/schedule-triggers.js"
   );
   try {
-    const settled = await settleScheduleOccurrenceOnCancel(db, runId);
+    const settled = await settleConnectedScheduleOccurrenceOnCancel(runId);
     if (!settled && isScheduleRun) {
       // No started occurrence carried this run id: the cancel landed in the
       // bind-to-started window. Warn so the miss is observed; the drain's
@@ -404,6 +406,13 @@ export async function cancelRunForOperator(
     );
     return { ...result, scheduleOccurrenceSettled: isScheduleRun ? false : null };
   }
+}
+
+export function cancelConnectedRunForOperator(
+  runId: string,
+  opts: CancelRunByIdDeps,
+): Promise<CancelRunForOperatorResult> {
+  return cancelRunForOperator(undefined as unknown as Db, runId, opts);
 }
 
 async function cancelOwnedSubject(
@@ -440,11 +449,9 @@ async function cancelOwnedSubject(
   // recreated by reconciliation while cancellation follows the handoff.
   let tombstone: { matched: boolean; successorOwnerToken: string | null };
   try {
-    const [{ getDb }, { tombstoneClarificationCancellation }] = await Promise.all([
-      import("../../db/client.js"),
-      import("../../db/repositories/clarifications.js"),
-    ]);
-    tombstone = await tombstoneClarificationCancellation(getDb(), {
+    const { tombstoneConnectedClarificationCancellation } =
+      await import("../../db/repositories/clarifications.js");
+    tombstone = await tombstoneConnectedClarificationCancellation({
       subjectKey,
       ownerToken: observed.ownerToken,
       runId: observed.runId,
@@ -605,11 +612,9 @@ async function persistCancelReason(
 ): Promise<void> {
   if (!reason) return;
   try {
-    const [{ getDb }, { recordRunStatusReason }] = await Promise.all([
-      import("../../db/client.js"),
-      import("../../db/repositories/runs/telemetry.js"),
-    ]);
-    await recordRunStatusReason(getDb(), runId, reason, {
+    const { recordConnectedRunStatusReason } =
+      await import("../../db/repositories/runs/telemetry.js");
+    await recordConnectedRunStatusReason(runId, reason, {
       kind: "cancellation",
     });
   } catch (error) {
@@ -636,11 +641,9 @@ async function persistCancelReason(
  */
 async function settleCancelledPark(subjectKey: string, runId: string): Promise<void> {
   try {
-    const [{ getDb }, { markRunBlockedOnCancel }] = await Promise.all([
-      import("../../db/client.js"),
-      import("../../db/repositories/runs/telemetry.js"),
-    ]);
-    await markRunBlockedOnCancel(getDb(), runId);
+    const { markConnectedRunBlockedOnCancel } =
+      await import("../../db/repositories/runs/telemetry.js");
+    await markConnectedRunBlockedOnCancel(runId);
   } catch (error) {
     logger.warn(
       { subjectKey, runId, error: (error as Error).message },
@@ -663,22 +666,19 @@ async function retirePostDrainContinuations(
 ): Promise<boolean> {
   try {
     const [
-      { getDb },
-      { tombstoneClarificationCancellation },
-      { retireApprovalCancellation },
+      { tombstoneConnectedClarificationCancellation },
+      { retireConnectedApprovalCancellation },
     ] = await Promise.all([
-      import("../../db/client.js"),
       import("../../db/repositories/clarifications.js"),
       import("../../db/repositories/approvals.js"),
     ]);
-    const db = getDb();
-    await tombstoneClarificationCancellation(db, {
+    await tombstoneConnectedClarificationCancellation({
       subjectKey,
       ownerToken: closed.ownerToken,
       runId,
     });
     if (closed.ticketKey) {
-      await retireApprovalCancellation(db, {
+      await retireConnectedApprovalCancellation({
         ticketKey: closed.ticketKey,
         runId,
       });

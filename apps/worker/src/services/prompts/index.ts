@@ -11,6 +11,9 @@ export {
   findPromptUsage,
   findPromptUsageInPrompts,
   updatePromptMeta,
+  requirePromptLibraryEditRole,
+  saveConnectedPromptVersionWithPolicy,
+  savePromptVersionWithPolicy,
 } from "./prompt-library-service.js";
 export {
   MAX_PROMPT_INT4,
@@ -19,14 +22,11 @@ export {
 } from "./prompt-library-identifiers.js";
 export {
   promptLibraryFailure,
+  PromptLibraryStoreError,
 } from "./prompt-library-failures.js";
 export type {
   PromptLibraryFailure,
 } from "./prompt-library-failures.js";
-export {
-  PromptLibraryStoreError,
-  savePromptVersion,
-} from "../../db/repositories/prompts.js";
 export {
   listPromptLibrary,
   readPromptDetail,
@@ -43,3 +43,7 @@ export {
 export type {
   PromptLibraryWriter,
 } from "./prompt-library-writes.js";
+export {
+  PROMPT_BODY_MAX_LENGTH,
+  validatePromptBody,
+} from "./prompt-library-validation.js";

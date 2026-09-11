@@ -1,6 +1,11 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import type {
+  ReplayAttemptOutcome,
+  ReplayAttemptState,
+  ReplayObservationKind,
+  ReplaySanitizedEnvelope,
+  WorkflowReplaySelectedTransition,
   WorkflowReplayGraphSnapshot,
   WorkflowReplayLayoutSnapshot,
 } from "@shared/contracts";
@@ -17,18 +22,25 @@ import { createTestDb } from "../../test-db.js";
 import {
   captureRunObservationStart,
   deleteExpiredRunObservations,
-  finishWorkflowBlockAttempt,
+  getWorkflowBlockAttemptPersistence,
+  markRunReplayCaptureUnavailable,
+  replaceWorkflowBlockAttemptPersistence,
+  RunObservationStoreError,
+  startWorkflowBlockAttempt,
+} from "./run-observability.js";
+import {
   getRunReplay,
   getRunReplayAttempt,
   getRunReplayAvailability,
-  markRunReplayCaptureUnavailable,
-  recordWorkflowBlockAttemptObservation,
-  RunObservationStoreError,
-  startWorkflowBlockAttempt,
-  updateWorkflowBlockAttemptState,
-} from "./run-observability.js";
+} from "../../../services/run-lifecycle/run-replay-read.js";
 import { sanitizeReplayValue } from "../../../run-observability/sanitizer.js";
-import { MAX_REPLAY_ATTEMPTS_PER_RUN } from "../../../run-observability/limits.js";
+import {
+  prepareReplayAttemptFinishPersistence,
+  prepareReplayAttemptObservationPersistence,
+  prepareReplayAttemptWaitingPersistence,
+  type PreparedReplayAttemptPersistence,
+  type ReplayAttemptPersistenceState,
+} from "../../../run-observability/runtime-hooks.js";
 
 let db: Db;
 let definitionId: number;
@@ -99,6 +111,93 @@ function capture(
     now: capturedAt,
     ...overrides,
   });
+}
+
+async function persistAttempt(
+  input: {
+    db: Db;
+    runId: string;
+    organizationId: string;
+    attemptId: number;
+  },
+  prepare: (current: ReplayAttemptPersistenceState) => PreparedReplayAttemptPersistence,
+): Promise<boolean> {
+  for (let retry = 0; retry < 64; retry += 1) {
+    const current = await getWorkflowBlockAttemptPersistence(input);
+    if (!current) return false;
+    const prepared = prepare(current);
+    if (await replaceWorkflowBlockAttemptPersistence({ ...input, ...prepared })) {
+      return true;
+    }
+  }
+  throw new Error("Concurrent attempt persistence exceeded the retry limit");
+}
+
+async function recordWorkflowBlockAttemptObservation(input: {
+  db: Db;
+  runId: string;
+  organizationId: string;
+  attemptId: number;
+  kind: ReplayObservationKind;
+  envelope: ReplaySanitizedEnvelope;
+  observedAt?: Date;
+}): Promise<boolean> {
+  return persistAttempt(input, (current) =>
+    prepareReplayAttemptObservationPersistence(current, input, input.observedAt),
+  );
+}
+
+async function updateWorkflowBlockAttemptState(input: {
+  db: Db;
+  runId: string;
+  organizationId: string;
+  attemptId: number;
+  state: "running" | "waiting_loop";
+  selectedTransition?: WorkflowReplaySelectedTransition | null;
+  observations?: readonly { kind: ReplayObservationKind; envelope: ReplaySanitizedEnvelope }[];
+  updatedAt?: Date;
+}): Promise<boolean> {
+  return persistAttempt(input, (current) =>
+    prepareReplayAttemptWaitingPersistence(current, {
+      selectedTransition: input.selectedTransition ?? null,
+      observations: input.observations ?? [],
+      updatedAt: input.updatedAt,
+    }),
+  );
+}
+
+async function finishWorkflowBlockAttempt(input: {
+  db: Db;
+  runId: string;
+  organizationId: string;
+  attemptId: number;
+  state: ReplayAttemptState;
+  outcome?: ReplayAttemptOutcome | null;
+  selectedTransition?: WorkflowReplaySelectedTransition | null;
+  diagnosticId?: string | null;
+  observations?: readonly { kind: ReplayObservationKind; envelope: ReplaySanitizedEnvelope }[];
+  completedAt?: Date;
+}): Promise<boolean> {
+  if (input.state === "running" || input.state === "waiting_loop") {
+    return updateWorkflowBlockAttemptState({
+      ...input,
+      state: input.state,
+      selectedTransition: input.selectedTransition ?? null,
+      observations: input.observations,
+      updatedAt: input.completedAt,
+    });
+  }
+  const completedAt = input.completedAt ?? new Date();
+  return persistAttempt(input, (current) =>
+    prepareReplayAttemptFinishPersistence(current, {
+      state: input.state as Exclude<ReplayAttemptState, "running" | "waiting_loop">,
+      outcome: input.outcome,
+      selectedTransition: input.selectedTransition ?? null,
+      diagnosticId: input.diagnosticId ?? null,
+      observations: input.observations ?? [],
+      completedAt,
+    }),
+  );
 }
 
 describe("captureRunObservationStart", () => {
@@ -228,81 +327,27 @@ describe("captureRunObservationStart", () => {
 });
 
 describe("attempt lifecycle", () => {
-  it("caps attempts across activation scopes and makes an over-limit replay unavailable", async () => {
+  it("atomically allocates one attempt for concurrent identity requests", async () => {
     await capture("run-attempt-cap");
-    await db.insert(workflowBlockAttempts).values(
-      Array.from(
-        { length: MAX_REPLAY_ATTEMPTS_PER_RUN - 1 },
-        (_, index) => ({
-          runId: "run-attempt-cap",
-          organizationId: "org-replay",
-          nodeId: `captured-${index}`,
-          attempt: 1,
-          activationScopeId: `root/resume:${Math.floor(index / 100)}`,
-          state: "running" as const,
-          startedAt: new Date(capturedAt.getTime() + index),
-        }),
-      ),
-    );
-    const finalAllowed = await startWorkflowBlockAttempt({
-      db,
-      runId: "run-attempt-cap",
-      organizationId: "org-replay",
-      nodeId: "skipped-at-cap",
-      attempt: 1,
-      activationScopeId: "root/resume:final",
-      startedAt: new Date("2026-07-23T10:01:00.000Z"),
-    });
-    await finishWorkflowBlockAttempt({
-      db,
-      runId: "run-attempt-cap",
-      organizationId: "org-replay",
-      attemptId: finalAllowed.attemptId,
-      state: "skipped",
-      outcome: { kind: "skipped", status: "skipped" },
-      completedAt: new Date("2026-07-23T10:01:00.000Z"),
-    });
-
-    await expect(
-      startWorkflowBlockAttempt({
+    const input = {
         db,
         runId: "run-attempt-cap",
         organizationId: "org-replay",
-        nodeId: "over-limit",
+        nodeId: "attempt",
         attempt: 1,
-        activationScopeId: "root/resume:final",
-        startedAt: new Date("2026-07-23T10:01:01.000Z"),
-      }),
-    ).rejects.toMatchObject({
-      statusCode: 409,
-    } satisfies Partial<RunObservationStoreError>);
-
-    await expect(
-      startWorkflowBlockAttempt({
-        db,
-        runId: "run-attempt-cap",
-        organizationId: "org-replay",
-        nodeId: "skipped-at-cap",
-        attempt: 1,
-        activationScopeId: "root/resume:final",
-        startedAt: new Date("2026-07-23T10:01:02.000Z"),
-      }),
-    ).rejects.toMatchObject({
-      statusCode: 404,
-    } satisfies Partial<RunObservationStoreError>);
-    expect(
-      await getRunReplayAvailability({
-        db,
-        runId: "run-attempt-cap",
-        organizationId: "org-replay",
-        now: new Date("2026-07-23T10:01:02.000Z"),
-      }),
-    ).toBe("not_captured");
+        activationScopeId: "root",
+        startedAt: new Date("2026-07-23T10:01:00.000Z"),
+      } as const;
+    const [first, second] = await Promise.all([
+      startWorkflowBlockAttempt(input),
+      startWorkflowBlockAttempt(input),
+    ]);
+    expect(first).toEqual(second);
     const [count] = await db
       .select({ value: sql<number>`count(*)::integer` })
       .from(workflowBlockAttempts)
       .where(eq(workflowBlockAttempts.runId, "run-attempt-cap"));
-    expect(Number(count?.value)).toBe(MAX_REPLAY_ATTEMPTS_PER_RUN);
+    expect(Number(count?.value)).toBe(1);
   });
 
   it("records states, sanitized envelopes, typed outcome, transition, and timing", async () => {

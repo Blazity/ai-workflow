@@ -1,7 +1,6 @@
 import type { JsonValue, WebhookAuthScheme } from "@shared/contracts";
 import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
-import { PostgresRunRegistry } from "../../../db/repositories/active-runs.js";
-import { getDb, type Db } from "../../../db/client.js";
+import { createConnectedPostgresRunRegistry } from "../../../db/repositories/active-runs.js";
 import { logger } from "../../../infra/logger.js";
 import {
   WebhookSecretDecryptionError,
@@ -9,26 +8,25 @@ import {
 } from "../../../infra/webhook-crypto.js";
 import {
   decryptCandidateSecrets,
-  readWebhookEndpointForDelivery,
   type WebhookEndpointRow,
 } from "../../../webhook-trigger/endpoint-store.js";
-import {
-  getEnabledDeployedDefinition,
-  runnableDefinitionOf,
-} from "../../../db/repositories/definitions.js";
+import { readConnectedWebhookEndpointForDelivery } from "../../../db/repositories/webhook-trigger-endpoints.js";
+import { runnableDefinitionOf } from "../../../db/repositories/definitions.js";
+import { getConnectedEnabledDeployedDefinition } from "../../../engine/definition-trigger-routing.js";
+import { parseOptionalWorkflowDefinitionVersionRow } from "../../../engine/stored-definition-reads.js";
 import { webhookTriggerEncryptionKey } from "../../settings/index.js";
 import {
   DEFAULT_WEBHOOK_RATE_LIMIT_PER_MINUTE,
   WEBHOOK_INGRESS_LIMIT_PER_MINUTE,
-  checkAndIncrementWebhookRate,
+  checkAndIncrementConnectedWebhookRate,
   dispatchWebhookDelivery,
   fallbackWebhookDeliveryId,
   mapWebhookPayload,
-  recordWebhookRejection,
+  recordConnectedWebhookRejection,
   verifyWebhookAuth,
   type WebhookMappingConfig,
 } from "../../webhook-trigger/index.js";
-import { createWebhookDispatchDeps, webhookNodeOf } from "./dispatch-deps.js";
+import { createConnectedWebhookDispatchDeps, webhookNodeOf } from "./dispatch-deps.js";
 
 /**
  * Public ingress for one webhook trigger endpoint, as a service operation.
@@ -128,7 +126,6 @@ export type CustomWebhookOutcome =
 export async function deliverCustomWebhook(
   request: CustomWebhookRequest,
 ): Promise<CustomWebhookOutcome> {
-  const db = getDb();
   const endpointId = request.endpointId;
 
   // A malformed segment never named an endpoint. Refuse it before any DB write,
@@ -137,19 +134,19 @@ export async function deliverCustomWebhook(
     return { outcome: "unroutable" };
   }
 
-  const found = await readWebhookEndpointForDelivery(db, endpointId);
+  const found = await readConnectedWebhookEndpointForDelivery(endpointId);
   // Well-formed but unknown: tallied under one constant id so a probe of many
   // fake ids cannot grow the rejection table beyond real endpoints + 1.
-  if (!found) return refuse(db, UNKNOWN_ENDPOINT_COUNTER_ID, "unknown_endpoint");
+  if (!found) return refuse(UNKNOWN_ENDPOINT_COUNTER_ID, "unknown_endpoint");
   const { endpoint, dbNow } = found;
-  if (endpoint.revokedAt) return refuse(db, endpointId, "endpoint_disabled");
+  if (endpoint.revokedAt) return refuse(endpointId, "endpoint_disabled");
 
   // Fail-closed and uncached: an endpoint row outlives the definition state that
   // makes it dispatchable, so the live head is what decides, on every request.
-  const resolvedTarget = await resolveLiveWebhookTarget(db, endpoint);
-  if (!resolvedTarget) return refuse(db, endpointId, "endpoint_disabled");
+  const resolvedTarget = await resolveLiveWebhookTarget(endpoint);
+  if (!resolvedTarget) return refuse(endpointId, "endpoint_disabled");
   if (resolvedTarget.kind === "retired") {
-    return refuse(db, endpointId, resolvedTarget.reason);
+    return refuse(endpointId, resolvedTarget.reason);
   }
   const target = resolvedTarget.target;
 
@@ -157,33 +154,32 @@ export async function deliverCustomWebhook(
   // junk cannot burn unbounded CPU, and this never touches the inbox budget the
   // real sender spends. Only now that the id names a live row, since the counter
   // has a foreign key to it.
-  const ingress = await checkAndIncrementWebhookRate(
-    db,
+  const ingress = await checkAndIncrementConnectedWebhookRate(
     endpointId,
     "ingress",
     WEBHOOK_INGRESS_LIMIT_PER_MINUTE,
   );
-  if (!ingress.allowed) return refuse(db, endpointId, "rate_limited");
+  if (!ingress.allowed) return refuse(endpointId, "rate_limited");
 
   // Require an honest Content-Length so the cheap refusal below runs before the
   // body is buffered. The post-read cap still holds as defense against a lying
   // length: a sender controls the header, and the read buffers what arrives.
   const declaredLength = Number(request.contentLength);
   if (!Number.isFinite(declaredLength)) {
-    return refuse(db, endpointId, "length_required");
+    return refuse(endpointId, "length_required");
   }
   if (declaredLength > WEBHOOK_MAX_BODY_BYTES) {
-    return refuse(db, endpointId, "payload_too_large");
+    return refuse(endpointId, "payload_too_large");
   }
   const rawBody = await request.readRawBody();
   if (Buffer.byteLength(rawBody, "utf8") > WEBHOOK_MAX_BODY_BYTES) {
-    return refuse(db, endpointId, "payload_too_large");
+    return refuse(endpointId, "payload_too_large");
   }
 
   // dbNow, not the app clock: previousExpiresAt was stamped on the DB clock, so
   // a skewed worker must not keep offering a replaced secret past its expiry.
   const candidates = decryptEndpointSecrets(endpoint, dbNow);
-  if (!candidates) return refuse(db, endpointId, "decrypt_failed");
+  if (!candidates) return refuse(endpointId, "decrypt_failed");
 
   // The endpoint row is the source of truth for the scheme and header override:
   // a deploy re-syncs them from the node config (like any other block param),
@@ -203,24 +199,23 @@ export async function deliverCustomWebhook(
     now: dbNow,
   });
   if (!verified.ok) {
-    return refuse(db, endpointId, verified.reason);
+    return refuse(endpointId, verified.reason);
   }
 
   // Inbox budget, charged only now that the signature is valid: authenticated
   // deliveries have their own limit that unauthenticated junk cannot spend.
-  const inbox = await checkAndIncrementWebhookRate(
-    db,
+  const inbox = await checkAndIncrementConnectedWebhookRate(
     endpointId,
     "inbox",
     DEFAULT_WEBHOOK_RATE_LIMIT_PER_MINUTE,
   );
-  if (!inbox.allowed) return refuse(db, endpointId, "rate_limited");
+  if (!inbox.allowed) return refuse(endpointId, "rate_limited");
 
   let body: JsonValue;
   try {
     body = JSON.parse(rawBody) as JsonValue;
   } catch {
-    return refuse(db, endpointId, "invalid_payload");
+    return refuse(endpointId, "invalid_payload");
   }
 
   // A sender that repeats its delivery id gets the first envelope back. Without
@@ -241,7 +236,7 @@ export async function deliverCustomWebhook(
       entry: mapped.entry,
       verifiedWith: verified.verifiedWith,
     },
-    createWebhookDispatchDeps(db, new PostgresRunRegistry(db)),
+    createConnectedWebhookDispatchDeps(createConnectedPostgresRunRegistry()),
   );
 
   if (result.result === "started") {
@@ -267,14 +262,16 @@ export async function deliverCustomWebhook(
  * per endpoint, so only this endpoint's own definition id decides.
  */
 async function resolveLiveWebhookTarget(
-  db: Db,
   endpoint: WebhookEndpointRow,
 ): Promise<
   | { kind: "runnable"; target: LiveWebhookTarget }
   | { kind: "retired"; reason: typeof RETIRED_SCHEMA_MESSAGE }
   | null
 > {
-  const live = await getEnabledDeployedDefinition(db, endpoint.definitionId);
+  const rawLive = await getConnectedEnabledDeployedDefinition(endpoint.definitionId);
+  const live = rawLive
+    ? { ...rawLive, current: parseOptionalWorkflowDefinitionVersionRow(rawLive.current) }
+    : null;
   if (!live || !live.current) {
     return null;
   }
@@ -334,12 +331,11 @@ function decryptEndpointSecrets(endpoint: WebhookEndpointRow, now: Date) {
  * precise reason. The route collapses it to the coarse class the sender learns.
  */
 async function refuse(
-  db: Db,
   endpointId: string,
   reason: WebhookRejectionReason,
 ): Promise<CustomWebhookOutcome> {
   // Best-effort tally: a counter-write failure must not upgrade a coarse 4xx into
   // a 500, so it is swallowed. The caller still gets the right refusal status.
-  await recordWebhookRejection(db, endpointId, reason).catch(() => {});
+  await recordConnectedWebhookRejection(endpointId, reason).catch(() => {});
   return { outcome: "refused", reason };
 }

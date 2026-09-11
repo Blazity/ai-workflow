@@ -40,7 +40,7 @@ vi.mock("../../../../services/auth/request-context.js", () => ({
     throw error;
   },
 }));
-vi.mock("../../../../db/repositories/runs/run-observability.js", () => ({
+vi.mock("../../../../services/run-lifecycle/run-replay-read.js", () => ({
   RunObservationStoreError: class RunObservationStoreError extends Error {
     constructor(
       readonly statusCode: number,
@@ -51,10 +51,14 @@ vi.mock("../../../../db/repositories/runs/run-observability.js", () => ({
   },
   getRunReplay: state.getRunReplay,
   getRunReplayAttempt: state.getRunReplayAttempt,
+  getConnectedRunReplay: state.getRunReplay,
+  getConnectedRunReplayAttempt: state.getRunReplayAttempt,
+  readRunReplay: state.getRunReplay,
+  readRunReplayAttempt: state.getRunReplayAttempt,
 }));
 
 const { RunObservationStoreError } = await import(
-  "../../../../db/repositories/runs/run-observability.js"
+  "../../../../services/run-lifecycle/run-replay-read.js"
 );
 const replayGet = (await import("./[runId]/replay.get.js")).default;
 const attemptGet = (
@@ -132,7 +136,6 @@ describe("run replay API", () => {
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(await response.json()).toEqual(NOT_CAPTURED);
     expect(state.getRunReplay).toHaveBeenCalledWith({
-      db: {},
       organizationId: "org_aiw",
       runId: "wrun_1",
       limit: 200,
@@ -174,7 +177,6 @@ describe("run replay API", () => {
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(await response.json()).toEqual(ATTEMPT);
     expect(state.getRunReplayAttempt).toHaveBeenCalledWith({
-      db: {},
       organizationId: "org_aiw",
       runId: "wrun_1",
       attemptId: 42,

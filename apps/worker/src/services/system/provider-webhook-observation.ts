@@ -1,5 +1,4 @@
 import { waitUntil } from "@vercel/functions";
-import { getDb } from "../../db/client.js";
 import { logger } from "../../infra/logger.js";
 import { providerWebhookSecret } from "../settings/index.js";
 import {
@@ -25,7 +24,7 @@ export function observeProviderWebhook(
 
   let write: Promise<void>;
   try {
-    write = recordSystemHealthObservation(getDb(), {
+    write = recordSystemHealthObservation({
       integrationId,
       checkId: "webhook-delivery",
       scope,

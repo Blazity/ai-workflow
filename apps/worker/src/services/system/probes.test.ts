@@ -354,7 +354,6 @@ describe("deployment system-health probes", () => {
       message: expect.stringContaining("not delivered anything yet"),
     });
     expect(getLatestSystemHealthObservations).toHaveBeenCalledWith(
-      expect.anything(),
       "github",
       "webhook-delivery",
       expect.stringMatching(/^deployment:[a-f0-9]{64}$/),

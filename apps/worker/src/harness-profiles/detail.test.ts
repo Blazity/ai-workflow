@@ -15,12 +15,11 @@ import {
   organization,
 } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
-import { listHarnessProfileUsage } from "../db/harness-profile-usage-store.js";
 import {
   compileHarnessProfileManifest,
   hashHarnessProfileManifest,
 } from "./manifest.js";
-import { getHarnessProfileDetail } from "../db/repositories/harness-profiles.js";
+import { readHarnessProfileDetailFromDb as getHarnessProfileDetail } from "../services/harness/profile-reads.js";
 
 let db: Db;
 
@@ -92,7 +91,7 @@ describe("Harness Profile detail", () => {
     const detail = await getHarnessProfileDetail(db, {
       organizationId: "org-detail",
       profileId,
-      actorRole: "owner",
+      canManageProfiles: true,
       requestedVersion: 1,
       usage: [],
     });
@@ -151,7 +150,7 @@ describe("Harness Profile detail", () => {
     const detail = await getHarnessProfileDetail(db, {
       organizationId: "org-detail",
       profileId: "profile-skill-sources",
-      actorRole: "owner",
+      canManageProfiles: true,
       usage: [],
     });
 

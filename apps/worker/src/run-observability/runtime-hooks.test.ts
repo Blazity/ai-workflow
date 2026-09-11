@@ -14,12 +14,41 @@ import {
 import {
   buildV2ReplayGraphSnapshot,
   createV2RunObservationHooks,
+  sanitizeV2ReplaySnapshotForCapture,
   type RunObservationAttemptFinish,
   type V2RunObservationSink,
 } from "./runtime-hooks.js";
 
 const STARTED_AT = new Date("2026-07-23T10:00:00.000Z");
 const COMPLETED_AT = new Date("2026-07-23T10:00:03.000Z");
+
+describe("sanitizeV2ReplaySnapshotForCapture", () => {
+  it("redacts graph presentation text and rejects unsafe snapshot identifiers", () => {
+    expect(
+      sanitizeV2ReplaySnapshotForCapture({
+        graph: {
+          nodes: [{ id: "node-1", type: "generic_agent", name: "token", x: 1, y: 2 }],
+          edges: [],
+        },
+        layout: { nodes: { "node-1": { x: 1, y: 2 } }, edges: {} },
+        secrets: ["token"],
+      }),
+    ).toEqual({
+      graph: {
+        nodes: [{ id: "node-1", type: "generic_agent", name: "[REDACTED:configured_secret]", x: 1, y: 2 }],
+        edges: [],
+      },
+      layout: { nodes: { "node-1": { x: 1, y: 2 } }, edges: {} },
+    });
+    expect(
+      sanitizeV2ReplaySnapshotForCapture({
+        graph: { nodes: [{ id: "token", type: "generic_agent", name: null, x: 1, y: 2 }], edges: [] },
+        layout: { nodes: {}, edges: {} },
+        secrets: ["token"],
+      }),
+    ).toBeNull();
+  });
+});
 
 function sink(): V2RunObservationSink & {
   start: ReturnType<typeof vi.fn>;

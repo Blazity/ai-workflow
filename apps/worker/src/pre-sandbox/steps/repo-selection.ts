@@ -47,12 +47,13 @@ export interface WorkflowOwnedBranchSelectionInput {
 
 export const repoSelectionStep: PreSandboxStepHandler = async ({ context, step }) => {
   const { listRepositoriesAcrossProviders } = await import("../../adapters/vcs/repository-directory.js");
-  const { getDb } = await import("../../db/client.js");
-  const { listWorkflowOwnedBranchesForTicket } = await import("../../db/repositories/runs.js");
+  const { listConnectedWorkflowOwnedBranchesForTicket } = await import(
+    "../../db/repositories/runs.js"
+  );
   const { env, getConfiguredVcsProviders } = await import("../../config/env.js");
   const ticketIdentifier = context.ticket.identifier;
   const workflowOwnedBranches = ticketIdentifier
-    ? (await listWorkflowOwnedBranchesForTicket(getDb(), ticketIdentifier)).map((record) => ({
+    ? (await listConnectedWorkflowOwnedBranchesForTicket(ticketIdentifier)).map((record) => ({
         provider: record.provider,
         repoPath: record.repoPath,
         branch: {
@@ -247,8 +248,7 @@ async function rememberedRoutingSelection(
     // database at all.
     if (labels.length === 0) return null;
     const { orgSubjectKey, repoOwner } = await import("../../services/run-lifecycle/subject-key.js");
-    const { getDb } = await import("../../db/client.js");
-    const { getMemoryDocument } = await import("../../memory/store.js");
+    const { getConnectedMemoryDocument } = await import("../../db/repositories/memory.js");
     const {
       REPO_ROUTING_DOC_PATH,
       isRepoRoutingEntryEligible,
@@ -283,11 +283,9 @@ async function rememberedRoutingSelection(
       if (owners.length === MAX_ROUTING_OWNERS_READ) break;
     }
 
-    const db = getDb();
     const entries: RepoRoutingEntry[] = [];
     for (const { provider, owner } of owners) {
-      const stored = await getMemoryDocument(
-        db,
+      const stored = await getConnectedMemoryDocument(
         orgSubjectKey(provider, owner),
         REPO_ROUTING_DOC_PATH,
       );
@@ -420,8 +418,9 @@ async function rememberRoutingAnswer(input: {
     const owner = repoOwner(chosen.repoPath);
     // A path with no owning namespace names no organisation to remember it under.
     if (owner === null) return;
-    const { getDb } = await import("../../db/client.js");
-    const { getMemoryDocument, upsertMemoryDocument } = await import("../../memory/store.js");
+    const { getConnectedMemoryDocument, upsertConnectedMemoryDocument } = await import(
+      "../../db/repositories/memory.js"
+    );
     const { prepareMemoryContent } = await import("../../memory/content.js");
     const {
       REPO_ROUTING_DOC_PATH,
@@ -456,11 +455,10 @@ async function rememberRoutingAnswer(input: {
     }
     if (candidates.length === 0) return;
 
-    const db = getDb();
     // Neither the label nor the repository path may address a document: the
     // subject key comes from orgSubjectKey and the doc path is a constant.
     const subjectKey = orgSubjectKey(chosen.provider, owner);
-    const stored = await getMemoryDocument(db, subjectKey, REPO_ROUTING_DOC_PATH);
+    const stored = await getConnectedMemoryDocument(subjectKey, REPO_ROUTING_DOC_PATH);
     let existing = stored ? parseRepoRoutingDocument(stored.content) : [];
     // `stored?.version ?? 0` is the required idiom: the key may never be present
     // with an undefined value, and 0 is what means "create it".
@@ -494,7 +492,7 @@ async function rememberRoutingAnswer(input: {
         await logRouting("warn", "repo_routing_write_skipped", { subjectKey });
         return;
       }
-      const result = await upsertMemoryDocument(db, {
+      const result = await upsertConnectedMemoryDocument({
         subjectKey,
         docPath: REPO_ROUTING_DOC_PATH,
         // Organisation scoped, so no ticket owns this document.
@@ -527,7 +525,7 @@ async function rememberRoutingAnswer(input: {
       // Re-read, re-merge and re-render per attempt: a lost swap means another run
       // replaced the document, and re-issuing the same bytes would discard exactly
       // the entries this loop exists to preserve.
-      const fresh = await getMemoryDocument(db, subjectKey, REPO_ROUTING_DOC_PATH);
+      const fresh = await getConnectedMemoryDocument(subjectKey, REPO_ROUTING_DOC_PATH);
       existing = fresh ? parseRepoRoutingDocument(fresh.content) : [];
       expectedVersion = fresh?.version ?? 0;
     }

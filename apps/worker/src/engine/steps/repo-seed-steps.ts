@@ -159,13 +159,13 @@ export async function seedRepoMemoryStep(
     });
     const { Sandbox } = await import("@vercel/sandbox");
     const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
-    const { getDb } = await import("../../db/client.js");
-    const { getMemoryDocument, upsertMemoryDocument } = await import("../../memory/store.js");
+    const { getConnectedMemoryDocument, upsertConnectedMemoryDocument } = await import(
+      "../../db/repositories/memory.js"
+    );
     const sandbox = await Sandbox.get({
       sandboxId: input.sandboxId,
       ...getSandboxCredentials(),
     });
-    const db = getDb();
 
     for (const repository of input.repositories) {
       // Provider-qualified through repoSubjectKey only: nothing read out of the
@@ -199,7 +199,7 @@ export async function seedRepoMemoryStep(
           continue;
         }
 
-        const stored = await getMemoryDocument(db, subjectKey, "facts");
+        const stored = await getConnectedMemoryDocument(subjectKey, "facts");
         if (!stored) {
           // Create only. A document that appears between this read and the insert
           // belongs to whoever wrote it: an LLM-distilled document is strictly
@@ -236,7 +236,7 @@ export async function seedRepoMemoryStep(
             log.warn({ repo: label }, "repo_memory_seed_truncated_skipped");
             continue;
           }
-          const created = await upsertMemoryDocument(db, {
+          const created = await upsertConnectedMemoryDocument({
             subjectKey,
             docPath: "facts",
             // Repo scoped, so no ticket owns this document.
@@ -301,7 +301,7 @@ export async function seedRepoMemoryStep(
             log.warn({ repo: label }, "repo_memory_prune_truncated_skipped");
             break;
           }
-          const result = await upsertMemoryDocument(db, {
+          const result = await upsertConnectedMemoryDocument({
             subjectKey,
             docPath: "facts",
             ticketKey: null,
@@ -323,7 +323,7 @@ export async function seedRepoMemoryStep(
             );
             break;
           }
-          const fresh = await getMemoryDocument(db, subjectKey, "facts");
+          const fresh = await getConnectedMemoryDocument(subjectKey, "facts");
           existing = fresh ? parseRepoMemoryDocument(fresh.content) : [];
           // `fresh?.version ?? 0` is the required idiom: the row may have been
           // deleted, and 0 is what means "create it".

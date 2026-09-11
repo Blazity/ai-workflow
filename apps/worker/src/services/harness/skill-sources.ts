@@ -8,16 +8,15 @@
  * own skills through the local pair, and would answer 503 to every one of them
  * if the client were built up front.
  */
-import { getDb } from "../../db/client.js";
 import {
   createGitHubSkillRepository,
   discoverGitHubSkills,
-  importGitHubSkills,
+  importConnectedGitHubSkills,
 } from "../../harness-profiles/github-skills.js";
 import { createConfiguredGitHubSkillRepository } from "../../harness-profiles/configured-github-skills.js";
 import {
   discoverLocalSkills,
-  importLocalSkills,
+  importConnectedLocalSkills,
 } from "../../harness-profiles/local-skills.js";
 import { vcsProviderConfig } from "../settings/index.js";
 import type {
@@ -51,7 +50,7 @@ export function importGitHubSkillSelection(input: {
   source: HarnessSkillImportRequest["source"];
   paths: HarnessSkillImportRequest["paths"];
 }) {
-  return importGitHubSkills(getDb(), {
+  return importConnectedGitHubSkills({
     repository: configuredGitHubSkillRepository(),
     organizationId: input.organizationId,
     actorId: input.actorId,
@@ -70,5 +69,5 @@ export function importDeploymentSkills(input: {
   actorId: string;
   skills: HarnessLocalSkillSelection[];
 }) {
-  return importLocalSkills(getDb(), input);
+  return importConnectedLocalSkills(input);
 }

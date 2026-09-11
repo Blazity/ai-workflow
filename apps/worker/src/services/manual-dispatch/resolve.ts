@@ -8,7 +8,6 @@ import {
   isManuallyDispatchableTrigger,
   RETIRED_SCHEMA_MESSAGE,
 } from "@shared/contracts";
-import { eq } from "drizzle-orm";
 import { env, getConfiguredVcsProviders } from "../../config/env.js";
 import {
   IssueTrackerNotFoundError,
@@ -19,9 +18,9 @@ import {
   hasManualDispatchPrCapability,
   type ManualDispatchPullRequestSnapshot,
 } from "../../adapters/vcs/types.js";
-import type { Db } from "../../db/client.js";
-import { workflowDefinitions } from "../../db/schema.js";
+import type { Db } from "../../db/types.js";
 import { findWorkflowOwnedPullRequest } from "../../db/repositories/runs.js";
+import { findConnectedWorkflowOwnedPullRequest } from "../../db/repositories/runs.js";
 import {
   isConfiguredTriggerRepository,
   selectEligibleEvent,
@@ -29,7 +28,6 @@ import {
 } from "../dispatch/dispatch-trigger.js";
 import { isRepoAllowedForScope } from "../dispatch/repo-allowlist.js";
 import { prSubjectKey, ticketSubjectKey } from "../run-lifecycle/subject-key.js";
-import { getVcsBotLogin } from "../vcs/vcs-bot-login.js";
 import type {
   TriggerEvent,
 } from "../dispatch/trigger-events.js";
@@ -37,14 +35,23 @@ import { isGateCheckName } from "../dispatch/trigger-events.js";
 import { createRepositoryVCS } from "../vcs/vcs-runtime.js";
 import { loadPostPrGateConfig } from "../../post-pr-gate/config.js";
 import {
-  getDeployedWorkflowDefinitionVersion,
-  getWorkflowDefinitionVersion,
+  getWorkflowDefinitionName,
   runnableDefinitionOf,
   type WorkflowDefinitionVersionRow,
 } from "../../db/repositories/definitions.js";
-import type { PrTriggerPayload, PrTriggerType } from "../../engine/index.js";
+import {
+  getConnectedWorkflowDefinitionName,
+} from "../../db/repositories/definitions/connected.js";
+import type { PrTriggerPayload } from "../../engine/index.js";
 import { hasDispatchBlockingApprovalForTicket } from "../../db/repositories/approvals.js";
+import { hasConnectedDispatchBlockingApprovalForTicket } from "../../db/repositories/approvals.js";
 import { ManualDispatchError } from "./errors.js";
+import {
+  readConnectedDeployedWorkflowDefinitionVersion,
+  readConnectedWorkflowDefinitionVersion,
+  readDeployedWorkflowDefinitionVersion,
+  readWorkflowDefinitionVersion,
+} from "../../engine/stored-definition-reads.js";
 
 /** The allowlist lives in the contracts package, because the dashboard decides
  * whether to offer "Run manually" from the same list and a second copy would drift.
@@ -95,6 +102,32 @@ export type ResolvedManualDispatch =
       steps: ManualDispatchPreflightStep[];
     };
 
+type ManualDispatchPersistence = {
+  getDeployed(definitionId: number): ReturnType<typeof readDeployedWorkflowDefinitionVersion>;
+  getVersion(definitionId: number, version: number): ReturnType<typeof readWorkflowDefinitionVersion>;
+  getDefinition(definitionId: number): Promise<{ name: string } | null>;
+  hasBlockingApproval(ticketKey: string): Promise<boolean>;
+  findWorkflowOwnedPullRequest(input: Parameters<typeof findWorkflowOwnedPullRequest>[1]): ReturnType<typeof findWorkflowOwnedPullRequest>;
+};
+
+function persistenceFor(db: Db): ManualDispatchPersistence {
+  return {
+    getDeployed: (definitionId) => readDeployedWorkflowDefinitionVersion(db, definitionId),
+    getVersion: (definitionId, version) => readWorkflowDefinitionVersion(db, definitionId, version),
+    getDefinition: (definitionId) => getWorkflowDefinitionName(db, definitionId),
+    hasBlockingApproval: (ticketKey) => hasDispatchBlockingApprovalForTicket(db, ticketKey),
+    findWorkflowOwnedPullRequest: (input) => findWorkflowOwnedPullRequest(db, input),
+  };
+}
+
+const connectedPersistence: ManualDispatchPersistence = {
+  getDeployed: readConnectedDeployedWorkflowDefinitionVersion,
+  getVersion: readConnectedWorkflowDefinitionVersion,
+  getDefinition: getConnectedWorkflowDefinitionName,
+  hasBlockingApproval: hasConnectedDispatchBlockingApprovalForTicket,
+  findWorkflowOwnedPullRequest: findConnectedWorkflowOwnedPullRequest,
+};
+
 export async function resolveManualDispatch(input: {
   db: Db;
   issueTracker: IssueTrackerAdapter;
@@ -104,8 +137,16 @@ export async function resolveManualDispatch(input: {
   /** Resolve an already-accepted request against its immutable pinned graph. */
   definitionVersion?: number;
 }): Promise<ResolvedManualDispatch> {
+  return resolveManualDispatchWithPersistence(input, persistenceFor(input.db));
+}
+
+export async function resolveConnectedManualDispatch(input: Omit<Parameters<typeof resolveManualDispatch>[0], "db">): Promise<ResolvedManualDispatch> {
+  return resolveManualDispatchWithPersistence(input, connectedPersistence);
+}
+
+async function resolveManualDispatchWithPersistence(input: Omit<Parameters<typeof resolveManualDispatch>[0], "db">, persistence: ManualDispatchPersistence): Promise<ResolvedManualDispatch> {
   const deployed = await loadDeployedTrigger(
-    input.db,
+    persistence,
     input.definitionId,
     input.triggerNodeId,
     input.definitionVersion,
@@ -115,7 +156,7 @@ export async function resolveManualDispatch(input: {
       throw new ManualDispatchError(422, "invalid_input", "This trigger requires a Jira ticket key.");
     }
     return resolveTicketDispatch(
-      { ...input, dispatchInput: input.dispatchInput },
+      { ...input, dispatchInput: input.dispatchInput, persistence },
       { ...deployed, triggerType: deployed.triggerType },
     );
   }
@@ -123,13 +164,13 @@ export async function resolveManualDispatch(input: {
     throw new ManualDispatchError(422, "invalid_input", "This trigger requires a pull or merge request URL.");
   }
   return resolvePullRequestDispatch(
-    { ...input, dispatchInput: input.dispatchInput },
+    { ...input, dispatchInput: input.dispatchInput, persistence },
     { ...deployed, triggerType: deployed.triggerType },
   );
 }
 
 async function loadDeployedTrigger(
-  db: Db,
+  persistence: ManualDispatchPersistence,
   definitionId: number,
   triggerNodeId: string,
   definitionVersion?: number,
@@ -140,8 +181,8 @@ async function loadDeployedTrigger(
 }> {
   const deployed =
     definitionVersion === undefined
-      ? await getDeployedWorkflowDefinitionVersion(db, definitionId)
-      : await getWorkflowDefinitionVersion(db, definitionId, definitionVersion);
+      ? await persistence.getDeployed(definitionId)
+      : await persistence.getVersion(definitionId, definitionVersion);
   if (!deployed) {
     throw new ManualDispatchError(422, "not_eligible", "This workflow has no deployed version.");
   }
@@ -157,24 +198,20 @@ async function loadDeployedTrigger(
       "This trigger is not present in the deployed workflow.",
     );
   }
-  const rows = await db
-    .select({ name: workflowDefinitions.name })
-    .from(workflowDefinitions)
-    .where(eq(workflowDefinitions.id, definitionId))
-    .limit(1);
-  if (!rows[0]) {
+  const definition = await persistence.getDefinition(definitionId);
+  if (!definition) {
     throw new ManualDispatchError(404, "invalid_input", "Workflow definition not found.");
   }
   return {
     definition: deployed,
-    definitionName: rows[0].name,
+    definitionName: definition.name,
     triggerType: node.type as RunnableTriggerType,
   };
 }
 
 async function resolveTicketDispatch(
   input: {
-    db: Db;
+    persistence: ManualDispatchPersistence;
     issueTracker: IssueTrackerAdapter;
     definitionId: number;
     triggerNodeId: string;
@@ -212,7 +249,7 @@ async function resolveTicketDispatch(
       `Ticket must belong to Jira project ${expectedProject}.`,
     );
   }
-  if (await hasDispatchBlockingApprovalForTicket(input.db, ticketKey)) {
+  if (await input.persistence.hasBlockingApproval(ticketKey)) {
     throw new ManualDispatchError(
       409,
       "approval_pending",
@@ -254,7 +291,7 @@ async function resolveTicketDispatch(
 
 async function resolvePullRequestDispatch(
   input: {
-    db: Db;
+    persistence: ManualDispatchPersistence;
     issueTracker: IssueTrackerAdapter;
     definitionId: number;
     triggerNodeId: string;
@@ -380,7 +417,7 @@ async function resolvePullRequestDispatch(
   const subjectKey = prSubjectKey(pr.provider, pr.repoPath, pr.prNumber);
   let ticketKey: string | null = null;
   if (scope !== "any") {
-    const owned = await findWorkflowOwnedPullRequest(input.db, {
+    const owned = await input.persistence.findWorkflowOwnedPullRequest({
       provider: pr.provider,
       repoPath: pr.repoPath,
       prNumber: pr.prNumber,
@@ -404,7 +441,7 @@ async function resolvePullRequestDispatch(
       );
     }
     ticketKey = ticket.identifier.trim().toUpperCase();
-    if (await hasDispatchBlockingApprovalForTicket(input.db, ticketKey)) {
+    if (await input.persistence.hasBlockingApproval(ticketKey)) {
       throw new ManualDispatchError(
         409,
         "approval_pending",

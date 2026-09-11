@@ -4,7 +4,6 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import { and, eq } from "drizzle-orm";
 import type {
   HarnessCapabilitiesResponse,
   HarnessCapabilityCatalog,
@@ -16,11 +15,12 @@ import type {
 } from "@shared/contracts";
 import { buildHarnessProfileDraftV2 } from "@shared/contracts";
 import { isRecognisedModel } from "@shared/harness";
-import type { Db } from "../db/client.js";
+import type { Db } from "../db/types.js";
 import {
-  harnessCapabilityCatalogs,
-  organization,
-} from "../db/schema.js";
+  createConnectedHarnessCapabilityCatalogRepository,
+  createHarnessCapabilityCatalogRepository,
+  type HarnessCapabilityCatalogRow,
+} from "../db/repositories/harness-capability-catalogs.js";
 import { logger } from "../infra/logger.js";
 import {
   HARNESS_PROVIDER_CONTRACTS,
@@ -61,10 +61,42 @@ export interface HarnessCapabilityDiscoveryDependencies {
   ) => Promise<HarnessCapabilityCatalog>;
 }
 
-type CachedCatalog = typeof harnessCapabilityCatalogs.$inferSelect;
+type CachedCatalog = HarnessCapabilityCatalogRow;
+type CapabilityCatalogRepository = ReturnType<typeof createHarnessCapabilityCatalogRepository>;
 
 export async function getHarnessCapabilities(
   db: Db,
+  input: {
+    organizationId: string;
+    provider: HarnessProvider;
+    cliVersion: string;
+    refresh: boolean;
+    dependencies?: HarnessCapabilityDiscoveryDependencies;
+  },
+): Promise<HarnessCapabilitiesResponse> {
+  return getHarnessCapabilitiesFromRepository(
+    createHarnessCapabilityCatalogRepository(db),
+    input,
+  );
+}
+
+export function getConnectedHarnessCapabilities(
+  input: {
+    organizationId: string;
+    provider: HarnessProvider;
+    cliVersion: string;
+    refresh: boolean;
+    dependencies?: HarnessCapabilityDiscoveryDependencies;
+  },
+): Promise<HarnessCapabilitiesResponse> {
+  return getHarnessCapabilitiesFromRepository(
+    createConnectedHarnessCapabilityCatalogRepository(),
+    input,
+  );
+}
+
+async function getHarnessCapabilitiesFromRepository(
+  repository: CapabilityCatalogRepository,
   input: {
     organizationId: string;
     provider: HarnessProvider;
@@ -81,7 +113,7 @@ export async function getHarnessCapabilities(
   if (input.refresh) {
     const existing = inFlightRefreshes.get(refreshKey);
     if (existing) return existing;
-    const pending = getHarnessCapabilitiesInternal(db, input);
+    const pending = getHarnessCapabilitiesInternal(repository, input);
     inFlightRefreshes.set(refreshKey, pending);
     try {
       return await pending;
@@ -91,11 +123,11 @@ export async function getHarnessCapabilities(
       }
     }
   }
-  return getHarnessCapabilitiesInternal(db, input);
+  return getHarnessCapabilitiesInternal(repository, input);
 }
 
 async function getHarnessCapabilitiesInternal(
-  db: Db,
+  repository: CapabilityCatalogRepository,
   input: {
     organizationId: string;
     provider: HarnessProvider;
@@ -107,7 +139,7 @@ async function getHarnessCapabilitiesInternal(
   assertSupportedCliVersion(input.provider, input.cliVersion);
 
   const now = input.dependencies?.now?.() ?? new Date();
-  const cached = await readCachedCatalog(db, input);
+  const cached = await readCachedCatalog(repository, input);
   if (
     input.refresh &&
     cached &&
@@ -169,15 +201,11 @@ async function getHarnessCapabilitiesInternal(
       "Harness capability discovery failed",
     );
     if (cached) {
-      const [row] = await db
-        .update(harnessCapabilityCatalogs)
-        .set({
-          lastRefreshFailedAt: now,
-          lastRefreshError: failureMessage,
-          updatedAt: now,
-        })
-        .where(eq(harnessCapabilityCatalogs.id, cached.id))
-        .returning();
+      const row = await repository.markRefreshFailure({
+        id: cached.id,
+        now,
+        error: failureMessage,
+      });
       return responseFromCache(row ?? cached, true);
     }
     throw new HarnessCapabilityCatalogError(
@@ -189,36 +217,15 @@ async function getHarnessCapabilitiesInternal(
   }
 
   const catalogHash = hashHarnessCapabilityCatalog(catalog);
-  const [row] = await db
-    .insert(harnessCapabilityCatalogs)
-    .values({
-      organizationId: input.organizationId,
-      provider: input.provider,
-      cliVersion: input.cliVersion,
-      catalog,
-      catalogHash,
-      fetchedAt: now,
-      lastRefreshFailedAt: null,
-      lastRefreshError: null,
-      updatedAt: now,
-    })
-    .onConflictDoUpdate({
-      target: [
-        harnessCapabilityCatalogs.organizationId,
-        harnessCapabilityCatalogs.provider,
-        harnessCapabilityCatalogs.cliVersion,
-      ],
-      set: {
-        catalog,
-        catalogHash,
-        fetchedAt: now,
-        lastRefreshFailedAt: null,
-        lastRefreshError: null,
-        updatedAt: now,
-      },
-    })
-    .returning();
-  return responseFromCache(row!, false);
+  const row = await repository.upsert({
+    organizationId: input.organizationId,
+    provider: input.provider,
+    cliVersion: input.cliVersion,
+    catalog,
+    catalogHash,
+    now,
+  });
+  return responseFromCache(row, false);
 }
 
 /**
@@ -234,9 +241,38 @@ export async function getCachedHarnessCapabilities(
     now?: () => Date;
   },
 ): Promise<HarnessCapabilitiesResponse> {
+  return getCachedHarnessCapabilitiesFromRepository(
+    createHarnessCapabilityCatalogRepository(db),
+    input,
+  );
+}
+
+export function getConnectedCachedHarnessCapabilities(
+  input: {
+    organizationId: string;
+    provider: HarnessProvider;
+    cliVersion: string;
+    now?: () => Date;
+  },
+): Promise<HarnessCapabilitiesResponse> {
+  return getCachedHarnessCapabilitiesFromRepository(
+    createConnectedHarnessCapabilityCatalogRepository(),
+    input,
+  );
+}
+
+async function getCachedHarnessCapabilitiesFromRepository(
+  repository: CapabilityCatalogRepository,
+  input: {
+    organizationId: string;
+    provider: HarnessProvider;
+    cliVersion: string;
+    now?: () => Date;
+  },
+): Promise<HarnessCapabilitiesResponse> {
   assertSupportedCliVersion(input.provider, input.cliVersion);
   const now = input.now?.() ?? new Date();
-  const cached = await readCachedCatalog(db, input);
+  const cached = await readCachedCatalog(repository, input);
   if (!cached) {
     throw new HarnessCapabilityCatalogError(
       503,
@@ -258,7 +294,34 @@ export async function requireFreshHarnessCapabilities(
     now?: () => Date;
   },
 ): Promise<HarnessCapabilitiesResponse> {
-  const response = await getCachedHarnessCapabilities(db, {
+  return requireFreshHarnessCapabilitiesFromRepository(
+    createHarnessCapabilityCatalogRepository(db),
+    input,
+  );
+}
+
+export function requireFreshHarnessCapabilitiesFromRepository(
+  repository: CapabilityCatalogRepository,
+  input: {
+    organizationId: string;
+    provider: HarnessProvider;
+    cliVersion: string;
+    now?: () => Date;
+  },
+): Promise<HarnessCapabilitiesResponse> {
+  return requireFreshHarnessCapabilitiesInternal(repository, input);
+}
+
+async function requireFreshHarnessCapabilitiesInternal(
+  repository: CapabilityCatalogRepository,
+  input: {
+    organizationId: string;
+    provider: HarnessProvider;
+    cliVersion: string;
+    now?: () => Date;
+  },
+): Promise<HarnessCapabilitiesResponse> {
+  const response = await getCachedHarnessCapabilitiesFromRepository(repository, {
     organizationId: input.organizationId,
     provider: input.provider,
     cliVersion: input.cliVersion,
@@ -285,30 +348,59 @@ export async function prewarmHarnessCapabilityCatalogs(
   stale: number;
   failed: number;
 }> {
-  const organizations = await db
-    .select({ id: organization.id })
-    .from(organization);
+  return prewarmHarnessCapabilityCatalogsFromRepository(
+    createHarnessCapabilityCatalogRepository(db),
+    input,
+  );
+}
+
+export function prewarmConnectedHarnessCapabilityCatalogs(
+  input: { dependencies?: HarnessCapabilityDiscoveryDependencies } = {},
+): Promise<{
+  organizations: number;
+  attempted: number;
+  ready: number;
+  stale: number;
+  failed: number;
+}> {
+  return prewarmHarnessCapabilityCatalogsFromRepository(
+    createConnectedHarnessCapabilityCatalogRepository(),
+    input,
+  );
+}
+
+async function prewarmHarnessCapabilityCatalogsFromRepository(
+  repository: CapabilityCatalogRepository,
+  input: { dependencies?: HarnessCapabilityDiscoveryDependencies } = {},
+): Promise<{
+  organizations: number;
+  attempted: number;
+  ready: number;
+  stale: number;
+  failed: number;
+}> {
+  const organizationIds = await repository.listOrganizationIds();
   const result = {
-    organizations: organizations.length,
+    organizations: organizationIds.length,
     attempted: 0,
     ready: 0,
     stale: 0,
     failed: 0,
   };
 
-  for (const { id: organizationId } of organizations) {
+  for (const organizationId of organizationIds) {
     for (const provider of ["claude", "codex"] as const) {
       for (const cliVersion of HARNESS_PROVIDER_CONTRACTS[provider]
         .cliVersions) {
         result.attempted++;
         try {
           const now = input.dependencies?.now?.() ?? new Date();
-          const cached = await readCachedCatalog(db, {
+          const cached = await readCachedCatalog(repository, {
             organizationId,
             provider,
             cliVersion,
           });
-          const capabilities = await getHarnessCapabilities(db, {
+          const capabilities = await getHarnessCapabilitiesFromRepository(repository, {
             organizationId,
             provider,
             cliVersion,
@@ -446,28 +538,14 @@ export function upgradeHarnessDraftToHistoricalV2(
 }
 
 async function readCachedCatalog(
-  db: Db,
+  repository: CapabilityCatalogRepository,
   input: {
     organizationId: string;
     provider: HarnessProvider;
     cliVersion: string;
   },
 ): Promise<CachedCatalog | null> {
-  const [row] = await db
-    .select()
-    .from(harnessCapabilityCatalogs)
-    .where(
-      and(
-        eq(
-          harnessCapabilityCatalogs.organizationId,
-          input.organizationId,
-        ),
-        eq(harnessCapabilityCatalogs.provider, input.provider),
-        eq(harnessCapabilityCatalogs.cliVersion, input.cliVersion),
-      ),
-    )
-    .limit(1);
-  return row ?? null;
+  return repository.find(input);
 }
 
 function assertSupportedCliVersion(

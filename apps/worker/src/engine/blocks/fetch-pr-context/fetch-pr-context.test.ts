@@ -18,7 +18,10 @@ vi.mock("../../../db/client.js", () => ({ getDb: mocks.getDb }));
 
 vi.mock("../../../db/repositories/runs.js", () => ({
   listWorkflowOwnedBranchesForTicket: mocks.listWorkflowOwnedBranchesForTicket,
+  listConnectedWorkflowOwnedBranchesForTicket:
+    mocks.listWorkflowOwnedBranchesForTicket,
   findRunPrSiblings: mocks.findRunPrSiblings,
+  findConnectedRunPrSiblings: mocks.findRunPrSiblings,
 }));
 
 

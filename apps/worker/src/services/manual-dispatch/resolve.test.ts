@@ -51,9 +51,12 @@ vi.mock("../dispatch/dispatch-trigger.js", async (importOriginal) => ({
 }));
 vi.mock("../../db/repositories/runs.js", () => ({
   findWorkflowOwnedPullRequest: mocks.findWorkflowOwnedPullRequest,
+  findConnectedWorkflowOwnedPullRequest: mocks.findWorkflowOwnedPullRequest,
 }));
 vi.mock("../../db/repositories/approvals.js", () => ({
   hasDispatchBlockingApprovalForTicket: mocks.hasDispatchBlockingApprovalForTicket,
+  hasConnectedDispatchBlockingApprovalForTicket:
+    mocks.hasDispatchBlockingApprovalForTicket,
 }));
 vi.mock("../../post-pr-gate/config.js", () => ({
   loadPostPrGateConfig: () => ({ postPrGate: { steps: [] } }),
@@ -219,7 +222,6 @@ describe("manual dispatch against a definition repository pin", () => {
     return {
       definitionId: 5,
       version: 12,
-      schema: "v2" as const,
       definition: {
         schemaVersion: 2,
         repositoryScope,
@@ -351,8 +353,7 @@ describe("manual dispatch against a definition repository pin", () => {
     mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue({
       definitionId: 5,
       version: 12,
-      schema: "legacy-v1",
-      raw: { schemaVersion: 1, nodes: [], edges: [] },
+      definition: { schemaVersion: 1, nodes: [], edges: [] },
     });
 
     await expect(

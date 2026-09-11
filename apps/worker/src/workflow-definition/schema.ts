@@ -27,7 +27,6 @@ import {
 } from "@shared/contracts";
 import { resolveBuiltinHarnessProfile } from "@shared/harness";
 import { PROMPT_SLOT_NAME_PATTERN } from "@shared/prompts";
-import { parseCondition } from "@shared/conditions";
 import {
   prepareWorkspaceParams,
   finalizeWorkspaceParams,

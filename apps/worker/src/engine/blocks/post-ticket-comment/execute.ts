@@ -9,11 +9,10 @@ async function blockPostTicketCommentStep(
   owner: ActiveRunOwner,
 ): Promise<string | null> {
   "use step";
-  const { getDb } = await import("../../../db/client.js");
-  const { assertActiveRunOwner } = await import("../../../services/run-lifecycle/active-run-owner.js");
+  const { assertConnectedActiveRunOwner } = await import("../../../services/run-lifecycle/active-run-owner.js");
   const { createAdapters } = await import("../../../services/vcs/adapters.js");
   const { issueTracker } = createAdapters();
-  await assertActiveRunOwner(getDb(), owner);
+  await assertConnectedActiveRunOwner(owner);
   // The body is {{variable}}-substituted before it gets here, so it can carry
   // {{change_summary}} or any agent block's output, exactly like post_pr_comment.
   return issueTracker.postComment(ticketId, scrubForPublication(body));

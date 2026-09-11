@@ -1,8 +1,9 @@
 import type {
   WorkflowDefinitionValidationIssue,
 } from "@shared/contracts";
-import type { Db } from "../db/client.js";
+import type { Db } from "../db/types.js";
 import { createPromptReferenceLoader } from "../prompt-library/prompt-reference-loader.js";
+import { createConnectedPromptReferenceLoader } from "../prompt-library/prompt-reference-loader.js";
 import {
   exampleValueForJsonSchema,
   effectivePromptProfileSource,
@@ -17,6 +18,7 @@ import {
 } from "./prompt-authoring.js";
 import { validateWorkflowDefinitionCandidate } from "./validation.js";
 import { resolveHarnessRuntimesForDefinition } from "./harness-profile-runtime.js";
+import { resolveConnectedVerifiedHarnessProfileVersion } from "../harness-profiles/resolved-version.js";
 
 export interface WorkflowPromptPreview {
   blockId: string;
@@ -123,6 +125,50 @@ export async function previewWorkflowPromptCandidate(
       issues: dedupeIssues([...validationIssues, ...resolved.issues]),
     },
   };
+}
+
+/** Process-bound preview assembled from named prompt/profile repository reads. */
+export async function previewConnectedWorkflowPromptCandidate(
+  input: { candidate: unknown; blockId: string; organizationId?: string },
+): Promise<WorkflowPromptPreviewResult> {
+  const registryContext = (await import("./models.js")).workflowBlockRegistryContextFromEnv();
+  const validated = validateWorkflowDefinitionCandidate(input.candidate, registryContext);
+  if (!validated.parsed) return { ok: false, statusCode: 422, message: "Prompt preview requires a structurally valid v2 definition.", issues: validated.response.issues };
+  const nodeIndex = validated.parsed.nodes.findIndex((node) => node.id === input.blockId);
+  const node = validated.parsed.nodes[nodeIndex];
+  if (!node) return { ok: false, statusCode: 400, message: `Unknown block "${input.blockId}".`, issues: [] };
+  if (!isPromptAuthoringBlock(node)) return { ok: false, statusCode: 400, message: `Block "${input.blockId}" does not have an effective agent prompt.`, issues: [] };
+  const availableValues = validated.response.availableValuesByNode[node.id] ?? [];
+  let profileSource = await resolveProfileInstructions({ node, defaultProvider: registryContext.defaultAgent.provider });
+  if (input.organizationId) {
+    try {
+      const reference = node.configuration.harnessProfile;
+      if (reference && typeof reference === "object" && "profileId" in reference && "version" in reference) {
+        const profile = await resolveConnectedVerifiedHarnessProfileVersion({
+          organizationId: input.organizationId,
+          profileId: String(reference.profileId),
+          version: Number(reference.version),
+        });
+        if (profile) profileSource = effectivePromptProfileSource({
+          ...await import("../sandbox/harness-runtime.js").then(({ resolveHarnessRuntime }) => resolveHarnessRuntime({
+            nodeId: node.id,
+            nodeType: node.type,
+            workspaceMode: node.configuration.workspaceMode,
+            resolved: profile,
+            legacyDynamicSkills: false,
+          })),
+        });
+      }
+    } catch {
+      // The regular validation path reports an unavailable persisted profile.
+    }
+  }
+  const resolved = await resolveNodePromptAuthoring({
+    node, nodeIndex, availableValues, loadPromptReference: createConnectedPromptReferenceLoader(), profileSource,
+    unresolvedRepositorySources: unresolvedRepositoryInstructionSources(), runtimeData: renderPreviewRuntimeData(availableValues),
+  });
+  const validationIssues = validated.response.issues.filter((issue) => issue.nodeId === null || issue.nodeId === input.blockId);
+  return { ok: true, preview: { blockId: input.blockId, prompt: resolved.compilation.prompt, hash: resolved.compilation.hash, sections: resolved.compilation.sections, provenance: resolved.compilation.provenance, unresolvedSources: resolved.compilation.unresolvedSources, issues: dedupeIssues([...validationIssues, ...resolved.issues]) } };
 }
 
 function renderPreviewRuntimeData(

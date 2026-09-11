@@ -1,4 +1,4 @@
-import type { Db } from "../../db/client.js";
+import type { Db } from "../../db/types.js";
 import { acknowledgeManualDispatchStarted } from "../../db/repositories/manual-dispatch.js";
 
 export async function acknowledgeManualDispatchWorkflow(

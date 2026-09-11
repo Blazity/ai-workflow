@@ -357,8 +357,15 @@ function fakeSchedules(rows: ScheduleRow[]) {
         watermarks.push({ scheduleId, occurrenceAt });
         return true;
       },
-      revoke: async (scheduleId: string) => {
+      revokeAndCancelWaiting: async (
+        scheduleId: string,
+        _now: Date,
+        reason = "schedule_revoked",
+        overwriteReason = false,
+      ) => {
         revoked.push(scheduleId);
+        await ledger.cancelWaiting(scheduleId, reason, overwriteReason);
+        return { revoked: true };
       },
       getById: async (scheduleId: string) =>
         rows.find((row) => row.id === scheduleId) ?? null,
@@ -413,7 +420,7 @@ function deps(overrides: Partial<DispatchDeps> = {}): DispatchDeps {
       listEvaluable: async () => [],
       recordEvaluationPass: async () => undefined,
       advanceWatermark: async () => true,
-      revoke: async () => undefined,
+      revokeAndCancelWaiting: async () => ({ revoked: true }),
       getById: async () => null,
     },
     resolveScheduleTarget: async () => null,

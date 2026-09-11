@@ -11,7 +11,6 @@ import type {
   JsonValue,
 } from "@shared/contracts";
 import {
-  HARNESS_MCP_INTEGRATION_IDS,
   HARNESS_TOOL_IDS,
   stableJson,
 } from "@shared/contracts";

@@ -20,18 +20,22 @@ import {
   SkillValidationError,
   type SkillSource,
 } from "@shared/skills";
-import { and, eq } from "drizzle-orm";
 import { extract } from "tar-stream";
-import type { Db } from "../db/client.js";
-import { harnessSkillArtifacts } from "../db/schema.js";
+import type { Db } from "../db/types.js";
 import { buildOctokit, type GitHubAppAuth } from "../services/vcs/github-auth.js";
 import { sha256Digest } from "./skill-artifact-digest.js";
 import {
-  persistHarnessSkillArtifacts,
+  persistHarnessSkillArtifactsFromRepository,
   type PersistableSkillArtifact,
 } from "./skill-artifact-persistence.js";
 import { HarnessSkillImportError } from "./skill-errors.js";
-import { readHarnessSkillArtifactSource } from "../db/repositories/harness-profiles.js";
+import {
+  createConnectedHarnessProfileRepository,
+  createHarnessProfileRepository,
+  readHarnessSkillArtifactSource,
+} from "../db/repositories/harness-profiles.js";
+
+type HarnessProfileRepository = ReturnType<typeof createHarnessProfileRepository>;
 
 export { HarnessSkillImportError } from "./skill-errors.js";
 
@@ -506,6 +510,18 @@ export async function importGitHubSkills(
     request: HarnessSkillImportRequest;
   },
 ): Promise<HarnessSkillArtifact[]> {
+  return importGitHubSkillsFromRepository(createHarnessProfileRepository(db), input);
+}
+
+export async function importGitHubSkillsFromRepository(
+  persistence: HarnessProfileRepository,
+  input: {
+    repository: GitHubSkillRepository;
+    organizationId: string;
+    actorId: string;
+    request: HarnessSkillImportRequest;
+  },
+): Promise<HarnessSkillArtifact[]> {
   const source = validateExactSource(input.request.source);
   const selectedPaths = normalizeSelectedPaths(input.request.paths);
   const resolved = await readProvider(() =>
@@ -580,11 +596,25 @@ export async function importGitHubSkills(
     names.add(artifact.name);
     artifacts.push(artifact);
   }
-  return persistHarnessSkillArtifacts(db, {
+  return persistHarnessSkillArtifactsFromRepository(persistence, {
     organizationId: input.organizationId,
     actorId: input.actorId,
     artifacts,
   });
+}
+
+export function importConnectedGitHubSkills(
+  input: {
+    repository: GitHubSkillRepository;
+    organizationId: string;
+    actorId: string;
+    request: HarnessSkillImportRequest;
+  },
+): Promise<HarnessSkillArtifact[]> {
+  return importGitHubSkillsFromRepository(
+    createConnectedHarnessProfileRepository(),
+    input,
+  );
 }
 
 export async function refreshGitHubSkillArtifact(
@@ -596,16 +626,22 @@ export async function refreshGitHubSkillArtifact(
     artifactHash: string;
   },
 ): Promise<HarnessSkillArtifact> {
-  const [existing] = await db
-    .select()
-    .from(harnessSkillArtifacts)
-    .where(
-      and(
-        eq(harnessSkillArtifacts.organizationId, input.organizationId),
-        eq(harnessSkillArtifacts.artifactHash, input.artifactHash),
-      ),
-    )
-    .limit(1);
+  return refreshGitHubSkillArtifactFromRepository(createHarnessProfileRepository(db), input);
+}
+
+export async function refreshGitHubSkillArtifactFromRepository(
+  persistence: HarnessProfileRepository,
+  input: {
+    repository: GitHubSkillRepository;
+    organizationId: string;
+    actorId: string;
+    artifactHash: string;
+  },
+): Promise<HarnessSkillArtifact> {
+  const existing = await persistence.getArtifactByHash({
+    organizationId: input.organizationId,
+    artifactHash: input.artifactHash,
+  });
   if (!existing) {
     throw new HarnessSkillImportError(404, "Skill artifact not found");
   }
@@ -645,7 +681,7 @@ export async function refreshGitHubSkillArtifact(
       ref: defaultBranch,
     }),
   );
-  const [artifact] = await importGitHubSkills(db, {
+  const [artifact] = await importGitHubSkillsFromRepository(persistence, {
     repository: input.repository,
     organizationId: input.organizationId,
     actorId: input.actorId,

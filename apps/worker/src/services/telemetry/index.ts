@@ -6,6 +6,7 @@
  * scripts/gates/cluster-deep-imports.json and that list only shrinks.
  */
 export {
+  collectConnectedSnapshots,
   collectSnapshots,
 } from "./collect-snapshots.js";
 export {

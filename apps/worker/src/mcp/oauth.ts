@@ -76,13 +76,12 @@ export function createMcpOAuthOptions(deployment: McpOAuthDeployment) {
     if (!deployment.organizationSlug) {
       throw new APIError("FORBIDDEN", { message: "OAuth deployment organization missing" });
     }
-    if (!deployment.db) {
+    if (!deployment.db && !deployment.findOrganizationId) {
       throw new APIError("FORBIDDEN", { message: "OAuth deployment organization missing" });
     }
-    const organizationId = await findDeploymentOrganizationId(
-      deployment.db,
-      deployment.organizationSlug,
-    );
+    const organizationId = deployment.findOrganizationId
+      ? await deployment.findOrganizationId(deployment.organizationSlug)
+      : await findDeploymentOrganizationId(deployment.db!, deployment.organizationSlug);
     if (!organizationId) {
       throw new APIError("FORBIDDEN", { message: "OAuth deployment organization missing" });
     }
@@ -129,10 +128,12 @@ export function createMcpOAuthOptions(deployment: McpOAuthDeployment) {
       if (!user) {
         return { organization_id: organizationId, organization_role: "service" };
       }
-      if (!deployment.db) {
+      if (!deployment.db && !deployment.findMemberRole) {
         throw new APIError("FORBIDDEN", { message: "Organization membership required" });
       }
-      const role = await findOrganizationMemberRole(deployment.db, organizationId, user.id);
+      const role = deployment.findMemberRole
+        ? await deployment.findMemberRole(organizationId, user.id)
+        : await findOrganizationMemberRole(deployment.db!, organizationId, user.id);
       if (!role) {
         throw new APIError("FORBIDDEN", { message: "Organization membership required" });
       }

@@ -25,7 +25,6 @@ import * as scheduleStore from "../../../../../../../../schedule-trigger/schedul
 
 const DEFINITION_ID = 9;
 const NODE_ID = "sched";
-const BASE = `/api/v1/workflow-definitions/${DEFINITION_ID}/triggers/${NODE_ID}/schedule`;
 
 const state = vi.hoisted(() => ({
   db: undefined as unknown,
@@ -480,7 +479,9 @@ describe("POST .../schedule/pause", () => {
 
   it("409s, not 404, when the write does not take effect on a row that exists", async () => {
     const minted = await mintSchedule();
-    const spy = vi.spyOn(scheduleStore, "pauseSchedule").mockResolvedValueOnce(undefined);
+    const spy = vi
+      .spyOn(scheduleStore, "pauseConnectedSchedule")
+      .mockResolvedValueOnce();
     try {
       const response = await call(pausePost, "POST", "/pause");
       // A row that exists but never got paused is a different failure than
@@ -545,7 +546,9 @@ describe("POST .../schedule/resume", () => {
   it("409s when the write does not take effect on a row that is still paused", async () => {
     const minted = await mintSchedule();
     await pauseSchedule(db, minted.scheduleId);
-    const spy = vi.spyOn(scheduleStore, "resumeSchedule").mockResolvedValueOnce(undefined);
+    const spy = vi
+      .spyOn(scheduleStore, "resumeConnectedSchedule")
+      .mockResolvedValueOnce();
     try {
       const response = await call(resumePost, "POST", "/resume");
       expect(response.status).toBe(409);

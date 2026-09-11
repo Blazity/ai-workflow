@@ -2,15 +2,27 @@ import {
   REVIEW_RESULT_JSON_SCHEMA,
   type JsonSchema202012,
 } from "@shared/contracts";
-import { and, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
-import type { Db } from "../db/client.js";
+import type { Db } from "../db/types.js";
 import {
-  approvalRequests,
-  manualDispatchRequests,
-  triggerDeliveries,
-  workflowDefinitions,
-  workflowDefinitionVersions,
-} from "../db/schema.js";
+  definitionHasAnyVersion,
+  listDefinitionDriftMetadata,
+  listDefinitionDriftSnapshots,
+  listDeployedDefinitionSnapshots,
+  listFreshInstallDefinitionCandidates,
+  listLiveManualDispatchDefinitionPins,
+  listPendingApprovalDefinitionPins,
+  listPendingTriggerDeliveryDefinitionPins,
+} from "../db/repositories/definitions.js";
+import {
+  connectedDefinitionHasAnyVersion,
+  listConnectedDefinitionDriftMetadata,
+  listConnectedDefinitionDriftSnapshots,
+  listConnectedDeployedDefinitionSnapshots,
+  listConnectedFreshInstallDefinitionCandidates,
+  listConnectedLiveManualDispatchDefinitionPins,
+  listConnectedPendingApprovalDefinitionPins,
+  listConnectedPendingTriggerDeliveryDefinitionPins,
+} from "../db/repositories/definitions/drift-reads.js";
 import { defaultWorkflowDefinitionV2 } from "./default.js";
 import { PR_CHECK_OUTPUT_SCHEMA } from "./templates.js";
 
@@ -333,12 +345,55 @@ export interface FindCarrySchemaDriftOptions {
   includeReview?: boolean;
 }
 
+interface CarrySchemaDriftStore {
+  listDeployedDefinitionSnapshots: typeof listDeployedDefinitionSnapshots extends (
+    db: Db,
+  ) => infer Result ? () => Result : never;
+  listFreshInstallDefinitionCandidates: typeof listFreshInstallDefinitionCandidates extends (
+    db: Db,
+  ) => infer Result ? () => Result : never;
+  definitionHasAnyVersion: (definitionId: number) => Promise<boolean>;
+  listPendingApprovalDefinitionPins: typeof listPendingApprovalDefinitionPins extends (
+    db: Db,
+  ) => infer Result ? () => Result : never;
+  listPendingTriggerDeliveryDefinitionPins: typeof listPendingTriggerDeliveryDefinitionPins extends (
+    db: Db,
+  ) => infer Result ? () => Result : never;
+  listLiveManualDispatchDefinitionPins: (statuses: readonly string[]) => ReturnType<typeof listLiveManualDispatchDefinitionPins>;
+  listDefinitionDriftMetadata: (definitionIds: number[]) => ReturnType<typeof listDefinitionDriftMetadata>;
+  listDefinitionDriftSnapshots: (requests: Array<{ definitionId: number; version: number }>) => ReturnType<typeof listDefinitionDriftSnapshots>;
+}
+
+function carrySchemaDriftStore(db: Db): CarrySchemaDriftStore {
+  return {
+    listDeployedDefinitionSnapshots: () => listDeployedDefinitionSnapshots(db),
+    listFreshInstallDefinitionCandidates: () => listFreshInstallDefinitionCandidates(db),
+    definitionHasAnyVersion: (definitionId) => definitionHasAnyVersion(db, definitionId),
+    listPendingApprovalDefinitionPins: () => listPendingApprovalDefinitionPins(db),
+    listPendingTriggerDeliveryDefinitionPins: () => listPendingTriggerDeliveryDefinitionPins(db),
+    listLiveManualDispatchDefinitionPins: (statuses) => listLiveManualDispatchDefinitionPins(db, statuses),
+    listDefinitionDriftMetadata: (definitionIds) => listDefinitionDriftMetadata(db, definitionIds),
+    listDefinitionDriftSnapshots: (requests) => listDefinitionDriftSnapshots(db, requests),
+  };
+}
+
+const connectedCarrySchemaDriftStore: CarrySchemaDriftStore = {
+  listDeployedDefinitionSnapshots: listConnectedDeployedDefinitionSnapshots,
+  listFreshInstallDefinitionCandidates: listConnectedFreshInstallDefinitionCandidates,
+  definitionHasAnyVersion: connectedDefinitionHasAnyVersion,
+  listPendingApprovalDefinitionPins: listConnectedPendingApprovalDefinitionPins,
+  listPendingTriggerDeliveryDefinitionPins: listConnectedPendingTriggerDeliveryDefinitionPins,
+  listLiveManualDispatchDefinitionPins: listConnectedLiveManualDispatchDefinitionPins,
+  listDefinitionDriftMetadata: listConnectedDefinitionDriftMetadata,
+  listDefinitionDriftSnapshots: listConnectedDefinitionDriftSnapshots,
+};
+
 /** Every definition snapshot a dispatch can still select. Ported from
  *  builtin-prompt-drift's collectWalkTargets: deployed pointer, the versionless
  *  fresh-install default, and every approval / trigger-delivery / manual-dispatch
  *  pin, deduplicated on definition plus version. */
 async function collectWalkTargets(
-  db: Db,
+  store: CarrySchemaDriftStore,
   options: FindCarrySchemaDriftOptions,
   skipped: SkippedWalkTarget[],
 ): Promise<WalkTarget[]> {
@@ -351,30 +406,7 @@ async function collectWalkTargets(
     targets.push(target);
   };
 
-  for (const row of await db
-    .select({
-      id: workflowDefinitions.id,
-      name: workflowDefinitions.name,
-      version: workflowDefinitionVersions.version,
-      definition: workflowDefinitionVersions.definition,
-    })
-    .from(workflowDefinitions)
-    .innerJoin(
-      workflowDefinitionVersions,
-      and(
-        eq(workflowDefinitionVersions.definitionId, workflowDefinitions.id),
-        eq(
-          workflowDefinitionVersions.version,
-          workflowDefinitions.deployedVersion,
-        ),
-      ),
-    )
-    .where(
-      and(
-        isNull(workflowDefinitions.archivedAt),
-        isNotNull(workflowDefinitions.deployedVersion),
-      ),
-    )) {
+  for (const row of await store.listDeployedDefinitionSnapshots()) {
     add({
       definitionId: row.id,
       definitionName: row.name,
@@ -386,27 +418,9 @@ async function collectWalkTargets(
 
   // Fresh install: the enabled ticket definition with no stored version at all,
   // for which definition-step.ts serves the code default graph.
-  for (const row of await db
-    .select({
-      id: workflowDefinitions.id,
-      name: workflowDefinitions.name,
-      triggerTypes: workflowDefinitions.triggerTypes,
-    })
-    .from(workflowDefinitions)
-    .where(
-      and(
-        isNull(workflowDefinitions.archivedAt),
-        eq(workflowDefinitions.enabled, true),
-        isNull(workflowDefinitions.deployedVersion),
-      ),
-    )) {
+  for (const row of await store.listFreshInstallDefinitionCandidates()) {
     if (!row.triggerTypes.includes("trigger_ticket_ai")) continue;
-    const anyVersion = await db
-      .select({ version: workflowDefinitionVersions.version })
-      .from(workflowDefinitionVersions)
-      .where(eq(workflowDefinitionVersions.definitionId, row.id))
-      .limit(1);
-    if (anyVersion.length > 0) continue;
+    if (await store.definitionHasAnyVersion(row.id)) continue;
     add({
       definitionId: row.id,
       definitionName: row.name,
@@ -424,35 +438,9 @@ async function collectWalkTargets(
     definitionVersion: number | null;
     source: CarrySchemaPinSource;
   }[] = [
-    ...(
-      await db
-        .selectDistinct({
-          definitionId: approvalRequests.definitionId,
-          definitionVersion: approvalRequests.definitionVersion,
-        })
-        .from(approvalRequests)
-        .where(eq(approvalRequests.status, "pending"))
-    ).map((row) => ({ ...row, source: "approval" as const })),
-    ...(
-      await db
-        .selectDistinct({
-          definitionId: triggerDeliveries.definitionId,
-          definitionVersion: triggerDeliveries.definitionVersion,
-        })
-        .from(triggerDeliveries)
-        .where(eq(triggerDeliveries.pending, true))
-    ).map((row) => ({ ...row, source: "trigger_delivery" as const })),
-    ...(
-      await db
-        .selectDistinct({
-          definitionId: manualDispatchRequests.definitionId,
-          definitionVersion: manualDispatchRequests.definitionVersion,
-        })
-        .from(manualDispatchRequests)
-        .where(
-          inArray(manualDispatchRequests.status, LIVE_MANUAL_DISPATCH_STATUSES),
-        )
-    ).map((row) => ({ ...row, source: "manual_dispatch" as const })),
+    ...(await store.listPendingApprovalDefinitionPins()).map((row) => ({ ...row, source: "approval" as const })),
+    ...(await store.listPendingTriggerDeliveryDefinitionPins()).map((row) => ({ ...row, source: "trigger_delivery" as const })),
+    ...(await store.listLiveManualDispatchDefinitionPins(LIVE_MANUAL_DISPATCH_STATUSES)).map((row) => ({ ...row, source: "manual_dispatch" as const })),
   ];
 
   const pending = new Map<string, (typeof reachable)[number]>();
@@ -462,19 +450,9 @@ async function collectWalkTargets(
   }
 
   if (pending.size > 0) {
-    const definitionRows = await db
-      .select({
-        id: workflowDefinitions.id,
-        name: workflowDefinitions.name,
-        deployedVersion: workflowDefinitions.deployedVersion,
-      })
-      .from(workflowDefinitions)
-      .where(
-        inArray(
-          workflowDefinitions.id,
-          [...new Set([...pending.values()].map((entry) => entry.definitionId))],
-        ),
-      );
+    const definitionRows = await store.listDefinitionDriftMetadata(
+      [...new Set([...pending.values()].map((entry) => entry.definitionId))],
+    );
     const definitionById = new Map(definitionRows.map((row) => [row.id, row]));
 
     const wanted: {
@@ -520,26 +498,7 @@ async function collectWalkTargets(
     }
 
     if (wanted.length > 0) {
-      const versionRows = await db
-        .select({
-          definitionId: workflowDefinitionVersions.definitionId,
-          version: workflowDefinitionVersions.version,
-          definition: workflowDefinitionVersions.definition,
-        })
-        .from(workflowDefinitionVersions)
-        .where(
-          or(
-            ...wanted.map((entry) =>
-              and(
-                eq(
-                  workflowDefinitionVersions.definitionId,
-                  entry.definitionId,
-                ),
-                eq(workflowDefinitionVersions.version, entry.version),
-              ),
-            ),
-          ),
-        );
+      const versionRows = await store.listDefinitionDriftSnapshots(wanted);
       const definitionByKey = new Map(
         versionRows.map((row) => [`${row.definitionId}@${row.version}`, row]),
       );
@@ -692,8 +651,21 @@ export async function findCarrySchemaDrift(
   db: Db,
   options: FindCarrySchemaDriftOptions = {},
 ): Promise<CarrySchemaDriftReport> {
+  return findCarrySchemaDriftWithStore(carrySchemaDriftStore(db), options);
+}
+
+export async function findConnectedCarrySchemaDrift(
+  options: FindCarrySchemaDriftOptions = {},
+): Promise<CarrySchemaDriftReport> {
+  return findCarrySchemaDriftWithStore(connectedCarrySchemaDriftStore, options);
+}
+
+async function findCarrySchemaDriftWithStore(
+  store: CarrySchemaDriftStore,
+  options: FindCarrySchemaDriftOptions,
+): Promise<CarrySchemaDriftReport> {
   const skipped: SkippedWalkTarget[] = [];
-  const targets = await collectWalkTargets(db, options, skipped);
+  const targets = await collectWalkTargets(store, options, skipped);
 
   const embeds: EmbeddedSchemaFinding[] = [];
   let definitionsWalked = 0;

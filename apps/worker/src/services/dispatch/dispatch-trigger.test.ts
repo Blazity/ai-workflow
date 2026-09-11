@@ -64,6 +64,10 @@ vi.mock("./pr-autofix-exhaustion.js", () => ({
 }));
 const mockGetEnabled = vi.fn();
 const mockGetVersion = vi.fn();
+vi.mock("../../engine/definition-trigger-routing.js", () => ({
+  getEnabledWorkflowDefinitionForTrigger: (...args: any[]) => mockGetEnabled(...args),
+  getConnectedEnabledWorkflowDefinitionForTrigger: (...args: any[]) => mockGetEnabled(...args),
+}));
 vi.mock("../../db/repositories/definitions.js", () => ({
   getEnabledWorkflowDefinitionForTrigger: (...args: any[]) => mockGetEnabled(...args),
   getWorkflowDefinitionVersion: (...args: any[]) => mockGetVersion(...args),

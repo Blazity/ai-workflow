@@ -11,6 +11,7 @@ export {
 export {
   PREMATURE_AI_REVIEW_CANCELLATION_REASON,
   decideAiReviewRun,
+  decideConnectedAiReviewRun,
 } from "./ai-review-transition.js";
 export {
   AWAITING_APPROVAL_LABEL,

@@ -115,6 +115,31 @@ vi.mock("../../memory/store.js", async (importOriginal) => {
     },
   };
 });
+vi.mock("../../db/repositories/memory.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../db/repositories/memory.js")>();
+  return {
+    ...actual,
+    getConnectedMemoryDocument: async (subjectKey: string, docPath: string) =>
+      mocks.readOverride
+        ? mocks.readOverride(subjectKey, docPath)
+        : actual.getMemoryDocument(mocks.db as Parameters<typeof actual.getMemoryDocument>[0], subjectKey, docPath),
+    upsertConnectedMemoryDocument: async (
+      documentInput: Parameters<typeof actual.upsertMemoryDocument>[1],
+    ) => {
+      mocks.upsertInputs.push({
+        subjectKey: documentInput.subjectKey,
+        docPath: documentInput.docPath,
+        sourceRunId: documentInput.sourceRunId,
+        expectedVersion: documentInput.expectedVersion,
+      });
+      if (mocks.beforeUpsert) await mocks.beforeUpsert();
+      return actual.upsertMemoryDocument(
+        mocks.db as Parameters<typeof actual.upsertMemoryDocument>[0],
+        documentInput,
+      );
+    },
+  };
+});
 
 import { and, eq } from "drizzle-orm";
 import type { Db } from "../../db/client.js";

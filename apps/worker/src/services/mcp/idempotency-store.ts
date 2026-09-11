@@ -1,9 +1,22 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
-import { and, asc, eq, inArray, lt, lte } from "drizzle-orm";
-
-import type { Db } from "../../db/client.js";
-import { mcpIdempotencyKeys } from "../../db/schema.js";
+import type { Db } from "../../db/types.js";
+import {
+  completeConnectedMcpIdempotencyLease,
+  completeMcpIdempotencyLease,
+  failConnectedMcpIdempotencyLease,
+  failMcpIdempotencyLease,
+  findConnectedMcpIdempotencyRow,
+  findMcpIdempotencyRow,
+  insertConnectedMcpIdempotencyLease,
+  insertMcpIdempotencyLease,
+  reclaimConnectedMcpIdempotencyLease,
+  reclaimMcpIdempotencyLease,
+  releaseConnectedMcpIdempotencyLease,
+  releaseMcpIdempotencyLease,
+  sweepConnectedExpiredMcpIdempotencyKeys,
+  sweepExpiredMcpIdempotencyKeys,
+} from "../../db/repositories/mcp.js";
 import {
   McpPublicError,
   type IdempotencyInput,
@@ -28,15 +41,37 @@ const RESPONSE_TTL_MS = 24 * 60 * 60 * 1_000;
 
 const SWEEP_BATCH_LIMIT = 100;
 
-function namespaceWhere(input: IdempotencyInput | Lease) {
-  return and(
-    eq(mcpIdempotencyKeys.organizationId, input.organizationId),
-    eq(mcpIdempotencyKeys.actorSubject, input.actorSubject),
-    eq(mcpIdempotencyKeys.clientId, input.clientId),
-    eq(mcpIdempotencyKeys.toolName, input.toolName),
-    eq(mcpIdempotencyKeys.idempotencyKey, input.idempotencyKey),
-  );
+interface McpIdempotencyStore {
+  insert: (input: Parameters<typeof insertMcpIdempotencyLease>[1]) => ReturnType<typeof insertMcpIdempotencyLease>;
+  find: (input: Parameters<typeof findMcpIdempotencyRow>[1]) => ReturnType<typeof findMcpIdempotencyRow>;
+  reclaim: (input: Parameters<typeof reclaimMcpIdempotencyLease>[1]) => ReturnType<typeof reclaimMcpIdempotencyLease>;
+  complete: (input: Parameters<typeof completeMcpIdempotencyLease>[1]) => ReturnType<typeof completeMcpIdempotencyLease>;
+  fail: (input: Parameters<typeof failMcpIdempotencyLease>[1]) => ReturnType<typeof failMcpIdempotencyLease>;
+  release: (input: Parameters<typeof releaseMcpIdempotencyLease>[1]) => ReturnType<typeof releaseMcpIdempotencyLease>;
+  sweep: (now: Date, limit: number) => ReturnType<typeof sweepExpiredMcpIdempotencyKeys>;
 }
+
+function mcpIdempotencyStore(db: Db): McpIdempotencyStore {
+  return {
+    insert: (input) => insertMcpIdempotencyLease(db, input),
+    find: (input) => findMcpIdempotencyRow(db, input),
+    reclaim: (input) => reclaimMcpIdempotencyLease(db, input),
+    complete: (input) => completeMcpIdempotencyLease(db, input),
+    fail: (input) => failMcpIdempotencyLease(db, input),
+    release: (input) => releaseMcpIdempotencyLease(db, input),
+    sweep: (now, limit) => sweepExpiredMcpIdempotencyKeys(db, now, limit),
+  };
+}
+
+const connectedMcpIdempotencyStore: McpIdempotencyStore = {
+  insert: insertConnectedMcpIdempotencyLease,
+  find: findConnectedMcpIdempotencyRow,
+  reclaim: reclaimConnectedMcpIdempotencyLease,
+  complete: completeConnectedMcpIdempotencyLease,
+  fail: failConnectedMcpIdempotencyLease,
+  release: releaseConnectedMcpIdempotencyLease,
+  sweep: sweepConnectedExpiredMcpIdempotencyKeys,
+};
 
 function leaseFor(input: IdempotencyInput): string {
   const lease: Lease = {
@@ -150,58 +185,46 @@ export async function sweepMcpIdempotencyKeys(
   now: Date,
   options: { limit?: number } = {},
 ): Promise<{ deleted: number }> {
-  const due = await db
-    .select({ expiresAt: mcpIdempotencyKeys.expiresAt })
-    .from(mcpIdempotencyKeys)
-    .where(lt(mcpIdempotencyKeys.expiresAt, now))
-    .orderBy(asc(mcpIdempotencyKeys.expiresAt))
-    .limit(options.limit ?? SWEEP_BATCH_LIMIT);
-  if (due.length === 0) return { deleted: 0 };
+  return sweepMcpIdempotencyKeysWithStore(mcpIdempotencyStore(db), now, options);
+}
 
-  const instants = [...new Set(due.map((row) => row.expiresAt.getTime()))].map(
-    (time) => new Date(time),
-  );
-  const deleted = await db
-    .delete(mcpIdempotencyKeys)
-    .where(
-      and(
-        lt(mcpIdempotencyKeys.expiresAt, now),
-        inArray(mcpIdempotencyKeys.expiresAt, instants),
-      ),
-    )
-    .returning({ expiresAt: mcpIdempotencyKeys.expiresAt });
-  return { deleted: deleted.length };
+export function sweepConnectedMcpIdempotencyKeys(
+  now: Date,
+  options: { limit?: number } = {},
+): Promise<{ deleted: number }> {
+  return sweepMcpIdempotencyKeysWithStore(connectedMcpIdempotencyStore, now, options);
+}
+
+async function sweepMcpIdempotencyKeysWithStore(
+  store: McpIdempotencyStore,
+  now: Date,
+  options: { limit?: number },
+): Promise<{ deleted: number }> {
+  return { deleted: await store.sweep(now, options.limit ?? SWEEP_BATCH_LIMIT) };
 }
 
 export async function beginMcpMutation<T>(
   db: Db,
   input: IdempotencyInput,
 ): Promise<{ kind: "execute"; leaseId: string } | { kind: "replay"; response: T }> {
-  return withSafeStoreErrors(async () => {
-    const inserted = await db
-      .insert(mcpIdempotencyKeys)
-      .values({
-        organizationId: input.organizationId,
-        actorSubject: input.actorSubject,
-        clientId: input.clientId,
-        toolName: input.toolName,
-        idempotencyKey: input.idempotencyKey,
-        payloadHash: input.payloadHash,
-        state: "started",
-        safeResponse: null,
-        errorCode: null,
-        expiresAt: input.expiresAt,
-      })
-      .onConflictDoNothing()
-      .returning({ payloadHash: mcpIdempotencyKeys.payloadHash });
-    if (inserted.length > 0) return { kind: "execute", leaseId: leaseFor(input) };
+  return beginMcpMutationWithStore<T>(mcpIdempotencyStore(db), input);
+}
 
-    const existingRows = await db
-      .select()
-      .from(mcpIdempotencyKeys)
-      .where(namespaceWhere(input))
-      .limit(1);
-    let existing = existingRows[0];
+export function beginConnectedMcpMutation<T>(
+  input: IdempotencyInput,
+): Promise<{ kind: "execute"; leaseId: string } | { kind: "replay"; response: T }> {
+  return beginMcpMutationWithStore<T>(connectedMcpIdempotencyStore, input);
+}
+
+async function beginMcpMutationWithStore<T>(
+  store: McpIdempotencyStore,
+  input: IdempotencyInput,
+): Promise<{ kind: "execute"; leaseId: string } | { kind: "replay"; response: T }> {
+  return withSafeStoreErrors(async () => {
+    const inserted = await store.insert(input);
+    if (inserted) return { kind: "execute", leaseId: leaseFor(input) };
+
+    let existing = await store.find(input);
     if (!existing) {
       throw new McpPublicError("CONFLICT", "Concurrent mutation, retry", true);
     }
@@ -231,28 +254,11 @@ export async function beginMcpMutation<T>(
     rejectDifferentRequest(existing);
 
     if (existing.expiresAt.getTime() <= input.now.getTime()) {
-      const reclaimed = await db
-        .update(mcpIdempotencyKeys)
-        .set({
-          payloadHash: input.payloadHash,
-          state: "started",
-          safeResponse: null,
-          errorCode: null,
-          expiresAt: input.expiresAt,
-        })
-        .where(
-          and(namespaceWhere(input), lte(mcpIdempotencyKeys.expiresAt, input.now)),
-        )
-        .returning();
-      if (reclaimed.length > 0) {
+      const reclaimed = await store.reclaim({ ...input, now: input.now });
+      if (reclaimed) {
         return { kind: "execute" as const, leaseId: leaseFor(input) };
       }
-      const refreshed = await db
-        .select()
-        .from(mcpIdempotencyKeys)
-        .where(namespaceWhere(input))
-        .limit(1);
-      existing = refreshed[0];
+      existing = await store.find(input);
       if (!existing) {
         throw new McpPublicError("CONFLICT", "Concurrent mutation, retry", true);
       }
@@ -277,26 +283,32 @@ export async function completeMcpMutation<T>(
   response: T,
   now: Date,
 ): Promise<void> {
+  return completeMcpMutationWithStore(mcpIdempotencyStore(db), leaseId, response, now);
+}
+
+export function completeConnectedMcpMutation<T>(
+  leaseId: string,
+  response: T,
+  now: Date,
+): Promise<void> {
+  return completeMcpMutationWithStore(connectedMcpIdempotencyStore, leaseId, response, now);
+}
+
+async function completeMcpMutationWithStore<T>(
+  store: McpIdempotencyStore,
+  leaseId: string,
+  response: T,
+  now: Date,
+): Promise<void> {
   return withSafeStoreErrors(async () => {
     const lease = parseLease(leaseId);
-    const updated = await db
-      .update(mcpIdempotencyKeys)
-      .set({
-        state: "completed",
-        safeResponse: response,
-        errorCode: null,
-        expiresAt: new Date(now.getTime() + RESPONSE_TTL_MS),
-      })
-      .where(
-        and(
-          namespaceWhere(lease),
-          eq(mcpIdempotencyKeys.payloadHash, lease.payloadHash),
-          eq(mcpIdempotencyKeys.expiresAt, new Date(lease.expiresAt)),
-          eq(mcpIdempotencyKeys.state, "started"),
-        ),
-      )
-      .returning({ state: mcpIdempotencyKeys.state });
-    if (updated.length === 0) {
+    const updated = await store.complete({
+      ...lease,
+      leaseExpiresAt: new Date(lease.expiresAt),
+      response,
+      expiresAt: new Date(now.getTime() + RESPONSE_TTL_MS),
+    });
+    if (!updated) {
       throw new McpPublicError("CONFLICT", "Mutation lease is no longer active", true);
     }
   });
@@ -310,20 +322,24 @@ export async function completeMcpMutation<T>(
 // response lifetime. Same optimistic guard as the terminal transitions, so a
 // lease already taken over by someone else is never deleted underneath them.
 export async function releaseMcpMutation(db: Db, leaseId: string): Promise<void> {
+  return releaseMcpMutationWithStore(mcpIdempotencyStore(db), leaseId);
+}
+
+export function releaseConnectedMcpMutation(leaseId: string): Promise<void> {
+  return releaseMcpMutationWithStore(connectedMcpIdempotencyStore, leaseId);
+}
+
+async function releaseMcpMutationWithStore(
+  store: McpIdempotencyStore,
+  leaseId: string,
+): Promise<void> {
   return withSafeStoreErrors(async () => {
     const lease = parseLease(leaseId);
-    const released = await db
-      .delete(mcpIdempotencyKeys)
-      .where(
-        and(
-          namespaceWhere(lease),
-          eq(mcpIdempotencyKeys.payloadHash, lease.payloadHash),
-          eq(mcpIdempotencyKeys.expiresAt, new Date(lease.expiresAt)),
-          eq(mcpIdempotencyKeys.state, "started"),
-        ),
-      )
-      .returning({ state: mcpIdempotencyKeys.state });
-    if (released.length === 0) {
+    const released = await store.release({
+      ...lease,
+      leaseExpiresAt: new Date(lease.expiresAt),
+    });
+    if (!released) {
       throw new McpPublicError("CONFLICT", "Mutation lease is no longer active", true);
     }
   });
@@ -335,26 +351,32 @@ export async function failMcpMutation(
   errorCode: McpErrorCode,
   now: Date,
 ): Promise<void> {
+  return failMcpMutationWithStore(mcpIdempotencyStore(db), leaseId, errorCode, now);
+}
+
+export function failConnectedMcpMutation(
+  leaseId: string,
+  errorCode: McpErrorCode,
+  now: Date,
+): Promise<void> {
+  return failMcpMutationWithStore(connectedMcpIdempotencyStore, leaseId, errorCode, now);
+}
+
+async function failMcpMutationWithStore(
+  store: McpIdempotencyStore,
+  leaseId: string,
+  errorCode: McpErrorCode,
+  now: Date,
+): Promise<void> {
   return withSafeStoreErrors(async () => {
     const lease = parseLease(leaseId);
-    const updated = await db
-      .update(mcpIdempotencyKeys)
-      .set({
-        state: "failed",
-        safeResponse: null,
-        errorCode,
-        expiresAt: new Date(now.getTime() + RESPONSE_TTL_MS),
-      })
-      .where(
-        and(
-          namespaceWhere(lease),
-          eq(mcpIdempotencyKeys.payloadHash, lease.payloadHash),
-          eq(mcpIdempotencyKeys.expiresAt, new Date(lease.expiresAt)),
-          eq(mcpIdempotencyKeys.state, "started"),
-        ),
-      )
-      .returning({ state: mcpIdempotencyKeys.state });
-    if (updated.length === 0) {
+    const updated = await store.fail({
+      ...lease,
+      leaseExpiresAt: new Date(lease.expiresAt),
+      errorCode,
+      expiresAt: new Date(now.getTime() + RESPONSE_TTL_MS),
+    });
+    if (!updated) {
       throw new McpPublicError("CONFLICT", "Mutation lease is no longer active", true);
     }
   });

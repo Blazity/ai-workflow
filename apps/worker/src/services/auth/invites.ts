@@ -1,18 +1,20 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, inArray } from "drizzle-orm";
-import type { Db } from "../../db/client.js";
-import { createAuthRepository } from "../../db/repositories/auth.js";
+import type { Db } from "../../db/types.js";
 import {
-  invitation,
-  inviteEmailDelivery,
-  member as memberTable,
-  organization,
-  user,
-} from "../../db/schema.js";
-import { type InviteEmailDeliveryStatus, updateInviteEmailDeliveryById } from "../email/invite-delivery.js";
+  createAuthRepository,
+  createConnectedAuthRepository,
+} from "../../db/repositories/auth.js";
+import {
+  createConnectedInviteEmailDeliveryRepository,
+  createInviteEmailDeliveryRepository,
+  type InviteEmailDeliveryStatus,
+} from "../../db/repositories/invite-email-deliveries.js";
 import { inviteEmailTemplate } from "../email/templates.js";
 import { canInvite, type DashboardRole } from "./roles.js";
 import { DashboardAuthError, type DashboardActor } from "./users-read.js";
+
+type AuthRepository = ReturnType<typeof createAuthRepository>;
+type InviteEmailDeliveryRepository = ReturnType<typeof createInviteEmailDeliveryRepository>;
 
 const INVITE_TTL_MS = 48 * 60 * 60 * 1000;
 
@@ -54,11 +56,49 @@ export async function createDashboardInvite(
     now?: Date;
   },
 ): Promise<DashboardInviteRow> {
+  return createDashboardInviteFromRepositories(
+    createAuthRepository(db),
+    createInviteEmailDeliveryRepository(db),
+    input,
+  );
+}
+
+export function createConnectedDashboardInvite(
+  input: {
+    organizationSlug: string;
+    organizationName: string;
+    dashboardOrigin: string;
+    actor: DashboardActor;
+    email: string;
+    sendInviteEmail: SendInviteEmail;
+    now?: Date;
+  },
+): Promise<DashboardInviteRow> {
+  return createDashboardInviteFromRepositories(
+    createConnectedAuthRepository(),
+    createConnectedInviteEmailDeliveryRepository(),
+    input,
+  );
+}
+
+async function createDashboardInviteFromRepositories(
+  repository: AuthRepository,
+  deliveries: InviteEmailDeliveryRepository,
+  input: {
+    organizationSlug: string;
+    organizationName: string;
+    dashboardOrigin: string;
+    actor: DashboardActor;
+    email: string;
+    sendInviteEmail: SendInviteEmail;
+    now?: Date;
+  },
+): Promise<DashboardInviteRow> {
   assertCanManageInvites(input.actor.role);
-  const org = await requireOrganization(db, input.organizationSlug);
+  const org = await requireOrganization(repository, input.organizationSlug);
   assertActorInOrganization(input.actor, org.id);
   const email = normalizeInviteEmail(input.email);
-  await assertCanInviteEmail(db, org.id, email);
+  await assertCanInviteEmail(repository, org.id, email);
 
   const now = input.now ?? new Date();
   const inviteId = randomUUID();
@@ -70,7 +110,7 @@ export async function createDashboardInvite(
   });
   const deliveryId = randomUUID();
 
-  const created = await createAuthRepository(db).createInviteWithDelivery({
+  const created = await repository.createInviteWithDelivery({
     inviteId,
     deliveryId,
     organizationId: org.id,
@@ -90,7 +130,7 @@ export async function createDashboardInvite(
       expiresAt,
     });
   } catch (error) {
-    await updateInviteEmailDeliveryById(db, {
+    await deliveries.updateById({
       id: deliveryId,
       status: "failed",
       error: messageFromUnknown(error),
@@ -98,7 +138,7 @@ export async function createDashboardInvite(
     throw error;
   }
 
-  await recordProviderAcceptedDelivery(db, deliveryId, sendResult.providerMessageId);
+  await recordProviderAcceptedDelivery(deliveries, deliveryId, sendResult.providerMessageId);
 
   return inviteRowFromRecord(
     {
@@ -120,28 +160,35 @@ export async function listDashboardInvites(
     now?: Date;
   },
 ): Promise<DashboardInviteRow[]> {
+  return listDashboardInvitesFromRepository(createAuthRepository(db), input);
+}
+
+export function listConnectedDashboardInvites(
+  input: {
+    organizationSlug: string;
+    actor: DashboardActor;
+    now?: Date;
+  },
+): Promise<DashboardInviteRow[]> {
+  return listDashboardInvitesFromRepository(createConnectedAuthRepository(), input);
+}
+
+async function listDashboardInvitesFromRepository(
+  repository: AuthRepository,
+  input: {
+    organizationSlug: string;
+    actor: DashboardActor;
+    now?: Date;
+  },
+): Promise<DashboardInviteRow[]> {
   assertCanManageInvites(input.actor.role);
-  const org = await requireOrganization(db, input.organizationSlug);
+  const org = await requireOrganization(repository, input.organizationSlug);
   assertActorInOrganization(input.actor, org.id);
   const now = input.now ?? new Date();
 
-  const rows = await db
-    .select({
-      id: invitation.id,
-      email: invitation.email,
-      role: invitation.role,
-      status: invitation.status,
-      expiresAt: invitation.expiresAt,
-      createdAt: invitation.createdAt,
-      inviterName: user.name,
-      inviterEmail: user.email,
-    })
-    .from(invitation)
-    .innerJoin(user, eq(user.id, invitation.inviterId))
-    .where(eq(invitation.organizationId, org.id))
-    .orderBy(desc(invitation.createdAt));
+  const rows = await repository.listOrganizationInvites(org.id);
 
-  const deliveryByInvite = await latestDeliveryByInvitation(db, rows.map((row) => row.id));
+  const deliveryByInvite = await latestDeliveryByInvitation(repository, rows.map((row) => row.id));
 
   return rows.map((row) =>
     inviteRowFromRecord(
@@ -167,11 +214,49 @@ export async function resendDashboardInvite(
     now?: Date;
   },
 ): Promise<DashboardInviteRow> {
+  return resendDashboardInviteFromRepositories(
+    createAuthRepository(db),
+    createInviteEmailDeliveryRepository(db),
+    input,
+  );
+}
+
+export function resendConnectedDashboardInvite(
+  input: {
+    organizationSlug: string;
+    organizationName: string;
+    dashboardOrigin: string;
+    actor: DashboardActor;
+    inviteId: string;
+    sendInviteEmail: SendInviteEmail;
+    now?: Date;
+  },
+): Promise<DashboardInviteRow> {
+  return resendDashboardInviteFromRepositories(
+    createConnectedAuthRepository(),
+    createConnectedInviteEmailDeliveryRepository(),
+    input,
+  );
+}
+
+async function resendDashboardInviteFromRepositories(
+  repository: AuthRepository,
+  deliveries: InviteEmailDeliveryRepository,
+  input: {
+    organizationSlug: string;
+    organizationName: string;
+    dashboardOrigin: string;
+    actor: DashboardActor;
+    inviteId: string;
+    sendInviteEmail: SendInviteEmail;
+    now?: Date;
+  },
+): Promise<DashboardInviteRow> {
   assertCanManageInvites(input.actor.role);
-  const org = await requireOrganization(db, input.organizationSlug);
+  const org = await requireOrganization(repository, input.organizationSlug);
   assertActorInOrganization(input.actor, org.id);
   const now = input.now ?? new Date();
-  const existing = await requireInvite(db, org.id, input.inviteId);
+  const existing = await requireInvite(repository, org.id, input.inviteId);
   const currentStatus = resolvedInviteStatus(existing.status, existing.expiresAt, now);
   if (currentStatus !== "pending" && currentStatus !== "expired") {
     throw new DashboardAuthError(409, "Invite is not pending");
@@ -185,7 +270,7 @@ export async function resendDashboardInvite(
   });
   const deliveryId = randomUUID();
 
-  const updated = await createAuthRepository(db).refreshInviteWithDelivery({
+  const updated = await repository.refreshInviteWithDelivery({
     inviteId: existing.id,
     deliveryId,
     expiresAt,
@@ -203,7 +288,7 @@ export async function resendDashboardInvite(
       expiresAt,
     });
   } catch (error) {
-    await updateInviteEmailDeliveryById(db, {
+    await deliveries.updateById({
       id: deliveryId,
       status: "failed",
       error: messageFromUnknown(error),
@@ -211,7 +296,7 @@ export async function resendDashboardInvite(
     throw error;
   }
 
-  await recordProviderAcceptedDelivery(db, deliveryId, sendResult.providerMessageId);
+  await recordProviderAcceptedDelivery(deliveries, deliveryId, sendResult.providerMessageId);
 
   return inviteRowFromRecord(
     {
@@ -234,17 +319,40 @@ export async function cancelDashboardInvite(
     now?: Date;
   },
 ): Promise<DashboardInviteRow> {
+  return cancelDashboardInviteFromRepository(createAuthRepository(db), input);
+}
+
+export function cancelConnectedDashboardInvite(
+  input: {
+    organizationSlug: string;
+    actor: DashboardActor;
+    inviteId: string;
+    now?: Date;
+  },
+): Promise<DashboardInviteRow> {
+  return cancelDashboardInviteFromRepository(createConnectedAuthRepository(), input);
+}
+
+async function cancelDashboardInviteFromRepository(
+  repository: AuthRepository,
+  input: {
+    organizationSlug: string;
+    actor: DashboardActor;
+    inviteId: string;
+    now?: Date;
+  },
+): Promise<DashboardInviteRow> {
   assertCanManageInvites(input.actor.role);
-  const org = await requireOrganization(db, input.organizationSlug);
+  const org = await requireOrganization(repository, input.organizationSlug);
   assertActorInOrganization(input.actor, org.id);
   const now = input.now ?? new Date();
-  const existing = await requireInvite(db, org.id, input.inviteId);
+  const existing = await requireInvite(repository, org.id, input.inviteId);
   const currentStatus = resolvedInviteStatus(existing.status, existing.expiresAt, now);
   if (currentStatus !== "pending" && currentStatus !== "expired") {
     throw new DashboardAuthError(409, "Invite is not pending");
   }
 
-  const updated = await createAuthRepository(db).cancelPendingInvite(existing.id);
+  const updated = await repository.cancelPendingInvite(existing.id);
   if (!updated) {
     throw new DashboardAuthError(409, "Invite is no longer pending");
   }
@@ -277,11 +385,11 @@ function assertActorInOrganization(
 }
 
 async function recordProviderAcceptedDelivery(
-  db: Db,
+  deliveries: InviteEmailDeliveryRepository,
   deliveryId: string,
   providerMessageId: string,
 ): Promise<void> {
-  const updated = await updateInviteEmailDeliveryById(db, {
+  const updated = await deliveries.updateById({
     id: deliveryId,
     resendEmailId: providerMessageId,
     status: "queued",
@@ -295,71 +403,43 @@ function messageFromUnknown(error: unknown): string {
   return error instanceof Error ? error.message : "Email provider failed";
 }
 
-async function requireOrganization(db: Db, slug: string) {
-  const [org] = await db
-    .select({ id: organization.id })
-    .from(organization)
-    .where(eq(organization.slug, slug))
-    .limit(1);
+async function requireOrganization(repository: AuthRepository, slug: string) {
+  const org = await repository.findOrganizationBySlug(slug);
   if (!org) throw new DashboardAuthError(404, "Organization not found");
   return org;
 }
 
-async function requireInvite(db: Db, organizationId: string, inviteId: string) {
-  const [row] = await db
-    .select()
-    .from(invitation)
-    .where(and(eq(invitation.organizationId, organizationId), eq(invitation.id, inviteId)))
-    .limit(1);
+async function requireInvite(repository: AuthRepository, organizationId: string, inviteId: string) {
+  const row = await repository.findOrganizationInvite({ organizationId, inviteId });
   if (!row) throw new DashboardAuthError(404, "Invite not found");
   return row;
 }
 
 async function assertCanInviteEmail(
-  db: Db,
+  repository: AuthRepository,
   organizationId: string,
   email: string,
 ): Promise<void> {
-  const [existingUser] = await db
-    .select({ id: user.id })
-    .from(user)
-    .innerJoin(memberTable, eq(memberTable.userId, user.id))
-    .where(and(eq(memberTable.organizationId, organizationId), eq(user.email, email)))
-    .limit(1);
+  const existingUser = await repository.findOrganizationMemberByEmail({ organizationId, email });
   if (existingUser) {
     throw new DashboardAuthError(409, "User is already a member");
   }
 
-  const [existingInvite] = await db
-    .select({ id: invitation.id })
-    .from(invitation)
-    .where(
-      and(
-        eq(invitation.organizationId, organizationId),
-        eq(invitation.email, email),
-        eq(invitation.status, "pending"),
-      ),
-    )
-    .limit(1);
+  const existingInvite = await repository.findPendingOrganizationInviteByEmail({
+    organizationId,
+    email,
+  });
   if (existingInvite) {
     throw new DashboardAuthError(409, "User is already invited");
   }
 }
 
 async function latestDeliveryByInvitation(
-  db: Db,
+  repository: AuthRepository,
   invitationIds: string[],
 ): Promise<Map<string, InviteEmailDeliveryStatus>> {
   if (invitationIds.length === 0) return new Map();
-  const rows = await db
-    .select({
-      invitationId: inviteEmailDelivery.invitationId,
-      status: inviteEmailDelivery.status,
-      createdAt: inviteEmailDelivery.createdAt,
-    })
-    .from(inviteEmailDelivery)
-    .where(inArray(inviteEmailDelivery.invitationId, invitationIds))
-    .orderBy(desc(inviteEmailDelivery.createdAt));
+  const rows = await repository.listLatestInviteDeliveryStatuses(invitationIds);
 
   const byInvite = new Map<string, InviteEmailDeliveryStatus>();
   for (const row of rows) {

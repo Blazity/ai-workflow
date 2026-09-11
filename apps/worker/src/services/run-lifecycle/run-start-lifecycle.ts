@@ -1,17 +1,23 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { getRun } from "workflow/api";
 import type {
   RunRegistryAdapter,
   StartedRunRecord,
 } from "../../adapters/run-registry/types.js";
-import { getDb, type Db } from "../../db/client.js";
-import { activeRuns, workflowRuns } from "../../db/schema.js";
+import type { Db } from "../../db/types.js";
+import {
+  findConnectedRunOutcomeByRunId,
+  claimStartupWatchdogTimeout,
+  insertConnectedNoDefinitionBlockedRun,
+  insertConnectedOrphanStartedRun,
+  listStartupWatchdogDueRuns,
+  markConnectedStartupRunFailure,
+  markStartupRunFailure,
+  persistStartupWatchdogDiagnosticId,
+} from "../../db/repositories/runs.js";
 import { confirmWorkflowStepsDrained } from "./workflow-step-drain.js";
 import { logger } from "../../infra/logger.js";
 import { cancelSubjectRun } from "./cancel-run.js";
-import { STARTUP_DEADLINE_MS } from "./run-start-constants.js";
-
 export { STARTUP_DEADLINE_MS } from "./run-start-constants.js";
 export const STARTUP_TIMEOUT_REASON =
   "Workflow did not start within 10 minutes.";
@@ -60,10 +66,7 @@ export async function commitHostedStart(
       // existed, so the run was invisible in the runs list. Observe the row.
       let outcome: { status: string | null } | null;
       try {
-        const { findRunOutcomeByRunId } = await import(
-          "../../db/repositories/runs.js"
-        );
-        outcome = await findRunOutcomeByRunId(getDb(), started.runId);
+        outcome = await findConnectedRunOutcomeByRunId(started.runId);
       } catch (checkError) {
         logger.warn(
           {
@@ -102,23 +105,15 @@ export async function commitHostedStart(
 export async function recordAndCancelOrphanStartedRun(
   started: StartedRunRecord,
 ): Promise<void> {
-  const db = getDb();
   const diagnosticId = diagnosticIdForStartup();
   try {
-    await db
-      .insert(workflowRuns)
-      .values({
-        runId: started.runId,
-        status: "running",
-        statusReason: LOST_START_OWNERSHIP_REASON,
-        subjectKey: started.subjectKey,
-        ticketKey: started.ticketKey,
-        createdAt: sql`now()`,
-        startedAt: sql`now()`,
-        startupDeadlineAt: sql`now()`,
-        diagnosticId,
-      })
-      .onConflictDoNothing({ target: workflowRuns.runId });
+    await insertConnectedOrphanStartedRun({
+      runId: started.runId,
+      subjectKey: started.subjectKey,
+      ticketKey: started.ticketKey,
+      diagnosticId,
+      reason: LOST_START_OWNERSHIP_REASON,
+    });
   } catch (error) {
     logger.warn(
       {
@@ -132,12 +127,11 @@ export async function recordAndCancelOrphanStartedRun(
   }
   const cancelled = await cancelUnownedHostedRun(started.runId);
   if (cancelled) {
-    await markStartupFailure(
-      db,
-      started.runId,
+    await markConnectedStartupRunFailure({
+      runId: started.runId,
       diagnosticId,
-      LOST_START_OWNERSHIP_REASON,
-    );
+      reason: LOST_START_OWNERSHIP_REASON,
+    });
   }
   logger.warn(
     {
@@ -170,33 +164,12 @@ export async function recordNoDefinitionBlockedRun(input: {
   ticketTitle: string | null;
 }): Promise<void> {
   try {
-    const db = getDb();
-    const [latest] = await db
-      .select({
-        status: workflowRuns.status,
-        statusReason: workflowRuns.statusReason,
-      })
-      .from(workflowRuns)
-      .where(eq(workflowRuns.subjectKey, input.subjectKey))
-      .orderBy(desc(workflowRuns.firstSeenAt))
-      .limit(1);
-    if (
-      latest?.status === "blocked" &&
-      latest.statusReason === NO_DEFINITION_BLOCKED_REASON
-    ) {
-      return;
-    }
-    await db.insert(workflowRuns).values({
+    await insertConnectedNoDefinitionBlockedRun({
       runId: `no_definition_${randomUUID()}`,
-      status: "blocked",
-      statusReason: NO_DEFINITION_BLOCKED_REASON,
       subjectKey: input.subjectKey,
       ticketKey: input.ticketKey,
       ticketTitle: input.ticketTitle,
-      createdAt: sql`now()`,
-      startedAt: sql`now()`,
-      completedAt: sql`now()`,
-      durationSec: 0,
+      reason: NO_DEFINITION_BLOCKED_REASON,
     });
   } catch (error) {
     logger.warn(
@@ -223,35 +196,11 @@ export async function reconcileStartupWatchdog(input: {
   onSubjectReleased?: (subjectKey: string) => Promise<void> | void;
 }): Promise<StartupWatchdogResult> {
   const now = input.now ?? new Date();
-  const due = await input.db
-    .select({
-      runId: workflowRuns.runId,
-      subjectKey: workflowRuns.subjectKey,
-      ticketKey: workflowRuns.ticketKey,
-      diagnosticId: workflowRuns.diagnosticId,
-      ownerToken: activeRuns.ownerToken,
-      ownerRunId: activeRuns.runId,
-      ownerState: activeRuns.state,
-    })
-    .from(workflowRuns)
-    .leftJoin(
-      activeRuns,
-      and(
-        eq(activeRuns.subjectKey, workflowRuns.subjectKey),
-        eq(activeRuns.runId, workflowRuns.runId),
-      ),
-    )
-    .where(
-      and(
-        isNull(workflowRuns.entryStartedAt),
-        sql`${workflowRuns.startupDeadlineAt} <= ${now}`,
-        sql`coalesce(${workflowRuns.status}, 'running') not in (${sql.join(
-          TERMINAL_LOCAL_STATUSES.map((status) => sql`${status}`),
-          sql`, `,
-        )})`,
-      ),
-    )
-    .limit(STARTUP_WATCHDOG_LIMIT);
+  const due = await listStartupWatchdogDueRuns(input.db, {
+    now,
+    terminalStatuses: TERMINAL_LOCAL_STATUSES,
+    limit: STARTUP_WATCHDOG_LIMIT,
+  });
 
   const result: StartupWatchdogResult = {
     selected: due.length,
@@ -259,12 +208,12 @@ export async function reconcileStartupWatchdog(input: {
     retryable: 0,
   };
   for (const row of due) {
-    const diagnosticId = await claimStartupTimeout(
-      input.db,
-      row.runId,
+    const diagnosticId = await claimStartupWatchdogTimeout(input.db, {
+      runId: row.runId,
       now,
-      row.diagnosticId ?? diagnosticIdForStartup(),
-    );
+      diagnosticId: row.diagnosticId ?? diagnosticIdForStartup(),
+      terminalStatuses: TERMINAL_LOCAL_STATUSES,
+    });
     if (!diagnosticId) continue;
     if (!row.subjectKey) {
       result.retryable++;
@@ -283,41 +232,18 @@ export async function reconcileStartupWatchdog(input: {
           )
         : await cancelUnownedHostedRun(row.runId);
     if (!confirmed) {
-      await persistDiagnosticId(input.db, row.runId, diagnosticId);
+      await persistStartupWatchdogDiagnosticId(input.db, { runId: row.runId, diagnosticId });
       result.retryable++;
       continue;
     }
-    await markStartupFailure(input.db, row.runId, diagnosticId);
+    await markStartupRunFailure(input.db, {
+      runId: row.runId,
+      diagnosticId,
+      reason: STARTUP_TIMEOUT_REASON,
+    });
     result.cancelled++;
   }
   return result;
-}
-
-async function claimStartupTimeout(
-  db: Db,
-  runId: string,
-  now: Date,
-  diagnosticId: string,
-): Promise<string | null> {
-  const rows = await db
-    .update(workflowRuns)
-    .set({
-      diagnosticId: sql`coalesce(${workflowRuns.diagnosticId}, ${diagnosticId})`,
-      updatedAt: sql`now()`,
-    })
-    .where(
-      and(
-        eq(workflowRuns.runId, runId),
-        isNull(workflowRuns.entryStartedAt),
-        sql`${workflowRuns.startupDeadlineAt} <= ${now}`,
-        sql`coalesce(${workflowRuns.status}, 'running') not in (${sql.join(
-          TERMINAL_LOCAL_STATUSES.map((status) => sql`${status}`),
-          sql`, `,
-        )})`,
-      ),
-    )
-    .returning({ diagnosticId: workflowRuns.diagnosticId });
-  return rows[0]?.diagnosticId ?? null;
 }
 
 async function cancelUnownedHostedRun(runId: string): Promise<boolean> {
@@ -359,44 +285,6 @@ async function cancelUnownedHostedRun(runId: string): Promise<boolean> {
   }
   if (!TERMINAL_HOSTED_STATUSES.has(status)) return false;
   return confirmWorkflowStepsDrained("startup-watchdog", runId);
-}
-
-async function markStartupFailure(
-  db: Db,
-  runId: string,
-  diagnosticId: string,
-  reason = STARTUP_TIMEOUT_REASON,
-): Promise<void> {
-  await db
-    .update(workflowRuns)
-    .set({
-      status: "failed",
-      statusReason: reason,
-      diagnosticId,
-      completedAt: sql`coalesce(${workflowRuns.completedAt}, now())`,
-      durationSec: sql`coalesce(${workflowRuns.durationSec}, greatest(0, extract(epoch from (now() - coalesce(${workflowRuns.startedAt}, ${workflowRuns.createdAt})))::int))`,
-      updatedAt: sql`now()`,
-    })
-    .where(
-      and(
-        eq(workflowRuns.runId, runId),
-        isNull(workflowRuns.entryStartedAt),
-      ),
-    );
-}
-
-async function persistDiagnosticId(
-  db: Db,
-  runId: string,
-  diagnosticId: string,
-): Promise<void> {
-  await db
-    .update(workflowRuns)
-    .set({
-      diagnosticId: sql`coalesce(${workflowRuns.diagnosticId}, ${diagnosticId})`,
-      updatedAt: sql`now()`,
-    })
-    .where(eq(workflowRuns.runId, runId));
 }
 
 function diagnosticIdForStartup(): string {

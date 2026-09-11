@@ -96,10 +96,8 @@ function actionableReviewResults(
 
 async function assertFixPrOwnershipStep(pr: PrTriggerPayload, runId: string): Promise<void> {
   "use step";
-  const { getDb } = await import("../../../db/client.js");
-  const { findRunPrSiblings } = await import("../../../db/repositories/runs.js");
-  const lookup = await findRunPrSiblings({
-    db: getDb(),
+  const { findConnectedRunPrSiblings } = await import("../../../db/repositories/runs.js");
+  const lookup = await findConnectedRunPrSiblings({
     provider: pr.provider,
     repoPath: pr.repoPath,
     prNumber: pr.prNumber,
@@ -177,11 +175,10 @@ function buildPrFixPublicationInput(
 async function publishPrFixStep(input: PrFixPublicationInput): Promise<string | null> {
   "use step";
   if (input.intendedHead) {
-    const { getDb } = await import("../../../db/client.js");
-    const { recordWorkflowOwnedPullRequestPublishedHead } = await import(
+    const { recordConnectedWorkflowOwnedPullRequestPublishedHead } = await import(
       "../../../db/repositories/runs.js"
     );
-    await recordWorkflowOwnedPullRequestPublishedHead(getDb(), {
+    await recordConnectedWorkflowOwnedPullRequestPublishedHead({
       provider: input.pr.provider,
       repoPath: input.pr.repoPath,
       prNumber: input.pr.prNumber,
@@ -218,10 +215,9 @@ async function publishPrFixStep(input: PrFixPublicationInput): Promise<string | 
       typeof repository.pushedHead === "string",
   );
 
-  const { getDb } = await import("../../../db/client.js");
   const {
-    findWorkflowOwnedPullRequestIdentity,
-    upsertWorkflowOwnedBranch,
+    findConnectedWorkflowOwnedPullRequestIdentity,
+    upsertConnectedWorkflowOwnedBranch,
   } = await import("../../../db/repositories/runs.js");
   for (const repository of result.repositories) {
     if (
@@ -231,13 +227,13 @@ async function publishPrFixStep(input: PrFixPublicationInput): Promise<string | 
       continue;
     }
     if (!repository.pushed || !repository.pushedHead) continue;
-    const owned = await findWorkflowOwnedPullRequestIdentity(getDb(), {
+    const owned = await findConnectedWorkflowOwnedPullRequestIdentity({
       provider: repository.provider,
       repoPath: repository.repoPath,
       prNumber: input.pr.prNumber,
     });
     if (!owned?.pr) continue;
-    await upsertWorkflowOwnedBranch(getDb(), {
+    await upsertConnectedWorkflowOwnedBranch({
       ticketKey: owned.ticketKey,
       provider: repository.provider,
       repoPath: repository.repoPath,

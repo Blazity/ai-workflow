@@ -3,51 +3,30 @@ import {
   desc,
   eq,
   gt,
-  isNull,
   lt,
   sql,
 } from "drizzle-orm";
 import type {
   ReplayAttemptOutcome,
   ReplayAttemptState,
-  ReplayAvailability,
   ReplayCaptureStatus,
-  ReplayObservationKind,
   ReplaySanitizedEnvelope,
-  WorkflowReplayAttemptDetail,
-  WorkflowReplayAttemptSummary,
   WorkflowReplayGraphSnapshot,
   WorkflowReplayLayoutSnapshot,
   WorkflowReplaySelectedTransition,
-  WorkflowRunReplayResponse,
 } from "@shared/contracts";
-import { normalizeWorkflowDefinitionLayout } from "@shared/contracts";
-import type { Db } from "../../client.js";
+import { getDb, type Db } from "../../client.js";
 import {
   workflowBlockAttempts,
   workflowRunObservations,
   workflowRuns,
 } from "../../schema.js";
-import {
-  appendReplayLogEnvelope,
-  enforceReplayAttemptStorageBudget,
-  REPLAY_ATTEMPT_MAX_BYTES,
-  sanitizeReplayAttemptOutcome,
-  sanitizeReplayGraphSnapshot,
-  sanitizeReplayLayoutSnapshot,
-  type ReplayAttemptEnvelopeSet,
-} from "../../../run-observability/sanitizer.js";
-import { MAX_REPLAY_ATTEMPTS_PER_RUN } from "../../../run-observability/limits.js";
 
 export const REPLAY_RETENTION_DAYS = 30;
 export const DEFAULT_REPLAY_PAGE_LIMIT = 100;
 export const MAX_REPLAY_PAGE_LIMIT = 200;
 export const DEFAULT_REPLAY_CLEANUP_LIMIT = 100;
 const MAX_REPLAY_CLEANUP_LIMIT = 500;
-const OBSERVATION_CAS_ATTEMPTS = 64;
-const ATTEMPT_ROW_BUDGET_OVERHEAD = 1024;
-const MAX_SELECTED_EDGE_IDS = 400;
-const MAX_TRANSITION_IDENTIFIER_CHARACTERS = 200;
 
 export class RunObservationStoreError extends Error {
   constructor(
@@ -69,7 +48,6 @@ export interface CaptureRunObservationStartInput {
   graph: WorkflowReplayGraphSnapshot;
   layout: WorkflowReplayLayoutSnapshot;
   runtimeManifest: ReplaySanitizedEnvelope;
-  secrets?: readonly string[];
   captureStatus?: ReplayCaptureStatus;
   now?: Date;
   retentionDays?: number;
@@ -102,43 +80,45 @@ export interface StartWorkflowBlockAttemptResult {
   attemptId: number;
 }
 
-export interface UpdateWorkflowBlockAttemptStateInput {
+export interface GetWorkflowBlockAttemptPersistenceInput {
   db: Db;
   runId: string;
   organizationId: string;
   attemptId: number;
-  state: "running" | "waiting_loop";
-  selectedTransition?: WorkflowReplaySelectedTransition | null;
-  observations?: readonly ReplayAttemptObservation[];
-  updatedAt?: Date;
 }
 
-export interface ReplayAttemptObservation {
-  kind: ReplayObservationKind;
-  envelope: ReplaySanitizedEnvelope;
-}
-
-export interface RecordWorkflowBlockAttemptObservationInput {
-  db: Db;
-  runId: string;
-  organizationId: string;
-  attemptId: number;
-  kind: ReplayAttemptObservation["kind"];
-  envelope: ReplayAttemptObservation["envelope"];
-  observedAt?: Date;
-}
-
-export interface FinishWorkflowBlockAttemptInput {
-  db: Db;
-  runId: string;
-  organizationId: string;
-  attemptId: number;
+export interface WorkflowBlockAttemptPersistence {
   state: ReplayAttemptState;
-  outcome?: ReplayAttemptOutcome | null;
-  selectedTransition?: WorkflowReplaySelectedTransition | null;
-  diagnosticId?: string | null;
-  observations?: readonly ReplayAttemptObservation[];
-  completedAt?: Date;
+  outcome: ReplayAttemptOutcome | null;
+  selectedTransition: WorkflowReplaySelectedTransition | null;
+  diagnosticId: string | null;
+  inputEnvelope: ReplaySanitizedEnvelope | null;
+  outputEnvelope: ReplaySanitizedEnvelope | null;
+  logEnvelope: ReplaySanitizedEnvelope | null;
+  metadataEnvelope: ReplaySanitizedEnvelope | null;
+  observationRevision: number;
+  startedAt: Date;
+  completedAt: Date | null;
+  durationMs: number | null;
+}
+
+export interface ReplaceWorkflowBlockAttemptPersistenceInput {
+  db: Db;
+  runId: string;
+  organizationId: string;
+  attemptId: number;
+  expectedRevision: number;
+  state: ReplayAttemptState;
+  outcome: ReplayAttemptOutcome | null;
+  selectedTransition: WorkflowReplaySelectedTransition | null;
+  diagnosticId: string | null;
+  inputEnvelope: ReplaySanitizedEnvelope | null;
+  outputEnvelope: ReplaySanitizedEnvelope | null;
+  logEnvelope: ReplaySanitizedEnvelope | null;
+  metadataEnvelope: ReplaySanitizedEnvelope | null;
+  completedAt: Date | null;
+  durationMs: number | null;
+  updatedAt: Date;
 }
 
 export interface GetRunReplayInput {
@@ -209,162 +189,12 @@ function retentionExpiry(now: Date, days: number): Date {
   return new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
 }
 
-function replayCursor(attemptId: number): string {
-  return Buffer.from(`attempt:${attemptId}`, "utf8").toString("base64url");
-}
-
-function parseReplayCursor(cursor: string | null | undefined): number | null {
-  if (!cursor) return null;
-  try {
-    const decoded = Buffer.from(cursor, "base64url").toString("utf8");
-    const match = /^attempt:(\d+)$/.exec(decoded);
-    if (!match) throw new Error("invalid");
-    const id = Number(match[1]);
-    assertPositiveInteger(id, "cursor");
-    return id;
-  } catch {
-    throw new RunObservationStoreError(400, "Invalid replay cursor");
-  }
-}
-
-function normalizePageLimit(limit: number | undefined): number {
-  if (limit === undefined) return DEFAULT_REPLAY_PAGE_LIMIT;
-  if (!Number.isInteger(limit) || limit < 1) {
-    throw new RunObservationStoreError(400, "limit must be a positive integer");
-  }
-  return Math.min(limit, MAX_REPLAY_PAGE_LIMIT);
-}
-
 function normalizeCleanupLimit(limit: number | undefined): number {
   if (limit === undefined) return DEFAULT_REPLAY_CLEANUP_LIMIT;
   if (!Number.isInteger(limit) || limit < 1) {
     throw new RunObservationStoreError(400, "limit must be a positive integer");
   }
   return Math.min(limit, MAX_REPLAY_CLEANUP_LIMIT);
-}
-
-function safeSelectedTransition(
-  transition: WorkflowReplaySelectedTransition | null | undefined,
-): WorkflowReplaySelectedTransition | null {
-  if (!transition) return null;
-  if (
-    transition.port.length < 1 ||
-    transition.port.length > MAX_TRANSITION_IDENTIFIER_CHARACTERS ||
-    transition.edgeIds.length > MAX_SELECTED_EDGE_IDS ||
-    transition.edgeIds.some(
-      (edgeId) =>
-        edgeId.length < 1 ||
-        edgeId.length > MAX_TRANSITION_IDENTIFIER_CHARACTERS,
-    )
-  ) {
-    return null;
-  }
-  return {
-    port: transition.port,
-    edgeIds: [...transition.edgeIds],
-  };
-}
-
-function attemptEnvelopeBudget(
-  outcome: ReplayAttemptOutcome | null,
-  selectedTransition: WorkflowReplaySelectedTransition | null,
-): number {
-  const extraBytes = Buffer.byteLength(
-    JSON.stringify({ outcome, selectedTransition }),
-    "utf8",
-  );
-  return Math.max(
-    1024,
-    REPLAY_ATTEMPT_MAX_BYTES -
-      ATTEMPT_ROW_BUDGET_OVERHEAD -
-      extraBytes,
-  );
-}
-
-function applyReplayAttemptObservations(
-  current: ReplayAttemptEnvelopeSet,
-  observations: readonly ReplayAttemptObservation[] | undefined,
-): ReplayAttemptEnvelopeSet {
-  const next = { ...current };
-  for (const observation of observations ?? []) {
-    const envelope = structuredClone(observation.envelope);
-    switch (observation.kind) {
-      case "input":
-        next.input = envelope;
-        break;
-      case "output":
-        next.output = envelope;
-        break;
-      case "log":
-        next.logs = appendReplayLogEnvelope(next.logs, envelope);
-        break;
-      case "metadata":
-        next.metadata = envelope;
-        break;
-    }
-  }
-  return next;
-}
-
-const TERMINAL_RUN_STATUSES: readonly string[] = [
-  "success",
-  "failed",
-  "blocked",
-];
-
-const STALE_LIVE_ATTEMPT_STATES: readonly ReplayAttemptState[] = [
-  "running",
-  "waiting_loop",
-  "waiting_for_clarification",
-];
-
-function isTerminalRunStatus(status: string | null | undefined): boolean {
-  return !!status && TERMINAL_RUN_STATUSES.includes(status);
-}
-
-/** The scheduler drops parked and in-flight attempts from its in-memory map
- * when a run ends, so those rows keep their last live state forever. Present
- * them as cancelled once the durable run status is terminal. Read-time only:
- * the stored row is never rewritten. */
-function displayAttemptState(
-  state: ReplayAttemptState,
-  runIsTerminal: boolean,
-): ReplayAttemptState {
-  return runIsTerminal && STALE_LIVE_ATTEMPT_STATES.includes(state)
-    ? "cancelled"
-    : state;
-}
-
-function mapAttemptSummary(
-  row: typeof workflowBlockAttempts.$inferSelect,
-  runIsTerminal: boolean,
-): WorkflowReplayAttemptSummary {
-  return {
-    id: row.id,
-    nodeId: row.nodeId,
-    attempt: row.attempt,
-    activationScopeId: row.activationScopeId,
-    state: displayAttemptState(row.state, runIsTerminal),
-    outcome: row.outcome,
-    selectedTransition: row.selectedTransition,
-    startedAt: row.startedAt.toISOString(),
-    completedAt: row.completedAt?.toISOString() ?? null,
-    durationMs: row.durationMs,
-    diagnosticId: row.diagnosticId,
-  };
-}
-
-function mapAttemptDetail(
-  row: typeof workflowBlockAttempts.$inferSelect,
-  runIsTerminal: boolean,
-): WorkflowReplayAttemptDetail {
-  return {
-    ...mapAttemptSummary(row, runIsTerminal),
-    input: row.inputEnvelope,
-    output: row.outputEnvelope,
-    logs: row.logEnvelope,
-    metadata: row.metadataEnvelope,
-  };
 }
 
 export async function captureRunObservationStart(
@@ -380,22 +210,8 @@ export async function captureRunObservationStart(
     input.retentionDays ?? REPLAY_RETENTION_DAYS,
   );
   const captureStatus = input.captureStatus ?? "available";
-  const sanitizedGraph = sanitizeReplayGraphSnapshot(
-    input.graph,
-    input.secrets,
-  );
-  const sanitizedLayout = sanitizeReplayLayoutSnapshot(
-    input.layout,
-    input.secrets,
-  );
-  if (!sanitizedGraph || !sanitizedLayout) {
-    throw new RunObservationStoreError(
-      400,
-      "Replay snapshot exceeds safe capture limits",
-    );
-  }
-  const graph = JSON.stringify(sanitizedGraph);
-  const layout = JSON.stringify(sanitizedLayout);
+  const graph = JSON.stringify(input.graph);
+  const layout = JSON.stringify(input.layout);
   const manifest = JSON.stringify(structuredClone(input.runtimeManifest));
   const result = await input.db.execute(sql`
     WITH requested AS (
@@ -545,6 +361,12 @@ export async function captureRunObservationStart(
   };
 }
 
+export function captureConnectedRunObservationStart(
+  input: Omit<CaptureRunObservationStartInput, "db">,
+): Promise<CaptureRunObservationStartResult> {
+  return captureRunObservationStart({ ...input, db: getDb() });
+}
+
 /**
  * Monotonically marks replay capture as incomplete for a run. The marker is
  * stored on the long-lived run row so a timed-out write that completes later
@@ -596,6 +418,12 @@ export async function markRunReplayCaptureUnavailable(
   }
 }
 
+export function markConnectedRunReplayCaptureUnavailable(
+  input: Omit<MarkRunReplayCaptureUnavailableInput, "db">,
+) {
+  return markRunReplayCaptureUnavailable({ ...input, db: getDb() });
+}
+
 export async function startWorkflowBlockAttempt(
   input: StartWorkflowBlockAttemptInput,
 ): Promise<StartWorkflowBlockAttemptResult> {
@@ -605,497 +433,238 @@ export async function startWorkflowBlockAttempt(
   assertNonEmpty(input.activationScopeId, "activationScopeId");
   assertPositiveInteger(input.attempt, "attempt");
   const startedAt = input.startedAt ?? new Date();
-
-  const identityFilter = and(
-    eq(workflowBlockAttempts.runId, input.runId),
-    eq(workflowBlockAttempts.organizationId, input.organizationId),
-    eq(workflowBlockAttempts.nodeId, input.nodeId),
-    eq(workflowBlockAttempts.attempt, input.attempt),
-    eq(
-      workflowBlockAttempts.activationScopeId,
-      input.activationScopeId,
+  const result = await input.db.execute(sql`
+    WITH requested AS (
+      SELECT
+        ${input.runId}::text AS run_id,
+        ${input.organizationId}::text AS organization_id,
+        ${input.nodeId}::text AS node_id,
+        ${input.attempt}::integer AS attempt,
+        ${input.activationScopeId}::text AS activation_scope_id,
+        ${startedAt}::timestamptz AS started_at
     ),
-  );
-  const [observation] = await input.db
-    .select({ runId: workflowRunObservations.runId })
-    .from(workflowRunObservations)
-    .innerJoin(
-      workflowRuns,
-      eq(workflowRuns.runId, workflowRunObservations.runId),
+    available_observation AS (
+      SELECT requested.*
+      FROM requested
+      INNER JOIN workflow_run_observations observation
+        ON observation.run_id = requested.run_id
+        AND observation.organization_id = requested.organization_id
+      INNER JOIN workflow_runs run
+        ON run.run_id = requested.run_id
+      WHERE observation.capture_status = 'available'
+        AND observation.expires_at > requested.started_at
+        AND run.replay_capture_failed_at IS NULL
+    ),
+    allocated AS (
+      INSERT INTO workflow_block_attempts (
+        run_id,
+        organization_id,
+        node_id,
+        attempt,
+        activation_scope_id,
+        state,
+        started_at,
+        created_at,
+        updated_at
+      )
+      SELECT
+        run_id,
+        organization_id,
+        node_id,
+        attempt,
+        activation_scope_id,
+        'running',
+        started_at,
+        started_at,
+        started_at
+      FROM available_observation
+      ON CONFLICT (run_id, node_id, attempt, activation_scope_id) DO UPDATE
+      SET updated_at = workflow_block_attempts.updated_at
+      RETURNING id AS attempt_id
     )
-    .where(
-      and(
-        eq(workflowRunObservations.runId, input.runId),
-        eq(workflowRunObservations.organizationId, input.organizationId),
-        eq(workflowRunObservations.captureStatus, "available"),
-        gt(workflowRunObservations.expiresAt, startedAt),
-        isNull(workflowRuns.replayCaptureFailedAt),
-      ),
-    )
-    .limit(1);
-  if (!observation) {
+    SELECT attempt_id FROM allocated
+  `);
+  const [allocated] = rawRows<{ attempt_id: number }>(result);
+  if (!allocated) {
     throw new RunObservationStoreError(
       404,
       "Replay observation is not available",
     );
   }
+  return { attemptId: allocated.attempt_id };
+}
 
-  const [existing] = await input.db
-    .select({ attemptId: workflowBlockAttempts.id })
-    .from(workflowBlockAttempts)
-    .where(identityFilter)
-    .limit(1);
-  if (existing) return existing;
+export function startConnectedWorkflowBlockAttempt(
+  input: Omit<StartWorkflowBlockAttemptInput, "db">,
+) {
+  return startWorkflowBlockAttempt({ ...input, db: getDb() });
+}
 
-  // The scheduler hook enforces the exact hard cap before starting any sink
-  // work. This durable count is defense in depth for reconstructed or direct
-  // callers and makes the run unavailable instead of retaining a partial trace.
-  const [count] = await input.db
-    .select({ value: sql<number>`count(*)::integer` })
+export async function getWorkflowBlockAttemptPersistence(
+  input: GetWorkflowBlockAttemptPersistenceInput,
+): Promise<WorkflowBlockAttemptPersistence | null> {
+  const [row] = await input.db
+    .select({
+      state: workflowBlockAttempts.state,
+      outcome: workflowBlockAttempts.outcome,
+      selectedTransition: workflowBlockAttempts.selectedTransition,
+      diagnosticId: workflowBlockAttempts.diagnosticId,
+      inputEnvelope: workflowBlockAttempts.inputEnvelope,
+      outputEnvelope: workflowBlockAttempts.outputEnvelope,
+      logEnvelope: workflowBlockAttempts.logEnvelope,
+      metadataEnvelope: workflowBlockAttempts.metadataEnvelope,
+      observationRevision: workflowBlockAttempts.observationRevision,
+      startedAt: workflowBlockAttempts.startedAt,
+      completedAt: workflowBlockAttempts.completedAt,
+      durationMs: workflowBlockAttempts.durationMs,
+    })
     .from(workflowBlockAttempts)
     .where(
       and(
+        eq(workflowBlockAttempts.id, input.attemptId),
         eq(workflowBlockAttempts.runId, input.runId),
         eq(workflowBlockAttempts.organizationId, input.organizationId),
       ),
-    );
-  if (Number(count?.value ?? 0) >= MAX_REPLAY_ATTEMPTS_PER_RUN) {
-    await markRunReplayCaptureUnavailable({
-      db: input.db,
-      runId: input.runId,
-      organizationId: input.organizationId,
-      failedAt: startedAt,
-    });
-    throw new RunObservationStoreError(
-      409,
-      `Replay capture is limited to ${MAX_REPLAY_ATTEMPTS_PER_RUN} attempts per run`,
-    );
-  }
-
-  const inserted = await input.db
-    .insert(workflowBlockAttempts)
-    .values({
-      runId: input.runId,
-      organizationId: input.organizationId,
-      nodeId: input.nodeId,
-      attempt: input.attempt,
-      activationScopeId: input.activationScopeId,
-      state: "running",
-      startedAt,
-      createdAt: startedAt,
-      updatedAt: startedAt,
-    })
-    .onConflictDoNothing()
-    .returning({ attemptId: workflowBlockAttempts.id });
-  if (inserted[0]) return inserted[0];
-
-  const [concurrentExisting] = await input.db
-    .select({ attemptId: workflowBlockAttempts.id })
-    .from(workflowBlockAttempts)
-    .where(identityFilter)
+    )
     .limit(1);
-  if (!concurrentExisting) {
-    throw new RunObservationStoreError(409, "Attempt identity conflict");
-  }
-  return concurrentExisting;
+  return row ?? null;
 }
 
-export async function updateWorkflowBlockAttemptState(
-  input: UpdateWorkflowBlockAttemptStateInput,
-): Promise<boolean> {
-  const selectedTransition = safeSelectedTransition(
-    input.selectedTransition,
-  );
-  for (
-    let casAttempt = 0;
-    casAttempt < OBSERVATION_CAS_ATTEMPTS;
-    casAttempt += 1
-  ) {
-    const [row] = await input.db
-      .select()
-      .from(workflowBlockAttempts)
-      .where(
-        and(
-          eq(workflowBlockAttempts.id, input.attemptId),
-          eq(workflowBlockAttempts.runId, input.runId),
-          eq(workflowBlockAttempts.organizationId, input.organizationId),
-        ),
-      )
-      .limit(1);
-    if (!row) return false;
-
-    const bounded = enforceReplayAttemptStorageBudget(
-      applyReplayAttemptObservations(
-        {
-          input: row.inputEnvelope,
-          output: row.outputEnvelope,
-          logs: row.logEnvelope,
-          metadata: row.metadataEnvelope,
-        },
-        input.observations,
-      ),
-      attemptEnvelopeBudget(row.outcome, selectedTransition),
-    );
-    const rows = await input.db
-      .update(workflowBlockAttempts)
-      .set({
-        state: input.state,
-        selectedTransition,
-        inputEnvelope: bounded.input,
-        outputEnvelope: bounded.output,
-        logEnvelope: bounded.logs,
-        metadataEnvelope: bounded.metadata,
-        observationRevision: row.observationRevision + 1,
-        completedAt: null,
-        durationMs: null,
-        updatedAt: input.updatedAt ?? new Date(),
-      })
-      .where(
-        and(
-          eq(workflowBlockAttempts.id, input.attemptId),
-          eq(workflowBlockAttempts.runId, input.runId),
-          eq(workflowBlockAttempts.organizationId, input.organizationId),
-          eq(
-            workflowBlockAttempts.observationRevision,
-            row.observationRevision,
-          ),
-        ),
-      )
-      .returning({ id: workflowBlockAttempts.id });
-    if (rows.length > 0) return true;
-  }
-  throw new RunObservationStoreError(
-    409,
-    "Concurrent attempt state updates exceeded the retry limit",
-  );
+export function getConnectedWorkflowBlockAttemptPersistence(
+  input: Omit<GetWorkflowBlockAttemptPersistenceInput, "db">,
+) {
+  return getWorkflowBlockAttemptPersistence({ ...input, db: getDb() });
 }
 
-export async function recordWorkflowBlockAttemptObservation(
-  input: RecordWorkflowBlockAttemptObservationInput,
+export async function replaceWorkflowBlockAttemptPersistence(
+  input: ReplaceWorkflowBlockAttemptPersistenceInput,
 ): Promise<boolean> {
-  for (let casAttempt = 0; casAttempt < OBSERVATION_CAS_ATTEMPTS; casAttempt += 1) {
-    const [row] = await input.db
-      .select()
-      .from(workflowBlockAttempts)
-      .where(
-        and(
-          eq(workflowBlockAttempts.id, input.attemptId),
-          eq(workflowBlockAttempts.runId, input.runId),
-          eq(workflowBlockAttempts.organizationId, input.organizationId),
-        ),
-      )
-      .limit(1);
-    if (!row) return false;
-
-    const envelopes = applyReplayAttemptObservations(
-      {
-        input: row.inputEnvelope,
-        output: row.outputEnvelope,
-        logs: row.logEnvelope,
-        metadata: row.metadataEnvelope,
-      },
-      [input],
-    );
-    const bounded = enforceReplayAttemptStorageBudget(
-      envelopes,
-      attemptEnvelopeBudget(
-        row.outcome,
-        safeSelectedTransition(row.selectedTransition),
-      ),
-    );
-
-    const updated = await input.db
-      .update(workflowBlockAttempts)
-      .set({
-        inputEnvelope: bounded.input,
-        outputEnvelope: bounded.output,
-        logEnvelope: bounded.logs,
-        metadataEnvelope: bounded.metadata,
-        observationRevision: row.observationRevision + 1,
-        updatedAt: input.observedAt ?? new Date(),
-      })
-      .where(
-        and(
-          eq(workflowBlockAttempts.id, input.attemptId),
-          eq(workflowBlockAttempts.runId, input.runId),
-          eq(workflowBlockAttempts.organizationId, input.organizationId),
-          eq(
-            workflowBlockAttempts.observationRevision,
-            row.observationRevision,
-          ),
-        ),
-      )
-      .returning({ id: workflowBlockAttempts.id });
-    if (updated.length > 0) return true;
-  }
-  throw new RunObservationStoreError(
-    409,
-    "Concurrent attempt observations exceeded the retry limit",
-  );
-}
-
-export async function finishWorkflowBlockAttempt(
-  input: FinishWorkflowBlockAttemptInput,
-): Promise<boolean> {
-  if (input.state === "running" || input.state === "waiting_loop") {
-    return updateWorkflowBlockAttemptState({
-      db: input.db,
-      runId: input.runId,
-      organizationId: input.organizationId,
-      attemptId: input.attemptId,
+  const rows = await input.db
+    .update(workflowBlockAttempts)
+    .set({
       state: input.state,
-      selectedTransition: input.selectedTransition ?? null,
-      observations: input.observations,
-      ...(input.completedAt ? { updatedAt: input.completedAt } : {}),
-    });
-  }
-  const completedAt = input.completedAt ?? new Date();
-  const outcome = sanitizeReplayAttemptOutcome(input.outcome);
-  const selectedTransition = safeSelectedTransition(
-    input.selectedTransition,
-  );
-  for (
-    let casAttempt = 0;
-    casAttempt < OBSERVATION_CAS_ATTEMPTS;
-    casAttempt += 1
-  ) {
-    const [row] = await input.db
-      .select()
-      .from(workflowBlockAttempts)
-      .where(
-        and(
-          eq(workflowBlockAttempts.id, input.attemptId),
-          eq(workflowBlockAttempts.runId, input.runId),
-          eq(workflowBlockAttempts.organizationId, input.organizationId),
-        ),
-      )
-      .limit(1);
-    if (!row) return false;
-    const durationMs = Math.max(
-      0,
-      completedAt.getTime() - row.startedAt.getTime(),
-    );
-    const bounded = enforceReplayAttemptStorageBudget(
-      applyReplayAttemptObservations(
-        {
-          input: row.inputEnvelope,
-          output: row.outputEnvelope,
-          logs: row.logEnvelope,
-          metadata: row.metadataEnvelope,
-        },
-        input.observations,
+      outcome: input.outcome,
+      selectedTransition: input.selectedTransition,
+      diagnosticId: input.diagnosticId,
+      inputEnvelope: input.inputEnvelope,
+      outputEnvelope: input.outputEnvelope,
+      logEnvelope: input.logEnvelope,
+      metadataEnvelope: input.metadataEnvelope,
+      observationRevision: input.expectedRevision + 1,
+      completedAt: input.completedAt,
+      durationMs: input.durationMs,
+      updatedAt: input.updatedAt,
+    })
+    .where(
+      and(
+        eq(workflowBlockAttempts.id, input.attemptId),
+        eq(workflowBlockAttempts.runId, input.runId),
+        eq(workflowBlockAttempts.organizationId, input.organizationId),
+        eq(workflowBlockAttempts.observationRevision, input.expectedRevision),
       ),
-      attemptEnvelopeBudget(outcome, selectedTransition),
-    );
-    const rows = await input.db
-      .update(workflowBlockAttempts)
-      .set({
-        state: input.state,
-        outcome,
-        selectedTransition,
-        diagnosticId: input.diagnosticId ?? null,
-        inputEnvelope: bounded.input,
-        outputEnvelope: bounded.output,
-        logEnvelope: bounded.logs,
-        metadataEnvelope: bounded.metadata,
-        observationRevision: row.observationRevision + 1,
-        completedAt,
-        durationMs,
-        updatedAt: completedAt,
-      })
-      .where(
-        and(
-          eq(workflowBlockAttempts.id, input.attemptId),
-          eq(workflowBlockAttempts.runId, input.runId),
-          eq(workflowBlockAttempts.organizationId, input.organizationId),
-          eq(
-            workflowBlockAttempts.observationRevision,
-            row.observationRevision,
-          ),
-        ),
-      )
-      .returning({ id: workflowBlockAttempts.id });
-    if (rows.length > 0) return true;
-  }
-  throw new RunObservationStoreError(
-    409,
-    "Concurrent attempt finalization exceeded the retry limit",
-  );
+    )
+    .returning({ id: workflowBlockAttempts.id });
+  return rows.length > 0;
 }
 
-export async function getRunReplayAvailability(
-  input: GetRunReplayAvailabilityInput,
-): Promise<ReplayAvailability> {
-  const now = input.now ?? new Date();
-  const [run] = await input.db
+export function replaceConnectedWorkflowBlockAttemptPersistence(
+  input: Omit<ReplaceWorkflowBlockAttemptPersistenceInput, "db">,
+) {
+  return replaceWorkflowBlockAttemptPersistence({ ...input, db: getDb() });
+}
+
+export async function readRunReplayRun(
+  db: Db,
+  runId: string,
+  organizationId: string,
+) {
+  const [run] = await db
     .select({
       organizationId: workflowRuns.replayOrganizationId,
       capturedAt: workflowRuns.replayCapturedAt,
       expiresAt: workflowRuns.replayExpiresAt,
       failedAt: workflowRuns.replayCaptureFailedAt,
+      status: workflowRuns.status,
     })
     .from(workflowRuns)
-    .where(eq(workflowRuns.runId, input.runId))
+    .where(and(
+      eq(workflowRuns.runId, runId),
+      eq(workflowRuns.replayOrganizationId, organizationId),
+    ))
     .limit(1);
-  if (
-    !run ||
-    (run.organizationId !== null &&
-      run.organizationId !== input.organizationId)
-  ) {
-    return "not_captured";
-  }
-  if (run.failedAt) return "not_captured";
-  if (!run.capturedAt || !run.expiresAt) return "not_captured";
-  if (run.expiresAt.getTime() <= now.getTime()) return "expired";
+  return run ?? null;
+}
 
-  const [observation] = await input.db
-    .select({ captureStatus: workflowRunObservations.captureStatus })
+export async function readRunReplayObservation(
+  db: Db,
+  runId: string,
+  organizationId: string,
+  now: Date,
+) {
+  const [observation] = await db
+    .select()
     .from(workflowRunObservations)
     .where(
       and(
-        eq(workflowRunObservations.runId, input.runId),
-        eq(workflowRunObservations.organizationId, input.organizationId),
+        eq(workflowRunObservations.runId, runId),
+        eq(workflowRunObservations.organizationId, organizationId),
+        gt(workflowRunObservations.expiresAt, now),
       ),
     )
     .limit(1);
-  return observation?.captureStatus === "available"
-    ? "available"
-    : "not_captured";
+  return observation ?? null;
 }
 
-export async function getRunReplay(
-  input: GetRunReplayInput,
-): Promise<WorkflowRunReplayResponse> {
-  const now = input.now ?? new Date();
-  const [run] = await input.db
-    .select({
-      status: workflowRuns.status,
-      captureFailedAt: workflowRuns.replayCaptureFailedAt,
-    })
-    .from(workflowRuns)
-    .where(
-      and(
-        eq(workflowRuns.runId, input.runId),
-        eq(workflowRuns.replayOrganizationId, input.organizationId),
-      ),
-    )
-    .limit(1);
-  const availability = await getRunReplayAvailability({ ...input, now });
-  const runIsTerminal = isTerminalRunStatus(run?.status);
-  const mayAdvance =
-    availability !== "expired" && run !== undefined && !runIsTerminal;
-  if (availability !== "available") {
-    return {
-      availability,
-      mayAdvance,
-      snapshot: null,
-      attempts: [],
-      nextCursor: null,
-    };
-  }
-  const afterId = parseReplayCursor(input.cursor);
-  const [observation] =
-    afterId === null
-      ? await input.db
-          .select()
-          .from(workflowRunObservations)
-          .where(
-            and(
-              eq(workflowRunObservations.runId, input.runId),
-              eq(
-                workflowRunObservations.organizationId,
-                input.organizationId,
-              ),
-              gt(workflowRunObservations.expiresAt, now),
-            ),
-          )
-          .limit(1)
-      : [];
-  if (afterId === null && !observation) {
-    return {
-      availability: "not_captured",
-      mayAdvance: false,
-      snapshot: null,
-      attempts: [],
-      nextCursor: null,
-    };
-  }
-
-  const limit = normalizePageLimit(input.limit);
-  const rows = await input.db
-    .select()
-    .from(workflowBlockAttempts)
-    .where(
-      and(
-        eq(workflowBlockAttempts.runId, input.runId),
-        eq(workflowBlockAttempts.organizationId, input.organizationId),
-        ...(afterId === null
-          ? []
-          : [lt(workflowBlockAttempts.id, afterId)]),
-      ),
-    )
+export function listRunReplayAttemptRows(
+  db: Db,
+  input: { runId: string; organizationId: string; afterId: number | null; limit: number },
+) {
+  return db.select().from(workflowBlockAttempts)
+    .where(and(
+      eq(workflowBlockAttempts.runId, input.runId),
+      eq(workflowBlockAttempts.organizationId, input.organizationId),
+      ...(input.afterId === null ? [] : [lt(workflowBlockAttempts.id, input.afterId)]),
+    ))
     .orderBy(desc(workflowBlockAttempts.id))
-    .limit(limit + 1);
-  const hasNextPage = rows.length > limit;
-  const page = rows.slice(0, limit);
-  return {
-    availability: "available",
-    mayAdvance,
-    snapshot:
-      observation === undefined
-        ? null
-        : {
-            runId: observation.runId,
-            definitionId: observation.definitionId,
-            definitionVersion: observation.definitionVersion,
-            definitionSchemaVersion:
-              observation.definitionSchemaVersion === 1 ? 1 : 2,
-            graph: observation.graph,
-            layout: normalizeWorkflowDefinitionLayout(observation.layout),
-            runtimeManifest: observation.runtimeManifest,
-            captureStatus: observation.captureStatus,
-            capturedAt: observation.capturedAt.toISOString(),
-            expiresAt: observation.expiresAt.toISOString(),
-          },
-    attempts: page.map((row) => mapAttemptSummary(row, runIsTerminal)),
-    nextCursor:
-      hasNextPage && page.length > 0
-        ? replayCursor(page[page.length - 1]!.id)
-        : null,
-  };
+    .limit(input.limit);
 }
 
-export async function getRunReplayAttempt(
-  input: GetRunReplayAttemptInput,
-): Promise<WorkflowReplayAttemptDetail | null> {
-  const availability = await getRunReplayAvailability(input);
-  if (availability !== "available") return null;
-  const [[run], [row]] = await Promise.all([
-    input.db
-      .select({ status: workflowRuns.status })
-      .from(workflowRuns)
-      .where(
-        and(
-          eq(workflowRuns.runId, input.runId),
-          eq(workflowRuns.replayOrganizationId, input.organizationId),
-        ),
-      )
-      .limit(1),
-    input.db
-      .select()
-      .from(workflowBlockAttempts)
-      .where(
-        and(
-          eq(workflowBlockAttempts.id, input.attemptId),
-          eq(workflowBlockAttempts.runId, input.runId),
-          eq(workflowBlockAttempts.organizationId, input.organizationId),
-        ),
-      )
-      .limit(1),
-  ]);
-  return row
-    ? mapAttemptDetail(row, isTerminalRunStatus(run?.status))
-    : null;
+export async function readRunReplayAttemptRow(
+  db: Db,
+  input: { runId: string; organizationId: string; attemptId: number },
+) {
+  const [row] = await db.select().from(workflowBlockAttempts)
+    .where(and(
+      eq(workflowBlockAttempts.id, input.attemptId),
+      eq(workflowBlockAttempts.runId, input.runId),
+      eq(workflowBlockAttempts.organizationId, input.organizationId),
+    ))
+    .limit(1);
+  return row ?? null;
+}
+
+export function readConnectedRunReplayRun(runId: string, organizationId: string) {
+  return readRunReplayRun(getDb(), runId, organizationId);
+}
+
+export function readConnectedRunReplayObservation(
+  runId: string,
+  organizationId: string,
+  now: Date,
+) {
+  return readRunReplayObservation(getDb(), runId, organizationId, now);
+}
+
+export function listConnectedRunReplayAttemptRows(
+  input: Parameters<typeof listRunReplayAttemptRows>[1],
+) {
+  return listRunReplayAttemptRows(getDb(), input);
+}
+
+export function readConnectedRunReplayAttemptRow(
+  input: Parameters<typeof readRunReplayAttemptRow>[1],
+) {
+  return readRunReplayAttemptRow(getDb(), input);
 }
 
 export async function deleteExpiredRunObservations(
@@ -1121,4 +690,10 @@ export async function deleteExpiredRunObservations(
     ({ run_id }) => run_id,
   );
   return { deleted: runIds.length, runIds };
+}
+
+export function deleteConnectedExpiredRunObservations(
+  input: Omit<DeleteExpiredRunObservationsInput, "db">,
+): Promise<DeleteExpiredRunObservationsResult> {
+  return deleteExpiredRunObservations({ ...input, db: getDb() });
 }

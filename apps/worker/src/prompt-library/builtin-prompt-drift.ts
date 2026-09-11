@@ -16,15 +16,27 @@ import {
   type UnresolvedPromptReference,
   type WorkflowDefinitionCoordinates,
 } from "@shared/prompts";
-import { and, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
-import type { Db } from "../db/client.js";
+import type { Db } from "../db/types.js";
 import {
-  approvalRequests,
-  manualDispatchRequests,
-  triggerDeliveries,
-  workflowDefinitions,
-  workflowDefinitionVersions,
-} from "../db/schema.js";
+  definitionHasAnyVersion,
+  listDefinitionDriftMetadata,
+  listDefinitionDriftSnapshots,
+  listDeployedDefinitionSnapshots,
+  listFreshInstallDefinitionCandidates,
+  listLiveManualDispatchDefinitionPins,
+  listPendingApprovalDefinitionPins,
+  listPendingTriggerDeliveryDefinitionPins,
+} from "../db/repositories/definitions.js";
+import {
+  connectedDefinitionHasAnyVersion,
+  listConnectedDefinitionDriftMetadata,
+  listConnectedDefinitionDriftSnapshots,
+  listConnectedDeployedDefinitionSnapshots,
+  listConnectedFreshInstallDefinitionCandidates,
+  listConnectedLiveManualDispatchDefinitionPins,
+  listConnectedPendingApprovalDefinitionPins,
+  listConnectedPendingTriggerDeliveryDefinitionPins,
+} from "../db/repositories/definitions/drift-reads.js";
 import { defaultWorkflowDefinitionV2 } from "../workflow-definition/default.js";
 import {
   findPromptBySlug,
@@ -33,6 +45,12 @@ import {
   getPromptVersion,
   type PromptLibraryRow,
   type PromptLibraryVersionRow,
+} from "../db/repositories/prompts.js";
+import {
+  findConnectedPromptBySlug,
+  getConnectedCurrentPromptVersion,
+  getConnectedPrompt,
+  getConnectedPromptVersion,
 } from "../db/repositories/prompts.js";
 
 /**
@@ -79,6 +97,61 @@ export interface FindBuiltInPromptDriftOptions {
   includeReview?: boolean;
 }
 
+interface BuiltInPromptDriftStore {
+  listDeployedDefinitionSnapshots: typeof listDeployedDefinitionSnapshots extends (
+    db: Db,
+  ) => infer Result ? () => Result : never;
+  listFreshInstallDefinitionCandidates: typeof listFreshInstallDefinitionCandidates extends (
+    db: Db,
+  ) => infer Result ? () => Result : never;
+  definitionHasAnyVersion: (definitionId: number) => Promise<boolean>;
+  listPendingApprovalDefinitionPins: typeof listPendingApprovalDefinitionPins extends (
+    db: Db,
+  ) => infer Result ? () => Result : never;
+  listPendingTriggerDeliveryDefinitionPins: typeof listPendingTriggerDeliveryDefinitionPins extends (
+    db: Db,
+  ) => infer Result ? () => Result : never;
+  listLiveManualDispatchDefinitionPins: (statuses: readonly string[]) => ReturnType<typeof listLiveManualDispatchDefinitionPins>;
+  listDefinitionDriftMetadata: (definitionIds: number[]) => ReturnType<typeof listDefinitionDriftMetadata>;
+  listDefinitionDriftSnapshots: (requests: Array<{ definitionId: number; version: number }>) => ReturnType<typeof listDefinitionDriftSnapshots>;
+  findPromptBySlug: (slug: string) => ReturnType<typeof findPromptBySlug>;
+  getPrompt: (promptId: number) => ReturnType<typeof getPrompt>;
+  getCurrentPromptVersion: (promptId: number) => ReturnType<typeof getCurrentPromptVersion>;
+  getPromptVersion: (promptId: number, version: number) => ReturnType<typeof getPromptVersion>;
+}
+
+function builtInPromptDriftStore(db: Db): BuiltInPromptDriftStore {
+  return {
+    listDeployedDefinitionSnapshots: () => listDeployedDefinitionSnapshots(db),
+    listFreshInstallDefinitionCandidates: () => listFreshInstallDefinitionCandidates(db),
+    definitionHasAnyVersion: (definitionId) => definitionHasAnyVersion(db, definitionId),
+    listPendingApprovalDefinitionPins: () => listPendingApprovalDefinitionPins(db),
+    listPendingTriggerDeliveryDefinitionPins: () => listPendingTriggerDeliveryDefinitionPins(db),
+    listLiveManualDispatchDefinitionPins: (statuses) => listLiveManualDispatchDefinitionPins(db, statuses),
+    listDefinitionDriftMetadata: (definitionIds) => listDefinitionDriftMetadata(db, definitionIds),
+    listDefinitionDriftSnapshots: (requests) => listDefinitionDriftSnapshots(db, requests),
+    findPromptBySlug: (slug) => findPromptBySlug(db, slug),
+    getPrompt: (promptId) => getPrompt(db, promptId),
+    getCurrentPromptVersion: (promptId) => getCurrentPromptVersion(db, promptId),
+    getPromptVersion: (promptId, version) => getPromptVersion(db, promptId, version),
+  };
+}
+
+const connectedBuiltInPromptDriftStore: BuiltInPromptDriftStore = {
+  listDeployedDefinitionSnapshots: listConnectedDeployedDefinitionSnapshots,
+  listFreshInstallDefinitionCandidates: listConnectedFreshInstallDefinitionCandidates,
+  definitionHasAnyVersion: connectedDefinitionHasAnyVersion,
+  listPendingApprovalDefinitionPins: listConnectedPendingApprovalDefinitionPins,
+  listPendingTriggerDeliveryDefinitionPins: listConnectedPendingTriggerDeliveryDefinitionPins,
+  listLiveManualDispatchDefinitionPins: listConnectedLiveManualDispatchDefinitionPins,
+  listDefinitionDriftMetadata: listConnectedDefinitionDriftMetadata,
+  listDefinitionDriftSnapshots: listConnectedDefinitionDriftSnapshots,
+  findPromptBySlug: findConnectedPromptBySlug,
+  getPrompt: getConnectedPrompt,
+  getCurrentPromptVersion: getConnectedCurrentPromptVersion,
+  getPromptVersion: getConnectedPromptVersion,
+};
+
 /**
  * Whether a block type is one that carries authored prompt text by convention.
  *
@@ -115,7 +188,7 @@ interface WalkTarget {
  *  of the same version, and deduplicated on definition plus version so one
  *  snapshot is never reported twice. */
 async function collectWalkTargets(
-  db: Db,
+  store: BuiltInPromptDriftStore,
   options: FindBuiltInPromptDriftOptions,
   skipped: SkippedWalkTarget[],
 ): Promise<WalkTarget[]> {
@@ -128,27 +201,7 @@ async function collectWalkTargets(
     targets.push(target);
   };
 
-  for (const row of await db
-    .select({
-      id: workflowDefinitions.id,
-      name: workflowDefinitions.name,
-      version: workflowDefinitionVersions.version,
-      definition: workflowDefinitionVersions.definition,
-    })
-    .from(workflowDefinitions)
-    .innerJoin(
-      workflowDefinitionVersions,
-      and(
-        eq(workflowDefinitionVersions.definitionId, workflowDefinitions.id),
-        eq(workflowDefinitionVersions.version, workflowDefinitions.deployedVersion),
-      ),
-    )
-    .where(
-      and(
-        isNull(workflowDefinitions.archivedAt),
-        isNotNull(workflowDefinitions.deployedVersion),
-      ),
-    )) {
+  for (const row of await store.listDeployedDefinitionSnapshots()) {
     add({
       definitionId: row.id,
       definitionName: row.name,
@@ -161,29 +214,11 @@ async function collectWalkTargets(
   // Fresh install: enabled ticket definition with no stored version at all, the
   // exact row migration 0013 leaves behind. definition-step.ts serves the v2
   // code default graph for it, with each built-in pinned to its shipped version.
-  for (const row of await db
-    .select({
-      id: workflowDefinitions.id,
-      name: workflowDefinitions.name,
-      triggerTypes: workflowDefinitions.triggerTypes,
-    })
-    .from(workflowDefinitions)
-    .where(
-      and(
-        isNull(workflowDefinitions.archivedAt),
-        eq(workflowDefinitions.enabled, true),
-        isNull(workflowDefinitions.deployedVersion),
-      ),
-    )) {
+  for (const row of await store.listFreshInstallDefinitionCandidates()) {
     if (!row.triggerTypes.includes("trigger_ticket_ai")) continue;
     // draftRevision is the head version number, so "draftRevision === 0" is
     // "no version rows exist".
-    const anyVersion = await db
-      .select({ version: workflowDefinitionVersions.version })
-      .from(workflowDefinitionVersions)
-      .where(eq(workflowDefinitionVersions.definitionId, row.id))
-      .limit(1);
-    if (anyVersion.length > 0) continue;
+    if (await store.definitionHasAnyVersion(row.id)) continue;
     add({
       definitionId: row.id,
       definitionName: row.name,
@@ -207,35 +242,18 @@ async function collectWalkTargets(
     definitionVersion: number | null;
     source: BuiltInPromptPinSource;
   }[] = [
-    ...(
-      await db
-        .selectDistinct({
-          definitionId: approvalRequests.definitionId,
-          definitionVersion: approvalRequests.definitionVersion,
-        })
-        .from(approvalRequests)
-        .where(eq(approvalRequests.status, "pending"))
-    ).map((row) => ({ ...row, source: "approval" as const })),
-    ...(
-      await db
-        .selectDistinct({
-          definitionId: triggerDeliveries.definitionId,
-          definitionVersion: triggerDeliveries.definitionVersion,
-        })
-        .from(triggerDeliveries)
-        .where(eq(triggerDeliveries.pending, true))
-    ).map((row) => ({ ...row, source: "trigger_delivery" as const })),
-    ...(
-      await db
-        .selectDistinct({
-          definitionId: manualDispatchRequests.definitionId,
-          definitionVersion: manualDispatchRequests.definitionVersion,
-        })
-        .from(manualDispatchRequests)
-        .where(
-          inArray(manualDispatchRequests.status, LIVE_MANUAL_DISPATCH_STATUSES),
-        )
-    ).map((row) => ({ ...row, source: "manual_dispatch" as const })),
+    ...(await store.listPendingApprovalDefinitionPins()).map((row) => ({
+      ...row,
+      source: "approval" as const,
+    })),
+    ...(await store.listPendingTriggerDeliveryDefinitionPins()).map((row) => ({
+      ...row,
+      source: "trigger_delivery" as const,
+    })),
+    ...(await store.listLiveManualDispatchDefinitionPins(LIVE_MANUAL_DISPATCH_STATUSES)).map((row) => ({
+      ...row,
+      source: "manual_dispatch" as const,
+    })),
   ];
 
   // The three queues can each name the same snapshot, so collapse across them
@@ -249,19 +267,9 @@ async function collectWalkTargets(
 
   if (pending.size > 0) {
     // One query for every definition the queues name, instead of one per row.
-    const definitionRows = await db
-      .select({
-        id: workflowDefinitions.id,
-        name: workflowDefinitions.name,
-        deployedVersion: workflowDefinitions.deployedVersion,
-      })
-      .from(workflowDefinitions)
-      .where(
-        inArray(
-          workflowDefinitions.id,
-          [...new Set([...pending.values()].map((entry) => entry.definitionId))],
-        ),
-      );
+    const definitionRows = await store.listDefinitionDriftMetadata(
+      [...new Set([...pending.values()].map((entry) => entry.definitionId))],
+    );
     const definitionById = new Map(definitionRows.map((row) => [row.id, row]));
 
     // Resolve each entry to a concrete version and drop everything already
@@ -318,23 +326,7 @@ async function collectWalkTargets(
 
     if (wanted.length > 0) {
       // One query for every distinct snapshot still needed.
-      const versionRows = await db
-        .select({
-          definitionId: workflowDefinitionVersions.definitionId,
-          version: workflowDefinitionVersions.version,
-          definition: workflowDefinitionVersions.definition,
-        })
-        .from(workflowDefinitionVersions)
-        .where(
-          or(
-            ...wanted.map((entry) =>
-              and(
-                eq(workflowDefinitionVersions.definitionId, entry.definitionId),
-                eq(workflowDefinitionVersions.version, entry.version),
-              ),
-            ),
-          ),
-        );
+      const versionRows = await store.listDefinitionDriftSnapshots(wanted);
       const definitionByKey = new Map(
         versionRows.map((row) => [`${row.definitionId}@${row.version}`, row]),
       );
@@ -415,10 +407,23 @@ export async function findBuiltInPromptDrift(
   db: Db,
   options: FindBuiltInPromptDriftOptions = {},
 ): Promise<BuiltInPromptDriftReport> {
+  return findBuiltInPromptDriftWithStore(builtInPromptDriftStore(db), options);
+}
+
+export async function findConnectedBuiltInPromptDrift(
+  options: FindBuiltInPromptDriftOptions = {},
+): Promise<BuiltInPromptDriftReport> {
+  return findBuiltInPromptDriftWithStore(connectedBuiltInPromptDriftStore, options);
+}
+
+async function findBuiltInPromptDriftWithStore(
+  store: BuiltInPromptDriftStore,
+  options: FindBuiltInPromptDriftOptions,
+): Promise<BuiltInPromptDriftReport> {
   const pins: BuiltInPromptPin[] = [];
   const unresolved: UnresolvedPromptReference[] = [];
   const skipped: SkippedWalkTarget[] = [];
-  const targets = await collectWalkTargets(db, options, skipped);
+  const targets = await collectWalkTargets(store, options, skipped);
 
   const promptCache = new Map<string, PromptLibraryRow | null>();
   const versionCache = new Map<string, PromptLibraryVersionRow | null>();
@@ -432,8 +437,8 @@ export async function findBuiltInPromptDrift(
       promptCache.set(
         key,
         slug !== undefined
-          ? await findPromptBySlug(db, slug)
-          : await getPrompt(db, legacyPromptId!),
+          ? await store.findPromptBySlug(slug)
+          : await store.getPrompt(legacyPromptId!),
       );
     }
     return promptCache.get(key)!;
@@ -448,8 +453,8 @@ export async function findBuiltInPromptDrift(
       versionCache.set(
         key,
         selector === "latest"
-          ? await getCurrentPromptVersion(db, promptId)
-          : await getPromptVersion(db, promptId, selector),
+          ? await store.getCurrentPromptVersion(promptId)
+          : await store.getPromptVersion(promptId, selector),
       );
     }
     return versionCache.get(key)!;

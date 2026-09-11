@@ -1,14 +1,10 @@
 import type { RunDetail, RunStep } from "@shared/contracts";
 import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
 import type { RunRegistryAdapter } from "../../adapters/run-registry/types.js";
-import { getDb, type Db } from "../../db/client.js";
-import { fetchRunDetailFromDb } from "../../db/repositories/runs.js";
+import type { Db } from "../../db/types.js";
 import {
-  costAgg,
   findLiveRunClaimByRunId,
   findRunOutcomeByRunId,
-  listRuns,
-  type TimeWindow,
 } from "../../db/repositories/runs.js";
 import {
   getResumableClarificationForRun,
@@ -19,27 +15,24 @@ import {
   findPromptBySlug,
   getCurrentPromptVersion,
   getPrompt,
-  savePromptVersion,
 } from "../../db/repositories/prompts.js";
+import { requirePromptLibraryEditRole, savePromptVersionWithPolicy, validatePromptBody } from "../prompts/index.js";
 import {
   MAX_REPLAY_PAGE_LIMIT,
   RunObservationStoreError,
   getRunReplay,
   getRunReplayAttempt,
   getRunReplayAvailability,
-} from "../../db/repositories/runs/run-observability.js";
+} from "../run-lifecycle/index.js";
 import { listSchedulesForDefinition } from "../../schedule-trigger/schedule-store.js";
 import { getWebhookEndpointForNode } from "../../webhook-trigger/endpoint-store.js";
+import { getWorkflowDefinition } from "../../db/repositories/definitions.js";
 import {
   createWorkflowDefinition,
   deployWorkflowDefinition,
-  getCurrentWorkflowDefinitionVersion,
-  getDeployedWorkflowDefinitionVersion,
-  getWorkflowDefinition,
-  getWorkflowDefinitionVersion,
   saveWorkflowDefinitionDraft,
   updateWorkflowDefinition,
-} from "../../db/repositories/definitions.js";
+} from "../workflow-definitions/index.js";
 import {
   answerClarificationAndResume,
   type AnswerClarificationOutcome,
@@ -59,6 +52,17 @@ import {
   workflowDefinitionPageQuery,
   type TicketRunRow,
 } from "./tool-queries.js";
+import {
+  readCurrentWorkflowDefinitionVersion,
+  readDeployedWorkflowDefinitionVersion,
+  readWorkflowDefinitionVersion,
+} from "../../engine/stored-definition-reads.js";
+import {
+  costAgg,
+  fetchRunDetailFromDb,
+  listRuns,
+  type TimeWindow,
+} from "../run-lifecycle/index.js";
 
 export type { TicketRunRow };
 export { MAX_REPLAY_PAGE_LIMIT, RunObservationStoreError };
@@ -126,8 +130,8 @@ export interface McpToolServices extends McpGateServices {
   getPrompt(promptId: number): ReturnType<typeof getPrompt>;
   getCurrentPromptVersion(promptId: number): ReturnType<typeof getCurrentPromptVersion>;
   savePromptVersion(
-    input: Parameters<typeof savePromptVersion>[1],
-  ): ReturnType<typeof savePromptVersion>;
+    input: Parameters<typeof savePromptVersionWithPolicy>[1],
+  ): ReturnType<typeof savePromptVersionWithPolicy>;
 
   // --- run reads ---------------------------------------------------------
   fetchRunDetail(
@@ -190,13 +194,13 @@ export interface McpToolServices extends McpGateServices {
   getWorkflowDefinitionVersion(
     definitionId: number,
     version: number,
-  ): ReturnType<typeof getWorkflowDefinitionVersion>;
+  ): ReturnType<typeof readWorkflowDefinitionVersion>;
   getCurrentWorkflowDefinitionVersion(
     definitionId: number,
-  ): ReturnType<typeof getCurrentWorkflowDefinitionVersion>;
+  ): ReturnType<typeof readCurrentWorkflowDefinitionVersion>;
   getDeployedWorkflowDefinitionVersion(
     definitionId: number,
-  ): ReturnType<typeof getDeployedWorkflowDefinitionVersion>;
+  ): ReturnType<typeof readDeployedWorkflowDefinitionVersion>;
 
   // --- manual dispatch ---------------------------------------------------
   preflightManualDispatch(
@@ -213,10 +217,10 @@ export interface McpToolServices extends McpGateServices {
 /**
  * Bind every operation to one database handle.
  *
- * Production passes nothing and gets the request's handle; the worker's tests
- * pass their pglite handle, which is why the parameter exists at all.
+ * Tests pass their pglite handle explicitly. Production construction belongs
+ * to the connected factory, so this surface never obtains a generic Db itself.
  */
-export function createMcpToolServices(db: Db = getDb()): McpToolServices {
+export function createMcpToolServices(db: Db): McpToolServices {
   return {
     ...createMcpGateServices(db),
 
@@ -243,10 +247,17 @@ export function createMcpToolServices(db: Db = getDb()): McpToolServices {
     findPromptBySlug: (slug) => findPromptBySlug(db, slug),
     getPrompt: (promptId) => getPrompt(db, promptId),
     getCurrentPromptVersion: (promptId) => getCurrentPromptVersion(db, promptId),
-    savePromptVersion: (input) => savePromptVersion(db, input),
+    savePromptVersion: (input) => {
+      requirePromptLibraryEditRole(input.actor.role as import("@shared/contracts").DashboardRole);
+      return savePromptVersionWithPolicy(db, { ...input, body: validatePromptBody(input.body) });
+    },
 
     fetchRunDetail: (runId, jiraBaseUrl) =>
-      fetchRunDetailFromDb({ db, runId, jiraBaseUrl }),
+      fetchRunDetailFromDb({
+        db,
+        runId,
+        jiraBaseUrl,
+      }),
     getRunReplay: (input) => getRunReplay({ db, ...input }),
     getRunReplayAvailability: (input) => getRunReplayAvailability({ db, ...input }),
     getRunReplayAttempt: (input) => getRunReplayAttempt({ db, ...input }),
@@ -264,11 +275,11 @@ export function createMcpToolServices(db: Db = getDb()): McpToolServices {
     updateWorkflowDefinition: (input) => updateWorkflowDefinition(db, input),
     getWorkflowDefinition: (definitionId) => getWorkflowDefinition(db, definitionId),
     getWorkflowDefinitionVersion: (definitionId, version) =>
-      getWorkflowDefinitionVersion(db, definitionId, version),
+      readWorkflowDefinitionVersion(db, definitionId, version),
     getCurrentWorkflowDefinitionVersion: (definitionId) =>
-      getCurrentWorkflowDefinitionVersion(db, definitionId),
+      readCurrentWorkflowDefinitionVersion(db, definitionId),
     getDeployedWorkflowDefinitionVersion: (definitionId) =>
-      getDeployedWorkflowDefinitionVersion(db, definitionId),
+      readDeployedWorkflowDefinitionVersion(db, definitionId),
 
     preflightManualDispatch: (input) =>
       preflightManualDispatch({

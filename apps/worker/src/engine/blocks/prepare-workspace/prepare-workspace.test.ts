@@ -99,6 +99,7 @@ vi.mock("../../../adapters/vcs/repository-directory.js", async (importOriginal) 
 vi.mock("../../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
 vi.mock("../../../db/repositories/runs.js", () => ({
   listWorkflowOwnedBranchesForTicket: mocks.listWorkflowOwnedBranchesForTicket,
+  listConnectedWorkflowOwnedBranchesForTicket: mocks.listWorkflowOwnedBranchesForTicket,
 }));
 vi.mock("../../../services/vcs/adapters.js", () => ({
   createAdapters: () => ({ runRegistry: { registerSandbox: mocks.registerSandbox } }),

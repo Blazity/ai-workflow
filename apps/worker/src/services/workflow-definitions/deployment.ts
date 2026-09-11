@@ -7,10 +7,8 @@
  * "make version N live" does not care whether N is behind or ahead of what an
  * operator last published.
  */
-import { getDb } from "../../db/client.js";
+import { canEditWorkflowDefinitions } from "@shared/contracts";
 import {
-  deployWorkflowDefinition,
-  rollbackWorkflowDefinition,
   type WorkflowDefinitionRow,
   type WorkflowDefinitionVersionRow,
 } from "../../db/repositories/definitions.js";
@@ -18,6 +16,17 @@ import {
   resolveWorkflowDefinitionActor,
   type WorkflowDefinitionRequestActor,
 } from "./definition-authoring.js";
+import {
+  deployConnectedWorkflowDefinition,
+  rollbackConnectedWorkflowDefinition,
+  WorkflowDefinitionStoreError,
+} from "./policy-operations.js";
+
+function requireWorkflowDefinitionEditor(role: WorkflowDefinitionRequestActor["role"]): void {
+  if (!canEditWorkflowDefinitions(role)) {
+    throw new WorkflowDefinitionStoreError(403, "Forbidden");
+  }
+}
 
 export interface DeployedWorkflowDefinition {
   definition: WorkflowDefinitionRow;
@@ -31,12 +40,12 @@ export async function deployWorkflowDefinitionDraft(input: {
   expectedDeployedVersion: number | null;
   actor: WorkflowDefinitionRequestActor;
 }): Promise<DeployedWorkflowDefinition> {
-  const db = getDb();
-  return deployWorkflowDefinition(db, {
+  requireWorkflowDefinitionEditor(input.actor.role);
+  return deployConnectedWorkflowDefinition({
     definitionId: input.definitionId,
     expectedDraftRevision: input.expectedDraftRevision,
     expectedDeployedVersion: input.expectedDeployedVersion,
-    actor: await resolveWorkflowDefinitionActor(db, input.actor),
+    actor: await resolveWorkflowDefinitionActor(input.actor),
   });
 }
 
@@ -47,11 +56,11 @@ export async function selectWorkflowDefinitionVersion(input: {
   expectedDeployedVersion: number | null;
   actor: WorkflowDefinitionRequestActor;
 }): Promise<DeployedWorkflowDefinition> {
-  const db = getDb();
-  return rollbackWorkflowDefinition(db, {
+  requireWorkflowDefinitionEditor(input.actor.role);
+  return rollbackConnectedWorkflowDefinition({
     definitionId: input.definitionId,
     version: input.version,
     expectedDeployedVersion: input.expectedDeployedVersion,
-    actor: await resolveWorkflowDefinitionActor(db, input.actor),
+    actor: await resolveWorkflowDefinitionActor(input.actor),
   });
 }

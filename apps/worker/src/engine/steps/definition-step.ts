@@ -62,13 +62,13 @@ export async function loadWorkflowDefinitionFor(
 ): Promise<LoadedWorkflowPlan | null> {
   "use step";
   const { env } = await import("../../config/env.js");
-  const { getDb } = await import("../../db/client.js");
   const {
-    getDeployedWorkflowDefinitionVersion,
-    getWorkflowDefinition,
-    getWorkflowDefinitionVersion,
-    getEnabledWorkflowDefinitionForTrigger,
-  } = await import("../../db/repositories/definitions.js");
+    getConnectedDeployedWorkflowDefinitionVersion,
+    getConnectedWorkflowDefinition,
+    getConnectedWorkflowDefinitionVersion,
+  } = await import("../../db/repositories/definitions/connected.js");
+  const { getConnectedEnabledWorkflowDefinitionForTrigger } =
+    await import("../definition-trigger-routing.js");
   const {
     workflowDefinitionV2Schema,
     validateWorkflowDefinitionForDeployment,
@@ -145,16 +145,15 @@ export async function loadWorkflowDefinitionFor(
     return buildDefault(definitionId);
   }
 
-  const db = getDb();
   let row: WorkflowDefinitionVersionRow | null;
   try {
     if (definitionId !== undefined) {
       row = version !== undefined
-        ? await getWorkflowDefinitionVersion(db, definitionId, version)
-        : await getDeployedWorkflowDefinitionVersion(db, definitionId);
+        ? await getConnectedWorkflowDefinitionVersion(definitionId, version)
+        : await getConnectedDeployedWorkflowDefinitionVersion(definitionId);
       if (!row) {
         const definition =
-          version === undefined ? await getWorkflowDefinition(db, definitionId) : null;
+          version === undefined ? await getConnectedWorkflowDefinition(definitionId) : null;
         if (
           isTicket &&
           definition?.enabled === true &&
@@ -172,7 +171,7 @@ export async function loadWorkflowDefinitionFor(
         return null;
       }
     } else {
-      const match = await getEnabledWorkflowDefinitionForTrigger(db, triggerType);
+      const match = await getConnectedEnabledWorkflowDefinitionForTrigger(triggerType);
       if (!match || !match.current) {
         if (isTicket && match) {
           logger.info({ reviewEnabled: env.ENABLE_REVIEW_PHASE }, "workflow_definition_default");

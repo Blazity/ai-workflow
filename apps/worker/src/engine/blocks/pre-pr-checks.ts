@@ -391,10 +391,11 @@ export async function resolveChecksProvisioningStep(): Promise<{
   "use step";
   const fallback = PRE_PR_CHECK_BATCH_MAX_MINUTES * 60_000;
   try {
-    const { getDb } = await import("../../db/client.js");
-    const { getCurrentPrePrCheckConfig } = await import("../../pre-pr-checks/store.js");
+    const { getConnectedCurrentPrePrCheckConfigRow } = await import(
+      "../../db/repositories/pre-pr-checks.js"
+    );
     const { repoScriptsConfigSchema } = await import("../../pre-pr-checks/config.js");
-    const current = await getCurrentPrePrCheckConfig(getDb());
+    const current = await getConnectedCurrentPrePrCheckConfigRow();
     if (!current) return { ceilingMs: fallback, config: null };
     const parsed = repoScriptsConfigSchema.safeParse(current.config);
     return {
@@ -440,11 +441,12 @@ export async function loadPrePrCheckConfigStep(): Promise<{
   config: PrePrCheckConfig;
 }> {
   "use step";
-  const { getDb } = await import("../../db/client.js");
-  const { getCurrentPrePrCheckConfig } = await import("../../pre-pr-checks/store.js");
+  const { getConnectedCurrentPrePrCheckConfigRow } = await import(
+    "../../db/repositories/pre-pr-checks.js"
+  );
   const { emptyPrePrCheckConfig } = await import("../../pre-pr-checks/config.js");
   const { logger } = await import("../../infra/logger.js");
-  const current = await getCurrentPrePrCheckConfig(getDb());
+  const current = await getConnectedCurrentPrePrCheckConfigRow();
   logger.info(
     { version: current?.version ?? null },
     "pre_pr_checks_config_version",

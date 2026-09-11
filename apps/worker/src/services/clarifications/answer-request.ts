@@ -8,15 +8,14 @@
  * no clarification.
  */
 import type { ClarificationAnswerResponse } from "@shared/contracts";
-import { getDb } from "../../db/client.js";
 import {
-  getHookClarification,
+  getConnectedHookClarification,
   type HookClarificationRow,
-} from "../../clarifications/hook-store.js";
-import { dashboardUserLabel } from "../../pre-pr-checks/store.js";
+} from "../../db/repositories/clarification-hooks.js";
+import { getConnectedDashboardUserLabel } from "../../db/repositories/auth.js";
 import { createAdapters } from "../vcs/index.js";
 import {
-  answerClarificationAndResume,
+  answerConnectedClarificationAndResume,
   type AnswerClarificationOutcome,
 } from "./answer-core.js";
 
@@ -54,13 +53,11 @@ export async function answerClarificationRequest(input: {
   rawAnswer: string;
   actor: { userId: string };
 }): Promise<AnswerClarificationRequestOutcome> {
-  const db = getDb();
-  const row = await getHookClarification(db, input.id);
+  const row = await getConnectedHookClarification(input.id);
   if (!row) return { kind: "unknown_clarification" };
 
-  const label = await dashboardUserLabel(db, input.actor.userId);
-  const outcome = await answerClarificationAndResume({
-    db,
+  const label = await getConnectedDashboardUserLabel(input.actor.userId);
+  const outcome = await answerConnectedClarificationAndResume({
     row,
     rawAnswer: input.rawAnswer,
     actor: { id: input.actor.userId, label },

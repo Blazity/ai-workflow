@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import {
   and,
   asc,
@@ -8,32 +7,25 @@ import {
   gt,
   inArray,
   isNull,
-  lt,
   max,
   notExists,
   or,
   sql,
+  type SQL,
 } from "drizzle-orm";
 import type {
-  BuiltinHarnessProfileId,
-  HarnessProfileDetailResponse,
   HarnessProfileDraftManifest,
   HarnessProfileDto,
   HarnessProfileManifest,
-  HarnessProfileManifestV1,
   HarnessProfileReference,
-  HarnessProfileResolvedVersion,
-  HarnessProfileSkillSourceDto,
-  HarnessProfileUsageDto,
   HarnessProfileVersionDto,
-  HarnessResolvedSkillArtifact,
   HarnessSkillSource,
 } from "@shared/contracts";
 import {
   BUILTIN_HARNESS_PROFILE_IDS,
   type HarnessProvider,
 } from "@shared/contracts";
-import type { Db } from "../client.js";
+import { getDb, type Db } from "../client.js";
 import {
   harnessProfiles,
   harnessProfileVersions,
@@ -41,41 +33,11 @@ import {
   harnessSkillArtifactFiles,
   harnessSkillArtifacts,
 } from "../schema.js";
-import {
-  canManageHarnessProfiles,
-  type DashboardRole,
-} from "../../services/auth/roles.js";
-import { DashboardAuthError } from "../../services/auth/users-read.js";
-import { isUniqueViolation } from "../../infra/unique-violation.js";
-import {
-  BUILTIN_HARNESS_PROFILE_MANIFESTS,
-  compileHarnessProfileManifest,
-  HarnessProfileManifestError,
-  hashHarnessProfileManifest,
-  parseHarnessProfileDraftManifest,
-  stableJson,
-} from "../../harness-profiles/manifest.js";
-import {
-  HarnessCapabilityCatalogError,
-  requireFreshHarnessCapabilities,
-  upgradeHarnessDraftToHistoricalV2,
-} from "../../harness-profiles/capability-catalog.js";
-import {
-  HarnessSkillArtifactIntegrityError,
-  verifyHarnessSkillArtifact,
-} from "../../harness-profiles/skill-validation.js";
 
 const VERSION_LIST_LIMIT = 50;
-const SYSTEM_ACTOR_ID = "system:harness-profiles";
-const SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
-
-export type SystemHarnessProfileCatalog = Readonly<
-  Record<BuiltinHarnessProfileId, Readonly<HarnessProfileManifestV1>>
->;
-
 export interface HarnessProfileActor {
   organizationId: string;
-  role: DashboardRole;
+  role?: string;
   id: string;
 }
 
@@ -117,7 +79,7 @@ export function readHarnessSkillArtifactSource(
   if (artifact.sourceKind === "local") {
     const { localPath, localContentSha256 } = artifact;
     if (localPath === null || localContentSha256 === null) {
-      throw new HarnessSkillArtifactIntegrityError(
+      throw new Error(
         "Skill artifact claims the local source kind but is missing columns " +
           "that harness_skill_artifacts_source_shape_check should have required.",
       );
@@ -125,7 +87,7 @@ export function readHarnessSkillArtifactSource(
     return { path: localPath, contentSha256: localContentSha256 };
   }
   if (artifact.sourceKind !== "github") {
-    throw new HarnessSkillArtifactIntegrityError(
+    throw new Error(
       `Skill artifact source kind '${artifact.sourceKind}' is unknown.`,
     );
   }
@@ -137,7 +99,7 @@ export function readHarnessSkillArtifactSource(
     sourcePath === null ||
     sourceCommitSha === null
   ) {
-    throw new HarnessSkillArtifactIntegrityError(
+    throw new Error(
       "Skill artifact claims the GitHub source kind but is missing columns " +
         "that harness_skill_artifacts_source_shape_check should have required.",
     );
@@ -148,12 +110,6 @@ export function readHarnessSkillArtifactSource(
     path: sourcePath,
     commitSha: sourceCommitSha,
   };
-}
-
-function requireManageRole(role: DashboardRole): void {
-  if (!canManageHarnessProfiles(role)) {
-    throw new DashboardAuthError(403, "Forbidden");
-  }
 }
 
 function mapProfile(row: ProfileSelect): HarnessProfileDto {
@@ -191,52 +147,6 @@ function rawRows<T>(result: unknown): T[] {
   return ((result as { rows?: T[] }).rows ?? []) as T[];
 }
 
-function validateSlug(value: unknown): string {
-  if (
-    typeof value !== "string" ||
-    !SLUG_PATTERN.test(value) ||
-    value.length > 64
-  ) {
-    throw new HarnessProfileStoreError(
-      400,
-      "Slug must be 1-64 lowercase letters, numbers, or hyphens",
-    );
-  }
-  return value;
-}
-
-function assertPositiveRevision(value: number): void {
-  if (!Number.isInteger(value) || value < 1 || value > 2_147_483_647) {
-    throw new HarnessProfileStoreError(400, "Invalid draft revision");
-  }
-}
-
-function normalizeDraft(value: unknown): HarnessProfileDraftManifest {
-  try {
-    return parseHarnessProfileDraftManifest(value);
-  } catch (error) {
-    if (error instanceof HarnessProfileManifestError) {
-      throw new HarnessProfileStoreError(400, error.message, {
-        issues: error.issues,
-      });
-    }
-    throw error;
-  }
-}
-
-function draftFromManifest(
-  manifest: HarnessProfileManifest,
-): HarnessProfileDraftManifest {
-  const {
-    profileId: _profileId,
-    version: _version,
-    slug: _slug,
-    system: _system,
-    ...draft
-  } = manifest;
-  return normalizeDraft(draft);
-}
-
 function visibleProfileCondition(organizationId: string) {
   return or(
     eq(harnessProfiles.organizationId, organizationId),
@@ -256,179 +166,154 @@ function writableProfileCondition(input: {
   );
 }
 
-export async function ensureSystemHarnessProfiles(
+export async function insertSystemHarnessProfile(
   db: Db,
-  catalog: SystemHarnessProfileCatalog = BUILTIN_HARNESS_PROFILE_MANIFESTS,
+  input: {
+    profileId: string;
+    slug: string;
+    draft: HarnessProfileDraftManifest;
+    actorId: string;
+  },
 ): Promise<void> {
-  for (const [catalogProfileId, codeOwned] of Object.entries(catalog)) {
-    if (
-      codeOwned.profileId !== catalogProfileId ||
-      codeOwned.system !== true ||
-      !Number.isInteger(codeOwned.version) ||
-      codeOwned.version < 1
-    ) {
-      throw new HarnessProfileStoreError(
-        500,
-        `Invalid code-owned Harness Profile catalog entry ${catalogProfileId}`,
-      );
-    }
-    const initialDraft = draftFromManifest(codeOwned);
-    await db
-      .insert(harnessProfiles)
-      .values({
-        id: codeOwned.profileId,
-        organizationId: null,
-        slug: codeOwned.slug,
-        draftManifest: initialDraft,
-        draftRevision: 1,
-        publishedVersion: null,
-        system: true,
-        readOnly: true,
-        createdById: SYSTEM_ACTOR_ID,
-        updatedById: SYSTEM_ACTOR_ID,
-      })
-      .onConflictDoNothing({ target: harnessProfiles.id });
-
-    const [profile] = await db
-      .select()
-      .from(harnessProfiles)
-      .where(
-        and(
-          eq(harnessProfiles.id, codeOwned.profileId),
-          isNull(harnessProfiles.organizationId),
-          eq(harnessProfiles.system, true),
-          eq(harnessProfiles.readOnly, true),
-        ),
-      )
-      .limit(1);
-    if (!profile) {
-      throw new HarnessProfileStoreError(
-        409,
-        `Profile ID ${codeOwned.profileId} is already used by a non-system profile`,
-      );
-    }
-
-    const [latest] = await db
-      .select()
-      .from(harnessProfileVersions)
-      .where(eq(harnessProfileVersions.profileId, profile.id))
-      .orderBy(desc(harnessProfileVersions.version))
-      .limit(1);
-
-    // The manifest version is the code-owned catalog revision. A process with
-    // an older catalog must never append or republish its stale content after a
-    // newer process has seeded this stable profile ID.
-    if (latest && latest.version > codeOwned.version) {
-      continue;
-    }
-
-    const candidate = compileHarnessProfileManifest({
-      profileId: profile.id,
-      version: codeOwned.version,
-      slug: codeOwned.slug,
+  await db
+    .insert(harnessProfiles)
+    .values({
+      id: input.profileId,
+      organizationId: null,
+      slug: input.slug,
+      draftManifest: input.draft,
+      draftRevision: 1,
+      publishedVersion: null,
       system: true,
-      draft: initialDraft,
-    });
-    const candidateHash = hashHarnessProfileManifest(candidate);
-    let [published] = await db
-      .select()
-      .from(harnessProfileVersions)
-      .where(
-        and(
-          eq(harnessProfileVersions.profileId, profile.id),
-          eq(harnessProfileVersions.version, codeOwned.version),
-        ),
-      )
-      .limit(1);
-    if (!published) {
-      const inserted = await db
-        .insert(harnessProfileVersions)
-        .values({
-          profileId: profile.id,
-          version: codeOwned.version,
-          manifest: candidate,
-          manifestHash: candidateHash,
-          createdById: SYSTEM_ACTOR_ID,
-        })
-        .onConflictDoNothing()
-        .returning();
-      published = inserted[0];
-      if (!published) {
-        [published] = await db
-          .select()
-          .from(harnessProfileVersions)
-          .where(
-            and(
-              eq(harnessProfileVersions.profileId, profile.id),
-              eq(harnessProfileVersions.version, codeOwned.version),
-            ),
-          )
-          .limit(1);
-      }
-    }
-    if (
-      !published ||
-      published.manifestHash !== candidateHash ||
-      !isDeepStrictEqual(published.manifest, candidate)
-    ) {
-      throw new HarnessProfileStoreError(
-        409,
-        `System Harness Profile ${profile.id} catalog version ${codeOwned.version} does not match its stored immutable version`,
-      );
-    }
+      readOnly: true,
+      createdById: input.actorId,
+      updatedById: input.actorId,
+    })
+    .onConflictDoNothing({ target: harnessProfiles.id });
+}
 
-    if (
-      profile.publishedVersion !== published.version ||
-      profile.slug !== codeOwned.slug ||
-      !isDeepStrictEqual(profile.draftManifest, initialDraft)
-    ) {
-      await db
-        .update(harnessProfiles)
-        .set({
-          slug: codeOwned.slug,
-          draftManifest: initialDraft,
-          draftRevision: sql<number>`CASE
-            WHEN ${harnessProfiles.draftManifest} IS DISTINCT FROM ${JSON.stringify(initialDraft)}::jsonb
-              THEN ${harnessProfiles.draftRevision} + 1
-            ELSE ${harnessProfiles.draftRevision}
-          END`,
-          publishedVersion: published.version,
-          updatedAt: new Date(),
-          updatedById: SYSTEM_ACTOR_ID,
-        })
-        .where(
-          and(
-            eq(harnessProfiles.id, profile.id),
-            isNull(harnessProfiles.organizationId),
-            eq(harnessProfiles.system, true),
-            eq(harnessProfiles.readOnly, true),
-            or(
-              isNull(harnessProfiles.publishedVersion),
-              lt(harnessProfiles.publishedVersion, published.version),
-              eq(harnessProfiles.publishedVersion, published.version),
+export async function getSystemHarnessProfile(
+  db: Db,
+  profileId: string,
+): Promise<ProfileSelect | null> {
+  const [profile] = await db
+    .select()
+    .from(harnessProfiles)
+    .where(
+      and(
+        eq(harnessProfiles.id, profileId),
+        isNull(harnessProfiles.organizationId),
+        eq(harnessProfiles.system, true),
+        eq(harnessProfiles.readOnly, true),
+      ),
+    )
+    .limit(1);
+  return profile ?? null;
+}
+
+export async function getLatestSystemHarnessProfileVersion(
+  db: Db,
+  profileId: string,
+): Promise<VersionSelect | null> {
+  const [version] = await db
+    .select()
+    .from(harnessProfileVersions)
+    .where(eq(harnessProfileVersions.profileId, profileId))
+    .orderBy(desc(harnessProfileVersions.version))
+    .limit(1);
+  return version ?? null;
+}
+
+export async function getSystemHarnessProfileVersion(
+  db: Db,
+  input: { profileId: string; version: number },
+): Promise<VersionSelect | null> {
+  const [version] = await db
+    .select()
+    .from(harnessProfileVersions)
+    .where(
+      and(
+        eq(harnessProfileVersions.profileId, input.profileId),
+        eq(harnessProfileVersions.version, input.version),
+      ),
+    )
+    .limit(1);
+  return version ?? null;
+}
+
+export async function insertSystemHarnessProfileVersion(
+  db: Db,
+  input: {
+    profileId: string;
+    version: number;
+    manifest: HarnessProfileManifest;
+    manifestHash: string;
+    actorId: string;
+  },
+): Promise<VersionSelect | null> {
+  const [version] = await db
+    .insert(harnessProfileVersions)
+    .values({
+      profileId: input.profileId,
+      version: input.version,
+      manifest: input.manifest,
+      manifestHash: input.manifestHash,
+      createdById: input.actorId,
+    })
+    .onConflictDoNothing()
+    .returning();
+  return version ?? null;
+}
+
+export async function updateSystemHarnessProfile(
+  db: Db,
+  input: {
+    profileId: string;
+    slug: string;
+    draft: HarnessProfileDraftManifest;
+    publishedVersion: number;
+    actorId: string;
+  },
+): Promise<void> {
+  await db
+    .update(harnessProfiles)
+    .set({
+      slug: input.slug,
+      draftManifest: input.draft,
+      draftRevision: sql<number>`CASE
+        WHEN ${harnessProfiles.draftManifest} IS DISTINCT FROM ${JSON.stringify(input.draft)}::jsonb
+          THEN ${harnessProfiles.draftRevision} + 1
+        ELSE ${harnessProfiles.draftRevision}
+      END`,
+      publishedVersion: input.publishedVersion,
+      updatedAt: new Date(),
+      updatedById: input.actorId,
+    })
+    .where(
+      and(
+        eq(harnessProfiles.id, input.profileId),
+        isNull(harnessProfiles.organizationId),
+        eq(harnessProfiles.system, true),
+        eq(harnessProfiles.readOnly, true),
+        notExists(
+          db
+            .select({ one: sql`1` })
+            .from(harnessProfileVersions)
+            .where(
+              and(
+                eq(harnessProfileVersions.profileId, input.profileId),
+                gt(harnessProfileVersions.version, input.publishedVersion),
+              ),
             ),
-            notExists(
-              db
-                .select({ one: sql`1` })
-                .from(harnessProfileVersions)
-                .where(
-                  and(
-                    eq(harnessProfileVersions.profileId, profile.id),
-                    gt(harnessProfileVersions.version, published.version),
-                  ),
-                ),
-            ),
-          ),
-        );
-    }
-  }
+        ),
+      ),
+    );
 }
 
 export async function listHarnessProfiles(
   db: Db,
   input: { organizationId: string; includeArchived?: boolean },
 ): Promise<HarnessProfileDto[]> {
-  await ensureSystemHarnessProfiles(db);
   const condition = visibleProfileCondition(input.organizationId);
   const rows = await db
     .select()
@@ -447,7 +332,6 @@ export async function getCurrentSystemHarnessProfileReference(
   db: Db,
   provider: HarnessProvider,
 ): Promise<HarnessProfileReference> {
-  await ensureSystemHarnessProfiles(db);
   const profileId = BUILTIN_HARNESS_PROFILE_IDS[provider];
   const [row] = await db
     .select({ publishedVersion: harnessProfiles.publishedVersion })
@@ -470,6 +354,14 @@ export async function getCurrentSystemHarnessProfileReference(
   return { profileId, version: row.publishedVersion };
 }
 
+/** Process-bound lookup for definition authoring. The service receives a
+ * reference, never a database capability. */
+export function getConnectedCurrentSystemHarnessProfileReference(
+  provider: HarnessProvider,
+): Promise<HarnessProfileReference> {
+  return getCurrentSystemHarnessProfileReference(getDb(), provider);
+}
+
 export async function getHarnessProfile(
   db: Db,
   input: {
@@ -477,7 +369,6 @@ export async function getHarnessProfile(
     profileId: string;
   },
 ): Promise<ProfileSelect | null> {
-  await ensureSystemHarnessProfiles(db);
   const [row] = await db
     .select()
     .from(harnessProfiles)
@@ -529,6 +420,51 @@ export async function getHarnessProfileVersion(
   return row ? mapVersion(row) : null;
 }
 
+/** Raw immutable version row for authoring policy; no manifest interpretation. */
+export async function getHarnessProfileVersionRaw(
+  db: Db,
+  input: { organizationId: string; profileId: string; version: number },
+): Promise<VersionSelect | null> {
+  const profile = await getHarnessProfile(db, input);
+  if (!profile) return null;
+  const [row] = await db
+    .select()
+    .from(harnessProfileVersions)
+    .where(and(eq(harnessProfileVersions.profileId, profile.id), eq(harnessProfileVersions.version, input.version)))
+    .limit(1);
+  return row ?? null;
+}
+
+/** Writes a draft prepared by the authoring tier under the existing CAS. */
+export async function replaceHarnessProfileDraftPrepared(
+  db: Db,
+  input: {
+    organizationId: string;
+    profileId: string;
+    expectedRevision: number;
+    actorId: string;
+    draft: HarnessProfileDraftManifest;
+    restoredFromVersion: number | null;
+  },
+): Promise<HarnessProfileDto | null> {
+  const [updated] = await db
+    .update(harnessProfiles)
+    .set({
+      draftManifest: input.draft,
+      draftRevision: sql`${harnessProfiles.draftRevision} + 1`,
+      draftRestoredFromVersion: input.restoredFromVersion,
+      updatedAt: new Date(),
+      updatedById: input.actorId,
+    })
+    .where(and(
+      writableProfileCondition({ organizationId: input.organizationId, profileId: input.profileId }),
+      eq(harnessProfiles.draftRevision, input.expectedRevision),
+      isNull(harnessProfiles.archivedAt),
+    ))
+    .returning();
+  return updated ? mapProfile(updated) : null;
+}
+
 /**
  * Reads the source of every skill the draft pins. The manifest carries only a
  * hash and a name, so this is the only way the dashboard can tell a skill
@@ -544,127 +480,41 @@ export async function getHarnessProfileVersion(
  * foreign-keyed to the artifact table, and a dangling pin must not take the
  * detail view down with it.
  */
-async function readDraftSkillSources(
+export async function insertHarnessProfile(
   db: Db,
   input: {
-    organizationId: string;
+    slug: string;
     draft: HarnessProfileDraftManifest;
-  },
-): Promise<HarnessProfileSkillSourceDto[]> {
-  const artifactHashes = input.draft.skills.map((skill) => skill.artifactHash);
-  if (artifactHashes.length === 0) return [];
-  const rows = await db
-    .select()
-    .from(harnessSkillArtifacts)
-    .where(
-      and(
-        eq(harnessSkillArtifacts.organizationId, input.organizationId),
-        inArray(harnessSkillArtifacts.artifactHash, artifactHashes),
-      ),
-    );
-  return rows.map((row) => ({
-    artifactHash: row.artifactHash,
-    source: readHarnessSkillArtifactSource(row),
-  }));
-}
-
-export async function getHarnessProfileDetail(
-  db: Db,
-  input: {
-    organizationId: string;
-    profileId: string;
-    actorRole: DashboardRole;
-    requestedVersion?: number;
-    usage: HarnessProfileUsageDto[];
-  },
-): Promise<HarnessProfileDetailResponse | null> {
-  const profile = await getHarnessProfile(db, input);
-  if (!profile) return null;
-  const recentVersions = await listHarnessProfileVersions(db, input);
-  const requestedVersion =
-    input.requestedVersion === undefined ||
-    recentVersions.some((version) => version.version === input.requestedVersion)
-      ? null
-      : await getHarnessProfileVersion(db, {
-          organizationId: input.organizationId,
-          profileId: input.profileId,
-          version: input.requestedVersion,
-        });
-  const versions = requestedVersion
-    ? [...recentVersions, requestedVersion]
-    : recentVersions;
-  const { usage } = input;
-  const canManageProfile =
-    !profile.readOnly && canManageHarnessProfiles(input.actorRole);
-  return {
-    profile: mapProfile(profile),
-    skillSources: await readDraftSkillSources(db, {
-      organizationId: input.organizationId,
-      draft: profile.draftManifest,
-    }),
-    published:
-      versions.find((version) => version.version === profile.publishedVersion) ??
-      null,
-    versions,
-    canManageProfile,
-    canDeleteProfile:
-      canManageProfile &&
-      !profile.system &&
-      profile.publishedVersion === null &&
-      versions.length === 0 &&
-      usage.length === 0,
-    usage,
-  };
-}
-
-export async function createHarnessProfile(
-  db: Db,
-  input: {
-    slug: unknown;
-    draft: unknown;
     actor: HarnessProfileActor;
   },
-): Promise<HarnessProfileDto> {
-  requireManageRole(input.actor.role);
-  const slug = validateSlug(input.slug);
-  const draft = normalizeDraft(input.draft);
-  try {
-    const [row] = await db
+): Promise<ProfileSelect> {
+  const [row] = await db
       .insert(harnessProfiles)
       .values({
         id: randomUUID(),
         organizationId: input.actor.organizationId,
-        slug,
-        draftManifest: draft,
+        slug: input.slug,
+        draftManifest: input.draft,
         createdById: input.actor.id,
         updatedById: input.actor.id,
       })
-      .returning();
-    return mapProfile(row!);
-  } catch (error) {
-    if (isUniqueViolation(error)) {
-      throw new HarnessProfileStoreError(409, "Slug already in use");
-    }
-    throw error;
-  }
+    .returning();
+  return row!;
 }
 
-export async function updateHarnessProfileDraft(
+export async function replaceHarnessProfileDraft(
   db: Db,
   input: {
     profileId: string;
     expectedRevision: number;
-    draft: unknown;
+    draft: HarnessProfileDraftManifest;
     actor: HarnessProfileActor;
   },
-): Promise<HarnessProfileDto> {
-  requireManageRole(input.actor.role);
-  assertPositiveRevision(input.expectedRevision);
-  const draft = normalizeDraft(input.draft);
+): Promise<ProfileSelect | null> {
   const [updated] = await db
     .update(harnessProfiles)
     .set({
-      draftManifest: draft,
+      draftManifest: input.draft,
       draftRevision: sql`${harnessProfiles.draftRevision} + 1`,
       updatedAt: new Date(),
       updatedById: input.actor.id,
@@ -680,126 +530,37 @@ export async function updateHarnessProfileDraft(
       ),
   )
     .returning();
-  if (updated) return mapProfile(updated);
-  return throwWriteMiss(db, input);
+  return updated ?? null;
 }
 
-export async function publishHarnessProfile(
+export async function getLatestHarnessProfileVersionNumber(
   db: Db,
-  input: {
-    profileId: string;
-    expectedRevision: number;
-    actor: HarnessProfileActor;
-  },
-): Promise<{
-  profile: HarnessProfileDto;
-  version: HarnessProfileVersionDto;
-  changed: boolean;
-}> {
-  requireManageRole(input.actor.role);
-  assertPositiveRevision(input.expectedRevision);
-  const profile = await getWritableProfileForRevision(db, input);
-  const draft = normalizeDraft(profile.draftManifest);
-  if (draft.schemaVersion === 2) {
-    let capabilities;
-    try {
-      capabilities = await requireFreshHarnessCapabilities(db, {
-        organizationId: input.actor.organizationId,
-        provider: draft.harness.provider,
-        cliVersion: draft.harness.cliVersion,
-      });
-    } catch (error) {
-      if (error instanceof HarnessCapabilityCatalogError) {
-        throw new HarnessProfileStoreError(error.statusCode, error.message);
-      }
-      throw error;
-    }
-    if (capabilities.catalogHash !== draft.model.catalogHash) {
-      throw new HarnessProfileStoreError(
-        409,
-        "Harness capabilities changed. Review the current model settings before publishing.",
-      );
-    }
-    const model = capabilities.models.find(
-      (candidate) => candidate.id === draft.model.id,
-    );
-    if (
-      !model ||
-      stableJson(model) !== stableJson(draft.model.capability)
-    ) {
-      throw new HarnessProfileStoreError(
-        409,
-        "The selected model capability snapshot is no longer current.",
-      );
-    }
-  }
-  const artifacts = await getHarnessSkillArtifactsByHashes(db, {
-    organizationId: input.actor.organizationId,
-    artifactHashes: draft.skills.map((skill) => skill.artifactHash),
-  });
-  if (artifacts.length !== draft.skills.length) {
-    throw new HarnessProfileStoreError(
-      400,
-      "Profile references an unknown skill artifact",
-    );
-  }
-  const artifactByHash = new Map(
-    artifacts.map((artifact) => [artifact.artifactHash, artifact]),
-  );
-  const canonicalNames = new Set<string>();
-  for (const skill of draft.skills) {
-    const artifact = artifactByHash.get(skill.artifactHash)!;
-    if (skill.name !== artifact.name) {
-      throw new HarnessProfileStoreError(
-        400,
-        `Profile skill "${skill.name}" does not match the pinned artifact name "${artifact.name}"`,
-      );
-    }
-    if (canonicalNames.has(artifact.name)) {
-      throw new HarnessProfileStoreError(
-        400,
-        `Profile contains duplicate canonical skill name "${artifact.name}"`,
-      );
-    }
-    canonicalNames.add(artifact.name);
-  }
-
-  if (profile.publishedVersion !== null) {
-    const [current] = await db
-      .select()
-      .from(harnessProfileVersions)
-      .where(
-        and(
-          eq(harnessProfileVersions.profileId, profile.id),
-          eq(harnessProfileVersions.version, profile.publishedVersion),
-        ),
-      )
-      .limit(1);
-    if (current && isDeepStrictEqual(draftFromManifest(current.manifest), draft)) {
-      return {
-        profile: mapProfile(profile),
-        version: mapVersion(current),
-        changed: false,
-      };
-    }
-  }
-
+  profileId: string,
+): Promise<number> {
   const [latest] = await db
     .select({ version: max(harnessProfileVersions.version) })
     .from(harnessProfileVersions)
-    .where(eq(harnessProfileVersions.profileId, profile.id));
-  const version = (latest?.version ?? 0) + 1;
-  const manifest = compileHarnessProfileManifest({
-    profileId: profile.id,
-    version,
-    slug: profile.slug,
-    system: false,
-    draft,
-  });
-  const manifestHash = hashHarnessProfileManifest(manifest);
-  const skillRows = draft.skills.map((skill, position) => {
-    const artifact = artifactByHash.get(skill.artifactHash)!;
-    return sql`(${artifact.id}::integer, ${skill.name}::text, ${position}::integer)`;
+    .where(eq(harnessProfileVersions.profileId, profileId));
+  return latest?.version ?? 0;
+}
+
+export async function publishHarnessProfilePrepared(
+  db: Db,
+  input: {
+    organizationId: string;
+    profileId: string;
+    expectedRevision: number;
+    expectedPublishedVersion: number | null;
+    restoredFromVersion: number | null;
+    actorId: string;
+    version: number;
+    manifest: HarnessProfileManifest;
+    manifestHash: string;
+    skills: Array<{ artifactId: number; name: string; position: number }>;
+  },
+): Promise<{ profileId: string; version: number } | null> {
+  const skillRows = input.skills.map((skill) => {
+    return sql`(${skill.artifactId}::integer, ${skill.name}::text, ${skill.position}::integer)`;
   });
   const insertedSkillsCte =
     skillRows.length === 0
@@ -819,22 +580,20 @@ export async function publishHarnessProfile(
     skillRows.length === 0
       ? sql``
       : sql`CROSS JOIN (SELECT count(*) FROM inserted_skills) AS skill_barrier`;
-  let selected: { profileId: string; version: number } | undefined;
-  try {
-    const result = await db.execute(sql`
+  const result = await db.execute(sql`
       WITH claimed_profile AS (
         UPDATE harness_profiles
-        SET published_version = ${version},
+        SET published_version = ${input.version},
             draft_restored_from_version = NULL,
             updated_at = now(),
-            updated_by_id = ${input.actor.id}
-        WHERE id = ${profile.id}
-          AND organization_id = ${input.actor.organizationId}
+            updated_by_id = ${input.actorId}
+        WHERE id = ${input.profileId}
+          AND organization_id = ${input.organizationId}
           AND system = false
           AND read_only = false
           AND archived_at IS NULL
           AND draft_revision = ${input.expectedRevision}
-          AND published_version IS NOT DISTINCT FROM ${profile.publishedVersion}
+          AND published_version IS NOT DISTINCT FROM ${input.expectedPublishedVersion}
         RETURNING id
       ), inserted_version AS (
         INSERT INTO harness_profile_versions
@@ -847,11 +606,11 @@ export async function publishHarnessProfile(
             restored_from_version
           )
         SELECT claimed.id,
-          ${version},
-          ${JSON.stringify(manifest)}::jsonb,
-          ${manifestHash},
-          ${input.actor.id},
-          ${profile.draftRestoredFromVersion}
+          ${input.version},
+          ${JSON.stringify(input.manifest)}::jsonb,
+          ${input.manifestHash},
+          ${input.actorId},
+          ${input.restoredFromVersion}
         FROM claimed_profile claimed
         RETURNING profile_id, version
       )
@@ -861,155 +620,20 @@ export async function publishHarnessProfile(
       JOIN claimed_profile claimed ON claimed.id = inserted.profile_id
       ${skillBarrier}
     `);
-    selected = rawRows<{ profileId: string; version: number }>(result)[0];
-  } catch (error) {
-    if (isUniqueViolation(error)) {
-      throw new HarnessProfileStoreError(
-        409,
-        "Profile changed while it was being published",
-      );
-    }
-    throw error;
-  }
-  if (!selected) {
-    return throwWriteMiss(db, input);
-  }
-  const [[updated], [inserted]] = await Promise.all([
-    db
-      .select()
-      .from(harnessProfiles)
-      .where(
-        and(
-          eq(harnessProfiles.id, selected.profileId),
-          eq(harnessProfiles.publishedVersion, selected.version),
-        ),
-      )
-      .limit(1),
-    db
-      .select()
-      .from(harnessProfileVersions)
-      .where(
-        and(
-          eq(harnessProfileVersions.profileId, selected.profileId),
-          eq(harnessProfileVersions.version, selected.version),
-        ),
-      )
-      .limit(1),
-  ]);
-  if (!updated || !inserted) {
-    throw new HarnessProfileStoreError(
-      500,
-      "Published Harness Profile version was not readable",
-    );
-  }
-  return {
-    profile: mapProfile(updated),
-    version: mapVersion(inserted),
-    changed: true,
-  };
+  return rawRows<{ profileId: string; version: number }>(result)[0] ?? null;
 }
 
-export async function restoreHarnessProfileVersion(
-  db: Db,
-  input: {
-    profileId: string;
-    version: number;
-    expectedRevision: number;
-    actor: HarnessProfileActor;
-  },
-): Promise<HarnessProfileDto> {
-  requireManageRole(input.actor.role);
-  assertPositiveRevision(input.expectedRevision);
-  assertPositiveRevision(input.version);
-  const profile = await getWritableProfileForRevision(db, input);
-  const [source] = await db
-    .select()
-    .from(harnessProfileVersions)
-    .where(
-      and(
-        eq(harnessProfileVersions.profileId, profile.id),
-        eq(harnessProfileVersions.version, input.version),
-      ),
-    )
-    .limit(1);
-  if (!source) {
-    throw new HarnessProfileStoreError(404, "Profile version not found");
-  }
-  let restoredDraft = draftFromManifest(source.manifest);
-  if (restoredDraft.schemaVersion === 1) {
-    restoredDraft = upgradeHarnessDraftToHistoricalV2(restoredDraft);
-  }
-  const [updated] = await db
-    .update(harnessProfiles)
-    .set({
-      draftManifest: restoredDraft,
-      draftRevision: sql`${harnessProfiles.draftRevision} + 1`,
-      draftRestoredFromVersion: source.version,
-      updatedAt: new Date(),
-      updatedById: input.actor.id,
-    })
-    .where(
-      and(
-        writableProfileCondition({
-          organizationId: input.actor.organizationId,
-          profileId: profile.id,
-        }),
-        eq(harnessProfiles.draftRevision, input.expectedRevision),
-        isNull(harnessProfiles.archivedAt),
-      ),
-    )
-    .returning();
-  if (!updated) {
-    throw new HarnessProfileStoreError(
-      409,
-      "Profile changed while it was being restored",
-    );
-  }
-  return mapProfile(updated);
-}
+export const mapHarnessProfileRow = mapProfile;
+export const mapHarnessProfileVersionRow = mapVersion;
 
-export async function forkHarnessProfile(
-  db: Db,
-  input: {
-    profileId: string;
-    slug: unknown;
-    expectedRevision: number;
-    actor: HarnessProfileActor;
-  },
-): Promise<HarnessProfileDto> {
-  requireManageRole(input.actor.role);
-  assertPositiveRevision(input.expectedRevision);
-  const source = await getHarnessProfile(db, {
-    organizationId: input.actor.organizationId,
-    profileId: input.profileId,
-  });
-  if (!source) {
-    throw new HarnessProfileStoreError(404, "Profile not found");
-  }
-  if (source.draftRevision !== input.expectedRevision) {
-    throw new HarnessProfileStoreError(409, "Profile draft revision conflict");
-  }
-  let draft = normalizeDraft(source.draftManifest);
-  if (draft.schemaVersion === 1) {
-    draft = upgradeHarnessDraftToHistoricalV2(draft);
-  }
-  return createHarnessProfile(db, {
-    slug: input.slug,
-    draft,
-    actor: input.actor,
-  });
-}
-
-export async function archiveHarnessProfile(
+export async function archiveHarnessProfileRaw(
   db: Db,
   input: {
     profileId: string;
     expectedRevision: number;
     actor: HarnessProfileActor;
   },
-): Promise<HarnessProfileDto> {
-  requireManageRole(input.actor.role);
-  assertPositiveRevision(input.expectedRevision);
+): Promise<ProfileSelect | null> {
   const [updated] = await db
     .update(harnessProfiles)
     .set({
@@ -1029,22 +653,18 @@ export async function archiveHarnessProfile(
       ),
   )
     .returning();
-  if (updated) return mapProfile(updated);
-  return throwWriteMiss(db, input);
+  return updated ?? null;
 }
 
-export async function restoreArchivedHarnessProfile(
+export async function restoreArchivedHarnessProfileRaw(
   db: Db,
   input: {
     profileId: string;
     expectedRevision: number;
     actor: HarnessProfileActor;
   },
-): Promise<HarnessProfileDto> {
-  requireManageRole(input.actor.role);
-  assertPositiveRevision(input.expectedRevision);
-  try {
-    const [updated] = await db
+): Promise<ProfileSelect | null> {
+  const [updated] = await db
       .update(harnessProfiles)
       .set({
         archivedAt: null,
@@ -1062,69 +682,36 @@ export async function restoreArchivedHarnessProfile(
           sql`${harnessProfiles.archivedAt} IS NOT NULL`,
         ),
       )
-      .returning();
-    if (updated) return mapProfile(updated);
-  } catch (error) {
-    if (isUniqueViolation(error)) {
-      throw new HarnessProfileStoreError(
-        409,
-        "Another active profile already uses this slug",
-      );
-    }
-    throw error;
-  }
-  return throwWriteMiss(db, input);
+    .returning();
+  return updated ?? null;
 }
 
-export async function deleteHarnessProfile(
+export async function hasHarnessProfileVersions(
   db: Db,
-  input: {
-    profileId: string;
-    expectedRevision: number;
-    actor: HarnessProfileActor;
-    usage: HarnessProfileUsageDto[];
-  },
-): Promise<void> {
-  requireManageRole(input.actor.role);
-  assertPositiveRevision(input.expectedRevision);
-  const profile = await getHarnessProfile(db, {
-    organizationId: input.actor.organizationId,
-    profileId: input.profileId,
-  });
-  if (!profile) {
-    throw new HarnessProfileStoreError(404, "Profile not found");
-  }
-  if (
-    profile.organizationId !== input.actor.organizationId ||
-    profile.system ||
-    profile.readOnly
-  ) {
-    throw new HarnessProfileStoreError(403, "Profile is read-only");
-  }
-  if (profile.draftRevision !== input.expectedRevision) {
-    throw new HarnessProfileStoreError(409, "Profile draft revision conflict");
-  }
+  profileId: string,
+): Promise<boolean> {
   const [version] = await db
     .select({ version: harnessProfileVersions.version })
     .from(harnessProfileVersions)
-    .where(eq(harnessProfileVersions.profileId, profile.id))
+    .where(eq(harnessProfileVersions.profileId, profileId))
     .limit(1);
-  if (
-    profile.publishedVersion !== null ||
-    version ||
-    input.usage.length > 0
-  ) {
-    throw new HarnessProfileStoreError(
-      409,
-      "Published or workflow-pinned profiles must be archived",
-    );
-  }
+  return version !== undefined;
+}
+
+export async function deleteUnpublishedHarnessProfile(
+  db: Db,
+  input: {
+    profileId: string;
+    organizationId: string;
+    expectedRevision: number;
+  },
+): Promise<boolean> {
   const [deleted] = await db
     .delete(harnessProfiles)
     .where(
       and(
-        eq(harnessProfiles.id, profile.id),
-        eq(harnessProfiles.organizationId, input.actor.organizationId),
+        eq(harnessProfiles.id, input.profileId),
+        eq(harnessProfiles.organizationId, input.organizationId),
         eq(harnessProfiles.draftRevision, input.expectedRevision),
         eq(harnessProfiles.system, false),
         eq(harnessProfiles.readOnly, false),
@@ -1132,79 +719,55 @@ export async function deleteHarnessProfile(
       ),
     )
     .returning({ id: harnessProfiles.id });
-  if (!deleted) {
-    throw new HarnessProfileStoreError(
-      409,
-      "Profile changed while it was being deleted",
-    );
-  }
+  return deleted !== undefined;
 }
 
-export async function replaceHarnessProfileSkillArtifact(
-  db: Db,
-  input: {
-    profileId: string;
-    expectedRevision: number;
-    previousArtifactHash: string;
-    nextArtifactHash: string;
-    actor: HarnessProfileActor;
-  },
-): Promise<HarnessProfileDto> {
-  requireManageRole(input.actor.role);
-  assertPositiveRevision(input.expectedRevision);
-  const profile = await getWritableProfileForRevision(db, input);
-  const draft = normalizeDraft(profile.draftManifest);
-  const index = draft.skills.findIndex(
-    (skill) => skill.artifactHash === input.previousArtifactHash,
-  );
-  if (index < 0) {
-    throw new HarnessProfileStoreError(
-      400,
-      "Profile does not reference the skill artifact",
-    );
-  }
-  if (input.previousArtifactHash === input.nextArtifactHash) {
-    return mapProfile(profile);
-  }
-  const [nextArtifact] = await getHarnessSkillArtifactsByHashes(db, {
-    organizationId: input.actor.organizationId,
-    artifactHashes: [input.nextArtifactHash],
-  });
-  if (!nextArtifact) {
-    throw new HarnessProfileStoreError(404, "Replacement skill artifact not found");
-  }
-  const nextDraft = structuredClone(draft);
-  nextDraft.skills[index] = {
-    artifactHash: nextArtifact.artifactHash,
-    name: nextArtifact.name,
-  };
-  return updateHarnessProfileDraft(db, {
-    profileId: input.profileId,
-    expectedRevision: input.expectedRevision,
-    draft: nextDraft,
-    actor: input.actor,
-  });
-}
-
-export async function resolveHarnessProfileVersion(
+export async function resolveHarnessProfileVersionRaw(
   db: Db,
   input: {
     organizationId: string;
     profileId: string;
     version: number;
   },
-): Promise<HarnessProfileResolvedVersion | null> {
-  await ensureSystemHarnessProfiles(db);
+): Promise<{
+  manifest: HarnessProfileManifest;
+  manifestHash: string;
+  artifacts: Array<typeof harnessSkillArtifacts.$inferSelect>;
+  files: Array<typeof harnessSkillArtifactFiles.$inferSelect>;
+  skillNames: string[];
+} | null> {
   if (!Number.isInteger(input.version) || input.version < 1) return null;
-  const [row] = await db
+  const rows = await db
     .select({
       profile: harnessProfiles,
       version: harnessProfileVersions,
+      artifact: harnessSkillArtifacts,
+      file: harnessSkillArtifactFiles,
+      skillName: harnessProfileVersionSkills.skillName,
+      position: harnessProfileVersionSkills.position,
     })
     .from(harnessProfileVersions)
     .innerJoin(
       harnessProfiles,
       eq(harnessProfiles.id, harnessProfileVersions.profileId),
+    )
+    .leftJoin(
+      harnessProfileVersionSkills,
+      and(
+        eq(harnessProfileVersionSkills.profileId, harnessProfileVersions.profileId),
+        eq(harnessProfileVersionSkills.profileVersion, harnessProfileVersions.version),
+      ),
+    )
+    .leftJoin(
+      harnessSkillArtifacts,
+      and(
+        eq(harnessSkillArtifacts.id, harnessProfileVersionSkills.artifactId),
+        eq(harnessSkillArtifacts.organizationId, input.organizationId),
+      ),
+    )
+    .leftJoin(
+      harnessSkillArtifactFiles,
+      eq(harnessSkillArtifactFiles.artifactId, harnessSkillArtifacts.id),
     )
     .where(
       and(
@@ -1213,23 +776,43 @@ export async function resolveHarnessProfileVersion(
         visibleProfileCondition(input.organizationId),
       ),
     )
-    .limit(1);
+    .orderBy(
+      asc(harnessProfileVersionSkills.position),
+      asc(harnessSkillArtifactFiles.path),
+    );
+  const row = rows[0];
   if (!row) return null;
-  let skillArtifacts: HarnessResolvedSkillArtifact[];
-  try {
-    skillArtifacts = await getVersionSkillArtifacts(db, {
-      organizationId: input.organizationId,
-      profileId: row.profile.id,
-      version: row.version.version,
-    });
-  } catch (error) {
-    if (error instanceof HarnessSkillArtifactIntegrityError) return null;
-    throw error;
-  }
+  const artifacts = Array.from(
+    new Map(
+      rows
+        .filter((candidate) => candidate.artifact !== null)
+        .map((candidate) => [candidate.artifact!.id, candidate.artifact!]),
+    ).values(),
+  );
+  const files = Array.from(
+    new Map(
+      rows
+        .filter((candidate) => candidate.file !== null)
+        .map((candidate) => [
+          `${candidate.file!.artifactId}\0${candidate.file!.path}`,
+          candidate.file!,
+        ]),
+    ).values(),
+  ).sort((left, right) =>
+    left.artifactId - right.artifactId || left.path.localeCompare(right.path)
+  );
   return {
     manifest: structuredClone(row.version.manifest),
     manifestHash: row.version.manifestHash,
-    skillArtifacts,
+    artifacts,
+    files,
+    skillNames: Array.from(
+      new Map(
+        rows
+          .filter((candidate) => candidate.artifact !== null && candidate.skillName !== null)
+          .map((candidate) => [candidate.position!, candidate.skillName!]),
+      ).values(),
+    ),
   };
 }
 
@@ -1250,168 +833,187 @@ export async function getHarnessSkillArtifactsByHashes(
         inArray(harnessSkillArtifacts.artifactHash, input.artifactHashes),
       ),
     );
-  try {
-    await loadAndVerifyHarnessSkillArtifacts(db, artifacts);
-  } catch (error) {
-    if (!(error instanceof HarnessSkillArtifactIntegrityError)) throw error;
-    throw new HarnessProfileStoreError(
-      409,
-      "Stored skill artifact failed integrity verification",
-    );
-  }
   return artifacts;
 }
 
-async function getVersionSkillArtifacts(
+/**
+ * Raw artifact rows and their immutable file blobs.  Consumers that make a
+ * policy decision (publish and runtime resolution) verify this envelope in
+ * their own tier; the repository deliberately does not interpret it.
+ */
+export async function getHarnessSkillArtifactEnvelopeByHashes(
   db: Db,
   input: {
     organizationId: string;
-    profileId: string;
-    version: number;
+    artifactHashes: string[];
   },
-): Promise<HarnessResolvedSkillArtifact[]> {
-  const relations = await db
-    .select({
-      artifact: harnessSkillArtifacts,
-      skillName: harnessProfileVersionSkills.skillName,
-      position: harnessProfileVersionSkills.position,
-    })
-    .from(harnessProfileVersionSkills)
-    .innerJoin(
-      harnessSkillArtifacts,
-      eq(harnessSkillArtifacts.id, harnessProfileVersionSkills.artifactId),
+): Promise<{
+  artifacts: Array<typeof harnessSkillArtifacts.$inferSelect>;
+  files: Array<typeof harnessSkillArtifactFiles.$inferSelect>;
+}> {
+  if (input.artifactHashes.length === 0) return { artifacts: [], files: [] };
+  const rows = await db
+    .select({ artifact: harnessSkillArtifacts, file: harnessSkillArtifactFiles })
+    .from(harnessSkillArtifacts)
+    .leftJoin(
+      harnessSkillArtifactFiles,
+      eq(harnessSkillArtifactFiles.artifactId, harnessSkillArtifacts.id),
     )
     .where(
       and(
-        eq(harnessProfileVersionSkills.profileId, input.profileId),
-        eq(harnessProfileVersionSkills.profileVersion, input.version),
         eq(harnessSkillArtifacts.organizationId, input.organizationId),
-      ),
-    )
-    .orderBy(asc(harnessProfileVersionSkills.position));
-  if (relations.length === 0) return [];
-  const resolved = await loadAndVerifyHarnessSkillArtifacts(
-    db,
-    relations.map(({ artifact }) => artifact),
-  );
-  const resolvedByHash = new Map(
-    resolved.map((artifact) => [artifact.artifactHash, artifact]),
-  );
-  const canonicalNames = new Set<string>();
-  for (const { artifact, skillName } of relations) {
-    if (artifact.name !== skillName) {
-      throw new HarnessSkillArtifactIntegrityError(
-        "Published profile skill name does not match its canonical artifact.",
-      );
-    }
-    if (canonicalNames.has(artifact.name)) {
-      throw new HarnessSkillArtifactIntegrityError(
-        "Published profile contains a duplicate canonical skill name.",
-      );
-    }
-    canonicalNames.add(artifact.name);
-  }
-  return relations.map(({ artifact }) => {
-    const candidate = resolvedByHash.get(artifact.artifactHash);
-    if (!candidate) {
-      throw new HarnessSkillArtifactIntegrityError(
-        "Published profile references an unavailable skill artifact.",
-      );
-    }
-    return candidate;
-  });
-}
-
-async function loadAndVerifyHarnessSkillArtifacts(
-  db: Db,
-  artifacts: Array<typeof harnessSkillArtifacts.$inferSelect>,
-): Promise<HarnessResolvedSkillArtifact[]> {
-  if (artifacts.length === 0) return [];
-  const files = await db
-    .select()
-    .from(harnessSkillArtifactFiles)
-    .where(
-      inArray(
-        harnessSkillArtifactFiles.artifactId,
-        artifacts.map((artifact) => artifact.id),
+        inArray(harnessSkillArtifacts.artifactHash, input.artifactHashes),
       ),
     )
     .orderBy(
-      asc(harnessSkillArtifactFiles.artifactId),
+      asc(harnessSkillArtifacts.id),
       asc(harnessSkillArtifactFiles.path),
     );
-  const filesByArtifact = new Map<number, typeof files>();
-  for (const file of files) {
-    const current = filesByArtifact.get(file.artifactId) ?? [];
-    current.push(file);
-    filesByArtifact.set(file.artifactId, current);
-  }
-  return artifacts.map((artifact) => {
-    const resolved: HarnessResolvedSkillArtifact = {
-      artifactHash: artifact.artifactHash,
-      organizationId: artifact.organizationId,
-      name: artifact.name,
-      description: artifact.description,
-      source: readHarnessSkillArtifactSource(artifact),
-      files: (filesByArtifact.get(artifact.id) ?? []).map((file) => ({
-        path: file.path,
-        mode: file.mode,
-        sizeBytes: file.sizeBytes,
-        sha256: file.sha256,
-        contentBase64: file.contentBase64,
-      })),
-      createdAt: artifact.createdAt.toISOString(),
-      createdById: artifact.createdById,
-    };
-    verifyHarnessSkillArtifact(resolved);
-    return resolved;
-  });
+  const artifacts = Array.from(
+    new Map(rows.map(({ artifact }) => [artifact.id, artifact])).values(),
+  );
+  const files = rows.flatMap(({ file }) => file === null ? [] : [file]);
+  return { artifacts, files };
 }
 
-async function getWritableProfileForRevision(
+/** Persist an imported artifact batch in one statement. Validation remains above the DB tier. */
+export async function persistHarnessSkillArtifactRows(
   db: Db,
   input: {
-    profileId: string;
-    expectedRevision: number;
-    actor: HarnessProfileActor;
+    organizationId: string;
+    actorId: string;
+    artifactRows: SQL[];
+    fileRows: SQL[];
   },
-): Promise<ProfileSelect> {
-  const [profile] = await db
-    .select()
-    .from(harnessProfiles)
-    .where(
-      and(
-        writableProfileCondition({
-          organizationId: input.actor.organizationId,
-          profileId: input.profileId,
-        }),
-        eq(harnessProfiles.draftRevision, input.expectedRevision),
-        isNull(harnessProfiles.archivedAt),
-      ),
+): Promise<void> {
+  await db.execute(sql`
+    WITH imported_artifact (
+      artifact_hash, name, description, source_kind, source_owner,
+      source_repository, source_path, source_commit_sha, local_path, local_content_sha256
+    ) AS (VALUES ${sql.join(input.artifactRows, sql`, `)}),
+    inserted_artifact AS (
+      INSERT INTO harness_skill_artifacts (
+        organization_id, artifact_hash, name, description, source_kind, source_owner,
+        source_repository, source_path, source_commit_sha, local_path,
+        local_content_sha256, created_by_id
+      )
+      SELECT ${input.organizationId}, artifact_hash, name, description, source_kind,
+        source_owner, source_repository, source_path, source_commit_sha, local_path,
+        local_content_sha256, ${input.actorId}
+      FROM imported_artifact
+      ON CONFLICT (organization_id, artifact_hash) DO NOTHING
+      RETURNING id, artifact_hash
+    ), stored_artifact AS (
+      SELECT inserted.id, inserted.artifact_hash FROM inserted_artifact inserted
+      UNION ALL
+      SELECT artifact.id, artifact.artifact_hash
+      FROM harness_skill_artifacts artifact
+      INNER JOIN imported_artifact imported ON imported.artifact_hash = artifact.artifact_hash
+      WHERE artifact.organization_id = ${input.organizationId}
+        AND NOT EXISTS (
+          SELECT 1 FROM inserted_artifact inserted
+          WHERE inserted.artifact_hash = artifact.artifact_hash
+        )
+    ), imported_file (artifact_hash, path, mode, size_bytes, sha256, content_base64)
+      AS (VALUES ${sql.join(input.fileRows, sql`, `)})
+    INSERT INTO harness_skill_artifact_files (
+      artifact_id, path, mode, size_bytes, sha256, content_base64
     )
-    .limit(1);
-  if (profile) return profile;
-  return throwWriteMiss(db, input);
+    SELECT stored.id, file.path, file.mode, file.size_bytes, file.sha256, file.content_base64
+    FROM imported_file file
+    INNER JOIN stored_artifact stored ON stored.artifact_hash = file.artifact_hash
+    ON CONFLICT (artifact_id, path) DO NOTHING
+  `);
 }
 
-async function throwWriteMiss(
-  db: Db,
-  input: {
-    profileId: string;
-    expectedRevision: number;
-    actor: HarnessProfileActor;
-  },
-): Promise<never> {
-  const visible = await getHarnessProfile(db, {
-    organizationId: input.actor.organizationId,
-    profileId: input.profileId,
-  });
-  if (!visible) throw new HarnessProfileStoreError(404, "Profile not found");
-  if (visible.readOnly) {
-    throw new DashboardAuthError(403, "System profiles are read-only");
-  }
-  if (visible.archivedAt !== null) {
-    throw new HarnessProfileStoreError(409, "Profile is archived");
-  }
-  throw new HarnessProfileStoreError(409, "Profile draft revision conflict");
+/**
+ * The policy layer uses this narrow collection of named statements instead of
+ * receiving a database capability. Keeping the connection here makes the
+ * production callers connected without turning it into a generic DB facade.
+ */
+export function createHarnessProfileRepository(db: Db) {
+  return {
+    insertSystemProfile(input: Parameters<typeof insertSystemHarnessProfile>[1]) {
+      return insertSystemHarnessProfile(db, input);
+    },
+    getSystemProfile(profileId: string) {
+      return getSystemHarnessProfile(db, profileId);
+    },
+    getLatestSystemVersion(profileId: string) {
+      return getLatestSystemHarnessProfileVersion(db, profileId);
+    },
+    getSystemVersion(input: Parameters<typeof getSystemHarnessProfileVersion>[1]) {
+      return getSystemHarnessProfileVersion(db, input);
+    },
+    insertSystemVersion(input: Parameters<typeof insertSystemHarnessProfileVersion>[1]) {
+      return insertSystemHarnessProfileVersion(db, input);
+    },
+    updateSystemProfile(input: Parameters<typeof updateSystemHarnessProfile>[1]) {
+      return updateSystemHarnessProfile(db, input);
+    },
+    listProfiles(input: Parameters<typeof listHarnessProfiles>[1]) {
+      return listHarnessProfiles(db, input);
+    },
+    getProfile(input: Parameters<typeof getHarnessProfile>[1]) {
+      return getHarnessProfile(db, input);
+    },
+    getVersionRaw(input: Parameters<typeof getHarnessProfileVersionRaw>[1]) {
+      return getHarnessProfileVersionRaw(db, input);
+    },
+    listVersions(input: Parameters<typeof listHarnessProfileVersions>[1]) {
+      return listHarnessProfileVersions(db, input);
+    },
+    getVersion(input: Parameters<typeof getHarnessProfileVersion>[1]) {
+      return getHarnessProfileVersion(db, input);
+    },
+    getArtifactsByHashes(input: Parameters<typeof getHarnessSkillArtifactsByHashes>[1]) {
+      return getHarnessSkillArtifactsByHashes(db, input);
+    },
+    resolveVersionRaw(input: Parameters<typeof resolveHarnessProfileVersionRaw>[1]) {
+      return resolveHarnessProfileVersionRaw(db, input);
+    },
+    getArtifactEnvelope(input: Parameters<typeof getHarnessSkillArtifactEnvelopeByHashes>[1]) {
+      return getHarnessSkillArtifactEnvelopeByHashes(db, input);
+    },
+    getArtifactByHash(input: { organizationId: string; artifactHash: string }) {
+      return getHarnessSkillArtifactsByHashes(db, {
+        organizationId: input.organizationId,
+        artifactHashes: [input.artifactHash],
+      }).then(([artifact]) => artifact ?? null);
+    },
+    persistArtifactRows(input: Parameters<typeof persistHarnessSkillArtifactRows>[1]) {
+      return persistHarnessSkillArtifactRows(db, input);
+    },
+    getLatestVersion(profileId: string) {
+      return getLatestHarnessProfileVersionNumber(db, profileId);
+    },
+    publishPrepared(input: Parameters<typeof publishHarnessProfilePrepared>[1]) {
+      return publishHarnessProfilePrepared(db, input);
+    },
+    replaceDraftPrepared(input: Parameters<typeof replaceHarnessProfileDraftPrepared>[1]) {
+      return replaceHarnessProfileDraftPrepared(db, input);
+    },
+    insertProfile(input: Parameters<typeof insertHarnessProfile>[1]) {
+      return insertHarnessProfile(db, input);
+    },
+    replaceDraft(input: Parameters<typeof replaceHarnessProfileDraft>[1]) {
+      return replaceHarnessProfileDraft(db, input);
+    },
+    archiveProfile(input: Parameters<typeof archiveHarnessProfileRaw>[1]) {
+      return archiveHarnessProfileRaw(db, input);
+    },
+    restoreArchivedProfile(input: Parameters<typeof restoreArchivedHarnessProfileRaw>[1]) {
+      return restoreArchivedHarnessProfileRaw(db, input);
+    },
+    hasProfileVersions(profileId: string) {
+      return hasHarnessProfileVersions(db, profileId);
+    },
+    deleteUnpublishedProfile(input: Parameters<typeof deleteUnpublishedHarnessProfile>[1]) {
+      return deleteUnpublishedHarnessProfile(db, input);
+    },
+  };
+}
+
+export function createConnectedHarnessProfileRepository() {
+  return createHarnessProfileRepository(getDb());
 }

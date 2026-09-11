@@ -36,28 +36,28 @@ vi.mock("../../sandbox/stop-ticket-sandboxes.js", () => ({
 }));
 vi.mock("../../db/client.js", () => ({ getDb: () => ({ db: true }) }));
 vi.mock("../../db/repositories/clarifications.js", () => ({
-  tombstoneClarificationCancellation: state.tombstone,
+  tombstoneConnectedClarificationCancellation: state.tombstone,
 }));
 vi.mock("../../db/repositories/approvals.js", () => ({
-  retireApprovalCancellation: state.retireApproval,
+  retireConnectedApprovalCancellation: state.retireApproval,
 }));
 vi.mock("../tickets/ticket-transition.js", () => ({
-  moveTicketForRun: state.moveTicket,
-  withdrawTicketFromAiForRun: state.moveTicket,
+  moveConnectedTicketForRun: state.moveTicket,
+  withdrawConnectedTicketFromAiForRun: state.moveTicket,
 }));
 vi.mock("../../db/repositories/runs/telemetry.js", () => ({
-  recordRunStatusReason: state.recordStatusReason,
-  markRunBlockedOnCancel: state.markBlockedOnCancel,
-  markRunBlockedByOperator: state.markBlockedByOperator,
+  recordConnectedRunStatusReason: state.recordStatusReason,
+  markConnectedRunBlockedOnCancel: state.markBlockedOnCancel,
+  markConnectedRunBlockedByOperator: state.markBlockedByOperator,
 }));
 vi.mock("../../db/repositories/runs.js", () => ({
-  findLiveRunClaimByRunId: state.findLiveClaim,
-  findRunOutcomeByRunId: state.findRunOutcome,
+  findConnectedLiveRunClaimByRunId: state.findLiveClaim,
+  findConnectedRunOutcomeByRunId: state.findRunOutcome,
 }));
 // cancelRunForOperator reaches the schedule ledger through a dynamic import, so this
 // mock has to stand in for the whole module rather than one export of it.
-vi.mock("../../schedule-trigger/occurrence-store.js", () => ({
-  settleScheduleOccurrenceOnCancel: state.settleOccurrence,
+vi.mock("../../db/repositories/schedule-triggers.js", () => ({
+  settleConnectedScheduleOccurrenceOnCancel: state.settleOccurrence,
 }));
 vi.mock("../../infra/logger.js", () => ({
   logger: { warn: state.warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -200,7 +200,6 @@ describe("cancelRun", () => {
       "Backlog",
     )).resolves.toBe(true);
     expect(state.moveTicket).toHaveBeenCalledWith({
-      db: { db: true },
       issueTracker,
       ticketKey: "PROJ-1",
       target: "Backlog",
@@ -250,7 +249,6 @@ describe("cancelRun", () => {
       "Cancelled via Slack /ai-workflow cancel",
     )).resolves.toBe(true);
     expect(state.recordStatusReason).toHaveBeenCalledWith(
-      { db: true },
       "run-1",
       "Cancelled via Slack /ai-workflow cancel",
       { kind: "cancellation" },
@@ -291,7 +289,7 @@ describe("cancelRun", () => {
       { ownerToken: "owner-a", runId: "run-1" },
       runRegistry,
     )).resolves.toBe(true);
-    expect(state.markBlockedOnCancel).toHaveBeenCalledWith({ db: true }, "run-1");
+    expect(state.markBlockedOnCancel).toHaveBeenCalledWith("run-1");
   });
 
   // Cancelling wakes the parked body, whose own error path flips the run back to
@@ -341,9 +339,8 @@ describe("cancelRunById", () => {
   const scheduleClaim = (over: Partial<ActiveRunEntry> = {}): ActiveRunEntry =>
     active({ subjectKey: "sched:demo:hourly", ticketKey: null, kind: "schedule", ...over });
 
-  // A distinct sentinel for the db passed straight into cancelRunById, so the
-  // markRunBlockedByOperator call it makes is distinguishable from the getDb()
-  // sentinel the reused subject cancel core drives internally.
+  // Compatibility callers retain the explicit Db argument while production
+  // paths use the connected repository operations.
   const outerDb = { marker: "outer" } as unknown as Db;
 
   it("cancels a live run: settles blocked with the operator reason and releases the subject", async () => {
@@ -374,7 +371,6 @@ describe("cancelRunById", () => {
     // Synchronous blocked + reason via the operator-only writer (the 3-arg call),
     // never the park writer settleCancelledPark drives.
     expect(state.markBlockedByOperator).toHaveBeenCalledWith(
-      db,
       "run-1",
       "cancelled by operator kate",
     );
@@ -401,7 +397,6 @@ describe("cancelRunById", () => {
       subjectKey: "ticket:jira:PROJ-1",
     });
     expect(state.moveTicket).toHaveBeenCalledWith({
-      db: outerDb,
       issueTracker,
       ticketKey: "PROJ-1",
       aiColumn: expect.any(String),
@@ -463,7 +458,6 @@ describe("cancelRunById", () => {
     ).resolves.toEqual({ outcome: "cancelled", subjectKey: "sched:demo:hourly" });
 
     expect(state.markBlockedByOperator).toHaveBeenCalledWith(
-      outerDb,
       "run-1",
       "cancelled by operator kate",
     );
@@ -650,9 +644,7 @@ describe("cancelRunForOperator", () => {
       scheduleOccurrenceSettled: true,
     });
 
-    // The settle takes the db handed to the wrapper, not an internal one: the
-    // ledger row and the cancel have to be read in the same tenant's database.
-    expect(state.settleOccurrence).toHaveBeenCalledWith(operatorDb, "run-1");
+    expect(state.settleOccurrence).toHaveBeenCalledWith("run-1");
     expect(state.warn).not.toHaveBeenCalled();
   });
 

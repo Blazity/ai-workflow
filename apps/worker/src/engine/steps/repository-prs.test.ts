@@ -17,10 +17,14 @@ vi.mock("../../services/vcs/vcs-runtime.js", () => ({
 
 vi.mock("../../db/repositories/runs.js", () => ({
   upsertWorkflowOwnedBranch: mocks.upsertWorkflowOwnedBranch,
+  upsertConnectedWorkflowOwnedBranch: (...args: any[]) =>
+    mocks.upsertWorkflowOwnedBranch(...args),
 }));
 
 vi.mock("../../services/run-lifecycle/active-run-owner.js", () => ({
   assertActiveRunOwner: (...args: any[]) => mocks.assertActiveRunOwner(...args),
+  assertConnectedActiveRunOwner: (...args: any[]) =>
+    mocks.assertActiveRunOwner(...args),
 }));
 
 import {
@@ -139,7 +143,7 @@ describe("durable publication PR phases", () => {
     });
 
     expect(order).toEqual(["reconcile", "owner-fence", "create"]);
-    expect(mocks.assertActiveRunOwner).toHaveBeenCalledWith({ db: true }, durableOwner);
+    expect(mocks.assertActiveRunOwner).toHaveBeenCalledWith(durableOwner);
     // The resolved title is handed to the provider verbatim, and a body with no
     // platform vocabulary survives the publication scrub unchanged.
     expect(createPR).toHaveBeenCalledWith(
@@ -322,7 +326,6 @@ describe("durable publication PR phases", () => {
     });
 
     expect(mocks.upsertWorkflowOwnedBranch).toHaveBeenCalledWith(
-      { db: true },
       {
         ticketKey: "AIW-100",
         provider: "github",
@@ -351,7 +354,6 @@ describe("durable publication PR phases", () => {
     });
 
     expect(mocks.upsertWorkflowOwnedBranch).toHaveBeenCalledWith(
-      { db: true },
       {
         ticketKey: "AIW-100",
         provider: "github",

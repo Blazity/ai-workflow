@@ -11,6 +11,8 @@ export {
 export { toManualDispatchHttpError } from "./http.js";
 export {
   dispatchManualWorkflow,
+  dispatchConnectedManualWorkflow,
+  preflightConnectedManualDispatch,
   preflightManualDispatch,
   recoverManualDispatches,
 } from "./service.js";

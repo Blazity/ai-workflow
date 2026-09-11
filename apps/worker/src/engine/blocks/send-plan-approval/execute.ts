@@ -17,12 +17,11 @@ async function createApprovalRequestStep(input: {
   repositoryScope: ApprovedRepositoryScope | null;
 }): Promise<string> {
   "use step";
-  const { getDb } = await import("../../../db/client.js");
-  const { createApprovalRequest } = await import("../../../db/repositories/approvals.js");
-  const row = await createApprovalRequest(getDb(), input);
+  const { createConnectedApprovalRequest } = await import("../../../db/repositories/approvals.js");
+  const row = await createConnectedApprovalRequest(input);
   return row.id;
 }
-createApprovalRequestStep.maxRetries = 0;
+createApprovalRequestStep.maxRetries = 1;
 
 export function approvedRepositoryScopeFromManifest(
   manifest: WorkspaceManifest | null,
@@ -68,11 +67,10 @@ async function mirrorApprovalCommentStep(
   owner: ActiveRunOwner,
 ): Promise<void> {
   "use step";
-  const { getDb } = await import("../../../db/client.js");
-  const { assertActiveRunOwner } = await import("../../../services/run-lifecycle/active-run-owner.js");
+  const { assertConnectedActiveRunOwner } = await import("../../../services/run-lifecycle/active-run-owner.js");
   const { createAdapters } = await import("../../../services/vcs/adapters.js");
   const { issueTracker } = createAdapters();
-  await assertActiveRunOwner(getDb(), owner);
+  await assertConnectedActiveRunOwner(owner);
   await issueTracker.postComment(ticketId, body);
 }
 mirrorApprovalCommentStep.maxRetries = 0;
@@ -82,11 +80,10 @@ async function notifyPlanApprovalStep(
   owner: ActiveRunOwner,
 ): Promise<void> {
   "use step";
-  const { getDb } = await import("../../../db/client.js");
-  const { assertActiveRunOwner } = await import("../../../services/run-lifecycle/active-run-owner.js");
+  const { assertConnectedActiveRunOwner } = await import("../../../services/run-lifecycle/active-run-owner.js");
   const { createAdapters } = await import("../../../services/vcs/adapters.js");
   const { messaging } = createAdapters();
-  await assertActiveRunOwner(getDb(), owner);
+  await assertConnectedActiveRunOwner(owner);
   await messaging.notifyForTicket(ticketKey, { kind: "plan_approval_requested" });
 }
 notifyPlanApprovalStep.maxRetries = 0;
@@ -97,19 +94,16 @@ async function parkForApprovalStep(
   owner: TicketTransitionOwner,
 ): Promise<void> {
   "use step";
-  const { getDb } = await import("../../../db/client.js");
   const { createAdapters } = await import("../../../services/vcs/adapters.js");
   const { AWAITING_APPROVAL_LABEL } = await import("../../../services/tickets/labels.js");
-  const { updateTicketLabelsForRun } = await import(
+  const { updateConnectedTicketLabelsForRun } = await import(
     "../../../services/tickets/ticket-label-mutation.js"
   );
-  const { moveTicketForRun } = await import("../../../services/tickets/ticket-transition.js");
+  const { moveConnectedTicketForRun } = await import("../../../services/tickets/ticket-transition.js");
   const { issueTracker } = createAdapters();
-  const db = getDb();
   if (typeof issueTracker.updateLabels === "function") {
     try {
-      await updateTicketLabelsForRun({
-        db,
+      await updateConnectedTicketLabelsForRun({
         issueTracker,
         ticketKey: ticketId,
         owner,
@@ -132,8 +126,7 @@ async function parkForApprovalStep(
   // re-dispatch it. Swallowing here rather than in the caller keeps pino inside the step:
   // workflow scope forbids Node modules.
   try {
-    await moveTicketForRun({
-      db,
+    await moveConnectedTicketForRun({
       issueTracker,
       ticketKey: ticketId,
       target: backlogTarget,

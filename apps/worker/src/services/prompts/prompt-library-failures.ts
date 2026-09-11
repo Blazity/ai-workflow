@@ -6,7 +6,25 @@
  * Recognising it here keeps the store class below the app tier while the caller
  * still answers with the same status and message it always did.
  */
-import { PromptLibraryStoreError } from "../../db/repositories/prompts.js";
+export class PromptLibraryStoreError extends Error {
+  constructor(public readonly statusCode: number, message: string) {
+    super(message);
+  }
+}
+
+export class PromptLibraryCasMissError extends PromptLibraryStoreError {
+  readonly kind = "prompt_library.cas_miss" as const;
+
+  constructor(
+    public readonly promptId: number,
+    public readonly expectedVersion: number,
+    public readonly currentVersion: number | null,
+  ) {
+    super(409, currentVersion === null
+      ? `Prompt ${promptId} has no current version`
+      : `Prompt ${promptId} is at version ${currentVersion}, not ${expectedVersion}. Read it again with prompts.get and re-send the edit against the version you have seen.`);
+  }
+}
 
 export interface PromptLibraryFailure {
   statusCode: number;

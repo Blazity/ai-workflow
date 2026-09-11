@@ -77,6 +77,7 @@ vi.mock("../../services/vcs/adapters.js", () => ({
 }));
 vi.mock("../../services/run-lifecycle/active-run-owner.js", () => ({
   assertActiveRunOwner: vi.fn(async () => {}),
+  assertConnectedActiveRunOwner: vi.fn(async () => {}),
 }));
 vi.mock("../../db/repositories/runs/telemetry.js", () => ({
   markRunFailedOnSelfMove: telemetry.markRunFailedOnSelfMove,
@@ -84,9 +85,15 @@ vi.mock("../../db/repositories/runs/telemetry.js", () => ({
   recordBlockStatuses: vi.fn(),
   recordRunStatusReason: telemetry.recordRunStatusReason,
   recordRunUsage: telemetry.recordRunUsage,
+  recordConnectedRunUsage: telemetry.recordRunUsage,
+  recordConnectedBlockStatuses: vi.fn(),
+  recordConnectedRunStatusReason: telemetry.recordRunStatusReason,
+  markConnectedRunFailedOnSelfMove: telemetry.markRunFailedOnSelfMove,
+  markConnectedRunSucceededOnSelfMove: vi.fn(),
 }));
-vi.mock("../../db/repositories/runs/run-analysis.js", () => ({
+vi.mock("../../run-analysis/persistence.js", () => ({
   finalizeRunAnalysisUsage: telemetry.finalizeRunAnalysisUsage,
+  finalizeConnectedRunAnalysisUsage: telemetry.finalizeRunAnalysisUsage,
 }));
 vi.mock("workflow/runtime", () => ({ getWorld: () => ({}) }));
 vi.mock("../../services/overview/collect-run-detail.js", () => ({
@@ -123,14 +130,12 @@ describe("retired workflow replay telemetry", () => {
 
     expect(telemetry.markRunFailedOnSelfMove).toHaveBeenCalledOnce();
     expect(telemetry.recordRunStatusReason).toHaveBeenCalledWith(
-      {},
       "run-retired-replay",
       RETIRED_SCHEMA_MESSAGE,
       { kind: "failure" },
     );
     expect(telemetry.recordRunUsage).toHaveBeenCalledOnce();
     expect(telemetry.recordRunUsage).toHaveBeenCalledWith(
-      {},
       expect.objectContaining({
         runId: "run-retired-replay",
         status: "failed",
@@ -180,7 +185,6 @@ describe("retired workflow replay telemetry", () => {
       RETIRED_SCHEMA_MESSAGE,
     );
     expect(telemetry.recordRunUsage).toHaveBeenCalledWith(
-      {},
       expect.objectContaining({
         runId: "run-retired-replay",
         status: "failed",

@@ -31,12 +31,22 @@ const dbRef = vi.hoisted(() => ({ current: null as unknown as Db }));
 vi.mock("../../db/client.js", () => ({ getDb: () => dbRef.current }));
 const mockGetEnabled = vi.fn();
 const mockHasBlockingApproval = vi.fn();
+vi.mock("../../engine/definition-trigger-routing.js", () => ({
+  getEnabledWorkflowDefinitionForTrigger: (...args: any[]) => mockGetEnabled(...args),
+  getConnectedEnabledWorkflowDefinitionForTrigger: (...args: any[]) => mockGetEnabled(...args),
+}));
 vi.mock("../../db/repositories/definitions.js", () => ({
   getEnabledWorkflowDefinitionForTrigger: (...args: any[]) => mockGetEnabled(...args),
   runnableDefinitionOf: (row: any) => row?.schema === "v2" ? row.definition : undefined,
 }));
+vi.mock("../../db/repositories/definitions/connected.js", () => ({
+  getConnectedEnabledWorkflowDefinitionForTrigger: (...args: any[]) =>
+    mockGetEnabled(...args),
+}));
 vi.mock("../../db/repositories/approvals.js", () => ({
   hasDispatchBlockingApprovalForTicket: (...args: any[]) =>
+    mockHasBlockingApproval(...args),
+  hasConnectedDispatchBlockingApprovalForTicket: (...args: any[]) =>
     mockHasBlockingApproval(...args),
 }));
 
@@ -177,7 +187,7 @@ describe("dispatchTicket owner reservation", () => {
       started: false,
       reason: "approval_pending",
     });
-    expect(mockHasBlockingApproval).toHaveBeenCalledWith(expect.anything(), "PROJ-42");
+    expect(mockHasBlockingApproval).toHaveBeenCalledWith("PROJ-42");
     expect(runRegistry.releaseReservation).toHaveBeenCalledOnce();
     expect(mockGetEnabled).not.toHaveBeenCalled();
     expect(mockStart).not.toHaveBeenCalled();

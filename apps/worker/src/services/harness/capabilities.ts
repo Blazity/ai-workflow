@@ -5,10 +5,9 @@
  * the cached catalog; a missing catalog is the catalog's own 503 and not an
  * empty answer.
  */
-import { getDb } from "../../db/client.js";
 import {
-  getCachedHarnessCapabilities,
-  prewarmHarnessCapabilityCatalogs,
+  getConnectedCachedHarnessCapabilities,
+  prewarmConnectedHarnessCapabilityCatalogs,
 } from "../../harness-profiles/capability-catalog.js";
 import type { HarnessProvider } from "@shared/contracts";
 
@@ -17,7 +16,7 @@ export function readCachedHarnessCapabilities(input: {
   provider: HarnessProvider;
   cliVersion: string;
 }) {
-  return getCachedHarnessCapabilities(getDb(), input);
+  return getConnectedCachedHarnessCapabilities(input);
 }
 
 /**
@@ -26,5 +25,5 @@ export function readCachedHarnessCapabilities(input: {
  * provider discovery on the request path is what this cache exists to avoid.
  */
 export function prewarmHarnessCapabilities() {
-  return prewarmHarnessCapabilityCatalogs(getDb());
+  return prewarmConnectedHarnessCapabilityCatalogs();
 }

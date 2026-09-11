@@ -26,15 +26,14 @@ export async function acknowledgeManualDispatchStep(
 ): Promise<void> {
   "use step";
   if (!("manualDispatchId" in entry) || !entry.manualDispatchId) return;
-  const { getDb } = await import("../../db/client.js");
-  const { acknowledgeManualDispatchWorkflow } = await import(
-    "../../services/manual-dispatch/acknowledge-workflow.js"
+  const { acknowledgeConnectedManualDispatchStarted } = await import(
+    "../../db/repositories/manual-dispatch.js"
   );
-  const acknowledged = await acknowledgeManualDispatchWorkflow(getDb(), {
-    requestId: entry.manualDispatchId,
-    ownerToken: entry.ownerToken,
-    runId: workflowRunId,
-  });
+  const acknowledged = await acknowledgeConnectedManualDispatchStarted(
+    entry.manualDispatchId,
+    entry.ownerToken,
+    workflowRunId,
+  );
   if (!acknowledged) {
     throw new Error(`Manual dispatch ${entry.manualDispatchId} could not be acknowledged`);
   }
@@ -50,9 +49,10 @@ export async function acknowledgeApprovalDispatchStep(
 ): Promise<void> {
   "use step";
   if (entry.kind !== "plan_approved") return;
-  const { getDb } = await import("../../db/client.js");
-  const { setDispatchedRunId } = await import("../../db/repositories/approvals.js");
-  await setDispatchedRunId(getDb(), entry.approval.approvalRequestId, workflowRunId);
+  const { setConnectedDispatchedRunId } = await import(
+    "../../db/repositories/approvals.js"
+  );
+  await setConnectedDispatchedRunId(entry.approval.approvalRequestId, workflowRunId);
 }
 
 /** Close the dispatcher crash window from inside the winning workflow. The
@@ -63,13 +63,11 @@ export async function acknowledgePrTriggerDispatchStep(
 ): Promise<boolean> {
   "use step";
   if (entry.kind !== "pr_trigger" || !entry.delivery) return true;
-  const { getDb } = await import("../../db/client.js");
-  const db = getDb();
   const {
-    acknowledgeStartedTriggerDelivery,
-    completeTriggerDelivery,
+    acknowledgeConnectedStartedTriggerDelivery,
+    completeConnectedTriggerDelivery,
   } = await import(
-    "../../services/dispatch/trigger-delivery-store.js"
+    "../../db/repositories/trigger-deliveries.js"
   );
   const {
     bindCurrentPullRequest,
@@ -82,26 +80,19 @@ export async function acknowledgePrTriggerDispatchStep(
   };
   const current = await readProviderCurrentPullRequest(triggerEvent);
   if (!bindCurrentPullRequest(triggerEvent, current)) {
-    await completeTriggerDelivery(
-      db,
+    await completeConnectedTriggerDelivery(
       entry.delivery.provider,
       entry.delivery.deliveryId,
       { result: "ignored_stale_head" },
     );
     return false;
   }
-  return acknowledgeStartedTriggerDelivery(
-    db,
-    {
-      subjectKey: entry.subjectKey,
-      triggerType: entry.triggerType,
-      delivery: entry.delivery,
-      pr: entry.pr,
-      definitionId: entry.definitionId,
-      definitionVersion: entry.definitionVersion,
-    },
-    workflowRunId,
-  );
+  return acknowledgeConnectedStartedTriggerDelivery({
+    provider: entry.delivery.provider,
+    deliveryId: entry.delivery.deliveryId,
+    subjectKey: entry.subjectKey,
+    runId: workflowRunId,
+  });
 }
 acknowledgePrTriggerDispatchStep.maxRetries = 0;
 
@@ -119,20 +110,16 @@ export async function acknowledgeWebhookDispatchStep(
 ): Promise<boolean> {
   "use step";
   if (entry.kind !== "webhook_trigger") return true;
-  const { getDb } = await import("../../db/client.js");
-  const { recordWebhookDeliveryStarted } = await import(
-    "../../webhook-trigger/delivery-store.js"
+  const { recordConnectedStartedWebhookTriggerDelivery } = await import(
+    "../../db/repositories/webhook-trigger-deliveries.js"
   );
-  return recordWebhookDeliveryStarted(
-    getDb(),
-    {
-      endpointId: entry.endpointId,
-      deliveryId: entry.deliveryId,
-      subjectKey: entry.subjectKey,
-    },
-    entry.ownerToken,
-    workflowRunId,
-  );
+  return recordConnectedStartedWebhookTriggerDelivery({
+    endpointId: entry.endpointId,
+    deliveryId: entry.deliveryId,
+    subjectKey: entry.subjectKey,
+    ownerToken: entry.ownerToken,
+    runId: workflowRunId,
+  });
 }
 acknowledgeWebhookDispatchStep.maxRetries = 0;
 
@@ -150,17 +137,15 @@ export async function acknowledgeScheduleDispatchStep(
 ): Promise<boolean> {
   "use step";
   if (entry.kind !== "schedule") return true;
-  const { getDb } = await import("../../db/client.js");
-  const { recordOccurrenceStarted } = await import(
-    "../../schedule-trigger/occurrence-store.js"
+  const { recordConnectedStartedScheduleOccurrence } = await import(
+    "../../db/repositories/schedule-triggers.js"
   );
-  return recordOccurrenceStarted(
-    getDb(),
-    entry.scheduleId,
-    new Date(entry.scheduledFor),
-    entry.ownerToken,
-    workflowRunId,
-  );
+  return recordConnectedStartedScheduleOccurrence({
+    scheduleId: entry.scheduleId,
+    occurrenceAt: new Date(entry.scheduledFor),
+    ownerToken: entry.ownerToken,
+    runId: workflowRunId,
+  });
 }
 acknowledgeScheduleDispatchStep.maxRetries = 0;
 
@@ -170,19 +155,13 @@ export async function acknowledgePendingTriggerStep(
   "use step";
   if ("continuation" in entry && entry.continuation?.kind === "clarification") return;
   if (entry.kind !== "pr_trigger" || !entry.pendingEvent || entry.delivery) return;
-  const { getDb } = await import("../../db/client.js");
-  const { deletePendingTrigger } = await import("../../services/dispatch/trigger-delivery-store.js");
-  await deletePendingTrigger(getDb(), {
+  const { deleteConnectedPendingTriggerDelivery } = await import(
+    "../../db/repositories/trigger-deliveries.js"
+  );
+  await deleteConnectedPendingTriggerDelivery({
+    provider: entry.pr.provider,
+    deliveryId: entry.pendingEvent.deliveryId,
     subjectKey: entry.subjectKey,
-    triggerType: entry.pendingEvent.triggerType,
-    delivery: {
-      provider: entry.pr.provider,
-      producer: "pending-snapshot",
-      deliveryId: entry.pendingEvent.deliveryId,
-    },
-    pr: { ...entry.pr, headSha: entry.pendingEvent.headSha },
-    definitionId: entry.definitionId,
-    definitionVersion: entry.definitionVersion,
   });
 }
 acknowledgePendingTriggerStep.maxRetries = 0;
@@ -195,16 +174,14 @@ export async function repairClarificationLabelStep(
   owner: import("../../services/run-lifecycle/active-run-owner.js").ActiveRunOwner,
 ): Promise<void> {
   "use step";
-  const { getDb } = await import("../../db/client.js");
   const { createAdapters } = await import("../../services/vcs/adapters.js");
   const { NEEDS_CLARIFICATION_LABEL } = await import("../../services/tickets/labels.js");
-  const { updateTicketLabelsForRun } = await import(
+  const { updateConnectedTicketLabelsForRun } = await import(
     "../../services/tickets/ticket-label-mutation.js"
   );
   const { issueTracker } = createAdapters();
   if (typeof issueTracker.updateLabels !== "function") return;
-  await updateTicketLabelsForRun({
-    db: getDb(),
+  await updateConnectedTicketLabelsForRun({
     issueTracker,
     ticketKey,
     owner,

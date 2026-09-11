@@ -9,7 +9,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseOptions, printTable, readJson, writeJson } from "./shared.mjs";
+import { parseOptions, printTable } from "./shared.mjs";
 
 const productionTypeScript = /\.[cm]?[jt]sx?$/u;
 const testPath = /(?:\.(?:test|spec)\.[cm]?[jt]sx?$|\/(?:test-support|e2e|fixtures)\/|\/test-db\.[cm]?[jt]s$)/u;
@@ -130,7 +130,7 @@ function isClientModule(root, target) {
 }
 
 function main() {
-  const options = parseOptions(process.argv.slice(2), { "--baseline": "baseline", "--root": "root" });
+  const options = parseOptions(process.argv.slice(2), { "--root": "root" });
   const root = options.root;
   const source = join(root, "apps/worker/src");
   const reexportCache = new Map();
@@ -156,12 +156,8 @@ function main() {
     }))
     .map((file) => relative(root, file).replaceAll("\\", "/"))
     .sort();
-  const baselinePath = options.baseline ?? fileURLToPath(new URL("./db-client-fence.baseline.json", import.meta.url));
-  if (options.updateBaseline) writeJson(baselinePath, { count: paths.length });
-  const baseline = readJson(baselinePath);
-  if (!Number.isInteger(baseline.count) || baseline.count < 0) throw new Error("Baseline count must be a non-negative integer.");
-  printTable(["metric", "baseline", "now"], [["production db/client reachability", baseline.count, paths.length]]);
-  if (paths.length > baseline.count) {
+  printTable(["metric", "now"], [["production db/client reachability", paths.length]]);
+  if (paths.length > 0) {
     console.log(paths.join("\n"));
     console.log("db-client-fence FAIL");
     process.exitCode = 1;

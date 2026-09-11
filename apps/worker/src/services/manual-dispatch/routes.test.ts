@@ -26,12 +26,10 @@ vi.mock("../auth/request-context.js", () => ({
 vi.mock("../../pre-pr-checks/store.js", () => ({
   dashboardUserLabel: async () => "Karol",
 }));
-vi.mock("./service.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./service.js")>();
+vi.mock("../workflow-definitions/trigger-manual-dispatch.js", () => {
   return {
-    ...actual,
-    preflightManualDispatch: (...args: unknown[]) => preflight(...args),
-    dispatchManualWorkflow: (...args: unknown[]) => dispatch(...args),
+    preflightTriggerDispatch: (...args: unknown[]) => preflight(...args),
+    dispatchTriggerManually: (...args: unknown[]) => dispatch(...args),
   };
 });
 
@@ -144,7 +142,8 @@ describe("manual dispatch routes", () => {
       expect.objectContaining({
         definitionId: 9,
         triggerNodeId: "ticket-trigger",
-        actor: { id: "user-1", label: "Karol" },
+        actorId: "user-1",
+        actorRole: "admin",
         request: expect.objectContaining({
           expectedDeployedVersion: 3,
           input: { kind: "ticket", ticketKey: "aiw-173" },

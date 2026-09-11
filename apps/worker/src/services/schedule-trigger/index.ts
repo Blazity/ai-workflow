@@ -6,6 +6,7 @@
  * scripts/gates/cluster-deep-imports.json and that list only shrinks.
  */
 export {
+  createConnectedScheduleDispatchDeps,
   createScheduleDispatchDeps,
   runScheduleTriggerPass,
 } from "./dispatch-schedule-trigger.js";

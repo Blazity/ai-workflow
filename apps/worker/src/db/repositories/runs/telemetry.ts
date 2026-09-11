@@ -9,7 +9,7 @@ import {
   or,
   sql,
 } from "drizzle-orm";
-import type { Db } from "../../client.js";
+import { getDb, type Db } from "../../client.js";
 import {
   activeRuns,
   approvalRequests,
@@ -188,6 +188,12 @@ export async function upsertRunSnapshots(
     });
 }
 
+export function upsertConnectedRunSnapshots(
+  snapshots: Parameters<typeof upsertRunSnapshots>[1],
+): Promise<void> {
+  return upsertRunSnapshots(getDb(), snapshots);
+}
+
 /**
  * Workflow writer. Upserts the cost/usage (and agent PR) for one run, plus the
  * run's authoritative terminal status/completion. Status is the run's own
@@ -277,6 +283,10 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
     });
 }
 
+export function recordConnectedRunUsage(usage: RunUsage): Promise<void> {
+  return recordRunUsage(getDb(), usage);
+}
+
 /**
  * Block-status fields the agent workflow streams mid-run, keyed by the
  * definition node id. Identity is written here too (INSERT only) so a run is
@@ -290,20 +300,9 @@ export interface RunBlockStatusWrite {
   ticketUrl: string | null;
   definitionVersion: number | null;
   definitionId: number | null;
-  blockStatuses: Record<string, BlockRunState>;
+  blockStatuses: Record<string, Omit<BlockRunState, "output">>;
   promptManifest?: ResolvedPromptReference[];
   harnessManifests?: HarnessRunManifestRecord[];
-}
-
-export function summarizeBlockStatuses(
-  blockStatuses: Record<string, BlockRunState>,
-): Record<string, BlockRunState> {
-  return Object.fromEntries(
-    Object.entries(blockStatuses).map(([nodeId, state]) => {
-      const { output: _output, ...summary } = state;
-      return [nodeId, summary];
-    }),
-  );
 }
 
 /**
@@ -317,7 +316,6 @@ export async function recordBlockStatuses(
   db: Db,
   write: RunBlockStatusWrite,
 ): Promise<void> {
-  const blockStatuses = summarizeBlockStatuses(write.blockStatuses);
   await db
     .insert(workflowRuns)
     .values({
@@ -331,7 +329,7 @@ export async function recordBlockStatuses(
       ticketUrl: write.ticketUrl,
       definitionVersion: write.definitionVersion,
       definitionId: write.definitionId,
-      blockStatuses,
+      blockStatuses: write.blockStatuses,
       promptManifest: write.promptManifest,
       harnessManifests: write.harnessManifests,
     })
@@ -349,6 +347,12 @@ export async function recordBlockStatuses(
         updatedAt: sql`now()`,
       },
     });
+}
+
+export function recordConnectedBlockStatuses(
+  payload: Parameters<typeof recordBlockStatuses>[1],
+): Promise<void> {
+  return recordBlockStatuses(getDb(), payload);
 }
 
 /**
@@ -404,6 +408,14 @@ export async function recordRunStatusReason(
     });
 }
 
+export function recordConnectedRunStatusReason(
+  runId: string,
+  reason: string,
+  input: Parameters<typeof recordRunStatusReason>[3],
+): Promise<void> {
+  return recordRunStatusReason(getDb(), runId, reason, input);
+}
+
 /**
  * Commits a run's authoritative "failed" status the moment its own
  * failure-handling backlog move is about to fire a Jira webhook. The bot moving
@@ -431,6 +443,10 @@ export async function markRunFailedOnSelfMove(db: Db, runId: string): Promise<vo
         ),
       ),
     );
+}
+
+export function markConnectedRunFailedOnSelfMove(runId: string): Promise<void> {
+  return markRunFailedOnSelfMove(getDb(), runId);
 }
 
 /**
@@ -463,6 +479,10 @@ export async function markRunSucceededOnSelfMove(db: Db, runId: string): Promise
     );
 }
 
+export function markConnectedRunSucceededOnSelfMove(runId: string): Promise<void> {
+  return markRunSucceededOnSelfMove(getDb(), runId);
+}
+
 /**
  * Flips a run parked on a clarification from "awaiting" to "success". Called
  * when the clarification is answered (or superseded by a re-pickup) so parked
@@ -477,6 +497,10 @@ export async function resolveAwaitingRun(db: Db, runId: string): Promise<boolean
     .where(and(eq(workflowRuns.runId, runId), eq(workflowRuns.status, "awaiting")))
     .returning({ runId: workflowRuns.runId });
   return rows.length > 0;
+}
+
+export function resolveConnectedAwaitingRun(runId: string): Promise<boolean> {
+  return resolveAwaitingRun(getDb(), runId);
 }
 
 /**
@@ -538,6 +562,10 @@ export async function markRunAwaiting(db: Db, runId: string): Promise<void> {
     );
 }
 
+export function markConnectedRunAwaiting(runId: string): Promise<void> {
+  return markRunAwaiting(getDb(), runId);
+}
+
 /**
  * Clears the live park marker once the answer lands and the parked run carries
  * on, so the dashboard stops reporting it as awaiting input. Guarded on exactly
@@ -549,6 +577,10 @@ export async function markRunResumed(db: Db, runId: string): Promise<void> {
     .update(workflowRuns)
     .set({ status: "running", updatedAt: sql`now()` })
     .where(and(eq(workflowRuns.runId, runId), eq(workflowRuns.status, "awaiting")));
+}
+
+export function markConnectedRunResumed(runId: string): Promise<void> {
+  return markRunResumed(getDb(), runId);
 }
 
 /**
@@ -575,6 +607,10 @@ export async function markRunBlockedOnCancel(db: Db, runId: string): Promise<voi
       updatedAt: sql`now()`,
     })
     .where(and(eq(workflowRuns.runId, runId), eq(workflowRuns.status, "awaiting")));
+}
+
+export function markConnectedRunBlockedOnCancel(runId: string): Promise<void> {
+  return markRunBlockedOnCancel(getDb(), runId);
 }
 
 /**
@@ -615,6 +651,10 @@ export async function markRunBlockedByOperator(
         inArray(workflowRuns.status, ["awaiting", "running"]),
       ),
     );
+}
+
+export function markConnectedRunBlockedByOperator(runId: string, reason: string): Promise<void> {
+  return markRunBlockedByOperator(getDb(), runId, reason);
 }
 
 /**
@@ -725,6 +765,10 @@ export async function sweepOrphanedAwaitingRuns(db: Db): Promise<number> {
   return rows.length;
 }
 
+export function sweepConnectedOrphanedAwaitingRuns(): Promise<number> {
+  return sweepOrphanedAwaitingRuns(getDb());
+}
+
 /**
  * Cron backstop for a run whose active owner disappeared before the workflow
  * recorded a terminal outcome. Agent runs are the only workflow rows with a
@@ -752,4 +796,8 @@ export async function sweepOrphanedRunningRuns(db: Db): Promise<number> {
     )
     .returning({ runId: workflowRuns.runId });
   return rows.length;
+}
+
+export function sweepConnectedOrphanedRunningRuns(): Promise<number> {
+  return sweepOrphanedRunningRuns(getDb());
 }

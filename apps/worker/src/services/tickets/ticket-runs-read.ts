@@ -7,10 +7,10 @@
  * names no ticket, which is the empty state and not an error.
  */
 import type { TicketRunsResponse } from "@shared/contracts";
-import { getDb } from "../../db/client.js";
-import { listRunsForTicket } from "../../db/repositories/runs.js";
+import { connectedListRunsForTicket } from "../run-lifecycle/index.js";
 import { logger } from "../../infra/logger.js";
 import { issueTrackerBaseUrl } from "../settings/index.js";
+import { resolveRunModels } from "../overview/index.js";
 
 /** The ticket payload as the wire carries it, minus the timestamp the route stamps. */
 export type TicketRunsPayload = Omit<TicketRunsResponse, "generatedAt">;
@@ -38,13 +38,18 @@ export function ticketKeyFromPathSegment(raw: string | undefined): string {
 export async function listTicketRuns(ticketKey: string): Promise<TicketRunsPayload> {
   if (!ticketKey) return EMPTY;
   try {
-    const { ticket, runs, totals } = await listRunsForTicket({
-      db: getDb(),
+    const { ticket, runs, totals } = await connectedListRunsForTicket({
       ticketKey,
       now: new Date(),
       jiraBaseUrl: issueTrackerBaseUrl(),
     });
-    return { available: true, ticket, runs, totals };
+    const models = await resolveRunModels(runs.map((run) => run.id));
+    return {
+      available: true,
+      ticket,
+      runs: runs.map((run) => ({ ...run, model: models.get(run.id) ?? null })),
+      totals,
+    };
   } catch (err) {
     // DB unreachable: degrade to the empty state so the page renders its
     // documented N/A view instead of erroring.

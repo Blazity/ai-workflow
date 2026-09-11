@@ -1,10 +1,20 @@
-import { and, eq, lt, sql } from "drizzle-orm";
 import type { ClarificationStatus } from "@shared/contracts";
 import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
-import { PostgresRunRegistry } from "../../db/repositories/active-runs.js";
-import type { Db } from "../../db/client.js";
-import { clarificationRequests } from "../../db/schema.js";
-import { cancelRunForOperator } from "../run-lifecycle/cancel-run.js";
+import {
+  createConnectedPostgresRunRegistry,
+  PostgresRunRegistry,
+} from "../../db/repositories/active-runs.js";
+import {
+  reserveConnectedClarificationResumeAttempt,
+  reserveClarificationResumeAttempt,
+  terminalizeConnectedClarificationResume,
+  terminalizeClarificationResume,
+} from "../../db/repositories/clarifications.js";
+import type { Db } from "../../db/types.js";
+import {
+  cancelConnectedRunForOperator,
+  cancelRunForOperator,
+} from "../run-lifecycle/cancel-run.js";
 import { logger } from "../../infra/logger.js";
 import { formatClarificationResumeFailedComment } from "./comment-format.js";
 
@@ -37,23 +47,26 @@ export async function reserveResumeAttempt(
   id: string,
   answeredAt: Date,
 ): Promise<ResumeAttemptReservation | null> {
-  const [row] = await db
-    .update(clarificationRequests)
-    .set({
-      resumeAttempts: sql`coalesce(${clarificationRequests.resumeAttempts}, 0) + 1`,
-    })
-    .where(
-      and(
-        eq(clarificationRequests.id, id),
-        eq(clarificationRequests.status, "answered"),
-        eq(clarificationRequests.answeredAt, answeredAt),
-        lt(sql`coalesce(${clarificationRequests.resumeAttempts}, 0)`, MAX_RESUME_ATTEMPTS),
-      ),
-    )
-    .returning({ resumeAttempts: clarificationRequests.resumeAttempts });
-  return row?.resumeAttempts === undefined || row.resumeAttempts === null
+  const attempt = await reserveClarificationResumeAttempt(db, {
+    id,
+    answeredAt,
+    maxAttempts: MAX_RESUME_ATTEMPTS,
+  });
+  return attempt === null
     ? null
-    : { attempt: row.resumeAttempts, answeredAt };
+    : { attempt, answeredAt };
+}
+
+export async function reserveConnectedResumeAttempt(
+  id: string,
+  answeredAt: Date,
+): Promise<ResumeAttemptReservation | null> {
+  const attempt = await reserveConnectedClarificationResumeAttempt({
+    id,
+    answeredAt,
+    maxAttempts: MAX_RESUME_ATTEMPTS,
+  });
+  return attempt === null ? null : { attempt, answeredAt };
 }
 
 function resumeErrorMessage(error: unknown): string {
@@ -73,44 +86,27 @@ export async function terminalizeExhaustedResume(
   error: unknown,
 ): Promise<boolean> {
   const reason = failureReason(row, resumeErrorMessage(error));
-  const result = await db.execute(sql`
-    WITH terminal_clarification AS (
-      UPDATE clarification_requests
-      SET status = 'resume_failed'
-      WHERE id = ${row.id}
-        AND status = 'answered'
-        AND resume_attempts >= ${MAX_RESUME_ATTEMPTS}
-        AND answered_at = ${answeredAt}
-        AND EXISTS (
-          SELECT 1 FROM workflow_runs WHERE workflow_runs.run_id = ${row.runId}
-        )
-      RETURNING id, run_id
-    ), failed_run AS (
-      UPDATE workflow_runs
-      SET status = 'failed',
-          status_reason = ${reason},
-          completed_at = coalesce(completed_at, now()),
-          duration_sec = coalesce(
-            duration_sec,
-            case
-              when coalesce(started_at, created_at) is not null
-              then greatest(0, extract(epoch from (now() - coalesce(started_at, created_at)))::int)
-              else null
-            end
-          ),
-          updated_at = now()
-      FROM terminal_clarification
-      WHERE workflow_runs.run_id = terminal_clarification.run_id
-        AND coalesce(workflow_runs.status, 'running')
-          NOT IN ('success', 'failed', 'blocked')
-      RETURNING workflow_runs.run_id
-    )
-    SELECT terminal_clarification.id
-    FROM terminal_clarification
-    LEFT JOIN failed_run ON failed_run.run_id = terminal_clarification.run_id
-  `);
-  const rows = (result as { rows?: Array<{ id: string }> }).rows ?? [];
-  return rows.length === 1;
+  return terminalizeClarificationResume(db, {
+    id: row.id,
+    runId: row.runId,
+    answeredAt,
+    maxAttempts: MAX_RESUME_ATTEMPTS,
+    reason,
+  });
+}
+
+export function terminalizeConnectedExhaustedResume(
+  row: ResumeAttemptSubject,
+  answeredAt: Date,
+  error: unknown,
+): Promise<boolean> {
+  return terminalizeConnectedClarificationResume({
+    id: row.id,
+    runId: row.runId,
+    answeredAt,
+    maxAttempts: MAX_RESUME_ATTEMPTS,
+    reason: failureReason(row, resumeErrorMessage(error)),
+  });
 }
 
 type FailedResumeInput = {
@@ -146,8 +142,35 @@ async function cancelExhaustedResume(input: FailedResumeInput): Promise<void> {
   }
 }
 
+type ConnectedFailedResumeInput = Omit<FailedResumeInput, "db">;
+
+async function cancelConnectedExhaustedResume(input: ConnectedFailedResumeInput): Promise<void> {
+  const { row } = input;
+  const cancellation = await cancelConnectedRunForOperator(row.runId, {
+    actorLabel: "clarification resume failure",
+    runRegistry: createConnectedPostgresRunRegistry(),
+    issueTracker: input.issueTracker as IssueTrackerAdapter,
+  }).catch((cancelError: unknown) => {
+    logger.warn(
+      {
+        ticketKey: row.ticketKey ?? "",
+        runId: row.runId,
+        error: cancelError instanceof Error ? cancelError.message : String(cancelError),
+      },
+      "clarification_resume_exhausted_cancel_failed",
+    );
+    return null;
+  });
+  if (cancellation?.outcome === "unconfirmed") {
+    logger.warn(
+      { ticketKey: row.ticketKey ?? "", runId: row.runId },
+      "clarification_resume_exhausted_cancel_unconfirmed",
+    );
+  }
+}
+
 async function postExhaustedResumeComment(
-  input: FailedResumeInput,
+  input: Omit<FailedResumeInput, "db">,
   message: string,
 ): Promise<void> {
   if (!input.row.ticketKey) return;
@@ -188,6 +211,36 @@ export async function finishFailedResume(
   if (!transitioned) return "lost";
 
   await cancelExhaustedResume(input);
+  await postExhaustedResumeComment(input, message);
+
+  logger.warn(
+    {
+      ticketKey: row.ticketKey ?? "",
+      runId: row.runId,
+      clarificationId: row.id,
+      error: message,
+    },
+    "clarification_resume_exhausted",
+  );
+  return "exhausted";
+}
+
+/** Connected production path: the service never receives a database client. */
+export async function finishConnectedFailedResume(
+  input: ConnectedFailedResumeInput,
+): Promise<"retryable" | "exhausted" | "lost"> {
+  if (input.reservation.attempt < MAX_RESUME_ATTEMPTS) return "retryable";
+
+  const { row, error } = input;
+  const message = resumeErrorMessage(error);
+  const transitioned = await terminalizeConnectedExhaustedResume(
+    row,
+    input.reservation.answeredAt,
+    error,
+  );
+  if (!transitioned) return "lost";
+
+  await cancelConnectedExhaustedResume(input);
   await postExhaustedResumeComment(input, message);
 
   logger.warn(

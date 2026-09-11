@@ -1,9 +1,11 @@
 import { createApp, eventHandler, toWebHandler } from "h3";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DashboardAuthError } from "../../../../services/auth/users-read.js";
 
 const state = vi.hoisted(() => ({
   getSession: vi.fn(),
   createHandoff: vi.fn(),
+  acceptInvite: vi.fn(),
   env: {
     BETTER_AUTH_URL: "https://worker.example.com",
     DASHBOARD_ORIGIN: "https://dashboard.example.com",
@@ -15,9 +17,8 @@ vi.mock("../../../../config/env.js", () => ({ env: state.env }));
 vi.mock("../../../../auth-instance.js", () => ({
   auth: { api: { getSession: state.getSession } },
 }));
-vi.mock("../../../../db/client.js", () => ({ getDb: vi.fn() }));
-vi.mock("../../../../services/auth/invite-acceptance.js", () => ({
-  acceptDashboardSsoInvite: vi.fn(),
+vi.mock("../../../../services/auth/invite-requests.js", () => ({
+  acceptDashboardSsoInviteForUser: state.acceptInvite,
 }));
 vi.mock("../../../../services/auth/sso-handoff.js", () => ({
   createDashboardSsoHandoff: state.createHandoff,
@@ -32,6 +33,7 @@ beforeEach(() => {
     session: { token: "session-token" },
   });
   state.createHandoff.mockResolvedValue("handoff-token");
+  state.acceptInvite.mockResolvedValue(undefined);
 });
 
 function handlerFor(route: Parameters<typeof eventHandler>[0]) {
@@ -70,5 +72,31 @@ describe("SSO completion", () => {
     expect(res.headers.get("location")).toBe(
       "https://dashboard.example.com/api/auth/sso/complete?token=handoff-token",
     );
+  });
+
+  it("treats a replayed already-accepted invite as the completed SSO flow", async () => {
+    const res = await handlerFor(completeRoute)(
+      new Request("http://localhost/?inviteId=invite_1"),
+    );
+
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe(
+      "https://dashboard.example.com/api/auth/sso/complete?token=handoff-token",
+    );
+    expect(state.acceptInvite).toHaveBeenCalledWith(expect.anything(), {
+      inviteId: "invite_1",
+      user: { id: "user_1", email: "user@example.com" },
+    });
+  });
+
+  it("renders a declined invite through the existing password-acceptance error path", async () => {
+    state.acceptInvite.mockRejectedValue(new DashboardAuthError(410, "Invite expired"));
+
+    const res = await handlerFor(completeRoute)(
+      new Request("http://localhost/?inviteId=invite_1"),
+    );
+
+    expect(res.status).toBe(410);
+    await expect(res.text()).resolves.toContain("Invite expired");
   });
 });

@@ -8,13 +8,12 @@ import {
   type RunRegistryAdapter,
 } from "../../adapters/run-registry/types.js";
 import type { TicketContent } from "../../adapters/issue-tracker/types.js";
-import { getDb } from "../../db/client.js";
 import {
-  getEnabledWorkflowDefinitionForTrigger,
   runnableDefinitionOf,
 } from "../../db/repositories/definitions.js";
+import { getConnectedEnabledWorkflowDefinitionForTrigger } from "../../engine/definition-trigger-routing.js";
 import {
-  enforceTriggerRateLimit,
+  enforceConnectedTriggerRateLimit,
   resolveTriggerRateLimitForType,
   triggerRateLimitLogFields,
   type TriggerRateLimitConfig,
@@ -25,7 +24,7 @@ import {
 import type { AgentWorkflowInput } from "../../engine/index.js";
 import { BUILTIN_FALLBACK_DEFINITION_VERSION } from "../../engine/agent-input.js";
 import { agentWorkflow } from "../../engine/index.js";
-import { hasDispatchBlockingApprovalForTicket } from "../../db/repositories/approvals.js";
+import { hasConnectedDispatchBlockingApprovalForTicket } from "../../db/repositories/approvals.js";
 import type { Adapters } from "../vcs/adapters.js";
 import { logger } from "../../infra/logger.js";
 import { ticketSubjectKey } from "../run-lifecycle/subject-key.js";
@@ -102,7 +101,7 @@ export async function dispatchTicket(
         // poller's earlier snapshot. A plan request can be persisted while a
         // poll is in flight; neither a pending decision nor an approved pinned
         // continuation may be replaced by generic ticket discovery.
-        if (await hasDispatchBlockingApprovalForTicket(getDb(), ticketKey)) {
+        if (await hasConnectedDispatchBlockingApprovalForTicket(ticketKey)) {
           return { started: false, reason: "approval_pending" };
         }
         ticket = await issueTracker.fetchTicket(ticketKey);
@@ -112,8 +111,7 @@ export async function dispatchTicket(
         if (extractProjectKey(ticket.identifier) !== expectedProjectKey) {
           return { started: false, reason: "wrong_project_key" };
         }
-        const enabled = await getEnabledWorkflowDefinitionForTrigger(
-          getDb(),
+        const enabled = await getConnectedEnabledWorkflowDefinitionForTrigger(
           "trigger_ticket_ai",
         );
         if (!enabled) {
@@ -238,7 +236,7 @@ export function triggerRateLimitNodes(
  * dispatcher resolves the definition by trigger type, not by node.
  */
 async function ticketTriggerRateLimited(
-  enabled: NonNullable<Awaited<ReturnType<typeof getEnabledWorkflowDefinitionForTrigger>>>,
+  enabled: NonNullable<Awaited<ReturnType<typeof getConnectedEnabledWorkflowDefinitionForTrigger>>>,
   ticketKey: string,
 ): Promise<boolean> {
   const limit = resolveTriggerRateLimitForType(
@@ -247,8 +245,7 @@ async function ticketTriggerRateLimited(
   );
   if (!limit) return false;
   const key = { definitionId: String(enabled.definition.id), nodeId: limit.nodeId };
-  const decision = await enforceTriggerRateLimit(
-    getDb(),
+  const decision = await enforceConnectedTriggerRateLimit(
     key,
     limit.config,
     new Date(),

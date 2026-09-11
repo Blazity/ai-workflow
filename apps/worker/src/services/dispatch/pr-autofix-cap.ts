@@ -1,6 +1,10 @@
-import { and, eq, sql } from "drizzle-orm";
-import type { Db } from "../../db/client.js";
-import { prAutofixAttempts } from "../../db/schema.js";
+import type { Db } from "../../db/types.js";
+import {
+  consumeConnectedPrAutofixAttempt,
+  consumePrAutofixAttempt,
+  refundConnectedPrAutofixAttempt,
+  refundPrAutofixAttempt,
+} from "../../db/repositories/pr-autofix-attempts.js";
 
 /** One pull request under one trigger node. */
 export interface PrAutofixCapKey {
@@ -63,33 +67,7 @@ export async function enforcePrAutofixCap(
   // One INSERT ... ON CONFLICT DO UPDATE: concurrent deliveries for a single
   // pull request serialize on the row instead of on a read-then-write, so none
   // of them can lose an increment or skip the crossing into exhaustion.
-  const rows = await db
-    .insert(prAutofixAttempts)
-    .values({
-      definitionId: key.definitionId,
-      nodeId: key.nodeId,
-      provider: key.provider,
-      repoPath: key.repoPath,
-      prNumber: key.prNumber,
-      attempts: 1,
-      updatedAt: now,
-    })
-    .onConflictDoUpdate({
-      target: [
-        prAutofixAttempts.definitionId,
-        prAutofixAttempts.nodeId,
-        prAutofixAttempts.provider,
-        prAutofixAttempts.repoPath,
-        prAutofixAttempts.prNumber,
-      ],
-      set: {
-        attempts: sql`${prAutofixAttempts.attempts} + 1`,
-        updatedAt: now,
-      },
-    })
-    .returning({ attempts: prAutofixAttempts.attempts });
-
-  const attempts = rows[0]?.attempts ?? 1;
+  const attempts = await consumePrAutofixAttempt(db, { ...key, now });
   return { max, allowed: attempts <= max, attempts };
 }
 
@@ -110,17 +88,14 @@ export async function enforcePrAutofixCap(
  * every other failure mode of this cap already errs in.
  */
 export async function refundPrAutofixCap(db: Db, key: PrAutofixCapKey): Promise<void> {
-  await db
-    .update(prAutofixAttempts)
-    .set({ attempts: sql`${prAutofixAttempts.attempts} - 1` })
-    .where(
-      and(
-        eq(prAutofixAttempts.definitionId, key.definitionId),
-        eq(prAutofixAttempts.nodeId, key.nodeId),
-        eq(prAutofixAttempts.provider, key.provider),
-        eq(prAutofixAttempts.repoPath, key.repoPath),
-        eq(prAutofixAttempts.prNumber, key.prNumber),
-        sql`${prAutofixAttempts.attempts} > 0`,
-      ),
-    );
+  await refundPrAutofixAttempt(db, key);
 }
+
+export async function enforceConnectedPrAutofixCap(key: PrAutofixCapKey, max: number | undefined, now: Date): Promise<PrAutofixCapDecision | null> {
+  if (max === undefined) return null;
+  if (max <= 0) return { max, allowed: false, attempts: 0 };
+  const attempts = await consumeConnectedPrAutofixAttempt({ ...key, now });
+  return { max, allowed: attempts <= max, attempts };
+}
+
+export function refundConnectedPrAutofixCap(key: PrAutofixCapKey): Promise<void> { return refundConnectedPrAutofixAttempt(key); }

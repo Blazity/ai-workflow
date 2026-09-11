@@ -13,14 +13,13 @@ import type {
   ManualDispatchRequest,
   ManualDispatchResponse,
 } from "@shared/contracts";
-import { getDb } from "../../db/client.js";
-import {
-  dispatchManualWorkflow,
-  preflightManualDispatch,
-} from "../manual-dispatch/index.js";
 import { maxConcurrentAgents } from "../settings/index.js";
 import { createAdapters } from "../vcs/index.js";
 import { resolveWorkflowDefinitionActor } from "./definition-authoring.js";
+import {
+  dispatchConnectedManualWorkflow,
+  preflightConnectedManualWorkflow,
+} from "./policy-operations.js";
 
 /** Would this dispatch start, and what would it start against? No run, no
  *  claim, no ticket transition. */
@@ -29,8 +28,7 @@ export function preflightTriggerDispatch(input: {
   triggerNodeId: string;
   dispatchInput: ManualDispatchInput;
 }): Promise<ManualDispatchPreflightResponse> {
-  return preflightManualDispatch({
-    db: getDb(),
+  return preflightConnectedManualWorkflow({
     adapters: createAdapters(),
     definitionId: input.definitionId,
     triggerNodeId: input.triggerNodeId,
@@ -47,13 +45,11 @@ export async function dispatchTriggerManually(input: {
   actorId: string;
   actorRole: DashboardRole;
 }): Promise<ManualDispatchResponse> {
-  const db = getDb();
-  const actor = await resolveWorkflowDefinitionActor(db, {
+  const actor = await resolveWorkflowDefinitionActor({
     role: input.actorRole,
     userId: input.actorId,
   });
-  return dispatchManualWorkflow({
-    db,
+  return dispatchConnectedManualWorkflow({
     adapters: createAdapters(),
     definitionId: input.definitionId,
     triggerNodeId: input.triggerNodeId,

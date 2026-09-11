@@ -14,16 +14,14 @@ export async function parkForClarificationStep(
   owner: TicketTransitionOwner,
 ): Promise<boolean> {
   "use step";
-  const { loadAdaptersPort, loadTicketTransitionPort } = await import(
+  const { loadAdaptersPort } = await import(
     "../internal/ports.js"
   );
-  const { getDb } = await import("../../db/client.js");
   const { createAdapters } = await loadAdaptersPort();
   const { NEEDS_CLARIFICATION_LABEL } = await import("../../services/tickets/labels.js");
-  const { updateTicketLabelsForRun } = await import(
+  const { updateConnectedTicketLabelsForRun } = await import(
     "../../services/tickets/ticket-label-mutation.js"
   );
-  const db = getDb();
   const { issueTracker } = createAdapters();
   // The questions live durably in the clarification store and the overview reads
   // awaiting state from the DB; the caller also posts a best-effort Jira comment
@@ -33,8 +31,7 @@ export async function parkForClarificationStep(
   // blocks the park.
   if (typeof issueTracker.updateLabels === "function") {
     try {
-      await updateTicketLabelsForRun({
-        db,
+      await updateConnectedTicketLabelsForRun({
         issueTracker,
         ticketKey: ticketId,
         owner,
@@ -50,9 +47,10 @@ export async function parkForClarificationStep(
       );
     }
   }
-  const { moveTicketForRun } = await loadTicketTransitionPort();
-  await moveTicketForRun({
-    db,
+  const { moveConnectedTicketForRun } = await import(
+    "../../services/tickets/ticket-transition.js"
+  );
+  await moveConnectedTicketForRun({
     issueTracker,
     ticketKey: ticketId,
     target: backlogTarget,
@@ -68,17 +66,15 @@ export async function reconcileClarificationsOnPickup(
 ): Promise<void> {
   "use step";
   const { loadAdaptersPort } = await import("../internal/ports.js");
-  const { getDb } = await import("../../db/client.js");
   const { createAdapters } = await loadAdaptersPort();
   const { NEEDS_CLARIFICATION_LABEL } = await import("../../services/tickets/labels.js");
-  const { updateTicketLabelsForRun } = await import(
+  const { updateConnectedTicketLabelsForRun } = await import(
     "../../services/tickets/ticket-label-mutation.js"
   );
-  const { reconcileClarificationPickupState } = await import(
+  const { reconcileConnectedClarificationPickupState } = await import(
     "../../db/repositories/clarifications.js"
   );
   const { issueTracker } = createAdapters();
-  const db = getDb();
   // Re-pickup housekeeping, all idempotent so default step retries are safe:
   //  - drop the awaiting-input label (best-effort; a label error must not fail
   //    the fresh run),
@@ -87,8 +83,7 @@ export async function reconcileClarificationsOnPickup(
   //  - flip parked predecessor runs off "awaiting" so they don't linger.
   if (typeof issueTracker.updateLabels === "function") {
     try {
-      await updateTicketLabelsForRun({
-        db,
+      await updateConnectedTicketLabelsForRun({
         issueTracker,
         ticketKey,
         owner,
@@ -104,7 +99,7 @@ export async function reconcileClarificationsOnPickup(
       );
     }
   }
-  await reconcileClarificationPickupState(db, {
+  await reconcileConnectedClarificationPickupState({
     ticketKey,
     currentRunId,
     owner,
@@ -116,10 +111,11 @@ export async function postPickupCommentStep(
   owner: ActiveRunOwner,
 ): Promise<void> {
   "use step";
-  const { loadActiveRunOwnerPort, loadAdaptersPort, loadEnvironmentPort } =
+  const { loadAdaptersPort, loadEnvironmentPort } =
     await import("../internal/ports.js");
-  const { getDb } = await import("../../db/client.js");
-  const { assertActiveRunOwner } = await loadActiveRunOwnerPort();
+  const { assertConnectedActiveRunOwner } = await import(
+    "../../services/run-lifecycle/active-run-owner.js"
+  );
   const { createAdapters } = await loadAdaptersPort();
   const { env } = await loadEnvironmentPort();
   const { issueTracker } = createAdapters();
@@ -128,7 +124,7 @@ export async function postPickupCommentStep(
   // most once per ticket. Best-effort: a post failure must not fail the run.
   const url = ticketPageUrl(env.DASHBOARD_ORIGIN, ticketKey);
   try {
-    await assertActiveRunOwner(getDb(), owner);
+    await assertConnectedActiveRunOwner(owner);
     await issueTracker.postComment(
       ticketKey,
       `AI workflow picked this ticket up. Follow progress and answer questions in the dashboard: ${url}`,
@@ -155,10 +151,11 @@ export async function postClarificationQuestionsCommentStep(
   owner: ActiveRunOwner,
 ): Promise<string | null> {
   "use step";
-  const { loadActiveRunOwnerPort, loadAdaptersPort, loadEnvironmentPort } =
+  const { loadAdaptersPort, loadEnvironmentPort } =
     await import("../internal/ports.js");
-  const { getDb } = await import("../../db/client.js");
-  const { assertActiveRunOwner } = await loadActiveRunOwnerPort();
+  const { assertConnectedActiveRunOwner } = await import(
+    "../../services/run-lifecycle/active-run-owner.js"
+  );
   const { createAdapters } = await loadAdaptersPort();
   const { env } = await loadEnvironmentPort();
   const { formatClarificationQuestionsComment } = await import(
@@ -169,7 +166,7 @@ export async function postClarificationQuestionsCommentStep(
   // Returns the comment deep-link on success, null on any failure. A run-control
   // error still rethrows so the workflow ownership CAS is honored.
   try {
-    await assertActiveRunOwner(getDb(), owner);
+    await assertConnectedActiveRunOwner(owner);
     return await issueTracker.postComment(
       ticketKey,
       formatClarificationQuestionsComment({
@@ -196,9 +193,10 @@ async function loadClarificationHistoryStep(
   ticketKey: string,
 ): Promise<Array<{ questions: string[]; answer: string; answeredBy?: string; answeredAt?: string }>> {
   "use step";
-  const { getDb } = await import("../../db/client.js");
-  const { listAnsweredForTicket } = await import("../../db/repositories/clarifications.js");
-  const rows = await listAnsweredForTicket(getDb(), ticketKey);
+  const { listConnectedAnsweredClarificationsForTicket } = await import(
+    "../../db/repositories/clarifications.js"
+  );
+  const rows = await listConnectedAnsweredClarificationsForTicket(ticketKey);
   return rows
     .filter((r) => r.answer !== null)
     .map((r) => ({
@@ -243,19 +241,12 @@ async function resolveHarnessRuntimesStep(
   "use step";
   const { loadEnvironmentPort } = await import("../internal/ports.js");
   const { env } = await loadEnvironmentPort();
-  const { getDb } = await import("../../db/client.js");
   const {
-    dashboardOrganizationId,
-    resolveHarnessRuntimesForDefinition,
+    resolveConnectedHarnessRuntimesForDefinition,
   } = await import("../../workflow-definition/harness-profile-runtime.js");
-  const db = getDb();
-  const organizationId = await dashboardOrganizationId(
-    db,
-    env.DASHBOARD_ORG_SLUG,
-  );
-  return resolveHarnessRuntimesForDefinition(db, {
+  return resolveConnectedHarnessRuntimesForDefinition({
     definition,
-    organizationId,
+    organizationSlug: env.DASHBOARD_ORG_SLUG,
     defaultProvider,
     providerOverride,
   });

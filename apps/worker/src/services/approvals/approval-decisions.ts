@@ -9,18 +9,17 @@
  * status code and this file never says 409.
  */
 import type { ApprovalRequest } from "@shared/contracts";
-import { getDb } from "../../db/client.js";
 import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js";
 import {
   ApprovalStoreError,
-  decideApproval,
-  getApproval,
-  listApprovals,
-  rejectUndispatchableApproval,
+  decideConnectedApproval,
+  getConnectedApproval,
+  listConnectedApprovals,
+  rejectConnectedUndispatchableApproval,
   serializeApproval,
 } from "../../db/repositories/approvals.js";
-import { dashboardUserLabel } from "../../pre-pr-checks/store.js";
-import { resolveAwaitingRun } from "../telemetry/index.js";
+import { getConnectedDashboardUserLabel } from "../../db/repositories/auth.js";
+import { resolveConnectedAwaitingRun } from "../../db/repositories/runs/telemetry.js";
 import { maxConcurrentAgents } from "../settings/index.js";
 import { createAdapters } from "../vcs/index.js";
 import { dispatchPlanApproved } from "./dispatch.js";
@@ -48,15 +47,14 @@ class ApprovalAlreadyDecidedError extends Error {}
 
 /** The approvals list: pending only, or every decision ever made. */
 export async function listDashboardApprovals(status: "all" | "pending"): Promise<ApprovalRequest[]> {
-  return (await listApprovals(getDb(), { status })).map(serializeApproval);
+  return (await listConnectedApprovals({ status })).map(serializeApproval);
 }
 
 export async function approveApproval(
   id: string,
   actor: { userId: string },
 ): Promise<ApprovalDecisionOutcome> {
-  const db = getDb();
-  const row = await getApproval(db, id);
+  const row = await getConnectedApproval(id);
   if (!row) return { kind: "unknown_approval" };
   // A dispatch that failed after the approve CAS leaves the row approved with
   // no dispatched run. Such a row is retryable: the decision stands, only the
@@ -66,7 +64,7 @@ export async function approveApproval(
     return { kind: "already_decided" };
   }
 
-  const label = await dashboardUserLabel(db, actor.userId);
+  const label = await getConnectedDashboardUserLabel(actor.userId);
   const decider = { id: actor.userId, label };
   const approver = isDispatchRetry
     ? { id: row.decidedById ?? actor.userId, label: row.decidedByLabel ?? label }
@@ -83,7 +81,7 @@ export async function approveApproval(
       // undispatchable. Once approved, however, the human decision is final:
       // retain it as a protected operational failure instead of silently
       // replacing the pinned path with generic ticket discovery.
-      if (!isDispatchRetry) await rejectUndispatchableApproval(db, id);
+      if (!isDispatchRetry) await rejectConnectedUndispatchableApproval(id);
       return { kind: "ticket_gone" };
     }
     throw err;
@@ -98,7 +96,6 @@ export async function approveApproval(
   let result;
   try {
     result = await dispatchPlanApproved({
-      db,
       runRegistry: adapters.runRegistry,
       issueTracker: adapters.issueTracker,
       approval: row,
@@ -106,13 +103,13 @@ export async function approveApproval(
       maxConcurrentAgents: maxConcurrentAgents(),
       onClaimed: isDispatchRetry
         ? async () => {
-            const fresh = await getApproval(db, id);
+            const fresh = await getConnectedApproval(id);
             if (!fresh || fresh.status !== "approved" || fresh.dispatchedRunId !== null) {
               throw new ApprovalAlreadyDecidedError();
             }
           }
         : async () => {
-            await decideApproval(db, { id, decision: "approved", actor: decider });
+            await decideConnectedApproval({ id, decision: "approved", actor: decider });
           },
     });
   } catch (err) {
@@ -124,7 +121,7 @@ export async function approveApproval(
     // A pending request that cannot resolve its version never completed the
     // approve CAS and may be retired. An already-approved plan is final and
     // remains protected for operator repair/recovery.
-    if (!isDispatchRetry) await rejectUndispatchableApproval(db, id);
+    if (!isDispatchRetry) await rejectConnectedUndispatchableApproval(id);
     return { kind: "definition_gone" };
   }
   if (result.status === "run_in_flight") {
@@ -136,13 +133,13 @@ export async function approveApproval(
   // run implements the plan, it never resumes. Same helper and same
   // best-effort handling as the clarification path (clarifications/
   // answer-core.ts), and the helper is a no-op unless the row is awaiting.
-  await resolveAwaitingRun(db, row.runId).catch(() => {});
+  await resolveConnectedAwaitingRun(row.runId).catch(() => {});
 
   await adapters.issueTracker
     .postComment(row.ticketKey, `Plan approved by ${approver.label}, implementation started.`)
     .catch(() => {});
 
-  const final = await getApproval(db, id);
+  const final = await getConnectedApproval(id);
   return { kind: "decided", approval: serializeApproval(final ?? row), runId: result.runId };
 }
 
@@ -154,13 +151,12 @@ export async function rejectApproval(
 ): Promise<
   Extract<ApprovalDecisionOutcome, { kind: "unknown_approval" | "already_decided" | "decided" }>
 > {
-  const db = getDb();
-  const row = await getApproval(db, id);
+  const row = await getConnectedApproval(id);
   if (!row) return { kind: "unknown_approval" };
   if (row.status !== "pending") return { kind: "already_decided" };
 
-  const label = await dashboardUserLabel(db, actor.userId);
-  const decided = await decideApproval(db, {
+  const label = await getConnectedDashboardUserLabel(actor.userId);
+  const decided = await decideConnectedApproval({
     id,
     decision: "rejected",
     actor: { id: actor.userId, label },
@@ -170,7 +166,7 @@ export async function rejectApproval(
   // filed it parked itself as "awaiting" and has already returned, so nothing
   // else will ever settle it. Same helper and same best-effort handling as
   // the clarification path (clarifications/answer-core.ts).
-  await resolveAwaitingRun(db, row.runId).catch(() => {});
+  await resolveConnectedAwaitingRun(row.runId).catch(() => {});
 
   const { issueTracker } = createAdapters();
   await issueTracker.postComment(row.ticketKey, `Plan rejected by ${label}.`).catch(() => {});

@@ -1,11 +1,31 @@
-import { and, asc, desc, eq, getTableColumns, isNull, lt, sql } from "drizzle-orm";
-import type { Db } from "../db/client.js";
+import type { Db } from "../db/types.js";
 import {
-  activeRuns,
-  scheduleOccurrences,
-  workflowRuns,
-  workflowSchedules,
-} from "../db/schema.js";
+  expireConnectedPendingScheduleOccurrences,
+  expirePendingScheduleOccurrences,
+  getConnectedScheduleOccurrence,
+  getScheduleOccurrence,
+  insertConnectedScheduleOccurrence,
+  listConnectedPendingScheduleOccurrences,
+  listPendingScheduleOccurrences,
+  listScheduleOccurrences,
+  recordConnectedRetiredScheduleOccurrence,
+  recordConnectedScheduleOccurrenceAtCapacity,
+  recordConnectedScheduleOccurrenceError,
+  recordConnectedSkippedScheduleOccurrence,
+  recordConnectedStartedScheduleOccurrence,
+  recordScheduleOccurrenceAtCapacity,
+  recordScheduleOccurrenceError,
+  recordRetiredScheduleOccurrence,
+  recordSkippedScheduleOccurrence,
+  recordStartedScheduleOccurrence,
+  insertScheduleOccurrence,
+  settleScheduleOccurrenceOnCancel as settleStoredScheduleOccurrenceOnCancel,
+  type ScheduleOccurrenceRow,
+  supersedeAndInsertConnectedScheduleOccurrence,
+  supersedeAndInsertScheduleOccurrence,
+  sweepConnectedExpiredSettledScheduleOccurrences,
+  sweepExpiredSettledScheduleOccurrences,
+} from "../db/repositories/schedule-triggers.js";
 
 /**
  * Durable occurrence ledger for schedule triggers.
@@ -81,7 +101,7 @@ export interface AdmittedOccurrence {
   droppedOlderAtLeast: boolean;
 }
 
-export type OccurrenceRow = typeof scheduleOccurrences.$inferSelect;
+export type OccurrenceRow = ScheduleOccurrenceRow;
 
 /**
  * Ceiling on how long a pending occurrence may wait before it is given up on.
@@ -122,9 +142,6 @@ const MIN_RETAINED_OCCURRENCES_PER_SCHEDULE = 20;
  * disjunction rather than NOT (...) so no branch can evaluate to NULL and quietly
  * fail the whole WHERE clause.
  */
-const notSettled = sql`(${scheduleOccurrences.pending} = true
-  OR ${scheduleOccurrences.outcome} IS NULL)`;
-
 /**
  * Admit one occurrence.
  *
@@ -153,46 +170,32 @@ export async function acceptOccurrence(
   let took = false;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const result = await db.execute(sql`
-        WITH blocker AS (
-          SELECT occ.occurrence_at
-          FROM ${scheduleOccurrences} occ
-          WHERE occ.schedule_id = ${admitted.scheduleId}
-            AND occ.pending = true
-          LIMIT 1
-        )
-        INSERT INTO ${scheduleOccurrences} (
-          schedule_id, occurrence_at, definition_id, definition_version,
-          pending, outcome, skip_reason, dropped_count, dropped_count_capped
-        )
-        SELECT ${admitted.scheduleId},
-               ${admitted.occurrenceAt},
-               ${admitted.definitionId},
-               ${admitted.definitionVersion},
-               NOT EXISTS (SELECT 1 FROM blocker),
-               CASE WHEN EXISTS (SELECT 1 FROM blocker) THEN 'skipped_overlap' END,
-               -- Formatted explicitly as UTC rather than cast with ::text, which
-               -- renders in the session time zone and would make the stored reason
-               -- depend on whichever connection happened to write it.
-               (SELECT 'overlap:' || to_char(
-                  b.occurrence_at AT TIME ZONE 'UTC',
-                  'YYYY-MM-DD"T"HH24:MI:SS"Z"'
-                ) FROM blocker b),
-               ${admitted.droppedOlder},
-               ${admitted.droppedOlderAtLeast}
-        ON CONFLICT (schedule_id, occurrence_at) DO NOTHING
-        RETURNING pending
-      `);
-      const rows = rawRows<{ pending: boolean }>(result);
       // One row back means this call inserted, and pending tells whether it took
       // the slot or landed already settled behind the occurrence that holds it.
-      took = rows.length === 1 && rows[0]?.pending === true;
+      took = await insertScheduleOccurrence(db, admitted);
       break;
     } catch (error) {
       if (!isUniqueViolation(error) || attempt === 1) throw error;
     }
   }
-  const stored = await getOccurrence(db, admitted.scheduleId, admitted.occurrenceAt);
+  const stored = await getScheduleOccurrence(db, admitted);
+  if (!stored) throw new Error("schedule occurrence disappeared after admission");
+  return { admitted: took, stored };
+}
+
+export async function acceptConnectedOccurrence(
+  admitted: AdmittedOccurrence,
+): Promise<{ admitted: boolean; stored: OccurrenceRow }> {
+  let took = false;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      took = await insertConnectedScheduleOccurrence(admitted);
+      break;
+    } catch (error) {
+      if (!isUniqueViolation(error) || attempt === 1) throw error;
+    }
+  }
+  const stored = await getConnectedScheduleOccurrence(admitted);
   if (!stored) throw new Error("schedule occurrence disappeared after admission");
   return { admitted: took, stored };
 }
@@ -210,32 +213,14 @@ export async function recordRetiredOccurrence(
   admitted: AdmittedOccurrence,
   reason: string,
 ): Promise<boolean> {
-  const result = await db.execute(sql`
-    INSERT INTO ${scheduleOccurrences} (
-      schedule_id, occurrence_at, definition_id, definition_version,
-      pending, outcome, skip_reason, dropped_count, dropped_count_capped
-    )
-    VALUES (
-      ${admitted.scheduleId},
-      ${admitted.occurrenceAt},
-      ${admitted.definitionId},
-      ${admitted.definitionVersion},
-      false,
-      'cancelled',
-      ${reason},
-      ${admitted.droppedOlder},
-      ${admitted.droppedOlderAtLeast}
-    )
-    ON CONFLICT (schedule_id, occurrence_at) DO UPDATE
-    SET pending = false,
-        outcome = 'cancelled',
-        skip_reason = ${reason},
-        updated_at = now()
-    WHERE ${scheduleOccurrences.pending} = true
-       OR ${scheduleOccurrences.outcome} IS NULL
-    RETURNING schedule_id
-  `);
-  return rawRows(result).length === 1;
+  return recordRetiredScheduleOccurrence(db, { ...admitted, reason });
+}
+
+export function recordConnectedRetiredOccurrence(
+  admitted: AdmittedOccurrence,
+  reason: string,
+): Promise<boolean> {
+  return recordConnectedRetiredScheduleOccurrence({ ...admitted, reason });
 }
 
 /**
@@ -286,60 +271,30 @@ export async function supersedePendingThenAccept(
   let took = false;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const result = await db.execute(sql`
-        WITH superseded AS (
-          UPDATE ${scheduleOccurrences} occ
-          SET outcome = 'superseded',
-              pending = false,
-              updated_at = now()
-          WHERE occ.schedule_id = ${admitted.scheduleId}
-            AND occ.pending = true
-            AND occ.occurrence_at < ${admitted.occurrenceAt}
-          RETURNING occ.dropped_count, occ.dropped_count_capped
-        )
-        INSERT INTO ${scheduleOccurrences} (
-          schedule_id, occurrence_at, definition_id, definition_version,
-          pending, dropped_count, dropped_count_capped
-        )
-        SELECT ${admitted.scheduleId},
-               ${admitted.occurrenceAt},
-               ${admitted.definitionId},
-               ${admitted.definitionVersion},
-               true,
-               -- LOAD-BEARING, DO NOT SIMPLIFY. These aggregates are not merely
-               -- how the dropped counters are computed, they are what ORDERS the
-               -- two sub-statements. The row cannot be formed until the SubPlan is
-               -- evaluated, evaluating it drains the CteScan, and draining that
-               -- runs the settling UPDATE's ModifyTable to completion.
-               -- Data-modifying CTEs are otherwise unordered by definition.
-               -- Replacing them with constants was measured on Postgres 17.9: the
-               -- INSERT then runs first and dies with 23505 on the one-pending
-               -- index, because the old row is still pending when the new one
-               -- lands. Beware that our own suite does NOT reproduce that: on
-               -- PGlite the same mutation raises no error and is caught only
-               -- indirectly, by the dropped_count assertions. So a green suite is
-               -- not evidence that these subqueries are redundant.
-               ${admitted.droppedOlder}
-                 + (SELECT count(*) + coalesce(sum(dropped_count), 0) FROM superseded),
-               ${admitted.droppedOlderAtLeast}
-                 OR (SELECT coalesce(bool_or(dropped_count_capped), false) FROM superseded)
-        ON CONFLICT (schedule_id, occurrence_at) DO NOTHING
-        RETURNING schedule_id
-      `);
+      // The aggregate subqueries are an ordering barrier for the two CTE writes.
       // Under ON CONFLICT DO NOTHING, RETURNING yields a row only for an insert
       // that actually happened. That makes this an admission token earned by THIS
       // call, which is the whole point: computing it from the row we read back
       // instead would hand the same occurrence to every concurrent caller, since
       // all of them observe the one surviving pending row and none of them get an
       // error. Eight of them would then each dispatch a 3 to 25 minute agent run.
-      took = rawRows(result).length === 1;
+      took = await supersedeAndInsertScheduleOccurrence(db, admitted);
       break;
     } catch (error) {
       if (!isUniqueViolation(error) || attempt === 1) throw error;
     }
   }
-  const stored = await getOccurrence(db, admitted.scheduleId, admitted.occurrenceAt);
+  const stored = await getScheduleOccurrence(db, admitted);
   if (!stored) throw new Error("schedule occurrence disappeared after supersede");
+  return { admitted: took, stored };
+}
+
+export async function supersedeConnectedPendingThenAccept(
+  admitted: AdmittedOccurrence,
+): Promise<{ admitted: boolean; stored: OccurrenceRow }> {
+  const took = await supersedeAndInsertConnectedScheduleOccurrence(admitted);
+  const stored = await getConnectedScheduleOccurrence(admitted);
+  if (!stored) throw new Error("schedule occurrence disappeared after admission");
   return { admitted: took, stored };
 }
 
@@ -413,56 +368,16 @@ export async function recordOccurrenceStarted(
   ownerToken: string,
   runId: string,
 ): Promise<boolean> {
-  // Deliberately NOT aliased. Aliasing the target in an UPDATE hides the real
-  // table name, and the shared notSettled predicate is built from the drizzle
-  // column objects, which render as "schedule_occurrences"."pending". One alias
-  // here would silently make that predicate unresolvable.
-  const updated = await db.execute(sql`
-    WITH published AS (
-      UPDATE ${scheduleOccurrences}
-      SET outcome = 'started',
-          pending = false,
-          run_id = ${runId},
-          dispatched_at = coalesce(${scheduleOccurrences.dispatchedAt}, now()),
-          updated_at = now()
-      WHERE ${scheduleOccurrences.scheduleId} = ${scheduleId}
-        AND ${scheduleOccurrences.occurrenceAt} = ${occurrenceAt}
-        AND (
-          ${notSettled}
-          OR (
-            ${scheduleOccurrences.outcome} = 'started'
-            AND ${scheduleOccurrences.runId} = ${runId}
-          )
-        )
-        AND EXISTS (
-          SELECT 1 FROM ${activeRuns}
-          WHERE ${activeRuns.ownerToken} = ${ownerToken}
-            AND (
-              (${activeRuns.state} = 'reserved' AND ${activeRuns.runId} IS NULL)
-              OR (${activeRuns.state} = 'bound' AND ${activeRuns.runId} = ${runId})
-            )
-        )
-        AND EXISTS (
-          SELECT 1 FROM ${workflowRuns}
-          WHERE ${workflowRuns.runId} = ${runId}
-        )
-      RETURNING ${scheduleOccurrences.scheduleId}, ${scheduleOccurrences.occurrenceAt}
-    ), fired AS (
-      UPDATE ${workflowSchedules} s
-      SET last_started_occurrence_at = published.occurrence_at,
-          last_started_run_id = ${runId},
-          updated_at = now()
-      FROM published
-      WHERE s.id = published.schedule_id
-        AND (
-          s.last_started_occurrence_at IS NULL
-          OR s.last_started_occurrence_at <= published.occurrence_at
-        )
-      RETURNING s.id
-    )
-    SELECT occurrence_at FROM published
-  `);
-  return rawRows(updated).length === 1;
+  return recordStartedScheduleOccurrence(db, { scheduleId, occurrenceAt, ownerToken, runId });
+}
+
+export function recordConnectedOccurrenceStarted(
+  scheduleId: string,
+  occurrenceAt: Date,
+  ownerToken: string,
+  runId: string,
+): Promise<boolean> {
+  return recordConnectedStartedScheduleOccurrence({ scheduleId, occurrenceAt, ownerToken, runId });
 }
 
 /**
@@ -513,20 +428,7 @@ export async function settleScheduleOccurrenceOnCancel(
   db: Db,
   runId: string,
 ): Promise<boolean> {
-  const flipped = await db
-    .update(scheduleOccurrences)
-    .set({
-      outcome: "run_cancelled",
-      updatedAt: sql`now()`,
-    })
-    .where(
-      and(
-        eq(scheduleOccurrences.runId, runId),
-        eq(scheduleOccurrences.outcome, "started"),
-      ),
-    )
-    .returning({ occurrenceAt: scheduleOccurrences.occurrenceAt });
-  return flipped.length > 0;
+  return settleStoredScheduleOccurrenceOnCancel(db, runId);
 }
 
 /**
@@ -550,22 +452,16 @@ export async function recordOccurrenceSkipped(
     blockingRunId?: string;
   } = {},
 ): Promise<boolean> {
-  const rows = await db
-    .update(scheduleOccurrences)
-    .set({
-      outcome,
-      pending: false,
-      // Never clears an existing reason. A skip that arrives after two failed
-      // attempts must not erase the provider message that explains them, or the
-      // operator reads "skipped_overlap" and goes looking for an overlap that was
-      // never the problem.
-      skipReason: sql`coalesce(${options.skipReason ?? null}, ${scheduleOccurrences.skipReason})`,
-      blockingRunId: options.blockingRunId ?? null,
-      updatedAt: sql`now()`,
-    })
-    .where(and(occurrenceIs(scheduleId, occurrenceAt), notSettled))
-    .returning({ scheduleId: scheduleOccurrences.scheduleId });
-  return rows.length === 1;
+  return recordSkippedScheduleOccurrence(db, { scheduleId, occurrenceAt, outcome, ...options });
+}
+
+export function recordConnectedOccurrenceSkipped(
+  scheduleId: string,
+  occurrenceAt: Date,
+  outcome: ScheduleSkipOutcome,
+  options: { skipReason?: string; blockingRunId?: string } = {},
+) {
+  return recordConnectedSkippedScheduleOccurrence({ scheduleId, occurrenceAt, outcome, ...options });
 }
 
 /**
@@ -585,17 +481,15 @@ export async function recordOccurrenceError(
   occurrenceAt: Date,
   message: string,
 ): Promise<boolean> {
-  const rows = await db
-    .update(scheduleOccurrences)
-    .set({
-      outcome: "error",
-      skipReason: message,
-      attemptCount: sql`${scheduleOccurrences.attemptCount} + 1`,
-      updatedAt: sql`now()`,
-    })
-    .where(and(occurrenceIs(scheduleId, occurrenceAt), notSettled))
-    .returning({ scheduleId: scheduleOccurrences.scheduleId });
-  return rows.length === 1;
+  return recordScheduleOccurrenceError(db, { scheduleId, occurrenceAt, message });
+}
+
+export function recordConnectedOccurrenceError(
+  scheduleId: string,
+  occurrenceAt: Date,
+  message: string,
+) {
+  return recordConnectedScheduleOccurrenceError({ scheduleId, occurrenceAt, message });
 }
 
 /**
@@ -612,21 +506,11 @@ export async function recordOccurrenceAtCapacity(
   scheduleId: string,
   occurrenceAt: Date,
 ): Promise<boolean> {
-  const rows = await db
-    .update(scheduleOccurrences)
-    .set({
-      skipReason: "at_capacity",
-      attemptCount: sql`${scheduleOccurrences.attemptCount} + 1`,
-      updatedAt: sql`now()`,
-    })
-    .where(
-      and(
-        occurrenceIs(scheduleId, occurrenceAt),
-        eq(scheduleOccurrences.pending, true),
-      ),
-    )
-    .returning({ scheduleId: scheduleOccurrences.scheduleId });
-  return rows.length === 1;
+  return recordScheduleOccurrenceAtCapacity(db, { scheduleId, occurrenceAt });
+}
+
+export function recordConnectedOccurrenceAtCapacity(scheduleId: string, occurrenceAt: Date) {
+  return recordConnectedScheduleOccurrenceAtCapacity({ scheduleId, occurrenceAt });
 }
 
 /**
@@ -650,24 +534,14 @@ export async function expirePendingOccurrences(
   now: Date = new Date(),
   maxAgeMs: number = PENDING_OCCURRENCE_MAX_AGE_MS,
 ): Promise<number> {
-  const rows = await db
-    .update(scheduleOccurrences)
-    .set({
-      outcome: "expired",
-      pending: false,
-      skipReason: sql`coalesce(${scheduleOccurrences.skipReason}, 'expired_before_dispatch')`,
-      updatedAt: sql`now()`,
-    })
-    // No settled-guard needed: pending = true IS the unsettled half, and a
-    // published start clears pending in the same statement that sets it.
-    .where(
-      and(
-        eq(scheduleOccurrences.pending, true),
-        lt(scheduleOccurrences.createdAt, new Date(now.getTime() - maxAgeMs)),
-      ),
-    )
-    .returning({ scheduleId: scheduleOccurrences.scheduleId });
-  return rows.length;
+  return expirePendingScheduleOccurrences(db, { now, maxAgeMs });
+}
+
+export function expireConnectedPendingOccurrences(
+  now: Date = new Date(),
+  maxAgeMs: number = PENDING_OCCURRENCE_MAX_AGE_MS,
+) {
+  return expireConnectedPendingScheduleOccurrences({ now, maxAgeMs });
 }
 
 export async function getOccurrence(
@@ -675,12 +549,7 @@ export async function getOccurrence(
   scheduleId: string,
   occurrenceAt: Date,
 ): Promise<OccurrenceRow | null> {
-  const rows = await db
-    .select()
-    .from(scheduleOccurrences)
-    .where(occurrenceIs(scheduleId, occurrenceAt))
-    .limit(1);
-  return rows[0] ?? null;
+  return getScheduleOccurrence(db, { scheduleId, occurrenceAt });
 }
 
 /**
@@ -695,12 +564,7 @@ export async function listOccurrencesForSchedule(
   scheduleId: string,
   limit: number,
 ): Promise<OccurrenceRow[]> {
-  return await db
-    .select()
-    .from(scheduleOccurrences)
-    .where(eq(scheduleOccurrences.scheduleId, scheduleId))
-    .orderBy(desc(scheduleOccurrences.occurrenceAt))
-    .limit(limit);
+  return listScheduleOccurrences(db, scheduleId, limit);
 }
 
 /**
@@ -721,22 +585,11 @@ export async function listPendingOccurrences(
   db: Db,
   limit: number,
 ): Promise<OccurrenceRow[]> {
-  return await db
-    .select(getTableColumns(scheduleOccurrences))
-    .from(scheduleOccurrences)
-    .innerJoin(
-      workflowSchedules,
-      eq(workflowSchedules.id, scheduleOccurrences.scheduleId),
-    )
-    .where(
-      and(
-        eq(scheduleOccurrences.pending, true),
-        isNull(workflowSchedules.pausedAt),
-        isNull(workflowSchedules.revokedAt),
-      ),
-    )
-    .orderBy(asc(scheduleOccurrences.occurrenceAt))
-    .limit(limit);
+  return listPendingScheduleOccurrences(db, limit);
+}
+
+export function listConnectedPendingOccurrences(limit: number) {
+  return listConnectedPendingScheduleOccurrences(limit);
 }
 
 /**
@@ -759,34 +612,17 @@ export async function sweepSettledOccurrences(
   now: Date = new Date(),
 ): Promise<void> {
   const cutoff = new Date(now.getTime() - SETTLED_OCCURRENCE_RETENTION_MS);
-  await db.execute(sql`
-    DELETE FROM ${scheduleOccurrences} occ
-    USING (
-      SELECT schedule_id,
-             occurrence_at,
-             row_number() OVER (
-               PARTITION BY schedule_id ORDER BY occurrence_at DESC
-             ) AS rn
-      FROM ${scheduleOccurrences}
-    ) ranked
-    WHERE occ.schedule_id = ranked.schedule_id
-      AND occ.occurrence_at = ranked.occurrence_at
-      AND ranked.rn > ${MIN_RETAINED_OCCURRENCES_PER_SCHEDULE}
-      AND occ.pending = false
-      AND occ.outcome IS NOT NULL
-      AND occ.created_at < ${cutoff}
-  `);
+  await sweepExpiredSettledScheduleOccurrences(db, {
+    cutoff,
+    minimumRetainedPerSchedule: MIN_RETAINED_OCCURRENCES_PER_SCHEDULE,
+  });
 }
 
-function occurrenceIs(scheduleId: string, occurrenceAt: Date) {
-  return and(
-    eq(scheduleOccurrences.scheduleId, scheduleId),
-    eq(scheduleOccurrences.occurrenceAt, occurrenceAt),
-  );
-}
-
-function rawRows<T = { scheduleId: string }>(result: unknown): T[] {
-  return ((result as { rows?: T[] }).rows ?? []) as T[];
+export function sweepConnectedSettledOccurrences(now: Date = new Date()): Promise<void> {
+  return sweepConnectedExpiredSettledScheduleOccurrences({
+    cutoff: new Date(now.getTime() - SETTLED_OCCURRENCE_RETENTION_MS),
+    minimumRetainedPerSchedule: MIN_RETAINED_OCCURRENCES_PER_SCHEDULE,
+  });
 }
 
 /**

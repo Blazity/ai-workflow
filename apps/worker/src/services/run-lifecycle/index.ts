@@ -16,6 +16,7 @@ export type {
 export {
   cancelRun,
   cancelRunDetailed,
+  cancelConnectedRunForOperator,
   cancelRunForOperator,
   cancelSubjectRun,
 } from "./cancel-run.js";
@@ -50,7 +51,36 @@ export type {
   DashboardRunsPage,
 } from "./run-reads.js";
 export {
+  connectedCostAgg,
+  connectedListRuns,
+  connectedListRunsForTicket,
+  connectedRunKpis,
+  connectedWorkflowAgg,
+  costAgg,
+  listRuns,
+  listRunsForTicket,
+  parseSearch,
+  parseWindow,
+  runKpis,
+  workflowAgg,
+} from "./dashboard-run-data.js";
+export type { TimeWindow } from "./dashboard-run-data.js";
+export {
+  fetchConnectedRunDetailFromDb,
+  fetchConnectedRunRefs,
+  fetchRunDetailFromDb,
+  fetchRunRefs,
+} from "./durable-run-detail.js";
+export type { FetchRunDetailFromDbOptions } from "./durable-run-detail.js";
+export {
+  MAX_REPLAY_PAGE_LIMIT,
   RunObservationStoreError,
+  getConnectedRunReplay,
+  getConnectedRunReplayAttempt,
+  getConnectedRunReplayAvailability,
+  getRunReplay,
+  getRunReplayAttempt,
+  getRunReplayAvailability,
   readRunReplay,
   readRunReplayAttempt,
 } from "./run-replay-read.js";

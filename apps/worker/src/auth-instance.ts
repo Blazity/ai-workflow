@@ -1,13 +1,12 @@
 import { Resend } from "resend";
 import { env } from "./config/env.js";
-import { createAuth, type AuthOptions } from "./auth.js";
-import { getDb } from "./db/client.js";
+import { createConnectedAuth, type AuthOptions } from "./auth.js";
 import { sendEmail } from "./services/email/send-email.js";
 import { resetPasswordEmailTemplate } from "./services/email/templates.js";
 import { buildTrustedOrigins } from "./services/auth/trusted-origins.js";
 
 /** The worker's Better Auth instance, wired from validated env. */
-export const auth = createAuth(getDb(), {
+export const auth = createConnectedAuth({
   secret: env.BETTER_AUTH_SECRET,
   baseURL: env.BETTER_AUTH_URL,
   trustedOrigins: buildTrustedOrigins(env.DASHBOARD_ORIGIN, env.DASHBOARD_TRUSTED_ORIGINS),

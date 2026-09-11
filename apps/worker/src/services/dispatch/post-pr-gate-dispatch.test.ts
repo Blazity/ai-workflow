@@ -42,6 +42,9 @@ vi.mock("../../post-pr-gate/config.js", () => ({
 vi.mock("../../db/repositories/definitions.js", () => ({
   getEnabledWorkflowDefinitionForTrigger: vi.fn().mockResolvedValue(null),
 }));
+vi.mock("../../engine/definition-trigger-routing.js", () => ({
+  getConnectedEnabledWorkflowDefinitionForTrigger: vi.fn().mockResolvedValue(null),
+}));
 
 vi.mock("../../post-pr-gate/gate-store.js", () => ({
   GateStore: vi.fn(() => ({

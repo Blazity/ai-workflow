@@ -7,13 +7,12 @@
  * unreachable database becomes on the wire.
  */
 import type { CostResponse } from "@shared/contracts";
-import { getDb } from "../../db/client.js";
-import { costAgg, parseWindow } from "../../db/repositories/runs.js";
+import { collectConnectedCostAggregate } from "../../engine/overview-aggregates.js";
 
 /** The spend aggregate for the window the raw query value selects. */
 export function collectCostAggregate(
   windowParam: unknown,
   now: Date,
 ): Promise<Omit<CostResponse, "generatedAt" | "available">> {
-  return costAgg({ db: getDb(), window: parseWindow(windowParam), now });
+  return collectConnectedCostAggregate(windowParam, now);
 }

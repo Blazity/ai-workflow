@@ -2,13 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkflowDefinitionNode } from "@shared/contracts";
 
 const mocks = vi.hoisted(() => ({
-  completeRunOwnedPrCheck: vi.fn(),
+  completeConnectedRunOwnedPrCheck: vi.fn(),
   prRunTarget: vi.fn(() => ({ kind: "target" })),
 }));
 
-vi.mock("../../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
 vi.mock("../../runtime/pr-external-resources.js", () => ({
-  completeRunOwnedPrCheck: mocks.completeRunOwnedPrCheck,
+  completeConnectedRunOwnedPrCheck: mocks.completeConnectedRunOwnedPrCheck,
   prRunTarget: mocks.prRunTarget,
 }));
 
@@ -18,7 +17,7 @@ import { makeCtx } from "../support/test-support.js";
 describe("complete_pr_check", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.completeRunOwnedPrCheck.mockResolvedValue(undefined);
+    mocks.completeConnectedRunOwnedPrCheck.mockResolvedValue(undefined);
   });
 
   it("refreshes the pull request head when the workflow fixed and pushed it", async () => {
@@ -70,7 +69,7 @@ describe("complete_pr_check", () => {
     );
 
     expect(result.kind).toBe("next");
-    expect(mocks.completeRunOwnedPrCheck).toHaveBeenCalledWith(
+    expect(mocks.completeConnectedRunOwnedPrCheck).toHaveBeenCalledWith(
       expect.objectContaining({ refreshHead: true }),
     );
   });

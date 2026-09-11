@@ -22,14 +22,16 @@ vi.mock("../config/env.js", () => ({
 
 import { createTestDb } from "../db/test-db.js";
 import {
-  createWorkflowDefinition,
-  deployWorkflowDefinition,
   getCurrentWorkflowDefinitionVersion,
-  restoreWorkflowDefinitionVersion,
-  rollbackWorkflowDefinition,
-  saveWorkflowDefinitionDraft,
   type WorkflowDefinitionActor,
 } from "../db/repositories/definitions.js";
+import {
+  createWorkflowDefinition,
+  deployWorkflowDefinition,
+  rollbackWorkflowDefinition,
+  restoreWorkflowDefinitionVersion,
+  saveWorkflowDefinitionDraft,
+} from "../services/workflow-definitions/policy-operations.js";
 
 const ADMIN: WorkflowDefinitionActor = { role: "admin", id: "u_admin", label: "Admin" };
 

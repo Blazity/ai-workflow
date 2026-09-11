@@ -8,6 +8,7 @@
 export {
   attributeRunModel,
 } from "./attribute-run-model.js";
+export { resolveRunModels } from "./resolve-run-models.js";
 export {
   collectAwaitingRuns,
 } from "./collect-awaiting-store.js";

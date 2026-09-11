@@ -1,4 +1,3 @@
-import { eq } from "drizzle-orm";
 import type {
   HarnessProfileReference,
   HarnessProfileResolvedVersion,
@@ -13,14 +12,14 @@ import {
   BUILTIN_HARNESS_PROFILE_MANIFESTS,
   builtinHarnessProfileReference,
 } from "@shared/harness";
-import type { Db } from "../db/client.js";
-import { organization } from "../db/schema.js";
+import type { Db } from "../db/types.js";
+import { createAuthRepository } from "../db/repositories/auth.js";
 import {
   resolveHarnessRuntime,
   type ResolvedHarnessRuntime,
 } from "../sandbox/harness-runtime.js";
 import { hashHarnessProfileManifest } from "../harness-profiles/manifest.js";
-import { resolveHarnessProfileVersion } from "../db/repositories/harness-profiles.js";
+import { resolveVerifiedHarnessProfileVersion } from "../harness-profiles/resolved-version.js";
 
 const AGENT_BLOCK_TYPES = new Set<WorkflowBlockType>([
   "planning_agent",
@@ -45,11 +44,9 @@ export async function dashboardOrganizationId(
   db: Db,
   organizationSlug: string,
 ): Promise<string> {
-  const [row] = await db
-    .select({ id: organization.id })
-    .from(organization)
-    .where(eq(organization.slug, organizationSlug))
-    .limit(1);
+  const row = await createAuthRepository(db).findOrganizationBySlug(
+    organizationSlug,
+  );
   if (!row) {
     throw new Error(
       `Dashboard organization "${organizationSlug}" is unavailable.`,
@@ -78,7 +75,7 @@ export async function resolveHarnessRuntimesForDefinition(
       const key = `${profileId}:${version}`;
       let pending = versions.get(key);
       if (!pending) {
-        pending = resolveHarnessProfileVersion(db, {
+        pending = resolveVerifiedHarnessProfileVersion(db, {
           organizationId: input.organizationId,
           profileId,
           version,
@@ -87,6 +84,35 @@ export async function resolveHarnessRuntimesForDefinition(
       }
       return pending;
     },
+    input.providerOverride ?? null,
+  );
+}
+
+export async function resolveConnectedHarnessRuntimesForDefinition(input: {
+  definition: WorkflowDefinition;
+  organizationSlug: string;
+  defaultProvider: "claude" | "codex";
+  providerOverride?: "claude" | "codex" | null;
+}): Promise<Record<string, ResolvedHarnessRuntime>> {
+  const { createConnectedAuthRepository } = await import("../db/repositories/auth.js");
+  const { resolveConnectedVerifiedHarnessProfileVersion } = await import(
+    "../harness-profiles/resolved-version.js"
+  );
+  const organization = await createConnectedAuthRepository().findOrganizationBySlug(
+    input.organizationSlug,
+  );
+  if (!organization) {
+    throw new Error(`Dashboard organization "${input.organizationSlug}" is unavailable.`);
+  }
+  return resolveHarnessRuntimesWithLoader(
+    input.definition,
+    input.defaultProvider,
+    ({ profileId, version }) =>
+      resolveConnectedVerifiedHarnessProfileVersion({
+        organizationId: organization.id,
+        profileId,
+        version,
+      }),
     input.providerOverride ?? null,
   );
 }
@@ -176,7 +202,7 @@ export async function validateHarnessProfileReferences(
   return validateHarnessProfileReferencesWithLoader(
     input.definition,
     ({ profileId, version }) =>
-      resolveHarnessProfileVersion(db, {
+      resolveVerifiedHarnessProfileVersion(db, {
         organizationId: input.organizationId,
         profileId,
         version,

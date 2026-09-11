@@ -12,6 +12,7 @@ import {
   recordHookClarificationSnapshot,
 } from "./hook-store.js";
 import { classifyProtectedClarificationSubjects } from "../db/repositories/clarifications.js";
+import { claimAnsweredClarificationResume } from "../db/repositories/clarification-hooks.js";
 
 const input = {
   ticketKey: "AWT-1",
@@ -50,6 +51,20 @@ async function publishPending(db: Db, askedAt?: Date) {
 }
 
 describe("clarification hook store", () => {
+  it("treats an empty claim result as a concurrent resume in progress", async () => {
+    const db = {
+      execute: async () => ({ rows: [] }),
+    } as unknown as Db;
+
+    await expect(
+      claimAnsweredClarificationResume(db, {
+        runId: input.runId,
+        subjectKey: input.subjectKey,
+        ticketKey: input.ticketKey,
+      }),
+    ).resolves.toBe("in_progress");
+  });
+
   it("publishes only after the hook row and optional snapshot are durable", async () => {
     const db = await createTestDb();
     const prepared = await prepareHookClarification(db, input);

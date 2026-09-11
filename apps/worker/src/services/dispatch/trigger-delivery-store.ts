@@ -1,6 +1,23 @@
-import { and, asc, eq, sql } from "drizzle-orm";
-import type { Db } from "../../db/client.js";
-import { activeRuns, triggerDeliveries, workflowRuns } from "../../db/schema.js";
+import type { Db } from "../../db/types.js";
+import {
+  acknowledgeStartedTriggerDelivery as acknowledgeStartedTriggerDeliveryRow,
+  coalesceConnectedPendingTriggerDelivery,
+  coalescePendingTriggerDelivery,
+  completeTriggerDelivery as completeTriggerDeliveryRow,
+  completeConnectedTriggerDelivery,
+  deletePendingTriggerDelivery,
+  deleteConnectedPendingTriggerDelivery,
+  findConnectedTriggerDeliveryRow,
+  findConnectedTriggerDeliveryRowBySemanticKey,
+  insertConnectedTriggerDeliveryRow,
+  insertTriggerDeliveryRow,
+  listConnectedPendingTriggerDeliveryRows,
+  listPendingTriggerDeliveryRows,
+  findTriggerDeliveryRow,
+  findTriggerDeliveryRowBySemanticKey,
+  recordConnectedCandidateStartedTriggerDelivery,
+  recordCandidateStartedTriggerDelivery as recordCandidateStartedTriggerDeliveryRow,
+} from "../../db/repositories/trigger-deliveries.js";
 import { isUniqueViolation } from "../../infra/unique-violation.js";
 import type { PrTriggerType } from "../../engine/agent-input.js";
 import type { TriggerEvent } from "./trigger-events.js";
@@ -47,9 +64,7 @@ export async function acceptTriggerDelivery(
   | { inserted: true; stored: StoredTriggerDelivery }
   | { inserted: false; stored: StoredTriggerDelivery }
 > {
-  const rows = await db
-    .insert(triggerDeliveries)
-    .values({
+  const inserted = await insertTriggerDeliveryRow(db, {
       provider: accepted.delivery.provider,
       deliveryId: accepted.delivery.deliveryId,
       producer: accepted.delivery.producer,
@@ -61,10 +76,8 @@ export async function acceptTriggerDelivery(
       definitionId: accepted.definitionId,
       definitionVersion: accepted.definitionVersion,
       payload: accepted,
-    })
-    .onConflictDoNothing()
-    .returning();
-  if (rows[0]) return { inserted: true, stored: mapDelivery(rows[0]) };
+    });
+  if (inserted) return { inserted: true, stored: mapDelivery(inserted) };
   const stored =
     (await getTriggerDelivery(
       db,
@@ -88,36 +101,7 @@ export async function completeTriggerDelivery(
   deliveryId: string,
   result: StoredTriggerResult,
 ): Promise<void> {
-  const serializedResult = JSON.stringify(result);
-  const pending =
-    result.result === "error"
-      ? true
-      : result.result === "coalesced"
-        ? sql`${triggerDeliveries.pending}`
-        : false;
-  await db
-    .update(triggerDeliveries)
-    .set({
-      pending,
-      result: sql`case
-        when ${triggerDeliveries.result} is null
-          then ${serializedResult}::jsonb
-        when ${triggerDeliveries.result}->>'result' = 'coalesced'
-          and ${result.result} = 'error'
-          then ${serializedResult}::jsonb
-        when ${triggerDeliveries.result}->>'result' in ('candidate_started', 'coalesced', 'error')
-          and ${result.result} in ('ignored_stale_head', 'ignored_not_workflow_owned')
-          then ${serializedResult}::jsonb
-        else ${triggerDeliveries.result}
-      end`,
-      updatedAt: sql`now()`,
-    })
-    .where(
-      and(
-        eq(triggerDeliveries.provider, provider),
-        eq(triggerDeliveries.deliveryId, deliveryId),
-      ),
-    );
+  await completeTriggerDeliveryRow(db, provider, deliveryId, result);
 }
 
 export async function getTriggerDelivery(
@@ -125,17 +109,8 @@ export async function getTriggerDelivery(
   provider: "github" | "gitlab",
   deliveryId: string,
 ): Promise<StoredTriggerDelivery | null> {
-  const rows = await db
-    .select()
-    .from(triggerDeliveries)
-    .where(
-      and(
-        eq(triggerDeliveries.provider, provider),
-        eq(triggerDeliveries.deliveryId, deliveryId),
-      ),
-    )
-    .limit(1);
-  return rows[0] ? mapDelivery(rows[0]) : null;
+  const row = await findTriggerDeliveryRow(db, { provider, deliveryId });
+  return row ? mapDelivery(row) : null;
 }
 
 /** Resolve the delivery that owns a semantic key (the winner of a
@@ -145,17 +120,8 @@ export async function getTriggerDeliveryBySemanticKey(
   provider: "github" | "gitlab",
   semanticKey: string,
 ): Promise<StoredTriggerDelivery | null> {
-  const rows = await db
-    .select()
-    .from(triggerDeliveries)
-    .where(
-      and(
-        eq(triggerDeliveries.provider, provider),
-        eq(triggerDeliveries.semanticKey, semanticKey),
-      ),
-    )
-    .limit(1);
-  return rows[0] ? mapDelivery(rows[0]) : null;
+  const row = await findTriggerDeliveryRowBySemanticKey(db, { provider, semanticKey });
+  return row ? mapDelivery(row) : null;
 }
 
 /** Keep exactly one pending semantic event for a subject. Newer feedback
@@ -166,54 +132,19 @@ export async function coalescePendingTrigger(
   accepted: AcceptedTriggerDelivery,
 ): Promise<void> {
   const payload = JSON.stringify(accepted);
-  const coalesced = JSON.stringify({ result: "coalesced" });
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      await db.execute(sql`
-        WITH existing AS (
-          SELECT provider, delivery_id
-          FROM ${triggerDeliveries}
-          WHERE subject_key = ${accepted.subjectKey}
-            AND pending = true
-          ORDER BY created_at
-          LIMIT 1
-          FOR UPDATE
-        ), merged AS (
-          UPDATE ${triggerDeliveries} inbox
-          SET trigger_type = ${accepted.triggerType},
-              ticket_key = ${accepted.ticketKey},
-              head_sha = ${accepted.pr.headSha},
-              definition_id = ${accepted.definitionId},
-              definition_version = ${accepted.definitionVersion},
-              payload = ${payload}::jsonb,
-              updated_at = now()
-          FROM existing
-          WHERE inbox.provider = existing.provider
-            AND inbox.delivery_id = existing.delivery_id
-          RETURNING inbox.provider, inbox.delivery_id
-        ), queued AS (
-          UPDATE ${triggerDeliveries} inbox
-          SET pending = true,
-              result = ${coalesced}::jsonb,
-              updated_at = now()
-          WHERE inbox.provider = ${accepted.delivery.provider}
-            AND inbox.delivery_id = ${accepted.delivery.deliveryId}
-            AND NOT EXISTS (SELECT 1 FROM existing)
-          RETURNING inbox.provider, inbox.delivery_id
-        )
-        UPDATE ${triggerDeliveries} inbox
-        SET result = ${coalesced}::jsonb,
-            pending = false,
-            updated_at = now()
-        WHERE inbox.provider = ${accepted.delivery.provider}
-          AND inbox.delivery_id = ${accepted.delivery.deliveryId}
-          AND EXISTS (SELECT 1 FROM existing)
-          AND NOT EXISTS (
-            SELECT 1 FROM existing
-            WHERE existing.provider = inbox.provider
-              AND existing.delivery_id = inbox.delivery_id
-          )
-      `);
+      await coalescePendingTriggerDelivery(db, {
+        provider: accepted.delivery.provider,
+        deliveryId: accepted.delivery.deliveryId,
+        subjectKey: accepted.subjectKey,
+        triggerType: accepted.triggerType,
+        ticketKey: accepted.ticketKey,
+        headSha: accepted.pr.headSha,
+        definitionId: accepted.definitionId,
+        definitionVersion: accepted.definitionVersion,
+        payload,
+      });
       return;
     } catch (error) {
       if (!isUniqueViolation(error) || attempt === 1) throw error;
@@ -225,17 +156,7 @@ export async function listPendingTriggersForSubject(
   db: Db,
   subjectKey: string,
 ): Promise<AcceptedTriggerDelivery[]> {
-  const rows = await db
-    .select()
-    .from(triggerDeliveries)
-    .where(
-      and(
-        eq(triggerDeliveries.subjectKey, subjectKey),
-        eq(triggerDeliveries.pending, true),
-      ),
-    )
-    .orderBy(asc(triggerDeliveries.createdAt))
-    .limit(1);
+  const rows = await listPendingTriggerDeliveryRows(db, { subjectKey, limit: 1 });
   return rows.map(mapDelivery);
 }
 
@@ -243,13 +164,14 @@ export async function listPendingTriggers(
   db: Db,
   limit: number,
 ): Promise<AcceptedTriggerDelivery[]> {
-  const rows = await db
-    .select()
-    .from(triggerDeliveries)
-    .where(eq(triggerDeliveries.pending, true))
-    .orderBy(asc(triggerDeliveries.createdAt))
-    .limit(limit);
+  const rows = await listPendingTriggerDeliveryRows(db, { limit });
   return rows.map(mapDelivery);
+}
+
+export async function listConnectedPendingTriggers(
+  limit: number,
+): Promise<{ subjectKey: string; updatedAt: Date }[]> {
+  return listConnectedPendingTriggerDeliveryRows({ limit });
 }
 
 export async function deletePendingTrigger(
@@ -259,19 +181,11 @@ export async function deletePendingTrigger(
     "delivery" | "subjectKey" | "triggerType" | "pr" | "definitionId" | "definitionVersion"
   >,
 ): Promise<boolean> {
-  const rows = await db
-    .update(triggerDeliveries)
-    .set({ pending: false, updatedAt: sql`now()` })
-    .where(
-      and(
-        eq(triggerDeliveries.provider, accepted.delivery.provider),
-        eq(triggerDeliveries.deliveryId, accepted.delivery.deliveryId),
-        eq(triggerDeliveries.subjectKey, accepted.subjectKey),
-        eq(triggerDeliveries.pending, true),
-      ),
-    )
-    .returning({ deliveryId: triggerDeliveries.deliveryId });
-  return rows.length === 1;
+  return deletePendingTriggerDelivery(db, {
+    provider: accepted.delivery.provider,
+    deliveryId: accepted.delivery.deliveryId,
+    subjectKey: accepted.subjectKey,
+  });
 }
 
 /** Record start only while this candidate still owns the subject. */
@@ -281,31 +195,13 @@ export async function recordCandidateStartedTriggerDelivery(
   ownerToken: string,
   runId: string,
 ): Promise<boolean> {
-  const marker = JSON.stringify({ result: "candidate_started", runId });
-  const updated = await db.execute(sql`
-    UPDATE ${triggerDeliveries} inbox
-    SET result = ${marker}::jsonb,
-        updated_at = now()
-    WHERE inbox.provider = ${accepted.delivery.provider}
-      AND inbox.delivery_id = ${accepted.delivery.deliveryId}
-      AND inbox.subject_key = ${accepted.subjectKey}
-      AND inbox.pending = true
-      AND EXISTS (
-        SELECT 1 FROM ${activeRuns}
-        WHERE ${activeRuns.subjectKey} = ${accepted.subjectKey}
-          AND ${activeRuns.ownerToken} = ${ownerToken}
-          AND (
-            (${activeRuns.state} = 'reserved' AND ${activeRuns.runId} IS NULL)
-            OR (${activeRuns.state} = 'bound' AND ${activeRuns.runId} = ${runId})
-          )
-      )
-      AND EXISTS (
-        SELECT 1 FROM ${workflowRuns}
-        WHERE ${workflowRuns.runId} = ${runId}
-      )
-    RETURNING inbox.delivery_id
-  `);
-  return rawRows(updated).length === 1;
+  return recordCandidateStartedTriggerDeliveryRow(db, {
+    provider: accepted.delivery.provider,
+    deliveryId: accepted.delivery.deliveryId,
+    subjectKey: accepted.subjectKey,
+    ownerToken,
+    runId,
+  });
 }
 
 /** Atomically acknowledge the winning Workflow and consume its pending row. */
@@ -317,40 +213,120 @@ export async function acknowledgeStartedTriggerDelivery(
   >,
   runId: string,
 ): Promise<boolean> {
-  const result = JSON.stringify({ result: "started", runId });
-  const acknowledged = await db.execute(sql`
-    UPDATE ${triggerDeliveries} inbox
-    SET result = ${result}::jsonb,
-        pending = false,
-        updated_at = now()
-    WHERE inbox.provider = ${accepted.delivery.provider}
-      AND inbox.delivery_id = ${accepted.delivery.deliveryId}
-      AND inbox.subject_key = ${accepted.subjectKey}
-      AND EXISTS (
-        SELECT 1 FROM ${activeRuns}
-        WHERE ${activeRuns.subjectKey} = ${accepted.subjectKey}
-          AND ${activeRuns.runId} = ${runId}
-          AND ${activeRuns.state} = 'bound'
-      )
-      AND EXISTS (
-        SELECT 1 FROM ${workflowRuns}
-        WHERE ${workflowRuns.runId} = ${runId}
-      )
-      AND (
-        inbox.result IS NULL
-        OR inbox.result->>'result' IN ('candidate_started', 'coalesced')
-        OR (inbox.result->>'result' = 'started' AND inbox.result->>'runId' = ${runId})
-      )
-    RETURNING inbox.delivery_id
-  `);
-  return rawRows(acknowledged).length === 1;
+  return acknowledgeStartedTriggerDeliveryRow(db, {
+    provider: accepted.delivery.provider,
+    deliveryId: accepted.delivery.deliveryId,
+    subjectKey: accepted.subjectKey,
+    runId,
+  });
 }
 
-function rawRows<T = { deliveryId: string }>(result: unknown): T[] {
-  return ((result as { rows?: T[] }).rows ?? []) as T[];
+export async function getConnectedTriggerDelivery(
+  provider: "github" | "gitlab",
+  deliveryId: string,
+): Promise<StoredTriggerDelivery | null> {
+  const row = await findConnectedTriggerDeliveryRow({ provider, deliveryId });
+  return row ? mapDelivery(row) : null;
 }
 
-function mapDelivery(row: typeof triggerDeliveries.$inferSelect): StoredTriggerDelivery {
+export async function acceptConnectedTriggerDelivery(
+  accepted: AcceptedTriggerDelivery,
+): Promise<{ inserted: boolean; stored: StoredTriggerDelivery }> {
+  const inserted = await insertConnectedTriggerDeliveryRow({
+    provider: accepted.delivery.provider,
+    deliveryId: accepted.delivery.deliveryId,
+    producer: accepted.delivery.producer,
+    semanticKey: accepted.delivery.semanticKey ?? null,
+    triggerType: accepted.triggerType,
+    subjectKey: accepted.subjectKey,
+    ticketKey: accepted.ticketKey,
+    headSha: accepted.pr.headSha,
+    definitionId: accepted.definitionId,
+    definitionVersion: accepted.definitionVersion,
+    payload: accepted,
+  });
+  if (inserted) return { inserted: true, stored: mapDelivery(inserted) };
+  const byDeliveryId = await getConnectedTriggerDelivery(
+    accepted.delivery.provider,
+    accepted.delivery.deliveryId,
+  );
+  const bySemanticKey = accepted.delivery.semanticKey
+    ? await findConnectedTriggerDeliveryRowBySemanticKey({
+        provider: accepted.delivery.provider,
+        semanticKey: accepted.delivery.semanticKey,
+      })
+    : null;
+  const stored = byDeliveryId ?? (bySemanticKey ? mapDelivery(bySemanticKey) : null);
+  if (!stored) throw new Error("trigger delivery disappeared after unique conflict");
+  return { inserted: false, stored };
+}
+
+export async function coalesceConnectedPendingTrigger(
+  accepted: AcceptedTriggerDelivery,
+): Promise<void> {
+  const payload = JSON.stringify(accepted);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await coalesceConnectedPendingTriggerDelivery({
+        provider: accepted.delivery.provider,
+        deliveryId: accepted.delivery.deliveryId,
+        subjectKey: accepted.subjectKey,
+        triggerType: accepted.triggerType,
+        ticketKey: accepted.ticketKey,
+        headSha: accepted.pr.headSha,
+        definitionId: accepted.definitionId,
+        definitionVersion: accepted.definitionVersion,
+        payload,
+      });
+      return;
+    } catch (error) {
+      if (!isUniqueViolation(error) || attempt === 1) throw error;
+    }
+  }
+}
+
+export async function listConnectedPendingTriggersForSubject(
+  subjectKey: string,
+): Promise<AcceptedTriggerDelivery[]> {
+  return (await listConnectedPendingTriggerDeliveryRows({ subjectKey, limit: 1 })).map(mapDelivery);
+}
+
+export async function completeConnectedTriggerDeliveryResult(
+  accepted: Pick<TriggerEvent, "delivery">,
+  result: StoredTriggerResult,
+): Promise<void> {
+  await completeConnectedTriggerDelivery(
+    accepted.delivery.provider,
+    accepted.delivery.deliveryId,
+    result,
+  );
+}
+
+export async function deleteConnectedPendingTrigger(
+  accepted: Pick<AcceptedTriggerDelivery, "delivery" | "subjectKey">,
+): Promise<boolean> {
+  return deleteConnectedPendingTriggerDelivery({
+    provider: accepted.delivery.provider,
+    deliveryId: accepted.delivery.deliveryId,
+    subjectKey: accepted.subjectKey,
+  });
+}
+
+export async function recordConnectedCandidateStartedTrigger(
+  accepted: AcceptedTriggerDelivery,
+  ownerToken: string,
+  runId: string,
+): Promise<boolean> {
+  return recordConnectedCandidateStartedTriggerDelivery({
+    provider: accepted.delivery.provider,
+    deliveryId: accepted.delivery.deliveryId,
+    subjectKey: accepted.subjectKey,
+    ownerToken,
+    runId,
+  });
+}
+
+function mapDelivery(row: NonNullable<Awaited<ReturnType<typeof findTriggerDeliveryRow>>>): StoredTriggerDelivery {
   const payload = row.payload as AcceptedTriggerDelivery;
   return {
     ...payload,

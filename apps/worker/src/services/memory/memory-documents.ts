@@ -7,14 +7,13 @@
  * enough to be a malformed or hostile request rather than something the agent
  * ever wrote.
  */
-import { getDb } from "../../db/client.js";
 import {
-  deleteMemoryDocument,
-  getMemoryDocument,
-  listMemoryDocuments,
+  deleteConnectedMemoryDocument,
+  getConnectedMemoryDocument,
+  listConnectedMemoryDocuments,
   type MemoryDocument,
   type MemoryDocumentSummary,
-} from "../../memory/store.js";
+} from "../../db/repositories/memory.js";
 
 /**
  * Subject keys and doc paths the agent writes are short identifiers, so a longer
@@ -35,14 +34,14 @@ export function readMemoryDocument(
   subjectKey: string,
   docPath: string,
 ): Promise<MemoryDocument | null> {
-  return getMemoryDocument(getDb(), subjectKey, docPath);
+  return getConnectedMemoryDocument(subjectKey, docPath);
 }
 
 /** The listing, without content, optionally narrowed to one ticket. */
 export function listMemoryDocumentSummaries(options: {
   ticketKey?: string;
 }): Promise<MemoryDocumentSummary[]> {
-  return listMemoryDocuments(getDb(), options);
+  return listConnectedMemoryDocuments(options);
 }
 
 /**
@@ -54,5 +53,5 @@ export function eraseMemoryDocument(
   subjectKey: string,
   docPath: string,
 ): Promise<boolean> {
-  return deleteMemoryDocument(getDb(), subjectKey, docPath);
+  return deleteConnectedMemoryDocument(subjectKey, docPath);
 }

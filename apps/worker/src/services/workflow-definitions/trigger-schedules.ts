@@ -9,25 +9,24 @@
  * its first one.
  */
 import type { ScheduleEvaluationState } from "@shared/contracts";
-import { getDb, type Db } from "../../db/client.js";
 import {
-  listOccurrencesForSchedule,
   type OccurrenceRow,
 } from "../../schedule-trigger/occurrence-store.js";
 import {
-  getScheduleById,
-  listSchedulesForDefinition,
-  mintSchedulesForLiveHead,
-  pauseSchedule,
-  resumeSchedule,
+  getConnectedScheduleById,
+  listConnectedOccurrencesForSchedule,
+  listConnectedSchedulesForDefinition,
+  mintConnectedSchedulesForLiveHead,
+  pauseConnectedSchedule,
+  resumeConnectedSchedule,
   type MintableScheduleNode,
   type ScheduleRow,
 } from "../../schedule-trigger/schedule-store.js";
+import { runnableDefinitionOf } from "../../db/repositories/definitions.js";
 import {
-  getDeployedWorkflowDefinitionVersion,
-  getWorkflowDefinition,
-  runnableDefinitionOf,
-} from "../../db/repositories/definitions.js";
+  getConnectedWorkflowDefinition,
+} from "../../db/repositories/definitions/connected.js";
+import { readConnectedDeployedWorkflowDefinitionVersion } from "../../engine/stored-definition-reads.js";
 
 export type { OccurrenceRow, ScheduleRow };
 
@@ -62,7 +61,7 @@ export interface ScheduleConfig {
 export function findTriggerScheduleRow(
   target: ScheduleTarget,
 ): Promise<ScheduleRow | null> {
-  return findScheduleRow(getDb(), target);
+  return findScheduleRow(target);
 }
 
 /**
@@ -79,16 +78,15 @@ export async function readTriggerScheduleConfig(
   target: ScheduleTarget,
   options: { mayHeal: boolean },
 ): Promise<ScheduleConfig> {
-  const db = getDb();
-  let row = await findScheduleRow(db, target);
+  let row = await findScheduleRow(target);
   if (!row && options.mayHeal) {
-    row = await healMissingSchedule(db, target);
+    row = await healMissingSchedule(target);
   }
   if (!row) return { row: null, occurrences: [] };
 
   return {
     row,
-    occurrences: await listOccurrencesForSchedule(db, row.id, OCCURRENCE_HISTORY_LIMIT),
+    occurrences: await listConnectedOccurrencesForSchedule(row.id, OCCURRENCE_HISTORY_LIMIT),
   };
 }
 
@@ -105,12 +103,11 @@ export type TriggerScheduleMutation =
 export async function pauseTriggerSchedule(
   target: ScheduleTarget,
 ): Promise<TriggerScheduleMutation> {
-  const db = getDb();
-  const row = await findScheduleRow(db, target);
+  const row = await findScheduleRow(target);
   if (!row) return { found: false };
 
-  await pauseSchedule(db, row.id);
-  const paused = await findScheduleRow(db, target);
+  await pauseConnectedSchedule(row.id);
+  const paused = await findScheduleRow(target);
   return paused ? { found: true, row: paused } : { found: false };
 }
 
@@ -118,12 +115,11 @@ export async function pauseTriggerSchedule(
 export async function resumeTriggerSchedule(
   target: ScheduleTarget,
 ): Promise<TriggerScheduleMutation> {
-  const db = getDb();
-  const row = await findScheduleRow(db, target);
+  const row = await findScheduleRow(target);
   if (!row) return { found: false };
 
-  await resumeSchedule(db, row.id);
-  const resumed = await findScheduleRow(db, target);
+  await resumeConnectedSchedule(row.id);
+  const resumed = await findScheduleRow(target);
   return resumed ? { found: true, row: resumed } : { found: false };
 }
 
@@ -151,8 +147,8 @@ export function deriveScheduleState(row: ScheduleRow, now: Date): ScheduleEvalua
   return "evaluating";
 }
 
-async function findScheduleRow(db: Db, target: ScheduleTarget): Promise<ScheduleRow | null> {
-  const rows = await listSchedulesForDefinition(db, target.definitionId);
+async function findScheduleRow(target: ScheduleTarget): Promise<ScheduleRow | null> {
+  const rows = await listConnectedSchedulesForDefinition(target.definitionId);
   return rows.find((row) => row.nodeId === target.nodeId) ?? null;
 }
 
@@ -164,12 +160,11 @@ async function findScheduleRow(db: Db, target: ScheduleTarget): Promise<Schedule
  * returned: its only caller mints from it and has no use for the version.
  */
 async function findDeployedScheduleNode(
-  db: Db,
   target: ScheduleTarget,
 ): Promise<MintableScheduleNode | null> {
-  const definition = await getWorkflowDefinition(db, target.definitionId);
+  const definition = await getConnectedWorkflowDefinition(target.definitionId);
   if (!definition || !definition.enabled || definition.archivedAt) return null;
-  const head = await getDeployedWorkflowDefinitionVersion(db, target.definitionId);
+  const head = await readConnectedDeployedWorkflowDefinitionVersion(target.definitionId);
   const graph = runnableDefinitionOf(head);
   if (!graph) return null;
   const node = graph.nodes.find(
@@ -179,14 +174,14 @@ async function findDeployedScheduleNode(
   return { id: node.id, type: "trigger_schedule", configuration: node.configuration ?? {} };
 }
 
-async function healMissingSchedule(db: Db, target: ScheduleTarget): Promise<ScheduleRow | null> {
-  const node = await findDeployedScheduleNode(db, target);
+async function healMissingSchedule(target: ScheduleTarget): Promise<ScheduleRow | null> {
+  const node = await findDeployedScheduleNode(target);
   if (!node) return null;
 
-  const [minted] = await mintSchedulesForLiveHead(db, {
+  const [minted] = await mintConnectedSchedulesForLiveHead({
     definitionId: target.definitionId,
     nodes: [node],
   });
   if (!minted) return null;
-  return getScheduleById(db, minted.scheduleId);
+  return getConnectedScheduleById(minted.scheduleId);
 }

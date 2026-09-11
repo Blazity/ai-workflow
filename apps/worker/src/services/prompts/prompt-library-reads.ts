@@ -13,20 +13,18 @@ import type {
   PromptLibraryUsageResponse,
   PromptLibraryVersion,
 } from "@shared/contracts";
-import { getDb } from "../../db/client.js";
 import {
-  getPrompt,
-  getPromptVersion,
-  listPrompts,
-  listPromptVersionRows,
-  serializePromptMeta,
-  serializePromptVersion,
+  getConnectedPrompt,
+  getConnectedPromptVersion,
+  listConnectedPromptVersionRows,
   type PromptLibraryListRow,
 } from "../../db/repositories/prompts.js";
 import {
-  findPromptUsage,
-  findPromptUsageInPrompts,
+  findConnectedPromptUsage,
+  findConnectedPromptUsageInPrompts,
+  listConnectedPrompts,
 } from "./prompt-library-service.js";
+import { serializePromptMeta, serializePromptVersion } from "./prompt-serialization.js";
 
 /** A list row as its DTO (meta plus the head body and slot contract). */
 function serializeListRow(row: PromptLibraryListRow): PromptLibraryListRowDto {
@@ -43,7 +41,7 @@ export async function listPromptLibrary(filter: {
   tag?: string;
   includeArchived: boolean;
 }): Promise<PromptLibraryListResponse> {
-  const rows = await listPrompts(getDb(), filter);
+  const rows = await listConnectedPrompts(filter);
   const prompts = rows.map(serializeListRow);
   const tags = [...new Set(prompts.flatMap((p) => p.tags))].sort();
   return { prompts, tags };
@@ -57,11 +55,10 @@ export async function listPromptLibrary(filter: {
 export async function readPromptDetail(
   promptId: number,
 ): Promise<PromptLibraryDetailResponse | null> {
-  const db = getDb();
-  const row = await getPrompt(db, promptId);
+  const row = await getConnectedPrompt(promptId);
   if (!row) return null;
 
-  const versions = (await listPromptVersionRows(db, promptId)).map(
+  const versions = (await listConnectedPromptVersionRows(promptId)).map(
     serializePromptVersion,
   );
   const current = versions[0];
@@ -74,7 +71,7 @@ export async function readPromptVersion(
   promptId: number,
   version: number,
 ): Promise<PromptLibraryVersion | null> {
-  const row = await getPromptVersion(getDb(), promptId, version);
+  const row = await getConnectedPromptVersion(promptId, version);
   return row ? serializePromptVersion(row) : null;
 }
 
@@ -82,10 +79,9 @@ export async function readPromptVersion(
 export async function readPromptUsage(
   promptId: number,
 ): Promise<PromptLibraryUsageResponse> {
-  const db = getDb();
   const [rows, prompts] = await Promise.all([
-    findPromptUsage(db, promptId),
-    findPromptUsageInPrompts(db, promptId),
+    findConnectedPromptUsage(promptId),
+    findConnectedPromptUsageInPrompts(promptId),
   ]);
   return { rows, prompts };
 }

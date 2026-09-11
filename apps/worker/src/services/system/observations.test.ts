@@ -5,8 +5,8 @@ import {
   getLatestSystemHealthObservations,
   recordSystemHealthObservation,
   sweepSystemHealthObservations,
-  systemHealthObservationScope,
-} from "./observations.js";
+} from "../../db/repositories/system-health.js";
+import { systemHealthObservationScope } from "./observations.js";
 
 let db: Db;
 

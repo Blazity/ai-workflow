@@ -1,6 +1,19 @@
-import { and, asc, eq, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm";
-import type { Db } from "../../db/client.js";
-import { dispatchCapacityQueue } from "../../db/schema.js";
+import type { Db } from "../../db/types.js";
+import {
+  claimConnectedQueuedDispatchTicketComment,
+  claimQueuedDispatchTicketComment,
+  confirmConnectedQueuedDispatchTicketComment,
+  confirmQueuedDispatchTicketComment,
+  deleteConnectedQueuedDispatchTickets,
+  deleteQueuedDispatchTickets,
+  ensureConnectedQueuedDispatchTicket,
+  ensureQueuedDispatchTicket,
+  listConnectedUnconfirmedQueuedDispatchTickets,
+  listQueuedDispatchTickets,
+  listUnconfirmedQueuedDispatchTickets,
+  reconcileConnectedQueuedDispatchTickets,
+  reconcileQueuedDispatchTickets,
+} from "../../db/repositories/dispatch-capacity-queue.js";
 import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
 import { logger } from "../../infra/logger.js";
 
@@ -28,10 +41,7 @@ export interface QueuedTicket {
 
 /** Insert a suppressing row for a refused ticket. No-op if one already exists. */
 export async function ensureQueued(db: Db, ticketKey: string): Promise<void> {
-  await db
-    .insert(dispatchCapacityQueue)
-    .values({ ticketKey })
-    .onConflictDoNothing();
+  await ensureQueuedDispatchTicket(db, ticketKey);
 }
 
 /** Drop queue rows for tickets whose episode ended (they dispatched). */
@@ -39,12 +49,7 @@ export async function deleteQueued(
   db: Db,
   ticketKeys: readonly string[],
 ): Promise<number> {
-  if (ticketKeys.length === 0) return 0;
-  const deleted = await db
-    .delete(dispatchCapacityQueue)
-    .where(inArray(dispatchCapacityQueue.ticketKey, [...ticketKeys]))
-    .returning({ ticketKey: dispatchCapacityQueue.ticketKey });
-  return deleted.length;
+  return deleteQueuedDispatchTickets(db, ticketKeys);
 }
 
 /**
@@ -59,12 +64,7 @@ export async function reconcileQueue(
   db: Db,
   currentTicketKeys: readonly string[],
 ): Promise<number> {
-  if (currentTicketKeys.length === 0) return 0;
-  const deleted = await db
-    .delete(dispatchCapacityQueue)
-    .where(notInArray(dispatchCapacityQueue.ticketKey, [...currentTicketKeys]))
-    .returning({ ticketKey: dispatchCapacityQueue.ticketKey });
-  return deleted.length;
+  return reconcileQueuedDispatchTickets(db, currentTicketKeys);
 }
 
 /**
@@ -76,19 +76,7 @@ export async function listUnconfirmedForComment(
   ticketKeys: readonly string[],
   limit: number,
 ): Promise<string[]> {
-  if (ticketKeys.length === 0) return [];
-  const rows = await db
-    .select({ ticketKey: dispatchCapacityQueue.ticketKey })
-    .from(dispatchCapacityQueue)
-    .where(
-      and(
-        isNull(dispatchCapacityQueue.confirmedAt),
-        inArray(dispatchCapacityQueue.ticketKey, [...ticketKeys]),
-      ),
-    )
-    .orderBy(asc(dispatchCapacityQueue.queuedAt))
-    .limit(limit);
-  return rows.map((r) => r.ticketKey);
+  return listUnconfirmedQueuedDispatchTickets(db, ticketKeys, limit);
 }
 
 /**
@@ -103,43 +91,17 @@ export async function claimForComment(
   ticketKey: string,
   leaseMs: number,
 ): Promise<boolean> {
-  const claimed = await db
-    .update(dispatchCapacityQueue)
-    .set({ attemptedAt: sql`now()` })
-    .where(
-      and(
-        eq(dispatchCapacityQueue.ticketKey, ticketKey),
-        isNull(dispatchCapacityQueue.confirmedAt),
-        or(
-          isNull(dispatchCapacityQueue.attemptedAt),
-          lt(
-            dispatchCapacityQueue.attemptedAt,
-            sql`now() - (${leaseMs} * interval '1 millisecond')`,
-          ),
-        ),
-      ),
-    )
-    .returning({ ticketKey: dispatchCapacityQueue.ticketKey });
-  return claimed.length > 0;
+  return claimQueuedDispatchTicketComment(db, ticketKey, leaseMs);
 }
 
 /** Record that a comment landed, permanently suppressing further ones. */
 export async function markConfirmed(db: Db, ticketKey: string): Promise<void> {
-  await db
-    .update(dispatchCapacityQueue)
-    .set({ confirmedAt: sql`now()` })
-    .where(eq(dispatchCapacityQueue.ticketKey, ticketKey));
+  await confirmQueuedDispatchTicketComment(db, ticketKey);
 }
 
 /** Every queued ticket, oldest first, for the dashboard "waiting" panel. */
 export async function listQueued(db: Db): Promise<QueuedTicket[]> {
-  const rows = await db
-    .select({
-      ticketKey: dispatchCapacityQueue.ticketKey,
-      queuedAt: dispatchCapacityQueue.queuedAt,
-    })
-    .from(dispatchCapacityQueue)
-    .orderBy(asc(dispatchCapacityQueue.queuedAt));
+  const rows = await listQueuedDispatchTickets(db);
   return rows.map((r) => ({
     ticketKey: r.ticketKey,
     queuedAt: r.queuedAt.toISOString(),
@@ -158,7 +120,7 @@ export function atCapacityComment(): string {
 }
 
 export interface ReconcileAtCapacityQueueInput {
-  db: Db;
+  db?: Db;
   issueTracker: Pick<IssueTrackerAdapter, "postComment">;
   /** Tickets refused with reason `at_capacity` this tick. */
   atCapacityKeys: readonly string[];
@@ -196,32 +158,37 @@ export async function reconcileAtCapacityQueue(
 
   // A dispatched ticket is no longer waiting: its episode ended the moment it
   // started, even though it stays in the AI column for the whole run.
-  await deleteQueued(input.db, input.startedKeys);
+  if (input.db) await deleteQueued(input.db, input.startedKeys);
+  else await deleteConnectedQueuedDispatchTickets(input.startedKeys);
 
   for (const ticketKey of input.atCapacityKeys) {
-    await ensureQueued(input.db, ticketKey);
+    if (input.db) await ensureQueued(input.db, ticketKey);
+    else await ensureConnectedQueuedDispatchTicket(ticketKey);
   }
 
   // Skip on an empty/unknown listing: deleting the whole queue there would
   // re-comment everything on the next tick.
   if (input.currentTicketKeys.length > 0) {
-    await reconcileQueue(input.db, input.currentTicketKeys);
+    if (input.db) await reconcileQueue(input.db, input.currentTicketKeys);
+    else await reconcileConnectedQueuedDispatchTickets(input.currentTicketKeys);
   }
 
-  const pending = await listUnconfirmedForComment(
-    input.db,
-    input.currentTicketKeys,
-    bound,
-  );
+  const pending = input.db
+    ? await listUnconfirmedForComment(input.db, input.currentTicketKeys, bound)
+    : await listConnectedUnconfirmedQueuedDispatchTickets(input.currentTicketKeys, bound);
 
   let commented = 0;
   for (const ticketKey of pending) {
-    if (!(await claimForComment(input.db, ticketKey, leaseMs))) continue;
+    const claimed = input.db
+      ? await claimForComment(input.db, ticketKey, leaseMs)
+      : await claimConnectedQueuedDispatchTicketComment(ticketKey, leaseMs);
+    if (!claimed) continue;
     try {
       await input.issueTracker.postComment(ticketKey, atCapacityComment(), {
         signal: AbortSignal.timeout(COMMENT_POST_TIMEOUT_MS),
       });
-      await markConfirmed(input.db, ticketKey);
+      if (input.db) await markConfirmed(input.db, ticketKey);
+      else await confirmConnectedQueuedDispatchTicketComment(ticketKey);
       commented++;
     } catch (error) {
       // Leave confirmed_at NULL so a later tick retries. The lease on

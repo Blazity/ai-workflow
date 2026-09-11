@@ -35,6 +35,14 @@ vi.mock("../../db/repositories/definitions.js", () => ({
   getEnabledWorkflowDefinitionForTrigger: (...args: any[]) =>
     mockGetEnabledDefinition(...args),
 }));
+vi.mock("../../db/repositories/definitions/connected.js", () => ({
+  getConnectedEnabledWorkflowDefinitionForTrigger: (...args: any[]) =>
+    mockGetEnabledDefinition(...args),
+}));
+vi.mock("../../engine/definition-trigger-routing.js", () => ({
+  getConnectedEnabledWorkflowDefinitionForTrigger: (...args: any[]) =>
+    mockGetEnabledDefinition(...args),
+}));
 
 vi.mock("../../infra/logger.js", () => ({
   logger: {
@@ -83,7 +91,7 @@ const workflowInput = {
 
 /** Resolves an enabled definition for exactly the listed trigger types. */
 function enableDefinitionsFor(triggerTypes: string[]): void {
-  mockGetEnabledDefinition.mockImplementation(async (_db: unknown, type: string) =>
+  mockGetEnabledDefinition.mockImplementation(async (type: string) =>
     triggerTypes.includes(type) ? { current: { definition: {} } } : null,
   );
 }
@@ -178,7 +186,7 @@ describe("post-pr-gate deprecation warning coverage", () => {
 
     await dispatchPostPrGateWebhook({ action: "opened", workflowInput });
 
-    expect(mockGetEnabledDefinition.mock.calls.map((call) => call[1])).toEqual([
+    expect(mockGetEnabledDefinition.mock.calls.map((call) => call[0])).toEqual([
       "trigger_pr_created",
       "trigger_pr_ready",
       "trigger_pr_updated",

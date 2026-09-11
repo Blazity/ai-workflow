@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { SystemHealthResponse } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
-import { readSystemHealthScan, saveSystemHealthScan } from "./last-scan.js";
+import { readSystemHealthScan, saveSystemHealthScan } from "../../db/repositories/system-health.js";
 
 let db: Db;
 

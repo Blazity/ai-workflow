@@ -1,7 +1,8 @@
-import { sql } from "drizzle-orm";
-import type { Db } from "../../db/client.js";
-import { ActiveRunOwnerError } from "./run-control-errors.js";
-
+import type { Db } from "../../db/types.js";
+import {
+  assertActiveRunOwnerState as assertOwnerState,
+  assertConnectedActiveRunOwner as assertConnected,
+} from "../../db/repositories/active-runs.js";
 export { ActiveRunOwnerError } from "./run-control-errors.js";
 
 export interface ActiveRunOwner {
@@ -27,28 +28,21 @@ export async function assertActiveRunOwner(
   );
 }
 
-export async function assertActiveRunOwnerState(
+export function assertConnectedActiveRunOwner(owner: ActiveRunOwner): Promise<void> {
+  return assertConnected(owner);
+}
+
+export function assertConnectedActiveRunOwnerState(
+  owner: ActiveRunOwner,
+  state: "reserved" | "bound" | "parked" | "cancelling",
+): Promise<void> {
+  return assertOwnerState(owner, state);
+}
+
+export function assertActiveRunOwnerState(
   db: Db,
   owner: ActiveRunOwner,
   state: "reserved" | "bound" | "parked" | "cancelling",
 ): Promise<void> {
-  const runMatch = owner.runId === null
-    ? sql`run_id IS NULL`
-    : sql`run_id = ${owner.runId}`;
-  const result = await db.execute(sql`
-    SELECT 1 AS owner_count
-    FROM active_runs
-    WHERE subject_key = ${owner.subjectKey}
-      AND owner_token = ${owner.ownerToken}
-      AND state = ${state}
-      AND ${runMatch}
-    LIMIT 1
-  `);
-  if (rawRows(result).length === 0) {
-    throw new ActiveRunOwnerError();
-  }
-}
-
-function rawRows(result: unknown): unknown[] {
-  return (result as { rows?: unknown[] }).rows ?? [];
+  return assertOwnerState(owner, state, db);
 }

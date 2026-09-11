@@ -3,8 +3,7 @@ import { env } from "../../config/env.js";
 import { JiraAdapter } from "../../adapters/issue-tracker/jira.js";
 import { ChatSDKAdapter } from "../../adapters/messaging/chatsdk.js";
 import { NoopMessagingAdapter } from "../../adapters/messaging/noop.js";
-import { PostgresRunRegistry } from "../../db/repositories/active-runs.js";
-import { getDb } from "../../db/client.js";
+import { createConnectedPostgresRunRegistry } from "../../db/repositories/active-runs.js";
 import { createVCS } from "./create-vcs.js";
 import { createRepositoryVCS } from "./vcs-runtime.js";
 import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
@@ -29,7 +28,7 @@ export interface VcsAdapterTarget {
 }
 
 export function createAdapters(vcsTarget?: VcsAdapterTarget): Adapters {
-  const runRegistry = new PostgresRunRegistry(getDb());
+  const runRegistry = createConnectedPostgresRunRegistry();
   let vcs: VCSAdapter | undefined;
   const messaging: MessagingAdapter =
     env.CHAT_SDK_SLACK_TOKEN && env.CHAT_SDK_CHANNEL_ID

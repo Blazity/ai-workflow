@@ -4,8 +4,9 @@ import type {
   IssueTrackerMoveTarget,
   TicketContent,
 } from "../../adapters/issue-tracker/types.js";
-import type { Db } from "../../db/client.js";
+import type { Db } from "../../db/types.js";
 import {
+  assertConnectedActiveRunOwnerState,
   assertActiveRunOwnerState,
   type ActiveRunOwner,
 } from "../run-lifecycle/active-run-owner.js";
@@ -32,6 +33,19 @@ export async function moveTicketForRun(input: {
     ticketKey: input.ticketKey,
     target: input.target,
     guard: () => assertActiveRunOwnerState(input.db, input.owner, state),
+  });
+}
+
+export async function moveConnectedTicketForRun(
+  input: Omit<Parameters<typeof moveTicketForRun>[0], "db">,
+): Promise<void> {
+  const state =
+    input.requiredOwnerState ?? (input.owner.runId === null ? "reserved" : "bound");
+  await moveTicket({
+    issueTracker: input.issueTracker,
+    ticketKey: input.ticketKey,
+    target: input.target,
+    guard: () => assertConnectedActiveRunOwnerState(input.owner, state),
   });
 }
 
@@ -98,6 +112,36 @@ export async function withdrawTicketFromAiForRun(input: {
         return;
       }
       // Preserve the original mutation error.
+    }
+    throw error;
+  }
+}
+
+export async function withdrawConnectedTicketFromAiForRun(
+  input: Omit<Parameters<typeof withdrawTicketFromAiForRun>[0], "db">,
+): Promise<void> {
+  let current: TicketContent;
+  try {
+    current = await input.issueTracker.fetchTicket(input.ticketKey);
+  } catch (error) {
+    if (!isIssueTrackerNotFound(error)) throw error;
+    await assertConnectedActiveRunOwnerState(input.owner, input.requiredOwnerState);
+    return;
+  }
+  await assertConnectedActiveRunOwnerState(input.owner, input.requiredOwnerState);
+  if (!ticketMatchesMoveTarget(current, input.aiColumn)) return;
+  if (!input.target) throw new Error("Cannot withdraw an AI ticket without a safe move target");
+  try {
+    await input.issueTracker.moveTicket(input.ticketKey, input.target);
+  } catch (error) {
+    try {
+      const afterError = await input.issueTracker.fetchTicket(input.ticketKey);
+      if (!ticketMatchesMoveTarget(afterError, input.aiColumn)) return;
+    } catch (readError) {
+      if (isIssueTrackerNotFound(readError)) {
+        await assertConnectedActiveRunOwnerState(input.owner, input.requiredOwnerState);
+        return;
+      }
     }
     throw error;
   }

@@ -35,4 +35,5 @@ export {
 export {
   isWorkflowGeneratedPush,
   workflowPushNormalizationOptions,
+  connectedWorkflowPushNormalizationOptions,
 } from "./workflow-push-suppression.js";

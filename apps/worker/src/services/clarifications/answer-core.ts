@@ -2,28 +2,49 @@
 // would bypass the module mock and hit the real Workflow runtime.
 import { MAX_CLARIFICATION_ANSWER_LENGTH } from "@shared/contracts";
 import { getHookByToken, resumeHook } from "workflow/api";
-import { and, eq } from "drizzle-orm";
 import { env } from "../../config/env.js";
 import { HookNotFoundError } from "workflow/errors";
-import type { Db } from "../../db/client.js";
-import { activeRuns } from "../../db/schema.js";
+import type { Db } from "../../db/types.js";
 import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
 } from "../../adapters/issue-tracker/types.js";
 import { logger } from "../../infra/logger.js";
 import { aiColumnMoveTarget } from "../tickets/move-targets.js";
-import { markRunBlockedOnCancel, markRunResumed } from "../../db/repositories/runs/telemetry.js";
-import { moveTicketForRun } from "../tickets/ticket-transition.js";
-import { formatClarificationAnswerComment } from "./comment-format.js";
-import { answerHookClarification, type HookClarificationRow } from "../../clarifications/hook-store.js";
 import {
+  markConnectedRunBlockedOnCancel,
+  markConnectedRunResumed,
+  markRunBlockedOnCancel,
+  markRunResumed,
+} from "../../db/repositories/runs/telemetry.js";
+import {
+  moveConnectedTicketForRun,
+  moveTicketForRun,
+} from "../tickets/ticket-transition.js";
+import { formatClarificationAnswerComment } from "./comment-format.js";
+import {
+  answerConnectedHookClarification,
+  answerHookClarification,
+  type HookClarificationRow,
+} from "../../db/repositories/clarification-hooks.js";
+import {
+  finishConnectedFailedResume,
   finishFailedResume,
+  reserveConnectedResumeAttempt,
   reserveResumeAttempt,
   RESUME_FAILED_STATUS,
   type ResumeAttemptReservation,
 } from "./resume-attempts.js";
-import { supersedeClarification, supersedePendingForTicket } from "../../db/repositories/clarifications.js";
+import {
+  supersedeConnectedClarification,
+  supersedeConnectedPendingClarificationsForTicket,
+  supersedeClarification,
+  supersedePendingForTicket,
+} from "../../db/repositories/clarifications.js";
+import {
+  findBoundActiveRunOwner,
+  findConnectedBoundActiveRunOwner,
+} from "../../db/repositories/active-runs.js";
 
 /** Re-exported under the name this cluster has always used. The number itself
  *  belongs to the contracts package, which is also what the request schema and
@@ -49,23 +70,40 @@ export type AnswerClarificationOutcome =
  * claim means no run can work this ticket, so it must not be moved either;
  * that is logged, not raised, because the answer itself is still legitimate.
  */
+interface AnswerPersistence {
+  findBoundOwner(input: { subjectKey: string; runId: string }): Promise<{ ownerToken: string } | null>;
+  transitionTicket(input: {
+    issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket">;
+    ticketKey: string;
+    target: ReturnType<typeof aiColumnMoveTarget>;
+    owner: { subjectKey: string; ownerToken: string; runId: string };
+  }): Promise<void>;
+  answer(
+    id: string,
+    answer: string,
+    actor: { id: string; label: string },
+  ): Promise<HookClarificationRow | null>;
+  reserve(id: string, answeredAt: Date): Promise<ResumeAttemptReservation | null>;
+  finishFailed(input: {
+    row: HookClarificationRow;
+    reservation: ResumeAttemptReservation;
+    issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket" | "postComment">;
+    error: unknown;
+  }): Promise<"retryable" | "exhausted" | "lost">;
+  retireGoneTicket(row: HookClarificationRow): Promise<void>;
+  markResumed(runId: string): Promise<void>;
+}
+
 async function moveTicketToAiColumn(input: {
-  db: Db;
+  persistence: AnswerPersistence;
   issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket">;
   ticketKey: string;
   row: HookClarificationRow;
 }): Promise<void> {
-  const [owner] = await input.db
-    .select({ ownerToken: activeRuns.ownerToken })
-    .from(activeRuns)
-    .where(
-      and(
-        eq(activeRuns.subjectKey, input.row.subjectKey),
-        eq(activeRuns.runId, input.row.runId),
-        eq(activeRuns.state, "bound"),
-      ),
-    )
-    .limit(1);
+  const owner = await input.persistence.findBoundOwner({
+    subjectKey: input.row.subjectKey,
+    runId: input.row.runId,
+  });
   if (!owner) {
     logger.warn(
       { ticketKey: input.ticketKey, runId: input.row.runId },
@@ -73,8 +111,7 @@ async function moveTicketToAiColumn(input: {
     );
     return;
   }
-  await moveTicketForRun({
-    db: input.db,
+  await input.persistence.transitionTicket({
     issueTracker: input.issueTracker,
     ticketKey: input.ticketKey,
     target: aiColumnMoveTarget(env),
@@ -99,8 +136,7 @@ async function moveTicketToAiColumn(input: {
  * `skipAnswerComment` is for callers whose answer already exists as a ticket
  * comment, so mirroring it back would duplicate what a human just wrote.
  */
-export async function answerClarificationAndResume(input: {
-  db: Db;
+type AnswerClarificationInput = {
   row: HookClarificationRow;
   rawAnswer: string;
   actor: { id: string; label: string };
@@ -108,8 +144,47 @@ export async function answerClarificationAndResume(input: {
   skipTicketFetch?: boolean;
   skipTicketMove?: boolean;
   skipAnswerComment?: boolean;
-}): Promise<AnswerClarificationOutcome> {
-  const { db, row, rawAnswer, actor, issueTracker } = input;
+};
+
+/** Explicit-db path kept for pglite tests and service callers that have an
+ * already-scoped database client. Production request paths use the connected
+ * variant below. */
+export function answerClarificationAndResume(
+  input: AnswerClarificationInput & { db: Db },
+): Promise<AnswerClarificationOutcome> {
+  const { db } = input;
+  return answerClarificationAndResumeWithPersistence(input, {
+    findBoundOwner: (owner) => findBoundActiveRunOwner(db, owner),
+    transitionTicket: (move) => moveTicketForRun({ db, ...move }),
+    answer: (id, answer, actor) => answerHookClarification(db, id, answer, actor),
+    reserve: (id, answeredAt) => reserveResumeAttempt(db, id, answeredAt),
+    finishFailed: (failed) => finishFailedResume({ db, ...failed }),
+    retireGoneTicket: (row) => retireClarificationForGoneTicket(db, row),
+    markResumed: (runId) => markRunResumed(db, runId),
+  });
+}
+
+/** Production path: services provide policy inputs, repositories own every
+ * database operation and resolve their connected client internally. */
+export function answerConnectedClarificationAndResume(
+  input: AnswerClarificationInput,
+): Promise<AnswerClarificationOutcome> {
+  return answerClarificationAndResumeWithPersistence(input, {
+    findBoundOwner: findConnectedBoundActiveRunOwner,
+    transitionTicket: moveConnectedTicketForRun,
+    answer: answerConnectedHookClarification,
+    reserve: reserveConnectedResumeAttempt,
+    finishFailed: finishConnectedFailedResume,
+    retireGoneTicket: retireConnectedClarificationForGoneTicket,
+    markResumed: markConnectedRunResumed,
+  });
+}
+
+async function answerClarificationAndResumeWithPersistence(
+  input: AnswerClarificationInput,
+  persistence: AnswerPersistence,
+): Promise<AnswerClarificationOutcome> {
+  const { row, rawAnswer, actor, issueTracker } = input;
 
   const answer = rawAnswer.trim();
   if (!answer || answer.length > MAX_ANSWER_LENGTH) {
@@ -133,7 +208,7 @@ export async function answerClarificationAndResume(input: {
       await issueTracker.fetchTicket(row.ticketKey);
     } catch (err) {
       if (!(err instanceof IssueTrackerNotFoundError)) throw err;
-      await retireClarificationForGoneTicket(db, row);
+      await persistence.retireGoneTicket(row);
       return { kind: "ticket_gone" };
     }
   }
@@ -147,7 +222,7 @@ export async function answerClarificationAndResume(input: {
   if (row.ticketKey && !input.skipTicketMove) {
     try {
       await moveTicketToAiColumn({
-        db,
+        persistence,
         issueTracker,
         ticketKey: row.ticketKey,
         row,
@@ -159,13 +234,13 @@ export async function answerClarificationAndResume(input: {
 
   const answered = isResumeRetry
     ? row
-    : await answerHookClarification(db, row.id, answer, answerer);
+    : await persistence.answer(row.id, answer, answerer);
   if (!answered) {
     return { kind: "conflict" };
   }
 
   if (!answered.answeredAt) return { kind: "conflict" };
-  const reservation = await reserveResumeAttempt(db, answered.id, answered.answeredAt);
+  const reservation = await persistence.reserve(answered.id, answered.answeredAt);
   if (!reservation) return { kind: "conflict" };
 
   // Mirror the answer into the ticket. The question was posted there publicly,
@@ -211,11 +286,11 @@ export async function answerClarificationAndResume(input: {
       if (HookNotFoundError.is(verificationError)) {
         hookAfterResume = null;
       } else {
-        return failedResumeOutcome(db, answered, reservation, issueTracker, verificationError);
+        return failedResumeOutcome(persistence, answered, reservation, issueTracker, verificationError);
       }
     }
     if (hookAfterResume !== null) {
-      return failedResumeOutcome(db, answered, reservation, issueTracker, error);
+      return failedResumeOutcome(persistence, answered, reservation, issueTracker, error);
     }
   }
 
@@ -224,20 +299,20 @@ export async function answerClarificationAndResume(input: {
   // stops reading as awaiting input the moment the answer lands, however long
   // the resumed body takes to reach its next write. Guarded on "awaiting" and
   // best-effort: a status write must never fail a delivered answer.
-  await markRunResumed(db, row.runId).catch(() => {});
+  await persistence.markResumed(row.runId).catch(() => {});
 
   return { kind: "answered", row: answered };
 }
 
 /** Finish a failed reserved delivery and report whether anything is left. */
 async function failedResumeOutcome(
-  db: Db,
+  persistence: AnswerPersistence,
   row: HookClarificationRow,
   reservation: ResumeAttemptReservation,
   issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket" | "postComment">,
   error: unknown,
 ): Promise<AnswerClarificationOutcome> {
-  const attempt = await finishFailedResume({ db, row, reservation, issueTracker, error });
+  const attempt = await persistence.finishFailed({ row, reservation, issueTracker, error });
   return attempt === "exhausted"
     ? { kind: "resume_exhausted", error }
     : attempt === "lost"
@@ -264,4 +339,14 @@ export async function retireClarificationForGoneTicket(
   }
   await supersedeClarification(db, row.id).catch(() => {});
   await markRunBlockedOnCancel(db, row.runId).catch(() => {});
+}
+
+export async function retireConnectedClarificationForGoneTicket(
+  row: HookClarificationRow,
+): Promise<void> {
+  if (row.ticketKey) {
+    await supersedeConnectedPendingClarificationsForTicket(row.ticketKey).catch(() => {});
+  }
+  await supersedeConnectedClarification(row.id).catch(() => {});
+  await markConnectedRunBlockedOnCancel(row.runId).catch(() => {});
 }

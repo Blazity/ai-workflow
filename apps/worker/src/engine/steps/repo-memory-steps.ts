@@ -833,16 +833,16 @@ export async function distillRepoMemoryStep(
       return result;
     };
     if (input.repositories.length === 0) return finish("no_repositories");
-    const { getDb } = await import("../../db/client.js");
-    const { getMemoryDocument, upsertMemoryDocument } = await import("../../memory/store.js");
-    const db = getDb();
+    const {
+      getConnectedMemoryDocument,
+      upsertConnectedMemoryDocument,
+    } = await import("../../db/repositories/memory.js");
 
     // Dual-read, symmetric with hydrate: the new key first, then the legacy key a
     // run started under the pre-migration prompt wrote its increment under.
     const ticketDocument =
-      (await getMemoryDocument(db, input.subjectKey, memoryDocPath(input.taskId))) ??
-      (await getMemoryDocument(
-        db,
+      (await getConnectedMemoryDocument(input.subjectKey, memoryDocPath(input.taskId))) ??
+      (await getConnectedMemoryDocument(
         input.subjectKey,
         legacyMemoryDocPath(input.taskId),
       ));
@@ -892,7 +892,7 @@ export async function distillRepoMemoryStep(
       const known: Record<RepoMemoryDocKind, RepoMemoryItem[]> = { facts: [], lessons: [] };
       const versions: Record<RepoMemoryDocKind, number> = { facts: 0, lessons: 0 };
       for (const kind of REPO_MEMORY_DOC_PATHS) {
-        const stored = await getMemoryDocument(db, subjectKey, kind);
+        const stored = await getConnectedMemoryDocument(subjectKey, kind);
         if (stored) {
           known[kind] = parseRepoMemoryDocument(stored.content);
           // `stored?.version ?? 0` is the required idiom: the key may never be
@@ -1009,7 +1009,7 @@ export async function distillRepoMemoryStep(
             log.warn({ repo: state.key, docPath: kind }, "repo_memory_truncated_skipped");
             break;
           }
-          const result = await upsertMemoryDocument(db, {
+          const result = await upsertConnectedMemoryDocument({
             subjectKey: state.subjectKey,
             docPath: kind,
             // Repo scoped, so no ticket owns these documents.
@@ -1047,7 +1047,7 @@ export async function distillRepoMemoryStep(
             );
             break;
           }
-          const fresh = await getMemoryDocument(db, state.subjectKey, kind);
+          const fresh = await getConnectedMemoryDocument(state.subjectKey, kind);
           existing = fresh ? parseRepoMemoryDocument(fresh.content) : [];
           expectedVersion = fresh?.version ?? 0;
         }
@@ -1073,7 +1073,7 @@ export async function distillRepoMemoryStep(
       // concurrent writer's included.
       const corroborated = new Map<string, { text: string; repositories: number }>();
       for (const member of group.members) {
-        const stored = await getMemoryDocument(db, member.subjectKey, "facts");
+        const stored = await getConnectedMemoryDocument(member.subjectKey, "facts");
         if (!stored) continue;
         // Counted once per repository, not once per item: two spellings of one
         // fact inside a single document are still one repository knowing it.
@@ -1111,7 +1111,7 @@ export async function distillRepoMemoryStep(
       // same reason: neon-http has no transactions, and an owner document is
       // contended by every repository under it rather than by one.
       const subjectKey = orgSubjectKey(group.provider, group.owner);
-      const storedOrg = await getMemoryDocument(db, subjectKey, "facts");
+      const storedOrg = await getConnectedMemoryDocument(subjectKey, "facts");
       let existing = storedOrg ? parseRepoMemoryDocument(storedOrg.content) : [];
       let expectedVersion = storedOrg?.version ?? 0;
       for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt += 1) {
@@ -1144,7 +1144,7 @@ export async function distillRepoMemoryStep(
           log.warn({ org: group.key, docPath: "facts" }, "repo_memory_truncated_skipped");
           break;
         }
-        const result = await upsertMemoryDocument(db, {
+        const result = await upsertConnectedMemoryDocument({
           subjectKey,
           docPath: "facts",
           // Owner scoped, so no ticket owns this document either.
@@ -1181,7 +1181,7 @@ export async function distillRepoMemoryStep(
           );
           break;
         }
-        const fresh = await getMemoryDocument(db, subjectKey, "facts");
+        const fresh = await getConnectedMemoryDocument(subjectKey, "facts");
         existing = fresh ? parseRepoMemoryDocument(fresh.content) : [];
         expectedVersion = fresh?.version ?? 0;
       }
@@ -1708,9 +1708,9 @@ export async function loadRepoMemorySourcesStep(
   "use step";
   try {
     if (input.repositories.length === 0) return [];
-    const { getDb } = await import("../../db/client.js");
-    const { getMemoryDocument } = await import("../../memory/store.js");
-    const db = getDb();
+    const { getConnectedMemoryDocument } = await import(
+      "../../db/repositories/memory.js"
+    );
 
     const sources: EffectivePromptMemorySource[] = [];
     /**
@@ -1738,7 +1738,7 @@ export async function loadRepoMemorySourcesStep(
     const readWithinDeadline = async (
       subjectKey: string,
       docPath: RepoMemoryDocKind,
-    ): Promise<Awaited<ReturnType<typeof getMemoryDocument>>> => {
+    ): Promise<Awaited<ReturnType<typeof getConnectedMemoryDocument>>> => {
       const remaining = deadlineAt - Date.now();
       if (remaining <= 0) {
         timedOut = true;
@@ -1747,7 +1747,7 @@ export async function loadRepoMemorySourcesStep(
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const outcome = await Promise.race([
-          getMemoryDocument(db, subjectKey, docPath),
+          getConnectedMemoryDocument(subjectKey, docPath),
           new Promise<typeof READ_DEADLINE>((resolve) => {
             timer = setTimeout(() => resolve(READ_DEADLINE), remaining);
           }),

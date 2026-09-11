@@ -67,6 +67,27 @@ vi.mock("../../memory/store.js", async (importOriginal) => {
     },
   };
 });
+vi.mock("../../db/repositories/memory.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../db/repositories/memory.js")>();
+  return {
+    ...actual,
+    getConnectedMemoryDocument: (
+      subjectKey: string,
+      docPath: string,
+    ) => actual.getMemoryDocument(mocks.db as Db, subjectKey, docPath),
+    upsertConnectedMemoryDocument: async (
+      documentInput: Parameters<typeof actual.upsertMemoryDocument>[1],
+    ) => {
+      mocks.upsertInputs.push({
+        docPath: documentInput.docPath,
+        sourceRunId: documentInput.sourceRunId,
+        expectedVersion: documentInput.expectedVersion,
+      });
+      if (mocks.beforeUpsert) await mocks.beforeUpsert();
+      return actual.upsertMemoryDocument(mocks.db as Db, documentInput);
+    },
+  };
+});
 
 import type { Db } from "../../db/client.js";
 import { agentMemoryDocuments } from "../../db/schema.js";

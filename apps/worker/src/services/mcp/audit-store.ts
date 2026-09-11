@@ -1,8 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, gte, inArray, lt } from "drizzle-orm";
-
-import type { Db } from "../../db/client.js";
-import { mcpAuditEvents } from "../../db/schema.js";
+import type { Db } from "../../db/types.js";
+import {
+  insertConnectedMcpAuditEvent,
+  insertMcpAuditEvent,
+  listMcpAuditEvents,
+  pruneConnectedMcpAuditEvents,
+  pruneMcpAuditEvents,
+} from "../../db/repositories/mcp.js";
 import { mcpSettings } from "../settings/index.js";
 import type { McpAuditInput } from "./contracts.js";
 
@@ -20,30 +24,55 @@ export async function pruneMcpAudits(
 ): Promise<{ deleted: number }> {
   const retentionDays = options.retentionDays ?? mcpSettings().auditRetentionDays;
   const cutoff = new Date(now.getTime() - retentionDays * DAY_MS);
-  const due = await db
-    .select({ id: mcpAuditEvents.id })
-    .from(mcpAuditEvents)
-    .where(lt(mcpAuditEvents.occurredAt, cutoff))
-    .orderBy(asc(mcpAuditEvents.occurredAt))
-    .limit(options.limit ?? PRUNE_BATCH_LIMIT);
-  if (due.length === 0) return { deleted: 0 };
+  return {
+    deleted: await pruneMcpAuditEvents(db, {
+      cutoff,
+      limit: options.limit ?? PRUNE_BATCH_LIMIT,
+    }),
+  };
+}
 
-  // Counted from what the delete actually removed, so a concurrent tick that
-  // already took some of this batch cannot inflate the reported number.
-  const deleted = await db
-    .delete(mcpAuditEvents)
-    .where(
-      inArray(
-        mcpAuditEvents.id,
-        due.map((row) => row.id),
-      ),
-    )
-    .returning({ id: mcpAuditEvents.id });
-  return { deleted: deleted.length };
+export async function pruneConnectedMcpAudits(
+  now: Date,
+  options: { retentionDays?: number; limit?: number } = {},
+): Promise<{ deleted: number }> {
+  const retentionDays = options.retentionDays ?? mcpSettings().auditRetentionDays;
+  const cutoff = new Date(now.getTime() - retentionDays * DAY_MS);
+  return {
+    deleted: await pruneConnectedMcpAuditEvents({
+      cutoff,
+      limit: options.limit ?? PRUNE_BATCH_LIMIT,
+    }),
+  };
 }
 
 export async function writeMcpAudit(db: Db, event: McpAuditInput): Promise<void> {
-  await db.insert(mcpAuditEvents).values({
+  await insertMcpAuditEvent(db, {
+    id: randomUUID(),
+    requestId: event.requestId,
+    traceId: event.traceId,
+    organizationId: event.actor.organizationId,
+    actorSubject: event.actor.subject,
+    clientId: event.actor.clientId,
+    role: event.actor.role,
+    scopes: [...event.actor.scopes].sort(),
+    toolName: event.toolName,
+    mutationClass: event.mutationClass,
+    targetRefs: [...event.targetRefs],
+    inputHash: event.inputHash,
+    outputHash: event.outputHash,
+    idempotencyKeyHash: event.idempotencyKeyHash,
+    outcome: event.outcome,
+    errorCode: event.errorCode,
+    latencyMs: event.latencyMs,
+    serverVersion: process.env.MCP_SERVER_VERSION ?? "0.1.0",
+    contractHash: event.contractHash,
+    occurredAt: event.occurredAt,
+  });
+}
+
+export async function writeConnectedMcpAudit(event: McpAuditInput): Promise<void> {
+  await insertConnectedMcpAuditEvent({
     id: randomUUID(),
     requestId: event.requestId,
     traceId: event.traceId,
@@ -72,14 +101,5 @@ export async function listMcpAuditsForOrganization(
   organizationId: string,
   filter: { since: Date },
 ) {
-  return db
-    .select()
-    .from(mcpAuditEvents)
-    .where(
-      and(
-        eq(mcpAuditEvents.organizationId, organizationId),
-        gte(mcpAuditEvents.occurredAt, filter.since),
-      ),
-    )
-    .orderBy(desc(mcpAuditEvents.occurredAt));
+  return listMcpAuditEvents(db, { organizationId, since: filter.since });
 }

@@ -14,14 +14,12 @@ import type {
   RunsResponse,
   WorkflowsResponse,
 } from "@shared/contracts";
-import { getDb } from "../../db/client.js";
 import {
-  fetchRunModels,
-  listRuns,
+  connectedListRuns,
+  connectedWorkflowAgg,
   parseSearch,
   parseWindow,
-  workflowAgg,
-} from "../../db/repositories/runs.js";
+} from "./dashboard-run-data.js";
 import { logger } from "../../infra/logger.js";
 import {
   collectAwaitingRuns,
@@ -29,6 +27,7 @@ import {
   collectLiveRuns,
   getWorkflowRegistry,
   registryRows,
+  resolveRunModels,
 } from "../overview/index.js";
 import { issueTrackerBaseUrl } from "../settings/index.js";
 import { createAdapters } from "../vcs/index.js";
@@ -54,14 +53,19 @@ export async function listDashboardRuns(query: {
   q?: unknown;
 }): Promise<DashboardRunsPage> {
   try {
-    const { rows, total, counts } = await listRuns({
-      db: getDb(),
+    const { rows, total, counts } = await connectedListRuns({
       window: parseWindow(query.window),
       q: parseSearch(query.q),
       now: new Date(),
       jiraBaseUrl: issueTrackerBaseUrl(),
     });
-    return { available: true, rows, total, counts };
+    const models = await resolveRunModels(rows.map((row) => row.id));
+    return {
+      available: true,
+      rows: rows.map((row) => ({ ...row, model: models.get(row.id) ?? null })),
+      total,
+      counts,
+    };
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "runs_list_failed");
     return EMPTY_RUNS;
@@ -77,8 +81,7 @@ export async function listWorkflowAggregates(query: {
   window?: unknown;
 }): Promise<Omit<WorkflowsResponse, "generatedAt">> {
   try {
-    const { rows, total } = await workflowAgg({
-      db: getDb(),
+    const { rows, total } = await connectedWorkflowAgg({
       window: parseWindow(query.window),
       now: new Date(),
       jiraBaseUrl: issueTrackerBaseUrl(),
@@ -109,9 +112,9 @@ export async function listLiveRuns(): Promise<LiveRunsResponse> {
       registry: adapters.runRegistry,
       issueTracker: adapters.issueTracker,
       jiraBaseUrl,
-      resolveModels: (runIds) => fetchRunModels(getDb(), runIds),
+      resolveModels: resolveRunModels,
     }),
-    collectAwaitingRuns({ db: getDb(), jiraBaseUrl, now }),
+    collectAwaitingRuns({ jiraBaseUrl, now }),
   ]);
 
   const awaitingIds = new Set(awaiting.map((r) => r.id));
@@ -130,7 +133,6 @@ export function readRunBlockStatuses(query: {
   const definitionId = Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
   return collectBlockStatuses({
     registry: createAdapters().runRegistry,
-    db: getDb(),
     definitionId,
   });
 }

@@ -16,8 +16,8 @@ export async function loadAdaptersPort() {
 }
 
 export async function loadActiveRunOwnerPort() {
-  const { assertActiveRunOwner } = await import("../../services/run-lifecycle/active-run-owner.js");
-  return { assertActiveRunOwner };
+  const { assertActiveRunOwner, assertConnectedActiveRunOwner } = await import("../../services/run-lifecycle/active-run-owner.js");
+  return { assertActiveRunOwner, assertConnectedActiveRunOwner };
 }
 
 export async function loadRepositoryDiscoveryPort() {
@@ -47,17 +47,32 @@ export async function loadRunTelemetryPort() {
     get markRunFailedOnSelfMove() {
       return runTelemetry.markRunFailedOnSelfMove;
     },
+    get markConnectedRunFailedOnSelfMove() {
+      return runTelemetry.markConnectedRunFailedOnSelfMove;
+    },
     get markRunSucceededOnSelfMove() {
       return runTelemetry.markRunSucceededOnSelfMove;
+    },
+    get markConnectedRunSucceededOnSelfMove() {
+      return runTelemetry.markConnectedRunSucceededOnSelfMove;
     },
     get recordBlockStatuses() {
       return runTelemetry.recordBlockStatuses;
     },
+    get recordConnectedBlockStatuses() {
+      return runTelemetry.recordConnectedBlockStatuses;
+    },
     get recordRunStatusReason() {
       return runTelemetry.recordRunStatusReason;
     },
+    get recordConnectedRunStatusReason() {
+      return runTelemetry.recordConnectedRunStatusReason;
+    },
     get recordRunUsage() {
       return runTelemetry.recordRunUsage;
+    },
+    get recordConnectedRunUsage() {
+      return runTelemetry.recordConnectedRunUsage;
     },
   };
 }

@@ -50,16 +50,14 @@ export async function postPrReviewStep(
   },
 ) {
   "use step";
-  const { getDb } = await import("../../../db/client.js");
-  const { findWorkflowOwnedPullRequestIdentity } = await import(
+  const { findConnectedWorkflowOwnedPullRequestIdentity } = await import(
     "../../../db/repositories/runs.js"
   );
   const {
     prRunTarget,
-    publishRunOwnedPrReview,
+    publishConnectedRunOwnedPrReview,
   } = await import("../../runtime/pr-external-resources.js");
-  const db = getDb();
-  const owned = await findWorkflowOwnedPullRequestIdentity(db, {
+  const owned = await findConnectedWorkflowOwnedPullRequestIdentity({
     provider: args.pr.provider,
     repoPath: args.pr.repoPath,
     prNumber: args.pr.prNumber,
@@ -69,8 +67,7 @@ export async function postPrReviewStep(
     pr: args.pr,
     owned,
   });
-  return publishRunOwnedPrReview({
-    db,
+  return publishConnectedRunOwnedPrReview({
     owner: args.owner,
     target: prRunTarget(args.owner.subjectKey, pr),
     nodeId: args.nodeId,

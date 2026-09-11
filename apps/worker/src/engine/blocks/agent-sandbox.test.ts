@@ -39,6 +39,15 @@ vi.mock("../../workflow-definition/harness-profile-runtime.js", () => ({
 vi.mock("../../db/repositories/harness-profiles.js", () => ({
   resolveHarnessProfileVersion: mocks.resolveHarnessProfileVersion,
 }));
+vi.mock("../../db/repositories/auth.js", () => ({
+  createConnectedAuthRepository: () => ({
+    findOrganizationBySlug: async () => ({ id: await mocks.dashboardOrganizationId() }),
+  }),
+}));
+vi.mock("../../harness-profiles/resolved-version.js", () => ({
+  resolveConnectedVerifiedHarnessProfileVersion:
+    mocks.resolveHarnessProfileVersion,
+}));
 vi.mock("../../sandbox/agents/index.js", () => ({
   createAgentAdapter: mocks.createAgentAdapter,
 }));

@@ -31,7 +31,10 @@ vi.mock("../../services/vcs/vcs-runtime.js", () => ({ createRepositoryVCS: mocks
 vi.mock("../../db/client.js", () => ({ getDb: mocks.getDb }));
 vi.mock("../../db/repositories/runs.js", () => ({
   listWorkflowOwnedBranchesForTicket: mocks.listWorkflowOwnedBranchesForTicket,
+  listConnectedWorkflowOwnedBranchesForTicket:
+    mocks.listWorkflowOwnedBranchesForTicket,
   upsertWorkflowOwnedBranch: mocks.upsertWorkflowOwnedBranch,
+  upsertConnectedWorkflowOwnedBranch: mocks.upsertWorkflowOwnedBranch,
 }));
 vi.mock("../steps/workspace-publication.js", () => ({
   finalizeWorkspacePublication: mocks.finalizeWorkspacePublication,
@@ -71,6 +74,8 @@ vi.mock("../../config/env.js", () => ({ env: { REVIEW_LEDGER_ENABLED: false } })
 vi.mock("../../services/vcs/github-auth.js", () => ({ buildOctokit: mocks.buildOctokit }));
 vi.mock("../../services/run-lifecycle/active-run-owner.js", () => ({
   assertActiveRunOwner: (...args: any[]) => mocks.assertActiveRunOwner(...args),
+  assertConnectedActiveRunOwner: (...args: any[]) =>
+    mocks.assertActiveRunOwner(...args),
 }));
 
 import type {

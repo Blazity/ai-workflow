@@ -11,13 +11,12 @@
  */
 import { getWorld } from "workflow/runtime";
 import type { RunDetailResponse } from "@shared/contracts";
-import { getDb } from "../../db/client.js";
 import {
-  fetchRunDetailFromDb,
-  fetchRunRefs,
-} from "../../db/repositories/runs.js";
+  fetchConnectedRunDetailFromDb,
+  fetchConnectedRunRefs,
+} from "./durable-run-detail.js";
 import {
-  getClarificationForRun,
+  getConnectedClarificationForRun,
   serializeClarification,
 } from "../../db/repositories/clarifications.js";
 import { logger } from "../../infra/logger.js";
@@ -49,22 +48,21 @@ export async function readRunDetail(runId: string): Promise<RunDetailPayload> {
 
   // Best-effort: the run detail must never 500 because the clarification lookup
   // hiccuped, so a lookup error degrades to no clarification rather than failing.
-  const clarification = await getClarificationForRun(getDb(), runId)
+  const clarification = await getConnectedClarificationForRun(runId)
     .then((row) => (row ? serializeClarification(row) : null))
     .catch(() => null);
 
   try {
     // Read the durable row first: it carries the persisted waterfall (finished
     // runs) plus the ticket/PR refs the world lacks, and is the coarse fallback.
-    const dbDetail = await fetchRunDetailFromDb({
-      db: getDb(),
+    const dbDetail = await fetchConnectedRunDetailFromDb({
       runId,
       jiraBaseUrl,
     }).catch(() => null);
     let analysisReport = dbDetail?.analysisReport ?? null;
     if (!analysisReport) {
-      analysisReport = await (await import("../../db/repositories/runs/run-analysis.js"))
-        .getRunAnalysisReport(getDb(), runId)
+      analysisReport = await (await import("../../run-analysis/persistence.js"))
+        .getConnectedRunAnalysisReport(runId)
         .catch(() => null);
     }
 
@@ -83,7 +81,7 @@ export async function readRunDetail(runId: string): Promise<RunDetailPayload> {
             model: dbDetail?.run.model ?? null,
             runId,
           }),
-          fetchRunRefs(getDb(), runId, jiraBaseUrl).catch(() => null),
+          fetchConnectedRunRefs(runId, jiraBaseUrl).catch(() => null),
         ]);
         run.prNumber = refs?.prNumber ?? null;
         run.prUrl = refs?.prUrl ?? null;
@@ -122,8 +120,7 @@ export async function readRunDetail(runId: string): Promise<RunDetailPayload> {
     // persisted per-phase breakdown, so old runs still render.
     logger.warn({ err: errorMessage(err), runId }, "run_detail_failed");
     try {
-      const fallback = await fetchRunDetailFromDb({
-        db: getDb(),
+      const fallback = await fetchConnectedRunDetailFromDb({
         runId,
         jiraBaseUrl,
       });

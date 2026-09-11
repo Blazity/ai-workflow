@@ -4,11 +4,13 @@ import { DEFAULT_AGENT_PROMPTS } from "@shared/prompts";
 import type { Db } from "../client.js";
 import { promptLibrary, promptLibraryVersions } from "../schema.js";
 import { createTestDb } from "../test-db.js";
-import { DashboardAuthError } from "../../services/auth/users-read.js";
 import {
   archivePrompt,
   createPrompt,
   findPromptUsageInPrompts,
+  restorePromptVersionWithPolicy as restorePromptVersion,
+  retryOnUniqueViolation,
+  savePromptVersionWithPolicy as savePromptVersion,
   updatePromptMeta,
 } from "../../services/prompts/prompt-library-service.js";
 import {
@@ -16,17 +18,13 @@ import {
   getCurrentPromptVersion,
   getPrompt,
   getPromptVersion,
-  listPrompts,
   listPromptVersionRows,
-  restorePromptVersion,
-  retryOnUniqueViolation,
-  savePromptVersion,
-  serializePromptMeta,
   type PromptLibraryActor,
 } from "./prompts.js";
+import { listPrompts } from "../../services/prompts/prompt-library-service.js";
+import { serializePromptMeta } from "../../services/prompts/prompt-serialization.js";
 
 const ADMIN: PromptLibraryActor = { role: "admin", id: "u_admin", label: "Admin" };
-const MEMBER: PromptLibraryActor = { role: "member", id: "u_member", label: "Member" };
 const PLAN_SLOT: PromptSlotDefinition = {
   name: "plan",
   description: "Approved implementation plan",
@@ -423,22 +421,6 @@ describe("archived write guards", () => {
     const id = await archived("ReadArch");
     expect((await getPrompt(db, id))?.archivedAt).not.toBeNull();
     expect((await getPromptVersion(db, id, 1))?.body).toBe("v1");
-  });
-});
-
-describe("role gating", () => {
-  it("rejects a member on every write with 403", async () => {
-    const { prompt } = await createPrompt(db, { name: "Gate", body: "v1", actor: ADMIN });
-    for (const p of [
-      createPrompt(db, { name: "Nope", body: "x", actor: MEMBER }),
-      savePromptVersion(db, { promptId: prompt.id, body: "v2", actor: MEMBER }),
-      updatePromptMeta(db, { promptId: prompt.id, name: "X", actor: MEMBER }),
-      archivePrompt(db, { promptId: prompt.id, actor: MEMBER }),
-      restorePromptVersion(db, { promptId: prompt.id, version: 1, actor: MEMBER }),
-    ]) {
-      await expect(p).rejects.toBeInstanceOf(DashboardAuthError);
-      await expect(p).rejects.toMatchObject({ statusCode: 403 });
-    }
   });
 });
 

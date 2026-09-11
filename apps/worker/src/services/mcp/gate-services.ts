@@ -6,8 +6,8 @@
  * whether it reads or mutates. They are separated from the tool operations so
  * that the list of things a tool may reach stays a list of tool operations.
  */
-import type { Db } from "../../db/client.js";
-import { writeMcpAudit } from "./audit-store.js";
+import type { Db } from "../../db/types.js";
+import { writeConnectedMcpAudit, writeMcpAudit } from "./audit-store.js";
 import type {
   IdempotencyInput,
   McpActorContext,
@@ -16,11 +16,16 @@ import type {
 } from "./contracts.js";
 import {
   beginMcpMutation,
+  beginConnectedMcpMutation,
   completeMcpMutation,
+  completeConnectedMcpMutation,
   failMcpMutation,
+  failConnectedMcpMutation,
   releaseMcpMutation,
+  releaseConnectedMcpMutation,
 } from "./idempotency-store.js";
 import {
+  consumeConnectedMcpRateLimit,
   consumeMcpRateLimit,
   type McpRateLimitVerdict,
 } from "./rate-limit-store.js";
@@ -58,5 +63,17 @@ export function createMcpGateServices(db: Db): McpGateServices {
     failMutation: (leaseId, errorCode, now) =>
       failMcpMutation(db, leaseId, errorCode, now),
     releaseMutation: (leaseId) => releaseMcpMutation(db, leaseId),
+  };
+}
+
+export function createConnectedMcpGateServices(): McpGateServices {
+  return {
+    writeAudit: writeConnectedMcpAudit,
+    consumeRateLimit: consumeConnectedMcpRateLimit,
+    beginMutation: <T,>(input: IdempotencyInput) => beginConnectedMcpMutation<T>(input),
+    completeMutation: <T,>(leaseId: string, response: T, now: Date) =>
+      completeConnectedMcpMutation<T>(leaseId, response, now),
+    failMutation: failConnectedMcpMutation,
+    releaseMutation: releaseConnectedMcpMutation,
   };
 }

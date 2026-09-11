@@ -1,6 +1,7 @@
 /* oxlint-disable eslint/max-lines-per-function */
 import { sql } from "drizzle-orm";
 import type { Db } from "../../client.js";
+import type { WorkflowBlockType } from "@shared/contracts";
 
 export interface CreateDefinitionInput {
   name: string;
@@ -18,6 +19,11 @@ export interface CreatedDefinition {
 
 function rows<T>(result: unknown): T[] {
   return ((result as { rows?: T[] }).rows ?? []) as T[];
+}
+
+function triggerArray(values: WorkflowBlockType[]) {
+  if (values.length === 0) return sql`ARRAY[]::text[]`;
+  return sql`ARRAY[${sql.join(values.map((value) => sql`${value}`), sql`, `)}]::text[]`;
 }
 
 /**
@@ -75,6 +81,8 @@ export function createDefinitionsRepository(db: Db) {
     async revokeScheduleAndCancelWaiting(
       scheduleId: string,
       now: Date = new Date(),
+      reason = "schedule_revoked",
+      overwriteReason = false,
     ): Promise<{ revoked: boolean }> {
       const result = await db.execute(sql`
         WITH revoked AS (
@@ -87,7 +95,10 @@ export function createDefinitionsRepository(db: Db) {
           UPDATE schedule_occurrences AS occurrence
           SET outcome = 'cancelled',
               pending = false,
-              skip_reason = coalesce(occurrence.skip_reason, 'schedule_revoked'),
+              skip_reason = case
+                when ${overwriteReason} then ${reason}
+                else coalesce(occurrence.skip_reason, ${reason})
+              end,
               updated_at = now()
           FROM workflow_schedules schedule
           WHERE schedule.id = ${scheduleId}
@@ -99,6 +110,150 @@ export function createDefinitionsRepository(db: Db) {
         SELECT EXISTS (SELECT 1 FROM revoked) AS revoked
       `);
       return { revoked: rows<{ revoked: boolean }>(result)[0]?.revoked ?? false };
+    },
+
+    async selectDeployment(input: {
+      definitionId: number;
+      expectedDraftRevision: number;
+      expectedDeployedVersion: number | null;
+      triggerTypes: WorkflowBlockType[];
+      bindingTriggerTypes: WorkflowBlockType[];
+    }): Promise<{ id: number; version: number } | null> {
+      const result = await db.execute(sql`
+        WITH candidate AS (
+          SELECT wd.id, wd.enabled
+          FROM workflow_definitions wd
+          WHERE wd.id = ${input.definitionId}
+            AND wd.archived_at IS NULL
+            AND wd.deployed_version IS NOT DISTINCT FROM ${input.expectedDeployedVersion}
+            AND COALESCE((SELECT MAX(v.version) FROM workflow_definition_versions v WHERE v.definition_id = wd.id), 0) = ${input.expectedDraftRevision}
+          FOR UPDATE
+        ), deleted_claims AS (
+          DELETE FROM workflow_definition_triggers
+          WHERE definition_id IN (SELECT id FROM candidate)
+          RETURNING trigger_type
+        ), inserted_claims AS (
+          INSERT INTO workflow_definition_triggers (trigger_type, definition_id)
+          SELECT trigger_type, candidate.id
+          FROM candidate
+          CROSS JOIN LATERAL unnest(${triggerArray(input.bindingTriggerTypes)}) AS trigger_type
+          CROSS JOIN (SELECT count(*) FROM deleted_claims) AS delete_barrier
+          WHERE candidate.enabled
+          RETURNING trigger_type
+        ), updated AS (
+          UPDATE workflow_definitions definition
+          SET deployed_version = ${input.expectedDraftRevision},
+              trigger_types = ${triggerArray(input.triggerTypes)},
+              updated_at = now()
+          FROM candidate
+          CROSS JOIN (SELECT count(*) FROM inserted_claims) AS claim_barrier
+          WHERE definition.id = candidate.id
+          RETURNING definition.id, definition.deployed_version AS version
+        )
+        SELECT id, version FROM updated
+      `);
+      return rows<{ id: number; version: number }>(result)[0] ?? null;
+    },
+
+    async selectRollback(input: {
+      definitionId: number;
+      version: number;
+      expectedDeployedVersion: number | null;
+      triggerTypes: WorkflowBlockType[];
+      bindingTriggerTypes: WorkflowBlockType[];
+    }): Promise<{ id: number; version: number } | null> {
+      const result = await db.execute(sql`
+        WITH candidate AS (
+          SELECT id, enabled
+          FROM workflow_definitions
+          WHERE id = ${input.definitionId}
+            AND archived_at IS NULL
+            AND deployed_version IS NOT DISTINCT FROM ${input.expectedDeployedVersion}
+          FOR UPDATE
+        ), target AS (
+          SELECT candidate.id, candidate.enabled, version.version
+          FROM candidate
+          JOIN workflow_definition_versions version
+            ON version.definition_id = candidate.id AND version.version = ${input.version}
+        ), deleted_claims AS (
+          DELETE FROM workflow_definition_triggers
+          WHERE definition_id IN (SELECT id FROM target)
+          RETURNING trigger_type
+        ), inserted_claims AS (
+          INSERT INTO workflow_definition_triggers (trigger_type, definition_id)
+          SELECT trigger_type, target.id
+          FROM target
+          CROSS JOIN LATERAL unnest(${triggerArray(input.bindingTriggerTypes)}) AS trigger_type
+          CROSS JOIN (SELECT count(*) FROM deleted_claims) AS delete_barrier
+          WHERE target.enabled
+          RETURNING trigger_type
+        ), updated AS (
+          UPDATE workflow_definitions definition
+          SET deployed_version = target.version,
+              trigger_types = ${triggerArray(input.triggerTypes)},
+              updated_at = now()
+          FROM target
+          CROSS JOIN (SELECT count(*) FROM inserted_claims) AS claim_barrier
+          WHERE definition.id = target.id
+          RETURNING definition.id, target.version
+        )
+        SELECT id, version FROM updated
+      `);
+      return rows<{ id: number; version: number }>(result)[0] ?? null;
+    },
+
+    async updateLifecycle(input: {
+      definitionId: number;
+      expectedDeployedVersion: number | null;
+      expectedTriggerTypes: WorkflowBlockType[];
+      enabled: boolean;
+      name: string | undefined;
+      bindingTriggerTypes: WorkflowBlockType[];
+    }): Promise<number | null> {
+      const result = await db.execute(sql`
+        WITH candidate AS (
+          SELECT id
+          FROM workflow_definitions
+          WHERE id = ${input.definitionId}
+            AND archived_at IS NULL
+            AND deployed_version IS NOT DISTINCT FROM ${input.expectedDeployedVersion}
+            AND trigger_types = ${triggerArray(input.expectedTriggerTypes)}
+          FOR UPDATE
+        ), deleted_claims AS (
+          DELETE FROM workflow_definition_triggers
+          WHERE definition_id IN (SELECT id FROM candidate)
+          RETURNING trigger_type
+        ), inserted_claims AS (
+          INSERT INTO workflow_definition_triggers (trigger_type, definition_id)
+          SELECT trigger_type, candidate.id
+          FROM candidate
+          CROSS JOIN LATERAL unnest(${triggerArray(input.bindingTriggerTypes)}) AS trigger_type
+          CROSS JOIN (SELECT count(*) FROM deleted_claims) AS delete_barrier
+          WHERE ${input.enabled}
+          RETURNING trigger_type
+        ), updated AS (
+          UPDATE workflow_definitions definition
+          SET enabled = ${input.enabled},
+              name = ${input.name === undefined ? sql`definition.name` : sql`${input.name}`},
+              updated_at = now()
+          FROM candidate
+          CROSS JOIN (SELECT count(*) FROM inserted_claims) AS claim_barrier
+          WHERE definition.id = candidate.id
+          RETURNING definition.id
+        )
+        SELECT id FROM updated
+      `);
+      return rows<{ id: number }>(result)[0]?.id ?? null;
+    },
+
+    async updateName(input: { definitionId: number; name: string }): Promise<number | null> {
+      const result = await db.execute(sql`
+        UPDATE workflow_definitions
+        SET name = ${input.name}, updated_at = now()
+        WHERE id = ${input.definitionId} AND archived_at IS NULL
+        RETURNING id
+      `);
+      return rows<{ id: number }>(result)[0]?.id ?? null;
     },
   };
 }

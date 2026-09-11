@@ -1,8 +1,7 @@
 import { createError, getHeaders, type H3Event } from "h3";
 import { dashboardOrganizationSettings } from "../settings/index.js";
 import { auth } from "../../auth-instance.js";
-import { getDb } from "../../db/client.js";
-import { getDashboardActor, DashboardAuthError } from "./users-read.js";
+import { getConnectedDashboardActor, DashboardAuthError } from "./users-read.js";
 
 export async function requireDashboardActor(event: H3Event) {
   const session = await auth.api.getSession({ headers: headersFromEvent(event) });
@@ -10,7 +9,7 @@ export async function requireDashboardActor(event: H3Event) {
     throw createError({ statusCode: 401, statusMessage: "Unauthorized" });
   }
 
-  const actor = await getDashboardActor(getDb(), {
+  const actor = await getConnectedDashboardActor({
     organizationSlug: dashboardOrganizationSettings().slug,
     userId: session.user.id,
   });

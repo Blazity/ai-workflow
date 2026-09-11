@@ -418,11 +418,10 @@ export async function snapshotClarificationSandboxStep(
   // Persist the provider cleanup identity before polling the source stop. If a
   // retry observes an ambiguous stop boundary, the snapshot can still be
   // deleted from the compact clarification row.
-  const { getDb } = await import("../../db/client.js");
-  const { recordHookClarificationSnapshot } = await import(
-    "../../clarifications/hook-store.js"
+  const { recordConnectedHookClarificationSnapshot } = await import(
+    "../../db/repositories/clarification-hooks.js"
   );
-  await recordHookClarificationSnapshot(getDb(), input.clarificationId, {
+  await recordConnectedHookClarificationSnapshot(input.clarificationId, {
     snapshotId: snapshotMetadata.snapshotId,
     sourceSandboxId: snapshotMetadata.sourceSandboxId,
     expiresAt: new Date(snapshotMetadata.expiresAt),

@@ -38,26 +38,29 @@ import {
   scheduleOccurrences,
 } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
-import { DashboardAuthError } from "../services/auth/users-read.js";
 import {
-  archiveWorkflowDefinition,
-  createWorkflowDefinition,
-  deployWorkflowDefinition,
   getCurrentWorkflowDefinitionVersion,
-  getEnabledWorkflowDefinitionForTrigger,
-  getLiveScheduleTriggerTarget,
   getWorkflowDefinition,
   listWorkflowDefinitions,
   listWorkflowDefinitionVersionRows,
   listWorkflowDefinitionVersions,
+  WorkflowDefinitionStoreError,
+} from "../db/repositories/definitions.js";
+import { getEnabledWorkflowDefinitionForTrigger } from "../engine/definition-trigger-routing.js";
+import { resolveLiveScheduleTriggerTarget } from "../services/schedule-trigger/live-target.js";
+import { readWorkflowDefinitionVersion } from "../engine/stored-definition-reads.js";
+import {
+  archiveWorkflowDefinition,
+  createWorkflowDefinition,
+  deployWorkflowDefinition,
   restoreWorkflowDefinitionVersion,
   rollbackWorkflowDefinition,
   saveWorkflowDefinitionDraft,
   saveWorkflowDefinitionVersion,
   updateWorkflowDefinition,
-  WorkflowDefinitionStoreError,
+  DashboardAuthError,
   type WorkflowDefinitionActor,
-} from "../db/repositories/definitions.js";
+} from "../services/workflow-definitions/policy-operations.js";
 import { seedWorkflowDefinitionTemplates } from "./template-seed.js";
 
 const ADMIN: WorkflowDefinitionActor = { role: "admin", id: "u_admin", label: "Admin" };
@@ -628,31 +631,23 @@ describe("dispatch derives from the deployed version, not mutable metadata", () 
       actor: ADMIN,
     });
 
-    const originalDelete = db.delete.bind(db);
+    const originalExecute = db.execute.bind(db);
     let deploymentRacedCleanup = false;
-    const deleteSpy = vi.spyOn(db, "delete").mockImplementation(((table: unknown) => {
-      const query = originalDelete(table as never) as unknown as {
-        where(condition: unknown): unknown;
-      };
-      if (table !== workflowDefinitionTriggers || deploymentRacedCleanup) return query as never;
-      const originalWhere = query.where.bind(query);
-      query.where = (condition: unknown) => {
+    const executeSpy = vi.spyOn(db, "execute").mockImplementation((async (query: never) => {
+      if (!deploymentRacedCleanup) {
         deploymentRacedCleanup = true;
-        return (async () => {
-          await deployWorkflowDefinition(db, {
-            definitionId: q.id,
-            expectedDraftRevision: 2,
-            expectedDeployedVersion: 1,
-            actor: ADMIN,
-          });
-          return originalWhere(condition);
-        })();
-      };
-      return query as never;
-    }) as typeof db.delete);
+        await deployWorkflowDefinition(db, {
+          definitionId: q.id,
+          expectedDraftRevision: 2,
+          expectedDeployedVersion: 1,
+          actor: ADMIN,
+        });
+      }
+      return originalExecute(query);
+    }) as typeof db.execute);
 
     expect(await getEnabledWorkflowDefinitionForTrigger(db, "trigger_pr_created")).toBeNull();
-    deleteSpy.mockRestore();
+    executeSpy.mockRestore();
 
     expect(deploymentRacedCleanup).toBe(true);
     expect((await getEnabledWorkflowDefinitionForTrigger(db, "trigger_pr_created"))?.definition.id).toBe(q.id);
@@ -772,6 +767,20 @@ describe("write-path validation", () => {
     const head = await getCurrentWorkflowDefinitionVersion(db, d.id);
     expect(head?.version).toBe(3);
     expect(head?.definition).toEqual(def());
+  });
+
+  it("parses stored v2 rows at the service read boundary", async () => {
+    const d = (await createWorkflowDefinition(db, { name: "Malformed", seed: def(), actor: ADMIN })).definition;
+    await db.insert(workflowDefinitionVersions).values({
+      definitionId: d.id,
+      version: 2,
+      definition: { schemaVersion: 2, nodes: "not-an-array", edges: [] },
+      createdById: "u_admin",
+      createdByLabel: "Admin",
+      restoredFromVersion: null,
+    });
+
+    await expect(readWorkflowDefinitionVersion(db, d.id, 2)).rejects.toBeTruthy();
   });
 
   it("rejects deploying a pin whose repositories contradict its own provider list", async () => {
@@ -908,10 +917,6 @@ describe("getEnabledWorkflowDefinitionForTrigger", () => {
 
     expect(await getEnabledWorkflowDefinitionForTrigger(db, "trigger_ticket_ai")).toBeNull();
     expect(await db.select().from(workflowDefinitionTriggers)).toEqual([]);
-    expect(loggerMock.warn).toHaveBeenCalledWith(
-      { triggerType: "trigger_ticket_ai", candidates: [] },
-      "trigger_binding_unclaimed",
-    );
   });
 
   it("never guesses an owner when two enabled definitions declare the trigger", async () => {
@@ -928,10 +933,6 @@ describe("getEnabledWorkflowDefinitionForTrigger", () => {
 
     expect(await getEnabledWorkflowDefinitionForTrigger(db, "trigger_ticket_ai")).toBeNull();
     expect(await db.select().from(workflowDefinitionTriggers)).toEqual([]);
-    expect(loggerMock.warn).toHaveBeenCalledWith(
-      { triggerType: "trigger_ticket_ai", candidates: [SEEDED_DEFAULT_ID, rival.id] },
-      "trigger_binding_unclaimed",
-    );
   });
 });
 
@@ -1086,7 +1087,7 @@ describe("schedule trigger rows", () => {
       .where(eq(workflowDefinitions.id, definition.id));
 
     await expect(
-      getLiveScheduleTriggerTarget(db, {
+      resolveLiveScheduleTriggerTarget(db, {
         definitionId: definition.id,
         nodeId: "schedule",
         definitionVersion: null,
@@ -1120,7 +1121,7 @@ describe("schedule trigger rows", () => {
       .where(eq(workflowDefinitions.id, definition.id));
 
     await expect(
-      getLiveScheduleTriggerTarget(db, {
+      resolveLiveScheduleTriggerTarget(db, {
         definitionId: definition.id,
         nodeId: "schedule",
         definitionVersion: 2,

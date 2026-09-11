@@ -66,6 +66,9 @@ vi.mock("../../../../services/vcs/adapters.js", () => ({
 vi.mock("../../../../pre-pr-checks/store.js", () => ({
   dashboardUserLabel: vi.fn(async () => "Operator"),
 }));
+vi.mock("../../../../db/repositories/auth.js", () => ({
+  getConnectedDashboardUserLabel: vi.fn(async () => "Operator"),
+}));
 vi.mock("../../../../infra/logger.js", () => ({
   logger: { warn: state.warn, info: vi.fn(), error: vi.fn() },
 }));
@@ -87,7 +90,15 @@ vi.mock("../../../../services/run-lifecycle/cancel-run.js", async (importOrigina
           ) => Promise<CancelRunForOperatorResult>)(db, runId, opts),
   );
   state.cancelRunForOperator = cancelRunForOperator;
-  return { ...actual, cancelRunForOperator };
+  return {
+    ...actual,
+    cancelRunForOperator,
+    cancelConnectedRunForOperator: (
+      runId: string,
+      opts: { actorLabel: string; runRegistry: unknown },
+    ) =>
+      cancelRunForOperator(state.db as Db, runId, opts),
+  };
 });
 
 const cancelPost = (await import("./[runId]/cancel.post.js")).default;

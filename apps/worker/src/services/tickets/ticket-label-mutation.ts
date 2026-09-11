@@ -1,6 +1,9 @@
 import type { IssueTrackerAdapter, TicketContent } from "../../adapters/issue-tracker/types.js";
-import type { Db } from "../../db/client.js";
-import { assertActiveRunOwnerState } from "../run-lifecycle/active-run-owner.js";
+import type { Db } from "../../db/types.js";
+import {
+  assertActiveRunOwnerState,
+  assertConnectedActiveRunOwnerState,
+} from "../run-lifecycle/active-run-owner.js";
 import type { TicketTransitionOwner } from "./ticket-transition.js";
 
 export interface TicketLabelChanges {
@@ -30,6 +33,41 @@ export async function updateTicketLabelsForRun(input: {
   }
 
   await assertActiveRunOwnerState(input.db, input.owner, input.requiredOwnerState);
+  try {
+    await input.issueTracker.updateLabels(input.ticketKey, {
+      ...(changes.add.length ? { add: changes.add } : {}),
+      ...(changes.remove.length ? { remove: changes.remove } : {}),
+    });
+  } catch (error) {
+    try {
+      const afterError = await input.issueTracker.fetchTicket(input.ticketKey);
+      if (ticketMatchesLabelChanges(afterError, changes)) return;
+    } catch {
+      // Preserve the original mutation error.
+    }
+    throw error;
+  }
+}
+
+export async function updateConnectedTicketLabelsForRun(
+  input: Omit<Parameters<typeof updateTicketLabelsForRun>[0], "db">,
+): Promise<void> {
+  if (typeof input.issueTracker.updateLabels !== "function") {
+    throw new Error("Issue tracker does not support label mutations.");
+  }
+  const changes = normalizeChanges(input.changes);
+  if (changes.add.length === 0 && changes.remove.length === 0) return;
+
+  const current = await input.issueTracker.fetchTicket(input.ticketKey);
+  if (ticketMatchesLabelChanges(current, changes)) {
+    await assertConnectedActiveRunOwnerState(
+      input.owner,
+      input.requiredOwnerState,
+    );
+    return;
+  }
+
+  await assertConnectedActiveRunOwnerState(input.owner, input.requiredOwnerState);
   try {
     await input.issueTracker.updateLabels(input.ticketKey, {
       ...(changes.add.length ? { add: changes.add } : {}),

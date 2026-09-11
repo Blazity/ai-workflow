@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { createTestDb } from "../../test-db.js";
 import type { Db } from "../../client.js";
 import type { ResolvedPromptReference } from "@shared/contracts";
+import { summarizeRunBlockStatuses } from "../../../engine/run-block-status-summary.js";
 import {
   activeRuns,
   approvalRequests,
@@ -322,7 +323,7 @@ describe("recordBlockStatuses", () => {
     await recordBlockStatuses(
       db,
       blockWrite({
-        blockStatuses: {
+        blockStatuses: summarizeRunBlockStatuses({
           b1: {
             status: "ok",
             attempt: 2,
@@ -331,7 +332,7 @@ describe("recordBlockStatuses", () => {
               body: "sensitive execution output",
             },
           },
-        },
+        }),
       }),
     );
 

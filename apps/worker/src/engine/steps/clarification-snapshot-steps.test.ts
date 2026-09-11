@@ -42,9 +42,8 @@ vi.mock("../../config/env.js", () => ({
     GENAI_ENGINE_TRACE_ENDPOINT: "https://arthur.example/api/v1/traces",
   },
 }));
-vi.mock("../../db/client.js", () => ({ getDb: () => "db-sentinel" }));
-vi.mock("../../clarifications/hook-store.js", () => ({
-  recordHookClarificationSnapshot: (...args: unknown[]) =>
+vi.mock("../../db/repositories/clarification-hooks.js", () => ({
+  recordConnectedHookClarificationSnapshot: (...args: unknown[]) =>
     mocks.recordSnapshot(...args),
 }));
 
@@ -169,7 +168,6 @@ describe("clarification sandbox snapshot Workflow steps", () => {
       ]),
     );
     expect(mocks.recordSnapshot).toHaveBeenCalledWith(
-      "db-sentinel",
       "clar-1",
       {
         snapshotId: "snap-1",
@@ -505,7 +503,6 @@ describe("clarification sandbox snapshot Workflow steps", () => {
     })).rejects.toThrow("source lookup unavailable");
 
     expect(mocks.recordSnapshot).toHaveBeenCalledWith(
-      "db-sentinel",
       "clar-before-poll",
       {
         snapshotId: "snap-before-poll",
@@ -561,7 +558,6 @@ describe("clarification sandbox snapshot Workflow steps", () => {
     ).resolves.toMatchObject({ snapshotId: "snap-recovered" });
     expect(mocks.get).toHaveBeenCalledTimes(1);
     expect(mocks.recordSnapshot).toHaveBeenCalledWith(
-      "db-sentinel",
       "clar-1",
       expect.objectContaining({ snapshotId: "snap-recovered" }),
     );

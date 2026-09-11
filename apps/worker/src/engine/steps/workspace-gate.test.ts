@@ -3,15 +3,13 @@ import type { WorkspaceManifest } from "../../sandbox/repo-workspace.js";
 
 const mocks = vi.hoisted(() => ({
   sandboxGet: vi.fn(),
-  getDb: vi.fn(),
   getCurrentPrePrCheckConfig: vi.fn(),
 }));
 
 vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.sandboxGet } }));
 vi.mock("../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
-vi.mock("../../db/client.js", () => ({ getDb: mocks.getDb }));
-vi.mock("../../pre-pr-checks/store.js", () => ({
-  getCurrentPrePrCheckConfig: mocks.getCurrentPrePrCheckConfig,
+vi.mock("../../db/repositories/pre-pr-checks.js", () => ({
+  getConnectedCurrentPrePrCheckConfigRow: mocks.getCurrentPrePrCheckConfig,
 }));
 
 import {
@@ -170,7 +168,6 @@ describe("workspace gate", () => {
     dirty = new Set();
     untracked = new Set();
     dirtyFiles = ["src/index.ts"];
-    mocks.getDb.mockReturnValue({ db: true });
     mocks.getCurrentPrePrCheckConfig.mockResolvedValue(null);
     mocks.sandboxGet.mockImplementation(async () => sandbox());
   });

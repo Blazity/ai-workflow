@@ -19,8 +19,9 @@ import {
   type ResolvedNodePromptAuthoring as SharedResolvedNodePromptAuthoring,
   type ResolveNodePromptAuthoringInput as SharedResolveNodePromptAuthoringInput,
 } from "@shared/prompts";
-import type { Db } from "../db/client.js";
+import type { Db } from "../db/types.js";
 import { createPromptReferenceLoader } from "../prompt-library/prompt-reference-loader.js";
+import { createConnectedPromptReferenceLoader } from "../prompt-library/prompt-reference-loader.js";
 import { compileEffectivePrompt } from "../engine/helpers/effective-prompt.js";
 import {
   analyzeWorkflowV2Bindings,
@@ -37,6 +38,8 @@ import {
   validateHarnessProfileReferencesWithLoader,
   type HarnessProfileVersionLoader,
 } from "./harness-profile-runtime.js";
+import { createConnectedAuthRepository } from "../db/repositories/auth.js";
+import { resolveConnectedVerifiedHarnessProfileVersion } from "../harness-profiles/resolved-version.js";
 import {
   validateWorkflowDefinitionCandidate,
   type WorkflowDefinitionCandidateValidation,
@@ -105,6 +108,33 @@ export async function validateWorkflowPromptAuthoringIssues(
           (await import("../config/env.js")).env.DASHBOARD_ORG_SLUG,
         ),
       });
+  return dedupeIssues([...promptIssues, ...profileIssues]);
+}
+
+/** Production binding composed from named repository reads. It intentionally
+ * keeps prompt and profile validation here, above persistence. */
+export async function validateConnectedWorkflowPromptAuthoringIssues(
+  definition: WorkflowDefinition,
+  registryContext?: WorkflowBlockRegistryContext,
+): Promise<WorkflowDefinitionValidationIssue[]> {
+  const context = registryContext ?? (await import("./models.js")).workflowBlockRegistryContextFromEnv();
+  const promptIssues = await validateWorkflowPromptAuthoringIssuesWithLoader(
+    definition,
+    context,
+    createConnectedPromptReferenceLoader(),
+  );
+  if (!definition.nodes.some((node) => isPromptAuthoringBlock(node))) return promptIssues;
+  const { env } = await import("../config/env.js");
+  const organization = await createConnectedAuthRepository().findOrganizationBySlug(env.DASHBOARD_ORG_SLUG);
+  if (!organization) throw new Error(`Dashboard organization "${env.DASHBOARD_ORG_SLUG}" is unavailable.`);
+  const profileIssues = await validateHarnessProfileReferencesWithLoader(
+    definition,
+    ({ profileId, version }) => resolveConnectedVerifiedHarnessProfileVersion({
+      organizationId: organization.id,
+      profileId,
+      version,
+    }),
+  );
   return dedupeIssues([...promptIssues, ...profileIssues]);
 }
 
@@ -277,6 +307,18 @@ export async function validateWorkflowDefinitionCandidateWithPromptAuthoring(
       issues,
     },
   };
+}
+
+export async function validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring(
+  candidate: unknown,
+  registryContext?: WorkflowBlockRegistryContext,
+): Promise<WorkflowDefinitionCandidateValidation> {
+  const context = registryContext ?? (await import("./models.js")).workflowBlockRegistryContextFromEnv();
+  const base = validateWorkflowDefinitionCandidate(candidate, context);
+  if (!base.parsed) return base;
+  const promptIssues = await validateConnectedWorkflowPromptAuthoringIssues(base.parsed, context);
+  const issues = dedupeIssues([...base.response.issues, ...promptIssues]);
+  return { parsed: base.parsed, response: { ...base.response, valid: issues.length === 0, issues } };
 }
 
 function nodeIssue(

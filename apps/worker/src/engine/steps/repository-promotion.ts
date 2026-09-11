@@ -358,18 +358,18 @@ export async function promoteRepositoryWriteScopeStep(input: {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
   const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
-  const { getDb } = await import("../../db/client.js");
-  const { loadActiveRunOwnerPort, loadVcsRuntimePort } = await import("../internal/ports.js");
-  const { assertActiveRunOwner } = await loadActiveRunOwnerPort();
+  const { assertConnectedActiveRunOwner } = await import(
+    "../../db/repositories/active-runs.js"
+  );
+  const { loadVcsRuntimePort } = await import("../internal/ports.js");
   const {
-    listWorkflowOwnedBranchesForTicket,
-    upsertWorkflowOwnedBranch,
+    listConnectedWorkflowOwnedBranchesForTicket,
+    upsertConnectedWorkflowOwnedBranch,
   } = await import("../../db/repositories/runs.js");
   const { createRepositoryVCS } = await loadVcsRuntimePort();
   const { buildSandboxProviderConfigs } = await loadVcsRuntimePort();
   const { logger } = await import("../../infra/logger.js");
-  const db = getDb();
-  const owned = await listWorkflowOwnedBranchesForTicket(db, input.ticketKey);
+  const owned = await listConnectedWorkflowOwnedBranchesForTicket(input.ticketKey);
   const adapterFor = (repository: WorkspaceRepoV2) =>
     createRepositoryVCS({
       provider: repository.provider,
@@ -401,22 +401,22 @@ export async function promoteRepositoryWriteScopeStep(input: {
       getBranchShaIfExists: (repository, branchName) =>
         adapterFor(repository).getBranchShaIfExists(branchName),
       createBranchIfMissing: async (repository, branchName, baseSha) => {
-        await assertActiveRunOwner(db, input.owner);
+        await assertConnectedActiveRunOwner(input.owner);
         return adapterFor(repository).createBranchIfMissing(
           branchName,
           baseSha,
         );
       },
       resetOwnedBranch: async (repository, branchName, baseSha) => {
-        await assertActiveRunOwner(db, input.owner);
+        await assertConnectedActiveRunOwner(input.owner);
         await adapterFor(repository).resetOwnedBranch(
           branchName,
           baseSha,
         );
       },
       recordOwnedBranch: async (repository, branchName) => {
-        await assertActiveRunOwner(db, input.owner);
-        await upsertWorkflowOwnedBranch(db, {
+        await assertConnectedActiveRunOwner(input.owner);
+        await upsertConnectedWorkflowOwnedBranch({
           ticketKey: input.ticketKey,
           provider: repository.provider,
           repoPath: repository.repoPath,
@@ -430,7 +430,7 @@ export async function promoteRepositoryWriteScopeStep(input: {
             `Refusing to promote ${repository.repoPath}: not in AGENT_ALLOWED_REPOS`,
           );
         }
-        await assertActiveRunOwner(db, input.owner);
+        await assertConnectedActiveRunOwner(input.owner);
       },
       getBranchSha: (repository, branchName) =>
         adapterFor(repository).getBranchSha(branchName),

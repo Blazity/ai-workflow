@@ -1,13 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
-
 import type { Auth } from "../../auth.js";
-import type { Db } from "../../db/client.js";
-import { createAuthRepository } from "../../db/repositories/auth.js";
-import {
-  invitation,
-  organization,
-} from "../../db/schema.js";
+import type { Db } from "../../db/types.js";
+import { createAuthRepository, createConnectedAuthRepository } from "../../db/repositories/auth.js";
 import type { DashboardRole } from "./roles.js";
 import { DashboardAuthError } from "./users-read.js";
 
@@ -15,8 +9,8 @@ type AuthContext = Awaited<Auth["$context"]>;
 type ExistingUserWithAccounts = NonNullable<
   Awaited<ReturnType<AuthContext["internalAdapter"]["findUserByEmail"]>>
 >;
-type InviteAcceptanceReadDb = Pick<Db, "select">;
-type InvitationRow = typeof invitation.$inferSelect;
+type AuthRepository = ReturnType<typeof createAuthRepository>;
+type InvitationRow = NonNullable<Awaited<ReturnType<AuthRepository["findOrganizationInvite"]>>>;
 
 type AcceptedPasswordUserBase = {
   id: string;
@@ -76,9 +70,32 @@ export async function getDashboardInviteAcceptanceState(
     now?: Date;
   },
 ): Promise<DashboardInviteAcceptanceState> {
+  return getDashboardInviteAcceptanceStateFromRepository(createAuthRepository(db), auth, input);
+}
+
+export function getConnectedDashboardInviteAcceptanceState(
+  auth: Auth,
+  input: {
+    organizationSlug: string;
+    inviteId: string;
+    now?: Date;
+  },
+): Promise<DashboardInviteAcceptanceState> {
+  return getDashboardInviteAcceptanceStateFromRepository(createConnectedAuthRepository(), auth, input);
+}
+
+async function getDashboardInviteAcceptanceStateFromRepository(
+  repository: AuthRepository,
+  auth: Auth,
+  input: {
+    organizationSlug: string;
+    inviteId: string;
+    now?: Date;
+  },
+): Promise<DashboardInviteAcceptanceState> {
   const now = input.now ?? new Date();
-  const org = await requireOrganization(db, input.organizationSlug);
-  const invite = await requirePendingInvite(db, org.id, input.inviteId, now);
+  const org = await requireOrganization(repository, input.organizationSlug);
+  const invite = await requireInviteForAcceptance(repository, org.id, input.inviteId, now);
   const role = requireInviteRole(invite.role);
   const ctx = await auth.$context;
   const existing = await ctx.internalAdapter.findUserByEmail(invite.email, {
@@ -103,9 +120,24 @@ export async function acceptDashboardInvite(
   auth: Auth,
   input: AcceptDashboardInviteInput,
 ): Promise<AcceptDashboardInviteResult> {
+  return acceptDashboardInviteFromRepository(createAuthRepository(db), auth, input);
+}
+
+export function acceptConnectedDashboardInvite(
+  auth: Auth,
+  input: AcceptDashboardInviteInput,
+): Promise<AcceptDashboardInviteResult> {
+  return acceptDashboardInviteFromRepository(createConnectedAuthRepository(), auth, input);
+}
+
+async function acceptDashboardInviteFromRepository(
+  repository: AuthRepository,
+  auth: Auth,
+  input: AcceptDashboardInviteInput,
+): Promise<AcceptDashboardInviteResult> {
   const now = input.now ?? new Date();
-  const org = await requireOrganization(db, input.organizationSlug);
-  const invite = await requireInviteForAcceptance(db, org.id, input.inviteId, now);
+  const org = await requireOrganization(repository, input.organizationSlug);
+  const invite = await requireInviteForAcceptance(repository, org.id, input.inviteId, now);
   const ctx = await auth.$context;
 
   assertPasswordLength(input.password, ctx.password.config);
@@ -121,7 +153,7 @@ export async function acceptDashboardInvite(
         password: input.password,
       });
 
-  const accepted = await createAuthRepository(db).acceptPasswordInvite({
+  const accepted = await repository.acceptPasswordInvite({
     organizationId: org.id,
     inviteId: invite.id,
     now,
@@ -133,7 +165,7 @@ export async function acceptDashboardInvite(
     membershipId: randomUUID(),
   });
   if (!accepted) {
-    await throwInviteAcceptanceFailure(db, org.id, invite.id, now);
+    await throwInviteAcceptanceFailure(repository, org.id, invite.id, now);
   }
 
   const signIn = await auth.api.signInEmail({
@@ -160,15 +192,44 @@ export async function acceptDashboardSsoInvite(
   _auth: Auth,
   input: AcceptDashboardSsoInviteInput,
 ): Promise<void> {
+  return acceptDashboardSsoInviteFromRepository(createAuthRepository(db), _auth, input);
+}
+
+export function acceptConnectedDashboardSsoInvite(
+  auth: Auth,
+  input: AcceptDashboardSsoInviteInput,
+): Promise<void> {
+  return acceptDashboardSsoInviteFromRepository(createConnectedAuthRepository(), auth, input);
+}
+
+async function acceptDashboardSsoInviteFromRepository(
+  repository: AuthRepository,
+  _auth: Auth,
+  input: AcceptDashboardSsoInviteInput,
+): Promise<void> {
   const now = input.now ?? new Date();
-  const org = await requireOrganization(db, input.organizationSlug);
-  const invite = await requireInviteForAcceptance(db, org.id, input.inviteId, now);
+  const org = await requireOrganization(repository, input.organizationSlug);
   const normalizedUserEmail = normalizeEmail(input.user.email);
-  if (normalizeEmail(invite.email) !== normalizedUserEmail) {
-    throw new DashboardAuthError(403, "Invite does not match signed-in user");
+  let invite: InvitationRow;
+  try {
+    invite = await requireInviteForAcceptance(
+      repository,
+      org.id,
+      input.inviteId,
+      now,
+      normalizedUserEmail,
+    );
+  } catch (error) {
+    if (!isAlreadyAcceptedInvite(error)) throw error;
+    const membership = await repository.findOrganizationMembership({
+      organizationId: org.id,
+      userId: input.user.id,
+    });
+    if (membership) return;
+    throw error;
   }
 
-  const accepted = await createAuthRepository(db).acceptSsoInvite({
+  const accepted = await repository.acceptSsoInvite({
     organizationId: org.id,
     inviteId: invite.id,
     now,
@@ -178,7 +239,7 @@ export async function acceptDashboardSsoInvite(
   });
   if (!accepted) {
     await throwInviteAcceptanceFailure(
-      db,
+      repository,
       org.id,
       invite.id,
       now,
@@ -187,41 +248,38 @@ export async function acceptDashboardSsoInvite(
   }
 }
 
+function isAlreadyAcceptedInvite(error: unknown): boolean {
+  return error instanceof DashboardAuthError &&
+    error.statusCode === 409 &&
+    error.message === "Invite already accepted";
+}
+
 function requireInviteRole(role: string): DashboardRole {
   if (role === "owner" || role === "admin" || role === "member") return role;
   throw new DashboardAuthError(500, "Invalid invite role");
 }
 
-async function requireOrganization(db: Db, slug: string) {
-  const [org] = await db
-    .select({ id: organization.id, name: organization.name })
-    .from(organization)
-    .where(eq(organization.slug, slug))
-    .limit(1);
+async function requireOrganization(repository: AuthRepository, slug: string) {
+  const org = await repository.findOrganizationBySlug(slug);
   if (!org) throw new DashboardAuthError(404, "Organization not found");
   return org;
 }
 
-async function requirePendingInvite(
-  db: InviteAcceptanceReadDb,
-  organizationId: string,
-  inviteId: string,
-  now: Date,
-) {
-  const invite = await findInvite(db, organizationId, inviteId);
-  if (!invite || invite.status !== "pending" || invite.expiresAt.getTime() <= now.getTime()) {
-    throw new DashboardAuthError(404, "Invite not found");
-  }
-  return invite;
-}
-
 async function requireInviteForAcceptance(
-  db: InviteAcceptanceReadDb,
+  repository: AuthRepository,
   organizationId: string,
   inviteId: string,
   now: Date,
+  normalizedUserEmail?: string,
 ): Promise<InvitationRow> {
-  const invite = await findInvite(db, organizationId, inviteId);
+  const invite = await findInvite(repository, organizationId, inviteId);
+  if (
+    invite &&
+    normalizedUserEmail !== undefined &&
+    normalizeEmail(invite.email) !== normalizedUserEmail
+  ) {
+    throw new DashboardAuthError(403, "Invite does not match signed-in user");
+  }
   const stateError = inviteAcceptanceStateError(invite, now);
   if (stateError) throw stateError;
   requireInviteRole(invite!.role);
@@ -229,22 +287,23 @@ async function requireInviteForAcceptance(
 }
 
 async function throwInviteAcceptanceFailure(
-  db: InviteAcceptanceReadDb,
+  repository: AuthRepository,
   organizationId: string,
   inviteId: string,
   now: Date,
   normalizedUserEmail?: string,
 ): Promise<never> {
-  const invite = await findInvite(db, organizationId, inviteId);
-  const stateError = inviteAcceptanceStateError(invite, now);
-  if (stateError) throw stateError;
-  requireInviteRole(invite!.role);
+  const invite = await findInvite(repository, organizationId, inviteId);
   if (
+    invite &&
     normalizedUserEmail !== undefined &&
     normalizeEmail(invite!.email) !== normalizedUserEmail
   ) {
     throw new DashboardAuthError(403, "Invite does not match signed-in user");
   }
+  const stateError = inviteAcceptanceStateError(invite, now);
+  if (stateError) throw stateError;
+  requireInviteRole(invite!.role);
   throw new DashboardAuthError(409, "Invite is no longer pending");
 }
 
@@ -269,16 +328,11 @@ function inviteAcceptanceStateError(
 }
 
 async function findInvite(
-  db: InviteAcceptanceReadDb,
+  repository: AuthRepository,
   organizationId: string,
   inviteId: string,
 ): Promise<InvitationRow | null> {
-  const [invite] = await db
-    .select()
-    .from(invitation)
-    .where(and(eq(invitation.organizationId, organizationId), eq(invitation.id, inviteId)))
-    .limit(1);
-  return invite ?? null;
+  return repository.findOrganizationInvite({ organizationId, inviteId });
 }
 
 function assertPasswordLength(

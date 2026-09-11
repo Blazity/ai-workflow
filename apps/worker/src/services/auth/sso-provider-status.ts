@@ -5,18 +5,10 @@
  * operator, so the honest answer comes from there rather than from whether the
  * deployment happens to carry SSO credentials.
  */
-import { eq } from "drizzle-orm";
-
-import { getDb } from "../../db/client.js";
-import { ssoProvider } from "../../db/schema.js";
+import { isConnectedSsoProviderRegistered } from "../../db/repositories/auth.js";
 
 export async function isDashboardSsoProviderRegistered(
   providerId: string,
 ): Promise<boolean> {
-  const [provider] = await getDb()
-    .select({ id: ssoProvider.id })
-    .from(ssoProvider)
-    .where(eq(ssoProvider.providerId, providerId))
-    .limit(1);
-  return Boolean(provider);
+  return isConnectedSsoProviderRegistered(providerId);
 }

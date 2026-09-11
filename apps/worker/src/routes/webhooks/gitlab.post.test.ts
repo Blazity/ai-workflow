@@ -44,6 +44,8 @@ vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
 vi.mock("../../db/repositories/runs.js", () => ({
   findWorkflowOwnedPullRequestIdentity: (...args: any[]) =>
     mocks.findWorkflowOwnedPullRequestIdentity(...args),
+  findConnectedWorkflowOwnedPullRequestIdentity: (...args: any[]) =>
+    mocks.findWorkflowOwnedPullRequestIdentity(...args),
 }));
 vi.mock("../../services/dispatch/repo-allowlist.js", () => ({
   isRepoAllowed: (...args: any[]) => mocks.isRepoAllowed(...args),

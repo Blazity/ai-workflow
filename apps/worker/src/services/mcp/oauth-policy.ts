@@ -1,6 +1,6 @@
 import { APIError } from "better-auth/api";
 
-import type { Db } from "../../db/client.js";
+import type { Db } from "../../db/types.js";
 import { MCP_SCOPES } from "./contracts.js";
 import { findDeploymentOrganizationId, findRegisteredOAuthClient } from "./oauth-store.js";
 
@@ -15,6 +15,9 @@ export type McpOAuthDeployment = {
   // one: a deployment that was assembled without a database is not entitled to
   // answer a token request.
   db?: Db;
+  findOrganizationId?: (slug: string) => Promise<string | null>;
+  findRegisteredClient?: (clientId: string) => Promise<ServiceClient | null>;
+  findMemberRole?: (organizationId: string, userId: string) => Promise<string | null>;
 };
 
 type ServiceClient = {
@@ -74,7 +77,7 @@ export function validateMcpOAuthRequest(input: McpOAuthRequest): void {
  * `invalid_client_metadata` refusal, so the requirement lives in the type.
  */
 export async function validateMcpOAuthHookRequest(
-  deployment: McpOAuthDeployment & { db: Db },
+  deployment: McpOAuthDeployment,
   path: string,
   body: Record<string, unknown> | undefined,
   authorization?: string | null,
@@ -86,7 +89,11 @@ export async function validateMcpOAuthHookRequest(
     organizationId = await deploymentOrganizationId(deployment);
     const clientId = clientIdFromTokenRequest(body, authorization);
     if (clientId) {
-      serviceClient = await findRegisteredOAuthClient(deployment.db, clientId);
+      serviceClient = deployment.findRegisteredClient
+        ? await deployment.findRegisteredClient(clientId)
+        : deployment.db
+          ? await findRegisteredOAuthClient(deployment.db, clientId)
+          : null;
     }
   }
 
@@ -108,10 +115,12 @@ export async function validateMcpOAuthHookRequest(
 
 async function deploymentOrganizationId(deployment: McpOAuthDeployment): Promise<string> {
   if (deployment.organizationId) return deployment.organizationId;
-  if (!deployment.db || !deployment.organizationSlug) {
+  if ((!deployment.db && !deployment.findOrganizationId) || !deployment.organizationSlug) {
     throw new APIError("FORBIDDEN", { message: "OAuth deployment organization missing" });
   }
-  const organizationId = await findDeploymentOrganizationId(deployment.db, deployment.organizationSlug);
+  const organizationId = deployment.findOrganizationId
+    ? await deployment.findOrganizationId(deployment.organizationSlug)
+    : await findDeploymentOrganizationId(deployment.db!, deployment.organizationSlug);
   if (!organizationId) {
     throw new APIError("FORBIDDEN", { message: "OAuth deployment organization missing" });
   }

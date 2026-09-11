@@ -9,7 +9,7 @@ import {
   withAnalysisDelivery,
   withAnalysisPublication,
 } from "../../../run-analysis/report.js";
-import { finalizeRunAnalysisUsage, getRunAnalysisReport, recordRunAnalysisReport } from "./run-analysis.js";
+import { finalizeRunAnalysisUsage, getRunAnalysisReport, recordRunAnalysisReport } from "../../../run-analysis/persistence.js";
 
 let db: Db;
 beforeAll(async () => { db = await createTestDb(); }, 60_000);

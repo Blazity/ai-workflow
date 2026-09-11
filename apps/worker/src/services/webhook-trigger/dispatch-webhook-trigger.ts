@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { start } from "workflow/api";
-import type { Db } from "../../db/client.js";
+import type { Db } from "../../db/types.js";
 import type { RunRegistryAdapter } from "../../adapters/run-registry/types.js";
 import type { AgentWorkflowInput } from "../../engine/index.js";
 import { agentWorkflow } from "../../engine/index.js";
@@ -8,6 +8,7 @@ import { claimSubjectRun } from "../dispatch/dispatch.js";
 import { recordIngestionFailure } from "../dispatch/ingestion-diagnostic.js";
 import { logger } from "../../infra/logger.js";
 import {
+  enforceConnectedTriggerRateLimit,
   enforceTriggerRateLimit,
   triggerRateLimitLogFields,
   type TriggerRateLimitConfig,
@@ -26,6 +27,15 @@ import {
   type StoredWebhookDelivery,
   type StoredWebhookResult,
 } from "../../webhook-trigger/delivery-store.js";
+import {
+  acceptConnectedWebhookDelivery,
+  coalesceConnectedPendingWebhookDelivery,
+  completeConnectedWebhookDelivery,
+  drainConnectedOldestPendingWebhookDelivery,
+  getConnectedWebhookDelivery,
+  listConnectedPendingWebhookDeliveries,
+  recordConnectedWebhookDeliveryStarted,
+} from "../../db/repositories/webhook-trigger-deliveries.js";
 import type { WebhookTriggerEntry } from "./payload-mapping.js";
 import type { WebhookVerifiedWith } from "./verify.js";
 
@@ -47,7 +57,7 @@ export interface WebhookDispatchTarget {
 }
 
 export interface WebhookDispatchDeps {
-  db: Db;
+  db?: Db;
   runRegistry: RunRegistryAdapter;
   maxConcurrentAgents: number;
   /**
@@ -101,12 +111,10 @@ async function consumeWebhookRateLimit(
 ): Promise<TriggerRateLimitDecision | null> {
   const config = await deps.resolveTriggerRateLimit(target);
   if (config === null) return null;
-  return enforceTriggerRateLimit(
-    deps.db,
-    { definitionId: String(target.definitionId), nodeId: target.nodeId },
-    config,
-    new Date(),
-  );
+  const key = { definitionId: String(target.definitionId), nodeId: target.nodeId };
+  return deps.db
+    ? enforceTriggerRateLimit(deps.db, key, config, new Date())
+    : enforceConnectedTriggerRateLimit(key, config, new Date());
 }
 
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
@@ -157,7 +165,9 @@ export async function dispatchWebhookDelivery(
 
   let durable: Awaited<ReturnType<typeof acceptWebhookDelivery>>;
   try {
-    durable = await acceptWebhookDelivery(deps.db, accepted);
+    durable = deps.db
+      ? await acceptWebhookDelivery(deps.db, accepted)
+      : await acceptConnectedWebhookDelivery(accepted);
   } catch (error) {
     // Nothing is durable yet, so there is no envelope to record this against.
     return {
@@ -207,7 +217,9 @@ export async function drainWebhookSubject(
   subjectKey: string,
   deps: WebhookDispatchDeps,
 ): Promise<DispatchWebhookResult | null> {
-  const pending = await drainOldestPendingWebhookDelivery(deps.db, subjectKey);
+  const pending = deps.db
+    ? await drainOldestPendingWebhookDelivery(deps.db, subjectKey)
+    : await drainConnectedOldestPendingWebhookDelivery(subjectKey);
   if (!pending) return null;
   return dispatchAcceptedWebhookDelivery(acceptedFields(pending), deps);
 }
@@ -221,7 +233,10 @@ export async function redispatchPendingWebhookDeliveries(
   limit: number = WEBHOOK_DRAIN_LIMIT,
 ): Promise<DispatchWebhookResult[]> {
   const results: DispatchWebhookResult[] = [];
-  for (const pending of await listPendingWebhookDeliveries(deps.db, limit)) {
+  const pendingDeliveries = deps.db
+    ? await listPendingWebhookDeliveries(deps.db, limit)
+    : await listConnectedPendingWebhookDeliveries(limit);
+  for (const pending of pendingDeliveries) {
     const result = await drainWebhookSubject(pending.subjectKey, deps);
     if (result) results.push(result);
   }
@@ -236,7 +251,10 @@ async function dispatchAcceptedWebhookDelivery(
     // Persist the accepted envelope as this subject's pending snapshot before a
     // candidate can start. A delivery that arrives while another one is pending
     // hands over its payload here and stops.
-    if ((await coalescePendingWebhookDelivery(deps.db, accepted)) === "coalesced") {
+    const coalesced = deps.db
+      ? await coalescePendingWebhookDelivery(deps.db, accepted)
+      : await coalesceConnectedPendingWebhookDelivery(accepted);
+    if (coalesced === "coalesced") {
       return { result: "coalesced" };
     }
 
@@ -291,20 +309,24 @@ async function dispatchAcceptedWebhookDelivery(
 
     if (dispatched.started) {
       const runId = dispatched.runId!;
-      const recorded = await recordWebhookDeliveryStarted(
-        deps.db,
-        accepted,
-        dispatched.ownerToken!,
-        runId,
-      );
+      const recorded = deps.db
+        ? await recordWebhookDeliveryStarted(
+            deps.db,
+            accepted,
+            dispatched.ownerToken!,
+            runId,
+          )
+        : await recordConnectedWebhookDeliveryStarted(
+            accepted,
+            dispatched.ownerToken!,
+            runId,
+          );
       if (recorded) return { result: "started", runId };
       // A newer owner took the subject between start() and this write. Report
       // the durable winner instead of acknowledging a candidate that lost.
-      const stored = await getWebhookDelivery(
-        deps.db,
-        accepted.endpointId,
-        accepted.deliveryId,
-      );
+      const stored = deps.db
+        ? await getWebhookDelivery(deps.db, accepted.endpointId, accepted.deliveryId)
+        : await getConnectedWebhookDelivery(accepted.endpointId, accepted.deliveryId);
       return storedResultToDispatch(stored?.result ?? null);
     }
 
@@ -404,8 +426,16 @@ async function completeDelivery(
   accepted: AcceptedWebhookDelivery,
   result: StoredWebhookResult,
 ): Promise<void> {
-  await completeWebhookDelivery(
-    deps.db,
+  if (deps.db) {
+    await completeWebhookDelivery(
+      deps.db,
+      accepted.endpointId,
+      accepted.deliveryId,
+      result,
+    );
+    return;
+  }
+  await completeConnectedWebhookDelivery(
     accepted.endpointId,
     accepted.deliveryId,
     result,

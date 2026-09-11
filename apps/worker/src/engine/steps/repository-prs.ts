@@ -51,8 +51,7 @@ export async function createOrFindWorkflowOwnedPullRequest(input: {
   repositoryScope?: WorkflowRepositoryScope;
 }): Promise<WorkflowPrLink> {
   "use step";
-  const { getDb } = await import("../../db/client.js");
-  const { assertActiveRunOwner } = await import("../../services/run-lifecycle/active-run-owner.js");
+  const { assertConnectedActiveRunOwner } = await import("../../services/run-lifecycle/active-run-owner.js");
   const { createRepositoryVCS } = await import("../../services/vcs/vcs-runtime.js");
   const { isRepoAllowedForScope } = await import("../../services/dispatch/repo-allowlist.js");
   return resolveWorkflowOwnedPullRequest(
@@ -63,7 +62,7 @@ export async function createOrFindWorkflowOwnedPullRequest(input: {
         { provider: input.repository.provider, repoPath },
         input.repositoryScope,
       ),
-    () => assertActiveRunOwner(getDb(), input.owner),
+    () => assertConnectedActiveRunOwner(input.owner),
   );
 }
 createOrFindWorkflowOwnedPullRequest.maxRetries = 3;
@@ -77,11 +76,10 @@ export async function recordWorkflowOwnedPullRequest(input: {
   targetBranch: string;
 }): Promise<void> {
   "use step";
-  const { getDb } = await import("../../db/client.js");
-  const { upsertWorkflowOwnedBranch } = await import(
+  const { upsertConnectedWorkflowOwnedBranch } = await import(
     "../../db/repositories/runs.js"
   );
-  await upsertWorkflowOwnedBranch(getDb(), {
+  await upsertConnectedWorkflowOwnedBranch({
     ticketKey: input.ticketKey,
     provider: input.pr.provider,
     repoPath: input.pr.repoPath,
@@ -109,11 +107,10 @@ export async function recordWorkflowOwnedPullRequestIntent(input: {
   targetBranch: string;
 }): Promise<void> {
   "use step";
-  const { getDb } = await import("../../db/client.js");
-  const { upsertWorkflowOwnedBranch } = await import(
+  const { upsertConnectedWorkflowOwnedBranch } = await import(
     "../../db/repositories/runs.js"
   );
-  await upsertWorkflowOwnedBranch(getDb(), {
+  await upsertConnectedWorkflowOwnedBranch({
     ...input,
     prCorrelationPending: true,
   });

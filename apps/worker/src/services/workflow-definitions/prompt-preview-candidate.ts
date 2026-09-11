@@ -8,23 +8,15 @@
  * types, and the route that asks for them had no step in its graph before the
  * services tier existed.
  */
-import { getDb } from "../../db/client.js";
-import { workflowBlockRegistryContextFromEnv } from "../../workflow-definition/models.js";
 import {
-  previewWorkflowPromptCandidate,
-  type WorkflowPromptPreviewResult,
-} from "../../workflow-definition/prompt-preview.js";
+  previewConnectedWorkflowPromptCandidate,
+} from "./policy-operations.js";
+import type { WorkflowPromptPreviewResult } from "../../workflow-definition/prompt-preview.js";
 
 export function previewWorkflowDefinitionPrompt(input: {
   candidate: unknown;
   blockId: string;
   organizationId?: string;
 }): Promise<WorkflowPromptPreviewResult> {
-  return previewWorkflowPromptCandidate(
-    getDb(),
-    input.candidate,
-    input.blockId,
-    workflowBlockRegistryContextFromEnv(),
-    { organizationId: input.organizationId },
-  );
+  return previewConnectedWorkflowPromptCandidate(input);
 }

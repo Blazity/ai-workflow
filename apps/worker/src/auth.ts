@@ -11,11 +11,18 @@ import {
 import { defaultAc } from "better-auth/plugins/organization/access";
 import { createError } from "h3";
 
-import type { Db } from "./db/client.js";
+import type { Db } from "./db/types.js";
 import {
   createAuthRepository,
   createBetterAuthAdapter,
+  createConnectedAuthRepository,
+  createConnectedBetterAuthAdapter,
 } from "./db/repositories/auth.js";
+import {
+  findConnectedMcpMemberRole,
+  findConnectedMcpOauthClient,
+  findConnectedMcpOrganizationBySlug,
+} from "./db/repositories/mcp.js";
 import { createMcpOAuthProvider, validateMcpOAuthHookRequest } from "./mcp/oauth.js";
 
 export type AuthOptions = {
@@ -70,21 +77,59 @@ const memberRole = defaultAc.newRole({
  * plugin lets the dashboard replay the session token as a Bearer.
  */
 export function createAuth(db: Db, options: AuthOptions) {
+  return createAuthFromPersistence(
+    {
+      adapter: createBetterAuthAdapter(db),
+      repository: createAuthRepository(db),
+      mcp: { db },
+    },
+    options,
+  );
+}
+
+export function createConnectedAuth(options: AuthOptions) {
+  return createAuthFromPersistence(
+    {
+      adapter: createConnectedBetterAuthAdapter(),
+      repository: createConnectedAuthRepository(),
+      mcp: {
+        findOrganizationId: async (slug: string) =>
+          (await findConnectedMcpOrganizationBySlug(slug))?.id ?? null,
+        findRegisteredClient: findConnectedMcpOauthClient,
+        findMemberRole: async (organizationId: string, userId: string) =>
+          (await findConnectedMcpMemberRole({ organizationId, userId }))?.role ?? null,
+      },
+    },
+    options,
+  );
+}
+
+function createAuthFromPersistence(
+  persistence: {
+    adapter: ReturnType<typeof createBetterAuthAdapter>;
+    repository: ReturnType<typeof createAuthRepository>;
+    mcp: Omit<
+      import("./services/mcp/oauth-policy.js").McpOAuthDeployment,
+      "baseURL" | "organizationId" | "organizationSlug" | "allowPublicDcr"
+    >;
+  },
+  options: AuthOptions,
+) {
   const passwordReset = options.passwordReset;
   const mcpDeployment = options.mcp
-    ? { ...options.mcp, baseURL: options.baseURL, db }
+    ? { ...options.mcp, ...persistence.mcp, baseURL: options.baseURL }
     : null;
 
   return betterAuth({
-    database: createBetterAuthAdapter(db),
+    database: persistence.adapter,
     emailAndPassword: {
       enabled: true,
       disableSignUp: true,
       sendResetPassword: passwordReset
         ? async ({ user, token }) => {
-            const hasCredential = await userHasCredentialAccount(db, user.id);
+            const hasCredential = await persistence.repository.hasCredentialAccount(user.id);
             if (!hasCredential) {
-              await createAuthRepository(db).deleteResetPasswordVerification(token);
+              await persistence.repository.deleteResetPasswordVerification(token);
               return;
             }
 

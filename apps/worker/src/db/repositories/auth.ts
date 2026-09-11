@@ -1,15 +1,17 @@
 /* oxlint-disable eslint/max-lines-per-function */
 import { randomUUID } from "node:crypto";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { and, eq, isNotNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { sql } from "drizzle-orm";
-import type { Db } from "../client.js";
+import { getDb, type Db } from "../client.js";
 import {
   account,
   invitation,
+  inviteEmailDelivery,
   member,
   organization,
   ssoProvider,
+  user,
   verification,
 } from "../schema.js";
 
@@ -27,6 +29,125 @@ type ExecuteRows<T> = { rows: T[] };
 /** Persistence boundary for custom dashboard authentication writes. */
 export function createAuthRepository(db: Db) {
   return {
+    async findOrganizationBySlug(slug: string) {
+      const [row] = await db
+        .select({ id: organization.id, name: organization.name, slug: organization.slug })
+        .from(organization)
+        .where(eq(organization.slug, slug))
+        .limit(1);
+      return row ?? null;
+    },
+
+    async findOrganizationMembership(input: { organizationId: string; userId: string }) {
+      const [row] = await db
+        .select({ id: member.id, role: member.role, userId: member.userId })
+        .from(member)
+        .where(
+          and(
+            eq(member.organizationId, input.organizationId),
+            eq(member.userId, input.userId),
+          ),
+        )
+        .limit(1);
+      return row ?? null;
+    },
+
+    listOrganizationMembers(organizationId: string) {
+      return db
+        .select({
+          userId: user.id,
+          name: user.name,
+          email: user.email,
+          role: member.role,
+          joinedAt: member.createdAt,
+        })
+        .from(member)
+        .innerJoin(user, eq(user.id, member.userId))
+        .where(eq(member.organizationId, organizationId))
+        .orderBy(asc(user.email));
+    },
+
+    listAccountProviders(userIds: string[]) {
+      if (userIds.length === 0) return [];
+      return db
+        .select({ userId: account.userId, providerId: account.providerId })
+        .from(account)
+        .where(inArray(account.userId, userIds));
+    },
+
+    async dashboardUserLabel(userId: string): Promise<string> {
+      const [row] = await db
+        .select({ name: user.name, email: user.email })
+        .from(user)
+        .where(eq(user.id, userId))
+        .limit(1);
+      return row?.name?.trim() || row?.email || userId;
+    },
+
+    listOrganizationInvites(organizationId: string) {
+      return db
+        .select({
+          id: invitation.id,
+          email: invitation.email,
+          role: invitation.role,
+          status: invitation.status,
+          expiresAt: invitation.expiresAt,
+          createdAt: invitation.createdAt,
+          inviterName: user.name,
+          inviterEmail: user.email,
+        })
+        .from(invitation)
+        .innerJoin(user, eq(user.id, invitation.inviterId))
+        .where(eq(invitation.organizationId, organizationId))
+        .orderBy(desc(invitation.createdAt));
+    },
+
+    async findOrganizationInvite(input: { organizationId: string; inviteId: string }) {
+      const [row] = await db
+        .select()
+        .from(invitation)
+        .where(and(eq(invitation.organizationId, input.organizationId), eq(invitation.id, input.inviteId)))
+        .limit(1);
+      return row ?? null;
+    },
+
+    async findOrganizationMemberByEmail(input: { organizationId: string; email: string }) {
+      const [row] = await db
+        .select({ id: user.id })
+        .from(user)
+        .innerJoin(member, eq(member.userId, user.id))
+        .where(and(eq(member.organizationId, input.organizationId), eq(user.email, input.email)))
+        .limit(1);
+      return row ?? null;
+    },
+
+    async findPendingOrganizationInviteByEmail(input: { organizationId: string; email: string }) {
+      const [row] = await db
+        .select({ id: invitation.id })
+        .from(invitation)
+        .where(
+          and(
+            eq(invitation.organizationId, input.organizationId),
+            eq(invitation.email, input.email),
+            eq(invitation.status, "pending"),
+          ),
+        )
+        .limit(1);
+      return row ?? null;
+    },
+
+    listLatestInviteDeliveryStatuses(invitationIds: string[]) {
+      if (invitationIds.length === 0) return [];
+      return db
+        .select({
+          invitationId: inviteEmailDelivery.invitationId,
+          status: inviteEmailDelivery.status,
+          createdAt: inviteEmailDelivery.createdAt,
+        })
+        .from(inviteEmailDelivery)
+        .where(inArray(inviteEmailDelivery.invitationId, invitationIds))
+        .orderBy(desc(inviteEmailDelivery.createdAt));
+    },
     async hasCredentialAccount(userId: string): Promise<boolean> {
       const [credential] = await db
         .select({ id: account.id })
@@ -262,7 +383,7 @@ export function createAuthRepository(db: Db) {
             and status = 'pending'
             and expires_at > ${input.now}
             and role in ('owner', 'admin', 'member')
-            and lower(btrim(email)) = ${input.userEmail}
+            and lower(btrim(email, E' \\t\\n\\r')) = ${input.userEmail}
           for update
         ), membership as (
           insert into member (id, organization_id, user_id, role)
@@ -288,7 +409,28 @@ export function createAuthRepository(db: Db) {
   };
 }
 
+export function createConnectedAuthRepository() {
+  return createAuthRepository(getDb());
+}
+
+export function getConnectedDashboardUserLabel(userId: string): Promise<string> {
+  return createConnectedAuthRepository().dashboardUserLabel(userId);
+}
+
 /** Better Auth adapter construction is database wiring, not a custom write. */
 export function createBetterAuthAdapter(db: Db) {
   return drizzleAdapter(db, { provider: "pg" });
+}
+
+export function createConnectedBetterAuthAdapter() {
+  return createBetterAuthAdapter(getDb());
+}
+
+export async function isConnectedSsoProviderRegistered(providerId: string): Promise<boolean> {
+  const [provider] = await getDb()
+    .select({ id: ssoProvider.id })
+    .from(ssoProvider)
+    .where(eq(ssoProvider.providerId, providerId))
+    .limit(1);
+  return Boolean(provider);
 }
