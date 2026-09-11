@@ -10,8 +10,6 @@ import {
   parsePromptDataTokens,
   parsePromptSlotTokens,
   promptDataTokenIssue,
-  promptFieldForV2Node,
-  promptSlotBindingsForV2Node,
   resolveNodePromptAuthoringPure,
   resolvePromptReferences,
   VARIABLE_PARAM_KEYS,
@@ -29,9 +27,7 @@ import {
 } from "./available-values.js";
 import { isWorkflowSchemaAssignable } from "./bindings.js";
 import type { WorkflowBlockRegistryContext } from "./block-registry.js";
-import {
-  inspectJsonSchema202012,
-} from "./json-schema.js";
+import { inspectJsonSchema202012 } from "./json-schema.js";
 import {
   dashboardOrganizationId,
   validateHarnessProfileReferences,
@@ -51,11 +47,7 @@ export interface ResolveNodePromptAuthoringInput extends Omit<
   "compile" | "areSlotSchemasCompatible"
 > {}
 
-export {
-  isPromptAuthoringBlock,
-  promptFieldForV2Node,
-  promptSlotBindingsForV2Node,
-};
+export { isPromptAuthoringBlock };
 
 export function resolveNodePromptAuthoring(
   input: ResolveNodePromptAuthoringInput,
@@ -279,34 +271,6 @@ function removePromptDataTokens(
     cursor = token.end;
   }
   return output + text.slice(cursor);
-}
-
-export async function validateWorkflowDefinitionCandidateWithPromptAuthoring(
-  db: Db,
-  candidate: unknown,
-  registryContext?: WorkflowBlockRegistryContext,
-  profileLoader?: HarnessProfileVersionLoader,
-): Promise<WorkflowDefinitionCandidateValidation> {
-  const context =
-    registryContext ??
-    (await import("./models.js")).workflowBlockRegistryContextFromEnv();
-  const base = validateWorkflowDefinitionCandidate(candidate, context);
-  if (!base.parsed) return base;
-  const promptIssues = await validateWorkflowPromptAuthoringIssues(
-    db,
-    base.parsed,
-    context,
-    profileLoader,
-  );
-  const issues = dedupeIssues([...base.response.issues, ...promptIssues]);
-  return {
-    parsed: base.parsed,
-    response: {
-      ...base.response,
-      valid: issues.length === 0,
-      issues,
-    },
-  };
 }
 
 export async function validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring(

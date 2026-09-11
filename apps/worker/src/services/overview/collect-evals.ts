@@ -14,7 +14,7 @@ export type EvalsAggregate = Pick<
  * an `ArthurClient`; this narrow interface keeps the aggregation testable with a
  * fake (mirrors `CostArthurClient` for the cost collector).
  */
-export interface EvalsArthurClient {
+interface EvalsArthurClient {
   listAllTasks(): Promise<ArthurTask[]>;
   countTraces(
     taskIds: string[],

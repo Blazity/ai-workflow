@@ -391,8 +391,7 @@ export function buildResearchAnalysisReport(input: BuildResearchAnalysisReportIn
   });
   const value = sanitized.value;
   const usage = fallbackUsage(input, capturedAt);
-  const repositories = sourceRepositories.map((repository, index) => ({
-    ...repository,
+  const repositories = sourceRepositories.map((repository, index) => Object.assign({}, repository, {
     rationale:
       Array.isArray(value.rationales) && typeof value.rationales[index] === "string"
         ? value.rationales[index] as string
@@ -458,8 +457,7 @@ export function buildApprovedPlanAnalysisReport(input: BuildApprovedPlanAnalysis
     planMarkdown: approvedMarkdown,
     rationales: sourceScope.map((repository) => repository.rationale),
   });
-  const scope = sourceScope.map((repository, index) => ({
-    ...repository,
+  const scope = sourceScope.map((repository, index) => Object.assign({}, repository, {
     rationale:
       Array.isArray(sanitized.value.rationales) &&
       typeof sanitized.value.rationales[index] === "string"

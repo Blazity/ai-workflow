@@ -2,8 +2,6 @@ export { RESERVATION_BIND_GRACE_MS } from "@shared/contracts";
 export type {
   ActiveRunEntry,
   FailedTicketMeta,
-  FailedTicketOwner,
-  RunClaimState,
   RunKind,
   RunRegistryAdapter,
   RunReservation,

@@ -4,7 +4,7 @@ import type {
 } from "@shared/contracts";
 import { inspectJsonSchema202012 } from "./json-schema.js";
 
-export const JSON_SCHEMA_2020_12_DIALECT =
+const JSON_SCHEMA_2020_12_DIALECT =
   "https://json-schema.org/draft/2020-12/schema" as const;
 export const MAX_AUTHORED_JSON_SCHEMA_BYTES = 256 * 1024;
 

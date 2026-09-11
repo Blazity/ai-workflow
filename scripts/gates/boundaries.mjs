@@ -1,28 +1,21 @@
 /**
- * This gate stops new imports that violate ADR-001 and growth in distinct file
- * cycles. It exits 1 for unknown paths, tool failures, counts above the
- * recorded tier-pair and file-cycle baseline, or a services cluster reaching
- * past another cluster's index.ts without an entry in
- * cluster-deep-imports.json. Run with --update-baseline after an approved
- * architecture change and review the complete before and after table.
+ * This gate stops imports that violate ADR-001 and any distinct file cycles.
+ * It also stops a services cluster reaching past another cluster's index.ts
+ * without an entry in cluster-deep-imports.json.
  */
 import { existsSync, globSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  countRegression,
   parseOptions,
   printTable,
   readJson,
   repositoryRoot,
   runTool,
   sortedObject,
-  writeJson,
 } from "./shared.mjs";
 
-const defaultBaseline = new URL("./boundaries.baseline.json", import.meta.url);
-// Stable report rows are not ratchet allowances. A pair absent from the
-// baseline is unconditional and its first observed edge fails the gate.
+// Stable report rows make a clean run auditable even when a pair has no edges.
 const reportedTierPairs = [
   "adapters->db",
   "adapters->engine",
@@ -374,8 +367,8 @@ export function normalizeFileCycles(report) {
   );
 }
 
-export function exceedsFileCycleBaseline(fileCycles, baseline) {
-  return fileCycles.length > baseline.fileCycleCount;
+export function hasFileCycles(fileCycles) {
+  return fileCycles.length > 0;
 }
 
 function walk(dir, output = []) {
@@ -427,12 +420,10 @@ function main() {
   const printEdges = process.argv.includes("--print-edges");
   const options = parseOptions(process.argv.slice(2).filter((argument) => argument !== "--print-edges"), {
     "--root": "root",
-    "--baseline": "baseline",
     "--config": "config",
     "--cluster-deep-imports": "clusterDeepImports",
   });
   const root = realpathSync(options.root);
-  const baselinePath = options.baseline ?? fileURLToPath(defaultBaseline);
   const config = options.config ?? join(repositoryRoot, ".dependency-cruiser.cjs");
   const { counts: tierPairs, report, unknown, deepImports, forbiddenEdges } = dependencyCounts(root, config);
   // The default list belongs to this repository, so a fixture root under --root
@@ -441,34 +432,22 @@ function main() {
   const deepImportPath = options.clusterDeepImports ?? (tierMap.clusterDeepImports && ownsDefaultList
     ? fileURLToPath(new URL(tierMap.clusterDeepImports, import.meta.url))
     : null);
-  if (deepImportPath && options.updateBaseline) writeJson(deepImportPath, deepImports);
   const recordedDeepImports = deepImportPath && existsSync(deepImportPath) ? readJson(deepImportPath) : [];
   const deepImportDrift = deepImportRegression(deepImports, recordedDeepImports);
   const directoryCycles = directoryCycleCounts(root);
   const fileCycles = normalizeFileCycles(report);
-  const current = { tierPairs, fileCycleCount: fileCycles.length, fileCycles };
-  if (options.updateBaseline) {
-    if (unknown.length > 0) throw new Error(`Cannot baseline unknown paths: ${unknown.join(", ")}`);
-    writeJson(baselinePath, current);
-  }
-  const baseline = options.updateBaseline
-    ? current
-    : existsSync(baselinePath)
-      ? readJson(baselinePath)
-      : { tierPairs: {}, fileCycleCount: 0, fileCycles: [] };
   const tierKeys = [
     ...new Set([
       ...reportedTierPairs,
-      ...Object.keys(baseline.tierPairs),
       ...Object.keys(tierPairs),
     ]),
   ].sort();
   console.log("Boundary tier pairs");
-  printTable(["pair", "baseline", "now"], tierKeys.map((key) => [key, baseline.tierPairs[key] ?? 0, tierPairs[key] ?? 0]));
+  printTable(["pair", "now"], tierKeys.map((key) => [key, tierPairs[key] ?? 0]));
   console.log("Directory cycle pairs (informational)");
   printTable(["pair", "now"], Object.entries(directoryCycles).map(([key, count]) => [key, count]));
-  console.log(`file cycles  ${baseline.fileCycleCount}  ${current.fileCycleCount}`);
-  console.log("Cross-cluster deep imports (shrink-only ratchet)");
+  console.log(`file cycles  ${fileCycles.length}`);
+  console.log("Cross-cluster deep imports");
   printTable(
     ["state", "count"],
     [["recorded", recordedDeepImports.length], ["now", deepImports.length]],
@@ -479,8 +458,8 @@ function main() {
     console.log("Unknown paths");
     for (const path of unknown) console.log(path);
   }
-  const failed = unknown.length > 0 || countRegression(tierPairs, baseline.tierPairs) ||
-    exceedsFileCycleBaseline(fileCycles, baseline) ||
+  const failed = unknown.length > 0 || Object.values(tierPairs).some((count) => count > 0) ||
+    hasFileCycles(fileCycles) ||
     deepImportDrift.added.length > 0 || deepImportDrift.stale.length > 0;
   if (failed || printEdges) {
     console.log("Forbidden edges");

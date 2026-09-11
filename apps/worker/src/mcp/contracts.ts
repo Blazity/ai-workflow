@@ -27,7 +27,6 @@ export {
   isTerminalRunStatus,
 } from "../services/mcp/contracts.js";
 export type {
-  IdempotencyInput,
   McpActorContext,
   McpAuditInput,
   McpAuditToolName,

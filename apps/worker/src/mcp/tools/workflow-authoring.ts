@@ -311,8 +311,7 @@ function publishAnnouncement(publish: {
 }): string {
   const name = announcementLabel(publish.name);
   const target = `workflow "${name}" (definition ${publish.definitionId})`;
-  const sentences: string[] = [];
-  sentences.push(
+  const sentences: string[] = [
     publish.replacedVersion === publish.deployedVersion
       ? `re-deployed version ${publish.deployedVersion} of ${target} without changing which version is live.`
       : `published ${target} as version ${publish.deployedVersion}${
@@ -320,7 +319,7 @@ function publishAnnouncement(publish: {
             ? ""
             : `, replacing version ${publish.replacedVersion}`
         }.`,
-  );
+  ];
   if (publish.draftAuthor !== null) {
     sentences.push(`The graph was drafted by ${announcementLabel(publish.draftAuthor)}.`);
   }

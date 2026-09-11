@@ -12,7 +12,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-export type JsonSchema = {
+type JsonSchema = {
   type?: string;
   const?: unknown;
   enum?: unknown[];
@@ -204,8 +204,7 @@ export function planProbes(
       // path nobody walked. The report names it under Coverage instead.
       acceptedErrorCodes: ["NOT_FOUND", "VALIDATION_FAILED", ...policyRefusals],
       placeholders,
-    });
-    probes.push({
+    }, {
       tool: tool.name,
       kind: "invented_argument",
       args: { ...args, [INVENTED_ARGUMENT]: 1 },

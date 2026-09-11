@@ -97,12 +97,12 @@ export type DispatchWebhookResult =
   | { result: "error"; reason: string };
 
 /** How many waiting subjects one drain pass starts at most. */
-export const WEBHOOK_DRAIN_LIMIT = 10;
+const WEBHOOK_DRAIN_LIMIT = 10;
 
 /** The stored reason on a delivery the node's rate limit refused. Terminal: the
  *  delivery is not replayed when the window rolls, because the limit drops
  *  excess starts rather than deferring them. */
-export const RATE_LIMITED_DELIVERY_REASON = "rate_limited";
+const RATE_LIMITED_DELIVERY_REASON = "rate_limited";
 
 /** Count one delivery against the node's rate limit, or null when unlimited. */
 async function consumeWebhookRateLimit(
@@ -213,7 +213,7 @@ function acceptedFields(stored: StoredWebhookDelivery): AcceptedWebhookDelivery 
  * which this change deliberately leaves alone. The cron drain below is correct
  * without it; the only cost is latency bounded by the cron period.
  */
-export async function drainWebhookSubject(
+async function drainWebhookSubject(
   subjectKey: string,
   deps: WebhookDispatchDeps,
 ): Promise<DispatchWebhookResult | null> {

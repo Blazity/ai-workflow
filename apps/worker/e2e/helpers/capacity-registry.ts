@@ -21,7 +21,7 @@ export interface CapacityCampaign {
   readonly subjectKeys: readonly string[];
 }
 
-export class CapacityFixtureBaselineError extends Error {
+class CapacityFixtureBaselineError extends Error {
   constructor(count: number) {
     super(
       `Capacity fixture baseline contains ${count} active run${count === 1 ? "" : "s"}; refusing to mutate it`,

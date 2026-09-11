@@ -112,7 +112,7 @@ function dashboardResetPasswordUrl(dashboardOrigin: string, token: string): stri
   return `${origin}/reset-password?token=${encodeURIComponent(token)}`;
 }
 
-export type DashboardSsoConfig = {
+type DashboardSsoConfig = {
   issuer: string;
   allowedDomain: string;
   clientId: string;

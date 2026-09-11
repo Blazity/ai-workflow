@@ -111,7 +111,7 @@ export async function installAndVerifyCli(
   await verifyInstalledCli(sandbox, spec, runtime);
 }
 
-export async function verifyInstalledCli(
+async function verifyInstalledCli(
   sandbox: RunnableSandbox,
   spec: AgentCliSpec,
   runtime?: AgentRuntimePaths,
@@ -406,7 +406,7 @@ export function eventMetadata(value: unknown): AgentProtocolDiagnostic["event"] 
   return Object.keys(metadata).length > 0 ? metadata : undefined;
 }
 
-export function hashText(value: string): string {
+function hashText(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 

@@ -513,7 +513,7 @@ export async function importGitHubSkills(
   return importGitHubSkillsFromRepository(createHarnessProfileRepository(db), input);
 }
 
-export async function importGitHubSkillsFromRepository(
+async function importGitHubSkillsFromRepository(
   persistence: HarnessProfileRepository,
   input: {
     repository: GitHubSkillRepository;
@@ -944,7 +944,7 @@ function validateExactSource(
 }
 
 function normalizeSelectedPaths(paths: string[]): string[] {
-  if (!Array.isArray(paths) || paths.length < 1 || paths.length > 100) {
+  if (!Array.isArray(paths) || paths.length === 0 || paths.length > 100) {
     throw new HarnessSkillImportError(
       400,
       "Select between one and 100 skills",

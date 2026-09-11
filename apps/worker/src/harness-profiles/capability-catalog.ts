@@ -27,11 +27,11 @@ import {
   stableJson,
 } from "./manifest.js";
 
-export const HARNESS_CAPABILITY_CACHE_TTL_MS = 15 * 60 * 1_000;
-export const HARNESS_CAPABILITY_PREWARM_LEAD_MS = 5 * 60 * 1_000;
-export const CLAUDE_CAPABILITY_DISCOVERY_TIMEOUT_MS = 180_000;
+const HARNESS_CAPABILITY_CACHE_TTL_MS = 15 * 60 * 1_000;
+const HARNESS_CAPABILITY_PREWARM_LEAD_MS = 5 * 60 * 1_000;
+const CLAUDE_CAPABILITY_DISCOVERY_TIMEOUT_MS = 180_000;
 export const CODEX_CAPABILITY_DISCOVERY_TIMEOUT_MS = 180_000;
-export const HARNESS_CAPABILITY_REFRESH_THROTTLE_MS = 30_000;
+const HARNESS_CAPABILITY_REFRESH_THROTTLE_MS = 30_000;
 
 const inFlightRefreshes = new Map<
   string,
@@ -76,21 +76,6 @@ export async function getHarnessCapabilities(
 ): Promise<HarnessCapabilitiesResponse> {
   return getHarnessCapabilitiesFromRepository(
     createHarnessCapabilityCatalogRepository(db),
-    input,
-  );
-}
-
-export function getConnectedHarnessCapabilities(
-  input: {
-    organizationId: string;
-    provider: HarnessProvider;
-    cliVersion: string;
-    refresh: boolean;
-    dependencies?: HarnessCapabilityDiscoveryDependencies;
-  },
-): Promise<HarnessCapabilitiesResponse> {
-  return getHarnessCapabilitiesFromRepository(
-    createConnectedHarnessCapabilityCatalogRepository(),
     input,
   );
 }
@@ -679,7 +664,7 @@ function uniqueOptions(
   });
 }
 
-export async function discoverClaudeCapabilities(
+async function discoverClaudeCapabilities(
   cliVersion: string,
   signal: AbortSignal,
   credential?: string,
@@ -1115,11 +1100,11 @@ function normalizeCodexModel(raw: unknown): HarnessModelCapability | null {
     ? record.additionalSpeedTiers
     : []) {
     const option = objectRecord(entry);
-    const id =
+    const optionId =
       stringValue(option.serviceTier) ??
       stringValue(option.id) ??
       stringValue(option.slug);
-    if (id) tierIds.add(id);
+    if (optionId) tierIds.add(optionId);
   }
   const contextWindow =
     positiveInteger(record.contextWindow) ??

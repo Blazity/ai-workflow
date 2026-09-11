@@ -28,6 +28,8 @@
     }
   },
   "ignoreIssues": {
-    "apps/worker/src/engine/blocks/run-checks/execute.ts": ["exports"]
+    "apps/worker/src/engine/blocks/run-checks/execute.ts": ["exports"],
+    "apps/worker/src/engine/blocks/fetch-pr-context/execute.ts": ["exports"],
+    "apps/worker/src/engine/steps/review-change-set.ts": ["exports"]
   }
 }

@@ -18,7 +18,6 @@ import {
   listWorkflowDefinitions,
   insertWorkflowDefinition,
   appendWorkflowDefinitionDraft,
-  appendWorkflowDefinitionVersion,
   updateWorkflowDefinitionLayout,
   archiveWorkflowDefinition,
 } from "./operations.js";
@@ -124,6 +123,5 @@ export function updateConnectedDefinitionName(
 
 export function insertConnectedWorkflowDefinition(input: Parameters<typeof insertWorkflowDefinition>[1]) { return insertWorkflowDefinition(getDb(), input); }
 export function appendConnectedWorkflowDefinitionDraft(input: Parameters<typeof appendWorkflowDefinitionDraft>[1]) { return appendWorkflowDefinitionDraft(getDb(), input); }
-export function appendConnectedWorkflowDefinitionVersion(input: Parameters<typeof appendWorkflowDefinitionVersion>[1]) { return appendWorkflowDefinitionVersion(getDb(), input); }
 export function updateConnectedWorkflowDefinitionLayout(input: Parameters<typeof updateWorkflowDefinitionLayout>[1]) { return updateWorkflowDefinitionLayout(getDb(), input); }
 export function archiveConnectedDefinition(input: Parameters<typeof archiveWorkflowDefinition>[1]) { return archiveWorkflowDefinition(getDb(), input); }

@@ -21,7 +21,7 @@ export function parseHarnessProfileId(event: H3Event): string {
   const id = getRouterParam(event, "id");
   if (
     typeof id !== "string" ||
-    id.length < 1 ||
+    id.length === 0 ||
     id.length > 128 ||
     !/^[A-Za-z0-9_-]+$/.test(id)
   ) {

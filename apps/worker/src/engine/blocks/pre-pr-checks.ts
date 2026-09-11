@@ -8,7 +8,7 @@ import type {
   RepoScriptsConfig,
   RepoScriptsRepositoryConfig,
 } from "../pre-pr-checks/config.js";
-export { MAX_PRE_PR_FIX_CYCLES } from "../steps/pre-pr-checks-runner.js";
+;
 import {
   PRE_PR_CHECK_BATCH_MAX_MINUTES,
   collectRepoCheckBatchStep,
@@ -60,7 +60,7 @@ import type { StepsRecord } from "../../workflow-definition/interpreter.js";
  * one node can ask for "test" across a workspace where only some repositories
  * have it.
  */
-export type RepoScriptsGroupSelection =
+type RepoScriptsGroupSelection =
   | { kind: "gate" }
   | { kind: "named"; groups: string[] };
 
@@ -148,13 +148,13 @@ export interface PrePrChecksOptions {
  * the schema has a maximum at all, and the reason to raise the ceiling only
  * for a batch that genuinely needs it.
  */
-export function maxTicksFor(capMs: number): number {
+function maxTicksFor(capMs: number): number {
   const bounded = Number.isFinite(capMs) && capMs > 0 ? capMs : 0;
   return Math.ceil(bounded / PHASE_POLL_TICK_MAX_MS) + 8;
 }
 
 /** A fresh record for one poll to report what it consumed. */
-export function newPhasePollOutcome(): PhasePollOutcome {
+function newPhasePollOutcome(): PhasePollOutcome {
   return { elapsedMs: 0, ticks: 0, reason: "finished" };
 }
 
@@ -171,7 +171,7 @@ export function newPhasePollOutcome(): PhasePollOutcome {
  * and a long batch asks it dozens of times; treating one reading as fatal
  * converts a single transient fault into an abandoned check run.
  */
-export function batchPollTuning(
+function batchPollTuning(
   outcome: PhasePollOutcome,
   capMs: number,
 ): PhasePollTuning {
@@ -205,7 +205,7 @@ export function batchPollTuning(
  * files, which is a step per tick on a path that has lost runs to
  * CORRUPTED_EVENT_LOG.
  */
-export interface RepositoryScriptsProgressObservation {
+interface RepositoryScriptsProgressObservation {
   event: "script_progress";
   phase: RepoBatchPhase;
   /** provider:repoPath of the repository being polled. */
@@ -234,7 +234,7 @@ export interface RepositoryScriptsProgressObservation {
  * whenever a tick took longer than it asked for. Naming the total as launched
  * rather than printing a bare count keeps it from reading as "4 done".
  */
-export function formatRepositoryScriptsProgress(
+function formatRepositoryScriptsProgress(
   value: RepositoryScriptsProgressObservation,
 ): string {
   const against =
@@ -267,7 +267,7 @@ const PROGRESS_OBSERVATION_MIN_INTERVAL_MS = PHASE_POLL_TICK_MAX_MS;
  * what a run does. Here that matters more than usual, because this one is
  * called from inside a poll that is holding a live batch.
  */
-export async function emitRepositoryScriptsProgress(
+async function emitRepositoryScriptsProgress(
   observations: V2InvocationObservationHooks | undefined,
   value: RepositoryScriptsProgressObservation,
 ): Promise<void> {
@@ -1609,7 +1609,7 @@ function uniqueConfiguredRepositories(
  * Shared with the explicit-commands mode of run_checks, which has no fix loop
  * to suppress but the same rule about never reading a stall as a pass.
  */
-export async function resolvePhaseStall(
+async function resolvePhaseStall(
   sandboxId: string,
   sentinelFile: string,
   outcome: PhasePollOutcome,
@@ -1725,7 +1725,7 @@ function stalledBatches(
  * Attach how far the checks got to a budget stop, then hand it back for the
  * caller to throw. Anything that is not a budget failure is returned untouched.
  */
-export async function budgetErrorNamingProgress(
+async function budgetErrorNamingProgress(
   error: unknown,
   provider: PrePrCheckFailure["provider"],
   repoPath: string,

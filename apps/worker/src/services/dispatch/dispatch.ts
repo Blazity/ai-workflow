@@ -415,7 +415,7 @@ async function isAtCapacity(max: number, runRegistry: RunRegistryAdapter): Promi
   }
 }
 
-export async function winsPostReservationCapacity(
+async function winsPostReservationCapacity(
   subjectKey: string,
   max: number,
   runRegistry: RunRegistryAdapter,

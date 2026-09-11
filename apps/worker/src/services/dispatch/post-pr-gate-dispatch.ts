@@ -85,7 +85,7 @@ export async function dispatchPostPrGateWebhook({
         { ownerRepo, prNumber, headSha, runId: handle.runId, winner: claimed },
         "post_pr_gate_lock_ttl_lost_race",
       );
-      await getRun(handle.runId).cancel().catch(() => undefined);
+      await getRun(handle.runId).cancel().catch(() => {});
       // Don't clear the pointer — the winning webhook's pointer is the source
       // of truth.
       return { status: "ignored", reason: "already_claimed", runId: claimed };

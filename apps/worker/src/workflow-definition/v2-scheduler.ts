@@ -58,9 +58,9 @@ export const V2_PRODUCTION_SCHEDULER_BOUNDS = Object.freeze({
   maxTotalExecutions: DEFAULT_MAX_TOTAL_EXECUTIONS,
 });
 
-export type V2EdgeToken = "unresolved" | "active" | "inactive";
+type V2EdgeToken = "unresolved" | "active" | "inactive";
 
-export type V2NodeRuntimeStatus =
+type V2NodeRuntimeStatus =
   | "waiting"
   | "ready"
   | "running"
@@ -71,19 +71,19 @@ export type V2NodeRuntimeStatus =
   | "cancelled"
   | "failed";
 
-export interface V2NodeRuntimeState {
+interface V2NodeRuntimeState {
   status: V2NodeRuntimeStatus;
   attempt?: number;
   readySequence?: number;
 }
 
-export interface V2LoopActivation {
+interface V2LoopActivation {
   loopNodeId: string;
   ownerScopeId: string;
   iteration: number;
 }
 
-export interface V2ActivationScopeState {
+interface V2ActivationScopeState {
   id: string;
   sequence: number;
   parentScopeId: string | null;
@@ -105,13 +105,13 @@ export interface V2ActivationScopeState {
   loopRegionExited?: string[];
 }
 
-export interface V2ReadyInvocation {
+interface V2ReadyInvocation {
   scopeId: string;
   nodeId: string;
   sequence: number;
 }
 
-export interface V2ClarificationState {
+interface V2ClarificationState {
   scopeId: string;
   nodeId: string;
   attempt: number;
@@ -135,12 +135,12 @@ export interface V2SchedulerCheckpoint {
   ended: boolean;
 }
 
-export interface V2ResolvedControlEdge
+interface V2ResolvedControlEdge
   extends WorkflowDefinitionV2ControlEdge {
   port: string;
 }
 
-export interface V2LoopRegion {
+interface V2LoopRegion {
   loopNodeId: string;
   memberNodeIds: Set<string>;
   hasExternalBodyEntry: boolean;
@@ -244,7 +244,7 @@ export interface V2SchedulerResult {
   executionError?: WorkflowExecutionErrorState;
 }
 
-export class V2SchedulerDefinitionError extends Error {
+class V2SchedulerDefinitionError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "V2SchedulerDefinitionError";
@@ -266,11 +266,6 @@ type SettledInvocation =
       key: string;
       error: unknown;
     };
-
-interface LoopRegionInternal {
-  loopNodeId: string;
-  memberNodeIds: Set<string>;
-}
 
 /**
  * Scheduler-side execution error. Delegates to the one construction path in
@@ -751,8 +746,8 @@ class V2SchedulerRuntime {
           ? BLOCK_TYPE_SPECS[trigger.type].ports[0]
           : undefined;
       this.propagatePort(root.id, trigger.id, selectedPort);
+      const boundaryAt = this.boundaryTime();
       if (active) {
-        const boundaryAt = this.boundaryTime();
         const selectedTransition = this.selectedTransition(
           trigger.id,
           selectedPort,
@@ -769,7 +764,6 @@ class V2SchedulerRuntime {
           }),
         );
       } else {
-        const boundaryAt = this.boundaryTime();
         this.pendingHookCalls.push(() =>
           this.hooks.onNodeSkipped?.({
             nodeId: trigger.id,
@@ -998,7 +992,7 @@ class V2SchedulerRuntime {
       this.assertRegionDecidedBeforeLoop(scope, nodeId);
       this.settleLoopBoundaryEdges(nodeId, scopeId, scopeId);
     }
-    this.propagatePort(scopeId, nodeId, undefined);
+    this.propagatePort(scopeId, nodeId, void 0);
   }
 
   /**
@@ -1922,7 +1916,7 @@ class V2SchedulerRuntime {
       // siblings finish and the walk drains into the "completed" outcome
       // instead of parking like "ended".
       this.completeNode(scopeId, nodeId, attempt, result.output);
-      this.propagatePort(scopeId, nodeId, undefined);
+      this.propagatePort(scopeId, nodeId, void 0);
       return;
     }
 
@@ -2103,28 +2097,28 @@ class V2SchedulerRuntime {
       nodeState.attempt = attempt;
     }
     const completedAt = this.boundaryTime();
-    this.pendingHookCalls.push(() =>
-      this.hooks.onExecutionError?.({
-        state,
-        error,
-        activationScopeId: scopeId,
-      }),
-    );
-    this.pendingHookCalls.push(() =>
-      this.hooks.onNodeFinish?.({
-        nodeId,
-        attempt,
-        activationScopeId: scopeId,
-        completedAt,
-        runtimeState: "failed",
-        selectedTransition: null,
-        state: {
-          status: "fail",
+    this.pendingHookCalls.push(
+      () =>
+        this.hooks.onExecutionError?.({
+          state,
+          error,
+          activationScopeId: scopeId,
+        }),
+      () =>
+        this.hooks.onNodeFinish?.({
+          nodeId,
           attempt,
-          error: state.message,
-          diagnosticId: state.diagnosticId,
-        },
-      }),
+          activationScopeId: scopeId,
+          completedAt,
+          runtimeState: "failed",
+          selectedTransition: null,
+          state: {
+            status: "fail",
+            attempt,
+            error: state.message,
+            diagnosticId: state.diagnosticId,
+          },
+        }),
     );
     await this.flushHookCalls();
   }

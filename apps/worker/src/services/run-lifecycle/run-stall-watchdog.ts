@@ -88,7 +88,7 @@ export async function findStalledStep(
   };
 }
 
-export function stalledRunReason(stalled: StalledStep, now: number): string {
+function stalledRunReason(stalled: StalledStep, now: number): string {
   const minutes = Math.max(1, Math.round((now - stalled.createdAt.getTime()) / 60_000));
   const name = stalled.stepName.split("//").pop() || stalled.stepName;
   return (

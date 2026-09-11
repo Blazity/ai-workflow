@@ -231,8 +231,8 @@ function normalizeForComparison(value: string): string {
   return value
     .normalize("NFC")
     .replace(/[\u2018\u2019]/g, "'")
-    .replace(/[\u201c\u201d]/g, '"')
-    .replace(/[\u200b\ufeff]/g, "")
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/[\u200B\uFEFF]/g, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -397,7 +397,7 @@ function describeAlias(
  * type exists to prevent. */
 type SettleSkipReason = "cap" | "third_party" | "thread_gone" | "deadline";
 
-export interface SettlementPost {
+interface SettlementPost {
   thread: ReviewThreadTarget;
   body: string;
   resolve: boolean;
@@ -771,14 +771,18 @@ export function parseReviewLedgerDurableState(
   return state;
 }
 
-const DISPOSITION_KINDS: ReviewThreadDisposition["disposition"][] = [
+const DISPOSITION_KINDS: ReadonlySet<ReviewThreadDisposition["disposition"]> = new Set([
   "actionable",
   "already_addressed",
   "question",
   "out_of_scope",
-];
+]);
 
-const THREAD_SOURCES: ReviewThread["source"][] = ["human", "bot", "third_party"];
+const THREAD_SOURCES: ReadonlySet<ReviewThread["source"]> = new Set([
+  "human",
+  "bot",
+  "third_party",
+]);
 
 function parseDurableFeedEntry(value: unknown): ReviewLedgerDurableFeedEntry | null {
   if (!isRecord(value)) return null;
@@ -788,7 +792,7 @@ function parseDurableFeedEntry(value: unknown): ReviewLedgerDurableFeedEntry | n
   if (typeof alias !== "string" || alias === "") return null;
   if (typeof snapshotAt !== "string" || snapshotAt === "") return null;
   if (typeof resolvable !== "boolean" || typeof awaitingHuman !== "boolean") return null;
-  if (!THREAD_SOURCES.includes(source as ReviewThread["source"])) return null;
+  if (!THREAD_SOURCES.has(source as ReviewThread["source"])) return null;
   if (filePath !== undefined && typeof filePath !== "string") return null;
   if (line !== undefined && typeof line !== "number") return null;
 
@@ -809,7 +813,7 @@ function parseDurableDisposition(value: unknown): ReviewThreadDisposition | null
   if (!isRecord(value)) return null;
   const { alias, threadId, disposition, reply, evidence, evidenceUnverified } = value;
   if (typeof alias !== "string" || alias === "") return null;
-  if (!DISPOSITION_KINDS.includes(disposition as ReviewThreadDisposition["disposition"])) {
+  if (!DISPOSITION_KINDS.has(disposition as ReviewThreadDisposition["disposition"])) {
     return null;
   }
   if (threadId !== undefined && typeof threadId !== "string") return null;
@@ -1101,12 +1105,11 @@ export function toReviewThreadDispositions(
     evidence?: { filePath: string; quote: string } | null;
   }> | null | undefined,
 ): ReviewThreadDisposition[] {
-  return (entries ?? []).map((entry) => ({
-    alias: entry.alias,
-    disposition: entry.disposition,
-    ...(entry.reply != null ? { reply: entry.reply } : {}),
-    ...(entry.evidence != null ? { evidence: entry.evidence } : {}),
-  }));
+  return (entries ?? []).map((entry) => Object.assign(
+    { alias: entry.alias, disposition: entry.disposition },
+    entry.reply != null ? { reply: entry.reply } : {},
+    entry.evidence != null ? { evidence: entry.evidence } : {},
+  ));
 }
 
 /**

@@ -588,7 +588,7 @@ function pathToken(raw: string): string | null {
   const segments = token.split("/");
   const nested = segments.length > 1;
   if (nested && GENERATED_PATH_ROOTS.has(segments[0].toLowerCase())) return null;
-  const last = segments[segments.length - 1] ?? "";
+  const last = segments.at(-1) ?? "";
   const dot = last.lastIndexOf(".");
   // Index 0 is a dotfile with no extension (".env", ".gitignore"), and -1 is no
   // dot at all. Both are names this filter will not judge.
@@ -1423,25 +1423,25 @@ export async function captureDefaultBranchFilesStep(
         "-z",
         ref,
       ]);
+    const reportDeadline = (key: string, ref: string): void => {
+      unavailable += 1;
+      log.warn(
+        { repo: key, ref, deadlineMs: CAPTURE_DEADLINE_MS },
+        "repo_memory_default_branch_files_deadline_exceeded",
+      );
+    };
     for (const repository of input.repositories) {
       const key = `${repository.provider}:${repository.repoPath}`;
       /** The throwaway repository this repository's fallback fetched into, if it
        * needed one, so the cleanup below knows what to remove. */
       let scratchPath: string | null = null;
-      const reportDeadline = (ref: string): void => {
-        unavailable += 1;
-        log.warn(
-          { repo: key, ref, deadlineMs: CAPTURE_DEADLINE_MS },
-          "repo_memory_default_branch_files_deadline_exceeded",
-        );
-      };
       // Per repository, not per step: a checkout whose listing fails must cost
       // only its own filter and not every repository listed after it.
       try {
         const ref = defaultBranchRef(repository);
         let listed = await withinDeadline(() => listTree(repository.localPath, ref));
         if (listed === CAPTURE_DEADLINE) {
-          reportDeadline(ref);
+          reportDeadline(key, ref);
           continue;
         }
         if (listed.exitCode !== 0 && ref !== "HEAD") {
@@ -1472,7 +1472,7 @@ export async function captureDefaultBranchFilesStep(
               buildSandboxProviderConfigs(input.repositories.map((entry) => entry.provider)),
             );
             if (resolved === CAPTURE_DEADLINE) {
-              reportDeadline(ref);
+              reportDeadline(key, ref);
               continue;
             }
             providers = resolved;
@@ -1492,7 +1492,7 @@ export async function captureDefaultBranchFilesStep(
             // timeout of its own either.
             const token = await withinDeadline(() => provider.getToken());
             if (token === CAPTURE_DEADLINE) {
-              reportDeadline(ref);
+              reportDeadline(key, ref);
               continue;
             }
             // Outside every checkout and unique per repository, so two
@@ -1506,7 +1506,7 @@ export async function captureDefaultBranchFilesStep(
               sandbox.runCommand("git", ["init", "--bare", "--quiet", scratchPath as string]),
             );
             if (prepared === CAPTURE_DEADLINE) {
-              reportDeadline(ref);
+              reportDeadline(key, ref);
               continue;
             }
             if (prepared.exitCode === 0) {
@@ -1544,7 +1544,7 @@ export async function captureDefaultBranchFilesStep(
                 );
               }
               if (fetched === CAPTURE_DEADLINE) {
-                reportDeadline(ref);
+                reportDeadline(key, ref);
                 continue;
               }
               // FETCH_HEAD in the throwaway repository. Nothing is created,
@@ -1555,7 +1555,7 @@ export async function captureDefaultBranchFilesStep(
                   listTree(scratchPath as string, "FETCH_HEAD"),
                 );
                 if (refetched === CAPTURE_DEADLINE) {
-                  reportDeadline(ref);
+                  reportDeadline(key, ref);
                   continue;
                 }
                 listed = refetched;

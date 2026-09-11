@@ -42,7 +42,7 @@ export interface TransformDefinition {
   >;
 }
 
-export class TransformExecutionError extends Error {
+class TransformExecutionError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "TransformExecutionError";
@@ -64,7 +64,7 @@ function isSupportedRegex(pattern: string): boolean {
     return false;
   }
   try {
-    new RegExp(pattern, "u");
+    void new RegExp(pattern, "u");
     return true;
   } catch {
     return false;
@@ -83,14 +83,12 @@ export function validateTransformDefinition(
         path: "/configuration/pattern",
         message: "replacement pattern cannot be empty.",
       });
-    } else if (config.mode === "regex") {
-      if (!isSupportedRegex(config.pattern)) {
+    } else if (config.mode === "regex" && !isSupportedRegex(config.pattern)) {
         issues.push({
           code: "invalid_configuration",
           path: "/configuration/pattern",
           message: "pattern must use supported RE2 syntax.",
         });
-      }
     }
   }
   if (config.operation === "parse_json" && config.expectedSchema) {

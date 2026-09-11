@@ -280,7 +280,7 @@ function isLikelyIban(candidate: string): boolean {
   for (const character of rearranged) {
     const digits =
       character >= "A"
-        ? String(character.charCodeAt(0) - 55)
+        ? String(character.codePointAt(0)! - 55)
         : character;
     for (const digit of digits) {
       remainder = (remainder * 10 + Number(digit)) % 97;

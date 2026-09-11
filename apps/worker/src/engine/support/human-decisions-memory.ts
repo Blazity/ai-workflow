@@ -35,9 +35,8 @@ function renderRound(roundNumber: number, decision: HumanDecision): string {
   for (let i = 0; i < decision.questions.length; i++) {
     lines.push(`${i + 1}. ${defangMarkers(decision.questions[i]!)}`);
   }
-  lines.push("");
   // Keep the answer verbatim (embedded newlines included), markers excepted.
-  lines.push(`Answer: ${defangMarkers(decision.answer)}`);
+  lines.push("", `Answer: ${defangMarkers(decision.answer)}`);
   return lines.join("\n");
 }
 

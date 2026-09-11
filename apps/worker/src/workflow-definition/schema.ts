@@ -74,7 +74,7 @@ const bindingInputName = z.custom<string>(
 const emptyParams = z.object({}).strict();
 const agentParams = z
   .object({
-    model: z.string().trim().max(200).regex(/^[A-Za-z0-9._:\/-]+$/).optional(),
+    model: z.string().trim().max(200).regex(/^[A-Za-z0-9._:/-]+$/).optional(),
     provider: z.enum(["claude", "codex"]).optional(),
     prompt: z.string().trim().min(1).max(50000).optional(),
   })
@@ -760,7 +760,7 @@ function findCycle(adjacency: Map<string, string[]>, nodeIds: string[]): string[
     const stack: { node: string; idx: number }[] = [{ node: start, idx: 0 }];
     color.set(start, GRAY);
     while (stack.length > 0) {
-      const frame = stack[stack.length - 1];
+      const frame = stack.at(-1)!;
       const neighbors = adjacency.get(frame.node) ?? [];
       if (frame.idx < neighbors.length) {
         const next = neighbors[frame.idx];
@@ -799,7 +799,7 @@ function stronglyConnectedComponents(
     if (indices.has(start)) continue;
     const work: { node: string; idx: number }[] = [{ node: start, idx: 0 }];
     while (work.length > 0) {
-      const frame = work[work.length - 1];
+      const frame = work.at(-1)!;
       const node = frame.node;
       if (frame.idx === 0) {
         indices.set(node, counter);
@@ -830,7 +830,7 @@ function stronglyConnectedComponents(
         }
         work.pop();
         if (work.length > 0) {
-          const parent = work[work.length - 1].node;
+          const parent = work.at(-1)!.node;
           lowlink.set(parent, Math.min(lowlink.get(parent)!, lowlink.get(node)!));
         }
       }
@@ -854,12 +854,6 @@ function reachableFrom(seeds: string[], adjacency: Map<string, string[]>): Set<s
     }
   }
   return seen;
-}
-
-export function validateWorkflowGraphIssues(
-  def: WorkflowDefinition,
-): WorkflowDefinitionValidationIssue[] {
-  return validateWorkflowGraphV2Issues(def);
 }
 
 function jsonPointerSegment(value: string | number): string {
@@ -919,28 +913,23 @@ function validateWorkflowV2ConfigurationIssues(
         ? v2BranchConfigurationSchema
         : v2ConfigurationSchemas[node.type];
     const parsed = schema.safeParse(node.configuration);
-    if (parsed.success) {
-      const profileReference = node.configuration.harnessProfile;
-      if (
-        isV2AgentBlockType(node.type) &&
-        isHarnessProfileReference(profileReference)
-      ) {
-        if (
-          node.configuration.provider !== undefined ||
-          node.configuration.model !== undefined
-        ) {
-          issues.push(
-            invalidConfigurationIssue(
-              node,
-              nodeIndex,
-              ["harnessProfile"],
-              "provider and model cannot override a pinned Harness Profile.",
-            ),
-          );
-        }
-      }
-      continue;
+    const profileReference = node.configuration.harnessProfile;
+    if (
+      parsed.success &&
+      isV2AgentBlockType(node.type) &&
+      isHarnessProfileReference(profileReference) &&
+      (node.configuration.provider !== undefined || node.configuration.model !== undefined)
+    ) {
+      issues.push(
+        invalidConfigurationIssue(
+          node,
+          nodeIndex,
+          ["harnessProfile"],
+          "provider and model cannot override a pinned Harness Profile.",
+        ),
+      );
     }
+    if (parsed.success) continue;
     for (const issue of parsed.error.issues) {
       // Emit one exact issue per unknown property above instead of Zod's
       // aggregate object-level "unrecognized keys" diagnostic.
@@ -1167,8 +1156,7 @@ function validateWorkflowV2BlockDeploymentIssues(
       }
     }
   }
-  issues.push(...unattendedScheduleGraphIssues(def));
-  issues.push(...pinnedScheduleRepositoryIssues(def));
+  issues.push(...unattendedScheduleGraphIssues(def), ...pinnedScheduleRepositoryIssues(def));
   return issues;
 }
 
@@ -1551,8 +1539,8 @@ function validateWorkflowGraphV2Issues(
   def: WorkflowDefinitionV2,
 ): WorkflowDefinitionValidationIssue[] {
   const issues: WorkflowDefinitionValidationIssue[] = [];
-  const addIssue = (message: string, nodeId: string | null = null, path?: string) => {
-    issues.push(deploymentIssue(message, nodeId, path));
+  const addIssue = (message: string, issueNodeId: string | null = null, path?: string) => {
+    issues.push(deploymentIssue(message, issueNodeId, path));
   };
   const nodeById = new Map<string, WorkflowDefinitionV2Node>();
   for (const [nodeIndex, node] of def.nodes.entries()) {
@@ -1922,13 +1910,13 @@ function repositoryScopePinIssues(
 
 function deploymentIssue(
   message: string,
-  nodeId: string | null,
+  issueNodeId: string | null,
   path?: string,
 ): WorkflowDefinitionValidationIssue {
   return {
     code: "deployment",
     severity: "error",
-    nodeId,
+    nodeId: issueNodeId,
     ...(path ? { path } : {}),
     message,
   };
@@ -1999,7 +1987,7 @@ export function validateAnyScopeReviewSafety(def: ReviewSafetyGraph): string[] {
   return validateAnyScopeReviewSafetyIssues(def).map(({ message }) => message);
 }
 
-export function validateAnyScopeReviewSafetyIssues(
+function validateAnyScopeReviewSafetyIssues(
   def: ReviewSafetyGraph,
 ): WorkflowDefinitionValidationIssue[] {
   const nodes = new Map(def.nodes.map((node) => [node.id, node]));

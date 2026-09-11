@@ -4,7 +4,7 @@ import { agentMemoryDocuments } from "../schema.js";
 
 export const MAX_MEMORY_DOCUMENT_BYTES = 256 * 1024;
 const DEFAULT_MEMORY_LIST_LIMIT = 100;
-export const MAX_MEMORY_LIST_LIMIT = 200;
+const MAX_MEMORY_LIST_LIMIT = 200;
 
 export interface MemoryDocument {
   content: string;

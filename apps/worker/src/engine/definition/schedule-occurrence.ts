@@ -122,7 +122,7 @@ const AMBIGUITY_REPAIR_LIMIT = 128;
 /** Upper bound on the editor preview, so a bad `count` cannot buy unbounded work. */
 const NEXT_RUNS_MAX = 50;
 
-export type ScheduleProblemReason =
+type ScheduleProblemReason =
   | "invalid-expression"
   | "invalid-timezone"
   | "below-minimum-period"
@@ -136,7 +136,7 @@ export interface ScheduleProblem {
   minGapMs?: number;
 }
 
-export interface ParsedSchedule {
+interface ParsedSchedule {
   cron: string;
   timezone: string;
 }
@@ -173,7 +173,7 @@ export function parseSchedule(
   if (timezoneProblem) return { ok: false, problem: timezoneProblem };
 
   try {
-    new Cron(cron, { timezone });
+    void new Cron(cron, { timezone });
   } catch (error) {
     return {
       ok: false,
@@ -344,7 +344,7 @@ export type PresetCompileResult =
  * Exported so a caller can recognise a compiled interval preset without
  * re-deriving the rule.
  */
-export const INTERVAL_PRESET_TIMEZONE = "UTC";
+const INTERVAL_PRESET_TIMEZONE = "UTC";
 
 /**
  * Turn a structured preset into a cron expression and the zone it must run in.
@@ -794,7 +794,7 @@ function countDroppedBetween(
     return ms > watermarkMs && ms < candidateMs;
   });
 
-  const last = sample[sample.length - 1];
+  const last = sample.at(-1);
   const reachedCandidate = last !== undefined && last.getTime() >= candidateMs;
   const exact = sample.length <= DROPPED_BACKLOG_CAP || reachedCandidate;
 
@@ -869,7 +869,7 @@ function validateTimezone(timezone: string): ScheduleProblem | null {
   }
 
   try {
-    new Intl.DateTimeFormat("en-GB", { timeZone: candidate });
+    void new Intl.DateTimeFormat("en-GB", { timeZone: candidate });
   } catch {
     return {
       reason: "invalid-timezone",

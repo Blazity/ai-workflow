@@ -1,9 +1,9 @@
 import { z } from "zod";
 import type { PRComment } from "../../adapters/vcs/types.js";
 
-export const REVIEW_FEEDBACK_INPUT_NAME = "reviewFeedback";
+const REVIEW_FEEDBACK_INPUT_NAME = "reviewFeedback";
 
-export const reviewFeedbackSchema = z
+const reviewFeedbackSchema = z
   .object({
     state: z.enum(["changes_requested", "commented"]),
     author: z.string(),

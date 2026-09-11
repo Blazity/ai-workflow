@@ -85,7 +85,7 @@ function undeclaredGroupStatuses(
     (group) => !declared.has(group),
   );
   return missing.flatMap((group) =>
-    repositories.map((repo) => ({ ...repo, group, status: "not_run" as const })),
+    repositories.map((repo) => Object.assign({}, repo, { group, status: "not_run" as const })),
   );
 }
 
@@ -232,7 +232,7 @@ export function repositoryScriptCoverageNotes(
   return notes;
 }
 
-export type RepositoryScriptResult = {
+type RepositoryScriptResult = {
   repo: string;
   command: string;
   group: string;
@@ -241,7 +241,7 @@ export type RepositoryScriptResult = {
   timedOut: boolean;
 };
 
-export type RepositoryScriptFailure = {
+type RepositoryScriptFailure = {
   repo: string;
   command: string;
   exitCode: number;
@@ -249,7 +249,7 @@ export type RepositoryScriptFailure = {
   phase: string | null;
 };
 
-export type RepositoryScriptDirtied = {
+type RepositoryScriptDirtied = {
   repo: string;
   files: string[];
   preExisting: string[];
@@ -357,7 +357,7 @@ export function asRepositoryScriptsOutput(
 export const REPOSITORY_SCRIPTS_FAILED_CLASS = "Repository scripts failed";
 export const REPOSITORY_SCRIPTS_ABANDONED_CLASS =
   "Repository scripts were stopped before finishing";
-export const REPOSITORY_SCRIPTS_TIMED_OUT_CLASS = "Repository scripts timed out";
+const REPOSITORY_SCRIPTS_TIMED_OUT_CLASS = "Repository scripts timed out";
 export const REPOSITORY_SCRIPTS_BUDGET_CLASS = "CHECKS BUDGET SPENT";
 export const REPOSITORY_SCRIPTS_NOT_STARTED_CLASS =
   "Repository scripts could not be started";
@@ -380,7 +380,7 @@ const REFUSED_SUFFIX = ", so publication was refused: ";
 /** Every class a scripts refusal can open with. Exported as one list so the
  *  surfaces that ROUTE on the class (the finalize block's lead selection,
  *  runs.diagnose) never re-type a sentence this module composes. */
-export const REPOSITORY_SCRIPTS_REFUSAL_LEADS: readonly string[] = [
+const REPOSITORY_SCRIPTS_REFUSAL_LEADS: readonly string[] = [
   REPOSITORY_SCRIPTS_FAILED_CLASS,
   REPOSITORY_SCRIPTS_ABANDONED_CLASS,
   REPOSITORY_SCRIPTS_TIMED_OUT_CLASS,

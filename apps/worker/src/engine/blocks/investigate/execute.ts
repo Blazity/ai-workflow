@@ -152,7 +152,7 @@ function slackEvidence(
   match: SlackSearchResult["matches"][number],
 ): InvestigateEvidence {
   const text = truncateExcerpt(match.text);
-  const seconds = Number.parseFloat(match.ts);
+  const seconds = Number(match.ts);
   return {
     ref: `slack:${match.channel}/${match.ts}`,
     source: "slack",
@@ -458,8 +458,7 @@ async function blockInvestigateRetrievalStep(input: {
   );
   const secrets = configuredReplaySecrets();
   return {
-    evidence: evidence.map((item) => ({
-      ...item,
+    evidence: evidence.map((item) => Object.assign({}, item, {
       title: redactConfiguredSecretsInText(item.title, secrets),
       excerpt: redactConfiguredSecretsInText(item.excerpt, secrets),
     })),

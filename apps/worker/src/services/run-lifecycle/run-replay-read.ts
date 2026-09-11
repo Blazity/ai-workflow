@@ -36,12 +36,12 @@ import {
 export { RunObservationStoreError };
 export { MAX_REPLAY_PAGE_LIMIT };
 
-const TERMINAL_RUN_STATUSES: readonly string[] = ["success", "failed", "blocked"];
-const STALE_LIVE_ATTEMPT_STATES: readonly ReplayAttemptState[] = [
+const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set(["success", "failed", "blocked"]);
+const STALE_LIVE_ATTEMPT_STATES: ReadonlySet<ReplayAttemptState> = new Set([
   "running",
   "waiting_loop",
   "waiting_for_clarification",
-];
+]);
 
 type RunRow = NonNullable<Awaited<ReturnType<typeof readRunReplayRun>>>;
 type ObservationRow = NonNullable<Awaited<ReturnType<typeof readRunReplayObservation>>>;
@@ -71,11 +71,11 @@ const connectedReads: ReplayReads = {
 };
 
 function isTerminalRunStatus(status: string | null | undefined): boolean {
-  return Boolean(status && TERMINAL_RUN_STATUSES.includes(status));
+  return Boolean(status && TERMINAL_RUN_STATUSES.has(status));
 }
 
 function displayAttemptState(state: ReplayAttemptState, runIsTerminal: boolean) {
-  return runIsTerminal && STALE_LIVE_ATTEMPT_STATES.includes(state) ? "cancelled" : state;
+  return runIsTerminal && STALE_LIVE_ATTEMPT_STATES.has(state) ? "cancelled" : state;
 }
 
 function mapAttemptSummary(row: AttemptRow, runIsTerminal: boolean): WorkflowReplayAttemptSummary {
@@ -187,7 +187,7 @@ async function replayWithReads(
     } : null,
     attempts: page.map((row) => mapAttemptSummary(row, runIsTerminal)),
     nextCursor: rows.length > limit && page.length > 0
-      ? replayCursor(page[page.length - 1]!.id)
+      ? replayCursor(page.at(-1)!.id)
       : null,
   };
 }

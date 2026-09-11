@@ -38,8 +38,7 @@
     "gate:model-catalog-drift": "node scripts/gates/model-catalog-drift.mjs",
     "gate:deps-consistency": "node scripts/gates/check-deps-consistency.mjs",
     "gate:docs-status": "node scripts/gates/docs-status.mjs",
-    "gates": "pnpm run gate:boundaries && pnpm run gate:unused && pnpm run gate:lint && pnpm run gate:resurrected && pnpm run gate:single-schema && pnpm run gate:transactions && pnpm run gate:consecutive-writes && pnpm run gate:db-client-fence && pnpm run gate:package-contracts && pnpm run gate:model-catalog-drift && pnpm run gate:deps-consistency && pnpm run gate:docs-status",
-    "gates:update-baselines": "pnpm run gate:unused -- --update-baseline && pnpm run gate:lint -- --update-baseline && pnpm run gate:db-client-fence -- --update-baseline"
+    "gates": "pnpm run gate:boundaries && pnpm run gate:unused && pnpm run gate:lint && pnpm run gate:resurrected && pnpm run gate:single-schema && pnpm run gate:transactions && pnpm run gate:consecutive-writes && pnpm run gate:db-client-fence && pnpm run gate:package-contracts && pnpm run gate:model-catalog-drift && pnpm run gate:deps-consistency && pnpm run gate:docs-status"
   },
   "devDependencies": {
     "@types/node": "catalog:",

@@ -59,7 +59,7 @@ import {
 export type WorkflowDefinitionActor = raw.WorkflowDefinitionActor;
 type WorkflowDefinitionRow = raw.WorkflowDefinitionRow;
 export type WorkflowDefinitionVersionRow = raw.WorkflowDefinitionVersionRow;
-export { WorkflowDefinitionStoreError, WorkflowDefinitionValidationError } from "../../db/repositories/definitions.js";
+export { WorkflowDefinitionStoreError,  } from "../../db/repositories/definitions.js";
 
 /** The definitions service's transport-mapped authorization rejection. Keeping
  * it here avoids loading the complete auth service (and its DB singleton) for
@@ -156,20 +156,20 @@ async function deployable(db: Db, definition: WorkflowDefinition): Promise<Workf
   return parsed;
 }
 
-function layout(layout: WorkflowDefinitionLayoutInput): void {
-  if (!layout || typeof layout !== "object" || !layout.nodes || typeof layout.nodes !== "object" || Array.isArray(layout.nodes)) {
+function layout(input: WorkflowDefinitionLayoutInput): void {
+  if (!input || typeof input !== "object" || !input.nodes || typeof input.nodes !== "object" || Array.isArray(input.nodes)) {
     throw new raw.WorkflowDefinitionStoreError(400, "Invalid workflow layout");
   }
-  for (const [id, position] of Object.entries(layout.nodes)) {
+  for (const [id, position] of Object.entries(input.nodes)) {
     if (!id || !position || !Number.isFinite(position.x) || !Number.isFinite(position.y)) {
       throw new raw.WorkflowDefinitionStoreError(400, "Invalid workflow layout");
     }
   }
-  if (layout.edges === undefined) return;
-  if (!layout.edges || typeof layout.edges !== "object" || Array.isArray(layout.edges)) {
+  if (input.edges === undefined) return;
+  if (!input.edges || typeof input.edges !== "object" || Array.isArray(input.edges)) {
     throw new raw.WorkflowDefinitionStoreError(400, "Invalid workflow layout");
   }
-  for (const [id, value] of Object.entries(layout.edges)) {
+  for (const [id, value] of Object.entries(input.edges)) {
     if (!id || !value || !Number.isFinite(value.bend.x) || !Number.isFinite(value.bend.y)) {
       throw new raw.WorkflowDefinitionStoreError(400, "Invalid workflow layout");
     }
@@ -803,12 +803,6 @@ async function deployableConnected(definition: WorkflowDefinition): Promise<Work
   const promptIssues = await validateConnectedDefinitionPromptAuthoring(parsed);
   if (promptIssues.length > 0) throw new raw.WorkflowDefinitionValidationError(promptIssues);
   return parsed;
-}
-
-export function validateConnectedWorkflowPromptAuthoring(
-  definition: WorkflowDefinition,
-) {
-  return validateConnectedDefinitionPromptAuthoring(definition);
 }
 
 export function validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring(

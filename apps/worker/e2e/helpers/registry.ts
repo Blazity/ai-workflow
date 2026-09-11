@@ -14,16 +14,6 @@ export async function getRunId(ticketKey: string): Promise<string | null> {
   return (rows[0]?.run_id as string | undefined) ?? null;
 }
 
-export async function listAll(): Promise<
-  Array<{ ticketKey: string; runId: string }>
-> {
-  const rows = await sql`SELECT ticket_key, run_id FROM active_runs`;
-  return rows.map((r) => ({
-    ticketKey: r.ticket_key as string,
-    runId: r.run_id as string,
-  }));
-}
-
 export async function setEntry(
   ticketKey: string,
   runId: string,

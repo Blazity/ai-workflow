@@ -102,7 +102,7 @@ type TemplateOptions = Parameters<typeof workflowDefinitionTemplate>[1];
 type TicketContext = Parameters<typeof triggerOutputWithTicketContext>[1];
 
 /** Which invocations a script claims. Omitted fields match any value. */
-export interface ScenarioScriptMatch {
+interface ScenarioScriptMatch {
   nodeId: string;
   /** 1-based scheduler attempt; a Loop re-invokes the same node. */
   attempt?: number;
@@ -110,7 +110,7 @@ export interface ScenarioScriptMatch {
   activationScopeId?: string;
 }
 
-export type ScenarioResultFactory = (
+type ScenarioResultFactory = (
   node: WorkflowDefinitionV2Node,
   resolvedInputs: Readonly<Record<string, unknown>>,
   context: V2InvocationContext,
@@ -575,6 +575,8 @@ class Scenario {
     this.assertNotStarted("execute");
     this.started = true;
     let failure: unknown;
+    let failed = false;
+    let outcome: ScenarioOutcome | undefined;
     try {
       const result = await executeV2Graph({
         definition: this.definition,
@@ -590,28 +592,30 @@ class Scenario {
         executeBlock: (node, steps, resolvedInputs, context) =>
           this.runBlock(node, steps, resolvedInputs, context),
       });
-      return {
+      outcome = {
         result,
         invocations: this.invocationLog,
         invocationsOf: (nodeId) =>
           this.invocationLog.filter((entry) => entry.nodeId === nodeId),
       };
     } catch (error) {
+      failed = true;
       failure = error;
-      throw error;
     } finally {
       for (const gate of this.gates) gate.dispose();
-      const unused = this.scripts.filter((entry) => entry.used === 0);
-      if (unused.length > 0) {
-        throw new ScenarioViolation(
-          `Scenario for ${this.source} scripted outcomes that never ran: ${unused.map((entry) => entry.label).join("; ")}. Remove them or fix the scenario's expectations.${
-            failure === undefined
-              ? ""
-              : ` The run also ended with: ${failure instanceof Error ? failure.message : String(failure)}`
-          }`,
-        );
-      }
     }
+    const unused = this.scripts.filter((entry) => entry.used === 0);
+    if (unused.length > 0) {
+      throw new ScenarioViolation(
+        `Scenario for ${this.source} scripted outcomes that never ran: ${unused.map((entry) => entry.label).join("; ")}. Remove them or fix the scenario's expectations.${
+          failed
+            ? ` The run also ended with: ${failure instanceof Error ? failure.message : String(failure)}`
+            : ""
+        }`,
+      );
+    }
+    if (failed) throw failure;
+    return outcome!;
   }
 
   private async runBlock(

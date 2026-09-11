@@ -340,10 +340,9 @@ function buildReviewThreadFeed(
   const context = drafts.filter((draft) => !isReviewLedgerWorkItem(draft)).sort(byAge);
   const kept = workItems.slice(0, REVIEW_LEDGER_MAX_WORK_ITEMS);
   const keptContext = context.slice(0, REVIEW_LEDGER_MAX_CONTEXT_THREADS);
-  const threads = [...kept, ...keptContext].map((draft, index) => ({
-    ...draft,
-    alias: `T${index + 1}`,
-  }));
+  const threads = [...kept, ...keptContext].map((draft, index) =>
+    Object.assign({}, draft, { alias: `T${index + 1}` }),
+  );
   // Counted apart, because they cost different things: a dropped work item is a
   // review comment the agent will never answer, a dropped context thread is
   // background it will not have.
@@ -479,7 +478,7 @@ export class GitHubAdapter
       return result.data.commit.sha!;
     } catch (err: any) {
       throw new Error(
-        `Failed to seed empty repository ${this.config.owner}/${this.config.repo}: ${err.message}`,
+        `Failed to seed empty repository ${this.config.owner}/${this.config.repo}: ${err.message}`, { cause: err },
       );
     }
   }
@@ -1412,7 +1411,7 @@ export class GitHubAdapter
           source: ledgerInlineSource(comments[0]),
           resolvable: true,
           // The bot spoke last, so the ball is in the reviewer's court.
-          awaitingHuman: notes[notes.length - 1]?.isLedgerReply === true,
+          awaitingHuman: notes.at(-1)?.isLedgerReply === true,
           ...(node.path ? { filePath: node.path } : {}),
           ...(typeof node.line === "number" ? { line: node.line } : {}),
           notes,
@@ -1528,7 +1527,7 @@ export class GitHubAdapter
     input: SettleReviewThreadInput,
   ): Promise<SettleReviewThreadResult> {
     const comments = await this.ledgerThreadComments(input.thread.threadId);
-    const last = comments[comments.length - 1];
+    const last = comments.at(-1);
     // Checked first, against any marker variant, and only on a comment this token
     // wrote. Posting the reply and resolving are two calls, so a failure between
     // them is retried; the marker is what makes that retry post nothing a second

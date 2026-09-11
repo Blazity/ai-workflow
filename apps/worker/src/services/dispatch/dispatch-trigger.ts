@@ -499,7 +499,7 @@ export function selectEligibleEvent(
   };
 }
 
-export function selectedReviewStates(
+function selectedReviewStates(
   params: Record<string, unknown>,
   provider: VcsProviderKind,
   botLogin: string | undefined,

@@ -21,7 +21,7 @@ export type McpSmokeInput = {
   token: string | undefined;
 };
 
-export type McpSmokeRejection = {
+type McpSmokeRejection = {
   status: number;
   wwwAuthenticate: string | null;
 };

@@ -316,8 +316,7 @@ async function readLegacyMemoryFile(
   ];
   const primary = manifest.repositories[0];
   if (primary && primary.localPath !== WORKSPACE_ROOT_DIR) {
-    candidates.push(`${primary.localPath}/${docPath}`);
-    candidates.push(`${primary.localPath}/${legacyDocPath}`);
+    candidates.push(`${primary.localPath}/${docPath}`, `${primary.localPath}/${legacyDocPath}`);
   }
   for (const candidate of candidates) {
     const found = await readMemoryFile(sandbox, candidate, maxBytes);

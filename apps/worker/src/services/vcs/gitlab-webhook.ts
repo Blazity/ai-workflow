@@ -82,7 +82,7 @@ export function normalizeGitLabMergeRequestEvent(
   const ownerRepo = project.path_with_namespace ?? stringId(project.id);
 
   if (typeof prNumber !== "number") {
-    throw new Error("Malformed GitLab merge request payload: missing iid");
+    throw new TypeError("Malformed GitLab merge request payload: missing iid");
   }
   if (!attrs.action) {
     throw new Error("Malformed GitLab merge request payload: missing action");

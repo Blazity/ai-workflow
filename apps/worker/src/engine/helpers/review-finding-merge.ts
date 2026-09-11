@@ -35,7 +35,7 @@ import type { ReviewResultFinding } from "@shared/contracts";
  */
 
 /** Where a finding sits on the reviewed diff. Null when it cannot be placed. */
-export interface ReviewFindingAnchor {
+interface ReviewFindingAnchor {
   path: string;
   startLine: number;
   endLine: number;
@@ -71,7 +71,7 @@ export interface MergedReviewFinding extends ReviewResultFinding {
  * Frozen on purpose. These numbers decide which comments a reader sees, so they
  * belong to the code that is reviewed and tested, not to a deployment.
  */
-export const REVIEW_FINDING_MERGE = Object.freeze({
+const REVIEW_FINDING_MERGE = Object.freeze({
   /** Lines each range grows by before testing for overlap. */
   lineWindow: 2,
   /** Wording agreement required when the line matches but the severity differs. */

@@ -18,7 +18,7 @@ import {
 import { confirmWorkflowStepsDrained } from "./workflow-step-drain.js";
 import { logger } from "../../infra/logger.js";
 import { cancelSubjectRun } from "./cancel-run.js";
-export { STARTUP_DEADLINE_MS } from "./run-start-constants.js";
+;
 export const STARTUP_TIMEOUT_REASON =
   "Workflow did not start within 10 minutes.";
 const LOST_START_OWNERSHIP_REASON =

@@ -13,7 +13,7 @@ export const postPrGateTicketInputFields = [
   "labels",
 ] as const;
 
-export interface PostPrGatePrInfo {
+interface PostPrGatePrInfo {
   number: number;
   url: string;
   headSha: string;
@@ -25,7 +25,7 @@ export interface PostPrGatePrInfo {
   isDraft: boolean;
 }
 
-export interface PostPrGateTicket {
+interface PostPrGateTicket {
   identifier?: string;
   title?: string;
   description?: string;
@@ -34,7 +34,7 @@ export interface PostPrGateTicket {
   labels?: string[];
 }
 
-export interface PostPrGateFile {
+interface PostPrGateFile {
   path: string;
   additions: number;
   deletions: number;
@@ -52,7 +52,7 @@ export interface PostPrGateStepContext {
   };
 }
 
-export type PostPrGateStepConclusion = "success" | "failure" | "neutral";
+type PostPrGateStepConclusion = "success" | "failure" | "neutral";
 
 export interface PostPrGateStepResult {
   conclusion: PostPrGateStepConclusion;
@@ -61,7 +61,7 @@ export interface PostPrGateStepResult {
   annotations?: CheckRunAnnotation[];
 }
 
-export type PostPrGateOnFailure = "continue" | "fail";
+type PostPrGateOnFailure = "continue" | "fail";
 
 export interface PostPrGateConfigStep<StepId extends string = string> {
   uses: StepId;
@@ -71,7 +71,7 @@ export interface PostPrGateConfigStep<StepId extends string = string> {
   with?: unknown;
 }
 
-export interface PostPrGateRunOn {
+interface PostPrGateRunOn {
   botPrsOnly: boolean;
   draftPrs: boolean;
   baseBranches: string[];
@@ -84,7 +84,7 @@ export interface PostPrGateConfig<StepId extends string = string> {
   };
 }
 
-export interface PostPrGateStepExecutionInput {
+interface PostPrGateStepExecutionInput {
   context: PostPrGateStepContext;
   config: unknown;
   step: PostPrGateConfigStep;

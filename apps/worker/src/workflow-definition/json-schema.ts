@@ -6,7 +6,7 @@ import {
   type WorkflowValueSchema,
 } from "@shared/contracts";
 
-export type JsonSchemaIssueCode =
+type JsonSchemaIssueCode =
   | "invalid_json"
   | "invalid_schema"
   | "unsupported_keyword"

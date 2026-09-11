@@ -12,7 +12,7 @@ import {
 } from "../../sandbox/repo-workspace.js";
 import { stopSandboxAndConfirm } from "../../sandbox/stop-ticket-sandboxes.js";
 
-export interface TrustedWorkspacePushRepositoryResult {
+interface TrustedWorkspacePushRepositoryResult {
   provider: WorkspaceRepo["provider"];
   repoPath: string;
   branchName: string;
@@ -600,7 +600,9 @@ export async function readBranchShaAfterWrite(
       return await vcs.getBranchSha(branchName);
     } catch (error) {
       if (attempt >= BRANCH_SHA_RETRY_DELAYS_MS.length || !isRefNotFound(error)) throw error;
-      await new Promise((resolve) => setTimeout(resolve, BRANCH_SHA_RETRY_DELAYS_MS[attempt]!));
+      await new Promise((resolve) => {
+        setTimeout(resolve, BRANCH_SHA_RETRY_DELAYS_MS[attempt]!);
+      });
     }
   }
 }

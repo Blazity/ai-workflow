@@ -129,7 +129,9 @@ async function listRepositoriesWithRetry(
     } catch (err) {
       lastError = err;
       if (attempt >= LISTING_MAX_ATTEMPTS || !isTransientListingError(err)) break;
-      await new Promise((resolve) => setTimeout(resolve, listingRetryDelayMs(attempt)));
+      await new Promise((resolve) => {
+        setTimeout(resolve, listingRetryDelayMs(attempt));
+      });
     }
   }
   throw lastError;

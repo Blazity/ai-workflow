@@ -154,24 +154,23 @@ export function registerDiscoveryTools(server: McpServer, deps: McpToolDependenc
           );
 
           return {
-            workflows: page.map((row) => ({
-              definitionId: row.id,
-              name: row.name,
-              enabled: row.enabled,
-              deployedVersion: row.deployedVersion,
-              deployedSchema:
-                deploymentByDefinition.get(row.id)?.deployedSchema ?? "v2",
-              ...(deploymentByDefinition.get(row.id)?.retiredMessage
-                ? {
-                    retiredMessage:
-                      deploymentByDefinition.get(row.id)!.retiredMessage,
-                  }
-                : {}),
-              // Empty for a definition with no deployed version, and also for a
-              // deployed pointer with no readable row behind it: both mean there
-              // is nothing an agent can dispatch today.
-              triggers: deploymentByDefinition.get(row.id)?.triggers ?? [],
-            })),
+            workflows: page.map((row) => Object.assign(
+              {
+                definitionId: row.id,
+                name: row.name,
+                enabled: row.enabled,
+                deployedVersion: row.deployedVersion,
+                deployedSchema:
+                  deploymentByDefinition.get(row.id)?.deployedSchema ?? "v2",
+                // Empty for a definition with no deployed version, and also for a
+                // deployed pointer with no readable row behind it: both mean there
+                // is nothing an agent can dispatch today.
+                triggers: deploymentByDefinition.get(row.id)?.triggers ?? [],
+              },
+              deploymentByDefinition.get(row.id)?.retiredMessage
+                ? { retiredMessage: deploymentByDefinition.get(row.id)!.retiredMessage }
+                : {},
+            )),
             truncated,
           };
         },

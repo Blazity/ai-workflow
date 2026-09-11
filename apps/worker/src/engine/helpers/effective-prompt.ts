@@ -30,15 +30,11 @@ export type {
   EffectivePromptCompilation,
   EffectivePromptMemorySource,
   EffectivePromptProfileSource,
-  EffectivePromptProvenance,
   EffectivePromptRepositorySource,
-  EffectivePromptSection,
-  EffectivePromptSectionKind,
-  EffectivePromptUnresolvedSource,
 } from "@shared/prompts";
 export { compatibilityPromptSourceForV2Node } from "@shared/prompts";
 
-export interface ResolveProfileInstructionsInput {
+interface ResolveProfileInstructionsInput {
   node: WorkflowDefinitionV2Node;
   defaultProvider?: "claude" | "codex";
 }

@@ -169,7 +169,7 @@ export function isReopenedLedgerThread<T extends LedgerNoteLike>(
   notes: readonly T[],
   isOurs: (note: T) => boolean,
 ): boolean {
-  const last = notes[notes.length - 1];
+  const last = notes.at(-1);
   if (last === undefined || isOurs(last)) return false;
   const ourMarker = notes.find(
     (note) => readAnyReviewLedgerMarker(note.body) !== null && isOurs(note),

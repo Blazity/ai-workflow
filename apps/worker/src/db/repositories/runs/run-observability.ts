@@ -22,10 +22,10 @@ import {
   workflowRuns,
 } from "../../schema.js";
 
-export const REPLAY_RETENTION_DAYS = 30;
+const REPLAY_RETENTION_DAYS = 30;
 export const DEFAULT_REPLAY_PAGE_LIMIT = 100;
 export const MAX_REPLAY_PAGE_LIMIT = 200;
-export const DEFAULT_REPLAY_CLEANUP_LIMIT = 100;
+const DEFAULT_REPLAY_CLEANUP_LIMIT = 100;
 const MAX_REPLAY_CLEANUP_LIMIT = 500;
 
 export class RunObservationStoreError extends Error {
@@ -119,30 +119,6 @@ export interface ReplaceWorkflowBlockAttemptPersistenceInput {
   completedAt: Date | null;
   durationMs: number | null;
   updatedAt: Date;
-}
-
-export interface GetRunReplayInput {
-  db: Db;
-  runId: string;
-  organizationId: string;
-  limit?: number;
-  cursor?: string | null;
-  now?: Date;
-}
-
-export interface GetRunReplayAttemptInput {
-  db: Db;
-  runId: string;
-  organizationId: string;
-  attemptId: number;
-  now?: Date;
-}
-
-export interface GetRunReplayAvailabilityInput {
-  db: Db;
-  runId: string;
-  organizationId: string;
-  now?: Date;
 }
 
 export interface DeleteExpiredRunObservationsInput {

@@ -46,7 +46,7 @@ const reviewThreadDispositionEntrySchema = z
     evidence: reviewThreadEvidenceSchema.nullish(),
   })
   .strict();
-export type ReviewThreadDispositionEntry = z.infer<typeof reviewThreadDispositionEntrySchema>;
+type ReviewThreadDispositionEntry = z.infer<typeof reviewThreadDispositionEntrySchema>;
 
 // Optional like every sibling field on these schemas (noChangeNeeded,
 // resolutionEvidence, ...): callers fall back with `?? []`, same as those.
@@ -232,7 +232,7 @@ export const REVIEW_SCHEMA = JSON.stringify({
   additionalProperties: false,
 });
 
-export type ResearchStatus =
+type ResearchStatus =
   | "completed"
   | "repositories_needed"
   | "clarification_needed"
@@ -440,7 +440,7 @@ export interface PhaseUsage {
 
 // --- Adapter contract ---
 
-export interface ArthurConfig {
+interface ArthurConfig {
   apiKey: string;
   taskId: string;
   endpoint: string;

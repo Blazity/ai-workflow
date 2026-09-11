@@ -53,10 +53,9 @@ export async function listEnabledTriggerBindingCandidates(
     )
     .where(and(eq(workflowDefinitions.enabled, true), isNull(workflowDefinitions.archivedAt)))
     .orderBy(asc(workflowDefinitions.id));
-  return rows.map((row) => ({
-    ...row,
-    triggerTypes: row.triggerTypes as WorkflowBlockType[],
-  }));
+  return rows.map((row) =>
+    Object.assign({}, row, { triggerTypes: row.triggerTypes as WorkflowBlockType[] }),
+  );
 }
 
 export async function claimTriggerBindingIfMissing(

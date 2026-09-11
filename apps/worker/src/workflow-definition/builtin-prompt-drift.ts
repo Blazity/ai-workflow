@@ -242,18 +242,15 @@ async function collectWalkTargets(
     definitionVersion: number | null;
     source: BuiltInPromptPinSource;
   }[] = [
-    ...(await store.listPendingApprovalDefinitionPins()).map((row) => ({
-      ...row,
-      source: "approval" as const,
-    })),
-    ...(await store.listPendingTriggerDeliveryDefinitionPins()).map((row) => ({
-      ...row,
-      source: "trigger_delivery" as const,
-    })),
-    ...(await store.listLiveManualDispatchDefinitionPins(LIVE_MANUAL_DISPATCH_STATUSES)).map((row) => ({
-      ...row,
-      source: "manual_dispatch" as const,
-    })),
+    ...(await store.listPendingApprovalDefinitionPins()).map((row) =>
+      Object.assign({}, row, { source: "approval" as const }),
+    ),
+    ...(await store.listPendingTriggerDeliveryDefinitionPins()).map((row) =>
+      Object.assign({}, row, { source: "trigger_delivery" as const }),
+    ),
+    ...(await store.listLiveManualDispatchDefinitionPins(LIVE_MANUAL_DISPATCH_STATUSES)).map((row) =>
+      Object.assign({}, row, { source: "manual_dispatch" as const }),
+    ),
   ];
 
   // The three queues can each name the same snapshot, so collapse across them

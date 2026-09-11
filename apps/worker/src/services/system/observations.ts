@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import {
   getConnectedLatestSystemHealthObservations,
-  observationWindowStart,
   recordConnectedSystemHealthObservation,
   sweepConnectedSystemHealthObservations,
   type SystemHealthObservation,
@@ -9,10 +8,6 @@ import {
 } from "../../db/repositories/system-health.js";
 
 export type { SystemHealthObservation, SystemHealthObservationOutcome };
-
-export function systemHealthObservationWindowStart(now: Date = new Date()): Date {
-  return observationWindowStart(now);
-}
 
 export function systemHealthObservationScope(secret: string | undefined): string {
   if (!secret) return "deployment:unconfigured";

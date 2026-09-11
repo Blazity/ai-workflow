@@ -53,5 +53,7 @@
  */
 export async function delayPhasePollStep(ms: number): Promise<void> {
   "use step";
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }

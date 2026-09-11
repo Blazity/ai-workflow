@@ -7,7 +7,7 @@ import {
   type DashboardRole,
 } from "./roles.js";
 
-export type DashboardAuthMethod = "Password" | "SSO" | "Password + SSO" | "Unknown";
+type DashboardAuthMethod = "Password" | "SSO" | "Password + SSO" | "Unknown";
 
 export type DashboardActor = {
   organizationId: string;

@@ -82,7 +82,7 @@ import {
 
 /** Ledger writes, one method per decision the dispatcher can record. Bound to a
  *  database by the factory below. */
-export interface ScheduleOccurrenceLedgerPort {
+interface ScheduleOccurrenceLedgerPort {
   accept(
     admitted: AdmittedOccurrence,
   ): Promise<{ admitted: boolean; stored: OccurrenceRow }>;
@@ -114,7 +114,7 @@ export interface ScheduleOccurrenceLedgerPort {
 }
 
 /** Schedule-row reads and the two cursor writes an evaluation pass performs. */
-export interface ScheduleRowPort {
+interface ScheduleRowPort {
   listEvaluable(limit: number): Promise<ScheduleRow[]>;
   recordEvaluationPass(scheduleId: string, now: Date): Promise<void>;
   advanceWatermark(scheduleId: string, occurrenceAt: Date): Promise<boolean>;
@@ -544,7 +544,7 @@ async function revokeAndCancelWaiting(
  * operator a limit refused it rather than a sibling run. The editor reads this
  * string; the durable per-node tally lives in trigger_rejection_counters.
  */
-export const RATE_LIMITED_SKIP_REASON = "rate_limited";
+const RATE_LIMITED_SKIP_REASON = "rate_limited";
 
 /**
  * Count this occurrence against the node's trigger rate limit. The schedule
@@ -679,10 +679,10 @@ function workflowInputFor(
  *  one can start a 3 to 25 minute agent run, and the poll it rides on has around
  *  twenty other phases to get through. The store orders oldest-evaluated first,
  *  so the tail of a large batch is served by the next tick rather than starved. */
-export const SCHEDULE_EVALUATION_LIMIT = 20;
+const SCHEDULE_EVALUATION_LIMIT = 20;
 
 /** How many waiting occurrences one drain pass starts at most. */
-export const SCHEDULE_DRAIN_LIMIT = 10;
+const SCHEDULE_DRAIN_LIMIT = 10;
 
 export interface ScheduleEvaluationMetrics {
   evaluated: number;
