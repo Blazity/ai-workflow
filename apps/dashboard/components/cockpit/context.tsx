@@ -4,7 +4,7 @@ import { createContext, useContext } from "react";
 import type { Run } from "@/lib/types";
 import { LIVE_POLL_MS } from "@/lib/use-live-poll";
 
-export type Density = "compact" | "comfy";
+type Density = "compact" | "comfy";
 
 /**
  * How often a mounted run surface needs the cockpit to refresh it.
@@ -38,9 +38,9 @@ export const TWEAK_DEFAULTS: Tweaks = {
 };
 
 /** Topbar selections. Kept as loose string unions; the topbar owns the option lists. */
-export type Persona = string;
-export type TimeRange = string;
-export type EnvName = string;
+type Persona = string;
+type TimeRange = string;
+type EnvName = string;
 
 export interface CockpitCtxValue {
   t: Tweaks;

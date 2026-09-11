@@ -7,7 +7,6 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  countRegression,
   parseOptions,
   printTable,
   readJson,
@@ -18,6 +17,21 @@ import {
 } from "./shared.mjs";
 
 const defaultBaseline = fileURLToPath(new URL("./lint.baseline.json", import.meta.url));
+
+function diagnosticLine(diagnostic) {
+  const span = diagnostic.labels?.find((label) => label.span)?.span;
+  const location = span
+    ? `${span.line}:${span.column}`
+    : "?:?";
+  return `${diagnostic.filename ?? "<unknown>"}:${location} ${diagnostic.code ?? "unknown"} ${diagnostic.message}`;
+}
+
+function lintRegression(current, baseline) {
+  return Object.entries(current).some(([rule, count]) => {
+    const baselineCount = baseline[rule] ?? 0;
+    return count > 0 && (baselineCount === 0 || count > baselineCount);
+  });
+}
 
 function main() {
   const options = parseOptions(process.argv.slice(2), {
@@ -85,15 +99,21 @@ function main() {
   ]);
   const changedRows = allRows.filter((row) => row[1] !== row[2]);
   const total = (warnings) => Object.values(warnings).reduce((sum, count) => sum + count, 0);
-  const rows = changedRows.length
+  const rows = changedRows.length > 0
     ? changedRows
     : [["all rules", total(baseline.warnings ?? {}), total(current.warnings)]];
   console.log("Lint warnings");
   printTable(["rule", "baseline", "now"], rows);
-  const failed = countRegression(
+  const failed = lintRegression(
     current.correctnessErrors,
     baseline.correctnessErrors ?? {},
-  ) || countRegression(current.warnings, baseline.warnings ?? {});
+  ) || lintRegression(current.warnings, baseline.warnings ?? {});
+  if (failed) {
+    console.log("Lint diagnostics");
+    for (const diagnostic of report.diagnostics ?? []) {
+      console.log(diagnosticLine(diagnostic));
+    }
+  }
   if (options.updateBaseline) console.log(`Updated ${baselinePath}`);
   console.log(failed ? "lint FAIL" : "lint PASS");
   process.exitCode = failed ? 1 : 0;

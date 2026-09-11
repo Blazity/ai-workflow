@@ -65,7 +65,8 @@ export function pullRequestRef(pr: Pick<RunPullRequest, "provider" | "id">): str
 
 /** Last path segment of `owner/repo` (or a nested GitLab group path). */
 function repoLeaf(repoPath: string): string {
-  return repoPath.split("/").filter(Boolean).at(-1) ?? repoPath;
+  const segments = repoPath.split("/").filter(Boolean);
+  return segments.pop() ?? repoPath;
 }
 
 /**

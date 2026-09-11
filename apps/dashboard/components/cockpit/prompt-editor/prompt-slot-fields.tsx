@@ -176,7 +176,7 @@ function primarySchemaType(schema: JsonSchema202012): string {
   const raw = schema.type;
   const candidate =
     (Array.isArray(raw)
-      ? raw.find((candidate) => candidate !== "null")
+      ? raw.find((typeName) => typeName !== "null")
       : raw) ?? "string";
   return typeof candidate === "string" ? candidate : "string";
 }
@@ -627,6 +627,8 @@ export function PromptSlotBindingsEditor({
               disabled={disabled}
               onChange={(event) => {
                 if (event.target.value === "") {
+                  // Undefined removes the optional slot binding.
+                  // eslint-disable-next-line unicorn/no-useless-undefined -- Clear the slot binding.
                   update(definition.name, undefined);
                 } else if (event.target.value === "reference") {
                   const first = selectableValues[0];

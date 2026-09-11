@@ -139,11 +139,10 @@ export function createWorkflowValidationController<T>(
     kind: "background" | "immediate",
   ): Promise<WorkflowDefinitionValidationResponse> {
     const request = new AbortController();
+    abortBackgroundRequest();
     if (kind === "background") {
-      abortBackgroundRequest();
       backgroundRequest = { controller: request, generation: scheduled.generation };
     } else {
-      abortBackgroundRequest();
       abortImmediateRequest();
       immediateRequest = { controller: request, generation: scheduled.generation };
     }
@@ -190,7 +189,7 @@ export function createWorkflowValidationController<T>(
     cancelTimer = scheduleTimer(() => {
       cancelTimer = null;
       if (disposed || focused || pending?.generation !== scheduled.generation) return;
-      void runValidation(scheduled, "background").catch(() => undefined);
+      void runValidation(scheduled, "background").catch(() => {});
     }, remainingMs);
   }
 

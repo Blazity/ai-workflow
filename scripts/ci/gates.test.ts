@@ -228,6 +228,121 @@ test("an existing retired path fails the no-resurrected-paths gate", async () =>
   assert.match(result.stdout, /removed\/path\.ts/);
 });
 
+test("ignored retired residue is reported but passes the no-resurrected-paths gate", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resurrected-ignored-gate-"));
+  const list = join(root, "paths.json");
+  await writeFile(join(root, ".gitignore"), "removed/\n");
+  await mkdir(join(root, "removed"));
+  await writeFile(join(root, "removed/path.ts"), "export {};\n");
+  await writeFile(list, '["removed/path.ts"]\n');
+
+  const initialized = spawnSync("/usr/bin/git", ["init", "-q"], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  assert.equal(initialized.status, gateSuccess, initialized.stderr || initialized.stdout);
+
+  const result = gate("no-resurrected-paths.mjs", ["--root", root, "--list", list]);
+  assert.equal(result.status, gateSuccess, result.stderr || result.stdout);
+  assert.match(result.stdout, /removed\/path\.ts\s+ignored residue/u);
+  assert.match(result.stdout, /delete directory removed\/path\.ts/u);
+  assert.match(result.stdout, /no-resurrected-paths PASS/u);
+});
+
+test("two awaited database writes outside repositories fail the consecutive-writes gate", () => {
+  const root = makeDepsRoot("consecutive-writes-fail-", {
+    "apps/worker/src/services/multi.ts": [
+      "async function save() {",
+      "  await db.insert(values);",
+      "  await db.update(values);",
+      "}",
+      "",
+    ].join("\n"),
+  });
+  const result = gate("consecutive-writes.mjs", ["--root", root]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(result.stdout, /apps\/worker\/src\/services\/multi\.ts/);
+  assert.match(result.stdout, /2 awaited db writes/);
+});
+
+test("repository and allowlisted writes pass the consecutive-writes gate", () => {
+  const root = makeDepsRoot("consecutive-writes-allowed-", {
+    "apps/worker/src/db/repositories/allowed.ts": [
+      "async function save() {",
+      "  await db.insert(values);",
+      "  await db.update(values);",
+      "}",
+      "",
+    ].join("\n"),
+    "apps/worker/src/workflow-definition/template-seed.ts": [
+      "async function seed() {",
+      "  await db.insert(values);",
+      "  await db.update(values);",
+      "}",
+      "",
+    ].join("\n"),
+  });
+  const result = gate("consecutive-writes.mjs", ["--root", root]);
+  assert.equal(result.status, gateSuccess, result.stderr || result.stdout);
+  assert.match(result.stdout, /consecutive-writes PASS/);
+});
+
+test("typed functions and arrow function properties count awaited writes", () => {
+  const root = makeDepsRoot("consecutive-writes-typed-", {
+    "apps/worker/src/services/typed.ts": [
+      "async function save(): Promise<void> {",
+      "  await db.insert(values);",
+      "  await db.update(values);",
+      "}",
+      "",
+    ].join("\n"),
+    "apps/worker/src/services/property.ts": [
+      "const service = {",
+      "  save: async (): Promise<void> => {",
+      "    await getDb().delete(values);",
+      "    await getDb().execute(values);",
+      "  },",
+      "};",
+      "",
+    ].join("\n"),
+  });
+  const result = gate("consecutive-writes.mjs", ["--root", root]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(result.stdout, /apps\/worker\/src\/services\/typed\.ts/u);
+  assert.match(result.stdout, /apps\/worker\/src\/services\/property\.ts/u);
+  assert.match(result.stdout, /2 awaited db writes/u);
+});
+
+test("sibling functions, nested arrows, and select pairs are scoped independently", () => {
+  const root = makeDepsRoot("consecutive-writes-scopes-", {
+    "apps/worker/src/services/scopes.ts": [
+      "async function first() {",
+      "  await db.insert(values);",
+      "}",
+      "async function second() {",
+      "  await db.update(values);",
+      "}",
+      "const service = {",
+      "  save: async () => {",
+      "    await db.delete(values);",
+      "    const nested = async () => {",
+      "      await db.execute(values);",
+      "    };",
+      "    await nested();",
+      "  },",
+      "};",
+      "async function selects() {",
+      "  await db.select(values);",
+      "  await db.select(values);",
+      "}",
+      "",
+    ].join("\n"),
+  });
+  const result = gate("consecutive-writes.mjs", ["--root", root]);
+  assert.equal(result.status, gateSuccess, result.stderr || result.stdout);
+  assert.match(result.stdout, /consecutive-writes PASS/u);
+});
+
 test("the db client fence counts import forms, ignores comments, and ratchets", async () => {
   const root = standaloneGateRoot(makeDepsRoot("db-client-fence-", {
     "apps/worker/src/db/client.ts": "export const db = 1;\n",
@@ -529,7 +644,10 @@ test("the composite gate ladder includes both database fences", async () => {
     await readFile(join(repoRoot, "package.json"), "utf8"),
   ) as { scripts: Record<string, string> };
   assert.match(rootPackage.scripts.gates, /gate:transactions/u);
+  assert.match(rootPackage.scripts.gates, /gate:consecutive-writes/u);
   assert.match(rootPackage.scripts.gates, /gate:db-client-fence/u);
+  assert.equal(rootPackage.scripts["gate:docs-status"], "node scripts/gates/docs-status.mjs");
+  assert.doesNotMatch(rootPackage.scripts["gate:docs-status"], /if \[ -f/u);
   assert.match(rootPackage.scripts["gates:update-baselines"], /gate:db-client-fence/u);
   assert.doesNotMatch(rootPackage.scripts["gates:update-baselines"], /gate:transactions/u);
 });

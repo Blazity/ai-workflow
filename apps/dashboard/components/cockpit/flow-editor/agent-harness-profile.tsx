@@ -311,7 +311,7 @@ export function AgentHarnessProfile({
 
   const contract = options.blockRegistry[node.type];
   const profileVersionOptions = useMemo(() => {
-    const options = selectableProfiles.flatMap((profile) => {
+    const profileOptions = selectableProfiles.flatMap((profile) => {
       const detail = catalog.details.get(profile.id);
       const versions =
         detail?.versions ??
@@ -327,13 +327,13 @@ export function AgentHarnessProfile({
     });
     if (
       reference &&
-      !options.some(
+      !profileOptions.some(
         (option) =>
           option.value ===
           profileVersionValue(reference.profileId, reference.version),
       )
     ) {
-      options.push({
+      profileOptions.push({
         value: profileVersionValue(reference.profileId, reference.version),
         label: `Unavailable profile (${reference.profileId}) · v${reference.version}`,
       });
@@ -342,7 +342,7 @@ export function AgentHarnessProfile({
       ...(reference === null
         ? [{ value: "", label: "Select a published profile and version" }]
         : []),
-      ...options,
+      ...profileOptions,
     ];
   }, [catalog.details, reference, selectableProfiles]);
   const updateAvailable =

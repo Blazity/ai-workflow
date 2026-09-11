@@ -65,6 +65,17 @@ function comparisonRows(current, baseline) {
   });
 }
 
+function findingLines(report) {
+  return (report.issues ?? []).flatMap((issue) =>
+    Object.entries(issue).flatMap(([category, findings]) => {
+      if (category === "file" || !Array.isArray(findings)) return [];
+      return findings.map(
+        (finding) => `${issue.file ?? "<unknown>"} ${category} ${JSON.stringify(finding)}`,
+      );
+    }),
+  );
+}
+
 function main() {
   const options = parseOptions(process.argv.slice(2), {
     "--root": "root",
@@ -90,6 +101,10 @@ function main() {
   console.log("Unused code findings");
   printTable(["workspace", "category", "baseline", "now"], rows);
   const failed = rows.some((row) => row[3] > row[2]);
+  if (failed) {
+    console.log("Unused code diagnostics");
+    for (const finding of findingLines(report)) console.log(finding);
+  }
   if (options.updateBaseline) console.log(`Updated ${baselinePath}`);
   console.log(failed ? "unused-code FAIL" : "unused-code PASS");
   process.exitCode = failed ? 1 : 0;

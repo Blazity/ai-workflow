@@ -386,7 +386,11 @@ describe("repository instruction sources", () => {
     mocks.readFile.mockImplementation(async (input: { path: string }) => {
       // A null rejection makes (error as Error).message throw a TypeError
       // inside the catch that is reporting it.
-      if (input.path === `${MEMORY_DIR}/broken.md`) return Promise.reject(null);
+      if (input.path === `${MEMORY_DIR}/broken.md`) {
+        // Deliberately preserve a non-error rejection to exercise defensive error handling.
+        // eslint-disable-next-line no-throw-literal -- The test covers a third-party null rejection.
+        throw null;
+      }
       return passthrough(input);
     });
 

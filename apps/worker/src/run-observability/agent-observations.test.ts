@@ -206,9 +206,10 @@ describe("emitAgentInvocationObservations", () => {
     const metadataCall = emit.mock.calls.find(
       (call) => (call[0] as { kind: string }).kind === "metadata",
     );
-    expect(
-      (metadataCall?.[0] as { value: Record<string, unknown> }).value,
-    ).not.toHaveProperty("clarificationDecision");
+    if (!metadataCall) throw new Error("metadata observation was not emitted");
+    expect((metadataCall[0] as { value: Record<string, unknown> }).value).not.toHaveProperty(
+      "clarificationDecision",
+    );
   });
 
   it("removes structured output repeated inside provider logs", async () => {

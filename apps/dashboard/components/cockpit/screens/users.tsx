@@ -5,8 +5,8 @@ import { useEffect, useId, useRef, useState } from "react";
 import { apiClient } from "@/lib/api/client";
 import { CkChip, CkTabs } from "@/components/ui";
 
-export type DashboardRole = "owner" | "admin" | "member";
-export type DashboardAuthMethod = "Password" | "SSO" | "Password + SSO" | "Unknown";
+type DashboardRole = "owner" | "admin" | "member";
+type DashboardAuthMethod = "Password" | "SSO" | "Password + SSO" | "Unknown";
 
 export type DashboardUserRow = {
   id: string;
@@ -654,7 +654,8 @@ function ModalFrame({
       }
 
       const first = focusable[0];
-      const last = focusable[focusable.length - 1];
+      const last = focusable.at(-1);
+      if (!last) return;
       if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
         last.focus();
@@ -942,7 +943,11 @@ function getInitials(user: DashboardUserRow): string {
 function hashString(value: string): number {
   let hash = 0;
   for (let index = 0; index < value.length; index += 1) {
+    // Keep the existing UTF-16 hash input for stable avatar colors.
+    // eslint-disable-next-line unicorn/prefer-code-point -- Preserve UTF-16 avatar hashes.
     hash = (hash << 5) - hash + value.charCodeAt(index);
+    // Preserve the signed 32-bit overflow semantics of this hash.
+    // eslint-disable-next-line unicorn/prefer-math-trunc -- Preserve signed 32-bit overflow.
     hash |= 0;
   }
   return hash;

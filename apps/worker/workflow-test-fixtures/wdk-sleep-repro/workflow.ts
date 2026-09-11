@@ -35,7 +35,9 @@ async function recordTickStep(label: string): Promise<string> {
 /** The same tick as a step that sleeps, rather than as a workflow wait. */
 async function sleepingTickStep(ms: number): Promise<void> {
   "use step";
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 /**

@@ -264,12 +264,12 @@ export function TraceDetail({
 
   const { phaseOf, groups, spans } = React.useMemo(() => {
     const names = derivePhases(steps);
-    const phaseOf = new Map<string, PhaseName>();
-    steps.forEach((s, i) => phaseOf.set(s.stepId, names[i]));
+    const phaseByStep = new Map<string, PhaseName>();
+    steps.forEach((s, i) => phaseByStep.set(s.stepId, names[i]));
 
     const byName = new Map<PhaseName, PhaseGroup>();
     steps.forEach((s) => {
-      const name = phaseOf.get(s.stepId)!;
+      const name = phaseByStep.get(s.stepId)!;
       const end = s.startOffsetMs + barMs(s);
       const g = byName.get(name);
       if (!g) {
@@ -289,11 +289,11 @@ export function TraceDetail({
         g.failed ||= s.status === "failed" || s.status === "cancelled";
       }
     });
-    const groups = PHASE_ORDER.filter((p) => byName.has(p)).map(
+    const phaseGroups = PHASE_ORDER.filter((p) => byName.has(p)).map(
       (p) => byName.get(p)!,
     );
 
-    const phaseSpans: Span[] = groups.map((g) => ({
+    const phaseSpans: Span[] = phaseGroups.map((g) => ({
       id: `phase:${g.name}`,
       parent: null,
       name: g.name,
@@ -303,7 +303,7 @@ export function TraceDetail({
       status: g.failed ? "error" : "ok",
     }));
     const stepSpans: Span[] = steps.map((s) => {
-      const name = phaseOf.get(s.stepId)!;
+      const name = phaseByStep.get(s.stepId)!;
       return {
         id: s.stepId,
         name: s.name,
@@ -314,7 +314,11 @@ export function TraceDetail({
         parent: `phase:${name}`,
       };
     });
-    return { phaseOf, groups, spans: [...phaseSpans, ...stepSpans] };
+    return {
+      phaseOf: phaseByStep,
+      groups: phaseGroups,
+      spans: [...phaseSpans, ...stepSpans],
+    };
   }, [steps, barMs]);
 
   const [selectedId, setSelectedId] = React.useState<string | null>(

@@ -62,7 +62,7 @@ function durations(rows: RunsResponse["rows"]): number[] {
 }
 
 function hourlyCounts(rows: RunsResponse["rows"]): number[] {
-  const buckets = new Array(24).fill(0);
+  const buckets = Array.from({ length: 24 }, () => 0);
   for (const r of rows) buckets[bucketOf(r.startedAtMin)] += 1;
   return buckets;
 }

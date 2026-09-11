@@ -11,7 +11,6 @@ import {
   createScenario,
   nonScriptableBlockReason,
   QUIESCENCE_TURNS,
-  ScenarioViolation,
   type CreateScenarioOptions,
 } from "./harness.js";
 
@@ -142,7 +141,8 @@ async function turnsWhile(work: Promise<unknown>): Promise<number> {
     },
   );
   let turns = 0;
-  while (running) {
+  while (true) {
+    if (!running) break;
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });

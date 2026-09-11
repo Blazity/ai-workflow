@@ -80,9 +80,9 @@ async function waitForTerminalStatus(runId: string): Promise<string> {
   const deadline = Date.now() + CANCELLATION_CONFIRMATION_TIMEOUT_MS;
   let status = await run.status;
   while (!TERMINAL.has(status) && Date.now() < deadline) {
-    await new Promise((resolve) =>
-      setTimeout(resolve, CANCELLATION_POLL_INTERVAL_MS),
-    );
+    await new Promise((resolve) => {
+      setTimeout(resolve, CANCELLATION_POLL_INTERVAL_MS);
+    });
     status = await run.status;
   }
   return status;

@@ -102,7 +102,7 @@ function signed(
       "x-workflow-signature": createHmac("sha256", signingSecret)
         .update(body)
         .digest("hex"),
-      ...(options.headers ?? {}),
+      ...options.headers,
     },
     body,
   });
@@ -131,7 +131,7 @@ function signedTs(
         .update(`${ts}.${body}`)
         .digest("hex"),
       "x-workflow-timestamp": String(ts),
-      ...(options.headers ?? {}),
+      ...options.headers,
     },
     body,
   });
@@ -174,7 +174,9 @@ async function setupWebhookDefinition(
     createdById: "test",
     createdByLabel: "Test",
   });
-  const nodes = graph().nodes.map((node) => ({ ...node, id: nodeId }));
+  const nodes = graph().nodes.map((node) =>
+    Object.assign({}, node, { id: nodeId }),
+  );
   await db.insert(workflowDefinitionVersions).values({
     definitionId,
     version: 1,

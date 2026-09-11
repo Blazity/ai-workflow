@@ -159,7 +159,7 @@ function executableNodeImports(source: string, fileName: string): string[] {
 
 function assertNoNodeImports(source: string, fileName: string): void {
   const imports = executableNodeImports(source, fileName);
-  if (imports.length) {
+  if (imports.length > 0) {
     throw new Error(`${fileName} imports Node modules: ${imports.join(", ")}`);
   }
 }

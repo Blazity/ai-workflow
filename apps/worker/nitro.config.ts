@@ -75,14 +75,13 @@ export default defineNitroConfig({
           hasSkills = false;
         }
         await Promise.all(
-          funcDirs.flatMap((dir) => [
-            ...presentYamlFiles.map((name) =>
+          funcDirs.flatMap((dir) => {
+            const copyTasks = presentYamlFiles.map((name) =>
               copyFile(resolve(nitro.options.rootDir, name), join(dir, name)),
-            ),
-            ...(hasSkills
-              ? [cp(skillsDir, join(dir, "skills"), { recursive: true })]
-              : []),
-          ]),
+            );
+            if (hasSkills) copyTasks.push(cp(skillsDir, join(dir, "skills"), { recursive: true }));
+            return copyTasks;
+          }),
         );
       });
     },

@@ -5,7 +5,6 @@ import { useCallback } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { WINDOWS, type TimeWindow, windowShort } from "@/lib/window";
 import { useCockpit } from "@/components/cockpit/context";
-import { LIVE_POLL_MS } from "@/lib/use-live-poll";
 
 /** Replace the current URL's search params, preserving every key not given. */
 function useParamWriter() {

@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { CollectedPhaseArtifacts } from "./types.js";
 import { ClaudeAgentAdapter } from "./claude.js";
@@ -12,7 +11,7 @@ import {
 } from "../../workflow-definition/interpreter.js";
 import { safeWorkflowExecutionLogEvent } from "../../run-observability/safe-execution-log.js";
 
-const fixtureRoot = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
+const fixtureRoot = join(import.meta.dirname, "fixtures");
 
 interface ProtocolFixture {
   package: string;

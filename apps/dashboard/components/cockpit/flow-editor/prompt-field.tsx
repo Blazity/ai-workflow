@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FlowNodeDef } from "@/lib/flows";
 import {
   type PromptLibraryVersion,
-  type PromptLibraryVersionResponse,
   type PromptLibraryListRowDto,
   type PromptSourceRef,
   type JsonValue,
@@ -168,9 +167,7 @@ export function PromptField({
           if (controller.signal.aborted) return;
           setFailedVersionKeys((current) => {
             if (current.has(request.key)) return current;
-            const next = new Set(current);
-            next.add(request.key);
-            return next;
+            return new Set([...current, request.key]);
           });
         });
     }
@@ -216,7 +213,11 @@ export function PromptField({
 
   function setBodyValue(v: string) {
     onChange(`params.${paramKey}`, v);
-    if (v.trim() === "") onChange(`promptRefs.${paramKey}`, undefined);
+    if (v.trim() === "") {
+      // Passing undefined removes the reference when the body is emptied.
+      // eslint-disable-next-line unicorn/no-useless-undefined -- Clear the prompt reference.
+      onChange(`promptRefs.${paramKey}`, undefined);
+    }
   }
 
   function applyInsertPayload(payload: PromptInsertPayload, baseValue = value) {
@@ -228,7 +229,11 @@ export function PromptField({
     }
   }
 
-  const detach = () => onChange(`promptRefs.${paramKey}`, undefined);
+  const detach = () => {
+    // Passing undefined removes the reference without changing the body.
+    // eslint-disable-next-line unicorn/no-useless-undefined -- Detach the prompt reference.
+    onChange(`promptRefs.${paramKey}`, undefined);
+  };
   function applyUpdate(row: PromptLibraryListRowDto) {
     onChange(`params.${paramKey}`, row.body);
     onChange(`promptRefs.${paramKey}`, makePromptRef(row.id, row.currentVersion, row.body));

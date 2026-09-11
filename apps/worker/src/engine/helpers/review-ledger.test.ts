@@ -724,17 +724,17 @@ describe("verifyDispositions unicode handling", () => {
   const cases: { name: string; file: string; quote: string }[] = [
     {
       name: "curly quotes in the file, ASCII quotes in the evidence",
-      file: "const label = \u201cDon\u2019t retry the webhook here\u201d;",
+      file: "const label = \u201CDon\u2019t retry the webhook here\u201D;",
       quote: "const label = \"Don't retry the webhook here\";",
     },
     {
       name: "NFD in the file, NFC in the evidence",
       file: "const label = \"cafe\u0301 receipts stay cached\";",
-      quote: "const label = \"caf\u00e9 receipts stay cached\";",
+      quote: "const label = \"caf\u00E9 receipts stay cached\";",
     },
     {
       name: "zero width space inside a file token",
-      file: "const width = wrapper.\u200boffsetWidth + padding;",
+      file: "const width = wrapper.\u200BoffsetWidth + padding;",
       quote: "const width = wrapper.offsetWidth + padding;",
     },
   ];

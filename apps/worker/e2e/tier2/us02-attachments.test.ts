@@ -155,10 +155,7 @@ describe("US-02: Ticket with attachments (real pipeline)", () => {
       "-c",
       `/tmp/attachments/${pngFile.filename}`,
     ]);
-    const pngSize = parseInt(
-      (await pngStat.stdout()).trim().split(/\s+/)[0],
-      10,
-    );
+    const pngSize = Math.trunc(Number((await pngStat.stdout()).trim().split(/\s+/)[0]));
     expect(pngSize).toBe(mockupContent.length);
 
     // 8. Verify: JSON file is valid and has correct content

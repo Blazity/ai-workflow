@@ -91,7 +91,7 @@ export async function createTestTicket(
           ],
         },
         issuetype: { name: "Task" },
-        ...(labels.length ? { labels } : {}),
+        ...(labels.length > 0 ? { labels } : {}),
       },
     }),
   });

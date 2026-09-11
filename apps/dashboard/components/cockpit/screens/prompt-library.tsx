@@ -272,7 +272,7 @@ export function PromptLibraryScreen({
         body: draft.body,
         slots: draft.slots,
         description: draft.description.trim() ? draft.description : undefined,
-        tags: draft.tags.length ? draft.tags : undefined,
+        tags: draft.tags.length > 0 ? draft.tags : undefined,
       });
       if (!res.ok) {
         setError(res.errorMessage);

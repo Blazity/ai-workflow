@@ -242,7 +242,7 @@ describe("retryOnUniqueViolation exhaustion", () => {
     await expect(
       retryOnUniqueViolation(async () => {
         calls++;
-        throw { code: "23505" };
+        throw Object.assign(new Error("unique violation"), { code: "23505" });
       }, 3),
     ).rejects.toMatchObject({ statusCode: 409, message: "Concurrent update, please retry" });
     expect(calls).toBe(3);

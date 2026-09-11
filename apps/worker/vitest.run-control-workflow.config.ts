@@ -1,4 +1,4 @@
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { workflow } from "@workflow/vitest";
 import { defineConfig } from "vitest/config";
 import {
@@ -6,10 +6,8 @@ import {
   workflowVitestIsolationGlobalSetup,
 } from "./src/test-support/workflow-vitest-isolation.js";
 
-const workerRoot = fileURLToPath(new URL("./", import.meta.url));
-const workflowRoot = fileURLToPath(
-  new URL("./workflow-test-fixtures/", import.meta.url),
-);
+const workerRoot = import.meta.dirname;
+const workflowRoot = resolve(workerRoot, "workflow-test-fixtures");
 const isolation = createWorkflowVitestIsolation("run-control");
 
 // @workflow/vitest's builder and client transform both derive stable function

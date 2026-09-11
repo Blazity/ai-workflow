@@ -2,12 +2,12 @@
 export type DiffLine = { type: "add" | "del" | "ctx"; text: string };
 
 /** Longest-common-subsequence line diff. O(n·m) — fine for prompt-sized bodies. */
-export function diffLines(oldText: string, newText: string): DiffLine[] {
+function diffLines(oldText: string, newText: string): DiffLine[] {
   const a = oldText.split("\n");
   const b = newText.split("\n");
   const n = a.length;
   const m = b.length;
-  const dp = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+  const dp = Array.from({ length: n + 1 }, () => Array.from({ length: m + 1 }, () => 0));
   for (let i = n - 1; i >= 0; i--) {
     for (let j = m - 1; j >= 0; j--) {
       dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
@@ -32,7 +32,7 @@ export function diffLines(oldText: string, newText: string): DiffLine[] {
   return out;
 }
 
-export const DIFF_LINE_STYLE: Record<DiffLine["type"], { bg: string; fg: string; sign: string }> = {
+const DIFF_LINE_STYLE: Record<DiffLine["type"], { bg: string; fg: string; sign: string }> = {
   add: { bg: "#EAF7E0", fg: "#2E5512", sign: "+" },
   del: { bg: "#FCE8E8", fg: "#B42318", sign: "-" },
   ctx: { bg: "transparent", fg: "#5F666F", sign: " " },

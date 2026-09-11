@@ -32,7 +32,7 @@ describe("verifyGitHubWebhookSignature", () => {
     // Flip the last hex char to something different — using a constant
     // replacement could be a no-op when the original already matches it.
     const valid = sign(body);
-    const lastChar = valid[valid.length - 1];
+    const lastChar = valid.at(-1);
     const wrong = valid.slice(0, -1) + (lastChar === "0" ? "1" : "0");
     expect(() => verifyGitHubWebhookSignature(body, wrong, SECRET)).toThrow(/Invalid/);
   });

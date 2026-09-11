@@ -881,8 +881,11 @@ describe("postReviewLedgerFailureNoteStep", () => {
     baseRef: "main",
     prNumber: 7,
   };
-  const postedBody = (): string =>
-    (vcs.postRunFailureNote.mock.calls[0]?.[0] as { body: string }).body;
+  const postedBody = (): string => {
+    const firstCall = vcs.postRunFailureNote.mock.calls[0];
+    if (!firstCall) throw new Error("failure note was not posted");
+    return (firstCall[0] as { body: string }).body;
+  };
 
   beforeEach(() => {
     vcs.postRunFailureNote.mockReset().mockResolvedValue(undefined);
