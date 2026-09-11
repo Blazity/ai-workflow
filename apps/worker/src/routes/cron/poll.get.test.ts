@@ -43,7 +43,7 @@ const mocks = vi.hoisted(() => ({
   createScheduleDispatchDeps: vi.fn(),
 }));
 
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: {
     CRON_SECRET: undefined,
     JIRA_PROJECT_KEY: "AIW",
@@ -56,12 +56,12 @@ vi.mock("../../config/env.js", () => ({
 }));
 vi.mock("workflow/runtime", () => ({ getWorld: () => ({ runs: {} }) }));
 vi.mock("../../db/client.js", () => ({ getDb: () => ({ db: true }) }));
-vi.mock("../../services/vcs/adapters.js", () => ({
+vi.mock("../../engine/support/adapters.js", () => ({
   createAdapters: () => ({
     issueTracker: {
       searchTickets: vi.fn(async () => {
         state.order.push("discover");
-        return state.discovered.length ? state.discovered : ["AIW-1", "AIW-2"];
+        return state.discovered.length > 0 ? state.discovered : ["AIW-1", "AIW-2"];
       }),
       postComment: vi.fn(async () => null),
     },
@@ -135,7 +135,7 @@ vi.mock("../../services/dispatch/trigger-rate-limit.js", () => ({
   sweepConnectedTriggerRateLimits: vi.fn().mockResolvedValue(undefined),
   sweepConnectedTriggerRejectionCounters: vi.fn().mockResolvedValue(undefined),
 }));
-vi.mock("../../services/dispatch/trigger-delivery-store.js", () => ({
+vi.mock("../../engine/support/trigger-delivery-store.js", () => ({
   listPendingTriggers: (...args: any[]) => mocks.listPendingTriggers(...args),
   listConnectedPendingTriggers: (...args: any[]) => mocks.listPendingTriggers(...args),
 }));
@@ -171,7 +171,7 @@ vi.mock("../../db/repositories/webhook-trigger-deliveries.js", () => ({
   sweepConnectedWebhookDeliveries: (...args: unknown[]) =>
     mocks.sweepWebhookDeliveries(...args),
 }));
-vi.mock("../../webhook-trigger/delivery-store.js", () => ({
+vi.mock("../../db/repositories/webhook-trigger-deliveries.js", () => ({
   sweepWebhookDeliveries: (...args: unknown[]) => mocks.sweepWebhookDeliveries(...args),
 }));
 vi.mock("../../services/webhook-trigger/dispatch-webhook-trigger.js", () => ({
@@ -506,6 +506,7 @@ describe("cron clarification recovery ordering", () => {
       new Set(["ticket:jira:AIW-1"]),
       undefined,
       new Set(["ticket:jira:AIW-CONTINUATION"]),
+      expect.any(Function),
     );
     await expect(response.json()).resolves.toMatchObject({
       pendingRecovered: 0,
@@ -613,6 +614,7 @@ describe("cron clarification recovery ordering", () => {
       new Set(),
       undefined,
       new Set(["ticket:jira:AIW-1"]),
+      expect.any(Function),
     );
     expect(mocks.dispatchPlanApproved).toHaveBeenCalledWith(
       expect.objectContaining({

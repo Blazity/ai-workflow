@@ -424,7 +424,7 @@ export async function promoteRepositoryWriteScopeStep(input: {
         });
       },
       assertRepositoryAllowed: async (repository) => {
-        const { isRepoAllowedForScope } = await import("../../services/dispatch/repo-allowlist.js");
+        const { isRepoAllowedForScope } = await import("../support/repo-allowlist.js");
         if (!isRepoAllowedForScope(repository, input.repositoryScope)) {
           throw new Error(
             `Refusing to promote ${repository.repoPath}: not in AGENT_ALLOWED_REPOS`,

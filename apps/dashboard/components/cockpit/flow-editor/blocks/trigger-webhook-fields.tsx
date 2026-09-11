@@ -305,9 +305,13 @@ export function WebhookTriggerFields({
   const writeTolerance = (value: string) => {
     const trimmed = value.trim();
     if (trimmed === "") {
+      // Passing undefined deletes the optional tolerance parameter.
+      // eslint-disable-next-line unicorn/no-useless-undefined -- Clear timestamp tolerance.
       onChange("params.timestampToleranceSeconds", undefined);
       return;
     }
+    // Keep parseInt's prefix parsing for user-entered tolerance values.
+    // eslint-disable-next-line unicorn/prefer-number-coercion -- Preserve prefix parsing.
     const parsed = Number.parseInt(trimmed, 10);
     onChange(
       "params.timestampToleranceSeconds",

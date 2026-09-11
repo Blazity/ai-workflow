@@ -1,27 +1,8 @@
-import type { PrTriggerPayload, PrTriggerType } from "../../engine/agent-input.js";
-import { hasAiWorkflowCommentMarker, vcsLoginsMatch } from "../vcs/vcs-bot-identity.js";
-import { isManagedGateCheckName } from "../publication/workflow-naming.js";
+import type { PrTriggerPayload, TriggerEvent } from "@shared/contracts";
+import { hasAiWorkflowCommentMarker, vcsLoginsMatch } from "../../adapters/vcs/vcs-bot-identity.js";
+import { isManagedGateCheckName } from "../../engine/support/workflow-naming.js";
 
-export {
-  GATE_CHECK_NAME_PREFIX,
-  LEGACY_GATE_CHECK_NAME_PREFIX,
-} from "../publication/workflow-naming.js";
-
-export interface TriggerEvent {
-  delivery: {
-    provider: "github" | "gitlab";
-    producer: string;
-    /** Provider event source, such as GitLab's merge_request_event pipeline source. */
-    source?: string;
-    deliveryId: string;
-    /** Stable identity of the human action behind this delivery, used for
-     * semantic dedup so one review's fan-out of N webhooks starts one run.
-     * Derived here at normalization; a later stage consumes it. */
-    semanticKey?: string;
-  };
-  triggerType: PrTriggerType;
-  pr: PrTriggerPayload;
-}
+export type { TriggerEvent } from "@shared/contracts";
 
 export interface NormalizeGitHubOptions {
   gateCheckNames: readonly string[];

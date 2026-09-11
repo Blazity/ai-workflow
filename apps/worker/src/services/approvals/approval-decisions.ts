@@ -21,7 +21,7 @@ import {
 import { getConnectedDashboardUserLabel } from "../../db/repositories/auth.js";
 import { resolveConnectedAwaitingRun } from "../../db/repositories/runs/telemetry.js";
 import { maxConcurrentAgents } from "../settings/index.js";
-import { createAdapters } from "../vcs/index.js";
+import { createAdapters } from "../../engine/support/adapters.js";
 import { dispatchPlanApproved } from "./dispatch.js";
 
 /**

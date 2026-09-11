@@ -25,7 +25,7 @@ const sql = neon(e2eEnv.DATABASE_URL);
  *
  * This helper does NOT call the dashboard-authenticated deploy path
  * (workflow-definition/store.ts's deployWorkflowDefinition). That module
- * transitively imports the worker's own env.ts, which throws at import time
+ * transitively imports the worker's own `src/infra/runtime-env.ts`, which throws at import time
  * unless a full server environment is present (BETTER_AUTH_SECRET, a
  * configured VCS provider, etc.), none of which e2e has or should fabricate.
  * So the three rows below are written directly, mirroring what a deploy

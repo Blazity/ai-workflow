@@ -189,12 +189,12 @@ test("retry count is per node and activation scope rather than triangular", () =
   const repeated = [
     attempts[0],
     ...[1, 2, 3].map(
-      (attempt): WorkflowReplayAttemptSummary => ({
-        ...attempts[1],
-        id: 10 + attempt,
-        attempt,
-        activationScopeId: "scope-a",
-      }),
+      (attempt): WorkflowReplayAttemptSummary =>
+        Object.assign({}, attempts[1], {
+          id: 10 + attempt,
+          attempt,
+          activationScopeId: "scope-a",
+        }),
     ),
     {
       ...attempts[1],

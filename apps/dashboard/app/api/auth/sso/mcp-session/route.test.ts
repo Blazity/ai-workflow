@@ -49,17 +49,17 @@ if (!moduleMock) {
 
   const route = import("./route.ts");
 
-  async function get(request: Request) {
+  const get = async (request: Request) => {
     return (await route).GET(request);
-  }
+  };
 
-  function reset() {
+  const reset = () => {
     state.sessionToken = "raw-dashboard-session-token";
     state.workerBaseUrl = "https://worker.example.com";
     state.fetchCalls.length = 0;
     state.workerResponse = Response.json({ token: "opaque-handoff-token-123456" });
     process.env.WORKER_BASE_URL = state.workerBaseUrl;
-  }
+  };
 
   test("bridges ba_session through a server-side bearer call", async () => {
     reset();

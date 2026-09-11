@@ -61,7 +61,7 @@ export async function loadWorkflowDefinitionFor(
   version?: WorkflowDefinitionVersionPin,
 ): Promise<LoadedWorkflowPlan | null> {
   "use step";
-  const { env } = await import("../../config/env.js");
+  const { env } = await import("../../infra/vcs-config.js");
   const {
     getConnectedDeployedWorkflowDefinitionVersion,
     getConnectedWorkflowDefinition,

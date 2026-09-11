@@ -6,12 +6,12 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
-vi.mock("../../../services/run-lifecycle/active-run-owner.js", () => ({
+vi.mock("../../../db/repositories/active-runs.js", () => ({
   assertActiveRunOwner: (...args: any[]) => mocks.assertActiveRunOwner(...args),
   assertConnectedActiveRunOwner: (...args: any[]) =>
     mocks.assertActiveRunOwner(...args),
 }));
-vi.mock("../../../services/vcs/adapters.js", () => ({
+vi.mock("../../../engine/support/adapters.js", () => ({
   createAdapters: () => ({ issueTracker: { postComment: mocks.postComment } }),
 }));
 

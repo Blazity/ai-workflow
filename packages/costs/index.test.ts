@@ -19,7 +19,6 @@ const codexUsage: CostUsage = {
 };
 
 const codexProvider: CostProvider = {
-  kind: "codex",
   price: {
     input: 0.000_003,
     cached_input: 0.000_000_7,
@@ -29,13 +28,12 @@ const codexProvider: CostProvider = {
 
 /** The in-process LLM path reports tokens and no cost on either provider. */
 const claudeTokenOnlyProvider: CostProvider = {
-  kind: "claude",
   price: codexProvider.price,
 };
 
 describe("costForUsage", () => {
   it("uses Claude's literal reported cost", () => {
-    assert.deepEqual(costForUsage({ kind: "claude", price: null }, claudeUsage), {
+    assert.deepEqual(costForUsage({ price: null }, claudeUsage), {
       costNanos: 1_234_567_891,
       costUsd: 1.234_567_891,
       known: true,
@@ -60,12 +58,12 @@ describe("costForUsage", () => {
   it("returns unknown for missing provider data or invalid numbers", () => {
     const unknown = { costNanos: null, costUsd: null, known: false };
     assert.deepEqual(
-      costForUsage({ kind: "claude", price: null }, { cost_usd: null, tokens: null }),
+      costForUsage({ price: null }, { cost_usd: null, tokens: null }),
       unknown,
     );
-    assert.deepEqual(costForUsage({ kind: "codex", price: null }, codexUsage), unknown);
+    assert.deepEqual(costForUsage({ price: null }, codexUsage), unknown);
     assert.deepEqual(
-      costForUsage({ kind: "claude", price: null }, { cost_usd: Number.NaN, tokens: null }),
+      costForUsage({ price: null }, { cost_usd: Number.NaN, tokens: null }),
       unknown,
     );
     assert.deepEqual(
@@ -77,7 +75,7 @@ describe("costForUsage", () => {
     );
     assert.deepEqual(
       costForUsage(
-        { kind: "codex", price: { input: Number.POSITIVE_INFINITY, cached_input: 0, output: 0 } },
+        { price: { input: Number.POSITIVE_INFINITY, cached_input: 0, output: 0 } },
         codexUsage,
       ),
       unknown,
@@ -95,9 +93,9 @@ describe("aggregateUsage", () => {
         Missing: null,
       },
       {
-        Research: { kind: "claude", price: null },
+        Research: { price: null },
         Implementation: codexProvider,
-        Review: { kind: "codex", price: null },
+        Review: { price: null },
       },
     );
 
@@ -138,7 +136,7 @@ describe("aggregateUsage", () => {
           tokens: { input: 1, cached_input: 0, output: 0 },
         },
       },
-      { Next: { kind: "codex", price: { input: 0, cached_input: 0, output: 0 } } },
+      { Next: { price: { input: 0, cached_input: 0, output: 0 } } },
       {
         costNanos: 0,
         costKnown: true,
@@ -156,7 +154,7 @@ describe("aggregateUsage", () => {
   it("keeps an invalid prior total instead of restarting it at zero", () => {
     const totals = aggregateUsage(
       { Next: claudeUsage },
-      { Next: { kind: "claude", price: null } },
+      { Next: { price: null } },
       {
         costNanos: Number.NaN,
         costKnown: true,

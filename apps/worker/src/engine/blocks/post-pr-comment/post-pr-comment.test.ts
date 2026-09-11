@@ -6,16 +6,16 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
-vi.mock("../../../services/run-lifecycle/active-run-owner.js", () => ({
+vi.mock("../../../db/repositories/active-runs.js", () => ({
   assertActiveRunOwner: (...args: any[]) => mocks.assertActiveRunOwner(...args),
   assertConnectedActiveRunOwner: (...args: any[]) =>
     mocks.assertActiveRunOwner(...args),
 }));
-vi.mock("../../../services/vcs/vcs-runtime.js", () => ({
+vi.mock("../../../engine/support/vcs-runtime.js", () => ({
   createRepositoryVCS: mocks.createRepositoryVCS,
 }));
 
-import { AI_WORKFLOW_COMMENT_MARKER } from "../../../services/vcs/vcs-bot-identity.js";
+import { AI_WORKFLOW_COMMENT_MARKER } from "../../../adapters/vcs/vcs-bot-identity.js";
 import type { WorkspacePublicationResult } from "../../steps/workspace-publication.js";
 import { execute } from "./execute.js";
 import { manifest } from "./manifest.js";

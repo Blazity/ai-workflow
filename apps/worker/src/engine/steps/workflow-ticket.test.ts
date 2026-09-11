@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchTicket = vi.fn();
-vi.mock("../../services/vcs/adapters.js", () => ({
+vi.mock("../../engine/support/adapters.js", () => ({
   createAdapters: () => ({ issueTracker: { fetchTicket } }),
 }));
 
@@ -46,7 +46,7 @@ describe("resolveWorkflowTicketStep", () => {
   });
 
   it("synthesizes a git-ref-safe identifier for webhook deliveries", async () => {
-    const { branchForTicket } = await import("../../services/publication/workflow-naming.js");
+    const { branchForTicket } = await import("../../engine/support/workflow-naming.js");
     const { resolveWorkflowTicketStep } = await import("./workflow-ticket.js");
     const ticket = await resolveWorkflowTicketStep(
       {
@@ -85,7 +85,7 @@ describe("resolveWorkflowTicketStep", () => {
     // git check-ref-format rules this branch must satisfy.
     expect(branch).not.toContain(":");
     expect(branch).not.toContain("..");
-    expect(branch).toMatch(/^[A-Za-z0-9._\/-]+$/);
+    expect(branch).toMatch(/^[A-Za-z0-9._/-]+$/);
   });
 
   it("derives the webhook identifier from the delivery, not the subject", async () => {
@@ -113,7 +113,7 @@ describe("resolveWorkflowTicketStep", () => {
   });
 
   it("synthesizes a git-ref-safe identifier for a schedule occurrence", async () => {
-    const { branchForTicket } = await import("../../services/publication/workflow-naming.js");
+    const { branchForTicket } = await import("../../engine/support/workflow-naming.js");
     const { resolveWorkflowTicketStep } = await import("./workflow-ticket.js");
     const ticket = await resolveWorkflowTicketStep(
       {
@@ -152,7 +152,7 @@ describe("resolveWorkflowTicketStep", () => {
     // git check-ref-format rules this branch must satisfy.
     expect(branch).not.toContain(":");
     expect(branch).not.toContain("..");
-    expect(branch).toMatch(/^[A-Za-z0-9._\/-]+$/);
+    expect(branch).toMatch(/^[A-Za-z0-9._/-]+$/);
   });
 
   // Every occurrence branches from the default branch under its own identity, so

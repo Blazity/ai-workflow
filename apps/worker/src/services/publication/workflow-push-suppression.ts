@@ -3,7 +3,7 @@ import type { Db } from "../../db/types.js";
 import { findWorkflowOwnedPullRequestIdentity } from "../../db/repositories/runs.js";
 import { findConnectedWorkflowOwnedPullRequestIdentity } from "../../db/repositories/runs.js";
 import { logger } from "../../infra/logger.js";
-import { vcsLoginsMatch } from "../vcs/vcs-bot-identity.js";
+import { vcsLoginsMatch } from "../../adapters/vcs/vcs-bot-identity.js";
 
 export function isWorkflowGeneratedPush(input: {
   currentHeadSha?: string;

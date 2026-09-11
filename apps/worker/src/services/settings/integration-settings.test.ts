@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({ env: {} as Record<string, unknown> }));
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: state.env,
   getConfiguredVcsProviders: () => [],
   getVcsProviderConfig: () => {

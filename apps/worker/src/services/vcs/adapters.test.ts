@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   createRepositoryVCS: vi.fn(() => ({ kind: "repo-vcs" })),
 }));
 
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: {
     JIRA_BASE_URL: "https://jira.example.com",
     JIRA_API_TOKEN: "jira-token",
@@ -30,11 +30,11 @@ vi.mock("../../db/repositories/active-runs.js", () => ({
   createConnectedPostgresRunRegistry: vi.fn(() => ({ kind: "registry", db: "db" })),
 }));
 
-vi.mock("./create-vcs.js", () => ({
+vi.mock("../../adapters/vcs/create-vcs.js", () => ({
   createVCS: mocks.createVCS,
 }));
 
-vi.mock("./vcs-runtime.js", () => ({
+vi.mock("../../engine/support/vcs-runtime.js", () => ({
   createRepositoryVCS: mocks.createRepositoryVCS,
 }));
 

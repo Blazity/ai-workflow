@@ -33,7 +33,7 @@ import { mergeLiveRuns } from "@/lib/merge-live-runs";
  * running, Input needed), even though the Recent runs table on the same page
  * (fed from the store directly) already shows its real terminal status.
  */
-export function reconcileOverviewLiveRuns(
+function reconcileOverviewLiveRuns(
   recentRuns: RunsResponse,
   liveRuns: LiveRunsResponse,
 ): LiveRunsResponse {

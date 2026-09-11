@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
-import type { Auth } from "../../auth.js";
+import { DashboardAuthError } from "@shared/contracts";
+import type { Auth } from "./auth-core.js";
 import type { Db } from "../../db/types.js";
 import { createAuthRepository, createConnectedAuthRepository } from "../../db/repositories/auth.js";
 import type { DashboardRole } from "./roles.js";
-import { DashboardAuthError } from "./users-read.js";
 
 type AuthContext = Awaited<Auth["$context"]>;
 type ExistingUserWithAccounts = NonNullable<

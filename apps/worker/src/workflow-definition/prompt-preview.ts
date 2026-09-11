@@ -20,7 +20,7 @@ import { validateWorkflowDefinitionCandidate } from "./validation.js";
 import { resolveHarnessRuntimesForDefinition } from "./harness-profile-runtime.js";
 import { resolveConnectedVerifiedHarnessProfileVersion } from "../harness-profiles/resolved-version.js";
 
-export interface WorkflowPromptPreview {
+interface WorkflowPromptPreview {
   blockId: string;
   prompt: string;
   hash: string;

@@ -8,7 +8,6 @@
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, join, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { parseOptions, printTable } from "./shared.mjs";
 
 const productionTypeScript = /\.[cm]?[jt]sx?$/u;

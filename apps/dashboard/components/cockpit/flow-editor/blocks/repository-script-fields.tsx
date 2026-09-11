@@ -675,6 +675,8 @@ export function RunChecksGroupsField({
               onChange={() => {
                 setLastNamed(selected);
                 setMode("gate");
+                // Passing undefined deletes the optional groups parameter.
+                // eslint-disable-next-line unicorn/no-useless-undefined -- Clear groups to select the default gate.
                 onChange("params.groups", undefined);
               }}
               className="w-3 h-3 accent-mariner"
@@ -722,7 +724,11 @@ export function RunChecksGroupsField({
       {commandsRule && !disabled && (
         <button
           type="button"
-          onClick={() => onChange("params.commands", undefined)}
+          onClick={() => {
+            // Passing undefined deletes the optional commands parameter.
+            // eslint-disable-next-line unicorn/no-useless-undefined -- Clear commands to select groups.
+            onChange("params.commands", undefined);
+          }}
           className="appearance-none self-start rounded-xs border border-neutral-300 bg-white px-1.5 py-[3px] font-mono text-[10px] text-neutral-700 hover:bg-app-bg"
         >
           Clear commands to select groups

@@ -137,7 +137,7 @@ For GitLab.com single-project setup, see [`docs/GITLAB-SETUP.md`](./docs/runbook
 3. Set the namespace/project path, for example `my-group/my-repo` → `GITLAB_PROJECT_ID`. Numeric project IDs are not supported because sandbox clone/push needs a path.
 4. Generate a random webhook secret → `GITLAB_WEBHOOK_SECRET`.
 5. Note the base branch (usually `main`) → `GITLAB_BASE_BRANCH`.
-6. On a self-hosted instance, set the instance URL → `GITLAB_HOST`. It defaults to `https://gitlab.com` (`apps/worker/env.ts`), so leave it unset for GitLab.com. The sandbox clone URL is built as `<host>/<project path>.git` (`apps/worker/src/infra/vcs-urls.ts`), which is also why step 3 requires a path and not a numeric id.
+6. On a self-hosted instance, set the instance URL → `GITLAB_HOST`. It defaults to `https://gitlab.com` (`apps/worker/src/infra/runtime-env.ts`), so leave it unset for GitLab.com. The sandbox clone URL is built as `<host>/<project path>.git` (`apps/worker/src/infra/vcs-urls.ts`), which is also why step 3 requires a path and not a numeric id.
 
 ### 2.3 Slack
 

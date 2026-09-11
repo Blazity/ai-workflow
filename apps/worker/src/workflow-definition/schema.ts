@@ -48,7 +48,7 @@ import {
   MINIMUM_PERIOD_MS,
   parseSchedule,
   violatesMinimumPeriod,
-} from "../services/schedule-trigger/occurrence.js";
+} from "../engine/support/schedule-occurrence.js";
 import {
   isSafeWorkflowInputName,
 } from "./bindings.js";

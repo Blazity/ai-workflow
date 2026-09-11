@@ -7,7 +7,7 @@ import type {
   PrePrCheckConfig,
   RepoScriptsConfig,
   RepoScriptsRepositoryConfig,
-} from "../../pre-pr-checks/config.js";
+} from "../pre-pr-checks/config.js";
 export { MAX_PRE_PR_FIX_CYCLES } from "../steps/pre-pr-checks-runner.js";
 import {
   PRE_PR_CHECK_BATCH_MAX_MINUTES,
@@ -535,7 +535,7 @@ export async function runRepositorySetup(options: {
    *  an operator watching it has nothing else at all to look at. */
   observations?: V2InvocationObservationHooks;
 }): Promise<RepositorySetupOutcome> {
-  const { repoScriptsConfigSchema } = await import("../../pre-pr-checks/config.js");
+  const { repoScriptsConfigSchema } = await import("../pre-pr-checks/config.js");
   const parsed = repoScriptsConfigSchema.safeParse(options.config);
   if (!parsed.success) {
     return {
@@ -650,7 +650,7 @@ export async function runPrePrChecksWithFixes(
   // and a static import graph that reaches a Node builtin fails the Vercel
   // build alone, never vitest or a local build.
   const { repoScriptsConfigSchema, describePrePrCheckIssues } = await import(
-    "../../pre-pr-checks/config.js"
+    "../pre-pr-checks/config.js"
   );
   const parsed = repoScriptsConfigSchema.safeParse(options.config);
   if (!parsed.success) {
@@ -1211,7 +1211,7 @@ async function selectedGroupsFor(
   repo: RepoScriptsRepositoryConfig,
   selection: RepoScriptsGroupSelection,
 ): Promise<string[]> {
-  const { resolveGateGroups } = await import("../../pre-pr-checks/config.js");
+  const { resolveGateGroups } = await import("../pre-pr-checks/config.js");
   return selection.kind === "gate"
     ? resolveGateGroups(repo)
     : selection.groups.filter((group) => group in repo.groups);

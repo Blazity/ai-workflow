@@ -16,7 +16,7 @@ vi.mock("../../infra/logger.js", () => ({
 // The regex half of the real redactor is what these assert against; its
 // process.env half would make the output depend on the machine running the
 // suite, and there is no secret in these fixtures for it to find.
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: { DASHBOARD_ORIGIN: "https://dashboard.example.com" },
 }));
 // The engine boundary, replaced exactly where run-checks.test.ts replaces it:

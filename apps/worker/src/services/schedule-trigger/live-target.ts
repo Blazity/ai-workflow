@@ -10,7 +10,7 @@ import {
   readWorkflowDefinitionVersion,
 } from "../../engine/stored-definition-reads.js";
 
-export interface StoredTriggerRateLimitParams {
+interface StoredTriggerRateLimitParams {
   rateLimitMax?: number;
   rateLimitWindow?: "minute" | "hour" | "day" | "month";
 }

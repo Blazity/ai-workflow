@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { diagnoseRun } from "./run-diagnosis.js";
+import { diagnoseRun } from "../services/mcp/run-diagnosis.js";
 import { WORKSPACE_GATE_NOT_RECORDED_MESSAGE } from "../workflow-definition/interpreter.js";
 
 describe("diagnoseRun", () => {

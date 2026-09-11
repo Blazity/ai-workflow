@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { FatalError } from "workflow";
 import { WorkflowRunCancelledError } from "workflow/errors";
-import { ActiveRunOwnerError } from "../../services/run-lifecycle/active-run-owner.js";
-import { ACTIVE_RUN_OWNER_ERROR_SENTINEL } from "../../services/run-lifecycle/run-control-errors.js";
+import { ActiveRunOwnerError } from "../../db/repositories/active-run-owner-error.js";
+import { ACTIVE_RUN_OWNER_ERROR_SENTINEL } from "../../engine/support/run-control-errors.js";
 import {
   isRunBudgetError,
   RunBudgetError,

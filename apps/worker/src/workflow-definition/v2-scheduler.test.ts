@@ -539,7 +539,7 @@ describe("executeV2Graph concurrency and failure", () => {
   // The floor of the operational ceiling behind V2_MAX_BLOCK_CONCURRENCY.
   // Concurrent dispatch is the ordinary case now, but the lever can still be set
   // to 1, whether to throttle a run deliberately or as the emergency stop
-  // described in env.ts, so a fan-out has to finish in that configuration too:
+  // described in infra/runtime-env.ts, so a fan-out has to finish in that configuration too:
   // one block at a time, admitting the next only as the previous one settles.
   it("runs a fan-out one block at a time when admission is capped at one", async () => {
     const gates = new Map(

@@ -10,7 +10,7 @@ import {
   getResumableClarificationForRun,
   getResumeFailedClarificationForRun,
   type HookClarificationRow,
-} from "../../clarifications/hook-store.js";
+} from "../../db/repositories/clarification-hooks.js";
 import {
   findPromptBySlug,
   getCurrentPromptVersion,
@@ -65,6 +65,7 @@ import {
 } from "../run-lifecycle/index.js";
 
 export type { TicketRunRow };
+export type { HookClarificationRow };
 export { MAX_REPLAY_PAGE_LIMIT, RunObservationStoreError };
 
 /** The time window a run listing or cost aggregation is taken over. */

@@ -47,7 +47,7 @@ vi.mock("../../../../sandbox/stop-ticket-sandboxes.js", () => ({
 // cancelling a run reaches the sandbox and dispatch modules, which read the
 // deployment environment at import. Nothing under test reads a setting, so the
 // environment is answered here rather than configured.
-vi.mock("../../../../config/env.js", () => ({ env: {} }));
+vi.mock("../../../../infra/vcs-config.js", () => ({ env: {} }));
 vi.mock("../../../../db/client.js", () => ({ getDb: () => state.db }));
 vi.mock("../../../../services/auth/request-context.js", () => ({
   requireDashboardActor: vi.fn(async () => {
@@ -60,7 +60,7 @@ vi.mock("../../../../services/auth/request-context.js", () => ({
     throw error;
   },
 }));
-vi.mock("../../../../services/vcs/adapters.js", () => ({
+vi.mock("../../../../engine/support/adapters.js", () => ({
   createAdapters: () => ({ runRegistry: {} }),
 }));
 vi.mock("../../../../pre-pr-checks/store.js", () => ({

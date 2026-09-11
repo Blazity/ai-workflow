@@ -22,7 +22,7 @@ vi.mock("@vercel/sandbox", () => ({
 vi.mock("../../sandbox/credentials.js", () => ({
   getSandboxCredentials: () => ({ token: "vercel-token", teamId: "team", projectId: "project" }),
 }));
-vi.mock("../../services/vcs/adapters.js", () => ({
+vi.mock("../../engine/support/adapters.js", () => ({
   createAdapters: () => ({
     runRegistry: {
       registerSandbox: mocks.registerSandbox,
@@ -33,7 +33,7 @@ vi.mock("../../services/vcs/adapters.js", () => ({
 vi.mock("../../sandbox/agents/index.js", () => ({
   createAgentAdapter: (kind: string) => ({ kind, configure: mocks.configure }),
 }));
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: {
     ANTHROPIC_API_KEY: "anthropic-fresh",
     CODEX_API_KEY: "codex-fresh",

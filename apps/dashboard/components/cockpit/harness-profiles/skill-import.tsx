@@ -705,7 +705,7 @@ export function SkillImport({
               disabled={selected.length === 0 || busy !== null}
               className={primaryButtonClass}
             >
-              Review {selected.length || ""}{" "}
+              Review {selected.length > 0 ? selected.length : ""}{" "}
               {selected.length === 1 ? "skill" : "skills"}
             </button>
           ) : (

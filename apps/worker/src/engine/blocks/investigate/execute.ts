@@ -3,7 +3,7 @@ import type { TicketSummary } from "../../../adapters/issue-tracker/types.js";
 import type {
   RetrievalFailureReason,
   SlackSearchResult,
-} from "../../../services/slack/slack-search.js";
+} from "../../../adapters/messaging/slack-search.js";
 import { isRunControlError } from "../../helpers/run-control-error.js";
 import { resolveCallLlmTarget } from "../call-llm/execute.js";
 import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "../support/types.js";
@@ -341,7 +341,7 @@ async function searchJiraProvider(input: {
     // within, and searching every project the credential can reach is exactly
     // what must not happen.
     if (input.projectKey === "") return { status: "failed", reason: "permission" };
-    const { createAdapters } = await import("../../../services/vcs/adapters.js");
+    const { createAdapters } = await import("../../support/adapters.js");
     const { issueTracker } = createAdapters();
     if (typeof issueTracker.searchTicketSummaries !== "function") {
       // The configured tracker cannot serve summary search at all, which is a
@@ -375,7 +375,7 @@ async function searchSlackProvider(input: {
   }
   try {
     const { searchSlackChannels, classifySlackFailure } = await import(
-      "../../../services/slack/slack-search.js"
+      "../../../adapters/messaging/slack-search.js"
     );
     try {
       const value = await searchSlackChannels({
@@ -419,7 +419,7 @@ async function blockInvestigateRetrievalStep(input: {
   // Both providers' credentials and the Jira project scope come from here, one
   // read, so no block param can influence what either provider is allowed to
   // reach.
-  const { env } = await import("../../../config/env.js");
+  const { env } = await import("../../../infra/vcs-config.js");
   const [jira, slack] = await Promise.all([
     input.jira === null
       ? Promise.resolve<ProviderOutcome<TicketSummary[]>>({ status: "disabled" })

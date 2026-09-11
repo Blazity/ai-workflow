@@ -8,16 +8,9 @@ import {
   apiClient,
   type EffectivePromptPreviewProvenance,
   type EffectivePromptPreviewResponse,
-  type EffectivePromptPreviewSection,
-  type EffectivePromptPreviewUnresolvedSource,
 } from "@/lib/api/client";
 
-export type {
-  EffectivePromptPreviewProvenance,
-  EffectivePromptPreviewResponse,
-  EffectivePromptPreviewSection,
-  EffectivePromptPreviewUnresolvedSource,
-};
+export type { EffectivePromptPreviewResponse } from "@/lib/api/client";
 
 const previewButton =
   "appearance-none rounded-xs border border-mariner bg-panel px-2.5 py-1.5 font-mono text-[9px] uppercase tracking-[0.04em] text-mariner disabled:opacity-40";

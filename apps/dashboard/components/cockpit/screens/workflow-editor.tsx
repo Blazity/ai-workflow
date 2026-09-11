@@ -341,11 +341,11 @@ export function WorkflowEditorScreen({
       update: (
         current: WorkflowEditorDocument,
       ) => WorkflowEditorDocument,
-      options: { semantic?: boolean } = {},
+      updateOptions: { semantic?: boolean } = {},
     ) => {
       const next = update(editorDocumentRef.current);
       editorDocumentRef.current = next;
-      if (options.semantic !== false) editorResponseGuard.invalidate();
+      if (updateOptions.semantic !== false) editorResponseGuard.invalidate();
       dispatchEditorHistory({ type: "apply", value: next });
     },
     [editorResponseGuard],

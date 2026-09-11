@@ -20,7 +20,7 @@ import { mcpSettings } from "../../services/settings/runtime-settings.js";
 import {
   MAX_REPLAY_PAGE_LIMIT,
   RunObservationStoreError,
-} from "../../services/mcp/index.js";
+} from "../../services/mcp/tool-services.js";
 import {
   McpPublicError,
   isTerminalRunStatus,
@@ -28,7 +28,7 @@ import {
   type McpToolDependencies,
 } from "../contracts.js";
 import { executeMcpRead } from "../execute-tool.js";
-import { diagnoseRun, type DiagnoseRunInput } from "../run-diagnosis.js";
+import { diagnoseRun, type DiagnoseRunInput } from "../../services/mcp/run-diagnosis.js";
 import { registerCatalogTool } from "../tool-catalog.js";
 
 // Flat interval, not a backoff curve: this slice has no per-run ETA to size

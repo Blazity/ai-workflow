@@ -20,7 +20,7 @@ vi.mock("workflow", async (importOriginal) => ({
   createHook: vi.fn(),
   getWorkflowMetadata: () => ({ workflowRunId: "run-retired-replay" }),
 }));
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: {
     AGENT_KIND: "codex",
     CLAUDE_MODEL: "claude-test",
@@ -72,10 +72,10 @@ vi.mock("../steps/workflow-ticket.js", () => ({
     attachments: [],
   })),
 }));
-vi.mock("../../services/vcs/adapters.js", () => ({
+vi.mock("../../engine/support/adapters.js", () => ({
   createAdapters: () => ({ issueTracker: { postComment: jira.postComment } }),
 }));
-vi.mock("../../services/run-lifecycle/active-run-owner.js", () => ({
+vi.mock("../../db/repositories/active-runs.js", () => ({
   assertActiveRunOwner: vi.fn(async () => {}),
   assertConnectedActiveRunOwner: vi.fn(async () => {}),
 }));
@@ -96,7 +96,7 @@ vi.mock("../../run-analysis/persistence.js", () => ({
   finalizeConnectedRunAnalysisUsage: telemetry.finalizeRunAnalysisUsage,
 }));
 vi.mock("workflow/runtime", () => ({ getWorld: () => ({}) }));
-vi.mock("../../services/overview/collect-run-detail.js", () => ({
+vi.mock("../../engine/support/collect-run-detail.js", () => ({
   captureRunStepsBestEffort: vi.fn(async () => []),
   sanitizeRunStepsForDiagnosticError: telemetry.sanitizeRunStepsForDiagnosticError,
 }));

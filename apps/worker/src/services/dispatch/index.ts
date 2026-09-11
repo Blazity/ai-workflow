@@ -42,7 +42,7 @@ export {
 export {
   listConnectedPendingTriggers,
   listPendingTriggers,
-} from "./trigger-delivery-store.js";
+} from "../../engine/support/trigger-delivery-store.js";
 export {
   isGateCheckName,
   normalizeGitHubEvents,
@@ -52,6 +52,7 @@ export type {
   TriggerEvent,
 } from "./trigger-events.js";
 export {
+  enforceConnectedTriggerRateLimit,
   enforceTriggerRateLimit,
   getTriggerRejectionsToday,
   resolveTriggerRateLimit,

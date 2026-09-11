@@ -1,5 +1,5 @@
 export async function loadEnvironmentPort() {
-  const environment = await import("../../config/env.js");
+  const environment = await import("../../infra/vcs-config.js");
   return {
     get env() {
       return environment.env;
@@ -11,17 +11,17 @@ export async function loadEnvironmentPort() {
 }
 
 export async function loadAdaptersPort() {
-  const { createAdapters } = await import("../../services/vcs/adapters.js");
+  const { createAdapters } = await import("../support/adapters.js");
   return { createAdapters };
 }
 
 export async function loadActiveRunOwnerPort() {
-  const { assertActiveRunOwner, assertConnectedActiveRunOwner } = await import("../../services/run-lifecycle/active-run-owner.js");
+  const { assertActiveRunOwner, assertConnectedActiveRunOwner } = await import("../../db/repositories/active-runs.js");
   return { assertActiveRunOwner, assertConnectedActiveRunOwner };
 }
 
 export async function loadRepositoryDiscoveryPort() {
-  const repositoryDiscovery = await import("../../services/repository-discovery/runner.js");
+  const repositoryDiscovery = await import("../repository-discovery/runner.js");
   return {
     get REPOSITORY_DISCOVERY_SCHEMA() {
       return repositoryDiscovery.REPOSITORY_DISCOVERY_SCHEMA;
@@ -78,12 +78,12 @@ export async function loadRunTelemetryPort() {
 }
 
 export async function loadTicketTransitionPort() {
-  const { moveTicketForRun } = await import("../../services/tickets/ticket-transition.js");
+  const { moveTicketForRun } = await import("../support/ticket-transition.js");
   return { moveTicketForRun };
 }
 
 export async function loadVcsRuntimePort() {
-  const vcsRuntime = await import("../../services/vcs/vcs-runtime.js");
+  const vcsRuntime = await import("../support/vcs-runtime.js");
   return {
     get buildSandboxProviderConfigs() {
       return vcsRuntime.buildSandboxProviderConfigs;

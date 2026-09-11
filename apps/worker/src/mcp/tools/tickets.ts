@@ -1,5 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js";
+import { IssueTrackerNotFoundError } from "../../services/mcp/app-dependencies.js";
 import {
   McpPublicError,
   isTerminalRunStatus,

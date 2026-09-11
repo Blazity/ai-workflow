@@ -58,7 +58,7 @@ export async function validateRehearsalEvidence(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     throw new Error(
-      `No rehearsal is recorded for ${input.version}: ${input.rehearsalPath} does not exist. Run an end-to-end rehearsal on production against a repository with real pre-PR checks, at source commit ${input.sourceCommit}, and commit the record. ${HOW_TO_REHEARSE}`,
+      `No rehearsal is recorded for ${input.version}: ${input.rehearsalPath} does not exist. Run an end-to-end rehearsal on production against a repository with real pre-PR checks, at source commit ${input.sourceCommit}, and commit the record. ${HOW_TO_REHEARSE}`, { cause: error },
     );
   }
   let parsedJson: unknown;
@@ -66,7 +66,7 @@ export async function validateRehearsalEvidence(
     parsedJson = JSON.parse(raw);
   } catch (error) {
     throw new Error(
-      `Rehearsal record ${input.rehearsalPath} is not valid JSON: ${error instanceof Error ? error.message : String(error)}. Repair the file so it parses, then rerun the synchronization. ${HOW_TO_REHEARSE}`,
+      `Rehearsal record ${input.rehearsalPath} is not valid JSON: ${error instanceof Error ? error.message : String(error)}. Repair the file so it parses, then rerun the synchronization. ${HOW_TO_REHEARSE}`, { cause: error },
     );
   }
   const parsed = rehearsalRecordSchema.safeParse(parsedJson);

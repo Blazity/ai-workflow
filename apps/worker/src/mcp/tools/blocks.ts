@@ -2,8 +2,10 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { WorkflowBlockContract } from "@shared/contracts";
 
-import { buildWorkflowBlockRegistry } from "../../workflow-definition/block-registry.js";
-import { workflowBlockRegistryContextFromEnv } from "../../workflow-definition/models.js";
+import {
+  buildWorkflowBlockRegistry,
+  workflowBlockRegistryContextFromEnv,
+} from "../../services/mcp/app-dependencies.js";
 import { McpPublicError, type McpToolDependencies } from "../contracts.js";
 import { executeMcpRead } from "../execute-tool.js";
 import { registerCatalogTool } from "../tool-catalog.js";

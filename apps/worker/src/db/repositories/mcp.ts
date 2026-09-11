@@ -114,7 +114,7 @@ export function consumeConnectedMcpRateLimitWindow(
   return consumeMcpRateLimitWindow(getDb(), input);
 }
 
-export async function findMcpOrganizationBySlug(db: Db, slug: string) {
+async function findMcpOrganizationBySlug(db: Db, slug: string) {
   const [row] = await db
     .select({ id: organization.id, slug: organization.slug })
     .from(organization)
@@ -123,7 +123,7 @@ export async function findMcpOrganizationBySlug(db: Db, slug: string) {
   return row ?? null;
 }
 
-export async function findMcpOauthClient(db: Db, clientId: string) {
+async function findMcpOauthClient(db: Db, clientId: string) {
   const [row] = await db
     .select({ referenceId: oauthClient.referenceId, scopes: oauthClient.scopes })
     .from(oauthClient)

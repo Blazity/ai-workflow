@@ -1,11 +1,6 @@
 import { parseWorkflowName } from "workflow/observability";
 import type { RunStatus } from "@shared/contracts";
 
-/**
- * The slice of the Workflow DevKit's `world.runs` API we depend on. The real
- * object is `getWorld().runs`; this narrow interface keeps the collector
- * testable with a fake.
- */
 export interface RunsLister {
   list(params?: {
     resolveData?: "none" | "all";
@@ -13,7 +8,6 @@ export interface RunsLister {
   }): Promise<{ data: WorkflowRunRecord[] }>;
 }
 
-/** Subset of a `WorkflowRun` record (from `world.runs.list`) that we read. */
 export interface WorkflowRunRecord {
   runId: string;
   status: "pending" | "running" | "completed" | "failed" | "cancelled";
@@ -42,7 +36,7 @@ export function mapWorkflow(workflowName: string): { id: string; name: string } 
   try {
     fn = parseWorkflowName(workflowName)?.functionName ?? workflowName;
   } catch {
-    // Unparseable name — fall back to the raw value.
+    // Unparseable name: fall back to the raw value.
   }
   return WORKFLOW_MAP[fn] ?? { id: `wf_${fn}`, name: fn };
 }

@@ -1,5 +1,14 @@
 export * from "./domain";
 export * from "./dashboard-roles";
+export * from "./dashboard-auth-error";
+export type {
+  PrTriggerPayload,
+  PrTriggerType,
+  SupportCase,
+  TriggerEvent,
+  WebhookTriggerEntry,
+  WebhookVerifiedWith,
+} from "./trigger-events";
 export * from "./block-catalog.generated";
 export * from "./api";
 export * from "./workflow-graph";

@@ -8,7 +8,7 @@ import type {
 import type { ApprovalRow } from "../../db/repositories/approvals.js";
 import { ActiveRunOwnerError } from "../run-lifecycle/run-control-errors.js";
 
-vi.mock("../../config/env.js", () => ({ env: { COLUMN_AI: "AI" } }));
+vi.mock("../../infra/vcs-config.js", () => ({ env: { COLUMN_AI: "AI" } }));
 const mockStart = vi.fn();
 vi.mock("workflow/api", () => ({ start: (...args: any[]) => mockStart(...args) }));
 vi.mock("../../engine/index.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));

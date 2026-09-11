@@ -6,7 +6,7 @@ const routeState = vi.hoisted(() => ({
   oauth2Consent: vi.fn(),
 }));
 
-vi.mock("../config/env.js", () => ({
+vi.mock("../infra/vcs-config.js", () => ({
   env: {
     BETTER_AUTH_SECRET: "s".repeat(32),
     BETTER_AUTH_URL: "https://worker.example.com",

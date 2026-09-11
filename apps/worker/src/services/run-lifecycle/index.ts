@@ -6,13 +6,13 @@
  * scripts/gates/cluster-deep-imports.json and that list only shrinks.
  */
 export {
-  ActiveRunOwnerError,
   assertActiveRunOwner,
   assertActiveRunOwnerState,
-} from "./active-run-owner.js";
+} from "../../db/repositories/active-runs.js";
 export type {
   ActiveRunOwner,
-} from "./active-run-owner.js";
+} from "../../db/repositories/active-runs.js";
+export { ActiveRunOwnerError } from "../../db/repositories/active-run-owner-error.js";
 export {
   cancelRun,
   cancelRunDetailed,

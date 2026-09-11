@@ -14,7 +14,7 @@ import type { Db } from "../../db/types.js";
 import {
   cancelConnectedRunForOperator,
   cancelRunForOperator,
-} from "../run-lifecycle/cancel-run.js";
+} from "../run-lifecycle/index.js";
 import { logger } from "../../infra/logger.js";
 import { formatClarificationResumeFailedComment } from "./comment-format.js";
 
@@ -95,7 +95,7 @@ export async function terminalizeExhaustedResume(
   });
 }
 
-export function terminalizeConnectedExhaustedResume(
+function terminalizeConnectedExhaustedResume(
   row: ResumeAttemptSubject,
   answeredAt: Date,
   error: unknown,

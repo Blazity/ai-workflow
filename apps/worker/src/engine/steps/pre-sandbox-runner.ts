@@ -7,8 +7,8 @@ import type {
   PreSandboxStepRegistry,
   RunPreSandboxPhaseInput,
   RunPreSandboxPhaseResult,
-} from "../../pre-sandbox/types.js";
-import { preSandboxTicketInputFields } from "../../pre-sandbox/types.js";
+} from "../pre-sandbox/types.js";
+import { preSandboxTicketInputFields } from "../pre-sandbox/types.js";
 
 interface PreSandboxLogger {
   info: (obj: Record<string, unknown>, msg: string) => void;
@@ -19,8 +19,8 @@ export async function runPreSandboxPhase(
   input: RunPreSandboxPhaseInput,
 ): Promise<RunPreSandboxPhaseResult> {
   "use step";
-  const { loadPreSandboxConfig } = await import("../../pre-sandbox/config.js");
-  const { preSandboxStepRegistry } = await import("../../pre-sandbox/steps/index.js");
+  const { loadPreSandboxConfig } = await import("../pre-sandbox/config.js");
+  const { preSandboxStepRegistry } = await import("../pre-sandbox/steps/index.js");
   const { logger } = await import("../../infra/logger.js");
 
   return executePreSandboxPhase(input, loadPreSandboxConfig(), preSandboxStepRegistry, logger);

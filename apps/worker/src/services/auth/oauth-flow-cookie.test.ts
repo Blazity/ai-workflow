@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 // The codec reads the signing secret itself, through the settings accessor, so
 // the test supplies it the way the deployment would rather than as an argument.
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: {
     BETTER_AUTH_SECRET: "s".repeat(32),
   },

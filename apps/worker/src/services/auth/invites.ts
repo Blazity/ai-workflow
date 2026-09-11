@@ -9,9 +9,10 @@ import {
   createInviteEmailDeliveryRepository,
   type InviteEmailDeliveryStatus,
 } from "../../db/repositories/invite-email-deliveries.js";
-import { inviteEmailTemplate } from "../email/templates.js";
+import { inviteEmailTemplate } from "../email/index.js";
 import { canInvite, type DashboardRole } from "./roles.js";
-import { DashboardAuthError, type DashboardActor } from "./users-read.js";
+import { DashboardAuthError } from "@shared/contracts";
+import type { DashboardActor } from "./users-read.js";
 
 type AuthRepository = ReturnType<typeof createAuthRepository>;
 type InviteEmailDeliveryRepository = ReturnType<typeof createInviteEmailDeliveryRepository>;

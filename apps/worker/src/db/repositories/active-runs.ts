@@ -19,8 +19,22 @@ import {
 } from "../schema.js";
 export const STARTUP_DEADLINE_MS = 10 * 60 * 1000;
 
+export interface ActiveRunOwner {
+  subjectKey: string;
+  ownerToken: string;
+  runId: string | null;
+}
+
+export function assertActiveRunOwner(db: Db, owner: ActiveRunOwner): Promise<void> {
+  return assertActiveRunOwnerState(
+    owner,
+    owner.runId === null ? "reserved" : "bound",
+    db,
+  );
+}
+
 export async function assertActiveRunOwnerState(
-  owner: { subjectKey: string; ownerToken: string; runId: string | null },
+  owner: ActiveRunOwner,
   state: "reserved" | "bound" | "parked" | "cancelling",
   db: Db = getDb(),
 ): Promise<void> {
@@ -42,7 +56,7 @@ export async function assertActiveRunOwnerState(
 }
 
 export function assertConnectedActiveRunOwner(
-  owner: { subjectKey: string; ownerToken: string; runId: string | null },
+  owner: ActiveRunOwner,
 ): Promise<void> {
   return assertActiveRunOwnerState(
     owner,

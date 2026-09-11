@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import type { PromptLibraryListResponse, PromptLibraryListRowDto } from "@shared/contracts";
+import type { PromptLibraryListRowDto } from "@shared/contracts";
 import { apiClient } from "@/lib/api/client";
 
 export type PromptLibraryStatus = "loading" | "ready" | "error";

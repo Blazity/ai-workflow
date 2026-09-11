@@ -2,7 +2,7 @@
 // would bypass the module mock and hit the real Workflow runtime.
 import { MAX_CLARIFICATION_ANSWER_LENGTH } from "@shared/contracts";
 import { getHookByToken, resumeHook } from "workflow/api";
-import { env } from "../../config/env.js";
+import { env } from "../../infra/vcs-config.js";
 import { HookNotFoundError } from "workflow/errors";
 import type { Db } from "../../db/types.js";
 import {
@@ -10,7 +10,7 @@ import {
   type IssueTrackerAdapter,
 } from "../../adapters/issue-tracker/types.js";
 import { logger } from "../../infra/logger.js";
-import { aiColumnMoveTarget } from "../tickets/move-targets.js";
+import { aiColumnMoveTarget } from "../tickets/index.js";
 import {
   markConnectedRunBlockedOnCancel,
   markConnectedRunResumed,
@@ -20,7 +20,7 @@ import {
 import {
   moveConnectedTicketForRun,
   moveTicketForRun,
-} from "../tickets/ticket-transition.js";
+} from "../tickets/index.js";
 import { formatClarificationAnswerComment } from "./comment-format.js";
 import {
   answerConnectedHookClarification,

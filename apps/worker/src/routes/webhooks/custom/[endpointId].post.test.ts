@@ -37,7 +37,7 @@ const state = vi.hoisted(() => ({
 }));
 const mockStart = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../config/env.js", () => ({ env: state.env }));
+vi.mock("../../../infra/vcs-config.js", () => ({ env: state.env }));
 vi.mock("../../../db/client.js", () => ({ getDb: () => state.db }));
 vi.mock("workflow/api", () => ({ start: (...args: unknown[]) => mockStart(...args) }));
 vi.mock("../../../engine/index.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
@@ -102,7 +102,7 @@ function signed(
       "x-workflow-signature": createHmac("sha256", signingSecret)
         .update(body)
         .digest("hex"),
-      ...(options.headers ?? {}),
+      ...options.headers,
     },
     body,
   });
@@ -131,7 +131,7 @@ function signedTs(
         .update(`${ts}.${body}`)
         .digest("hex"),
       "x-workflow-timestamp": String(ts),
-      ...(options.headers ?? {}),
+      ...options.headers,
     },
     body,
   });
@@ -174,7 +174,9 @@ async function setupWebhookDefinition(
     createdById: "test",
     createdByLabel: "Test",
   });
-  const nodes = graph().nodes.map((node) => ({ ...node, id: nodeId }));
+  const nodes = graph().nodes.map((node) =>
+    Object.assign({}, node, { id: nodeId }),
+  );
   await db.insert(workflowDefinitionVersions).values({
     definitionId,
     version: 1,

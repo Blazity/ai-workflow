@@ -46,7 +46,7 @@ export function coerceStatus(status: string | null): RunStatus {
   return status && RUN_STATUSES.has(status as RunStatus) ? status as RunStatus : "running";
 }
 
-export function percentile(values: number[], p: number): number {
+function percentile(values: number[], p: number): number {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
   const index = Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1);
@@ -321,7 +321,11 @@ async function costAggWithQueries(
     value.tokens += row.tokens;
     byDay.set(date, value);
   }
-  const daily = [...byDay.entries()].map(([date, value]) => ({ date, ...value }))
+  const daily = [...byDay.entries()].map(([date, value]) => ({
+    date,
+    cost: value.cost,
+    tokens: value.tokens,
+  }))
     .sort((left, right) => left.date.localeCompare(right.date));
   const start = cutoff
     ? cutoff.toISOString()

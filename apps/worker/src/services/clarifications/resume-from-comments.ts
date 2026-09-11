@@ -1,10 +1,10 @@
-import { env } from "../../config/env.js";
+import { env } from "../../infra/vcs-config.js";
 import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
 } from "../../adapters/issue-tracker/types.js";
 import type { Db } from "../../db/types.js";
-import { ticketPageUrl } from "../publication/dashboard-links.js";
+import { ticketPageUrl } from "../../engine/support/dashboard-links.js";
 import { logger } from "../../infra/logger.js";
 import {
   answerClarificationAndResume,
@@ -18,7 +18,7 @@ import {
   formatAlreadyAnsweredComment,
   formatClarificationNudgeComment,
 } from "./comment-format.js";
-import { getHookClarification, getResumableClarificationForTicket } from "../../clarifications/hook-store.js";
+import { getHookClarification, getResumableClarificationForTicket } from "../../db/repositories/clarification-hooks.js";
 import {
   claimAnsweredClarificationResume,
   claimConnectedAnsweredClarificationResume,

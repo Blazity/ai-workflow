@@ -1870,7 +1870,7 @@ test("history marks the newest version and loads an older one as an unsaved edit
   const historyRow = (version: number) =>
     root
       .findAll((n) => n.type === "div" && typeof n.props.className === "string")
-      .filter((n) => nodeText(n).startsWith(`v${version}`))[0];
+      .find((n) => nodeText(n).startsWith(`v${version}`))!;
   assert.match(nodeText(historyRow(2)), /current/);
   assert.doesNotMatch(nodeText(historyRow(1)), /current/);
   assert.equal(buttons(root, "Restore").length, 1, "the newest version has nothing to restore to");
@@ -2219,7 +2219,8 @@ function stubWindow(t: TestContext) {
     state,
     fire: (type: string) =>
       act(() => {
-        for (const cb of [...(listeners.get(type) ?? [])]) cb();
+        const callbacks = [...(listeners.get(type) ?? [])];
+        for (const cb of callbacks) cb();
       }),
   };
 }

@@ -190,7 +190,7 @@ function indexConfig(table: PgTable) {
     .map((tableIndex) => {
       const name = tableIndex.config.name;
       if (typeof name !== "string") {
-        throw new Error("Expected a named table index");
+        throw new TypeError("Expected a named table index");
       }
       return {
         name,

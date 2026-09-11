@@ -1,4 +1,4 @@
-import type { PrePrCheckConfig } from "../../pre-pr-checks/config.js";
+import type { PrePrCheckConfig } from "../pre-pr-checks/config.js";
 import {
   WORKSPACE_GATE_NOT_RECORDED_MESSAGE,
   WORKSPACE_NOT_VERIFIABLE_MESSAGE,

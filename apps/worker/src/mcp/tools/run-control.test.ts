@@ -4,7 +4,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: {
     MCP_SERVER_VERSION: "0.1.0",
     DASHBOARD_ORIGIN: "https://dashboard.example",
@@ -47,7 +47,7 @@ import {
   getHookClarification,
   prepareHookClarification,
   publishHookClarification,
-} from "../../clarifications/hook-store.js";
+} from "../../db/repositories/clarification-hooks.js";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
 import {
@@ -56,7 +56,7 @@ import {
   organization,
   workflowRuns,
 } from "../../db/schema.js";
-import type { Adapters } from "../../services/vcs/adapters.js";
+import type { Adapters } from "../../engine/support/adapters.js";
 import type {
   ActiveRunEntry,
   RunRegistryAdapter,

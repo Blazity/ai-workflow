@@ -10,7 +10,7 @@ import {
 } from "../../adapters/issue-tracker/types.js";
 import type { Db } from "../../db/client.js";
 
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: {
     JIRA_PROJECT_KEY: "PROJ",
     COLUMN_AI: "AI",
@@ -61,16 +61,12 @@ vi.mock("../../sandbox/stop-ticket-sandboxes.js", () => ({
 vi.mock("./run-stall-watchdog.js", () => ({
   reconcileStalledRun: (...args: any[]) => mockReconcileStalledRun(...args),
 }));
-vi.mock("./active-run-owner.js", () => ({
+vi.mock("../../db/repositories/active-runs.js", () => ({
   assertActiveRunOwnerState: (...args: any[]) => mockAssertActiveRunOwnerState(...args),
 }));
-vi.mock("../../clarifications/hook-store.js", () => ({
+vi.mock("../../db/repositories/clarification-hooks.js", () => ({
   getResumableClarificationForRun: (...args: any[]) =>
     mockGetResumableClarificationForRun(...args),
-}));
-vi.mock("../clarifications/answer-core.js", () => ({
-  retireClarificationForGoneTicket: (...args: any[]) =>
-    mockRetireClarificationForGoneTicket(...args),
 }));
 
 function entry(overrides: Partial<ActiveRunEntry> = {}): ActiveRunEntry {
@@ -771,6 +767,8 @@ describe("reconcileRuns owner-CAS recovery", () => {
         onReleased,
         new Set([parked.subjectKey]),
         mockDb,
+        undefined,
+        mockRetireClarificationForGoneTicket,
       ),
     ).toEqual({ cancelled: 1, cleaned: 0 });
     expect(mockRetireClarificationForGoneTicket).toHaveBeenCalledWith(mockDb, clarification);
@@ -816,6 +814,8 @@ describe("reconcileRuns owner-CAS recovery", () => {
         undefined,
         new Set([parked.subjectKey]),
         mockDb,
+        undefined,
+        mockRetireClarificationForGoneTicket,
       ),
     ).toEqual({ cancelled: 1, cleaned: 0 });
     expect(onCancelled).not.toHaveBeenCalled();

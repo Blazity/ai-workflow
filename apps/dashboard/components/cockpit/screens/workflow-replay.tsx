@@ -24,7 +24,7 @@ import type {
 const NODE_WIDTH = 184;
 const NODE_HEIGHT = 72;
 const CANVAS_PADDING = 56;
-export const REPLAY_GRAPH_HISTORY_MAX_PAGES = 10;
+const REPLAY_GRAPH_HISTORY_MAX_PAGES = 10;
 
 type ReplayTab = "input" | "output" | "logs" | "metadata" | "attempts";
 type ReplayEdge = WorkflowReplayGraphEdge;
@@ -212,11 +212,8 @@ export async function loadReplayAttemptSummaryTail({
   let nextCursor: string | null = cursor;
   let loadedPages = 0;
 
-  while (
-    nextCursor &&
-    !signal?.aborted &&
-    loadedPages < Math.max(1, maxPages)
-  ) {
+  while (nextCursor && loadedPages < Math.max(1, maxPages)) {
+    if (signal?.aborted) break;
     if (seenCursors.has(nextCursor)) break;
     seenCursors.add(nextCursor);
     let page: WorkflowRunReplayResponse;
@@ -382,7 +379,7 @@ export function shouldPollAttemptDetail(
   return runIsLive && attempt !== null && isLiveReplayAttempt(attempt);
 }
 
-export function replayEdgeIsActive(
+function replayEdgeIsActive(
   edge: ReplayEdge,
   attempts: WorkflowReplayAttemptSummary[],
 ): boolean {
@@ -493,7 +490,7 @@ function ReplayCanvas({
               <path d="M0,0 L8,4 L0,8 Z" fill="#3C43E7" />
             </marker>
           </defs>
-          {edges.map((edge, index) => {
+          {edges.map((edge) => {
             const from = positions.get(edge.from);
             const to = positions.get(edge.to);
             if (!from || !to) return null;
@@ -980,7 +977,7 @@ export function renderScriptOutput(value: JsonValue): React.ReactNode | null {
               const repo = asStringField(r.repo);
               const exitCode = asNumberField(r.exitCode);
               const phase = asStringField(r.phase);
-              const output = asStringField(r.output) ?? "";
+              const failureOutput = asStringField(r.output) ?? "";
               return (
                 <div key={i} className="rounded-[3px] border border-red-200 bg-red-50 px-2 py-1.5">
                   <div className="flex items-start justify-between gap-2">
@@ -995,9 +992,9 @@ export function renderScriptOutput(value: JsonValue): React.ReactNode | null {
                     {repo ? <span>repo: {repo}</span> : null}
                     {phase ? <span>phase: {phase}</span> : null}
                   </div>
-                  {output ? (
+                  {failureOutput ? (
                     <pre className="m-0 mt-1.5 max-h-[160px] overflow-auto whitespace-pre-wrap break-words rounded-[3px] bg-[#0E1014] p-2 font-mono text-[10px] leading-[1.5] text-neutral-300">
-                      {output}
+                      {failureOutput}
                     </pre>
                   ) : null}
                 </div>

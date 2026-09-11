@@ -19,7 +19,7 @@ import { makeCtx, makePrPayload } from "../blocks/support/test-support.js";
 // else in this file is pure. Mocked at module level so the note's body can be
 // read off the adapter it would have posted to.
 const vcs = vi.hoisted(() => ({ postRunFailureNote: vi.fn() }));
-vi.mock("../../services/vcs/vcs-runtime.js", () => ({
+vi.mock("../../engine/support/vcs-runtime.js", () => ({
   buildSandboxProviderConfigs: vi.fn(),
   createRepositoryVCS: () => vcs,
 }));
@@ -881,8 +881,11 @@ describe("postReviewLedgerFailureNoteStep", () => {
     baseRef: "main",
     prNumber: 7,
   };
-  const postedBody = (): string =>
-    (vcs.postRunFailureNote.mock.calls[0]?.[0] as { body: string }).body;
+  const postedBody = (): string => {
+    const firstCall = vcs.postRunFailureNote.mock.calls[0];
+    if (!firstCall) throw new Error("failure note was not posted");
+    return (firstCall[0] as { body: string }).body;
+  };
 
   beforeEach(() => {
     vcs.postRunFailureNote.mockReset().mockResolvedValue(undefined);

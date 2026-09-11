@@ -11,6 +11,7 @@ import {
 import { upgradeHarnessDraftToHistoricalV2 } from "./capability-catalog.js";
 import {
   HarnessProfileManifestError,
+  isHistoricalHarnessProfileDraft,
   parseHarnessProfileDraftManifest,
 } from "./manifest.js";
 
@@ -44,7 +45,7 @@ function draftFromManifest(manifest: HarnessProfileManifest): HarnessProfileDraf
 
 function upgradedDraft(manifest: HarnessProfileManifest): HarnessProfileDraftManifest {
   const draft = draftFromManifest(manifest);
-  return draft.schemaVersion === 1
+  return isHistoricalHarnessProfileDraft(draft)
     ? upgradeHarnessDraftToHistoricalV2(draft)
     : draft;
 }
@@ -247,7 +248,7 @@ async function forkHarnessProfileWithRepository(
   const draft = parseHarnessProfileDraftManifest(source.draftManifest);
   return mapHarnessProfileRow(await repository.insertProfile({
     slug: input.slug,
-    draft: draft.schemaVersion === 1
+    draft: isHistoricalHarnessProfileDraft(draft)
       ? upgradeHarnessDraftToHistoricalV2(draft)
       : draft,
     actor: input.actor,

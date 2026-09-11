@@ -4,7 +4,7 @@ import type {
   WorkflowParamValue,
 } from "@shared/contracts";
 import { v2NonAgentPromptPlaceholderIssue } from "../helpers/prompt-output.js";
-import { substituteNodePromptParams } from "../helpers/prompt-vars.js";
+import { substituteNodePromptParams } from "@shared/prompts";
 
 const node = (
   type: WorkflowDefinitionNode["type"],

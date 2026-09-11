@@ -1973,7 +1973,7 @@ describe("checks phase progress observations", () => {
       if (tuning?.outcome) {
         Object.assign(tuning.outcome, {
           reason: "finished",
-          elapsedMs: ticks[ticks.length - 1]?.elapsedMs ?? 0,
+          elapsedMs: ticks.at(-1)?.elapsedMs ?? 0,
           ticks: ticks.length,
         });
       }

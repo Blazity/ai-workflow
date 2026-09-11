@@ -16,7 +16,7 @@ import { parseStoredWorkflowDefinition } from "../workflow-definition/stored-def
 
 type VersionMetadata = Omit<WorkflowDefinitionVersionRow, keyof StoredWorkflowDefinition>;
 
-export function parseWorkflowDefinitionVersionRow(
+function parseWorkflowDefinitionVersionRow(
   row: WorkflowDefinitionVersionRow,
 ): WorkflowDefinitionVersionRow {
   const metadata: VersionMetadata = {
@@ -36,7 +36,7 @@ export function parseOptionalWorkflowDefinitionVersionRow(
   return row ? parseWorkflowDefinitionVersionRow(row) : null;
 }
 
-export function parseWorkflowDefinitionVersionRows(
+function parseWorkflowDefinitionVersionRows(
   rows: WorkflowDefinitionVersionRow[],
 ): WorkflowDefinitionVersionRow[] {
   return rows.map(parseWorkflowDefinitionVersionRow);

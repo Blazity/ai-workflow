@@ -4,7 +4,7 @@ import { configuredReplaySecrets } from "../../run-observability/configured-secr
 import { type ClarificationDecisionObservation } from "../../run-observability/agent-observations.js";
 import type { ClarificationDecisionDigest } from "../helpers/clarification-decision-digest.js";
 import { replayCaptureWithinTimeout } from "../../run-observability/capture-timeout.js";
-import { usageSnapshot } from "../../run-analysis/report.js";
+import { usageSnapshot } from "../../engine/support/run-analysis-report.js";
 import { summarizeRunBlockStatuses } from "../run-block-status-summary.js";
 import { type RunBudgetFailure } from "../helpers/run-budget.js";
 import { redactDiagnosticText } from "../../sandbox/agents/redact.js";
@@ -58,10 +58,10 @@ export async function recordRunTelemetryStep(payload: {
   const { finalizeConnectedRunAnalysisUsage } = await import("../../run-analysis/persistence.js");
   const { getWorld } = await import("workflow/runtime");
   const collectRunDetailMod = await import(
-    "../../services/overview/collect-run-detail.js"
+    "../support/collect-run-detail.js"
   );
   const capturedSteps = await collectRunDetailMod.captureRunStepsBestEffort(
-    getWorld() as unknown as import("../../services/overview/collect-run-detail.js").RunDetailSource,
+    getWorld() as unknown as import("../support/collect-run-detail.js").RunDetailSource,
     payload.runId,
   );
   const steps = collectRunDetailMod.sanitizeRunStepsForDiagnosticError(

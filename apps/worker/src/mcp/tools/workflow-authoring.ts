@@ -11,18 +11,18 @@ import type {
 } from "@shared/contracts";
 import { workflowDefinitionUrl } from "../../services/publication/dashboard-links.js";
 import { dashboardOrigin } from "../../services/settings/runtime-settings.js";
-import { logger } from "../../infra/logger.js";
+import {
+  declaresRetiredSchema,
+  logger,
+  validateWorkflowDefinitionCandidate,
+  workflowBlockRegistryContextFromEnv,
+} from "../../services/mcp/app-dependencies.js";
 import { isRepoAllowed } from "../../services/dispatch/repo-allowlist.js";
-import { workflowBlockRegistryContextFromEnv } from "../../workflow-definition/models.js";
 import {
   runnableDefinitionOf,
   WorkflowDefinitionStoreError,
   WorkflowDefinitionValidationError,
-} from "../../services/workflow-definitions/index.js";
-import {
-  declaresRetiredSchema,
-  validateWorkflowDefinitionCandidate,
-} from "../../workflow-definition/validation.js";
+} from "../../services/workflow-definitions/definition-store.js";
 import { McpPublicError, type McpToolDependencies } from "../contracts.js";
 import { executeMcpMutation, executeMcpRead } from "../execute-tool.js";
 import { hashCanonicalJson } from "../sanitize-result.js";

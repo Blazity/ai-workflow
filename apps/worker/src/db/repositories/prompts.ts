@@ -120,8 +120,7 @@ export async function listPromptHeadRows(
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(asc(promptLibrary.id), desc(promptLibraryVersions.version))
     .limit(500);
-  return rows.map((row) => ({
-    ...mapPromptRow(row.prompt),
+  return rows.map((row) => Object.assign({}, mapPromptRow(row.prompt), {
     currentVersion: row.currentVersion,
     body: row.body,
     slots: structuredClone(row.slots),

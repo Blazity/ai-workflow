@@ -9,9 +9,9 @@ import { defaultWorkflowDefinitionV2 } from "../workflow-definition/default.js";
 import {
   assertNoBuiltInPromptDrift,
   BuiltInPromptDriftError,
-} from "./builtin-prompt-drift-gate.js";
+} from "../workflow-definition/builtin-prompt-drift-gate.js";
 import { evaluateBuiltInPromptDriftGate } from "@shared/prompts";
-import { findBuiltInPromptDrift } from "./builtin-prompt-drift.js";
+import { findBuiltInPromptDrift } from "../workflow-definition/builtin-prompt-drift.js";
 
 const migrationsDir = fileURLToPath(new URL("../../drizzle/", import.meta.url));
 const migrationFiles = readdirSync(migrationsDir)

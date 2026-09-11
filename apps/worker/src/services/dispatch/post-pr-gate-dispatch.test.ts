@@ -58,7 +58,7 @@ vi.mock("../../post-pr-gate/gate-store.js", () => ({
   })),
 }));
 
-vi.mock("../vcs/adapters.js", () => ({
+vi.mock("../../engine/support/adapters.js", () => ({
   createAdapters: (...args: any[]) => mockCreateAdapters(...args),
 }));
 

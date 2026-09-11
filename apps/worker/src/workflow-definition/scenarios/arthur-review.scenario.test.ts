@@ -403,12 +403,16 @@ function buildArthurReviewDefinition(
       inputs: spec.inputs ?? {},
       additionalInputs: [],
     })),
-    edges: edges.map((edge, index) => ({
-      id: edgeId(index, edge),
-      from: edge.from,
-      to: edge.to,
-      ...(edge.fromPort === undefined ? {} : { fromPort: edge.fromPort }),
-    })),
+    edges: edges.map((edge, index) =>
+      Object.assign(
+        {
+          id: edgeId(index, edge),
+          from: edge.from,
+          to: edge.to,
+        },
+        edge.fromPort === undefined ? {} : { fromPort: edge.fromPort },
+      ),
+    ),
   };
 }
 

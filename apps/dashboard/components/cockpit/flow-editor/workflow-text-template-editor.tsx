@@ -50,10 +50,10 @@ export function textTemplateDocument(value: string): TiptapJsonNode {
       if (offset < line.length) {
         content.push({ type: "text", text: line.slice(offset) });
       }
-      return {
-        type: "paragraph",
-        ...(content.length === 0 ? {} : { content }),
-      };
+      return Object.assign(
+        { type: "paragraph" },
+        content.length === 0 ? {} : { content },
+      );
     }),
   };
 }

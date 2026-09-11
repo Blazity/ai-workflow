@@ -20,7 +20,7 @@ const mockReserve = vi.hoisted(() => vi.fn());
 const mockMove = vi.hoisted(() => vi.fn());
 const mockStart = vi.hoisted(() => vi.fn());
 
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: {
     COLUMN_AI: "AI",
     JIRA_AI_TRANSITION_ID: undefined,

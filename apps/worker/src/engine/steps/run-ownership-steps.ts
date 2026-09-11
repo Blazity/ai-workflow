@@ -6,7 +6,7 @@ export async function bindWorkflowCandidateStep(
   kind: import("../../adapters/run-registry/types.js").RunKind = "ticket",
 ): Promise<boolean> {
   "use step";
-  const { createAdapters } = await import("../../services/vcs/adapters.js");
+  const { createAdapters } = await import("../support/adapters.js");
   return createAdapters().runRegistry.markRunEntryStarted({
     subjectKey,
     ticketKey,
@@ -72,7 +72,7 @@ export async function acknowledgePrTriggerDispatchStep(
   const {
     bindCurrentPullRequest,
     readProviderCurrentPullRequest,
-  } = await import("../../services/dispatch/trigger-current-pull-request.js");
+  } = await import("../support/trigger-current-pull-request.js");
   const triggerEvent = {
     delivery: entry.delivery,
     triggerType: entry.triggerType,
@@ -171,13 +171,13 @@ acknowledgePendingTriggerStep.maxRetries = 0;
  * cannot supersede a newer question. */
 export async function repairClarificationLabelStep(
   ticketKey: string,
-  owner: import("../../services/run-lifecycle/active-run-owner.js").ActiveRunOwner,
+  owner: import("../../db/repositories/active-runs.js").ActiveRunOwner,
 ): Promise<void> {
   "use step";
-  const { createAdapters } = await import("../../services/vcs/adapters.js");
-  const { NEEDS_CLARIFICATION_LABEL } = await import("../../services/tickets/labels.js");
+  const { createAdapters } = await import("../../engine/support/adapters.js");
+  const { NEEDS_CLARIFICATION_LABEL } = await import("../../engine/support/ticket-labels.js");
   const { updateConnectedTicketLabelsForRun } = await import(
-    "../../services/tickets/ticket-label-mutation.js"
+    "../../engine/support/ticket-label-mutation.js"
   );
   const { issueTracker } = createAdapters();
   if (typeof issueTracker.updateLabels !== "function") return;

@@ -6,9 +6,9 @@ import type {
   IssueTrackerAdapter,
   IssueTrackerMoveTarget,
 } from "../../adapters/issue-tracker/types.js";
-import type { CancelRunTarget } from "../run-lifecycle/cancel-run.js";
+import { ticketSubjectKey } from "../../engine/support/subject-key.js";
+import type { CancelRunTarget } from "../run-lifecycle/index.js";
 import { logger } from "../../infra/logger.js";
-import { ticketSubjectKey } from "../run-lifecycle/subject-key.js";
 import {
   formatInspectAll,
   formatInspectTicket,

@@ -255,7 +255,7 @@ export interface RunModelEvidenceRow {
   blockStatuses: Record<string, Omit<BlockRunState, "output">> | null;
 }
 
-export async function fetchRunModelEvidence(
+async function fetchRunModelEvidence(
   db: Db,
   runIds: string[],
 ): Promise<Map<string, RunModelEvidenceRow>> {

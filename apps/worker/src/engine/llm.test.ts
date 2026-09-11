@@ -23,7 +23,7 @@ vi.mock("@ai-sdk/openai", () => ({
   createOpenAI: (opts: any) => mockCreateOpenAI(opts),
 }));
 
-vi.mock("../config/env.js", () => ({
+vi.mock("../infra/vcs-config.js", () => ({
   env: {
     ANTHROPIC_API_KEY: "test-anthropic-key",
     CODEX_API_KEY: "test-codex-key",

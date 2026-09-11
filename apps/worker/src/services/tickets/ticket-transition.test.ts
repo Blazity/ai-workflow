@@ -3,7 +3,7 @@ import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js
 import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
 
 const assertOwner = vi.hoisted(() => vi.fn());
-vi.mock("../run-lifecycle/active-run-owner.js", () => ({ assertActiveRunOwnerState: assertOwner }));
+vi.mock("../../db/repositories/active-runs.js", () => ({ assertActiveRunOwnerState: assertOwner }));
 
 import {
   moveTicketForRun,

@@ -30,7 +30,7 @@ import {
   resolveRunModels,
 } from "../overview/index.js";
 import { issueTrackerBaseUrl } from "../settings/index.js";
-import { createAdapters } from "../vcs/index.js";
+import { createAdapters } from "../../engine/support/adapters.js";
 
 /** The runs list as the wire carries it, minus the timestamp the route stamps. */
 export type DashboardRunsPage = Omit<RunsResponse, "generatedAt">;
@@ -62,7 +62,7 @@ export async function listDashboardRuns(query: {
     const models = await resolveRunModels(rows.map((row) => row.id));
     return {
       available: true,
-      rows: rows.map((row) => ({ ...row, model: models.get(row.id) ?? null })),
+      rows: rows.map((row) => Object.assign({}, row, { model: models.get(row.id) ?? null })),
       total,
       counts,
     };

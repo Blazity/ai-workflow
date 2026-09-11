@@ -215,7 +215,7 @@ describe("system profile seeding", () => {
       new Set(["builtin-claude", "builtin-codex"]),
     );
 
-    const [currentCodex] = versions.filter(
+    const currentCodex = versions.find(
       (version) => version.profileId === "builtin-codex",
     );
     const nextCodex: HarnessProfileManifestV1 = {

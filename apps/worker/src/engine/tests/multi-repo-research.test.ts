@@ -25,7 +25,7 @@ vi.mock("../steps/repository-prs.js", () => ({
   recordWorkflowOwnedPullRequestIntent: mocks.recordIntent,
   recordWorkflowOwnedPullRequest: mocks.recordPr,
 }));
-vi.mock("../../services/vcs/vcs-runtime.js", () => ({
+vi.mock("../../engine/support/vcs-runtime.js", () => ({
   createRepositoryVcsRuntime: () => ({
     config: {
       kind: "github",
@@ -39,12 +39,12 @@ vi.mock("../../services/vcs/vcs-runtime.js", () => ({
 vi.mock("../../sandbox/credentials.js", () => ({
   getSandboxCredentials: () => ({ teamId: "team" }),
 }));
-vi.mock("../../services/dispatch/repo-allowlist.js", () => ({
+vi.mock("../../engine/support/repo-allowlist.js", () => ({
   isRepoAllowed: mocks.isRepoAllowed,
   isRepoAllowedForScope: (repository: { repoPath: string }) =>
     mocks.isRepoAllowed(repository.repoPath),
 }));
-vi.mock("../../config/env.js", () => ({ env: { JOB_TIMEOUT_MS: 120_000 } }));
+vi.mock("../../infra/vcs-config.js", () => ({ env: { JOB_TIMEOUT_MS: 120_000 } }));
 vi.mock("@vercel/sandbox", () => ({
   Sandbox: {
     get: vi.fn(async () => ({
@@ -58,13 +58,13 @@ vi.mock("@vercel/sandbox", () => ({
 
 import {
   validateRepositoryDiscoveryResult,
-} from "../../services/repository-discovery/protocol.js";
+} from "../../engine/repository-discovery/protocol.js";
 import {
   EXPANSION_LIMIT_CLARIFICATION_PREFIX,
   validateHumanRepositoryExpansion,
   validateRepositoryExpansionRequests,
-} from "../../services/repository-discovery/runner.js";
-import type { RepositoryCatalogEntry } from "../../services/repository-discovery/catalog.js";
+} from "../../engine/repository-discovery/runner.js";
+import type { RepositoryCatalogEntry } from "../../engine/repository-discovery/catalog.js";
 import { filterPinnedRepositories } from "../../adapters/vcs/repository-directory.js";
 import type { WorkspaceManifest } from "../../sandbox/repo-workspace.js";
 import { workspaceRepositoryAccess } from "../../sandbox/repo-workspace.js";

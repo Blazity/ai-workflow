@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { WebhookAuthScheme, WebhookDeliveryLogEntry, WebhookDeliveryOutcome, WebhookEndpointConfigResponse, WebhookEndpointRevivalResponse, WebhookRejectionSummaryEntry, WebhookRevealResponse, WebhookRevokeResponse, WebhookRotateResponse } from "@shared/contracts";
+import type { WebhookAuthScheme, WebhookDeliveryLogEntry, WebhookDeliveryOutcome, WebhookEndpointConfigResponse, WebhookRejectionSummaryEntry } from "@shared/contracts";
 import { DEFAULT_WEBHOOK_SIGNATURE_HEADER, DEFAULT_WEBHOOK_TOKEN_HEADER } from "@shared/contracts";
 import { ConfigField, ConfigNote, inputCls, readOnlyMonoCls, readOnlyRowCls, webhookActionButtonCls, webhookBannerCls, webhookDangerButtonCls } from "./shared";
 
@@ -27,14 +27,6 @@ function webhookSecretNoun(scheme: WebhookAuthScheme): {
     ? { label: "Shared token", inline: "shared token" }
     : { label: "Signing secret", inline: "signing secret" };
 }
-
-/** Reveal, rotate and revival all hand back a cleartext secret exactly once;
- *  revoke hands back nothing to show. */
-type WebhookActionResponse =
-  | WebhookRevealResponse
-  | WebhookRotateResponse
-  | WebhookEndpointRevivalResponse
-  | WebhookRevokeResponse;
 
 export type WebhookConfirmAction =
   | "reveal"

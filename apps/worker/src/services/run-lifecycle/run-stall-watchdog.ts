@@ -1,5 +1,5 @@
 import { getRun } from "workflow/api";
-import { env } from "../../config/env.js";
+import { env } from "../../infra/vcs-config.js";
 import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
@@ -17,7 +17,7 @@ import {
 } from "./cancel-run.js";
 import { logger } from "../../infra/logger.js";
 import { ticketSubjectKey } from "./subject-key.js";
-import { withdrawTicketFromAiForRun } from "../tickets/ticket-transition.js";
+import { withdrawTicketFromAiForRun } from "../tickets/index.js";
 import {
   markRunFailedByWatchdog,
   WATCHDOG_FAILURE_REASON_PREFIX,

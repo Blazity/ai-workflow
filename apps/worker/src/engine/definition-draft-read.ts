@@ -21,7 +21,7 @@ function applyLayout(
   };
 }
 
-export function materializeWorkflowDefinitionDraft(
+function materializeWorkflowDefinitionDraft(
   state: WorkflowDefinitionDraftStateRow | null,
 ): WorkflowDefinitionDraftRow | null {
   if (!state) return null;

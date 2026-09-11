@@ -574,13 +574,16 @@ function FlowCanvas({
     const top = rect?.top ?? 0;
     // Read live pan/zoom from the ref so this stays identity-stable across
     // pan/zoom — lets the port handlers be memoized without breaking on pan.
-    const { pan, zoom } = viewRef.current;
-    return { x: (clientX - left - pan.x) / zoom, y: (clientY - top - pan.y) / zoom };
+    const { pan: currentPan, zoom: currentZoom } = viewRef.current;
+    return {
+      x: (clientX - left - currentPan.x) / currentZoom,
+      y: (clientY - top - currentPan.y) / currentZoom,
+    };
   }, []);
 
   const fitNodes = useCallback((nodesToFit: FlowNodeDef[]) => {
     const el = containerRef.current;
-    if (!el || !nodesToFit.length) return;
+    if (!el || nodesToFit.length === 0) return;
     const minX = Math.min(...nodesToFit.map(n => n.x));
     const minY = Math.min(...nodesToFit.map(n => n.y));
     const maxX = Math.max(...nodesToFit.map(n => n.x + NODE_W));
@@ -618,7 +621,8 @@ function FlowCanvas({
   const nodeCountRef = useRef(nodes.length);
   useEffect(() => {
     if (isMobileCanvas && nodes.length > nodeCountRef.current) {
-      centerNode(nodes[nodes.length - 1]);
+      const newestNode = nodes.at(-1);
+      if (newestNode) centerNode(newestNode);
     }
     nodeCountRef.current = nodes.length;
   }, [nodes, isMobileCanvas, centerNode]);
@@ -632,19 +636,25 @@ function FlowCanvas({
     if (!el) return;
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const { pan, zoom } = viewRef.current;
+      const { pan: currentPan, zoom: currentZoom } = viewRef.current;
       if (e.ctrlKey || e.metaKey) {
         const rect = el.getBoundingClientRect();
         const cx = e.clientX - rect.left;
         const cy = e.clientY - rect.top;
         const d = Math.max(-50, Math.min(50, e.deltaY));
-        const nz = Math.max(0.4, Math.min(1.4, zoom * Math.exp(-d * 0.004)));
-        const ratio = nz / zoom;
+        const nz = Math.max(0.4, Math.min(1.4, currentZoom * Math.exp(-d * 0.004)));
+        const ratio = nz / currentZoom;
         // Keep the point under the cursor fixed while scaling.
-        setPan({ x: cx - (cx - pan.x) * ratio, y: cy - (cy - pan.y) * ratio });
+        setPan({
+          x: cx - (cx - currentPan.x) * ratio,
+          y: cy - (cy - currentPan.y) * ratio,
+        });
         setZoom(nz);
       } else {
-        setPan({ x: pan.x - e.deltaX, y: pan.y - e.deltaY });
+        setPan({
+          x: currentPan.x - e.deltaX,
+          y: currentPan.y - e.deltaY,
+        });
       }
     };
     el.addEventListener("wheel", handleWheel, { passive: false });
@@ -923,7 +933,7 @@ function FlowCanvas({
             const ports = portsByNode[a.id] ?? [];
             const port = resolvedPort(e, a.type);
             const idx = ports.indexOf(port);
-            const p1 = outPortPos(a, idx < 0 ? 0 : idx, ports.length || 1);
+            const p1 = outPortPos(a, Math.max(0, idx), ports.length || 1);
             const p2 = inPortPos(b);
             const geometry = e.id ? edgeGeometry[e.id] : undefined;
             const path = bezier(p1, p2, geometry);
@@ -1211,7 +1221,7 @@ function FlowCanvas({
             if (!a) return null;
             const ports = portsByNode[a.id] ?? [];
             const idx = ports.indexOf(connect.fromPort);
-            const p1 = outPortPos(a, idx < 0 ? 0 : idx, ports.length || 1);
+            const p1 = outPortPos(a, Math.max(0, idx), ports.length || 1);
             return (
               <path
                 d={bezier(p1, connect.cursor)}
@@ -1608,15 +1618,15 @@ export function FlowEditor({
 
   const addNode = (item: PaletteItem, at?: Point) => {
     if (!item.available) return;
-    const num = (s: string) => parseInt(s.replace(/\D/g, ""), 10) || 0;
+    const num = (s: string) => Math.trunc(Number(s.replace(/\D/g, ""))) || 0;
     const id = "n" + (Math.max(0, ...nodes.map(n => num(n.id))) + 1);
     let x: number, y: number;
     if (at) {
       x = Math.round(at.x - NODE_W / 2);
       y = Math.round(at.y - NODE_H / 2);
     } else {
-      x = (nodes.length ? Math.max(...nodes.map(n => n.x)) : 200) + 60;
-      y = nodes.length ? Math.round(nodes.reduce((s, n) => s + n.y, 0) / nodes.length) : 280;
+      x = (nodes.length > 0 ? Math.max(...nodes.map(n => n.x)) : 200) + 60;
+      y = nodes.length > 0 ? Math.round(nodes.reduce((s, n) => s + n.y, 0) / nodes.length) : 280;
     }
     if (item.templateId) {
       const instantiated = instantiateWorkflowEditorBlockTemplate({

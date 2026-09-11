@@ -8,18 +8,14 @@
 export {
   isAiReviewDestination,
 } from "./ai-review-destination.js";
+export { aiColumnMoveTarget } from "./move-targets.js";
 export {
   PREMATURE_AI_REVIEW_CANCELLATION_REASON,
   decideAiReviewRun,
   decideConnectedAiReviewRun,
 } from "./ai-review-transition.js";
 export {
-  AWAITING_APPROVAL_LABEL,
-} from "./labels.js";
-export {
-  aiColumnMoveTarget,
-} from "./move-targets.js";
-export {
+  updateConnectedTicketLabelsForRun,
   updateTicketLabelsForRun,
 } from "./ticket-label-mutation.js";
 export {
@@ -30,8 +26,10 @@ export type {
   TicketRunsPayload,
 } from "./ticket-runs-read.js";
 export {
+  moveConnectedTicketForRun,
   moveTicket,
   moveTicketForRun,
+  withdrawConnectedTicketFromAiForRun,
   withdrawTicketFromAiForRun,
 } from "./ticket-transition.js";
 export type {

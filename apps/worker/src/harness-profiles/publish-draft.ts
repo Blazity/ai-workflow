@@ -23,6 +23,7 @@ import {
   compileHarnessProfileManifest,
   HarnessProfileManifestError,
   hashHarnessProfileManifest,
+  isHistoricalHarnessProfileDraft,
   parseHarnessProfileDraftManifest,
   stableJson,
 } from "./manifest.js";
@@ -143,7 +144,7 @@ async function validateCapabilities(
   organizationId: string,
   draft: HarnessProfileDraftManifest,
 ): Promise<void> {
-  if (draft.schemaVersion !== 2) return;
+  if (isHistoricalHarnessProfileDraft(draft)) return;
   let capabilities;
   try {
     capabilities = await requireFreshHarnessCapabilitiesFromRepository(repository, {

@@ -61,13 +61,13 @@ export function promptInspectorSummary(
   if (value.trim()) {
     const structure = promptStructure(value, rows);
     const sections = `${structure.blockCount} ${structure.blockCount === 1 ? "section" : "sections"}`;
-    const references = structure.referenceCount > 0
+    const referenceSummary = structure.referenceCount > 0
       ? ` · ${structure.referenceCount} ${structure.referenceCount === 1 ? "live prompt" : "live prompts"}`
       : "";
     return {
       kind: "custom",
       title: "Custom prompt",
-      detail: `${value.length} chars · ~${Math.ceil(value.length / 4)} tokens · ${sections}${references}`,
+      detail: `${value.length} chars · ~${Math.ceil(value.length / 4)} tokens · ${sections}${referenceSummary}`,
       sectionTitles: structure.sectionTitles,
       remainingSectionCount: structure.remainingSectionCount,
     };

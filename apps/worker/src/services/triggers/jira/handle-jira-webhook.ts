@@ -7,7 +7,8 @@ import { isConnectedRunRecordedFailed, isConnectedRunRecordedSucceeded } from ".
 import { logger } from "../../../infra/logger.js";
 import { resumeConnectedClarificationFromComments } from "../../clarifications/index.js";
 import { dispatchTicket } from "../../dispatch/index.js";
-import { cancelRunDetailed, ticketSubjectKey } from "../../run-lifecycle/index.js";
+import { ticketSubjectKey } from "../../../engine/support/subject-key.js";
+import { cancelRunDetailed } from "../../run-lifecycle/index.js";
 import {
   jiraWebhookSecret,
   maxConcurrentAgents,
@@ -19,7 +20,7 @@ import {
   decideConnectedAiReviewRun,
   isAiReviewDestination,
 } from "../../tickets/index.js";
-import { createAdapters } from "../../vcs/index.js";
+import { createAdapters } from "../../../engine/support/adapters.js";
 import { TriggerHttpError } from "../../../infra/trigger-http-error.js";
 
 /**

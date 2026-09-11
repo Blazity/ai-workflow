@@ -4,7 +4,7 @@ import type {
   WorkflowBlockType,
   WorkflowDefinition,
 } from "@shared/contracts";
-import { getVcsBotLogin } from "../vcs/vcs-bot-login.js";
+import { getVcsBotLogin } from "../vcs/index.js";
 import type { Db } from "../../db/types.js";
 import {
   IssueTrackerNotFoundError,
@@ -32,7 +32,7 @@ import {
   getConnectedEnabledWorkflowDefinitionForTrigger,
   getEnabledWorkflowDefinitionForTrigger,
 } from "../../engine/definition-trigger-routing.js";
-import { createAdapters } from "../vcs/adapters.js";
+import { createAdapters } from "../../engine/support/adapters.js";
 import { claimSubjectRun, envTriggerRateLimitDefault, triggerRateLimitNodes } from "./dispatch.js";
 import { recordIngestionFailure } from "./ingestion-diagnostic.js";
 import { logger } from "../../infra/logger.js";
@@ -44,8 +44,9 @@ import {
   type PrAutofixCapKey,
 } from "./pr-autofix-cap.js";
 import { announcePrAutofixExhaustion } from "./pr-autofix-exhaustion.js";
-import { isRepoAllowedForScope } from "./repo-allowlist.js";
-import { prSubjectKey } from "../run-lifecycle/subject-key.js";
+import { isRepoAllowedForScope } from "../../engine/support/repo-allowlist.js";
+import { prSubjectKey } from "../../engine/support/subject-key.js";
+import { cancelSubjectRun } from "../run-lifecycle/index.js";
 import {
   enforceTriggerRateLimit,
   enforceConnectedTriggerRateLimit,
@@ -70,14 +71,13 @@ import {
   type AcceptedTriggerDelivery,
   type StoredTriggerResult,
   type TriggerScope,
-} from "./trigger-delivery-store.js";
+} from "../../engine/support/trigger-delivery-store.js";
 import type { TriggerEvent } from "./trigger-events.js";
 import {
   bindCurrentPullRequest,
   readProviderCurrentPullRequest,
-} from "./trigger-current-pull-request.js";
-import { normalizeVcsLogin, vcsLoginsMatch } from "../vcs/vcs-bot-identity.js";
-import { cancelSubjectRun } from "../run-lifecycle/cancel-run.js";
+} from "../../engine/support/trigger-current-pull-request.js";
+import { normalizeVcsLogin, vcsLoginsMatch } from "../../adapters/vcs/vcs-bot-identity.js";
 import {
   readConnectedWorkflowDefinitionVersion,
   readWorkflowDefinitionVersion,
@@ -425,7 +425,7 @@ async function readRepositoryScope(
 
 export async function isConfiguredTriggerRepository(pr: PrTriggerPayload): Promise<boolean> {
   if (pr.provider !== "gitlab") return true;
-  const { env, getConfiguredVcsProviders } = await import("../../config/env.js");
+  const { env, getConfiguredVcsProviders } = await import("../../infra/vcs-config.js");
   if (env.GITLAB_PROJECT_ID) {
     return (
       pr.repoPath === env.GITLAB_PROJECT_ID ||
@@ -535,7 +535,7 @@ async function prTriggerRateLimited(
     accepted.definitionId,
     accepted.definitionVersion,
   );
-  const { env } = await import("../../config/env.js");
+  const { env } = await import("../../infra/vcs-config.js");
   const limit = resolveTriggerRateLimitForType(
     triggerRateLimitNodes(runnableDefinitionOf(pinned), accepted.triggerType),
     envTriggerRateLimitDefault(env),

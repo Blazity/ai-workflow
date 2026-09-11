@@ -6,11 +6,10 @@ import type {
   ManualDispatchRequest,
   ManualDispatchResponse,
 } from "@shared/contracts";
-import { env } from "../../config/env.js";
-import type { Adapters } from "../vcs/adapters.js";
-import { reserveSubjectWithinCapacity } from "../dispatch/dispatch.js";
-import { aiColumnMoveTarget } from "../tickets/move-targets.js";
-import { moveTicketForRun } from "../tickets/ticket-transition.js";
+import { env } from "../../infra/vcs-config.js";
+import type { Adapters } from "../../engine/support/adapters.js";
+import { reserveSubjectWithinCapacity } from "../dispatch/index.js";
+import { aiColumnMoveTarget, moveTicketForRun } from "../tickets/index.js";
 import type { Db } from "../../db/types.js";
 import type { AgentWorkflowInput, PrTriggerPayload } from "../../engine/index.js";
 import { agentWorkflow } from "../../engine/index.js";

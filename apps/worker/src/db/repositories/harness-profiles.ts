@@ -192,7 +192,7 @@ export async function insertSystemHarnessProfile(
     .onConflictDoNothing({ target: harnessProfiles.id });
 }
 
-export async function getSystemHarnessProfile(
+async function getSystemHarnessProfile(
   db: Db,
   profileId: string,
 ): Promise<ProfileSelect | null> {
@@ -211,7 +211,7 @@ export async function getSystemHarnessProfile(
   return profile ?? null;
 }
 
-export async function getLatestSystemHarnessProfileVersion(
+async function getLatestSystemHarnessProfileVersion(
   db: Db,
   profileId: string,
 ): Promise<VersionSelect | null> {
@@ -533,7 +533,7 @@ export async function replaceHarnessProfileDraft(
   return updated ?? null;
 }
 
-export async function getLatestHarnessProfileVersionNumber(
+async function getLatestHarnessProfileVersionNumber(
   db: Db,
   profileId: string,
 ): Promise<number> {
@@ -686,7 +686,7 @@ export async function restoreArchivedHarnessProfileRaw(
   return updated ?? null;
 }
 
-export async function hasHarnessProfileVersions(
+async function hasHarnessProfileVersions(
   db: Db,
   profileId: string,
 ): Promise<boolean> {

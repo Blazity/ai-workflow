@@ -11,7 +11,7 @@ import {
 import { createTestDb } from "../test-db.js";
 import { createDefinitionsRepository } from "./definitions.js";
 
-vi.mock("../../config/env.js", () => ({ env: {} }));
+vi.mock("../../infra/vcs-config.js", () => ({ env: {} }));
 
 let db: Db;
 

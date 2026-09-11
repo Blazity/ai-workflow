@@ -1,7 +1,7 @@
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
 import type { WorkflowRepositoryScope } from "@shared/contracts";
 import type { PullRequestHead } from "../../adapters/vcs/types.js";
-import type { HumanDecision } from "../../services/publication/human-decisions-memory.js";
+import type { HumanDecision } from "../support/human-decisions-memory.js";
 import type { WorkspaceManifest } from "../../sandbox/repo-workspace.js";
 import {
   publishTrustedWorkspaceFromSandbox,
@@ -296,7 +296,7 @@ async function verifySourcePullRequestStep(
   input: SourcePullRequestIdentity,
 ): Promise<PullRequestHead> {
   "use step";
-  const { createRepositoryVcsRuntime } = await import("../../services/vcs/vcs-runtime.js");
+  const { createRepositoryVcsRuntime } = await import("../support/vcs-runtime.js");
   return createRepositoryVcsRuntime({
     provider: input.provider,
     repoPath: input.repoPath,
@@ -312,7 +312,7 @@ async function verifyPullRequestStep(input: {
   targetBranch: string;
 }): Promise<PullRequestHead> {
   "use step";
-  const { createRepositoryVcsRuntime } = await import("../../services/vcs/vcs-runtime.js");
+  const { createRepositoryVcsRuntime } = await import("../support/vcs-runtime.js");
   return createRepositoryVcsRuntime({
     provider: input.provider,
     repoPath: input.repoPath,
@@ -323,7 +323,7 @@ verifyPullRequestStep.maxRetries = 3;
 
 async function verifyFinalizedBranchHeadStep(repository: FinalizedBranch): Promise<string> {
   "use step";
-  const { createRepositoryVcsRuntime } = await import("../../services/vcs/vcs-runtime.js");
+  const { createRepositoryVcsRuntime } = await import("../support/vcs-runtime.js");
   // Publication pushed this branch moments ago, so tolerate a provider ref API
   // that has not caught up with its own write instead of spending a step retry.
   return readBranchShaAfterWrite(

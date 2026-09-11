@@ -7,7 +7,7 @@ import { executionError, type StepsRecord } from "../../workflow-definition/inte
 import { parseWorkflowDataReferenceV2, resolveWorkflowPromptDataTokensV2, type V2BindingResolutionContext } from "../../workflow-definition/v2-bindings.js";
 import type { BlockExecutionResult } from "../../workflow-definition/interpreter.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
-import { substitutePromptVariables, VARIABLE_PARAM_KEYS, type PromptVariableValues } from "./prompt-vars.js";
+import { substitutePromptVariables, VARIABLE_PARAM_KEYS, type PromptVariableValues } from "@shared/prompts";
 import type { WorkspacePublicationResult } from "../steps/workspace-publication.js";
 import { type WorkspaceManifest } from "../../sandbox/repo-workspace.js";
 import { resolveCallLlmTarget } from "../blocks/call-llm/execute.js";
@@ -19,7 +19,54 @@ import { REPO_MEMORY_DISTILL_CODEX_MODEL } from "@shared/harness";
 export { REPO_MEMORY_DISTILL_CODEX_MODEL } from "@shared/harness";
 import type { BlockOutput, BlockRunState, WorkflowBlockType, WorkflowDefinitionNode, WorkflowDefinitionV2, WorkflowDefinitionV2Node } from "@shared/contracts";
 import type { TerminalStatus } from "./review-ledger.js";
-import type { HumanDecision } from "../../services/publication/human-decisions-memory.js";
+import type { HumanDecision } from "../support/human-decisions-memory.js";
+import type { EngineCtx } from "../blocks/support/types.js";
+import { formatPRComments } from "../../sandbox/context.js";
+
+type PromptVariableSource = Pick<
+  EngineCtx,
+  | "runId"
+  | "ticket"
+  | "ticketUrl"
+  | "branchName"
+  | "entry"
+  | "researchPlanMarkdown"
+  | "changeSummary"
+  | "publication"
+  | "selectedRepositories"
+  | "repositoryContexts"
+>;
+
+/** Snapshot prompt variables at the current point of a run. */
+export function buildPromptVariables(ctx: PromptVariableSource): PromptVariableValues {
+  const { entry, ticket, publication, selectedRepositories, repositoryContexts } = ctx;
+  const prEntry = entry.kind === "pr_trigger" ? entry.pr : null;
+  const prReviewFeedback = repositoryContexts
+    .filter((context) => context.prComments.length > 0)
+    .map(
+      (context) =>
+        `### ${context.repository.provider}:${context.repository.repoPath}\n${formatPRComments(context.prComments)}`,
+    )
+    .join("\n\n");
+  const openedPr = publication?.prs[0];
+  return {
+    ticket_key: ticket.identifier,
+    ticket_title: ticket.title,
+    ticket_url: ctx.ticketUrl,
+    ticket_description: ticket.description,
+    ticket_acceptance_criteria: ticket.acceptanceCriteria ?? "",
+    ticket_labels: ticket.labels.join(", "),
+    change_summary: ctx.changeSummary,
+    branch_name: ctx.branchName,
+    run_id: ctx.runId,
+    plan_markdown: ctx.researchPlanMarkdown ?? "",
+    pr_number: prEntry ? String(prEntry.prNumber) : openedPr ? String(openedPr.id) : "",
+    pr_url: prEntry ? prEntry.prUrl : (openedPr?.url ?? ""),
+    pr_title: prEntry ? prEntry.title : "",
+    repo_path: prEntry ? prEntry.repoPath : (selectedRepositories[0]?.repoPath ?? ""),
+    pr_review_feedback: prReviewFeedback,
+  };
+}
 
 /** Append one durable answer round without duplicating a retry of the same answer. */
 export function appendClarificationRound(

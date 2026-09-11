@@ -194,6 +194,38 @@ function chainToStep(entry: string): string[] | null {
   return null;
 }
 
+/** Every step module reachable through static runtime imports from one entry. */
+function reachableStepFiles(entry: string): Set<string> {
+  const seen = new Set([entry]);
+  const steps = new Set<string>();
+  const frontier = [entry];
+  while (frontier.length > 0) {
+    const file = frontier.shift()!;
+    const source = readSource(file);
+    if (STEP_DIRECTIVE.test(source)) steps.add(file);
+    for (const specifier of runtimeSpecifiers(source)) {
+      const target = resolveSpecifier(file, specifier);
+      if (!target || seen.has(target)) continue;
+      seen.add(target);
+      frontier.push(target);
+    }
+  }
+  return steps;
+}
+
+// Measured at stage 11 after removing one shared step from each webhook graph.
+// These values are a one-way size ratchet: a smaller graph updates the constant;
+// a larger graph fails with the newly reachable step paths.
+const STEP_GRAPH_LIMITS = {
+  "routes/health.get.ts": 0,
+  "routes/webhooks/custom/[endpointId].post.ts": 34,
+  "routes/webhooks/github.post.ts": 34,
+  "routes/webhooks/gitlab.post.ts": 34,
+  "routes/webhooks/jira.post.ts": 35,
+  "routes/webhooks/resend.post.ts": 0,
+  "routes/webhooks/slack.post.ts": 0,
+} as const;
+
 describe("app tier import graph", () => {
   it("lists entries that all exist", () => {
     const missing = ENTRIES.filter((entry) => !existsSync(resolve(SRC_ROOT, entry)));
@@ -205,4 +237,20 @@ describe("app tier import graph", () => {
     const printed = chain?.map((file) => relative(SRC_ROOT, file)).join("\n  imports ") ?? "";
     expect(chain, `${entry} reaches a "use step" module:\n  ${printed}`).toBeNull();
   });
+
+  it.each(Object.entries(STEP_GRAPH_LIMITS))(
+    "%s does not grow its reachable step graph beyond %i",
+    (entry, limit) => {
+      const steps = reachableStepFiles(resolve(SRC_ROOT, entry));
+      const printed = [...steps]
+        .map((file) => relative(SRC_ROOT, file))
+        // oxlint-disable-next-line unicorn/no-array-sort -- Node 20 lacks toSorted.
+        .sort()
+        .join("\n  ");
+      expect(
+        steps.size,
+        `${entry} reaches ${steps.size} step modules (limit ${limit}):\n  ${printed}`,
+      ).toBeLessThanOrEqual(limit);
+    },
+  );
 });

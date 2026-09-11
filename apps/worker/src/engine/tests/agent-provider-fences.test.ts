@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ActiveRunOwnerError } from "../../services/run-lifecycle/run-control-errors.js";
+import { ActiveRunOwnerError } from "../../engine/support/run-control-errors.js";
 
 const mocks = vi.hoisted(() => ({
   assertActiveRunOwner: vi.fn(),
@@ -20,12 +20,12 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
-vi.mock("../../services/run-lifecycle/active-run-owner.js", () => ({
+vi.mock("../../db/repositories/active-runs.js", () => ({
   assertActiveRunOwner: (...args: any[]) => mocks.assertActiveRunOwner(...args),
   assertConnectedActiveRunOwner: (...args: any[]) =>
     mocks.assertActiveRunOwner(...args),
 }));
-vi.mock("../../services/vcs/adapters.js", () => ({
+vi.mock("../../engine/support/adapters.js", () => ({
   createAdapters: () => ({
     issueTracker: {
       fetchTicket: mocks.fetchTicket,
@@ -58,11 +58,11 @@ vi.mock("../../db/repositories/runs/telemetry.js", () => ({
   resolveAwaitingRunsForTicket: (...args: any[]) =>
     mocks.resolveAwaitingRunsForTicket(...args),
 }));
-vi.mock("../../services/tickets/ticket-transition.js", () => ({
+vi.mock("../../engine/support/ticket-transition.js", () => ({
   moveTicketForRun: (...args: any[]) => mocks.moveTicket(...args),
   moveConnectedTicketForRun: (...args: any[]) => mocks.moveTicket(...args),
 }));
-vi.mock("../../services/tickets/ticket-label-mutation.js", () => ({
+vi.mock("../../engine/support/ticket-label-mutation.js", () => ({
   updateTicketLabelsForRun: (...args: any[]) =>
     mocks.updateTicketLabels(...args),
   updateConnectedTicketLabelsForRun: (...args: any[]) =>
@@ -77,7 +77,7 @@ vi.mock("../../run-analysis/persistence.js", () => ({
     mocks.recordRunAnalysisReport(...args),
   finalizeConnectedRunAnalysisUsage: vi.fn(),
 }));
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: { DASHBOARD_ORIGIN: "https://dashboard.example.com" },
   getConfiguredVcsProviders: vi.fn(),
 }));
@@ -87,7 +87,7 @@ import { clarificationExitDisposition } from "../helpers/review-ledger.js";
 import { notifyTicket, notifyTicketBestEffort, loadApprovedPlanAnalysisReportBestEffort, postPrLinksComment, postRunAnalysisCommentStep, postTicketComment, recordRunAnalysisReportBestEffort } from "../steps/ticket-analysis.js";
 import { parkForClarificationStep, postPickupCommentStep, reconcileClarificationsOnPickup } from "../steps/clarification.js";
 import { runControlErrorCases } from "../blocks/support/test-support.js";
-import { buildResearchAnalysisReport } from "../../run-analysis/report.js";
+import { buildResearchAnalysisReport } from "../../engine/support/run-analysis-report.js";
 
 const owner = {
   subjectKey: "ticket:jira:AWT-1",

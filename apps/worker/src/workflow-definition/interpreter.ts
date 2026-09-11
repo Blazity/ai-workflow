@@ -8,22 +8,14 @@ import type {
 import type { AgentProtocolDiagnostic } from "../sandbox/agents/types.js";
 import {
   deriveFailureMessage,
+  type ExecutionErrorCategory,
   type FailureEvidence,
 } from "./failure-message.js";
 
 /** Accumulated block outputs keyed by node id, readable by later condition evaluation. */
 export type StepsRecord = Record<string, { output: BlockOutput }>;
 
-export type ExecutionErrorCategory =
-  | "sandbox"
-  | "provider"
-  | "engine"
-  | "binding"
-  | "timeout"
-  | "parsing"
-  | "schema"
-  | "checks"
-  | "unknown";
+export type { ExecutionErrorCategory } from "./failure-message.js";
 
 export interface BlockExecutionError {
   category: ExecutionErrorCategory;

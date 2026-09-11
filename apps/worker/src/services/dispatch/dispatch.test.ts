@@ -20,7 +20,7 @@ const testEnv = vi.hoisted(() => ({
   TRIGGER_RATE_LIMIT_MAX: undefined as number | undefined,
   TRIGGER_RATE_LIMIT_WINDOW: undefined as "minute" | "hour" | "day" | "month" | undefined,
 }));
-vi.mock("../../config/env.js", () => ({ env: testEnv }));
+vi.mock("../../infra/vcs-config.js", () => ({ env: testEnv }));
 const mockStart = vi.fn();
 vi.mock("workflow/api", () => ({ start: (...args: any[]) => mockStart(...args) }));
 vi.mock("../../engine/index.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));

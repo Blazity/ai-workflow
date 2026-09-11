@@ -18,19 +18,17 @@ export type PhaseProviders = Record<string, CostProviderKind | undefined>;
  * dollar cost is priced from that table, exactly as before the extraction.
  */
 function resolveCostProvider(
-  kind: CostProviderKind | undefined,
   priceLookup: PriceLookup | undefined,
   model: string | undefined,
 ): CostProvider {
   return {
-    kind,
     price: priceLookup && model ? priceLookup(model) : null,
   };
 }
 
 function costProvidersForPhases(
   phases: Record<string, PhaseUsage | null>,
-  providersByPhase: PhaseProviders,
+  _providersByPhase: PhaseProviders,
   priceLookup?: PriceLookup,
   model?: string,
   modelsByPhase?: Record<string, string>,
@@ -39,7 +37,6 @@ function costProvidersForPhases(
     Object.keys(phases).map((name) => [
       name,
       resolveCostProvider(
-        providersByPhase[name],
         priceLookup,
         modelsByPhase?.[name] ?? model,
       ),

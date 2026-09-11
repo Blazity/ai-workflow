@@ -105,7 +105,7 @@ export async function validateWorkflowPromptAuthoringIssues(
         definition,
         organizationId: await dashboardOrganizationId(
           db,
-          (await import("../config/env.js")).env.DASHBOARD_ORG_SLUG,
+          (await import("../infra/vcs-config.js")).env.DASHBOARD_ORG_SLUG,
         ),
       });
   return dedupeIssues([...promptIssues, ...profileIssues]);
@@ -124,7 +124,7 @@ export async function validateConnectedWorkflowPromptAuthoringIssues(
     createConnectedPromptReferenceLoader(),
   );
   if (!definition.nodes.some((node) => isPromptAuthoringBlock(node))) return promptIssues;
-  const { env } = await import("../config/env.js");
+  const { env } = await import("../infra/vcs-config.js");
   const organization = await createConnectedAuthRepository().findOrganizationBySlug(env.DASHBOARD_ORG_SLUG);
   if (!organization) throw new Error(`Dashboard organization "${env.DASHBOARD_ORG_SLUG}" is unavailable.`);
   const profileIssues = await validateHarnessProfileReferencesWithLoader(

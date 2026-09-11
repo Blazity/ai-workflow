@@ -4,7 +4,7 @@ import {
   getHookClarification,
   prepareHookClarification,
   publishHookClarification,
-} from "../../clarifications/hook-store.js";
+} from "../../db/repositories/clarification-hooks.js";
 
 const mocks = vi.hoisted(() => ({
   resumeHook: vi.fn(),

@@ -17,7 +17,7 @@ import {
   acknowledgeStartedTriggerDelivery,
   getTriggerDelivery,
   listPendingTriggersForSubject,
-} from "./trigger-delivery-store.js";
+} from "../../engine/support/trigger-delivery-store.js";
 
 const testEnv = vi.hoisted(() => ({
   GITLAB_PROJECT_ID: undefined as string | undefined,
@@ -26,11 +26,11 @@ const testEnv = vi.hoisted(() => ({
   TRIGGER_RATE_LIMIT_MAX: undefined as number | undefined,
   TRIGGER_RATE_LIMIT_WINDOW: undefined as "minute" | "hour" | "day" | "month" | undefined,
 }));
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: testEnv,
   getConfiguredVcsProviders: vi.fn(() => []),
 }));
-vi.mock("../vcs/vcs-bot-login.js", () => ({
+vi.mock("../vcs/index.js", () => ({
   getVcsBotLogin: vi.fn((provider: "github" | "gitlab") =>
     provider === "github" ? testEnv.GITHUB_BOT_LOGIN : testEnv.GITLAB_BOT_LOGIN),
 }));

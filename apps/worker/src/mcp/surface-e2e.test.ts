@@ -60,12 +60,12 @@ const state = vi.hoisted(() => ({
   db: undefined as unknown as Db,
 }));
 
-vi.mock("../config/env.js", () => ({ env: state.env }));
+vi.mock("../infra/vcs-config.js", () => ({ env: state.env }));
 // The one seam that cannot be crossed in a test: a token is minted by an OAuth
 // client we do not have. Everything downstream of the actor is real.
 vi.mock("./request-context.js", () => ({ requireMcpActor: state.requireMcpActor }));
 vi.mock("../db/client.js", () => ({ getDb: () => state.db }));
-vi.mock("../services/vcs/adapters.js", () => ({ createAdapters: state.createAdapters }));
+vi.mock("../engine/support/adapters.js", () => ({ createAdapters: state.createAdapters }));
 // Seam S3, as in tools/workflows.test.ts: the dispatch domain owns its own rules
 // and its own tests. Faking it is what makes "exactly one service call" visible.
 vi.mock("../services/manual-dispatch/service.js", () => ({

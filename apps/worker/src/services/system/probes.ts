@@ -1,7 +1,8 @@
 import { createAppAuth } from "@octokit/auth-app";
 import type { SystemHealthResponse } from "@shared/contracts";
+import { FIRST_SLICE_TOOLS } from "@shared/contracts";
 import { resolveModelDefaults } from "@shared/harness";
-import { env } from "../../config/env.js";
+import { env } from "../../infra/vcs-config.js";
 import { JiraAdapter } from "../../adapters/issue-tracker/jira.js";
 import {
   checkConnectedDatabaseConnectivity,
@@ -9,8 +10,7 @@ import {
   listConnectedActiveCustomWebhookRejections,
   listConnectedCustomWebhookEndpointStates,
 } from "../../db/repositories/system-health.js";
-import { buildOctokit } from "../vcs/github-auth.js";
-import { MCP_CONTRACT_ARTIFACT } from "../../mcp/contract-artifact.js";
+import { buildOctokit } from "../../adapters/vcs/github-auth.js";
 import {
   collectSystemHealth,
   PublicHealthProbeError,
@@ -48,7 +48,7 @@ const REQUIRED_RESEND_WEBHOOK_EVENTS = [
  * same request so nothing health-related runs from cron or page rendering. */
 export async function collectDeploymentSystemHealth(): Promise<SystemHealthResponse> {
   const config = configFromEnvironment();
-  await sweepSystemHealthObservations().catch(() => undefined);
+  await sweepSystemHealthObservations().catch(() => {});
   return collectSystemHealth({
     config,
     probes: probesForEnvironment(config),
@@ -256,7 +256,8 @@ export function probesForEnvironment(config: SystemHealthConfig): SystemHealthPr
 
   if (config.mcpEnabled) {
     probes["mcp.contract"] = async () => {
-      if (MCP_CONTRACT_ARTIFACT.tools.length === 0) {
+      const toolCount: number = FIRST_SLICE_TOOLS.length;
+      if (toolCount === 0) {
         throw new PublicHealthProbeError("MCP contract has no tools.");
       }
     };

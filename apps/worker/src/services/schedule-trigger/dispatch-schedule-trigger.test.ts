@@ -6,7 +6,7 @@ import type {
   RunReservation,
   StartedRunRecord,
 } from "../../adapters/run-registry/types.js";
-import type { AdmittedOccurrence, OccurrenceRow } from "../../schedule-trigger/occurrence-store.js";
+import type { AdmittedOccurrence, OccurrenceRow } from "../../engine/support/schedule-occurrence-store.js";
 import type { ScheduleRow } from "../../schedule-trigger/schedule-store.js";
 
 /** Mutable so the trigger rate limit's env default can be set per test. */
@@ -17,7 +17,7 @@ const { testEnv } = vi.hoisted(() => ({
     MAX_CONCURRENT_AGENTS: 3,
   } as Record<string, unknown>,
 }));
-vi.mock("../../config/env.js", () => ({ env: testEnv }));
+vi.mock("../../infra/vcs-config.js", () => ({ env: testEnv }));
 const { hostedStart } = vi.hoisted(() => ({ hostedStart: vi.fn() }));
 vi.mock("workflow/api", () => ({ start: hostedStart, getRun: vi.fn() }));
 vi.mock("../../engine/index.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));

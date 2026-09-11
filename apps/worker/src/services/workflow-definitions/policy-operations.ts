@@ -57,8 +57,7 @@ import {
 } from "../../engine/stored-definition-reads.js";
 
 export type WorkflowDefinitionActor = raw.WorkflowDefinitionActor;
-export type WorkflowDefinitionRow = raw.WorkflowDefinitionRow;
-export type WorkflowDefinitionDraftRow = raw.WorkflowDefinitionDraftRow;
+type WorkflowDefinitionRow = raw.WorkflowDefinitionRow;
 export type WorkflowDefinitionVersionRow = raw.WorkflowDefinitionVersionRow;
 export { WorkflowDefinitionStoreError, WorkflowDefinitionValidationError } from "../../db/repositories/definitions.js";
 

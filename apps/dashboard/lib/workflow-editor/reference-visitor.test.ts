@@ -265,12 +265,13 @@ test("Loop carry bindings remap and remain discoverable", () => {
   };
 
   const remapped = remapFlowNodeReferences(node, ids);
+  assert.ok(remapped.v2);
+  const carry = remapped.v2.configuration.carry as Array<{
+    binding: { reference: string };
+  }>;
+  assert.ok(carry[0]);
   assert.equal(
-    (
-      remapped.v2?.configuration.carry as Array<{
-        binding: { reference: string };
-      }>
-    )[0]?.binding.reference,
+    carry[0].binding.reference,
     "steps.review-copy.output",
   );
   assert.deepEqual(collectFlowNodeReferences(node), [{
@@ -309,12 +310,13 @@ test("Loop reference-list carry bindings remap every ordered reference", () => {
   };
 
   const remapped = remapFlowNodeReferences(node, ids);
+  assert.ok(remapped.v2);
+  const carry = remapped.v2.configuration.carry as Array<{
+    binding: { references: string[] };
+  }>;
+  assert.ok(carry[0]);
   assert.deepEqual(
-    (
-      remapped.v2?.configuration.carry as Array<{
-        binding: { references: string[] };
-      }>
-    )[0]?.binding.references,
+    carry[0].binding.references,
     ["steps.review-copy.output", "steps.plan-copy.output"],
   );
   assert.deepEqual(collectFlowNodeReferences(node), [

@@ -9,11 +9,55 @@
     "style": "off",
     "suspicious": "warn"
   },
+  "rules": {
+    "eslint/eqeqeq": ["warn", "always", { "null": "ignore" }],
+    "eslint/require-unicode-regexp": "off",
+    "eslint/max-lines-per-function": "off",
+    "eslint/max-lines": "off",
+    "eslint/max-depth": "off",
+    "eslint/max-classes-per-file": "off",
+    "eslint/require-await": "off",
+    "eslint/no-await-in-loop": "off",
+    "eslint/no-inline-comments": "off",
+    "eslint/no-negated-condition": "off",
+    "unicorn/no-negated-condition": "off",
+    "unicorn/no-array-callback-reference": "off",
+    "unicorn/consistent-function-scoping": "off",
+    "unicorn/no-array-sort": "off",
+    "unicorn/no-array-reverse": "off",
+    "unicorn/prefer-string-replace-all": "off",
+    "eslint/sort-vars": "off",
+    "eslint/no-underscore-dangle": "off",
+    "unicorn/prefer-top-level-await": "off"
+  },
+  "overrides": [
+    {
+      "files": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/__tests__/**",
+        "**/e2e/**",
+        "**/test-support/**",
+        "scripts/**"
+      ],
+      "rules": {
+        "eslint/one-var": "off",
+        "eslint/no-use-before-define": "off",
+        "eslint/no-magic-numbers": "off",
+        "unicorn/no-useless-undefined": "off",
+        "eslint/no-promise-executor-return": "off",
+        "unicorn/no-object-as-default-parameter": "off",
+        "eslint/no-shadow": "off"
+      }
+    }
+  ],
   "ignorePatterns": [
     "**/*.generated.ts",
     "**/dist/**",
     "**/node_modules/**",
     "apps/dashboard/.next/**",
+    "apps/dashboard/next-env.d.ts",
+    "apps/worker/src/nitro.d.ts",
     "apps/worker/.output/**"
   ]
 }

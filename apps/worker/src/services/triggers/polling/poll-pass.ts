@@ -15,6 +15,7 @@ import { sweepConnectedWebhookDeliveries } from "../../../db/repositories/webhoo
 import { dispatchPlanApproved } from "../../approvals/index.js";
 import {
   expireConnectedHookClarifications,
+  retireClarificationForGoneTicket,
   resumeConnectedClarificationFromComments,
 } from "../../clarifications/index.js";
 import {
@@ -32,7 +33,8 @@ import {
   sweepConnectedMcpRateLimits,
 } from "../../mcp/index.js";
 import type { RunsLister } from "../../overview/index.js";
-import { reconcileRuns, ticketSubjectKey } from "../../run-lifecycle/index.js";
+import { ticketSubjectKey } from "../../../engine/support/subject-key.js";
+import { reconcileRuns } from "../../run-lifecycle/index.js";
 import {
   createConnectedScheduleDispatchDeps,
   runScheduleTriggerPass,
@@ -46,7 +48,7 @@ import {
   sweepConnectedOrphanedRunningRuns,
   upsertConnectedRunSnapshots,
 } from "../../../db/repositories/runs/telemetry.js";
-import { createAdapters } from "../../vcs/index.js";
+import { createAdapters } from "../../../engine/support/adapters.js";
 import {
   redispatchPendingWebhookDeliveries,
   sweepConnectedWebhookRateLimits,
@@ -153,6 +155,7 @@ export async function runPollPass() {
     protectedRunSubjects,
     undefined,
     terminalReconciliationSubjects,
+    retireClarificationForGoneTicket,
   );
 
   const polledTriggerRecovery = await recoverPendingTriggers(

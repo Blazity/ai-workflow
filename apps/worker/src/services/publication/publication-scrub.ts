@@ -1,4 +1,1 @@
-export {
-  SCRUB_PLACEHOLDER,
-  scrubForPublication,
-} from "../../infra/publication-scrub.js";
+export * from "../../engine/support/publication-scrub.js";

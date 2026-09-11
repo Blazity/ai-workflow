@@ -7,7 +7,7 @@
  * values rather than exceptions, because the same missing row means 404 in one
  * route and 409 in another depending on what the caller was trying to do.
  */
-import { listConnectedRecentWebhookDeliveries } from "../../webhook-trigger/delivery-store.js";
+import { listConnectedRecentWebhookDeliveries } from "../../db/repositories/webhook-trigger-deliveries.js";
 import {
   getConnectedWebhookEndpointById,
   getConnectedWebhookEndpointForNode,

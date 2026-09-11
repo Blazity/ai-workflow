@@ -62,7 +62,7 @@ test("copies selected nodes, internal edges, and their geometry only", () => {
     },
   });
 
-  assert(payload);
+  assert.ok(payload);
   assert.deepEqual(
     payload.nodes.map((node) => node.id),
     ["a", "b"],

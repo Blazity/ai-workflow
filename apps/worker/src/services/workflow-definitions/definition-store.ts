@@ -10,6 +10,7 @@
  * a request that only reads a row and maps a store error to a status.
  */
 export {
+  runnableDefinitionOf,
   serializeWorkflowDefinitionVersion,
   WorkflowDefinitionStoreError,
   WorkflowDefinitionValidationError,

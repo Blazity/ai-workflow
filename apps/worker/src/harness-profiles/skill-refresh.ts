@@ -51,7 +51,7 @@ export function refreshConnectedHarnessSkillArtifact(
   );
 }
 
-export async function refreshHarnessSkillArtifactFromRepository(
+async function refreshHarnessSkillArtifactFromRepository(
   repository: HarnessProfileRepository,
   input: {
     organizationId: string;

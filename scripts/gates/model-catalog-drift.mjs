@@ -1,12 +1,11 @@
 /**
  * Product model identifiers have one owner. These exclusions are deliberately
  * narrow: tests assert behavior, capture tooling records external protocols,
- * and the two dashboard files are presentation-only mock data.
+ * and the dashboard activity drawer is presentation-only mock data.
  */
 const EXCLUSIONS = [
   "**/*.test.*",
   "apps/dashboard/components/cockpit/activity-drawer.tsx",
-  "apps/dashboard/lib/data/mock.ts",
   "apps/worker/scripts/capture-agent-protocol-fixtures.ts",
   "packages/harness/model-catalog.ts",
 ];
@@ -57,7 +56,6 @@ function isExcluded(path) {
   return (
     path === "packages/harness/model-catalog.ts" ||
     path === "apps/dashboard/components/cockpit/activity-drawer.tsx" ||
-    path === "apps/dashboard/lib/data/mock.ts" ||
     path === "apps/worker/scripts/capture-agent-protocol-fixtures.ts" ||
     /(?:^|\/)\w[^/]*\.test\.[^/]+$/u.test(path)
   );

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { PromptLibraryDetailResponse, PromptLibraryEntryMeta } from "@shared/contracts";
+import type { PromptLibraryEntryMeta } from "@shared/contracts";
 import { apiClient } from "@/lib/api/client";
 import {
   DIALOG_FOCUSABLE_SELECTOR,

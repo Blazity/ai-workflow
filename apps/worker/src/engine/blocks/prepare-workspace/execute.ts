@@ -6,7 +6,7 @@ import type {
   ResearchRepository,
 } from "../../../sandbox/agents/types.js";
 import type { SelectedRepository } from "../../../adapters/vcs/repository-directory.js";
-import type { PreSandboxPromptAdditionsByTarget } from "../../../pre-sandbox/types.js";
+import type { PreSandboxPromptAdditionsByTarget } from "../../pre-sandbox/types.js";
 import type {
   WorkspaceManifest,
   WorkspaceRepositoryInput,
@@ -44,7 +44,7 @@ import type {
   PreSandboxRepositoryCatalogDegradation,
   PreSandboxRepositoryDiscovery,
   PreSandboxRepositoryScopeNarrowing,
-} from "../../../pre-sandbox/types.js";
+} from "../../pre-sandbox/types.js";
 import type {
   ApprovedRepositoryScope,
   WorkflowRepositoryScope,
@@ -135,12 +135,12 @@ async function blockApprovedRepositoryScopeStep(
     );
   }
   scope = parsed.data;
-  const { getConfiguredVcsProviders } = await import("../../../config/env.js");
+  const { getConfiguredVcsProviders } = await import("../../../infra/vcs-config.js");
   const { createRepositoryDirectoryForProviders, isRepositoryWithinPinnedScope } =
     await import("../../../adapters/vcs/repository-directory.js");
-  const { createRepositoryVCS } = await import("../../../services/vcs/vcs-runtime.js");
+  const { createRepositoryVCS } = await import("../../support/vcs-runtime.js");
   const { filterRepositoriesForScope } = await import(
-    "../../../services/dispatch/repo-allowlist.js"
+    "../../support/repo-allowlist.js"
   );
   const { listConnectedWorkflowOwnedBranchesForTicket } = await import(
     "../../../db/repositories/runs.js"
@@ -240,7 +240,7 @@ async function blockPrepareWorkspaceEnsureArthurTaskStep(
   taskName: string,
 ): Promise<string | null> {
   "use step";
-  const { env } = await import("../../../config/env.js");
+  const { env } = await import("../../../infra/vcs-config.js");
   if (!env.GENAI_ENGINE_API_KEY || !env.GENAI_ENGINE_TRACE_ENDPOINT) return null;
 
   const { logger } = await import("../../../infra/logger.js");
@@ -286,10 +286,10 @@ async function blockPrepareWorkspaceProvisionStep(
   | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
 > {
   "use step";
-  const { env } = await import("../../../config/env.js");
+  const { env } = await import("../../../infra/vcs-config.js");
   const { SandboxManager } = await import("../../../sandbox/manager.js");
   const { createAgentAdapter } = await import("../../../sandbox/agents/index.js");
-  const { buildSandboxProviderConfigs } = await import("../../../services/vcs/vcs-runtime.js");
+  const { buildSandboxProviderConfigs } = await import("../../support/vcs-runtime.js");
 
   const arthur =
     env.GENAI_ENGINE_API_KEY && env.GENAI_ENGINE_TRACE_ENDPOINT && arthurTaskId
@@ -394,7 +394,7 @@ async function blockPrepareWorkspaceProvisionStep(
       additionalAgents,
       {
         onCreated: async (sandboxId) => {
-          const { createAdapters } = await import("../../../services/vcs/adapters.js");
+          const { createAdapters } = await import("../../support/adapters.js");
           await createAdapters().runRegistry.registerSandbox(
             subjectKey,
             ownerToken,
@@ -443,7 +443,7 @@ async function blockInstallPromotedWorkspaceAgentsStep(
   | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
 > {
   "use step";
-  const { env } = await import("../../../config/env.js");
+  const { env } = await import("../../../infra/vcs-config.js");
   const { Sandbox } = await import("@vercel/sandbox");
   const { getSandboxCredentials } = await import("../../../sandbox/credentials.js");
   const { createAgentAdapter } = await import("../../../sandbox/agents/index.js");
@@ -522,7 +522,7 @@ async function blockPrepareWorkspaceRegisterSandboxStep(
   sandboxId: string,
 ): Promise<void> {
   "use step";
-  const { createAdapters } = await import("../../../services/vcs/adapters.js");
+  const { createAdapters } = await import("../../support/adapters.js");
   const { runRegistry } = createAdapters();
   await runRegistry.registerSandbox(subjectKey, ownerToken, sandboxId);
 }
@@ -1012,7 +1012,7 @@ export async function ensureWorkspace(
     // useful facts before its first successful run distills any. Gated here at
     // the call site rather than inside the step: a "use step" invocation writes
     // a durable step record even when its body returns immediately.
-    const { env } = await import("../../../config/env.js");
+    const { env } = await import("../../../infra/vcs-config.js");
     if (env.ENABLE_REPO_MEMORY) {
       // The branch fields come from this trusted in-memory manifest rather than
       // from the sandbox's copy of it: they gate a retraction of durable memory

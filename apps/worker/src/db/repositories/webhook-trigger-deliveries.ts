@@ -4,9 +4,9 @@ import { getDb, type Db } from "../client.js";
 import { activeRuns, webhookTriggerDeliveries, workflowRuns } from "../schema.js";
 import { isUniqueViolation } from "../../infra/unique-violation.js";
 
-export type WebhookVerifiedWith = "current" | "previous";
+type WebhookVerifiedWith = "current" | "previous";
 
-export interface WebhookSupportCase {
+interface WebhookSupportCase {
   [key: string]: JsonValue;
   provider: "zendesk" | "sentry";
   endpoint: string;
@@ -21,7 +21,7 @@ export interface WebhookSupportCase {
   metadata: JsonValue;
 }
 
-export interface WebhookTriggerEntry {
+interface WebhookTriggerEntry {
   subject: string;
   description: string;
   requester: string;
@@ -52,7 +52,7 @@ export interface WebhookTriggerEntry {
  * has "pending": that is the row's pending column, not a decision anyone wrote,
  * and only the log projection below turns it into an outcome.
  */
-export type StoredWebhookOutcome =
+type StoredWebhookOutcome =
   | "started"
   | "coalesced"
   | "rejected"

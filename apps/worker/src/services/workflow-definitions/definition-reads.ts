@@ -8,6 +8,7 @@
  * archived definition as absent.
  */
 import { defaultWorkflowDefinitionV2 } from "../../workflow-definition/default.js";
+import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import {
   buildWorkflowEditorOptions,
   fetchAvailableModels,
@@ -53,12 +54,24 @@ export interface WorkflowDefinitionDetail {
  */
 export async function readWorkflowDefinitionsOverview(): Promise<WorkflowDefinitionsOverview> {
   const { agentKind, includeReview, includeLeakReview } = agentRuntimeSettings();
-  const definitions = await listConnectedWorkflowDefinitions();
-  const [models, ticketStatuses, profileReference] = await Promise.all([
+  const storedDefinitions = await listConnectedWorkflowDefinitions();
+  const [models, ticketStatuses, profileReference, deployments] = await Promise.all([
     fetchAvailableModels(),
     fetchTicketStatuses(),
     currentSystemHarnessProfileReference(agentKind),
+    Promise.all(storedDefinitions.map((row) =>
+      row.deployedVersion === null
+        ? null
+        : readConnectedDeployedWorkflowDefinitionVersion(row.id))),
   ]);
+  const definitions = storedDefinitions.map((row, index) =>
+    deployments[index]?.schema === "legacy-v1"
+      ? Object.assign({}, row, {
+          deployedSchema: "legacy-v1" as const,
+          retiredMessage: RETIRED_SCHEMA_MESSAGE,
+          triggerTypes: [],
+        })
+      : row);
   const seedOptions = {
     includeReview,
     includeLeakReview,

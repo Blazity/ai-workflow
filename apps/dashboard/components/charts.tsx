@@ -16,7 +16,7 @@ export function Spark({
   fill?: string;
   strokeWidth?: number;
 }) {
-  if (!data || !data.length) return null;
+  if (!data || data.length === 0) return null;
   const max = Math.max(...data),
     min = Math.min(...data);
   const range = max - min || 1;
@@ -52,7 +52,7 @@ export function AreaChart({
   grid?: boolean;
   valueFmt?: (v: number) => string | number;
 }) {
-  if (!data || !data.length) return null;
+  if (!data || data.length === 0) return null;
   const padL = 32,
     padR = 8,
     padT = 12,

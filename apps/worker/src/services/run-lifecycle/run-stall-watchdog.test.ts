@@ -8,7 +8,7 @@ import { workflowRuns } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
 import * as runTelemetry from "../../db/repositories/runs/telemetry.js";
 
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: { COLUMN_AI: "AI" },
 }));
 
@@ -43,7 +43,7 @@ vi.mock("./cancel-run.js", () => ({
 vi.mock("../../infra/logger.js", () => ({
   logger: { warn: mocks.warn, info: mocks.info, error: vi.fn(), debug: vi.fn() },
 }));
-vi.mock("./active-run-owner.js", () => ({
+vi.mock("../../db/repositories/active-runs.js", () => ({
   assertActiveRunOwnerState: assertOwner,
 }));
 

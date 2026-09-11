@@ -65,7 +65,8 @@ export function pullRequestRef(pr: Pick<RunPullRequest, "provider" | "id">): str
 
 /** Last path segment of `owner/repo` (or a nested GitLab group path). */
 function repoLeaf(repoPath: string): string {
-  return repoPath.split("/").filter(Boolean).at(-1) ?? repoPath;
+  const segments = repoPath.split("/").filter(Boolean);
+  return segments.pop() ?? repoPath;
 }
 
 /**
@@ -784,3 +785,61 @@ export interface ClarificationRequest {
   /** Deprecated: clarification answers now resume the asking run in place. */
   dispatchedRunId: string | null;
 }
+
+/** Provider-neutral pull request payload consumed by the detached gate workflow. */
+export interface PostPrGateWorkflowInput {
+  prNumber: number;
+  headSha: string;
+  headRef: string;
+  baseRef: string;
+  title: string;
+  body: string;
+  author: string;
+  isDraft: boolean;
+  url: string;
+  ownerRepo: string;
+  provider: VcsProviderKind;
+}
+
+/** OAuth scopes published by the MCP transport and consumed by auth wiring. */
+export const MCP_SCOPES = [
+  "mcp:read",
+  "runs:dispatch",
+  "prompts:write",
+  "workflows:write",
+  "tickets:write",
+] as const;
+export type McpScope = (typeof MCP_SCOPES)[number];
+
+/** MCP tools in their stable published order. */
+export const FIRST_SLICE_TOOLS = [
+  "system.capabilities",
+  "tickets.get",
+  "tickets.list_runs",
+  "runs.get",
+  "runs.trace",
+  "runs.result",
+  "runs.diagnose",
+  "workflows.dispatch_preflight",
+  "workflows.dispatch",
+  "workflows.list",
+  "prompts.list",
+  "prompts.get",
+  "prompts.update",
+  "workflows.create",
+  "workflows.save_draft",
+  "workflows.publish",
+  "runs.get_clarification",
+  "runs.answer_clarification",
+  "runs.cancel",
+  "tickets.comment",
+  "tickets.transition",
+  "tickets.create",
+  "blocks.list",
+  "blocks.get",
+  "runs.stats",
+  "workflows.get_graph",
+  "workflows.set_enabled",
+  "runs.logs",
+] as const;
+export type McpToolName = (typeof FIRST_SLICE_TOOLS)[number];

@@ -45,7 +45,7 @@ export async function ensureQueued(db: Db, ticketKey: string): Promise<void> {
 }
 
 /** Drop queue rows for tickets whose episode ended (they dispatched). */
-export async function deleteQueued(
+async function deleteQueued(
   db: Db,
   ticketKeys: readonly string[],
 ): Promise<number> {
@@ -71,7 +71,7 @@ export async function reconcileQueue(
  * Currently-queued tickets that have never had a confirmed comment, oldest
  * first, capped at `limit` to bound the Jira calls this tick.
  */
-export async function listUnconfirmedForComment(
+async function listUnconfirmedForComment(
   db: Db,
   ticketKeys: readonly string[],
   limit: number,
@@ -95,7 +95,7 @@ export async function claimForComment(
 }
 
 /** Record that a comment landed, permanently suppressing further ones. */
-export async function markConfirmed(db: Db, ticketKey: string): Promise<void> {
+async function markConfirmed(db: Db, ticketKey: string): Promise<void> {
   await confirmQueuedDispatchTicketComment(db, ticketKey);
 }
 

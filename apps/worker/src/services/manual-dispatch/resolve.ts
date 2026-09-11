@@ -8,7 +8,7 @@ import {
   isManuallyDispatchableTrigger,
   RETIRED_SCHEMA_MESSAGE,
 } from "@shared/contracts";
-import { env, getConfiguredVcsProviders } from "../../config/env.js";
+import { env, getConfiguredVcsProviders } from "../../infra/vcs-config.js";
 import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
@@ -22,17 +22,15 @@ import type { Db } from "../../db/types.js";
 import { findWorkflowOwnedPullRequest } from "../../db/repositories/runs.js";
 import { findConnectedWorkflowOwnedPullRequest } from "../../db/repositories/runs.js";
 import {
+  isGateCheckName,
   isConfiguredTriggerRepository,
+  isRepoAllowedForScope,
   selectEligibleEvent,
   triggerNodeParams,
-} from "../dispatch/dispatch-trigger.js";
-import { isRepoAllowedForScope } from "../dispatch/repo-allowlist.js";
-import { prSubjectKey, ticketSubjectKey } from "../run-lifecycle/subject-key.js";
-import type {
   TriggerEvent,
-} from "../dispatch/trigger-events.js";
-import { isGateCheckName } from "../dispatch/trigger-events.js";
-import { createRepositoryVCS } from "../vcs/vcs-runtime.js";
+} from "../dispatch/index.js";
+import { prSubjectKey, ticketSubjectKey } from "../../engine/support/subject-key.js";
+import { createRepositoryVCS } from "../../engine/support/vcs-runtime.js";
 import { loadPostPrGateConfig } from "../../post-pr-gate/config.js";
 import {
   getWorkflowDefinitionName,

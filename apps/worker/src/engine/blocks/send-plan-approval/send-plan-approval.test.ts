@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../../infra/logger.js", () => ({ logger: { warn: mocks.warn } }));
 vi.mock("../../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
-vi.mock("../../../services/run-lifecycle/active-run-owner.js", () => ({
+vi.mock("../../../db/repositories/active-runs.js", () => ({
   assertActiveRunOwner: (...args: any[]) => mocks.assertActiveRunOwner(...args),
   assertConnectedActiveRunOwner: (...args: any[]) =>
     mocks.assertActiveRunOwner(...args),
@@ -22,7 +22,7 @@ vi.mock("../../../db/repositories/approvals.js", () => ({
   createApprovalRequest: mocks.createApprovalRequest,
   createConnectedApprovalRequest: mocks.createApprovalRequest,
 }));
-vi.mock("../../../services/vcs/adapters.js", () => ({
+vi.mock("../../../engine/support/adapters.js", () => ({
   createAdapters: () => ({
     issueTracker: {
       postComment: mocks.postComment,
@@ -32,11 +32,11 @@ vi.mock("../../../services/vcs/adapters.js", () => ({
     messaging: { notifyForTicket: mocks.notifyForTicket },
   }),
 }));
-vi.mock("../../../services/tickets/ticket-transition.js", () => ({
+vi.mock("../../../engine/support/ticket-transition.js", () => ({
   moveTicketForRun: (...args: any[]) => mocks.moveTicket(...args),
   moveConnectedTicketForRun: (...args: any[]) => mocks.moveTicket(...args),
 }));
-vi.mock("../../../services/tickets/ticket-label-mutation.js", () => ({
+vi.mock("../../../engine/support/ticket-label-mutation.js", () => ({
   updateTicketLabelsForRun: (...args: any[]) =>
     mocks.updateTicketLabels(...args),
   updateConnectedTicketLabelsForRun: (...args: any[]) =>
@@ -45,7 +45,7 @@ vi.mock("../../../services/tickets/ticket-label-mutation.js", () => ({
 
 import { execute } from "./execute.js";
 import { manifest } from "./manifest.js";
-import { AWAITING_APPROVAL_LABEL } from "../../../services/tickets/labels.js";
+import { AWAITING_APPROVAL_LABEL } from "../../../engine/support/ticket-labels.js";
 import { makeCtx, makeNode, runControlErrorCases } from "../support/test-support.js";
 
 describe("send_plan_approval paramsSchema", () => {

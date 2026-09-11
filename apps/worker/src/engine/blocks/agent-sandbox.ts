@@ -29,7 +29,7 @@ async function blockProvisionAgentSandboxStep(
   | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
 > {
   "use step";
-  const { env } = await import("../../config/env.js");
+  const { env } = await import("../../infra/vcs-config.js");
   const { Sandbox } = await import("@vercel/sandbox");
   const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
   const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
@@ -89,7 +89,7 @@ async function blockProvisionAgentSandboxStep(
   });
 
   try {
-    const { createAdapters } = await import("../../services/vcs/adapters.js");
+    const { createAdapters } = await import("../support/adapters.js");
     await createAdapters().runRegistry.registerSandbox(
       subjectKey,
       ownerToken,
@@ -153,7 +153,7 @@ export async function prepareHarnessAgentInvocationStep(
   "use step";
   if (!runtime) return { ok: true, value: undefined };
 
-  const { env } = await import("../../config/env.js");
+  const { env } = await import("../../infra/vcs-config.js");
   const { Sandbox } = await import("@vercel/sandbox");
   const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
   const { createAgentAdapter } = await import("../../sandbox/agents/index.js");

@@ -54,7 +54,7 @@ export function systemHarnessProfileSeedEnvelopes(
  * decision to advance a system profile belong to the harness-profile policy
  * layer rather than the DB tier.
  */
-export async function ensureSystemHarnessProfiles(
+async function ensureSystemHarnessProfiles(
   repository: SystemHarnessProfileRepository,
   catalog: readonly SystemHarnessProfileSeedEnvelope[],
 ): Promise<void> {

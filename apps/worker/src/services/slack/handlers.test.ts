@@ -4,7 +4,7 @@ import type {
   RunRegistryAdapter,
 } from "../../adapters/run-registry/types.js";
 
-vi.mock("../../config/env.js", () => ({ env: {} }));
+vi.mock("../../infra/vcs-config.js", () => ({ env: {} }));
 
 const { handleCancel, handleList, handleStatus } = await import("./handlers.js");
 

@@ -64,16 +64,7 @@ function mapRow(row: SelectRow): ClarificationRow {
   };
 }
 
-export async function getClarification(db: Db, id: string): Promise<ClarificationRow | null> {
-  const [row] = await db
-    .select()
-    .from(clarificationRequests)
-    .where(eq(clarificationRequests.id, id))
-    .limit(1);
-  return row ? mapRow(row) : null;
-}
-
-export async function getClarificationForRun(
+async function getClarificationForRun(
   db: Db,
   runId: string,
 ): Promise<ClarificationRow | null> {
@@ -98,7 +89,7 @@ export function supersedeConnectedClarification(id: string) {
   return supersedeClarification(getDb(), id);
 }
 
-export async function listAnsweredForTicket(
+async function listAnsweredForTicket(
   db: Db,
   ticketKey: string,
 ): Promise<ClarificationRow[]> {

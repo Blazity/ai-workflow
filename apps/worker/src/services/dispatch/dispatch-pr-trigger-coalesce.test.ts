@@ -17,9 +17,9 @@ import {
   completeTriggerDelivery,
   listPendingTriggersForSubject,
   type AcceptedTriggerDelivery,
-} from "./trigger-delivery-store.js";
+} from "../../engine/support/trigger-delivery-store.js";
 
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: { JIRA_PROJECT_KEY: "PROJ", COLUMN_AI: "AI" },
 }));
 

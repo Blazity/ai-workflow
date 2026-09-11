@@ -1,7 +1,7 @@
 import type { VcsProviderKind } from "@shared/contracts";
-import { createAdapters } from "../vcs/adapters.js";
+import { createAdapters } from "../../engine/support/adapters.js";
 import { logger } from "../../infra/logger.js";
-import { AI_WORKFLOW_COMMENT_MARKER } from "../vcs/vcs-bot-identity.js";
+import { AI_WORKFLOW_COMMENT_MARKER } from "../../adapters/vcs/vcs-bot-identity.js";
 import type { PrAutofixCapDecision } from "./pr-autofix-cap.js";
 import type { PrTriggerType } from "../../engine/index.js";
 

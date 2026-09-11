@@ -27,7 +27,7 @@ vi.mock("../../infra/logger.js", () => ({
     debug: vi.fn(),
   },
 }));
-vi.mock("../../config/env.js", () => ({ env: {} }));
+vi.mock("../../infra/vcs-config.js", () => ({ env: {} }));
 vi.mock("../../db/client.js", () => ({
   getDb: () => {
     if (!state.db) throw new Error("Test database is not ready");

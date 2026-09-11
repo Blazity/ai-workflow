@@ -3,7 +3,7 @@ import { DEFAULT_MODELS, resolveModelDefaults } from "@shared/harness";
 
 async function importEnvModule() {
   const [config, botIdentity] = await Promise.all([
-    import("./src/config/env.js"),
+    import("./src/infra/vcs-config.js"),
     import("./src/services/vcs/vcs-bot-login.js"),
   ]);
   return { ...config, getVcsBotLogin: botIdentity.getVcsBotLogin };
@@ -209,8 +209,7 @@ describe("env", () => {
   });
 
   it("parses valid GitLab env without GitHub webhook secret", async () => {
-    const gitlabEnv = { ...VALID_ENV };
-    gitlabEnv.VCS_KIND = "gitlab";
+    const gitlabEnv = { ...VALID_ENV, VCS_KIND: "gitlab" };
     delete (gitlabEnv as any).GITHUB_APP_ID;
     delete (gitlabEnv as any).GITHUB_APP_PRIVATE_KEY;
     delete (gitlabEnv as any).GITHUB_INSTALLATION_ID;
@@ -324,8 +323,7 @@ describe("env", () => {
   });
 
   it("honors GITLAB_HOST for self-hosted instances", async () => {
-    const gitlabEnv = { ...VALID_ENV };
-    gitlabEnv.VCS_KIND = "gitlab";
+    const gitlabEnv = { ...VALID_ENV, VCS_KIND: "gitlab" };
     delete (gitlabEnv as any).GITHUB_APP_ID;
     delete (gitlabEnv as any).GITHUB_APP_PRIVATE_KEY;
     delete (gitlabEnv as any).GITHUB_INSTALLATION_ID;

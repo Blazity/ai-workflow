@@ -132,7 +132,7 @@ export function readConnectedSystemHealthScan() {
   return readSystemHealthScan(getDb());
 }
 
-export async function readDeploymentEnvironmentMarker(
+async function readDeploymentEnvironmentMarker(
   db: Db,
 ): Promise<{ env: string | null; endpointHost: string | null } | null> {
   const [row] = await db.select({ env: envMarker.env, endpointHost: envMarker.endpointHost })
@@ -144,7 +144,7 @@ export function readConnectedDeploymentEnvironmentMarker() {
   return readDeploymentEnvironmentMarker(getDb());
 }
 
-export async function checkDatabaseConnectivity(db: Db): Promise<void> {
+async function checkDatabaseConnectivity(db: Db): Promise<void> {
   await db.execute(sql.raw("select 1"));
 }
 
@@ -152,7 +152,7 @@ export function checkConnectedDatabaseConnectivity() {
   return checkDatabaseConnectivity(getDb());
 }
 
-export async function listCustomWebhookEndpointStates(db: Db) {
+async function listCustomWebhookEndpointStates(db: Db) {
   return db.select({ id: webhookTriggerEndpoints.id, revokedAt: webhookTriggerEndpoints.revokedAt })
     .from(webhookTriggerEndpoints);
 }
@@ -161,7 +161,7 @@ export function listConnectedCustomWebhookEndpointStates() {
   return listCustomWebhookEndpointStates(getDb());
 }
 
-export async function getLatestActiveCustomWebhookDelivery(db: Db) {
+async function getLatestActiveCustomWebhookDelivery(db: Db) {
   return db.select({ createdAt: webhookTriggerDeliveries.createdAt })
     .from(webhookTriggerDeliveries)
     .innerJoin(webhookTriggerEndpoints, eq(webhookTriggerDeliveries.endpointId, webhookTriggerEndpoints.id))
@@ -174,7 +174,7 @@ export function getConnectedLatestActiveCustomWebhookDelivery() {
   return getLatestActiveCustomWebhookDelivery(getDb());
 }
 
-export async function listActiveCustomWebhookRejections(db: Db, since: Date) {
+async function listActiveCustomWebhookRejections(db: Db, since: Date) {
   return db.select({ count: webhookTriggerRejectionCounters.count })
     .from(webhookTriggerRejectionCounters)
     .innerJoin(webhookTriggerEndpoints, eq(webhookTriggerRejectionCounters.endpointId, webhookTriggerEndpoints.id))

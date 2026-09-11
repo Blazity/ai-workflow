@@ -195,7 +195,7 @@ export async function getWebhookEndpointById(
  * because previousExpiresAt is written on now() (the DB clock): a worker whose
  * clock runs fast must not keep accepting a replaced secret past its expiry.
  */
-export async function readWebhookEndpointForDelivery(
+async function readWebhookEndpointForDelivery(
   db: Db,
   endpointId: string,
 ): Promise<{ endpoint: WebhookEndpointRow; dbNow: Date } | null> {

@@ -435,22 +435,24 @@ export async function withCapacityReservations<T>(input: {
   beforeRelease: () => Promise<void>;
 }): Promise<T> {
   await input.registry.seed(input.campaign);
-  let runFailed = false;
+  const release = async () => {
+    await input.beforeRelease();
+    await input.registry.cleanup(input.campaign);
+  };
+  let result: T;
   try {
-    return await input.run();
+    result = await input.run();
   } catch (error) {
-    runFailed = true;
-    throw error;
-  } finally {
     try {
-      await input.beforeRelease();
-      await input.registry.cleanup(input.campaign);
+      await release();
     } catch (releaseError) {
-      if (!runFailed) throw releaseError;
       console.error(
         "[US-11] Capacity release failed after the primary test failure:",
         releaseError,
       );
     }
+    throw error;
   }
+  await release();
+  return result;
 }

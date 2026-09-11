@@ -1,6 +1,8 @@
-import { NoopMessagingAdapter } from "../../adapters/messaging/noop.js";
-import type { MessagingAdapter } from "../../adapters/messaging/types.js";
-import { logger } from "../../infra/logger.js";
+import {
+  logger,
+  NoopMessagingAdapter,
+  type MessagingAdapter,
+} from "../../services/mcp/app-dependencies.js";
 import {
   McpPublicError,
   type McpActorContext,

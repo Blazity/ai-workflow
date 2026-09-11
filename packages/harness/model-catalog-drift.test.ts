@@ -9,7 +9,6 @@ const gate = resolve(import.meta.dirname, "../../scripts/gates/model-catalog-dri
 const exclusions = [
   "**/*.test.*",
   "apps/dashboard/components/cockpit/activity-drawer.tsx",
-  "apps/dashboard/lib/data/mock.ts",
   "apps/worker/scripts/capture-agent-protocol-fixtures.ts",
   "packages/harness/model-catalog.ts",
 ] as const;

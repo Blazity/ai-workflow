@@ -13,7 +13,7 @@ import {
   type HookClarificationRow,
 } from "../../db/repositories/clarification-hooks.js";
 import { getConnectedDashboardUserLabel } from "../../db/repositories/auth.js";
-import { createAdapters } from "../vcs/index.js";
+import { createAdapters } from "../../engine/support/adapters.js";
 import {
   answerConnectedClarificationAndResume,
   type AnswerClarificationOutcome,

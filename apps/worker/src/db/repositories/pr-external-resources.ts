@@ -29,7 +29,7 @@ export async function findPrCheckForAttempt(
   return rows[0];
 }
 
-export async function findPrCheckById(
+async function findPrCheckById(
   db: Db,
   id: string,
 ): Promise<ExternalPrCheck | undefined> {
@@ -120,7 +120,7 @@ export async function listOpenPrChecks(
   return db.select().from(workflowRunExternalChecks).where(and(...filters));
 }
 
-export async function listReconcilePrChecks(
+async function listReconcilePrChecks(
   db: Db,
   limit: number,
 ): Promise<ExternalPrCheck[]> {
@@ -129,7 +129,7 @@ export async function listReconcilePrChecks(
     .orderBy(asc(workflowRunExternalChecks.updatedAt)).limit(limit);
 }
 
-export async function listRunStatuses(
+async function listRunStatuses(
   db: Db,
   runIds: string[],
 ): Promise<Array<{ runId: string; status: string | null }>> {

@@ -31,9 +31,9 @@ const state = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../../../../config/env.js", () => ({ env: state.env }));
+vi.mock("../../../../infra/vcs-config.js", () => ({ env: state.env }));
 vi.mock("../../../../db/client.js", () => ({ getDb: () => state.db }));
-vi.mock("../../../../auth-instance.js", () => ({
+vi.mock("../../../../services/auth/auth-instance.js", () => ({
   auth: {
     api: {
       getSession: vi.fn(async () =>
@@ -144,10 +144,10 @@ describe("GET /api/v1/system/mcp-readiness", () => {
   it("publishes no env value beyond the switch and the version", async () => {
     const body = (await (await request()).json()) as unknown;
     const leaves = jsonLeaves(body);
-    const published: unknown[] = [state.env.MCP_ENABLED, state.env.MCP_SERVER_VERSION];
+    const published = new Set<unknown>([state.env.MCP_ENABLED, state.env.MCP_SERVER_VERSION]);
 
     for (const [key, value] of Object.entries(state.env)) {
-      if (published.includes(value)) continue;
+      if (published.has(value)) continue;
       expect(leaves, `env.${key} must not reach the readiness payload`).not.toContain(
         value,
       );

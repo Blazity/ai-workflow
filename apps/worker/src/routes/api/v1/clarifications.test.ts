@@ -16,7 +16,7 @@ import {
   getHookClarification,
   prepareHookClarification,
   publishHookClarification,
-} from "../../../clarifications/hook-store.js";
+} from "../../../db/repositories/clarification-hooks.js";
 import { IssueTrackerNotFoundError } from "../../../adapters/issue-tracker/types.js";
 
 const state = vi.hoisted(() => ({
@@ -34,11 +34,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../db/client.js", () => ({ getDb: () => state.db }));
-vi.mock("../../../config/env.js", () => ({ env: state.env }));
-vi.mock("../../../auth-instance.js", () => ({
+vi.mock("../../../infra/vcs-config.js", () => ({ env: state.env }));
+vi.mock("../../../services/auth/auth-instance.js", () => ({
   auth: { api: { getSession: vi.fn(async () => state.session) } },
 }));
-vi.mock("../../../services/vcs/adapters.js", () => ({
+vi.mock("../../../engine/support/adapters.js", () => ({
   createAdapters: () => ({
     issueTracker: {
       fetchTicket: mocks.fetchTicket,

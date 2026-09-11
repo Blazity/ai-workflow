@@ -10,7 +10,7 @@ interface CacheEntry {
 let cache: CacheEntry | null = null;
 
 async function loadAll(): Promise<Record<string, TokenPrice> | null> {
-  const { env } = await import("../../config/env.js");
+  const { env } = await import("../../infra/vcs-config.js");
   const ttl = env.CODEX_PRICING_TTL_MS;
   if (cache && Date.now() - cache.fetchedAt < ttl) return cache.data;
 

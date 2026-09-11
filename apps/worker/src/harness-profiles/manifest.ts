@@ -622,6 +622,12 @@ export class HarnessProfileManifestError extends Error {
   }
 }
 
+export function isHistoricalHarnessProfileDraft(
+  draft: HarnessProfileDraftManifest,
+): draft is HarnessProfileDraftManifestV1 {
+  return draft.schemaVersion === 1;
+}
+
 export function parseHarnessProfileDraftManifest(
   value: unknown,
 ): HarnessProfileDraftManifest {

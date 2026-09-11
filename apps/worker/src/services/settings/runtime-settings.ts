@@ -4,14 +4,14 @@
  * ADR-001 wants `env` imported only by `config`, and the boundary baseline caps
  * how many service files may reach past that rule. Every service that needs a
  * deployment setting therefore takes it from a named accessor here instead of
- * importing `config/env.js` itself, so the tier violation is a single edge from
+ * importing `infra/vcs-config.js` itself, so the tier violation is a single edge from
  * one file rather than one per consumer, and the settings each cluster actually
  * depends on are visible as a list instead of scattered `env.X` reads.
  *
  * Accessors are functions, not constants: the worker's tests replace the env
  * module per case, and a module-level snapshot would freeze the first value.
  */
-import { env } from "../../config/env.js";
+import { env } from "../../infra/vcs-config.js";
 
 /** The run-slot ceiling every dispatch path shares. */
 export function maxConcurrentAgents(): number {

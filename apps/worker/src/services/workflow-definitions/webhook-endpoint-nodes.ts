@@ -7,24 +7,18 @@
  * next to the one lookup that answers it, and neither can drift from the other.
  */
 import type { JsonValue } from "@shared/contracts";
-import type { Db } from "../../db/types.js";
 import { logger } from "../../infra/logger.js";
 import {
   acceptConnectedWebhookDelivery,
   completeConnectedWebhookDelivery,
-} from "../../webhook-trigger/delivery-store.js";
+} from "../../db/repositories/webhook-trigger-deliveries.js";
 import {
-  getWebhookEndpointForNode,
   getConnectedWebhookEndpointForNode,
   mintConnectedWebhookEndpointsForDefinition,
-  mintWebhookEndpointsForDefinition,
   type MintableWebhookNode,
   type WebhookEndpointRow,
 } from "../../webhook-trigger/endpoint-store.js";
-import {
-  getWorkflowDefinition,
-  runnableDefinitionOf,
-} from "../../db/repositories/definitions.js";
+import { runnableDefinitionOf } from "../../db/repositories/definitions.js";
 import {
   getConnectedEnabledDeployedDefinition,
 } from "../../engine/definition-trigger-routing.js";
@@ -35,7 +29,6 @@ import {
 } from "../webhook-trigger/index.js";
 import {
   parseOptionalWorkflowDefinitionVersionRow,
-  readDeployedWorkflowDefinitionVersion,
 } from "../../engine/stored-definition-reads.js";
 
 export interface WebhookEndpointTarget {
@@ -58,50 +51,6 @@ export function auditWebhookAction(
     | "tested",
 ): void {
   logger.info({ actorId, endpointId, action }, "webhook_endpoint_action");
-}
-
-/**
- * The endpoint's node in the definition's live deployed head, with the version
- * it belongs to. Null unless the definition is enabled, not archived, has a
- * deployed head, and that head declares this webhook node: anything short of all
- * four is the "authored but not live" case, which must never mint a URL a sender
- * could rely on nor let a dead endpoint be tested green.
- */
-export async function findDeployedWebhookNode(
-  db: Db,
-  target: WebhookEndpointTarget,
-): Promise<{ definitionVersion: number; node: MintableWebhookNode } | null> {
-  const definition = await getWorkflowDefinition(db, target.definitionId);
-  if (!definition || !definition.enabled || definition.archivedAt) return null;
-  const head = await readDeployedWorkflowDefinitionVersion(db, target.definitionId);
-  const graph = runnableDefinitionOf(head);
-  if (!head || !graph) return null;
-  const node = graph.nodes.find(
-    (n) => n.id === target.nodeId && n.type === "trigger_webhook",
-  );
-  if (!node) return null;
-  return {
-    definitionVersion: head.version,
-    node: { id: node.id, type: "trigger_webhook", configuration: node.configuration ?? {} },
-  };
-}
-
-/** Mint only for a node that is genuinely live (enabled, not archived, deployed
- *  head declares it), so a draft or a disabled definition never gets a URL a
- *  sender could rely on. */
-export async function mintMissingEndpoint(
-  db: Db,
-  encryptionKey: string,
-  target: WebhookEndpointTarget,
-): Promise<WebhookEndpointRow | null> {
-  const deployed = await findDeployedWebhookNode(db, target);
-  if (!deployed) return null;
-
-  await mintWebhookEndpointsForDefinition(db, encryptionKey, {
-    definitionId: target.definitionId,
-    nodes: [deployed.node],
-  });
-  return getWebhookEndpointForNode(db, target.definitionId, target.nodeId);
 }
 
 export async function mintMissingEndpointForConnectedDefinition(
@@ -149,7 +98,7 @@ export async function runWebhookTestDelivery(input: {
   actorId: string;
 }): Promise<WebhookTestDeliveryResult> {
   // The log row pins a definition version, and the version is also where the
-  // mappings live. findDeployedWebhookNode also gates enabled + not archived,
+  // mappings live. The deployed-node lookup also gates enabled + not archived,
   // so a disabled or draft definition has nothing to test against.
   const deployed = await findDeployedWebhookNodeForConnectedDefinition(input.target);
   if (!deployed) return { ok: false, reason: "not_deployed" };

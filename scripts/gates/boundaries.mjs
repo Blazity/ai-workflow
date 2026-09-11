@@ -21,6 +21,25 @@ import {
 } from "./shared.mjs";
 
 const defaultBaseline = new URL("./boundaries.baseline.json", import.meta.url);
+// Stable report rows are not ratchet allowances. A pair absent from the
+// baseline is unconditional and its first observed edge fails the gate.
+const reportedTierPairs = [
+  "adapters->db",
+  "adapters->engine",
+  "adapters->services",
+  "app->adapters",
+  "app->db",
+  "app->engine",
+  "app->infra",
+  "db->adapters",
+  "db->config",
+  "db->engine",
+  "db->services",
+  "engine->config",
+  "engine->services",
+  "services->app",
+  "services->config",
+];
 const tierMap = readJson(fileURLToPath(new URL("./tiers.json", import.meta.url)));
 const sourceExtension = /\.[cm]?[jt]sx?$/;
 const testFile = new RegExp(tierMap.testFilePattern);
@@ -80,7 +99,6 @@ function workspacePath(modulePath, root) {
 function isTrackedSource(path) {
   return (
     within(path, tierMap.workerSourceRoot) ||
-    path === "apps/worker/env.ts" ||
     within(path, `${tierMap.dashboardRoot}/app`) ||
     within(path, `${tierMap.dashboardRoot}/components`) ||
     within(path, `${tierMap.dashboardRoot}/lib`) ||
@@ -295,6 +313,7 @@ function dependencyCounts(root, config) {
     throw new Error(`dependency-cruiser exited ${result.status}: ${result.stderr.trim()}`);
   }
   const counts = new Map();
+  const forbiddenEdges = [];
   const unknown = new Set();
   const deepImports = new Set();
   const packageDirectories = workspacePackageDirectories(root);
@@ -318,7 +337,9 @@ function dependencyCounts(root, config) {
       const toTier = classify(root, toPath);
       if (!toTier) unknown.add(toPath);
       if (fromTier && toTier && !allowed(fromTier, toTier, toPath)) {
-        increment(counts, `${fromTier}->${toTier}`);
+        const pair = `${fromTier}->${toTier}`;
+        increment(counts, pair);
+        forbiddenEdges.push({ from: fromPath, to: toPath, pair });
       }
       if (!dependency.dynamic && crossClusterDeepImport(fromPath, toPath)) {
         deepImports.add(JSON.stringify([fromPath, toPath]));
@@ -330,6 +351,9 @@ function dependencyCounts(root, config) {
     report,
     unknown: [...unknown].sort(),
     deepImports: [...deepImports].toSorted().map((entry) => JSON.parse(entry)),
+    forbiddenEdges: forbiddenEdges.toSorted((left, right) =>
+      `${left.pair}\0${left.from}\0${left.to}`.localeCompare(`${right.pair}\0${right.from}\0${right.to}`),
+    ),
   };
 }
 
@@ -371,7 +395,7 @@ function directoryCycleCounts(root) {
     ["dashboard", join(root, "apps/dashboard/src")],
   ];
   const cycles = new Map();
-  const importPattern = /(?:import|export)\s+(?:[^'\"]*?\s+from\s+)?['\"]([^'\"]+)['\"]|import\(\s*['\"]([^'\"]+)['\"]\s*\)/g;
+  const importPattern = /(?:import|export)\s+(?:[^'"]*?\s+from\s+)?['"]([^'"]+)['"]|import\(\s*['"]([^'"]+)['"]\s*\)/g;
   for (const [name, base] of targets) {
     if (!existsSync(base)) continue;
     const edges = new Set();
@@ -400,7 +424,8 @@ function directoryCycleCounts(root) {
 }
 
 function main() {
-  const options = parseOptions(process.argv.slice(2), {
+  const printEdges = process.argv.includes("--print-edges");
+  const options = parseOptions(process.argv.slice(2).filter((argument) => argument !== "--print-edges"), {
     "--root": "root",
     "--baseline": "baseline",
     "--config": "config",
@@ -409,7 +434,7 @@ function main() {
   const root = realpathSync(options.root);
   const baselinePath = options.baseline ?? fileURLToPath(defaultBaseline);
   const config = options.config ?? join(repositoryRoot, ".dependency-cruiser.cjs");
-  const { counts: tierPairs, report, unknown, deepImports } = dependencyCounts(root, config);
+  const { counts: tierPairs, report, unknown, deepImports, forbiddenEdges } = dependencyCounts(root, config);
   // The default list belongs to this repository, so a fixture root under --root
   // neither reads nor overwrites it; a fixture passes its own with the flag.
   const ownsDefaultList = root === realpathSync(repositoryRoot);
@@ -423,11 +448,21 @@ function main() {
   const fileCycles = normalizeFileCycles(report);
   const current = { tierPairs, fileCycleCount: fileCycles.length, fileCycles };
   if (options.updateBaseline) {
-    if (unknown.length) throw new Error(`Cannot baseline unknown paths: ${unknown.join(", ")}`);
+    if (unknown.length > 0) throw new Error(`Cannot baseline unknown paths: ${unknown.join(", ")}`);
     writeJson(baselinePath, current);
   }
-  const baseline = options.updateBaseline ? current : readJson(baselinePath);
-  const tierKeys = [...new Set([...Object.keys(baseline.tierPairs), ...Object.keys(tierPairs)])].sort();
+  const baseline = options.updateBaseline
+    ? current
+    : existsSync(baselinePath)
+      ? readJson(baselinePath)
+      : { tierPairs: {}, fileCycleCount: 0, fileCycles: [] };
+  const tierKeys = [
+    ...new Set([
+      ...reportedTierPairs,
+      ...Object.keys(baseline.tierPairs),
+      ...Object.keys(tierPairs),
+    ]),
+  ].sort();
   console.log("Boundary tier pairs");
   printTable(["pair", "baseline", "now"], tierKeys.map((key) => [key, baseline.tierPairs[key] ?? 0, tierPairs[key] ?? 0]));
   console.log("Directory cycle pairs (informational)");
@@ -440,13 +475,21 @@ function main() {
   );
   for (const [from, to] of deepImportDrift.added) console.log(`new deep import  ${from} -> ${to}`);
   for (const [from, to] of deepImportDrift.stale) console.log(`retired deep import still listed  ${from} -> ${to}`);
-  if (unknown.length) {
+  if (unknown.length > 0) {
     console.log("Unknown paths");
     for (const path of unknown) console.log(path);
   }
   const failed = unknown.length > 0 || countRegression(tierPairs, baseline.tierPairs) ||
     exceedsFileCycleBaseline(fileCycles, baseline) ||
     deepImportDrift.added.length > 0 || deepImportDrift.stale.length > 0;
+  if (failed || printEdges) {
+    console.log("Forbidden edges");
+    for (const { from, to, pair } of forbiddenEdges) console.log(`${from} -> ${to}  (${pair})`);
+    console.log("File cycles");
+    for (const cycle of fileCycles) console.log(cycle.join(" -> "));
+    console.log("Cross-cluster deep import edges");
+    for (const [from, to] of deepImports) console.log(`${from} -> ${to}`);
+  }
   console.log(failed ? "boundaries FAIL" : "boundaries PASS");
   process.exitCode = failed ? 1 : 0;
 }

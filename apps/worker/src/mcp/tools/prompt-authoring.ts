@@ -3,9 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { dashboardOrigin } from "../../services/settings/runtime-settings.js";
 import { promptLibraryUrl } from "../../services/publication/dashboard-links.js";
 import { builtInPromptNameForSlug } from "@shared/prompts";
-import {
-  PromptLibraryStoreError,
-} from "../../services/prompts/index.js";
+import { PromptLibraryStoreError } from "../../services/prompts/prompt-store-error.js";
 import type { McpToolDependencies } from "../contracts.js";
 import { executeMcpMutation } from "../execute-tool.js";
 import { hashCanonicalJson } from "../sanitize-result.js";

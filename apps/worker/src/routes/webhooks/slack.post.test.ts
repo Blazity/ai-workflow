@@ -7,7 +7,7 @@ const JIRA_BASE_URL = "https://example.atlassian.net";
 const observeProviderWebhook = vi.hoisted(() => vi.fn());
 
 // Mock env BEFORE importing anything that pulls it in transitively.
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: {
     SLACK_SIGNING_SECRET: SIGNING_SECRET,
     SLACK_ALLOWED_USER_IDS: undefined as string | undefined,
@@ -35,7 +35,7 @@ const runRegistry = {
   setParent: vi.fn().mockResolvedValue(undefined),
   clearParent: vi.fn().mockResolvedValue(undefined),
 };
-vi.mock("../../services/vcs/adapters.js", () => ({
+vi.mock("../../engine/support/adapters.js", () => ({
   createAdapters: () => ({
     runRegistry,
     issueTracker: {},
@@ -208,7 +208,7 @@ describe("POST /webhooks/slack", () => {
   });
 
   it("returns ephemeral 'Not authorized.' when user is not in the allowlist", async () => {
-    const { env } = await import("../../config/env.js");
+    const { env } = await import("../../infra/vcs-config.js");
     (env as any).SLACK_ALLOWED_USER_IDS = "UALLOWED1,UALLOWED2";
     try {
       const handler = makeApp();

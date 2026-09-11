@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { config as loadEnv } from "dotenv";
 import { Sandbox } from "@vercel/sandbox";
 import { createAgentAdapter, type AgentKind } from "../src/sandbox/agents/index.js";
@@ -21,7 +20,7 @@ const providers: AgentKind[] = requestedProvider === "all"
     : fail("--provider must be claude, codex, or all");
 
 const fixtureRoot = join(
-  dirname(fileURLToPath(import.meta.url)),
+  import.meta.dirname,
   "..",
   "src",
   "sandbox",

@@ -1,4 +1,4 @@
-export type LayoutSaveTask = (expectedLayoutRevision: number) => Promise<number | false>;
+type LayoutSaveTask = (expectedLayoutRevision: number) => Promise<number | false>;
 export type LayoutSaveTimer = (callback: () => void, delayMs: number) => () => void;
 
 export interface PendingLayoutSave {
@@ -77,7 +77,7 @@ export function createPendingLayoutSave(options?: {
       clearScheduledTimer();
       cancelTimer = scheduleTimer(() => {
         cancelTimer = null;
-        void flush().catch(() => undefined);
+        void flush().catch(() => {});
       }, delayMs);
     },
     flush,
@@ -89,7 +89,7 @@ export function createPendingLayoutSave(options?: {
       generation += 1;
       clearScheduledTimer();
       pending = null;
-      await flushing?.catch(() => undefined);
+      await flushing?.catch(() => {});
     },
     reset(revision) {
       layoutRevision = revision;

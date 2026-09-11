@@ -8,7 +8,7 @@
  * label the acting operator is recorded under.
  */
 import { getConnectedDashboardUserLabel } from "../../db/repositories/auth.js";
-import { createAdapters } from "../vcs/index.js";
+import { createAdapters } from "../../engine/support/adapters.js";
 import {
   cancelConnectedRunForOperator,
   type CancelRunForOperatorResult,

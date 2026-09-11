@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ActiveRunOwnerError } from "../../services/run-lifecycle/run-control-errors.js";
+import { ActiveRunOwnerError } from "../../engine/support/run-control-errors.js";
 
 const markRunEntryStarted = vi.fn();
 const beginParking = vi.fn();
@@ -28,7 +28,7 @@ const moveTicket = vi.fn();
 const fetchTicket = vi.fn();
 const updateTicketLabels = vi.fn();
 const acknowledgeManualDispatch = vi.fn();
-vi.mock("../../services/vcs/adapters.js", () => ({
+vi.mock("../../engine/support/adapters.js", () => ({
   createAdapters: () => ({
     runRegistry: {
       markRunEntryStarted,
@@ -41,23 +41,23 @@ vi.mock("../../services/vcs/adapters.js", () => ({
   }),
 }));
 vi.mock("../../db/client.js", () => ({ getDb: () => ({ db: true }) }));
-vi.mock("../../services/run-lifecycle/active-run-owner.js", () => ({
+vi.mock("../../db/repositories/active-runs.js", () => ({
   assertActiveRunOwner: (...args: any[]) => assertActiveRunOwner(...args),
   assertConnectedActiveRunOwner: (...args: any[]) =>
     assertActiveRunOwner(...args),
 }));
-vi.mock("../../services/dispatch/trigger-delivery-store.js", () => ({
+vi.mock("../../engine/support/trigger-delivery-store.js", () => ({
   deletePendingTrigger: (...args: any[]) => deletePending(...args),
   acknowledgeStartedTriggerDelivery: (...args: any[]) => acknowledgeStartedDelivery(...args),
   completeTriggerDelivery: (...args: any[]) => completeTriggerDelivery(...args),
 }));
-vi.mock("../../webhook-trigger/delivery-store.js", () => ({
+vi.mock("../support/webhook-delivery-store.js", () => ({
   recordWebhookDeliveryStarted: (...args: any[]) => recordWebhookStarted(...args),
 }));
-vi.mock("../../schedule-trigger/occurrence-store.js", () => ({
+vi.mock("../support/schedule-occurrence-store.js", () => ({
   recordOccurrenceStarted: (...args: any[]) => recordOccurrenceStarted(...args),
 }));
-vi.mock("../../services/vcs/vcs-runtime.js", () => ({
+vi.mock("../../engine/support/vcs-runtime.js", () => ({
   createRepositoryVCS: (...args: any[]) => {
     createRepositoryVcsRuntime(...args);
     return { getPRHead, getLatestCheckRuns };
@@ -104,17 +104,17 @@ vi.mock("../../db/repositories/schedule-triggers.js", () => ({
 vi.mock("../../sandbox/stop-ticket-sandboxes.js", () => ({
   stopSandboxesByIds: (...args: any[]) => stopSandboxes(...args),
 }));
-vi.mock("../../services/tickets/ticket-transition.js", () => ({
+vi.mock("../../engine/support/ticket-transition.js", () => ({
   moveTicketForRun: (...args: any[]) => moveTicket(...args),
   moveConnectedTicketForRun: (...args: any[]) => moveTicket(...args),
 }));
-vi.mock("../../services/tickets/ticket-label-mutation.js", () => ({
+vi.mock("../../engine/support/ticket-label-mutation.js", () => ({
   updateTicketLabelsForRun: (...args: any[]) =>
     updateTicketLabels(...args),
   updateConnectedTicketLabelsForRun: (...args: any[]) =>
     updateTicketLabels(...args),
 }));
-vi.mock("../../services/manual-dispatch/acknowledge-workflow.js", () => ({
+vi.mock("../../engine/support/acknowledge-manual-workflow.js", () => ({
   acknowledgeManualDispatchWorkflow: (...args: unknown[]) =>
     acknowledgeManualDispatch(...args),
 }));

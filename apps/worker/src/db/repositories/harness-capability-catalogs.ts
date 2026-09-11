@@ -82,7 +82,7 @@ export async function upsertHarnessCapabilityCatalog(
   return row!;
 }
 
-export async function listHarnessCapabilityOrganizationIds(db: Db): Promise<string[]> {
+async function listHarnessCapabilityOrganizationIds(db: Db): Promise<string[]> {
   const rows = await db.select({ id: organization.id }).from(organization);
   return rows.map((row) => row.id);
 }

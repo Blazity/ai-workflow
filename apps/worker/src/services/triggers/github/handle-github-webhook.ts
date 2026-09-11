@@ -21,11 +21,13 @@ import {
   type DispatchTriggerResult,
 } from "../../dispatch/index.js";
 import {
-  gateCheckNameAliases,
   isWorkflowGeneratedPush,
-  ticketKeyFromBranch,
   connectedWorkflowPushNormalizationOptions,
 } from "../../publication/index.js";
+import {
+  gateCheckNameAliases,
+  ticketKeyFromBranch,
+} from "../../../engine/support/workflow-naming.js";
 import { githubWebhookSettings, maxConcurrentAgents } from "../../settings/index.js";
 import { observeProviderWebhook } from "../../system/index.js";
 import { getVcsBotLogin } from "../../vcs/index.js";

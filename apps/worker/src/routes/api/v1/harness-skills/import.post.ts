@@ -7,7 +7,7 @@ import {
 } from "@shared/contracts";
 import { requireDashboardActor } from "../../../../services/auth/request-context.js";
 import { canManageHarnessProfiles } from "../../../../services/auth/roles.js";
-import { DashboardAuthError } from "../../../../services/auth/users-read.js";
+import { DashboardAuthError } from "@shared/contracts";
 import {
   importGitHubSkillSelection,
 } from "../../../../services/harness/skill-sources.js";

@@ -4,9 +4,9 @@ import type { Db } from "../../client.js";
 import { workflowRuns } from "../../schema.js";
 import type { HarnessRunManifestRecord } from "@shared/contracts";
 import { fetchRunDetailFromDb, fetchRunRefs } from "../../../services/run-lifecycle/durable-run-detail.js";
-import { buildResearchAnalysisReport } from "../../../run-analysis/report.js";
+import { buildResearchAnalysisReport } from "../../../engine/support/run-analysis-report.js";
 
-vi.mock("../../../config/env.js", () => ({ env: {} }));
+vi.mock("../../../infra/vcs-config.js", () => ({ env: {} }));
 
 /** Minimal fixture: attributeRunModel only reads `.nodeId` / `.manifest.model.id`. */
 function harnessManifest(nodeId: string, modelId: string): HarnessRunManifestRecord {

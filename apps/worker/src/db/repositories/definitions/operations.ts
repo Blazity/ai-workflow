@@ -9,7 +9,6 @@ import type {
 import {
   normalizeWorkflowDefinitionLayout,
   RETIRED_SCHEMA_MESSAGE,
-  workflowDefinitionSchemaVersionOf,
 } from "@shared/contracts";
 import { and, arrayContains, asc, desc, eq, isNull, max, or, sql } from "drizzle-orm";
 import type { Db } from "../../client.js";
@@ -144,9 +143,8 @@ function mapVersionRow(row: VersionSelect): WorkflowDefinitionVersionRow {
     createdById: row.createdById,
     createdByLabel: row.createdByLabel,
     restoredFromVersion: row.restoredFromVersion,
-    ...(workflowDefinitionSchemaVersionOf(row.definition) === 1
-      ? { schema: "legacy-v1" as const, definition: row.definition }
-      : { schema: "v2" as const, definition: row.definition as WorkflowDefinition }),
+    schema: "v2",
+    definition: row.definition as WorkflowDefinition,
   };
 }
 
@@ -188,14 +186,11 @@ export async function listWorkflowDefinitions(db: Db): Promise<WorkflowDefinitio
   const deployedByDefinition = new Map(
     deployedRows.map((row) => [row.definitionId, mapVersionRow(row)]),
   );
-  return defs.map((row) => ({
-    ...mapDefinitionRow(
+  return defs.map((row) => Object.assign({}, mapDefinitionRow(
       row,
       headByDefinition.get(row.id) ?? 0,
       deployedByDefinition.get(row.id) ?? null,
-    ),
-    currentVersion: headByDefinition.get(row.id) ?? null,
-  }));
+    ), { currentVersion: headByDefinition.get(row.id) ?? null }));
 }
 
 export async function getWorkflowDefinition(

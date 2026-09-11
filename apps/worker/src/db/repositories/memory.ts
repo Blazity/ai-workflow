@@ -3,7 +3,7 @@ import { getDb, type Db } from "../client.js";
 import { agentMemoryDocuments } from "../schema.js";
 
 export const MAX_MEMORY_DOCUMENT_BYTES = 256 * 1024;
-export const DEFAULT_MEMORY_LIST_LIMIT = 100;
+const DEFAULT_MEMORY_LIST_LIMIT = 100;
 export const MAX_MEMORY_LIST_LIMIT = 200;
 
 export interface MemoryDocument {

@@ -7,13 +7,13 @@ const state = vi.hoisted(() => ({
 const preflight = vi.hoisted(() => vi.fn());
 const dispatch = vi.hoisted(() => vi.fn());
 
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: { MAX_CONCURRENT_AGENTS: 4 },
 }));
 vi.mock("../../db/client.js", () => ({
   getDb: () => ({ kind: "db" }),
 }));
-vi.mock("../vcs/adapters.js", () => ({
+vi.mock("../../engine/support/adapters.js", () => ({
   createAdapters: () => ({ kind: "adapters" }),
 }));
 vi.mock("../auth/request-context.js", () => ({

@@ -25,7 +25,8 @@ export function trappedDialogTabTarget<T extends DialogFocusTarget>(
 ): T | null {
   if (focusable.length === 0) return null;
   const first = focusable[0];
-  const last = focusable[focusable.length - 1];
+  const last = focusable.at(-1);
+  if (last === undefined) return null;
   const activeIndex = focusable.indexOf(active as T);
   if (activeIndex === -1) return backwards ? last : first;
   if (backwards && active === first) return last;

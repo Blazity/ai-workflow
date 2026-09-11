@@ -254,7 +254,7 @@ export async function markHookClarificationCleanup(
   ).where(eq(clarificationRequests.id, id));
 }
 
-export async function supersedePreparingHookClarification(db: Db, id: string): Promise<void> {
+async function supersedePreparingHookClarification(db: Db, id: string): Promise<void> {
   await db.update(clarificationRequests).set({ status: "superseded" }).where(and(
     eq(clarificationRequests.id, id),
     sql`${clarificationRequests.status} in ('preparing', 'pending')`,

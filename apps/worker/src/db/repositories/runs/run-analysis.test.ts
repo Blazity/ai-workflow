@@ -8,7 +8,7 @@ import {
   usageSnapshot,
   withAnalysisDelivery,
   withAnalysisPublication,
-} from "../../../run-analysis/report.js";
+} from "../../../engine/support/run-analysis-report.js";
 import { finalizeRunAnalysisUsage, getRunAnalysisReport, recordRunAnalysisReport } from "../../../run-analysis/persistence.js";
 
 let db: Db;

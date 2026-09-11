@@ -1,20 +1,7 @@
-import type { VcsProviderKind } from "@shared/contracts";
+import type { PostPrGateWorkflowInput } from "@shared/contracts";
 import type { GateStatusCapableVCS, GateStatusRef } from "../adapters/vcs/types.js";
 
-export interface PostPrGateWorkflowInput {
-  prNumber: number;
-  headSha: string;
-  headRef: string;
-  baseRef: string;
-  title: string;
-  body: string;
-  author: string;
-  isDraft: boolean;
-  url: string;
-  /** Owner/repo string for gate-store keys. */
-  ownerRepo: string;
-  provider: VcsProviderKind;
-}
+export type { PostPrGateWorkflowInput } from "@shared/contracts";
 
 /**
  * Detached workflow triggered by the GitHub webhook. Does NOT block agent.ts
@@ -40,8 +27,8 @@ async function runGate(input: PostPrGateWorkflowInput) {
     gateCheckName,
     isManagedBranch,
     ticketKeyFromBranch,
-  } = await import("../services/publication/workflow-naming.js");
-  const { createAdapters } = await import("../services/vcs/adapters.js");
+  } = await import("./support/workflow-naming.js");
+  const { createAdapters } = await import("./support/adapters.js");
   const { logger } = await import("../infra/logger.js");
   const { hasGateStatusCapability } = await import("../adapters/vcs/types.js");
 

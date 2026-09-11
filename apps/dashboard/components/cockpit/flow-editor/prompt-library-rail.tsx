@@ -145,7 +145,12 @@ export function PromptLibraryRail({
     if (id === null || detailCache.has(id)) return;
     let alive = true;
     apiClient.prompts.detail(id)
-      .then((res) => (res.ok ? res.data : Promise.reject()))
+      .then((res) => {
+        if (res.ok) return res.data;
+        // Preserve the existing rejection value; this branch is only a catch trigger.
+        // eslint-disable-next-line unicorn/no-useless-promise-resolve-reject, prefer-promise-reject-errors -- Preserve the empty rejection contract.
+        return Promise.reject();
+      })
       .then((detail) => {
         if (alive) setDetailCache((m) => new Map(m).set(id, detail));
       })
@@ -244,7 +249,7 @@ export function PromptLibraryRail({
           />
           <span className="block truncate font-mono text-[12px] font-semibold text-neutral-900">{row.name}</span>
           <span className="block truncate font-mono text-[10px] text-neutral-500">
-            {`v${row.currentVersion}${row.tags.length ? ` · ${row.tags.join(", ")}` : ""}`}
+            {`v${row.currentVersion}${row.tags.length > 0 ? ` · ${row.tags.join(", ")}` : ""}`}
           </span>
         </button>
       );

@@ -131,7 +131,7 @@ describe("buildRepoCheckBatchScript", () => {
     });
 
     const lines = script.trimEnd().split("\n");
-    expect(lines[lines.length - 1]).toBe(`touch ${paths.sentinel}`);
+    expect(lines.at(-1)).toBe(`touch ${paths.sentinel}`);
     expect(script.indexOf(`rm -f ${paths.sentinel}`)).toBeLessThan(
       script.indexOf("run_pre_pr_command 0"),
     );
@@ -1176,36 +1176,6 @@ function batchReaderScript(cmd: unknown): string | null {
   if (objectCommand.cmd !== "bash" || !Array.isArray(objectCommand.args)) return null;
   if (objectCommand.args[0] !== "-lc") return null;
   return typeof objectCommand.args[1] === "string" ? objectCommand.args[1] : null;
-}
-
-function phaseArtifactCommand(
-  cmd: unknown,
-  args: unknown,
-  provider: "claude" | "codex",
-  stdout = provider === "claude"
-    ? JSON.stringify({ type: "result", subtype: "success", is_error: false })
-    : JSON.stringify({ type: "turn.completed" }),
-  phaseExitCode = 0,
-) {
-  if (cmd !== "cat" || !Array.isArray(args) || typeof args[0] !== "string") return null;
-  const path = args[0];
-  if (!path.startsWith("/tmp/pre-pr-fix-")) return null;
-  if (path.endsWith("-stdout.txt")) return commandResult(0, stdout);
-  if (path.endsWith("-stderr.txt")) return commandResult(0, "");
-  if (path.endsWith("-exit-code")) return commandResult(0, String(phaseExitCode));
-  if (path.endsWith("-result.json")) return commandResult(0, "repair complete");
-  return null;
-}
-
-/** What a detached `runCommand` resolves to: the process is still running, so
- *  there is no exit code yet. */
-function detachedCommand() {
-  return {
-    exitCode: null,
-    cmdId: "cmd-detached",
-    stdout: vi.fn().mockResolvedValue(""),
-    stderr: vi.fn().mockResolvedValue(""),
-  };
 }
 
 function batchLaunch() {

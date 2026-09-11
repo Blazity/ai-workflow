@@ -10,9 +10,9 @@ const state = vi.hoisted(() => ({
   env: { DASHBOARD_ORG_SLUG: "ai-workflow" },
 }));
 
-vi.mock("../../../../config/env.js", () => ({ env: state.env }));
+vi.mock("../../../../infra/vcs-config.js", () => ({ env: state.env }));
 vi.mock("../../../../db/client.js", () => ({ getDb: () => state.db }));
-vi.mock("../../../../auth-instance.js", () => ({
+vi.mock("../../../../services/auth/auth-instance.js", () => ({
   auth: {
     api: {
       getSession: vi.fn(async () =>
@@ -25,7 +25,7 @@ vi.mock("../../../../auth-instance.js", () => ({
 }));
 // The guard runs before any registry work; an empty registry keeps the
 // authorized case on the collector's "nothing qualifies" path.
-vi.mock("../../../../services/vcs/adapters.js", () => ({
+vi.mock("../../../../engine/support/adapters.js", () => ({
   createAdapters: () => ({ runRegistry: { listAll: async () => [] } }),
 }));
 

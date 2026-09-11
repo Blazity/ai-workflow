@@ -236,7 +236,7 @@ export async function cancelRunById(
           undefined,
           async (owner) => {
             const [{ env }, { withdrawConnectedTicketFromAiForRun }] = await Promise.all([
-              import("../../config/env.js"),
+              import("../../infra/vcs-config.js"),
               import("../tickets/ticket-transition.js"),
             ]);
             await withdrawConnectedTicketFromAiForRun({

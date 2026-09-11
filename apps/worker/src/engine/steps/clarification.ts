@@ -1,4 +1,4 @@
-import { ticketPageUrl } from "../../services/publication/dashboard-links.js";
+import { ticketPageUrl } from "../support/dashboard-links.js";
 import type { AgentKind } from "../../sandbox/agents/index.js";
 import type { IssueTrackerMoveTarget } from "../../adapters/issue-tracker/types.js";
 import type { ActiveRunOwner, TicketTransitionOwner } from "../internal/ports.js";
@@ -18,9 +18,9 @@ export async function parkForClarificationStep(
     "../internal/ports.js"
   );
   const { createAdapters } = await loadAdaptersPort();
-  const { NEEDS_CLARIFICATION_LABEL } = await import("../../services/tickets/labels.js");
+  const { NEEDS_CLARIFICATION_LABEL } = await import("../../engine/support/ticket-labels.js");
   const { updateConnectedTicketLabelsForRun } = await import(
-    "../../services/tickets/ticket-label-mutation.js"
+    "../../engine/support/ticket-label-mutation.js"
   );
   const { issueTracker } = createAdapters();
   // The questions live durably in the clarification store and the overview reads
@@ -48,7 +48,7 @@ export async function parkForClarificationStep(
     }
   }
   const { moveConnectedTicketForRun } = await import(
-    "../../services/tickets/ticket-transition.js"
+    "../../engine/support/ticket-transition.js"
   );
   await moveConnectedTicketForRun({
     issueTracker,
@@ -67,9 +67,9 @@ export async function reconcileClarificationsOnPickup(
   "use step";
   const { loadAdaptersPort } = await import("../internal/ports.js");
   const { createAdapters } = await loadAdaptersPort();
-  const { NEEDS_CLARIFICATION_LABEL } = await import("../../services/tickets/labels.js");
+  const { NEEDS_CLARIFICATION_LABEL } = await import("../../engine/support/ticket-labels.js");
   const { updateConnectedTicketLabelsForRun } = await import(
-    "../../services/tickets/ticket-label-mutation.js"
+    "../../engine/support/ticket-label-mutation.js"
   );
   const { reconcileConnectedClarificationPickupState } = await import(
     "../../db/repositories/clarifications.js"
@@ -114,7 +114,7 @@ export async function postPickupCommentStep(
   const { loadAdaptersPort, loadEnvironmentPort } =
     await import("../internal/ports.js");
   const { assertConnectedActiveRunOwner } = await import(
-    "../../services/run-lifecycle/active-run-owner.js"
+    "../../db/repositories/active-runs.js"
   );
   const { createAdapters } = await loadAdaptersPort();
   const { env } = await loadEnvironmentPort();
@@ -154,12 +154,12 @@ export async function postClarificationQuestionsCommentStep(
   const { loadAdaptersPort, loadEnvironmentPort } =
     await import("../internal/ports.js");
   const { assertConnectedActiveRunOwner } = await import(
-    "../../services/run-lifecycle/active-run-owner.js"
+    "../../db/repositories/active-runs.js"
   );
   const { createAdapters } = await loadAdaptersPort();
   const { env } = await loadEnvironmentPort();
   const { formatClarificationQuestionsComment } = await import(
-    "../../services/clarifications/comment-format.js"
+    "../support/clarification-comment-format.js"
   );
   const { issueTracker } = createAdapters();
   // Best-effort: surfacing the questions in Jira must never fail the paused run.

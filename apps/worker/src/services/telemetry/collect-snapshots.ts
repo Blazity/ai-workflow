@@ -11,7 +11,7 @@ import {
   STATUS_MAP,
   mapWorkflow,
   type RunsLister,
-} from "../overview/collect-runs.js";
+} from "../overview/index.js";
 import type { RunSnapshot } from "../../db/repositories/runs/telemetry.js";
 
 export interface CollectSnapshotsOptions {

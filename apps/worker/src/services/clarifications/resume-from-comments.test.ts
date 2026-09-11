@@ -15,7 +15,7 @@ import {
   getHookClarification,
   prepareHookClarification,
   publishHookClarification,
-} from "../../clarifications/hook-store.js";
+} from "../../db/repositories/clarification-hooks.js";
 import { resumeClarificationFromComments } from "./resume-from-comments.js";
 
 const mocks = vi.hoisted(() => ({
@@ -23,7 +23,7 @@ const mocks = vi.hoisted(() => ({
   getHookByToken: vi.fn(),
 }));
 
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: { COLUMN_AI: "AI", DASHBOARD_ORIGIN: "https://dash.example" },
 }));
 vi.mock("workflow/api", () => ({

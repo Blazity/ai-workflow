@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { WorkflowDefinition } from "@shared/contracts";
 
 // One file, four source areas. vi.mock is hoisted and file-scoped, so we mock
-// the union of every dependency once. The env module (apps/worker/env.ts) is
+// the union of every dependency once. The runtime environment module is
 // shared by all areas; the bot-login helper has its own mock because it resolves
 // provider configuration through the config module.
 const H = vi.hoisted(() => ({
@@ -18,10 +18,10 @@ const H = vi.hoisted(() => ({
     VCS_BOT_LOGIN: undefined as string | undefined,
   },
 }));
-vi.mock("../config/env.js", () => ({
+vi.mock("../infra/vcs-config.js", () => ({
   env: H.env,
 }));
-vi.mock("../services/vcs/vcs-bot-login.js", () => ({
+vi.mock("../services/vcs/index.js", () => ({
   getVcsBotLogin: () => H.env.VCS_BOT_LOGIN,
 }));
 

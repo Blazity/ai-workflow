@@ -13,10 +13,10 @@ import {
   workflowReferenceSourceNodeId,
 } from "./reference-visitor";
 
-export const WORKFLOW_SESSION_CLIPBOARD_KEY =
+const WORKFLOW_SESSION_CLIPBOARD_KEY =
   "ai-workflow.workflow-editor.clipboard.v1";
 
-export interface WorkflowClipboardEdge<TGeometry = JsonValue> {
+interface WorkflowClipboardEdge<TGeometry = JsonValue> {
   edge: FlowEdgeDef;
   geometry?: TGeometry;
 }
@@ -32,7 +32,7 @@ export interface WorkflowClipboardPayload<TGeometry = JsonValue> {
   pasteCount: number;
 }
 
-export interface WorkflowClipboardPasteSuccess<TGeometry = JsonValue> {
+interface WorkflowClipboardPasteSuccess<TGeometry = JsonValue> {
   ok: true;
   nodes: FlowNodeDef[];
   edges: FlowEdgeDef[];
@@ -210,6 +210,8 @@ function allocateNodeId(
 
 function defaultGenerateEdgeId(): string {
   if (typeof globalThis.crypto?.randomUUID !== "function") {
+    // The thrown class is part of the public contract for the exported paste operation.
+    // oxlint-disable-next-line unicorn/prefer-type-error
     throw new Error("V2 clipboard paste requires an edge id generator.");
   }
   return globalThis.crypto.randomUUID();
@@ -275,14 +277,11 @@ export function planWorkflowClipboardPaste<TGeometry = JsonValue>(input: {
   const destinationNodeIds = new Set(
     input.destinationNodes.map((node) => node.id),
   );
-  const unavailableNodeIds = new Set(destinationNodeIds);
-  unavailableNodeIds.add("entry");
-  for (const sourceId of unavailableExternalSourceIds(
-    input.payload,
-    destinationNodeIds,
-  )) {
-    unavailableNodeIds.add(sourceId);
-  }
+  const unavailableNodeIds = new Set([
+    ...destinationNodeIds,
+    "entry",
+    ...unavailableExternalSourceIds(input.payload, destinationNodeIds),
+  ]);
   const nodeIdMap = new Map<string, string>();
   input.payload.nodes.forEach((node, index) => {
     nodeIdMap.set(

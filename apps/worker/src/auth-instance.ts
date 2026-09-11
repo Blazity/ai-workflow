@@ -1,44 +1,10 @@
-import { Resend } from "resend";
-import { env } from "./config/env.js";
-import { createConnectedAuth, type AuthOptions } from "./auth.js";
-import { sendEmail } from "./services/email/send-email.js";
-import { resetPasswordEmailTemplate } from "./services/email/templates.js";
-import { buildTrustedOrigins } from "./services/auth/trusted-origins.js";
+import { createConnectedAuth } from "./auth.js";
+import { authDeployment } from "./services/auth/auth-deployment.js";
+import { installAuthInstance } from "./services/auth/auth-instance.js";
 
-/** The worker's Better Auth instance, wired from validated env. */
-export const auth = createConnectedAuth({
-  secret: env.BETTER_AUTH_SECRET,
-  baseURL: env.BETTER_AUTH_URL,
-  trustedOrigins: buildTrustedOrigins(env.DASHBOARD_ORIGIN, env.DASHBOARD_TRUSTED_ORIGINS),
-  mcp: {
-    organizationSlug: env.DASHBOARD_ORG_SLUG,
-    allowPublicDcr: env.MCP_ALLOW_PUBLIC_DCR,
-  },
-  passwordReset: createPasswordResetOptions(),
-});
+const deployment = authDeployment();
 
-function createPasswordResetOptions(): AuthOptions["passwordReset"] {
-  const apiKey = env.RESEND_API_KEY;
-  const from = env.RESEND_FROM_EMAIL;
-  if (!apiKey || !from) {
-    console.warn(
-      "[dashboard-auth] password reset email delivery disabled: RESEND_API_KEY and RESEND_FROM_EMAIL are not set.",
-    );
-    return undefined;
-  }
+/** The worker's Better Auth instance, composed at the app tier. */
+export const auth = createConnectedAuth(deployment.options);
 
-  const client = new Resend(apiKey);
-  return {
-    dashboardOrigin: env.DASHBOARD_ORIGIN,
-    sendEmail: async ({ user, resetUrl }) => {
-      const email = resetPasswordEmailTemplate({ resetUrl });
-      await sendEmail(client, {
-        from,
-        to: user.email,
-        subject: email.subject,
-        html: email.html,
-        text: email.text,
-      });
-    },
-  };
-}
+installAuthInstance(auth);

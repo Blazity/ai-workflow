@@ -14,7 +14,7 @@ import type {
   ManualDispatchResponse,
 } from "@shared/contracts";
 import { maxConcurrentAgents } from "../settings/index.js";
-import { createAdapters } from "../vcs/index.js";
+import { createAdapters } from "../../engine/support/adapters.js";
 import { resolveWorkflowDefinitionActor } from "./definition-authoring.js";
 import {
   dispatchConnectedManualWorkflow,

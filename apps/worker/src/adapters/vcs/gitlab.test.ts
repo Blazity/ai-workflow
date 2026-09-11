@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { GitLabAdapter } from "./gitlab.js";
 import { reviewFindingDigest } from "./types.js";
 import type { ReviewThread } from "./types.js";
-import { AI_WORKFLOW_COMMENT_MARKER } from "../../services/vcs/vcs-bot-identity.js";
+import { AI_WORKFLOW_COMMENT_MARKER } from "../../adapters/vcs/vcs-bot-identity.js";
 import { logger } from "../../infra/logger.js";
 
 vi.mock("../../infra/logger.js", () => ({
@@ -1619,9 +1619,11 @@ describe("GitLabAdapter", () => {
         { status: "completed", conclusion: "failure", summary },
       );
 
-      const body = JSON.parse(
-        (mockFetch.mock.calls.at(-1)?.[1] as { body: string }).body,
-      ) as { description: string };
+      const lastCall = mockFetch.mock.calls.at(-1);
+      if (!lastCall) throw new Error("GitLab request was not made");
+      const body = JSON.parse((lastCall[1] as { body: string }).body) as {
+        description: string;
+      };
       expect(body.description.length).toBeLessThanOrEqual(255);
       expect(body.description).toContain("The requested URL returned error: 403");
       expect(body.description).toContain(diagnosticId);
@@ -1639,10 +1641,10 @@ describe("GitLabAdapter", () => {
           { provider: "gitlab", name: "blazebot / code-hygiene", headSha: "sha1" },
           { status: "completed", conclusion, summary: "The review did not run." },
         );
+        const lastCall = mockFetch.mock.calls.at(-1);
+        if (!lastCall) throw new Error("GitLab request was not made");
         states[conclusion] = (
-          JSON.parse((mockFetch.mock.calls.at(-1)?.[1] as { body: string }).body) as {
-            state: string;
-          }
+          JSON.parse((lastCall[1] as { body: string }).body) as { state: string }
         ).state;
       }
 

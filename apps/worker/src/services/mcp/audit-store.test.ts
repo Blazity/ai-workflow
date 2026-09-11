@@ -1,7 +1,7 @@
 import { asc, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: {
     MCP_AUDIT_RETENTION_DAYS: 365,
   },

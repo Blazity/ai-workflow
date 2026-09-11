@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../config/env.js", () => ({
+vi.mock("../../infra/vcs-config.js", () => ({
   env: {
     MCP_SERVER_VERSION: "0.1.0",
     MCP_MAX_RESULT_BYTES: 65_536,
@@ -24,7 +24,7 @@ const service = vi.hoisted(() => ({
 }));
 vi.mock("../../services/manual-dispatch/service.js", () => service);
 
-import type { Adapters } from "../../services/vcs/adapters.js";
+import type { Adapters } from "../../engine/support/adapters.js";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
 import { mcpAuditEvents, organization } from "../../db/schema.js";

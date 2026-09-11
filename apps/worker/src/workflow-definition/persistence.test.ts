@@ -7,7 +7,7 @@ import type {
 import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 
-vi.mock("../config/env.js", () => ({
+vi.mock("../infra/vcs-config.js", () => ({
   env: {
     AGENT_KIND: "claude",
     CLAUDE_MODEL: "claude-test",
@@ -28,7 +28,7 @@ const { loggerMock } = vi.hoisted(() => ({
   loggerMock: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 vi.mock("../infra/logger.js", () => ({ logger: loggerMock }));
-import { env } from "../config/env.js";
+import { env } from "../infra/vcs-config.js";
 import {
   webhookTriggerEndpoints,
   workflowDefinitions,
@@ -163,7 +163,7 @@ async function triggerTypesOf(db: Db, definitionId: number): Promise<string[]> {
 async function createDeployed(
   name: string,
   definition: WorkflowDefinitionV2,
-): Promise<Awaited<ReturnType<typeof getWorkflowDefinition>> & {}> {
+): Promise<NonNullable<Awaited<ReturnType<typeof getWorkflowDefinition>>>> {
   const created = (await createWorkflowDefinition(db, { name, seed: null, actor: ADMIN })).definition;
   await saveWorkflowDefinitionDraft(db, {
     definitionId: created.id,

@@ -1,24 +1,11 @@
 {
   "workspaces": {
-    "apps/dashboard": {
-      "dependencies": 3,
-      "devDependencies": 2,
-      "exports": 59,
-      "files": 42,
-      "types": 17,
-      "unlisted": 4
-    },
     "apps/worker": {
       "dependencies": 2,
       "devDependencies": 1,
       "exports": 113,
       "files": 7,
       "types": 78
-    },
-    "root": {
-      "devDependencies": 2,
-      "exports": 1,
-      "files": 1
     }
   }
 }

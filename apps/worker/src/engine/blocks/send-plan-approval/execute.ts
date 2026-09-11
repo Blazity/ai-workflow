@@ -1,6 +1,6 @@
 import type { IssueTrackerMoveTarget } from "../../../adapters/issue-tracker/types.js";
-import type { ActiveRunOwner } from "../../../services/run-lifecycle/active-run-owner.js";
-import type { TicketTransitionOwner } from "../../../services/tickets/ticket-transition.js";
+import type { ActiveRunOwner } from "../../../db/repositories/active-runs.js";
+import type { TicketTransitionOwner } from "../../support/ticket-transition.js";
 import { isRunControlError } from "../../helpers/run-control-error.js";
 import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "../support/types.js";
 import type { ApprovedRepositoryScope } from "@shared/contracts";
@@ -67,8 +67,8 @@ async function mirrorApprovalCommentStep(
   owner: ActiveRunOwner,
 ): Promise<void> {
   "use step";
-  const { assertConnectedActiveRunOwner } = await import("../../../services/run-lifecycle/active-run-owner.js");
-  const { createAdapters } = await import("../../../services/vcs/adapters.js");
+  const { assertConnectedActiveRunOwner } = await import("../../../db/repositories/active-runs.js");
+  const { createAdapters } = await import("../../../engine/support/adapters.js");
   const { issueTracker } = createAdapters();
   await assertConnectedActiveRunOwner(owner);
   await issueTracker.postComment(ticketId, body);
@@ -80,8 +80,8 @@ async function notifyPlanApprovalStep(
   owner: ActiveRunOwner,
 ): Promise<void> {
   "use step";
-  const { assertConnectedActiveRunOwner } = await import("../../../services/run-lifecycle/active-run-owner.js");
-  const { createAdapters } = await import("../../../services/vcs/adapters.js");
+  const { assertConnectedActiveRunOwner } = await import("../../../db/repositories/active-runs.js");
+  const { createAdapters } = await import("../../../engine/support/adapters.js");
   const { messaging } = createAdapters();
   await assertConnectedActiveRunOwner(owner);
   await messaging.notifyForTicket(ticketKey, { kind: "plan_approval_requested" });
@@ -94,12 +94,12 @@ async function parkForApprovalStep(
   owner: TicketTransitionOwner,
 ): Promise<void> {
   "use step";
-  const { createAdapters } = await import("../../../services/vcs/adapters.js");
-  const { AWAITING_APPROVAL_LABEL } = await import("../../../services/tickets/labels.js");
+  const { createAdapters } = await import("../../../engine/support/adapters.js");
+  const { AWAITING_APPROVAL_LABEL } = await import("../../../engine/support/ticket-labels.js");
   const { updateConnectedTicketLabelsForRun } = await import(
-    "../../../services/tickets/ticket-label-mutation.js"
+    "../../../engine/support/ticket-label-mutation.js"
   );
-  const { moveConnectedTicketForRun } = await import("../../../services/tickets/ticket-transition.js");
+  const { moveConnectedTicketForRun } = await import("../../../engine/support/ticket-transition.js");
   const { issueTracker } = createAdapters();
   if (typeof issueTracker.updateLabels === "function") {
     try {

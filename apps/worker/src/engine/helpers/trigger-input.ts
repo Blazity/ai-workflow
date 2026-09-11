@@ -1,5 +1,5 @@
 import { type AgentWorkflowInput } from "../agent-input.js";
-import type { HumanDecision } from "../../services/publication/human-decisions-memory.js";
+import type { HumanDecision } from "../support/human-decisions-memory.js";
 import { appendClarificationRound } from "./prompt-output.js";
 import type { BlockOutput, JsonValue, WorkflowBlockType, WorkflowDefinitionNode } from "@shared/contracts";
 

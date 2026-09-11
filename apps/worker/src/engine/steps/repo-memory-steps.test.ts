@@ -57,7 +57,7 @@ vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.getSandbox } }));
 vi.mock("../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
 // vcs-urls.js stays real: it is pure string building, and asserting the argv the
 // fetch actually issues is the point of the fallback tests.
-vi.mock("../../services/vcs/vcs-runtime.js", () => ({
+vi.mock("../../engine/support/vcs-runtime.js", () => ({
   buildSandboxProviderConfigs: mocks.buildSandboxProviderConfigs,
 }));
 
@@ -69,7 +69,7 @@ vi.mock("../../infra/logger.js", () => ({
   },
 }));
 vi.mock("../../db/client.js", () => ({ getDb: () => mocks.db }));
-vi.mock("../../config/env.js", () => ({ env: mocks.env }));
+vi.mock("../../infra/vcs-config.js", () => ({ env: mocks.env }));
 vi.mock("../llm.js", () => ({ generateStructured: mocks.generateStructured }));
 // Passthrough by default. `prepareMemoryContent` wraps its whole redaction call,
 // this one included, so failing it here is what drives the null-result branch.
@@ -145,7 +145,7 @@ import { and, eq } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import { agentMemoryDocuments } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
-import { orgSubjectKey, repoOwner, repoSubjectKey } from "../../services/run-lifecycle/subject-key.js";
+import { orgSubjectKey, repoOwner, repoSubjectKey } from "../../engine/support/subject-key.js";
 import {
   parseRepoMemoryDocument,
   renderRepoMemoryDocument,
@@ -525,7 +525,7 @@ function fakeSandbox(): void {
         return { exitCode: 0, stdout: async () => "" };
       }
       if (args.includes("fetch")) return { exitCode: mocks.fetchExit, stdout: async () => "" };
-      const answer = mocks.lsTree.get(args[args.length - 1] ?? "");
+      const answer = mocks.lsTree.get(args.at(-1) ?? "");
       if (!answer) return { exitCode: 128, stdout: async () => "" };
       return {
         exitCode: answer.exitCode,
@@ -3933,7 +3933,7 @@ describe("captureDefaultBranchFilesStep", () => {
           return { exitCode: 0, stdout: async () => "" };
         }
         if (args.includes("ls-tree")) {
-          const ref = args[args.length - 1];
+          const ref = args.at(-1);
           if (ref === "FETCH_HEAD") {
             return {
               exitCode: 0,
@@ -4005,7 +4005,7 @@ describe("captureDefaultBranchFilesStep", () => {
           return { exitCode: 0, stdout: async () => "" };
         }
         if (args.includes("fetch")) return { exitCode: 0, stdout: async () => "" };
-        if (args[args.length - 1] === "FETCH_HEAD") {
+        if (args.at(-1) === "FETCH_HEAD") {
           // The whole budget is spent the instant the listing lands, so the only
           // thing left needing it is the cleanup. setSystemTime moves the clock
           // without running the pending race timer, which is what makes this the
@@ -4047,7 +4047,7 @@ describe("captureDefaultBranchFilesStep", () => {
           return { exitCode: 0, stdout: async () => "" };
         }
         if (args.includes("fetch")) return { exitCode: 0, stdout: async () => "" };
-        if (args[args.length - 1] === "FETCH_HEAD") {
+        if (args.at(-1) === "FETCH_HEAD") {
           throw new Error("sandbox died mid-listing");
         }
         return { exitCode: 128, stdout: async () => "" };
@@ -4089,7 +4089,8 @@ describe("captureDefaultBranchFilesStep", () => {
     expect(fetched).toContain("--depth=1");
     expect(fetched).toContain("--no-tags");
     expect(fetched).toContain("--filter=blob:none");
-    expect(fetched?.[fetched.length - 1]).toBe("main");
+    if (!fetched) return;
+    expect(fetched.at(-1)).toBe("main");
     expect(fetched?.some((arg) => arg.includes("AUTHORIZATION"))).toBe(true);
     // Into a throwaway bare repository, never the checkout: see the shallow
     // invariant case above.
@@ -4116,7 +4117,7 @@ describe("captureDefaultBranchFilesStep", () => {
             stdout: async () => "",
           };
         }
-        const ref = args[args.length - 1];
+        const ref = args.at(-1);
         return ref === "FETCH_HEAD"
           ? {
               exitCode: 0,
