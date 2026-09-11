@@ -1,7 +1,7 @@
 import type { FlowEdgeDef, FlowNodeDef } from "@/lib/flows";
 import { edgeInstanceKey } from "./edges";
 
-export type GraphSelectionDeleteBlocker = never;
+type GraphSelectionDeleteBlocker = never;
 
 export interface GraphSelectionDeleteResult {
   nodes: FlowNodeDef[];

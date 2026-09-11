@@ -121,7 +121,7 @@ export interface EffectivePromptPreviewProvenance {
   hash: string;
 }
 
-export interface EffectivePromptPreviewSection {
+interface EffectivePromptPreviewSection {
   kind: "profile" | "repository" | "memory" | "block" | "runtime";
   title: string;
   content: string;
@@ -129,7 +129,7 @@ export interface EffectivePromptPreviewSection {
   provenance: EffectivePromptPreviewProvenance[];
 }
 
-export interface EffectivePromptPreviewUnresolvedSource {
+interface EffectivePromptPreviewUnresolvedSource {
   kind: "profile" | "repository" | "data" | "slot";
   reference: string;
   message: string;

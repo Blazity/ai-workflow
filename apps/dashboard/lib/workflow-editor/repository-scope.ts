@@ -15,7 +15,7 @@ export const MAX_PINNED_REPOSITORIES = 8;
 export const PINNABLE_PROVIDERS: readonly VcsProviderKind[] = ["github", "gitlab"];
 
 /** `repoPath` is stored in the case the operator picked; matching ignores case. */
-export function sameRepository(a: PinnedRepository, b: PinnedRepository): boolean {
+function sameRepository(a: PinnedRepository, b: PinnedRepository): boolean {
   return (
     a.provider === b.provider &&
     a.repoPath.toLowerCase() === b.repoPath.toLowerCase()

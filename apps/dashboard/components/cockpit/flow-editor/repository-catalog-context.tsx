@@ -65,13 +65,15 @@ export function RepositoryCatalogProvider({
         // every consumer maps over `repositories`, so anything but an array has
         // to fail rather than land as a `ready` catalog that throws on render.
         const response = result as Partial<RepositoriesResponse> | null;
-        const repositories = response?.repositories;
-        const providers = response?.providers;
-        if (!Array.isArray(repositories) || !Array.isArray(providers)) {
+        const nextRepositories = response?.repositories;
+        const nextProviders = response?.providers;
+        if (!Array.isArray(nextRepositories) || !Array.isArray(nextProviders)) {
+          // The thrown class is part of the public contract for the exported catalog provider.
+          // oxlint-disable-next-line unicorn/prefer-type-error
           throw new Error("malformed repository catalog");
         }
-        setRepositories(repositories);
-        setProviders(providers);
+        setRepositories(nextRepositories);
+        setProviders(nextProviders);
         setStatus("ready");
       })
       .catch(() => {

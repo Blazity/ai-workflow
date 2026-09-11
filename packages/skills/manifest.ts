@@ -43,7 +43,7 @@ export function parseHarnessSkillMetadata(content: Uint8Array): SkillMetadata {
   if (
     typeof record.description !== "string" ||
     record.description.trim() !== record.description ||
-    record.description.length < 1 ||
+    record.description.length === 0 ||
     record.description.length > 1_024
   ) {
     throw invalidManifest("SKILL.md has an invalid description.");

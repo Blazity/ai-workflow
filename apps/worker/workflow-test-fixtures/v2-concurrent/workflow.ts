@@ -32,7 +32,9 @@ import {
 
 async function sleep(ms: number): Promise<void> {
   if (ms <= 0) return;
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 // --- Steps (each one is a durable event-log entry, like agent.ts's) ---
@@ -110,6 +112,7 @@ async function persistProbeAttemptStartStep(payload: {
   activationScopeId: string;
 }): Promise<number> {
   "use step";
+  void payload;
   probeAttemptIds += 1;
   return probeAttemptIds;
 }
@@ -131,6 +134,7 @@ async function logProbeExecutionErrorStep(payload: {
   diagnosticId: string;
 }): Promise<void> {
   "use step";
+  void payload;
 }
 logProbeExecutionErrorStep.maxRetries = 0;
 
@@ -139,6 +143,7 @@ async function persistProbeAttemptFinishStep(payload: {
   state: string;
 }): Promise<void> {
   "use step";
+  void payload;
 }
 persistProbeAttemptFinishStep.maxRetries = 0;
 
@@ -451,7 +456,7 @@ export async function probeV2ConcurrentFanOut(input: ProbeConcurrentInput) {
     maxConcurrency: input.maxConcurrency,
   });
 
-  await Promise.allSettled([...captureTasks]);
+  await Promise.allSettled(captureTasks);
 
   return {
     outcome: walk.outcome,
@@ -582,8 +587,11 @@ export async function probeV2ConsumptionOrder(
   const edges: WorkflowDefinitionV2["edges"] = [];
   for (const branch of input.branches) {
     nodes.push(genericNode(branch.id), genericNode(`${branch.id}-next`));
-    edges.push({ id: `trigger-${branch.id}`, from: "trigger", to: branch.id });
     edges.push({
+      id: `trigger-${branch.id}`,
+      from: "trigger",
+      to: branch.id,
+    }, {
       id: `${branch.id}-next-edge`,
       from: branch.id,
       to: `${branch.id}-next`,

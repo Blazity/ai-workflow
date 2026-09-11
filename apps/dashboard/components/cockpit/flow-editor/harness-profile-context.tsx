@@ -12,7 +12,6 @@ import {
 import type {
   HarnessProfileDetailResponse,
   HarnessProfileDto,
-  HarnessProfilesResponse,
 } from "@shared/contracts";
 import { apiClient } from "@/lib/api/client";
 

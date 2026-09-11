@@ -1,4 +1,5 @@
 import { neon } from "@neondatabase/serverless";
+import type { FailedTicketMeta } from "@shared/contracts";
 import { e2eEnv } from "../env.js";
 
 /**
@@ -45,12 +46,6 @@ export async function cleanup(ticketKey: string): Promise<void> {
   await sql`DELETE FROM active_runs WHERE ticket_key = ${ticketKey}`.catch(
     () => {},
   );
-}
-
-export interface FailedTicketMeta {
-  runId: string;
-  error: string;
-  failedAt: string;
 }
 
 export async function markFailed(

@@ -60,7 +60,7 @@ export function slugifyPromptName(name: string): string {
   const base = name
     .toLowerCase()
     .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\u0300-\u036F]/g, "")
     .replace(/ł/g, "l")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")

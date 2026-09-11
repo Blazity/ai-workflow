@@ -419,7 +419,7 @@ function formatTime(value: string): string {
 
 /** Subscribes to nothing: the store only tells server and client renders apart. */
 function subscribeNever(): () => void {
-  return () => undefined;
+  return () => {};
 }
 
 /** Local date and time of the scan; formatted only after hydration so the

@@ -83,8 +83,9 @@ const doc = {
 /** Hide or show the tab the way Chrome does: flip the flag, then notify. */
 function setVisibility(state: "visible" | "hidden"): void {
   doc.visibilityState = state;
+  const callbacks = [...visibilityListeners];
   act(() => {
-    for (const cb of [...visibilityListeners]) cb();
+    for (const cb of callbacks) cb();
   });
 }
 

@@ -85,7 +85,7 @@ describe("resolveWorkflowTicketStep", () => {
     // git check-ref-format rules this branch must satisfy.
     expect(branch).not.toContain(":");
     expect(branch).not.toContain("..");
-    expect(branch).toMatch(/^[A-Za-z0-9._\/-]+$/);
+    expect(branch).toMatch(/^[A-Za-z0-9._/-]+$/);
   });
 
   it("derives the webhook identifier from the delivery, not the subject", async () => {
@@ -152,7 +152,7 @@ describe("resolveWorkflowTicketStep", () => {
     // git check-ref-format rules this branch must satisfy.
     expect(branch).not.toContain(":");
     expect(branch).not.toContain("..");
-    expect(branch).toMatch(/^[A-Za-z0-9._\/-]+$/);
+    expect(branch).toMatch(/^[A-Za-z0-9._/-]+$/);
   });
 
   // Every occurrence branches from the default branch under its own identity, so

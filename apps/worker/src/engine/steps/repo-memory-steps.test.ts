@@ -500,7 +500,7 @@ function fakeSandbox(): void {
         return { exitCode: 0, stdout: async () => "" };
       }
       if (args.includes("fetch")) return { exitCode: mocks.fetchExit, stdout: async () => "" };
-      const answer = mocks.lsTree.get(args[args.length - 1] ?? "");
+      const answer = mocks.lsTree.get(args.at(-1) ?? "");
       if (!answer) return { exitCode: 128, stdout: async () => "" };
       return {
         exitCode: answer.exitCode,
@@ -3908,7 +3908,7 @@ describe("captureDefaultBranchFilesStep", () => {
           return { exitCode: 0, stdout: async () => "" };
         }
         if (args.includes("ls-tree")) {
-          const ref = args[args.length - 1];
+          const ref = args.at(-1);
           if (ref === "FETCH_HEAD") {
             return {
               exitCode: 0,
@@ -3980,7 +3980,7 @@ describe("captureDefaultBranchFilesStep", () => {
           return { exitCode: 0, stdout: async () => "" };
         }
         if (args.includes("fetch")) return { exitCode: 0, stdout: async () => "" };
-        if (args[args.length - 1] === "FETCH_HEAD") {
+        if (args.at(-1) === "FETCH_HEAD") {
           // The whole budget is spent the instant the listing lands, so the only
           // thing left needing it is the cleanup. setSystemTime moves the clock
           // without running the pending race timer, which is what makes this the
@@ -4022,7 +4022,7 @@ describe("captureDefaultBranchFilesStep", () => {
           return { exitCode: 0, stdout: async () => "" };
         }
         if (args.includes("fetch")) return { exitCode: 0, stdout: async () => "" };
-        if (args[args.length - 1] === "FETCH_HEAD") {
+        if (args.at(-1) === "FETCH_HEAD") {
           throw new Error("sandbox died mid-listing");
         }
         return { exitCode: 128, stdout: async () => "" };
@@ -4064,7 +4064,8 @@ describe("captureDefaultBranchFilesStep", () => {
     expect(fetched).toContain("--depth=1");
     expect(fetched).toContain("--no-tags");
     expect(fetched).toContain("--filter=blob:none");
-    expect(fetched?.[fetched.length - 1]).toBe("main");
+    if (!fetched) return;
+    expect(fetched.at(-1)).toBe("main");
     expect(fetched?.some((arg) => arg.includes("AUTHORIZATION"))).toBe(true);
     // Into a throwaway bare repository, never the checkout: see the shallow
     // invariant case above.
@@ -4091,7 +4092,7 @@ describe("captureDefaultBranchFilesStep", () => {
             stdout: async () => "",
           };
         }
-        const ref = args[args.length - 1];
+        const ref = args.at(-1);
         return ref === "FETCH_HEAD"
           ? {
               exitCode: 0,

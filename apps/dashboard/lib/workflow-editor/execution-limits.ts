@@ -8,7 +8,7 @@ export type WorkflowExecutionLimitKey = keyof WorkflowExecutionBudgets;
 export function executionLimitsFromDefinition(
   definition: WorkflowDefinition,
 ): WorkflowExecutionBudgets {
-  return { ...(definition.budgets ?? {}) };
+  return { ...definition.budgets };
 }
 
 export function setExecutionLimit(

@@ -7,6 +7,11 @@ import {
   sanitizeMcpData,
 } from "./sanitize-result.js";
 
+const controlCharacterPattern = new RegExp(
+  String.raw`[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]`,
+  "u",
+);
+
 describe("sanitizeMcpData", () => {
   it("keeps external instructions inert while redacting credential shapes and controls", () => {
     const configuredSecret = "fixture-config-secret-71c9";
@@ -16,7 +21,7 @@ describe("sanitizeMcpData", () => {
       github: `ghp_${"A".repeat(36)}`,
       pem: "-----BEGIN PRIVATE KEY-----\nprivate-fixture\n-----END PRIVATE KEY-----",
       configured: `prefix ${configuredSecret} suffix`,
-      controls: "safe\u0000\u0007\u001b[31mred\u001b[0m\ud800text",
+      controls: "safe\u0000\u0007\u001B[31mred\u001B[0m\uD800text",
     };
 
     const envelope = sanitizeMcpData(hostile, {
@@ -42,7 +47,7 @@ describe("sanitizeMcpData", () => {
     expect(json).not.toContain(hostile.github);
     expect(json).not.toContain("BEGIN PRIVATE KEY");
     expect(json).not.toContain(configuredSecret);
-    expect(json).not.toMatch(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u);
+    expect(json).not.toMatch(controlCharacterPattern);
     expect(() => JSON.parse(utf8)).not.toThrow();
     expect(utf8).toBe(json);
   });

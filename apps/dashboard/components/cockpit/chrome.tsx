@@ -24,7 +24,7 @@ const NAV_GROUPS = [
   { id: "team", label: "Administration" },
 ];
 
-export const MOBILE_MORE_NAV_IDS = [
+const MOBILE_MORE_NAV_IDS = [
   "approvals",
   "prompts",
   "memory",

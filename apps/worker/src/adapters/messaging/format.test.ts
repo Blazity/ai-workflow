@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { formatTicketEvent, formatTicketStatus, neutralizeSlackBroadcasts } from "./format.js";
 import type { RunPullRequest } from "@shared/contracts";
 
-const ZWSP = "\u200b";
+const ZWSP = "\u200B";
 
 const JIRA = "https://example.atlassian.net";
 const KEY = "AWT-42";

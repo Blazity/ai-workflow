@@ -21,7 +21,7 @@ interface Hit {
 const OPEN_EVENT = "cockpit:spotlight-open";
 
 /** Open the Spotlight overlay from anywhere on the page. */
-export function openSpotlight() {
+function openSpotlight() {
   window.dispatchEvent(new Event(OPEN_EVENT));
 }
 
@@ -89,6 +89,8 @@ export function SpotlightSearch({
   const [active, setActive] = useState(0);
 
   const inputRef = useRef<HTMLInputElement>(null);
+  // The ref needs an explicit undefined initializer for React's overload.
+  // eslint-disable-next-line unicorn/no-useless-undefined -- Preserve the timer ref type.
   const debounce = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const reqId = useRef(0);
   const restoreFocus = useRef<HTMLElement | null>(null);
@@ -197,10 +199,10 @@ export function SpotlightSearch({
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setActive((i) => (hits.length ? (i + 1) % hits.length : 0));
+      setActive((i) => (hits.length > 0 ? (i + 1) % hits.length : 0));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      setActive((i) => (hits.length ? (i - 1 + hits.length) % hits.length : 0));
+      setActive((i) => (hits.length > 0 ? (i - 1 + hits.length) % hits.length : 0));
     } else if (e.key === "Enter") {
       e.preventDefault();
       go(hits[active]);
@@ -209,7 +211,9 @@ export function SpotlightSearch({
 
   // Keep the active row in view as the selection moves by keyboard.
   useEffect(() => {
-    document.getElementById(`${listId}-opt-${active}`)?.scrollIntoView({ block: "nearest" });
+    document
+      .querySelector<HTMLElement>(`[id="${listId}-opt-${active}"]`)
+      ?.scrollIntoView({ block: "nearest" });
   }, [active, listId]);
 
   if (!mounted || !open) return null;
@@ -343,7 +347,7 @@ export function SpotlightSearch({
           <span className="inline-flex items-center gap-1.5">
             <Kbd>esc</Kbd> close
           </span>
-          <span className="ml-auto">{hasQuery && hits.length ? `${hits.length} shown` : "Up to 8 results"}</span>
+          <span className="ml-auto">{hasQuery && hits.length > 0 ? `${hits.length} shown` : "Up to 8 results"}</span>
         </div>
       </div>
     </div>,

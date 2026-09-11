@@ -29,10 +29,10 @@ export function canChangeRole(input: {
  * every caller treats as "no access" rather than as a default.
  */
 export function normalizeDashboardRole(role: string): DashboardRole | null {
-  const roles = role.split(",").map((part) => part.trim());
-  if (roles.includes("owner")) return "owner";
-  if (roles.includes("admin")) return "admin";
-  if (roles.includes("member")) return "member";
+  const roles = new Set(role.split(",").map((part) => part.trim()));
+  if (roles.has("owner")) return "owner";
+  if (roles.has("admin")) return "admin";
+  if (roles.has("member")) return "member";
   return null;
 }
 

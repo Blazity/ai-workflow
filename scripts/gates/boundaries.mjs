@@ -395,7 +395,7 @@ function directoryCycleCounts(root) {
     ["dashboard", join(root, "apps/dashboard/src")],
   ];
   const cycles = new Map();
-  const importPattern = /(?:import|export)\s+(?:[^'\"]*?\s+from\s+)?['\"]([^'\"]+)['\"]|import\(\s*['\"]([^'\"]+)['\"]\s*\)/g;
+  const importPattern = /(?:import|export)\s+(?:[^'"]*?\s+from\s+)?['"]([^'"]+)['"]|import\(\s*['"]([^'"]+)['"]\s*\)/g;
   for (const [name, base] of targets) {
     if (!existsSync(base)) continue;
     const edges = new Set();
@@ -448,7 +448,7 @@ function main() {
   const fileCycles = normalizeFileCycles(report);
   const current = { tierPairs, fileCycleCount: fileCycles.length, fileCycles };
   if (options.updateBaseline) {
-    if (unknown.length) throw new Error(`Cannot baseline unknown paths: ${unknown.join(", ")}`);
+    if (unknown.length > 0) throw new Error(`Cannot baseline unknown paths: ${unknown.join(", ")}`);
     writeJson(baselinePath, current);
   }
   const baseline = options.updateBaseline ? current : readJson(baselinePath);
@@ -471,7 +471,7 @@ function main() {
   );
   for (const [from, to] of deepImportDrift.added) console.log(`new deep import  ${from} -> ${to}`);
   for (const [from, to] of deepImportDrift.stale) console.log(`retired deep import still listed  ${from} -> ${to}`);
-  if (unknown.length) {
+  if (unknown.length > 0) {
     console.log("Unknown paths");
     for (const path of unknown) console.log(path);
   }

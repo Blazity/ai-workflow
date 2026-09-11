@@ -4,10 +4,9 @@
  */
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, resolve } from "node:path";
 
-export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+export const repositoryRoot = resolve(import.meta.dirname, "../..");
 
 export function parseOptions(argv, definitions = {}) {
   const options = { root: repositoryRoot, updateBaseline: false };

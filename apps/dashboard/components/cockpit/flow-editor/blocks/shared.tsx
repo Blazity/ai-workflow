@@ -306,6 +306,8 @@ export function NumberField({
       disabled={disabled}
       onChange={(e) => {
         if (e.target.value === "") {
+          // The undefined value clears the optional numeric parameter.
+          // eslint-disable-next-line unicorn/no-useless-undefined -- Clear the number field.
           onChange(undefined);
           return;
         }
@@ -351,8 +353,8 @@ export function ArrayTextarea({
       rows={3}
       onChange={(e) => {
         setText(e.target.value);
-        const arr = linesToArray(e.target.value);
-        onChange(arr.length > 0 ? arr : undefined);
+        const parsedLines = linesToArray(e.target.value);
+        onChange(parsedLines.length > 0 ? parsedLines : undefined);
       }}
       className={mono ? monoTextareaCls : textareaCls}
     />
@@ -415,7 +417,7 @@ function TriggerRejectionsNote({
           );
         }
       })
-      .catch(() => undefined);
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -486,7 +488,11 @@ export function TriggerRateLimitFields({
           disabled={!canEdit}
           onChange={(v) => {
             onChange("params.rateLimitMax", v);
-            if (v === undefined) onChange("params.rateLimitWindow", undefined);
+            if (v === undefined) {
+              // Passing undefined deletes the paired optional window parameter.
+              // eslint-disable-next-line unicorn/no-useless-undefined -- Clear the rate-limit window.
+              onChange("params.rateLimitWindow", undefined);
+            }
             else if (windowValue === "") onChange("params.rateLimitWindow", "day");
           }}
         />

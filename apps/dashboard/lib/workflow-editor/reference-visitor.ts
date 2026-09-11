@@ -219,48 +219,6 @@ function isJsonRecord(
     typeof value === "object" && !Array.isArray(value);
 }
 
-function remapBranchCondition(
-  value: JsonValue,
-  nodeIdMap: ReadonlyMap<string, string>,
-): JsonValue {
-  if (!isJsonRecord(value) || typeof value.kind !== "string") {
-    return structuredClone(value);
-  }
-  if (value.kind === "path" && typeof value.reference === "string") {
-    return {
-      ...structuredClone(value),
-      reference: remapWorkflowDataReference(
-        value.reference,
-        nodeIdMap,
-      ),
-    };
-  }
-  if (value.kind === "lit") {
-    return structuredClone(value);
-  }
-  if (value.kind === "not" && value.operand !== undefined) {
-    return {
-      ...structuredClone(value),
-      operand: remapBranchCondition(value.operand, nodeIdMap),
-    };
-  }
-  if (
-    (value.kind === "and" ||
-      value.kind === "or" ||
-      value.kind === "eq" ||
-      value.kind === "neq") &&
-    value.left !== undefined &&
-    value.right !== undefined
-  ) {
-    return {
-      ...structuredClone(value),
-      left: remapBranchCondition(value.left, nodeIdMap),
-      right: remapBranchCondition(value.right, nodeIdMap),
-    };
-  }
-  return structuredClone(value);
-}
-
 function remapPromptSlotBindings(
   value: JsonValue,
   nodeIdMap: ReadonlyMap<string, string>,
@@ -467,45 +425,6 @@ function collectPromptTokens(
 ): void {
   for (const token of parsePromptDataTokens(value)) {
     found.push({ reference: token.reference, path });
-  }
-}
-
-function collectBranchConditionReferences(
-  value: JsonValue,
-  path: string,
-  found: WorkflowReferenceOccurrence[],
-): void {
-  if (!isJsonRecord(value) || typeof value.kind !== "string") {
-    return;
-  }
-  if (value.kind === "path" && typeof value.reference === "string") {
-    found.push({
-      reference: value.reference,
-      path: `${path}/reference`,
-    });
-    return;
-  }
-  if (value.kind === "lit") {
-    return;
-  }
-  if (value.kind === "not" && value.operand !== undefined) {
-    collectBranchConditionReferences(
-      value.operand,
-      `${path}/operand`,
-      found,
-    );
-    return;
-  }
-  if (
-    (value.kind === "and" ||
-      value.kind === "or" ||
-      value.kind === "eq" ||
-      value.kind === "neq") &&
-    value.left !== undefined &&
-    value.right !== undefined
-  ) {
-    collectBranchConditionReferences(value.left, `${path}/left`, found);
-    collectBranchConditionReferences(value.right, `${path}/right`, found);
   }
 }
 

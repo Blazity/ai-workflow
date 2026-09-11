@@ -61,7 +61,7 @@ vi.mock("../../engine/support/adapters.js", () => ({
     issueTracker: {
       searchTickets: vi.fn(async () => {
         state.order.push("discover");
-        return state.discovered.length ? state.discovered : ["AIW-1", "AIW-2"];
+        return state.discovered.length > 0 ? state.discovered : ["AIW-1", "AIW-2"];
       }),
       postComment: vi.fn(async () => null),
     },

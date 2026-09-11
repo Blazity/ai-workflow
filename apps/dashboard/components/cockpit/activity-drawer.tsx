@@ -1,10 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AIWF_DATA } from "@/lib/data/mock";
-
-const D = AIWF_DATA;
-
 type ActLevel = "ok" | "info" | "warn" | "fail";
 
 interface ActEvent {

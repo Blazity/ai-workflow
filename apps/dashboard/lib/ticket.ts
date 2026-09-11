@@ -9,7 +9,7 @@ import { mergeLiveRuns } from "./merge-live-runs";
  */
 export function pickSelectedRunId(
   runs: Run[],
-  requested: string | null | undefined,
+  requested?: string | null,
 ): string | null {
   if (runs.length === 0) return null;
   if (requested && runs.some((r) => r.id === requested)) return requested;

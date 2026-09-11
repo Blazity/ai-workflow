@@ -12,11 +12,7 @@ import type {
   WorkflowParamValue,
 } from "@shared/contracts";
 
-export type {
-  BlockRunStatus,
-  WorkflowBlockType,
-  WorkflowDefinition,
-};
+export type { WorkflowBlockType, WorkflowDefinition };
 
 /** The graph of a stored version the editor can still open on the canvas. A
  *  retired v1 version stays listed and readable in history and answers null

@@ -494,7 +494,7 @@ describe("nextRuns", () => {
       from: at("2026-08-05T12:00:00.000Z"),
       count: 10_000,
     });
-    expect(result.ok && result.runs.length).toBe(50);
+    expect(result.ok ? result.runs.length : 0).toBe(50);
   });
 
   it("returns nothing for an expression that never fires, and rejects bad input", () => {

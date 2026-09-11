@@ -160,7 +160,7 @@ async function triggerTypesOf(db: Db, definitionId: number): Promise<string[]> {
 async function createDeployed(
   name: string,
   definition: WorkflowDefinitionV2,
-): Promise<Awaited<ReturnType<typeof getWorkflowDefinition>> & {}> {
+): Promise<NonNullable<Awaited<ReturnType<typeof getWorkflowDefinition>>>> {
   const created = (await createWorkflowDefinition(db, { name, seed: null, actor: ADMIN })).definition;
   await saveWorkflowDefinitionDraft(db, {
     definitionId: created.id,

@@ -4,17 +4,17 @@ import test from "node:test";
 import { cockpitNavItems } from "./chrome";
 
 test("Harness Profiles is always discoverable while administration remains role-gated", () => {
-  const memberIds = cockpitNavItems({ canManageUsers: false }).map(
+  const memberIds = new Set(cockpitNavItems({ canManageUsers: false }).map(
     (item) => item.id,
-  );
-  assert.ok(memberIds.includes("profiles"));
-  assert.ok(!memberIds.includes("health"));
-  assert.ok(!memberIds.includes("users"));
+  ));
+  assert.ok(memberIds.has("profiles"));
+  assert.ok(!memberIds.has("health"));
+  assert.ok(!memberIds.has("users"));
 
-  const adminIds = cockpitNavItems({ canManageUsers: true }).map(
+  const adminIds = new Set(cockpitNavItems({ canManageUsers: true }).map(
     (item) => item.id,
-  );
-  assert.ok(adminIds.includes("profiles"));
-  assert.ok(adminIds.includes("health"));
-  assert.ok(adminIds.includes("users"));
+  ));
+  assert.ok(adminIds.has("profiles"));
+  assert.ok(adminIds.has("health"));
+  assert.ok(adminIds.has("users"));
 });

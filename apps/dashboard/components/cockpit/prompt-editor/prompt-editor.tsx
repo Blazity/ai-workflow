@@ -382,9 +382,9 @@ export function PromptEditor({
       handleKeyDown: (_view, event) =>
         singleLine && event.key === "Enter",
     },
-    onUpdate: ({ editor }) => {
+    onUpdate: ({ editor: updatedEditor }) => {
       if (settingRef.current) return;
-      const markdown = editor.getMarkdown();
+      const markdown = updatedEditor.getMarkdown();
       onChange(
         singleLine ? markdown.replace(/\s*\n+\s*/g, " ") : markdown,
       );
