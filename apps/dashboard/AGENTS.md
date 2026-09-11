@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-10
+Last-verified: 2026-09-11
 
 # apps/dashboard
 
@@ -14,7 +14,8 @@ file adds only what is true of the dashboard.
 
 ## Run and test
 
-From `apps/dashboard` (every script starts by building the shared contracts):
+From `apps/dashboard` (workspace packages are consumed as TypeScript source;
+the scripts invoke Next, TypeScript and Node directly):
 
 ```sh
 pnpm run dev        # next dev on port 3001

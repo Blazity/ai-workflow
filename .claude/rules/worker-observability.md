@@ -1,8 +1,11 @@
 ---
 paths:
-  - "apps/worker/src/services/**"
+  - "apps/worker/src/services/overview/**"
+  - "apps/worker/src/services/telemetry/**"
+  - "apps/worker/src/services/run-lifecycle/**"
   - "apps/worker/src/run-observability/**"
-  - "apps/worker/src/routes/api/v1/runs**"
+  - "apps/worker/src/routes/api/v1/runs*.ts"
+  - "apps/worker/src/routes/api/v1/runs/**"
 ---
 
 # Logging and run telemetry

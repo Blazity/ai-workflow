@@ -1,5 +1,5 @@
 import { createError, getHeaders, type H3Event } from "h3";
-import { env } from "../../config/env.js";
+import { dashboardOrganizationSettings } from "../settings/index.js";
 import { auth } from "../../auth-instance.js";
 import { getDb } from "../../db/client.js";
 import { getDashboardActor, DashboardAuthError } from "./users-read.js";
@@ -11,7 +11,7 @@ export async function requireDashboardActor(event: H3Event) {
   }
 
   const actor = await getDashboardActor(getDb(), {
-    organizationSlug: env.DASHBOARD_ORG_SLUG,
+    organizationSlug: dashboardOrganizationSettings().slug,
     userId: session.user.id,
   });
   if (!actor) {

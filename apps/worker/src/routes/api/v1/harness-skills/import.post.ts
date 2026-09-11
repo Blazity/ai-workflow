@@ -1,20 +1,18 @@
 import { createError, defineEventHandler, readBody } from "h3";
-import type {
-  HarnessSkillImportRequest,
-  HarnessSkillImportResponse,
-} from "@shared/contracts";
-import { getDb } from "../../../../db/client.js";
 import {
-  importGitHubSkills,
-} from "../../../../harness-profiles/github-skills.js";
+  harnessSkillImportBodySchema,
+  parseRequestBody,
+  type HarnessSkillImportRequest,
+  type HarnessSkillImportResponse,
+} from "@shared/contracts";
 import { requireDashboardActor } from "../../../../services/auth/request-context.js";
 import { canManageHarnessProfiles } from "../../../../services/auth/roles.js";
 import { DashboardAuthError } from "../../../../services/auth/users-read.js";
-import { setHarnessApiNoStore } from "../harness-profiles.get.js";
 import {
-  configuredGitHubSkillRepository,
-  toHarnessSkillHttpError,
-} from "./discover.post.js";
+  importGitHubSkillSelection,
+} from "../../../../services/harness/skill-sources.js";
+import { setHarnessApiNoStore } from "../harness-profiles.get.js";
+import { toHarnessSkillHttpError } from "./discover.post.js";
 
 export default defineEventHandler(
   async (event): Promise<HarnessSkillImportResponse | undefined> => {
@@ -24,29 +22,21 @@ export default defineEventHandler(
       if (!canManageHarnessProfiles(actor.role)) {
         throw new DashboardAuthError(403, "Forbidden");
       }
-      const body =
-        (await readBody<Partial<HarnessSkillImportRequest>>(event).catch(
-          () => null,
-        )) ?? {};
-      if (
-        !body.source ||
-        typeof body.source !== "object" ||
-        !Array.isArray(body.paths)
-      ) {
-        throw createError({
-          statusCode: 400,
-          statusMessage: "Exact source and selected paths are required",
-        });
+      const parsed = parseRequestBody(
+        harnessSkillImportBodySchema,
+        (await readBody(event).catch(() => null)) ?? {},
+      );
+      if (!parsed.ok) {
+        throw createError({ statusCode: 400, statusMessage: parsed.message });
       }
       return {
-        artifacts: await importGitHubSkills(getDb(), {
-          repository: configuredGitHubSkillRepository(),
+        artifacts: await importGitHubSkillSelection({
           organizationId: actor.organizationId,
           actorId: actor.userId,
-          request: {
-            source: body.source as HarnessSkillImportRequest["source"],
-            paths: body.paths,
-          },
+          // The exact shape is the import's own business: it validates the
+          // commit and the paths before it reads a byte.
+          source: parsed.value.source as HarnessSkillImportRequest["source"],
+          paths: parsed.value.paths as HarnessSkillImportRequest["paths"],
         }),
       };
     } catch (error) {

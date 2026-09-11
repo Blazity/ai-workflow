@@ -11,7 +11,8 @@
  *
  * What it checks, for every Markdown document under docs/ (except docs/archive/
  * and docs/research/), under apps/<app>/docs/, for each apps/<app>/AGENTS.md,
- * and for README.md, AGENTS.md and SETUP.md at the repository root:
+ * and for packages/AGENTS.md, README.md, AGENTS.md and SETUP.md at the
+ * repository root:
  *   1. the first two lines are `Status: <value>` and `Last-verified: YYYY-MM-DD`;
  *   2. `Status:` is `current`, `draft`, or `superseded-by <path>` naming a file
  *      that exists;
@@ -82,6 +83,8 @@ const gate = {
         (path) => !gate.SKIPPED_DOC_DIRS.some((dir) => path.startsWith(`${dir}/`)),
       );
       docs.push(...gate.appDocuments(), ...gate.rootDocuments());
+      const packagesAgents = "packages/AGENTS.md";
+      if (existsSync(nodePath.join(gate.repoRoot, packagesAgents))) docs.push(packagesAgents);
       return [...new Set(docs)].toSorted();
     },
     collectFailures(path, reachableMap) {

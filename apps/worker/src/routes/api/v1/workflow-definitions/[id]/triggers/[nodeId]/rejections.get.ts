@@ -1,11 +1,12 @@
 import type { WebhookRejectionSummaryEntry } from "@shared/contracts";
 import { createError, defineEventHandler, getRouterParam } from "h3";
-import { getDb } from "../../../../../../../db/client.js";
 import {
   requireDashboardActor,
   toHttpError,
 } from "../../../../../../../services/auth/request-context.js";
-import { getTriggerRejectionsToday } from "../../../../../../../services/dispatch/trigger-rate-limit.js";
+import {
+  readTriggerRejectionsToday,
+} from "../../../../../../../services/workflow-definitions/trigger-rejection-counts.js";
 import { parseDefinitionId } from "../../../../workflow-definitions.get.js";
 
 export interface TriggerRejectionsResponse {
@@ -28,9 +29,8 @@ export default defineEventHandler(
       if (!nodeId) {
         throw createError({ statusCode: 404, statusMessage: "Unknown trigger" });
       }
-      const rejectionsToday = await getTriggerRejectionsToday(
-        getDb(),
-        { definitionId: String(definitionId), nodeId },
+      const rejectionsToday = await readTriggerRejectionsToday(
+        { definitionId, nodeId },
         new Date(),
       );
       return { rejectionsToday };

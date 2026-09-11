@@ -1,5 +1,4 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { and, asc, eq, inArray, isNull, max, or } from "drizzle-orm";
 import { z } from "zod";
 
 import {
@@ -10,17 +9,6 @@ import {
 } from "@shared/contracts";
 import { isLegacyStoredWorkflowDefinition } from "../../workflow-definition/stored-definition.js";
 
-import {
-  promptLibrary,
-  promptLibraryVersions,
-  workflowDefinitions,
-  workflowDefinitionVersions,
-} from "../../db/schema.js";
-import {
-  findPromptBySlug,
-  getCurrentPromptVersion,
-  getPrompt,
-} from "../../prompt-library/store.js";
 import { McpPublicError, type McpToolDependencies } from "../contracts.js";
 import { executeMcpRead } from "../execute-tool.js";
 import { registerCatalogTool } from "../tool-catalog.js";
@@ -121,19 +109,7 @@ export function registerDiscoveryTools(server: McpServer, deps: McpToolDependenc
           // rolls a max(version) up over every definition's whole history, and it
           // carries canvas layout blobs this payload has no use for. Slicing its
           // answer afterwards is the mistake this slice already had to fix once.
-          const rows = await deps.db
-            .select({
-              id: workflowDefinitions.id,
-              name: workflowDefinitions.name,
-              enabled: workflowDefinitions.enabled,
-              deployedVersion: workflowDefinitions.deployedVersion,
-            })
-            .from(workflowDefinitions)
-            .where(isNull(workflowDefinitions.archivedAt))
-            .orderBy(asc(workflowDefinitions.id))
-            // One extra row, unreturned, is how truncation is detected without a
-            // second count query.
-            .limit(limit + 1);
+          const rows = await deps.services.listWorkflowDefinitionPage(limit);
 
           const truncated = rows.length > limit;
           const page = truncated ? rows.slice(0, limit) : rows;
@@ -145,25 +121,12 @@ export function registerDiscoveryTools(server: McpServer, deps: McpToolDependenc
           // (id, version) OR-set prompt-library/store.ts:355 uses for its heads),
           // so the page costs two queries rather than one per definition.
           const deployed = page.filter((row) => row.deployedVersion != null);
-          const versionRows =
-            deployed.length === 0
-              ? []
-              : await deps.db
-                  .select({
-                    definitionId: workflowDefinitionVersions.definitionId,
-                    definition: workflowDefinitionVersions.definition,
-                  })
-                  .from(workflowDefinitionVersions)
-                  .where(
-                    or(
-                      ...deployed.map((row) =>
-                        and(
-                          eq(workflowDefinitionVersions.definitionId, row.id),
-                          eq(workflowDefinitionVersions.version, row.deployedVersion!),
-                        ),
-                      ),
-                    ),
-                  );
+          const versionRows = await deps.services.readDeployedDefinitionVersions(
+            deployed.map((row) => ({
+              definitionId: row.id,
+              version: row.deployedVersion!,
+            })),
+          );
           const deploymentByDefinition = new Map<
             number,
             {
@@ -235,34 +198,15 @@ export function registerDiscoveryTools(server: McpServer, deps: McpToolDependenc
           // Not listPrompts either, for the same reason plus one more: it pulls
           // every prompt's head BODY (up to 50k each) to build its list rows, and
           // this list returns no bodies at all.
-          const rows = await deps.db
-            .select({
-              id: promptLibrary.id,
-              slug: promptLibrary.slug,
-              name: promptLibrary.name,
-            })
-            .from(promptLibrary)
-            .where(isNull(promptLibrary.archivedAt))
-            .orderBy(asc(promptLibrary.id))
-            .limit(limit + 1);
+          const rows = await deps.services.listPromptPage(limit);
 
           const truncated = rows.length > limit;
           const page = truncated ? rows.slice(0, limit) : rows;
           if (page.length === 0) return { prompts: [], truncated };
 
-          const heads = await deps.db
-            .select({
-              promptId: promptLibraryVersions.promptId,
-              currentVersion: max(promptLibraryVersions.version),
-            })
-            .from(promptLibraryVersions)
-            .where(
-              inArray(
-                promptLibraryVersions.promptId,
-                page.map((row) => row.id),
-              ),
-            )
-            .groupBy(promptLibraryVersions.promptId);
+          const heads = await deps.services.readPromptHeadVersions(
+            page.map((row) => row.id),
+          );
           const versionByPrompt = new Map(
             heads.map((head) => [head.promptId, head.currentVersion]),
           );
@@ -316,10 +260,10 @@ export function registerDiscoveryTools(server: McpServer, deps: McpToolDependenc
           }
           const prompt =
             input.slug !== undefined
-              ? await findPromptBySlug(deps.db, input.slug)
-              : await getPrompt(deps.db, input.promptId!);
+              ? await deps.services.findPromptBySlug(input.slug)
+              : await deps.services.getPrompt(input.promptId!);
           if (!prompt) throw new McpPublicError("NOT_FOUND", "Prompt not found", false);
-          const version = await getCurrentPromptVersion(deps.db, prompt.id);
+          const version = await deps.services.getCurrentPromptVersion(prompt.id);
           // Distinct message from the one above: the prompt exists and the agent
           // did name it correctly, so retrying under another id or slug would
           // only take it further from the truth.

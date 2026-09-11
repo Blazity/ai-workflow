@@ -1,6 +1,9 @@
 import { defineEventHandler, setResponseHeader } from "h3";
-import { env } from "../../../../config/env.js";
-import { requireDashboardActor, toHttpError } from "../../../../services/auth/request-context.js";
+import {
+  requireDashboardActor,
+  toHttpError,
+} from "../../../../services/auth/request-context.js";
+import { mcpSettings } from "../../../../services/settings/runtime-settings.js";
 import { MCP_CONTRACT_ARTIFACT } from "../../../../mcp/contract-artifact.js";
 import { MCP_PROTOCOL_VERSION } from "../../../../mcp/server.js";
 import { MCP_ENABLED_DOMAINS } from "../../../../mcp/tool-catalog.js";
@@ -42,9 +45,10 @@ export default defineEventHandler(
     try {
       await requireDashboardActor(event);
 
+      const mcp = mcpSettings();
       return {
-        enabled: env.MCP_ENABLED,
-        serverVersion: env.MCP_SERVER_VERSION,
+        enabled: mcp.enabled,
+        serverVersion: mcp.serverVersion,
         protocolVersion: MCP_PROTOCOL_VERSION,
         contractHash: MCP_CONTRACT_ARTIFACT.contractHash,
         // Both from the artifact rather than from a second list: the count and the

@@ -293,7 +293,11 @@ importers:
         specifier: workspace:*
         version: link:../contracts
 
-  packages/contracts: {}
+  packages/contracts:
+    dependencies:
+      zod:
+        specifier: 'catalog:'
+        version: 3.25.76
 
   packages/costs:
     devDependencies:

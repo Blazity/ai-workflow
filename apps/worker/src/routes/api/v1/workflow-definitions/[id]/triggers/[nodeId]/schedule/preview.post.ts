@@ -1,9 +1,8 @@
 import type {
   SchedulePreset,
-  SchedulePreviewRequest,
   SchedulePreviewResponse,
-  ScheduleWeekday,
 } from "@shared/contracts";
+import { parseRequestBody, schedulePreviewRequestSchema } from "@shared/contracts";
 import { createError, defineEventHandler, readBody } from "h3";
 import { toHttpError } from "../../../../../../../../services/auth/request-context.js";
 import {
@@ -11,10 +10,12 @@ import {
   nextRuns,
   suggestedGraceMinutes,
   violatesMinimumPeriod,
-  type EveryNHoursStep,
-  type EveryNMinutesStep,
-  type SchedulePreset as OccurrenceSchedulePreset,
-  type Weekday as OccurrenceWeekday,
+} from "../../../../../../../../services/schedule-trigger/occurrence.js";
+import type {
+  EveryNHoursStep,
+  EveryNMinutesStep,
+  SchedulePreset as OccurrenceSchedulePreset,
+  Weekday as OccurrenceWeekday,
 } from "../../../../../../../../services/schedule-trigger/occurrence.js";
 import { parseScheduleTarget, requireScheduleActor } from "./config.get.js";
 
@@ -40,7 +41,14 @@ export default defineEventHandler(
       await requireScheduleActor(event, false);
       parseScheduleTarget(event);
 
-      const body = parsePreviewRequest(await readBody<unknown>(event).catch(() => null));
+      const parsed = parseRequestBody(
+        schedulePreviewRequestSchema,
+        await readBody(event).catch(() => null),
+      );
+      if (!parsed.ok) {
+        throw createError({ statusCode: 400, statusMessage: parsed.message });
+      }
+      const body = parsed.value;
 
       // Presets may not keep the requested zone: compileSchedulePreset overrides
       // an interval preset ("every N minutes/hours" below a day) to UTC and
@@ -81,65 +89,6 @@ export default defineEventHandler(
     }
   },
 );
-
-function parsePreviewRequest(value: unknown): SchedulePreviewRequest {
-  if (!value || typeof value !== "object") {
-    throw createError({ statusCode: 400, statusMessage: "Invalid preview request" });
-  }
-  const body = value as Record<string, unknown>;
-  if (typeof body.timezone !== "string" || body.timezone.trim() === "") {
-    throw createError({ statusCode: 400, statusMessage: "timezone is required" });
-  }
-
-  if (body.source === "cron") {
-    if (typeof body.cron !== "string" || body.cron.trim() === "") {
-      throw createError({ statusCode: 400, statusMessage: "cron is required" });
-    }
-    return { source: "cron", cron: body.cron, timezone: body.timezone };
-  }
-
-  if (body.source === "preset") {
-    return { source: "preset", preset: parsePreset(body.preset), timezone: body.timezone };
-  }
-
-  throw createError({ statusCode: 400, statusMessage: "source must be \"cron\" or \"preset\"" });
-}
-
-/** Only the shape is checked here: is a number a number, is an array an array.
- *  Whether a value is actually allowed (a step that divides the hour, a weekday
- *  0-6, an hour 0-23) is compileSchedulePreset's job, on purpose, so there is
- *  exactly one place that decides it. */
-function parsePreset(value: unknown): SchedulePreset {
-  const invalid = () => createError({ statusCode: 400, statusMessage: "Invalid schedule preset" });
-  if (!value || typeof value !== "object") throw invalid();
-  const preset = value as Record<string, unknown>;
-
-  switch (preset.kind) {
-    case "every-n-minutes":
-      if (typeof preset.minutes !== "number") throw invalid();
-      return { kind: "every-n-minutes", minutes: preset.minutes };
-    case "every-n-hours":
-      if (typeof preset.hours !== "number") throw invalid();
-      return { kind: "every-n-hours", hours: preset.hours };
-    case "daily":
-      if (typeof preset.hour !== "number" || typeof preset.minute !== "number") throw invalid();
-      return { kind: "daily", hour: preset.hour, minute: preset.minute };
-    case "weekly": {
-      if (typeof preset.hour !== "number" || typeof preset.minute !== "number") throw invalid();
-      if (!Array.isArray(preset.weekdays) || !preset.weekdays.every((d) => typeof d === "number")) {
-        throw invalid();
-      }
-      return {
-        kind: "weekly",
-        weekdays: preset.weekdays as ScheduleWeekday[],
-        hour: preset.hour,
-        minute: preset.minute,
-      };
-    }
-    default:
-      throw invalid();
-  }
-}
 
 /**
  * The wire shape (contracts' SchedulePreset, plain numbers) to occurrence.ts's

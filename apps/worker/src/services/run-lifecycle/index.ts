@@ -24,12 +24,36 @@ export type {
   CancelRunTarget,
 } from "./cancel-run.js";
 export {
+  cancelRunAsOperator,
+} from "./cancel-run-request.js";
+export {
   reconcileRuns,
 } from "./reconcile.js";
 export {
   ACTIVE_RUN_OWNER_ERROR_SENTINEL,
   isActiveRunOwnerError,
 } from "./run-control-errors.js";
+export {
+  emptyRunDetail,
+  readRunDetail,
+} from "./run-detail-read.js";
+export type {
+  RunDetailPayload,
+} from "./run-detail-read.js";
+export {
+  listDashboardRuns,
+  listLiveRuns,
+  listWorkflowAggregates,
+  readRunBlockStatuses,
+} from "./run-reads.js";
+export type {
+  DashboardRunsPage,
+} from "./run-reads.js";
+export {
+  RunObservationStoreError,
+  readRunReplay,
+  readRunReplayAttempt,
+} from "./run-replay-read.js";
 export {
   STARTUP_DEADLINE_MS,
 } from "./run-start-constants.js";

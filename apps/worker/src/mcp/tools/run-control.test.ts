@@ -64,7 +64,7 @@ import type {
 import { MCP_TOOL_CATALOG } from "../tool-catalog.js";
 import { policyFor } from "../policy.js";
 import type { McpActorContext, McpScope } from "../contracts.js";
-import { actorFor, depsFor } from "../test-support.js";
+import { actorFor, depsFor } from "../../test-support/mcp.js";
 import { registerRunControlTools } from "./run-control.js";
 
 const ORG_ID = "org-execute";

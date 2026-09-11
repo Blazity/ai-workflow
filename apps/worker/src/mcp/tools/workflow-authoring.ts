@@ -9,21 +9,14 @@ import type {
   WorkflowDefinition,
   WorkflowDefinitionValidationIssue,
 } from "@shared/contracts";
-import { env } from "../../config/env.js";
 import { workflowDefinitionUrl } from "../../services/publication/dashboard-links.js";
+import { dashboardOrigin } from "../../services/settings/runtime-settings.js";
 import { logger } from "../../infra/logger.js";
 import { isRepoAllowed } from "../../services/dispatch/repo-allowlist.js";
-import { listSchedulesForDefinition } from "../../schedule-trigger/schedule-store.js";
-import { getWebhookEndpointForNode } from "../../webhook-trigger/endpoint-store.js";
-import type { Db } from "../../db/client.js";
 import { workflowBlockRegistryContextFromEnv } from "../../workflow-definition/models.js";
 import {
   createWorkflowDefinition,
   deployWorkflowDefinition,
-  getCurrentWorkflowDefinitionVersion,
-  getDeployedWorkflowDefinitionVersion,
-  getWorkflowDefinition,
-  getWorkflowDefinitionVersion,
   runnableDefinitionOf,
   saveWorkflowDefinitionDraft,
   updateWorkflowDefinition,
@@ -262,7 +255,7 @@ function triggerNodesOf(graph: WorkflowDefinition): Array<{ id: string; type: Wo
  * dormant.
  */
 async function dormantTriggerNodes(
-  db: Db,
+  services: McpToolDependencies["services"],
   definitionId: number,
   graph: WorkflowDefinition,
   enabled: boolean,
@@ -272,7 +265,7 @@ async function dormantTriggerNodes(
 
   const dormant: string[] = [];
   const scheduleRows = triggers.some((node) => node.type === "trigger_schedule")
-    ? await listSchedulesForDefinition(db, definitionId)
+    ? await services.listSchedulesForDefinition(definitionId)
     : [];
   for (const node of triggers) {
     if (node.type === "trigger_schedule") {
@@ -281,7 +274,7 @@ async function dormantTriggerNodes(
       continue;
     }
     if (node.type === "trigger_webhook") {
-      const endpoint = await getWebhookEndpointForNode(db, definitionId, node.id);
+      const endpoint = await services.getWebhookEndpointForNode(definitionId, node.id);
       if (!endpoint || endpoint.revokedAt !== null) dormant.push(node.id);
     }
   }
@@ -357,7 +350,7 @@ function publishAnnouncement(publish: {
         .join(", ")}.`,
     );
   }
-  const link = `<${workflowDefinitionUrl(env.DASHBOARD_ORIGIN, publish.definitionId)}|open in the editor>`;
+  const link = `<${workflowDefinitionUrl(dashboardOrigin(), publish.definitionId)}|open in the editor>`;
   sentences.push(
     publish.replacedVersion === null || publish.replacedVersion === publish.deployedVersion
       ? `Review it here: ${link}.`
@@ -438,7 +431,7 @@ export function registerWorkflowAuthoringTools(
           const actor = storeActor(deps.actor);
           let created: Awaited<ReturnType<typeof createWorkflowDefinition>>;
           try {
-            created = await createWorkflowDefinition(deps.db, {
+            created = await deps.services.createWorkflowDefinition({
               name: input.name,
               // No seed on purpose. The dashboard's create seeds a default graph,
               // a template or a duplicate, and each of those is a choice about
@@ -520,7 +513,7 @@ export function registerWorkflowAuthoringTools(
           const actor = storeActor(deps.actor);
           let saved: Awaited<ReturnType<typeof saveWorkflowDefinitionDraft>>;
           try {
-            saved = await saveWorkflowDefinitionDraft(deps.db, {
+            saved = await deps.services.saveWorkflowDefinitionDraft({
               definitionId: input.definitionId,
               definition: candidate.parsed,
               // Compare-and-set, and unlike prompts.update this one IS atomic:
@@ -540,8 +533,7 @@ export function registerWorkflowAuthoringTools(
           // digest that means the same thing as the one publish reports. The
           // version row and not saved.draft, which has the editor's layout applied
           // over it and would hash to something no other reader sees.
-          const stored = await getWorkflowDefinitionVersion(
-            deps.db,
+          const stored = await deps.services.getWorkflowDefinitionVersion(
             saved.definition.id,
             saved.draftRevision,
           );
@@ -618,7 +610,7 @@ export function registerWorkflowAuthoringTools(
             // the store, so this tool cannot be the way around any of them. Adding
             // a check here that the route does not do would be worse, not safer:
             // the two paths would then publish under different rules.
-            deployed = await deployWorkflowDefinition(deps.db, {
+            deployed = await deps.services.deployWorkflowDefinition({
               definitionId: input.definitionId,
               expectedDraftRevision: input.expectedDraftRevision,
               expectedDeployedVersion: input.expectedDeployedVersion,
@@ -636,7 +628,7 @@ export function registerWorkflowAuthoringTools(
           let dormant: string[];
           try {
             dormant = await dormantTriggerNodes(
-              deps.db,
+              deps.services,
               deployed.definition.id,
               graph,
               deployed.definition.enabled,
@@ -729,7 +721,7 @@ export function registerWorkflowGraphTools(
         toolName: "workflows.get_graph",
         targetRefs: [String(input.definitionId)],
         operation: async (): Promise<GraphData> => {
-          const definition = await getWorkflowDefinition(deps.db, input.definitionId);
+          const definition = await deps.services.getWorkflowDefinition(input.definitionId);
           // NOT_FOUND for the same two states the dashboard's GET route hides behind
           // a 404 ([id].get.ts): a missing row and an archived one. An archived
           // definition still has versions, but it is retired and cannot be saved or
@@ -745,8 +737,8 @@ export function registerWorkflowGraphTools(
           // layout-applied shape getWorkflowDefinitionDraft returns for the editor,
           // which would hash to something no other reader sees.
           const [draftVersion, deployedVersion] = await Promise.all([
-            getCurrentWorkflowDefinitionVersion(deps.db, input.definitionId),
-            getDeployedWorkflowDefinitionVersion(deps.db, input.definitionId),
+            deps.services.getCurrentWorkflowDefinitionVersion(input.definitionId),
+            deps.services.getDeployedWorkflowDefinitionVersion(input.definitionId),
           ]);
           const draft = runnableDefinitionOf(draftVersion) ?? null;
           const deployed =
@@ -800,7 +792,7 @@ export function registerWorkflowGraphTools(
             // compare-and-set on the definition row, and the webhook/schedule
             // arming of the live head all live in the store, so this tool cannot be
             // the way around any of them.
-            updated = await updateWorkflowDefinition(deps.db, {
+            updated = await deps.services.updateWorkflowDefinition({
               definitionId: input.definitionId,
               enabled: input.enabled,
               actor,

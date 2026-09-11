@@ -1,19 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-import {
-  answerClarificationAndResume,
-  type AnswerClarificationOutcome,
+import type {
+  AnswerClarificationOutcome,
 } from "../../services/clarifications/answer-core.js";
-import {
-  getResumableClarificationForRun,
-  getResumeFailedClarificationForRun,
-  type HookClarificationRow,
-} from "../../clarifications/hook-store.js";
-import {
-  findLiveRunClaimByRunId,
-  findRunOutcomeByRunId,
-} from "../../db/queries/runs-read.js";
-import { cancelRunForOperator } from "../../services/run-lifecycle/cancel-run.js";
+import type { HookClarificationRow } from "../../clarifications/hook-store.js";
 import { McpPublicError, type McpToolDependencies } from "../contracts.js";
 import { executeMcpMutation, executeMcpRead } from "../execute-tool.js";
 import { hashCanonicalJson } from "../sanitize-result.js";
@@ -129,23 +119,19 @@ function toView(row: HookClarificationRow): ClarificationView {
  * row is already proof the run exists.
  */
 async function assertRunExists(
-  db: McpToolDependencies["db"],
+  services: McpToolDependencies["services"],
   runId: string,
 ): Promise<void> {
-  const [claim, outcome] = await Promise.all([
-    findLiveRunClaimByRunId(db, runId),
-    findRunOutcomeByRunId(db, runId),
-  ]);
-  if (!claim && !outcome) throw refused("NOT_FOUND", "Run not found");
+  if (!(await services.runExists(runId))) throw refused("NOT_FOUND", "Run not found");
 }
 
 async function getClarificationToAnswer(
-  db: McpToolDependencies["db"],
+  services: McpToolDependencies["services"],
   runId: string,
 ): Promise<HookClarificationRow | null> {
-  const row = await getResumableClarificationForRun(db, runId);
+  const row = await services.getResumableClarificationForRun(runId);
   if (row) return row;
-  const terminal = await getResumeFailedClarificationForRun(db, runId);
+  const terminal = await services.getResumeFailedClarificationForRun(runId);
   if (terminal) throwForOutcome({ kind: "resume_terminal" });
   return null;
 }
@@ -242,9 +228,9 @@ export function registerRunControlTools(server: McpServer, deps: McpToolDependen
         toolName: "runs.get_clarification",
         targetRefs: [input.runId],
         operation: async (): Promise<GetClarificationData> => {
-          const row = await getResumableClarificationForRun(deps.db, input.runId);
+          const row = await deps.services.getResumableClarificationForRun(input.runId);
           if (!row) {
-            await assertRunExists(deps.db, input.runId);
+            await assertRunExists(deps.services, input.runId);
             return { runId: input.runId, clarification: null };
           }
           return { runId: input.runId, clarification: toView(row) };
@@ -280,9 +266,9 @@ export function registerRunControlTools(server: McpServer, deps: McpToolDependen
           answer: input.answer,
         }),
         operation: async (): Promise<AnswerClarificationData> => {
-          const row = await getClarificationToAnswer(deps.db, input.runId);
+          const row = await getClarificationToAnswer(deps.services, input.runId);
           if (!row) {
-            await assertRunExists(deps.db, input.runId);
+            await assertRunExists(deps.services, input.runId);
             throw refused(
               "CONFLICT",
               "This run is not waiting on human input: it never parked on a question, it was already answered and resumed, or its clarification expired. Check runs.get_clarification.",
@@ -299,8 +285,7 @@ export function registerRunControlTools(server: McpServer, deps: McpToolDependen
             );
           }
 
-          const outcome = await answerClarificationAndResume({
-            db: deps.db,
+          const outcome = await deps.services.answerClarificationAndResume({
             row,
             rawAnswer: input.answer,
             // The policy for this tool refuses the service role, so there is a person
@@ -348,7 +333,7 @@ export function registerRunControlTools(server: McpServer, deps: McpToolDependen
         // different run id is a mistake worth refusing rather than a second cancel.
         payloadHash: `sha256:${hashCanonicalJson({ runId: input.runId })}`,
         operation: async (): Promise<CancelRunData> => {
-          const result = await cancelRunForOperator(deps.db, input.runId, {
+          const result = await deps.services.cancelRunForOperator(input.runId, {
             // Lands in the durable "cancelled by <actor>" reason on the run, so a
             // person reading why their run stopped sees which client stopped it.
             actorLabel: `MCP ${deps.actor.clientId}`,

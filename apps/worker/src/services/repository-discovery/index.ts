@@ -14,6 +14,9 @@ export type {
   RepositoryCatalogEntry,
 } from "./catalog.js";
 export {
+  listRepositoryDirectory,
+} from "./directory.js";
+export {
   validateRepositoryDiscoveryResult,
 } from "./protocol.js";
 export {

@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "input=$(/bin/cat); if printf '%s' \"$input\" | /usr/bin/grep -Eq '\"stop_hook_active\"[[:space:]]*:[[:space:]]*true'; then exit 0; fi; if [ -z \"$(/usr/bin/git status --porcelain=v1 --untracked-files=all)\" ]; then exit 0; fi; if pnpm run verify:changed -- --base origin/main --worktree; then exit 0; fi; printf '%s\\n' '{\"decision\":\"block\",\"reason\":\"verify:changed failed; fix the reported checks before stopping.\"}' >&2; exit 2"
+          }
+        ]
+      }
+    ]
+  }
+}

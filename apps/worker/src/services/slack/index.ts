@@ -23,6 +23,13 @@ export {
   handleSummary,
 } from "./handlers.js";
 export {
+  handleSlackSlashCommand,
+} from "./handle-slash-command.js";
+export type {
+  SlackSlashCommandRequest,
+  SlackSlashCommandResponse,
+} from "./handle-slash-command.js";
+export {
   postToResponseUrl,
 } from "./respond.js";
 export type {

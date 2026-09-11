@@ -41,7 +41,7 @@ import {
   finishWorkflowBlockAttempt,
   startWorkflowBlockAttempt,
 } from "../../run-observability/store.js";
-import { depsFor } from "../test-support.js";
+import { depsFor } from "../../test-support/mcp.js";
 import { registerRunLogsTool, registerRunTools } from "./runs.js";
 
 const ORG_ID = "org-execute";

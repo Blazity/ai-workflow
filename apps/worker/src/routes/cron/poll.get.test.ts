@@ -154,17 +154,17 @@ vi.mock("../../services/webhook-trigger/rejection-counters.js", () => ({
   sweepWebhookRejectionCounters: (...args: unknown[]) =>
     mocks.sweepWebhookRejectionCounters(...args),
 }));
-vi.mock("../../mcp/audit-store.js", () => ({
+vi.mock("../../services/mcp/audit-store.js", () => ({
   pruneMcpAudits: (...args: unknown[]) => mocks.pruneMcpAudits(...args),
 }));
-vi.mock("../../mcp/rate-limit-store.js", () => ({
+vi.mock("../../services/mcp/rate-limit-store.js", () => ({
   sweepMcpRateLimits: (...args: unknown[]) => mocks.sweepMcpRateLimits(...args),
 }));
-vi.mock("../../mcp/idempotency-store.js", () => ({
+vi.mock("../../services/mcp/idempotency-store.js", () => ({
   sweepMcpIdempotencyKeys: (...args: unknown[]) =>
     mocks.sweepMcpIdempotencyKeys(...args),
 }));
-vi.mock("../webhooks/custom/[endpointId].post.js", () => ({
+vi.mock("../../services/triggers/custom-webhooks/dispatch-deps.js", () => ({
   createWebhookDispatchDeps: (...args: unknown[]) =>
     mocks.createWebhookDispatchDeps(...args),
 }));

@@ -1,9 +1,11 @@
 import { defineEventHandler } from "h3";
 import type { HarnessLocalSkillDiscoveryResponse } from "@shared/contracts";
-import { discoverLocalSkills } from "../../../../harness-profiles/local-skills.js";
 import { requireDashboardActor } from "../../../../services/auth/request-context.js";
 import { canManageHarnessProfiles } from "../../../../services/auth/roles.js";
 import { DashboardAuthError } from "../../../../services/auth/users-read.js";
+import {
+  discoverDeploymentSkills,
+} from "../../../../services/harness/skill-sources.js";
 import { setHarnessApiNoStore } from "../harness-profiles.get.js";
 import { toHarnessSkillHttpError } from "./discover.post.js";
 
@@ -21,7 +23,7 @@ export default defineEventHandler(
       if (!canManageHarnessProfiles(actor.role)) {
         throw new DashboardAuthError(403, "Forbidden");
       }
-      return discoverLocalSkills();
+      return await discoverDeploymentSkills();
     } catch (error) {
       toHarnessSkillHttpError(error);
     }

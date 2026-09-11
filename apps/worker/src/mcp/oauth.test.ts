@@ -163,7 +163,6 @@ describe("MCP OAuth provider options", () => {
 
     await expect(
       validateMcpOAuthHookRequest(
-        db,
         { ...DEPLOYMENT, db },
         "/oauth2/token",
         { grant_type: "client_credentials", client_id: "approved-client" },
@@ -177,7 +176,6 @@ describe("MCP OAuth provider options", () => {
 
     await expect(
       validateMcpOAuthHookRequest(
-        db,
         { ...DEPLOYMENT, db },
         "/oauth2/token",
         { grant_type: "client_credentials", client_id: "approved-client" },
@@ -191,7 +189,6 @@ describe("MCP OAuth provider options", () => {
 
     await expect(
       validateMcpOAuthHookRequest(
-        db,
         { ...DEPLOYMENT, db },
         "/oauth2/token",
         { grant_type: "client_credentials", client_id: "approved-client" },

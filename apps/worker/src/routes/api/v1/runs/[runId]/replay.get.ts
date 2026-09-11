@@ -5,15 +5,14 @@ import {
 } from "h3";
 import type { WorkflowRunReplayResponse } from "@shared/contracts";
 
-import { getDb } from "../../../../../db/client.js";
 import {
   requireDashboardActor,
   toHttpError,
 } from "../../../../../services/auth/request-context.js";
 import {
-  getRunReplay,
   RunObservationStoreError,
-} from "../../../../../run-observability/store.js";
+  readRunReplay,
+} from "../../../../../services/run-lifecycle/run-replay-read.js";
 import { parseReplayPageQuery } from "../replay-query.js";
 import {
   parseReplayRunId,
@@ -26,12 +25,12 @@ export default defineEventHandler(
     try {
       const actor = await requireDashboardActor(event);
       const runId = parseReplayRunId(event);
-      const page = parseReplayPageQuery(getQuery(event));
-      return getRunReplay({
-        db: getDb(),
+      // Awaited on purpose: the handler this replaced returned the promise from
+      // inside the try, so every store error escaped the catch below as a 500.
+      return await readRunReplay({
         organizationId: actor.organizationId,
         runId,
-        ...page,
+        ...parseReplayPageQuery(getQuery(event)),
       });
     } catch (error) {
       if (error instanceof RunObservationStoreError) {

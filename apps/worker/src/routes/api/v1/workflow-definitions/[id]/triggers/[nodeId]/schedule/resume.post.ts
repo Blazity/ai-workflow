@@ -1,13 +1,10 @@
 import type { ScheduleResumeResponse } from "@shared/contracts";
 import { createError, defineEventHandler } from "h3";
-import { getDb } from "../../../../../../../../db/client.js";
 import { toHttpError } from "../../../../../../../../services/auth/request-context.js";
-import { resumeSchedule } from "../../../../../../../../schedule-trigger/schedule-store.js";
 import {
-  parseScheduleTarget,
-  requireScheduleActor,
-  requireScheduleRow,
-} from "./config.get.js";
+  resumeTriggerSchedule,
+} from "../../../../../../../../services/workflow-definitions/trigger-schedules.js";
+import { parseScheduleTarget, requireScheduleActor } from "./config.get.js";
 
 /**
  * Resume a paused schedule. Per resumeSchedule's own contract (schedule-store.ts)
@@ -24,19 +21,19 @@ export default defineEventHandler(
     try {
       await requireScheduleActor(event, true);
       const target = parseScheduleTarget(event);
-      const db = getDb();
-      const row = await requireScheduleRow(db, target);
 
-      await resumeSchedule(db, row.id);
-      const resumed = await requireScheduleRow(db, target);
-      if (resumed.pausedAt) {
+      const resumed = await resumeTriggerSchedule(target);
+      if (!resumed.found) {
+        throw createError({ statusCode: 404, statusMessage: "Unknown schedule" });
+      }
+      if (resumed.row.pausedAt) {
         throw createError({ statusCode: 409, statusMessage: "Resume did not take effect" });
       }
 
       // The evaluation watermark resumeSchedule just moved is an internal
       // engine cursor the contract forbids showing to a user, so it is not
-      // part of the response even though this route can see it.
-      return { scheduleId: row.id };
+      // part of the response even though this route could see it.
+      return { scheduleId: resumed.row.id };
     } catch (error) {
       toHttpError(error);
     }

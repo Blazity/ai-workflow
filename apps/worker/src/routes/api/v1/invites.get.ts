@@ -1,16 +1,14 @@
 import { defineEventHandler } from "h3";
-import { env } from "../../../config/env.js";
-import { getDb } from "../../../db/client.js";
-import { listDashboardInvites } from "../../../services/auth/invites.js";
-import { requireDashboardActor, toHttpError } from "../../../services/auth/request-context.js";
+import { listInvitesForActor } from "../../../services/auth/dashboard-invites.js";
+import {
+  requireDashboardActor,
+  toHttpError,
+} from "../../../services/auth/request-context.js";
 
 export default defineEventHandler(async (event) => {
   try {
     const actor = await requireDashboardActor(event);
-    const invites = await listDashboardInvites(getDb(), {
-      organizationSlug: env.DASHBOARD_ORG_SLUG,
-      actor,
-    });
+    const invites = await listInvitesForActor(actor);
     return { invites };
   } catch (error) {
     toHttpError(error);

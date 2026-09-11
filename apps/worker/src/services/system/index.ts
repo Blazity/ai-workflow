@@ -9,6 +9,16 @@ export {
   deploymentIdentity,
 } from "./deployment-identity.js";
 export {
+  healthResponse,
+} from "./health-response.js";
+export type {
+  HealthResponse,
+} from "./health-response.js";
+export {
+  readLastSystemHealthScan,
+  runSystemHealthScan,
+} from "./health-scan.js";
+export {
   readSystemHealthScan,
   saveSystemHealthScan,
 } from "./last-scan.js";

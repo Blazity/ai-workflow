@@ -7,6 +7,12 @@ description: Run a production release of AI Workflow to the Arthur tenant (Blazi
 
 Releases AI Workflow from `Blazity/ai-workflow` (source) to `Blazity/ai-workflow-arthur` (client deployment repo). Everything is automated by four GitHub Actions workflows; the human (Filip) makes exactly two decisions, each of which is an approval plus a merge.
 
+## Authority and references
+
+This skill documents the release procedure; it does not grant authority. Before any dispatch, merge, deployment, rollback, production change, or Jira update, use the authority rules in [docs/delivery-gates.md](../../../docs/delivery-gates.md) and obtain explicit maintainer approval for that action.
+
+The authoritative Artur documents are [the release contract](../../../docs/releases/artur/README.md), [the upgrade preflight](../../../docs/releases/artur/upgrade-preflight.md), [the rehearsal procedure](../../../docs/releases/artur/rehearsals/README.md), and [the delivery gates](../../../docs/delivery-gates.md).
+
 ## How the pipeline works
 
 1. **Prepare Artur Release** (`prepare-artur-release.yml`, source repo, manual dispatch): generates `docs/releases/artur/<version>.md` from the commit range and opens a docs-only PR authored by the GitHub App.
@@ -85,4 +91,4 @@ Other hard rules:
 
 ## Division of responsibility
 
-Agent: dispatch and watch workflows, write the notes, verify every gate, collect evidence, update Jira. Filip: formal Approve on the notes PR, merge of both PRs (the production GO), rollback decisions.
+Agent: prepare notes, verify every gate, and collect evidence. A maintainer grants and performs any dispatch, merge, deployment, rollback, production change, or Jira update required by the runbook.

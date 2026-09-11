@@ -5,6 +5,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 // Zod 4 JSON-schema conversion drops constraints such as maxLength, maximum,
 // format and additionalProperties, so pin the catalog schemas to the same
 // Zod 3 dialect used by the committed contract artifact.
+import { MAX_CLARIFICATION_ANSWER_LENGTH } from "@shared/contracts";
 import { z } from "zod/v3";
 
 import { McpPublicError, type McpToolName } from "./contracts.js";
@@ -93,12 +94,12 @@ const ATTEMPT_ID_MAX = 2_147_483_647;
 // Clarification ids are generated (`cl_...`); this only keeps a pathological input
 // out of targetRefs and the audit row.
 const CLARIFICATION_ID_MAX_LENGTH = 200;
-// Mirrors MAX_ANSWER_LENGTH in clarifications/answer-core.ts, which is the authority:
-// the core refuses a longer answer whichever channel it arrives through. Duplicated
-// as a literal because this module is loaded by the transport gate before a call is
-// known to be servable, so it must not import the core and drag `workflow/api` and
-// the database in with it. run-control.test.ts fails if the two ever drift.
-const CLARIFICATION_ANSWER_MAX_LENGTH = 10_000;
+// The limit the answer path judges by, read from the contracts package rather
+// than repeated: this module is loaded by the transport gate before a call is
+// known to be servable, so it still must not import the clarification core and
+// drag `workflow/api` and the database in with it, but the contracts package is
+// data and costs nothing to load.
+const CLARIFICATION_ANSWER_MAX_LENGTH = MAX_CLARIFICATION_ANSWER_LENGTH;
 // A comment body, bounded well below the request cap so an oversized one is refused
 // before it is hashed, audited and charged a mutation slot. Same order as a prompt
 // body, because it is the same kind of thing: prose a person reads.

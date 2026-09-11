@@ -26,7 +26,7 @@ import type { Adapters } from "../../services/vcs/adapters.js";
 import type { ActiveRunEntry } from "../../adapters/run-registry/types.js";
 import type { McpActorContext, McpScope } from "../contracts.js";
 import { policyFor } from "../policy.js";
-import { actorFor, depsFor } from "../test-support.js";
+import { actorFor, depsFor } from "../../test-support/mcp.js";
 import { registerTicketWriteTools } from "./ticket-write.js";
 
 const TICKET = "PROJ-1";

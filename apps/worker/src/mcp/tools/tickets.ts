@@ -1,9 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { eq, sql } from "drizzle-orm";
-
 import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js";
-import { coerceStatus } from "../../db/queries/runs-read.js";
-import { workflowRuns } from "../../db/schema.js";
 import {
   McpPublicError,
   isTerminalRunStatus,
@@ -128,33 +124,13 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
           // would make a sliced-after-the-fact page carry a runCount wider
           // than what's actually returned. Reading workflow_runs directly
           // keeps the LIMIT in the query and this tool's page honest.
-          const rows = await deps.db
-            .select({
-              runId: workflowRuns.runId,
-              workflowId: workflowRuns.workflowId,
-              workflowName: workflowRuns.workflowName,
-              status: workflowRuns.status,
-              ticketKey: workflowRuns.ticketKey,
-              createdAt: workflowRuns.createdAt,
-              firstSeenAt: workflowRuns.firstSeenAt,
-              startedAt: workflowRuns.startedAt,
-              completedAt: workflowRuns.completedAt,
-              durationSec: workflowRuns.durationSec,
-            })
-            .from(workflowRuns)
-            .where(eq(workflowRuns.ticketKey, input.ticketKey))
-            .orderBy(
-              sql`coalesce(${workflowRuns.startedAt}, ${workflowRuns.firstSeenAt}) desc`,
-            )
-            // One extra row, unreturned, is how truncation is detected
-            // without a second count query.
-            .limit(limit + 1);
+          const rows = await deps.services.listTicketRunPage(input.ticketKey, limit);
 
           const truncated = rows.length > limit;
           const page = truncated ? rows.slice(0, limit) : rows;
 
           const runs: McpRunSummary[] = page.map((r) => {
-            const status = coerceStatus(r.status);
+            const status = r.status;
             return {
               runId: r.runId,
               workflowName: r.workflowName ?? r.workflowId ?? "wf_unknown",

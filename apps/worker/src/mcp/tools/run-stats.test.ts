@@ -18,7 +18,7 @@ vi.mock("../../config/env.js", () => ({
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
 import { organization, workflowRuns } from "../../db/schema.js";
-import { depsFor } from "../test-support.js";
+import { depsFor } from "../../test-support/mcp.js";
 import { registerRunStatsTools } from "./run-stats.js";
 
 const NOW = new Date("2026-08-16T12:00:00.000Z");

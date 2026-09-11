@@ -13,11 +13,14 @@ import {
 } from "h3";
 import type { ZodIssue } from "zod";
 
-import { env } from "../config/env.js";
-import { getDb, type Db } from "../db/client.js";
 import { createAdapters } from "../services/vcs/adapters.js";
 import { logger } from "../infra/logger.js";
-import { writeMcpAudit } from "./audit-store.js";
+import { createMcpToolServices } from "../services/mcp/tool-services.js";
+import type { McpToolServices } from "../services/mcp/tool-services.js";
+import {
+  betterAuthBaseUrl,
+  mcpSettings,
+} from "../services/settings/runtime-settings.js";
 import {
   MCP_UNRECOGNIZED_TOOL,
   McpPublicError,
@@ -27,9 +30,8 @@ import {
   type McpErrorCode,
 } from "./contracts.js";
 import { authorizeTool, policyFor } from "./policy.js";
-import { consumeMcpRateLimit } from "./rate-limit-store.js";
 import { requireMcpActor } from "./request-context.js";
-import { hashCanonicalJson } from "./sanitize-result.js";
+import { MCP_CONTRACT_HASH, hashCanonicalJson } from "./sanitize-result.js";
 import { createMcpServer, MCP_SUPPORTED_PROTOCOL_VERSIONS } from "./server.js";
 import { catalogedTool, mcpToolErrorResult } from "./tool-catalog.js";
 
@@ -55,7 +57,7 @@ type GateVerdict =
   | { kind: "refused_silently" };
 
 export async function handleMcpPost(event: H3Event): Promise<void> {
-  if (!env.MCP_ENABLED) {
+  if (!mcpSettings().enabled) {
     await writePublicError(
       event,
       404,
@@ -74,13 +76,13 @@ export async function handleMcpPost(event: H3Event): Promise<void> {
   }
 
   const declaredLength = Number(getHeader(event, "content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > env.MCP_MAX_REQUEST_BYTES) {
+  if (Number.isFinite(declaredLength) && declaredLength > mcpSettings().maxRequestBytes) {
     drainRequest(event);
     await requestTooLarge(event);
     return;
   }
 
-  const bodyResult = await readBoundedBody(event, env.MCP_MAX_REQUEST_BYTES);
+  const bodyResult = await readBoundedBody(event, mcpSettings().maxRequestBytes);
   if (bodyResult.kind === "too_large") {
     await requestTooLarge(event);
     return;
@@ -147,7 +149,7 @@ export async function handleMcpPost(event: H3Event): Promise<void> {
   }
 
   const requestId = randomUUID();
-  const db = getDb();
+  const services = createMcpToolServices();
 
   // Ahead of the server and its adapters: a request this gate refuses never needs
   // either, and a refusal decided here is the only one that costs the caller
@@ -155,7 +157,7 @@ export async function handleMcpPost(event: H3Event): Promise<void> {
   if (gated) {
     let verdict: GateVerdict;
     try {
-      verdict = await gateRequest({ db, actor, requestId, request: gated });
+      verdict = await gateRequest({ services, actor, requestId, request: gated });
     } catch (error) {
       const publicError =
         error instanceof McpPublicError
@@ -175,7 +177,7 @@ export async function handleMcpPost(event: H3Event): Promise<void> {
   }
 
   const server = createMcpServer({
-    db,
+    services,
     adapters: createAdapters(),
     actor,
     requestId,
@@ -212,7 +214,7 @@ export async function handleMcpPost(event: H3Event): Promise<void> {
 }
 
 export async function handleMcpMethodNotAllowed(event: H3Event): Promise<void> {
-  if (!env.MCP_ENABLED) {
+  if (!mcpSettings().enabled) {
     await writePublicError(
       event,
       404,
@@ -255,7 +257,7 @@ function readGatedRequest(body: unknown): GatedRequest | "unnamed" | null {
 // through the same limiter and the same audit store a served call uses, in the
 // same order: cheapest guard first, then the row proving somebody tried.
 async function gateRequest(input: {
-  db: Db;
+  services: McpToolServices;
   actor: McpActorContext;
   requestId: string;
   request: GatedRequest;
@@ -303,6 +305,7 @@ async function gateRequest(input: {
     errorCode,
     latencyMs: Math.max(0, Date.now() - startedAt.getTime()),
     occurredAt: new Date(),
+    contractHash: MCP_CONTRACT_HASH,
   });
 
   // Scope and role are evaluated ahead of the schema, because
@@ -340,14 +343,13 @@ async function gateRequest(input: {
   // got for free.
   if (servable && input.request.responds && call !== null) return { kind: "servable" };
 
-  const verdict = await consumeMcpRateLimit({
-    db: input.db,
+  const verdict = await input.services.consumeRateLimit({
     actor: input.actor,
     toolName,
     limit:
       mutationClass === "read"
-        ? env.MCP_READ_RATE_LIMIT_PER_MINUTE
-        : env.MCP_MUTATION_RATE_LIMIT_PER_MINUTE,
+        ? mcpSettings().readRateLimitPerMinute
+        : mcpSettings().mutationRateLimitPerMinute,
     now: startedAt,
   });
 
@@ -357,7 +359,7 @@ async function gateRequest(input: {
     // Fail-open: nothing ran and nothing is returned, so a lost row must not
     // dress a temporary throttle up as a permanent internal failure.
     if (verdict.firstRejectionInWindow) {
-      await writeMcpAudit(input.db, auditRow("rejected", "RATE_LIMITED")).catch((error) =>
+      await input.services.writeAudit(auditRow("rejected", "RATE_LIMITED")).catch((error) =>
         signalAuditWriteFailure(input.requestId, toolName, error),
       );
     }
@@ -365,14 +367,14 @@ async function gateRequest(input: {
   }
 
   if (authorizationError !== null) {
-    await recordGateRow(input.db, auditRow("rejected", authorizationError.code));
+    await recordGateRow(input.services, auditRow("rejected", authorizationError.code));
     return input.request.responds
       ? { kind: "refused", error: authorizationError }
       : { kind: "refused_silently" };
   }
 
   await recordGateRow(
-    input.db,
+    input.services,
     servable ? auditRow("attempted", null) : auditRow("rejected", "VALIDATION_FAILED"),
   );
 
@@ -396,9 +398,12 @@ async function gateRequest(input: {
 // Fail-closed, exactly like the attempted row in execute-tool.ts: for a request
 // the SDK would otherwise answer for free this row is the only record that it
 // happened at all, so without the row there is no request.
-async function recordGateRow(db: Db, row: McpAuditInput): Promise<void> {
+async function recordGateRow(
+  services: McpToolServices,
+  row: McpAuditInput,
+): Promise<void> {
   try {
-    await writeMcpAudit(db, row);
+    await services.writeAudit(row);
   } catch {
     // Reported the way the stores report their own outages, and not as an
     // INTERNAL_ERROR: the audit table and the rate-limit table live in the same
@@ -658,7 +663,7 @@ async function writePublicError(
 ): Promise<void> {
   setResponseStatus(event, status);
   if (error.code === "UNAUTHENTICATED") {
-    const metadata = new URL(env.BETTER_AUTH_URL);
+    const metadata = new URL(betterAuthBaseUrl());
     metadata.pathname = "/.well-known/oauth-protected-resource/mcp";
     metadata.search = "";
     metadata.hash = "";

@@ -43,6 +43,9 @@ vi.mock("workflow/api", () => ({ start: (...args: unknown[]) => mockStart(...arg
 vi.mock("../../../engine/index.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
 
 const route = (await import("./[endpointId].post.js")).default;
+const { deliverCustomWebhook } = await import(
+  "../../../services/triggers/custom-webhooks/deliver.js"
+);
 
 let db: Db;
 let secret: string;
@@ -820,5 +823,90 @@ describe("POST /webhooks/custom/:endpointId", () => {
     expect(second.status).toBe(200);
     expect(mockStart).toHaveBeenCalledOnce();
     expect(await db.select().from(webhookTriggerDeliveries)).toHaveLength(1);
+  });
+});
+
+/**
+ * What the route hands the service, and when the bytes are actually read.
+ *
+ * The reader is a function rather than a string so the refusals that cost
+ * nothing (an id that names no live endpoint, a spent ingress budget, a declared
+ * length over the cap) happen before the sender's body is buffered. These tests
+ * assert the reader itself, because an assertion on the status would pass either
+ * way.
+ */
+function reader() {
+  return vi.fn(() => Promise.resolve(BODY));
+}
+
+function deliverWithReader(readRawBody: () => Promise<string>, body = BODY) {
+  return deliverCustomWebhook({
+    endpointId,
+    contentLength: String(Buffer.byteLength(body, "utf8")),
+    readRawBody,
+    headers: {
+      "content-type": "application/json",
+      "x-workflow-signature": createHmac("sha256", secret).update(body).digest("hex"),
+    },
+    deliveryIdHeader: "d-lazy",
+  });
+}
+
+describe("deliverCustomWebhook and the raw body", () => {
+  it("never reads the body of a revoked endpoint", async () => {
+    await db
+      .update(webhookTriggerEndpoints)
+      .set({ revokedAt: new Date() })
+      .where(eq(webhookTriggerEndpoints.id, endpointId));
+    const read = reader();
+
+    await expect(deliverWithReader(read)).resolves.toEqual({
+      outcome: "refused",
+      reason: "endpoint_disabled",
+    });
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("never reads the body once the ingress budget is spent", async () => {
+    await db.insert(webhookTriggerRateLimits).values({
+      endpointId,
+      windowStart: webhookRateWindowStart(),
+      kind: "ingress",
+      count: 600,
+    });
+    const read = reader();
+
+    await expect(deliverWithReader(read)).resolves.toEqual({
+      outcome: "refused",
+      reason: "rate_limited",
+    });
+    expect(read).not.toHaveBeenCalled();
+  });
+});
+
+describe("deliverCustomWebhook and the declared length", () => {
+  it("never reads a body whose declared length is already over the cap", async () => {
+    const read = reader();
+
+    await expect(
+      deliverCustomWebhook({
+        endpointId,
+        contentLength: String(600 * 1024),
+        readRawBody: read,
+        headers: { "content-type": "application/json" },
+        deliveryIdHeader: undefined,
+      }),
+    ).resolves.toEqual({ outcome: "refused", reason: "payload_too_large" });
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("reads the body once for a delivery that gets that far", async () => {
+    const read = reader();
+
+    await expect(deliverWithReader(read)).resolves.toEqual({
+      outcome: "dispatched",
+      runId: "run-1",
+    });
+    expect(read).toHaveBeenCalledOnce();
   });
 });

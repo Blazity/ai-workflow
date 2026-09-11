@@ -6,12 +6,7 @@ import type {
   ManualDispatchPreflightResponse,
   ManualDispatchResponse,
 } from "@shared/contracts";
-import { env } from "../../config/env.js";
 import { ManualDispatchError } from "../../services/manual-dispatch/errors.js";
-import {
-  dispatchManualWorkflow,
-  preflightManualDispatch,
-} from "../../services/manual-dispatch/service.js";
 import {
   McpPublicError,
   type McpErrorCode,
@@ -166,13 +161,11 @@ export function registerWorkflowTools(server: McpServer, deps: McpToolDependenci
         operation: async (): Promise<PreflightData> => {
           let preflight: ManualDispatchPreflightResponse;
           try {
-            preflight = await preflightManualDispatch({
-              db: deps.db,
+            preflight = await deps.services.preflightManualDispatch({
               adapters: deps.adapters,
               definitionId: input.definitionId,
               triggerNodeId: input.triggerNodeId,
               dispatchInput: input.input,
-              maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
             });
           } catch (error) {
             throwPublicDispatchError(error);
@@ -244,8 +237,7 @@ export function registerWorkflowTools(server: McpServer, deps: McpToolDependenci
           }
           let response: ManualDispatchResponse;
           try {
-            response = await dispatchManualWorkflow({
-              db: deps.db,
+            response = await deps.services.dispatchManualWorkflow({
               adapters: deps.adapters,
               definitionId: input.definitionId,
               triggerNodeId: input.triggerNodeId,
@@ -260,7 +252,6 @@ export function registerWorkflowTools(server: McpServer, deps: McpToolDependenci
                 id: deps.actor.userId ?? deps.actor.subject,
                 label: `MCP ${deps.actor.clientId}`,
               },
-              maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
             });
           } catch (error) {
             throwPublicDispatchError(error);

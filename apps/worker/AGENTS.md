@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-09
+Last-verified: 2026-09-11
 
 # apps/worker
 
@@ -43,25 +43,13 @@ credentials. Their `:dry` variants run locally.
 
 ## Directory map
 
-Tiers come from
-[ADR-001](../../docs/adr/ADR-001-layering-and-packages.md), which is the source
-of truth for the mapping. The directories keep their names until the stage that
-moves them.
-
-| Directory | Tier | Note |
-|---|---|---|
-| `routes/` | app | Nitro scans this path, so it keeps its name |
-| `middleware/`, `plugins/`, `auth.ts`, `auth-instance.ts`, `nitro.d.ts` | app | the server surface |
-| `mcp/` | app | MCP tools, auth, catalog, contract |
-| `services/` | services | one directory per domain cluster, each with an `index.ts` interface; [docs/architecture/overview.md](../../docs/architecture/overview.md) lists them |
-| `approvals/`, `clarifications/`, `manual-dispatch/`, `schedule-trigger/`, `webhook-trigger/` | services | only the store files are left here; they become db repositories in stage 7 |
-| `engine/`, `workflow-definition/`, `memory/`, `post-pr-gate/`, `pre-pr-checks/`, `pre-sandbox/`, `run-analysis/`, `run-observability/`, `sandbox/` | engine | the runtime: the `"use workflow"` body, the `"use step"` functions, blocks, definition handling |
-| `harness-profiles/`, `prompt-library/` | engine (runtime) | their `store.ts` moves to db, their pure parts to packages |
-| `adapters/` | adapters | `adapters/vcs`, `adapters/issue-tracker`, `adapters/messaging`; `adapters/run-registry` is db, because it is one repository implementation |
-| `db/` | db | the only tier that knows the driver |
-| `config/`, `infra/` | config, infra | the validated env schema; the logger, LLM client, webhook signature and unique-violation helpers |
-| `env.ts` | config | one schema, validated at boot |
-| `test-support/`, `mcp-dogfood/`, `e2e/`, `workflow-test-fixtures/`, colocated `*.test.ts` | testing | |
+[ADR-001](../../docs/adr/ADR-001-layering-and-packages.md) owns the tier map,
+and [the architecture overview](../../docs/architecture/overview.md) owns the
+service-cluster contracts. The current runtime entrypoints are under
+`src/engine`, domain code is under `src/services`, the Nitro app surface is
+under `src/routes` and `src/mcp`, and configuration helpers are under
+`src/config` and `src/infra`. Use those documents when a change crosses a
+boundary instead of copying their ownership tables here.
 
 ## Traps specific to this app
 

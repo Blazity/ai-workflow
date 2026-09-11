@@ -1,4 +1,3 @@
-import { env } from "../config/env.js";
 import type {
   McpAuditInput,
   McpEnvelope,
@@ -9,16 +8,17 @@ import type {
 } from "./contracts.js";
 import { McpPublicError } from "./contracts.js";
 import { logger } from "../infra/logger.js";
-import { writeMcpAudit } from "./audit-store.js";
+import type { McpRateLimitVerdict } from "../services/mcp/rate-limit-store.js";
 import {
-  beginMcpMutation,
-  completeMcpMutation,
-  failMcpMutation,
-  releaseMcpMutation,
-} from "./idempotency-store.js";
+  configuredSecretValues,
+  mcpSettings,
+} from "../services/settings/runtime-settings.js";
 import { authorizeTool, policyFor } from "./policy.js";
-import { consumeMcpRateLimit, type McpRateLimitVerdict } from "./rate-limit-store.js";
-import { hashCanonicalJson, sanitizeMcpData } from "./sanitize-result.js";
+import {
+  MCP_CONTRACT_HASH,
+  hashCanonicalJson,
+  sanitizeMcpData,
+} from "./sanitize-result.js";
 
 // What a running mutation holds is a lease, not the lifetime of its answer: the
 // store moves the expiry out to the response TTL the moment the row turns
@@ -73,30 +73,6 @@ function auditOutcome(code: McpErrorCode): McpAuditInput["outcome"] {
     : "rejected";
 }
 
-function configuredSecrets(): string[] {
-  return [
-    env.JIRA_API_TOKEN,
-    env.GITHUB_APP_PRIVATE_KEY,
-    env.GITLAB_TOKEN,
-    env.CHAT_SDK_SLACK_TOKEN,
-    env.SLACK_SIGNING_SECRET,
-    env.ANTHROPIC_API_KEY,
-    env.CODEX_API_KEY,
-    env.CODEX_CHATGPT_OAUTH_TOKEN,
-    env.GENAI_ENGINE_API_KEY,
-    env.VERCEL_TOKEN,
-    env.CRON_SECRET,
-    env.JIRA_WEBHOOK_SECRET,
-    env.GITHUB_WEBHOOK_SECRET,
-    env.GITLAB_WEBHOOK_SECRET,
-    env.WEBHOOK_TRIGGER_ENCRYPTION_KEY,
-    env.BETTER_AUTH_SECRET,
-    env.SSO_CLIENT_SECRET,
-    env.RESEND_API_KEY,
-    env.RESEND_WEBHOOK_SECRET,
-  ].filter((secret): secret is string => typeof secret === "string" && secret.length > 0);
-}
-
 async function audit(
   context: ExecutionContext,
   outcome: McpAuditInput["outcome"],
@@ -106,7 +82,7 @@ async function audit(
   // row that carries a result. See executeMcpMutation's outcomeTargetRefs.
   extraTargetRefs: readonly string[] = [],
 ): Promise<void> {
-  await writeMcpAudit(context.deps.db, {
+  await context.deps.services.writeAudit({
     requestId: context.deps.requestId,
     traceId: context.deps.traceId,
     actor: context.deps.actor,
@@ -120,6 +96,7 @@ async function audit(
     errorCode,
     latencyMs: Math.max(0, context.deps.now().getTime() - context.startedAt.getTime()),
     occurredAt: context.deps.now(),
+    contractHash: MCP_CONTRACT_HASH,
   });
 }
 
@@ -207,14 +184,13 @@ async function prepare(context: ExecutionContext): Promise<void> {
   // calls cannot become a flood of rows kept for a year. An unreachable rate
   // store keeps propagating untouched: it is infrastructure failure on the very
   // database the audit row would need.
-  const verdict = await consumeMcpRateLimit({
-    db: context.deps.db,
+  const verdict = await context.deps.services.consumeRateLimit({
     actor: context.deps.actor,
     toolName: context.toolName,
     limit:
       policy.mutation === "read"
-        ? env.MCP_READ_RATE_LIMIT_PER_MINUTE
-        : env.MCP_MUTATION_RATE_LIMIT_PER_MINUTE,
+        ? mcpSettings().readRateLimitPerMinute
+        : mcpSettings().mutationRateLimitPerMinute,
     now: context.startedAt,
   });
   if (!verdict.allowed) await rejectRateLimited(context, verdict);
@@ -233,8 +209,8 @@ function sanitize<T>(context: ExecutionContext, data: T): McpEnvelope<T> {
     requestId: context.deps.requestId,
     traceId: context.deps.traceId,
     trust: "external_untrusted",
-    maxBytes: env.MCP_MAX_RESULT_BYTES,
-    secrets: configuredSecrets(),
+    maxBytes: mcpSettings().maxResultBytes,
+    secrets: configuredSecretValues(),
   });
 }
 
@@ -268,7 +244,7 @@ export async function executeMcpRead<T>(input: {
   try {
     envelope = sanitize(
       context,
-      await input.operation(AbortSignal.timeout(env.MCP_TOOL_TIMEOUT_MS)),
+      await input.operation(AbortSignal.timeout(mcpSettings().toolTimeoutMs)),
     );
   } catch (error) {
     return auditFailure(context, error);
@@ -335,9 +311,9 @@ export async function executeMcpMutation<T>(input: {
   };
   await prepare(context);
 
-  let decision: Awaited<ReturnType<typeof beginMcpMutation<T>>>;
+  let decision: { kind: "execute"; leaseId: string } | { kind: "replay"; response: T };
   try {
-    decision = await beginMcpMutation<T>(input.deps.db, {
+    decision = await input.deps.services.beginMutation<T>({
       organizationId: input.deps.actor.organizationId,
       actorSubject: input.deps.actor.subject,
       clientId: input.deps.actor.clientId,
@@ -387,10 +363,9 @@ export async function executeMcpMutation<T>(input: {
         // back there buys a second run on the same ticket. Anything else,
         // including plain uncertainty, is stored as this key's outcome.
         if (safeError.effectNotApplied) {
-          await releaseMcpMutation(input.deps.db, decision.leaseId);
+          await input.deps.services.releaseMutation(decision.leaseId);
         } else {
-          await failMcpMutation(
-            input.deps.db,
+          await input.deps.services.failMutation(
             decision.leaseId,
             safeError.code,
             input.deps.now(),
@@ -407,8 +382,7 @@ export async function executeMcpMutation<T>(input: {
     }
 
     try {
-      await completeMcpMutation(
-        input.deps.db,
+      await input.deps.services.completeMutation(
         decision.leaseId,
         envelope.data,
         input.deps.now(),
@@ -419,8 +393,7 @@ export async function executeMcpMutation<T>(input: {
         // Failed, never released, whatever the error says about retrying: the
         // operation already landed and only its answer was lost, so handing the
         // key back would buy a retry that dispatches a second time.
-        await failMcpMutation(
-          input.deps.db,
+        await input.deps.services.failMutation(
           decision.leaseId,
           safeError.code,
           input.deps.now(),
@@ -469,7 +442,7 @@ export async function executeMcpMutation<T>(input: {
   );
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const timedOut = new Promise<never>((_resolve, reject) => {
-    timeout = setTimeout(() => reject(timedOutError), env.MCP_TOOL_TIMEOUT_MS);
+    timeout = setTimeout(() => reject(timedOutError), mcpSettings().toolTimeoutMs);
   });
   try {
     return await Promise.race([terminal, timedOut]);
@@ -486,8 +459,7 @@ export async function executeMcpMutation<T>(input: {
     // second run on the same ticket. Best-effort, because if the operation
     // settled the row first then its outcome is the truth and this finds
     // nothing to change.
-    await failMcpMutation(
-      input.deps.db,
+    await input.deps.services.failMutation(
       decision.leaseId,
       timedOutError.code,
       input.deps.now(),

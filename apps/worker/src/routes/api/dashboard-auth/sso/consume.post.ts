@@ -1,22 +1,24 @@
 import { createError, defineEventHandler, readBody } from "h3";
+import {
+  dashboardSsoHandoffConsumeRequestSchema,
+  parseRequestBody,
+} from "@shared/contracts";
 
 import { auth } from "../../../../auth-instance.js";
-import { consumeDashboardSsoHandoff } from "../../../../services/auth/sso-handoff.js";
 import { toHttpError } from "../../../../services/auth/request-context.js";
+import { consumeDashboardSsoHandoff } from "../../../../services/auth/sso-handoff.js";
 
 export default defineEventHandler(async (event) => {
-  const body = await readBody<{ token?: string }>(event);
-  if (typeof body?.token !== "string") {
-    throw createError({ statusCode: 400, statusMessage: "Missing SSO handoff token" });
-  }
-
-  const token = body.token.trim();
-  if (!token) {
-    throw createError({ statusCode: 400, statusMessage: "Missing SSO handoff token" });
+  const parsed = parseRequestBody(
+    dashboardSsoHandoffConsumeRequestSchema,
+    await readBody(event),
+  );
+  if (!parsed.ok) {
+    throw createError({ statusCode: 400, statusMessage: parsed.message });
   }
 
   try {
-    return await consumeDashboardSsoHandoff(auth, token);
+    return await consumeDashboardSsoHandoff(auth, parsed.value.token);
   } catch (error) {
     toHttpError(error);
   }

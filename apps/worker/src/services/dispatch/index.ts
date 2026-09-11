@@ -6,6 +6,9 @@
  * scripts/gates/cluster-deep-imports.json and that list only shrinks.
  */
 export {
+  readDispatchCapacity,
+} from "./capacity-snapshot.js";
+export {
   dispatchTriggerEvent,
   drainOldestPendingTrigger,
   isConfiguredTriggerRepository,

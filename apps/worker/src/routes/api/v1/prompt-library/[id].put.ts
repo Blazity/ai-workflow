@@ -1,17 +1,13 @@
 import { createError, defineEventHandler, readBody } from "h3";
-import type {
-  PromptLibrarySaveResponse,
-  PromptSlotDefinition,
-} from "@shared/contracts";
-import { getDb } from "../../../../db/client.js";
-import { requireDashboardActor } from "../../../../services/auth/request-context.js";
-import { dashboardUserLabel } from "../../../../pre-pr-checks/store.js";
 import {
-  getPrompt,
-  savePromptVersion,
-  serializePromptMeta,
-  serializePromptVersion,
-} from "../../../../prompt-library/store.js";
+  parseRequestBody,
+  promptLibrarySaveVersionRequestSchema,
+  type PromptLibrarySaveResponse,
+} from "@shared/contracts";
+import { requireDashboardActor } from "../../../../services/auth/request-context.js";
+import {
+  savePromptEntryVersion,
+} from "../../../../services/prompts/prompt-library-writes.js";
 import { parsePromptId, toPromptLibraryHttpError } from "../prompt-library.get.js";
 
 export default defineEventHandler(
@@ -19,34 +15,21 @@ export default defineEventHandler(
     try {
       const actor = await requireDashboardActor(event);
       const id = parsePromptId(event);
-      const body =
-        (await readBody<{ body?: unknown; slots?: unknown }>(event).catch(
-          () => null,
-        )) ?? {};
-      if (typeof body.body !== "string") {
-        throw createError({ statusCode: 400, statusMessage: "Invalid body" });
+      const parsed = parseRequestBody(
+        promptLibrarySaveVersionRequestSchema,
+        (await readBody(event).catch(() => null)) ?? {},
+      );
+      if (!parsed.ok) {
+        throw createError({ statusCode: 400, statusMessage: parsed.message });
       }
-      if (body.slots !== undefined && !Array.isArray(body.slots)) {
-        throw createError({ statusCode: 400, statusMessage: "Invalid slots" });
-      }
+      const body = parsed.value;
 
-      const dbHandle = getDb();
-      const { version, changed } = await savePromptVersion(dbHandle, {
+      return await savePromptEntryVersion({
         promptId: id,
         body: body.body,
-        slots: body.slots as PromptSlotDefinition[] | undefined,
-        actor: {
-          role: actor.role,
-          id: actor.userId,
-          label: await dashboardUserLabel(dbHandle, actor.userId),
-        },
+        slots: body.slots,
+        writer: { role: actor.role, userId: actor.userId },
       });
-      const row = await getPrompt(dbHandle, id);
-      return {
-        meta: serializePromptMeta(row!, version.version),
-        version: serializePromptVersion(version),
-        changed,
-      };
     } catch (error) {
       toPromptLibraryHttpError(error);
     }

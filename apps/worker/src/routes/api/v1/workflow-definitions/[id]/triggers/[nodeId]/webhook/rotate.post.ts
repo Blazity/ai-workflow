@@ -1,13 +1,11 @@
 import type { WebhookRotateResponse } from "@shared/contracts";
+import { parseRequestBody, webhookRotateSecretRequestSchema } from "@shared/contracts";
 import { createError, defineEventHandler, readBody } from "h3";
-import { getDb } from "../../../../../../../../db/client.js";
 import { toHttpError } from "../../../../../../../../services/auth/request-context.js";
 import {
-  rotateWebhookEndpointSecret,
-  WebhookRotationInFlightError,
-} from "../../../../../../../../webhook-trigger/endpoint-store.js";
+  rotateWebhookSecret,
+} from "../../../../../../../../services/workflow-definitions/trigger-webhooks.js";
 import {
-  auditWebhookAction,
   parseWebhookEndpointTarget,
   requireWebhookActor,
   requireWebhookEncryptionKey,
@@ -29,27 +27,30 @@ export default defineEventHandler(
       const actor = await requireWebhookActor(event, true);
       const target = parseWebhookEndpointTarget(event);
       const keyHex = requireWebhookEncryptionKey();
-      const db = getDb();
-      const endpoint = await requireWebhookEndpoint(db, target);
-      const body = await readBody<{ force?: unknown } | null>(event).catch(() => null);
-
-      const rotated = await rotateWebhookEndpointSecret(db, keyHex, endpoint.id, {
-        force: body?.force === true,
-      }).catch((error: unknown) => {
-        if (error instanceof WebhookRotationInFlightError) {
-          throw createError({
-            statusCode: 409,
-            statusMessage: "A replaced secret is still accepted",
-            data: { previousExpiresAt: error.previousExpiresAt.toISOString() },
-          });
-        }
-        throw error;
-      });
-      if (!rotated) {
-        throw createError({ statusCode: 404, statusMessage: "Unknown webhook endpoint" });
+      const endpoint = await requireWebhookEndpoint(target);
+      const parsed = parseRequestBody(
+        webhookRotateSecretRequestSchema,
+        (await readBody(event).catch(() => null)) ?? {},
+      );
+      if (!parsed.ok) {
+        throw createError({ statusCode: 400, statusMessage: parsed.message });
       }
 
-      auditWebhookAction(actor.userId, rotated.endpointId, "rotated");
+      const rotated = await rotateWebhookSecret(keyHex, endpoint.id, {
+        // Only the literal true forces: anything else leaves the window intact.
+        force: parsed.value.force === true,
+        actorId: actor.userId,
+      });
+      if (!rotated.ok) {
+        throw rotated.reason === "rotation_in_flight"
+          ? createError({
+              statusCode: 409,
+              statusMessage: "A replaced secret is still accepted",
+              data: { previousExpiresAt: rotated.previousExpiresAt.toISOString() },
+            })
+          : createError({ statusCode: 404, statusMessage: "Unknown webhook endpoint" });
+      }
+
       return {
         endpointId: rotated.endpointId,
         secret: rotated.secret,
