@@ -7,69 +7,12 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { parseOptions, printTable, readJson } from "./shared.mjs";
 
 const sourceExtension = /\.[cm]?[jt]sx?$/u;
 const testPath = /(?:\.(?:test|spec)\.[cm]?[jt]sx?$|\/(?:test-support|e2e|fixtures)\/)/u;
-const awaitedWrite = /\bawait\s+db\.(?:insert|update|delete|execute)\b/gu;
-const functionHeader = /(?:\basync\s+)?\bfunction(?:\s+[A-Za-z_$][\w$]*)?\s*(?:<[^{}]*>)?\s*\([^{}]*\)\s*\{|(?:\basync\s+)?(?:[A-Za-z_$][\w$]*|\([^{}]*\))\s*=>\s*\{|(?:\basync\s+)?(?!if\b|for\b|while\b|switch\b|catch\b)[A-Za-z_$][\w$]*\s*\([^{}]*\)\s*\{/gu;
-
-function mask(source) {
-  let output = "";
-  let quote = null;
-  let lineComment = false;
-  let blockComment = false;
-  let escaped = false;
-  for (let index = 0; index < source.length; index += 1) {
-    const character = source[index];
-    const next = source[index + 1];
-    if (lineComment) {
-      if (character === "\n") {
-        lineComment = false;
-        output += character;
-      } else {
-        output += " ";
-      }
-      continue;
-    }
-    if (blockComment) {
-      if (character === "*" && next === "/") {
-        blockComment = false;
-        output += "  ";
-        index += 1;
-      } else {
-        output += character === "\n" ? "\n" : " ";
-      }
-      continue;
-    }
-    if (quote !== null) {
-      output += character === "\n" ? "\n" : " ";
-      if (escaped) escaped = false;
-      else if (character === "\\") escaped = true;
-      else if (character === quote) quote = null;
-      continue;
-    }
-    if (character === "/" && next === "/") {
-      lineComment = true;
-      output += "  ";
-      index += 1;
-      continue;
-    }
-    if (character === "/" && next === "*") {
-      blockComment = true;
-      output += "  ";
-      index += 1;
-      continue;
-    }
-    if (character === "'" || character === '"' || character === "`") {
-      quote = character;
-      output += " ";
-      continue;
-    }
-    output += character;
-  }
-  return output;
-}
+const databaseWriteMethods = new Set(["insert", "update", "delete", "execute"]);
 
 function sourceFiles(directory) {
   if (!existsSync(directory)) return [];
@@ -80,50 +23,99 @@ function sourceFiles(directory) {
   });
 }
 
-function closingBrace(source, openingBrace) {
-  let depth = 0;
-  for (let index = openingBrace; index < source.length; index += 1) {
-    if (source[index] === "{") depth += 1;
-    else if (source[index] === "}") {
-      depth -= 1;
-      if (depth === 0) return index;
-    }
+function isFunctionLike(node) {
+  return (
+    ts.isFunctionDeclaration(node) ||
+    ts.isFunctionExpression(node) ||
+    ts.isArrowFunction(node) ||
+    ts.isMethodDeclaration(node) ||
+    ts.isConstructorDeclaration(node) ||
+    ts.isGetAccessorDeclaration(node) ||
+    ts.isSetAccessorDeclaration(node)
+  );
+}
+
+function functionBody(node) {
+  return isFunctionLike(node) ? node.body : undefined;
+}
+
+function unwrapExpression(expression) {
+  let current = expression;
+  while (
+    ts.isAsExpression(current) ||
+    ts.isSatisfiesExpression(current) ||
+    ts.isParenthesizedExpression(current) ||
+    ts.isNonNullExpression(current) ||
+    ts.isTypeAssertionExpression(current)
+  ) {
+    current = current.expression;
   }
-  return source.length;
+  return current;
 }
 
-function functionBodies(source) {
-  return [...source.matchAll(functionHeader)].flatMap((match) => {
-    const openingBrace = match.index + match[0].lastIndexOf("{");
-    const closing = closingBrace(source, openingBrace);
-    return closing > openingBrace ? [{ openingBrace, closing }] : [];
-  });
+function isAwaitedDatabaseWrite(expression) {
+  let current = unwrapExpression(expression);
+  let reachedWrite = false;
+
+  while (true) {
+    if (ts.isCallExpression(current)) {
+      const callee = unwrapExpression(current.expression);
+      if (ts.isPropertyAccessExpression(callee)) {
+        if (databaseWriteMethods.has(callee.name.text)) reachedWrite = true;
+        current = unwrapExpression(callee.expression);
+        continue;
+      }
+      if (ts.isIdentifier(callee) && callee.text === "getDb") {
+        return reachedWrite;
+      }
+      return false;
+    }
+    if (ts.isPropertyAccessExpression(current)) {
+      current = unwrapExpression(current.expression);
+      continue;
+    }
+    return reachedWrite && ts.isIdentifier(current) && current.text === "db";
+  }
 }
 
-function lineOf(source, index) {
-  return source.slice(0, index).split("\n").length;
+function awaitedDatabaseWrites(body) {
+  const writes = [];
+  const visit = (node) => {
+    if (node !== body && isFunctionLike(node)) return;
+    if (ts.isAwaitExpression(node) && isAwaitedDatabaseWrite(node.expression)) {
+      writes.push(node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(body);
+  return writes;
 }
 
 function findingsForFile(file, root) {
-  const original = readFileSync(file, "utf8");
-  const masked = mask(original);
-  const bodies = functionBodies(masked).sort(
-    (left, right) => (left.closing - left.openingBrace) - (right.closing - right.openingBrace),
+  const sourceFile = ts.createSourceFile(
+    file,
+    readFileSync(file, "utf8"),
+    ts.ScriptTarget.Latest,
+    true,
+    ts.getScriptKindFromFileName(file),
   );
-  const counts = new Map();
-  for (const match of masked.matchAll(awaitedWrite)) {
-    const body = bodies.find(
-      (candidate) => match.index > candidate.openingBrace && match.index < candidate.closing,
-    );
-    if (!body) continue;
-    const current = counts.get(body) ?? { count: 0, firstWrite: match.index };
-    current.count += 1;
-    counts.set(body, current);
-  }
+  const findings = [];
+  const visit = (node) => {
+    const body = functionBody(node);
+    if (body) {
+      const writes = awaitedDatabaseWrites(body);
+      if (writes.length >= 2) {
+        findings.push({ count: writes.length, firstWrite: writes[0].getStart(sourceFile) });
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
   const path = relative(root, file).replaceAll("\\", "/");
-  return [...counts.values()]
-    .filter(({ count }) => count >= 2)
-    .map(({ count, firstWrite }) => `${path}:${lineOf(original, firstWrite)} (${count} awaited db writes)`);
+  return findings.map(({ count, firstWrite }) => {
+    const line = sourceFile.getLineAndCharacterOfPosition(firstWrite).line + 1;
+    return `${path}:${line} (${count} awaited db writes)`;
+  });
 }
 
 function main() {

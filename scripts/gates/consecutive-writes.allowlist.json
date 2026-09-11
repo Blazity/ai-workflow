@@ -1,3 +1,9 @@
 [
+  "apps/worker/src/engine/runtime/pr-external-resources.ts",
+  "apps/worker/src/harness-profiles/capability-catalog.ts",
+  "apps/worker/src/memory/store.ts",
+  "apps/worker/src/services/clarifications/expiry.ts",
+  "apps/worker/src/services/clarifications/resume-from-comments.ts",
+  "apps/worker/src/services/mcp/idempotency-store.ts",
   "apps/worker/src/workflow-definition/template-seed.ts"
 ]

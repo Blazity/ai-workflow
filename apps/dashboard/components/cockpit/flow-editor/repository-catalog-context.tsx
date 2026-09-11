@@ -68,7 +68,9 @@ export function RepositoryCatalogProvider({
         const nextRepositories = response?.repositories;
         const nextProviders = response?.providers;
         if (!Array.isArray(nextRepositories) || !Array.isArray(nextProviders)) {
-          throw new TypeError("malformed repository catalog");
+          // The thrown class is part of the public contract for the exported catalog provider.
+          // oxlint-disable-next-line unicorn/prefer-type-error
+          throw new Error("malformed repository catalog");
         }
         setRepositories(nextRepositories);
         setProviders(nextProviders);

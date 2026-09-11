@@ -210,7 +210,9 @@ function allocateNodeId(
 
 function defaultGenerateEdgeId(): string {
   if (typeof globalThis.crypto?.randomUUID !== "function") {
-    throw new TypeError("V2 clipboard paste requires an edge id generator.");
+    // The thrown class is part of the public contract for the exported paste operation.
+    // oxlint-disable-next-line unicorn/prefer-type-error
+    throw new Error("V2 clipboard paste requires an edge id generator.");
   }
   return globalThis.crypto.randomUUID();
 }

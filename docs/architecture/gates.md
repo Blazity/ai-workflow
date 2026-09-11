@@ -11,7 +11,7 @@ stops the ladder when its check fails.
 | Boundaries | Worker tier edges, unknown source paths, file-cycle growth, and unlisted cross-cluster deep imports | `scripts/gates/boundaries.mjs` | A dependency crosses an unallowed edge, a path is unknown, a cycle count grows, or a new deep import is found |
 | Unused code | Knip findings by workspace and category | `scripts/gates/unused-code.mjs` | A finding is above its current ratchet |
 | Lint | Oxlint diagnostics for worker, dashboard, scripts, and packages | `scripts/gates/lint.mjs` | A correctness error or warning is above its current ratchet, or a rule with a zero baseline reports a diagnostic |
-| Resurrected paths | Retired paths using tracked and non-ignored files | `scripts/gates/no-resurrected-paths.mjs` | A retired path is active or exists only as ignored residue |
+| Resurrected paths | Retired paths using tracked and non-ignored files | `scripts/gates/no-resurrected-paths.mjs` | A retired path has a tracked or non-ignored file |
 | Single schema | Retired workflow schema v1 spellings and production references | `scripts/gates/single-schema-version.mjs` | A retired schema branch, helper, type, or production test import is found |
 | Transactions | Production worker source for `.transaction(` | `scripts/gates/transactions-in-repositories.mjs` | Any production transaction call is found |
 | Consecutive writes | Awaited `db.insert`, `db.update`, `db.delete`, or `db.execute` calls in one non-repository production function | `scripts/gates/consecutive-writes.mjs` | A function contains two or more awaited database writes outside the repository tier and allowlist |
@@ -49,12 +49,19 @@ make broad behavior-sensitive edits. All other rules remain enabled.
 | `unicorn/prefer-top-level-await` | Top-level await changes module evaluation and lifecycle behavior. |
 
 In test files, end-to-end files, test support, and `scripts/**`, these rules are
-also disabled: `eslint/one-var`, `eslint/no-use-before-define`,
-`eslint/no-magic-numbers`, `unicorn/no-useless-undefined`,
-`eslint/no-promise-executor-return`, `unicorn/no-object-as-default-parameter`,
-and `eslint/no-shadow`. Fixtures, mocks, assertions, and command-line setup
-use these patterns intentionally and the override does not affect production
-source.
+also disabled:
+
+| Rule | Reason |
+|---|---|
+| `eslint/one-var` | Fixtures and test setup group related declarations for readability. |
+| `eslint/no-use-before-define` | Test helpers and fixtures may be declared after the cases they support. |
+| `eslint/no-magic-numbers` | Assertions and fixtures use literal values to pin expected behavior. |
+| `unicorn/no-useless-undefined` | Mocks and assertions use explicit `undefined` to model omitted values. |
+| `eslint/no-promise-executor-return` | Test promise helpers use executor returns to control mocked async behavior. |
+| `unicorn/no-object-as-default-parameter` | Test fixtures use object defaults for concise case setup. |
+| `eslint/no-shadow` | Nested test scopes reuse names to mirror fixture and context values. |
+
+The override does not affect production source.
 
 `eqeqeq` remains enabled with the narrow `null` exception so deliberate
 nullish checks retain their behavior. Inline rule suppressions are exceptional;

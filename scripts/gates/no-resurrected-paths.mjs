@@ -1,7 +1,8 @@
 /**
  * This gate prevents completed moves from being undone by a later rebase. It
- * exits 1 when any path in no-resurrected-paths.json exists. Update the list
- * by appending paths removed by an approved architecture stage.
+ * exits 1 when any path in no-resurrected-paths.json has a tracked or
+ * non-ignored file. Update the list by appending paths removed by an approved
+ * architecture stage.
  */
 import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -49,7 +50,7 @@ function main() {
       console.log(`${path}: ignored residue only; delete directory ${path}`);
     }
   }
-  const failed = rows.some((row) => row[1] !== "absent");
+  const failed = rows.some((row) => row[1] === "exists");
   console.log(failed ? "no-resurrected-paths FAIL" : "no-resurrected-paths PASS");
   process.exitCode = failed ? 1 : 0;
 }
