@@ -18,10 +18,20 @@ export const WORKFLOW_TESTS = [
 ] as const;
 
 export const WORKTREE_DIFF = ["git", "diff", "--check"] as const satisfies Cmd;
+export const STAGED_WORKTREE_DIFF = ["git", "diff", "--cached", "--check"] as const satisfies Cmd;
 export const candidateDiff = (merge: string, candidate: string): Cmd =>
   ["git", "diff", "--check", merge, candidate, "--"];
 export const namesDiff = (merge: string, candidate: string): Cmd => [
   "git", "diff", "--name-only", "-z", "--no-renames", merge, candidate, "--",
+];
+export const stagedNamesDiff = (): Cmd => [
+  "git", "diff", "--cached", "--name-only", "-z", "--no-renames", "--",
+];
+export const worktreeNamesDiff = (merge: string, candidate: string): readonly Cmd[] => [
+  namesDiff(merge, candidate),
+  stagedNamesDiff(),
+  ["git", "diff", "--name-only", "-z", "--no-renames", "--"],
+  ["git", "ls-files", "--others", "--exclude-standard", "-z", "--"],
 ];
 
 const C = {
@@ -37,6 +47,7 @@ const C = {
   releaseType: ["pnpm", "run", "typecheck:release-notes"],
   releaseTest: ["pnpm", "run", "test:release-notes"],
   gates: ["pnpm", "run", "gates"],
+  docsStatus: ["pnpm", "run", "gate:docs-status"],
 } as const satisfies Record<string, Cmd>;
 
 const ROOT_CI = new Set(["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]);
@@ -75,7 +86,15 @@ const disk: Repo = {
 const any = (paths: readonly string[], match: (path: string) => boolean) =>
   paths.some(match);
 const isDocs = (path: string) =>
-  path.startsWith("docs/") || /\.(?:md|mdx|txt)$/i.test(path);
+  path.startsWith("docs/") ||
+  /\.(?:md|mdx|txt)$/i.test(path) ||
+  path === ".claude/settings.json" ||
+  path.startsWith(".claude/rules/") ||
+  path.startsWith(".claude/skills/") ||
+  path === "AGENTS.md" ||
+  path.endsWith("/AGENTS.md") ||
+  path === "CLAUDE.md" ||
+  path.endsWith("/CLAUDE.md");
 const isSkill = (path: string) => path.startsWith("skills/");
 const isRelease = (path: string) =>
   path.startsWith("scripts/release-notes/") ||
@@ -123,7 +142,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
   const skills = any(paths, isSkill);
   const release = any(paths, isRelease);
   if (paths.every(isDocs) && !product && !skills && !release) {
-    return { scopes: ["docs-only"], commands: [] };
+    return { scopes: ["docs-only"], commands: [C.docsStatus] };
   }
 
   const worker = any(paths, (path) => path.startsWith("apps/worker/"));
@@ -292,22 +311,39 @@ function execute([program, ...args]: Cmd): Promise<void> {
   });
 }
 export function parseArgs(input: readonly string[]): string | undefined {
+  return parseOptions(input).base;
+}
+
+export type VerifyOptions = { base?: string; worktree: boolean };
+
+export function parseOptions(input: readonly string[]): VerifyOptions {
   const args = input[0] === "--" ? input.slice(1) : [...input];
   let base: string | undefined;
+  let worktree = false;
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
+    if (arg === "--worktree") {
+      if (worktree) throw new Error("Provide --worktree at most once.");
+      worktree = true;
+      continue;
+    }
     const value = arg === "--base" ? args[++i] : arg.startsWith("--base=") ? arg.slice(7) : null;
     if (value === null) throw new Error(`Unknown argument ${JSON.stringify(arg)}.`);
     if (!value || base) throw new Error("Provide --base exactly once with a value.");
     base = value;
   }
-  return base;
+  return { base, worktree };
 }
 
 export async function main(input = process.argv.slice(2)) {
   console.log(`[verify:changed] $ ${show(WORKTREE_DIFF)}`);
   await execute(WORKTREE_DIFF);
-  const resolved = await resolveBase((args) => capture(["git", ...args]), parseArgs(input));
+  const options = parseOptions(input);
+  if (options.worktree) {
+    console.log(`[verify:changed] $ ${show(STAGED_WORKTREE_DIFF)}`);
+    await execute(STAGED_WORKTREE_DIFF);
+  }
+  const resolved = await resolveBase((args) => capture(["git", ...args]), options.base);
   console.log(
     `[verify:changed] base: ${resolved.source} ${resolved.reference} -> ${resolved.baseSha}`,
   );
@@ -316,9 +352,15 @@ export async function main(input = process.argv.slice(2)) {
   const checks = candidateDiff(resolved.mergeBaseSha, resolved.candidateSha);
   console.log(`[verify:changed] $ ${show(checks)}`);
   await execute(checks);
-  const names = namesDiff(resolved.mergeBaseSha, resolved.candidateSha);
-  console.log(`[verify:changed] $ ${show(names)}`);
-  const paths = parseNames(await capture(names));
+  const names = options.worktree
+    ? worktreeNamesDiff(resolved.mergeBaseSha, resolved.candidateSha)
+    : [namesDiff(resolved.mergeBaseSha, resolved.candidateSha)];
+  for (const command of names) console.log(`[verify:changed] $ ${show(command)}`);
+  const paths = [
+    ...new Set(
+      (await Promise.all(names.map((command) => capture(command)))).flatMap((output) => parseNames(output)),
+    ),
+  ];
   const next = plan(paths);
   console.log(`[verify:changed] changed files: ${JSON.stringify(paths)}`);
   console.log(`[verify:changed] scopes: ${next.scopes.join(", ")}`);
