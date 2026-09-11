@@ -47,7 +47,7 @@ import {
   getHookClarification,
   prepareHookClarification,
   publishHookClarification,
-} from "../../clarifications/hook-store.js";
+} from "../../db/repositories/clarification-hooks.js";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
 import {

@@ -19,15 +19,19 @@ import {
   SkillValidationError,
   type SkillSource,
 } from "@shared/skills";
-import { and, eq } from "drizzle-orm";
-import type { Db } from "../db/client.js";
-import { harnessSkillArtifacts } from "../db/schema.js";
+import type { Db } from "../db/types.js";
 import {
-  persistHarnessSkillArtifacts,
+  persistHarnessSkillArtifactsFromRepository,
 } from "./skill-artifact-persistence.js";
 import { sha256Digest } from "./skill-artifact-digest.js";
 import { HarnessSkillImportError } from "./skill-errors.js";
-import { readHarnessSkillArtifactSource } from "../db/repositories/harness-profiles.js";
+import {
+  createConnectedHarnessProfileRepository,
+  createHarnessProfileRepository,
+  readHarnessSkillArtifactSource,
+} from "../db/repositories/harness-profiles.js";
+
+type HarnessProfileRepository = ReturnType<typeof createHarnessProfileRepository>;
 
 /**
  * Skills shipped by the deployment itself live in `skills/` at the repository
@@ -426,6 +430,18 @@ export async function importLocalSkills(
     directory?: string;
   },
 ): Promise<HarnessSkillArtifact[]> {
+  return importLocalSkillsFromRepository(createHarnessProfileRepository(db), input);
+}
+
+export async function importLocalSkillsFromRepository(
+  persistence: HarnessProfileRepository,
+  input: {
+    organizationId: string;
+    actorId: string;
+    skills: HarnessLocalSkillSelection[];
+    directory?: string;
+  },
+): Promise<HarnessSkillArtifact[]> {
   const selections = validateSelections(input.skills);
   const directory = input.directory ?? defaultLocalSkillsDirectory();
   const read = await readLocalSkills(directory);
@@ -469,11 +485,25 @@ export async function importLocalSkills(
       }
     }),
   );
-  return persistHarnessSkillArtifacts(db, {
+  return persistHarnessSkillArtifactsFromRepository(persistence, {
     organizationId: input.organizationId,
     actorId: input.actorId,
     artifacts,
   });
+}
+
+export function importConnectedLocalSkills(
+  input: {
+    organizationId: string;
+    actorId: string;
+    skills: HarnessLocalSkillSelection[];
+    directory?: string;
+  },
+): Promise<HarnessSkillArtifact[]> {
+  return importLocalSkillsFromRepository(
+    createConnectedHarnessProfileRepository(),
+    input,
+  );
 }
 
 /**
@@ -491,16 +521,22 @@ export async function refreshLocalSkillArtifact(
     directory?: string;
   },
 ): Promise<HarnessSkillArtifact> {
-  const [existing] = await db
-    .select()
-    .from(harnessSkillArtifacts)
-    .where(
-      and(
-        eq(harnessSkillArtifacts.organizationId, input.organizationId),
-        eq(harnessSkillArtifacts.artifactHash, input.artifactHash),
-      ),
-    )
-    .limit(1);
+  return refreshLocalSkillArtifactFromRepository(createHarnessProfileRepository(db), input);
+}
+
+export async function refreshLocalSkillArtifactFromRepository(
+  persistence: HarnessProfileRepository,
+  input: {
+    organizationId: string;
+    actorId: string;
+    artifactHash: string;
+    directory?: string;
+  },
+): Promise<HarnessSkillArtifact> {
+  const existing = await persistence.getArtifactByHash({
+    organizationId: input.organizationId,
+    artifactHash: input.artifactHash,
+  });
   if (!existing) {
     throw new HarnessSkillImportError(404, "Skill artifact not found");
   }
@@ -531,7 +567,7 @@ export async function refreshLocalSkillArtifact(
         : `Skill "${source.path}" cannot be read from this deployment: ${reason.reason}`,
     );
   }
-  const [artifact] = await persistHarnessSkillArtifacts(db, {
+  const [artifact] = await persistHarnessSkillArtifactsFromRepository(persistence, {
     organizationId: input.organizationId,
     actorId: input.actorId,
     artifacts: [{ ...skill, artifactHash: hashHarnessSkillArtifact(skill, sha256Digest) }],

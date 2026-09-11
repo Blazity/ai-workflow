@@ -30,9 +30,10 @@ export async function prepareClarificationHookStep(input: {
   suggestedAnswers?: string[] | null;
 }) {
   "use step";
-  const { getDb } = await import("../../db/client.js");
-  const { prepareHookClarification } = await import("../support/clarification-hook-store.js");
-  const row = await prepareHookClarification(getDb(), input);
+  const { prepareConnectedHookClarification } = await import(
+    "../../db/repositories/clarification-hooks.js"
+  );
+  const row = await prepareConnectedHookClarification(input);
   return {
     id: row.id,
     hookToken: row.hookToken,
@@ -46,9 +47,10 @@ export async function recordClarificationHookSnapshotStep(
   snapshot: SerializableClarificationSnapshot,
 ): Promise<void> {
   "use step";
-  const { getDb } = await import("../../db/client.js");
-  const { recordHookClarificationSnapshot } = await import("../support/clarification-hook-store.js");
-  await recordHookClarificationSnapshot(getDb(), id, {
+  const { recordConnectedHookClarificationSnapshot } = await import(
+    "../../db/repositories/clarification-hooks.js"
+  );
+  await recordConnectedHookClarificationSnapshot(id, {
     snapshotId: snapshot.snapshotId,
     sourceSandboxId: snapshot.sourceSandboxId,
     expiresAt: new Date(snapshot.expiresAt),
@@ -57,9 +59,10 @@ export async function recordClarificationHookSnapshotStep(
 
 export async function publishClarificationHookStep(id: string): Promise<void> {
   "use step";
-  const { getDb } = await import("../../db/client.js");
-  const { publishHookClarification } = await import("../support/clarification-hook-store.js");
-  await publishHookClarification(getDb(), id);
+  const { publishConnectedHookClarification } = await import(
+    "../../db/repositories/clarification-hooks.js"
+  );
+  await publishConnectedHookClarification(id);
 }
 
 export async function markClarificationHookCleanupStep(
@@ -67,28 +70,28 @@ export async function markClarificationHookCleanupStep(
   result: { status: "deleted" } | { status: "failed"; error: string },
 ): Promise<void> {
   "use step";
-  const { getDb } = await import("../../db/client.js");
-  const { markHookClarificationCleanup } = await import("../support/clarification-hook-store.js");
-  await markHookClarificationCleanup(getDb(), id, result);
+  const { markConnectedHookClarificationCleanup } = await import(
+    "../../db/repositories/clarification-hooks.js"
+  );
+  await markConnectedHookClarificationCleanup(id, result);
 }
 
 export async function markRunAwaitingStep(runId: string): Promise<void> {
   "use step";
-  const { getDb } = await import("../../db/client.js");
-  const { markRunAwaiting } = await import("../../db/repositories/runs/telemetry.js");
-  await markRunAwaiting(getDb(), runId);
+  const { markConnectedRunAwaiting } = await import("../../db/repositories/runs/telemetry.js");
+  await markConnectedRunAwaiting(runId);
 }
 
 export async function markRunResumedStep(runId: string): Promise<void> {
   "use step";
-  const { getDb } = await import("../../db/client.js");
-  const { markRunResumed } = await import("../../db/repositories/runs/telemetry.js");
-  await markRunResumed(getDb(), runId);
+  const { markConnectedRunResumed } = await import("../../db/repositories/runs/telemetry.js");
+  await markConnectedRunResumed(runId);
 }
 
 export async function supersedeClarificationHookStep(id: string): Promise<void> {
   "use step";
-  const { getDb } = await import("../../db/client.js");
-  const { supersedePreparingHookClarification } = await import("../support/clarification-hook-store.js");
-  await supersedePreparingHookClarification(getDb(), id);
+  const { supersedeConnectedPreparingHookClarification } = await import(
+    "../../db/repositories/clarification-hooks.js"
+  );
+  await supersedeConnectedPreparingHookClarification(id);
 }

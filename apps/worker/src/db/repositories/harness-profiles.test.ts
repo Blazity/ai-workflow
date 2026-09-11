@@ -23,7 +23,6 @@ import {
 } from "../schema.js";
 import { createTestDb } from "../test-db.js";
 import { listHarnessProfileUsage } from "../harness-profile-usage-store.js";
-import { DashboardAuthError } from "@shared/contracts";
 import { hashHarnessSkillArtifact } from "@shared/skills";
 import { sha256Digest } from "../../harness-profiles/skill-artifact-digest.js";
 import {
@@ -32,36 +31,46 @@ import {
   upgradeHarnessDraftToV2,
 } from "../../harness-profiles/capability-catalog.js";
 import {
-  archiveHarnessProfile,
-  createHarnessProfile,
-  deleteHarnessProfile,
-  ensureSystemHarnessProfiles,
-  forkHarnessProfile,
   getHarnessProfile,
-  getHarnessProfileDetail,
   listHarnessProfiles,
   listHarnessProfileVersions,
-  publishHarnessProfile,
-  resolveHarnessProfileVersion,
-  restoreHarnessProfileVersion,
-  restoreArchivedHarnessProfile,
-  updateHarnessProfileDraft,
   type HarnessProfileActor,
-  type SystemHarnessProfileCatalog,
 } from "./harness-profiles.js";
+import { readHarnessProfileDetailFromDb as getHarnessProfileDetail } from "../../services/harness/profile-reads.js";
+import { removeHarnessProfileFromDb } from "../../harness-profiles/profile-deletion.js";
+import {
+  archiveHarnessProfileOnDb as archiveHarnessProfile,
+  createHarnessProfileOnDb as createHarnessProfile,
+  restoreArchivedHarnessProfileOnDb as restoreArchivedHarnessProfile,
+  updateHarnessProfileDraftOnDb as updateHarnessProfileDraft,
+} from "../../harness-profiles/profile-writes.js";
+import { resolveVerifiedHarnessProfileVersion as resolveHarnessProfileVersion } from "../../harness-profiles/resolved-version.js";
+import { publishHarnessProfileDraftOnDb } from "../../harness-profiles/publish-draft.js";
+import {
+  forkHarnessProfileOnDb,
+  replaceHarnessProfileSkillArtifactOnDb,
+  restoreHarnessProfileVersionOnDb,
+} from "../../harness-profiles/draft-authoring.js";
+import {
+  ensureSystemHarnessProfilesOnDb,
+  systemHarnessProfileSeedEnvelopes,
+  type SystemHarnessProfileCatalog,
+} from "../../harness-profiles/system-seed.js";
 
 const ADMIN: HarnessProfileActor = {
   organizationId: "org-a",
   role: "admin",
   id: "admin-a",
 };
-const MEMBER: HarnessProfileActor = {
-  organizationId: "org-a",
-  role: "member",
-  id: "member-a",
-};
 
 let db: Db;
+
+function seedSystemProfiles(catalog?: SystemHarnessProfileCatalog) {
+  return ensureSystemHarnessProfilesOnDb(
+    db,
+    systemHarnessProfileSeedEnvelopes(catalog),
+  );
+}
 
 beforeEach(async () => {
   db = await createTestDb();
@@ -198,8 +207,8 @@ async function insertSkillFixture(
 
 describe("system profile seeding", () => {
   it("is idempotent and publishes an explicitly versioned catalog update", async () => {
-    await ensureSystemHarnessProfiles(db);
-    await ensureSystemHarnessProfiles(db);
+    await seedSystemProfiles();
+    await seedSystemProfiles();
     let versions = await db.select().from(harnessProfileVersions);
     expect(versions).toHaveLength(2);
     expect(new Set(versions.map((version) => version.profileId))).toEqual(
@@ -217,7 +226,7 @@ describe("system profile seeding", () => {
       instructions: "Updated code-owned instructions",
     };
 
-    await ensureSystemHarnessProfiles(db, catalogWithCodex(nextCodex));
+    await seedSystemProfiles(catalogWithCodex(nextCodex));
     versions = await db
       .select()
       .from(harnessProfileVersions)
@@ -230,7 +239,7 @@ describe("system profile seeding", () => {
     expect(profile?.publishedVersion).toBe(3);
     expect(profile?.draftManifest.instructions).toBe(nextCodex.instructions);
 
-    await ensureSystemHarnessProfiles(db, catalogWithCodex(nextCodex));
+    await seedSystemProfiles(catalogWithCodex(nextCodex));
     expect(
       await db
         .select()
@@ -252,15 +261,15 @@ describe("system profile seeding", () => {
     const oldCatalog = catalogWithCodex(currentCodex);
     const newCatalog = catalogWithCodex(nextCodex);
 
-    await ensureSystemHarnessProfiles(db, oldCatalog);
-    await ensureSystemHarnessProfiles(db, newCatalog);
-    await ensureSystemHarnessProfiles(db, oldCatalog);
-    await ensureSystemHarnessProfiles(db, newCatalog);
+    await seedSystemProfiles(oldCatalog);
+    await seedSystemProfiles(newCatalog);
+    await seedSystemProfiles(oldCatalog);
+    await seedSystemProfiles(newCatalog);
     await Promise.all([
-      ensureSystemHarnessProfiles(db, oldCatalog),
-      ensureSystemHarnessProfiles(db, newCatalog),
-      ensureSystemHarnessProfiles(db, oldCatalog),
-      ensureSystemHarnessProfiles(db, newCatalog),
+      seedSystemProfiles(oldCatalog),
+      seedSystemProfiles(newCatalog),
+      seedSystemProfiles(oldCatalog),
+      seedSystemProfiles(newCatalog),
     ]);
 
     const versions = await db
@@ -279,7 +288,7 @@ describe("system profile seeding", () => {
   });
 
   it("rejects code-owned content drift without a catalog version bump", async () => {
-    await ensureSystemHarnessProfiles(db);
+    await seedSystemProfiles();
     const currentCodex =
       BUILTIN_HARNESS_PROFILE_MANIFESTS[
         BUILTIN_HARNESS_PROFILE_IDS.codex
@@ -290,7 +299,7 @@ describe("system profile seeding", () => {
     };
 
     await expect(
-      ensureSystemHarnessProfiles(db, catalogWithCodex(driftedCurrent)),
+      seedSystemProfiles(catalogWithCodex(driftedCurrent)),
     ).rejects.toMatchObject({
       statusCode: 409,
     });
@@ -304,15 +313,7 @@ describe("system profile seeding", () => {
 });
 
 describe("organization profiles", () => {
-  it("enforces owner/admin writes, tenant scope, and CAS revisions", async () => {
-    await expect(
-      createHarnessProfile(db, {
-        slug: "member-profile",
-        draft: draft(),
-        actor: MEMBER,
-      }),
-    ).rejects.toBeInstanceOf(DashboardAuthError);
-
+  it("enforces tenant scope and CAS revisions", async () => {
     const created = await createHarnessProfile(db, {
       slug: "team-profile",
       draft: draft(),
@@ -354,6 +355,45 @@ describe("organization profiles", () => {
     });
   });
 
+  it("replaces a draft skill only when the profile and replacement artifact are valid", async () => {
+    const first = await insertSkillFixture({ commitSha: "a".repeat(40) });
+    const second = await insertSkillFixture({
+      sourcePath: "replacement",
+      commitSha: "c".repeat(40),
+    });
+    const profileDraft = draft();
+    profileDraft.skills = [
+      { artifactHash: first.fixture.artifactHash, name: first.fixture.name },
+    ];
+    const profile = await createHarnessProfile(db, {
+      slug: "replace-draft-skill",
+      draft: profileDraft,
+      actor: ADMIN,
+    });
+
+    const updated = await replaceHarnessProfileSkillArtifactOnDb(db, {
+      profileId: profile.id,
+      expectedRevision: profile.draftRevision,
+      previousArtifactHash: first.fixture.artifactHash,
+      nextArtifactHash: second.fixture.artifactHash,
+      actor: ADMIN,
+    });
+    expect(updated.draftRevision).toBe(profile.draftRevision + 1);
+    expect(updated.draft.skills).toEqual([
+      { artifactHash: second.fixture.artifactHash, name: second.fixture.name },
+    ]);
+
+    await expect(
+      replaceHarnessProfileSkillArtifactOnDb(db, {
+        profileId: profile.id,
+        expectedRevision: updated.draftRevision,
+        previousArtifactHash: first.fixture.artifactHash,
+        nextArtifactHash: second.fixture.artifactHash,
+        actor: ADMIN,
+      }),
+    ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
   it("publishes immutable versions, restores drafts, forks, and preserves pinned archives", async () => {
     const liveCapabilities = capabilityCatalogFor(draft());
     const capabilityDependencies = {
@@ -371,7 +411,7 @@ describe("organization profiles", () => {
       draft: draft(),
       actor: ADMIN,
     });
-    const first = await publishHarnessProfile(db, {
+    const first = await publishHarnessProfileDraftOnDb(db, {
       profileId: created.id,
       expectedRevision: 1,
       actor: ADMIN,
@@ -380,7 +420,7 @@ describe("organization profiles", () => {
     expect(first.version.version).toBe(1);
     expect(first.version.manifestHash).toMatch(/^[a-f0-9]{64}$/);
 
-    const unchanged = await publishHarnessProfile(db, {
+    const unchanged = await publishHarnessProfileDraftOnDb(db, {
       profileId: created.id,
       expectedRevision: 1,
       actor: ADMIN,
@@ -396,14 +436,14 @@ describe("organization profiles", () => {
       draft: nextDraft,
       actor: ADMIN,
     });
-    const second = await publishHarnessProfile(db, {
+    const second = await publishHarnessProfileDraftOnDb(db, {
       profileId: created.id,
       expectedRevision: changedDraft.draftRevision,
       actor: ADMIN,
     });
     expect(second.version.version).toBe(2);
 
-    const restored = await restoreHarnessProfileVersion(db, {
+    const restored = await restoreHarnessProfileVersionOnDb(db, {
       profileId: created.id,
       version: 1,
       expectedRevision: changedDraft.draftRevision,
@@ -411,7 +451,7 @@ describe("organization profiles", () => {
     });
     expect(restored.draftRestoredFromVersion).toBe(1);
     await expect(
-      publishHarnessProfile(db, {
+      publishHarnessProfileDraftOnDb(db, {
         profileId: created.id,
         expectedRevision: restored.draftRevision,
         actor: ADMIN,
@@ -434,7 +474,7 @@ describe("organization profiles", () => {
       draft: currentDraft,
       actor: ADMIN,
     });
-    const third = await publishHarnessProfile(db, {
+    const third = await publishHarnessProfileDraftOnDb(db, {
       profileId: created.id,
       expectedRevision: reviewedRestore.draftRevision,
       actor: ADMIN,
@@ -442,7 +482,7 @@ describe("organization profiles", () => {
     expect(third.version.version).toBe(3);
     expect(third.version.restoredFromVersion).toBe(1);
 
-    const fork = await forkHarnessProfile(db, {
+    const fork = await forkHarnessProfileOnDb(db, {
       profileId: created.id,
       slug: "lifecycle-fork",
       expectedRevision: reviewedRestore.draftRevision,
@@ -480,11 +520,10 @@ describe("organization profiles", () => {
     });
     expect(unarchived.archivedAt).toBeNull();
 
-    await deleteHarnessProfile(db, {
+    await removeHarnessProfileFromDb(db, {
       profileId: fork.id,
       expectedRevision: fork.draftRevision,
       actor: ADMIN,
-      usage: [],
     });
     expect(
       await getHarnessProfile(db, {
@@ -493,11 +532,10 @@ describe("organization profiles", () => {
       }),
     ).toBeNull();
     await expect(
-      deleteHarnessProfile(db, {
+      removeHarnessProfileFromDb(db, {
         profileId: created.id,
         expectedRevision: unarchived.draftRevision,
         actor: ADMIN,
-        usage: [],
       }),
     ).rejects.toMatchObject({
       statusCode: 409,
@@ -511,7 +549,7 @@ describe("organization profiles", () => {
       draft: draft(),
       actor: ADMIN,
     });
-    await publishHarnessProfile(db, {
+    await publishHarnessProfileDraftOnDb(db, {
       profileId: created.id,
       expectedRevision: 1,
       actor: ADMIN,
@@ -551,7 +589,7 @@ describe("organization profiles", () => {
     const detail = await getHarnessProfileDetail(db, {
       organizationId: ADMIN.organizationId,
       profileId: created.id,
-      actorRole: ADMIN.role,
+      canManageProfiles: true,
       usage: await listHarnessProfileUsage(db, created.id),
     });
     expect(detail).toMatchObject({
@@ -602,7 +640,7 @@ describe("organization profiles", () => {
     }) as Db;
 
     await expect(
-      publishHarnessProfile(racedDb, {
+      publishHarnessProfileDraftOnDb(racedDb, {
         profileId: created.id,
         expectedRevision: created.draftRevision,
         actor: ADMIN,
@@ -648,7 +686,7 @@ describe("organization profiles", () => {
       draft: skillDraft,
       actor: ADMIN,
     });
-    await publishHarnessProfile(db, {
+    await publishHarnessProfileDraftOnDb(db, {
       profileId: profile.id,
       expectedRevision: profile.draftRevision,
       actor: ADMIN,
@@ -702,7 +740,7 @@ describe("organization profiles", () => {
     });
 
     await expect(
-      publishHarnessProfile(db, {
+      publishHarnessProfileDraftOnDb(db, {
         profileId: profile.id,
         expectedRevision: profile.draftRevision,
         actor: ADMIN,
@@ -741,7 +779,7 @@ describe("organization profiles", () => {
       draft: profileDraft,
       actor: ADMIN,
     });
-    await publishHarnessProfile(db, {
+    await publishHarnessProfileDraftOnDb(db, {
       profileId: profile.id,
       expectedRevision: profile.draftRevision,
       actor: ADMIN,
@@ -760,7 +798,7 @@ describe("organization profiles", () => {
       .where(eq(harnessSkillArtifactFiles.artifactId, tampered.artifact.id));
 
     await expect(
-      publishHarnessProfile(db, {
+      publishHarnessProfileDraftOnDb(db, {
         profileId: profile.id,
         expectedRevision: profile.draftRevision,
         actor: ADMIN,
@@ -806,7 +844,7 @@ describe("organization profiles", () => {
   });
 
   it("keeps system profiles read-only for every organization", async () => {
-    await ensureSystemHarnessProfiles(db);
+    await seedSystemProfiles();
     await expect(
       updateHarnessProfileDraft(db, {
         profileId: "builtin-codex",
@@ -814,6 +852,6 @@ describe("organization profiles", () => {
         draft: draft(),
         actor: ADMIN,
       }),
-    ).rejects.toBeInstanceOf(DashboardAuthError);
+    ).rejects.toMatchObject({ statusCode: 403 });
   });
 });

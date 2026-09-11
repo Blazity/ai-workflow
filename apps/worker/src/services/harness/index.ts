@@ -26,6 +26,7 @@ export {
   unarchiveHarnessProfileDraft,
 } from "./profile-authoring.js";
 export {
+  currentSystemHarnessProfileReference,
   listHarnessProfilesForOrganization,
   readHarnessProfileDetail,
 } from "./profile-reads.js";

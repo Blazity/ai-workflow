@@ -1,5 +1,5 @@
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
-import type { Db } from "../client.js";
+import { getDb, type Db } from "../client.js";
 import { manualDispatchRequests } from "../schema.js";
 
 type ManualDispatchStatus =
@@ -56,6 +56,12 @@ export async function createManualDispatchRequest(
   return { inserted: false, row: existing };
 }
 
+export function createConnectedManualDispatchRequest(
+  input: Parameters<typeof createManualDispatchRequest>[1],
+) {
+  return createManualDispatchRequest(getDb(), input);
+}
+
 export async function getManualDispatchRequest(
   db: Db,
   requestId: string,
@@ -66,6 +72,10 @@ export async function getManualDispatchRequest(
     .where(eq(manualDispatchRequests.requestId, requestId))
     .limit(1);
   return rows[0] ? mapRow(rows[0]) : null;
+}
+
+export function getConnectedManualDispatchRequest(requestId: string) {
+  return getManualDispatchRequest(getDb(), requestId);
 }
 
 export async function reserveManualDispatchRequest(
@@ -91,6 +101,10 @@ export async function reserveManualDispatchRequest(
     )
     .returning({ requestId: manualDispatchRequests.requestId });
   return rows.length === 1;
+}
+
+export function reserveConnectedManualDispatchRequest(requestId: string, ownerToken: string) {
+  return reserveManualDispatchRequest(getDb(), requestId, ownerToken);
 }
 
 export async function markManualDispatchPrepared(
@@ -121,6 +135,10 @@ export async function markManualDispatchPrepared(
   return rows.length === 1;
 }
 
+export function markConnectedManualDispatchPrepared(requestId: string, ownerToken: string, inputPayload?: Record<string, unknown>) {
+  return markManualDispatchPrepared(getDb(), requestId, ownerToken, inputPayload);
+}
+
 export async function markManualDispatchCandidateStarted(
   db: Db,
   requestId: string,
@@ -143,6 +161,10 @@ export async function markManualDispatchCandidateStarted(
     )
     .returning({ requestId: manualDispatchRequests.requestId });
   return rows.length === 1;
+}
+
+export function markConnectedManualDispatchCandidateStarted(requestId: string, ownerToken: string, runId: string) {
+  return markManualDispatchCandidateStarted(getDb(), requestId, ownerToken, runId);
 }
 
 export async function acknowledgeManualDispatchStarted(
@@ -176,6 +198,14 @@ export async function acknowledgeManualDispatchStarted(
   return rows.length === 1;
 }
 
+export function acknowledgeConnectedManualDispatchStarted(
+  requestId: string,
+  ownerToken: string,
+  runId: string,
+): Promise<boolean> {
+  return acknowledgeManualDispatchStarted(getDb(), requestId, ownerToken, runId);
+}
+
 export async function markManualDispatchFailed(
   db: Db,
   requestId: string,
@@ -201,6 +231,10 @@ export async function markManualDispatchFailed(
         ]),
       ),
     );
+}
+
+export function markConnectedManualDispatchFailed(requestId: string, errorCode: string, errorMessage: string) {
+  return markManualDispatchFailed(getDb(), requestId, errorCode, errorMessage);
 }
 
 export async function resetManualDispatchToPending(
@@ -231,6 +265,10 @@ export async function resetManualDispatchToPending(
   return rows.length === 1;
 }
 
+export function resetConnectedManualDispatchToPending(requestId: string, ownerToken: string) {
+  return resetManualDispatchToPending(getDb(), requestId, ownerToken);
+}
+
 export async function listRecoverableManualDispatches(
   db: Db,
   limit = 25,
@@ -249,6 +287,10 @@ export async function listRecoverableManualDispatches(
     .orderBy(manualDispatchRequests.createdAt)
     .limit(limit);
   return rows.map(mapRow);
+}
+
+export function listConnectedRecoverableManualDispatches(limit = 25) {
+  return listRecoverableManualDispatches(getDb(), limit);
 }
 
 function mapRow(

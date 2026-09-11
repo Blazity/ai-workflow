@@ -6,11 +6,11 @@ import type {
   IssueTrackerMoveTarget,
   TicketContent,
 } from "../../adapters/issue-tracker/types.js";
-import type { Db } from "../../db/client.js";
+import type { Db } from "../../db/types.js";
 import {
   assertActiveRunOwnerState,
   type ActiveRunOwner,
-} from "../../engine/support/active-run-owner.js";
+} from "../../db/repositories/active-runs.js";
 
 export type TicketTransitionOwner = ActiveRunOwner;
 
@@ -33,7 +33,20 @@ export async function moveTicketForRun(input: {
     issueTracker: input.issueTracker,
     ticketKey: input.ticketKey,
     target: input.target,
-    guard: () => assertActiveRunOwnerState(input.db, input.owner, state),
+    guard: () => assertActiveRunOwnerState(input.owner, state, input.db),
+  });
+}
+
+export async function moveConnectedTicketForRun(
+  input: Omit<Parameters<typeof moveTicketForRun>[0], "db">,
+): Promise<void> {
+  const state =
+    input.requiredOwnerState ?? (input.owner.runId === null ? "reserved" : "bound");
+  await moveTicket({
+    issueTracker: input.issueTracker,
+    ticketKey: input.ticketKey,
+    target: input.target,
+    guard: () => assertActiveRunOwnerState(input.owner, state),
   });
 }
 
@@ -67,18 +80,10 @@ export async function withdrawTicketFromAiForRun(input: {
     // A deleted ticket is already outside AI. Still fence the release against
     // the exact cancelling owner; absence alone must never authorize another
     // run's claim to be released.
-    await assertActiveRunOwnerState(
-      input.db,
-      input.owner,
-      input.requiredOwnerState,
-    );
+    await assertActiveRunOwnerState(input.owner, input.requiredOwnerState, input.db);
     return;
   }
-  await assertActiveRunOwnerState(
-    input.db,
-    input.owner,
-    input.requiredOwnerState,
-  );
+  await assertActiveRunOwnerState(input.owner, input.requiredOwnerState, input.db);
   if (!ticketMatchesMoveTarget(current, input.aiColumn)) return;
   if (!input.target) {
     throw new Error("Cannot withdraw an AI ticket without a safe move target");
@@ -92,14 +97,40 @@ export async function withdrawTicketFromAiForRun(input: {
       if (!ticketMatchesMoveTarget(afterError, input.aiColumn)) return;
     } catch (readError) {
       if (isIssueTrackerNotFound(readError)) {
-        await assertActiveRunOwnerState(
-          input.db,
-          input.owner,
-          input.requiredOwnerState,
-        );
+        await assertActiveRunOwnerState(input.owner, input.requiredOwnerState, input.db);
         return;
       }
       // Preserve the original mutation error.
+    }
+    throw error;
+  }
+}
+
+export async function withdrawConnectedTicketFromAiForRun(
+  input: Omit<Parameters<typeof withdrawTicketFromAiForRun>[0], "db">,
+): Promise<void> {
+  let current: TicketContent;
+  try {
+    current = await input.issueTracker.fetchTicket(input.ticketKey);
+  } catch (error) {
+    if (!isIssueTrackerNotFound(error)) throw error;
+    await assertActiveRunOwnerState(input.owner, input.requiredOwnerState);
+    return;
+  }
+  await assertActiveRunOwnerState(input.owner, input.requiredOwnerState);
+  if (!ticketMatchesMoveTarget(current, input.aiColumn)) return;
+  if (!input.target) throw new Error("Cannot withdraw an AI ticket without a safe move target");
+  try {
+    await input.issueTracker.moveTicket(input.ticketKey, input.target);
+  } catch (error) {
+    try {
+      const afterError = await input.issueTracker.fetchTicket(input.ticketKey);
+      if (!ticketMatchesMoveTarget(afterError, input.aiColumn)) return;
+    } catch (readError) {
+      if (isIssueTrackerNotFound(readError)) {
+        await assertActiveRunOwnerState(input.owner, input.requiredOwnerState);
+        return;
+      }
     }
     throw error;
   }

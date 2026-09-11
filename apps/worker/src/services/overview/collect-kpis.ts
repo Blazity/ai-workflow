@@ -5,13 +5,12 @@
  * here, and the caller decides what an unreachable database looks like.
  */
 import type { KpisResponse } from "@shared/contracts";
-import { getDb } from "../../db/client.js";
-import { parseWindow, runKpis } from "../../db/repositories/runs.js";
+import { collectConnectedRunKpis } from "../../engine/overview-aggregates.js";
 
 /** The KPI aggregate for the window the raw query value selects. */
 export function collectRunKpis(
   windowParam: unknown,
   now: Date,
 ): Promise<Omit<KpisResponse, "generatedAt">> {
-  return runKpis({ db: getDb(), window: parseWindow(windowParam), now });
+  return collectConnectedRunKpis(windowParam, now);
 }

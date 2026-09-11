@@ -1,6 +1,9 @@
-import type { Db } from "../../db/client.js";
+import type { Db } from "../../db/types.js";
 import {
+  hasConnectedDurableRunPublication,
   hasDurableRunPublication,
+  isConnectedRunRecordedFailed,
+  isConnectedRunRecordedSucceeded,
   isRunRecordedFailed,
   isRunRecordedSucceeded,
 } from "../../db/repositories/runs.js";
@@ -24,6 +27,18 @@ export async function decideAiReviewRun(
     if (await isRunRecordedFailed(db, runId)) return "retain";
     if (await isRunRecordedSucceeded(db, runId)) return "retain";
     return (await hasDurableRunPublication(db, runId)) ? "retain" : "cancel";
+  } catch {
+    return "lookup_failed";
+  }
+}
+
+export async function decideConnectedAiReviewRun(
+  runId: string,
+): Promise<AiReviewRunDecision> {
+  try {
+    if (await isConnectedRunRecordedFailed(runId)) return "retain";
+    if (await isConnectedRunRecordedSucceeded(runId)) return "retain";
+    return (await hasConnectedDurableRunPublication(runId)) ? "retain" : "cancel";
   } catch {
     return "lookup_failed";
   }

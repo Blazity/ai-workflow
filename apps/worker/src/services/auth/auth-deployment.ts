@@ -1,6 +1,5 @@
 import { Resend } from "resend";
 
-import { getDb } from "../../db/client.js";
 import { env } from "../../infra/vcs-config.js";
 import { resetPasswordEmailTemplate, sendEmail } from "../email/index.js";
 import type { AuthOptions } from "./auth-core.js";
@@ -9,7 +8,6 @@ import { buildTrustedOrigins } from "./trusted-origins.js";
 /** Values and service callbacks needed by the app-tier auth instance. */
 export function authDeployment() {
   return {
-    db: getDb(),
     options: {
       secret: env.BETTER_AUTH_SECRET,
       baseURL: env.BETTER_AUTH_URL,

@@ -2,9 +2,12 @@ import type {
   BlockOutput,
   ReplayAttemptOutcome,
   ReplayAttemptState,
+  ReplayObservationKind,
+  ReplaySanitizedEnvelope,
   WorkflowBlockType,
   WorkflowDefinitionV2,
   WorkflowReplayGraphSnapshot,
+  WorkflowReplayLayoutSnapshot,
   WorkflowReplaySelectedTransition,
 } from "@shared/contracts";
 import type { V2InvocationObservation } from "../workflow-definition/invocation-context.js";
@@ -14,6 +17,56 @@ import type {
   V2SchedulerHooks,
 } from "../workflow-definition/v2-scheduler.js";
 import { MAX_REPLAY_ATTEMPTS_PER_RUN } from "./limits.js";
+import {
+  appendReplayLogEnvelope,
+  enforceReplayAttemptStorageBudget,
+  REPLAY_ATTEMPT_MAX_BYTES,
+  sanitizeReplayAttemptOutcome,
+  sanitizeReplayGraphSnapshot,
+  sanitizeReplayLayoutSnapshot,
+  type ReplayAttemptEnvelopeSet,
+} from "./sanitizer.js";
+
+const ATTEMPT_ROW_BUDGET_OVERHEAD = 1024;
+const MAX_SELECTED_EDGE_IDS = 400;
+const MAX_TRANSITION_IDENTIFIER_CHARACTERS = 200;
+
+export const REPLAY_ATTEMPT_CAS_ATTEMPTS = 64;
+
+export interface ReplayAttemptPersistenceState {
+  state: ReplayAttemptState;
+  outcome: ReplayAttemptOutcome | null;
+  selectedTransition: WorkflowReplaySelectedTransition | null;
+  diagnosticId: string | null;
+  inputEnvelope: ReplaySanitizedEnvelope | null;
+  outputEnvelope: ReplaySanitizedEnvelope | null;
+  logEnvelope: ReplaySanitizedEnvelope | null;
+  metadataEnvelope: ReplaySanitizedEnvelope | null;
+  observationRevision: number;
+  startedAt: Date;
+  completedAt: Date | null;
+  durationMs: number | null;
+}
+
+export interface ReplayAttemptObservation {
+  kind: ReplayObservationKind;
+  envelope: ReplaySanitizedEnvelope;
+}
+
+export interface PreparedReplayAttemptPersistence {
+  expectedRevision: number;
+  state: ReplayAttemptState;
+  outcome: ReplayAttemptOutcome | null;
+  selectedTransition: WorkflowReplaySelectedTransition | null;
+  diagnosticId: string | null;
+  inputEnvelope: ReplaySanitizedEnvelope | null;
+  outputEnvelope: ReplaySanitizedEnvelope | null;
+  logEnvelope: ReplaySanitizedEnvelope | null;
+  metadataEnvelope: ReplaySanitizedEnvelope | null;
+  completedAt: Date | null;
+  durationMs: number | null;
+  updatedAt: Date;
+}
 
 export interface RunObservationAttemptFinish {
   state: Exclude<ReplayAttemptState, "running" | "waiting_loop">;
@@ -82,6 +135,188 @@ export function buildV2ReplayGraphSnapshot(
       fromPort: edge.fromPort ?? null,
     })),
   };
+}
+
+/**
+ * Replay snapshots cross from workflow execution into persistence here. Keep
+ * presentation redaction and size policy above the statement-only repository.
+ */
+export function sanitizeV2ReplaySnapshotForCapture(input: {
+  graph: WorkflowReplayGraphSnapshot;
+  layout: WorkflowReplayLayoutSnapshot;
+  secrets: readonly string[];
+}): {
+  graph: WorkflowReplayGraphSnapshot;
+  layout: WorkflowReplayLayoutSnapshot;
+} | null {
+  const graph = sanitizeReplayGraphSnapshot(input.graph, input.secrets);
+  const layout = sanitizeReplayLayoutSnapshot(input.layout, input.secrets);
+  return graph && layout ? { graph, layout } : null;
+}
+
+function safeSelectedTransition(
+  transition: WorkflowReplaySelectedTransition | null | undefined,
+): WorkflowReplaySelectedTransition | null {
+  if (
+    !transition ||
+    transition.port.length < 1 ||
+    transition.port.length > MAX_TRANSITION_IDENTIFIER_CHARACTERS ||
+    transition.edgeIds.length > MAX_SELECTED_EDGE_IDS ||
+    transition.edgeIds.some(
+      (edgeId) =>
+        edgeId.length < 1 ||
+        edgeId.length > MAX_TRANSITION_IDENTIFIER_CHARACTERS,
+    )
+  ) {
+    return null;
+  }
+  return { port: transition.port, edgeIds: [...transition.edgeIds] };
+}
+
+function applyReplayAttemptObservations(
+  current: ReplayAttemptEnvelopeSet,
+  observations: readonly ReplayAttemptObservation[],
+): ReplayAttemptEnvelopeSet {
+  const next = { ...current };
+  for (const observation of observations) {
+    const envelope = structuredClone(observation.envelope);
+    switch (observation.kind) {
+      case "input":
+        next.input = envelope;
+        break;
+      case "output":
+        next.output = envelope;
+        break;
+      case "log":
+        next.logs = appendReplayLogEnvelope(next.logs, envelope);
+        break;
+      case "metadata":
+        next.metadata = envelope;
+        break;
+    }
+  }
+  return next;
+}
+
+function boundedReplayAttemptEnvelopes(
+  current: ReplayAttemptPersistenceState,
+  observations: readonly ReplayAttemptObservation[],
+  outcome: ReplayAttemptOutcome | null,
+  selectedTransition: WorkflowReplaySelectedTransition | null,
+): ReplayAttemptEnvelopeSet {
+  const extraBytes = Buffer.byteLength(
+    JSON.stringify({ outcome, selectedTransition }),
+    "utf8",
+  );
+  return enforceReplayAttemptStorageBudget(
+    applyReplayAttemptObservations(
+      {
+        input: current.inputEnvelope,
+        output: current.outputEnvelope,
+        logs: current.logEnvelope,
+        metadata: current.metadataEnvelope,
+      },
+      observations,
+    ),
+    Math.max(1024, REPLAY_ATTEMPT_MAX_BYTES - ATTEMPT_ROW_BUDGET_OVERHEAD - extraBytes),
+  );
+}
+
+function preparedReplayAttemptPersistence(
+  current: ReplayAttemptPersistenceState,
+  input: {
+    state: ReplayAttemptState;
+    outcome: ReplayAttemptOutcome | null;
+    selectedTransition: WorkflowReplaySelectedTransition | null;
+    diagnosticId: string | null;
+    observations: readonly ReplayAttemptObservation[];
+    completedAt: Date | null | undefined;
+    updatedAt: Date;
+  },
+): PreparedReplayAttemptPersistence {
+  const envelopes = boundedReplayAttemptEnvelopes(
+    current,
+    input.observations,
+    input.outcome,
+    input.selectedTransition,
+  );
+  return {
+    expectedRevision: current.observationRevision,
+    state: input.state,
+    outcome: input.outcome,
+    selectedTransition: input.selectedTransition,
+    diagnosticId: input.diagnosticId,
+    inputEnvelope: envelopes.input,
+    outputEnvelope: envelopes.output,
+    logEnvelope: envelopes.logs,
+    metadataEnvelope: envelopes.metadata,
+    completedAt:
+      input.completedAt === undefined ? current.completedAt : input.completedAt,
+    durationMs:
+      input.completedAt instanceof Date
+        ? Math.max(0, input.completedAt.getTime() - current.startedAt.getTime())
+        : input.completedAt === null
+          ? null
+          : current.durationMs,
+    updatedAt: input.updatedAt,
+  };
+}
+
+export function prepareReplayAttemptObservationPersistence(
+  current: ReplayAttemptPersistenceState,
+  observation: ReplayAttemptObservation,
+  observedAt = new Date(),
+): PreparedReplayAttemptPersistence {
+  return preparedReplayAttemptPersistence(current, {
+    state: current.state,
+    outcome: current.outcome,
+    selectedTransition: safeSelectedTransition(current.selectedTransition),
+    diagnosticId: current.diagnosticId,
+    observations: [observation],
+    completedAt: undefined,
+    updatedAt: observedAt,
+  });
+}
+
+export function prepareReplayAttemptWaitingPersistence(
+  current: ReplayAttemptPersistenceState,
+  input: {
+    selectedTransition: WorkflowReplaySelectedTransition | null;
+    observations: readonly ReplayAttemptObservation[];
+    updatedAt?: Date;
+  },
+): PreparedReplayAttemptPersistence {
+  return preparedReplayAttemptPersistence(current, {
+    state: "waiting_loop",
+    outcome: current.outcome,
+    selectedTransition: safeSelectedTransition(input.selectedTransition),
+    diagnosticId: current.diagnosticId,
+    observations: input.observations,
+    completedAt: null,
+    updatedAt: input.updatedAt ?? new Date(),
+  });
+}
+
+export function prepareReplayAttemptFinishPersistence(
+  current: ReplayAttemptPersistenceState,
+  input: {
+    state: Exclude<ReplayAttemptState, "running" | "waiting_loop">;
+    outcome: ReplayAttemptOutcome | null | undefined;
+    selectedTransition: WorkflowReplaySelectedTransition | null;
+    diagnosticId: string | null;
+    observations: readonly ReplayAttemptObservation[];
+    completedAt: Date;
+  },
+): PreparedReplayAttemptPersistence {
+  return preparedReplayAttemptPersistence(current, {
+    state: input.state,
+    outcome: sanitizeReplayAttemptOutcome(input.outcome),
+    selectedTransition: safeSelectedTransition(input.selectedTransition),
+    diagnosticId: input.diagnosticId,
+    observations: input.observations,
+    completedAt: input.completedAt,
+    updatedAt: input.completedAt,
+  });
 }
 
 function identityKey(identity: V2InvocationIdentity): string {

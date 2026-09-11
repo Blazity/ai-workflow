@@ -103,3 +103,21 @@ export type {
   WebhookEndpointTarget,
   WebhookTestDeliveryResult,
 } from "./webhook-endpoint-nodes.js";
+export {
+  archiveWorkflowDefinition,
+  createConnectedWorkflowDefinition,
+  createWorkflowDefinition,
+  createWorkflowDefinitionDraft,
+  deployConnectedWorkflowDefinition,
+  deployWorkflowDefinition,
+  restoreWorkflowDefinitionVersion,
+  rollbackWorkflowDefinition,
+  saveConnectedWorkflowDefinitionDraft,
+  saveWorkflowDefinitionDraft,
+  saveWorkflowDefinitionLayout,
+  saveWorkflowDefinitionVersion,
+  updateConnectedWorkflowDefinition,
+  updateWorkflowDefinition,
+} from "./policy-operations.js";
+export type { WorkflowDefinitionActor } from "./policy-operations.js";
+export { runnableDefinitionOf } from "../../db/repositories/definitions.js";

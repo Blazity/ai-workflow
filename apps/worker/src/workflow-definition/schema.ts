@@ -27,7 +27,6 @@ import {
 } from "@shared/contracts";
 import { resolveBuiltinHarnessProfile } from "@shared/harness";
 import { PROMPT_SLOT_NAME_PATTERN } from "@shared/prompts";
-import { parseCondition } from "@shared/conditions";
 import {
   prepareWorkspaceParams,
   finalizeWorkspaceParams,
@@ -49,7 +48,7 @@ import {
   MINIMUM_PERIOD_MS,
   parseSchedule,
   violatesMinimumPeriod,
-} from "../engine/support/schedule-occurrence.js";
+} from "../engine/definition/schedule-occurrence.js";
 import {
   isSafeWorkflowInputName,
 } from "./bindings.js";

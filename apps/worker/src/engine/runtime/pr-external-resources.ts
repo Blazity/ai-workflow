@@ -3,14 +3,12 @@ import type {
   ReviewResult,
   WorkflowPrCheckReference,
 } from "@shared/contracts";
-import { and, asc, eq, inArray } from "drizzle-orm";
-import type { Db } from "../../db/client.js";
 import {
-  workflowPrReviewPublicationComments,
-  workflowPrReviewPublications,
-  workflowRunExternalChecks,
-  workflowRuns,
-} from "../../db/schema.js";
+  createConnectedPrExternalResourcesRepository,
+  createPrExternalResourcesRepository,
+  type PrExternalResourcesDb,
+  type PrExternalResourcesRepository,
+} from "../../db/repositories/pr-external-resources.js";
 import {
   hasGateStatusCapability,
   hasPRFilesCapability,
@@ -20,7 +18,11 @@ import {
   type PRFile,
   type PRReviewInlineComment,
 } from "../../adapters/vcs/types.js";
-import { assertActiveRunOwner, type ActiveRunOwner } from "../support/active-run-owner.js";
+import {
+  assertActiveRunOwner,
+  assertConnectedActiveRunOwner,
+  type ActiveRunOwner,
+} from "../../db/repositories/active-runs.js";
 import {
   compareMergedFindingsForDisplay,
   compareMergedFindingsForPublication,
@@ -34,7 +36,10 @@ import {
 } from "../helpers/review-finding-merge.js";
 import { scrubForPublication } from "../support/publication-scrub.js";
 import type { PrTriggerPayload } from "../agent-input.js";
-import { findRunPrSiblings } from "../../db/repositories/runs.js";
+import {
+  findConnectedRunPrSiblings,
+  findRunPrSiblings,
+} from "../../db/repositories/runs.js";
 import { logger } from "../../infra/logger.js";
 
 export type CheckBusinessConclusion = "success" | "failure" | "neutral";
@@ -51,6 +56,31 @@ export interface PrRunTarget {
   prNumber: number;
   headSha: string;
   baseRef: string;
+}
+
+type PrExternalResourcesPersistence = PrExternalResourcesRepository & {
+  assertOwner(owner: ActiveRunOwner): Promise<void>;
+  findRunPrSiblings(
+    input: Omit<Parameters<typeof findRunPrSiblings>[0], "db">,
+  ): ReturnType<typeof findRunPrSiblings>;
+};
+
+function prExternalResourcesPersistence(
+  db: PrExternalResourcesDb,
+): PrExternalResourcesPersistence {
+  return {
+    ...createPrExternalResourcesRepository(db),
+    assertOwner: (owner) => assertActiveRunOwner(db, owner),
+    findRunPrSiblings: (input) => findRunPrSiblings({ db, ...input }),
+  };
+}
+
+function connectedPrExternalResourcesPersistence(): PrExternalResourcesPersistence {
+  return {
+    ...createConnectedPrExternalResourcesRepository(),
+    assertOwner: assertConnectedActiveRunOwner,
+    findRunPrSiblings: findConnectedRunPrSiblings,
+  };
 }
 
 export function prRunTarget(
@@ -94,7 +124,7 @@ function checkProviderUpdate(
 }
 
 export async function createRunOwnedPrCheck(args: {
-  db: Db;
+  db: PrExternalResourcesDb;
   owner: ActiveRunOwner;
   target: PrRunTarget;
   nodeId: string;
@@ -102,27 +132,30 @@ export async function createRunOwnedPrCheck(args: {
   activationScope: string;
   name: string;
 }): Promise<WorkflowPrCheckReference> {
-  const existing = await args.db
-    .select()
-    .from(workflowRunExternalChecks)
-    .where(
-      and(
-        eq(workflowRunExternalChecks.runId, args.owner.runId!),
-        eq(workflowRunExternalChecks.nodeId, args.nodeId),
-        eq(workflowRunExternalChecks.attempt, args.attempt),
-        eq(workflowRunExternalChecks.activationScope, args.activationScope),
-      ),
-    )
-    .limit(1);
-  if (existing[0]?.providerReference) {
+  const { db, ...input } = args;
+  return createRunOwnedPrCheckWithPersistence(
+    input,
+    prExternalResourcesPersistence(db),
+  );
+}
+
+async function createRunOwnedPrCheckWithPersistence(
+  args: Omit<Parameters<typeof createRunOwnedPrCheck>[0], "db">,
+  persistence: PrExternalResourcesPersistence,
+): Promise<WorkflowPrCheckReference> {
+  const existing = await persistence.findPrCheckForAttempt({
+    runId: args.owner.runId!, nodeId: args.nodeId, attempt: args.attempt,
+    activationScope: args.activationScope,
+  });
+  if (existing?.providerReference) {
     return {
-      id: existing[0].id,
-      headSha: existing[0].headSha,
-      name: existing[0].name,
+      id: existing.id,
+      headSha: existing.headSha,
+      name: existing.name,
     };
   }
-  await assertActiveRunOwner(args.db, args.owner);
-  const { createRepositoryVCS } = await import("../support/vcs-runtime.js");
+  await persistence.assertOwner(args.owner);
+  const { createRepositoryVCS } = await import("../../engine/support/vcs-runtime.js");
   const vcs = createRepositoryVCS({
     provider: args.target.provider,
     repoPath: args.target.repoPath,
@@ -139,22 +172,13 @@ export async function createRunOwnedPrCheck(args: {
     throw new Error("The pull request changed before its check could be created.");
   }
 
-  const id = existing[0]?.id ?? randomUUID();
-  if (!existing[0]) {
-    await args.db.insert(workflowRunExternalChecks).values({
-      id,
-      runId: args.owner.runId!,
-      nodeId: args.nodeId,
-      attempt: args.attempt,
-      activationScope: args.activationScope,
-      subjectKey: args.target.subjectKey,
-      provider: args.target.provider,
-      repository: args.target.repoPath,
-      prNumber: args.target.prNumber,
-      headSha: args.target.headSha,
-      name: args.name,
-      providerReference: null,
-      state: "creating",
+  const id = existing?.id ?? randomUUID();
+  if (!existing) {
+    await persistence.insertPrCheck({
+      id, runId: args.owner.runId!, nodeId: args.nodeId, attempt: args.attempt,
+      activationScope: args.activationScope, subjectKey: args.target.subjectKey,
+      provider: args.target.provider, repository: args.target.repoPath,
+      prNumber: args.target.prNumber, headSha: args.target.headSha, name: args.name,
     });
   }
   try {
@@ -163,28 +187,29 @@ export async function createRunOwnedPrCheck(args: {
       args.target.headSha,
       id,
     );
-    await args.db
-      .update(workflowRunExternalChecks)
-      .set({ providerReference, state: "pending", updatedAt: new Date() })
-      .where(eq(workflowRunExternalChecks.id, id));
+    await persistence.markPrCheckPending({ id, providerReference });
   } catch (error) {
-    await args.db
-      .update(workflowRunExternalChecks)
-      .set({
-        // A check that could not even be created holds no verdict, so this
-        // placeholder must stay outside the decided set closeRunPrChecks keeps.
-        closureIntent: "cancelled",
-        lastError: error instanceof Error ? error.message : String(error),
-        updatedAt: new Date(),
-      })
-      .where(eq(workflowRunExternalChecks.id, id));
+    // A check that could not even be created holds no verdict, so this
+    // placeholder must stay outside the decided set closeRunPrChecks keeps.
+    await persistence.markPrCheckCreationFailed({
+      id, error: error instanceof Error ? error.message : String(error),
+    });
     throw error;
   }
   return { id, headSha: args.target.headSha, name: args.name };
 }
 
+export function createConnectedRunOwnedPrCheck(
+  args: Omit<Parameters<typeof createRunOwnedPrCheck>[0], "db">,
+): Promise<WorkflowPrCheckReference> {
+  return createRunOwnedPrCheckWithPersistence(
+    args,
+    connectedPrExternalResourcesPersistence(),
+  );
+}
+
 export async function completeRunOwnedPrCheck(args: {
-  db: Db;
+  db: PrExternalResourcesDb;
   owner: ActiveRunOwner;
   target: PrRunTarget;
   reference: WorkflowPrCheckReference;
@@ -192,11 +217,18 @@ export async function completeRunOwnedPrCheck(args: {
   details: string;
   refreshHead?: boolean;
 }): Promise<void> {
-  const [storedCheck] = await args.db
-    .select()
-    .from(workflowRunExternalChecks)
-    .where(eq(workflowRunExternalChecks.id, args.reference.id))
-    .limit(1);
+  const { db, ...input } = args;
+  return completeRunOwnedPrCheckWithPersistence(
+    input,
+    prExternalResourcesPersistence(db),
+  );
+}
+
+async function completeRunOwnedPrCheckWithPersistence(
+  args: Omit<Parameters<typeof completeRunOwnedPrCheck>[0], "db">,
+  persistence: PrExternalResourcesPersistence,
+): Promise<void> {
+  const storedCheck = await persistence.findPrCheckById(args.reference.id);
   if (!storedCheck || storedCheck.runId !== args.owner.runId || storedCheck.name !== args.reference.name) {
     throw new Error(
       "The PR check does not belong to this workflow run and pull request head.",
@@ -212,7 +244,7 @@ export async function completeRunOwnedPrCheck(args: {
     baseBranch: args.target.baseRef,
   });
   if (args.refreshHead) {
-    await assertActiveRunOwner(args.db, args.owner);
+    await persistence.assertOwner(args.owner);
     const latest = await vcs.getPRHead(args.target.prNumber);
     if (latest.state !== "open") {
       throw new Error("The pull request is no longer open.");
@@ -227,15 +259,9 @@ export async function completeRunOwnedPrCheck(args: {
         latest.headSha,
         check.id,
       );
-      await args.db
-        .update(workflowRunExternalChecks)
-        .set({
-          headSha: latest.headSha,
-          providerReference,
-          state: "pending",
-          updatedAt: new Date(),
-        })
-        .where(eq(workflowRunExternalChecks.id, check.id));
+      await persistence.markPrCheckPending({
+        id: check.id, headSha: latest.headSha, providerReference,
+      });
       check = {
         ...check,
         headSha: latest.headSha,
@@ -255,15 +281,8 @@ export async function completeRunOwnedPrCheck(args: {
   if (!check.providerReference) {
     throw new Error("The PR check provider reference is unavailable.");
   }
-  await assertActiveRunOwner(args.db, args.owner);
-  await args.db
-    .update(workflowRunExternalChecks)
-    .set({
-      state: "closing",
-      closureIntent: args.conclusion,
-      updatedAt: new Date(),
-    })
-    .where(eq(workflowRunExternalChecks.id, check.id));
+  await persistence.assertOwner(args.owner);
+  await persistence.markPrCheckClosing({ id: check.id, intent: args.conclusion });
   if (!hasGateStatusCapability(vcs)) {
     throw new Error(`${args.target.provider} does not support workflow PR checks.`);
   }
@@ -279,52 +298,48 @@ export async function completeRunOwnedPrCheck(args: {
         "Superseded by a newer pull request commit.",
       ),
     );
-    await args.db
-      .update(workflowRunExternalChecks)
-      .set({
-        state: "completed",
-        closureIntent: "superseded",
-        conclusion: "superseded",
-        completedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(eq(workflowRunExternalChecks.id, check.id));
+    await persistence.completePrCheck({
+      id: check.id, conclusion: "superseded", closureIntent: "superseded",
+    });
     throw new Error("The PR check was superseded by a newer commit.");
   }
   await vcs.updateGateStatus(
     check.providerReference,
     checkProviderUpdate(args.conclusion, args.details),
   );
-  await args.db
-    .update(workflowRunExternalChecks)
-    .set({
-      state: "completed",
-      conclusion: args.conclusion,
-      completedAt: new Date(),
-      updatedAt: new Date(),
-      lastError: null,
-    })
-    .where(eq(workflowRunExternalChecks.id, check.id));
+  await persistence.completePrCheck({ id: check.id, conclusion: args.conclusion });
+}
+
+export function completeConnectedRunOwnedPrCheck(
+  args: Omit<Parameters<typeof completeRunOwnedPrCheck>[0], "db">,
+): Promise<void> {
+  return completeRunOwnedPrCheckWithPersistence(
+    args,
+    connectedPrExternalResourcesPersistence(),
+  );
 }
 
 export async function closeRunPrChecks(args: {
-  db: Db;
+  db: PrExternalResourcesDb;
   runId: string;
   intent: CheckTerminalIntent;
   details: string;
   checkIds?: string[];
 }): Promise<{ closed: number; pending: number }> {
-  const filters = [
-    eq(workflowRunExternalChecks.runId, args.runId),
-    inArray(workflowRunExternalChecks.state, ["pending", "closing"]),
-  ];
-  if (args.checkIds) {
-    filters.push(inArray(workflowRunExternalChecks.id, args.checkIds));
-  }
-  const rows = await args.db
-    .select()
-    .from(workflowRunExternalChecks)
-    .where(and(...filters));
+  const { db, ...input } = args;
+  return closeRunPrChecksWithPersistence(
+    input,
+    prExternalResourcesPersistence(db),
+  );
+}
+
+async function closeRunPrChecksWithPersistence(
+  args: Omit<Parameters<typeof closeRunPrChecks>[0], "db">,
+  persistence: PrExternalResourcesPersistence,
+): Promise<{ closed: number; pending: number }> {
+  const rows = await persistence.listOpenPrChecks({
+    runId: args.runId, checkIds: args.checkIds,
+  });
   let closed = 0;
   let pending = 0;
   for (const check of rows) {
@@ -343,14 +358,7 @@ export async function closeRunPrChecks(args: {
     const intent = decided
       ? (check.closureIntent as CheckTerminalIntent)
       : args.intent;
-    await args.db
-      .update(workflowRunExternalChecks)
-      .set({
-        state: "closing",
-        closureIntent: intent,
-        updatedAt: new Date(),
-      })
-      .where(eq(workflowRunExternalChecks.id, check.id));
+    await persistence.markPrCheckClosing({ id: check.id, intent });
     if (!check.providerReference) {
       pending++;
       continue;
@@ -367,30 +375,26 @@ export async function closeRunPrChecks(args: {
         check.providerReference,
         checkProviderUpdate(intent, args.details),
       );
-      await args.db
-        .update(workflowRunExternalChecks)
-        .set({
-          state: "completed",
-          conclusion: intent,
-          completedAt: new Date(),
-          updatedAt: new Date(),
-          lastError: null,
-        })
-        .where(eq(workflowRunExternalChecks.id, check.id));
+      await persistence.completePrCheck({ id: check.id, conclusion: intent });
       closed++;
     } catch (error) {
       pending++;
-      await args.db
-        .update(workflowRunExternalChecks)
-        .set({
-          retryCount: check.retryCount + 1,
-          lastError: error instanceof Error ? error.message : String(error),
-          updatedAt: new Date(),
-        })
-        .where(eq(workflowRunExternalChecks.id, check.id));
+      await persistence.markPrCheckRetry({
+        id: check.id, retryCount: check.retryCount + 1,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
   return { closed, pending };
+}
+
+export function closeConnectedRunPrChecks(
+  args: Omit<Parameters<typeof closeRunPrChecks>[0], "db">,
+): Promise<{ closed: number; pending: number }> {
+  return closeRunPrChecksWithPersistence(
+    args,
+    connectedPrExternalResourcesPersistence(),
+  );
 }
 
 /** Statuses a run never leaves, so a check it still owes will never be paid. */
@@ -411,7 +415,7 @@ const ABANDONED_CHECK_GRACE_MS = 60 * 1000;
  * real verdict with "cancelled".
  */
 async function abandonedPendingCheckIds(
-  db: Db,
+  persistence: PrExternalResourcesPersistence,
   rows: Array<{ id: string; runId: string; state: string; updatedAt: Date | null }>,
 ): Promise<Set<string>> {
   const candidates = rows.filter(
@@ -421,10 +425,7 @@ async function abandonedPendingCheckIds(
   );
   if (candidates.length === 0) return new Set();
   const runIds = [...new Set(candidates.map((row) => row.runId))];
-  const runs = await db
-    .select({ runId: workflowRuns.runId, status: workflowRuns.status })
-    .from(workflowRuns)
-    .where(inArray(workflowRuns.runId, runIds));
+  const runs = await persistence.listRunStatuses(runIds);
   const ended = new Set(
     runs
       .filter((run) => run.status && ENDED_RUN_STATUSES.includes(run.status))
@@ -436,18 +437,21 @@ async function abandonedPendingCheckIds(
 }
 
 export async function reconcilePendingPrChecks(
-  db: Db,
+  db: PrExternalResourcesDb,
   limit = 25,
 ): Promise<{ attempted: number; closed: number; pending: number }> {
-  const rows = await db
-    .select()
-    .from(workflowRunExternalChecks)
-    .where(
-      inArray(workflowRunExternalChecks.state, ["creating", "pending", "closing"]),
-    )
-    .orderBy(asc(workflowRunExternalChecks.updatedAt))
-    .limit(limit);
-  const abandoned = await abandonedPendingCheckIds(db, rows);
+  return reconcilePendingPrChecksWithPersistence(
+    prExternalResourcesPersistence(db),
+    limit,
+  );
+}
+
+async function reconcilePendingPrChecksWithPersistence(
+  persistence: PrExternalResourcesPersistence,
+  limit = 25,
+): Promise<{ attempted: number; closed: number; pending: number }> {
+  const rows = await persistence.listReconcilePrChecks(limit);
+  const abandoned = await abandonedPendingCheckIds(persistence, rows);
   const retries: Array<{
     checkId: string;
     runId: string;
@@ -460,14 +464,9 @@ export async function reconcilePendingPrChecks(
       // verdict. Only a run that will never speak again may be closed here, so
       // anything still in flight is left alone.
       if (!abandoned.has(row.id)) continue;
-      await db
-        .update(workflowRunExternalChecks)
-        .set({
-          state: "closing",
-          closureIntent: row.closureIntent ?? "cancelled",
-          updatedAt: new Date(),
-        })
-        .where(eq(workflowRunExternalChecks.id, row.id));
+      await persistence.markPrCheckClosing({
+        id: row.id, intent: row.closureIntent ?? "cancelled",
+      });
       retries.push({
         checkId: row.id,
         runId: row.runId,
@@ -492,25 +491,17 @@ export async function reconcilePendingPrChecks(
           row.headSha,
           row.id,
         );
-        await db
-          .update(workflowRunExternalChecks)
-          .set({
-            providerReference,
-            state: "closing",
-            // The run died before it could ask for anything; no verdict exists.
-            closureIntent: row.closureIntent ?? "cancelled",
-            updatedAt: new Date(),
-          })
-          .where(eq(workflowRunExternalChecks.id, row.id));
+        // The run died before it could ask for anything; no verdict exists.
+        await persistence.markReconciledPrCheckPending({
+          id: row.id,
+          providerReference,
+          intent: row.closureIntent ?? "cancelled",
+        });
       } catch (error) {
-        await db
-          .update(workflowRunExternalChecks)
-          .set({
-            retryCount: row.retryCount + 1,
-            lastError: error instanceof Error ? error.message : String(error),
-            updatedAt: new Date(),
-          })
-          .where(eq(workflowRunExternalChecks.id, row.id));
+        await persistence.markPrCheckRetry({
+          id: row.id, retryCount: row.retryCount + 1,
+          error: error instanceof Error ? error.message : String(error),
+        });
         continue;
       }
     }
@@ -525,17 +516,25 @@ export async function reconcilePendingPrChecks(
   let closed = 0;
   let pending = 0;
   for (const retry of retries) {
-    const result = await closeRunPrChecks({
-      db,
+    const result = await closeRunPrChecksWithPersistence({
       runId: retry.runId,
       intent: retry.intent,
       details: retry.details,
       checkIds: [retry.checkId],
-    });
+    }, persistence);
     closed += result.closed;
     pending += result.pending;
   }
   return { attempted: retries.length, closed, pending };
+}
+
+export function reconcileConnectedPendingPrChecks(
+  limit = 25,
+): Promise<{ attempted: number; closed: number; pending: number }> {
+  return reconcilePendingPrChecksWithPersistence(
+    connectedPrExternalResourcesPersistence(),
+    limit,
+  );
 }
 
 function normalizedPath(
@@ -1006,7 +1005,7 @@ export function reviewCommentContentHash(
 }
 
 export async function publishRunOwnedPrReview(args: {
-  db: Db;
+  db: PrExternalResourcesDb;
   owner: ActiveRunOwner;
   target: PrRunTarget;
   nodeId: string;
@@ -1019,8 +1018,19 @@ export async function publishRunOwnedPrReview(args: {
   inlineCommentCount: number;
   summaryFallbackCount: number;
 }> {
-  await assertActiveRunOwner(args.db, args.owner);
-  const { createRepositoryVCS } = await import("../support/vcs-runtime.js");
+  const { db, ...input } = args;
+  return publishRunOwnedPrReviewWithPersistence(
+    input,
+    prExternalResourcesPersistence(db),
+  );
+}
+
+async function publishRunOwnedPrReviewWithPersistence(
+  args: Omit<Parameters<typeof publishRunOwnedPrReview>[0], "db">,
+  persistence: PrExternalResourcesPersistence,
+): ReturnType<typeof publishRunOwnedPrReview> {
+  await persistence.assertOwner(args.owner);
+  const { createRepositoryVCS } = await import("../../engine/support/vcs-runtime.js");
   const vcs = createRepositoryVCS({
     provider: args.target.provider,
     repoPath: args.target.repoPath,
@@ -1034,8 +1044,7 @@ export async function publishRunOwnedPrReview(args: {
     throw new Error("The pull request changed before the review could be published.");
   }
   const files = await vcs.listPRFiles(args.target.prNumber);
-  const siblingLookup = await findRunPrSiblings({
-    db: args.db,
+  const siblingLookup = await persistence.findRunPrSiblings({
     provider: args.target.provider,
     repoPath: args.target.repoPath,
     prNumber: args.target.prNumber,
@@ -1147,18 +1156,12 @@ export async function publishRunOwnedPrReview(args: {
   // and the pull request keeps whatever the first round said until a new commit
   // opens a new round. The check run reports that same published verdict, so the
   // check and the review always agree.
-  const roundRows = await args.db
-    .select()
-    .from(workflowPrReviewPublications)
-    .where(
-      and(
-        eq(workflowPrReviewPublications.provider, args.target.provider),
-        eq(workflowPrReviewPublications.repository, args.target.repoPath),
-        eq(workflowPrReviewPublications.prNumber, args.target.prNumber),
-        eq(workflowPrReviewPublications.headSha, args.target.headSha),
-      ),
-    )
-    .orderBy(asc(workflowPrReviewPublications.createdAt));
+  const roundRows = await persistence.listPrReviewPublicationsForRound({
+    provider: args.target.provider,
+    repository: args.target.repoPath,
+    prNumber: args.target.prNumber,
+    headSha: args.target.headSha,
+  });
   const publishedRound = roundRows.find((row) => row.state === "published");
   if (publishedRound) {
     // What is returned is what the pull request actually carries, not what this
@@ -1215,7 +1218,7 @@ export async function publishRunOwnedPrReview(args: {
     contentHash: reviewCommentContentHash(comment, index),
   }));
   if (!existing) {
-    await args.db.insert(workflowPrReviewPublications).values({
+    await persistence.insertPrReviewPublication({
       id: publicationId,
       runId: args.owner.runId!,
       nodeId: args.nodeId,
@@ -1230,15 +1233,8 @@ export async function publishRunOwnedPrReview(args: {
       summary,
       inlineCommentCount: comments.length,
       summaryFallbackCount: fallback.length,
+      commentContentHashes: commentRecords.map((comment) => comment.contentHash),
     });
-    if (comments.length > 0) {
-      await args.db.insert(workflowPrReviewPublicationComments).values(
-        commentRecords.map((comment) => ({
-          publicationId,
-          contentHash: comment.contentHash,
-        })),
-      );
-    }
   }
   // Unconditional: a round with a published row returned above, so nothing here
   // is on record as published. A review can still be on the pull request without
@@ -1278,60 +1274,34 @@ export async function publishRunOwnedPrReview(args: {
       `[${diagnosticId}] PR review publication failed:`,
       error instanceof Error ? error.message : String(error),
     );
-    await args.db
-      .update(workflowPrReviewPublications)
-      .set({
-        lastError: "Provider review publication failed.",
-        diagnosticId,
-        updatedAt: new Date(),
-      })
-      .where(eq(workflowPrReviewPublications.id, publicationId));
+    await persistence.markPrReviewPublicationFailed({ id: publicationId, diagnosticId });
     throw new Error(
       `PR review publication failed. Diagnostic ID: ${diagnosticId}`,
     );
   }
-  await args.db
-    .update(workflowPrReviewPublications)
-    .set({
-      state: "published",
-      providerReference: published.id,
-      publishedAt: new Date(),
-      updatedAt: new Date(),
-      lastError: null,
-    })
-    .where(eq(workflowPrReviewPublications.id, publicationId));
-  await args.db
-    .update(workflowPrReviewPublicationComments)
-    .set({ state: "published", publishedAt: new Date() })
-    .where(
-      eq(
-        workflowPrReviewPublicationComments.publicationId,
-        publicationId,
-      ),
-    );
-  for (const [index, comment] of commentRecords.entries()) {
-    const providerReference = published.commentIds[index];
-    if (!providerReference) continue;
-    await args.db
-      .update(workflowPrReviewPublicationComments)
-      .set({ providerReference })
-      .where(
-        and(
-          eq(
-            workflowPrReviewPublicationComments.publicationId,
-            publicationId,
-          ),
-          eq(
-            workflowPrReviewPublicationComments.contentHash,
-            comment.contentHash,
-          ),
-        ),
-      );
-  }
+  await persistence.markPrReviewPublicationPublished({
+    id: publicationId,
+    providerReference: published.id,
+    commentProviderReferences: commentRecords.flatMap((comment, index) => {
+      const providerReference = published.commentIds[index];
+      return !providerReference
+        ? []
+        : [{ contentHash: comment.contentHash, providerReference }];
+    }),
+  });
   return {
     decision,
     summary,
     inlineCommentCount: comments.length,
     summaryFallbackCount: fallback.length,
   };
+}
+
+export function publishConnectedRunOwnedPrReview(
+  args: Omit<Parameters<typeof publishRunOwnedPrReview>[0], "db">,
+): ReturnType<typeof publishRunOwnedPrReview> {
+  return publishRunOwnedPrReviewWithPersistence(
+    args,
+    connectedPrExternalResourcesPersistence(),
+  );
 }

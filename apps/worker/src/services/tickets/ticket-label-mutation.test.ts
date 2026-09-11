@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
 
 const assertOwner = vi.hoisted(() => vi.fn());
-vi.mock("../../engine/support/active-run-owner.js", () => ({ assertActiveRunOwnerState: assertOwner }));
+vi.mock("../../db/repositories/active-runs.js", () => ({ assertActiveRunOwnerState: assertOwner }));
 
 import { updateTicketLabelsForRun } from "./ticket-label-mutation.js";
 
@@ -38,7 +38,7 @@ describe("updateTicketLabelsForRun", () => {
       changes: { add: [" needs-input ", "needs-input"] },
     });
 
-    expect(assertOwner).toHaveBeenCalledWith(db, owner, "bound");
+    expect(assertOwner).toHaveBeenCalledWith(owner, "bound", db);
     expect(issueTracker.updateLabels).toHaveBeenCalledWith("AIW-101", {
       add: ["needs-input"],
     });

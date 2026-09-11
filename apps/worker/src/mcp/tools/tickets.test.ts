@@ -308,6 +308,15 @@ describe("tickets.list_runs", () => {
     expect(data.runs[0]).toMatchObject({ status, terminal });
   });
 
+  it("coerces an unknown persisted status at the MCP response boundary", async () => {
+    await seedRun({ runId: "r_unknown", status: "orphaned" });
+
+    const result = await listRuns({ ticketKey: "PROJ-1" });
+
+    const data = (result.structuredContent as { data: { runs: McpRunSummary[] } }).data;
+    expect(data.runs[0]).toMatchObject({ status: "running", terminal: false });
+  });
+
   it("carries createdAt, startedAt, completedAt and durationSec as ISO/plain values", async () => {
     await seedRun({
       runId: "r1",

@@ -1,14 +1,13 @@
 import { start } from "workflow/api";
 import { env } from "../../infra/vcs-config.js";
-import type { Db } from "../../db/client.js";
+import type { Db } from "../../db/types.js";
 import type { RunRegistryAdapter } from "../../adapters/run-registry/types.js";
 import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
 import type { AgentWorkflowInput } from "../../engine/index.js";
 import { agentWorkflow } from "../../engine/index.js";
+import { getConnectedWorkflowDefinition } from "../../db/repositories/definitions/connected.js";
 import {
-  getDeployedWorkflowDefinitionVersion,
   getWorkflowDefinition,
-  getWorkflowDefinitionVersion,
 } from "../../db/repositories/definitions.js";
 import { aiColumnMoveTarget } from "../tickets/index.js";
 import { AWAITING_APPROVAL_LABEL } from "../../engine/support/ticket-labels.js";
@@ -18,6 +17,12 @@ import { ticketSubjectKey } from "../../engine/support/subject-key.js";
 import { claimTicketRun } from "../dispatch/index.js";
 import { updateTicketLabelsForRun, moveTicketForRun } from "../tickets/index.js";
 import type { ApprovalRow } from "../../db/repositories/approvals.js";
+import {
+  readConnectedDeployedWorkflowDefinitionVersion,
+  readConnectedWorkflowDefinitionVersion,
+  readDeployedWorkflowDefinitionVersion,
+  readWorkflowDefinitionVersion,
+} from "../../engine/stored-definition-reads.js";
 
 export type DispatchPlanApprovedResult =
   | { status: "definition_gone" }
@@ -36,7 +41,7 @@ export type DispatchPlanApprovedResult =
  * three result statuses onto their own responses.
  */
 export async function dispatchPlanApproved(input: {
-  db: Db;
+  db?: Db;
   runRegistry: RunRegistryAdapter;
   issueTracker: IssueTrackerAdapter;
   approval: ApprovalRow;
@@ -57,15 +62,21 @@ export async function dispatchPlanApproved(input: {
   // definition_gone. Legacy
   // rows with a null pinned version fall back to the selected deployed version,
   // never an undeployed draft snapshot.
-  const definition = await getWorkflowDefinition(db, approval.definitionId);
+  const definition = db
+    ? await getWorkflowDefinition(db, approval.definitionId)
+    : await getConnectedWorkflowDefinition(approval.definitionId);
   if (!definition) {
     logger.info({ ticketKey, definitionId: approval.definitionId }, "plan_approved_definition_gone");
     return { status: "definition_gone" };
   }
   const pinned =
     approval.definitionVersion != null
-      ? await getWorkflowDefinitionVersion(db, approval.definitionId, approval.definitionVersion)
-      : await getDeployedWorkflowDefinitionVersion(db, approval.definitionId);
+      ? db
+        ? await readWorkflowDefinitionVersion(db, approval.definitionId, approval.definitionVersion)
+        : await readConnectedWorkflowDefinitionVersion(approval.definitionId, approval.definitionVersion)
+      : db
+        ? await readDeployedWorkflowDefinitionVersion(db, approval.definitionId)
+        : await readConnectedDeployedWorkflowDefinitionVersion(approval.definitionId);
   if (!pinned) {
     logger.info(
       { ticketKey, definitionId: approval.definitionId, version: approval.definitionVersion },
@@ -81,24 +92,32 @@ export async function dispatchPlanApproved(input: {
       try {
         if (onClaimed) await onClaimed();
 
-        await moveTicketForRun({
-          db,
+        const moveInput = {
           issueTracker,
           ticketKey,
           target: aiColumnMoveTarget(env),
           owner: { subjectKey, ownerToken, runId: null },
-        });
+        };
+        if (db) await moveTicketForRun({ ...moveInput, db });
+        else {
+          const { moveConnectedTicketForRun } = await import("../tickets/ticket-transition.js");
+          await moveConnectedTicketForRun(moveInput);
+        }
 
         if (typeof issueTracker.updateLabels === "function") {
           try {
-            await updateTicketLabelsForRun({
-              db,
+            const labelInput = {
               issueTracker,
               ticketKey,
               owner: { subjectKey, ownerToken, runId: null },
-              requiredOwnerState: "reserved",
+              requiredOwnerState: "reserved" as const,
               changes: { remove: [AWAITING_APPROVAL_LABEL] },
-            });
+            };
+            if (db) await updateTicketLabelsForRun({ ...labelInput, db });
+            else {
+              const { updateConnectedTicketLabelsForRun } = await import("../tickets/ticket-label-mutation.js");
+              await updateConnectedTicketLabelsForRun(labelInput);
+            }
           } catch (err) {
             if (isActiveRunOwnerError(err)) throw err;
             logger.warn(

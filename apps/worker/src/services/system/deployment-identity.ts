@@ -1,8 +1,6 @@
-import { eq } from "drizzle-orm";
 import { deploymentSettings } from "../settings/index.js";
-import type { Db } from "../../db/client.js";
 import { databaseFingerprint } from "../../db/database-fingerprint.js";
-import { envMarker } from "../../db/schema.js";
+import { readConnectedDeploymentEnvironmentMarker } from "../../db/repositories/system-health.js";
 import { logger } from "../../infra/logger.js";
 
 /**
@@ -50,16 +48,14 @@ export function resetDeploymentIdentityCache(): void {
   cachedMarker = undefined;
 }
 
-async function readMarker(openDb: () => Db): Promise<Marker> {
+async function readMarker(
+  readEnvironmentMarker: () => Promise<{ env: string | null; endpointHost: string | null } | null>,
+): Promise<Marker> {
   if (cachedMarker !== undefined) return cachedMarker;
   try {
-    const [row] = await openDb()
-      .select({ env: envMarker.env, endpointHost: envMarker.endpointHost })
-      .from(envMarker)
-      .where(eq(envMarker.id, 1))
-      .limit(1);
+    const row = await readEnvironmentMarker();
     cachedMarker = row
-      ? { env: row.env, fingerprint: databaseFingerprint(row.endpointHost) }
+      ? { env: row.env, fingerprint: row.endpointHost ? databaseFingerprint(row.endpointHost) : null }
       : UNKNOWN_MARKER;
   } catch (error) {
     // Deliberately not cached: a transient failure must not pin this
@@ -80,8 +76,10 @@ async function readMarker(openDb: () => Db): Promise<Marker> {
  * exactly when somebody is asking health what is going on. The gate refusing a
  * null is what makes that safe.
  */
-export async function deploymentIdentity(openDb: () => Db): Promise<DeploymentIdentity> {
-  const marker = await readMarker(openDb);
+export async function deploymentIdentity(
+  readEnvironmentMarker = readConnectedDeploymentEnvironmentMarker,
+): Promise<DeploymentIdentity> {
+  const marker = await readMarker(readEnvironmentMarker);
   const deployment = deploymentSettings();
   return {
     commit: deployment.commitSha ?? null,

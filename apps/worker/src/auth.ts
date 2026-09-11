@@ -11,10 +11,12 @@ import {
 import { defaultAc } from "better-auth/plugins/organization/access";
 
 import {
-  createAuthDatabaseAdapter,
+  createAuthPersistence,
+  createConnectedAuthPersistence,
   handleResetPasswordRequest,
   type AuthDatabase,
   type AuthOptions,
+  type AuthPersistence,
 } from "./services/auth/auth-core.js";
 import {
   createMcpOAuthOptions,
@@ -59,19 +61,30 @@ const memberRole = defaultAc.newRole({
 
 /** Compose Better Auth at the app tier over service-owned persistence and hooks. */
 export function createAuth(db: AuthDatabase, options: AuthOptions) {
+  return createAuthFromPersistence(createAuthPersistence(db), options);
+}
+
+export function createConnectedAuth(options: AuthOptions) {
+  return createAuthFromPersistence(createConnectedAuthPersistence(), options);
+}
+
+function createAuthFromPersistence(
+  persistence: AuthPersistence,
+  options: AuthOptions,
+) {
   const passwordReset = options.passwordReset;
   const mcpDeployment = options.mcp
-    ? { ...options.mcp, baseURL: options.baseURL, db }
+    ? { ...options.mcp, ...persistence.mcp, baseURL: options.baseURL }
     : null;
 
   return betterAuth({
-    database: createAuthDatabaseAdapter(db),
+    database: persistence.adapter,
     emailAndPassword: {
       enabled: true,
       disableSignUp: true,
       sendResetPassword: passwordReset
         ? ({ user, token }) =>
-            handleResetPasswordRequest(db, passwordReset, { user, token })
+            handleResetPasswordRequest(persistence.repository, passwordReset, { user, token })
         : undefined,
     },
     account: {

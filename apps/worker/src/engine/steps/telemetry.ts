@@ -4,11 +4,32 @@ import { configuredReplaySecrets } from "../../run-observability/configured-secr
 import { type ClarificationDecisionObservation } from "../../run-observability/agent-observations.js";
 import type { ClarificationDecisionDigest } from "../helpers/clarification-decision-digest.js";
 import { replayCaptureWithinTimeout } from "../../run-observability/capture-timeout.js";
-import { usageSnapshot } from "../support/run-analysis-report.js";
+import { usageSnapshot } from "../../engine/support/run-analysis-report.js";
+import { summarizeRunBlockStatuses } from "../run-block-status-summary.js";
 import { type RunBudgetFailure } from "../helpers/run-budget.js";
 import { redactDiagnosticText } from "../../sandbox/agents/redact.js";
 import { errorMessage } from "../helpers/repository-failure.js";
 import type { BlockRunState, ReplayAttemptOutcome, ReplayObservationKind, ReplaySanitizedEnvelope, ResolvedPromptReference, RunPullRequest, WorkflowReplayGraphSnapshot, WorkflowReplaySelectedTransition, HarnessRunManifestRecord } from "@shared/contracts";
+import type {
+  PreparedReplayAttemptPersistence,
+  ReplayAttemptPersistenceState,
+} from "../../run-observability/runtime-hooks.js";
+
+async function persistPreparedReplayAttempt(input: {
+  read: () => Promise<ReplayAttemptPersistenceState | null>;
+  replace: (prepared: PreparedReplayAttemptPersistence) => Promise<boolean>;
+  prepare: (
+    current: ReplayAttemptPersistenceState,
+  ) => PreparedReplayAttemptPersistence;
+  errorMessage: string;
+}): Promise<boolean> {
+  for (let attempt = 0; attempt < 64; attempt += 1) {
+    const current = await input.read();
+    if (!current) return false;
+    if (await input.replace(input.prepare(current))) return true;
+  }
+  throw new Error(input.errorMessage);
+}
 
 /**
  * Persist the run's cost/usage (+ agent PR + ticket) to the durable telemetry
@@ -33,9 +54,8 @@ export async function recordRunTelemetryStep(payload: {
 }) {
   "use step";
   const { loadRunTelemetryPort } = await import("../internal/ports.js");
-  const { getDb } = await import("../../db/client.js");
-  const { recordRunUsage } = await loadRunTelemetryPort();
-  const { finalizeRunAnalysisUsage } = await import("../../db/repositories/runs/run-analysis.js");
+  const { recordConnectedRunUsage } = await loadRunTelemetryPort();
+  const { finalizeConnectedRunAnalysisUsage } = await import("../../run-analysis/persistence.js");
   const { getWorld } = await import("workflow/runtime");
   const collectRunDetailMod = await import(
     "../support/collect-run-detail.js"
@@ -49,7 +69,7 @@ export async function recordRunTelemetryStep(payload: {
     payload.executionError,
   );
   const { totals } = payload;
-  await recordRunUsage(getDb(), {
+  await recordConnectedRunUsage({
     runId: payload.runId,
     // This is the agent workflow — its canonical identity (mirrors
     // WORKFLOW_MAP.agentWorkflow in lib/overview/collect-runs.ts). Recorded here
@@ -85,8 +105,7 @@ export async function recordRunTelemetryStep(payload: {
     harnessManifests: payload.harnessManifests,
   });
   try {
-    await finalizeRunAnalysisUsage(
-      getDb(),
+    await finalizeConnectedRunAnalysisUsage(
       payload.runId,
       usageSnapshot(payload.totals, new Date().toISOString()),
     );
@@ -117,9 +136,8 @@ async function closeTerminalPrChecksStep(payload: {
   details: string;
 }): Promise<{ closed: number; pending: number }> {
   "use step";
-  const { getDb } = await import("../../db/client.js");
-  const { closeRunPrChecks } = await import("../runtime/pr-external-resources.js");
-  return closeRunPrChecks({ db: getDb(), ...payload });
+  const { closeConnectedRunPrChecks } = await import("../runtime/pr-external-resources.js");
+  return closeConnectedRunPrChecks(payload);
 }
 closeTerminalPrChecksStep.maxRetries = 0;
 
@@ -137,9 +155,11 @@ async function recordBlockStatusesStep(payload: {
 }) {
   "use step";
   const { loadRunTelemetryPort } = await import("../internal/ports.js");
-  const { getDb } = await import("../../db/client.js");
-  const { recordBlockStatuses } = await loadRunTelemetryPort();
-  await recordBlockStatuses(getDb(), payload);
+  const { recordConnectedBlockStatuses } = await loadRunTelemetryPort();
+  await recordConnectedBlockStatuses({
+    ...payload,
+    blockStatuses: summarizeRunBlockStatuses(payload.blockStatuses),
+  });
 }
 recordBlockStatusesStep.maxRetries = 0;
 
@@ -148,15 +168,11 @@ async function markV2ReplayCaptureUnavailable(payload: {
   organizationId: string;
 }): Promise<void> {
   try {
-    const { getDb } = await import("../../db/client.js");
-    const { markRunReplayCaptureUnavailable } = await import(
+    const { markConnectedRunReplayCaptureUnavailable } = await import(
       "../../db/repositories/runs/run-observability.js"
     );
     await replayCaptureWithinTimeout(
-      markRunReplayCaptureUnavailable({
-        db: getDb(),
-        ...payload,
-      }),
+      markConnectedRunReplayCaptureUnavailable(payload),
     );
   } catch {
     const { logger } = await import("../../infra/logger.js");
@@ -241,28 +257,29 @@ async function captureV2RunObservationStartStep(payload: {
     const capture = await replayCaptureWithinTimeout(
       (async () => {
         const { env } = await loadEnvironmentPort();
-        const { getDb } = await import("../../db/client.js");
-        const { dashboardOrganizationId } = await import(
-          "../../workflow-definition/harness-profile-runtime.js"
+        const { createConnectedAuthRepository } = await import(
+          "../../db/repositories/auth.js"
         );
-        const { getWorkflowDefinitionRawState } = await import(
-          "../../db/repositories/definitions.js"
+        const { getConnectedWorkflowDefinitionRawState } = await import(
+          "../../db/repositories/definitions/connected.js"
         );
-        const { captureRunObservationStart } = await import(
+        const { captureConnectedRunObservationStart } = await import(
           "../../db/repositories/runs/run-observability.js"
         );
-        const db = getDb();
-        organizationId = await dashboardOrganizationId(
-          db,
+        const { sanitizeV2ReplaySnapshotForCapture } = await import(
+          "../../run-observability/runtime-hooks.js"
+        );
+        const organization = await createConnectedAuthRepository().findOrganizationBySlug(
           env.DASHBOARD_ORG_SLUG,
         );
+        if (!organization) {
+          throw new Error(`Dashboard organization "${env.DASHBOARD_ORG_SLUG}" is unavailable.`);
+        }
+        organizationId = organization.id;
         if (captureAbandoned) {
           throw new Error("Replay capture was abandoned");
         }
-        const definition = await getWorkflowDefinitionRawState(
-          db,
-          payload.definitionId!,
-        );
+        const definition = await getConnectedWorkflowDefinitionRawState(payload.definitionId!);
         if (captureAbandoned) {
           throw new Error("Replay capture was abandoned");
         }
@@ -282,17 +299,23 @@ async function captureV2RunObservationStartStep(payload: {
             ...(layout.nodes[node.id] ?? { x: node.x, y: node.y }),
           })),
         };
-        return captureRunObservationStart({
-          db,
+        const snapshot = sanitizeV2ReplaySnapshotForCapture({
+          graph,
+          layout,
+          secrets: configuredReplaySecrets(),
+        });
+        if (!snapshot) {
+          throw new Error("Replay snapshot exceeds safe capture limits");
+        }
+        return captureConnectedRunObservationStart({
           runId: payload.runId,
           organizationId: organizationId!,
           definitionId: payload.definitionId!,
           definitionVersion: payload.definitionVersion!,
           definitionSchemaVersion: 2,
-          graph,
-          layout,
+          graph: snapshot.graph,
+          layout: snapshot.layout,
           runtimeManifest: payload.runtimeManifest,
-          secrets: configuredReplaySecrets(),
         });
       })(),
     );
@@ -335,13 +358,11 @@ async function startV2RunObservationAttemptStep(payload: {
 }): Promise<number | null> {
   "use step";
   try {
-    const { getDb } = await import("../../db/client.js");
-    const { startWorkflowBlockAttempt } = await import(
+    const { startConnectedWorkflowBlockAttempt } = await import(
       "../../db/repositories/runs/run-observability.js"
     );
     const result = await replayCaptureWithinTimeout(
-      startWorkflowBlockAttempt({
-        db: getDb(),
+      startConnectedWorkflowBlockAttempt({
         runId: payload.runId,
         organizationId: payload.organizationId,
         nodeId: payload.nodeId,
@@ -391,20 +412,34 @@ async function flushV2RunObservationsStep(payload: {
 }): Promise<boolean> {
   "use step";
   try {
-    const { getDb } = await import("../../db/client.js");
-    const { recordWorkflowBlockAttemptObservation } = await import(
+    const {
+      getConnectedWorkflowBlockAttemptPersistence,
+      replaceConnectedWorkflowBlockAttemptPersistence,
+    } = await import(
       "../../db/repositories/runs/run-observability.js"
     );
-    const db = getDb();
+    const { prepareReplayAttemptObservationPersistence } = await import(
+      "../../run-observability/runtime-hooks.js"
+    );
     for (const observation of payload.observations) {
       const recorded = await replayCaptureWithinTimeout(
-        recordWorkflowBlockAttemptObservation({
-          db,
-          runId: payload.runId,
-          organizationId: payload.organizationId,
-          attemptId: payload.attemptId,
-          kind: observation.kind,
-          envelope: observation.envelope,
+        persistPreparedReplayAttempt({
+          read: () => getConnectedWorkflowBlockAttemptPersistence({
+            runId: payload.runId,
+            organizationId: payload.organizationId,
+            attemptId: payload.attemptId,
+          }),
+          replace: (prepared) => replaceConnectedWorkflowBlockAttemptPersistence({
+            runId: payload.runId,
+            organizationId: payload.organizationId,
+            attemptId: payload.attemptId,
+            ...prepared,
+          }),
+          prepare: (current) => prepareReplayAttemptObservationPersistence(
+            current,
+            observation,
+          ),
+          errorMessage: "Concurrent attempt observations exceeded the retry limit",
         }),
       );
       if (!recorded) {
@@ -433,19 +468,33 @@ async function updateV2RunObservationWaitingStep(payload: {
 }): Promise<boolean> {
   "use step";
   try {
-    const { getDb } = await import("../../db/client.js");
-    const { updateWorkflowBlockAttemptState } = await import(
+    const {
+      getConnectedWorkflowBlockAttemptPersistence,
+      replaceConnectedWorkflowBlockAttemptPersistence,
+    } = await import(
       "../../db/repositories/runs/run-observability.js"
     );
+    const { prepareReplayAttemptWaitingPersistence } = await import(
+      "../../run-observability/runtime-hooks.js"
+    );
     const updated = await replayCaptureWithinTimeout(
-      updateWorkflowBlockAttemptState({
-        db: getDb(),
-        runId: payload.runId,
-        organizationId: payload.organizationId,
-        attemptId: payload.attemptId,
-        selectedTransition: payload.selectedTransition,
-        state: "waiting_loop",
-        observations: payload.observations,
+      persistPreparedReplayAttempt({
+        read: () => getConnectedWorkflowBlockAttemptPersistence({
+          runId: payload.runId,
+          organizationId: payload.organizationId,
+          attemptId: payload.attemptId,
+        }),
+        replace: (prepared) => replaceConnectedWorkflowBlockAttemptPersistence({
+          runId: payload.runId,
+          organizationId: payload.organizationId,
+          attemptId: payload.attemptId,
+          ...prepared,
+        }),
+        prepare: (current) => prepareReplayAttemptWaitingPersistence(current, {
+          selectedTransition: payload.selectedTransition,
+          observations: payload.observations,
+        }),
+        errorMessage: "Concurrent attempt state updates exceeded the retry limit",
       }),
     );
     if (!updated) {
@@ -482,22 +531,37 @@ async function finishV2RunObservationAttemptStep(payload: {
 }): Promise<boolean> {
   "use step";
   try {
-    const { getDb } = await import("../../db/client.js");
-    const { finishWorkflowBlockAttempt } = await import(
+    const {
+      getConnectedWorkflowBlockAttemptPersistence,
+      replaceConnectedWorkflowBlockAttemptPersistence,
+    } = await import(
       "../../db/repositories/runs/run-observability.js"
     );
+    const { prepareReplayAttemptFinishPersistence } = await import(
+      "../../run-observability/runtime-hooks.js"
+    );
     const finished = await replayCaptureWithinTimeout(
-      finishWorkflowBlockAttempt({
-        db: getDb(),
-        runId: payload.runId,
-        organizationId: payload.organizationId,
-        attemptId: payload.attemptId,
-        state: payload.state,
-        outcome: payload.outcome,
-        selectedTransition: payload.selectedTransition,
-        diagnosticId: payload.diagnosticId,
-        observations: payload.observations,
-        completedAt: new Date(payload.completedAt),
+      persistPreparedReplayAttempt({
+        read: () => getConnectedWorkflowBlockAttemptPersistence({
+          runId: payload.runId,
+          organizationId: payload.organizationId,
+          attemptId: payload.attemptId,
+        }),
+        replace: (prepared) => replaceConnectedWorkflowBlockAttemptPersistence({
+          runId: payload.runId,
+          organizationId: payload.organizationId,
+          attemptId: payload.attemptId,
+          ...prepared,
+        }),
+        prepare: (current) => prepareReplayAttemptFinishPersistence(current, {
+          state: payload.state,
+          outcome: payload.outcome,
+          selectedTransition: payload.selectedTransition,
+          diagnosticId: payload.diagnosticId,
+          observations: payload.observations,
+          completedAt: new Date(payload.completedAt),
+        }),
+        errorMessage: "Concurrent attempt finalization exceeded the retry limit",
       }),
     );
     if (!finished) {

@@ -38,18 +38,16 @@ export async function blockPrTriggerRepositoriesWithSiblingsStep(
 ): Promise<SelectedRepository[]> {
   "use step";
   const primary = await blockPrTriggerRepositoriesStep(pr.prUrl, pr);
-  const { findRunPrSiblings } = await import("../../../db/repositories/runs.js");
+  const { findConnectedRunPrSiblings } = await import("../../../db/repositories/runs.js");
   const { createRepositoryDirectoryForProviders } = await import(
     "../../../adapters/vcs/repository-directory.js",
   );
   const { getConfiguredVcsProviders } = await import("../../../infra/vcs-config.js");
-  const { createRepositoryVCS } = await import("../../support/vcs-runtime.js");
-  const { getDb } = await import("../../../db/client.js");
+  const { createRepositoryVCS } = await import("../../../engine/support/vcs-runtime.js");
   const { logger } = await import("../../../infra/logger.js");
   const { isRepoAllowed } = await import("../../support/repo-allowlist.js");
 
-  const lookup = await findRunPrSiblings({
-    db: getDb(),
+  const lookup = await findConnectedRunPrSiblings({
     provider: pr.provider,
     repoPath: pr.repoPath,
     prNumber: pr.prNumber,
@@ -233,11 +231,10 @@ export async function resolveTicketWorkflowOwnedReposStep(
   ticketKey: string,
 ): Promise<SelectedRepository[]> {
   "use step";
-  const { getDb } = await import("../../../db/client.js");
-  const { listWorkflowOwnedBranchesForTicket } = await import(
+  const { listConnectedWorkflowOwnedBranchesForTicket } = await import(
     "../../../db/repositories/runs.js"
   );
-  const records = await listWorkflowOwnedBranchesForTicket(getDb(), ticketKey);
+  const records = await listConnectedWorkflowOwnedBranchesForTicket(ticketKey);
   return records
     .filter((record) => record.pr)
     .map((record) => ({

@@ -451,7 +451,11 @@ function main() {
     if (unknown.length > 0) throw new Error(`Cannot baseline unknown paths: ${unknown.join(", ")}`);
     writeJson(baselinePath, current);
   }
-  const baseline = options.updateBaseline ? current : readJson(baselinePath);
+  const baseline = options.updateBaseline
+    ? current
+    : existsSync(baselinePath)
+      ? readJson(baselinePath)
+      : { tierPairs: {}, fileCycleCount: 0, fileCycles: [] };
   const tierKeys = [
     ...new Set([
       ...reportedTierPairs,

@@ -1,4 +1,4 @@
-import type { Db } from "../db/client.js";
+import type { Db } from "../db/types.js";
 import type { McpActorContext, McpToolDependencies } from "../mcp/contracts.js";
 import { createMcpToolServices } from "../services/mcp/tool-services.js";
 import type { Adapters } from "../engine/support/adapters.js";

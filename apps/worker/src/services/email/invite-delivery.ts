@@ -1,14 +1,12 @@
-import { randomUUID } from "node:crypto";
-import { and, eq, notInArray } from "drizzle-orm";
-import type { Db } from "../../db/client.js";
-import { inviteEmailDelivery } from "../../db/schema.js";
+import type { Db } from "../../db/types.js";
+import {
+  createInviteEmailDelivery as createDelivery,
+  updateInviteEmailDeliveryById as updateDeliveryById,
+  updateInviteEmailDeliveryByResendId as updateDeliveryByResendId,
+  type InviteEmailDeliveryStatus,
+} from "../../db/repositories/invite-email-deliveries.js";
 
-export type InviteEmailDeliveryStatus =
-  | "pending_send"
-  | "queued"
-  | "sent"
-  | "bounced"
-  | "failed";
+export type { InviteEmailDeliveryStatus } from "../../db/repositories/invite-email-deliveries.js";
 
 type InviteEmailDeliveryDb = Pick<Db, "insert" | "update">;
 
@@ -64,71 +62,21 @@ export async function createInviteEmailDelivery(
   db: InviteEmailDeliveryDb,
   input: CreateInviteEmailDeliveryInput,
 ) {
-  const [row] = await db
-    .insert(inviteEmailDelivery)
-    .values({
-      id: input.id ?? randomUUID(),
-      invitationId: input.invitationId,
-      resendEmailId: input.resendEmailId ?? null,
-      status: input.status ?? (input.resendEmailId ? "queued" : "pending_send"),
-      error: input.error ?? null,
-    })
-    .returning();
-
-  return row;
+  return createDelivery(db, input);
 }
 
 export async function updateInviteEmailDeliveryByResendId(
   db: Db,
   input: UpdateInviteEmailDeliveryInput,
 ): Promise<boolean> {
-  const [row] = await db
-    .update(inviteEmailDelivery)
-    .set({
-      status: input.status,
-      error: input.error ?? null,
-      updatedAt: new Date(),
-    })
-    .where(deliveryUpdateWhere(input))
-    .returning({ id: inviteEmailDelivery.id });
-
-  return !!row;
-}
-
-function deliveryUpdateWhere(input: UpdateInviteEmailDeliveryInput) {
-  const byResendId = eq(inviteEmailDelivery.resendEmailId, input.resendEmailId);
-  if (input.status !== "sent") return byResendId;
-  return and(
-    byResendId,
-    notInArray(inviteEmailDelivery.status, ["bounced", "failed"]),
-  );
+  return updateDeliveryByResendId(db, input);
 }
 
 export async function updateInviteEmailDeliveryById(
   db: InviteEmailDeliveryDb,
   input: UpdateInviteEmailDeliveryByIdInput,
 ): Promise<boolean> {
-  const values: {
-    resendEmailId?: string | null;
-    status: InviteEmailDeliveryStatus;
-    error: string | null;
-    updatedAt: Date;
-  } = {
-    status: input.status,
-    error: input.error ?? null,
-    updatedAt: new Date(),
-  };
-  if (input.resendEmailId !== undefined) {
-    values.resendEmailId = input.resendEmailId;
-  }
-
-  const [row] = await db
-    .update(inviteEmailDelivery)
-    .set(values)
-    .where(eq(inviteEmailDelivery.id, input.id))
-    .returning({ id: inviteEmailDelivery.id });
-
-  return !!row;
+  return updateDeliveryById(db, input);
 }
 
 export async function applyInviteEmailDeliveryEvent(

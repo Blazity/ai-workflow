@@ -26,12 +26,26 @@ const mockGetDeployedVersion = vi.fn();
 const mockGetDefinition = vi.fn();
 const mockGetVersion = vi.fn();
 const mockGetEnabled = vi.fn();
+vi.mock("../definition-trigger-routing.js", () => ({
+  getConnectedEnabledWorkflowDefinitionForTrigger: (...args: unknown[]) =>
+    mockGetEnabled(...args),
+}));
 vi.mock("../../db/repositories/definitions.js", () => ({
   getCurrentWorkflowDefinitionVersion: (...args: unknown[]) => mockGetCurrentVersion(...args),
   getDeployedWorkflowDefinitionVersion: (...args: unknown[]) => mockGetDeployedVersion(...args),
   getWorkflowDefinition: (...args: unknown[]) => mockGetDefinition(...args),
   getWorkflowDefinitionVersion: (...args: unknown[]) => mockGetVersion(...args),
   getEnabledWorkflowDefinitionForTrigger: (...args: unknown[]) => mockGetEnabled(...args),
+}));
+vi.mock("../../db/repositories/definitions/connected.js", () => ({
+  getConnectedCurrentWorkflowDefinitionVersion: (...args: unknown[]) =>
+    mockGetCurrentVersion(...args),
+  getConnectedDeployedWorkflowDefinitionVersion: (...args: unknown[]) =>
+    mockGetDeployedVersion(...args),
+  getConnectedWorkflowDefinition: (...args: unknown[]) => mockGetDefinition(...args),
+  getConnectedWorkflowDefinitionVersion: (...args: unknown[]) => mockGetVersion(...args),
+  getConnectedEnabledWorkflowDefinitionForTrigger: (...args: unknown[]) =>
+    mockGetEnabled(...args),
 }));
 
 const loggerError = vi.fn();
@@ -119,7 +133,7 @@ describe("loadWorkflowDefinitionFor", () => {
     expect(plan).not.toBeNull();
     expect(plan!.version).toBe(3);
     expect(plan!.definitionId).toBe(55);
-    expect(mockGetDeployedVersion).toHaveBeenCalledWith(expect.anything(), 55);
+    expect(mockGetDeployedVersion).toHaveBeenCalledWith(55);
     expect(mockGetEnabled).not.toHaveBeenCalled();
   });
 
@@ -129,7 +143,7 @@ describe("loadWorkflowDefinitionFor", () => {
     expect(plan).not.toBeNull();
     expect(plan!.version).toBe(4);
     expect(plan!.definitionId).toBe(55);
-    expect(mockGetVersion).toHaveBeenCalledWith(expect.anything(), 55, 4);
+    expect(mockGetVersion).toHaveBeenCalledWith(55, 4);
     expect(mockGetDeployedVersion).not.toHaveBeenCalled();
   });
 
@@ -137,7 +151,7 @@ describe("loadWorkflowDefinitionFor", () => {
     mockGetVersion.mockResolvedValue(null);
     const plan = await loadWorkflowDefinitionFor("trigger_plan_approved", 55, 99);
     expect(plan).toBeNull();
-    expect(mockGetVersion).toHaveBeenCalledWith(expect.anything(), 55, 99);
+    expect(mockGetVersion).toHaveBeenCalledWith(55, 99);
   });
 
   it("returns null for a non-ticket trigger with no enabled definition", async () => {
@@ -247,7 +261,7 @@ describe("loadWorkflowDefinitionFor, ticket trigger", () => {
       "send_slack_message",
       "update_ticket_status",
     ]);
-    expect(mockGetEnabled).toHaveBeenCalledWith(expect.anything(), "trigger_ticket_ai");
+    expect(mockGetEnabled).toHaveBeenCalledWith("trigger_ticket_ai");
     expect(loggerError).not.toHaveBeenCalled();
   });
 

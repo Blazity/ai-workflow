@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { formatTicketEvent } from "../adapters/messaging/format.js";
 import { scrubForPublication } from "../engine/support/publication-scrub.js";
-import { sanitizeRunError } from "../engine/support/sanitize-run-detail.js";
+import { sanitizeRunError } from "../services/overview/sanitize-run-detail.js";
 import {
   createWorkflowExecutionErrorState,
   executionError,

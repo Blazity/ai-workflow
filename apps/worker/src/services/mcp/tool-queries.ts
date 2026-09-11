@@ -7,17 +7,20 @@
  * result than it returns. They are bound to a handle the same way, one factory
  * per query, so `createMcpToolServices` stays a list of bindings.
  */
-import { and, asc, eq, inArray, isNull, max, or, sql } from "drizzle-orm";
-
-import type { Db } from "../../db/client.js";
+import type { Db } from "../../db/types.js";
+import type { RunStatus } from "@shared/contracts";
 import {
-  promptLibrary,
-  promptLibraryVersions,
-  workflowDefinitions,
-  workflowDefinitionVersions,
-  workflowRuns,
-} from "../../db/schema.js";
-import { coerceStatus } from "../../db/repositories/runs.js";
+  listMcpPromptPage,
+  listMcpTicketRunPage,
+  listMcpWorkflowDefinitionPage,
+  readMcpDeployedDefinitionVersions,
+  readMcpPromptHeadVersions,
+} from "../../db/repositories/mcp.js";
+const RUN_STATUSES = new Set<RunStatus>(["success", "running", "failed", "blocked", "awaiting"]);
+
+function coerceStatus(status: string | null): RunStatus {
+  return status && RUN_STATUSES.has(status as RunStatus) ? status as RunStatus : "running";
+}
 
 /** One row of a ticket's run page, with its status already coerced to the
  *  vocabulary the MCP contract publishes. */
@@ -34,94 +37,31 @@ export interface TicketRunRow {
   durationSec: number | null;
 }
 
+export function mapMcpTicketRunRows(
+  rows: Awaited<ReturnType<typeof listMcpTicketRunPage>>,
+): TicketRunRow[] {
+  return rows.map((row) => ({ ...row, status: coerceStatus(row.status) }));
+}
+
 export function ticketRunPageQuery(db: Db) {
-  return async (ticketKey: string, limit: number): Promise<TicketRunRow[]> => {
-    const rows = await db
-      .select({
-        runId: workflowRuns.runId,
-        workflowId: workflowRuns.workflowId,
-        workflowName: workflowRuns.workflowName,
-        status: workflowRuns.status,
-        ticketKey: workflowRuns.ticketKey,
-        createdAt: workflowRuns.createdAt,
-        firstSeenAt: workflowRuns.firstSeenAt,
-        startedAt: workflowRuns.startedAt,
-        completedAt: workflowRuns.completedAt,
-        durationSec: workflowRuns.durationSec,
-      })
-      .from(workflowRuns)
-      .where(eq(workflowRuns.ticketKey, ticketKey))
-      .orderBy(
-        sql`coalesce(${workflowRuns.startedAt}, ${workflowRuns.firstSeenAt}) desc`,
-      )
-      // One extra row, unreturned, is how truncation is detected without a
-      // second count query.
-      .limit(limit + 1);
-    return rows.map((row) => ({ ...row, status: coerceStatus(row.status) }));
-  };
+  return async (ticketKey: string, limit: number): Promise<TicketRunRow[]> =>
+    mapMcpTicketRunRows(await listMcpTicketRunPage(db, ticketKey, limit));
 }
 
 export function workflowDefinitionPageQuery(db: Db) {
-  return (limit: number) =>
-    db
-      .select({
-        id: workflowDefinitions.id,
-        name: workflowDefinitions.name,
-        enabled: workflowDefinitions.enabled,
-        deployedVersion: workflowDefinitions.deployedVersion,
-      })
-      .from(workflowDefinitions)
-      .where(isNull(workflowDefinitions.archivedAt))
-      .orderBy(asc(workflowDefinitions.id))
-      // One extra row, unreturned, is how truncation is detected without a
-      // second count query.
-      .limit(limit + 1);
+  return (limit: number) => listMcpWorkflowDefinitionPage(db, limit);
 }
 
 export function deployedDefinitionVersionsQuery(db: Db) {
   return (pairs: readonly { definitionId: number; version: number }[]) =>
-    pairs.length === 0
-      ? Promise.resolve([])
-      : db
-          .select({
-            definitionId: workflowDefinitionVersions.definitionId,
-            definition: workflowDefinitionVersions.definition,
-          })
-          .from(workflowDefinitionVersions)
-          .where(
-            or(
-              ...pairs.map((pair) =>
-                and(
-                  eq(workflowDefinitionVersions.definitionId, pair.definitionId),
-                  eq(workflowDefinitionVersions.version, pair.version),
-                ),
-              ),
-            ),
-          );
+    readMcpDeployedDefinitionVersions(db, pairs);
 }
 
 export function promptPageQuery(db: Db) {
-  return (limit: number) =>
-    db
-      .select({
-        id: promptLibrary.id,
-        slug: promptLibrary.slug,
-        name: promptLibrary.name,
-      })
-      .from(promptLibrary)
-      .where(isNull(promptLibrary.archivedAt))
-      .orderBy(asc(promptLibrary.id))
-      .limit(limit + 1);
+  return (limit: number) => listMcpPromptPage(db, limit);
 }
 
 export function promptHeadVersionsQuery(db: Db) {
   return (promptIds: readonly number[]) =>
-    db
-      .select({
-        promptId: promptLibraryVersions.promptId,
-        currentVersion: max(promptLibraryVersions.version),
-      })
-      .from(promptLibraryVersions)
-      .where(inArray(promptLibraryVersions.promptId, [...promptIds]))
-      .groupBy(promptLibraryVersions.promptId);
+    readMcpPromptHeadVersions(db, promptIds);
 }

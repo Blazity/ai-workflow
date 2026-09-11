@@ -15,6 +15,7 @@ export type {
 } from "./actor-resolution.js";
 export {
   listMcpAuditsForOrganization,
+  pruneConnectedMcpAudits,
   pruneMcpAudits,
   writeMcpAudit,
 } from "./audit-store.js";
@@ -43,15 +44,20 @@ export {
   completeMcpMutation,
   failMcpMutation,
   releaseMcpMutation,
+  sweepConnectedMcpIdempotencyKeys,
   sweepMcpIdempotencyKeys,
 } from "./idempotency-store.js";
 export {
   consumeMcpRateLimit,
+  sweepConnectedMcpRateLimits,
   sweepMcpRateLimits,
 } from "./rate-limit-store.js";
 export type {
   McpRateLimitVerdict,
 } from "./rate-limit-store.js";
+export {
+  createConnectedMcpToolServices,
+} from "./connected-tool-services.js";
 export {
   createMcpToolServices,
   MAX_REPLAY_PAGE_LIMIT,

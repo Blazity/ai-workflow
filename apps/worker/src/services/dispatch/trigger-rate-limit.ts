@@ -1,6 +1,15 @@
-import { and, desc, eq, lt, sql } from "drizzle-orm";
-import type { Db } from "../../db/client.js";
-import { triggerRateLimits, triggerRejectionCounters } from "../../db/schema.js";
+import type { Db } from "../../db/types.js";
+import {
+  consumeTriggerRateLimit,
+  consumeConnectedTriggerRateLimit,
+  incrementConnectedTriggerRejectionCounter,
+  incrementTriggerRejectionCounter,
+  listTriggerRejectionCounters,
+  sweepConnectedExpiredTriggerRateLimits,
+  sweepConnectedExpiredTriggerRejectionCounters,
+  sweepExpiredTriggerRateLimits,
+  sweepExpiredTriggerRejectionCounters,
+} from "../../db/repositories/trigger-rate-limits.js";
 
 export type TriggerRateLimitWindow = "minute" | "hour" | "day" | "month";
 
@@ -68,26 +77,11 @@ export async function checkAndIncrementTriggerRate(
   max: number,
   now: Date,
 ): Promise<{ allowed: boolean; count: number }> {
-  const rows = await db
-    .insert(triggerRateLimits)
-    .values({
-      definitionId: key.definitionId,
-      nodeId: key.nodeId,
-      windowKind,
-      windowStart: triggerRateWindowStart(windowKind, now),
-      count: 1,
-    })
-    .onConflictDoUpdate({
-      target: [
-        triggerRateLimits.definitionId,
-        triggerRateLimits.nodeId,
-        triggerRateLimits.windowKind,
-        triggerRateLimits.windowStart,
-      ],
-      set: { count: sql`${triggerRateLimits.count} + 1` },
-    })
-    .returning({ count: triggerRateLimits.count });
-  const count = rows[0]?.count ?? 1;
+  const count = await consumeTriggerRateLimit(db, {
+    ...key,
+    windowKind,
+    windowStart: triggerRateWindowStart(windowKind, now),
+  });
   return { allowed: count <= max, count };
 }
 
@@ -211,6 +205,35 @@ export async function enforceTriggerRateLimit(
   };
 }
 
+export async function enforceConnectedTriggerRateLimit(
+  key: TriggerRateLimitKey,
+  limit: TriggerRateLimitConfig | null,
+  now: Date,
+): Promise<TriggerRateLimitDecision | null> {
+  if (limit === null) return null;
+  const windowStart = triggerRateWindowStart(limit.windowKind, now);
+  const count = await consumeConnectedTriggerRateLimit({
+    ...key,
+    windowKind: limit.windowKind,
+    windowStart,
+  });
+  const allowed = count <= limit.max;
+  if (!allowed) {
+    await incrementConnectedTriggerRejectionCounter({
+      ...key,
+      reason: "rate_limited",
+      day: rejectionDay(now),
+    });
+  }
+  return {
+    ...limit,
+    allowed,
+    count,
+    windowStart,
+    resetAt: triggerRateWindowEnd(limit.windowKind, windowStart),
+  };
+}
+
 /** The fields an operator needs to read a refusal: what the limit was, what the
  *  count reached, and when the window rolls. */
 export function triggerRateLimitLogFields(
@@ -263,24 +286,7 @@ export async function recordTriggerRejection(
   reason: string,
   now: Date,
 ): Promise<void> {
-  await db
-    .insert(triggerRejectionCounters)
-    .values({
-      definitionId: key.definitionId,
-      nodeId: key.nodeId,
-      reason,
-      day: rejectionDay(now),
-      count: 1,
-    })
-    .onConflictDoUpdate({
-      target: [
-        triggerRejectionCounters.definitionId,
-        triggerRejectionCounters.nodeId,
-        triggerRejectionCounters.day,
-        triggerRejectionCounters.reason,
-      ],
-      set: { count: sql`${triggerRejectionCounters.count} + 1` },
-    });
+  await incrementTriggerRejectionCounter(db, { ...key, reason, day: rejectionDay(now) });
 }
 
 /** Today's refusals for one node grouped by reason, worst first. */
@@ -289,20 +295,7 @@ export async function getTriggerRejectionsToday(
   key: TriggerRateLimitKey,
   now: Date,
 ): Promise<{ reason: string; count: number }[]> {
-  return db
-    .select({
-      reason: triggerRejectionCounters.reason,
-      count: triggerRejectionCounters.count,
-    })
-    .from(triggerRejectionCounters)
-    .where(
-      and(
-        eq(triggerRejectionCounters.definitionId, key.definitionId),
-        eq(triggerRejectionCounters.nodeId, key.nodeId),
-        eq(triggerRejectionCounters.day, rejectionDay(now)),
-      ),
-    )
-    .orderBy(desc(triggerRejectionCounters.count));
+  return listTriggerRejectionCounters(db, { ...key, day: rejectionDay(now) });
 }
 
 /** Safely above the longest live window (a calendar month plus its longest
@@ -315,16 +308,28 @@ const REJECTION_RETENTION_DAYS = 30;
 
 /** Housekeeping for windows nothing can read again. */
 export async function sweepTriggerRateLimits(db: Db, now: Date): Promise<void> {
-  await db
-    .delete(triggerRateLimits)
-    .where(
-      lt(triggerRateLimits.windowStart, new Date(now.getTime() - RATE_LIMIT_RETENTION_MS)),
-    );
+  await sweepExpiredTriggerRateLimits(
+    db,
+    new Date(now.getTime() - RATE_LIMIT_RETENTION_MS),
+  );
+}
+
+export function sweepConnectedTriggerRateLimits(now: Date): Promise<void> {
+  return sweepConnectedExpiredTriggerRateLimits(
+    new Date(now.getTime() - RATE_LIMIT_RETENTION_MS),
+  );
 }
 
 /** Housekeeping for rejection days nothing surfaces anymore. The day column
  *  is an ISO date string, so the cutoff compares lexicographically. */
 export async function sweepTriggerRejectionCounters(db: Db, now: Date): Promise<void> {
   const cutoff = rejectionDay(new Date(now.getTime() - REJECTION_RETENTION_DAYS * 24 * 60 * 60 * 1000));
-  await db.delete(triggerRejectionCounters).where(lt(triggerRejectionCounters.day, cutoff));
+  await sweepExpiredTriggerRejectionCounters(db, cutoff);
+}
+
+export function sweepConnectedTriggerRejectionCounters(now: Date): Promise<void> {
+  const cutoff = rejectionDay(
+    new Date(now.getTime() - REJECTION_RETENTION_DAYS * 24 * 60 * 60 * 1000),
+  );
+  return sweepConnectedExpiredTriggerRejectionCounters(cutoff);
 }

@@ -15,7 +15,7 @@ import { logger } from "../../infra/logger.js";
 import {
   getResumableClarificationForRun,
   type HookClarificationRow,
-} from "../../clarifications/hook-store.js";
+} from "../../db/repositories/clarification-hooks.js";
 import { stopSandboxesByIds } from "../../sandbox/stop-ticket-sandboxes.js";
 import {
   IssueTrackerNotFoundError,
@@ -26,7 +26,7 @@ import type {
   ActiveRunEntry,
   RunRegistryAdapter,
 } from "../../adapters/run-registry/types.js";
-import type { Db } from "../../db/client.js";
+import type { Db } from "../../db/types.js";
 import { confirmWorkflowStepsDrained } from "./workflow-step-drain.js";
 import { reconcileStartupWatchdog } from "./run-start-lifecycle.js";
 import { reconcileStalledRun } from "./run-stall-watchdog.js";
@@ -621,9 +621,22 @@ async function retryCancellingClaim(
     ownerToken: string;
     runId: string | null;
   }) => {
-    const transitionDb = db ?? (await import("../../db/client.js")).getDb();
-    await withdrawTicketFromAiForRun({
-      db: transitionDb,
+    if (db) {
+      await withdrawTicketFromAiForRun({
+        db,
+        issueTracker: issueTracker!,
+        ticketKey,
+        aiColumn: env.COLUMN_AI,
+        target: backlogTarget,
+        owner,
+        requiredOwnerState: "cancelling",
+      });
+      return;
+    }
+    const { withdrawConnectedTicketFromAiForRun } = await import(
+      "../tickets/ticket-transition.js"
+    );
+    await withdrawConnectedTicketFromAiForRun({
       issueTracker: issueTracker!,
       ticketKey,
       aiColumn: env.COLUMN_AI,
@@ -675,7 +688,7 @@ async function recoverStaleReservation(
   runRegistry: RunRegistryAdapter,
   issueTracker?: IssueTrackerAdapter,
   onSubjectReleased?: SubjectReleasedCallback,
-  db?: Db,
+  _db?: Db,
 ): Promise<number> {
   if (runRegistry.releaseExpiredReservation) {
     const released = await runRegistry
@@ -720,7 +733,7 @@ async function cleanFinishedRun(
   runRegistry: RunRegistryAdapter,
   issueTracker?: IssueTrackerAdapter,
   onSubjectReleased?: SubjectReleasedCallback,
-  db?: Db,
+  _db?: Db,
 ): Promise<number> {
   try {
     const status = await getRun(entry.runId).status;

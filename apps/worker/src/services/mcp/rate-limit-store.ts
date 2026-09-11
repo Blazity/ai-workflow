@@ -1,7 +1,10 @@
-import { lt, sql } from "drizzle-orm";
-
-import type { Db } from "../../db/client.js";
-import { mcpRateLimitWindows } from "../../db/schema.js";
+import type { Db } from "../../db/types.js";
+import {
+  consumeConnectedMcpRateLimitWindow,
+  consumeMcpRateLimitWindow,
+  sweepConnectedExpiredMcpRateLimitWindows,
+  sweepExpiredMcpRateLimitWindows,
+} from "../../db/repositories/mcp.js";
 import { logger } from "../../infra/logger.js";
 import {
   McpPublicError,
@@ -40,7 +43,11 @@ async function withSafeStoreErrors<T>(operation: () => Promise<T>): Promise<T> {
 // Windows expire two minutes after they open and nothing reads them again, but
 // the rows stay until something removes them. The cron calls this.
 export async function sweepMcpRateLimits(db: Db, now: Date = new Date()): Promise<void> {
-  await db.delete(mcpRateLimitWindows).where(lt(mcpRateLimitWindows.expiresAt, now));
+  await sweepExpiredMcpRateLimitWindows(db, now);
+}
+
+export function sweepConnectedMcpRateLimits(now: Date = new Date()): Promise<void> {
+  return sweepConnectedExpiredMcpRateLimitWindows(now);
 }
 
 export async function consumeMcpRateLimit(input: {
@@ -57,32 +64,44 @@ export async function consumeMcpRateLimit(input: {
       Math.floor(input.now.getTime() / WINDOW_MS) * WINDOW_MS,
     );
     const retryAfterMs = WINDOW_MS - (input.now.getTime() - windowStartedAt.getTime());
-    const rows = await input.db
-      .insert(mcpRateLimitWindows)
-      .values({
-        organizationId: input.actor.organizationId,
-        actorSubject: input.actor.subject,
-        clientId: input.actor.clientId,
-        toolName: input.toolName,
-        windowStartedAt,
-        requestCount: 1,
-        expiresAt: new Date(windowStartedAt.getTime() + 2 * WINDOW_MS),
-      })
-      .onConflictDoUpdate({
-        target: [
-          mcpRateLimitWindows.organizationId,
-          mcpRateLimitWindows.actorSubject,
-          mcpRateLimitWindows.clientId,
-          mcpRateLimitWindows.toolName,
-          mcpRateLimitWindows.windowStartedAt,
-        ],
-        set: { requestCount: sql`${mcpRateLimitWindows.requestCount} + 1` },
-      })
-      .returning({ requestCount: mcpRateLimitWindows.requestCount });
-    const requestCount = rows[0]?.requestCount ?? 1;
+    const requestCount = await consumeMcpRateLimitWindow(input.db, {
+      organizationId: input.actor.organizationId,
+      actorSubject: input.actor.subject,
+      clientId: input.actor.clientId,
+      toolName: input.toolName,
+      windowStartedAt,
+      expiresAt: new Date(windowStartedAt.getTime() + 2 * WINDOW_MS),
+    });
     if (requestCount > input.limit) {
       // The upsert is atomic, so exactly one request per window observes the
       // count crossing the limit. That one is the window's auditable verdict.
+      return {
+        allowed: false,
+        firstRejectionInWindow: requestCount === input.limit + 1,
+        retryAfterMs,
+      };
+    }
+    return { allowed: true, remaining: input.limit - requestCount, retryAfterMs };
+  });
+}
+
+export async function consumeConnectedMcpRateLimit(
+  input: Omit<Parameters<typeof consumeMcpRateLimit>[0], "db">,
+): Promise<McpRateLimitVerdict> {
+  return withSafeStoreErrors(async () => {
+    const windowStartedAt = new Date(
+      Math.floor(input.now.getTime() / WINDOW_MS) * WINDOW_MS,
+    );
+    const retryAfterMs = WINDOW_MS - (input.now.getTime() - windowStartedAt.getTime());
+    const requestCount = await consumeConnectedMcpRateLimitWindow({
+      organizationId: input.actor.organizationId,
+      actorSubject: input.actor.subject,
+      clientId: input.actor.clientId,
+      toolName: input.toolName,
+      windowStartedAt,
+      expiresAt: new Date(windowStartedAt.getTime() + 2 * WINDOW_MS),
+    });
+    if (requestCount > input.limit) {
       return {
         allowed: false,
         firstRejectionInWindow: requestCount === input.limit + 1,

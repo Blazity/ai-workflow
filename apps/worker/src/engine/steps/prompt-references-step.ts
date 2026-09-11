@@ -10,15 +10,12 @@ export async function resolvePromptReferencesForRun(
   nodes: WorkflowDefinitionNode[],
 ): Promise<ResolvedWorkflowPromptReferences> {
   "use step";
-  const { getDb } = await import("../../db/client.js");
-  const { createPromptReferenceLoader } = await import(
+  const { createConnectedPromptReferenceLoader } = await import(
     "../../prompt-library/prompt-reference-loader.js"
   );
-  const db = getDb();
-
   return resolvePromptReferencesInNodes(
     nodes,
-    createPromptReferenceLoader(db),
+    createConnectedPromptReferenceLoader(),
     { requirePinned: true },
   );
 }

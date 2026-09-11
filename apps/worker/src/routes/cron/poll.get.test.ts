@@ -84,6 +84,11 @@ vi.mock("../../db/repositories/approvals.js", () => ({
   getApproval: (...args: any[]) => mocks.getApproval(...args),
   rejectUndispatchableApproval: (...args: any[]) =>
     mocks.rejectUndispatchableApproval(...args),
+  listConnectedDispatchBlockingApprovals: (...args: any[]) =>
+    mocks.listDispatchBlockingApprovals(...args),
+  listConnectedApprovalParkedSubjects: (...args: any[]) =>
+    mocks.listApprovalParkedSubjects(...args),
+  getConnectedApproval: (...args: any[]) => mocks.getApproval(...args),
 }));
 vi.mock("../../services/approvals/dispatch.js", () => ({
   dispatchPlanApproved: (...args: any[]) => mocks.dispatchPlanApproved(...args),
@@ -98,6 +103,8 @@ vi.mock("../../db/repositories/clarifications.js", () => ({
     mocks.classifyProtectedClarifications(...args),
   listProtectedClarificationSubjectKeys: (...args: any[]) =>
     mocks.listProtectedClarifications(...args),
+  classifyConnectedProtectedClarificationSubjects: (...args: any[]) =>
+    mocks.classifyProtectedClarifications(...args),
 }));
 vi.mock("../../clarifications/reconciliation.js", () => ({
   recoverClarificationProviderParking: (...args: any[]) =>
@@ -111,21 +118,39 @@ vi.mock("../../clarifications/reconciliation.js", () => ({
 }));
 vi.mock("../../services/clarifications/expiry.js", () => ({
   expireHookClarifications: (...args: any[]) => mocks.expireClarifications(...args),
+  expireConnectedHookClarifications: (...args: any[]) =>
+    mocks.expireClarifications(...args),
 }));
 vi.mock("../../services/clarifications/resume-from-comments.js", () => ({
   resumeClarificationFromComments: (...args: any[]) =>
+    mocks.resumeClarificationFromComments(...args),
+  resumeConnectedClarificationFromComments: (...args: any[]) =>
     mocks.resumeClarificationFromComments(...args),
 }));
 vi.mock("../../services/dispatch/dispatch-trigger.js", () => ({
   drainOldestPendingTrigger: (...args: any[]) =>
     mocks.drainOldestPendingTrigger(...args),
 }));
-vi.mock("../../engine/support/trigger-delivery-store.js", () => ({
+vi.mock("../../services/dispatch/trigger-rate-limit.js", () => ({
+  sweepConnectedTriggerRateLimits: vi.fn().mockResolvedValue(undefined),
+  sweepConnectedTriggerRejectionCounters: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../../services/dispatch/trigger-delivery-store.js", () => ({
   listPendingTriggers: (...args: any[]) => mocks.listPendingTriggers(...args),
+  listConnectedPendingTriggers: (...args: any[]) => mocks.listPendingTriggers(...args),
 }));
 vi.mock("../../db/repositories/runs/run-observability.js", () => ({
+  DEFAULT_REPLAY_PAGE_LIMIT: 50,
+  MAX_REPLAY_PAGE_LIMIT: 100,
+  RunObservationStoreError: class extends Error {},
   deleteExpiredRunObservations: (...args: any[]) =>
     mocks.deleteExpiredRunObservations(...args),
+  deleteConnectedExpiredRunObservations: (...args: any[]) =>
+    mocks.deleteExpiredRunObservations(...args),
+  readConnectedRunReplayRun: vi.fn(),
+  readConnectedRunReplayObservation: vi.fn(),
+  listConnectedRunReplayAttemptRows: vi.fn(),
+  readConnectedRunReplayAttemptRow: vi.fn(),
 }));
 vi.mock("../../post-pr-gate/gate-store.js", () => ({
   GateStore: class {
@@ -139,8 +164,12 @@ vi.mock("../../services/manual-dispatch/service.js", () => ({
 vi.mock("../../db/repositories/manual-dispatch.js", () => ({
   listRecoverableManualDispatches: (...args: unknown[]) =>
     mocks.listRecoverableManualDispatches(...args),
+  listConnectedRecoverableManualDispatches: (...args: unknown[]) =>
+    mocks.listRecoverableManualDispatches(...args),
 }));
-vi.mock("../../webhook-trigger/delivery-store.js", () => ({
+vi.mock("../../db/repositories/webhook-trigger-deliveries.js", () => ({
+  sweepConnectedWebhookDeliveries: (...args: unknown[]) =>
+    mocks.sweepWebhookDeliveries(...args),
   sweepWebhookDeliveries: (...args: unknown[]) => mocks.sweepWebhookDeliveries(...args),
 }));
 vi.mock("../../services/webhook-trigger/dispatch-webhook-trigger.js", () => ({
@@ -149,23 +178,34 @@ vi.mock("../../services/webhook-trigger/dispatch-webhook-trigger.js", () => ({
 }));
 vi.mock("../../services/webhook-trigger/rate-limit.js", () => ({
   sweepWebhookRateLimits: (...args: unknown[]) => mocks.sweepWebhookRateLimits(...args),
+  sweepConnectedWebhookRateLimits: (...args: unknown[]) =>
+    mocks.sweepWebhookRateLimits(...args),
 }));
 vi.mock("../../services/webhook-trigger/rejection-counters.js", () => ({
   sweepWebhookRejectionCounters: (...args: unknown[]) =>
     mocks.sweepWebhookRejectionCounters(...args),
+  sweepConnectedWebhookRejectionCounters: (...args: unknown[]) =>
+    mocks.sweepWebhookRejectionCounters(...args),
 }));
 vi.mock("../../services/mcp/audit-store.js", () => ({
   pruneMcpAudits: (...args: unknown[]) => mocks.pruneMcpAudits(...args),
+  pruneConnectedMcpAudits: (...args: unknown[]) => mocks.pruneMcpAudits(...args),
 }));
 vi.mock("../../services/mcp/rate-limit-store.js", () => ({
   sweepMcpRateLimits: (...args: unknown[]) => mocks.sweepMcpRateLimits(...args),
+  sweepConnectedMcpRateLimits: (...args: unknown[]) =>
+    mocks.sweepMcpRateLimits(...args),
 }));
 vi.mock("../../services/mcp/idempotency-store.js", () => ({
   sweepMcpIdempotencyKeys: (...args: unknown[]) =>
     mocks.sweepMcpIdempotencyKeys(...args),
+  sweepConnectedMcpIdempotencyKeys: (...args: unknown[]) =>
+    mocks.sweepMcpIdempotencyKeys(...args),
 }));
 vi.mock("../../services/triggers/custom-webhooks/dispatch-deps.js", () => ({
   createWebhookDispatchDeps: (...args: unknown[]) =>
+    mocks.createWebhookDispatchDeps(...args),
+  createConnectedWebhookDispatchDeps: (...args: unknown[]) =>
     mocks.createWebhookDispatchDeps(...args),
 }));
 vi.mock("../../services/schedule-trigger/dispatch-schedule-trigger.js", () => ({
@@ -173,16 +213,31 @@ vi.mock("../../services/schedule-trigger/dispatch-schedule-trigger.js", () => ({
     mocks.runScheduleTriggerPass(...args),
   createScheduleDispatchDeps: (...args: unknown[]) =>
     mocks.createScheduleDispatchDeps(...args),
+  createConnectedScheduleDispatchDeps: (...args: unknown[]) =>
+    mocks.createScheduleDispatchDeps(...args),
 }));
 vi.mock("../../services/telemetry/collect-snapshots.js", () => ({
   collectSnapshots: vi.fn().mockResolvedValue([]),
+  collectConnectedSnapshots: vi.fn().mockResolvedValue([]),
 }));
 vi.mock("../../db/repositories/runs/telemetry.js", () => ({
   upsertRunSnapshots: vi.fn().mockResolvedValue(undefined),
+  upsertConnectedRunSnapshots: vi.fn().mockResolvedValue(undefined),
   sweepOrphanedAwaitingRuns: (...args: unknown[]) =>
+    mocks.sweepOrphanedAwaitingRuns(...args),
+  sweepConnectedOrphanedAwaitingRuns: (...args: unknown[]) =>
     mocks.sweepOrphanedAwaitingRuns(...args),
   sweepOrphanedRunningRuns: (...args: unknown[]) =>
     mocks.sweepOrphanedRunningRuns(...args),
+  sweepConnectedOrphanedRunningRuns: (...args: unknown[]) =>
+    mocks.sweepOrphanedRunningRuns(...args),
+}));
+vi.mock("../../engine/runtime/pr-external-resources.js", () => ({
+  reconcileConnectedPendingPrChecks: vi.fn().mockResolvedValue({
+    attempted: 0,
+    closed: 0,
+    pending: 0,
+  }),
 }));
 
 const poll = (await import("./poll.get.js")).default;
@@ -283,8 +338,8 @@ describe("cron clarification recovery ordering", () => {
   // clears it is best-effort, so the poll has to settle the leftovers.
   it("sweeps orphaned awaiting runs alongside the telemetry snapshot", async () => {
     expect((await request()).status).toBe(200);
-    expect(mocks.sweepOrphanedAwaitingRuns).toHaveBeenCalledWith({ db: true });
-    expect(mocks.sweepOrphanedRunningRuns).toHaveBeenCalledWith({ db: true });
+    expect(mocks.sweepOrphanedAwaitingRuns).toHaveBeenCalledWith();
+    expect(mocks.sweepOrphanedRunningRuns).toHaveBeenCalledWith();
   });
 
   it("keeps polling when the awaiting sweep fails", async () => {
@@ -303,13 +358,13 @@ describe("cron clarification recovery ordering", () => {
     const response = await request();
 
     expect(response.status).toBe(200);
-    expect(mocks.createWebhookDispatchDeps).toHaveBeenCalledWith({ db: true }, {});
+    expect(mocks.createWebhookDispatchDeps).toHaveBeenCalledWith({});
     expect(mocks.redispatchPendingWebhookDeliveries).toHaveBeenCalledWith({
       kind: "webhook-deps",
     });
-    expect(mocks.sweepWebhookRateLimits).toHaveBeenCalledWith({ db: true });
-    expect(mocks.sweepWebhookRejectionCounters).toHaveBeenCalledWith({ db: true });
-    expect(mocks.sweepWebhookDeliveries).toHaveBeenCalledWith({ db: true });
+    expect(mocks.sweepWebhookRateLimits).toHaveBeenCalledWith();
+    expect(mocks.sweepWebhookRejectionCounters).toHaveBeenCalledWith();
+    expect(mocks.sweepWebhookDeliveries).toHaveBeenCalledWith();
     await expect(response.json()).resolves.toMatchObject({
       webhookRecovery: { attempted: 2, started: 1, errors: 1 },
     });
@@ -339,16 +394,14 @@ describe("cron clarification recovery ordering", () => {
     const response = await request();
 
     expect(response.status).toBe(200);
-    expect(mocks.sweepMcpRateLimits).toHaveBeenCalledWith({ db: true });
+    expect(mocks.sweepMcpRateLimits).toHaveBeenCalledWith();
     expect(mocks.pruneMcpAudits).toHaveBeenCalledWith(
-      { db: true },
       expect.any(Date),
       { limit: 100 },
     );
     // Nothing on the request path deletes a spent idempotency key either, so
     // the same retention shape carries it: bounded batch, reported count.
     expect(mocks.sweepMcpIdempotencyKeys).toHaveBeenCalledWith(
-      { db: true },
       expect.any(Date),
       { limit: 100 },
     );
@@ -396,7 +449,6 @@ describe("cron clarification recovery ordering", () => {
 
     expect(response.status).toBe(200);
     expect(mocks.createScheduleDispatchDeps).toHaveBeenCalledWith(
-      { db: true },
       {},
       1,
     );
@@ -450,7 +502,7 @@ describe("cron clarification recovery ordering", () => {
       expect.any(Function),
       expect.any(Function),
       new Set(["ticket:jira:AIW-1"]),
-      { db: true },
+      undefined,
       new Set(["ticket:jira:AIW-CONTINUATION"]),
       expect.any(Function),
     );
@@ -462,7 +514,6 @@ describe("cron clarification recovery ordering", () => {
       },
     });
     expect(mocks.deleteExpiredRunObservations).toHaveBeenCalledWith({
-      db: { db: true },
       limit: 100,
     });
   });
@@ -559,7 +610,7 @@ describe("cron clarification recovery ordering", () => {
       expect.any(Function),
       expect.any(Function),
       new Set(),
-      { db: true },
+      undefined,
       new Set(["ticket:jira:AIW-1"]),
       expect.any(Function),
     );
@@ -599,7 +650,7 @@ describe("cron clarification recovery ordering", () => {
 
     const response = await request();
 
-    expect(mocks.listPendingTriggers).toHaveBeenCalledWith({ db: true }, 20);
+    expect(mocks.listPendingTriggers).toHaveBeenCalledWith(20);
     expect(mocks.drainOldestPendingTrigger).toHaveBeenCalledTimes(2);
     expect(mocks.drainOldestPendingTrigger.mock.calls.map(([subject]) => subject)).toEqual([
       "pr:github:acme/app#1",

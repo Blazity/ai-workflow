@@ -1,8 +1,8 @@
 import type { IssueTrackerAdapter, TicketContent } from "../../adapters/issue-tracker/types.js";
 
 // Label mutation shares the engine's run-ownership guard and transition port.
-import type { Db } from "../../db/client.js";
-import { assertActiveRunOwnerState } from "../../engine/support/active-run-owner.js";
+import type { Db } from "../../db/types.js";
+import { assertActiveRunOwnerState } from "../../db/repositories/active-runs.js";
 import type { TicketTransitionOwner } from "./ticket-transition.js";
 
 export interface TicketLabelChanges {
@@ -20,6 +20,7 @@ export async function updateTicketLabelsForRun(input: {
   changes: TicketLabelChanges;
 }): Promise<void> {
   if (typeof input.issueTracker.updateLabels !== "function") {
+    // oxlint-disable-next-line unicorn/prefer-type-error -- Error is the established exported API contract.
     throw new Error("Issue tracker does not support label mutations.");
   }
   const changes = normalizeChanges(input.changes);
@@ -27,15 +28,48 @@ export async function updateTicketLabelsForRun(input: {
 
   const current = await input.issueTracker.fetchTicket(input.ticketKey);
   if (ticketMatchesLabelChanges(current, changes)) {
-    await assertActiveRunOwnerState(input.db, input.owner, input.requiredOwnerState);
+    await assertActiveRunOwnerState(input.owner, input.requiredOwnerState, input.db);
     return;
   }
 
-  await assertActiveRunOwnerState(input.db, input.owner, input.requiredOwnerState);
+  await assertActiveRunOwnerState(input.owner, input.requiredOwnerState, input.db);
   try {
     await input.issueTracker.updateLabels(input.ticketKey, {
-      ...(changes.add.length ? { add: changes.add } : {}),
-      ...(changes.remove.length ? { remove: changes.remove } : {}),
+      ...(changes.add.length > 0 ? { add: changes.add } : {}),
+      ...(changes.remove.length > 0 ? { remove: changes.remove } : {}),
+    });
+  } catch (error) {
+    try {
+      const afterError = await input.issueTracker.fetchTicket(input.ticketKey);
+      if (ticketMatchesLabelChanges(afterError, changes)) return;
+    } catch {
+      // Preserve the original mutation error.
+    }
+    throw error;
+  }
+}
+
+export async function updateConnectedTicketLabelsForRun(
+  input: Omit<Parameters<typeof updateTicketLabelsForRun>[0], "db">,
+): Promise<void> {
+  if (typeof input.issueTracker.updateLabels !== "function") {
+    // oxlint-disable-next-line unicorn/prefer-type-error -- Error is the established exported API contract.
+    throw new Error("Issue tracker does not support label mutations.");
+  }
+  const changes = normalizeChanges(input.changes);
+  if (changes.add.length === 0 && changes.remove.length === 0) return;
+
+  const current = await input.issueTracker.fetchTicket(input.ticketKey);
+  if (ticketMatchesLabelChanges(current, changes)) {
+    await assertActiveRunOwnerState(input.owner, input.requiredOwnerState);
+    return;
+  }
+
+  await assertActiveRunOwnerState(input.owner, input.requiredOwnerState);
+  try {
+    await input.issueTracker.updateLabels(input.ticketKey, {
+      ...(changes.add.length > 0 ? { add: changes.add } : {}),
+      ...(changes.remove.length > 0 ? { remove: changes.remove } : {}),
     });
   } catch (error) {
     try {

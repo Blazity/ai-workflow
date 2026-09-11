@@ -18,7 +18,7 @@ vi.mock("../infra/vcs-config.js", () => ({
 }));
 
 import type { Db } from "../db/client.js";
-import { PROMPT_BODY_MAX_LENGTH as STORE_BODY_MAX_LENGTH } from "../db/repositories/prompts.js";
+import { PROMPT_BODY_MAX_LENGTH as STORE_BODY_MAX_LENGTH } from "../services/prompts/index.js";
 import { MAX_EDGES, MAX_NODES } from "../workflow-definition/schema.js";
 import { FIRST_SLICE_TOOLS } from "./contracts.js";
 import { policyFor } from "./policy.js";

@@ -1,6 +1,11 @@
-import { lt, sql } from "drizzle-orm";
-import type { Db } from "../../db/client.js";
-import { webhookTriggerRateLimits } from "../../db/schema.js";
+import {
+  consumeConnectedWebhookTriggerRate,
+  consumeWebhookTriggerRate,
+  sweepConnectedExpiredWebhookTriggerRates,
+  sweepExpiredWebhookTriggerRates,
+} from "../../db/repositories/webhook-trigger-deliveries.js";
+
+type WebhookRateDb = Parameters<typeof consumeWebhookTriggerRate>[0];
 
 /** Authenticated deliveries one endpoint may accept per minute before it starts
  *  refusing. High enough that a normal integration never notices, low enough
@@ -56,37 +61,38 @@ export function webhookRateWindowStart(now: Date = new Date()): Date {
  * belongs in recordWebhookRejection, which is keyless exactly for that case.
  */
 export async function checkAndIncrementWebhookRate(
-  db: Db,
+  db: WebhookRateDb,
   endpointId: string,
   kind: WebhookRateKind,
   limitPerMinute: number,
   now: Date = new Date(),
 ): Promise<WebhookRateDecision> {
   const windowStart = webhookRateWindowStart(now);
-  const rows = await db
-    .insert(webhookTriggerRateLimits)
-    .values({ endpointId, windowStart, kind, count: 1 })
-    .onConflictDoUpdate({
-      target: [
-        webhookTriggerRateLimits.endpointId,
-        webhookTriggerRateLimits.windowStart,
-        webhookTriggerRateLimits.kind,
-      ],
-      set: { count: sql`${webhookTriggerRateLimits.count} + 1` },
-    })
-    .returning({ count: webhookTriggerRateLimits.count });
-  const count = rows[0]?.count ?? 1;
+  const count = await consumeWebhookTriggerRate(db, { endpointId, windowStart, kind });
+  return { allowed: count <= limitPerMinute, count, limit: limitPerMinute, windowStart };
+}
+
+export async function checkAndIncrementConnectedWebhookRate(
+  endpointId: string,
+  kind: WebhookRateKind,
+  limitPerMinute: number,
+  now: Date = new Date(),
+): Promise<WebhookRateDecision> {
+  const windowStart = webhookRateWindowStart(now);
+  const count = await consumeConnectedWebhookTriggerRate({ endpointId, windowStart, kind });
   return { allowed: count <= limitPerMinute, count, limit: limitPerMinute, windowStart };
 }
 
 /** Housekeeping for windows nothing can read again. */
 export async function sweepWebhookRateLimits(
-  db: Db,
+  db: WebhookRateDb,
   now: Date = new Date(),
 ): Promise<void> {
-  await db
-    .delete(webhookTriggerRateLimits)
-    .where(
-      lt(webhookTriggerRateLimits.windowStart, new Date(now.getTime() - RETENTION_MS)),
-    );
+  await sweepExpiredWebhookTriggerRates(db, new Date(now.getTime() - RETENTION_MS));
+}
+
+export function sweepConnectedWebhookRateLimits(now: Date = new Date()): Promise<void> {
+  return sweepConnectedExpiredWebhookTriggerRates(
+    new Date(now.getTime() - RETENTION_MS),
+  );
 }

@@ -9,7 +9,7 @@ import type {
   ActiveRunEntry,
   RunRegistryAdapter,
 } from "../../adapters/run-registry/types.js";
-import type { Db } from "../../db/client.js";
+import type { Db } from "../../db/types.js";
 import {
   cancelRunDetailed,
   cancelSubjectRunDetailed,

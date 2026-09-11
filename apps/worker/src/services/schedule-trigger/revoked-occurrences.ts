@@ -1,6 +1,5 @@
-import { and, eq, sql } from "drizzle-orm";
-import type { Db } from "../../db/client.js";
-import { scheduleOccurrences } from "../../db/schema.js";
+import type { Db } from "../../db/types.js";
+import { cancelWaitingScheduleOccurrences } from "../../db/repositories/schedule-triggers.js";
 
 /** Why a waiting occurrence was cancelled when its schedule stopped being live. */
 export const REVOKED_SCHEDULE_REASON = "schedule_revoked";
@@ -32,22 +31,5 @@ export async function cancelWaitingOccurrences(
   reason: string = REVOKED_SCHEDULE_REASON,
   overwriteReason = false,
 ): Promise<number> {
-  const rows = await db
-    .update(scheduleOccurrences)
-    .set({
-      outcome: "cancelled",
-      pending: false,
-      skipReason: overwriteReason
-        ? reason
-        : sql`coalesce(${scheduleOccurrences.skipReason}, ${reason})`,
-      updatedAt: sql`now()`,
-    })
-    .where(
-      and(
-        eq(scheduleOccurrences.scheduleId, scheduleId),
-        eq(scheduleOccurrences.pending, true),
-      ),
-    )
-    .returning({ scheduleId: scheduleOccurrences.scheduleId });
-  return rows.length;
+  return cancelWaitingScheduleOccurrences(db, { scheduleId, reason, overwriteReason });
 }

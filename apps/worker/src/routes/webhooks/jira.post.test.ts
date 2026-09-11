@@ -27,22 +27,21 @@ vi.mock("../../infra/vcs-config.js", () => ({ env: state.env }));
 vi.mock("../../engine/support/adapters.js", () => ({ createAdapters: state.createAdapters }));
 vi.mock("../../services/dispatch/dispatch.js", () => ({ dispatchTicket: state.dispatch }));
 vi.mock("../../services/run-lifecycle/cancel-run.js", () => ({ cancelRunDetailed: state.cancel }));
-vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
 vi.mock("../../services/clarifications/resume-from-comments.js", () => ({
-  resumeClarificationFromComments: (...args: unknown[]) => state.resume(...args),
+  resumeConnectedClarificationFromComments: (...args: unknown[]) => state.resume(...args),
 }));
 vi.mock("../../db/repositories/clarifications.js", () => ({
-  classifyProtectedClarificationSubjects: (...args: unknown[]) =>
+  classifyConnectedProtectedClarificationSubjects: (...args: unknown[]) =>
     state.classifyProtected(...args),
 }));
 vi.mock("../../db/repositories/approvals.js", () => ({
-  listApprovalParkedSubjects: (...args: unknown[]) =>
+  listConnectedApprovalParkedSubjects: (...args: unknown[]) =>
     state.listApprovalParked(...args),
 }));
 vi.mock("../../db/repositories/runs.js", () => ({
-  isRunRecordedFailed: state.isRunRecordedFailed,
-  isRunRecordedSucceeded: state.isRunRecordedSucceeded,
-  hasDurableRunPublication: state.hasDurableRunPublication,
+  isConnectedRunRecordedFailed: state.isRunRecordedFailed,
+  isConnectedRunRecordedSucceeded: state.isRunRecordedSucceeded,
+  hasConnectedDurableRunPublication: state.hasDurableRunPublication,
 }));
 vi.mock("../../services/system/provider-webhook-observation.js", () => ({
   observeProviderWebhook: state.observeProviderWebhook,
@@ -334,7 +333,7 @@ describe("POST /webhooks/jira", () => {
       reason: "run_already_failed",
       ticketKey: "PROJ-42",
     });
-    expect(state.isRunRecordedFailed).toHaveBeenCalledWith(expect.anything(), "run-1");
+    expect(state.isRunRecordedFailed).toHaveBeenCalledWith("run-1");
     expect(state.cancel).not.toHaveBeenCalled();
   });
 
@@ -358,7 +357,7 @@ describe("POST /webhooks/jira", () => {
       reason: "ticket_in_ai_review_column",
       ticketKey: "PROJ-42",
     });
-    expect(state.isRunRecordedSucceeded).toHaveBeenCalledWith(expect.anything(), "run-1");
+    expect(state.isRunRecordedSucceeded).toHaveBeenCalledWith("run-1");
     expect(state.cancel).not.toHaveBeenCalled();
     expect(state.hasDurableRunPublication).not.toHaveBeenCalled();
   });
@@ -410,7 +409,7 @@ describe("POST /webhooks/jira", () => {
       ticketKey: "PROJ-42",
     });
     expect(state.cancel).not.toHaveBeenCalled();
-    expect(state.hasDurableRunPublication).toHaveBeenCalledWith(expect.anything(), "run-1");
+    expect(state.hasDurableRunPublication).toHaveBeenCalledWith("run-1");
   });
 
   it("cancels a human AI Review move before durable PR publication exists", async () => {
@@ -428,7 +427,7 @@ describe("POST /webhooks/jira", () => {
       status: "cancelled",
       reason: "left_ai_column",
     });
-    expect(state.hasDurableRunPublication).toHaveBeenCalledWith(expect.anything(), "run-1");
+    expect(state.hasDurableRunPublication).toHaveBeenCalledWith("run-1");
     expect(state.cancel).toHaveBeenCalledWith(
       "PROJ-42",
       { ownerToken: "owner-1", runId: "run-1" },
@@ -470,7 +469,7 @@ describe("POST /webhooks/jira", () => {
       ticketKey: "PROJ-42",
     });
     expect(state.cancel).not.toHaveBeenCalled();
-    expect(state.hasDurableRunPublication).toHaveBeenCalledWith(expect.anything(), "run-1");
+    expect(state.hasDurableRunPublication).toHaveBeenCalledWith("run-1");
   });
 
   it("fails closed when AI Review publication evidence lookup fails", async () => {

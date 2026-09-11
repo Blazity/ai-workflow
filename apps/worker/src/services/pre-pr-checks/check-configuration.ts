@@ -12,7 +12,6 @@ import type {
   PrePrChecksResponse,
 } from "@shared/contracts";
 
-import { getDb } from "../../db/client.js";
 import {
   PRE_PR_ALLOWED_ENV_VAR,
   allowedRepoEnvNames,
@@ -24,14 +23,16 @@ import {
   type RepoScriptsConfig,
 } from "../../pre-pr-checks/config.js";
 import {
-  dashboardUserLabel,
-  getCurrentPrePrCheckConfig,
-  listPrePrCheckConfigVersions,
-  restorePrePrCheckConfig,
-  savePrePrCheckConfig,
+  getConnectedCurrentPrePrCheckConfig,
+  listConnectedPrePrCheckConfigVersions,
+  restoreConnectedPrePrCheckConfig,
+  saveConnectedPrePrCheckConfig,
   serializePrePrCheckConfigVersion,
 } from "../../pre-pr-checks/store.js";
-import type { DashboardRole } from "../auth/index.js";
+import {
+  getConnectedDashboardUserLabel,
+  type DashboardRole,
+} from "../auth/index.js";
 
 /** Who is editing, as the store's audit trail records them. */
 export interface PrePrCheckEditor {
@@ -92,7 +93,7 @@ function describeDisallowedEnvNames(config: RepoScriptsConfig): string | null {
 
 /** Everything the editor screen loads: the history and the deployment state. */
 export async function readPrePrChecksOverview(): Promise<PrePrChecksResponse> {
-  const versions = (await listPrePrCheckConfigVersions(getDb())).map(
+  const versions = (await listConnectedPrePrCheckConfigVersions()).map(
     serializePrePrCheckConfigVersion,
   );
   return {
@@ -130,7 +131,6 @@ export async function savePrePrChecksConfiguration(input: {
   if (envRejection) {
     return { kind: "invalid", message: envRejection };
   }
-  const dbHandle = getDb();
   // Optimistic concurrency, and only when the editor asked for it. A screen
   // opened before a colleague saved holds a config built on THEIR predecessor,
   // and the store is append-only, so saving it would not merge anything: it
@@ -145,15 +145,15 @@ export async function savePrePrChecksConfiguration(input: {
     // transactions, so this closes the window an operator can actually hit
     // (a stale tab minutes old), not the microseconds between this read and
     // the insert below.
-    const latestVersion = (await getCurrentPrePrCheckConfig(dbHandle))?.version ?? 0;
+    const latestVersion = (await getConnectedCurrentPrePrCheckConfig())?.version ?? 0;
     if (latestVersion !== input.baseVersion) {
       return { kind: "version_conflict", latestVersion };
     }
   }
-  const saved = await savePrePrCheckConfig(dbHandle, {
+  const saved = await saveConnectedPrePrCheckConfig({
     actorRole: input.editor.actorRole,
     actorId: input.editor.actorId,
-    actorLabel: await dashboardUserLabel(dbHandle, input.editor.actorId),
+    actorLabel: await getConnectedDashboardUserLabel(input.editor.actorId),
     // The RAW submitted shape, deliberately not parsed.data.
     //
     // repoScriptsConfigSchema normalizes on the way through: it fills setup
@@ -178,11 +178,10 @@ export async function restorePrePrChecksConfiguration(input: {
   editor: PrePrCheckEditor;
   version: number;
 }): Promise<PrePrCheckConfigVersion> {
-  const dbHandle = getDb();
-  const restored = await restorePrePrCheckConfig(dbHandle, {
+  const restored = await restoreConnectedPrePrCheckConfig({
     actorRole: input.editor.actorRole,
     actorId: input.editor.actorId,
-    actorLabel: await dashboardUserLabel(dbHandle, input.editor.actorId),
+    actorLabel: await getConnectedDashboardUserLabel(input.editor.actorId),
     version: input.version,
   });
   return serializePrePrCheckConfigVersion(restored);

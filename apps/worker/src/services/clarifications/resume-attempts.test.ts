@@ -1,8 +1,13 @@
 import { eq } from "drizzle-orm";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../../db/client.js";
 import { clarificationRequests, workflowRuns } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
+
+vi.mock("../run-lifecycle/index.js", () => ({
+  cancelConnectedRunForOperator: vi.fn(),
+  cancelRunForOperator: vi.fn(),
+}));
 import {
   reserveResumeAttempt,
   terminalizeExhaustedResume,

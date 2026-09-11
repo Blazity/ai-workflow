@@ -51,6 +51,15 @@ vi.mock("../../db/client.js", () => ({
 
 vi.mock("../../db/repositories/runs.js", () => ({
   listWorkflowOwnedBranchesForTicket: mocks.listWorkflowOwnedBranchesForTicket,
+  listConnectedWorkflowOwnedBranchesForTicket: (ticketKey: string) =>
+    mocks.listWorkflowOwnedBranchesForTicket(mocks.getDb(), ticketKey),
+}));
+
+vi.mock("../../db/repositories/memory.js", () => ({
+  getConnectedMemoryDocument: (subjectKey: string, docPath: string) =>
+    mocks.getMemoryDocument(mocks.getDb(), subjectKey, docPath),
+  upsertConnectedMemoryDocument: (input: unknown) =>
+    mocks.upsertMemoryDocument(mocks.getDb(), input),
 }));
 
 // The store is mocked, the routing document format is not: mocking the render and

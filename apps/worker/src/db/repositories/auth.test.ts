@@ -195,6 +195,25 @@ describe("auth repository atomic writes", () => {
       .toHaveLength(1);
   });
 
+  it("matches an SSO invite email after trimming tabs as well as spaces", async () => {
+    await seedInvite("sso-tab", "\tsso-tab@example.com\t");
+    await db.insert(user).values({
+      id: "sso-tab-user",
+      name: "SSO Tab User",
+      email: "sso-tab@example.com",
+      emailVerified: true,
+    });
+
+    await expect(createAuthRepository(db).acceptSsoInvite({
+      organizationId: "org",
+      inviteId: "sso-tab",
+      now,
+      userId: "sso-tab-user",
+      userEmail: "sso-tab@example.com",
+      membershipId: "sso-tab-member",
+    })).resolves.toBe(true);
+  });
+
   it("rejects an SSO invite when the locked email does not match", async () => {
     await seedInvite("sso-mismatch", "invited@example.com");
     await db.insert(user).values({

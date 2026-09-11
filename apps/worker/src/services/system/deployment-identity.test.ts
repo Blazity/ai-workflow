@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { Db } from "../../db/client.js";
 import { databaseFingerprint } from "../../db/database-fingerprint.js";
 import { deploymentIdentity, resetDeploymentIdentityCache } from "./deployment-identity.js";
 import { logger } from "../../infra/logger.js";
@@ -17,25 +16,18 @@ vi.mock("../../infra/logger.js", () => ({
 
 const HOST = "ep-cool-name-123456.eu-central-1.aws.neon.tech";
 
-/** A db whose marker read resolves to `rows`, or rejects when given an error. */
+/** A marker reader that resolves to `rows`, or rejects when given an error. */
 function markerDb(result: Array<{ env: string; endpointHost: string }> | Error): {
-  db: () => Db;
+  db: () => Promise<{ env: string | null; endpointHost: string | null } | null>;
   reads: () => number;
 } {
   let reads = 0;
-  const db = {
-    select: () => ({
-      from: () => ({
-        where: () => ({
-          limit: () => {
-            reads += 1;
-            return result instanceof Error ? Promise.reject(result) : Promise.resolve(result);
-          },
-        }),
-      }),
-    }),
+  const db = () => {
+    reads += 1;
+    if (result instanceof Error) return Promise.reject(result);
+    return Promise.resolve(result[0] ?? null);
   };
-  return { db: () => db as unknown as Db, reads: () => reads };
+  return { db, reads: () => reads };
 }
 
 describe("deploymentIdentity", () => {

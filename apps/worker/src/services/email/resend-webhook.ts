@@ -12,12 +12,11 @@ import { Webhook } from "svix";
 
 import { resendWebhookEventSchema, type ResendWebhookEvent } from "@shared/contracts";
 
-import { getDb } from "../../db/client.js";
+import { updateConnectedInviteEmailDeliveryById, updateConnectedInviteEmailDeliveryByResendId } from "../../db/repositories/invite-email-deliveries.js";
 import { resendWebhookSecret } from "../settings/index.js";
 import { observeProviderWebhook } from "../system/index.js";
 import { TriggerHttpError } from "../../infra/trigger-http-error.js";
 import {
-  applyInviteEmailDeliveryEvent,
   type ResendEmailDeliveryEvent,
 } from "./invite-delivery.js";
 
@@ -52,7 +51,7 @@ export async function handleResendWebhook(
   }
 
   try {
-    await applyInviteEmailDeliveryEvent(getDb(), consumableEvent(payload));
+    await applyConnectedInviteEmailDeliveryEvent(consumableEvent(payload));
     observeProviderWebhook("email", "accepted", "request_succeeded");
     return { status: "ok" };
   } catch (error) {
@@ -87,4 +86,43 @@ function consumableEvent(payload: unknown): ResendEmailDeliveryEvent {
   // it did before this file existed.
   const verified: ResendWebhookEvent = parsed.data;
   return verified as ResendEmailDeliveryEvent;
+}
+
+async function applyConnectedInviteEmailDeliveryEvent(
+  event: ResendEmailDeliveryEvent,
+): Promise<{ handled: boolean; updated: boolean }> {
+  const update = mapResendDeliveryEvent(event);
+  if (!update) return { handled: false, updated: false };
+  if (update.deliveryId) {
+    const updatedById = await updateConnectedInviteEmailDeliveryById({
+      id: update.deliveryId,
+      resendEmailId: update.resendEmailId,
+      status: update.status,
+      error: update.error,
+    });
+    if (updatedById) return { handled: true, updated: true };
+  }
+  const updated = update.resendEmailId
+    ? await updateConnectedInviteEmailDeliveryByResendId({
+        resendEmailId: update.resendEmailId,
+        status: update.status,
+        error: update.error,
+      })
+    : false;
+  return { handled: true, updated };
+}
+
+function mapResendDeliveryEvent(event: ResendEmailDeliveryEvent) {
+  const resendEmailId = event.data?.email_id;
+  const deliveryId = event.data?.tags?.invite_delivery_id?.trim() || undefined;
+  if (!resendEmailId && !deliveryId) return null;
+  switch (event.type) {
+    case "email.sent":
+    case "email.delivered": return { deliveryId, resendEmailId, status: "sent" as const, error: null };
+    case "email.bounced": return { deliveryId, resendEmailId, status: "bounced" as const, error: event.data?.bounce?.message ?? "Email bounced" };
+    case "email.complained": return { deliveryId, resendEmailId, status: "failed" as const, error: "Recipient complained" };
+    case "email.failed": return { deliveryId, resendEmailId, status: "failed" as const, error: event.data?.failed?.reason ?? "Email failed" };
+    case "email.suppressed": return { deliveryId, resendEmailId, status: "failed" as const, error: event.data?.suppressed?.message ?? "Email suppressed" };
+    default: return null;
+  }
 }

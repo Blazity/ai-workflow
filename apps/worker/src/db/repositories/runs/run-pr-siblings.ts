@@ -1,6 +1,6 @@
 import type { RunPullRequest } from "@shared/contracts";
 import { desc, sql } from "drizzle-orm";
-import type { Db } from "../../client.js";
+import { getDb, type Db } from "../../client.js";
 import { workflowRuns } from "../../schema.js";
 
 export type RunPrSiblingLookup =
@@ -73,4 +73,10 @@ export async function findRunPrSiblings(input: {
       reason: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+export function findConnectedRunPrSiblings(
+  input: Omit<Parameters<typeof findRunPrSiblings>[0], "db">,
+) {
+  return findRunPrSiblings({ db: getDb(), ...input });
 }

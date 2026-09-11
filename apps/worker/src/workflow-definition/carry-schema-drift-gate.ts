@@ -1,8 +1,9 @@
 import { fileURLToPath } from "node:url";
-import type { Db } from "../db/client.js";
+import type { Db } from "../db/types.js";
 import {
   describeCarrySchemaDrift,
   findCarrySchemaDrift,
+  findConnectedCarrySchemaDrift,
   type CarrySchemaDriftReport,
   type FindCarrySchemaDriftOptions,
 } from "./carry-schema-drift.js";
@@ -121,9 +122,8 @@ export async function assertNoCarrySchemaDrift(
 /** Command entry point. Resolves the database lazily so importing this module
  *  never requires DATABASE_URL to be set. */
 export async function runCarrySchemaDriftGate(): Promise<number> {
-  const { getDb } = await import("../db/client.js");
   const result = evaluateCarrySchemaDriftGate(
-    await findCarrySchemaDrift(getDb()),
+    await findConnectedCarrySchemaDrift(),
   );
   console.log(result.message);
   return result.ok ? 0 : 1;

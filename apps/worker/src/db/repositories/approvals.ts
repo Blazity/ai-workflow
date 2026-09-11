@@ -5,7 +5,7 @@ import type {
   ApprovalStatus,
   ApprovedRepositoryScope,
 } from "@shared/contracts";
-import type { Db } from "../client.js";
+import { getDb, type Db } from "../client.js";
 import { activeRuns, approvalRequests, workflowRuns } from "../schema.js";
 
 export interface ApprovalRow {
@@ -31,11 +31,15 @@ export interface ApprovalRow {
 /** Domain-level failure a write raises (409 conflict). Routes map statusCode onto
  *  the HTTP response; distinct from the 403 auth gate. */
 export class ApprovalStoreError extends Error {
+  public readonly retryable: boolean;
+
   constructor(
     public readonly statusCode: number,
     message: string,
+    retryable = false,
   ) {
     super(message);
+    this.retryable = retryable;
   }
 }
 
@@ -91,7 +95,9 @@ export async function createApprovalRequest(
     input.repositoryScope == null
       ? null
       : JSON.stringify(input.repositoryScope);
-  const result = await db.execute(sql`
+  const result = await (async () => {
+    try {
+      return await db.execute(sql`
     with superseded as (
       update ${approvalRequests}
       set status = 'superseded'
@@ -151,10 +157,23 @@ export async function createApprovalRequest(
       decided_at as "decidedAt",
       dispatched_run_id as "dispatchedRunId"
     from inserted
-  `);
+      `);
+    } catch (error) {
+      if (isRetryableApprovalWriteError(error)) {
+        throw new ApprovalStoreError(503, "Approval request write can be retried", true);
+      }
+      throw error;
+    }
+  })();
   const row = rawRows<ApprovalSelect>(result)[0];
   if (!row) throw new Error("approval request insert returned no row");
   return mapRow(row);
+}
+
+export function createConnectedApprovalRequest(
+  input: Omit<Parameters<typeof createApprovalRequest>[1], "db">,
+) {
+  return createApprovalRequest(getDb(), input);
 }
 
 /** Newest first. `pending` (default) filters to open approvals; `all` returns every row. */
@@ -172,6 +191,10 @@ export async function listApprovals(
           .orderBy(desc(approvalRequests.requestedAt))
       : await db.select().from(approvalRequests).orderBy(desc(approvalRequests.requestedAt));
   return rows.map(mapRow);
+}
+
+export function listConnectedApprovals(input: { status?: "pending" | "all" } = {}) {
+  return listApprovals(getDb(), input);
 }
 
 /**
@@ -194,6 +217,10 @@ export async function listDispatchBlockingApprovals(db: Db): Promise<ApprovalRow
     )
     .orderBy(desc(approvalRequests.requestedAt));
   return rows.map(mapRow);
+}
+
+export function listConnectedDispatchBlockingApprovals(): Promise<ApprovalRow[]> {
+  return listDispatchBlockingApprovals(getDb());
 }
 
 /**
@@ -230,6 +257,10 @@ export async function listApprovalParkedSubjects(db: Db): Promise<string[]> {
   return [...new Set(rows.map((row) => row.subjectKey))].sort();
 }
 
+export function listConnectedApprovalParkedSubjects(): Promise<string[]> {
+  return listApprovalParkedSubjects(getDb());
+}
+
 export async function hasDispatchBlockingApprovalForTicket(
   db: Db,
   ticketKey: string,
@@ -253,6 +284,10 @@ export async function hasDispatchBlockingApprovalForTicket(
   return rows.length > 0;
 }
 
+export function hasConnectedDispatchBlockingApprovalForTicket(ticketKey: string) {
+  return hasDispatchBlockingApprovalForTicket(getDb(), ticketKey);
+}
+
 export async function getApproval(db: Db, id: string): Promise<ApprovalRow | null> {
   const rows = await db
     .select()
@@ -260,6 +295,10 @@ export async function getApproval(db: Db, id: string): Promise<ApprovalRow | nul
     .where(eq(approvalRequests.id, id))
     .limit(1);
   return rows[0] ? mapRow(rows[0]) : null;
+}
+
+export function getConnectedApproval(id: string) {
+  return getApproval(getDb(), id);
 }
 
 /**
@@ -288,6 +327,12 @@ export async function decideApproval(
   return mapRow(row);
 }
 
+export function decideConnectedApproval(
+  input: Parameters<typeof decideApproval>[1],
+) {
+  return decideApproval(getDb(), input);
+}
+
 /** System-only terminal transition for a pending request that cannot be
  * decided. An approved human decision is final and is never eligible. */
 export async function rejectUndispatchableApproval(db: Db, id: string): Promise<ApprovalRow> {
@@ -311,6 +356,10 @@ export async function rejectUndispatchableApproval(db: Db, id: string): Promise<
     throw new ApprovalStoreError(409, "already_decided");
   }
   return mapRow(row);
+}
+
+export function rejectConnectedUndispatchableApproval(id: string) {
+  return rejectUndispatchableApproval(getDb(), id);
 }
 
 /**
@@ -339,6 +388,12 @@ export async function retireApprovalCancellation(
   return rows.length;
 }
 
+export function retireConnectedApprovalCancellation(
+  input: Parameters<typeof retireApprovalCancellation>[1],
+) {
+  return retireApprovalCancellation(getDb(), input);
+}
+
 export async function setDispatchedRunId(db: Db, id: string, runId: string): Promise<void> {
   const rows = await db
     .update(approvalRequests)
@@ -357,6 +412,10 @@ export async function setDispatchedRunId(db: Db, id: string, runId: string): Pro
   if (rows.length === 0) {
     throw new ApprovalStoreError(409, "dispatch_already_recorded");
   }
+}
+
+export function setConnectedDispatchedRunId(id: string, runId: string): Promise<void> {
+  return setDispatchedRunId(getDb(), id, runId);
 }
 
 export function serializeApproval(row: ApprovalRow): ApprovalRequest {
@@ -381,4 +440,23 @@ export function serializeApproval(row: ApprovalRow): ApprovalRequest {
 
 function rawRows<T>(result: unknown): T[] {
   return ((result as { rows?: T[] }).rows ?? []) as T[];
+}
+
+/** Deadlocks and serialization failures can arise from the folded approval CTE. */
+export function isRetryableApprovalWriteError(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; current && depth < 5; depth += 1) {
+    if (
+      typeof current === "object" &&
+      current !== null &&
+      "code" in current &&
+      (current.code === "40P01" || current.code === "40001")
+    ) {
+      return true;
+    }
+    current = typeof current === "object" && current !== null && "cause" in current
+      ? current.cause
+      : null;
+  }
+  return false;
 }

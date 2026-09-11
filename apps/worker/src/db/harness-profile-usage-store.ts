@@ -1,6 +1,6 @@
 import { asc, desc, inArray, isNull } from "drizzle-orm";
 import type { HarnessProfileUsageDto } from "@shared/contracts";
-import type { Db } from "./client.js";
+import { getDb, type Db } from "./client.js";
 import {
   workflowDefinitions,
   workflowDefinitionVersions,
@@ -118,4 +118,8 @@ export async function listHarnessProfileUsage(
     }
   }
   return usage;
+}
+
+export function listConnectedHarnessProfileUsage(profileId: string) {
+  return listHarnessProfileUsage(getDb(), profileId);
 }

@@ -113,6 +113,53 @@ describe("acceptDashboardInvite", () => {
     ).resolves.toMatchObject({ mode: "sso_only" });
   });
 
+  it("keeps preview refusal distinctions and the SSO email mismatch", async () => {
+    const { db, auth } = await setupInvite();
+    const input = {
+      organizationSlug: "ai-workflow",
+      inviteId: "invite_1",
+      now: new Date("2026-06-26T00:00:00.000Z"),
+    };
+
+    await db.update(invitation).set({ status: "accepted" })
+      .where(eq(invitation.id, "invite_1"));
+    await expect(getDashboardInviteAcceptanceState(db, auth, input))
+      .rejects.toMatchObject({ statusCode: 409, message: "Invite already accepted" });
+    await expect(acceptDashboardSsoInvite(db, auth, {
+      ...input,
+      user: { id: "other", email: "other@example.com" },
+    })).rejects.toMatchObject({
+      statusCode: 403,
+      message: "Invite does not match signed-in user",
+    });
+
+    await db.update(invitation).set({ status: "pending", expiresAt: new Date("2026-06-25T00:00:00.000Z") })
+      .where(eq(invitation.id, "invite_1"));
+    await expect(getDashboardInviteAcceptanceState(db, auth, input))
+      .rejects.toMatchObject({ statusCode: 410, message: "Invite expired" });
+
+    await db.delete(invitation).where(eq(invitation.id, "invite_1"));
+    await expect(getDashboardInviteAcceptanceState(db, auth, input))
+      .rejects.toMatchObject({ statusCode: 404, message: "Invite not found" });
+
+    await db.insert(invitation).values({
+      id: "invite_1",
+      organizationId: "org_aiw",
+      email: "new.user@example.com",
+      role: "member",
+      status: "pending",
+      expiresAt: new Date("2026-06-28T00:00:00.000Z"),
+      inviterId: "user_owner",
+    });
+    await expect(acceptDashboardSsoInvite(db, auth, {
+      ...input,
+      user: { id: "other", email: "other@example.com" },
+    })).rejects.toMatchObject({
+      statusCode: 403,
+      message: "Invite does not match signed-in user",
+    });
+  });
+
   it("creates a password user, accepts the invite, creates membership, and returns a session token", async () => {
     const { db, auth } = await setupInvite();
 
@@ -304,6 +351,38 @@ describe("acceptDashboardInvite", () => {
       .from(member)
       .where(eq(member.userId, ssoUser.id));
     expect(membership).toEqual({ role: "admin" });
+  });
+
+  it("treats an accepted invite as success only for its existing member", async () => {
+    const { db, auth } = await setupInvite("sso@example.com", "admin");
+    await db.update(invitation).set({ status: "accepted" })
+      .where(eq(invitation.id, "invite_1"));
+    await db.insert(user).values({
+      id: "user_sso",
+      name: "SSO User",
+      email: "sso@example.com",
+      emailVerified: true,
+    });
+    await db.insert(member).values({
+      id: "member_sso",
+      organizationId: "org_aiw",
+      userId: "user_sso",
+      role: "admin",
+    });
+
+    await expect(acceptDashboardSsoInvite(db, auth, {
+      organizationSlug: "ai-workflow",
+      inviteId: "invite_1",
+      user: { id: "user_sso", email: "sso@example.com" },
+      now: new Date("2026-06-26T00:00:00.000Z"),
+    })).resolves.toBeUndefined();
+
+    await expect(acceptDashboardSsoInvite(db, auth, {
+      organizationSlug: "ai-workflow",
+      inviteId: "invite_1",
+      user: { id: "user_other", email: "sso@example.com" },
+      now: new Date("2026-06-26T00:00:00.000Z"),
+    })).rejects.toMatchObject({ statusCode: 409, message: "Invite already accepted" });
   });
 
   it("re-checks pending invite state before creating membership", async () => {

@@ -3,9 +3,13 @@ import {
   type HarnessProvider,
   type HarnessProfileReference,
 } from "@shared/contracts";
-import { and, eq, isNull, or } from "drizzle-orm";
-import type { Db } from "../db/client.js";
-import { workflowDefinitions, workflowDefinitionVersions } from "../db/schema.js";
+import type { Db } from "../db/types.js";
+import {
+  createWorkflowDefinitionTemplate,
+  deleteWorkflowDefinitionTemplate,
+  findWorkflowDefinitionTemplate,
+  writeWorkflowDefinitionTemplateVersion,
+} from "../db/repositories/definitions.js";
 import { canonicalizeWorkflowDefinition, extractWorkflowDefinitionLayout } from "./layout.js";
 import { workflowDefinitionTemplates } from "./templates.js";
 
@@ -26,63 +30,32 @@ export async function seedWorkflowDefinitionTemplates(
 ): Promise<void> {
   for (const template of workflowDefinitionTemplates(options).slice(1)) {
     const marker = `System template:${template.id}`;
-    const findExisting = () =>
-      db
-        .select({ id: workflowDefinitions.id })
-        .from(workflowDefinitions)
-        .where(
-          or(
-            eq(workflowDefinitions.createdByLabel, marker),
-            and(eq(workflowDefinitions.name, template.name), isNull(workflowDefinitions.archivedAt)),
-          ),
-        )
-        .limit(1);
-    const existing = await findExisting();
-    if (existing.length > 0) continue;
+    const findExisting = () => findWorkflowDefinitionTemplate(db, { marker, name: template.name });
+    if ((await findExisting()) !== null) continue;
 
     let definitionId: number;
     try {
-      const created = await db
-        .insert(workflowDefinitions)
-        .values({
-          name: template.name,
-          enabled: false,
-          triggerTypes: [],
-          layout: extractWorkflowDefinitionLayout(template.definition),
-          layoutRevision: 1,
-          createdById: "system",
-          createdByLabel: marker,
-        })
-        .returning({ id: workflowDefinitions.id });
-      definitionId = created[0]!.id;
+      definitionId = await createWorkflowDefinitionTemplate(db, {
+        name: template.name,
+        marker,
+        layout: extractWorkflowDefinitionLayout(template.definition),
+      });
     } catch (error) {
-      if ((await findExisting()).length > 0) continue;
+      if ((await findExisting()) !== null) continue;
       throw error;
     }
 
     try {
-      await db.insert(workflowDefinitionVersions).values({
+      await writeWorkflowDefinitionTemplateVersion(db, {
         definitionId,
-        version: 1,
         definition: canonicalizeWorkflowDefinition(template.definition),
-        createdById: "system",
-        createdByLabel: marker,
-        restoredFromVersion: null,
+        marker,
+        triggerTypes: template.definition.nodes
+          .map((node) => node.type)
+          .filter(isTriggerBlockType),
       });
-      await db
-        .update(workflowDefinitions)
-        .set({
-          deployedVersion: 1,
-          triggerTypes: template.definition.nodes
-            .map((node) => node.type)
-            .filter(isTriggerBlockType),
-        })
-        .where(eq(workflowDefinitions.id, definitionId));
     } catch (error) {
-      await db
-        .delete(workflowDefinitionVersions)
-        .where(eq(workflowDefinitionVersions.definitionId, definitionId));
-      await db.delete(workflowDefinitions).where(eq(workflowDefinitions.id, definitionId));
+      await deleteWorkflowDefinitionTemplate(db, definitionId);
       throw error;
     }
   }

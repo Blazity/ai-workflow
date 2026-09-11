@@ -1,59 +1,60 @@
 import { getWorld } from "workflow/runtime";
-import { getDb, type Db } from "../../../db/client.js";
 import { logger } from "../../../infra/logger.js";
 import { GateStore } from "../../../post-pr-gate/gate-store.js";
-import { deleteExpiredRunObservations } from "../../../db/repositories/runs/run-observability.js";
-import { reconcilePendingPrChecks } from "../../../engine/runtime/pr-external-resources.js";
+import { deleteConnectedExpiredRunObservations } from "../../../db/repositories/runs/run-observability.js";
+import { reconcileConnectedPendingPrChecks } from "../../../engine/runtime/pr-external-resources.js";
 import {
-  getApproval,
-  listApprovalParkedSubjects,
-  listDispatchBlockingApprovals,
+  getConnectedApproval,
+  listConnectedApprovalParkedSubjects,
+  listConnectedDispatchBlockingApprovals,
   type ApprovalRow,
 } from "../../../db/repositories/approvals.js";
-import { classifyProtectedClarificationSubjects } from "../../../db/repositories/clarifications.js";
-import { listRecoverableManualDispatches } from "../../../db/repositories/manual-dispatch.js";
-import { sweepWebhookDeliveries } from "../../../webhook-trigger/delivery-store.js";
+import { classifyConnectedProtectedClarificationSubjects } from "../../../db/repositories/clarifications.js";
+import { listConnectedRecoverableManualDispatches } from "../../../db/repositories/manual-dispatch.js";
+import { sweepConnectedWebhookDeliveries } from "../../../db/repositories/webhook-trigger-deliveries.js";
 import { dispatchPlanApproved } from "../../approvals/index.js";
 import {
-  expireHookClarifications,
+  expireConnectedHookClarifications,
   retireClarificationForGoneTicket,
-  resumeClarificationFromComments,
+  resumeConnectedClarificationFromComments,
 } from "../../clarifications/index.js";
 import {
   dispatchTicket,
   drainOldestPendingTrigger,
-  listPendingTriggers,
-  sweepTriggerRateLimits,
-  sweepTriggerRejectionCounters,
+  listConnectedPendingTriggers,
+  sweepConnectedTriggerRateLimits,
+  sweepConnectedTriggerRejectionCounters,
 } from "../../dispatch/index.js";
 import { reconcileAtCapacityQueue } from "../../dispatch-queue/index.js";
 import { recoverManualDispatches } from "../../manual-dispatch/index.js";
 import {
-  pruneMcpAudits,
-  sweepMcpIdempotencyKeys,
-  sweepMcpRateLimits,
+  pruneConnectedMcpAudits,
+  sweepConnectedMcpIdempotencyKeys,
+  sweepConnectedMcpRateLimits,
 } from "../../mcp/index.js";
 import type { RunsLister } from "../../overview/index.js";
 import { ticketSubjectKey } from "../../../engine/support/subject-key.js";
 import { reconcileRuns } from "../../run-lifecycle/index.js";
 import {
-  createScheduleDispatchDeps,
+  createConnectedScheduleDispatchDeps,
   runScheduleTriggerPass,
 } from "../../schedule-trigger/index.js";
 import { maxConcurrentAgents, ticketBoardSettings } from "../../settings/index.js";
 import {
-  collectSnapshots,
-  sweepOrphanedAwaitingRuns,
-  sweepOrphanedRunningRuns,
-  upsertRunSnapshots,
+  collectConnectedSnapshots,
 } from "../../telemetry/index.js";
+import {
+  sweepConnectedOrphanedAwaitingRuns,
+  sweepConnectedOrphanedRunningRuns,
+  upsertConnectedRunSnapshots,
+} from "../../../db/repositories/runs/telemetry.js";
 import { createAdapters } from "../../../engine/support/adapters.js";
 import {
   redispatchPendingWebhookDeliveries,
-  sweepWebhookRateLimits,
-  sweepWebhookRejectionCounters,
+  sweepConnectedWebhookRateLimits,
+  sweepConnectedWebhookRejectionCounters,
 } from "../../webhook-trigger/index.js";
-import { createWebhookDispatchDeps } from "../custom-webhooks/dispatch-deps.js";
+import { createConnectedWebhookDispatchDeps } from "../custom-webhooks/dispatch-deps.js";
 
 /**
  * One pass of the scheduled poller.
@@ -70,11 +71,10 @@ const PENDING_TRIGGER_RECOVERY_SCAN_LIMIT = 20;
 export async function runPollPass() {
   const board = ticketBoardSettings();
   const adapters = createAdapters();
-  const db = getDb();
-  const clarificationExpiry = await expireHookClarifications(db);
+  const clarificationExpiry = await expireConnectedHookClarifications();
 
   const clarificationProtection =
-    await classifyProtectedClarificationSubjects(db);
+    await classifyConnectedProtectedClarificationSubjects();
   const protectedClarificationSubjects = new Set(clarificationProtection.all);
   // Subjects reconciled by terminal cleanup only: their run is finished and its
   // bound claim must be released quietly, never through the orphan cancellation
@@ -90,7 +90,7 @@ export async function runPollPass() {
   // decisions and approved-undispatched continuations for the entire poll
   // snapshot. Recovery runs after owner reconciliation below, so an exact
   // reserved owner retained for Jira settlement can be cleared before retry.
-  const blockingApprovals = await listDispatchBlockingApprovals(db);
+  const blockingApprovals = await listConnectedDispatchBlockingApprovals();
   const protectedDiscoverySubjects = new Set(protectedClarificationSubjects);
   for (const approval of blockingApprovals) {
     protectedDiscoverySubjects.add(ticketSubjectKey("jira", approval.ticketKey));
@@ -101,7 +101,7 @@ export async function runPollPass() {
   // it retires the pending approval and strands the ticket with nobody able to
   // approve; terminal cleanup releases the same claim quietly, which is what the
   // approval dispatch needs to reserve.
-  for (const subjectKey of await listApprovalParkedSubjects(db)) {
+  for (const subjectKey of await listConnectedApprovalParkedSubjects()) {
     terminalReconciliationSubjects.add(subjectKey);
   }
 
@@ -112,12 +112,11 @@ export async function runPollPass() {
   const ticketKeys = await discoverAiColumnTickets(adapters, board);
 
   const manualDispatchRecovery = await recoverManualDispatches({
-    db,
     adapters,
     maxConcurrentAgents: maxConcurrentAgents(),
   });
   const protectedRunSubjects = new Set(retainedClarificationSubjects);
-  for (const request of await listRecoverableManualDispatches(db)) {
+  for (const request of await listConnectedRecoverableManualDispatches()) {
     protectedRunSubjects.add(request.subjectKey);
   }
 
@@ -143,7 +142,6 @@ export async function runPollPass() {
       releasedTriggerRecovery.attempted++;
       try {
         const result = await drainOldestPendingTrigger(subjectKey, {
-          db,
           runRegistry: adapters.runRegistry,
           maxConcurrentAgents: maxConcurrentAgents(),
         });
@@ -155,27 +153,24 @@ export async function runPollPass() {
       }
     },
     protectedRunSubjects,
-    db,
+    undefined,
     terminalReconciliationSubjects,
     retireClarificationForGoneTicket,
   );
 
   const polledTriggerRecovery = await recoverPendingTriggers(
-    db,
     adapters,
     releasedTriggerSubjects,
     releasedTriggerRecovery.started === 0,
   );
   const approvalRecovery = await recoverApprovedPlanDispatches(
     blockingApprovals,
-    db,
     adapters,
   );
   const dispatchOutcome = await dispatchDiscoveredTickets(
     ticketKeys,
     adapters,
     protectedDiscoverySubjects,
-    db,
   );
   const started = dispatchOutcome.started;
 
@@ -185,7 +180,6 @@ export async function runPollPass() {
   // leaves the AI column). Best-effort — a failed queue pass must not fail the
   // poll.
   const atCapacityQueue = await reconcileAtCapacityQueue({
-    db,
     issueTracker: adapters.issueTracker,
     atCapacityKeys: dispatchOutcome.atCapacity,
     startedKeys: dispatchOutcome.started,
@@ -200,14 +194,14 @@ export async function runPollPass() {
 
   // Housekeeping: physically drop expired gate rows (reads already treat
   // them as absent). Best-effort — a failed purge must not fail the poll.
-  await new GateStore(db)
+  await new GateStore()
     .purgeExpired()
     .catch((err) => logger.warn({ err: (err as Error).message }, "poll_gate_purge_failed"));
 
   // Replay retention: delete at most one bounded batch per poll. The durable
   // expiry markers remain on workflow_runs, so the UI can still distinguish an
   // expired replay from a historical run that was never captured.
-  const replayRetention = await deleteExpiredRunObservations({ db, limit: 100 })
+  const replayRetention = await deleteConnectedExpiredRunObservations({ limit: 100 })
     .catch((err) => {
       logger.warn(
         { err: (err as Error).message },
@@ -219,24 +213,24 @@ export async function runPollPass() {
   // capacity, a failed start) stay pending, so this is what actually starts
   // them; the two sweeps drop counter rows whose window nothing can read again.
   // Best-effort, like every other housekeeping step in this poll.
-  const webhookRecovery = await recoverPendingWebhookDeliveries(db, adapters);
-  await sweepWebhookRateLimits(db).catch((err) =>
+  const webhookRecovery = await recoverPendingWebhookDeliveries(adapters);
+  await sweepConnectedWebhookRateLimits().catch((err) =>
     logger.warn({ err: (err as Error).message }, "poll_webhook_rate_sweep_failed"),
   );
-  await sweepWebhookRejectionCounters(db).catch((err) =>
+  await sweepConnectedWebhookRejectionCounters().catch((err) =>
     logger.warn({ err: (err as Error).message }, "poll_webhook_rejection_sweep_failed"),
   );
-  await sweepWebhookDeliveries(db).catch((err) =>
+  await sweepConnectedWebhookDeliveries().catch((err) =>
     logger.warn({ err: (err as Error).message }, "poll_webhook_delivery_sweep_failed"),
   );
   // The same housekeeping for the per-node trigger limits, which every automatic
   // trigger type writes: windows nothing can count into again, and rejection days
   // nothing surfaces anymore.
   const now = new Date();
-  await sweepTriggerRateLimits(db, now).catch((err) =>
+  await sweepConnectedTriggerRateLimits(now).catch((err) =>
     logger.warn({ err: (err as Error).message }, "poll_trigger_rate_sweep_failed"),
   );
-  await sweepTriggerRejectionCounters(db, now).catch((err) =>
+  await sweepConnectedTriggerRejectionCounters(now).catch((err) =>
     logger.warn(
       { err: (err as Error).message },
       "poll_trigger_rejection_sweep_failed",
@@ -244,7 +238,7 @@ export async function runPollPass() {
   );
   // Rate limit windows are unreadable two minutes after they open, and nothing
   // else ever deletes them.
-  await sweepMcpRateLimits(db).catch((err) =>
+  await sweepConnectedMcpRateLimits().catch((err) =>
     logger.warn({ err: (err as Error).message }, "poll_mcp_rate_sweep_failed"),
   );
 
@@ -252,9 +246,9 @@ export async function runPollPass() {
   // trigger: it evaluates every live schedule against its cron, dispatches what is
   // due, starts what could not start earlier, and sweeps its own ledger. Bounded
   // per tick and best-effort, like every other housekeeping phase here.
-  const scheduleTriggers = await evaluateScheduleTriggers(db, adapters);
+  const scheduleTriggers = await evaluateScheduleTriggers(adapters);
 
-  const prCheckReconciliation = await reconcilePendingPrChecks(db).catch(
+  const prCheckReconciliation = await reconcileConnectedPendingPrChecks().catch(
     (err) => {
       logger.warn(
         { err: err instanceof Error ? err.message : String(err) },
@@ -269,16 +263,15 @@ export async function runPollPass() {
   // ~24h observability window. Per-run cost is filled separately by the agent
   // workflow. Best-effort — a failed snapshot must not fail the poll.
   try {
-    const snapshots = await collectSnapshots({
+    const snapshots = await collectConnectedSnapshots({
       runsLister: getWorld().runs as RunsLister,
-      db,
     });
-    await upsertRunSnapshots(db, snapshots);
+    await upsertConnectedRunSnapshots(snapshots);
     // The snapshot above deliberately never downgrades "awaiting", so a park
     // marker left behind by a best-effort writer that failed is invisible to it.
     // This settles those orphans.
-    await sweepOrphanedAwaitingRuns(db);
-    await sweepOrphanedRunningRuns(db);
+    await sweepConnectedOrphanedAwaitingRuns();
+    await sweepConnectedOrphanedRunningRuns();
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "poll_snapshot_failed");
   }
@@ -287,7 +280,7 @@ export async function runPollPass() {
   // steps above include live Jira calls that throw, and retention that only
   // runs when the rest of the poll is healthy silently stops running at all.
   // Reported like replay retention, so a sweep that never fires is visible.
-  const mcpAuditRetention = await pruneMcpAudits(db, new Date(), { limit: 100 }).catch(
+  const mcpAuditRetention = await pruneConnectedMcpAudits(new Date(), { limit: 100 }).catch(
     (err) => {
       logger.warn({ err: (err as Error).message }, "poll_mcp_audit_prune_failed");
       return { deleted: 0 };
@@ -296,7 +289,7 @@ export async function runPollPass() {
 
   // Same story for spent idempotency keys: taking one over replaces a row, it
   // never removes one, so this is the only thing that ever deletes them.
-  const mcpIdempotencyRetention = await sweepMcpIdempotencyKeys(db, new Date(), {
+  const mcpIdempotencyRetention = await sweepConnectedMcpIdempotencyKeys(new Date(), {
     limit: 100,
   }).catch((err) => {
     logger.warn({ err: (err as Error).message }, "poll_mcp_idempotency_sweep_failed");
@@ -329,12 +322,10 @@ export async function runPollPass() {
 }
 
 async function evaluateScheduleTriggers(
-  db: Db,
   adapters: ReturnType<typeof createAdapters>,
 ): Promise<ReturnType<typeof runScheduleTriggerPass>> {
   return await runScheduleTriggerPass(
-    createScheduleDispatchDeps(
-      db,
+    createConnectedScheduleDispatchDeps(
       adapters.runRegistry,
       maxConcurrentAgents(),
     ),
@@ -369,12 +360,11 @@ async function evaluateScheduleTriggers(
 }
 
 async function recoverPendingWebhookDeliveries(
-  db: Db,
   adapters: ReturnType<typeof createAdapters>,
 ): Promise<{ attempted: number; started: number; errors: number }> {
   try {
     const results = await redispatchPendingWebhookDeliveries(
-      createWebhookDispatchDeps(db, adapters.runRegistry),
+      createConnectedWebhookDispatchDeps(adapters.runRegistry),
     );
     return {
       attempted: results.length,
@@ -391,7 +381,6 @@ async function recoverPendingWebhookDeliveries(
 }
 
 async function recoverPendingTriggers(
-  db: Db,
   adapters: ReturnType<typeof createAdapters>,
   releasedSubjects: ReadonlySet<string>,
   mayStart: boolean,
@@ -399,12 +388,9 @@ async function recoverPendingTriggers(
   const metrics = { listed: 0, attempted: 0, started: 0, errors: 0 };
   if (!mayStart) return metrics;
 
-  let pending: Awaited<ReturnType<typeof listPendingTriggers>>;
+  let pending: Awaited<ReturnType<typeof listConnectedPendingTriggers>>;
   try {
-    pending = await listPendingTriggers(
-      db,
-      PENDING_TRIGGER_RECOVERY_SCAN_LIMIT,
-    );
+    pending = await listConnectedPendingTriggers(PENDING_TRIGGER_RECOVERY_SCAN_LIMIT);
     metrics.listed = pending.length;
   } catch (error) {
     metrics.errors++;
@@ -422,7 +408,6 @@ async function recoverPendingTriggers(
     metrics.attempted++;
     try {
       const result = await drainOldestPendingTrigger(trigger.subjectKey, {
-        db,
         runRegistry: adapters.runRegistry,
         maxConcurrentAgents: maxConcurrentAgents(),
       });
@@ -448,7 +433,6 @@ async function recoverPendingTriggers(
 
 async function recoverApprovedPlanDispatches(
   blockingApprovals: ApprovalRow[],
-  db: Db,
   adapters: ReturnType<typeof createAdapters>,
 ): Promise<{ scanned: number; started: number; blocked: number; errors: number }> {
   const approved = blockingApprovals.filter(
@@ -460,7 +444,6 @@ async function recoverApprovedPlanDispatches(
     approved.map(async (approval) => {
       try {
         const result = await dispatchPlanApproved({
-          db,
           runRegistry: adapters.runRegistry,
           issueTracker: adapters.issueTracker,
           approval,
@@ -470,7 +453,7 @@ async function recoverApprovedPlanDispatches(
           },
           maxConcurrentAgents: maxConcurrentAgents(),
           onClaimed: async () => {
-            const fresh = await getApproval(db, approval.id);
+            const fresh = await getConnectedApproval(approval.id);
             if (
               !fresh ||
               fresh.status !== "approved" ||
@@ -538,7 +521,6 @@ async function dispatchDiscoveredTickets(
   ticketKeys: string[],
   adapters: ReturnType<typeof createAdapters>,
   protectedSubjects: ReadonlySet<string>,
-  db: Db,
 ): Promise<DispatchOutcome> {
   // Dispatch in parallel. dispatchTicket is internally atomic — the
   // post-claim fairness check in src/services/dispatch/dispatch.ts caps started
@@ -551,8 +533,7 @@ async function dispatchDiscoveredTickets(
         // answers arrived as human comments. Try to wake it (no nudging on the
         // poll: the cron JQL snapshot is not the human's commit gesture). A
         // resumed run needs no dispatch, so this always returns started:false.
-        const resume = await resumeClarificationFromComments({
-          db,
+        const resume = await resumeConnectedClarificationFromComments({
           issueTracker: adapters.issueTracker,
           ticketKey: key,
           allowNudge: false,

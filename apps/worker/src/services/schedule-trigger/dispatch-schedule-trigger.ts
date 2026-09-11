@@ -1,6 +1,6 @@
 import { start } from "workflow/api";
 import { env } from "../../infra/vcs-config.js";
-import type { Db } from "../../db/client.js";
+import type { Db } from "../../db/types.js";
 import type {
   RunRegistryAdapter,
   StartedRunRecord,
@@ -10,6 +10,7 @@ import { agentWorkflow } from "../../engine/index.js";
 import {
   claimSubjectRun,
   enforceTriggerRateLimit,
+  enforceConnectedTriggerRateLimit,
   envTriggerRateLimitDefault,
   resolveTriggerRateLimit,
   triggerRateLimitLogFields,
@@ -19,35 +20,53 @@ import {
   type TriggerRateLimitNodeParams,
 } from "../dispatch/index.js";
 import { logger } from "../../infra/logger.js";
-import { getLiveScheduleTriggerTarget } from "../../db/repositories/definitions.js";
+import { createDefinitionsRepository } from "../../db/repositories/definitions.js";
+import {
+  revokeConnectedScheduleAndCancelWaiting,
+} from "../../db/repositories/definitions/connected.js";
+import { listConnectedRunPullRequestUrls, listRunPullRequestUrls } from "../../db/repositories/runs.js";
 import { scheduleSubjectKey } from "../../engine/support/subject-key.js";
 import { dueOccurrence, nextRuns } from "./occurrence.js";
+import { REVOKED_SCHEDULE_REASON } from "./revoked-occurrences.js";
 import {
-  cancelWaitingOccurrences,
-  REVOKED_SCHEDULE_REASON,
-} from "./revoked-occurrences.js";
+  resolveConnectedLiveScheduleTriggerTarget,
+  resolveLiveScheduleTriggerTarget,
+} from "./live-target.js";
 import {
   acceptOccurrence,
+  acceptConnectedOccurrence,
+  expireConnectedPendingOccurrences,
   expirePendingOccurrences,
   isUniqueViolation,
+  listConnectedPendingOccurrences,
   listPendingOccurrences,
+  recordConnectedOccurrenceAtCapacity,
+  recordConnectedOccurrenceError,
+  recordConnectedOccurrenceSkipped,
+  recordConnectedOccurrenceStarted,
+  recordConnectedRetiredOccurrence,
   recordOccurrenceAtCapacity,
   recordOccurrenceError,
   recordRetiredOccurrence,
   recordOccurrenceSkipped,
   recordOccurrenceStarted,
+  supersedeConnectedPendingThenAccept,
   supersedePendingThenAccept,
+  sweepConnectedSettledOccurrences,
   sweepSettledOccurrences,
   type AdmittedOccurrence,
   type OccurrenceRow,
   type ScheduleSkipOutcome,
-} from "../../schedule-trigger/occurrence-store.js";
+} from "./occurrence-store.js";
 import {
+  advanceConnectedScheduleWatermark,
   advanceWatermark,
+  getConnectedScheduleById,
   getScheduleById,
+  listConnectedEvaluableSchedules,
   listEvaluableSchedules,
+  recordConnectedScheduleEvaluationPass,
   recordEvaluationPass,
-  revokeSchedule,
   type ScheduleOverlapPolicy,
   type ScheduleRow,
 } from "../../schedule-trigger/schedule-store.js";
@@ -89,14 +108,6 @@ export interface ScheduleOccurrenceLedgerPort {
   ): Promise<boolean>;
   recordAtCapacity(scheduleId: string, occurrenceAt: Date): Promise<boolean>;
   recordRetired(admitted: AdmittedOccurrence, reason: string): Promise<boolean>;
-  /** Settle whatever this schedule left waiting, for a revocation. Separate from
-   *  recordSkipped because 'cancelled' is not a skip outcome a dispatcher may
-   *  choose, and the frozen store writes it only from pauseSchedule. */
-  cancelWaiting(
-    scheduleId: string,
-    reason: string,
-    overwriteReason?: boolean,
-  ): Promise<number>;
   listPending(limit: number): Promise<OccurrenceRow[]>;
   expirePending(now: Date): Promise<number>;
   sweepSettled(now: Date): Promise<void>;
@@ -107,7 +118,12 @@ export interface ScheduleRowPort {
   listEvaluable(limit: number): Promise<ScheduleRow[]>;
   recordEvaluationPass(scheduleId: string, now: Date): Promise<void>;
   advanceWatermark(scheduleId: string, occurrenceAt: Date): Promise<boolean>;
-  revoke(scheduleId: string, now: Date): Promise<void>;
+  revokeAndCancelWaiting(
+    scheduleId: string,
+    now: Date,
+    reason?: string,
+    overwriteReason?: boolean,
+  ): Promise<{ revoked: boolean }>;
   getById(scheduleId: string): Promise<ScheduleRow | null>;
 }
 
@@ -508,9 +524,8 @@ async function startAdmittedOccurrence(
  * the drain then starts eleven hours late. Settling it here closes that, and
  * 'cancelled' rather than a skip is the honest word: a human removed the node.
  *
- * Not atomic with the revocation, and it does not need to be: revoking is a
- * deploy-time act, and an occurrence that survives a crash between the two is
- * refused by the drain's own grace window on the next tick.
+ * The definitions repository owns the one-statement revocation and cancellation
+ * so a crash cannot leave a waiting occurrence behind.
  */
 async function revokeAndCancelWaiting(
   scheduleId: string,
@@ -519,8 +534,7 @@ async function revokeAndCancelWaiting(
   reason: string = REVOKED_SCHEDULE_REASON,
   overwriteReason = false,
 ): Promise<void> {
-  await deps.schedules.revoke(scheduleId, now);
-  await deps.occurrences.cancelWaiting(scheduleId, reason, overwriteReason);
+  await deps.schedules.revokeAndCancelWaiting(scheduleId, now, reason, overwriteReason);
 }
 
 /**
@@ -1175,8 +1189,6 @@ export function createScheduleDispatchDeps(
         recordOccurrenceAtCapacity(db, scheduleId, occurrenceAt),
       recordRetired: (admitted, reason) =>
         recordRetiredOccurrence(db, admitted, reason),
-      cancelWaiting: (scheduleId, reason, overwriteReason) =>
-        cancelWaitingOccurrences(db, scheduleId, reason, overwriteReason),
       listPending: (limit) => listPendingOccurrences(db, limit),
       expirePending: (now) => expirePendingOccurrences(db, now),
       sweepSettled: (now) => sweepSettledOccurrences(db, now),
@@ -1187,15 +1199,61 @@ export function createScheduleDispatchDeps(
         recordEvaluationPass(db, scheduleId, now),
       advanceWatermark: (scheduleId, occurrenceAt) =>
         advanceWatermark(db, scheduleId, occurrenceAt),
-      revoke: (scheduleId, now) => revokeSchedule(db, scheduleId, now),
+      revokeAndCancelWaiting: (scheduleId, now, reason, overwriteReason) =>
+        createDefinitionsRepository(db).revokeScheduleAndCancelWaiting(
+          scheduleId,
+          now,
+          reason,
+          overwriteReason,
+        ),
       getById: (scheduleId) => getScheduleById(db, scheduleId),
     },
     resolveScheduleTarget: memoizeScheduleTarget((query) =>
-      getLiveScheduleTriggerTarget(db, query),
+      resolveLiveScheduleTriggerTarget(db, query),
     ),
     consumeTriggerRateLimit: (key, config, now) =>
       enforceTriggerRateLimit(db, key, config, now),
     previousRunPullRequests: (runId) => readRunPullRequestUrls(db, runId),
+    startWorkflow: async (input) => (await start(agentWorkflow, [input])).runId,
+    orphanStartedRun: async (started) => {
+      const { recordAndCancelOrphanStartedRun } = await import(
+        "../run-lifecycle/run-start-lifecycle.js"
+      );
+      await recordAndCancelOrphanStartedRun(started);
+    },
+    now: () => new Date(),
+  };
+}
+
+export function createConnectedScheduleDispatchDeps(
+  runRegistry: RunRegistryAdapter,
+  maxConcurrentAgents: number,
+): ScheduleDispatchDeps {
+  return {
+    runRegistry,
+    maxConcurrentAgents,
+    occurrences: {
+      accept: acceptConnectedOccurrence,
+      supersedeThenAccept: supersedeConnectedPendingThenAccept,
+      recordStarted: recordConnectedOccurrenceStarted,
+      recordSkipped: recordConnectedOccurrenceSkipped,
+      recordError: recordConnectedOccurrenceError,
+      recordAtCapacity: recordConnectedOccurrenceAtCapacity,
+      recordRetired: recordConnectedRetiredOccurrence,
+      listPending: listConnectedPendingOccurrences,
+      expirePending: expireConnectedPendingOccurrences,
+      sweepSettled: sweepConnectedSettledOccurrences,
+    },
+    schedules: {
+      listEvaluable: listConnectedEvaluableSchedules,
+      recordEvaluationPass: recordConnectedScheduleEvaluationPass,
+      advanceWatermark: advanceConnectedScheduleWatermark,
+      revokeAndCancelWaiting: revokeConnectedScheduleAndCancelWaiting,
+      getById: getConnectedScheduleById,
+    },
+    resolveScheduleTarget: memoizeScheduleTarget(resolveConnectedLiveScheduleTriggerTarget),
+    consumeTriggerRateLimit: enforceConnectedTriggerRateLimit,
+    previousRunPullRequests: listConnectedRunPullRequestUrls,
     startWorkflow: async (input) => (await start(agentWorkflow, [input])).runId,
     orphanStartedRun: async (started) => {
       const { recordAndCancelOrphanStartedRun } = await import(
@@ -1237,12 +1295,5 @@ function memoizeScheduleTarget(
 
 /** Pull request URLs a run recorded, empty for a run that opened none. */
 async function readRunPullRequestUrls(db: Db, runId: string): Promise<string[]> {
-  const { workflowRuns } = await import("../../db/schema.js");
-  const { eq } = await import("drizzle-orm");
-  const rows = await db
-    .select({ prs: workflowRuns.prs })
-    .from(workflowRuns)
-    .where(eq(workflowRuns.runId, runId))
-    .limit(1);
-  return (rows[0]?.prs ?? []).map((pr) => pr.url);
+  return listRunPullRequestUrls(db, runId);
 }

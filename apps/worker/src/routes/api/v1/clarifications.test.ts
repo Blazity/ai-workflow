@@ -16,7 +16,7 @@ import {
   getHookClarification,
   prepareHookClarification,
   publishHookClarification,
-} from "../../../clarifications/hook-store.js";
+} from "../../../db/repositories/clarification-hooks.js";
 import { IssueTrackerNotFoundError } from "../../../adapters/issue-tracker/types.js";
 
 const state = vi.hoisted(() => ({

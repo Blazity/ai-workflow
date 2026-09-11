@@ -9,7 +9,7 @@ import {
   type StartedRunRecord,
   type ThreadStore,
 } from "@shared/contracts";
-import type { Db } from "../client.js";
+import { getDb, type Db } from "../client.js";
 import { ActiveRunOwnerError } from "./active-run-owner-error.js";
 import {
   activeRunSandboxes,
@@ -18,6 +18,75 @@ import {
   threadParents,
 } from "../schema.js";
 export const STARTUP_DEADLINE_MS = 10 * 60 * 1000;
+
+export interface ActiveRunOwner {
+  subjectKey: string;
+  ownerToken: string;
+  runId: string | null;
+}
+
+export function assertActiveRunOwner(db: Db, owner: ActiveRunOwner): Promise<void> {
+  return assertActiveRunOwnerState(
+    owner,
+    owner.runId === null ? "reserved" : "bound",
+    db,
+  );
+}
+
+export async function assertActiveRunOwnerState(
+  owner: ActiveRunOwner,
+  state: "reserved" | "bound" | "parked" | "cancelling",
+  db: Db = getDb(),
+): Promise<void> {
+  const runMatch = owner.runId === null
+    ? sql`run_id IS NULL`
+    : sql`run_id = ${owner.runId}`;
+  const result = await db.execute(sql`
+    SELECT 1 AS owner_count
+    FROM active_runs
+    WHERE subject_key = ${owner.subjectKey}
+      AND owner_token = ${owner.ownerToken}
+      AND state = ${state}
+      AND ${runMatch}
+    LIMIT 1
+  `);
+  if (((result as { rows?: unknown[] }).rows ?? []).length === 0) {
+    throw new ActiveRunOwnerError();
+  }
+}
+
+export function assertConnectedActiveRunOwner(
+  owner: ActiveRunOwner,
+): Promise<void> {
+  return assertActiveRunOwnerState(
+    owner,
+    owner.runId === null ? "reserved" : "bound",
+  );
+}
+
+export async function findBoundActiveRunOwner(
+  db: Db,
+  input: { subjectKey: string; runId: string },
+): Promise<{ ownerToken: string } | null> {
+  const [row] = await db
+    .select({ ownerToken: activeRuns.ownerToken })
+    .from(activeRuns)
+    .where(
+      and(
+        eq(activeRuns.subjectKey, input.subjectKey),
+        eq(activeRuns.runId, input.runId),
+        eq(activeRuns.state, "bound"),
+      ),
+    )
+    .limit(1);
+  return row ?? null;
+}
+
+export function findConnectedBoundActiveRunOwner(
+  input: Parameters<typeof findBoundActiveRunOwner>[1],
+) {
+  return findBoundActiveRunOwner(getDb(), input);
+}
 
 export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
   constructor(private db: Db) {}
@@ -569,6 +638,12 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
   async clearParent(ticketKey: string): Promise<void> {
     await this.db.delete(threadParents).where(eq(threadParents.ticketKey, ticketKey));
   }
+}
+
+/** Production registry bound inside the DB tier so service composition never
+ * receives the database client itself. */
+export function createConnectedPostgresRunRegistry(): PostgresRunRegistry {
+  return new PostgresRunRegistry(getDb());
 }
 
 function toEntry(row: typeof activeRuns.$inferSelect): ActiveRunEntry {

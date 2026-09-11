@@ -13,6 +13,17 @@ vi.mock("../../engine/index.js", () => ({ agentWorkflow: "agentWorkflow_sentinel
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
 vi.mock("../../db/repositories/approvals.js", () => ({
   hasDispatchBlockingApprovalForTicket: vi.fn(() => Promise.resolve(false)),
+  hasConnectedDispatchBlockingApprovalForTicket: vi.fn(() => Promise.resolve(false)),
+}));
+vi.mock("../../engine/definition-trigger-routing.js", () => ({
+  getConnectedEnabledWorkflowDefinitionForTrigger: vi.fn(() => Promise.resolve({
+    definition: { id: 9 },
+    current: {
+      schema: "v2",
+      version: 3,
+      definition: { version: 2, nodes: [], edges: [] },
+    },
+  })),
 }));
 vi.mock("../../db/repositories/definitions.js", () => ({
   getEnabledWorkflowDefinitionForTrigger: vi.fn(() => Promise.resolve({
@@ -25,6 +36,16 @@ vi.mock("../../db/repositories/definitions.js", () => ({
   })),
   runnableDefinitionOf: (row: { schema?: string; definition?: unknown } | null) =>
     row?.schema === "v2" ? row.definition : undefined,
+}));
+vi.mock("../../db/repositories/definitions/connected.js", () => ({
+  getConnectedEnabledWorkflowDefinitionForTrigger: vi.fn(() => Promise.resolve({
+    definition: { id: 9 },
+    current: {
+      schema: "v2",
+      version: 3,
+      definition: { version: 2, nodes: [], edges: [] },
+    },
+  })),
 }));
 const recordAndCancelOrphanStartedRun = vi.hoisted(() => vi.fn());
 vi.mock("../run-lifecycle/run-start-lifecycle.js", () => ({

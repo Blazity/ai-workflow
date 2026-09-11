@@ -162,12 +162,11 @@ export async function prepareHarnessAgentInvocationStep(
     resetHarnessRuntimeHomes,
     resolveRuntimeCredentials,
   } = await import("../../sandbox/harness-runtime.js");
-  const { getDb } = await import("../../db/client.js");
-  const { dashboardOrganizationId } = await import(
-    "../../workflow-definition/harness-profile-runtime.js"
+  const { createConnectedAuthRepository } = await import(
+    "../../db/repositories/auth.js"
   );
-  const { resolveHarnessProfileVersion } = await import(
-    "../../db/repositories/harness-profiles.js"
+  const { resolveConnectedVerifiedHarnessProfileVersion } = await import(
+    "../../harness-profiles/resolved-version.js"
   );
   const adapter = createAgentAdapter(agentKind, runtime.cliSpec);
   try {
@@ -176,12 +175,16 @@ export async function prepareHarnessAgentInvocationStep(
       ...getSandboxCredentials(),
     });
     await resetHarnessRuntimeHomes(sandbox);
-    const organizationId = await dashboardOrganizationId(
-      getDb(),
+    const organization = await createConnectedAuthRepository().findOrganizationBySlug(
       env.DASHBOARD_ORG_SLUG,
     );
-    const resolved = await resolveHarnessProfileVersion(getDb(), {
-      organizationId,
+    if (!organization) {
+      throw new Error(
+        `Dashboard organization "${env.DASHBOARD_ORG_SLUG}" is unavailable.`,
+      );
+    }
+    const resolved = await resolveConnectedVerifiedHarnessProfileVersion({
+      organizationId: organization.id,
       profileId: runtime.manifest.profileId,
       version: runtime.manifest.version,
     });

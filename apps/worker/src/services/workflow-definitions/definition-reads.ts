@@ -7,9 +7,8 @@
  * seed a new definition would start from, and the detail read, which treats an
  * archived definition as absent.
  */
-import { getDb } from "../../db/client.js";
-import { getCurrentSystemHarnessProfileReference } from "../../db/repositories/harness-profiles.js";
 import { defaultWorkflowDefinitionV2 } from "../../workflow-definition/default.js";
+import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import {
   buildWorkflowEditorOptions,
   fetchAvailableModels,
@@ -17,15 +16,20 @@ import {
 } from "../../workflow-definition/models.js";
 import { workflowDefinitionTemplates } from "../../workflow-definition/templates.js";
 import {
-  getDeployedWorkflowDefinitionVersion,
-  getWorkflowDefinition,
-  getWorkflowDefinitionDraft,
-  listWorkflowDefinitionVersionRows,
-  listWorkflowDefinitions,
   type WorkflowDefinitionRow,
   type WorkflowDefinitionVersionRow,
 } from "../../db/repositories/definitions.js";
+import {
+  getConnectedWorkflowDefinition,
+  listConnectedWorkflowDefinitions,
+} from "../../db/repositories/definitions/connected.js";
 import { agentRuntimeSettings } from "../settings/index.js";
+import { currentSystemHarnessProfileReference } from "../harness/index.js";
+import {
+  readConnectedDeployedWorkflowDefinitionVersion,
+  readConnectedWorkflowDefinitionVersionRows,
+} from "../../engine/stored-definition-reads.js";
+import { readConnectedWorkflowDefinitionDraft } from "../../engine/definition-draft-read.js";
 
 export interface WorkflowDefinitionsOverview {
   definitions: WorkflowDefinitionRow[];
@@ -36,7 +40,7 @@ export interface WorkflowDefinitionsOverview {
 
 export interface WorkflowDefinitionDetail {
   row: WorkflowDefinitionRow;
-  draft: Awaited<ReturnType<typeof getWorkflowDefinitionDraft>>;
+  draft: Awaited<ReturnType<typeof readConnectedWorkflowDefinitionDraft>>;
   deployedRow: WorkflowDefinitionVersionRow | null;
   versionRows: WorkflowDefinitionVersionRow[];
 }
@@ -49,14 +53,25 @@ export interface WorkflowDefinitionDetail {
  * contains, so they are shaped here rather than by the caller.
  */
 export async function readWorkflowDefinitionsOverview(): Promise<WorkflowDefinitionsOverview> {
-  const db = getDb();
   const { agentKind, includeReview, includeLeakReview } = agentRuntimeSettings();
-  const definitions = await listWorkflowDefinitions(db);
-  const [models, ticketStatuses, profileReference] = await Promise.all([
+  const storedDefinitions = await listConnectedWorkflowDefinitions();
+  const [models, ticketStatuses, profileReference, deployments] = await Promise.all([
     fetchAvailableModels(),
     fetchTicketStatuses(),
-    getCurrentSystemHarnessProfileReference(db, agentKind),
+    currentSystemHarnessProfileReference(agentKind),
+    Promise.all(storedDefinitions.map((row) =>
+      row.deployedVersion === null
+        ? null
+        : readConnectedDeployedWorkflowDefinitionVersion(row.id))),
   ]);
+  const definitions = storedDefinitions.map((row, index) =>
+    deployments[index]?.schema === "legacy-v1"
+      ? Object.assign({}, row, {
+          deployedSchema: "legacy-v1" as const,
+          retiredMessage: RETIRED_SCHEMA_MESSAGE,
+          triggerTypes: [],
+        })
+      : row);
   const seedOptions = {
     includeReview,
     includeLeakReview,
@@ -76,14 +91,13 @@ export async function readWorkflowDefinitionsOverview(): Promise<WorkflowDefinit
 export async function readWorkflowDefinitionDetail(
   definitionId: number,
 ): Promise<WorkflowDefinitionDetail | null> {
-  const db = getDb();
-  const row = await getWorkflowDefinition(db, definitionId);
+  const row = await getConnectedWorkflowDefinition(definitionId);
   if (!row || row.archivedAt) return null;
 
   const [draft, deployedRow, versionRows] = await Promise.all([
-    getWorkflowDefinitionDraft(db, definitionId),
-    getDeployedWorkflowDefinitionVersion(db, definitionId),
-    listWorkflowDefinitionVersionRows(db, definitionId),
+    readConnectedWorkflowDefinitionDraft(definitionId),
+    readConnectedDeployedWorkflowDefinitionVersion(definitionId),
+    readConnectedWorkflowDefinitionVersionRows(definitionId),
   ]);
   return { row, draft, deployedRow, versionRows };
 }
@@ -93,6 +107,6 @@ export async function readWorkflowDefinitionDetail(
 export async function activeWorkflowDefinitionExists(
   definitionId: number,
 ): Promise<boolean> {
-  const row = await getWorkflowDefinition(getDb(), definitionId);
+  const row = await getConnectedWorkflowDefinition(definitionId);
   return Boolean(row && row.archivedAt === null);
 }

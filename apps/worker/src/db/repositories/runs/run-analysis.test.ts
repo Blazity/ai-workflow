@@ -8,8 +8,8 @@ import {
   usageSnapshot,
   withAnalysisDelivery,
   withAnalysisPublication,
-} from "../../../run-analysis/report.js";
-import { finalizeRunAnalysisUsage, getRunAnalysisReport, recordRunAnalysisReport } from "./run-analysis.js";
+} from "../../../engine/support/run-analysis-report.js";
+import { finalizeRunAnalysisUsage, getRunAnalysisReport, recordRunAnalysisReport } from "../../../run-analysis/persistence.js";
 
 let db: Db;
 beforeAll(async () => { db = await createTestDb(); }, 60_000);

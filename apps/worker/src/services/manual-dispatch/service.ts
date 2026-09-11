@@ -9,31 +9,83 @@ import type {
 import { env } from "../../infra/vcs-config.js";
 import type { Adapters } from "../../engine/support/adapters.js";
 import { reserveSubjectWithinCapacity } from "../dispatch/index.js";
-import { aiColumnMoveTarget } from "../tickets/index.js";
-import { moveTicketForRun } from "../tickets/index.js";
-import type { Db } from "../../db/client.js";
+import { aiColumnMoveTarget, moveTicketForRun } from "../tickets/index.js";
+import type { Db } from "../../db/types.js";
 import type { AgentWorkflowInput, PrTriggerPayload } from "../../engine/index.js";
 import { agentWorkflow } from "../../engine/index.js";
-import { getDeployedWorkflowDefinitionVersion } from "../../db/repositories/definitions.js";
+import {
+  readConnectedDeployedWorkflowDefinitionVersion,
+  readDeployedWorkflowDefinitionVersion,
+} from "../../engine/stored-definition-reads.js";
 import { ManualDispatchError } from "./errors.js";
 import {
   acknowledgeManualDispatchStarted,
+  acknowledgeConnectedManualDispatchStarted,
+  createConnectedManualDispatchRequest,
   createManualDispatchRequest,
+  getConnectedManualDispatchRequest,
   getManualDispatchRequest,
   listRecoverableManualDispatches,
+  listConnectedRecoverableManualDispatches,
   markManualDispatchCandidateStarted,
+  markConnectedManualDispatchCandidateStarted,
   markManualDispatchFailed,
+  markConnectedManualDispatchFailed,
   markManualDispatchPrepared,
+  markConnectedManualDispatchPrepared,
   reserveManualDispatchRequest,
+  reserveConnectedManualDispatchRequest,
   resetManualDispatchToPending,
+  resetConnectedManualDispatchToPending,
   type ManualDispatchRow,
 } from "../../db/repositories/manual-dispatch.js";
-import { resolveManualDispatch, type ResolvedManualDispatch } from "./resolve.js";
+import { resolveConnectedManualDispatch, resolveManualDispatch, type ResolvedManualDispatch } from "./resolve.js";
 
 export interface ManualDispatchActor {
   id: string;
   label: string;
 }
+
+type ManualExecutionStore = {
+  getDeployed(definitionId: number): ReturnType<typeof readDeployedWorkflowDefinitionVersion>;
+  get(requestId: string): ReturnType<typeof getManualDispatchRequest>;
+  reserve(requestId: string, ownerToken: string): ReturnType<typeof reserveManualDispatchRequest>;
+  prepare(requestId: string, ownerToken: string, payload?: Record<string, unknown>): ReturnType<typeof markManualDispatchPrepared>;
+  candidateStarted(requestId: string, ownerToken: string, runId: string): ReturnType<typeof markManualDispatchCandidateStarted>;
+  fail(requestId: string, code: string, message: string): ReturnType<typeof markManualDispatchFailed>;
+  transitionTicket(input: Omit<Parameters<typeof moveTicketForRun>[0], "db">): Promise<void>;
+  resolve(input: Omit<Parameters<typeof resolveManualDispatch>[0], "db">): ReturnType<typeof resolveManualDispatch>;
+};
+
+function explicitExecutionStore(db: Db): ManualExecutionStore {
+  return {
+    getDeployed: (definitionId) => readDeployedWorkflowDefinitionVersion(db, definitionId),
+    get: (requestId) => getManualDispatchRequest(db, requestId),
+    reserve: (requestId, ownerToken) => reserveManualDispatchRequest(db, requestId, ownerToken),
+    prepare: (requestId, ownerToken, payload) => markManualDispatchPrepared(db, requestId, ownerToken, payload),
+    candidateStarted: (requestId, ownerToken, runId) => markManualDispatchCandidateStarted(db, requestId, ownerToken, runId),
+    fail: (requestId, code, message) => markManualDispatchFailed(db, requestId, code, message),
+    transitionTicket: (input) => moveTicketForRun({ ...input, db }),
+    resolve: (input) => resolveManualDispatch({ ...input, db }),
+  };
+}
+
+const connectedExecutionStore: ManualExecutionStore = {
+  getDeployed: readConnectedDeployedWorkflowDefinitionVersion,
+  get: getConnectedManualDispatchRequest,
+  reserve: reserveConnectedManualDispatchRequest,
+  prepare: markConnectedManualDispatchPrepared,
+  candidateStarted: markConnectedManualDispatchCandidateStarted,
+  fail: markConnectedManualDispatchFailed,
+  transitionTicket: async (input) => {
+    const { moveConnectedTicketForRun } = await import("../tickets/ticket-transition.js");
+    return moveConnectedTicketForRun(input);
+  },
+  resolve: async (input) => {
+    const { resolveConnectedManualDispatch: resolveConnected } = await import("./resolve.js");
+    return resolveConnected(input);
+  },
+};
 
 export async function preflightManualDispatch(input: {
   db: Db;
@@ -91,6 +143,37 @@ export async function preflightManualDispatch(input: {
   };
 }
 
+/** Production preflight with persistence expressed as named connected reads. */
+export async function preflightConnectedManualDispatch(
+  input: Omit<Parameters<typeof preflightManualDispatch>[0], "db">,
+): Promise<ManualDispatchPreflightResponse> {
+  const resolved = await resolveConnectedManualDispatch({
+    issueTracker: input.adapters.issueTracker,
+    definitionId: input.definitionId,
+    triggerNodeId: input.triggerNodeId,
+    dispatchInput: input.dispatchInput,
+  });
+  const active = await input.adapters.runRegistry.get(resolved.subjectKey);
+  const atCapacity = !active && (await capacityCount(input.adapters)) >= input.maxConcurrentAgents;
+  return {
+    definitionId: resolved.definitionId,
+    definitionName: resolved.definitionName,
+    deployedVersion: resolved.definitionVersion,
+    triggerNodeId: resolved.triggerNodeId,
+    triggerType: resolved.triggerType,
+    input: resolved.input,
+    subject: {
+      kind: resolved.inputKind === "ticket" ? "ticket" : "pull_request",
+      key: resolved.inputKind === "ticket" ? resolved.ticketKey : `${(resolved.inputPayload.pr as PrTriggerPayload).repoPath}#${(resolved.inputPayload.pr as PrTriggerPayload).prNumber}`,
+      title: resolved.subjectTitle,
+      ...(resolved.inputKind === "ticket" ? { currentStatus: resolved.currentStatus } : { url: resolved.subjectUrl }),
+    },
+    steps: resolved.steps,
+    runnable: !active && !atCapacity,
+    ...(active ? { blocker: { code: "active_run" as const, message: "This ticket or pull request already has an active workflow run." } } : atCapacity ? { blocker: { code: "at_capacity" as const, message: "All workflow execution slots are currently in use." } } : {}),
+  };
+}
+
 export async function dispatchManualWorkflow(input: {
   db: Db;
   adapters: Adapters;
@@ -144,11 +227,39 @@ export async function dispatchManualWorkflow(input: {
   if (!persisted.inserted) return storedResponse(persisted.row);
   return processManualDispatch({
     db: input.db,
+    store: explicitExecutionStore(input.db),
     adapters: input.adapters,
     row: persisted.row,
     requireCurrentDeployment: true,
     maxConcurrentAgents: input.maxConcurrentAgents,
   });
+}
+
+export async function dispatchConnectedManualWorkflow(
+  input: Omit<Parameters<typeof dispatchManualWorkflow>[0], "db">,
+): Promise<ManualDispatchResponse> {
+  const resolved = await resolveConnectedManualDispatch({
+    issueTracker: input.adapters.issueTracker,
+    definitionId: input.definitionId,
+    triggerNodeId: input.triggerNodeId,
+    dispatchInput: input.request.input,
+  });
+  if (resolved.definitionVersion !== input.request.expectedDeployedVersion) {
+    throw new ManualDispatchError(409, "deployment_changed", "The deployed workflow changed. Run the preflight again.");
+  }
+  const payloadHash = hashRequest({ definitionId: input.definitionId, definitionVersion: resolved.definitionVersion, triggerNodeId: input.triggerNodeId, input: resolved.input });
+  const persisted = await createConnectedManualDispatchRequest({
+    requestId: input.request.requestId, payloadHash, definitionId: resolved.definitionId,
+    definitionVersion: resolved.definitionVersion, triggerNodeId: resolved.triggerNodeId,
+    triggerType: resolved.triggerType, inputKind: resolved.inputKind, subjectKey: resolved.subjectKey,
+    ticketKey: resolved.ticketKey, inputPayload: resolved.inputPayload,
+    actorUserId: input.actor.id, actorLabel: input.actor.label,
+  });
+  if (!persisted.inserted && persisted.row.payloadHash !== payloadHash) {
+    throw new ManualDispatchError(409, "invalid_input", "That request ID was already used for different dispatch input.");
+  }
+  if (!persisted.inserted) return storedResponse(persisted.row);
+  return processManualDispatch({ store: connectedExecutionStore, adapters: input.adapters, row: persisted.row, requireCurrentDeployment: true, maxConcurrentAgents: input.maxConcurrentAgents });
 }
 
 function storedResponse(row: ManualDispatchRow): ManualDispatchResponse {
@@ -163,11 +274,14 @@ function storedResponse(row: ManualDispatchRow): ManualDispatchResponse {
 }
 
 export async function recoverManualDispatches(input: {
-  db: Db;
+  db?: Db;
   adapters: Adapters;
   maxConcurrentAgents: number;
 }): Promise<{ scanned: number; started: number; recovering: number; failed: number }> {
-  const rows = await listRecoverableManualDispatches(input.db);
+  const store = input.db ? explicitExecutionStore(input.db) : connectedExecutionStore;
+  const rows = input.db
+    ? await listRecoverableManualDispatches(input.db)
+    : await listConnectedRecoverableManualDispatches();
   const metrics = { scanned: rows.length, started: 0, recovering: 0, failed: 0 };
   for (const listed of rows) {
     let row = listed;
@@ -179,24 +293,34 @@ export async function recoverManualDispatches(input: {
           active.runId &&
           active.state !== "reserved"
         ) {
-          await acknowledgeManualDispatchStarted(
-            input.db,
-            row.requestId,
-            row.ownerToken,
-            active.runId,
-          );
+          if (input.db) {
+            await acknowledgeManualDispatchStarted(
+              input.db,
+              row.requestId,
+              row.ownerToken,
+              active.runId,
+            );
+          } else {
+            await acknowledgeConnectedManualDispatchStarted(
+              row.requestId,
+              row.ownerToken,
+              active.runId,
+            );
+          }
           metrics.started++;
           continue;
         }
         if (!active) {
-          if (!(await resetManualDispatchToPending(input.db, row.requestId, row.ownerToken))) {
+          const reset = input.db
+            ? await resetManualDispatchToPending(input.db, row.requestId, row.ownerToken)
+            : await resetConnectedManualDispatchToPending(row.requestId, row.ownerToken);
+          if (!reset) {
             metrics.recovering++;
             continue;
           }
-          row = (await getManualDispatchRequest(input.db, row.requestId))!;
+          row = (await store.get(row.requestId))!;
         } else if (active.ownerToken !== row.ownerToken) {
-          await markManualDispatchFailed(
-            input.db,
+          await store.fail(
             row.requestId,
             "active_run",
             "The subject is now owned by another workflow run.",
@@ -206,14 +330,16 @@ export async function recoverManualDispatches(input: {
         }
       }
       const dispatchInput = storedInput(row);
-      const resolved = await resolveManualDispatch({
-        db: input.db,
+      const resolveInput = {
         issueTracker: input.adapters.issueTracker,
         definitionId: row.definitionId,
         triggerNodeId: row.triggerNodeId,
         dispatchInput,
         definitionVersion: row.definitionVersion,
-      });
+      };
+      const resolved = input.db
+        ? await resolveManualDispatch({ ...resolveInput, db: input.db })
+        : await resolveConnectedManualDispatch(resolveInput);
       if (
         resolved.definitionVersion !== row.definitionVersion ||
         hashRequest({
@@ -223,12 +349,13 @@ export async function recoverManualDispatches(input: {
           input: resolved.input,
         }) !== row.payloadHash
       ) {
-        await failAndRelease(input, row, "deployment_changed", "The pinned dispatch is no longer valid.");
+        await failAndRelease({ ...input, store }, row, "deployment_changed", "The pinned dispatch is no longer valid.");
         metrics.failed++;
         continue;
       }
       const result = await processManualDispatch({
         ...input,
+        store,
         row,
         requireCurrentDeployment: false,
       });
@@ -236,7 +363,7 @@ export async function recoverManualDispatches(input: {
       else metrics.recovering++;
     } catch (error) {
       if (error instanceof ManualDispatchError && error.statusCode < 500) {
-        await failAndRelease(input, row, error.code, error.message);
+        await failAndRelease({ ...input, store }, row, error.code, error.message);
         metrics.failed++;
       } else {
         metrics.recovering++;
@@ -247,7 +374,8 @@ export async function recoverManualDispatches(input: {
 }
 
 async function processManualDispatch(input: {
-  db: Db;
+  db?: Db;
+  store: ManualExecutionStore;
   adapters: Adapters;
   row: ManualDispatchRow;
   requireCurrentDeployment: boolean;
@@ -278,8 +406,7 @@ async function processManualDispatch(input: {
     );
     if (reservation !== "reserved") {
       const code = reservation === "at_capacity" ? "at_capacity" : "active_run";
-      await markManualDispatchFailed(
-        input.db,
+      await input.store.fail(
         input.row.requestId,
         code,
         reservation === "at_capacity"
@@ -294,11 +421,11 @@ async function processManualDispatch(input: {
           : "This ticket or pull request already has an active workflow run.",
       );
     }
-    if (!(await reserveManualDispatchRequest(input.db, input.row.requestId, ownerToken))) {
+    if (!(await input.store.reserve(input.row.requestId, ownerToken))) {
       await input.adapters.runRegistry
         .releaseReservation(input.row.subjectKey, ownerToken)
         .catch(() => false);
-      const fresh = await getManualDispatchRequest(input.db, input.row.requestId);
+      const fresh = await input.store.get(input.row.requestId);
       if (fresh?.status === "started" && fresh.runId) {
         return { requestId: fresh.requestId, status: "started", runId: fresh.runId };
       }
@@ -307,10 +434,7 @@ async function processManualDispatch(input: {
   }
 
   if (input.requireCurrentDeployment) {
-    const deployed = await getDeployedWorkflowDefinitionVersion(
-      input.db,
-      input.row.definitionId,
-    );
+    const deployed = await input.store.getDeployed(input.row.definitionId);
     if (deployed?.version !== input.row.definitionVersion) {
       await failAndRelease(
         input,
@@ -328,8 +452,7 @@ async function processManualDispatch(input: {
 
   let resolved: ResolvedManualDispatch;
   try {
-    resolved = await resolveManualDispatch({
-      db: input.db,
+    resolved = await input.store.resolve({
       issueTracker: input.adapters.issueTracker,
       definitionId: input.row.definitionId,
       triggerNodeId: input.row.triggerNodeId,
@@ -363,8 +486,7 @@ async function processManualDispatch(input: {
 
   if (resolved.inputKind === "ticket") {
     try {
-      await moveTicketForRun({
-        db: input.db,
+      await input.store.transitionTicket({
         issueTracker: input.adapters.issueTracker,
         ticketKey: resolved.ticketKey,
         target: aiColumnMoveTarget(env),
@@ -376,8 +498,7 @@ async function processManualDispatch(input: {
         requiredOwnerState: "reserved",
       });
       if (
-        !(await markManualDispatchPrepared(
-          input.db,
+        !(await input.store.prepare(
           input.row.requestId,
           ownerToken,
           resolved.inputPayload,
@@ -385,12 +506,11 @@ async function processManualDispatch(input: {
       ) {
         return { requestId: input.row.requestId, status: "recovering" };
       }
-    } catch (error) {
+    } catch {
       await input.adapters.runRegistry
         .releaseReservation(input.row.subjectKey, ownerToken)
         .catch(() => false);
-      await markManualDispatchFailed(
-        input.db,
+      await input.store.fail(
         input.row.requestId,
         "provider_unavailable",
         "Jira could not move the ticket to the AI column.",
@@ -402,8 +522,7 @@ async function processManualDispatch(input: {
       );
     }
   } else if (
-    !(await markManualDispatchPrepared(
-      input.db,
+    !(await input.store.prepare(
       input.row.requestId,
       ownerToken,
       resolved.inputPayload,
@@ -435,14 +554,13 @@ async function processManualDispatch(input: {
     if (!committed) {
       return { requestId: input.row.requestId, status: "recovering" };
     }
-    const recorded = await markManualDispatchCandidateStarted(
-      input.db,
+    const recorded = await input.store.candidateStarted(
       input.row.requestId,
       ownerToken,
       handle.runId,
     );
     if (!recorded) {
-      const fresh = await getManualDispatchRequest(input.db, input.row.requestId);
+      const fresh = await input.store.get(input.row.requestId);
       if (fresh?.status === "started" && fresh.runId) {
         return { requestId: fresh.requestId, status: "started", runId: fresh.runId };
       }
@@ -537,7 +655,7 @@ function storedFailure(row: ManualDispatchRow): ManualDispatchError {
 
 async function failAndRelease(
   input: {
-    db: Db;
+    store: Pick<ManualExecutionStore, "fail">;
     adapters: Adapters;
   },
   row: ManualDispatchRow,
@@ -549,5 +667,5 @@ async function failAndRelease(
       .releaseReservation(row.subjectKey, row.ownerToken)
       .catch(() => false);
   }
-  await markManualDispatchFailed(input.db, row.requestId, code, message);
+  await input.store.fail(row.requestId, code, message);
 }

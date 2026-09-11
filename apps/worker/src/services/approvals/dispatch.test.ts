@@ -55,6 +55,26 @@ function makeApproval(overrides: Partial<ApprovalRow> = {}): ApprovalRow {
   };
 }
 
+function rawDefinitionVersion(version: number) {
+  return {
+    definitionId: 7,
+    version,
+    definition: {
+      schemaVersion: 2,
+      nodes: [{
+        id: "trigger",
+        type: "trigger_ticket_ai",
+        x: 0,
+        y: 0,
+        configuration: {},
+        inputs: {},
+        additionalInputs: [],
+      }],
+      edges: [],
+    },
+  };
+}
+
 function makeRegistry(options: {
   reserveResult?: boolean;
   initial?: ActiveRunEntry[];
@@ -159,8 +179,8 @@ describe("dispatchPlanApproved owner reservation", () => {
     mockUpdateTicketLabelsWithIntent.mockReset().mockResolvedValue(undefined);
     mockStart.mockResolvedValue({ runId: "run-dispatched" });
     mockGetDefinition.mockResolvedValue({ id: 7, archivedAt: null, enabled: false });
-    mockGetVersion.mockResolvedValue({ definitionId: 7, version: 4 });
-    mockGetDeployedVersion.mockResolvedValue({ definitionId: 7, version: 8 });
+    mockGetVersion.mockResolvedValue(rawDefinitionVersion(4));
+    mockGetDeployedVersion.mockResolvedValue(rawDefinitionVersion(8));
     mockMoveTicketWithIntent.mockResolvedValue(undefined);
   });
 

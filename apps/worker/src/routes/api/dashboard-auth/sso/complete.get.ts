@@ -4,6 +4,7 @@ import { auth } from "../../../../auth-instance.js";
 import {
   acceptDashboardSsoInviteForUser,
 } from "../../../../services/auth/invite-requests.js";
+import { toHttpError } from "../../../../services/auth/request-context.js";
 import {
   dashboardLoginUrl,
   dashboardSsoCompletionUrl,
@@ -19,10 +20,14 @@ export default defineEventHandler(async (event) => {
 
   const inviteId = inviteIdFromQuery(getQuery(event).inviteId);
   if (inviteId) {
-    await acceptDashboardSsoInviteForUser(auth, {
-      inviteId,
-      user: { id: session.user.id, email: session.user.email },
-    });
+    try {
+      await acceptDashboardSsoInviteForUser(auth, {
+        inviteId,
+        user: { id: session.user.id, email: session.user.email },
+      });
+    } catch (error) {
+      toHttpError(error);
+    }
   }
 
   const returnTo = safeOAuthReturnPath(getQuery(event).returnTo);

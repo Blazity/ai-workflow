@@ -18,7 +18,7 @@ import { defaultWorkflowDefinitionV2 } from "../../../workflow-definition/defaul
 import {
   deployWorkflowDefinition,
   saveWorkflowDefinitionDraft,
-} from "../../../db/repositories/definitions.js";
+} from "../../../services/workflow-definitions/policy-operations.js";
 
 const state = vi.hoisted(() => ({
   db: undefined as unknown,

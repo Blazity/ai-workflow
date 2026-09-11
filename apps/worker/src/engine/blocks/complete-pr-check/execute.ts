@@ -32,13 +32,11 @@ async function completePrCheckStep(
   },
 ) {
   "use step";
-  const { getDb } = await import("../../../db/client.js");
   const {
-    completeRunOwnedPrCheck,
+    completeConnectedRunOwnedPrCheck,
     prRunTarget,
   } = await import("../../runtime/pr-external-resources.js");
-  return completeRunOwnedPrCheck({
-    db: getDb(),
+  return completeConnectedRunOwnedPrCheck({
     owner: args.owner,
     target: prRunTarget(args.owner.subjectKey, args.pr),
     reference: args.reference,

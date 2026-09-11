@@ -1,7 +1,7 @@
 import type { WorkflowRepositoryScope } from "@shared/contracts";
 import type { VcsProvider } from "../../../adapters/vcs/repository-directory.js";
 import type { PullRequestHead } from "../../../adapters/vcs/types.js";
-import type { ActiveRunOwner } from "../../support/active-run-owner.js";
+import type { ActiveRunOwner } from "../../../db/repositories/active-runs.js";
 import { scrubForPublication } from "../../support/publication-scrub.js";
 import {
   AI_WORKFLOW_COMMENT_MARKER,
@@ -36,11 +36,9 @@ async function blockPostPrCommentStep(
   repositoryScope?: WorkflowRepositoryScope,
 ): Promise<PostPrCommentsResult> {
   "use step";
-  const { getDb } = await import("../../../db/client.js");
-  const { assertActiveRunOwner } = await import("../../support/active-run-owner.js");
-  const { createRepositoryVCS } = await import("../../support/vcs-runtime.js");
-  const { isRepoAllowedForScope } = await import("../../support/repo-allowlist.js");
-  const db = getDb();
+  const { assertConnectedActiveRunOwner } = await import("../../../db/repositories/active-runs.js");
+  const { createRepositoryVCS } = await import("../../../engine/support/vcs-runtime.js");
+  const { isRepoAllowedForScope } = await import("../../../engine/support/repo-allowlist.js");
   const comments: PostPrCommentsResult["comments"] = [];
   const errors: string[] = [];
 
@@ -67,7 +65,7 @@ async function blockPostPrCommentStep(
       });
       const current = await vcs.getPRHead(target.prId);
       assertCurrentPrCommentTarget(target, current);
-      await assertActiveRunOwner(db, owner);
+      await assertConnectedActiveRunOwner(owner);
       const { url } = await vcs.postPRComment(target.prId, markedBody);
       comments.push({
         provider: target.provider,

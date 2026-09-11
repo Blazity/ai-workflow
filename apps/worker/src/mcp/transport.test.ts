@@ -41,7 +41,12 @@ vi.mock("../engine/support/adapters.js", () => ({ createAdapters: state.createAd
 vi.mock("../services/mcp/audit-store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../services/mcp/audit-store.js")>();
   state.realWriteMcpAudit = actual.writeMcpAudit;
-  return { ...actual, writeMcpAudit: state.writeMcpAudit };
+  return {
+    ...actual,
+    writeMcpAudit: state.writeMcpAudit,
+  writeConnectedMcpAudit: (row: Parameters<typeof state.writeMcpAudit>[1]) =>
+    state.writeMcpAudit(state.db, row),
+  };
 });
 
 import type { Db } from "../db/client.js";

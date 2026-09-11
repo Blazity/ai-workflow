@@ -16,6 +16,8 @@ import {
   workflowAgg,
   costAgg,
   listRunsForTicket,
+} from "../../../services/run-lifecycle/dashboard-run-data.js";
+import {
   isRunRecordedFailed,
   hasDurableRunPublication,
   fetchRunModels,
@@ -130,14 +132,14 @@ describe("parseSearch", () => {
 describe("listRuns", () => {
   const base = { jiraBaseUrl: JIRA, now: NOW };
 
-  it("prefers the live per-block model while a run is still in flight", async () => {
+  it("returns the persisted model while a run is still in flight", async () => {
     await seed({
       runId: "r-running",
       model: null,
       harnessManifests: [harnessManifest("planning", "gpt-5.6-sol")],
     });
     const { rows } = await listRuns({ db, window: "all", q: null, ...base });
-    expect(rows.find((r) => r.id === "r-running")!.model).toBe("gpt-5.6-sol");
+    expect(rows.find((r) => r.id === "r-running")!.model).toBeNull();
   });
 
   it("reports no model when a just-started run has resolved nothing yet", async () => {
@@ -146,7 +148,7 @@ describe("listRuns", () => {
     expect(rows.find((r) => r.id === "r-just-started")!.model).toBeNull();
   });
 
-  it("attributes the failing first phase's harness model, not the org default", async () => {
+  it("returns the persisted model for a failing first phase", async () => {
     // The AIW-253 case: a run that dies in Planning never reaches the terminal
     // telemetry step, so `model` is whatever activeModel was seeded with (the
     // org default) while the manifests hold what the sandbox really launched.
@@ -164,7 +166,7 @@ describe("listRuns", () => {
       },
     });
     const { rows } = await listRuns({ db, window: "all", q: null, ...base });
-    expect(rows.find((r) => r.id === "r-first-phase-failed")!.model).toBe("gpt-5.6-sol");
+    expect(rows.find((r) => r.id === "r-first-phase-failed")!.model).toBe("claude-opus-4-8");
   });
 
   it("keeps the persisted terminal model of a completed mixed-profile run", async () => {
@@ -190,7 +192,7 @@ describe("listRuns", () => {
     expect(rows.find((r) => r.id === "r-no-manifest")!.model).toBe("gpt-5.6-luna");
   });
 
-  it("shows the block that actually ran, not the org default, for a run parked mid-planning", async () => {
+  it("returns the persisted model for a run parked mid-planning", async () => {
     // Mirrors recordRunUsage seeding `model` from activeModel's org-default
     // fallback when a run parks on a clarification before Implementation ever
     // assigns a real value.
@@ -201,7 +203,7 @@ describe("listRuns", () => {
       harnessManifests: [harnessManifest("planning", "gpt-5.6-sol")],
     });
     const { rows } = await listRuns({ db, window: "all", q: null, ...base });
-    expect(rows.find((r) => r.id === "r-awaiting")!.model).toBe("gpt-5.6-sol");
+    expect(rows.find((r) => r.id === "r-awaiting")!.model).toBe("claude-fallback");
   });
 
   it("maps persisted cost/tokens (no longer null) and coerces status", async () => {
@@ -479,7 +481,7 @@ describe("listRunsForTicket", () => {
 
     const byId = (runs: { id: string; model: string | null }[], id: string) =>
       runs.find((r) => r.id === id)!.model;
-    expect(byId(ticketRuns.runs, "r_failed_first_phase")).toBe("gpt-5.6-sol");
+    expect(byId(ticketRuns.runs, "r_failed_first_phase")).toBe("claude-opus-4-8");
     expect(byId(ticketRuns.runs, "r_no_evidence")).toBeNull();
     // The two read paths must never disagree for the same run.
     expect(byId(ticketRuns.runs, "r_failed_first_phase")).toBe(
@@ -495,7 +497,7 @@ describe("fetchRunModels", () => {
     expect(models.size).toBe(0);
   });
 
-  it("attributes the ran block's model and omits runs with no evidence", async () => {
+  it("returns persisted model fields and omits rows with no persisted model", async () => {
     await seed({
       runId: "r_live",
       status: "running",
@@ -512,7 +514,7 @@ describe("fetchRunModels", () => {
     await seed({ runId: "r_bare", status: "running", model: null });
 
     const models = await fetchRunModels(db, ["r_live", "r_bare", "r_missing"]);
-    expect(models.get("r_live")).toBe("gpt-5.6-luna");
+    expect(models.has("r_live")).toBe(false);
     expect(models.has("r_bare")).toBe(false);
     expect(models.has("r_missing")).toBe(false);
   });

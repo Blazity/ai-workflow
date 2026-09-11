@@ -1,11 +1,12 @@
 import { fileURLToPath } from "node:url";
-import type { Db } from "../db/client.js";
+import type { Db } from "../db/types.js";
 import {
   evaluateBuiltInPromptDriftGate,
   type BuiltInPromptDriftGateResult,
 } from "@shared/prompts";
 import {
   findBuiltInPromptDrift,
+  findConnectedBuiltInPromptDrift,
   type FindBuiltInPromptDriftOptions,
 } from "./builtin-prompt-drift.js";
 
@@ -63,9 +64,8 @@ export async function assertNoBuiltInPromptDrift(
 /** Command entry point. Resolves the database lazily so importing this module
  *  never requires DATABASE_URL to be set. */
 export async function runBuiltInPromptDriftGate(): Promise<number> {
-  const { getDb } = await import("../db/client.js");
   const result = evaluateBuiltInPromptDriftGate(
-    await findBuiltInPromptDrift(getDb()),
+    await findConnectedBuiltInPromptDrift(),
   );
   console.log(result.message);
   return result.ok ? 0 : 1;

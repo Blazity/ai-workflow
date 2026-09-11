@@ -1,13 +1,20 @@
-import { and, desc, eq, inArray, isNotNull, isNull, notInArray, or, sql } from "drizzle-orm";
-import type { RunBlockStatusSnapshot } from "@shared/contracts";
-import type { Db } from "../../db/client.js";
-import { workflowRuns } from "../../db/schema.js";
-import { coerceStatus } from "../../db/repositories/runs.js";
+import type { RunBlockStatusSnapshot, RunStatus } from "@shared/contracts";
+import type { Db } from "../../db/types.js";
+import {
+  findLastBlockStatusRow,
+  findLiveBlockStatusRow,
+} from "../../db/repositories/runs.js";
 import type { RunRegistryAdapter } from "../../adapters/run-registry/types.js";
+
+const RUN_STATUSES = new Set<RunStatus>(["success", "running", "failed", "blocked", "awaiting"]);
+
+function coerceStatus(status: string | null): RunStatus {
+  return status && RUN_STATUSES.has(status as RunStatus) ? status as RunStatus : "running";
+}
 
 export interface CollectBlockStatusesOptions {
   registry: RunRegistryAdapter;
-  db: Db;
+  db?: Db;
   /** When set, restrict both the live and last queries to this definition. */
   definitionId?: number;
 }
@@ -19,8 +26,6 @@ export interface CollectBlockStatusesOptions {
  * outlive the run it points to: its own row may already carry one of these.
  * A null status (not yet snapshotted) counts as in-flight, not terminal.
  */
-const TERMINAL_RUN_STATUSES: string[] = ["success", "failed", "blocked"];
-
 /**
  * Builds the single block-status snapshot the editor canvas renders live dots
  * from. Prefers an in-flight run (a registry entry whose row carries block
@@ -33,8 +38,6 @@ export async function collectBlockStatuses(
   opts: CollectBlockStatusesOptions,
 ): Promise<RunBlockStatusSnapshot | null> {
   const { registry, db, definitionId } = opts;
-  const definitionFilter =
-    definitionId === undefined ? undefined : eq(workflowRuns.definitionId, definitionId);
 
   const entries = await registry.listAll();
   const liveRunIds = entries.flatMap((entry) =>
@@ -47,46 +50,21 @@ export async function collectBlockStatuses(
   );
 
   if (liveRunIds.length > 0) {
-    const [row] = await db
-      .select()
-      .from(workflowRuns)
-      .where(
-        and(
-          inArray(workflowRuns.runId, liveRunIds),
-          isNotNull(workflowRuns.blockStatuses),
-          // Registry membership alone isn't enough: only count the row as live
-          // if it hasn't already recorded a terminal outcome (see comment above).
-          or(
-            isNull(workflowRuns.status),
-            notInArray(workflowRuns.status, TERMINAL_RUN_STATUSES),
-          ),
-          ...(definitionFilter ? [definitionFilter] : []),
-        ),
-      )
-      .orderBy(desc(workflowRuns.updatedAt))
-      .limit(1);
+    const row = await findLiveBlockStatusRow(db, {
+      runIds: liveRunIds,
+      definitionId,
+    });
     if (row) return toSnapshot(row, "live");
   }
 
-  const [row] = await db
-    .select()
-    .from(workflowRuns)
-    .where(
-      and(
-        isNotNull(workflowRuns.blockStatuses),
-        inArray(workflowRuns.status, ["success", "failed"]),
-        ...(definitionFilter ? [definitionFilter] : []),
-      ),
-    )
-    .orderBy(desc(sql`coalesce(${workflowRuns.completedAt}, ${workflowRuns.updatedAt})`))
-    .limit(1);
+  const row = await findLastBlockStatusRow(db, definitionId);
   if (row) return toSnapshot(row, "last");
 
   return null;
 }
 
 function toSnapshot(
-  row: typeof workflowRuns.$inferSelect,
+  row: NonNullable<Awaited<ReturnType<typeof findLastBlockStatusRow>>>,
   source: "live" | "last",
 ): RunBlockStatusSnapshot {
   return {

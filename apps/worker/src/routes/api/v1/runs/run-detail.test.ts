@@ -20,8 +20,13 @@ vi.mock("../../../../services/auth/request-context.js", () => ({
   toHttpError: (error: unknown) => { throw error; },
 }));
 vi.mock("../../../../db/repositories/runs.js", () => ({
+  fetchConnectedRunModelEvidence: vi.fn(async () => []),
+}));
+vi.mock("../../../../services/run-lifecycle/durable-run-detail.js", () => ({
   fetchRunDetailFromDb: vi.fn(async () => state.dbDetail),
   fetchRunRefs: vi.fn(async () => null),
+  fetchConnectedRunDetailFromDb: vi.fn(async () => state.dbDetail),
+  fetchConnectedRunRefs: vi.fn(async () => null),
 }));
 vi.mock("../../../../services/overview/resolve-run-detail.js", () => ({
   resolveRunDetail: vi.fn(async () => {
@@ -29,9 +34,16 @@ vi.mock("../../../../services/overview/resolve-run-detail.js", () => ({
     return state.worldResult;
   }),
 }));
-vi.mock("../../../../engine/support/collect-run-detail.js", () => ({ collectRunDetail: vi.fn() }));
-vi.mock("../../../../db/repositories/clarifications.js", () => ({ getClarificationForRun: vi.fn(async () => null), serializeClarification: vi.fn() }));
-vi.mock("../../../../db/repositories/runs/run-analysis.js", () => ({ getRunAnalysisReport: vi.fn(async () => state.storedReport) }));
+vi.mock("../../../../services/overview/collect-run-detail.js", () => ({ collectRunDetail: vi.fn() }));
+vi.mock("../../../../db/repositories/clarifications.js", () => ({
+  getClarificationForRun: vi.fn(async () => null),
+  getConnectedClarificationForRun: vi.fn(async () => null),
+  serializeClarification: vi.fn(),
+}));
+vi.mock("../../../../run-analysis/persistence.js", () => ({
+  getRunAnalysisReport: vi.fn(async () => state.storedReport),
+  getConnectedRunAnalysisReport: vi.fn(async () => state.storedReport),
+}));
 
 const route = (await import("./[runId].get.js")).default;
 

@@ -14,6 +14,8 @@ vi.mock("../../db/client.js", () => ({
 vi.mock("../../harness-profiles/capability-catalog.js", () => ({
   prewarmHarnessCapabilityCatalogs: (...args: unknown[]) =>
     mocks.prewarm(...args),
+  prewarmConnectedHarnessCapabilityCatalogs: (...args: unknown[]) =>
+    mocks.prewarm(...args),
 }));
 vi.mock("../../infra/logger.js", () => ({
   logger: { info: vi.fn() },
@@ -60,6 +62,6 @@ describe("capability prewarm cron", () => {
       stale: 0,
       failed: 0,
     });
-    expect(mocks.prewarm).toHaveBeenCalledWith({ db: true });
+    expect(mocks.prewarm).toHaveBeenCalledWith();
   });
 });

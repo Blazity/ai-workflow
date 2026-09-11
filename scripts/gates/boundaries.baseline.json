@@ -1,9 +1,0 @@
-{
-  "tierPairs": {
-    "db->adapters": 1,
-    "db->engine": 10,
-    "db->services": 12
-  },
-  "fileCycleCount": 0,
-  "fileCycles": []
-}

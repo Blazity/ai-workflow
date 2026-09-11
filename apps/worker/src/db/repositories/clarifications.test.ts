@@ -4,7 +4,7 @@ import type { Db } from "../client.js";
 import { activeRuns, workflowRuns } from "../schema.js";
 import { createTestDb } from "../test-db.js";
 import { ActiveRunOwnerError } from "../../engine/support/run-control-errors.js";
-import { getHookClarification, prepareHookClarification, publishHookClarification } from "../../clarifications/hook-store.js";
+import { getHookClarification, prepareHookClarification, publishHookClarification } from "../../db/repositories/clarification-hooks.js";
 import { reconcileClarificationPickupState } from "./clarifications.js";
 
 const TICKET = "AWT-1";

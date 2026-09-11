@@ -730,7 +730,7 @@ export function registerWorkflowGraphTools(
           // is the draft head), and the deployed pointer names the live one. Both are
           // read through mapVersionRow, so their `.definition` is the canonical
           // {schemaVersion, nodes, edges} save_draft reads back and hashes -- not the
-          // layout-applied shape getWorkflowDefinitionDraft returns for the editor,
+          // layout-applied draft shape returned for the editor,
           // which would hash to something no other reader sees.
           const [draftVersion, deployedVersion] = await Promise.all([
             deps.services.getCurrentWorkflowDefinitionVersion(input.definitionId),

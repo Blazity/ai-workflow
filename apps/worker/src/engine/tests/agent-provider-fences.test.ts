@@ -20,8 +20,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
-vi.mock("../../engine/support/active-run-owner.js", () => ({
+vi.mock("../../db/repositories/active-runs.js", () => ({
   assertActiveRunOwner: (...args: any[]) => mocks.assertActiveRunOwner(...args),
+  assertConnectedActiveRunOwner: (...args: any[]) =>
+    mocks.assertActiveRunOwner(...args),
 }));
 vi.mock("../../engine/support/adapters.js", () => ({
   createAdapters: () => ({
@@ -38,6 +40,9 @@ vi.mock("../../db/repositories/clarifications.js", () => ({
   reconcileClarificationPickupState: (...args: any[]) =>
     mocks.reconcileClarificationPickupState(...args),
   supersedePendingForTicket: (...args: any[]) => mocks.supersedePendingForTicket(...args),
+  listConnectedAnsweredClarificationsForTicket: vi.fn().mockResolvedValue([]),
+  reconcileConnectedClarificationPickupState: (...args: any[]) =>
+    mocks.reconcileClarificationPickupState(...args),
 }));
 vi.mock("../../db/repositories/runs/telemetry.js", () => ({
   markRunFailedOnSelfMove: vi.fn(),
@@ -45,20 +50,32 @@ vi.mock("../../db/repositories/runs/telemetry.js", () => ({
   recordBlockStatuses: vi.fn(),
   recordRunStatusReason: vi.fn(),
   recordRunUsage: vi.fn(),
+  recordConnectedRunUsage: vi.fn(),
+  markConnectedRunFailedOnSelfMove: vi.fn(),
+  markConnectedRunSucceededOnSelfMove: vi.fn(),
+  recordConnectedBlockStatuses: vi.fn(),
+  recordConnectedRunStatusReason: vi.fn(),
   resolveAwaitingRunsForTicket: (...args: any[]) =>
     mocks.resolveAwaitingRunsForTicket(...args),
 }));
 vi.mock("../../engine/support/ticket-transition.js", () => ({
   moveTicketForRun: (...args: any[]) => mocks.moveTicket(...args),
+  moveConnectedTicketForRun: (...args: any[]) => mocks.moveTicket(...args),
 }));
 vi.mock("../../engine/support/ticket-label-mutation.js", () => ({
   updateTicketLabelsForRun: (...args: any[]) =>
     mocks.updateTicketLabels(...args),
+  updateConnectedTicketLabelsForRun: (...args: any[]) =>
+    mocks.updateTicketLabels(...args),
 }));
 vi.mock("../../infra/logger.js", () => ({ logger: { info: mocks.info, warn: mocks.warn } }));
-vi.mock("../../db/repositories/runs/run-analysis.js", () => ({
+vi.mock("../../run-analysis/persistence.js", () => ({
   getRunAnalysisReport: (...args: any[]) => mocks.getRunAnalysisReport(...args),
+  getConnectedRunAnalysisReport: (...args: any[]) => mocks.getRunAnalysisReport(...args),
   recordRunAnalysisReport: (...args: any[]) => mocks.recordRunAnalysisReport(...args),
+  recordConnectedRunAnalysisReport: (...args: any[]) =>
+    mocks.recordRunAnalysisReport(...args),
+  finalizeConnectedRunAnalysisUsage: vi.fn(),
 }));
 vi.mock("../../infra/vcs-config.js", () => ({
   env: { DASHBOARD_ORIGIN: "https://dashboard.example.com" },
@@ -70,7 +87,7 @@ import { clarificationExitDisposition } from "../helpers/review-ledger.js";
 import { notifyTicket, notifyTicketBestEffort, loadApprovedPlanAnalysisReportBestEffort, postPrLinksComment, postRunAnalysisCommentStep, postTicketComment, recordRunAnalysisReportBestEffort } from "../steps/ticket-analysis.js";
 import { parkForClarificationStep, postPickupCommentStep, reconcileClarificationsOnPickup } from "../steps/clarification.js";
 import { runControlErrorCases } from "../blocks/support/test-support.js";
-import { buildResearchAnalysisReport } from "../../run-analysis/report.js";
+import { buildResearchAnalysisReport } from "../../engine/support/run-analysis-report.js";
 
 const owner = {
   subjectKey: "ticket:jira:AWT-1",
@@ -151,7 +168,7 @@ describe("agent provider side-effect fences", () => {
     ]);
     expect(mocks.assertActiveRunOwner).toHaveBeenCalledTimes(4);
     for (const call of mocks.assertActiveRunOwner.mock.calls) {
-      expect(call).toEqual([{ kind: "db" }, owner]);
+      expect(call).toEqual([owner]);
     }
   });
 
@@ -311,7 +328,6 @@ describe("agent provider side-effect fences", () => {
 
     expect(order).toEqual(["mutation", "mutation", "pickup-state"]);
     expect(mocks.updateTicketLabels).toHaveBeenNthCalledWith(1, {
-      db: { kind: "db" },
       issueTracker: expect.anything(),
       ticketKey: "AWT-1",
       owner,
@@ -319,7 +335,6 @@ describe("agent provider side-effect fences", () => {
       changes: { add: ["needs-clarification"] },
     });
     expect(mocks.updateTicketLabels).toHaveBeenNthCalledWith(2, {
-      db: { kind: "db" },
       issueTracker: expect.anything(),
       ticketKey: "AWT-1",
       owner,
@@ -329,7 +344,6 @@ describe("agent provider side-effect fences", () => {
     expect(mocks.assertActiveRunOwner).not.toHaveBeenCalled();
     expect(mocks.updateLabels).not.toHaveBeenCalled();
     expect(mocks.reconcileClarificationPickupState).toHaveBeenCalledWith(
-      { kind: "db" },
       { ticketKey: "AWT-1", currentRunId: "run-1", owner },
     );
     expect(mocks.supersedePendingForTicket).not.toHaveBeenCalled();

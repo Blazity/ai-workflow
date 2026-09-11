@@ -22,13 +22,12 @@ export async function postPrLinksComment(
   const { loadActiveRunOwnerPort, loadAdaptersPort } = await import(
     "../internal/ports.js"
   );
-  const { getDb } = await import("../../db/client.js");
-  const { assertActiveRunOwner } = await loadActiveRunOwnerPort();
+  const { assertConnectedActiveRunOwner } = await loadActiveRunOwnerPort();
   const { createAdapters } = await loadAdaptersPort();
   const { issueTracker } = createAdapters();
   const lines = prs.map((pr) => `- ${pr.provider}:${pr.repoPath}: #${pr.id} ${pr.url}`);
   try {
-    await assertActiveRunOwner(getDb(), owner);
+    await assertConnectedActiveRunOwner(owner);
     await issueTracker.postComment(ticketId, `${heading}\n${lines.join("\n")}`);
   } catch (err) {
     if (isRunControlError(err)) throw err;
@@ -46,10 +45,9 @@ postPrLinksComment.maxRetries = 0;
  * workflow bundle. */
 async function recordRunAnalysisReportStep(report: RunAnalysisReport): Promise<void> {
   "use step";
-  const { getDb } = await import("../../db/client.js");
   const { logger } = await import("../../infra/logger.js");
-  const { recordRunAnalysisReport } = await import("../../db/repositories/runs/run-analysis.js");
-  await recordRunAnalysisReport(getDb(), report);
+  const { recordConnectedRunAnalysisReport } = await import("../../run-analysis/persistence.js");
+  await recordConnectedRunAnalysisReport(report);
   logger.info({ runId: report.runId, stage: report.stage }, "run_analysis_report_recorded");
 }
 recordRunAnalysisReportStep.maxRetries = 2;
@@ -72,9 +70,8 @@ async function loadApprovedPlanAnalysisReportStep(
   approvedPlan: AgentWorkflowInput & { kind: "plan_approved" },
 ): Promise<RunAnalysisReport> {
   "use step";
-  const { getDb } = await import("../../db/client.js");
-  const { getRunAnalysisReport } = await import("../../db/repositories/runs/run-analysis.js");
-  const source = sourceRunId ? await getRunAnalysisReport(getDb(), sourceRunId) : null;
+  const { getConnectedRunAnalysisReport } = await import("../../run-analysis/persistence.js");
+  const source = sourceRunId ? await getConnectedRunAnalysisReport(sourceRunId) : null;
   return buildApprovedPlanAnalysisReport({
     runId,
     sourceRunId: sourceRunId ?? null,
@@ -123,12 +120,11 @@ export async function postRunAnalysisCommentStep(
   "use step";
   const { loadActiveRunOwnerPort, loadAdaptersPort, loadEnvironmentPort } =
     await import("../internal/ports.js");
-  const { getDb } = await import("../../db/client.js");
-  const { assertActiveRunOwner } = await loadActiveRunOwnerPort();
+  const { assertConnectedActiveRunOwner } = await loadActiveRunOwnerPort();
   const { createAdapters } = await loadAdaptersPort();
   const { env } = await loadEnvironmentPort();
   const { issueTracker } = createAdapters();
-  await assertActiveRunOwner(getDb(), owner);
+  await assertConnectedActiveRunOwner(owner);
   const attemptedAt = new Date().toISOString();
   const marker = analysisCommentMarker(report.runId, stage);
   let existingCommentUrl: string | null | undefined;
@@ -152,7 +148,7 @@ export async function postRunAnalysisCommentStep(
   const body = stage === "research"
     ? formatResearchAnalysisComment(report, dashboardUrl)
     : formatPublishedAnalysisComment(report, dashboardUrl);
-  await assertActiveRunOwner(getDb(), owner);
+  await assertConnectedActiveRunOwner(owner);
   const commentUrl = await issueTracker.postComment(ticketKey, body);
   const { logger } = await import("../../infra/logger.js");
   logger.info({ runId: report.runId, stage, ticketKey }, "run_analysis_comment_posted");
@@ -215,11 +211,10 @@ export async function postTicketComment(
   const { loadActiveRunOwnerPort, loadAdaptersPort } = await import(
     "../internal/ports.js"
   );
-  const { getDb } = await import("../../db/client.js");
-  const { assertActiveRunOwner } = await loadActiveRunOwnerPort();
+  const { assertConnectedActiveRunOwner } = await loadActiveRunOwnerPort();
   const { createAdapters } = await loadAdaptersPort();
   const { issueTracker } = createAdapters();
-  await assertActiveRunOwner(getDb(), owner);
+  await assertConnectedActiveRunOwner(owner);
   return issueTracker.postComment(ticketId, comment);
 }
 
@@ -232,11 +227,10 @@ export async function notifyTicket(
   const { loadActiveRunOwnerPort, loadAdaptersPort } = await import(
     "../internal/ports.js"
   );
-  const { getDb } = await import("../../db/client.js");
-  const { assertActiveRunOwner } = await loadActiveRunOwnerPort();
+  const { assertConnectedActiveRunOwner } = await loadActiveRunOwnerPort();
   const { createAdapters } = await loadAdaptersPort();
   const { messaging } = createAdapters();
-  await assertActiveRunOwner(getDb(), owner);
+  await assertConnectedActiveRunOwner(owner);
   await messaging.notifyForTicket(ticketKey, event);
 }
 
@@ -282,12 +276,11 @@ async function postFailureReasonCommentStep(
   const { loadActiveRunOwnerPort, loadAdaptersPort } = await import(
     "../internal/ports.js"
   );
-  const { getDb } = await import("../../db/client.js");
-  const { assertActiveRunOwner } = await loadActiveRunOwnerPort();
+  const { assertConnectedActiveRunOwner } = await loadActiveRunOwnerPort();
   const { createAdapters } = await loadAdaptersPort();
   const { issueTracker } = createAdapters();
   try {
-    await assertActiveRunOwner(getDb(), owner);
+    await assertConnectedActiveRunOwner(owner);
     await issueTracker.postComment(ticketKey, reason);
   } catch (err) {
     if (isRunControlError(err)) throw err;
@@ -322,9 +315,8 @@ logPhaseFailure.maxRetries = 0;
 async function markRunFailedOnSelfMoveStep(runId: string): Promise<void> {
   "use step";
   const { loadRunTelemetryPort } = await import("../internal/ports.js");
-  const { getDb } = await import("../../db/client.js");
-  const { markRunFailedOnSelfMove } = await loadRunTelemetryPort();
-  await markRunFailedOnSelfMove(getDb(), runId);
+  const { markConnectedRunFailedOnSelfMove } = await loadRunTelemetryPort();
+  await markConnectedRunFailedOnSelfMove(runId);
 }
 markRunFailedOnSelfMoveStep.maxRetries = 0;
 
@@ -341,13 +333,12 @@ async function recordRunFailureReasonStep(
 ): Promise<void> {
   "use step";
   const { loadRunTelemetryPort } = await import("../internal/ports.js");
-  const [{ getDb }, { recordRunStatusReason }, { logger }] = await Promise.all([
-    import("../../db/client.js"),
+  const [{ recordConnectedRunStatusReason }, { logger }] = await Promise.all([
     loadRunTelemetryPort(),
     import("../../infra/logger.js"),
   ]);
   try {
-    await recordRunStatusReason(getDb(), runId, reason.slice(0, 2_000), {
+    await recordConnectedRunStatusReason(runId, reason.slice(0, 2_000), {
       kind: "failure",
     });
   } catch (error) {
@@ -368,9 +359,8 @@ recordRunFailureReasonStep.maxRetries = 0;
 async function markRunSucceededOnSelfMoveStep(runId: string): Promise<void> {
   "use step";
   const { loadRunTelemetryPort } = await import("../internal/ports.js");
-  const { getDb } = await import("../../db/client.js");
-  const { markRunSucceededOnSelfMove } = await loadRunTelemetryPort();
-  await markRunSucceededOnSelfMove(getDb(), runId);
+  const { markConnectedRunSucceededOnSelfMove } = await loadRunTelemetryPort();
+  await markConnectedRunSucceededOnSelfMove(runId);
 }
 markRunSucceededOnSelfMoveStep.maxRetries = 0;
 

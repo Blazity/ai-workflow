@@ -5,7 +5,6 @@
  * connection it reads the env marker through, so the route stays a transport
  * adapter and the shape a verifier parses is decided in one place.
  */
-import { getDb } from "../../db/client.js";
 import { deploymentIdentity, type DeploymentIdentity } from "./deployment-identity.js";
 
 export interface HealthResponse extends DeploymentIdentity {
@@ -18,6 +17,6 @@ export async function healthResponse(): Promise<HealthResponse> {
   return {
     status: "ok",
     timestamp: new Date().toISOString(),
-    ...(await deploymentIdentity(getDb)),
+    ...(await deploymentIdentity()),
   };
 }

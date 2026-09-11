@@ -43,7 +43,7 @@ vi.mock("./cancel-run.js", () => ({
 vi.mock("../../infra/logger.js", () => ({
   logger: { warn: mocks.warn, info: mocks.info, error: vi.fn(), debug: vi.fn() },
 }));
-vi.mock("../../engine/support/active-run-owner.js", () => ({
+vi.mock("../../db/repositories/active-runs.js", () => ({
   assertActiveRunOwnerState: assertOwner,
 }));
 
@@ -315,13 +315,13 @@ describe("reconcileStalledRun", () => {
     expect(fetchTicket).toHaveBeenCalledTimes(2);
     expect(moveTicket).not.toHaveBeenCalled();
     expect(assertOwner).toHaveBeenCalledWith(
-      db,
       expect.objectContaining({
         subjectKey: entry.subjectKey,
         ownerToken: entry.ownerToken,
         runId: entry.runId,
       }),
       "cancelling",
+      db,
     );
   });
 
@@ -491,13 +491,13 @@ describe("reconcileStalledRun", () => {
       expect(fetchTicket).toHaveBeenCalledTimes(2);
       expect(moveTicket).not.toHaveBeenCalled();
       expect(assertOwner).toHaveBeenCalledWith(
-        db,
         expect.objectContaining({
           subjectKey: entry.subjectKey,
           ownerToken: entry.ownerToken,
           runId: entry.runId,
         }),
         "cancelling",
+        db,
       );
     },
   );

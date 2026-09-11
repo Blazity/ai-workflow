@@ -11,7 +11,7 @@ import {
 } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
 import { PostgresRunRegistry } from "../../db/repositories/active-runs.js";
-import { getWebhookDelivery } from "../../webhook-trigger/delivery-store.js";
+import { getWebhookDelivery } from "../../db/repositories/webhook-trigger-deliveries.js";
 
 vi.mock("../../infra/vcs-config.js", () => ({
   env: { JIRA_PROJECT_KEY: "PROJ", COLUMN_AI: "AI" },

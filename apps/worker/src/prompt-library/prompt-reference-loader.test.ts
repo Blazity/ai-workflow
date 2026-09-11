@@ -4,12 +4,10 @@ import { createTestDb } from "../db/test-db.js";
 import {
   archivePrompt,
   createPrompt,
+  savePromptVersionWithPolicy as savePromptVersion,
 } from "../services/prompts/prompt-library-service.js";
 import { createPromptReferenceLoader } from "./prompt-reference-loader.js";
-import {
-  savePromptVersion,
-  type PromptLibraryActor,
-} from "../db/repositories/prompts.js";
+import { type PromptLibraryActor } from "../db/repositories/prompts.js";
 
 const ADMIN: PromptLibraryActor = { role: "admin", id: "u_admin", label: "Admin" };
 

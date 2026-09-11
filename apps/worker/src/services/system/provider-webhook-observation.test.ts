@@ -36,7 +36,6 @@ describe("provider webhook health observations", () => {
     ).toBeUndefined();
     expect(state.record).toHaveBeenCalledOnce();
     expect(state.record).toHaveBeenCalledWith(
-      expect.anything(),
       expect.objectContaining({ scope: "scope:github-secret" }),
     );
     expect(state.waitUntil).toHaveBeenCalledOnce();

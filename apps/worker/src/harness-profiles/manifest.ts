@@ -11,7 +11,6 @@ import type {
   JsonValue,
 } from "@shared/contracts";
 import {
-  HARNESS_MCP_INTEGRATION_IDS,
   HARNESS_TOOL_IDS,
   stableJson,
 } from "@shared/contracts";
@@ -621,6 +620,12 @@ export class HarnessProfileManifestError extends Error {
   ) {
     super(message);
   }
+}
+
+export function isHistoricalHarnessProfileDraft(
+  draft: HarnessProfileDraftManifest,
+): draft is HarnessProfileDraftManifestV1 {
+  return draft.schemaVersion === 1;
 }
 
 export function parseHarnessProfileDraftManifest(

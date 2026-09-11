@@ -1,83 +1,32 @@
 import { env } from "../../infra/vcs-config.js";
-import { and, eq, isNull, or, sql } from "drizzle-orm";
 import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
 } from "../../adapters/issue-tracker/types.js";
-import type { Db } from "../../db/client.js";
-import { workflowRuns } from "../../db/schema.js";
+import type { Db } from "../../db/types.js";
 import { ticketPageUrl } from "../../engine/support/dashboard-links.js";
 import { logger } from "../../infra/logger.js";
 import {
   answerClarificationAndResume,
+  answerConnectedClarificationAndResume,
   MAX_ANSWER_LENGTH,
+  retireConnectedClarificationForGoneTicket,
+  retireClarificationForGoneTicket,
 } from "./answer-core.js";
-import { retireClarificationForGoneTicket } from "./retirement.js";
 import {
   CLARIFICATION_NUDGE_MARKER,
   formatAlreadyAnsweredComment,
   formatClarificationNudgeComment,
 } from "./comment-format.js";
-import { getHookClarification, getResumableClarificationForTicket } from "../../clarifications/hook-store.js";
-
-const RESUME_CLAIM_TTL_MS = 60_000;
-
-async function claimAnsweredResume(
-  db: Db,
-  row: { runId: string; subjectKey: string | null; ticketKey: string | null },
-): Promise<"claimed" | "in_progress" | "resumed" | "settled"> {
-  const claimable = or(
-    isNull(workflowRuns.status),
-    eq(workflowRuns.status, "awaiting"),
-    and(
-      eq(workflowRuns.status, "resuming"),
-      or(
-        isNull(workflowRuns.updatedAt),
-        sql`${workflowRuns.updatedAt} < now() - (${RESUME_CLAIM_TTL_MS} * interval '1 millisecond')`,
-      ),
-    ),
-  );
-  const [updated] = await db
-    .update(workflowRuns)
-    .set({ status: "resuming", updatedAt: sql`now()` })
-    .where(and(eq(workflowRuns.runId, row.runId), claimable))
-    .returning({ runId: workflowRuns.runId });
-  if (updated) return "claimed";
-
-  // The run row should already exist, but claiming an older status-less run is
-  // still safe. ON CONFLICT makes this the same one-winner CAS as the update.
-  const [inserted] = await db
-    .insert(workflowRuns)
-    .values({
-      runId: row.runId,
-      subjectKey: row.subjectKey,
-      ticketKey: row.ticketKey,
-      status: "resuming",
-    })
-    .onConflictDoNothing()
-    .returning({ runId: workflowRuns.runId });
-  if (inserted) return "claimed";
-
-  const [current] = await db
-    .select({ status: workflowRuns.status })
-    .from(workflowRuns)
-    .where(eq(workflowRuns.runId, row.runId))
-    .limit(1);
-  if (current?.status === "running") return "resumed";
-  if (current?.status === "resuming") return "in_progress";
-  return "settled";
-}
-
-async function finishAnsweredResumeClaim(
-  db: Db,
-  runId: string,
-  status: "awaiting" | "running" | "blocked",
-): Promise<void> {
-  await db
-    .update(workflowRuns)
-    .set({ status, updatedAt: sql`now()` })
-    .where(and(eq(workflowRuns.runId, runId), eq(workflowRuns.status, "resuming")));
-}
+import { getHookClarification, getResumableClarificationForTicket } from "../../db/repositories/clarification-hooks.js";
+import {
+  claimAnsweredClarificationResume,
+  claimConnectedAnsweredClarificationResume,
+  finishAnsweredClarificationResumeClaim,
+  finishConnectedAnsweredClarificationResumeClaim,
+  getConnectedHookClarification,
+  getConnectedResumableClarificationForTicket,
+} from "../../db/repositories/clarification-hooks.js";
 
 export type CommentResumeStatus =
   | "no_clarification" // caller proceeds to dispatchTicket as today
@@ -102,14 +51,36 @@ export type CommentResumeStatus =
  * what re-syncs a dashboard answer whose column move never landed.
  */
 export async function resumeClarificationFromComments(input: {
-  db: Db;
+  db?: Db;
   issueTracker: IssueTrackerAdapter;
   ticketKey: string;
   allowNudge: boolean;
 }): Promise<{ status: CommentResumeStatus; runId?: string; nudged?: boolean }> {
   const { db, issueTracker, ticketKey, allowNudge } = input;
+  const persistence: {
+    getResumable: (key: string) => ReturnType<typeof getResumableClarificationForTicket>;
+    claim: (row: { runId: string; subjectKey: string | null; ticketKey: string | null }) => Promise<"claimed" | "in_progress" | "resumed" | "settled">;
+    finish: (runId: string, status: "awaiting" | "running" | "blocked") => Promise<void>;
+    answer: (value: any) => ReturnType<typeof answerConnectedClarificationAndResume>;
+    retire: (row: Parameters<typeof retireClarificationForGoneTicket>[1]) => Promise<void>;
+    getHook: (id: string) => ReturnType<typeof getHookClarification>;
+  } = db ? {
+    getResumable: (key: string) => getResumableClarificationForTicket(db, key),
+    claim: (row: { runId: string; subjectKey: string | null; ticketKey: string | null }) => claimAnsweredClarificationResume(db, row),
+    finish: (runId: string, status: "awaiting" | "running" | "blocked") => finishAnsweredClarificationResumeClaim(db, { runId, status }),
+    answer: (value: Parameters<typeof answerClarificationAndResume>[0]) => answerClarificationAndResume({ ...value, db }),
+    retire: (row: Parameters<typeof retireClarificationForGoneTicket>[1]) => retireClarificationForGoneTicket(db, row),
+    getHook: (id: string) => getHookClarification(db, id),
+  } : {
+    getResumable: getConnectedResumableClarificationForTicket,
+    claim: claimConnectedAnsweredClarificationResume,
+    finish: (runId: string, status: "awaiting" | "running" | "blocked") => finishConnectedAnsweredClarificationResumeClaim({ runId, status }),
+    answer: answerConnectedClarificationAndResume,
+    retire: retireConnectedClarificationForGoneTicket,
+    getHook: getConnectedHookClarification,
+  };
 
-  const row = await getResumableClarificationForTicket(db, ticketKey);
+  const row = await persistence.getResumable(ticketKey);
   if (!row) return { status: "no_clarification" };
 
   // An already-answered row is a dashboard answer whose resume was lost (e.g. a
@@ -123,7 +94,7 @@ export async function resumeClarificationFromComments(input: {
     // resume. Keep the dashboard's retry behavior in answer-core unchanged by
     // using the Jira run marker only on this provider-specific path. A row that
     // is still awaiting input means the earlier resume needs a retry.
-    const claim = await claimAnsweredResume(db, row);
+    const claim = await persistence.claim(row);
     if (claim === "resumed") {
       return { status: "resumed", runId: row.runId };
     }
@@ -136,8 +107,7 @@ export async function resumeClarificationFromComments(input: {
 
     let outcome;
     try {
-      outcome = await answerClarificationAndResume({
-        db,
+      outcome = await persistence.answer({
         row,
         rawAnswer: row.answer ?? "",
         actor: {
@@ -148,16 +118,16 @@ export async function resumeClarificationFromComments(input: {
         skipTicketFetch: false,
       });
     } catch (error) {
-      await finishAnsweredResumeClaim(db, row.runId, "awaiting");
+      await persistence.finish(row.runId, "awaiting");
       throw error;
     }
     switch (outcome.kind) {
       case "answered": {
-        await finishAnsweredResumeClaim(db, row.runId, "running");
+        await persistence.finish(row.runId, "running");
         return { status: "resumed", runId: row.runId };
       }
       case "resume_failed_retryable": {
-        await finishAnsweredResumeClaim(db, row.runId, "awaiting");
+        await persistence.finish(row.runId, "awaiting");
         logger.warn(
           { ticketKey, runId: row.runId },
           "clarification_resume_retry_pending",
@@ -171,13 +141,13 @@ export async function resumeClarificationFromComments(input: {
         return { status: "resume_exhausted", runId: row.runId };
       }
       case "ticket_gone": {
-        await finishAnsweredResumeClaim(db, row.runId, "blocked");
+        await persistence.finish(row.runId, "blocked");
         return { status: "ticket_gone" };
       }
       case "ticket_transition_failed": {
         // Nothing was committed, so release the claim and let the next delivery
         // (or the cron) retry the whole resume, transition included.
-        await finishAnsweredResumeClaim(db, row.runId, "awaiting");
+        await persistence.finish(row.runId, "awaiting");
         logger.warn(
           { ticketKey, runId: row.runId },
           "clarification_resume_transition_retry_pending",
@@ -185,13 +155,13 @@ export async function resumeClarificationFromComments(input: {
         return { status: "resume_retry_pending", runId: row.runId };
       }
       case "conflict": {
-        await finishAnsweredResumeClaim(db, row.runId, "awaiting");
+        await persistence.finish(row.runId, "awaiting");
         return { status: "already_answered" };
       }
       case "resume_terminal":
         return { status: "already_answered", runId: row.runId };
       case "invalid_answer": {
-        await finishAnsweredResumeClaim(db, row.runId, "awaiting");
+        await persistence.finish(row.runId, "awaiting");
         // Defensive: an answered row with an empty answer cannot resume. Do not
         // throw; the run stays parked and expiry eventually reclaims it.
         logger.warn(
@@ -208,7 +178,7 @@ export async function resumeClarificationFromComments(input: {
     ticket = await issueTracker.fetchTicket(ticketKey);
   } catch (err) {
     if (err instanceof IssueTrackerNotFoundError) {
-      await retireClarificationForGoneTicket(db, row);
+      await persistence.retire(row);
       return { status: "ticket_gone" };
     }
     throw err;
@@ -311,8 +281,7 @@ export async function resumeClarificationFromComments(input: {
   // string in answered_by_label and inject it into prompts/memory.
   const answeredByLabel = `${uniqueAuthors.join(", ")} (via Jira)`.slice(0, 200);
 
-  const outcome = await answerClarificationAndResume({
-    db,
+  const outcome = await persistence.answer({
     row,
     rawAnswer: composed,
     actor: { id: answeredById, label: answeredByLabel },
@@ -343,7 +312,7 @@ export async function resumeClarificationFromComments(input: {
       // Another channel won. Acknowledge in Jira only when the winner is NOT a
       // Jira comment answer; suppress noise on duplicate webhook deliveries
       // where the winner IS our own jira:* answer.
-      const winner = await getHookClarification(db, row.id);
+      const winner = await persistence.getHook(row.id);
       if (!(winner?.answeredById ?? "").startsWith("jira:")) {
         await issueTracker
           .postComment(
@@ -380,4 +349,10 @@ export async function resumeClarificationFromComments(input: {
       );
       return { status: "no_answer_comments", nudged: false };
   }
+}
+
+export function resumeConnectedClarificationFromComments(
+  input: Omit<Parameters<typeof resumeClarificationFromComments>[0], "db">,
+) {
+  return resumeClarificationFromComments(input);
 }

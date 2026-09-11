@@ -1,11 +1,10 @@
-import { and, desc, eq, sql } from "drizzle-orm";
 import type { Run } from "@shared/contracts";
-import type { Db } from "../../db/client.js";
-import { approvalRequests, clarificationRequests, workflowRuns } from "../../db/schema.js";
+import type { Db } from "../../db/types.js";
+import { listAwaitingRunRows } from "../../db/repositories/runs.js";
 import { attributeRunModel } from "./attribute-run-model.js";
 
 export interface CollectAwaitingRunsOptions {
-  db: Db;
+  db?: Db;
   jiraBaseUrl: string;
   now: Date;
 }
@@ -36,48 +35,7 @@ export async function collectAwaitingRuns(
   const { db, jiraBaseUrl, now } = opts;
   const tenantOrigin = jiraBaseUrl.replace(/\/+$/, "");
 
-  const rows = await db
-    .select({
-      runId: workflowRuns.runId,
-      workflowId: workflowRuns.workflowId,
-      workflowName: workflowRuns.workflowName,
-      ticketKey: workflowRuns.ticketKey,
-      ticketTitle: workflowRuns.ticketTitle,
-      ticketUrl: workflowRuns.ticketUrl,
-      model: workflowRuns.model,
-      harnessManifests: workflowRuns.harnessManifests,
-      blockStatuses: workflowRuns.blockStatuses,
-      startedAt: workflowRuns.startedAt,
-      firstSeenAt: workflowRuns.firstSeenAt,
-      prNumber: workflowRuns.prNumber,
-      prUrl: workflowRuns.prUrl,
-      prs: workflowRuns.prs,
-      questions: clarificationRequests.questions,
-      suggestedAnswers: clarificationRequests.suggestedAnswers,
-      askedAt: clarificationRequests.askedAt,
-      approvalId: approvalRequests.id,
-    })
-    .from(workflowRuns)
-    .leftJoin(
-      clarificationRequests,
-      and(
-        eq(clarificationRequests.runId, workflowRuns.runId),
-        eq(clarificationRequests.status, "pending"),
-      ),
-    )
-    .leftJoin(
-      approvalRequests,
-      and(
-        eq(approvalRequests.runId, workflowRuns.runId),
-        eq(approvalRequests.status, "pending"),
-      ),
-    )
-    .where(eq(workflowRuns.status, "awaiting"))
-    .orderBy(
-      desc(
-        sql`coalesce(${clarificationRequests.askedAt}, ${workflowRuns.startedAt}, ${workflowRuns.firstSeenAt})`,
-      ),
-    );
+  const rows = await listAwaitingRunRows(db);
 
   return rows.map((r): Run => {
     const eff = r.startedAt ?? r.firstSeenAt;

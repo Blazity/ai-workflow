@@ -7,6 +7,7 @@
  */
 export {
   MAX_ANSWER_LENGTH,
+  answerConnectedClarificationAndResume,
   answerClarificationAndResume,
 } from "./answer-core.js";
 export { retireClarificationForGoneTicket } from "./retirement.js";
@@ -20,8 +21,10 @@ export type {
   AnswerClarificationRequestOutcome,
 } from "./answer-request.js";
 export {
+  expireConnectedHookClarifications,
   expireHookClarifications,
 } from "./expiry.js";
 export {
   resumeClarificationFromComments,
+  resumeConnectedClarificationFromComments,
 } from "./resume-from-comments.js";

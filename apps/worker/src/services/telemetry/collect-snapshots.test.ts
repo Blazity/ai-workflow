@@ -1,12 +1,17 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createTestDb } from "../../db/test-db.js";
 import type { Db } from "../../db/client.js";
 import { activeRunSandboxes, activeRuns, gateCurrent } from "../../db/schema.js";
-import type {
-  RunsLister,
-  WorkflowRunRecord,
+import {
+  mapWorkflow,
+  STATUS_MAP,
+  type RunsLister,
+  type WorkflowRunRecord,
 } from "../overview/collect-runs.js";
-import { collectSnapshots } from "./collect-snapshots.js";
+
+vi.doMock("../overview/index.js", () => ({ mapWorkflow, STATUS_MAP }));
+
+const { collectSnapshots } = await import("./collect-snapshots.js");
 
 let db: Db;
 

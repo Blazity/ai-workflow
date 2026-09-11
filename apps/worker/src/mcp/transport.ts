@@ -15,8 +15,10 @@ import type { ZodIssue } from "zod";
 
 import { createAdapters } from "../services/vcs/adapters.js";
 import { logger } from "../services/system/logger.js";
-import { createMcpToolServices } from "../services/mcp/tool-services.js";
-import type { McpToolServices } from "../services/mcp/tool-services.js";
+import {
+  createConnectedMcpToolServices,
+  type McpToolServices,
+} from "../services/mcp/index.js";
 import {
   betterAuthBaseUrl,
   mcpSettings,
@@ -149,7 +151,7 @@ export async function handleMcpPost(event: H3Event): Promise<void> {
   }
 
   const requestId = randomUUID();
-  const services = createMcpToolServices();
+  const services = createConnectedMcpToolServices();
 
   // Ahead of the server and its adapters: a request this gate refuses never needs
   // either, and a refusal decided here is the only one that costs the caller

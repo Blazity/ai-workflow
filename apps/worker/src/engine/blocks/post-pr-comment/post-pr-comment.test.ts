@@ -6,8 +6,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
-vi.mock("../../../engine/support/active-run-owner.js", () => ({
+vi.mock("../../../db/repositories/active-runs.js", () => ({
   assertActiveRunOwner: (...args: any[]) => mocks.assertActiveRunOwner(...args),
+  assertConnectedActiveRunOwner: (...args: any[]) =>
+    mocks.assertActiveRunOwner(...args),
 }));
 vi.mock("../../../engine/support/vcs-runtime.js", () => ({
   createRepositoryVCS: mocks.createRepositoryVCS,
@@ -238,12 +240,10 @@ describe("post_pr_comment execute", () => {
     expect(mocks.assertActiveRunOwner).toHaveBeenCalledTimes(2);
     expect(mocks.assertActiveRunOwner).toHaveBeenNthCalledWith(
       1,
-      { kind: "db" },
       { subjectKey: "ticket:jira:AWT-1", ownerToken: "owner:test", runId: "run-1" },
     );
     expect(mocks.assertActiveRunOwner).toHaveBeenNthCalledWith(
       2,
-      { kind: "db" },
       { subjectKey: "ticket:jira:AWT-1", ownerToken: "owner:test", runId: "run-1" },
     );
     expect(result.kind).toBe("next");

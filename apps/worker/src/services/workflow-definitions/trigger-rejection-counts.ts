@@ -9,17 +9,17 @@
  * not pull the dispatcher into the request that renders it.
  */
 import type { WebhookRejectionSummaryEntry } from "@shared/contracts";
-import { getDb } from "../../db/client.js";
-import { getTriggerRejectionsToday } from "../dispatch/index.js";
-import { getWebhookRejectionsToday } from "../webhook-trigger/index.js";
 import type { ScheduleTarget } from "./trigger-schedules.js";
+import {
+  readConnectedTriggerRejectionsToday,
+  readConnectedWebhookRejectionsToday,
+} from "./policy-operations.js";
 
 /** Today's dispatch-time rejections for one trigger node, grouped by reason,
  *  worst first. The counters are keyed by the definition id as a string, which
  *  is the shape every automatic trigger type writes. */
 export function readTriggerRejectionsToday(target: ScheduleTarget, now: Date) {
-  return getTriggerRejectionsToday(
-    getDb(),
+  return readConnectedTriggerRejectionsToday(
     { definitionId: String(target.definitionId), nodeId: target.nodeId },
     now,
   );
@@ -30,5 +30,5 @@ export function webhookRejectionsToday(
   endpointId: string,
   now: Date,
 ): Promise<WebhookRejectionSummaryEntry[]> {
-  return getWebhookRejectionsToday(getDb(), endpointId, now);
+  return readConnectedWebhookRejectionsToday(endpointId, now);
 }

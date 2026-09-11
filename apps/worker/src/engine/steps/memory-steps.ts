@@ -78,9 +78,8 @@ export async function hydrateWorkspaceMemoryStep(
     });
     const { Sandbox } = await import("@vercel/sandbox");
     const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
-    const { getDb } = await import("../../db/client.js");
-    const { MAX_MEMORY_DOCUMENT_BYTES, getMemoryDocument, upsertMemoryDocument } =
-      await import("../../memory/store.js");
+    const { MAX_MEMORY_DOCUMENT_BYTES, getConnectedMemoryDocument, upsertConnectedMemoryDocument } =
+      await import("../../db/repositories/memory.js");
     const sandbox = await Sandbox.get({
       sandboxId: input.sandboxId,
       ...getSandboxCredentials(),
@@ -121,9 +120,8 @@ export async function hydrateWorkspaceMemoryStep(
     // absolutePath, so the agent reads it where the current prompt points and
     // the persist step at the end of the run stores it under the new key.
     const stored =
-      (await getMemoryDocument(getDb(), input.subjectKey, docPath)) ??
-      (await getMemoryDocument(
-        getDb(),
+      (await getConnectedMemoryDocument(input.subjectKey, docPath)) ??
+      (await getConnectedMemoryDocument(
         input.subjectKey,
         legacyMemoryDocPath(input.taskId),
       ));
@@ -169,7 +167,7 @@ export async function hydrateWorkspaceMemoryStep(
       log.warn({}, "memory_document_redaction_failed");
       return { source: "none", trackedInRepo, written: false };
     }
-    await upsertMemoryDocument(getDb(), {
+    await upsertConnectedMemoryDocument({
       subjectKey: input.subjectKey,
       docPath,
       ticketKey: input.ticketKey,
@@ -218,9 +216,8 @@ export async function persistWorkspaceMemoryStep(
     });
     const { Sandbox } = await import("@vercel/sandbox");
     const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
-    const { getDb } = await import("../../db/client.js");
-    const { MAX_MEMORY_DOCUMENT_BYTES, upsertMemoryDocument } = await import(
-      "../../memory/store.js"
+    const { MAX_MEMORY_DOCUMENT_BYTES, upsertConnectedMemoryDocument } = await import(
+      "../../db/repositories/memory.js"
     );
     const sandbox = await Sandbox.get({
       sandboxId: input.sandboxId,
@@ -253,7 +250,7 @@ export async function persistWorkspaceMemoryStep(
     if (prepared.truncated) {
       log.warn({ maxBytes: MAX_MEMORY_DOCUMENT_BYTES }, "memory_document_truncated");
     }
-    await upsertMemoryDocument(getDb(), {
+    await upsertConnectedMemoryDocument({
       subjectKey: input.subjectKey,
       docPath,
       ticketKey: input.ticketKey,

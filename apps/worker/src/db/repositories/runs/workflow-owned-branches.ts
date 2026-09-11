@@ -1,7 +1,8 @@
 import { and, eq, isNull, or, sql } from "drizzle-orm";
-import type { VcsProvider } from "../../../adapters/vcs/repository-directory.js";
-import type { Db } from "../../client.js";
+import { getDb, type Db } from "../../client.js";
 import { workflowOwnedBranches } from "../../schema.js";
+
+type VcsProvider = "github" | "gitlab";
 
 export interface WorkflowOwnedBranchRecord {
   ticketKey: string;
@@ -44,6 +45,10 @@ export async function listWorkflowOwnedBranchesForTicket(
       ? { pr: { id: row.prId, url: row.prUrl, branch: row.prBranchName } }
       : {}),
   }));
+}
+
+export function listConnectedWorkflowOwnedBranchesForTicket(ticketKey: string) {
+  return listWorkflowOwnedBranchesForTicket(getDb(), ticketKey);
 }
 
 export async function upsertWorkflowOwnedBranch(
@@ -97,6 +102,10 @@ export async function upsertWorkflowOwnedBranch(
     });
 }
 
+export function upsertConnectedWorkflowOwnedBranch(record: WorkflowOwnedBranchRecord) {
+  return upsertWorkflowOwnedBranch(getDb(), record);
+}
+
 export async function findWorkflowOwnedPullRequest(
   db: Db,
   input: {
@@ -144,6 +153,12 @@ export async function findWorkflowOwnedPullRequest(
     ...(row.prTargetBranch ? { targetBranch: row.prTargetBranch } : {}),
     pr: { id: row.prId, url: row.prUrl, branch: row.prBranchName },
   };
+}
+
+export function findConnectedWorkflowOwnedPullRequest(
+  input: Parameters<typeof findWorkflowOwnedPullRequest>[1],
+) {
+  return findWorkflowOwnedPullRequest(getDb(), input);
 }
 
 /**
@@ -220,6 +235,18 @@ export async function findWorkflowOwnedPullRequestIdentity(
   };
 }
 
+export function recordConnectedWorkflowOwnedPullRequestPublishedHead(
+  input: Parameters<typeof recordWorkflowOwnedPullRequestPublishedHead>[1],
+) {
+  return recordWorkflowOwnedPullRequestPublishedHead(getDb(), input);
+}
+
+export function findConnectedWorkflowOwnedPullRequestIdentity(
+  input: Parameters<typeof findWorkflowOwnedPullRequestIdentity>[1],
+) {
+  return findWorkflowOwnedPullRequestIdentity(getDb(), input);
+}
+
 /**
  * Find the exact workflow-owned branch/head that may be about to receive a PR.
  * PR identity is intentionally not part of this lookup: callers must treat a
@@ -262,6 +289,12 @@ export async function findWorkflowOwnedPullRequestIntent(
       ? { pr: { id: row.prId, url: row.prUrl, branch: row.prBranchName } }
       : {}),
   };
+}
+
+export function findConnectedWorkflowOwnedPullRequestIntent(
+  input: Parameters<typeof findWorkflowOwnedPullRequestIntent>[1],
+) {
+  return findWorkflowOwnedPullRequestIntent(getDb(), input);
 }
 
 /**
@@ -317,4 +350,10 @@ export async function bindWorkflowOwnedPullRequestIntent(
     ...(row.targetBranch ? { targetBranch: row.targetBranch } : {}),
     pr: { id: row.prId, url: row.prUrl, branch: row.prBranchName },
   };
+}
+
+export function bindConnectedWorkflowOwnedPullRequestIntent(
+  input: Parameters<typeof bindWorkflowOwnedPullRequestIntent>[1],
+) {
+  return bindWorkflowOwnedPullRequestIntent(getDb(), input);
 }

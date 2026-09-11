@@ -100,9 +100,15 @@ describe("definitions repository", () => {
 
     const repository = createDefinitionsRepository(db);
     const first = new Date("2026-09-10T10:05:00.000Z");
-    expect(await repository.revokeScheduleAndCancelWaiting("schedule-871", first)).toEqual({
-      revoked: true,
-    });
+    const execute = vi.spyOn(db, "execute");
+    try {
+      expect(await repository.revokeScheduleAndCancelWaiting("schedule-871", first)).toEqual({
+        revoked: true,
+      });
+      expect(execute).toHaveBeenCalledTimes(1);
+    } finally {
+      execute.mockRestore();
+    }
     expect(
       await repository.revokeScheduleAndCancelWaiting(
         "schedule-871",

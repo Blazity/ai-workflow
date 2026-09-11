@@ -1,27 +1,45 @@
-import { and, eq, isNotNull, lte } from "drizzle-orm";
 import { getHookByToken, resumeHook } from "workflow/api";
-import type { Db } from "../../db/client.js";
-import { clarificationRequests } from "../../db/schema.js";
+import type { Db } from "../../db/types.js";
+import {
+  listConnectedExpiredPendingHookClarifications,
+  listExpiredPendingHookClarifications,
+  recordConnectedHookClarificationCleanup,
+  recordHookClarificationCleanup,
+  retireConnectedPendingHookClarification,
+  retirePendingHookClarification,
+} from "../../db/repositories/clarifications.js";
 import { deleteClarificationSnapshotStep } from "../../engine/steps/clarification-snapshot-steps.js";
 
 export async function expireHookClarifications(
   db: Db,
   now = new Date(),
 ): Promise<{ expired: number; retryable: number; cleanupFailed: number }> {
-  const candidates = await db
-    .select({
-      id: clarificationRequests.id,
-      hookToken: clarificationRequests.hookToken,
-      snapshotId: clarificationRequests.snapshotId,
-    })
-    .from(clarificationRequests)
-    .where(
-      and(
-        eq(clarificationRequests.status, "pending"),
-        isNotNull(clarificationRequests.hookToken),
-        lte(clarificationRequests.expiresAt, now),
-      ),
-    );
+  return expireHookClarificationsWithStore({
+    list: (at) => listExpiredPendingHookClarifications(db, at),
+    retire: (id) => retirePendingHookClarification(db, id),
+    recordCleanup: (input) => recordHookClarificationCleanup(db, input),
+  }, now);
+}
+
+export function expireConnectedHookClarifications(
+  now = new Date(),
+): Promise<{ expired: number; retryable: number; cleanupFailed: number }> {
+  return expireHookClarificationsWithStore({
+    list: listConnectedExpiredPendingHookClarifications,
+    retire: retireConnectedPendingHookClarification,
+    recordCleanup: recordConnectedHookClarificationCleanup,
+  }, now);
+}
+
+async function expireHookClarificationsWithStore(
+  store: {
+    list: typeof listConnectedExpiredPendingHookClarifications;
+    retire: typeof retireConnectedPendingHookClarification;
+    recordCleanup: typeof recordConnectedHookClarificationCleanup;
+  },
+  now: Date,
+): Promise<{ expired: number; retryable: number; cleanupFailed: number }> {
+  const candidates = await store.list(now);
 
   let expired = 0;
   let retryable = 0;
@@ -41,36 +59,27 @@ export async function expireHookClarifications(
       }
     }
 
-    const [retired] = await db
-      .update(clarificationRequests)
-      .set({ status: "superseded" })
-      .where(
-        and(
-          eq(clarificationRequests.id, candidate.id),
-          eq(clarificationRequests.status, "pending"),
-        ),
-      )
-      .returning({ id: clarificationRequests.id });
-    if (!retired) continue;
+    if (!(await store.retire(candidate.id))) continue;
     expired += 1;
 
     if (candidate.snapshotId) {
+      let cleanup: { id: string; state: "deleted" | "failed"; error: string | null };
       try {
         await deleteClarificationSnapshotStep(candidate.snapshotId);
-        await db
-          .update(clarificationRequests)
-          .set({ cleanupState: "deleted", cleanupError: null })
-          .where(eq(clarificationRequests.id, candidate.id));
+        cleanup = {
+          id: candidate.id,
+          state: "deleted",
+          error: null,
+        };
       } catch (error) {
         cleanupFailed += 1;
-        await db
-          .update(clarificationRequests)
-          .set({
-            cleanupState: "failed",
-            cleanupError: (error instanceof Error ? error.message : String(error)).slice(0, 2000),
-          })
-          .where(eq(clarificationRequests.id, candidate.id));
+        cleanup = {
+          id: candidate.id,
+          state: "failed",
+          error: (error instanceof Error ? error.message : String(error)).slice(0, 2000),
+        };
       }
+      await store.recordCleanup(cleanup);
     }
   }
   return { expired, retryable, cleanupFailed };

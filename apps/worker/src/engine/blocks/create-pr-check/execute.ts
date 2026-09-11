@@ -16,13 +16,11 @@ async function createPrCheckStep(args: {
   name: string;
 }) {
   "use step";
-  const { getDb } = await import("../../../db/client.js");
   const {
-    createRunOwnedPrCheck,
+    createConnectedRunOwnedPrCheck,
     prRunTarget,
   } = await import("../../runtime/pr-external-resources.js");
-  return createRunOwnedPrCheck({
-    db: getDb(),
+  return createConnectedRunOwnedPrCheck({
     owner: args.owner,
     target: prRunTarget(args.owner.subjectKey, args.pr),
     nodeId: args.nodeId,

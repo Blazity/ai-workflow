@@ -8,14 +8,13 @@
  * refuses the request rather than recording an invite nobody will ever receive.
  */
 import { Resend } from "resend";
-import { getDb } from "../../db/client.js";
 import { sendEmail } from "../email/index.js";
 import { dashboardOrganizationSettings, outboundEmailSettings } from "../settings/index.js";
 import {
-  cancelDashboardInvite,
-  createDashboardInvite,
-  listDashboardInvites,
-  resendDashboardInvite,
+  cancelConnectedDashboardInvite,
+  createConnectedDashboardInvite,
+  listConnectedDashboardInvites,
+  resendConnectedDashboardInvite,
   type DashboardInviteRow,
   type SendInviteEmail,
 } from "./invites.js";
@@ -26,7 +25,7 @@ import type { DashboardActor } from "./users-read.js";
 export function listInvitesForActor(
   actor: DashboardActor,
 ): Promise<DashboardInviteRow[]> {
-  return listDashboardInvites(getDb(), {
+  return listConnectedDashboardInvites({
     organizationSlug: dashboardOrganizationSettings().slug,
     actor,
   });
@@ -39,7 +38,7 @@ export function createInviteForActor(input: {
 }): Promise<DashboardInviteRow> {
   const sendInviteEmail = inviteEmailSender();
   const organization = dashboardOrganizationSettings();
-  return createDashboardInvite(getDb(), {
+  return createConnectedDashboardInvite({
     organizationSlug: organization.slug,
     organizationName: organization.name,
     dashboardOrigin: organization.origin,
@@ -56,7 +55,7 @@ export function resendInviteForActor(input: {
 }): Promise<DashboardInviteRow> {
   const sendInviteEmail = inviteEmailSender();
   const organization = dashboardOrganizationSettings();
-  return resendDashboardInvite(getDb(), {
+  return resendConnectedDashboardInvite({
     organizationSlug: organization.slug,
     organizationName: organization.name,
     dashboardOrigin: organization.origin,
@@ -71,7 +70,7 @@ export function cancelInviteForActor(input: {
   actor: DashboardActor;
   inviteId: string;
 }): Promise<DashboardInviteRow> {
-  return cancelDashboardInvite(getDb(), {
+  return cancelConnectedDashboardInvite({
     organizationSlug: dashboardOrganizationSettings().slug,
     actor: input.actor,
     inviteId: input.inviteId,

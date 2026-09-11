@@ -13,6 +13,7 @@ vi.mock("../../db/repositories/runs/telemetry.js", () => ({
   recordBlockStatuses: vi.fn(),
   recordRunStatusReason: vi.fn(),
   recordRunUsage: (...args: unknown[]) => mocks.recordRunUsage(...args),
+  recordConnectedRunUsage: (...args: unknown[]) => mocks.recordRunUsage(...args),
 }));
 vi.mock("../../db/repositories/clarifications.js", () => ({
   getClarification: (...args: unknown[]) => mocks.getClarification(...args),
@@ -59,7 +60,6 @@ describe("clarification terminal telemetry", () => {
 
     expect(mocks.getClarification).not.toHaveBeenCalled();
     expect(mocks.recordRunUsage).toHaveBeenCalledWith(
-      { db: true },
       expect.objectContaining({ runId: "run-asking", status: "awaiting" }),
     );
   });
@@ -96,7 +96,6 @@ describe("duration terminal telemetry", () => {
     });
 
     expect(mocks.recordRunUsage).toHaveBeenCalledWith(
-      { db: true },
       expect.objectContaining({
         statusReason:
           "Run stopped on budget: budget_exceeded: the run took 31 min 12 s, over the " +

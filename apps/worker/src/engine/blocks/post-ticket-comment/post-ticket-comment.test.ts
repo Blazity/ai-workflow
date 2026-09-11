@@ -6,8 +6,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
-vi.mock("../../../engine/support/active-run-owner.js", () => ({
+vi.mock("../../../db/repositories/active-runs.js", () => ({
   assertActiveRunOwner: (...args: any[]) => mocks.assertActiveRunOwner(...args),
+  assertConnectedActiveRunOwner: (...args: any[]) =>
+    mocks.assertActiveRunOwner(...args),
 }));
 vi.mock("../../../engine/support/adapters.js", () => ({
   createAdapters: () => ({ issueTracker: { postComment: mocks.postComment } }),
@@ -48,10 +50,11 @@ describe("post_ticket_comment execute", () => {
     );
 
     expect(mocks.postComment).toHaveBeenCalledWith("AWT-1", "Done.");
-    expect(mocks.assertActiveRunOwner).toHaveBeenCalledWith(
-      { kind: "db" },
-      { subjectKey: "ticket:jira:AWT-1", ownerToken: "owner:test", runId: "run-1" },
-    );
+    expect(mocks.assertActiveRunOwner).toHaveBeenCalledWith({
+      subjectKey: "ticket:jira:AWT-1",
+      ownerToken: "owner:test",
+      runId: "run-1",
+    });
     expect(result).toEqual({
       kind: "next",
       output: {

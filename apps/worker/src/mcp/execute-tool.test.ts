@@ -509,12 +509,9 @@ describe("executeMcpMutation", () => {
   it("audits a safe begin failure after the attempted audit", async () => {
     const beginFailingDb = new Proxy(db, {
       get(target, property, receiver) {
-        if (property === "insert") {
-          return (table: unknown) => {
-            if (table === mcpIdempotencyKeys) {
-              throw new Error("raw begin persistence detail");
-            }
-            return target.insert(table as never);
+        if (property === "execute") {
+          return () => {
+            throw new Error("raw begin persistence detail");
           };
         }
         const value = Reflect.get(target, property, receiver) as unknown;

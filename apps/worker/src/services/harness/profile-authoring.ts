@@ -3,23 +3,28 @@
  * lifecycle a profile moves through (forked, archived, restored, deleted).
  *
  * Every operation here binds its own connection and takes the actor the
- * request authenticated. The store decides whether the actor may write and
- * whether the revision it was handed still matches, and it raises
- * HarnessProfileStoreError with the status the caller puts on the wire.
+ * request authenticated. This service and the harness policy modules decide
+ * whether that actor may write; repositories expose named row statements.
  */
-import { deleteHarnessProfileWithUsage } from "../../db/harness-profile-detail-store.js";
-import { getDb } from "../../db/client.js";
-import { refreshHarnessSkillArtifact } from "../../harness-profiles/skill-refresh.js";
+import { canManageHarnessProfiles } from "@shared/contracts";
+import { refreshConnectedHarnessSkillArtifact } from "../../harness-profiles/skill-refresh.js";
+import { publishHarnessProfileDraft as publishHarnessProfileDraftPolicy } from "../../harness-profiles/publish-draft.js";
 import {
-  archiveHarnessProfile,
-  createHarnessProfile,
   forkHarnessProfile,
-  publishHarnessProfile,
   replaceHarnessProfileSkillArtifact,
-  restoreArchivedHarnessProfile,
   restoreHarnessProfileVersion,
-  updateHarnessProfileDraft,
+} from "../../harness-profiles/draft-authoring.js";
+import { removeConnectedHarnessProfile } from "../../harness-profiles/profile-deletion.js";
+import {
+  archiveConnectedHarnessProfile,
+  createConnectedHarnessProfile,
+  restoreConnectedHarnessProfile,
+  updateConnectedHarnessProfileDraft,
+} from "../../harness-profiles/profile-writes.js";
+import { HarnessProfileManifestError, parseHarnessProfileDraftManifest } from "../../harness-profiles/manifest.js";
+import {
   type HarnessProfileActor,
+  HarnessProfileStoreError,
 } from "../../db/repositories/harness-profiles.js";
 import { configuredGitHubSkillRepository } from "./skill-sources.js";
 
@@ -32,12 +37,55 @@ function uncheckedRevision(value: unknown): number {
   return (value ?? Number.NaN) as number;
 }
 
+function requireHarnessProfileManager(actor: HarnessProfileActor): void {
+  if (!canManageHarnessProfiles(actor.role as import("@shared/contracts").DashboardRole)) {
+    throw new HarnessProfileStoreError(403, "Forbidden");
+  }
+}
+
+function managed<T>(actor: HarnessProfileActor, operation: () => Promise<T>): Promise<T> {
+  return Promise.resolve().then(() => {
+    requireHarnessProfileManager(actor);
+    return operation();
+  });
+}
+
+const SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+
+function validatedSlug(value: unknown): string {
+  if (typeof value !== "string" || !SLUG_PATTERN.test(value) || value.length > 64) {
+    throw new HarnessProfileStoreError(400, "Slug must be 1-64 lowercase letters, numbers, or hyphens");
+  }
+  return value;
+}
+
+function normalizedDraft(value: unknown) {
+  try { return parseHarnessProfileDraftManifest(value); }
+  catch (error) {
+    if (error instanceof HarnessProfileManifestError) throw new HarnessProfileStoreError(400, error.message, { issues: error.issues });
+    throw error;
+  }
+}
+
+function validatedRevision(value: number): number {
+  if (!Number.isInteger(value) || value < 1 || value > 2_147_483_647) {
+    throw new HarnessProfileStoreError(400, "Invalid draft revision");
+  }
+  return value;
+}
+
 export function createHarnessProfileDraft(input: {
   slug: unknown;
   draft: unknown;
   actor: HarnessProfileActor;
 }) {
-  return createHarnessProfile(getDb(), input);
+  return managed(input.actor, () =>
+    createConnectedHarnessProfile({
+      ...input,
+      slug: validatedSlug(input.slug),
+      draft: normalizedDraft(input.draft),
+    }),
+  );
 }
 
 export function saveHarnessProfileDraft(input: {
@@ -46,7 +94,13 @@ export function saveHarnessProfileDraft(input: {
   draft: unknown;
   actor: HarnessProfileActor;
 }) {
-  return updateHarnessProfileDraft(getDb(), input);
+  return managed(input.actor, () =>
+    updateConnectedHarnessProfileDraft({
+      ...input,
+      expectedRevision: validatedRevision(input.expectedRevision),
+      draft: normalizedDraft(input.draft),
+    }),
+  );
 }
 
 export function publishHarnessProfileDraft(input: {
@@ -54,7 +108,10 @@ export function publishHarnessProfileDraft(input: {
   expectedRevision: number;
   actor: HarnessProfileActor;
 }) {
-  return publishHarnessProfile(getDb(), input);
+  return managed(input.actor, () => publishHarnessProfileDraftPolicy({
+    ...input,
+    expectedRevision: validatedRevision(input.expectedRevision),
+  }));
 }
 
 export function restoreHarnessProfileDraftVersion(input: {
@@ -63,7 +120,10 @@ export function restoreHarnessProfileDraftVersion(input: {
   expectedRevision: number;
   actor: HarnessProfileActor;
 }) {
-  return restoreHarnessProfileVersion(getDb(), input);
+  return managed(input.actor, () => restoreHarnessProfileVersion({
+    ...input,
+    expectedRevision: validatedRevision(input.expectedRevision),
+  }));
 }
 
 export function forkHarnessProfileDraft(input: {
@@ -72,7 +132,11 @@ export function forkHarnessProfileDraft(input: {
   expectedRevision: number;
   actor: HarnessProfileActor;
 }) {
-  return forkHarnessProfile(getDb(), input);
+  return managed(input.actor, () => forkHarnessProfile({
+    ...input,
+    slug: validatedSlug(input.slug),
+    expectedRevision: validatedRevision(input.expectedRevision),
+  }));
 }
 
 export function archiveHarnessProfileDraft(input: {
@@ -80,7 +144,10 @@ export function archiveHarnessProfileDraft(input: {
   expectedRevision: number;
   actor: HarnessProfileActor;
 }) {
-  return archiveHarnessProfile(getDb(), input);
+  return managed(input.actor, () => archiveConnectedHarnessProfile({
+    ...input,
+    expectedRevision: validatedRevision(input.expectedRevision),
+  }));
 }
 
 export function unarchiveHarnessProfileDraft(input: {
@@ -88,11 +155,11 @@ export function unarchiveHarnessProfileDraft(input: {
   expectedRevision: unknown;
   actor: HarnessProfileActor;
 }) {
-  return restoreArchivedHarnessProfile(getDb(), {
+  return managed(input.actor, () => restoreConnectedHarnessProfile({
     profileId: input.profileId,
-    expectedRevision: uncheckedRevision(input.expectedRevision),
+    expectedRevision: validatedRevision(uncheckedRevision(input.expectedRevision)),
     actor: input.actor,
-  });
+  }));
 }
 
 export function removeHarnessProfile(input: {
@@ -100,11 +167,11 @@ export function removeHarnessProfile(input: {
   expectedRevision: unknown;
   actor: HarnessProfileActor;
 }) {
-  return deleteHarnessProfileWithUsage(getDb(), {
-    profileId: input.profileId,
-    expectedRevision: uncheckedRevision(input.expectedRevision),
-    actor: input.actor,
-  });
+  return managed(input.actor, () => removeConnectedHarnessProfile({
+      profileId: input.profileId,
+      expectedRevision: validatedRevision(uncheckedRevision(input.expectedRevision)),
+      actor: input.actor,
+    }));
 }
 
 /**
@@ -119,15 +186,16 @@ export async function refreshHarnessProfileSkill(input: {
   artifactHash: string;
   actor: HarnessProfileActor;
 }) {
-  const db = getDb();
-  const artifact = await refreshHarnessSkillArtifact(db, {
+  requireHarnessProfileManager(input.actor);
+  validatedRevision(input.expectedRevision);
+  const artifact = await refreshConnectedHarnessSkillArtifact({
     githubRepository: configuredGitHubSkillRepository,
     organizationId: input.actor.organizationId,
     actorId: input.actor.id,
     artifactHash: input.artifactHash,
   });
   return {
-    profile: await replaceHarnessProfileSkillArtifact(db, {
+    profile: await replaceHarnessProfileSkillArtifact({
       profileId: input.profileId,
       expectedRevision: input.expectedRevision,
       previousArtifactHash: input.artifactHash,

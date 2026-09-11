@@ -9,7 +9,10 @@ import {
   workflowDefinitionVersions,
 } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
-import { getManualDispatchRequest } from "../../db/repositories/manual-dispatch.js";
+import {
+  acknowledgeManualDispatchStarted,
+  getManualDispatchRequest,
+} from "../../db/repositories/manual-dispatch.js";
 
 const testState = vi.hoisted(() => ({
   order: [] as string[],
@@ -47,9 +50,6 @@ const {
   dispatchManualWorkflow,
   recoverManualDispatches,
 } = await import("./service.js");
-const { acknowledgeManualDispatchWorkflow } = await import(
-  "./acknowledge-workflow.js"
-);
 
 let db: Db;
 let runRegistry: {
@@ -345,18 +345,20 @@ describe("manual dispatch durability", () => {
     const row = await getManualDispatchRequest(db, request().requestId);
 
     await expect(
-      acknowledgeManualDispatchWorkflow(db, {
-        requestId: request().requestId,
-        ownerToken: "wrong-owner",
-        runId: "run-loser",
-      }),
+      acknowledgeManualDispatchStarted(
+        db,
+        request().requestId,
+        "wrong-owner",
+        "run-loser",
+      ),
     ).resolves.toBe(false);
     await expect(
-      acknowledgeManualDispatchWorkflow(db, {
-        requestId: request().requestId,
-        ownerToken: row!.ownerToken!,
-        runId: "run-1",
-      }),
+      acknowledgeManualDispatchStarted(
+        db,
+        request().requestId,
+        row!.ownerToken!,
+        "run-1",
+      ),
     ).resolves.toBe(true);
     expect(await getManualDispatchRequest(db, request().requestId)).toMatchObject({
       status: "started",

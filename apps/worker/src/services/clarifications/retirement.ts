@@ -3,7 +3,7 @@ import {
   supersedePendingForTicket,
 } from "../../db/repositories/clarifications.js";
 import { markRunBlockedOnCancel } from "../../db/repositories/runs/telemetry.js";
-import type { HookClarificationRow } from "../../engine/support/clarification-hook-store.js";
+import type { HookClarificationRow } from "../../db/repositories/clarification-hooks.js";
 
 type Db = Parameters<typeof supersedeClarification>[0];
 

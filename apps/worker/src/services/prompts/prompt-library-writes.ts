@@ -12,24 +12,17 @@ import type {
   PromptLibrarySaveResponse,
   PromptSlotDefinition,
 } from "@shared/contracts";
-import type { Db } from "../../db/client.js";
-import { getDb } from "../../db/client.js";
-import { dashboardUserLabel } from "../../pre-pr-checks/store.js";
+import { getConnectedDashboardUserLabel } from "../../db/repositories/auth.js";
 import {
-  getPrompt,
-  listPromptVersionRows,
-  restorePromptVersion,
-  savePromptVersion,
-  serializePromptMeta,
-  serializePromptVersion,
+  getConnectedPrompt,
+  listConnectedPromptVersionRows,
   type PromptLibraryActor,
 } from "../../db/repositories/prompts.js";
-import type { DashboardRole } from "../auth/index.js";
-import {
-  archivePrompt,
-  createPrompt,
-  updatePromptMeta,
-} from "./prompt-library-service.js";
+import type { DashboardRole } from "@shared/contracts";
+import { archiveConnectedPrompt, createConnectedPrompt, restoreConnectedPromptVersionWithPolicy, saveConnectedPromptVersionWithPolicy, updateConnectedPromptMeta } from "./prompt-library-service.js";
+import { requirePromptLibraryEditRole } from "./prompt-library-service.js";
+import { validatePromptBody, validatePromptSlots } from "./prompt-library-validation.js";
+import { serializePromptMeta, serializePromptVersion } from "./prompt-serialization.js";
 
 /** The dashboard user behind a write, as the request identified them. */
 export interface PromptLibraryWriter {
@@ -38,10 +31,9 @@ export interface PromptLibraryWriter {
 }
 
 function resolveActor(
-  db: Db,
   writer: PromptLibraryWriter,
 ): Promise<PromptLibraryActor> {
-  return dashboardUserLabel(db, writer.userId).then((label) => ({
+  return getConnectedDashboardUserLabel(writer.userId).then((label) => ({
     role: writer.role,
     id: writer.userId,
     label,
@@ -57,14 +49,13 @@ export async function createPromptEntry(input: {
   tags?: string[];
   writer: PromptLibraryWriter;
 }): Promise<PromptLibraryDetailResponse> {
-  const db = getDb();
-  const { prompt, current } = await createPrompt(db, {
+  const { prompt, current } = await createConnectedPrompt({
     name: input.name,
     body: input.body,
     slots: input.slots,
     description: input.description,
     tags: input.tags,
-    actor: await resolveActor(db, input.writer),
+    actor: await resolveActor(input.writer),
   });
   const version = serializePromptVersion(current);
   return {
@@ -82,19 +73,18 @@ export async function updatePromptEntryMeta(input: {
   tags?: string[];
   writer: PromptLibraryWriter;
 }): Promise<PromptLibraryDetailResponse | null> {
-  const db = getDb();
-  const versions = (await listPromptVersionRows(db, input.promptId)).map(
+  const versions = (await listConnectedPromptVersionRows(input.promptId)).map(
     serializePromptVersion,
   );
   const current = versions[0];
   if (!current) return null;
 
-  const updated = await updatePromptMeta(db, {
+  const updated = await updateConnectedPromptMeta({
     promptId: input.promptId,
     name: input.name,
     description: input.description,
     tags: input.tags,
-    actor: await resolveActor(db, input.writer),
+    actor: await resolveActor(input.writer),
   });
   return {
     meta: serializePromptMeta(updated, current.version),
@@ -112,16 +102,15 @@ export async function archivePromptEntry(input: {
   promptId: number;
   writer: PromptLibraryWriter;
 }): Promise<PromptLibraryDetailResponse | null> {
-  const db = getDb();
-  const versions = (await listPromptVersionRows(db, input.promptId)).map(
+  const versions = (await listConnectedPromptVersionRows(input.promptId)).map(
     serializePromptVersion,
   );
   const current = versions[0];
   if (!current) return null;
 
-  const archived = await archivePrompt(db, {
+  const archived = await archiveConnectedPrompt({
     promptId: input.promptId,
-    actor: await resolveActor(db, input.writer),
+    actor: await resolveActor(input.writer),
   });
   return {
     meta: serializePromptMeta(archived, current.version),
@@ -137,14 +126,14 @@ export async function savePromptEntryVersion(input: {
   slots?: PromptSlotDefinition[];
   writer: PromptLibraryWriter;
 }): Promise<PromptLibrarySaveResponse> {
-  const db = getDb();
-  const { version, changed } = await savePromptVersion(db, {
+  requirePromptLibraryEditRole(input.writer.role);
+  const { version, changed } = await saveConnectedPromptVersionWithPolicy({
     promptId: input.promptId,
-    body: input.body,
-    slots: input.slots,
-    actor: await resolveActor(db, input.writer),
+    body: validatePromptBody(input.body),
+    slots: input.slots === undefined ? undefined : validatePromptSlots(input.slots),
+    actor: await resolveActor(input.writer),
   });
-  const row = await getPrompt(db, input.promptId);
+  const row = await getConnectedPrompt(input.promptId);
   return {
     meta: serializePromptMeta(row!, version.version),
     version: serializePromptVersion(version),
@@ -158,13 +147,13 @@ export async function restorePromptEntryVersion(input: {
   version: number;
   writer: PromptLibraryWriter;
 }): Promise<PromptLibrarySaveResponse> {
-  const db = getDb();
-  const restored = await restorePromptVersion(db, {
+  requirePromptLibraryEditRole(input.writer.role);
+  const restored = await restoreConnectedPromptVersionWithPolicy({
     promptId: input.promptId,
     version: input.version,
-    actor: await resolveActor(db, input.writer),
+    actor: await resolveActor(input.writer),
   });
-  const row = await getPrompt(db, input.promptId);
+  const row = await getConnectedPrompt(input.promptId);
   return {
     meta: serializePromptMeta(row!, restored.version),
     version: serializePromptVersion(restored),

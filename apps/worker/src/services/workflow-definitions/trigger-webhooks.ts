@@ -7,24 +7,24 @@
  * values rather than exceptions, because the same missing row means 404 in one
  * route and 409 in another depending on what the caller was trying to do.
  */
-import { getDb } from "../../db/client.js";
-import { listRecentWebhookDeliveries } from "../../webhook-trigger/delivery-store.js";
+import { listConnectedRecentWebhookDeliveries } from "../../db/repositories/webhook-trigger-deliveries.js";
 import {
-  getWebhookEndpointById,
-  getWebhookEndpointForNode,
-  revealWebhookEndpointSecret,
-  revokeWebhookEndpoint,
-  rotateWebhookEndpointSecret,
-  setWebhookEndpointSecret,
-  unrevokeWebhookEndpoint,
+  getConnectedWebhookEndpointById,
+  getConnectedWebhookEndpointForNode,
+  revealConnectedWebhookEndpointSecret,
+  revokeConnectedWebhookEndpoint,
+  rotateConnectedWebhookEndpointSecret,
+  setConnectedWebhookEndpointSecret,
+  unrevokeConnectedWebhookEndpoint,
   WebhookRotationInFlightError,
   WebhookSecretInvalidError,
   type WebhookEndpointRow,
 } from "../../webhook-trigger/endpoint-store.js";
-import { getEnabledDeployedDefinition } from "../../db/repositories/definitions.js";
+import { getConnectedEnabledDeployedDefinition } from "../../engine/definition-trigger-routing.js";
+import { parseOptionalWorkflowDefinitionVersionRow } from "../../engine/stored-definition-reads.js";
 import {
   auditWebhookAction,
-  mintMissingEndpoint,
+  mintMissingEndpointForConnectedDefinition,
   type WebhookEndpointTarget,
 } from "./webhook-endpoint-nodes.js";
 
@@ -36,12 +36,12 @@ const DELIVERY_LOG_LIMIT = 50;
 export function findWebhookEndpoint(
   target: WebhookEndpointTarget,
 ): Promise<WebhookEndpointRow | null> {
-  return getWebhookEndpointForNode(getDb(), target.definitionId, target.nodeId);
+  return getConnectedWebhookEndpointForNode(target.definitionId, target.nodeId);
 }
 
 /** Recent deliveries for one endpoint, newest first. */
 export function listWebhookEndpointDeliveries(endpointId: string) {
-  return listRecentWebhookDeliveries(getDb(), endpointId, DELIVERY_LOG_LIMIT);
+  return listConnectedRecentWebhookDeliveries(endpointId, DELIVERY_LOG_LIMIT);
 }
 
 export type WebhookEndpointState =
@@ -65,11 +65,9 @@ export async function readWebhookEndpointState(
   options: { actorId: string; mayMint: boolean; encryptionKey: string | undefined },
 ): Promise<WebhookEndpointState> {
   if (!options.encryptionKey) return { state: "unconfigured", endpoint: null };
-  const db = getDb();
-
-  let endpoint = await getWebhookEndpointForNode(db, target.definitionId, target.nodeId);
+  let endpoint = await getConnectedWebhookEndpointForNode(target.definitionId, target.nodeId);
   if (!endpoint && options.mayMint) {
-    endpoint = await mintMissingEndpoint(db, options.encryptionKey, target);
+    endpoint = await mintMissingEndpointForConnectedDefinition(options.encryptionKey, target);
     if (endpoint) auditWebhookAction(options.actorId, endpoint.id, "minted");
   }
   if (!endpoint) return { state: "await_deploy", endpoint: null };
@@ -79,7 +77,10 @@ export async function readWebhookEndpointState(
   // Routing is per endpoint, so its own definition must be enabled with a
   // readable deployed head; otherwise the endpoint exists but every delivery
   // to it is refused.
-  const live = await getEnabledDeployedDefinition(db, target.definitionId);
+  const rawLive = await getConnectedEnabledDeployedDefinition(target.definitionId);
+  const live = rawLive
+    ? { ...rawLive, current: parseOptionalWorkflowDefinitionVersionRow(rawLive.current) }
+    : null;
   return { state: live?.current ? "active" : "inactive", endpoint };
 }
 
@@ -89,7 +90,7 @@ export async function revealWebhookSecret(
   endpointId: string,
   actorId: string,
 ): Promise<string | null> {
-  const secret = await revealWebhookEndpointSecret(getDb(), encryptionKey, endpointId);
+  const secret = await revealConnectedWebhookEndpointSecret(encryptionKey, endpointId);
   if (!secret) return null;
   auditWebhookAction(actorId, endpointId, "revealed");
   return secret;
@@ -106,9 +107,8 @@ export async function revokeWebhookEndpointForNode(
   endpointId: string,
   actorId: string,
 ): Promise<Date | null> {
-  const db = getDb();
-  await revokeWebhookEndpoint(db, endpointId);
-  const revoked = await getWebhookEndpointById(db, endpointId);
+  await revokeConnectedWebhookEndpoint(endpointId);
+  const revoked = await getConnectedWebhookEndpointById(endpointId);
   if (!revoked?.revokedAt) return null;
   auditWebhookAction(actorId, endpointId, "revoked");
   return revoked.revokedAt;
@@ -133,14 +133,12 @@ export async function reviveWebhookEndpoint(
   actorId: string,
 ): Promise<WebhookRevivalResult> {
   if (!endpoint.revokedAt) return { ok: false, reason: "not_revoked" };
-  const db = getDb();
-
-  const revived = await unrevokeWebhookEndpoint(db, encryptionKey, endpoint.id);
+  const revived = await unrevokeConnectedWebhookEndpoint(encryptionKey, endpoint.id);
   if (!revived) {
     // The revival only touches a still-revoked row. Our pre-read saw one, so a
     // null means the row changed underneath us: revived by a concurrent caller,
     // or its definition was archived away.
-    const stillThere = await getWebhookEndpointById(db, endpoint.id);
+    const stillThere = await getConnectedWebhookEndpointById(endpoint.id);
     return { ok: false, reason: stillThere ? "not_revoked" : "unknown" };
   }
 
@@ -167,9 +165,9 @@ export async function rotateWebhookSecret(
   endpointId: string,
   options: { force: boolean; actorId: string },
 ): Promise<WebhookRotationResult> {
-  let rotated: Awaited<ReturnType<typeof rotateWebhookEndpointSecret>>;
+  let rotated: Awaited<ReturnType<typeof rotateConnectedWebhookEndpointSecret>>;
   try {
-    rotated = await rotateWebhookEndpointSecret(getDb(), encryptionKey, endpointId, {
+    rotated = await rotateConnectedWebhookEndpointSecret(encryptionKey, endpointId, {
       force: options.force,
     });
   } catch (error) {
@@ -214,7 +212,7 @@ export async function importWebhookSecret(
 ): Promise<WebhookSecretImportResult> {
   let updated: WebhookEndpointRow | null;
   try {
-    updated = await setWebhookEndpointSecret(getDb(), encryptionKey, endpointId, secret);
+    updated = await setConnectedWebhookEndpointSecret(encryptionKey, endpointId, secret);
   } catch (error) {
     if (error instanceof WebhookSecretInvalidError) {
       return { ok: false, reason: "invalid", message: error.message };

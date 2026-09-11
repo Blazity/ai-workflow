@@ -70,7 +70,9 @@ vi.mock("../engine/support/adapters.js", () => ({ createAdapters: state.createAd
 // and its own tests. Faking it is what makes "exactly one service call" visible.
 vi.mock("../services/manual-dispatch/service.js", () => ({
   preflightManualDispatch: state.preflightManualDispatch,
+  preflightConnectedManualDispatch: state.preflightManualDispatch,
   dispatchManualWorkflow: state.dispatchManualWorkflow,
+  dispatchConnectedManualWorkflow: state.dispatchManualWorkflow,
 }));
 
 import type { Db } from "../db/client.js";
@@ -89,13 +91,38 @@ import {
 import { sanitizeReplayValue } from "../run-observability/sanitizer.js";
 import {
   captureRunObservationStart,
-  finishWorkflowBlockAttempt,
+  getWorkflowBlockAttemptPersistence,
+  replaceWorkflowBlockAttemptPersistence,
   startWorkflowBlockAttempt,
 } from "../db/repositories/runs/run-observability.js";
+import { prepareReplayAttemptFinishPersistence } from "../run-observability/runtime-hooks.js";
 
 const mcpPost = (await import("../routes/mcp.post.js")).default;
 const mcpGet = (await import("../routes/mcp.get.js")).default;
 const mcpDelete = (await import("../routes/mcp.delete.js")).default;
+
+async function finishWorkflowBlockAttempt(input: {
+  db: Db;
+  runId: string;
+  organizationId: string;
+  attemptId: number;
+  state: "completed";
+  outcome: Parameters<typeof prepareReplayAttemptFinishPersistence>[1]["outcome"];
+}): Promise<boolean> {
+  const current = await getWorkflowBlockAttemptPersistence(input);
+  if (!current) return false;
+  return replaceWorkflowBlockAttemptPersistence({
+    ...input,
+    ...prepareReplayAttemptFinishPersistence(current, {
+      state: input.state,
+      outcome: input.outcome,
+      selectedTransition: null,
+      diagnosticId: null,
+      observations: [],
+      completedAt: new Date(),
+    }),
+  });
+}
 
 // --- what the server is expected to publish ---------------------------------
 //

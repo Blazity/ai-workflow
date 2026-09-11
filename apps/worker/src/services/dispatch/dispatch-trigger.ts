@@ -1,8 +1,11 @@
 import { start } from "workflow/api";
-import type { VcsProviderKind, WorkflowDefinition } from "@shared/contracts";
-import { createAdapters } from "../../engine/support/adapters.js";
+import type {
+  VcsProviderKind,
+  WorkflowBlockType,
+  WorkflowDefinition,
+} from "@shared/contracts";
 import { getVcsBotLogin } from "../vcs/index.js";
-import type { Db } from "../../db/client.js";
+import type { Db } from "../../db/types.js";
 import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
@@ -16,39 +19,55 @@ import type { AgentWorkflowInput, PrTriggerPayload } from "../../engine/index.js
 import { agentWorkflow } from "../../engine/index.js";
 import {
   bindWorkflowOwnedPullRequestIntent,
+  bindConnectedWorkflowOwnedPullRequestIntent,
+  findConnectedWorkflowOwnedPullRequest,
+  findConnectedWorkflowOwnedPullRequestIntent,
   findWorkflowOwnedPullRequest,
   findWorkflowOwnedPullRequestIntent,
 } from "../../db/repositories/runs.js";
 import {
-  getEnabledWorkflowDefinitionForTrigger,
-  getWorkflowDefinitionVersion,
   runnableDefinitionOf,
 } from "../../db/repositories/definitions.js";
+import {
+  getConnectedEnabledWorkflowDefinitionForTrigger,
+  getEnabledWorkflowDefinitionForTrigger,
+} from "../../engine/definition-trigger-routing.js";
+import { createAdapters } from "../../engine/support/adapters.js";
 import { claimSubjectRun, envTriggerRateLimitDefault, triggerRateLimitNodes } from "./dispatch.js";
 import { recordIngestionFailure } from "./ingestion-diagnostic.js";
 import { logger } from "../../infra/logger.js";
 import {
   enforcePrAutofixCap,
+  enforceConnectedPrAutofixCap,
+  refundConnectedPrAutofixCap,
   refundPrAutofixCap,
   type PrAutofixCapKey,
 } from "./pr-autofix-cap.js";
 import { announcePrAutofixExhaustion } from "./pr-autofix-exhaustion.js";
-import { isRepoAllowedForScope } from "./repo-allowlist.js";
+import { isRepoAllowedForScope } from "../../engine/support/repo-allowlist.js";
 import { prSubjectKey } from "../../engine/support/subject-key.js";
 import { cancelSubjectRun } from "../run-lifecycle/index.js";
 import {
   enforceTriggerRateLimit,
+  enforceConnectedTriggerRateLimit,
   resolveTriggerRateLimitForType,
   triggerRateLimitLogFields,
 } from "./trigger-rate-limit.js";
 import {
   acceptTriggerDelivery,
+  acceptConnectedTriggerDelivery,
   coalescePendingTrigger,
+  coalesceConnectedPendingTrigger,
   completeTriggerDelivery,
+  completeConnectedTriggerDeliveryResult,
   deletePendingTrigger,
+  deleteConnectedPendingTrigger,
   getTriggerDelivery,
+  getConnectedTriggerDelivery,
   listPendingTriggersForSubject,
+  listConnectedPendingTriggersForSubject,
   recordCandidateStartedTriggerDelivery,
+  recordConnectedCandidateStartedTrigger,
   type AcceptedTriggerDelivery,
   type StoredTriggerResult,
   type TriggerScope,
@@ -57,8 +76,12 @@ import type { TriggerEvent } from "./trigger-events.js";
 import {
   bindCurrentPullRequest,
   readProviderCurrentPullRequest,
-} from "./trigger-current-pull-request.js";
+} from "../../engine/support/trigger-current-pull-request.js";
 import { normalizeVcsLogin, vcsLoginsMatch } from "../../adapters/vcs/vcs-bot-identity.js";
+import {
+  readConnectedWorkflowDefinitionVersion,
+  readWorkflowDefinitionVersion,
+} from "../../engine/stored-definition-reads.js";
 
 export type DispatchTriggerResult =
   | { result: "no_definition" }
@@ -74,7 +97,7 @@ export type DispatchTriggerResult =
   | { result: "started"; runId: string };
 
 export interface DispatchTriggerDeps {
-  db: Db;
+  db?: Db;
   runRegistry: RunRegistryAdapter;
   maxConcurrentAgents: number;
   issueTracker?: IssueTrackerAdapter;
@@ -86,6 +109,82 @@ export interface DispatchTriggerDeps {
   deletePending?: typeof deletePendingTrigger;
 }
 
+async function readEnabledDefinition(db: Db | undefined, triggerType: WorkflowBlockType) {
+  const selected = await (db
+    ? getEnabledWorkflowDefinitionForTrigger(db, triggerType)
+    : getConnectedEnabledWorkflowDefinitionForTrigger(triggerType));
+  return selected;
+}
+
+function readDefinitionVersion(db: Db | undefined, definitionId: number, version: number) {
+  return db
+    ? readWorkflowDefinitionVersion(db, definitionId, version)
+    : readConnectedWorkflowDefinitionVersion(definitionId, version);
+}
+
+function readTriggerDelivery(
+  db: Db | undefined,
+  provider: "github" | "gitlab",
+  deliveryId: string,
+) {
+  return db
+    ? getTriggerDelivery(db, provider, deliveryId)
+    : getConnectedTriggerDelivery(provider, deliveryId);
+}
+
+function acceptDurableTrigger(db: Db | undefined, accepted: AcceptedTriggerDelivery) {
+  return db
+    ? acceptTriggerDelivery(db, accepted)
+    : acceptConnectedTriggerDelivery(accepted);
+}
+
+function coalesceDurableTrigger(db: Db | undefined, accepted: AcceptedTriggerDelivery) {
+  return db
+    ? coalescePendingTrigger(db, accepted)
+    : coalesceConnectedPendingTrigger(accepted);
+}
+
+function completeDurableTrigger(
+  db: Db | undefined,
+  accepted: Pick<TriggerEvent, "delivery">,
+  result: StoredTriggerResult,
+) {
+  return db
+    ? completeTriggerDelivery(
+        db,
+        accepted.delivery.provider,
+        accepted.delivery.deliveryId,
+        result,
+      )
+    : completeConnectedTriggerDeliveryResult(accepted, result);
+}
+
+function deleteDurablePendingTrigger(
+  db: Db | undefined,
+  accepted: AcceptedTriggerDelivery,
+) {
+  return db
+    ? deletePendingTrigger(db, accepted)
+    : deleteConnectedPendingTrigger(accepted);
+}
+
+function listDurablePendingTriggersForSubject(db: Db | undefined, subjectKey: string) {
+  return db
+    ? listPendingTriggersForSubject(db, subjectKey)
+    : listConnectedPendingTriggersForSubject(subjectKey);
+}
+
+function recordDurableCandidateStarted(
+  db: Db | undefined,
+  accepted: AcceptedTriggerDelivery,
+  ownerToken: string,
+  runId: string,
+) {
+  return db
+    ? recordCandidateStartedTriggerDelivery(db, accepted, ownerToken, runId)
+    : recordConnectedCandidateStartedTrigger(accepted, ownerToken, runId);
+}
+
 export function triggerNodeParams(
   definition: WorkflowDefinition | undefined,
   triggerType: string,
@@ -95,11 +194,11 @@ export function triggerNodeParams(
 }
 
 export async function resolveEnabledReviewStates(
-  db: Db,
+  db: Db | undefined,
   provider: VcsProviderKind,
   botLogin: string | undefined,
 ): Promise<string[]> {
-  const enabled = await getEnabledWorkflowDefinitionForTrigger(db, "trigger_pr_review");
+  const enabled = await readEnabledDefinition(db, "trigger_pr_review");
   if (!enabled?.current) return provider === "github" ? ["changes_requested"] : [];
   const params = triggerNodeParams(
     runnableDefinitionOf(enabled.current),
@@ -123,7 +222,7 @@ export async function dispatchTriggerEvent(
   }
 
   try {
-    const existing = await getTriggerDelivery(
+    const existing = await readTriggerDelivery(
       deps.db,
       event.delivery.provider,
       event.delivery.deliveryId,
@@ -148,7 +247,7 @@ export async function dispatchTriggerEvent(
     if (existing?.result) return storedResultToDispatch(existing.result);
     if (existing?.pending) return { result: "coalesced" };
 
-    const enabled = await getEnabledWorkflowDefinitionForTrigger(deps.db, event.triggerType);
+    const enabled = await readEnabledDefinition(deps.db, event.triggerType);
     if (!enabled?.current) return { result: "no_definition" };
 
     const deployedGraph = runnableDefinitionOf(enabled.current);
@@ -244,7 +343,7 @@ export async function dispatchTriggerEvent(
       definitionId: enabled.definition.id,
       definitionVersion: enabled.current.version,
     };
-    const durable = await acceptTriggerDelivery(deps.db, accepted);
+    const durable = await acceptDurableTrigger(deps.db, accepted);
     if (!durable.inserted) {
       if (durable.stored.result) return storedResultToDispatch(durable.stored.result);
       if (durable.stored.pending) return { result: "coalesced" };
@@ -273,15 +372,16 @@ async function supersedePreviousPrRun(
   if (accepted.triggerType !== "trigger_pr_updated") return null;
   const active = await deps.runRegistry.get(accepted.subjectKey);
   if (!active?.runId || active.state !== "bound") return null;
-  const { closeRunPrChecks } = await import(
+  const { closeRunPrChecks, closeConnectedRunPrChecks } = await import(
     "../../engine/runtime/pr-external-resources.js"
   );
-  await closeRunPrChecks({
-    db: deps.db,
+  const closeInput = {
     runId: active.runId,
-    intent: "superseded",
+    intent: "superseded" as const,
     details: "Superseded by a newer pull request commit.",
-  });
+  };
+  if (deps.db) await closeRunPrChecks({ ...closeInput, db: deps.db });
+  else await closeConnectedRunPrChecks(closeInput);
   const cancelled = await cancelSubjectRun(
     accepted.subjectKey,
     { ownerToken: active.ownerToken, runId: active.runId },
@@ -427,10 +527,10 @@ function stringArray(value: unknown, fallback: string[] = []): string[] {
  * envelope in hand.
  */
 async function prTriggerRateLimited(
-  db: Db,
+  db: Db | undefined,
   accepted: AcceptedTriggerDelivery,
 ): Promise<boolean> {
-  const pinned = await getWorkflowDefinitionVersion(
+  const pinned = await readDefinitionVersion(
     db,
     accepted.definitionId,
     accepted.definitionVersion,
@@ -442,7 +542,9 @@ async function prTriggerRateLimited(
   );
   if (!limit) return false;
   const key = { definitionId: String(accepted.definitionId), nodeId: limit.nodeId };
-  const decision = await enforceTriggerRateLimit(db, key, limit.config, new Date());
+  const decision = db
+    ? await enforceTriggerRateLimit(db, key, limit.config, new Date())
+    : await enforceConnectedTriggerRateLimit(key, limit.config, new Date());
   if (!decision || decision.allowed) return false;
   logger.info(
     {
@@ -555,12 +657,12 @@ function prTriggerCapValue(
  * dispatchAcceptedTrigger below).
  */
 async function prAutofixCapReached(
-  db: Db,
+  db: Db | undefined,
   accepted: AcceptedTriggerDelivery,
 ): Promise<{ reached: boolean; key: PrAutofixCapKey } | null> {
   const capField = PR_TRIGGER_CAP_FIELD[accepted.triggerType];
   if (!capField) return null;
-  const pinned = await getWorkflowDefinitionVersion(
+  const pinned = await readDefinitionVersion(
     db,
     accepted.definitionId,
     accepted.definitionVersion,
@@ -585,7 +687,9 @@ async function prAutofixCapReached(
     repoPath: accepted.pr.repoPath,
     prNumber: accepted.pr.prNumber,
   };
-  const decision = await enforcePrAutofixCap(db, key, cap.max, new Date());
+  const decision = db
+    ? await enforcePrAutofixCap(db, key, cap.max, new Date())
+    : await enforceConnectedPrAutofixCap(key, cap.max, new Date());
   if (!decision) return null;
   if (decision.allowed) return { reached: false, key };
   logger.info(
@@ -654,7 +758,7 @@ async function dispatchAcceptedTrigger(
     // binds its runtime id. If start returns but that candidate never reaches
     // bind, stale-owner reconciliation can therefore recover the same pinned
     // definition and provider snapshot without waiting for a redelivery.
-    await coalescePendingTrigger(deps.db, accepted);
+    await coalesceDurableTrigger(deps.db, accepted);
 
     const inputBase = {
       kind: "pr_trigger" as const,
@@ -710,7 +814,7 @@ async function dispatchAcceptedTrigger(
 
     if (dispatched.started) {
       const result = { result: "started" as const, runId: dispatched.runId! };
-      const recorded = await recordCandidateStartedTriggerDelivery(
+      const recorded = await recordDurableCandidateStarted(
         deps.db,
         accepted,
         dispatched.ownerToken!,
@@ -721,7 +825,7 @@ async function dispatchAcceptedTrigger(
       // The candidate may have completed freshness validation before start()
       // returned to this dispatcher, or a newer recovery owner may have won.
       // Report the durable winner instead of acknowledging the stale candidate.
-      const stored = await getTriggerDelivery(
+      const stored = await readTriggerDelivery(
         deps.db,
         accepted.delivery.provider,
         accepted.delivery.deliveryId,
@@ -735,7 +839,7 @@ async function dispatchAcceptedTrigger(
       // once the window rolls, which is the deferred queue the rate limit
       // deliberately does not provide.
       await completeDelivery(deps.db, accepted, { result: "coalesced" });
-      await deletePendingTrigger(deps.db, accepted);
+      await deleteDurablePendingTrigger(deps.db, accepted);
       return { result: "coalesced" };
     }
 
@@ -751,7 +855,8 @@ async function dispatchAcceptedTrigger(
     // pending delivery would spend a second unit for the one human action
     // that produced it, and could exhaust the cap without a run ever starting.
     if (dispatched.reason === "error" && spentCapKey) {
-      await refundPrAutofixCap(deps.db, spentCapKey);
+      if (deps.db) await refundPrAutofixCap(deps.db, spentCapKey);
+      else await refundConnectedPrAutofixCap(spentCapKey);
     }
     return coalesceOrRecoverStarted(accepted, deps.db);
   } catch (error) {
@@ -769,7 +874,7 @@ async function dispatchAcceptedTrigger(
 
 async function coalesceOrRecoverStarted(
   accepted: AcceptedTriggerDelivery,
-  db: Db,
+  db: Db | undefined,
 ): Promise<DispatchTriggerResult> {
   await completeDelivery(db, accepted, { result: "coalesced" });
 
@@ -777,13 +882,13 @@ async function coalesceOrRecoverStarted(
   // recovery read began. Preserve that stronger result and remove only this
   // delivery's pending snapshot; a newer merged delivery has a different CAS
   // token and remains queued.
-  const stored = await getTriggerDelivery(
+  const stored = await readTriggerDelivery(
     db,
     accepted.delivery.provider,
     accepted.delivery.deliveryId,
   );
   if (stored?.result?.result === "started") {
-    await deletePendingTrigger(db, accepted);
+    await deleteDurablePendingTrigger(db, accepted);
     return stored.result;
   }
   if (stored?.result?.result === "candidate_started") {
@@ -800,8 +905,8 @@ export async function drainOldestPendingTrigger(
   subjectKey: string,
   deps: DispatchTriggerDeps,
 ): Promise<DispatchTriggerResult | null> {
-  for (const pending of await listPendingTriggersForSubject(deps.db, subjectKey)) {
-    const stored = await getTriggerDelivery(
+  for (const pending of await listDurablePendingTriggersForSubject(deps.db, subjectKey)) {
+    const stored = await readTriggerDelivery(
       deps.db,
       pending.delivery.provider,
       pending.delivery.deliveryId,
@@ -811,7 +916,10 @@ export async function drainOldestPendingTrigger(
         ? stored.result.diagnosticId
         : undefined;
     if (stored?.result?.result === "started") {
-      await (deps.deletePending ?? deletePendingTrigger)(deps.db, pending).catch((error) => {
+      const deletePending = deps.deletePending && deps.db
+        ? () => deps.deletePending!(deps.db!, pending)
+        : () => deleteDurablePendingTrigger(deps.db, pending);
+      await deletePending().catch((error) => {
         logger.warn(
           { subjectKey, error: (error as Error).message },
           "trigger_stale_started_pending_delete_failed",
@@ -836,7 +944,7 @@ export async function drainOldestPendingTrigger(
     }
     const currentPending = bindCurrentPullRequest(pending, currentResult.current);
     if (!currentPending) {
-      await deletePendingTrigger(deps.db, pending);
+      await deleteDurablePendingTrigger(deps.db, pending);
       await completeDelivery(deps.db, pending, { result: "ignored_stale_head" });
       continue;
     }
@@ -877,31 +985,37 @@ async function resolveSubjectIdentity(
     };
   }
 
-  const correlation = await findWorkflowOwnedPullRequest(deps.db, {
+  const correlationInput = {
     provider: event.pr.provider,
     repoPath: event.pr.repoPath,
     prNumber: event.pr.prNumber,
     branchName: event.pr.headRef,
     publishedHeadSha: event.pr.headSha,
     baseBranch: event.pr.baseRef,
-  });
+  };
+  const correlation = deps.db
+    ? await findWorkflowOwnedPullRequest(deps.db, correlationInput)
+    : await findConnectedWorkflowOwnedPullRequest(correlationInput);
   if (correlation) {
     return resolveTicketIdentity(correlation.ticketKey, "resolved", deps, event);
   }
 
-  const intent = await findWorkflowOwnedPullRequestIntent(deps.db, {
+  const intentInput = {
     provider: event.pr.provider,
     repoPath: event.pr.repoPath,
     branchName: event.pr.headRef,
     publishedHeadSha: event.pr.headSha,
     baseBranch: event.pr.baseRef,
-  });
+  };
+  const intent = deps.db
+    ? await findWorkflowOwnedPullRequestIntent(deps.db, intentInput)
+    : await findConnectedWorkflowOwnedPullRequestIntent(intentInput);
   if (!intent) return { status: "ignored" };
   if (event.triggerType !== "trigger_pr_created") {
     return resolveTicketIdentity(intent.ticketKey, "pending_correlation", deps, event);
   }
 
-  const bound = await bindWorkflowOwnedPullRequestIntent(deps.db, {
+  const bindInput = {
     ticketKey: intent.ticketKey,
     provider: event.pr.provider,
     repoPath: event.pr.repoPath,
@@ -910,28 +1024,22 @@ async function resolveSubjectIdentity(
     baseBranch: event.pr.baseRef,
     prNumber: event.pr.prNumber,
     prUrl: event.pr.prUrl,
-  });
+  };
+  const bound = deps.db
+    ? await bindWorkflowOwnedPullRequestIntent(deps.db, bindInput)
+    : await bindConnectedWorkflowOwnedPullRequestIntent(bindInput);
   if (bound) return resolveTicketIdentity(bound.ticketKey, "resolved", deps, event);
 
   // The CAS can lose to publication correlation or a newer intent between
   // lookup and bind. Re-read exact state; never dispatch from the stale
   // pre-CAS snapshot.
-  const concurrent = await findWorkflowOwnedPullRequest(deps.db, {
-    provider: event.pr.provider,
-    repoPath: event.pr.repoPath,
-    prNumber: event.pr.prNumber,
-    branchName: event.pr.headRef,
-    publishedHeadSha: event.pr.headSha,
-    baseBranch: event.pr.baseRef,
-  });
+  const concurrent = deps.db
+    ? await findWorkflowOwnedPullRequest(deps.db, correlationInput)
+    : await findConnectedWorkflowOwnedPullRequest(correlationInput);
   if (concurrent) return resolveTicketIdentity(concurrent.ticketKey, "resolved", deps, event);
-  const stillPending = await findWorkflowOwnedPullRequestIntent(deps.db, {
-    provider: event.pr.provider,
-    repoPath: event.pr.repoPath,
-    branchName: event.pr.headRef,
-    publishedHeadSha: event.pr.headSha,
-    baseBranch: event.pr.baseRef,
-  });
+  const stillPending = deps.db
+    ? await findWorkflowOwnedPullRequestIntent(deps.db, intentInput)
+    : await findConnectedWorkflowOwnedPullRequestIntent(intentInput);
   if (!stillPending) return { status: "ignored" };
   return resolveTicketIdentity(stillPending.ticketKey, "pending_correlation", deps, event);
 }
@@ -1032,20 +1140,15 @@ async function readCurrentPullRequest(
 }
 
 async function completeDelivery(
-  db: Db,
+  db: Db | undefined,
   accepted: Pick<TriggerEvent, "delivery">,
   result: StoredTriggerResult,
 ) {
-  await completeTriggerDelivery(
-    db,
-    accepted.delivery.provider,
-    accepted.delivery.deliveryId,
-    result,
-  );
+  await completeDurableTrigger(db, accepted, result);
 }
 
 async function persistAcceptedRetryableFailure(
-  db: Db,
+  db: Db | undefined,
   accepted: Pick<TriggerEvent, "delivery">,
   result: Extract<StoredTriggerResult, { result: "error" }>,
 ): Promise<void> {

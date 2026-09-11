@@ -142,8 +142,7 @@ async function blockApprovedRepositoryScopeStep(
   const { filterRepositoriesForScope } = await import(
     "../../support/repo-allowlist.js"
   );
-  const { getDb } = await import("../../../db/client.js");
-  const { listWorkflowOwnedBranchesForTicket } = await import(
+  const { listConnectedWorkflowOwnedBranchesForTicket } = await import(
     "../../../db/repositories/runs.js"
   );
   const available = filterRepositoriesForScope(
@@ -158,7 +157,7 @@ async function blockApprovedRepositoryScopeStep(
       repository,
     ]),
   );
-  const owned = await listWorkflowOwnedBranchesForTicket(getDb(), ticketKey);
+  const owned = await listConnectedWorkflowOwnedBranchesForTicket(ticketKey);
   const seen = new Set<string>();
   const selected: SelectedRepository[] = [];
   for (const approved of scope.repositories) {

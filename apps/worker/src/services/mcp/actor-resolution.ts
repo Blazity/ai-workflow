@@ -1,9 +1,10 @@
-import { and, eq } from "drizzle-orm";
-
 import { normalizeDashboardRole } from "@shared/contracts";
 
-import { getDb } from "../../db/client.js";
-import { member, oauthClient, organization } from "../../db/schema.js";
+import {
+  findConnectedMcpMemberRole,
+  findConnectedMcpOauthClient,
+  findConnectedMcpOrganizationBySlug,
+} from "../../db/repositories/mcp.js";
 import { dashboardOrganizationSettings } from "../settings/index.js";
 import { MCP_SCOPES, McpPublicError, type McpActorContext, type McpScope } from "./contracts.js";
 
@@ -36,21 +37,14 @@ export interface VerifiedMcpTokenClaims {
 export async function resolveMcpActor(
   claims: VerifiedMcpTokenClaims,
 ): Promise<McpActorContext> {
-  const db = getDb();
-  const [fixedOrganization] = await db
-    .select({ id: organization.id, slug: organization.slug })
-    .from(organization)
-    .where(eq(organization.slug, dashboardOrganizationSettings().slug))
-    .limit(1);
+  const fixedOrganization = await findConnectedMcpOrganizationBySlug(
+    dashboardOrganizationSettings().slug,
+  );
   if (!fixedOrganization || claims.organizationId !== fixedOrganization.id) {
     throw new McpPublicError("FORBIDDEN", "Access denied", false);
   }
 
-  const [client] = await db
-    .select({ referenceId: oauthClient.referenceId, scopes: oauthClient.scopes })
-    .from(oauthClient)
-    .where(eq(oauthClient.clientId, claims.clientId))
-    .limit(1);
+  const client = await findConnectedMcpOauthClient(claims.clientId);
   if (!client || client.referenceId !== fixedOrganization.id) {
     throw new McpPublicError("FORBIDDEN", "Access denied", false);
   }
@@ -82,11 +76,10 @@ export async function resolveMcpActor(
     };
   }
 
-  const [membership] = await db
-    .select({ role: member.role })
-    .from(member)
-    .where(and(eq(member.organizationId, fixedOrganization.id), eq(member.userId, userId)))
-    .limit(1);
+  const membership = await findConnectedMcpMemberRole({
+    organizationId: fixedOrganization.id,
+    userId,
+  });
   const role = membership ? normalizeDashboardRole(membership.role) : null;
   if (!role) throw new McpPublicError("FORBIDDEN", "Access denied", false);
 

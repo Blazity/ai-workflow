@@ -234,9 +234,10 @@ async function loadCurrentPrePrCheckConfigStep(): Promise<{
   config: PrePrCheckConfig;
 } | null> {
   "use step";
-  const { getDb } = await import("../../db/client.js");
-  const { getCurrentPrePrCheckConfig } = await import("../pre-pr-checks/store.js");
-  const current = await getCurrentPrePrCheckConfig(getDb());
+  const { getConnectedCurrentPrePrCheckConfigRow } = await import(
+    "../../db/repositories/pre-pr-checks.js"
+  );
+  const current = await getConnectedCurrentPrePrCheckConfigRow();
   return current ? { version: current.version, config: current.config } : null;
 }
 loadCurrentPrePrCheckConfigStep.maxRetries = 0;

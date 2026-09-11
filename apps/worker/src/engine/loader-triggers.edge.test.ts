@@ -30,12 +30,25 @@ const mockGetDeployedVersion = vi.fn();
 const mockGetDefinition = vi.fn();
 const mockGetVersion = vi.fn();
 const mockGetEnabled = vi.fn();
+vi.mock("./definition-trigger-routing.js", () => ({
+  getConnectedEnabledWorkflowDefinitionForTrigger: (...args: any[]) => mockGetEnabled(...args),
+}));
 vi.mock("../db/repositories/definitions.js", () => ({
   getCurrentWorkflowDefinitionVersion: (...args: any[]) => mockGetCurrentVersion(...args),
   getDeployedWorkflowDefinitionVersion: (...args: any[]) => mockGetDeployedVersion(...args),
   getWorkflowDefinition: (...args: any[]) => mockGetDefinition(...args),
   getWorkflowDefinitionVersion: (...args: any[]) => mockGetVersion(...args),
   getEnabledWorkflowDefinitionForTrigger: (...args: any[]) => mockGetEnabled(...args),
+}));
+vi.mock("../db/repositories/definitions/connected.js", () => ({
+  getConnectedCurrentWorkflowDefinitionVersion: (...args: any[]) =>
+    mockGetCurrentVersion(...args),
+  getConnectedDeployedWorkflowDefinitionVersion: (...args: any[]) =>
+    mockGetDeployedVersion(...args),
+  getConnectedWorkflowDefinition: (...args: any[]) => mockGetDefinition(...args),
+  getConnectedWorkflowDefinitionVersion: (...args: any[]) => mockGetVersion(...args),
+  getConnectedEnabledWorkflowDefinitionForTrigger: (...args: any[]) =>
+    mockGetEnabled(...args),
 }));
 
 const loggerInfo = vi.fn();

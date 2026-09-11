@@ -16,6 +16,7 @@ import {
   rejectUndispatchableApproval,
   retireApprovalCancellation,
   setDispatchedRunId,
+  isRetryableApprovalWriteError,
 } from "./approvals.js";
 
 function seed(ticketKey = "AWT-1") {
@@ -29,6 +30,11 @@ function seed(ticketKey = "AWT-1") {
 }
 
 describe("createApprovalRequest", () => {
+  it("classifies folded-statement deadlocks and serialization failures as retryable", () => {
+    expect(isRetryableApprovalWriteError({ code: "40P01" })).toBe(true);
+    expect(isRetryableApprovalWriteError({ cause: { code: "40001" } })).toBe(true);
+    expect(isRetryableApprovalWriteError({ code: "23505" })).toBe(false);
+  });
   it("inserts a pending row with the supplied plan and defaults", async () => {
     const db = await createTestDb();
     const row = await createApprovalRequest(db, seed());

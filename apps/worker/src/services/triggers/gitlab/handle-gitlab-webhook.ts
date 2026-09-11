@@ -9,9 +9,8 @@
  */
 import { createHash } from "node:crypto";
 
-import { PostgresRunRegistry } from "../../../db/repositories/active-runs.js";
+import { createConnectedPostgresRunRegistry } from "../../../db/repositories/active-runs.js";
 import { createRepositoryDirectoryForProviders } from "../../../adapters/vcs/repository-directory.js";
-import { getDb } from "../../../db/client.js";
 import { logger } from "../../../infra/logger.js";
 import {
   dispatchPostPrGateWebhook,
@@ -23,7 +22,7 @@ import {
 } from "../../dispatch/index.js";
 import {
   isWorkflowGeneratedPush,
-  workflowPushNormalizationOptions,
+  connectedWorkflowPushNormalizationOptions,
 } from "../../publication/index.js";
 import { ticketKeyFromBranch } from "../../../engine/support/workflow-naming.js";
 import {
@@ -118,11 +117,9 @@ async function handleVerifiedGitLabWebhook(request: GitLabWebhookRequest) {
   }
 
   const botUsername = getVcsBotLogin("gitlab");
-  const db = getDb();
   const workflowPushOptions =
     gitLabEvent === "Merge Request Hook" && body.object_attributes?.action === "update"
-      ? await workflowPushNormalizationOptions({
-          db,
+      ? await connectedWorkflowPushNormalizationOptions({
           provider: "gitlab",
           repoPath: body.project?.path_with_namespace ?? "",
           prNumber: body.object_attributes?.iid,
@@ -158,8 +155,7 @@ async function handleVerifiedGitLabWebhook(request: GitLabWebhookRequest) {
     let claimedEvent = events[0]!;
     for (const candidate of events) {
       const candidateResult = await dispatchTriggerEvent(candidate, {
-        db,
-        runRegistry: new PostgresRunRegistry(db),
+        runRegistry: createConnectedPostgresRunRegistry(),
         maxConcurrentAgents: maxConcurrentAgents(),
       });
       result = candidateResult;

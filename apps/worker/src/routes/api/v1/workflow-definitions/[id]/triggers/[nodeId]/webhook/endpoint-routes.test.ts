@@ -17,7 +17,7 @@ import { createTestDb } from "../../../../../../../../db/test-db.js";
 import {
   acceptWebhookDelivery,
   completeWebhookDelivery,
-} from "../../../../../../../../webhook-trigger/delivery-store.js";
+} from "../../../../../../../../db/repositories/webhook-trigger-deliveries.js";
 import { fallbackWebhookDeliveryId } from "../../../../../../../../services/webhook-trigger/dispatch-webhook-trigger.js";
 import {
   getWebhookEndpointForNode,

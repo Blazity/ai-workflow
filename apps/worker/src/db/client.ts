@@ -1,8 +1,7 @@
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
-import type { PgDatabase } from "drizzle-orm/pg-core";
-import { env } from "../infra/vcs-config.js";
 import * as schema from "./schema.js";
+import type { Db } from "./types.js";
 
 /**
  * Driver-agnostic database handle. `any` for the query-result HKT so both
@@ -10,8 +9,7 @@ import * as schema from "./schema.js";
  * assignable — adapters only use the query-builder surface, which is
  * identical across drivers.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type Db = PgDatabase<any, typeof schema>;
+export type { Db } from "./types.js";
 
 let _db: Db | null = null;
 
@@ -23,7 +21,11 @@ let _db: Db | null = null;
  */
 export function getDb(): Db {
   if (!_db) {
-    _db = drizzle({ client: neon(env.DATABASE_URL), schema });
+    const databaseUrl = process.env.DATABASE_URL;
+    if (!databaseUrl) {
+      throw new Error("Invalid environment variables:\n  DATABASE_URL: Required");
+    }
+    _db = drizzle({ client: neon(databaseUrl), schema });
   }
   return _db;
 }

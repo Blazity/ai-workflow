@@ -14,10 +14,6 @@ vi.mock("../../infra/vcs-config.js", () => ({
   },
 }));
 
-vi.mock("../../db/client.js", () => ({
-  getDb: vi.fn(() => "db"),
-}));
-
 vi.mock("../../adapters/issue-tracker/jira.js", () => ({
   JiraAdapter: vi.fn().mockImplementation((config) => ({ kind: "jira", config })),
 }));
@@ -31,7 +27,7 @@ vi.mock("../../adapters/messaging/noop.js", () => ({
 }));
 
 vi.mock("../../db/repositories/active-runs.js", () => ({
-  PostgresRunRegistry: vi.fn().mockImplementation((db) => ({ kind: "registry", db })),
+  createConnectedPostgresRunRegistry: vi.fn(() => ({ kind: "registry", db: "db" })),
 }));
 
 vi.mock("../../adapters/vcs/create-vcs.js", () => ({

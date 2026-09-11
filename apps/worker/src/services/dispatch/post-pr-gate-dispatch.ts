@@ -1,13 +1,12 @@
 import { start, getRun } from "workflow/api";
 import type { WorkflowBlockType } from "@shared/contracts";
 import { hasGateStatusCapability } from "../../adapters/vcs/types.js";
-import { getDb, type Db } from "../../db/client.js";
 import { createAdapters } from "../../engine/support/adapters.js";
 import { logger } from "../../infra/logger.js";
 import { isManagedBranch } from "../../engine/support/workflow-naming.js";
 import { GateStore, type CurrentGateRun } from "../../post-pr-gate/gate-store.js";
 import { loadPostPrGateConfig } from "../../post-pr-gate/config.js";
-import { getEnabledWorkflowDefinitionForTrigger } from "../../db/repositories/definitions.js";
+import { getConnectedEnabledWorkflowDefinitionForTrigger } from "../../engine/definition-trigger-routing.js";
 import {
   postPrGateWorkflow,
   type PostPrGateWorkflowInput,
@@ -38,7 +37,7 @@ export async function dispatchPostPrGateWebhook({
   const eligibility = checkPostPrGateEligibility(workflowInput, config);
   if (eligibility) return eligibility;
 
-  const gateStore = new GateStore(getDb());
+  const gateStore = new GateStore();
 
   const lockToken = await gateStore.acquireLock(ownerRepo, prNumber);
   if (!lockToken) {
@@ -99,16 +98,16 @@ export async function dispatchPostPrGateWebhook({
       { ownerRepo, prNumber, headSha, runId: handle.runId },
       "post_pr_gate_started",
     );
-    await warnIfSupersededByDefinition(getDb());
+    await warnIfSupersededByDefinition();
     return { status: "dispatched", runId: handle.runId };
   } finally {
     await gateStore.releaseLock(ownerRepo, prNumber, lockToken);
   }
 }
 
-async function warnIfSupersededByDefinition(db: Db): Promise<void> {
+async function warnIfSupersededByDefinition(): Promise<void> {
   for (const triggerType of PR_TRIGGER_TYPES) {
-    const enabled = await getEnabledWorkflowDefinitionForTrigger(db, triggerType).catch(
+    const enabled = await getConnectedEnabledWorkflowDefinitionForTrigger(triggerType).catch(
       () => null,
     );
     if (enabled) {

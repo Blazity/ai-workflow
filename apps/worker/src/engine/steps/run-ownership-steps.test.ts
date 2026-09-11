@@ -41,19 +41,10 @@ vi.mock("../../engine/support/adapters.js", () => ({
   }),
 }));
 vi.mock("../../db/client.js", () => ({ getDb: () => ({ db: true }) }));
-vi.mock("../../engine/support/active-run-owner.js", () => ({
+vi.mock("../../db/repositories/active-runs.js", () => ({
   assertActiveRunOwner: (...args: any[]) => assertActiveRunOwner(...args),
-}));
-vi.mock("../../engine/support/trigger-delivery-store.js", () => ({
-  deletePendingTrigger: (...args: any[]) => deletePending(...args),
-  acknowledgeStartedTriggerDelivery: (...args: any[]) => acknowledgeStartedDelivery(...args),
-  completeTriggerDelivery: (...args: any[]) => completeTriggerDelivery(...args),
-}));
-vi.mock("../support/webhook-delivery-store.js", () => ({
-  recordWebhookDeliveryStarted: (...args: any[]) => recordWebhookStarted(...args),
-}));
-vi.mock("../support/schedule-occurrence-store.js", () => ({
-  recordOccurrenceStarted: (...args: any[]) => recordOccurrenceStarted(...args),
+  assertConnectedActiveRunOwner: (...args: any[]) =>
+    assertActiveRunOwner(...args),
 }));
 vi.mock("../../engine/support/vcs-runtime.js", () => ({
   createRepositoryVCS: (...args: any[]) => {
@@ -78,22 +69,40 @@ vi.mock("../../db/repositories/runs/telemetry.js", () => ({
 }));
 vi.mock("../../db/repositories/approvals.js", () => ({
   setDispatchedRunId: (...args: any[]) => setApprovalRun(...args),
+  setConnectedDispatchedRunId: (...args: any[]) => setApprovalRun(...args),
+}));
+vi.mock("../../db/repositories/manual-dispatch.js", () => ({
+  acknowledgeConnectedManualDispatchStarted: (...args: any[]) =>
+    acknowledgeManualDispatch(...args),
+}));
+vi.mock("../../db/repositories/trigger-deliveries.js", () => ({
+  acknowledgeConnectedStartedTriggerDelivery: (...args: any[]) =>
+    acknowledgeStartedDelivery(...args),
+  completeConnectedTriggerDelivery: (...args: any[]) =>
+    completeTriggerDelivery(...args),
+  deleteConnectedPendingTriggerDelivery: (...args: any[]) => deletePending(...args),
+}));
+vi.mock("../../db/repositories/webhook-trigger-deliveries.js", () => ({
+  recordConnectedStartedWebhookTriggerDelivery: (...args: any[]) =>
+    recordWebhookStarted(...args),
+}));
+vi.mock("../../db/repositories/schedule-triggers.js", () => ({
+  recordConnectedStartedScheduleOccurrence: (...args: any[]) =>
+    recordOccurrenceStarted(...args),
 }));
 vi.mock("../../sandbox/stop-ticket-sandboxes.js", () => ({
   stopSandboxesByIds: (...args: any[]) => stopSandboxes(...args),
 }));
 vi.mock("../../engine/support/ticket-transition.js", () => ({
   moveTicketForRun: (...args: any[]) => moveTicket(...args),
+  moveConnectedTicketForRun: (...args: any[]) => moveTicket(...args),
 }));
 vi.mock("../../engine/support/ticket-label-mutation.js", () => ({
   updateTicketLabelsForRun: (...args: any[]) =>
     updateTicketLabels(...args),
+  updateConnectedTicketLabelsForRun: (...args: any[]) =>
+    updateTicketLabels(...args),
 }));
-vi.mock("../../engine/support/acknowledge-manual-workflow.js", () => ({
-  acknowledgeManualDispatchWorkflow: (...args: unknown[]) =>
-    acknowledgeManualDispatch(...args),
-}));
-
 describe("workflow owner steps", () => {
   beforeEach(() => {
     markRunEntryStarted.mockReset();
@@ -153,12 +162,9 @@ describe("workflow owner steps", () => {
     );
 
     expect(acknowledgeManualDispatch).toHaveBeenCalledWith(
-      { db: true },
-      {
-        requestId: "dispatch-1",
-        ownerToken: "owner-1",
-        runId: "run-1",
-      },
+      "dispatch-1",
+      "owner-1",
+      "run-1",
     );
   });
 
@@ -191,7 +197,7 @@ describe("workflow owner steps", () => {
 
     await acknowledgeApprovalDispatchStep(entry, "run-approved");
 
-    expect(setApprovalRun).toHaveBeenCalledWith({ db: true }, "approval-1", "run-approved");
+    expect(setApprovalRun).toHaveBeenCalledWith("approval-1", "run-approved");
   });
 
   it("acknowledges a drained pending identity after owner bind and before work", async () => {
@@ -214,15 +220,10 @@ describe("workflow owner steps", () => {
     };
     await acknowledgePendingTriggerStep(entry);
     expect(deletePending).toHaveBeenCalledWith(
-      { db: true },
       expect.objectContaining({
         subjectKey: "pr:github:acme/api#7",
-        triggerType: "trigger_pr_created",
-        delivery: {
-          provider: "github",
-          producer: "pending-snapshot",
-          deliveryId: "delivery-1",
-        },
+        provider: "github",
+        deliveryId: "delivery-1",
       }),
     );
   });
@@ -283,14 +284,10 @@ describe("workflow owner steps", () => {
     await expect(acknowledgePrTriggerDispatchStep(entry, "run-winning")).resolves.toBe(true);
 
     expect(acknowledgeStartedDelivery).toHaveBeenCalledWith(
-      { db: true },
       expect.objectContaining({
         subjectKey: entry.subjectKey,
-        triggerType: entry.triggerType,
-        delivery: entry.delivery,
-        pr: entry.pr,
+        runId: "run-winning",
       }),
-      "run-winning",
     );
     expect(createRepositoryVcsRuntime).toHaveBeenCalledWith({
       provider: "github",
@@ -362,7 +359,6 @@ describe("workflow owner steps", () => {
       ).resolves.toBe(false);
       expect(acknowledgeStartedDelivery).not.toHaveBeenCalled();
       expect(completeTriggerDelivery).toHaveBeenCalledWith(
-        { db: true },
         "github",
         "delivery-stale-provider",
         { result: "ignored_stale_head" },
@@ -418,7 +414,6 @@ describe("workflow owner steps", () => {
     expect(getLatestCheckRuns).toHaveBeenCalledWith("sha");
     expect(acknowledgeStartedDelivery).not.toHaveBeenCalled();
     expect(completeTriggerDelivery).toHaveBeenCalledWith(
-      { db: true },
       "github",
       "delivery-passed-check",
       { result: "ignored_stale_head" },
@@ -466,7 +461,6 @@ describe("workflow owner steps", () => {
     ).resolves.toBe(false);
     expect(acknowledgeStartedDelivery).not.toHaveBeenCalled();
     expect(completeTriggerDelivery).toHaveBeenCalledWith(
-      { db: true },
       "gitlab",
       "delivery-passed-pipeline",
       { result: "ignored_stale_head" },
@@ -496,10 +490,13 @@ describe("workflow owner steps", () => {
     await expect(acknowledgeWebhookDispatchStep(entry, "run-1")).resolves.toBe(true);
 
     expect(recordWebhookStarted).toHaveBeenCalledWith(
-      { db: true },
-      { endpointId: "wh_test", deliveryId: "d-1", subjectKey: "webhook:wh_test:T-1" },
-      "owner-1",
-      "run-1",
+      {
+        endpointId: "wh_test",
+        deliveryId: "d-1",
+        subjectKey: "webhook:wh_test:T-1",
+        ownerToken: "owner-1",
+        runId: "run-1",
+      },
     );
     // Every other entry kind passes straight through.
     await expect(
@@ -563,11 +560,12 @@ describe("workflow owner steps", () => {
     // The occurrence instant is the ledger's key, so it has to arrive as the exact
     // Date the dispatcher admitted, not as the ISO string the entry carries.
     expect(recordOccurrenceStarted).toHaveBeenCalledWith(
-      { db: true },
-      "sch_1",
-      new Date("2026-08-05T14:00:00.000Z"),
-      "owner-1",
-      "run-1",
+      {
+        scheduleId: "sch_1",
+        occurrenceAt: new Date("2026-08-05T14:00:00.000Z"),
+        ownerToken: "owner-1",
+        runId: "run-1",
+      },
     );
     // Every other entry kind passes straight through.
     await expect(
@@ -636,7 +634,6 @@ describe("workflow owner steps", () => {
     await expect(repairClarificationLabelStep("AWT-1", owner)).resolves.toBeUndefined();
     expect(updateTicketLabels).toHaveBeenCalledTimes(2);
     expect(updateTicketLabels).toHaveBeenLastCalledWith({
-      db: { db: true },
       issueTracker: expect.anything(),
       ticketKey: "AWT-1",
       owner,

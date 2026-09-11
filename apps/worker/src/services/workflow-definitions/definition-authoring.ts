@@ -15,31 +15,42 @@ import type {
   WorkflowDefinitionLayoutInput,
 } from "@shared/contracts";
 import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
-import { getDb, type Db } from "../../db/client.js";
-import { getCurrentSystemHarnessProfileReference } from "../../db/repositories/harness-profiles.js";
+import { canEditWorkflowDefinitions } from "@shared/contracts";
+import { getConnectedDashboardUserLabel } from "../../db/repositories/auth.js";
 import { logger } from "../../infra/logger.js";
-import { dashboardUserLabel } from "../../pre-pr-checks/store.js";
 import { defaultWorkflowDefinitionV2 } from "../../workflow-definition/default.js";
-import { workflowBlockRegistryContextFromEnv } from "../../workflow-definition/models.js";
-import { validateWorkflowDefinitionCandidateWithPromptAuthoring } from "../../workflow-definition/prompt-authoring.js";
 import {
-  archiveWorkflowDefinition,
-  createWorkflowDefinitionDraft,
-  getCurrentWorkflowDefinitionVersion,
-  getDeployedWorkflowDefinitionVersion,
-  getWorkflowDefinition,
-  getWorkflowDefinitionDraft,
-  saveWorkflowDefinitionDraft,
-  saveWorkflowDefinitionLayout,
-  updateWorkflowDefinition,
   WorkflowDefinitionStoreError,
   type WorkflowDefinitionActor,
   type WorkflowDefinitionDraftRow,
   type WorkflowDefinitionRow,
   type WorkflowDefinitionVersionRow,
 } from "../../db/repositories/definitions.js";
+import {
+  getConnectedWorkflowDefinition,
+} from "../../db/repositories/definitions/connected.js";
 import { workflowDefinitionTemplate } from "../../workflow-definition/templates.js";
 import { agentRuntimeSettings } from "../settings/index.js";
+import { currentSystemHarnessProfileReference } from "../harness/index.js";
+import {
+  archiveConnectedWorkflowDefinition,
+  createConnectedWorkflowDefinitionDraft,
+  saveConnectedWorkflowDefinitionDraft,
+  saveConnectedWorkflowDefinitionLayout,
+  updateConnectedWorkflowDefinition,
+  validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring,
+} from "./policy-operations.js";
+import {
+  readConnectedCurrentWorkflowDefinitionVersion,
+  readConnectedDeployedWorkflowDefinitionVersion,
+} from "../../engine/stored-definition-reads.js";
+import { readConnectedWorkflowDefinitionDraft } from "../../engine/definition-draft-read.js";
+
+function requireWorkflowDefinitionEditor(role: DashboardRole): void {
+  if (!canEditWorkflowDefinitions(role)) {
+    throw new WorkflowDefinitionStoreError(403, "Forbidden");
+  }
+}
 
 /** The acting user as a request knows them, before the store's audit label has
  *  been looked up. */
@@ -51,13 +62,12 @@ export interface WorkflowDefinitionRequestActor {
 /** The store records who changed a definition by a human-readable label, which
  *  lives in another table, so every write path resolves it first. */
 export async function resolveWorkflowDefinitionActor(
-  db: Db,
   actor: WorkflowDefinitionRequestActor,
 ): Promise<WorkflowDefinitionActor> {
   return {
     role: actor.role,
     id: actor.userId,
-    label: await dashboardUserLabel(db, actor.userId),
+    label: await getConnectedDashboardUserLabel(actor.userId),
   };
 }
 
@@ -90,9 +100,9 @@ export async function createWorkflowDefinitionFromSource(input: {
   source: WorkflowDefinitionSeedSource;
   actor: WorkflowDefinitionRequestActor;
 }): Promise<CreateWorkflowDefinitionResult> {
-  const db = getDb();
+  requireWorkflowDefinitionEditor(input.actor.role);
   const { agentKind, includeReview, includeLeakReview } = agentRuntimeSettings();
-  const profileReference = await getCurrentSystemHarnessProfileReference(db, agentKind);
+  const profileReference = await currentSystemHarnessProfileReference(agentKind);
   const seedOptions = {
     includeReview,
     includeLeakReview,
@@ -103,12 +113,12 @@ export async function createWorkflowDefinitionFromSource(input: {
   let seed: WorkflowDefinition;
   if (input.source.kind === "duplicate") {
     const sourceId = input.source.definitionId;
-    const sourceRow = await getWorkflowDefinition(db, sourceId);
+    const sourceRow = await getConnectedWorkflowDefinition(sourceId);
     if (!sourceRow || sourceRow.archivedAt) return { ok: false, reason: "unknown_definition" };
 
-    const draft = await getWorkflowDefinitionDraft(db, sourceId);
-    const deployed = await getDeployedWorkflowDefinitionVersion(db, sourceId);
-    const current = await getCurrentWorkflowDefinitionVersion(db, sourceId);
+    const draft = await readConnectedWorkflowDefinitionDraft(sourceId);
+    const deployed = await readConnectedDeployedWorkflowDefinitionVersion(sourceId);
+    const current = await readConnectedCurrentWorkflowDefinitionVersion(sourceId);
     const storedSource = deployed ?? current;
     if (!draft && storedSource?.schema === "legacy-v1") {
       throw new WorkflowDefinitionStoreError(409, RETIRED_SCHEMA_MESSAGE);
@@ -125,16 +135,16 @@ export async function createWorkflowDefinitionFromSource(input: {
     seed = defaultWorkflowDefinitionV2(seedOptions);
   }
 
-  const created = await createWorkflowDefinitionDraft(db, {
+  const created = await createConnectedWorkflowDefinitionDraft({
     name: input.name,
     seed,
-    actor: await resolveWorkflowDefinitionActor(db, input.actor),
+    actor: await resolveWorkflowDefinitionActor(input.actor),
   });
   return {
     ok: true,
     definition: created.definition,
     draft: created.draft,
-    currentVersion: await getCurrentWorkflowDefinitionVersion(db, created.definition.id),
+    currentVersion: await readConnectedCurrentWorkflowDefinitionVersion(created.definition.id),
   };
 }
 
@@ -146,13 +156,14 @@ export async function updateWorkflowDefinitionMeta(input: {
   enabled?: boolean;
   actor: WorkflowDefinitionRequestActor;
 }): Promise<WorkflowDefinitionRow> {
-  const db = getDb();
-  return updateWorkflowDefinition(db, {
+  requireWorkflowDefinitionEditor(input.actor.role);
+  const updated = await updateConnectedWorkflowDefinition({
     definitionId: input.definitionId,
     name: input.name,
     enabled: input.enabled,
-    actor: await resolveWorkflowDefinitionActor(db, input.actor),
+    actor: await resolveWorkflowDefinitionActor(input.actor),
   });
+  return updated;
 }
 
 /** Retire a definition from the listing without deleting its history. */
@@ -160,10 +171,10 @@ export async function archiveWorkflowDefinitionById(input: {
   definitionId: number;
   actor: WorkflowDefinitionRequestActor;
 }): Promise<void> {
-  const db = getDb();
-  await archiveWorkflowDefinition(db, {
+  requireWorkflowDefinitionEditor(input.actor.role);
+  await archiveConnectedWorkflowDefinition({
     definitionId: input.definitionId,
-    actor: await resolveWorkflowDefinitionActor(db, input.actor),
+    actor: await resolveWorkflowDefinitionActor(input.actor),
   });
 }
 
@@ -171,7 +182,7 @@ export interface SavedWorkflowDefinitionDraft {
   definition: WorkflowDefinitionRow;
   draftRow: WorkflowDefinitionDraftRow;
   validation: Awaited<
-    ReturnType<typeof validateWorkflowDefinitionCandidateWithPromptAuthoring>
+    ReturnType<typeof validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring>
   >["response"] | null;
   validationError: string | null;
 }
@@ -189,20 +200,16 @@ export async function saveWorkflowDefinitionDraftAndValidate(input: {
   expectedDraftRevision: number;
   actor: WorkflowDefinitionRequestActor;
 }): Promise<SavedWorkflowDefinitionDraft> {
-  const db = getDb();
-  const saved = await saveWorkflowDefinitionDraft(db, {
+  requireWorkflowDefinitionEditor(input.actor.role);
+  const saved = await saveConnectedWorkflowDefinitionDraft({
     definitionId: input.definitionId,
     definition: input.definition,
     expectedDraftRevision: input.expectedDraftRevision,
-    actor: await resolveWorkflowDefinitionActor(db, input.actor),
+    actor: await resolveWorkflowDefinitionActor(input.actor),
   });
 
   try {
-    const validation = await validateWorkflowDefinitionCandidateWithPromptAuthoring(
-      db,
-      saved.draft,
-      workflowBlockRegistryContextFromEnv(),
-    );
+    const validation = await validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring(saved.draft);
     return {
       definition: saved.definition,
       draftRow: saved,
@@ -238,11 +245,11 @@ export async function saveWorkflowDefinitionLayoutRevision(input: {
   expectedLayoutRevision: number;
   actor: WorkflowDefinitionRequestActor;
 }): Promise<WorkflowDefinitionRow> {
-  const db = getDb();
-  return saveWorkflowDefinitionLayout(db, {
+  requireWorkflowDefinitionEditor(input.actor.role);
+  return saveConnectedWorkflowDefinitionLayout({
     definitionId: input.definitionId,
     layout: input.layout,
     expectedLayoutRevision: input.expectedLayoutRevision,
-    actor: await resolveWorkflowDefinitionActor(db, input.actor),
+    actor: await resolveWorkflowDefinitionActor(input.actor),
   });
 }

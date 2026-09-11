@@ -8,6 +8,7 @@ import {
 } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
 import {
+  dashboardUserLabel,
   getDashboardActor,
   listDashboardUsers,
   updateDashboardUserRole,
@@ -94,6 +95,21 @@ beforeEach(async () => {
 });
 
 describe("dashboard users read model", () => {
+  it("resolves audit labels through name, email, and id fallbacks", async () => {
+    await db.insert(user).values({
+      id: "user_blank_name",
+      name: "  ",
+      email: "blank@example.com",
+      emailVerified: true,
+    });
+
+    await expect(dashboardUserLabel(db, "user_owner")).resolves.toBe("Owner");
+    await expect(dashboardUserLabel(db, "user_blank_name")).resolves.toBe(
+      "blank@example.com",
+    );
+    await expect(dashboardUserLabel(db, "missing_user")).resolves.toBe("missing_user");
+  });
+
   it("resolves the current actor role in the fixed organization", async () => {
     await expect(
       getDashboardActor(db, {

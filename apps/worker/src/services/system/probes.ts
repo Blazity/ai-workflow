@@ -1,16 +1,15 @@
 import { createAppAuth } from "@octokit/auth-app";
-import { and, desc, eq, gte, isNull, sql } from "drizzle-orm";
 import type { SystemHealthResponse } from "@shared/contracts";
 import { FIRST_SLICE_TOOLS } from "@shared/contracts";
 import { resolveModelDefaults } from "@shared/harness";
 import { env } from "../../infra/vcs-config.js";
 import { JiraAdapter } from "../../adapters/issue-tracker/jira.js";
-import { getDb } from "../../db/client.js";
 import {
-  webhookTriggerDeliveries,
-  webhookTriggerEndpoints,
-  webhookTriggerRejectionCounters,
-} from "../../db/schema.js";
+  checkConnectedDatabaseConnectivity,
+  getConnectedLatestActiveCustomWebhookDelivery,
+  listConnectedActiveCustomWebhookRejections,
+  listConnectedCustomWebhookEndpointStates,
+} from "../../db/repositories/system-health.js";
 import { buildOctokit } from "../../adapters/vcs/github-auth.js";
 import {
   collectSystemHealth,
@@ -49,7 +48,7 @@ const REQUIRED_RESEND_WEBHOOK_EVENTS = [
  * same request so nothing health-related runs from cron or page rendering. */
 export async function collectDeploymentSystemHealth(): Promise<SystemHealthResponse> {
   const config = configFromEnvironment();
-  await sweepSystemHealthObservations(getDb()).catch(() => undefined);
+  await sweepSystemHealthObservations().catch(() => {});
   return collectSystemHealth({
     config,
     probes: probesForEnvironment(config),
@@ -106,7 +105,7 @@ export function probesForEnvironment(config: SystemHealthConfig): SystemHealthPr
   const probes: SystemHealthProbes = {
     "database.connectivity": async () => {
       try {
-        await getDb().execute(sql.raw("select 1"));
+        await checkConnectedDatabaseConnectivity();
       } catch {
         throw new PublicHealthProbeError("Database did not respond.");
       }
@@ -270,7 +269,6 @@ export function probesForEnvironment(config: SystemHealthConfig): SystemHealthPr
 
 function localObservations(integrationId: string, secret: string | undefined) {
   return getLatestSystemHealthObservations(
-    getDb(),
     integrationId,
     "webhook-delivery",
     systemHealthObservationScope(secret),
@@ -805,10 +803,7 @@ async function slackChannelDeliveryResult(
 }
 
 async function customWebhookAggregate(): Promise<SystemHealthProbeResult> {
-  const db = getDb();
-  const endpoints = await db
-    .select({ id: webhookTriggerEndpoints.id, revokedAt: webhookTriggerEndpoints.revokedAt })
-    .from(webhookTriggerEndpoints);
+  const endpoints = await listConnectedCustomWebhookEndpointStates();
   const active = endpoints.filter((endpoint) => !endpoint.revokedAt);
   if (active.length === 0) {
     return {
@@ -817,30 +812,8 @@ async function customWebhookAggregate(): Promise<SystemHealthProbeResult> {
       coverage: { checked: 0, total: endpoints.length },
     };
   }
-  const latestDelivery = await db
-    .select({ createdAt: webhookTriggerDeliveries.createdAt })
-    .from(webhookTriggerDeliveries)
-    .innerJoin(
-      webhookTriggerEndpoints,
-      eq(webhookTriggerDeliveries.endpointId, webhookTriggerEndpoints.id),
-    )
-    .where(isNull(webhookTriggerEndpoints.revokedAt))
-    .orderBy(desc(webhookTriggerDeliveries.createdAt))
-    .limit(1);
-  const rejection = await db
-    .select({ count: webhookTriggerRejectionCounters.count })
-    .from(webhookTriggerRejectionCounters)
-    .innerJoin(
-      webhookTriggerEndpoints,
-      eq(webhookTriggerRejectionCounters.endpointId, webhookTriggerEndpoints.id),
-    )
-    .where(
-      and(
-        isNull(webhookTriggerEndpoints.revokedAt),
-        gte(webhookTriggerRejectionCounters.windowStart, utcDayStart()),
-      ),
-    )
-    .limit(1)
+  const latestDelivery = await getConnectedLatestActiveCustomWebhookDelivery();
+  const rejection = await listConnectedActiveCustomWebhookRejections(utcDayStart())
     .catch(() => [] as Array<{ count: number }>);
   const observedAt = latestDelivery[0]?.createdAt;
   const deliveryIsFresh = Boolean(

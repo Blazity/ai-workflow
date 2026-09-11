@@ -2,8 +2,18 @@ import { waitUntil } from "@vercel/functions";
 import type { Auth as BetterAuthInstance } from "better-auth";
 import { createError } from "h3";
 
-import type { Db } from "../../db/client.js";
-import { createAuthRepository, createBetterAuthAdapter } from "../../db/repositories/auth.js";
+import type { Db } from "../../db/types.js";
+import {
+  createAuthRepository,
+  createBetterAuthAdapter,
+  createConnectedAuthRepository,
+  createConnectedBetterAuthAdapter,
+} from "../../db/repositories/auth.js";
+import {
+  findConnectedMcpMemberRole,
+  findConnectedMcpOauthClient,
+  findConnectedMcpOrganizationBySlug,
+} from "../../db/repositories/mcp.js";
 
 export type AuthOptions = {
   secret: string;
@@ -30,17 +40,48 @@ export type AuthDatabase = Db;
 export type Auth = BetterAuthInstance<any>;
 type AuthContext = Awaited<Auth["$context"]>;
 
-export function createAuthDatabaseAdapter(db: Db) {
-  return createBetterAuthAdapter(db);
+export type AuthPersistence = {
+  adapter: ReturnType<typeof createBetterAuthAdapter>;
+  repository: ReturnType<typeof createAuthRepository>;
+  mcp: {
+    findOrganizationId?: (slug: string) => Promise<string | null>;
+    findRegisteredClient?: (clientId: string) => Promise<{
+      referenceId: string | null;
+      scopes: string[] | null;
+    } | null>;
+    findMemberRole?: (organizationId: string, userId: string) => Promise<string | null>;
+  };
+};
+
+export function createAuthPersistence(db: Db): AuthPersistence {
+  return {
+    adapter: createBetterAuthAdapter(db),
+    repository: createAuthRepository(db),
+    mcp: {},
+  };
+}
+
+export function createConnectedAuthPersistence(): AuthPersistence {
+  return {
+    adapter: createConnectedBetterAuthAdapter(),
+    repository: createConnectedAuthRepository(),
+    mcp: {
+      findOrganizationId: async (slug) =>
+        (await findConnectedMcpOrganizationBySlug(slug))?.id ?? null,
+      findRegisteredClient: findConnectedMcpOauthClient,
+      findMemberRole: async (organizationId, userId) =>
+        (await findConnectedMcpMemberRole({ organizationId, userId }))?.role ?? null,
+    },
+  };
 }
 
 export async function handleResetPasswordRequest(
-  db: Db,
+  repository: ReturnType<typeof createAuthRepository>,
   passwordReset: NonNullable<AuthOptions["passwordReset"]>,
   input: { user: { id: string; email: string; name: string }; token: string },
 ): Promise<void> {
-  if (!(await userHasCredentialAccount(db, input.user.id))) {
-    await createAuthRepository(db).deleteResetPasswordVerification(input.token);
+  if (!(await repository.hasCredentialAccount(input.user.id))) {
+    await repository.deleteResetPasswordVerification(input.token);
     return;
   }
 

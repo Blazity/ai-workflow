@@ -13,10 +13,15 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../../infra/logger.js", () => ({ logger: { warn: mocks.warn } }));
 vi.mock("../../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
-vi.mock("../../../engine/support/active-run-owner.js", () => ({
+vi.mock("../../../db/repositories/active-runs.js", () => ({
   assertActiveRunOwner: (...args: any[]) => mocks.assertActiveRunOwner(...args),
+  assertConnectedActiveRunOwner: (...args: any[]) =>
+    mocks.assertActiveRunOwner(...args),
 }));
-vi.mock("../../../db/repositories/approvals.js", () => ({ createApprovalRequest: mocks.createApprovalRequest }));
+vi.mock("../../../db/repositories/approvals.js", () => ({
+  createApprovalRequest: mocks.createApprovalRequest,
+  createConnectedApprovalRequest: mocks.createApprovalRequest,
+}));
 vi.mock("../../../engine/support/adapters.js", () => ({
   createAdapters: () => ({
     issueTracker: {
@@ -29,9 +34,12 @@ vi.mock("../../../engine/support/adapters.js", () => ({
 }));
 vi.mock("../../../engine/support/ticket-transition.js", () => ({
   moveTicketForRun: (...args: any[]) => mocks.moveTicket(...args),
+  moveConnectedTicketForRun: (...args: any[]) => mocks.moveTicket(...args),
 }));
 vi.mock("../../../engine/support/ticket-label-mutation.js", () => ({
   updateTicketLabelsForRun: (...args: any[]) =>
+    mocks.updateTicketLabels(...args),
+  updateConnectedTicketLabelsForRun: (...args: any[]) =>
     mocks.updateTicketLabels(...args),
 }));
 
@@ -86,7 +94,7 @@ describe("send_plan_approval execute", () => {
     const ctx = makeCtx({ researchPlanMarkdown: "# Research plan" });
     const result = await execute(makeNode("send_plan_approval"), {}, ctx);
 
-    expect(mocks.createApprovalRequest).toHaveBeenCalledWith(expect.anything(), {
+    expect(mocks.createApprovalRequest).toHaveBeenCalledWith({
       ticketKey: "AWT-1",
       definitionId: 1,
       definitionVersion: 1,
@@ -103,19 +111,16 @@ describe("send_plan_approval execute", () => {
     expect(mocks.assertActiveRunOwner).toHaveBeenCalledTimes(2);
     expect(mocks.assertActiveRunOwner).toHaveBeenNthCalledWith(
       1,
-      { kind: "db" },
       { subjectKey: "ticket:jira:AWT-1", ownerToken: "owner:test", runId: "run-1" },
     );
     expect(mocks.assertActiveRunOwner).toHaveBeenNthCalledWith(
       2,
-      { kind: "db" },
       { subjectKey: "ticket:jira:AWT-1", ownerToken: "owner:test", runId: "run-1" },
     );
     // Parked out of the AI column with an awaiting-approval label so the cron
     // poll stops re-dispatching it; label add precedes the move, mirroring
     // clarification. The workflow's terminal finally releases ownership.
     expect(mocks.updateTicketLabels).toHaveBeenCalledWith({
-      db: { kind: "db" },
       issueTracker: expect.anything(),
       ticketKey: "AWT-1",
       owner: {
@@ -128,7 +133,6 @@ describe("send_plan_approval execute", () => {
     });
     expect(mocks.updateLabels).not.toHaveBeenCalled();
     expect(mocks.moveTicket).toHaveBeenCalledWith({
-      db: expect.anything(),
       issueTracker: expect.anything(),
       ticketKey: "AWT-1",
       target: "Backlog",
@@ -148,7 +152,6 @@ describe("send_plan_approval execute", () => {
     const ctx = makeCtx({ researchPlanMarkdown: "# Plan", definitionId: 3, definitionVersion: 5 });
     await execute(makeNode("send_plan_approval"), {}, ctx);
     expect(mocks.createApprovalRequest).toHaveBeenCalledWith(
-      expect.anything(),
       expect.objectContaining({ definitionId: 3, definitionVersion: 5 }),
     );
   });
@@ -179,7 +182,6 @@ describe("send_plan_approval execute", () => {
     await execute(makeNode("send_plan_approval"), {}, ctx);
 
     expect(mocks.createApprovalRequest).toHaveBeenCalledWith(
-      expect.anything(),
       expect.objectContaining({
         repositoryScope: {
           repositories: [
@@ -240,7 +242,6 @@ describe("send_plan_approval execute", () => {
     await execute(makeNode("send_plan_approval"), {}, ctx);
 
     expect(mocks.createApprovalRequest).toHaveBeenCalledWith(
-      expect.anything(),
       expect.objectContaining({
         repositoryScope: {
           repositories: [
@@ -275,7 +276,6 @@ describe("send_plan_approval execute", () => {
       assumptions: ["db is seeded", 3],
     });
     expect(mocks.createApprovalRequest).toHaveBeenCalledWith(
-      expect.anything(),
       expect.objectContaining({ plan: { markdown: "# Step plan" }, assumptions: ["db is seeded"] }),
     );
   });

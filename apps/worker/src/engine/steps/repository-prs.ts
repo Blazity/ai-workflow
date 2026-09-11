@@ -1,7 +1,7 @@
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
 import type { WorkflowRepositoryScope } from "@shared/contracts";
 import type { PullRequest, VCSAdapter } from "../../adapters/vcs/types.js";
-import type { ActiveRunOwner } from "../support/active-run-owner.js";
+import type { ActiveRunOwner } from "../../db/repositories/active-runs.js";
 import { scrubForPublication } from "../support/publication-scrub.js";
 import { isRunControlError } from "../helpers/run-control-error.js";
 
@@ -51,10 +51,9 @@ export async function createOrFindWorkflowOwnedPullRequest(input: {
   repositoryScope?: WorkflowRepositoryScope;
 }): Promise<WorkflowPrLink> {
   "use step";
-  const { getDb } = await import("../../db/client.js");
-  const { assertActiveRunOwner } = await import("../support/active-run-owner.js");
-  const { createRepositoryVCS } = await import("../support/vcs-runtime.js");
-  const { isRepoAllowedForScope } = await import("../support/repo-allowlist.js");
+  const { assertConnectedActiveRunOwner } = await import("../../db/repositories/active-runs.js");
+  const { createRepositoryVCS } = await import("../../engine/support/vcs-runtime.js");
+  const { isRepoAllowedForScope } = await import("../../engine/support/repo-allowlist.js");
   return resolveWorkflowOwnedPullRequest(
     input,
     createRepositoryVCS,
@@ -63,7 +62,7 @@ export async function createOrFindWorkflowOwnedPullRequest(input: {
         { provider: input.repository.provider, repoPath },
         input.repositoryScope,
       ),
-    () => assertActiveRunOwner(getDb(), input.owner),
+    () => assertConnectedActiveRunOwner(input.owner),
   );
 }
 createOrFindWorkflowOwnedPullRequest.maxRetries = 3;
@@ -77,11 +76,10 @@ export async function recordWorkflowOwnedPullRequest(input: {
   targetBranch: string;
 }): Promise<void> {
   "use step";
-  const { getDb } = await import("../../db/client.js");
-  const { upsertWorkflowOwnedBranch } = await import(
+  const { upsertConnectedWorkflowOwnedBranch } = await import(
     "../../db/repositories/runs.js"
   );
-  await upsertWorkflowOwnedBranch(getDb(), {
+  await upsertConnectedWorkflowOwnedBranch({
     ticketKey: input.ticketKey,
     provider: input.pr.provider,
     repoPath: input.pr.repoPath,
@@ -109,11 +107,10 @@ export async function recordWorkflowOwnedPullRequestIntent(input: {
   targetBranch: string;
 }): Promise<void> {
   "use step";
-  const { getDb } = await import("../../db/client.js");
-  const { upsertWorkflowOwnedBranch } = await import(
+  const { upsertConnectedWorkflowOwnedBranch } = await import(
     "../../db/repositories/runs.js"
   );
-  await upsertWorkflowOwnedBranch(getDb(), {
+  await upsertConnectedWorkflowOwnedBranch({
     ...input,
     prCorrelationPending: true,
   });

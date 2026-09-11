@@ -1,12 +1,11 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 import { IssueTrackerNotFoundError } from "../../../adapters/issue-tracker/types.js";
-import { listApprovalParkedSubjects } from "../../../db/repositories/approvals.js";
-import { classifyProtectedClarificationSubjects } from "../../../db/repositories/clarifications.js";
-import { getDb } from "../../../db/client.js";
-import { isRunRecordedFailed, isRunRecordedSucceeded } from "../../../db/repositories/runs.js";
+import { listConnectedApprovalParkedSubjects } from "../../../db/repositories/approvals.js";
+import { classifyConnectedProtectedClarificationSubjects } from "../../../db/repositories/clarifications.js";
+import { isConnectedRunRecordedFailed, isConnectedRunRecordedSucceeded } from "../../../db/repositories/runs.js";
 import { logger } from "../../../infra/logger.js";
-import { resumeClarificationFromComments } from "../../clarifications/index.js";
+import { resumeConnectedClarificationFromComments } from "../../clarifications/index.js";
 import { dispatchTicket } from "../../dispatch/index.js";
 import { ticketSubjectKey } from "../../../engine/support/subject-key.js";
 import { cancelRunDetailed } from "../../run-lifecycle/index.js";
@@ -18,7 +17,7 @@ import {
 import { observeProviderWebhook } from "../../system/index.js";
 import {
   PREMATURE_AI_REVIEW_CANCELLATION_REASON,
-  decideAiReviewRun,
+  decideConnectedAiReviewRun,
   isAiReviewDestination,
 } from "../../tickets/index.js";
 import { createAdapters } from "../../../engine/support/adapters.js";
@@ -290,7 +289,7 @@ async function handleVerifiedJiraWebhook(rawBody: string) {
         );
         return { status: "ignored", reason: "ticket_in_ai_review_column", ticketKey };
       }
-      const aiReviewDecision = await decideAiReviewRun(getDb(), activeRun.runId);
+      const aiReviewDecision = await decideConnectedAiReviewRun(activeRun.runId);
       if (aiReviewDecision === "lookup_failed") {
         logger.warn(
           { ticketKey, runId: activeRun.runId },
@@ -316,10 +315,10 @@ async function handleVerifiedJiraWebhook(rawBody: string) {
       let recordedFailed: boolean;
       let recordedSucceeded: boolean;
       try {
-        recordedFailed = await isRunRecordedFailed(getDb(), activeRun.runId);
+        recordedFailed = await isConnectedRunRecordedFailed(activeRun.runId);
         recordedSucceeded = recordedFailed
           ? false
-          : await isRunRecordedSucceeded(getDb(), activeRun.runId);
+          : await isConnectedRunRecordedSucceeded(activeRun.runId);
       } catch (lookupError) {
         // Do not guess on a lookup failure: treating it as "not terminal" would
         // let this self-triggered webhook cancel a genuinely finished run (the
@@ -361,7 +360,7 @@ async function handleVerifiedJiraWebhook(rawBody: string) {
       liveTicketState.status.trim().toLowerCase() ===
         board.backlogColumn.trim().toLowerCase()
     ) {
-      const protectedSubjects = await classifyProtectedClarificationSubjects(getDb());
+      const protectedSubjects = await classifyConnectedProtectedClarificationSubjects();
       if (protectedSubjects.all.includes(subjectKey)) {
         logger.info(
           {
@@ -387,7 +386,7 @@ async function handleVerifiedJiraWebhook(rawBody: string) {
       // protected, so an in-flight ticket run or an already dispatched approved
       // continuation still cancels, and any move to a non-backlog column
       // (a human abort) never reaches this branch at all.
-      const approvalParkedSubjects = await listApprovalParkedSubjects(getDb());
+      const approvalParkedSubjects = await listConnectedApprovalParkedSubjects();
       if (approvalParkedSubjects.includes(subjectKey)) {
         logger.info(
           {
@@ -518,8 +517,7 @@ async function tryResumeClarification(
   adapters: ReturnType<typeof createAdapters>,
   allowNudge: boolean,
 ): Promise<{ status: string; reason: string; ticketKey: string } | null> {
-  const resume = await resumeClarificationFromComments({
-    db: getDb(),
+  const resume = await resumeConnectedClarificationFromComments({
     issueTracker: adapters.issueTracker,
     ticketKey,
     allowNudge,

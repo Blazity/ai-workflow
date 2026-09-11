@@ -1,4 +1,4 @@
-import type { ActiveRunOwner } from "../../support/active-run-owner.js";
+import type { ActiveRunOwner } from "../../../db/repositories/active-runs.js";
 import { scrubForPublication } from "../../support/publication-scrub.js";
 import { isRunControlError } from "../../helpers/run-control-error.js";
 import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "../support/types.js";
@@ -9,11 +9,10 @@ async function blockPostTicketCommentStep(
   owner: ActiveRunOwner,
 ): Promise<string | null> {
   "use step";
-  const { getDb } = await import("../../../db/client.js");
-  const { assertActiveRunOwner } = await import("../../support/active-run-owner.js");
-  const { createAdapters } = await import("../../support/adapters.js");
+  const { assertConnectedActiveRunOwner } = await import("../../../db/repositories/active-runs.js");
+  const { createAdapters } = await import("../../../engine/support/adapters.js");
   const { issueTracker } = createAdapters();
-  await assertActiveRunOwner(getDb(), owner);
+  await assertConnectedActiveRunOwner(owner);
   // The body is {{variable}}-substituted before it gets here, so it can carry
   // {{change_summary}} or any agent block's output, exactly like post_pr_comment.
   return issueTracker.postComment(ticketId, scrubForPublication(body));

@@ -54,7 +54,7 @@ export async function buildSandboxProviderConfigs(
   const { logger } = await import("../../infra/logger.js");
   const needed = neededProviders ? new Set(neededProviders) : null;
   const configs: SandboxProviderConfig[] = [];
-  for (const provider of getConfiguredVcsProviders().filter((provider) => !needed || needed.has(provider.kind))) {
+  for (const provider of getConfiguredVcsProviders().filter((candidate) => !needed || needed.has(candidate.kind))) {
     try {
       const commitIdentity = await resolveCommitIdentity(provider);
       configs.push({

@@ -1,5 +1,5 @@
 import type { RunRegistryAdapter } from "../../../adapters/run-registry/types.js";
-import type { Db } from "../../../db/client.js";
+import type { Db } from "../../../db/types.js";
 import {
   envTriggerRateLimitDefault,
   resolveTriggerRateLimit,
@@ -16,10 +16,18 @@ import {
   getWebhookEndpointById,
 } from "../../../webhook-trigger/endpoint-store.js";
 import {
-  getEnabledDeployedDefinition,
-  getWorkflowDefinitionVersion,
   runnableDefinitionOf,
 } from "../../../db/repositories/definitions.js";
+import {
+  getEnabledDeployedDefinition,
+  getConnectedEnabledDeployedDefinition,
+} from "../../../engine/definition-trigger-routing.js";
+import { getConnectedWebhookEndpointById } from "../../../db/repositories/webhook-trigger-endpoints.js";
+import {
+  parseOptionalWorkflowDefinitionVersionRow,
+  readConnectedWorkflowDefinitionVersion,
+  readWorkflowDefinitionVersion,
+} from "../../../engine/stored-definition-reads.js";
 
 /**
  * Deps for dispatching a webhook delivery, shared by the ingress route and the
@@ -42,6 +50,53 @@ export function createWebhookDispatchDeps(
   };
 }
 
+export function createConnectedWebhookDispatchDeps(
+  runRegistry: RunRegistryAdapter,
+): WebhookDispatchDeps {
+  return {
+    runRegistry,
+    maxConcurrentAgents: maxConcurrentAgents(),
+    ensureStillDispatchable: ensureConnectedStillDispatchable,
+    resolveTriggerRateLimit: resolveConnectedWebhookTriggerRateLimit,
+  };
+}
+
+async function resolveConnectedWebhookTriggerRateLimit(
+  target: WebhookDispatchTarget,
+): Promise<TriggerRateLimitConfig | null> {
+  const pinned = await readConnectedWorkflowDefinitionVersion(
+    target.definitionId,
+    target.definitionVersion,
+  );
+  return resolveTriggerRateLimit(
+    triggerNodeRateLimitParams(runnableDefinitionOf(pinned), target.nodeId),
+    envTriggerRateLimitDefault(triggerRateLimitDefaults()),
+  );
+}
+
+async function ensureConnectedStillDispatchable(
+  target: WebhookDispatchTarget,
+): Promise<WebhookDispatchGuardRejection | null> {
+  const endpoint = await getConnectedWebhookEndpointById(target.endpointId);
+  if (!endpoint || endpoint.revokedAt) return "endpoint_revoked";
+
+  const rawLive = await getConnectedEnabledDeployedDefinition(target.definitionId);
+  const live = rawLive
+    ? { ...rawLive, current: parseOptionalWorkflowDefinitionVersionRow(rawLive.current) }
+    : null;
+  if (!live || !live.current) return "definition_disabled";
+
+  const pinned = await readConnectedWorkflowDefinitionVersion(
+    target.definitionId,
+    target.definitionVersion,
+  );
+  const pinnedGraph = runnableDefinitionOf(pinned);
+  if (!pinnedGraph || !webhookNodeOf(pinnedGraph.nodes, target.nodeId)) {
+    return "node_missing";
+  }
+  return null;
+}
+
 /**
  * The webhook node's start budget, read from the version the delivery is pinned
  * to so the limit is the one authored in the graph this run would execute. The
@@ -56,7 +111,7 @@ async function resolveWebhookTriggerRateLimit(
   db: Db,
   target: WebhookDispatchTarget,
 ): Promise<TriggerRateLimitConfig | null> {
-  const pinned = await getWorkflowDefinitionVersion(
+  const pinned = await readWorkflowDefinitionVersion(
     db,
     target.definitionId,
     target.definitionVersion,
@@ -74,10 +129,13 @@ async function ensureStillDispatchable(
   const endpoint = await getWebhookEndpointById(db, target.endpointId);
   if (!endpoint || endpoint.revokedAt) return "endpoint_revoked";
 
-  const live = await getEnabledDeployedDefinition(db, target.definitionId);
+  const rawLive = await getEnabledDeployedDefinition(db, target.definitionId);
+  const live = rawLive
+    ? { ...rawLive, current: parseOptionalWorkflowDefinitionVersionRow(rawLive.current) }
+    : null;
   if (!live || !live.current) return "definition_disabled";
 
-  const pinned = await getWorkflowDefinitionVersion(
+  const pinned = await readWorkflowDefinitionVersion(
     db,
     target.definitionId,
     target.definitionVersion,

@@ -5,9 +5,17 @@ import {
   type DashboardRole,
   type PrePrCheckConfigVersion,
 } from "@shared/contracts";
-import { desc, eq } from "drizzle-orm";
-import type { Db } from "../../db/client.js";
-import { prePrCheckConfigVersions, user } from "../../db/schema.js";
+import type { Db } from "../../db/types.js";
+import {
+  getConnectedCurrentPrePrCheckConfigRow,
+  getConnectedPrePrCheckConfigVersionRow,
+  getCurrentPrePrCheckConfigRow,
+  getPrePrCheckConfigVersionRow,
+  insertConnectedPrePrCheckConfigVersion,
+  insertPrePrCheckConfigVersion,
+  listConnectedPrePrCheckConfigVersionRows,
+  listPrePrCheckConfigVersionRows,
+} from "../../db/repositories/pre-pr-checks.js";
 import type { PrePrCheckConfig } from "./config.js";
 
 const VERSION_LIST_LIMIT = 50;
@@ -39,22 +47,14 @@ function canonicalRow(row: PrePrCheckConfigVersionRow): PrePrCheckConfigVersionR
 export async function getCurrentPrePrCheckConfig(
   db: Db,
 ): Promise<PrePrCheckConfigVersionRow | null> {
-  const rows = await db
-    .select()
-    .from(prePrCheckConfigVersions)
-    .orderBy(desc(prePrCheckConfigVersions.version))
-    .limit(1);
-  return rows[0] ? canonicalRow(rows[0]) : null;
+  const row = await getCurrentPrePrCheckConfigRow(db);
+  return row ? canonicalRow(row) : null;
 }
 
 export async function listPrePrCheckConfigVersions(
   db: Db,
 ): Promise<PrePrCheckConfigVersionRow[]> {
-  const rows = await db
-    .select()
-    .from(prePrCheckConfigVersions)
-    .orderBy(desc(prePrCheckConfigVersions.version))
-    .limit(VERSION_LIST_LIMIT);
+  const rows = await listPrePrCheckConfigVersionRows(db, VERSION_LIST_LIMIT);
   return rows.map(canonicalRow);
 }
 
@@ -73,15 +73,12 @@ export async function savePrePrCheckConfig(
   if (!canEditPrePrChecks(input.actorRole)) {
     throw new DashboardAuthError(403, "Forbidden");
   }
-  const rows = await db
-    .insert(prePrCheckConfigVersions)
-    .values({
-      config: input.config,
-      createdById: input.actorId,
-      createdByLabel: input.actorLabel,
-      restoredFromVersion: input.restoredFromVersion ?? null,
-    })
-    .returning();
+  const rows = await insertPrePrCheckConfigVersion(db, {
+    config: input.config,
+    createdById: input.actorId,
+    createdByLabel: input.actorLabel,
+    restoredFromVersion: input.restoredFromVersion ?? null,
+  });
   return canonicalRow(rows[0]!);
 }
 
@@ -92,11 +89,7 @@ export async function restorePrePrCheckConfig(
   if (!canEditPrePrChecks(input.actorRole)) {
     throw new DashboardAuthError(403, "Forbidden");
   }
-  const rows = await db
-    .select()
-    .from(prePrCheckConfigVersions)
-    .where(eq(prePrCheckConfigVersions.version, input.version))
-    .limit(1);
+  const rows = await getPrePrCheckConfigVersionRow(db, input.version);
   const source = rows[0];
   if (!source) {
     throw new DashboardAuthError(404, "Unknown version");
@@ -123,13 +116,43 @@ export function serializePrePrCheckConfigVersion(
   };
 }
 
-/** Display label for the audit trail: name, falling back to email, then id. */
-export async function dashboardUserLabel(db: Db, userId: string): Promise<string> {
-  const rows = await db
-    .select({ name: user.name, email: user.email })
-    .from(user)
-    .where(eq(user.id, userId))
-    .limit(1);
-  const row = rows[0];
-  return row?.name?.trim() || row?.email || userId;
+export function listConnectedPrePrCheckConfigVersions() {
+  return listConnectedPrePrCheckConfigVersionRows(VERSION_LIST_LIMIT).then((rows) =>
+    rows.map(canonicalRow),
+  );
+}
+
+export function getConnectedCurrentPrePrCheckConfig() {
+  return getConnectedCurrentPrePrCheckConfigRow().then((row) =>
+    row ? canonicalRow(row) : null,
+  );
+}
+
+export function saveConnectedPrePrCheckConfig(input: SavePrePrCheckConfigInput) {
+  if (!canEditPrePrChecks(input.actorRole)) {
+    throw new DashboardAuthError(403, "Forbidden");
+  }
+  return insertConnectedPrePrCheckConfigVersion({
+    config: input.config,
+    createdById: input.actorId,
+    createdByLabel: input.actorLabel,
+    restoredFromVersion: input.restoredFromVersion ?? null,
+  }).then((rows) => canonicalRow(rows[0]!));
+}
+
+export async function restoreConnectedPrePrCheckConfig(
+  input: Parameters<typeof restorePrePrCheckConfig>[1],
+) {
+  if (!canEditPrePrChecks(input.actorRole)) {
+    throw new DashboardAuthError(403, "Forbidden");
+  }
+  const [source] = await getConnectedPrePrCheckConfigVersionRow(input.version);
+  if (!source) throw new DashboardAuthError(404, "Unknown version");
+  return saveConnectedPrePrCheckConfig({
+    actorRole: input.actorRole,
+    actorId: input.actorId,
+    actorLabel: input.actorLabel,
+    config: source.config,
+    restoredFromVersion: source.version,
+  });
 }

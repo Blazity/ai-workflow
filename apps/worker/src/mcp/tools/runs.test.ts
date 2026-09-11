@@ -38,15 +38,44 @@ import {
 import { sanitizeReplayValue } from "../../run-observability/sanitizer.js";
 import {
   captureRunObservationStart,
-  finishWorkflowBlockAttempt,
+  getWorkflowBlockAttemptPersistence,
+  replaceWorkflowBlockAttemptPersistence,
   startWorkflowBlockAttempt,
 } from "../../db/repositories/runs/run-observability.js";
+import { prepareReplayAttemptFinishPersistence } from "../../run-observability/runtime-hooks.js";
 import { depsFor } from "../../test-support/mcp.js";
 import { registerRunLogsTool, registerRunTools } from "./runs.js";
 
 const ORG_ID = "org-execute";
 
 let db: Db;
+
+async function finishWorkflowBlockAttempt(input: {
+  db: Db;
+  runId: string;
+  organizationId: string;
+  attemptId: number;
+  state: "completed" | "failed";
+  outcome: Parameters<typeof prepareReplayAttemptFinishPersistence>[1]["outcome"];
+  selectedTransition?: null;
+  diagnosticId?: string | null;
+  observations?: Parameters<typeof prepareReplayAttemptFinishPersistence>[1]["observations"];
+  completedAt?: Date;
+}): Promise<boolean> {
+  const current = await getWorkflowBlockAttemptPersistence(input);
+  if (!current) return false;
+  return replaceWorkflowBlockAttemptPersistence({
+    ...input,
+    ...prepareReplayAttemptFinishPersistence(current, {
+      state: input.state,
+      outcome: input.outcome,
+      selectedTransition: input.selectedTransition ?? null,
+      diagnosticId: input.diagnosticId ?? null,
+      observations: input.observations ?? [],
+      completedAt: input.completedAt ?? new Date(),
+    }),
+  });
+}
 
 beforeEach(async () => {
   db = await createTestDb();

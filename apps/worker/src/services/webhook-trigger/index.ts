@@ -26,12 +26,16 @@ export {
   DEFAULT_WEBHOOK_RATE_LIMIT_PER_MINUTE,
   WEBHOOK_INGRESS_LIMIT_PER_MINUTE,
   checkAndIncrementWebhookRate,
+  checkAndIncrementConnectedWebhookRate,
+  sweepConnectedWebhookRateLimits,
   sweepWebhookRateLimits,
   webhookRateWindowStart,
 } from "./rate-limit.js";
 export {
   getWebhookRejectionsToday,
+  recordConnectedWebhookRejection,
   recordWebhookRejection,
+  sweepConnectedWebhookRejectionCounters,
   sweepWebhookRejectionCounters,
   webhookRejectionWindowStart,
 } from "./rejection-counters.js";

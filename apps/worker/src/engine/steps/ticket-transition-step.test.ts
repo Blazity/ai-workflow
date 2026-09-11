@@ -12,6 +12,7 @@ vi.mock("../../engine/support/adapters.js", () => ({
 }));
 vi.mock("../../engine/support/ticket-transition.js", () => ({
   moveTicketForRun: (...args: any[]) => mocks.moveTicket(...args),
+  moveConnectedTicketForRun: (...args: any[]) => mocks.moveTicket(...args),
 }));
 
 import { moveTicketStep } from "./ticket-transition-step.js";
@@ -33,7 +34,6 @@ describe("moveTicketStep", () => {
     await moveTicketStep("AIW-101", target, owner);
 
     expect(mocks.moveTicket).toHaveBeenCalledWith({
-      db: mocks.db,
       issueTracker: mocks.issueTracker,
       ticketKey: "AIW-101",
       target,

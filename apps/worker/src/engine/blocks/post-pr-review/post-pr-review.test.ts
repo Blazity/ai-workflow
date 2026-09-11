@@ -1,19 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  findWorkflowOwnedPullRequestIdentity: vi.fn(),
-  publishRunOwnedPrReview: vi.fn(),
+  findConnectedWorkflowOwnedPullRequestIdentity: vi.fn(),
+  publishConnectedRunOwnedPrReview: vi.fn(),
 }));
 
-vi.mock("../../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
 vi.mock("../../../db/repositories/runs.js", () => ({
-  findWorkflowOwnedPullRequestIdentity: (...args: unknown[]) =>
-    mocks.findWorkflowOwnedPullRequestIdentity(...args),
+  findConnectedWorkflowOwnedPullRequestIdentity: (...args: unknown[]) =>
+    mocks.findConnectedWorkflowOwnedPullRequestIdentity(...args),
 }));
 vi.mock("../../runtime/pr-external-resources.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../runtime/pr-external-resources.js")>()),
-  publishRunOwnedPrReview: (...args: unknown[]) =>
-    mocks.publishRunOwnedPrReview(...args),
+  publishConnectedRunOwnedPrReview: (...args: unknown[]) =>
+    mocks.publishConnectedRunOwnedPrReview(...args),
 }));
 import type { WorkflowOwnedBranchRecord } from "../../../db/repositories/runs.js";
 import { makePrPayload } from "../support/test-support.js";
@@ -79,8 +78,8 @@ describe("reviewPrAtWorkflowPublishedHead", () => {
 describe("postPrReviewStep", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.findWorkflowOwnedPullRequestIdentity.mockResolvedValue(owned);
-    mocks.publishRunOwnedPrReview.mockResolvedValue({
+    mocks.findConnectedWorkflowOwnedPullRequestIdentity.mockResolvedValue(owned);
+    mocks.publishConnectedRunOwnedPrReview.mockResolvedValue({
       decision: "approve",
       summary: "Approved",
       inlineCommentCount: 0,
@@ -103,7 +102,7 @@ describe("postPrReviewStep", () => {
     });
 
     expect(result.decision).toBe("approve");
-    expect(mocks.publishRunOwnedPrReview).toHaveBeenCalledWith(
+    expect(mocks.publishConnectedRunOwnedPrReview).toHaveBeenCalledWith(
       expect.objectContaining({
         target: expect.objectContaining({ headSha: "fixed-head" }),
       }),

@@ -23,7 +23,6 @@ async function runGate(input: PostPrGateWorkflowInput) {
   const { postPrGateStepRegistry } = await import("../post-pr-gate/steps/index.js");
   const { executePostPrGatePhase } = await import("../post-pr-gate/runner.js");
   const { GateStore } = await import("../post-pr-gate/gate-store.js");
-  const { getDb } = await import("../db/client.js");
   const {
     gateCheckName,
     isManagedBranch,
@@ -39,7 +38,7 @@ async function runGate(input: PostPrGateWorkflowInput) {
     repoPath: input.ownerRepo,
     baseBranch: input.baseRef,
   });
-  const gateStore = new GateStore(getDb());
+  const gateStore = new GateStore();
 
   if (config.postPrGate.runOn.botPrsOnly && !isManagedBranch(input.headRef)) {
     logger.info({ headRef: input.headRef }, "post_pr_gate_skipped_not_bot_branch");

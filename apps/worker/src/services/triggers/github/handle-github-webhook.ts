@@ -8,8 +8,7 @@
  * and the fall back to the legacy post-PR gate, is one ordered decision and
  * lives here.
  */
-import { PostgresRunRegistry } from "../../../db/repositories/active-runs.js";
-import { getDb } from "../../../db/client.js";
+import { createConnectedPostgresRunRegistry } from "../../../db/repositories/active-runs.js";
 import { verifyGitHubWebhookSignature } from "../../../infra/github-webhook-sig.js";
 import { logger } from "../../../infra/logger.js";
 import { loadPostPrGateConfig } from "../../../post-pr-gate/config.js";
@@ -23,7 +22,7 @@ import {
 } from "../../dispatch/index.js";
 import {
   isWorkflowGeneratedPush,
-  workflowPushNormalizationOptions,
+  connectedWorkflowPushNormalizationOptions,
 } from "../../publication/index.js";
 import {
   gateCheckNameAliases,
@@ -105,11 +104,9 @@ async function handleVerifiedGitHubWebhook(request: GitHubWebhookRequest) {
   // snapshot that it pins, avoiding a load-then-deploy race in this route.
   // Comment events (inline diff + PR conversation) can only ever be "commented".
   const botLogin = getVcsBotLogin("github");
-  const db = getDb();
   const workflowPushOptions =
     ghEvent === "pull_request" && body.action === "synchronize"
-      ? await workflowPushNormalizationOptions({
-          db,
+      ? await connectedWorkflowPushNormalizationOptions({
           provider: "github",
           repoPath: ownerRepo,
           prNumber: body.pull_request?.number,
@@ -146,8 +143,7 @@ async function handleVerifiedGitHubWebhook(request: GitHubWebhookRequest) {
     let claimedEvent = events[0]!;
     for (const candidate of events) {
       const candidateResult = await dispatchTriggerEvent(candidate, {
-        db,
-        runRegistry: new PostgresRunRegistry(db),
+        runRegistry: createConnectedPostgresRunRegistry(),
         maxConcurrentAgents: maxConcurrentAgents(),
       });
       result = candidateResult;

@@ -6,6 +6,7 @@
  * scripts/gates/cluster-deep-imports.json and that list only shrinks.
  */
 export {
+  createConnectedScheduleDispatchDeps,
   createScheduleDispatchDeps,
   runScheduleTriggerPass,
 } from "./dispatch-schedule-trigger.js";
@@ -23,6 +24,7 @@ export type {
   SchedulePreset,
   Weekday,
 } from "./occurrence.js";
+export type { OccurrenceRow } from "./occurrence-store.js";
 export {
   cancelWaitingOccurrences,
 } from "./revoked-occurrences.js";

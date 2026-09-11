@@ -1,7 +1,7 @@
-import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, lt, lte, sql } from "drizzle-orm";
 import type { ClarificationRequest, ClarificationStatus } from "@shared/contracts";
-import type { Db } from "../client.js";
-import { activeRuns, clarificationRequests, workflowRuns } from "../schema.js";
+import { getDb, type Db } from "../client.js";
+import { activeRuns, clarificationRequests } from "../schema.js";
 import { ActiveRunOwnerError } from "./active-run-owner-error.js";
 
 interface ActiveRunOwner {
@@ -64,16 +64,7 @@ function mapRow(row: SelectRow): ClarificationRow {
   };
 }
 
-export async function getClarification(db: Db, id: string): Promise<ClarificationRow | null> {
-  const [row] = await db
-    .select()
-    .from(clarificationRequests)
-    .where(eq(clarificationRequests.id, id))
-    .limit(1);
-  return row ? mapRow(row) : null;
-}
-
-export async function getClarificationForRun(
+async function getClarificationForRun(
   db: Db,
   runId: string,
 ): Promise<ClarificationRow | null> {
@@ -86,7 +77,19 @@ export async function getClarificationForRun(
   return row ? mapRow(row) : null;
 }
 
-export async function listAnsweredForTicket(
+export function getConnectedClarificationForRun(runId: string) {
+  return getClarificationForRun(getDb(), runId);
+}
+
+export function supersedeConnectedPendingClarificationsForTicket(ticketKey: string) {
+  return supersedePendingForTicket(getDb(), ticketKey);
+}
+
+export function supersedeConnectedClarification(id: string) {
+  return supersedeClarification(getDb(), id);
+}
+
+async function listAnsweredForTicket(
   db: Db,
   ticketKey: string,
 ): Promise<ClarificationRow[]> {
@@ -151,6 +154,10 @@ export async function classifyProtectedClarificationSubjects(
   const terminal = [...terminalSet].sort();
   const all = [...new Set([...retained, ...terminal])].sort();
   return { all, retained, terminal };
+}
+
+export function classifyConnectedProtectedClarificationSubjects() {
+  return classifyProtectedClarificationSubjects(getDb());
 }
 
 export async function supersedePendingForTicket(
@@ -235,6 +242,16 @@ export async function reconcileClarificationPickupState(
   };
 }
 
+export function reconcileConnectedClarificationPickupState(
+  input: Parameters<typeof reconcileClarificationPickupState>[1],
+) {
+  return reconcileClarificationPickupState(getDb(), input);
+}
+
+export function listConnectedAnsweredClarificationsForTicket(ticketKey: string) {
+  return listAnsweredForTicket(getDb(), ticketKey);
+}
+
 export async function tombstoneClarificationCancellation(
   db: Db,
   input: { subjectKey: string; ownerToken: string; runId: string | null },
@@ -251,6 +268,148 @@ export async function tombstoneClarificationCancellation(
     )
     .returning({ id: clarificationRequests.id });
   return { matched: rows.length > 0, successorOwnerToken: null };
+}
+
+export function tombstoneConnectedClarificationCancellation(
+  input: Parameters<typeof tombstoneClarificationCancellation>[1],
+) {
+  return tombstoneClarificationCancellation(getDb(), input);
+}
+
+/** Reserve a delivery of one exact answered clarification generation. */
+export async function reserveClarificationResumeAttempt(
+  db: Db,
+  input: { id: string; answeredAt: Date; maxAttempts: number },
+): Promise<number | null> {
+  const [row] = await db
+    .update(clarificationRequests)
+    .set({
+      resumeAttempts: sql`coalesce(${clarificationRequests.resumeAttempts}, 0) + 1`,
+    })
+    .where(
+      and(
+        eq(clarificationRequests.id, input.id),
+        eq(clarificationRequests.status, "answered"),
+        eq(clarificationRequests.answeredAt, input.answeredAt),
+        lt(sql`coalesce(${clarificationRequests.resumeAttempts}, 0)`, input.maxAttempts),
+      ),
+    )
+    .returning({ resumeAttempts: clarificationRequests.resumeAttempts });
+  return row?.resumeAttempts ?? null;
+}
+
+/** Retire an exhausted clarification delivery and fail its linked run atomically. */
+export async function terminalizeClarificationResume(
+  db: Db,
+  input: { id: string; runId: string; answeredAt: Date; maxAttempts: number; reason: string },
+): Promise<boolean> {
+  const result = await db.execute(sql`
+    WITH terminal_clarification AS (
+      UPDATE clarification_requests
+      SET status = 'resume_failed'
+      WHERE id = ${input.id}
+        AND status = 'answered'
+        AND resume_attempts >= ${input.maxAttempts}
+        AND answered_at = ${input.answeredAt}
+        AND EXISTS (
+          SELECT 1 FROM workflow_runs WHERE workflow_runs.run_id = ${input.runId}
+        )
+      RETURNING id, run_id
+    ), failed_run AS (
+      UPDATE workflow_runs
+      SET status = 'failed',
+          status_reason = ${input.reason},
+          completed_at = coalesce(completed_at, now()),
+          duration_sec = coalesce(
+            duration_sec,
+            case
+              when coalesce(started_at, created_at) is not null
+              then greatest(0, extract(epoch from (now() - coalesce(started_at, created_at)))::int)
+              else null
+            end
+          ),
+          updated_at = now()
+      FROM terminal_clarification
+      WHERE workflow_runs.run_id = terminal_clarification.run_id
+        AND coalesce(workflow_runs.status, 'running')
+          NOT IN ('success', 'failed', 'blocked')
+      RETURNING workflow_runs.run_id
+    )
+    SELECT terminal_clarification.id
+    FROM terminal_clarification
+    LEFT JOIN failed_run ON failed_run.run_id = terminal_clarification.run_id
+  `);
+  return ((result as { rows?: Array<{ id: string }> }).rows ?? []).length === 1;
+}
+
+export function reserveConnectedClarificationResumeAttempt(
+  input: Parameters<typeof reserveClarificationResumeAttempt>[1],
+) {
+  return reserveClarificationResumeAttempt(getDb(), input);
+}
+
+export function terminalizeConnectedClarificationResume(
+  input: Parameters<typeof terminalizeClarificationResume>[1],
+) {
+  return terminalizeClarificationResume(getDb(), input);
+}
+
+export function listExpiredPendingHookClarifications(db: Db, now: Date) {
+  return db
+    .select({
+      id: clarificationRequests.id,
+      hookToken: clarificationRequests.hookToken,
+      snapshotId: clarificationRequests.snapshotId,
+    })
+    .from(clarificationRequests)
+    .where(
+      and(
+        eq(clarificationRequests.status, "pending"),
+        isNotNull(clarificationRequests.hookToken),
+        lte(clarificationRequests.expiresAt, now),
+      ),
+    );
+}
+
+export function listConnectedExpiredPendingHookClarifications(now: Date) {
+  return listExpiredPendingHookClarifications(getDb(), now);
+}
+
+export async function retirePendingHookClarification(
+  db: Db,
+  id: string,
+): Promise<boolean> {
+  const [row] = await db
+    .update(clarificationRequests)
+    .set({ status: "superseded" })
+    .where(
+      and(
+        eq(clarificationRequests.id, id),
+        eq(clarificationRequests.status, "pending"),
+      ),
+    )
+    .returning({ id: clarificationRequests.id });
+  return Boolean(row);
+}
+
+export function retireConnectedPendingHookClarification(id: string) {
+  return retirePendingHookClarification(getDb(), id);
+}
+
+export async function recordHookClarificationCleanup(
+  db: Db,
+  input: { id: string; state: "deleted" | "failed"; error: string | null },
+): Promise<void> {
+  await db
+    .update(clarificationRequests)
+    .set({ cleanupState: input.state, cleanupError: input.error })
+    .where(eq(clarificationRequests.id, input.id));
+}
+
+export function recordConnectedHookClarificationCleanup(
+  input: Parameters<typeof recordHookClarificationCleanup>[1],
+) {
+  return recordHookClarificationCleanup(getDb(), input);
 }
 
 export function serializeClarification(row: ClarificationRow): ClarificationRequest {

@@ -40,6 +40,7 @@ export {
   isRepoAllowedForScope,
 } from "./repo-allowlist.js";
 export {
+  listConnectedPendingTriggers,
   listPendingTriggers,
 } from "./trigger-delivery-store.js";
 export {
@@ -51,9 +52,12 @@ export type {
   TriggerEvent,
 } from "./trigger-events.js";
 export {
+  enforceConnectedTriggerRateLimit,
   enforceTriggerRateLimit,
   getTriggerRejectionsToday,
   resolveTriggerRateLimit,
+  sweepConnectedTriggerRateLimits,
+  sweepConnectedTriggerRejectionCounters,
   sweepTriggerRateLimits,
   sweepTriggerRejectionCounters,
   triggerRateLimitLogFields,

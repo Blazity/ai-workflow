@@ -30,21 +30,23 @@ import {
 } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
 import {
+  getWorkflowDefinition,
+  listWorkflowDefinitions,
+  listWorkflowDefinitionVersionRows,
+  type WorkflowDefinitionActor,
+} from "../db/repositories/definitions.js";
+import { readWorkflowDefinitionDraft } from "../engine/definition-draft-read.js";
+import { getEnabledWorkflowDefinitionForTrigger } from "../engine/definition-trigger-routing.js";
+import {
   archiveWorkflowDefinition,
   createWorkflowDefinition,
   deployWorkflowDefinition,
-  getWorkflowDefinition,
-  getWorkflowDefinitionDraft,
-  getEnabledWorkflowDefinitionForTrigger,
-  listWorkflowDefinitions,
-  listWorkflowDefinitionVersionRows,
   rollbackWorkflowDefinition,
   saveWorkflowDefinitionDraft,
   saveWorkflowDefinitionLayout,
   saveWorkflowDefinitionVersion,
   updateWorkflowDefinition,
-  type WorkflowDefinitionActor,
-} from "../db/repositories/definitions.js";
+} from "../services/workflow-definitions/policy-operations.js";
 
 const ADMIN: WorkflowDefinitionActor = { role: "admin", id: "u_admin", label: "Admin" };
 
@@ -108,7 +110,7 @@ describe("workflow definition lifecycle", () => {
     expect(layout.layout.edges).toEqual({
       "stable-edge": { bend: { x: 150, y: 175 } },
     });
-    expect((await getWorkflowDefinitionDraft(db, created.definition.id))?.draft.nodes[0]).toMatchObject({
+    expect((await readWorkflowDefinitionDraft(db, created.definition.id))?.draft.nodes[0]).toMatchObject({
       x: 99,
       y: 101,
     });
