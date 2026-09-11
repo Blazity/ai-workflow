@@ -393,9 +393,9 @@ describe("reconcileRuns owner-CAS recovery", () => {
       expect(tracker.fetchTicket).toHaveBeenCalledOnce();
       expect(tracker.moveTicket).not.toHaveBeenCalled();
       expect(mockAssertActiveRunOwnerState).toHaveBeenCalledWith(
-        mockDb,
         manual,
         "bound",
+        mockDb,
       );
       expect(runRegistry.release).toHaveBeenCalledWith(
         manual.subjectKey,
@@ -426,9 +426,9 @@ describe("reconcileRuns owner-CAS recovery", () => {
       ),
     ).resolves.toEqual({ cancelled: 0, cleaned: 1 });
     expect(mockAssertActiveRunOwnerState).toHaveBeenCalledWith(
-      mockDb,
       manual,
       "bound",
+      mockDb,
     );
     expect(tracker.moveTicket).toHaveBeenCalledTimes(1);
     expect(tracker.moveTicket).toHaveBeenCalledWith("PROJ-1", "Backlog");
@@ -1099,13 +1099,13 @@ describe("reconcileRuns owner-CAS recovery", () => {
     expect(fetchTicket).toHaveBeenCalledTimes(2);
     expect(tracker.moveTicket).not.toHaveBeenCalled();
     expect(mockAssertActiveRunOwnerState).toHaveBeenCalledWith(
-      mockDb,
       expect.objectContaining({
         subjectKey: closing.subjectKey,
         ownerToken: closing.ownerToken,
         runId: closing.runId,
       }),
       "cancelling",
+      mockDb,
     );
   });
 
@@ -1161,13 +1161,13 @@ describe("reconcileRuns owner-CAS recovery", () => {
     expect(fetchTicket).toHaveBeenCalledTimes(2);
     expect(tracker.moveTicket).toHaveBeenCalledWith("PROJ-1", "Backlog");
     expect(mockAssertActiveRunOwnerState).toHaveBeenCalledWith(
-      mockDb,
       expect.objectContaining({
         subjectKey: closing.subjectKey,
         ownerToken: closing.ownerToken,
         runId: closing.runId,
       }),
       "cancelling",
+      mockDb,
     );
   });
 
@@ -1210,13 +1210,13 @@ describe("reconcileRuns owner-CAS recovery", () => {
     expect(vi.mocked(tracker.fetchTicket)).toHaveBeenCalledTimes(2);
     expect(tracker.moveTicket).not.toHaveBeenCalled();
     expect(mockAssertActiveRunOwnerState).toHaveBeenCalledWith(
-      mockDb,
       expect.objectContaining({
         subjectKey: closing.subjectKey,
         ownerToken: closing.ownerToken,
         runId: closing.runId,
       }),
       "cancelling",
+      mockDb,
     );
     await expect(mockCancelRunDetailed.mock.results[0]?.value).resolves.toEqual({
       cancelled: true,

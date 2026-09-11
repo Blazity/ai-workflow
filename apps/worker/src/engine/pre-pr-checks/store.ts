@@ -8,10 +8,8 @@ import {
 import type { Db } from "../../db/types.js";
 import {
   getConnectedCurrentPrePrCheckConfigRow,
-  getConnectedDashboardUserLabelRow,
   getConnectedPrePrCheckConfigVersionRow,
   getCurrentPrePrCheckConfigRow,
-  getDashboardUserLabelRow,
   getPrePrCheckConfigVersionRow,
   insertConnectedPrePrCheckConfigVersion,
   insertPrePrCheckConfigVersion,
@@ -118,12 +116,6 @@ export function serializePrePrCheckConfigVersion(
   };
 }
 
-/** Display label for the audit trail: name, falling back to email, then id. */
-export async function dashboardUserLabel(db: Db, userId: string): Promise<string> {
-  const row = await getDashboardUserLabelRow(db, userId);
-  return row?.name?.trim() || row?.email || userId;
-}
-
 export function listConnectedPrePrCheckConfigVersions() {
   return listConnectedPrePrCheckConfigVersionRows(VERSION_LIST_LIMIT).then((rows) =>
     rows.map(canonicalRow),
@@ -163,10 +155,4 @@ export async function restoreConnectedPrePrCheckConfig(
     config: source.config,
     restoredFromVersion: source.version,
   });
-}
-
-export function getConnectedPrePrDashboardUserLabel(userId: string) {
-  return getConnectedDashboardUserLabelRow(userId).then(
-    (row) => row?.name?.trim() || row?.email || userId,
-  );
 }

@@ -697,6 +697,7 @@ test("the composite gate ladder includes both database fences", async () => {
   assert.equal(rootPackage.scripts["gate:docs-status"], "node scripts/gates/docs-status.mjs");
   assert.doesNotMatch(rootPackage.scripts["gate:docs-status"], /if \[ -f/u);
   assert.match(rootPackage.scripts["gates:update-baselines"], /gate:db-client-fence/u);
+  assert.doesNotMatch(rootPackage.scripts["gates:update-baselines"], /gate:boundaries/u);
   assert.doesNotMatch(rootPackage.scripts["gates:update-baselines"], /gate:transactions/u);
 });
 

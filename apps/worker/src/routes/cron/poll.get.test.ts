@@ -135,7 +135,7 @@ vi.mock("../../services/dispatch/trigger-rate-limit.js", () => ({
   sweepConnectedTriggerRateLimits: vi.fn().mockResolvedValue(undefined),
   sweepConnectedTriggerRejectionCounters: vi.fn().mockResolvedValue(undefined),
 }));
-vi.mock("../../engine/support/trigger-delivery-store.js", () => ({
+vi.mock("../../services/dispatch/trigger-delivery-store.js", () => ({
   listPendingTriggers: (...args: any[]) => mocks.listPendingTriggers(...args),
   listConnectedPendingTriggers: (...args: any[]) => mocks.listPendingTriggers(...args),
 }));
@@ -170,8 +170,6 @@ vi.mock("../../db/repositories/manual-dispatch.js", () => ({
 vi.mock("../../db/repositories/webhook-trigger-deliveries.js", () => ({
   sweepConnectedWebhookDeliveries: (...args: unknown[]) =>
     mocks.sweepWebhookDeliveries(...args),
-}));
-vi.mock("../../db/repositories/webhook-trigger-deliveries.js", () => ({
   sweepWebhookDeliveries: (...args: unknown[]) => mocks.sweepWebhookDeliveries(...args),
 }));
 vi.mock("../../services/webhook-trigger/dispatch-webhook-trigger.js", () => ({

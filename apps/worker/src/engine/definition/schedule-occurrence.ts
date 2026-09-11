@@ -1,7 +1,5 @@
 import { Cron } from "croner";
 
-// Deterministic occurrence calculation is shared with workflow schema validation.
-
 /**
  * Pure occurrence evaluator for schedule (cron) triggers.
  *

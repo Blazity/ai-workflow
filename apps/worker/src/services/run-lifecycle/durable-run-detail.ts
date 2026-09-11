@@ -8,8 +8,7 @@ import {
 } from "../../db/repositories/runs.js";
 import { parseStoredRunAnalysisReport } from "../../db/repositories/runs/analysis-report.js";
 import { coerceStatus } from "./dashboard-run-data.js";
-import { attributeRunModel } from "../overview/index.js";
-import { sanitizeRunSteps } from "../../engine/support/sanitize-run-detail.js";
+import { attributeRunModel, sanitizeRunSteps } from "../overview/index.js";
 
 const PHASE_ORDER = ["Setup", "Research", "Implementation", "Review", "Finalize", "Run"];
 const TERMINAL = new Set(["success", "failed", "blocked", "awaiting"]);

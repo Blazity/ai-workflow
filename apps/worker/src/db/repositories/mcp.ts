@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, max, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lt, max, or, sql } from "drizzle-orm";
 import { getDb, type Db } from "../client.js";
 import {
   mcpAuditEvents,
@@ -276,40 +276,89 @@ function mcpIdempotencyIdentityWhere(input: McpIdempotencyIdentity) {
   );
 }
 
-export async function insertMcpIdempotencyLease(
-  db: Db,
-  input: McpIdempotencyIdentity & { payloadHash: string; expiresAt: Date },
-): Promise<boolean> {
-  const rows = await db.insert(mcpIdempotencyKeys).values({
-    ...input,
-    state: "started",
-    safeResponse: null,
-    errorCode: null,
-  }).onConflictDoNothing().returning({ payloadHash: mcpIdempotencyKeys.payloadHash });
-  return rows.length > 0;
+export interface McpIdempotencyBeginDecision {
+  outcome: "inserted" | "reclaimed" | "refused";
+  row: {
+    payloadHash: string;
+    state: string;
+    safeResponse: unknown;
+    errorCode: string | null;
+    expiresAt: Date;
+  };
 }
 
-export async function findMcpIdempotencyRow(db: Db, input: McpIdempotencyIdentity) {
-  const [row] = await db.select().from(mcpIdempotencyKeys)
-    .where(mcpIdempotencyIdentityWhere(input)).limit(1);
-  return row ?? null;
-}
-
-export async function reclaimMcpIdempotencyLease(
+export async function beginMcpIdempotencyLease(
   db: Db,
   input: McpIdempotencyIdentity & { payloadHash: string; now: Date; expiresAt: Date },
-): Promise<boolean> {
-  const rows = await db.update(mcpIdempotencyKeys).set({
-    payloadHash: input.payloadHash,
-    state: "started",
-    safeResponse: null,
-    errorCode: null,
-    expiresAt: input.expiresAt,
-  }).where(and(
-    mcpIdempotencyIdentityWhere(input),
-    lte(mcpIdempotencyKeys.expiresAt, input.now),
-  )).returning({ state: mcpIdempotencyKeys.state });
-  return rows.length > 0;
+): Promise<McpIdempotencyBeginDecision | null> {
+  const result = await db.execute(sql`
+    WITH existing AS MATERIALIZED (
+      SELECT payload_hash, state, safe_response, error_code, expires_at
+      FROM ${mcpIdempotencyKeys}
+      WHERE organization_id = ${input.organizationId}
+        AND actor_subject = ${input.actorSubject}
+        AND client_id = ${input.clientId}
+        AND tool_name = ${input.toolName}
+        AND idempotency_key = ${input.idempotencyKey}
+      FOR UPDATE
+    ), acquired AS (
+      INSERT INTO ${mcpIdempotencyKeys} (
+        organization_id, actor_subject, client_id, tool_name, idempotency_key,
+        payload_hash, state, safe_response, error_code, expires_at
+      ) VALUES (
+        ${input.organizationId}, ${input.actorSubject}, ${input.clientId},
+        ${input.toolName}, ${input.idempotencyKey}, ${input.payloadHash},
+        'started', NULL, NULL, ${input.expiresAt}
+      )
+      ON CONFLICT (organization_id, actor_subject, client_id, tool_name, idempotency_key)
+      DO UPDATE SET
+        payload_hash = EXCLUDED.payload_hash,
+        state = 'started',
+        safe_response = NULL,
+        error_code = NULL,
+        expires_at = EXCLUDED.expires_at
+      WHERE ${mcpIdempotencyKeys}.expires_at <= ${input.now}
+        AND (
+          ${mcpIdempotencyKeys}.payload_hash = ${input.payloadHash}
+          OR ${mcpIdempotencyKeys}.state <> 'started'
+        )
+      RETURNING
+        payload_hash, state, safe_response, error_code, expires_at,
+        (xmax = 0) AS inserted
+    )
+    SELECT
+      CASE WHEN inserted THEN 'inserted' ELSE 'reclaimed' END AS outcome,
+      payload_hash, state, safe_response, error_code, expires_at
+    FROM acquired
+    UNION ALL
+    SELECT
+      'refused' AS outcome,
+      payload_hash, state, safe_response, error_code, expires_at
+    FROM existing
+    WHERE NOT EXISTS (SELECT 1 FROM acquired)
+    LIMIT 1
+  `);
+  const row = ((result as { rows?: Array<{
+    outcome: "inserted" | "reclaimed" | "refused";
+    payload_hash: string;
+    state: string;
+    safe_response: unknown;
+    error_code: string | null;
+    expires_at: Date | string;
+  }> }).rows ?? [])[0];
+  if (!row) return null;
+  return {
+    outcome: row.outcome,
+    row: {
+      payloadHash: row.payload_hash,
+      state: row.state,
+      safeResponse: row.safe_response,
+      errorCode: row.error_code,
+      expiresAt: row.expires_at instanceof Date
+        ? row.expires_at
+        : new Date(row.expires_at),
+    },
+  };
 }
 
 export async function completeMcpIdempotencyLease(
@@ -397,15 +446,9 @@ export async function sweepExpiredMcpIdempotencyKeys(
   return affectedRowCount(result);
 }
 
-export const insertConnectedMcpIdempotencyLease = (
-  input: Parameters<typeof insertMcpIdempotencyLease>[1],
-) => insertMcpIdempotencyLease(getDb(), input);
-export const findConnectedMcpIdempotencyRow = (
-  input: Parameters<typeof findMcpIdempotencyRow>[1],
-) => findMcpIdempotencyRow(getDb(), input);
-export const reclaimConnectedMcpIdempotencyLease = (
-  input: Parameters<typeof reclaimMcpIdempotencyLease>[1],
-) => reclaimMcpIdempotencyLease(getDb(), input);
+export const beginConnectedMcpIdempotencyLease = (
+  input: Parameters<typeof beginMcpIdempotencyLease>[1],
+) => beginMcpIdempotencyLease(getDb(), input);
 export const completeConnectedMcpIdempotencyLease = (
   input: Parameters<typeof completeMcpIdempotencyLease>[1],
 ) => completeMcpIdempotencyLease(getDb(), input);

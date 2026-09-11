@@ -42,7 +42,7 @@ export {
 export {
   listConnectedPendingTriggers,
   listPendingTriggers,
-} from "../../engine/support/trigger-delivery-store.js";
+} from "./trigger-delivery-store.js";
 export {
   isGateCheckName,
   normalizeGitHubEvents,

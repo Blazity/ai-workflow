@@ -83,6 +83,8 @@ export {
   buildTrustedOrigins,
 } from "./trusted-origins.js";
 export {
+  dashboardUserLabel,
+  getConnectedDashboardUserLabel,
   listDashboardUsers,
   updateDashboardUserRole,
 } from "./users-read.js";

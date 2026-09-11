@@ -26,7 +26,7 @@ import {
 } from "../../db/repositories/definitions/connected.js";
 import { listConnectedRunPullRequestUrls, listRunPullRequestUrls } from "../../db/repositories/runs.js";
 import { scheduleSubjectKey } from "../../engine/support/subject-key.js";
-import { dueOccurrence, nextRuns } from "../../engine/support/schedule-occurrence.js";
+import { dueOccurrence, nextRuns } from "./occurrence.js";
 import { REVOKED_SCHEDULE_REASON } from "./revoked-occurrences.js";
 import {
   resolveConnectedLiveScheduleTriggerTarget,
@@ -57,7 +57,7 @@ import {
   type AdmittedOccurrence,
   type OccurrenceRow,
   type ScheduleSkipOutcome,
-} from "../../engine/support/schedule-occurrence-store.js";
+} from "./occurrence-store.js";
 import {
   advanceConnectedScheduleWatermark,
   advanceWatermark,

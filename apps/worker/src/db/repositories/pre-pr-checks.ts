@@ -1,6 +1,6 @@
 import { desc, eq } from "drizzle-orm";
 import { getDb, type Db } from "../client.js";
-import { prePrCheckConfigVersions, user } from "../schema.js";
+import { prePrCheckConfigVersions } from "../schema.js";
 
 export async function getCurrentPrePrCheckConfigRow(db: Db) {
   const [row] = await db
@@ -42,15 +42,6 @@ export function getPrePrCheckConfigVersionRow(db: Db, version: number) {
     .limit(1);
 }
 
-export async function getDashboardUserLabelRow(db: Db, userId: string) {
-  const [row] = await db
-    .select({ name: user.name, email: user.email })
-    .from(user)
-    .where(eq(user.id, userId))
-    .limit(1);
-  return row ?? null;
-}
-
 export function getConnectedCurrentPrePrCheckConfigRow() {
   return getCurrentPrePrCheckConfigRow(getDb());
 }
@@ -67,8 +58,4 @@ export function insertConnectedPrePrCheckConfigVersion(
 
 export function getConnectedPrePrCheckConfigVersionRow(version: number) {
   return getPrePrCheckConfigVersionRow(getDb(), version);
-}
-
-export function getConnectedDashboardUserLabelRow(userId: string) {
-  return getDashboardUserLabelRow(getDb(), userId);
 }

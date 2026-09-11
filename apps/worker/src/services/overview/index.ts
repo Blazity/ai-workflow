@@ -13,4 +13,9 @@ export type { RunsLister, WorkflowRunRecord } from "./collect-runs.js";
 export { registryRows } from "./collect-workflows.js";
 export { resolveRunDetail } from "./resolve-run-detail.js";
 export { resolveRunModels } from "./resolve-run-models.js";
+export {
+  sanitizeRunDetailForResponse,
+  sanitizeRunError,
+  sanitizeRunSteps,
+} from "./sanitize-run-detail.js";
 export { getWorkflowRegistry } from "./workflow-registry.js";

@@ -17,7 +17,7 @@ import {
   acknowledgeStartedTriggerDelivery,
   getTriggerDelivery,
   listPendingTriggersForSubject,
-} from "../../engine/support/trigger-delivery-store.js";
+} from "./trigger-delivery-store.js";
 
 const testEnv = vi.hoisted(() => ({
   GITLAB_PROJECT_ID: undefined as string | undefined,

@@ -38,7 +38,7 @@ describe("updateTicketLabelsForRun", () => {
       changes: { add: [" needs-input ", "needs-input"] },
     });
 
-    expect(assertOwner).toHaveBeenCalledWith(db, owner, "bound");
+    expect(assertOwner).toHaveBeenCalledWith(owner, "bound", db);
     expect(issueTracker.updateLabels).toHaveBeenCalledWith("AIW-101", {
       add: ["needs-input"],
     });

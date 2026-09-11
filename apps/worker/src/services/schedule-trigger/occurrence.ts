@@ -1,1 +1,1 @@
-export * from "../../engine/support/schedule-occurrence.js";
+export * from "../../engine/definition/schedule-occurrence.js";

@@ -800,6 +800,61 @@ describe("PR check reconciliation", () => {
     expect(rows.every((row) => row.state === "pending")).toBe(true);
   });
 
+  it("records each creating-check branch with one targeted repository statement", async () => {
+    const createGateStatus = vi.fn()
+      .mockResolvedValueOnce({ provider: "github", id: 31 })
+      .mockRejectedValueOnce(new Error("provider unavailable"));
+    mockCreateRepositoryVCS.mockReset().mockReturnValue({
+      createGateStatus,
+      updateGateStatus: mockUpdateGateStatus,
+    });
+    const db = await createTestDb();
+    const creating = (id: string, updatedAt: Date) => ({
+      id,
+      runId: `run-${id}`,
+      nodeId: "create-check",
+      attempt: 1,
+      activationScope: "root",
+      subjectKey: `pr:github:acme/app#${id}`,
+      provider: "github",
+      repository: "acme/app",
+      prNumber: id === "first" ? 1 : 2,
+      headSha: "head",
+      name: `AI Workflow / ${id}`,
+      providerReference: null,
+      state: "creating",
+      updatedAt,
+    });
+    await db.insert(workflowRuns).values([
+      { runId: "run-first" },
+      { runId: "run-second" },
+    ]);
+    await db.insert(workflowRunExternalChecks).values([
+      creating("first", new Date("2026-09-11T10:00:00.000Z")),
+      creating("second", new Date("2026-09-11T10:01:00.000Z")),
+    ]);
+
+    await expect(reconcilePendingPrChecks(db)).resolves.toEqual({
+      attempted: 0,
+      closed: 0,
+      pending: 0,
+    });
+
+    const rows = await db.select().from(workflowRunExternalChecks);
+    expect(Object.fromEntries(rows.map((row) => [row.id, {
+      state: row.state,
+      retryCount: row.retryCount,
+      lastError: row.lastError,
+    }]))).toEqual({
+      first: { state: "closing", retryCount: 0, lastError: null },
+      second: {
+        state: "creating",
+        retryCount: 1,
+        lastError: "provider unavailable",
+      },
+    });
+  });
+
   it("closes each check with its own stored conclusion", async () => {
     mockUpdateGateStatus.mockReset().mockResolvedValue(undefined);
     mockCreateRepositoryVCS.mockReset().mockImplementation(gateStatusVcs);

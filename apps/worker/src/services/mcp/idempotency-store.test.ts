@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
 import { mcpIdempotencyKeys, organization } from "../../db/schema.js";
+import { beginMcpIdempotencyLease } from "../../db/repositories/mcp.js";
 import type { IdempotencyInput } from "./contracts.js";
 import {
   beginMcpMutation,
@@ -45,10 +46,27 @@ beforeEach(async () => {
 });
 
 describe("MCP mutation idempotency", () => {
+  it("distinguishes inserted, refused, and reclaimed leases in one statement", async () => {
+    const first = await beginMcpIdempotencyLease(db, input());
+    expect(first?.outcome).toBe("inserted");
+
+    const refused = await beginMcpIdempotencyLease(
+      db,
+      input({ now: new Date(now.getTime() + 1) }),
+    );
+    expect(refused?.outcome).toBe("refused");
+
+    const reclaimed = await beginMcpIdempotencyLease(
+      db,
+      input({ now: new Date(now.getTime() + LEASE_MS) }),
+    );
+    expect(reclaimed?.outcome).toBe("reclaimed");
+  });
+
   it("normalizes begin database failures without exposing driver details", async () => {
     const failingDb = new Proxy(db, {
       get(target, property, receiver) {
-        if (property === "insert") {
+        if (property === "execute") {
           return () => {
             throw new Error("raw begin database detail");
           };

@@ -22,12 +22,12 @@ import {
 import { logger } from "../../infra/logger.js";
 import {
   resolveRunDetail,
+  sanitizeRunDetailForResponse,
 } from "../overview/index.js";
 import {
   collectRunDetail,
   type RunDetailSource,
 } from "../../engine/support/collect-run-detail.js";
-import { sanitizeRunDetailForResponse } from "../../engine/support/sanitize-run-detail.js";
 import { issueTrackerBaseUrl } from "../settings/index.js";
 
 /** The detail payload as the wire carries it, minus the timestamp the route stamps. */

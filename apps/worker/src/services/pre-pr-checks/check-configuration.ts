@@ -24,13 +24,15 @@ import {
 } from "../../pre-pr-checks/config.js";
 import {
   getConnectedCurrentPrePrCheckConfig,
-  getConnectedPrePrDashboardUserLabel,
   listConnectedPrePrCheckConfigVersions,
   restoreConnectedPrePrCheckConfig,
   saveConnectedPrePrCheckConfig,
   serializePrePrCheckConfigVersion,
 } from "../../pre-pr-checks/store.js";
-import type { DashboardRole } from "../auth/index.js";
+import {
+  getConnectedDashboardUserLabel,
+  type DashboardRole,
+} from "../auth/index.js";
 
 /** Who is editing, as the store's audit trail records them. */
 export interface PrePrCheckEditor {
@@ -151,7 +153,7 @@ export async function savePrePrChecksConfiguration(input: {
   const saved = await saveConnectedPrePrCheckConfig({
     actorRole: input.editor.actorRole,
     actorId: input.editor.actorId,
-    actorLabel: await getConnectedPrePrDashboardUserLabel(input.editor.actorId),
+    actorLabel: await getConnectedDashboardUserLabel(input.editor.actorId),
     // The RAW submitted shape, deliberately not parsed.data.
     //
     // repoScriptsConfigSchema normalizes on the way through: it fills setup
@@ -179,7 +181,7 @@ export async function restorePrePrChecksConfiguration(input: {
   const restored = await restoreConnectedPrePrCheckConfig({
     actorRole: input.editor.actorRole,
     actorId: input.editor.actorId,
-    actorLabel: await getConnectedPrePrDashboardUserLabel(input.editor.actorId),
+    actorLabel: await getConnectedDashboardUserLabel(input.editor.actorId),
     version: input.version,
   });
   return serializePrePrCheckConfigVersion(restored);

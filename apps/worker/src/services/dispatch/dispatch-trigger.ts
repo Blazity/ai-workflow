@@ -71,7 +71,7 @@ import {
   type AcceptedTriggerDelivery,
   type StoredTriggerResult,
   type TriggerScope,
-} from "../../engine/support/trigger-delivery-store.js";
+} from "./trigger-delivery-store.js";
 import type { TriggerEvent } from "./trigger-events.js";
 import {
   bindCurrentPullRequest,

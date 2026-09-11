@@ -3,10 +3,8 @@ import type { Db } from "../../db/types.js";
 import {
   listConnectedExpiredPendingHookClarifications,
   listExpiredPendingHookClarifications,
-  recordConnectedClarificationSnapshotCleanup,
-  recordClarificationSnapshotCleanup,
-  supersedeConnectedPendingHookClarification,
-  supersedePendingHookClarification,
+  retireConnectedExpiredHookClarification,
+  retireExpiredHookClarification,
 } from "../../db/repositories/clarifications.js";
 import { deleteClarificationSnapshotStep } from "../../engine/steps/clarification-snapshot-steps.js";
 
@@ -16,8 +14,7 @@ export async function expireHookClarifications(
 ): Promise<{ expired: number; retryable: number; cleanupFailed: number }> {
   return expireHookClarificationsWithStore({
     list: (at) => listExpiredPendingHookClarifications(db, at),
-    supersede: (id) => supersedePendingHookClarification(db, id),
-    cleanup: (input) => recordClarificationSnapshotCleanup(db, input),
+    retire: (input) => retireExpiredHookClarification(db, input),
   }, now);
 }
 
@@ -26,16 +23,14 @@ export function expireConnectedHookClarifications(
 ): Promise<{ expired: number; retryable: number; cleanupFailed: number }> {
   return expireHookClarificationsWithStore({
     list: listConnectedExpiredPendingHookClarifications,
-    supersede: supersedeConnectedPendingHookClarification,
-    cleanup: recordConnectedClarificationSnapshotCleanup,
+    retire: retireConnectedExpiredHookClarification,
   }, now);
 }
 
 async function expireHookClarificationsWithStore(
   store: {
     list: typeof listConnectedExpiredPendingHookClarifications;
-    supersede: typeof supersedeConnectedPendingHookClarification;
-    cleanup: typeof recordConnectedClarificationSnapshotCleanup;
+    retire: typeof retireConnectedExpiredHookClarification;
   },
   now: Date,
 ): Promise<{ expired: number; retryable: number; cleanupFailed: number }> {
@@ -59,26 +54,24 @@ async function expireHookClarificationsWithStore(
       }
     }
 
-    if (!(await store.supersede(candidate.id))) continue;
-    expired += 1;
-
+    let cleanup: { state: "deleted" | "failed"; error: string | null } | null = null;
     if (candidate.snapshotId) {
       try {
         await deleteClarificationSnapshotStep(candidate.snapshotId);
-        await store.cleanup({
-          id: candidate.id,
+        cleanup = {
           state: "deleted",
           error: null,
-        });
+        };
       } catch (error) {
-        cleanupFailed += 1;
-        await store.cleanup({
-          id: candidate.id,
+        cleanup = {
           state: "failed",
           error: (error instanceof Error ? error.message : String(error)).slice(0, 2000),
-        });
+        };
       }
     }
+    if (!(await store.retire({ id: candidate.id, cleanup }))) continue;
+    expired += 1;
+    if (cleanup?.state === "failed") cleanupFailed += 1;
   }
   return { expired, retryable, cleanupFailed };
 }

@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import type { Db } from "../client.js";
-import { activeRuns, clarificationRequests } from "../schema.js";
+import { activeRuns, clarificationRequests, workflowRuns } from "../schema.js";
 import { createTestDb } from "../test-db.js";
 import {
   answerHookClarification,
@@ -63,6 +63,26 @@ describe("clarification hook store", () => {
         ticketKey: input.ticketKey,
       }),
     ).resolves.toBe("in_progress");
+  });
+
+  it("reports an already-claimed resume without inserting another run", async () => {
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({
+      runId: input.runId,
+      subjectKey: input.subjectKey,
+      ticketKey: input.ticketKey,
+      status: "resuming",
+      updatedAt: new Date(),
+    });
+
+    await expect(
+      claimAnsweredClarificationResume(db, {
+        runId: input.runId,
+        subjectKey: input.subjectKey,
+        ticketKey: input.ticketKey,
+      }),
+    ).resolves.toBe("in_progress");
+    await expect(db.select().from(workflowRuns)).resolves.toHaveLength(1);
   });
 
   it("publishes only after the hook row and optional snapshot are durable", async () => {

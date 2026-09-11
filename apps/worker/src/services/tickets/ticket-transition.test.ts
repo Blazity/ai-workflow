@@ -39,7 +39,7 @@ describe("moveTicketForRun", () => {
       owner,
     });
 
-    expect(assertOwner).toHaveBeenCalledWith(db, owner, "bound");
+    expect(assertOwner).toHaveBeenCalledWith(owner, "bound", db);
     expect(issueTracker.moveTicket).not.toHaveBeenCalled();
   });
 
@@ -86,7 +86,7 @@ describe("moveTicketForRun", () => {
       owner,
       requiredOwnerState: "cancelling",
     });
-    expect(assertOwner).toHaveBeenCalledWith(db, owner, "cancelling");
+    expect(assertOwner).toHaveBeenCalledWith(owner, "cancelling", db);
   });
 });
 
@@ -133,7 +133,7 @@ describe("withdrawTicketFromAiForRun", () => {
       requiredOwnerState: "bound",
     });
 
-    expect(assertOwner).toHaveBeenCalledWith(db, owner, "bound");
+    expect(assertOwner).toHaveBeenCalledWith(owner, "bound", db);
     expect(issueTracker.moveTicket).not.toHaveBeenCalled();
   });
 
@@ -157,7 +157,7 @@ describe("withdrawTicketFromAiForRun", () => {
         }),
       ).resolves.toBeUndefined();
 
-      expect(assertOwner).toHaveBeenCalledWith(db, owner, "cancelling");
+      expect(assertOwner).toHaveBeenCalledWith(owner, "cancelling", db);
       expect(issueTracker.moveTicket).not.toHaveBeenCalled();
     },
   );

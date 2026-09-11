@@ -46,17 +46,6 @@ vi.mock("../../db/repositories/active-runs.js", () => ({
   assertConnectedActiveRunOwner: (...args: any[]) =>
     assertActiveRunOwner(...args),
 }));
-vi.mock("../../engine/support/trigger-delivery-store.js", () => ({
-  deletePendingTrigger: (...args: any[]) => deletePending(...args),
-  acknowledgeStartedTriggerDelivery: (...args: any[]) => acknowledgeStartedDelivery(...args),
-  completeTriggerDelivery: (...args: any[]) => completeTriggerDelivery(...args),
-}));
-vi.mock("../support/webhook-delivery-store.js", () => ({
-  recordWebhookDeliveryStarted: (...args: any[]) => recordWebhookStarted(...args),
-}));
-vi.mock("../support/schedule-occurrence-store.js", () => ({
-  recordOccurrenceStarted: (...args: any[]) => recordOccurrenceStarted(...args),
-}));
 vi.mock("../../engine/support/vcs-runtime.js", () => ({
   createRepositoryVCS: (...args: any[]) => {
     createRepositoryVcsRuntime(...args);
@@ -114,11 +103,6 @@ vi.mock("../../engine/support/ticket-label-mutation.js", () => ({
   updateConnectedTicketLabelsForRun: (...args: any[]) =>
     updateTicketLabels(...args),
 }));
-vi.mock("../../engine/support/acknowledge-manual-workflow.js", () => ({
-  acknowledgeManualDispatchWorkflow: (...args: unknown[]) =>
-    acknowledgeManualDispatch(...args),
-}));
-
 describe("workflow owner steps", () => {
   beforeEach(() => {
     markRunEntryStarted.mockReset();

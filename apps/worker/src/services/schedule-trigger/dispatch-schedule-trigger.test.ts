@@ -6,7 +6,7 @@ import type {
   RunReservation,
   StartedRunRecord,
 } from "../../adapters/run-registry/types.js";
-import type { AdmittedOccurrence, OccurrenceRow } from "../../engine/support/schedule-occurrence-store.js";
+import type { AdmittedOccurrence, OccurrenceRow } from "./occurrence-store.js";
 import type { ScheduleRow } from "../../schedule-trigger/schedule-store.js";
 
 /** Mutable so the trigger rate limit's env default can be set per test. */

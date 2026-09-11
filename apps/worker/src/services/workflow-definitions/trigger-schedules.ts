@@ -11,7 +11,7 @@
 import type { ScheduleEvaluationState } from "@shared/contracts";
 import {
   type OccurrenceRow,
-} from "../../engine/support/schedule-occurrence-store.js";
+} from "../schedule-trigger/index.js";
 import {
   getConnectedScheduleById,
   listConnectedOccurrencesForSchedule,

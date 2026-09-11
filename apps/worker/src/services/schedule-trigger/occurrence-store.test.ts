@@ -26,7 +26,7 @@ import {
   sweepSettledOccurrences,
   type AdmittedOccurrence,
   type ScheduleOccurrenceOutcome,
-} from "./schedule-occurrence-store.js";
+} from "./occurrence-store.js";
 
 let db: Db;
 

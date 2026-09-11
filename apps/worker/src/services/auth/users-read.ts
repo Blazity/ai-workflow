@@ -1,4 +1,5 @@
 import type { Db } from "../../db/types.js";
+import { DashboardAuthError } from "@shared/contracts";
 import { createAuthRepository, createConnectedAuthRepository } from "../../db/repositories/auth.js";
 import {
   canChangeRole,
@@ -8,14 +9,7 @@ import {
 
 export type DashboardAuthMethod = "Password" | "SSO" | "Password + SSO" | "Unknown";
 
-export class DashboardAuthError extends Error {
-  constructor(
-    public readonly statusCode: number,
-    message: string,
-  ) {
-    super(message);
-  }
-}
+export { DashboardAuthError } from "@shared/contracts";
 
 export type DashboardActor = {
   organizationId: string;
@@ -37,6 +31,14 @@ export type DashboardUserRow = {
     canDemote: boolean;
   };
 };
+
+export async function dashboardUserLabel(db: Db, userId: string): Promise<string> {
+  return createAuthRepository(db).dashboardUserLabel(userId);
+}
+
+export function getConnectedDashboardUserLabel(userId: string): Promise<string> {
+  return createConnectedAuthRepository().dashboardUserLabel(userId);
+}
 
 export async function getDashboardActor(
   db: Db,

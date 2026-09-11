@@ -2,16 +2,12 @@ import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import type { Db } from "../../db/types.js";
 import {
+  beginConnectedMcpIdempotencyLease,
+  beginMcpIdempotencyLease,
   completeConnectedMcpIdempotencyLease,
   completeMcpIdempotencyLease,
   failConnectedMcpIdempotencyLease,
   failMcpIdempotencyLease,
-  findConnectedMcpIdempotencyRow,
-  findMcpIdempotencyRow,
-  insertConnectedMcpIdempotencyLease,
-  insertMcpIdempotencyLease,
-  reclaimConnectedMcpIdempotencyLease,
-  reclaimMcpIdempotencyLease,
   releaseConnectedMcpIdempotencyLease,
   releaseMcpIdempotencyLease,
   sweepConnectedExpiredMcpIdempotencyKeys,
@@ -42,9 +38,7 @@ const RESPONSE_TTL_MS = 24 * 60 * 60 * 1_000;
 const SWEEP_BATCH_LIMIT = 100;
 
 interface McpIdempotencyStore {
-  insert: (input: Parameters<typeof insertMcpIdempotencyLease>[1]) => ReturnType<typeof insertMcpIdempotencyLease>;
-  find: (input: Parameters<typeof findMcpIdempotencyRow>[1]) => ReturnType<typeof findMcpIdempotencyRow>;
-  reclaim: (input: Parameters<typeof reclaimMcpIdempotencyLease>[1]) => ReturnType<typeof reclaimMcpIdempotencyLease>;
+  begin: (input: Parameters<typeof beginMcpIdempotencyLease>[1]) => ReturnType<typeof beginMcpIdempotencyLease>;
   complete: (input: Parameters<typeof completeMcpIdempotencyLease>[1]) => ReturnType<typeof completeMcpIdempotencyLease>;
   fail: (input: Parameters<typeof failMcpIdempotencyLease>[1]) => ReturnType<typeof failMcpIdempotencyLease>;
   release: (input: Parameters<typeof releaseMcpIdempotencyLease>[1]) => ReturnType<typeof releaseMcpIdempotencyLease>;
@@ -53,9 +47,7 @@ interface McpIdempotencyStore {
 
 function mcpIdempotencyStore(db: Db): McpIdempotencyStore {
   return {
-    insert: (input) => insertMcpIdempotencyLease(db, input),
-    find: (input) => findMcpIdempotencyRow(db, input),
-    reclaim: (input) => reclaimMcpIdempotencyLease(db, input),
+    begin: (input) => beginMcpIdempotencyLease(db, input),
     complete: (input) => completeMcpIdempotencyLease(db, input),
     fail: (input) => failMcpIdempotencyLease(db, input),
     release: (input) => releaseMcpIdempotencyLease(db, input),
@@ -64,9 +56,7 @@ function mcpIdempotencyStore(db: Db): McpIdempotencyStore {
 }
 
 const connectedMcpIdempotencyStore: McpIdempotencyStore = {
-  insert: insertConnectedMcpIdempotencyLease,
-  find: findConnectedMcpIdempotencyRow,
-  reclaim: reclaimConnectedMcpIdempotencyLease,
+  begin: beginConnectedMcpIdempotencyLease,
   complete: completeConnectedMcpIdempotencyLease,
   fail: failConnectedMcpIdempotencyLease,
   release: releaseConnectedMcpIdempotencyLease,
@@ -221,13 +211,14 @@ async function beginMcpMutationWithStore<T>(
   input: IdempotencyInput,
 ): Promise<{ kind: "execute"; leaseId: string } | { kind: "replay"; response: T }> {
   return withSafeStoreErrors(async () => {
-    const inserted = await store.insert(input);
-    if (inserted) return { kind: "execute", leaseId: leaseFor(input) };
-
-    let existing = await store.find(input);
-    if (!existing) {
+    const decision = await store.begin(input);
+    if (!decision) {
       throw new McpPublicError("CONFLICT", "Concurrent mutation, retry", true);
     }
+    if (decision.outcome !== "refused") {
+      return { kind: "execute", leaseId: leaseFor(input) };
+    }
+    const existing = decision.row;
     // Checked before anything is overwritten, because taking a row over is a
     // retry of the request it names and the payload is what says whether this
     // is that request. A "started" row is protected even once its lease is
@@ -252,20 +243,6 @@ async function beginMcpMutationWithStore<T>(
       );
     };
     rejectDifferentRequest(existing);
-
-    if (existing.expiresAt.getTime() <= input.now.getTime()) {
-      const reclaimed = await store.reclaim({ ...input, now: input.now });
-      if (reclaimed) {
-        return { kind: "execute" as const, leaseId: leaseFor(input) };
-      }
-      existing = await store.find(input);
-      if (!existing) {
-        throw new McpPublicError("CONFLICT", "Concurrent mutation, retry", true);
-      }
-      // The row that won the race is a different row than the one checked
-      // above, and it may well name a different request.
-      rejectDifferentRequest(existing);
-    }
 
     if (existing.state === "completed") {
       return { kind: "replay" as const, response: existing.safeResponse as T };

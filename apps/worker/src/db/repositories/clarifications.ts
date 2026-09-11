@@ -375,33 +375,45 @@ export function listConnectedExpiredPendingHookClarifications(now: Date) {
   return listExpiredPendingHookClarifications(getDb(), now);
 }
 
-export async function supersedePendingHookClarification(db: Db, id: string): Promise<boolean> {
-  const [row] = await db
-    .update(clarificationRequests)
-    .set({ status: "superseded" })
-    .where(and(eq(clarificationRequests.id, id), eq(clarificationRequests.status, "pending")))
-    .returning({ id: clarificationRequests.id });
-  return Boolean(row);
-}
-
-export function supersedeConnectedPendingHookClarification(id: string): Promise<boolean> {
-  return supersedePendingHookClarification(getDb(), id);
-}
-
-export async function recordClarificationSnapshotCleanup(
+export async function retireExpiredHookClarification(
   db: Db,
-  input: { id: string; state: "deleted" | "failed"; error: string | null },
-): Promise<void> {
-  await db
-    .update(clarificationRequests)
-    .set({ cleanupState: input.state, cleanupError: input.error })
-    .where(eq(clarificationRequests.id, input.id));
+  input: {
+    id: string;
+    cleanup: { state: "deleted" | "failed"; error: string | null } | null;
+  },
+): Promise<boolean> {
+  if (!input.cleanup) {
+    const [row] = await db
+      .update(clarificationRequests)
+      .set({ status: "superseded" })
+      .where(
+        and(
+          eq(clarificationRequests.id, input.id),
+          eq(clarificationRequests.status, "pending"),
+        ),
+      )
+      .returning({ id: clarificationRequests.id });
+    return Boolean(row);
+  }
+  const result = await db.execute(sql`
+    WITH retired AS (
+      UPDATE ${clarificationRequests}
+      SET status = 'superseded',
+          cleanup_state = ${input.cleanup.state},
+          cleanup_error = ${input.cleanup.error}
+      WHERE id = ${input.id}
+        AND status = 'pending'
+      RETURNING id
+    )
+    SELECT id FROM retired
+  `);
+  return ((result as { rows?: Array<{ id: string }> }).rows ?? []).length === 1;
 }
 
-export function recordConnectedClarificationSnapshotCleanup(
-  input: Parameters<typeof recordClarificationSnapshotCleanup>[1],
+export function retireConnectedExpiredHookClarification(
+  input: Parameters<typeof retireExpiredHookClarification>[1],
 ) {
-  return recordClarificationSnapshotCleanup(getDb(), input);
+  return retireExpiredHookClarification(getDb(), input);
 }
 
 export function serializeClarification(row: ClarificationRow): ClarificationRequest {

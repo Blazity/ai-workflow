@@ -24,6 +24,7 @@ export type {
   SchedulePreset,
   Weekday,
 } from "./occurrence.js";
+export type { OccurrenceRow } from "./occurrence-store.js";
 export {
   cancelWaitingOccurrences,
 } from "./revoked-occurrences.js";

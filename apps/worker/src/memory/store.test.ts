@@ -197,6 +197,19 @@ describe("optimistic concurrency", () => {
     expect(doc?.version).toBe(2);
   });
 
+  it("keeps every stored field unchanged when the version predicate conflicts", async () => {
+    await write("original", "run_original");
+    const [before] = await db.select().from(agentMemoryDocuments);
+
+    expect(await write("stale", "run_stale", 9)).toEqual({
+      applied: false,
+      version: null,
+    });
+
+    const [after] = await db.select().from(agentMemoryDocuments);
+    expect(after).toEqual(before);
+  });
+
   it("creates the row when expectedVersion is 0 and nothing exists", async () => {
     const result = await write("created", "run_1", 0);
 
