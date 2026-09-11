@@ -27,7 +27,7 @@ import {
 } from "./skill-artifact-persistence.js";
 import { sha256Digest } from "./skill-artifact-digest.js";
 import { HarnessSkillImportError } from "./skill-errors.js";
-import { readHarnessSkillArtifactSource } from "./store.js";
+import { readHarnessSkillArtifactSource } from "../db/repositories/harness-profiles.js";
 
 /**
  * Skills shipped by the deployment itself live in `skills/` at the repository

@@ -9,7 +9,7 @@ import {
   decideApproval,
   getApproval,
   setDispatchedRunId,
-} from "../../../approvals/store.js";
+} from "../../../db/repositories/approvals.js";
 import { IssueTrackerNotFoundError } from "../../../adapters/issue-tracker/types.js";
 
 const state = vi.hoisted(() => ({

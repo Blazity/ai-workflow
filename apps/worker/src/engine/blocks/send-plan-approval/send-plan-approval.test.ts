@@ -16,7 +16,7 @@ vi.mock("../../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
 vi.mock("../../../services/run-lifecycle/active-run-owner.js", () => ({
   assertActiveRunOwner: (...args: any[]) => mocks.assertActiveRunOwner(...args),
 }));
-vi.mock("../../../approvals/store.js", () => ({ createApprovalRequest: mocks.createApprovalRequest }));
+vi.mock("../../../db/repositories/approvals.js", () => ({ createApprovalRequest: mocks.createApprovalRequest }));
 vi.mock("../../../services/vcs/adapters.js", () => ({
   createAdapters: () => ({
     issueTracker: {

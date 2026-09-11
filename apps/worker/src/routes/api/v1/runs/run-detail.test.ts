@@ -19,7 +19,7 @@ vi.mock("../../../../services/auth/request-context.js", () => ({
   }),
   toHttpError: (error: unknown) => { throw error; },
 }));
-vi.mock("../../../../db/queries/run-detail-read.js", () => ({
+vi.mock("../../../../db/repositories/runs.js", () => ({
   fetchRunDetailFromDb: vi.fn(async () => state.dbDetail),
   fetchRunRefs: vi.fn(async () => null),
 }));
@@ -30,8 +30,8 @@ vi.mock("../../../../services/overview/resolve-run-detail.js", () => ({
   }),
 }));
 vi.mock("../../../../services/overview/collect-run-detail.js", () => ({ collectRunDetail: vi.fn() }));
-vi.mock("../../../../clarifications/store.js", () => ({ getClarificationForRun: vi.fn(async () => null), serializeClarification: vi.fn() }));
-vi.mock("../../../../run-analysis/store.js", () => ({ getRunAnalysisReport: vi.fn(async () => state.storedReport) }));
+vi.mock("../../../../db/repositories/clarifications.js", () => ({ getClarificationForRun: vi.fn(async () => null), serializeClarification: vi.fn() }));
+vi.mock("../../../../db/repositories/runs/run-analysis.js", () => ({ getRunAnalysisReport: vi.fn(async () => state.storedReport) }));
 
 const route = (await import("./[runId].get.js")).default;
 

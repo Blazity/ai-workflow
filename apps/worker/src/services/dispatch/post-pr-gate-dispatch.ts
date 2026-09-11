@@ -7,7 +7,7 @@ import { logger } from "../../infra/logger.js";
 import { isManagedBranch } from "../publication/workflow-naming.js";
 import { GateStore, type CurrentGateRun } from "../../post-pr-gate/gate-store.js";
 import { loadPostPrGateConfig } from "../../post-pr-gate/config.js";
-import { getEnabledWorkflowDefinitionForTrigger } from "../../workflow-definition/store.js";
+import { getEnabledWorkflowDefinitionForTrigger } from "../../db/repositories/definitions.js";
 import {
   postPrGateWorkflow,
   type PostPrGateWorkflowInput,

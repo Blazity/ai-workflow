@@ -5,8 +5,7 @@ import { promptLibraryUrl } from "../../services/publication/dashboard-links.js"
 import { builtInPromptNameForSlug } from "@shared/prompts";
 import {
   PromptLibraryStoreError,
-  savePromptVersion,
-} from "../../prompt-library/store.js";
+} from "../../services/prompts/index.js";
 import type { McpToolDependencies } from "../contracts.js";
 import { executeMcpMutation } from "../execute-tool.js";
 import { hashCanonicalJson } from "../sanitize-result.js";
@@ -141,7 +140,7 @@ export function registerPromptAuthoringTools(
           // Outside the try below, so a refused role cannot be read as a failure
           // of the store.
           const actor = storeActor(deps.actor);
-          let saved: Awaited<ReturnType<typeof savePromptVersion>>;
+          let saved: Awaited<ReturnType<typeof deps.services.savePromptVersion>>;
           try {
             saved = await deps.services.savePromptVersion({
               promptId: input.promptId,

@@ -266,7 +266,9 @@ message set and the error state the run records.
 
 ## 12. Storage, versions and deployment state
 
-`apps/worker/src/workflow-definition/store.ts` owns persistence. A definition
+`apps/worker/src/db/repositories/definitions.ts` owns the atomic definition
+creation and schedule-revocation writes; the workflow-definition persistence
+facade owns the remaining version lifecycle reads and writes. A definition
 row carries `draftRevision`, `deployedVersion` and `archivedAt`; every save
 appends a version row, and the head version is the draft. Dispatch reads the
 deployed version only, and refuses a definition that is disabled, archived, or
@@ -308,5 +310,5 @@ Three properties matter to anyone authoring a graph through an agent:
 | Execution errors and runtime graph helpers | `apps/worker/src/workflow-definition/interpreter.ts` |
 | Harness profile resolution | `apps/worker/src/workflow-definition/harness-profile-runtime.ts` |
 | Workspace access rules | `apps/worker/src/workflow-definition/workspace-access.ts` |
-| Persistence and versions | `apps/worker/src/workflow-definition/store.ts` |
+| Persistence and versions | `apps/worker/src/db/repositories/definitions.ts`, `apps/worker/src/workflow-definition/persistence.ts` |
 | MCP authoring tools | `apps/worker/src/mcp/tools/workflow-authoring.ts` |

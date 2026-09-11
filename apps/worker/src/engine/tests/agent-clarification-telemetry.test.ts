@@ -7,14 +7,14 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../db/client.js", () => ({ getDb: () => ({ db: true }) }));
-vi.mock("../../services/telemetry/run-telemetry.js", () => ({
+vi.mock("../../db/repositories/runs/telemetry.js", () => ({
   markRunFailedOnSelfMove: vi.fn(),
   markRunSucceededOnSelfMove: vi.fn(),
   recordBlockStatuses: vi.fn(),
   recordRunStatusReason: vi.fn(),
   recordRunUsage: (...args: unknown[]) => mocks.recordRunUsage(...args),
 }));
-vi.mock("../../clarifications/store.js", () => ({
+vi.mock("../../db/repositories/clarifications.js", () => ({
   getClarification: (...args: unknown[]) => mocks.getClarification(...args),
 }));
 vi.mock("../../services/overview/collect-run-detail.js", () => ({

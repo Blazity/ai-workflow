@@ -49,7 +49,7 @@ vi.mock("../../db/client.js", () => ({
   getDb: mocks.getDb,
 }));
 
-vi.mock("../../db/queries/workflow-owned-branches.js", () => ({
+vi.mock("../../db/repositories/runs.js", () => ({
   listWorkflowOwnedBranchesForTicket: mocks.listWorkflowOwnedBranchesForTicket,
 }));
 

@@ -2,16 +2,16 @@ import { getWorld } from "workflow/runtime";
 import { getDb, type Db } from "../../../db/client.js";
 import { logger } from "../../../infra/logger.js";
 import { GateStore } from "../../../post-pr-gate/gate-store.js";
-import { deleteExpiredRunObservations } from "../../../run-observability/store.js";
+import { deleteExpiredRunObservations } from "../../../db/repositories/runs/run-observability.js";
 import { reconcilePendingPrChecks } from "../../../engine/runtime/pr-external-resources.js";
 import {
   getApproval,
   listApprovalParkedSubjects,
   listDispatchBlockingApprovals,
   type ApprovalRow,
-} from "../../../approvals/store.js";
-import { classifyProtectedClarificationSubjects } from "../../../clarifications/store.js";
-import { listRecoverableManualDispatches } from "../../../manual-dispatch/store.js";
+} from "../../../db/repositories/approvals.js";
+import { classifyProtectedClarificationSubjects } from "../../../db/repositories/clarifications.js";
+import { listRecoverableManualDispatches } from "../../../db/repositories/manual-dispatch.js";
 import { sweepWebhookDeliveries } from "../../../webhook-trigger/delivery-store.js";
 import { dispatchPlanApproved } from "../../approvals/index.js";
 import {

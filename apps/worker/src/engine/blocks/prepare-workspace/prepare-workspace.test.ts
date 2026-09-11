@@ -97,7 +97,7 @@ vi.mock("../../../adapters/vcs/repository-directory.js", async (importOriginal) 
   }),
 }));
 vi.mock("../../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
-vi.mock("../../../db/queries/workflow-owned-branches.js", () => ({
+vi.mock("../../../db/repositories/runs.js", () => ({
   listWorkflowOwnedBranchesForTicket: mocks.listWorkflowOwnedBranchesForTicket,
 }));
 vi.mock("../../../services/vcs/adapters.js", () => ({

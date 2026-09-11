@@ -33,7 +33,7 @@ import {
   getPromptVersion,
   type PromptLibraryRow,
   type PromptLibraryVersionRow,
-} from "./store.js";
+} from "../db/repositories/prompts.js";
 
 /**
  * Drift alarm for the built-in agent prompts.

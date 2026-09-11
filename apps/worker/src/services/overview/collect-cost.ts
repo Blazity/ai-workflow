@@ -8,7 +8,7 @@
  */
 import type { CostResponse } from "@shared/contracts";
 import { getDb } from "../../db/client.js";
-import { costAgg, parseWindow } from "../../db/queries/runs-read.js";
+import { costAgg, parseWindow } from "../../db/repositories/runs.js";
 
 /** The spend aggregate for the window the raw query value selects. */
 export function collectCostAggregate(

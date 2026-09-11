@@ -6,7 +6,7 @@
  */
 import type { KpisResponse } from "@shared/contracts";
 import { getDb } from "../../db/client.js";
-import { parseWindow, runKpis } from "../../db/queries/runs-read.js";
+import { parseWindow, runKpis } from "../../db/repositories/runs.js";
 
 /** The KPI aggregate for the window the raw query value selects. */
 export function collectRunKpis(

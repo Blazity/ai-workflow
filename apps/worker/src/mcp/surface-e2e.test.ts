@@ -91,7 +91,7 @@ import {
   captureRunObservationStart,
   finishWorkflowBlockAttempt,
   startWorkflowBlockAttempt,
-} from "../run-observability/store.js";
+} from "../db/repositories/runs/run-observability.js";
 
 const mcpPost = (await import("../routes/mcp.post.js")).default;
 const mcpGet = (await import("../routes/mcp.get.js")).default;

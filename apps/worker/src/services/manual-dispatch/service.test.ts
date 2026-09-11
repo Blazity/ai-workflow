@@ -9,7 +9,7 @@ import {
   workflowDefinitionVersions,
 } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
-import { getManualDispatchRequest } from "../../manual-dispatch/store.js";
+import { getManualDispatchRequest } from "../../db/repositories/manual-dispatch.js";
 
 const testState = vi.hoisted(() => ({
   order: [] as string[],

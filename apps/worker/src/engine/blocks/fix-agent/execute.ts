@@ -97,7 +97,7 @@ function actionableReviewResults(
 async function assertFixPrOwnershipStep(pr: PrTriggerPayload, runId: string): Promise<void> {
   "use step";
   const { getDb } = await import("../../../db/client.js");
-  const { findRunPrSiblings } = await import("../../../db/queries/run-pr-siblings.js");
+  const { findRunPrSiblings } = await import("../../../db/repositories/runs.js");
   const lookup = await findRunPrSiblings({
     db: getDb(),
     provider: pr.provider,
@@ -179,7 +179,7 @@ async function publishPrFixStep(input: PrFixPublicationInput): Promise<string | 
   if (input.intendedHead) {
     const { getDb } = await import("../../../db/client.js");
     const { recordWorkflowOwnedPullRequestPublishedHead } = await import(
-      "../../../db/queries/workflow-owned-branches.js"
+      "../../../db/repositories/runs.js"
     );
     await recordWorkflowOwnedPullRequestPublishedHead(getDb(), {
       provider: input.pr.provider,
@@ -222,7 +222,7 @@ async function publishPrFixStep(input: PrFixPublicationInput): Promise<string | 
   const {
     findWorkflowOwnedPullRequestIdentity,
     upsertWorkflowOwnedBranch,
-  } = await import("../../../db/queries/workflow-owned-branches.js");
+  } = await import("../../../db/repositories/runs.js");
   for (const repository of result.repositories) {
     if (
       repository.provider !== input.pr.provider ||

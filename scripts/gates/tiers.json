@@ -60,10 +60,8 @@
     "db": {
       "patterns": [
         "^apps/worker/src/db(?:/|$)",
-        "^apps/worker/src/adapters/run-registry(?:/|$)",
-        "^apps/worker/src/(?:approvals|clarifications|manual-dispatch|schedule-trigger|webhook-trigger)/(?:[^/]+-schema|store)\\.[cm]?[jt]s$",
-        "^apps/worker/src/(?:approvals|clarifications|manual-dispatch|schedule-trigger|webhook-trigger)/.+/(?:[^/]+-schema|store)\\.[cm]?[jt]s$",
-        "^apps/worker/src/(?:harness-profiles|prompt-library|workflow-definition)/store\\.[cm]?[jt]s$"
+        "^apps/worker/src/(?:schedule-trigger|webhook-trigger)/(?:[^/]+-schema|store)\\.[cm]?[jt]s$",
+        "^apps/worker/src/(?:schedule-trigger|webhook-trigger)/.+/(?:[^/]+-schema|store)\\.[cm]?[jt]s$"
       ]
     },
     "config": {

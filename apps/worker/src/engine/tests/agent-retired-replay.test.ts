@@ -78,14 +78,14 @@ vi.mock("../../services/vcs/adapters.js", () => ({
 vi.mock("../../services/run-lifecycle/active-run-owner.js", () => ({
   assertActiveRunOwner: vi.fn(async () => {}),
 }));
-vi.mock("../../services/telemetry/run-telemetry.js", () => ({
+vi.mock("../../db/repositories/runs/telemetry.js", () => ({
   markRunFailedOnSelfMove: telemetry.markRunFailedOnSelfMove,
   markRunSucceededOnSelfMove: vi.fn(),
   recordBlockStatuses: vi.fn(),
   recordRunStatusReason: telemetry.recordRunStatusReason,
   recordRunUsage: telemetry.recordRunUsage,
 }));
-vi.mock("../../run-analysis/store.js", () => ({
+vi.mock("../../db/repositories/runs/run-analysis.js", () => ({
   finalizeRunAnalysisUsage: telemetry.finalizeRunAnalysisUsage,
 }));
 vi.mock("workflow/runtime", () => ({ getWorld: () => ({}) }));

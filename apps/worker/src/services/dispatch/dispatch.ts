@@ -12,7 +12,7 @@ import { getDb } from "../../db/client.js";
 import {
   getEnabledWorkflowDefinitionForTrigger,
   runnableDefinitionOf,
-} from "../../workflow-definition/store.js";
+} from "../../db/repositories/definitions.js";
 import {
   enforceTriggerRateLimit,
   resolveTriggerRateLimitForType,
@@ -25,7 +25,7 @@ import {
 import type { AgentWorkflowInput } from "../../engine/index.js";
 import { BUILTIN_FALLBACK_DEFINITION_VERSION } from "../../engine/agent-input.js";
 import { agentWorkflow } from "../../engine/index.js";
-import { hasDispatchBlockingApprovalForTicket } from "../../approvals/store.js";
+import { hasDispatchBlockingApprovalForTicket } from "../../db/repositories/approvals.js";
 import type { Adapters } from "../vcs/adapters.js";
 import { logger } from "../../infra/logger.js";
 import { ticketSubjectKey } from "../run-lifecycle/subject-key.js";

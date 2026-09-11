@@ -31,7 +31,7 @@ vi.mock("../../post-pr-gate/config.js", () => ({
   })),
 }));
 
-vi.mock("../../workflow-definition/store.js", () => ({
+vi.mock("../../db/repositories/definitions.js", () => ({
   getEnabledWorkflowDefinitionForTrigger: (...args: any[]) =>
     mockGetEnabledDefinition(...args),
 }));

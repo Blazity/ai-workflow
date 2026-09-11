@@ -29,7 +29,7 @@ vi.mock("../../services/vcs/adapters.js", () => ({
 }));
 vi.mock("../../services/vcs/vcs-runtime.js", () => ({ createRepositoryVCS: mocks.createRepositoryVCS }));
 vi.mock("../../db/client.js", () => ({ getDb: mocks.getDb }));
-vi.mock("../../db/queries/workflow-owned-branches.js", () => ({
+vi.mock("../../db/repositories/runs.js", () => ({
   listWorkflowOwnedBranchesForTicket: mocks.listWorkflowOwnedBranchesForTicket,
   upsertWorkflowOwnedBranch: mocks.upsertWorkflowOwnedBranch,
 }));

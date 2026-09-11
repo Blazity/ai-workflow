@@ -9,8 +9,8 @@ import {
   workflowDefinitionVersions,
 } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
-import { upsertWorkflowOwnedBranch } from "../../db/queries/workflow-owned-branches.js";
-import { PostgresRunRegistry } from "../../adapters/run-registry/postgres.js";
+import { upsertWorkflowOwnedBranch } from "../../db/repositories/runs.js";
+import { PostgresRunRegistry } from "../../db/repositories/active-runs.js";
 import { prSubjectKey } from "../run-lifecycle/subject-key.js";
 import type { TriggerEvent } from "./trigger-events.js";
 import {
@@ -64,7 +64,7 @@ vi.mock("./pr-autofix-exhaustion.js", () => ({
 }));
 const mockGetEnabled = vi.fn();
 const mockGetVersion = vi.fn();
-vi.mock("../../workflow-definition/store.js", () => ({
+vi.mock("../../db/repositories/definitions.js", () => ({
   getEnabledWorkflowDefinitionForTrigger: (...args: any[]) => mockGetEnabled(...args),
   getWorkflowDefinitionVersion: (...args: any[]) => mockGetVersion(...args),
   runnableDefinitionOf: (row: any) => row?.schema === "v2" ? row.definition : undefined,

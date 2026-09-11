@@ -20,7 +20,7 @@ import {
   type ResolvedHarnessRuntime,
 } from "../sandbox/harness-runtime.js";
 import { hashHarnessProfileManifest } from "../harness-profiles/manifest.js";
-import { resolveHarnessProfileVersion } from "../harness-profiles/store.js";
+import { resolveHarnessProfileVersion } from "../db/repositories/harness-profiles.js";
 
 const AGENT_BLOCK_TYPES = new Set<WorkflowBlockType>([
   "planning_agent",

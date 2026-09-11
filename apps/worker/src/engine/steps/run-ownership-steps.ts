@@ -51,7 +51,7 @@ export async function acknowledgeApprovalDispatchStep(
   "use step";
   if (entry.kind !== "plan_approved") return;
   const { getDb } = await import("../../db/client.js");
-  const { setDispatchedRunId } = await import("../../approvals/store.js");
+  const { setDispatchedRunId } = await import("../../db/repositories/approvals.js");
   await setDispatchedRunId(getDb(), entry.approval.approvalRequestId, workflowRunId);
 }
 

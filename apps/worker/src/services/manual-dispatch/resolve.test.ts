@@ -33,8 +33,8 @@ const mocks = vi.hoisted(() => ({
   hasDispatchBlockingApprovalForTicket: vi.fn(),
 }));
 
-vi.mock("../../workflow-definition/store.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../workflow-definition/store.js")>()),
+vi.mock("../../db/repositories/definitions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../db/repositories/definitions.js")>()),
   getDeployedWorkflowDefinitionVersion: mocks.getDeployedWorkflowDefinitionVersion,
   getWorkflowDefinitionVersion: vi.fn(),
 }));
@@ -49,10 +49,10 @@ vi.mock("../dispatch/dispatch-trigger.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../dispatch/dispatch-trigger.js")>()),
   isConfiguredTriggerRepository: mocks.isConfiguredTriggerRepository,
 }));
-vi.mock("../../db/queries/workflow-owned-branches.js", () => ({
+vi.mock("../../db/repositories/runs.js", () => ({
   findWorkflowOwnedPullRequest: mocks.findWorkflowOwnedPullRequest,
 }));
-vi.mock("../../approvals/store.js", () => ({
+vi.mock("../../db/repositories/approvals.js", () => ({
   hasDispatchBlockingApprovalForTicket: mocks.hasDispatchBlockingApprovalForTicket,
 }));
 vi.mock("../../post-pr-gate/config.js", () => ({

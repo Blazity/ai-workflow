@@ -3,7 +3,7 @@ import {
   hasDurableRunPublication,
   isRunRecordedFailed,
   isRunRecordedSucceeded,
-} from "../../db/queries/runs-read.js";
+} from "../../db/repositories/runs.js";
 
 export const PREMATURE_AI_REVIEW_CANCELLATION_REASON =
   "Jira AI Review transition before durable PR publication evidence";

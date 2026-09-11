@@ -33,9 +33,9 @@ each `apps/*/AGENTS.md`, `packages/AGENTS.md`, and `README.md`, `AGENTS.md`,
 | [architecture/blocks.md](./architecture/blocks.md) | How block manifests, executor modules, generated catalogs, and the reviewer walkthrough fit together |
 | [architecture/skills.md](./architecture/skills.md) | Product skill manifests, artifact integrity, source boundaries, and the repository-root `skills/` convention |
 | [architecture/overview.md](./architecture/overview.md) | The `services/` tier: what each cluster owns, what it may import, and what its `index.ts` promises |
+| [architecture/data-model.md](./architecture/data-model.md) | The worker's 62 SQL tables, ownership and principal callers |
 
-Later stages of the restructure plan add `architecture/data-model.md` and
-`architecture/gates.md` to this group.
+Later stages of the restructure plan add `architecture/gates.md` to this group.
 
 ## Decision records
 

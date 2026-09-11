@@ -112,7 +112,7 @@ not on every edit.
 
 Each is quoted verbatim from the file that owns it.
 
-**neon-http has no transactions** (`apps/worker/src/approvals/store.ts`):
+**neon-http has no transactions** (`apps/worker/src/db/repositories/approvals.ts`):
 
 > Production uses neon-http and cannot open an interactive transaction.
 

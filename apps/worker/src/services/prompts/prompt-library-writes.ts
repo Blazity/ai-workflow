@@ -23,7 +23,7 @@ import {
   serializePromptMeta,
   serializePromptVersion,
   type PromptLibraryActor,
-} from "../../prompt-library/store.js";
+} from "../../db/repositories/prompts.js";
 import type { DashboardRole } from "../auth/index.js";
 import {
   archivePrompt,

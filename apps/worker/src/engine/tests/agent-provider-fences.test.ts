@@ -34,12 +34,12 @@ vi.mock("../../services/vcs/adapters.js", () => ({
     messaging: { notifyForTicket: mocks.notifyForTicket },
   }),
 }));
-vi.mock("../../clarifications/store.js", () => ({
+vi.mock("../../db/repositories/clarifications.js", () => ({
   reconcileClarificationPickupState: (...args: any[]) =>
     mocks.reconcileClarificationPickupState(...args),
   supersedePendingForTicket: (...args: any[]) => mocks.supersedePendingForTicket(...args),
 }));
-vi.mock("../../services/telemetry/run-telemetry.js", () => ({
+vi.mock("../../db/repositories/runs/telemetry.js", () => ({
   markRunFailedOnSelfMove: vi.fn(),
   markRunSucceededOnSelfMove: vi.fn(),
   recordBlockStatuses: vi.fn(),
@@ -56,7 +56,7 @@ vi.mock("../../services/tickets/ticket-label-mutation.js", () => ({
     mocks.updateTicketLabels(...args),
 }));
 vi.mock("../../infra/logger.js", () => ({ logger: { info: mocks.info, warn: mocks.warn } }));
-vi.mock("../../run-analysis/store.js", () => ({
+vi.mock("../../db/repositories/runs/run-analysis.js", () => ({
   getRunAnalysisReport: (...args: any[]) => mocks.getRunAnalysisReport(...args),
   recordRunAnalysisReport: (...args: any[]) => mocks.recordRunAnalysisReport(...args),
 }));

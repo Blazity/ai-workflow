@@ -34,7 +34,7 @@ import {
 } from "../helpers/review-finding-merge.js";
 import { scrubForPublication } from "../../services/publication/publication-scrub.js";
 import type { PrTriggerPayload } from "../agent-input.js";
-import { findRunPrSiblings } from "../../db/queries/run-pr-siblings.js";
+import { findRunPrSiblings } from "../../db/repositories/runs.js";
 import { logger } from "../../infra/logger.js";
 
 export type CheckBusinessConclusion = "success" | "failure" | "neutral";

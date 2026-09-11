@@ -30,7 +30,7 @@ vi.mock("../../adapters/messaging/noop.js", () => ({
   NoopMessagingAdapter: vi.fn().mockImplementation(() => ({ kind: "noop" })),
 }));
 
-vi.mock("../../adapters/run-registry/postgres.js", () => ({
+vi.mock("../../db/repositories/active-runs.js", () => ({
   PostgresRunRegistry: vi.fn().mockImplementation((db) => ({ kind: "registry", db })),
 }));
 

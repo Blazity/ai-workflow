@@ -79,7 +79,7 @@ export async function recordWorkflowOwnedPullRequest(input: {
   "use step";
   const { getDb } = await import("../../db/client.js");
   const { upsertWorkflowOwnedBranch } = await import(
-    "../../db/queries/workflow-owned-branches.js"
+    "../../db/repositories/runs.js"
   );
   await upsertWorkflowOwnedBranch(getDb(), {
     ticketKey: input.ticketKey,
@@ -111,7 +111,7 @@ export async function recordWorkflowOwnedPullRequestIntent(input: {
   "use step";
   const { getDb } = await import("../../db/client.js");
   const { upsertWorkflowOwnedBranch } = await import(
-    "../../db/queries/workflow-owned-branches.js"
+    "../../db/repositories/runs.js"
   );
   await upsertWorkflowOwnedBranch(getDb(), {
     ...input,

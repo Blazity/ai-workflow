@@ -37,10 +37,6 @@
   ],
   [
     "apps/worker/src/services/clarifications/answer-core.ts",
-    "apps/worker/src/services/telemetry/run-telemetry.ts"
-  ],
-  [
-    "apps/worker/src/services/clarifications/answer-core.ts",
     "apps/worker/src/services/tickets/move-targets.ts"
   ],
   [
@@ -174,10 +170,6 @@
   [
     "apps/worker/src/services/run-lifecycle/reconcile.ts",
     "apps/worker/src/services/tickets/ticket-transition.ts"
-  ],
-  [
-    "apps/worker/src/services/run-lifecycle/run-stall-watchdog.ts",
-    "apps/worker/src/services/telemetry/run-telemetry.ts"
   ],
   [
     "apps/worker/src/services/run-lifecycle/run-stall-watchdog.ts",

@@ -33,7 +33,7 @@ const HARNESS_PROFILE_MANIFESTS = new Set([
   "apps/dashboard/lib/harness-profiles/editor.ts",
   "apps/worker/src/harness-profiles/capability-catalog.ts",
   "apps/worker/src/harness-profiles/manifest.ts",
-  "apps/worker/src/harness-profiles/store.ts",
+  "apps/worker/src/db/repositories/harness-profiles.ts",
   "apps/worker/src/sandbox/harness-runtime.ts",
   "packages/contracts/harness-profiles.ts",
 ]);

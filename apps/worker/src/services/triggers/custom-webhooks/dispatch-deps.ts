@@ -19,7 +19,7 @@ import {
   getEnabledDeployedDefinition,
   getWorkflowDefinitionVersion,
   runnableDefinitionOf,
-} from "../../../workflow-definition/store.js";
+} from "../../../db/repositories/definitions.js";
 
 /**
  * Deps for dispatching a webhook delivery, shared by the ingress route and the

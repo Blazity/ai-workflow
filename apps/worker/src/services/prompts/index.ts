@@ -24,6 +24,10 @@ export type {
   PromptLibraryFailure,
 } from "./prompt-library-failures.js";
 export {
+  PromptLibraryStoreError,
+  savePromptVersion,
+} from "../../db/repositories/prompts.js";
+export {
   listPromptLibrary,
   readPromptDetail,
   readPromptUsage,

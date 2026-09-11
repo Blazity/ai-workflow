@@ -18,7 +18,7 @@ import {
   type TriggerRateLimitKey,
   type TriggerRateLimitNodeParams,
 } from "../dispatch/trigger-rate-limit.js";
-import { getLiveScheduleTriggerTarget } from "../../workflow-definition/store.js";
+import { getLiveScheduleTriggerTarget } from "../../db/repositories/definitions.js";
 import { scheduleSubjectKey } from "../run-lifecycle/subject-key.js";
 import { dueOccurrence, nextRuns } from "./occurrence.js";
 import {

@@ -219,7 +219,7 @@ export async function cancelRunById(
 ): Promise<CancelRunByIdResult> {
   const { actorLabel, runRegistry } = opts;
   const { findLiveRunClaimByRunId, findRunOutcomeByRunId } = await import(
-    "../../db/queries/runs-read.js"
+    "../../db/repositories/runs.js"
   );
 
   const claim = await findLiveRunClaimByRunId(db, runId);
@@ -306,7 +306,7 @@ export async function cancelRunById(
       // up on the one-minute poll cron and converges it through
       // retryCancellingClaim, which is what actually releases it.
       const { markRunBlockedByOperator } = await import(
-        "../telemetry/run-telemetry.js"
+        "../../db/repositories/runs/telemetry.js"
       );
       try {
         await markRunBlockedByOperator(db, runId, reason);
@@ -442,7 +442,7 @@ async function cancelOwnedSubject(
   try {
     const [{ getDb }, { tombstoneClarificationCancellation }] = await Promise.all([
       import("../../db/client.js"),
-      import("../../clarifications/store.js"),
+      import("../../db/repositories/clarifications.js"),
     ]);
     tombstone = await tombstoneClarificationCancellation(getDb(), {
       subjectKey,
@@ -607,7 +607,7 @@ async function persistCancelReason(
   try {
     const [{ getDb }, { recordRunStatusReason }] = await Promise.all([
       import("../../db/client.js"),
-      import("../telemetry/run-telemetry.js"),
+      import("../../db/repositories/runs/telemetry.js"),
     ]);
     await recordRunStatusReason(getDb(), runId, reason, {
       kind: "cancellation",
@@ -638,7 +638,7 @@ async function settleCancelledPark(subjectKey: string, runId: string): Promise<v
   try {
     const [{ getDb }, { markRunBlockedOnCancel }] = await Promise.all([
       import("../../db/client.js"),
-      import("../telemetry/run-telemetry.js"),
+      import("../../db/repositories/runs/telemetry.js"),
     ]);
     await markRunBlockedOnCancel(getDb(), runId);
   } catch (error) {
@@ -668,8 +668,8 @@ async function retirePostDrainContinuations(
       { retireApprovalCancellation },
     ] = await Promise.all([
       import("../../db/client.js"),
-      import("../../clarifications/store.js"),
-      import("../../approvals/store.js"),
+      import("../../db/repositories/clarifications.js"),
+      import("../../db/repositories/approvals.js"),
     ]);
     const db = getDb();
     await tombstoneClarificationCancellation(db, {

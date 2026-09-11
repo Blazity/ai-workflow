@@ -21,7 +21,7 @@ import {
 } from "../../adapters/vcs/types.js";
 import type { Db } from "../../db/client.js";
 import { workflowDefinitions } from "../../db/schema.js";
-import { findWorkflowOwnedPullRequest } from "../../db/queries/workflow-owned-branches.js";
+import { findWorkflowOwnedPullRequest } from "../../db/repositories/runs.js";
 import {
   isConfiguredTriggerRepository,
   selectEligibleEvent,
@@ -41,9 +41,9 @@ import {
   getWorkflowDefinitionVersion,
   runnableDefinitionOf,
   type WorkflowDefinitionVersionRow,
-} from "../../workflow-definition/store.js";
+} from "../../db/repositories/definitions.js";
 import type { PrTriggerPayload, PrTriggerType } from "../../engine/index.js";
-import { hasDispatchBlockingApprovalForTicket } from "../../approvals/store.js";
+import { hasDispatchBlockingApprovalForTicket } from "../../db/repositories/approvals.js";
 import { ManualDispatchError } from "./errors.js";
 
 /** The allowlist lives in the contracts package, because the dashboard decides

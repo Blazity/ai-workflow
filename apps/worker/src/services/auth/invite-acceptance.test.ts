@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -308,24 +308,31 @@ describe("acceptDashboardInvite", () => {
 
   it("re-checks pending invite state before creating membership", async () => {
     const { db, auth } = await setupInvite();
-    const originalTransaction = db.transaction.bind(db);
-    vi.spyOn(db, "transaction").mockImplementation((async (callback, config) => {
+    const originalExecute = db.execute.bind(db);
+    const executeSpy = vi.spyOn(db, "execute").mockImplementation((async (query) => {
       await db
         .update(invitation)
         .set({ status: "accepted" })
         .where(eq(invitation.id, "invite_1"));
-      return originalTransaction(callback, config);
-    }) as typeof db.transaction);
+      return originalExecute(query);
+    }) as typeof db.execute);
 
-    await expect(
-      acceptDashboardInvite(db, auth, {
-        organizationSlug: "ai-workflow",
-        inviteId: "invite_1",
-        name: "New User",
-        password: "password123",
-        now: new Date("2026-06-26T00:00:00.000Z"),
-      }),
-    ).rejects.toThrow("Invite not found");
+    try {
+      await expect(
+        acceptDashboardInvite(db, auth, {
+          organizationSlug: "ai-workflow",
+          inviteId: "invite_1",
+          name: "New User",
+          password: "password123",
+          now: new Date("2026-06-26T00:00:00.000Z"),
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        message: "Invite already accepted",
+      });
+    } finally {
+      executeSpy.mockRestore();
+    }
 
     await expect(userCount(db, "new.user@example.com")).resolves.toBe(0);
     const memberships = await db.select().from(member);
@@ -342,9 +349,104 @@ describe("acceptDashboardInvite", () => {
         password: "password123",
         now: new Date("2026-07-01T00:00:00.000Z"),
       }),
-    ).rejects.toThrow("Invite not found");
+    ).rejects.toMatchObject({ statusCode: 410, message: "Invite expired" });
 
     await expect(userCount(db, "new.user@example.com")).resolves.toBe(0);
+  });
+
+  it("reports a revoked invite without creating a user", async () => {
+    const { db, auth } = await setupInvite();
+    await db.update(invitation).set({ status: "canceled" })
+      .where(eq(invitation.id, "invite_1"));
+
+    await expect(
+      acceptDashboardInvite(db, auth, {
+        organizationSlug: "ai-workflow",
+        inviteId: "invite_1",
+        password: "password123",
+        now: new Date("2026-06-26T00:00:00.000Z"),
+      }),
+    ).rejects.toMatchObject({ statusCode: 409, message: "Invite was revoked" });
+
+    await expect(userCount(db, "new.user@example.com")).resolves.toBe(0);
+  });
+
+  it("reports an absent invite", async () => {
+    const { db, auth } = await setupInvite();
+    await db.delete(invitation).where(eq(invitation.id, "invite_1"));
+
+    await expect(
+      acceptDashboardInvite(db, auth, {
+        organizationSlug: "ai-workflow",
+        inviteId: "invite_1",
+        password: "password123",
+        now: new Date("2026-06-26T00:00:00.000Z"),
+      }),
+    ).rejects.toMatchObject({ statusCode: 404, message: "Invite not found" });
+  });
+
+  it("reports an invalid invite role", async () => {
+    const { db, auth } = await setupInvite();
+    await db.execute(sql`alter table invitation drop constraint invitation_role_check`);
+    try {
+      await db.update(invitation).set({ role: "invalid" })
+        .where(eq(invitation.id, "invite_1"));
+
+      await expect(
+        acceptDashboardInvite(db, auth, {
+          organizationSlug: "ai-workflow",
+          inviteId: "invite_1",
+          password: "password123",
+          now: new Date("2026-06-26T00:00:00.000Z"),
+        }),
+      ).rejects.toMatchObject({ statusCode: 500, message: "Invalid invite role" });
+    } finally {
+      await db.update(invitation).set({ role: "member" })
+        .where(eq(invitation.id, "invite_1"));
+      await db.execute(sql`
+        alter table invitation add constraint invitation_role_check
+        check (role in ('owner', 'admin', 'member'))
+      `);
+    }
+  });
+
+  it("re-checks the invited email inside SSO acceptance SQL", async () => {
+    const { db, auth } = await setupInvite("sso-race@example.com");
+    const ctx = await auth.$context;
+    const ssoUser = await ctx.internalAdapter.createUser({
+      email: "sso-race@example.com",
+      name: "SSO Race User",
+      emailVerified: true,
+    });
+    const executeSpy = vi.spyOn(db, "execute").mockImplementation((async () => {
+      await db.update(invitation).set({ email: "other@example.com" })
+        .where(eq(invitation.id, "invite_1"));
+      return { rows: [{ accepted: false }] } as never;
+    }) as unknown as typeof db.execute);
+
+    try {
+      await expect(
+        acceptDashboardSsoInvite(db, auth, {
+          organizationSlug: "ai-workflow",
+          inviteId: "invite_1",
+          user: { id: ssoUser.id, email: "sso-race@example.com" },
+          now: new Date("2026-06-26T00:00:00.000Z"),
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 403,
+        message: "Invite does not match signed-in user",
+      });
+    } finally {
+      executeSpy.mockRestore();
+    }
+
+    const memberships = await db.select().from(member)
+      .where(eq(member.userId, ssoUser.id));
+    expect(memberships).toHaveLength(0);
+    const [unchanged] = await db.select({ status: invitation.status })
+      .from(invitation)
+      .where(eq(invitation.id, "invite_1"));
+    expect(unchanged).toEqual({ status: "pending" });
   });
 
   it("does not let an existing SSO-only user create a password through invite acceptance", async () => {

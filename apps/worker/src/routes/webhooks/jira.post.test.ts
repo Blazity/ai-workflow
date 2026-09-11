@@ -31,15 +31,15 @@ vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
 vi.mock("../../services/clarifications/resume-from-comments.js", () => ({
   resumeClarificationFromComments: (...args: unknown[]) => state.resume(...args),
 }));
-vi.mock("../../clarifications/store.js", () => ({
+vi.mock("../../db/repositories/clarifications.js", () => ({
   classifyProtectedClarificationSubjects: (...args: unknown[]) =>
     state.classifyProtected(...args),
 }));
-vi.mock("../../approvals/store.js", () => ({
+vi.mock("../../db/repositories/approvals.js", () => ({
   listApprovalParkedSubjects: (...args: unknown[]) =>
     state.listApprovalParked(...args),
 }));
-vi.mock("../../db/queries/runs-read.js", () => ({
+vi.mock("../../db/repositories/runs.js", () => ({
   isRunRecordedFailed: state.isRunRecordedFailed,
   isRunRecordedSucceeded: state.isRunRecordedSucceeded,
   hasDurableRunPublication: state.hasDurableRunPublication,

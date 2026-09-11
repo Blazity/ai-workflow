@@ -23,3 +23,4 @@ export * from "./requests-webhooks";
 export * from "./requests-workflow-definitions";
 export * from "./requests-workflow-triggers";
 export * from "./requests-admin";
+export * from "./run-registry";

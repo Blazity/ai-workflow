@@ -8,7 +8,7 @@
  */
 import type { TicketRunsResponse } from "@shared/contracts";
 import { getDb } from "../../db/client.js";
-import { listRunsForTicket } from "../../db/queries/runs-read.js";
+import { listRunsForTicket } from "../../db/repositories/runs.js";
 import { logger } from "../../infra/logger.js";
 import { issueTrackerBaseUrl } from "../settings/index.js";
 

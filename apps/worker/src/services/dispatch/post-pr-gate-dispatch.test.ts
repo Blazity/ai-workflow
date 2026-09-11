@@ -39,7 +39,7 @@ vi.mock("../../post-pr-gate/config.js", () => ({
   loadPostPrGateConfig: vi.fn(() => state.config),
 }));
 
-vi.mock("../../workflow-definition/store.js", () => ({
+vi.mock("../../db/repositories/definitions.js", () => ({
   getEnabledWorkflowDefinitionForTrigger: vi.fn().mockResolvedValue(null),
 }));
 

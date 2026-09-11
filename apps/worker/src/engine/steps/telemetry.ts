@@ -35,7 +35,7 @@ export async function recordRunTelemetryStep(payload: {
   const { loadRunTelemetryPort } = await import("../internal/ports.js");
   const { getDb } = await import("../../db/client.js");
   const { recordRunUsage } = await loadRunTelemetryPort();
-  const { finalizeRunAnalysisUsage } = await import("../../run-analysis/store.js");
+  const { finalizeRunAnalysisUsage } = await import("../../db/repositories/runs/run-analysis.js");
   const { getWorld } = await import("workflow/runtime");
   const collectRunDetailMod = await import(
     "../../services/overview/collect-run-detail.js"
@@ -150,7 +150,7 @@ async function markV2ReplayCaptureUnavailable(payload: {
   try {
     const { getDb } = await import("../../db/client.js");
     const { markRunReplayCaptureUnavailable } = await import(
-      "../../run-observability/store.js"
+      "../../db/repositories/runs/run-observability.js"
     );
     await replayCaptureWithinTimeout(
       markRunReplayCaptureUnavailable({
@@ -246,10 +246,10 @@ async function captureV2RunObservationStartStep(payload: {
           "../../workflow-definition/harness-profile-runtime.js"
         );
         const { getWorkflowDefinitionRawState } = await import(
-          "../../workflow-definition/store.js"
+          "../../db/repositories/definitions.js"
         );
         const { captureRunObservationStart } = await import(
-          "../../run-observability/store.js"
+          "../../db/repositories/runs/run-observability.js"
         );
         const db = getDb();
         organizationId = await dashboardOrganizationId(
@@ -337,7 +337,7 @@ async function startV2RunObservationAttemptStep(payload: {
   try {
     const { getDb } = await import("../../db/client.js");
     const { startWorkflowBlockAttempt } = await import(
-      "../../run-observability/store.js"
+      "../../db/repositories/runs/run-observability.js"
     );
     const result = await replayCaptureWithinTimeout(
       startWorkflowBlockAttempt({
@@ -393,7 +393,7 @@ async function flushV2RunObservationsStep(payload: {
   try {
     const { getDb } = await import("../../db/client.js");
     const { recordWorkflowBlockAttemptObservation } = await import(
-      "../../run-observability/store.js"
+      "../../db/repositories/runs/run-observability.js"
     );
     const db = getDb();
     for (const observation of payload.observations) {
@@ -435,7 +435,7 @@ async function updateV2RunObservationWaitingStep(payload: {
   try {
     const { getDb } = await import("../../db/client.js");
     const { updateWorkflowBlockAttemptState } = await import(
-      "../../run-observability/store.js"
+      "../../db/repositories/runs/run-observability.js"
     );
     const updated = await replayCaptureWithinTimeout(
       updateWorkflowBlockAttemptState({
@@ -484,7 +484,7 @@ async function finishV2RunObservationAttemptStep(payload: {
   try {
     const { getDb } = await import("../../db/client.js");
     const { finishWorkflowBlockAttempt } = await import(
-      "../../run-observability/store.js"
+      "../../db/repositories/runs/run-observability.js"
     );
     const finished = await replayCaptureWithinTimeout(
       finishWorkflowBlockAttempt({

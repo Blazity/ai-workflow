@@ -15,14 +15,10 @@ import { logger } from "../../infra/logger.js";
 import { isRepoAllowed } from "../../services/dispatch/repo-allowlist.js";
 import { workflowBlockRegistryContextFromEnv } from "../../workflow-definition/models.js";
 import {
-  createWorkflowDefinition,
-  deployWorkflowDefinition,
   runnableDefinitionOf,
-  saveWorkflowDefinitionDraft,
-  updateWorkflowDefinition,
   WorkflowDefinitionStoreError,
   WorkflowDefinitionValidationError,
-} from "../../workflow-definition/store.js";
+} from "../../services/workflow-definitions/index.js";
 import {
   declaresRetiredSchema,
   validateWorkflowDefinitionCandidate,
@@ -429,7 +425,7 @@ export function registerWorkflowAuthoringTools(
         payloadHash: `sha256:${hashCanonicalJson({ name: input.name })}`,
         operation: async (): Promise<CreateData> => {
           const actor = storeActor(deps.actor);
-          let created: Awaited<ReturnType<typeof createWorkflowDefinition>>;
+          let created: Awaited<ReturnType<typeof deps.services.createWorkflowDefinition>>;
           try {
             created = await deps.services.createWorkflowDefinition({
               name: input.name,
@@ -511,7 +507,7 @@ export function registerWorkflowAuthoringTools(
           // work in progress. deployWorkflowDefinition is the gate, and publish is
           // where it speaks.
           const actor = storeActor(deps.actor);
-          let saved: Awaited<ReturnType<typeof saveWorkflowDefinitionDraft>>;
+          let saved: Awaited<ReturnType<typeof deps.services.saveWorkflowDefinitionDraft>>;
           try {
             saved = await deps.services.saveWorkflowDefinitionDraft({
               definitionId: input.definitionId,
@@ -600,7 +596,7 @@ export function registerWorkflowAuthoringTools(
         outcomeTargetRefs: (data) => [allowlistRef(data.repositoriesOutsideAllowlist)],
         operation: async (): Promise<PublishData> => {
           const actor = storeActor(deps.actor);
-          let deployed: Awaited<ReturnType<typeof deployWorkflowDefinition>>;
+          let deployed: Awaited<ReturnType<typeof deps.services.deployWorkflowDefinition>>;
           try {
             // deployWorkflowDefinition IS the dashboard's publish path, not a
             // layer under it: deploy.post.ts authenticates, parses the two
@@ -784,7 +780,7 @@ export function registerWorkflowGraphTools(
         })}`,
         operation: async (): Promise<SetEnabledData> => {
           const actor = storeActor(deps.actor);
-          let updated: Awaited<ReturnType<typeof updateWorkflowDefinition>>;
+          let updated: Awaited<ReturnType<typeof deps.services.updateWorkflowDefinition>>;
           try {
             // updateWorkflowDefinition IS the dashboard's PATCH path
             // ([id].patch.ts:41): the deployable-version gate, the "one enabled owner

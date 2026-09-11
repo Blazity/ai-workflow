@@ -75,7 +75,7 @@ export async function reconcileClarificationsOnPickup(
     "../../services/tickets/ticket-label-mutation.js"
   );
   const { reconcileClarificationPickupState } = await import(
-    "../../clarifications/store.js"
+    "../../db/repositories/clarifications.js"
   );
   const { issueTracker } = createAdapters();
   const db = getDb();
@@ -197,7 +197,7 @@ async function loadClarificationHistoryStep(
 ): Promise<Array<{ questions: string[]; answer: string; answeredBy?: string; answeredAt?: string }>> {
   "use step";
   const { getDb } = await import("../../db/client.js");
-  const { listAnsweredForTicket } = await import("../../clarifications/store.js");
+  const { listAnsweredForTicket } = await import("../../db/repositories/clarifications.js");
   const rows = await listAnsweredForTicket(getDb(), ticketKey);
   return rows
     .filter((r) => r.answer !== null)

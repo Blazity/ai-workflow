@@ -2,14 +2,14 @@ import type { RunDetail, RunStep } from "@shared/contracts";
 import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
 import type { RunRegistryAdapter } from "../../adapters/run-registry/types.js";
 import { getDb, type Db } from "../../db/client.js";
-import { fetchRunDetailFromDb } from "../../db/queries/run-detail-read.js";
+import { fetchRunDetailFromDb } from "../../db/repositories/runs.js";
 import {
   costAgg,
   findLiveRunClaimByRunId,
   findRunOutcomeByRunId,
   listRuns,
   type TimeWindow,
-} from "../../db/queries/runs-read.js";
+} from "../../db/repositories/runs.js";
 import {
   getResumableClarificationForRun,
   getResumeFailedClarificationForRun,
@@ -20,12 +20,14 @@ import {
   getCurrentPromptVersion,
   getPrompt,
   savePromptVersion,
-} from "../../prompt-library/store.js";
+} from "../../db/repositories/prompts.js";
 import {
+  MAX_REPLAY_PAGE_LIMIT,
+  RunObservationStoreError,
   getRunReplay,
   getRunReplayAttempt,
   getRunReplayAvailability,
-} from "../../run-observability/store.js";
+} from "../../db/repositories/runs/run-observability.js";
 import { listSchedulesForDefinition } from "../../schedule-trigger/schedule-store.js";
 import { getWebhookEndpointForNode } from "../../webhook-trigger/endpoint-store.js";
 import {
@@ -37,7 +39,7 @@ import {
   getWorkflowDefinitionVersion,
   saveWorkflowDefinitionDraft,
   updateWorkflowDefinition,
-} from "../../workflow-definition/store.js";
+} from "../../db/repositories/definitions.js";
 import {
   answerClarificationAndResume,
   type AnswerClarificationOutcome,
@@ -59,6 +61,7 @@ import {
 } from "./tool-queries.js";
 
 export type { TicketRunRow };
+export { MAX_REPLAY_PAGE_LIMIT, RunObservationStoreError };
 
 /** The time window a run listing or cost aggregation is taken over. */
 export type McpStatsWindow = TimeWindow;

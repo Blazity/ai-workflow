@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, isNotNull, isNull, notInArray, or, sql } from "
 import type { RunBlockStatusSnapshot } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
 import { workflowRuns } from "../../db/schema.js";
-import { coerceStatus } from "../../db/queries/runs-read.js";
+import { coerceStatus } from "../../db/repositories/runs.js";
 import type { RunRegistryAdapter } from "../../adapters/run-registry/types.js";
 
 export interface CollectBlockStatusesOptions {

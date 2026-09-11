@@ -9,7 +9,7 @@ import { createPromptReferenceLoader } from "./prompt-reference-loader.js";
 import {
   savePromptVersion,
   type PromptLibraryActor,
-} from "./store.js";
+} from "../db/repositories/prompts.js";
 
 const ADMIN: PromptLibraryActor = { role: "admin", id: "u_admin", label: "Admin" };
 

@@ -6,7 +6,7 @@ import {
   mapWorkflow,
   type RunsLister,
 } from "../overview/collect-runs.js";
-import type { RunSnapshot } from "./run-telemetry.js";
+import type { RunSnapshot } from "../../db/repositories/runs/telemetry.js";
 
 export interface CollectSnapshotsOptions {
   /** The Workflow world run store — `getWorld().runs`. */

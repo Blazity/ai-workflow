@@ -103,3 +103,4 @@ export type {
   WebhookEndpointTarget,
   WebhookTestDeliveryResult,
 } from "./webhook-endpoint-nodes.js";
+export { runnableDefinitionOf } from "../../db/repositories/definitions.js";

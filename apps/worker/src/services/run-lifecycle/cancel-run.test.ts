@@ -35,22 +35,22 @@ vi.mock("../../sandbox/stop-ticket-sandboxes.js", () => ({
   stopSandboxesByIds: state.stopSandboxes,
 }));
 vi.mock("../../db/client.js", () => ({ getDb: () => ({ db: true }) }));
-vi.mock("../../clarifications/store.js", () => ({
+vi.mock("../../db/repositories/clarifications.js", () => ({
   tombstoneClarificationCancellation: state.tombstone,
 }));
-vi.mock("../../approvals/store.js", () => ({
+vi.mock("../../db/repositories/approvals.js", () => ({
   retireApprovalCancellation: state.retireApproval,
 }));
 vi.mock("../tickets/ticket-transition.js", () => ({
   moveTicketForRun: state.moveTicket,
   withdrawTicketFromAiForRun: state.moveTicket,
 }));
-vi.mock("../telemetry/run-telemetry.js", () => ({
+vi.mock("../../db/repositories/runs/telemetry.js", () => ({
   recordRunStatusReason: state.recordStatusReason,
   markRunBlockedOnCancel: state.markBlockedOnCancel,
   markRunBlockedByOperator: state.markBlockedByOperator,
 }));
-vi.mock("../../db/queries/runs-read.js", () => ({
+vi.mock("../../db/repositories/runs.js", () => ({
   findLiveRunClaimByRunId: state.findLiveClaim,
   findRunOutcomeByRunId: state.findRunOutcome,
 }));

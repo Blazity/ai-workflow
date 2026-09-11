@@ -5,7 +5,7 @@ import {
   getCurrentPromptVersion,
   getPrompt,
   getPromptVersion,
-} from "./store.js";
+} from "../db/repositories/prompts.js";
 
 /** Maps a prompt token target and selector onto the concrete stored version. */
 export function createPromptReferenceLoader(db: Db): PromptReferenceLoader {

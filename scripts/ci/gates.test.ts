@@ -228,6 +228,40 @@ test("an existing retired path fails the no-resurrected-paths gate", async () =>
   assert.match(result.stdout, /removed\/path\.ts/);
 });
 
+test("the db client fence counts import forms, ignores comments, and ratchets", async () => {
+  const root = standaloneGateRoot(makeDepsRoot("db-client-fence-", {
+    "apps/worker/src/db/client.ts": "export const db = 1;\n",
+    "apps/worker/src/db/barrel.ts": 'export { db } from "./client.js";\n',
+    "apps/worker/src/services/static.ts": 'import { db } from "../db/client.js"; void db;\n',
+    "apps/worker/src/services/multiline.ts": 'import {\n  db,\n} from "../db/client.js";\nvoid db;\n',
+    "apps/worker/src/services/side-effect.ts": 'import "../db/client.js";\n',
+    "apps/worker/src/services/type.ts": 'import type { db } from "../db/client.js"; type T = typeof db;\n',
+    "apps/worker/src/services/dynamic.ts": 'void import("../db/client.js");\n',
+    "apps/worker/src/services/exported.ts": 'export { db } from "../db/client.js";\n',
+    "apps/worker/src/services/mocked.ts": 'vi.mock("../db/client.js");\n',
+    "apps/worker/src/services/barrel.ts": 'import { db } from "../db/barrel.js"; void db;\n',
+    "apps/worker/src/services/comment.ts": '// import { db } from "../db/client.js";\nconst text = "db/client";\n',
+    "apps/worker/src/services/ignored.test.ts": 'import { db } from "../db/client.js"; void db;\n',
+    "baseline.json": '{"count":9}\n',
+  }));
+  const pass = gate("db-client-fence.mjs", ["--root", root, "--baseline", join(root, "baseline.json")], root);
+  assert.equal(pass.status, gateSuccess, pass.stderr || pass.stdout);
+  assert.match(pass.stdout, /9\s+9/u);
+
+  await rename(
+    join(root, "apps/worker/src/services/static.ts"),
+    join(root, "apps/worker/src/services/renamed.ts"),
+  );
+  const renamed = gate("db-client-fence.mjs", ["--root", root, "--baseline", join(root, "baseline.json")], root);
+  assert.equal(renamed.status, gateSuccess, renamed.stderr || renamed.stdout);
+  assert.match(renamed.stdout, /9\s+9/u);
+
+  await writeFile(join(root, "baseline.json"), '{"count":6}\n');
+  const fail = gate("db-client-fence.mjs", ["--root", root, "--baseline", join(root, "baseline.json")], root);
+  assert.equal(fail.status, gateFailure, fail.stderr || fail.stdout);
+  assert.match(fail.stdout, /services\/renamed\.ts/u);
+});
+
 test("a reintroduced definition schema branch fails the single schema version gate", async () => {
   const root = await mkdtemp(join(tmpdir(), "single-schema-gate-"));
   const source = join(root, "apps/worker/src/workflow-definition");
@@ -483,10 +517,21 @@ test("gate baselines are machine readable JSON", async () => {
     "boundaries.baseline.json",
     "unused-code.baseline.json",
     "lint.baseline.json",
+    "db-client-fence.baseline.json",
     "no-resurrected-paths.json",
   ]) {
     JSON.parse(await readFile(join(repoRoot, "scripts/gates", file), "utf8"));
   }
+});
+
+test("the composite gate ladder includes both database fences", async () => {
+  const rootPackage = JSON.parse(
+    await readFile(join(repoRoot, "package.json"), "utf8"),
+  ) as { scripts: Record<string, string> };
+  assert.match(rootPackage.scripts.gates, /gate:transactions/u);
+  assert.match(rootPackage.scripts.gates, /gate:db-client-fence/u);
+  assert.match(rootPackage.scripts["gates:update-baselines"], /gate:db-client-fence/u);
+  assert.doesNotMatch(rootPackage.scripts["gates:update-baselines"], /gate:transactions/u);
 });
 
 // Two service clusters, where beta reaches past alpha's interface.

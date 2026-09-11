@@ -3,7 +3,7 @@ import { listHarnessProfileUsage } from "./harness-profile-usage-store.js";
 import {
   deleteHarnessProfile,
   getHarnessProfileDetail,
-} from "../harness-profiles/store.js";
+} from "../db/repositories/harness-profiles.js";
 
 export async function getHarnessProfileDetailWithUsage(
   db: Db,

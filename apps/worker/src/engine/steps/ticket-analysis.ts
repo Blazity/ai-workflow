@@ -48,7 +48,7 @@ async function recordRunAnalysisReportStep(report: RunAnalysisReport): Promise<v
   "use step";
   const { getDb } = await import("../../db/client.js");
   const { logger } = await import("../../infra/logger.js");
-  const { recordRunAnalysisReport } = await import("../../run-analysis/store.js");
+  const { recordRunAnalysisReport } = await import("../../db/repositories/runs/run-analysis.js");
   await recordRunAnalysisReport(getDb(), report);
   logger.info({ runId: report.runId, stage: report.stage }, "run_analysis_report_recorded");
 }
@@ -73,7 +73,7 @@ async function loadApprovedPlanAnalysisReportStep(
 ): Promise<RunAnalysisReport> {
   "use step";
   const { getDb } = await import("../../db/client.js");
-  const { getRunAnalysisReport } = await import("../../run-analysis/store.js");
+  const { getRunAnalysisReport } = await import("../../db/repositories/runs/run-analysis.js");
   const source = sourceRunId ? await getRunAnalysisReport(getDb(), sourceRunId) : null;
   return buildApprovedPlanAnalysisReport({
     runId,

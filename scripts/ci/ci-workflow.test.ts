@@ -210,6 +210,12 @@ test("the source build covers worker and dashboard without deployment side effec
   assert.doesNotMatch(workerPackage.scripts["build:ci"], /seed:auth-user/);
 });
 
+test("the CI gate command reaches both database fences", async () => {
+  const rootPackage = await readPackageJson("package.json");
+  assert.match(rootPackage.scripts.gates, /gate:transactions/u);
+  assert.match(rootPackage.scripts.gates, /gate:db-client-fence/u);
+});
+
 test("the source build uses the validator entrypoints and preserves deployment setup order", async () => {
   const workerPackage = await readPackageJson("apps/worker/package.json");
 

@@ -76,7 +76,7 @@ vi.mock("../../services/dispatch-queue/at-capacity-queue.js", () => ({
   reconcileAtCapacityQueue: (...args: any[]) =>
     mocks.reconcileAtCapacityQueue(...args),
 }));
-vi.mock("../../approvals/store.js", () => ({
+vi.mock("../../db/repositories/approvals.js", () => ({
   listDispatchBlockingApprovals: (...args: any[]) =>
     mocks.listDispatchBlockingApprovals(...args),
   listApprovalParkedSubjects: (...args: any[]) =>
@@ -91,7 +91,7 @@ vi.mock("../../services/approvals/dispatch.js", () => ({
 vi.mock("../../services/run-lifecycle/reconcile.js", () => ({
   reconcileRuns: (...args: any[]) => mocks.reconcileRuns(...args),
 }));
-vi.mock("../../clarifications/store.js", () => ({
+vi.mock("../../db/repositories/clarifications.js", () => ({
   reconcileClarificationCheckpoints: (...args: any[]) =>
     mocks.reconcileClarifications(...args),
   classifyProtectedClarificationSubjects: (...args: any[]) =>
@@ -123,7 +123,7 @@ vi.mock("../../services/dispatch/dispatch-trigger.js", () => ({
 vi.mock("../../services/dispatch/trigger-delivery-store.js", () => ({
   listPendingTriggers: (...args: any[]) => mocks.listPendingTriggers(...args),
 }));
-vi.mock("../../run-observability/store.js", () => ({
+vi.mock("../../db/repositories/runs/run-observability.js", () => ({
   deleteExpiredRunObservations: (...args: any[]) =>
     mocks.deleteExpiredRunObservations(...args),
 }));
@@ -136,7 +136,7 @@ vi.mock("../../services/manual-dispatch/service.js", () => ({
   recoverManualDispatches: (...args: unknown[]) =>
     mocks.recoverManualDispatches(...args),
 }));
-vi.mock("../../manual-dispatch/store.js", () => ({
+vi.mock("../../db/repositories/manual-dispatch.js", () => ({
   listRecoverableManualDispatches: (...args: unknown[]) =>
     mocks.listRecoverableManualDispatches(...args),
 }));
@@ -177,7 +177,7 @@ vi.mock("../../services/schedule-trigger/dispatch-schedule-trigger.js", () => ({
 vi.mock("../../services/telemetry/collect-snapshots.js", () => ({
   collectSnapshots: vi.fn().mockResolvedValue([]),
 }));
-vi.mock("../../services/telemetry/run-telemetry.js", () => ({
+vi.mock("../../db/repositories/runs/telemetry.js", () => ({
   upsertRunSnapshots: vi.fn().mockResolvedValue(undefined),
   sweepOrphanedAwaitingRuns: (...args: unknown[]) =>
     mocks.sweepOrphanedAwaitingRuns(...args),

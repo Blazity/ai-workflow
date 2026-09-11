@@ -43,7 +43,7 @@ vi.mock("./cancel-run.js", () => ({
   cancelRunDetailed: (...args: any[]) => mockCancelRunDetailed(...args),
   cancelSubjectRunDetailed: (...args: any[]) => mockCancelSubjectRunDetailed(...args),
 }));
-vi.mock("../../db/queries/runs-read.js", () => ({
+vi.mock("../../db/repositories/runs.js", () => ({
   isRunRecordedFailed: (...args: any[]) => mockIsRunRecordedFailed(...args),
   isRunRecordedSucceeded: (...args: any[]) => mockIsRunRecordedSucceeded(...args),
   hasDurableRunPublication: (...args: any[]) => mockHasDurableRunPublication(...args),

@@ -10,7 +10,7 @@ import {
   workflowDefinitionVersions,
 } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
-import { PostgresRunRegistry } from "../../adapters/run-registry/postgres.js";
+import { PostgresRunRegistry } from "../../db/repositories/active-runs.js";
 import { getWebhookDelivery } from "../../webhook-trigger/delivery-store.js";
 
 vi.mock("../../config/env.js", () => ({
@@ -21,7 +21,7 @@ vi.mock("workflow/api", () => ({ start: (...args: any[]) => mockStart(...args) }
 vi.mock("../../engine/index.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
 // The definition store is only reachable from ticket dispatch in this module's
 // import graph; stubbing it keeps this test independent of that file.
-vi.mock("../../workflow-definition/store.js", () => ({
+vi.mock("../../db/repositories/definitions.js", () => ({
   getEnabledWorkflowDefinitionForTrigger: vi.fn(async () => null),
 }));
 const dbRef = vi.hoisted(() => ({ current: null as unknown as Db }));

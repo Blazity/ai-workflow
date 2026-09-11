@@ -31,11 +31,11 @@ const dbRef = vi.hoisted(() => ({ current: null as unknown as Db }));
 vi.mock("../../db/client.js", () => ({ getDb: () => dbRef.current }));
 const mockGetEnabled = vi.fn();
 const mockHasBlockingApproval = vi.fn();
-vi.mock("../../workflow-definition/store.js", () => ({
+vi.mock("../../db/repositories/definitions.js", () => ({
   getEnabledWorkflowDefinitionForTrigger: (...args: any[]) => mockGetEnabled(...args),
   runnableDefinitionOf: (row: any) => row?.schema === "v2" ? row.definition : undefined,
 }));
-vi.mock("../../approvals/store.js", () => ({
+vi.mock("../../db/repositories/approvals.js", () => ({
   hasDispatchBlockingApprovalForTicket: (...args: any[]) =>
     mockHasBlockingApproval(...args),
 }));

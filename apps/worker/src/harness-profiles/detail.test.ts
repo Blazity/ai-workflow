@@ -20,7 +20,7 @@ import {
   compileHarnessProfileManifest,
   hashHarnessProfileManifest,
 } from "./manifest.js";
-import { getHarnessProfileDetail } from "./store.js";
+import { getHarnessProfileDetail } from "../db/repositories/harness-profiles.js";
 
 let db: Db;
 

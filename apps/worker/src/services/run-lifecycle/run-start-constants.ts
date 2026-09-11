@@ -1,1 +1,1 @@
-export const STARTUP_DEADLINE_MS = 10 * 60 * 1000;
+export { STARTUP_DEADLINE_MS } from "../../db/repositories/active-runs.js";

@@ -18,7 +18,7 @@ import {
   listApprovals,
   rejectUndispatchableApproval,
   serializeApproval,
-} from "../../approvals/store.js";
+} from "../../db/repositories/approvals.js";
 import { dashboardUserLabel } from "../../pre-pr-checks/store.js";
 import { resolveAwaitingRun } from "../telemetry/index.js";
 import { maxConcurrentAgents } from "../settings/index.js";

@@ -1,5 +1,5 @@
 import type { Db } from "../../db/client.js";
-import { acknowledgeManualDispatchStarted } from "../../manual-dispatch/store.js";
+import { acknowledgeManualDispatchStarted } from "../../db/repositories/manual-dispatch.js";
 
 export async function acknowledgeManualDispatchWorkflow(
   db: Db,

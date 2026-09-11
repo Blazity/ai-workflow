@@ -24,7 +24,7 @@ import {
   getEnabledDeployedDefinition,
   getWorkflowDefinition,
   runnableDefinitionOf,
-} from "../../workflow-definition/store.js";
+} from "../../db/repositories/definitions.js";
 import { webhookSubjectKey } from "../run-lifecycle/index.js";
 import {
   mapWebhookPayload,

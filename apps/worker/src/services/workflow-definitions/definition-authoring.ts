@@ -16,7 +16,7 @@ import type {
 } from "@shared/contracts";
 import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import { getDb, type Db } from "../../db/client.js";
-import { getCurrentSystemHarnessProfileReference } from "../../harness-profiles/store.js";
+import { getCurrentSystemHarnessProfileReference } from "../../db/repositories/harness-profiles.js";
 import { logger } from "../../infra/logger.js";
 import { dashboardUserLabel } from "../../pre-pr-checks/store.js";
 import { defaultWorkflowDefinitionV2 } from "../../workflow-definition/default.js";
@@ -37,7 +37,7 @@ import {
   type WorkflowDefinitionDraftRow,
   type WorkflowDefinitionRow,
   type WorkflowDefinitionVersionRow,
-} from "../../workflow-definition/store.js";
+} from "../../db/repositories/definitions.js";
 import { workflowDefinitionTemplate } from "../../workflow-definition/templates.js";
 import { agentRuntimeSettings } from "../settings/index.js";
 

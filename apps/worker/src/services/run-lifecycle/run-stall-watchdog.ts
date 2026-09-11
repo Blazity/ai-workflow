@@ -21,7 +21,7 @@ import { withdrawTicketFromAiForRun } from "../tickets/ticket-transition.js";
 import {
   markRunFailedByWatchdog,
   WATCHDOG_FAILURE_REASON_PREFIX,
-} from "../telemetry/run-telemetry.js";
+} from "../../db/repositories/runs/telemetry.js";
 
 /**
  * A step still "running" this long after it was created has outlived every

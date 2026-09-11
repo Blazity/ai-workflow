@@ -9,7 +9,7 @@ import {
   getDeployedWorkflowDefinitionVersion,
   getWorkflowDefinition,
   getWorkflowDefinitionVersion,
-} from "../../workflow-definition/store.js";
+} from "../../db/repositories/definitions.js";
 import { aiColumnMoveTarget } from "../tickets/move-targets.js";
 import { AWAITING_APPROVAL_LABEL } from "../tickets/labels.js";
 import { logger } from "../../infra/logger.js";
@@ -18,7 +18,7 @@ import { claimTicketRun } from "../dispatch/dispatch.js";
 import { ticketSubjectKey } from "../run-lifecycle/subject-key.js";
 import { updateTicketLabelsForRun } from "../tickets/ticket-label-mutation.js";
 import { moveTicketForRun } from "../tickets/ticket-transition.js";
-import type { ApprovalRow } from "../../approvals/store.js";
+import type { ApprovalRow } from "../../db/repositories/approvals.js";
 
 export type DispatchPlanApprovedResult =
   | { status: "definition_gone" }

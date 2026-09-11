@@ -16,7 +16,7 @@ import {
 } from "../db/schema.js";
 import { sha256Digest } from "./skill-artifact-digest.js";
 import { HarnessSkillImportError } from "./skill-errors.js";
-import { readHarnessSkillArtifactSource } from "./store.js";
+import { readHarnessSkillArtifactSource } from "../db/repositories/harness-profiles.js";
 
 export interface PersistableSkillArtifact {
   artifactHash: string;

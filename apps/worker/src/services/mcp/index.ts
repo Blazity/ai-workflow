@@ -70,6 +70,8 @@ export type {
 } from "./rate-limit-store.js";
 export {
   createMcpToolServices,
+  MAX_REPLAY_PAGE_LIMIT,
+  RunObservationStoreError,
 } from "./tool-services.js";
 export type {
   McpStatsWindow,

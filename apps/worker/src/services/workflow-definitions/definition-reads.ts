@@ -8,7 +8,7 @@
  * archived definition as absent.
  */
 import { getDb } from "../../db/client.js";
-import { getCurrentSystemHarnessProfileReference } from "../../harness-profiles/store.js";
+import { getCurrentSystemHarnessProfileReference } from "../../db/repositories/harness-profiles.js";
 import { defaultWorkflowDefinitionV2 } from "../../workflow-definition/default.js";
 import {
   buildWorkflowEditorOptions,
@@ -24,7 +24,7 @@ import {
   listWorkflowDefinitions,
   type WorkflowDefinitionRow,
   type WorkflowDefinitionVersionRow,
-} from "../../workflow-definition/store.js";
+} from "../../db/repositories/definitions.js";
 import { agentRuntimeSettings } from "../settings/index.js";
 
 export interface WorkflowDefinitionsOverview {

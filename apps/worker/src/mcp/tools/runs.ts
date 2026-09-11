@@ -20,7 +20,7 @@ import { mcpSettings } from "../../services/settings/runtime-settings.js";
 import {
   MAX_REPLAY_PAGE_LIMIT,
   RunObservationStoreError,
-} from "../../run-observability/store.js";
+} from "../../services/mcp/index.js";
 import {
   McpPublicError,
   isTerminalRunStatus,

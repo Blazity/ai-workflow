@@ -22,7 +22,7 @@ const { hostedStart } = vi.hoisted(() => ({ hostedStart: vi.fn() }));
 vi.mock("workflow/api", () => ({ start: hostedStart, getRun: vi.fn() }));
 vi.mock("../../engine/index.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
 // Reachable only from ticket dispatch in this module's import graph.
-vi.mock("../../workflow-definition/store.js", () => ({
+vi.mock("../../db/repositories/definitions.js", () => ({
   getEnabledWorkflowDefinitionForTrigger: vi.fn(async () => null),
   getLiveScheduleTriggerTarget: vi.fn(async () => null),
 }));

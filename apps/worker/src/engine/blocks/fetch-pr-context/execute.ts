@@ -38,7 +38,7 @@ export async function blockPrTriggerRepositoriesWithSiblingsStep(
 ): Promise<SelectedRepository[]> {
   "use step";
   const primary = await blockPrTriggerRepositoriesStep(pr.prUrl, pr);
-  const { findRunPrSiblings } = await import("../../../db/queries/run-pr-siblings.js");
+  const { findRunPrSiblings } = await import("../../../db/repositories/runs.js");
   const { createRepositoryDirectoryForProviders } = await import(
     "../../../adapters/vcs/repository-directory.js",
   );
@@ -235,7 +235,7 @@ export async function resolveTicketWorkflowOwnedReposStep(
   "use step";
   const { getDb } = await import("../../../db/client.js");
   const { listWorkflowOwnedBranchesForTicket } = await import(
-    "../../../db/queries/workflow-owned-branches.js"
+    "../../../db/repositories/runs.js"
   );
   const records = await listWorkflowOwnedBranchesForTicket(getDb(), ticketKey);
   return records

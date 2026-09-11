@@ -11,7 +11,7 @@ import {
   runCleanup,
   runCleanupCli,
 } from "../../../scripts/cleanup-orphaned-running-runs.js";
-import { sweepOrphanedRunningRuns } from "./run-telemetry.js";
+import { sweepOrphanedRunningRuns } from "../../db/repositories/runs/telemetry.js";
 
 let db: Db;
 

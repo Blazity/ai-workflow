@@ -15,7 +15,7 @@ vi.mock("../../services/vcs/vcs-runtime.js", () => ({
   createRepositoryVCS: mocks.createRepositoryVCS,
 }));
 
-vi.mock("../../db/queries/workflow-owned-branches.js", () => ({
+vi.mock("../../db/repositories/runs.js", () => ({
   upsertWorkflowOwnedBranch: mocks.upsertWorkflowOwnedBranch,
 }));
 

@@ -8,7 +8,7 @@
  * and the fall back to the legacy post-PR gate, is one ordered decision and
  * lives here.
  */
-import { PostgresRunRegistry } from "../../../adapters/run-registry/postgres.js";
+import { PostgresRunRegistry } from "../../../db/repositories/active-runs.js";
 import { getDb } from "../../../db/client.js";
 import { verifyGitHubWebhookSignature } from "../../../infra/github-webhook-sig.js";
 import { logger } from "../../../infra/logger.js";

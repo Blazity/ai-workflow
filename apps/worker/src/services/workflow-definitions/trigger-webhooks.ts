@@ -21,7 +21,7 @@ import {
   WebhookSecretInvalidError,
   type WebhookEndpointRow,
 } from "../../webhook-trigger/endpoint-store.js";
-import { getEnabledDeployedDefinition } from "../../workflow-definition/store.js";
+import { getEnabledDeployedDefinition } from "../../db/repositories/definitions.js";
 import {
   auditWebhookAction,
   mintMissingEndpoint,
