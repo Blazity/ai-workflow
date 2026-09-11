@@ -1809,6 +1809,41 @@ describe("PR review publication idempotency", () => {
     expect(commentRows[0]!.providerReference).toBe("comment-12");
   });
 
+  it("skips an empty provider reference returned for an inline comment", async () => {
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "run-empty-comment-reference" });
+    const publishPRReview = vi
+      .fn()
+      .mockResolvedValue({ id: "review-empty-comment-reference", commentIds: [""] });
+    reviewVcs(publishPRReview);
+
+    await publish(db, {
+      runId: "run-empty-comment-reference",
+      prNumber: 19,
+      headSha: "head",
+      reviewResults: [
+        {
+          decision: "request_changes",
+          findings: [
+            {
+              file: "src/a.ts",
+              description: "Reads the config twice.",
+              severity: "Blocker",
+              startLine: 4,
+              endLine: 4,
+            },
+          ],
+        },
+      ],
+    });
+
+    const commentRows = await db
+      .select()
+      .from(workflowPrReviewPublicationComments);
+    expect(commentRows).toHaveLength(1);
+    expect(commentRows[0]!.providerReference).toBeNull();
+  });
+
   it("resumes a failed publication on the row it already created", async () => {
     const db = await createTestDb();
     await db.insert(workflowRuns).values({ runId: "run-resume" });

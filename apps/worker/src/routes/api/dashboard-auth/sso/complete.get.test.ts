@@ -1,6 +1,6 @@
 import { createApp, eventHandler, toWebHandler } from "h3";
+import { DashboardAuthError } from "@shared/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DashboardAuthError } from "../../../../services/auth/users-read.js";
 
 const state = vi.hoisted(() => ({
   getSession: vi.fn(),

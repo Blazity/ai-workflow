@@ -315,13 +315,13 @@ describe("reconcileStalledRun", () => {
     expect(fetchTicket).toHaveBeenCalledTimes(2);
     expect(moveTicket).not.toHaveBeenCalled();
     expect(assertOwner).toHaveBeenCalledWith(
-      db,
       expect.objectContaining({
         subjectKey: entry.subjectKey,
         ownerToken: entry.ownerToken,
         runId: entry.runId,
       }),
       "cancelling",
+      db,
     );
   });
 
@@ -491,13 +491,13 @@ describe("reconcileStalledRun", () => {
       expect(fetchTicket).toHaveBeenCalledTimes(2);
       expect(moveTicket).not.toHaveBeenCalled();
       expect(assertOwner).toHaveBeenCalledWith(
-        db,
         expect.objectContaining({
           subjectKey: entry.subjectKey,
           ownerToken: entry.ownerToken,
           runId: entry.runId,
         }),
         "cancelling",
+        db,
       );
     },
   );

@@ -20,7 +20,8 @@ export async function updateTicketLabelsForRun(input: {
   changes: TicketLabelChanges;
 }): Promise<void> {
   if (typeof input.issueTracker.updateLabels !== "function") {
-    throw new TypeError("Issue tracker does not support label mutations.");
+    // oxlint-disable-next-line unicorn/prefer-type-error -- Error is the established exported API contract.
+    throw new Error("Issue tracker does not support label mutations.");
   }
   const changes = normalizeChanges(input.changes);
   if (changes.add.length === 0 && changes.remove.length === 0) return;
@@ -52,7 +53,8 @@ export async function updateConnectedTicketLabelsForRun(
   input: Omit<Parameters<typeof updateTicketLabelsForRun>[0], "db">,
 ): Promise<void> {
   if (typeof input.issueTracker.updateLabels !== "function") {
-    throw new TypeError("Issue tracker does not support label mutations.");
+    // oxlint-disable-next-line unicorn/prefer-type-error -- Error is the established exported API contract.
+    throw new Error("Issue tracker does not support label mutations.");
   }
   const changes = normalizeChanges(input.changes);
   if (changes.add.length === 0 && changes.remove.length === 0) return;

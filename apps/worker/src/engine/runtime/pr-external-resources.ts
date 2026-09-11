@@ -1284,7 +1284,7 @@ async function publishRunOwnedPrReviewWithPersistence(
     providerReference: published.id,
     commentProviderReferences: commentRecords.flatMap((comment, index) => {
       const providerReference = published.commentIds[index];
-      return providerReference === undefined || providerReference === null
+      return !providerReference
         ? []
         : [{ contentHash: comment.contentHash, providerReference }];
     }),

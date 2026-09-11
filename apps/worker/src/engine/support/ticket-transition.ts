@@ -186,7 +186,7 @@ function isIssueTrackerNotFound(error: unknown): boolean {
   return (error as { code?: unknown }).code === "NOT_FOUND";
 }
 
-function ticketMatchesMoveTarget(
+export function ticketMatchesMoveTarget(
   ticket: Pick<TicketContent, "trackerStatus" | "trackerStatusId">,
   target: IssueTrackerMoveTarget,
 ): boolean {

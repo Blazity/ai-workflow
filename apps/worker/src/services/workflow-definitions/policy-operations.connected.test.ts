@@ -100,41 +100,113 @@ beforeEach(() => {
 });
 
 describe("connected workflow definition trigger convergence", () => {
-  it("syncs after deploy", async () => {
-    mocks.deploy.mockResolvedValue({ definition: { id: 41 } });
+  it("returns the deploy result and syncs only after persistence succeeds", async () => {
+    const deployedDefinition = {
+      id: 41,
+      archivedAt: null,
+      draftRevision: 2,
+      deployedVersion: 1,
+      triggerTypes: ["trigger_pr_created"],
+    };
+    const deployedVersion = { schema: "v2", definition };
+    mocks.getDefinition.mockResolvedValue(deployedDefinition);
+    mocks.getVersion.mockResolvedValue(deployedVersion);
 
-    await deployConnectedWorkflowDefinition({
+    const result = await deployConnectedWorkflowDefinition({
       definitionId: 41,
       expectedDraftRevision: 2,
       expectedDeployedVersion: 1,
       actor,
     });
 
+    expect(result).toEqual({ definition: deployedDefinition, version: deployedVersion });
+    expect(result.definition).toBe(deployedDefinition);
+    expect(mocks.selectDeployment.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.sync.mock.invocationCallOrder[0]!,
+    );
     expect(mocks.sync).toHaveBeenCalledWith(41);
+
+    vi.clearAllMocks();
+    const persistenceError = new Error("deploy persistence failed");
+    mocks.selectDeployment.mockRejectedValue(persistenceError);
+    await expect(deployConnectedWorkflowDefinition({
+      definitionId: 41,
+      expectedDraftRevision: 2,
+      expectedDeployedVersion: 1,
+      actor,
+    })).rejects.toBe(persistenceError);
+    expect(mocks.sync).not.toHaveBeenCalled();
   });
 
-  it("syncs after rollback", async () => {
-    mocks.rollback.mockResolvedValue({ definition: { id: 42 } });
+  it("returns the rollback result and syncs only after persistence succeeds", async () => {
+    const rolledBackDefinition = {
+      id: 42,
+      archivedAt: null,
+      draftRevision: 2,
+      deployedVersion: 2,
+      triggerTypes: ["trigger_pr_created"],
+    };
+    const rolledBackVersion = { schema: "v2", definition };
+    mocks.getDefinition.mockResolvedValue(rolledBackDefinition);
+    mocks.getVersion.mockResolvedValue(rolledBackVersion);
 
-    await rollbackConnectedWorkflowDefinition({
+    const result = await rollbackConnectedWorkflowDefinition({
       definitionId: 42,
       version: 1,
       expectedDeployedVersion: 2,
       actor,
     });
 
+    expect(result).toEqual({ definition: rolledBackDefinition, version: rolledBackVersion });
+    expect(result.definition).toBe(rolledBackDefinition);
+    expect(mocks.selectRollback.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.sync.mock.invocationCallOrder[0]!,
+    );
     expect(mocks.sync).toHaveBeenCalledWith(42);
+
+    vi.clearAllMocks();
+    const persistenceError = new Error("rollback persistence failed");
+    mocks.selectRollback.mockRejectedValue(persistenceError);
+    await expect(rollbackConnectedWorkflowDefinition({
+      definitionId: 42,
+      version: 1,
+      expectedDeployedVersion: 2,
+      actor,
+    })).rejects.toBe(persistenceError);
+    expect(mocks.sync).not.toHaveBeenCalled();
   });
 
-  it("syncs after enabling", async () => {
-    mocks.update.mockResolvedValue({ id: 43, enabled: true });
+  it("returns the enabled result and syncs only after persistence succeeds", async () => {
+    const enabledDefinition = {
+      id: 43,
+      archivedAt: null,
+      draftRevision: 2,
+      deployedVersion: 2,
+      triggerTypes: ["trigger_pr_created"],
+      enabled: true,
+    };
+    mocks.getDefinition.mockResolvedValue(enabledDefinition);
 
-    await updateConnectedWorkflowDefinition({
+    const result = await updateConnectedWorkflowDefinition({
       definitionId: 43,
       enabled: true,
       actor,
     });
 
+    expect(result).toBe(enabledDefinition);
+    expect(mocks.updateLifecycle.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.sync.mock.invocationCallOrder[0]!,
+    );
     expect(mocks.sync).toHaveBeenCalledWith(43);
+
+    vi.clearAllMocks();
+    const persistenceError = new Error("enable persistence failed");
+    mocks.updateLifecycle.mockRejectedValue(persistenceError);
+    await expect(updateConnectedWorkflowDefinition({
+      definitionId: 43,
+      enabled: true,
+      actor,
+    })).rejects.toBe(persistenceError);
+    expect(mocks.sync).not.toHaveBeenCalled();
   });
 });

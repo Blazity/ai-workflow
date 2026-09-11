@@ -9,8 +9,6 @@ import {
 
 export type DashboardAuthMethod = "Password" | "SSO" | "Password + SSO" | "Unknown";
 
-export { DashboardAuthError } from "@shared/contracts";
-
 export type DashboardActor = {
   organizationId: string;
   organizationName: string;
