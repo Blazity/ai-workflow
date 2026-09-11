@@ -22,7 +22,7 @@ import {
   serializePromptMeta,
   serializePromptVersion,
   type PromptLibraryListRow,
-} from "../../prompt-library/store.js";
+} from "../../db/repositories/prompts.js";
 import {
   findPromptUsage,
   findPromptUsageInPrompts,

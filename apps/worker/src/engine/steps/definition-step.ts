@@ -7,7 +7,7 @@ import type {
   WorkflowDefinitionNode,
 } from "@shared/contracts";
 import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
-import type { WorkflowDefinitionVersionRow } from "../../workflow-definition/store.js";
+import type { WorkflowDefinitionVersionRow } from "../../db/repositories/definitions.js";
 import {
   BUILTIN_FALLBACK_DEFINITION_VERSION,
   type WorkflowDefinitionVersionPin,
@@ -68,7 +68,7 @@ export async function loadWorkflowDefinitionFor(
     getWorkflowDefinition,
     getWorkflowDefinitionVersion,
     getEnabledWorkflowDefinitionForTrigger,
-  } = await import("../../workflow-definition/store.js");
+  } = await import("../../db/repositories/definitions.js");
   const {
     workflowDefinitionV2Schema,
     validateWorkflowDefinitionForDeployment,

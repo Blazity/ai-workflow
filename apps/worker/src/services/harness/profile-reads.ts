@@ -12,7 +12,7 @@ import { getHarnessProfileDetailWithUsage } from "../../db/harness-profile-detai
 import {
   listHarnessProfiles,
   type HarnessProfileActor,
-} from "../../harness-profiles/store.js";
+} from "../../db/repositories/harness-profiles.js";
 
 /** The actor fields every profile operation needs, as the route knows them. */
 export type { HarnessProfileActor };

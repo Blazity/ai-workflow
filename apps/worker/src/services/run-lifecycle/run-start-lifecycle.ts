@@ -61,7 +61,7 @@ export async function commitHostedStart(
       let outcome: { status: string | null } | null;
       try {
         const { findRunOutcomeByRunId } = await import(
-          "../../db/queries/runs-read.js"
+          "../../db/repositories/runs.js"
         );
         outcome = await findRunOutcomeByRunId(getDb(), started.runId);
       } catch (checkError) {

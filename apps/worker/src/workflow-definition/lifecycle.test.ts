@@ -44,7 +44,7 @@ import {
   saveWorkflowDefinitionVersion,
   updateWorkflowDefinition,
   type WorkflowDefinitionActor,
-} from "./store.js";
+} from "../db/repositories/definitions.js";
 
 const ADMIN: WorkflowDefinitionActor = { role: "admin", id: "u_admin", label: "Admin" };
 

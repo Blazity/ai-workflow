@@ -1,6 +1,6 @@
 import type { VcsProvider } from "../../adapters/vcs/repository-directory.js";
 import type { Db } from "../../db/client.js";
-import { findWorkflowOwnedPullRequestIdentity } from "../../db/queries/workflow-owned-branches.js";
+import { findWorkflowOwnedPullRequestIdentity } from "../../db/repositories/runs.js";
 import { logger } from "../../infra/logger.js";
 import { vcsLoginsMatch } from "../vcs/vcs-bot-identity.js";
 

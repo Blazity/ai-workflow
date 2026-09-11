@@ -1,5 +1,6 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
+import { createAuthRepository } from "../../db/repositories/auth.js";
 import {
   account,
   member as memberTable,
@@ -185,10 +186,7 @@ export async function updateDashboardUserRole(
     throw new DashboardAuthError(403, "Forbidden");
   }
 
-  await db
-    .update(memberTable)
-    .set({ role: input.nextRole })
-    .where(eq(memberTable.id, target.id));
+  await createAuthRepository(db).updateMemberRole(target.id, input.nextRole);
 
   return { userId: target.userId, role: input.nextRole };
 }

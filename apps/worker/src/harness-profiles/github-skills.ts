@@ -31,7 +31,7 @@ import {
   type PersistableSkillArtifact,
 } from "./skill-artifact-persistence.js";
 import { HarnessSkillImportError } from "./skill-errors.js";
-import { readHarnessSkillArtifactSource } from "./store.js";
+import { readHarnessSkillArtifactSource } from "../db/repositories/harness-profiles.js";
 
 export { HarnessSkillImportError } from "./skill-errors.js";
 

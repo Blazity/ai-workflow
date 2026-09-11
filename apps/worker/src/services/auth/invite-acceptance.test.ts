@@ -308,14 +308,14 @@ describe("acceptDashboardInvite", () => {
 
   it("re-checks pending invite state before creating membership", async () => {
     const { db, auth } = await setupInvite();
-    const originalTransaction = db.transaction.bind(db);
-    vi.spyOn(db, "transaction").mockImplementation((async (callback, config) => {
+    const originalExecute = db.execute.bind(db);
+    vi.spyOn(db, "execute").mockImplementation((async (query) => {
       await db
         .update(invitation)
         .set({ status: "accepted" })
         .where(eq(invitation.id, "invite_1"));
-      return originalTransaction(callback, config);
-    }) as typeof db.transaction);
+      return originalExecute(query);
+    }) as typeof db.execute);
 
     await expect(
       acceptDashboardInvite(db, auth, {

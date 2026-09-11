@@ -36,7 +36,7 @@ vi.mock("../../post-pr-gate/config.js", () => ({
 }));
 
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
-vi.mock("../../db/queries/workflow-owned-branches.js", () => ({
+vi.mock("../../db/repositories/runs.js", () => ({
   findWorkflowOwnedPullRequestIdentity: (...args: any[]) =>
     mocks.findWorkflowOwnedPullRequestIdentity(...args),
 }));

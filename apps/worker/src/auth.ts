@@ -1,9 +1,7 @@
-import { randomUUID } from "node:crypto";
 import { sso } from "@better-auth/sso";
 import { waitUntil } from "@vercel/functions";
 import { betterAuth } from "better-auth";
 import { createAuthMiddleware } from "better-auth/api";
-import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import {
   bearer,
   jwt,
@@ -11,11 +9,13 @@ import {
   organization as organizationPlugin,
 } from "better-auth/plugins";
 import { defaultAc } from "better-auth/plugins/organization/access";
-import { and, eq, isNotNull } from "drizzle-orm";
 import { createError } from "h3";
 
 import type { Db } from "./db/client.js";
-import { account, member, organization, ssoProvider, verification } from "./db/schema.js";
+import {
+  createAuthRepository,
+  createBetterAuthAdapter,
+} from "./db/repositories/auth.js";
 import { createMcpOAuthProvider, validateMcpOAuthHookRequest } from "./mcp/oauth.js";
 
 export type AuthOptions = {
@@ -76,7 +76,7 @@ export function createAuth(db: Db, options: AuthOptions) {
     : null;
 
   return betterAuth({
-    database: drizzleAdapter(db, { provider: "pg" }),
+    database: createBetterAuthAdapter(db),
     emailAndPassword: {
       enabled: true,
       disableSignUp: true,
@@ -84,9 +84,7 @@ export function createAuth(db: Db, options: AuthOptions) {
         ? async ({ user, token }) => {
             const hasCredential = await userHasCredentialAccount(db, user.id);
             if (!hasCredential) {
-              await db
-                .delete(verification)
-                .where(eq(verification.identifier, `reset-password:${token}`));
+              await createAuthRepository(db).deleteResetPasswordVerification(token);
               return;
             }
 
@@ -165,19 +163,8 @@ type AuthContext = Awaited<Auth["$context"]>;
 
 const AUTH_SEED_MAX_ATTEMPTS = 3;
 
-export async function userHasCredentialAccount(db: Db, userId: string): Promise<boolean> {
-  const [credential] = await db
-    .select({ id: account.id })
-    .from(account)
-    .where(
-      and(
-        eq(account.userId, userId),
-        eq(account.providerId, "credential"),
-        isNotNull(account.password),
-      ),
-    )
-    .limit(1);
-  return Boolean(credential);
+export function userHasCredentialAccount(db: Db, userId: string): Promise<boolean> {
+  return createAuthRepository(db).hasCredentialAccount(userId);
 }
 
 function dashboardResetPasswordUrl(dashboardOrigin: string, token: string): string {
@@ -326,85 +313,22 @@ export async function bootstrapDashboardAuth(
   };
 }
 
-async function ensureDashboardOrganization(
+function ensureDashboardOrganization(
   db: Db,
   input: BootstrapDashboardAuthOptions["organization"],
 ) {
-  const [created] = await db
-    .insert(organization)
-    .values({
-      id: randomUUID(),
-      name: input.name,
-      slug: input.slug,
-    })
-    .onConflictDoNothing({ target: organization.slug })
-    .returning();
-
-  if (created) {
-    return { organization: created, created: true };
-  }
-
-  const [existing] = await db
-    .select()
-    .from(organization)
-    .where(eq(organization.slug, input.slug))
-    .limit(1);
-
-  if (!existing) {
-    throw new Error("Dashboard organization was not found after bootstrap");
-  }
-
-  if (existing.name !== input.name) {
-    const [updated] = await db
-      .update(organization)
-      .set({ name: input.name, updatedAt: new Date() })
-      .where(eq(organization.id, existing.id))
-      .returning();
-    return { organization: updated, created: false };
-  }
-
-  return { organization: existing, created: false };
+  return createAuthRepository(db).ensureOrganization(input);
 }
 
-async function ensureOwnerMembership(
+function ensureOwnerMembership(
   db: Db,
   organizationId: string,
   userId: string,
 ): Promise<{ created: boolean; updated: boolean }> {
-  const [created] = await db
-    .insert(member)
-    .values({
-      id: randomUUID(),
-      organizationId,
-      userId,
-      role: "owner",
-    })
-    .onConflictDoNothing({ target: [member.organizationId, member.userId] })
-    .returning();
-
-  if (created) {
-    return { created: true, updated: false };
-  }
-
-  const [existing] = await db
-    .select()
-    .from(member)
-    .where(and(eq(member.organizationId, organizationId), eq(member.userId, userId)))
-    .limit(1);
-
-  if (!existing) {
-    throw new Error("Dashboard owner membership was not found after bootstrap");
-  }
-
-  if (existing.role !== "owner") {
-    await db.update(member).set({ role: "owner" }).where(eq(member.id, existing.id));
-    return { created: false, updated: true };
-  }
-
-  return { created: false, updated: false };
+  return createAuthRepository(db).ensureOwnerMembership(organizationId, userId);
 }
 
-async function ensureSsoProvider(
+function ensureSsoProvider(
   db: Db,
   organizationId: string,
   userId: string,
@@ -420,58 +344,14 @@ async function ensureSsoProvider(
     scopes: ["openid", "email", "profile"],
   });
 
-  const providerData = {
+  return createAuthRepository(db).ensureSsoProvider({
     issuer,
     oidcConfig,
-    samlConfig: null,
     userId,
     providerId: DASHBOARD_SSO_PROVIDER_ID,
     organizationId,
     domain: input.allowedDomain,
-    domainVerified: true,
-  };
-
-  const [created] = await db
-    .insert(ssoProvider)
-    .values({
-      id: randomUUID(),
-      ...providerData,
-    })
-    .onConflictDoNothing({ target: ssoProvider.providerId })
-    .returning();
-
-  if (created) {
-    return { created: true, updated: false };
-  }
-
-  const [existing] = await db
-    .select()
-    .from(ssoProvider)
-    .where(eq(ssoProvider.providerId, DASHBOARD_SSO_PROVIDER_ID))
-    .limit(1);
-
-  if (!existing) {
-    throw new Error("Dashboard SSO provider was not found after bootstrap");
-  }
-
-  const changed =
-    existing.issuer !== providerData.issuer ||
-    existing.oidcConfig !== providerData.oidcConfig ||
-    existing.samlConfig !== providerData.samlConfig ||
-    existing.userId !== providerData.userId ||
-    existing.organizationId !== providerData.organizationId ||
-    existing.domain !== providerData.domain ||
-    existing.domainVerified !== providerData.domainVerified;
-
-  if (changed) {
-    await db
-      .update(ssoProvider)
-      .set(providerData)
-      .where(eq(ssoProvider.providerId, DASHBOARD_SSO_PROVIDER_ID));
-    return { created: false, updated: true };
-  }
-
-  return { created: false, updated: false };
+  });
 }
 
 function isUniqueViolation(error: unknown): boolean {

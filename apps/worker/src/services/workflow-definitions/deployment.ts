@@ -13,7 +13,7 @@ import {
   rollbackWorkflowDefinition,
   type WorkflowDefinitionRow,
   type WorkflowDefinitionVersionRow,
-} from "../../workflow-definition/store.js";
+} from "../../db/repositories/definitions.js";
 import {
   resolveWorkflowDefinitionActor,
   type WorkflowDefinitionRequestActor,

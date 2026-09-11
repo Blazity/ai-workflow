@@ -17,7 +17,7 @@ export {
 } from "../../harness-profiles/github-skills.js";
 export {
   HarnessProfileStoreError,
-} from "../../harness-profiles/store.js";
+} from "../../db/repositories/harness-profiles.js";
 export {
   archiveHarnessProfileDraft,
   createHarnessProfileDraft,

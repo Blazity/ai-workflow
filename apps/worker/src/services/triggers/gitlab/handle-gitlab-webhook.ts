@@ -9,7 +9,7 @@
  */
 import { createHash } from "node:crypto";
 
-import { PostgresRunRegistry } from "../../../adapters/run-registry/postgres.js";
+import { PostgresRunRegistry } from "../../../db/repositories/active-runs.js";
 import { createRepositoryDirectoryForProviders } from "../../../adapters/vcs/repository-directory.js";
 import { getDb } from "../../../db/client.js";
 import { logger } from "../../../infra/logger.js";

@@ -1,10 +1,10 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 import { IssueTrackerNotFoundError } from "../../../adapters/issue-tracker/types.js";
-import { listApprovalParkedSubjects } from "../../../approvals/store.js";
-import { classifyProtectedClarificationSubjects } from "../../../clarifications/store.js";
+import { listApprovalParkedSubjects } from "../../../db/repositories/approvals.js";
+import { classifyProtectedClarificationSubjects } from "../../../db/repositories/clarifications.js";
 import { getDb } from "../../../db/client.js";
-import { isRunRecordedFailed, isRunRecordedSucceeded } from "../../../db/queries/runs-read.js";
+import { isRunRecordedFailed, isRunRecordedSucceeded } from "../../../db/repositories/runs.js";
 import { logger } from "../../../infra/logger.js";
 import { resumeClarificationFromComments } from "../../clarifications/index.js";
 import { dispatchTicket } from "../../dispatch/index.js";

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
+import { createAuthRepository } from "../../db/repositories/auth.js";
 import {
   invitation,
   inviteEmailDelivery,
@@ -8,11 +9,7 @@ import {
   organization,
   user,
 } from "../../db/schema.js";
-import {
-  createInviteEmailDelivery,
-  type InviteEmailDeliveryStatus,
-  updateInviteEmailDeliveryById,
-} from "../email/invite-delivery.js";
+import { type InviteEmailDeliveryStatus, updateInviteEmailDeliveryById } from "../email/invite-delivery.js";
 import { inviteEmailTemplate } from "../email/templates.js";
 import { canInvite, type DashboardRole } from "./roles.js";
 import { DashboardAuthError, type DashboardActor } from "./users-read.js";
@@ -73,27 +70,13 @@ export async function createDashboardInvite(
   });
   const deliveryId = randomUUID();
 
-  const created = await db.transaction(async (tx) => {
-    const [row] = await tx
-      .insert(invitation)
-      .values({
-        id: inviteId,
-        organizationId: org.id,
-        email,
-        role: "member",
-        status: "pending",
-        expiresAt,
-        inviterId: input.actor.userId,
-      })
-      .returning();
-
-    await createInviteEmailDelivery(tx, {
-      id: deliveryId,
-      invitationId: row.id,
-      status: "pending_send",
-    });
-
-    return row;
+  const created = await createAuthRepository(db).createInviteWithDelivery({
+    inviteId,
+    deliveryId,
+    organizationId: org.id,
+    email,
+    expiresAt,
+    inviterId: input.actor.userId,
   });
 
   let sendResult: { providerMessageId: string };
@@ -202,24 +185,12 @@ export async function resendDashboardInvite(
   });
   const deliveryId = randomUUID();
 
-  const updated = await db.transaction(async (tx) => {
-    const [row] = await tx
-      .update(invitation)
-      .set({ expiresAt, status: "pending" })
-      .where(and(eq(invitation.id, existing.id), eq(invitation.status, "pending")))
-      .returning();
-    if (!row) {
-      throw new DashboardAuthError(409, "Invite is no longer pending");
-    }
-
-    await createInviteEmailDelivery(tx, {
-      id: deliveryId,
-      invitationId: row.id,
-      status: "pending_send",
-    });
-
-    return row;
+  const updated = await createAuthRepository(db).refreshInviteWithDelivery({
+    inviteId: existing.id,
+    deliveryId,
+    expiresAt,
   });
+  if (!updated) throw new DashboardAuthError(409, "Invite is no longer pending");
 
   let sendResult: { providerMessageId: string };
   try {
@@ -273,11 +244,7 @@ export async function cancelDashboardInvite(
     throw new DashboardAuthError(409, "Invite is not pending");
   }
 
-  const [updated] = await db
-    .update(invitation)
-    .set({ status: "canceled" })
-    .where(and(eq(invitation.id, existing.id), eq(invitation.status, "pending")))
-    .returning();
+  const updated = await createAuthRepository(db).cancelPendingInvite(existing.id);
   if (!updated) {
     throw new DashboardAuthError(409, "Invite is no longer pending");
   }

@@ -48,7 +48,7 @@ export interface WorkflowOwnedBranchSelectionInput {
 export const repoSelectionStep: PreSandboxStepHandler = async ({ context, step }) => {
   const { listRepositoriesAcrossProviders } = await import("../../adapters/vcs/repository-directory.js");
   const { getDb } = await import("../../db/client.js");
-  const { listWorkflowOwnedBranchesForTicket } = await import("../../db/queries/workflow-owned-branches.js");
+  const { listWorkflowOwnedBranchesForTicket } = await import("../../db/repositories/runs.js");
   const { env, getConfiguredVcsProviders } = await import("../../config/env.js");
   const ticketIdentifier = context.ticket.identifier;
   const workflowOwnedBranches = ticketIdentifier

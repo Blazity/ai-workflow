@@ -36,7 +36,7 @@ vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
 vi.mock("../../workflow-definition/harness-profile-runtime.js", () => ({
   dashboardOrganizationId: mocks.dashboardOrganizationId,
 }));
-vi.mock("../../harness-profiles/store.js", () => ({
+vi.mock("../../db/repositories/harness-profiles.js", () => ({
   resolveHarnessProfileVersion: mocks.resolveHarnessProfileVersion,
 }));
 vi.mock("../../sandbox/agents/index.js", () => ({

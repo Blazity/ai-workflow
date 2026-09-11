@@ -15,7 +15,7 @@ import {
   RunObservationStoreError,
   getRunReplay,
   getRunReplayAttempt,
-} from "../../run-observability/store.js";
+} from "../../db/repositories/runs/run-observability.js";
 
 /**
  * The store's own refusal, re-declared here so the transport can map it to its

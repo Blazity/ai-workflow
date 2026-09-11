@@ -65,7 +65,7 @@ vi.mock("../../services/vcs/vcs-runtime.js", () => ({
     return { vcs: { getPRHead, getLatestCheckRuns } };
   },
 }));
-vi.mock("../../clarifications/store.js", () => ({
+vi.mock("../../db/repositories/clarifications.js", () => ({
   assertClarificationCheckpointAvailable: (...args: unknown[]) =>
     assertClarificationCheckpointAvailable(...args),
   recordDispatchedRun: (...args: unknown[]) => recordDispatched(...args),
@@ -73,10 +73,10 @@ vi.mock("../../clarifications/store.js", () => ({
   getClarification: (...args: unknown[]) => getClarification(...args),
   markClarificationCheckpointConsumed: (...args: unknown[]) => markConsumed(...args),
 }));
-vi.mock("../../services/telemetry/run-telemetry.js", () => ({
+vi.mock("../../db/repositories/runs/telemetry.js", () => ({
   resolveAwaitingRun: (...args: unknown[]) => resolveAwaitingRun(...args),
 }));
-vi.mock("../../approvals/store.js", () => ({
+vi.mock("../../db/repositories/approvals.js", () => ({
   setDispatchedRunId: (...args: any[]) => setApprovalRun(...args),
 }));
 vi.mock("../../sandbox/stop-ticket-sandboxes.js", () => ({

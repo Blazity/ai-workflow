@@ -144,7 +144,7 @@ async function blockApprovedRepositoryScopeStep(
   );
   const { getDb } = await import("../../../db/client.js");
   const { listWorkflowOwnedBranchesForTicket } = await import(
-    "../../../db/queries/workflow-owned-branches.js"
+    "../../../db/repositories/runs.js"
   );
   const available = filterRepositoriesForScope(
     await createRepositoryDirectoryForProviders(

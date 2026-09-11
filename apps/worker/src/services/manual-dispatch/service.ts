@@ -14,7 +14,7 @@ import { moveTicketForRun } from "../tickets/ticket-transition.js";
 import type { Db } from "../../db/client.js";
 import type { AgentWorkflowInput, PrTriggerPayload } from "../../engine/index.js";
 import { agentWorkflow } from "../../engine/index.js";
-import { getDeployedWorkflowDefinitionVersion } from "../../workflow-definition/store.js";
+import { getDeployedWorkflowDefinitionVersion } from "../../db/repositories/definitions.js";
 import { ManualDispatchError } from "./errors.js";
 import {
   acknowledgeManualDispatchStarted,
@@ -27,7 +27,7 @@ import {
   reserveManualDispatchRequest,
   resetManualDispatchToPending,
   type ManualDispatchRow,
-} from "../../manual-dispatch/store.js";
+} from "../../db/repositories/manual-dispatch.js";
 import { resolveManualDispatch, type ResolvedManualDispatch } from "./resolve.js";
 
 export interface ManualDispatchActor {

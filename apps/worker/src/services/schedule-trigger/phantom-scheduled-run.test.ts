@@ -53,7 +53,7 @@ const { loggerMock } = vi.hoisted(() => ({
 }));
 vi.mock("../../infra/logger.js", () => ({ logger: loggerMock }));
 
-const { PostgresRunRegistry } = await import("../../adapters/run-registry/postgres.js");
+const { PostgresRunRegistry } = await import("../../db/repositories/active-runs.js");
 const { recordOccurrenceStarted } = await import("../../schedule-trigger/occurrence-store.js");
 const { createScheduleDispatchDeps, dispatchScheduleOccurrence } = await import(
   "./dispatch-schedule-trigger.js"

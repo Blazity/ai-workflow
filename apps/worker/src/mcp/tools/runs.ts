@@ -17,7 +17,7 @@ import { issueTrackerBaseUrl, mcpSettings } from "../../services/settings/index.
 import {
   MAX_REPLAY_PAGE_LIMIT,
   RunObservationStoreError,
-} from "../../run-observability/store.js";
+} from "../../services/mcp/index.js";
 import {
   McpPublicError,
   isTerminalRunStatus,

@@ -4,7 +4,7 @@ import {
 } from "../../helpers/review-results.js";
 import type { PrTriggerPayload } from "../../agent-input.js";
 import type { ReviewResult } from "@shared/contracts";
-import type { WorkflowOwnedBranchRecord } from "../../../db/queries/workflow-owned-branches.js";
+import type { WorkflowOwnedBranchRecord } from "../../../db/repositories/runs.js";
 import { prSubjectKey } from "../../../services/run-lifecycle/subject-key.js";
 import {
   executionError,
@@ -52,7 +52,7 @@ export async function postPrReviewStep(
   "use step";
   const { getDb } = await import("../../../db/client.js");
   const { findWorkflowOwnedPullRequestIdentity } = await import(
-    "../../../db/queries/workflow-owned-branches.js"
+    "../../../db/repositories/runs.js"
   );
   const {
     prRunTarget,

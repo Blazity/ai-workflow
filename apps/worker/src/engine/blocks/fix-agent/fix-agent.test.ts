@@ -78,14 +78,14 @@ vi.mock("../fix-workspace-state.js", async (importOriginal) => ({
   restoreReadOnlyFixRepositories: mocks.restoreReadOnlyFixRepositories,
 }));
 vi.mock("../../../db/client.js", () => ({ getDb: () => ({}) }));
-vi.mock("../../../db/queries/run-pr-siblings.js", () => ({
+vi.mock("../../../db/repositories/runs.js", () => ({
   findRunPrSiblings: mocks.findRunPrSiblings,
 }));
 vi.mock("../../steps/trusted-workspace-publisher.js", () => ({
   publishTrustedWorkspaceFromSandbox: (...args: any[]) =>
     mocks.publishTrustedWorkspaceFromSandbox(...args),
 }));
-vi.mock("../../../db/queries/workflow-owned-branches.js", () => ({
+vi.mock("../../../db/repositories/runs.js", () => ({
   findWorkflowOwnedPullRequestIdentity: (...args: any[]) =>
     mocks.findWorkflowOwnedPullRequestIdentity(...args),
   upsertWorkflowOwnedBranch: (...args: any[]) =>

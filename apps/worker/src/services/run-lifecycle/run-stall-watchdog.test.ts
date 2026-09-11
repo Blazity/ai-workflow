@@ -6,7 +6,7 @@ import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js"
 import type { Db } from "../../db/client.js";
 import { workflowRuns } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
-import * as runTelemetry from "../telemetry/run-telemetry.js";
+import * as runTelemetry from "../../db/repositories/runs/telemetry.js";
 
 vi.mock("../../config/env.js", () => ({
   env: { COLUMN_AI: "AI" },

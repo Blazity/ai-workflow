@@ -16,7 +16,7 @@ import {
   finalizeCapacityReservations,
   writeCapacityReleaseMarker,
 } from "./e2e/helpers/capacity-release.js";
-import { PostgresRunRegistry } from "./src/adapters/run-registry/postgres.js";
+import { PostgresRunRegistry } from "./src/db/repositories/active-runs.js";
 import { RESERVATION_BIND_GRACE_MS } from "./src/adapters/run-registry/types.js";
 import type { Db } from "./src/db/client.js";
 import {

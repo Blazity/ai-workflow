@@ -1,7 +1,7 @@
 import { and, eq, lt, sql } from "drizzle-orm";
 import type { ClarificationStatus } from "@shared/contracts";
 import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
-import { PostgresRunRegistry } from "../../adapters/run-registry/postgres.js";
+import { PostgresRunRegistry } from "../../db/repositories/active-runs.js";
 import type { Db } from "../../db/client.js";
 import { clarificationRequests } from "../../db/schema.js";
 import { cancelRunForOperator } from "../run-lifecycle/cancel-run.js";

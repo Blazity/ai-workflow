@@ -20,7 +20,7 @@ import {
   restoreHarnessProfileVersion,
   updateHarnessProfileDraft,
   type HarnessProfileActor,
-} from "../../harness-profiles/store.js";
+} from "../../db/repositories/harness-profiles.js";
 import { configuredGitHubSkillRepository } from "./skill-sources.js";
 
 /**

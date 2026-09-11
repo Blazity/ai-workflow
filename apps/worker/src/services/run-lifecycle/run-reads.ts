@@ -21,7 +21,7 @@ import {
   parseSearch,
   parseWindow,
   workflowAgg,
-} from "../../db/queries/runs-read.js";
+} from "../../db/repositories/runs.js";
 import { logger } from "../../infra/logger.js";
 import {
   collectAwaitingRuns,

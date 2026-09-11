@@ -40,7 +40,7 @@ vi.mock("../../../../services/auth/request-context.js", () => ({
     throw error;
   },
 }));
-vi.mock("../../../../run-observability/store.js", () => ({
+vi.mock("../../../../db/repositories/runs/run-observability.js", () => ({
   RunObservationStoreError: class RunObservationStoreError extends Error {
     constructor(
       readonly statusCode: number,
@@ -54,7 +54,7 @@ vi.mock("../../../../run-observability/store.js", () => ({
 }));
 
 const { RunObservationStoreError } = await import(
-  "../../../../run-observability/store.js"
+  "../../../../db/repositories/runs/run-observability.js"
 );
 const replayGet = (await import("./[runId]/replay.get.js")).default;
 const attemptGet = (

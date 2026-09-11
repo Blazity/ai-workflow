@@ -13,7 +13,7 @@ import {
 } from "../../adapters/issue-tracker/types.js";
 import { logger } from "../../infra/logger.js";
 import { aiColumnMoveTarget } from "../tickets/move-targets.js";
-import { markRunBlockedOnCancel, markRunResumed } from "../telemetry/run-telemetry.js";
+import { markRunBlockedOnCancel, markRunResumed } from "../../db/repositories/runs/telemetry.js";
 import { moveTicketForRun } from "../tickets/ticket-transition.js";
 import { formatClarificationAnswerComment } from "./comment-format.js";
 import { answerHookClarification, type HookClarificationRow } from "../../clarifications/hook-store.js";
@@ -23,7 +23,7 @@ import {
   RESUME_FAILED_STATUS,
   type ResumeAttemptReservation,
 } from "./resume-attempts.js";
-import { supersedeClarification, supersedePendingForTicket } from "../../clarifications/store.js";
+import { supersedeClarification, supersedePendingForTicket } from "../../db/repositories/clarifications.js";
 
 /** Re-exported under the name this cluster has always used. The number itself
  *  belongs to the contracts package, which is also what the request schema and

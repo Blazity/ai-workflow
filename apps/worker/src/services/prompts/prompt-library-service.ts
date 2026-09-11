@@ -23,7 +23,7 @@ import {
   type PromptLibraryActor,
   type PromptLibraryRow,
   type PromptLibraryVersionRow,
-} from "../../prompt-library/store.js";
+} from "../../db/repositories/prompts.js";
 
 /** Built-in agent defaults are looked up BY NAME at run time (implicit
  *  materialization); archiving or renaming one would fail every workflow run

@@ -1,6 +1,6 @@
 import type { JsonValue, WebhookAuthScheme } from "@shared/contracts";
 import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
-import { PostgresRunRegistry } from "../../../adapters/run-registry/postgres.js";
+import { PostgresRunRegistry } from "../../../db/repositories/active-runs.js";
 import { getDb, type Db } from "../../../db/client.js";
 import { logger } from "../../../infra/logger.js";
 import {
@@ -15,7 +15,7 @@ import {
 import {
   getEnabledDeployedDefinition,
   runnableDefinitionOf,
-} from "../../../workflow-definition/store.js";
+} from "../../../db/repositories/definitions.js";
 import { webhookTriggerEncryptionKey } from "../../settings/index.js";
 import {
   DEFAULT_WEBHOOK_RATE_LIMIT_PER_MINUTE,

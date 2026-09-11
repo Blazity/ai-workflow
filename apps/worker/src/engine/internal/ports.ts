@@ -42,7 +42,7 @@ export async function loadRepositoryDiscoveryPort() {
 }
 
 export async function loadRunTelemetryPort() {
-  const runTelemetry = await import("../../services/telemetry/run-telemetry.js");
+  const runTelemetry = await import("../../db/repositories/runs/telemetry.js");
   return {
     get markRunFailedOnSelfMove() {
       return runTelemetry.markRunFailedOnSelfMove;

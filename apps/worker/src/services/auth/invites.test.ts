@@ -177,23 +177,23 @@ describe("dashboard invites", () => {
     });
     const before = await db.select().from(invitation);
     let deliveryExistedBeforeSend = false;
-    let sendRanAfterTransaction = false;
-    let transactionActive = false;
+    let sendRanAfterPersistence = false;
+    let persistenceActive = false;
     const order: string[] = [];
-    const originalTransaction = db.transaction.bind(db);
-    vi.spyOn(db, "transaction").mockImplementation((async (callback, config) => {
-      order.push("transaction:start");
-      transactionActive = true;
+    const originalExecute = db.execute.bind(db);
+    vi.spyOn(db, "execute").mockImplementation((async (query) => {
+      order.push("persistence:start");
+      persistenceActive = true;
       try {
-        return await originalTransaction(callback, config);
+        return await originalExecute(query);
       } finally {
-        transactionActive = false;
-        order.push("transaction:end");
+        persistenceActive = false;
+        order.push("persistence:end");
       }
-    }) as typeof db.transaction);
+    }) as typeof db.execute);
     const sendInviteEmail: SendInviteEmail = vi.fn(async ({ invitationId }) => {
       order.push("send");
-      sendRanAfterTransaction = !transactionActive;
+      sendRanAfterPersistence = !persistenceActive;
       const [deliveryIntent] = await db
         .select({ id: inviteEmailDelivery.id })
         .from(inviteEmailDelivery)
@@ -217,8 +217,8 @@ describe("dashboard invites", () => {
 
     const after = await db.select().from(invitation);
     expect(sendInviteEmail).toHaveBeenCalledTimes(1);
-    expect(sendRanAfterTransaction).toBe(true);
-    expect(order).toEqual(["transaction:start", "transaction:end", "send"]);
+    expect(sendRanAfterPersistence).toBe(true);
+    expect(order).toEqual(["persistence:start", "persistence:end", "send"]);
     expect(deliveryExistedBeforeSend).toBe(true);
     expect(after).toHaveLength(before.length + 1);
     expect(after).toEqual(
@@ -358,14 +358,14 @@ describe("dashboard invites", () => {
       sendInviteEmail: acceptedEmail("email_first"),
       now: new Date("2026-06-26T12:00:00.000Z"),
     });
-    const originalTransaction = db.transaction.bind(db);
-    vi.spyOn(db, "transaction").mockImplementation((async (callback, config) => {
+    const originalExecute = db.execute.bind(db);
+    vi.spyOn(db, "execute").mockImplementation((async (query) => {
       await db
         .update(invitation)
         .set({ status: "accepted" })
         .where(eq(invitation.id, invite.id));
-      return originalTransaction(callback, config);
-    }) as typeof db.transaction);
+      return originalExecute(query);
+    }) as typeof db.execute);
     const sendInviteEmail = acceptedEmail("email_second");
 
     await expect(

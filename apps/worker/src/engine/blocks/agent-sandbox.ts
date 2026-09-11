@@ -167,7 +167,7 @@ export async function prepareHarnessAgentInvocationStep(
     "../../workflow-definition/harness-profile-runtime.js"
   );
   const { resolveHarnessProfileVersion } = await import(
-    "../../harness-profiles/store.js"
+    "../../db/repositories/harness-profiles.js"
   );
   const adapter = createAgentAdapter(agentKind, runtime.cliSpec);
   try {

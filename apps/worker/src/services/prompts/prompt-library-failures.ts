@@ -6,7 +6,7 @@
  * Recognising it here keeps the store class below the app tier while the caller
  * still answers with the same status and message it always did.
  */
-import { PromptLibraryStoreError } from "../../prompt-library/store.js";
+import { PromptLibraryStoreError } from "../../db/repositories/prompts.js";
 
 export interface PromptLibraryFailure {
   statusCode: number;

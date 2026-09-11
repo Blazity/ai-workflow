@@ -11,10 +11,10 @@ const { hostedStart } = vi.hoisted(() => ({ hostedStart: vi.fn() }));
 vi.mock("workflow/api", () => ({ start: hostedStart, getRun: vi.fn() }));
 vi.mock("../../engine/index.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
-vi.mock("../../approvals/store.js", () => ({
+vi.mock("../../db/repositories/approvals.js", () => ({
   hasDispatchBlockingApprovalForTicket: vi.fn(() => Promise.resolve(false)),
 }));
-vi.mock("../../workflow-definition/store.js", () => ({
+vi.mock("../../db/repositories/definitions.js", () => ({
   getEnabledWorkflowDefinitionForTrigger: vi.fn(() => Promise.resolve({
     definition: { id: 9 },
     current: {

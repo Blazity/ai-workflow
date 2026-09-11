@@ -5,7 +5,7 @@ import type {
   RunRegistryAdapter,
   RunReservation,
 } from "../../adapters/run-registry/types.js";
-import type { ApprovalRow } from "../../approvals/store.js";
+import type { ApprovalRow } from "../../db/repositories/approvals.js";
 import { ActiveRunOwnerError } from "../run-lifecycle/run-control-errors.js";
 
 vi.mock("../../config/env.js", () => ({ env: { COLUMN_AI: "AI" } }));
@@ -18,7 +18,7 @@ const mockGetVersion = vi.fn();
 const mockGetDeployedVersion = vi.fn();
 const mockMoveTicketWithIntent = vi.fn();
 const mockUpdateTicketLabelsWithIntent = vi.fn();
-vi.mock("../../workflow-definition/store.js", () => ({
+vi.mock("../../db/repositories/definitions.js", () => ({
   getWorkflowDefinition: (...args: any[]) => mockGetDefinition(...args),
   getWorkflowDefinitionVersion: (...args: any[]) => mockGetVersion(...args),
   getDeployedWorkflowDefinitionVersion: (...args: any[]) => mockGetDeployedVersion(...args),

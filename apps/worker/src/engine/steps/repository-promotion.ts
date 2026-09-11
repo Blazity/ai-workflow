@@ -364,7 +364,7 @@ export async function promoteRepositoryWriteScopeStep(input: {
   const {
     listWorkflowOwnedBranchesForTicket,
     upsertWorkflowOwnedBranch,
-  } = await import("../../db/queries/workflow-owned-branches.js");
+  } = await import("../../db/repositories/runs.js");
   const { createRepositoryVCS } = await loadVcsRuntimePort();
   const { buildSandboxProviderConfigs } = await loadVcsRuntimePort();
   const { logger } = await import("../../infra/logger.js");

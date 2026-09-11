@@ -17,7 +17,7 @@ import {
   workflowDefinitionVersions,
   workflowRuns,
 } from "../../db/schema.js";
-import { coerceStatus } from "../../db/queries/runs-read.js";
+import { coerceStatus } from "../../db/repositories/runs.js";
 
 /** One row of a ticket's run page, with its status already coerced to the
  *  vocabulary the MCP contract publishes. */

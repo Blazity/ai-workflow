@@ -17,12 +17,12 @@ import {
   bindWorkflowOwnedPullRequestIntent,
   findWorkflowOwnedPullRequest,
   findWorkflowOwnedPullRequestIntent,
-} from "../../db/queries/workflow-owned-branches.js";
+} from "../../db/repositories/runs.js";
 import {
   getEnabledWorkflowDefinitionForTrigger,
   getWorkflowDefinitionVersion,
   runnableDefinitionOf,
-} from "../../workflow-definition/store.js";
+} from "../../db/repositories/definitions.js";
 import { createAdapters } from "../vcs/adapters.js";
 import { claimSubjectRun, envTriggerRateLimitDefault, triggerRateLimitNodes } from "./dispatch.js";
 import { recordIngestionFailure } from "./ingestion-diagnostic.js";

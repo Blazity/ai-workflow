@@ -11,7 +11,7 @@ import {
   publishHookClarification,
   recordHookClarificationSnapshot,
 } from "./hook-store.js";
-import { classifyProtectedClarificationSubjects } from "./store.js";
+import { classifyProtectedClarificationSubjects } from "../db/repositories/clarifications.js";
 
 const input = {
   ticketKey: "AWT-1",

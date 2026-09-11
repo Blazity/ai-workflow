@@ -18,7 +18,7 @@ async function createApprovalRequestStep(input: {
 }): Promise<string> {
   "use step";
   const { getDb } = await import("../../../db/client.js");
-  const { createApprovalRequest } = await import("../../../approvals/store.js");
+  const { createApprovalRequest } = await import("../../../db/repositories/approvals.js");
   const row = await createApprovalRequest(getDb(), input);
   return row.id;
 }

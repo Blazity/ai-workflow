@@ -5,16 +5,7 @@
  * this file; the deep imports that predate the rule are listed in
  * scripts/gates/cluster-deep-imports.json and that list only shrinks.
  */
-export {
-  serializeWorkflowDefinitionVersion,
-  WorkflowDefinitionStoreError,
-  WorkflowDefinitionValidationError,
-} from "../../workflow-definition/store.js";
-export type {
-  WorkflowDefinitionDraftRow,
-  WorkflowDefinitionRow,
-  WorkflowDefinitionVersionRow,
-} from "../../workflow-definition/store.js";
+export * from "../../db/repositories/definitions.js";
 export {
   archiveWorkflowDefinitionById,
   createWorkflowDefinitionFromSource,

@@ -1,0 +1,990 @@
+import { isDeepStrictEqual } from "node:util";
+import { and, arrayContains, asc, desc, eq, inArray, isNull, max, notExists, or, sql } from "drizzle-orm";
+import { z } from "zod";
+import type {
+  JsonValue,
+  PromptLibraryEntryMeta,
+  PromptLibraryVersion,
+  PromptSlotDefinition,
+} from "@shared/contracts";
+import type { Db } from "../client.js";
+import {
+  promptLibrary,
+  promptLibraryVersions,
+  workflowDefinitions,
+  workflowDefinitionVersions,
+} from "../schema.js";
+import { canEditPromptLibrary, type DashboardRole } from "../../services/auth/roles.js";
+import { DashboardAuthError } from "../../services/auth/users-read.js";
+import {
+  inspectJsonSchema202012,
+  validateJsonSchemaValue,
+} from "../../workflow-definition/json-schema.js";
+
+const VERSION_LIST_LIMIT = 50;
+const QUERY_MAX_LENGTH = 100;
+
+export interface PromptLibraryActor {
+  role: DashboardRole;
+  id: string;
+  label: string;
+}
+
+export interface PromptLibraryRow {
+  id: number;
+  slug: string;
+  name: string;
+  description: string | null;
+  tags: string[];
+  archivedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+  createdById: string;
+  createdByLabel: string;
+}
+
+export interface PromptLibraryVersionRow {
+  promptId: number;
+  version: number;
+  body: string;
+  slots: PromptSlotDefinition[];
+  createdAt: Date;
+  createdById: string;
+  createdByLabel: string;
+  restoredFromVersion: number | null;
+}
+
+/** List row = parent meta + head version number + head body, so the list view
+ *  needs no per-prompt version fetch for its insert picker and drift check. */
+export interface PromptLibraryListRow extends PromptLibraryRow {
+  currentVersion: number;
+  body: string;
+  slots: PromptSlotDefinition[];
+}
+
+/** Domain-level failure a write raises (400 invalid, 409 conflict, 404 not
+ *  found). Routes map statusCode onto the HTTP response; distinct from the 403
+ *  auth gate. */
+export class PromptLibraryStoreError extends Error {
+  constructor(
+    public readonly statusCode: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+export class PromptLibraryCasMissError extends PromptLibraryStoreError {
+  readonly kind = "prompt_library.cas_miss" as const;
+
+  constructor(
+    public readonly promptId: number,
+    public readonly expectedVersion: number,
+    public readonly currentVersion: number | null,
+  ) {
+    super(
+      409,
+      currentVersion === null
+        ? `Prompt ${promptId} has no current version`
+        : `Prompt ${promptId} is at version ${currentVersion}, not ${expectedVersion}. Read it again with prompts.get and re-send the edit against the version you have seen.`,
+    );
+  }
+}
+
+type PromptSelect = typeof promptLibrary.$inferSelect;
+type PromptVersionSelect = typeof promptLibraryVersions.$inferSelect;
+
+function mapPromptRow(row: PromptSelect): PromptLibraryRow {
+  return {
+    id: row.id,
+    slug: row.slug,
+    name: row.name,
+    description: row.description,
+    tags: row.tags,
+    archivedAt: row.archivedAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    createdById: row.createdById,
+    createdByLabel: row.createdByLabel,
+  };
+}
+
+function mapVersionRow(row: PromptVersionSelect): PromptLibraryVersionRow {
+  return {
+    promptId: row.promptId,
+    version: row.version,
+    body: row.body,
+    slots: structuredClone(row.slots),
+    createdAt: row.createdAt,
+    createdById: row.createdById,
+    createdByLabel: row.createdByLabel,
+    restoredFromVersion: row.restoredFromVersion,
+  };
+}
+
+function requireEditRole(role: DashboardRole): void {
+  if (!canEditPromptLibrary(role)) {
+    throw new DashboardAuthError(403, "Forbidden");
+  }
+}
+
+// --- Input validation (write paths only). Length/count limits live here; the
+// routes only do the cheap typeof checks. ---
+
+function validateName(name: string): string {
+  const parsed = z.string().trim().min(1).max(120).safeParse(name);
+  if (!parsed.success) throw new PromptLibraryStoreError(400, "Invalid name");
+  return parsed.data;
+}
+
+function validateDescription(description: string | null): string | null {
+  if (description === null) return null;
+  const parsed = z.string().trim().max(2000).safeParse(description);
+  if (!parsed.success) throw new PromptLibraryStoreError(400, "Invalid description");
+  return parsed.data.length > 0 ? parsed.data : null;
+}
+
+function validateTags(tags: string[]): string[] {
+  const parsed = z.array(z.string().trim().min(1).max(40)).safeParse(tags);
+  if (!parsed.success) throw new PromptLibraryStoreError(400, "Invalid tags");
+  // De-duplicate (first occurrence wins) and bound the count on the deduped set,
+  // so repeated tags collapse instead of eating into the 15-tag limit.
+  const deduped = [...new Set(parsed.data)];
+  if (deduped.length > 15) throw new PromptLibraryStoreError(400, "Invalid tags");
+  return deduped;
+}
+
+/** The library's own ceiling on a prompt body. Exported so the MCP tool catalog's
+ * cap can be pinned against it (mcp/tool-catalog.test.ts): the catalog restates the
+ * number rather than importing it, and a restatement that drifted below this one
+ * would leave an agent able to read a prompt it can never write back. */
+export const PROMPT_BODY_MAX_LENGTH = 50_000;
+
+function validateBody(body: string): string {
+  const parsed = z.string().min(1).max(PROMPT_BODY_MAX_LENGTH).safeParse(body);
+  if (!parsed.success) throw new PromptLibraryStoreError(400, "Invalid body");
+  return parsed.data;
+}
+
+const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
+  z.union([
+    z.string(),
+    z.number().finite(),
+    z.boolean(),
+    z.null(),
+    z.array(jsonValueSchema),
+    z.record(z.string(), jsonValueSchema),
+  ]),
+);
+
+const promptSlotDefinitionSchema = z
+  .object({
+    name: z.string().regex(/^[A-Za-z_][A-Za-z0-9_-]{0,63}$/),
+    description: z.string().trim().max(2000),
+    schema: z.record(z.string(), jsonValueSchema),
+    required: z.boolean().default(true),
+    defaultValue: jsonValueSchema.optional(),
+  })
+  .strict();
+
+function validateSlots(value: unknown): PromptSlotDefinition[] {
+  const parsed = z.array(promptSlotDefinitionSchema).max(100).safeParse(value);
+  if (!parsed.success) {
+    throw new PromptLibraryStoreError(400, "Invalid slots");
+  }
+  const names = new Set<string>();
+  for (const slot of parsed.data) {
+    if (names.has(slot.name)) {
+      throw new PromptLibraryStoreError(
+        400,
+        `Invalid slots: duplicate slot "${slot.name}"`,
+      );
+    }
+    names.add(slot.name);
+    const inspected = inspectJsonSchema202012(slot.schema);
+    if (!inspected.ok) {
+      const issue = inspected.issues[0]!;
+      throw new PromptLibraryStoreError(
+        400,
+        `Invalid slots: slot "${slot.name}" schema${issue.path || "/"} ${issue.message}`,
+      );
+    }
+    if (slot.defaultValue !== undefined) {
+      const issues = validateJsonSchemaValue(
+        inspected.schema,
+        slot.defaultValue,
+      );
+      if (issues.length > 0) {
+        throw new PromptLibraryStoreError(
+          400,
+          `Invalid slots: slot "${slot.name}" defaultValue${issues[0]!.path || "/"} ${issues[0]!.message}`,
+        );
+      }
+    }
+  }
+  return structuredClone(parsed.data);
+}
+
+/** Walks the error cause chain (drizzle wraps the driver error) looking for a
+ *  unique-violation signal, by SQLSTATE 23505 or message. */
+function isUniqueViolation(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; current && depth < 5; depth++) {
+    const code = (current as { code?: string }).code;
+    if (code === "23505") return true;
+    const message = current instanceof Error ? current.message : String(current);
+    if (/duplicate key value|unique constraint/i.test(message)) return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+function rawRows<T>(result: unknown): T[] {
+  return ((result as { rows?: T[] }).rows ?? []) as T[];
+}
+
+/** Retries an operation on a unique-violation. Used for the version-number
+ *  insert, the one race left now that writes run per-statement (neon-http has
+ *  no interactive transactions). The (prompt_id, version) PK rejects the dup.
+ *  Exported so the exhaustion mapping can be unit-tested directly, since a real
+ *  cross-connection race is not forceable on single-connection PGlite. */
+export async function retryOnUniqueViolation<T>(
+  operation: () => Promise<T>,
+  attempts = 3,
+): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (attempt < attempts && isUniqueViolation(error)) continue;
+      // Attempts exhausted. If we are still colliding on a unique index, a
+      // concurrent writer kept taking our target slot; surface a truthful 409
+      // instead of leaking the raw driver error as a 500. Non-unique errors
+      // pass through unchanged.
+      if (isUniqueViolation(error)) {
+        throw new PromptLibraryStoreError(409, "Concurrent update, please retry");
+      }
+      throw error;
+    }
+  }
+}
+
+// --- Reads (no role gate) ---
+
+export async function findPromptRowsByNames(
+  db: Db,
+  names: readonly string[],
+): Promise<PromptLibraryRow[]> {
+  if (names.length === 0) return [];
+  const rows = await db
+    .select()
+    .from(promptLibrary)
+    .where(inArray(promptLibrary.name, [...names]))
+    .orderBy(asc(promptLibrary.id));
+  return rows.map(mapPromptRow);
+}
+
+/** Case-insensitive substring token: trimmed, capped, lower-cased. `%` and `_`
+ *  are matched literally because the filter runs in JS, not as a SQL LIKE. */
+function normalizeQuery(q: string | undefined): string | null {
+  if (!q) return null;
+  const trimmed = q.trim().slice(0, QUERY_MAX_LENGTH);
+  return trimmed.length > 0 ? trimmed.toLowerCase() : null;
+}
+
+function matchesQuery(row: PromptLibraryListRow, q: string): boolean {
+  const haystack = [row.name, row.description ?? "", ...row.tags, row.body].join("\n").toLowerCase();
+  return haystack.includes(q);
+}
+
+export async function listPrompts(
+  db: Db,
+  filter?: { q?: string; tag?: string; includeArchived?: boolean },
+): Promise<PromptLibraryListRow[]> {
+  const conditions = [];
+  if (!filter?.includeArchived) conditions.push(isNull(promptLibrary.archivedAt));
+  if (filter?.tag) conditions.push(arrayContains(promptLibrary.tags, [filter.tag]));
+  const prompts = await db
+    .select()
+    .from(promptLibrary)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .orderBy(asc(promptLibrary.id))
+    // Protective upper bound for the org-curated library (admin-controlled growth).
+    .limit(500);
+  if (prompts.length === 0) return [];
+
+  // One grouped max(version) per prompt (no bodies), then fetch only the
+  // (promptId, maxVersion) head rows' bodies. Avoids pulling every historical
+  // version body (up to 50k each) just to reduce to the head in JS; same shape
+  // as findPromptUsage's head lookup.
+  const maxRows = await db
+    .select({
+      promptId: promptLibraryVersions.promptId,
+      maxVersion: max(promptLibraryVersions.version),
+    })
+    .from(promptLibraryVersions)
+    .where(
+      inArray(
+        promptLibraryVersions.promptId,
+        prompts.map((p) => p.id),
+      ),
+    )
+    .groupBy(promptLibraryVersions.promptId);
+
+  const headByPrompt = new Map<
+    number,
+    { version: number; body: string; slots: PromptSlotDefinition[] }
+  >();
+  if (maxRows.length > 0) {
+    const headRows = await db
+      .select({
+        promptId: promptLibraryVersions.promptId,
+        version: promptLibraryVersions.version,
+        body: promptLibraryVersions.body,
+        slots: promptLibraryVersions.slots,
+      })
+      .from(promptLibraryVersions)
+      .where(
+        or(
+          ...maxRows.map((m) =>
+            and(
+              eq(promptLibraryVersions.promptId, m.promptId),
+              eq(promptLibraryVersions.version, m.maxVersion!),
+            ),
+          ),
+        ),
+      );
+    for (const row of headRows) {
+      headByPrompt.set(row.promptId, {
+        version: row.version,
+        body: row.body,
+        slots: structuredClone(row.slots),
+      });
+    }
+  }
+
+  // Skip any prompt with no head version: a list row requires body +
+  // currentVersion, and a prompt with zero versions is an orphan (create's
+  // parent insert landed but the version insert and its compensating delete
+  // both failed). Mirrors listWorkflowDefinitions' degrade, but here dropping
+  // the row is correct rather than nulling the version.
+  const rows: PromptLibraryListRow[] = [];
+  for (const p of prompts) {
+    const head = headByPrompt.get(p.id);
+    if (!head) continue;
+    rows.push({
+      ...mapPromptRow(p),
+      currentVersion: head.version,
+      body: head.body,
+      slots: head.slots,
+    });
+  }
+
+  const q = normalizeQuery(filter?.q);
+  return q ? rows.filter((row) => matchesQuery(row, q)) : rows;
+}
+
+/** Reads archived prompts too (the detail routes gate on archivedAt themselves). */
+export async function getPrompt(db: Db, id: number): Promise<PromptLibraryRow | null> {
+  const rows = await db.select().from(promptLibrary).where(eq(promptLibrary.id, id)).limit(1);
+  return rows[0] ? mapPromptRow(rows[0]) : null;
+}
+
+/** Resolves a {{prompt:<slug>}} target. Slugs are unique among active prompts;
+ *  when only archived rows hold the slug, the newest one is returned so pinned
+ *  references to archived prompts keep resolving. */
+export async function findPromptBySlug(db: Db, slug: string): Promise<PromptLibraryRow | null> {
+  const rows = await db
+    .select()
+    .from(promptLibrary)
+    .where(eq(promptLibrary.slug, slug))
+    .orderBy(desc(promptLibrary.id));
+  if (rows.length === 0) return null;
+  const active = rows.find((row) => row.archivedAt === null);
+  return mapPromptRow(active ?? rows[0]!);
+}
+
+export async function getCurrentPromptVersion(
+  db: Db,
+  promptId: number,
+): Promise<PromptLibraryVersionRow | null> {
+  const rows = await db
+    .select()
+    .from(promptLibraryVersions)
+    .where(eq(promptLibraryVersions.promptId, promptId))
+    .orderBy(desc(promptLibraryVersions.version))
+    .limit(1);
+  return rows[0] ? mapVersionRow(rows[0]) : null;
+}
+
+/** Reads a version regardless of the parent prompt's archived state. */
+export async function getPromptVersion(
+  db: Db,
+  promptId: number,
+  version: number,
+): Promise<PromptLibraryVersionRow | null> {
+  const rows = await db
+    .select()
+    .from(promptLibraryVersions)
+    .where(and(eq(promptLibraryVersions.promptId, promptId), eq(promptLibraryVersions.version, version)))
+    .limit(1);
+  return rows[0] ? mapVersionRow(rows[0]) : null;
+}
+
+export async function listPromptVersionRows(
+  db: Db,
+  promptId: number,
+): Promise<PromptLibraryVersionRow[]> {
+  const rows = await db
+    .select()
+    .from(promptLibraryVersions)
+    .where(eq(promptLibraryVersions.promptId, promptId))
+    .orderBy(desc(promptLibraryVersions.version))
+    .limit(VERSION_LIST_LIMIT);
+  return rows.map(mapVersionRow);
+}
+
+// --- Writes (role-gated). Each write is a single statement or a
+// retry-guarded sequence; the (prompt_id, version) PK and the active-name
+// partial unique index (not a lock) provide the real guarantees. ---
+
+async function insertPromptParent(
+  db: Db,
+  input: {
+    name: string;
+    slug: string;
+    description: string | null;
+    tags: string[];
+    actor: PromptLibraryActor;
+  },
+): Promise<PromptSelect> {
+  const rows = await db
+    .insert(promptLibrary)
+    .values({
+      name: input.name,
+      slug: input.slug,
+      description: input.description,
+      tags: input.tags,
+      createdById: input.actor.id,
+      createdByLabel: input.actor.label,
+    })
+    .returning();
+  return rows[0]!;
+}
+
+/** Heal path for createPrompt's active-name conflict: if the row holding the
+ *  name is a zero-version orphan (a parent left behind when an earlier create's
+ *  version-1 seed and its compensating delete both failed), delete it so the
+ *  caller can retry the insert. Deleting a zero-version row is safe because
+ *  nothing references it. Returns true when an orphan was removed; a live prompt
+ *  (>= 1 version) is left untouched so the caller keeps the 409.
+ *
+ *  The delete is a single conditional statement (NOT EXISTS guard) rather than a
+ *  read-then-delete, so a row that gains a version between a check and the delete
+ *  can never be removed: the guard is evaluated atomically with the delete.
+ *  Equivalent to:
+ *    DELETE FROM prompt_library
+ *    WHERE name = $name AND archived_at IS NULL
+ *      AND NOT EXISTS (
+ *        SELECT 1 FROM prompt_library_versions WHERE prompt_id = prompt_library.id
+ *      ) */
+async function tryHealOrphanName(db: Db, name: string): Promise<boolean> {
+  const deleted = await db
+    .delete(promptLibrary)
+    .where(
+      and(
+        eq(promptLibrary.name, name),
+        isNull(promptLibrary.archivedAt),
+        notExists(
+          db
+            .select({ one: sql`1` })
+            .from(promptLibraryVersions)
+            .where(eq(promptLibraryVersions.promptId, promptLibrary.id)),
+        ),
+      ),
+    )
+    .returning({ id: promptLibrary.id });
+  return deleted.length > 0;
+}
+
+/** Picks the first slug candidate not held by an active prompt: the base, then
+ *  base-2, base-3, ... The active-slug unique index still backstops races. */
+async function nextAvailableSlug(db: Db, base: string): Promise<string> {
+  const taken = new Set(
+    (
+      await db
+        .select({ slug: promptLibrary.slug })
+        .from(promptLibrary)
+        .where(and(isNull(promptLibrary.archivedAt), sql`${promptLibrary.slug} like ${`${base}%`}`))
+    ).map((row) => row.slug),
+  );
+  if (!taken.has(base)) return base;
+  for (let suffix = 2; ; suffix++) {
+    const candidate = `${base}-${suffix}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
+export async function createPromptWithSlugBase(
+  db: Db,
+  input: {
+    name: string;
+    slugBase: string;
+    body: string;
+    slots?: PromptSlotDefinition[];
+    description?: string | null;
+    tags?: string[];
+    actor: PromptLibraryActor;
+  },
+): Promise<{ prompt: PromptLibraryRow; current: PromptLibraryVersionRow }> {
+  requireEditRole(input.actor.role);
+  const name = validateName(input.name);
+  const body = validateBody(input.body);
+  const slots = validateSlots(input.slots ?? []);
+  const description = validateDescription(input.description ?? null);
+  const tags = validateTags(input.tags ?? []);
+  const slug = await nextAvailableSlug(db, input.slugBase);
+
+  let created: PromptSelect;
+  try {
+    created = await insertPromptParent(db, { name, slug, description, tags, actor: input.actor });
+  } catch (error) {
+    if (!isUniqueViolation(error)) throw error;
+    // A unique index rejected the insert: the active-name index, or (after a
+    // race on nextAvailableSlug) the active-slug index. Heal a zero-version
+    // orphan holding the name and retry once with a freshly computed slug (no
+    // transactions on neon-http, so this is a best-effort sequence). A live
+    // prompt keeps the 409, and a concurrent healer racing us re-triggers
+    // 23505 -> also 409.
+    const healed = await tryHealOrphanName(db, name);
+    const retrySlug = await nextAvailableSlug(db, input.slugBase);
+    if (!healed && retrySlug === slug) {
+      throw new PromptLibraryStoreError(409, "Name already in use");
+    }
+    try {
+      created = await insertPromptParent(db, {
+        name,
+        slug: retrySlug,
+        description,
+        tags,
+        actor: input.actor,
+      });
+    } catch (retryError) {
+      if (isUniqueViolation(retryError)) {
+        throw new PromptLibraryStoreError(409, "Name already in use");
+      }
+      throw retryError;
+    }
+  }
+
+  let current: PromptLibraryVersionRow;
+  try {
+    const versions = await db
+      .insert(promptLibraryVersions)
+      .values({
+        promptId: created.id,
+        version: 1,
+        body,
+        slots,
+        createdById: input.actor.id,
+        createdByLabel: input.actor.label,
+        restoredFromVersion: null,
+      })
+      .returning();
+    current = mapVersionRow(versions[0]!);
+  } catch (error) {
+    // No transaction on neon-http: if the seed version fails to insert, remove
+    // the just-created prompt so we never leave one without its version.
+    await db.delete(promptLibrary).where(eq(promptLibrary.id, created.id)).catch(() => {});
+    throw error;
+  }
+  return { prompt: mapPromptRow(created), current };
+}
+
+export async function savePromptVersion(
+  db: Db,
+  input: {
+    promptId: number;
+    body: string;
+    slots?: PromptSlotDefinition[];
+    restoredFromVersion?: number;
+    expectedVersion?: number;
+    actor: PromptLibraryActor;
+  },
+): Promise<{ version: PromptLibraryVersionRow; changed: boolean }> {
+  requireEditRole(input.actor.role);
+  const body = validateBody(input.body);
+  const promptRows = await db
+    .select()
+    .from(promptLibrary)
+    .where(eq(promptLibrary.id, input.promptId))
+    .limit(1);
+  const promptRow = promptRows[0];
+  if (!promptRow) {
+    throw new PromptLibraryStoreError(404, "Unknown prompt");
+  }
+  if (promptRow.archivedAt) {
+    throw new PromptLibraryStoreError(409, "Prompt is archived");
+  }
+
+  const head = await getCurrentPromptVersion(db, input.promptId);
+  const slots =
+    input.slots === undefined
+      ? (head?.slots ?? [])
+      : validateSlots(input.slots);
+
+  if (input.expectedVersion !== undefined) {
+    let selected: { promptId: number; version: number; changed: boolean } | undefined;
+    try {
+      const result = await db.execute(sql`
+        WITH candidate AS (
+          SELECT p.id
+          FROM prompt_library p
+          WHERE p.id = ${input.promptId}
+            AND p.archived_at IS NULL
+            AND COALESCE((
+              SELECT MAX(v.version)
+              FROM prompt_library_versions v
+              WHERE v.prompt_id = p.id
+            ), 0) = ${input.expectedVersion}
+          FOR UPDATE
+        ), current_head AS (
+          SELECT v.prompt_id, v.version, v.body, v.slots
+          FROM prompt_library_versions v
+          JOIN candidate c ON c.id = v.prompt_id
+          WHERE v.version = ${input.expectedVersion}
+        ), inserted AS (
+          INSERT INTO prompt_library_versions
+            (prompt_id, version, body, slots, created_by_id, created_by_label, restored_from_version)
+          SELECT c.id, ${input.expectedVersion + 1}, ${body}, ${JSON.stringify(slots)}::jsonb,
+            ${input.actor.id}, ${input.actor.label}, ${input.restoredFromVersion ?? null}
+          FROM candidate c
+          WHERE NOT EXISTS (
+            SELECT 1
+            FROM current_head h
+            WHERE h.body = ${body}
+              AND h.slots = ${JSON.stringify(slots)}::jsonb
+          )
+          RETURNING prompt_id, version
+        ), updated AS (
+          UPDATE prompt_library p
+          SET updated_at = now()
+          FROM inserted i
+          WHERE p.id = i.prompt_id
+          RETURNING p.id
+        )
+        SELECT h.prompt_id AS "promptId", h.version, false AS changed
+        FROM current_head h
+        WHERE h.body = ${body}
+          AND h.slots = ${JSON.stringify(slots)}::jsonb
+        UNION ALL
+        SELECT i.prompt_id AS "promptId", i.version, true AS changed
+        FROM inserted i
+      `);
+      selected = rawRows<{ promptId: number; version: number; changed: boolean }>(result)[0];
+    } catch (error) {
+      // The expected-head row lock makes this unnecessary in normal operation,
+      // but a version PK collision is still a deterministic CAS miss rather than
+      // a retry that could turn a stale edit into a new head.
+      if (!isUniqueViolation(error)) throw error;
+    }
+
+    if (!selected) {
+      const currentPrompt = await getPrompt(db, input.promptId);
+      if (!currentPrompt) throw new PromptLibraryStoreError(404, "Unknown prompt");
+      if (currentPrompt.archivedAt) {
+        throw new PromptLibraryStoreError(409, "Prompt is archived");
+      }
+      const currentHead = await getCurrentPromptVersion(db, input.promptId);
+      throw new PromptLibraryCasMissError(
+        input.promptId,
+        input.expectedVersion,
+        currentHead?.version ?? null,
+      );
+    }
+
+    const saved = await getPromptVersion(db, input.promptId, selected.version);
+    if (!saved) {
+      throw new PromptLibraryStoreError(500, "Saved prompt version was not readable");
+    }
+    return { version: saved, changed: selected.changed };
+  }
+
+  if (
+    head &&
+    head.body === body &&
+    isDeepStrictEqual(head.slots, slots)
+  ) {
+    return { version: head, changed: false };
+  }
+
+  // Compute-then-insert the next version, retrying if a concurrent save took the
+  // same number (the (prompt_id, version) PK rejects the duplicate).
+  const saved = await retryOnUniqueViolation(async () => {
+    const [{ maxVersion }] = await db
+      .select({ maxVersion: max(promptLibraryVersions.version) })
+      .from(promptLibraryVersions)
+      .where(eq(promptLibraryVersions.promptId, input.promptId));
+    const next = (maxVersion ?? 0) + 1;
+    const rows = await db
+      .insert(promptLibraryVersions)
+      .values({
+        promptId: input.promptId,
+        version: next,
+        body,
+        slots,
+        createdById: input.actor.id,
+        createdByLabel: input.actor.label,
+        restoredFromVersion: input.restoredFromVersion ?? null,
+      })
+      .returning();
+    return rows[0]!;
+  });
+
+  await db
+    .update(promptLibrary)
+    .set({ updatedAt: new Date() })
+    .where(eq(promptLibrary.id, input.promptId));
+  return { version: mapVersionRow(saved), changed: true };
+}
+
+export async function updatePromptMetaWithProtectedNames(
+  db: Db,
+  input: {
+    promptId: number;
+    name?: string;
+    description?: string | null;
+    tags?: string[];
+    protectedNames: ReadonlySet<string>;
+    actor: PromptLibraryActor;
+  },
+): Promise<PromptLibraryRow> {
+  requireEditRole(input.actor.role);
+  const rows = await db
+    .select()
+    .from(promptLibrary)
+    .where(eq(promptLibrary.id, input.promptId))
+    .limit(1);
+  const current = rows[0];
+  if (!current) {
+    throw new PromptLibraryStoreError(404, "Unknown prompt");
+  }
+  if (current.archivedAt) {
+    throw new PromptLibraryStoreError(409, "Prompt is archived");
+  }
+
+  const set: { name?: string; description?: string | null; tags?: string[]; updatedAt?: Date } = {};
+  if (input.name !== undefined) set.name = validateName(input.name);
+  if (
+    set.name !== undefined
+    && set.name !== current.name
+    && input.protectedNames.has(current.name)
+  ) {
+    throw new PromptLibraryStoreError(
+      409,
+      `"${current.name}" is a built-in default prompt and cannot be renamed`,
+    );
+  }
+  if (input.description !== undefined) set.description = validateDescription(input.description);
+  if (input.tags !== undefined) set.tags = validateTags(input.tags);
+  if (Object.keys(set).length === 0) return mapPromptRow(current);
+
+  set.updatedAt = new Date();
+  let updated: PromptSelect;
+  try {
+    const res = await db
+      .update(promptLibrary)
+      .set(set)
+      .where(eq(promptLibrary.id, input.promptId))
+      .returning();
+    updated = res[0]!;
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw new PromptLibraryStoreError(409, "Name already in use");
+    }
+    throw error;
+  }
+  return mapPromptRow(updated);
+}
+
+export async function archivePromptWithProtectedNames(
+  db: Db,
+  input: {
+    promptId: number;
+    protectedNames: ReadonlySet<string>;
+    actor: PromptLibraryActor;
+  },
+): Promise<PromptLibraryRow> {
+  requireEditRole(input.actor.role);
+  const rows = await db
+    .select()
+    .from(promptLibrary)
+    .where(eq(promptLibrary.id, input.promptId))
+    .limit(1);
+  const current = rows[0];
+  if (!current) {
+    throw new PromptLibraryStoreError(404, "Unknown prompt");
+  }
+  if (current.archivedAt) return mapPromptRow(current);
+  if (input.protectedNames.has(current.name)) {
+    throw new PromptLibraryStoreError(
+      409,
+      `"${current.name}" is a built-in default prompt and cannot be archived`,
+    );
+  }
+
+  const res = await db
+    .update(promptLibrary)
+    .set({ archivedAt: new Date(), updatedAt: new Date() })
+    .where(eq(promptLibrary.id, input.promptId))
+    .returning();
+  return mapPromptRow(res[0]!);
+}
+
+export async function restorePromptVersion(
+  db: Db,
+  input: { promptId: number; version: number; actor: PromptLibraryActor },
+): Promise<PromptLibraryVersionRow> {
+  requireEditRole(input.actor.role);
+  const sourceRows = await db
+    .select()
+    .from(promptLibraryVersions)
+    .where(
+      and(
+        eq(promptLibraryVersions.promptId, input.promptId),
+        eq(promptLibraryVersions.version, input.version),
+      ),
+    )
+    .limit(1);
+  const source = sourceRows[0];
+  if (!source) {
+    throw new PromptLibraryStoreError(404, "Unknown version");
+  }
+
+  const promptRows = await db
+    .select()
+    .from(promptLibrary)
+    .where(eq(promptLibrary.id, input.promptId))
+    .limit(1);
+  const promptRow = promptRows[0];
+  if (promptRow?.archivedAt) {
+    throw new PromptLibraryStoreError(409, "Prompt is archived");
+  }
+
+  // Restore ALWAYS appends a new head, even when the source body equals the
+  // current head (unlike savePromptVersion's no-op): the restore itself is the
+  // recorded event, marked via restoredFromVersion.
+  const saved = await retryOnUniqueViolation(async () => {
+    const [{ maxVersion }] = await db
+      .select({ maxVersion: max(promptLibraryVersions.version) })
+      .from(promptLibraryVersions)
+      .where(eq(promptLibraryVersions.promptId, input.promptId));
+    const next = (maxVersion ?? 0) + 1;
+    const rows = await db
+      .insert(promptLibraryVersions)
+      .values({
+        promptId: input.promptId,
+        version: next,
+        body: source.body,
+        slots: source.slots,
+        createdById: input.actor.id,
+        createdByLabel: input.actor.label,
+        restoredFromVersion: source.version,
+      })
+      .returning();
+    return rows[0]!;
+  });
+
+  await db
+    .update(promptLibrary)
+    .set({ updatedAt: new Date() })
+    .where(eq(promptLibrary.id, input.promptId));
+  return mapVersionRow(saved);
+}
+
+export interface PromptUsageDefinitionHead {
+  id: number;
+  name: string;
+  definition: unknown;
+}
+
+/** Raw definition heads for the prompt-usage service. Parsing stays above the
+ * database tier while this pre-stage-7 store still owns the query. */
+export async function listPromptUsageDefinitionHeads(
+  db: Db,
+): Promise<PromptUsageDefinitionHead[]> {
+  const defs = await db
+    .select({ id: workflowDefinitions.id, name: workflowDefinitions.name })
+    .from(workflowDefinitions)
+    .where(isNull(workflowDefinitions.archivedAt))
+    .orderBy(asc(workflowDefinitions.id));
+  if (defs.length === 0) return [];
+  const defIds = defs.map((d) => d.id);
+
+  const maxRows = await db
+    .select({
+      definitionId: workflowDefinitionVersions.definitionId,
+      maxVersion: max(workflowDefinitionVersions.version),
+    })
+    .from(workflowDefinitionVersions)
+    .where(inArray(workflowDefinitionVersions.definitionId, defIds))
+    .groupBy(workflowDefinitionVersions.definitionId);
+  if (maxRows.length === 0) return [];
+
+  const headRows = await db
+    .select({
+      definitionId: workflowDefinitionVersions.definitionId,
+      definition: workflowDefinitionVersions.definition,
+    })
+    .from(workflowDefinitionVersions)
+    .where(
+      or(
+        ...maxRows.map((m) =>
+          and(
+            eq(workflowDefinitionVersions.definitionId, m.definitionId),
+            eq(workflowDefinitionVersions.version, m.maxVersion!),
+          ),
+        ),
+      ),
+    );
+  const headByDef = new Map(
+    headRows.map((row) => [row.definitionId, row.definition]),
+  );
+  return defs.flatMap((definition) => {
+    const head = headByDef.get(definition.id);
+    return head === undefined ? [] : [{ ...definition, definition: head }];
+  });
+}
+
+// --- Serialization ---
+
+export function serializePromptMeta(
+  row: PromptLibraryRow,
+  currentVersion: number,
+): PromptLibraryEntryMeta {
+  return {
+    id: row.id,
+    slug: row.slug,
+    name: row.name,
+    description: row.description,
+    tags: row.tags,
+    currentVersion,
+    archivedAt: row.archivedAt ? row.archivedAt.toISOString() : null,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+    createdByLabel: row.createdByLabel,
+  };
+}
+
+export function serializePromptVersion(row: PromptLibraryVersionRow): PromptLibraryVersion {
+  return {
+    promptId: row.promptId,
+    version: row.version,
+    body: row.body,
+    slots: structuredClone(row.slots),
+    createdAt: row.createdAt.toISOString(),
+    createdById: row.createdById,
+    createdByLabel: row.createdByLabel,
+    restoredFromVersion: row.restoredFromVersion,
+  };
+}

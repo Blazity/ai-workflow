@@ -15,11 +15,11 @@ import { getDb } from "../../db/client.js";
 import {
   fetchRunDetailFromDb,
   fetchRunRefs,
-} from "../../db/queries/run-detail-read.js";
+} from "../../db/repositories/runs.js";
 import {
   getClarificationForRun,
   serializeClarification,
-} from "../../clarifications/store.js";
+} from "../../db/repositories/clarifications.js";
 import { logger } from "../../infra/logger.js";
 import {
   collectRunDetail,
@@ -63,7 +63,7 @@ export async function readRunDetail(runId: string): Promise<RunDetailPayload> {
     }).catch(() => null);
     let analysisReport = dbDetail?.analysisReport ?? null;
     if (!analysisReport) {
-      analysisReport = await (await import("../../run-analysis/store.js"))
+      analysisReport = await (await import("../../db/repositories/runs/run-analysis.js"))
         .getRunAnalysisReport(getDb(), runId)
         .catch(() => null);
     }

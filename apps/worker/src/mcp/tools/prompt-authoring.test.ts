@@ -66,8 +66,8 @@ const headReadBarrier = vi.hoisted(() => ({
   resolveRelease: () => {},
 }));
 
-vi.mock("../../prompt-library/store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../prompt-library/store.js")>();
+vi.mock("../../db/repositories/prompts.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../db/repositories/prompts.js")>();
   return {
     ...actual,
     getCurrentPromptVersion: async (...args: Parameters<typeof actual.getCurrentPromptVersion>) => {

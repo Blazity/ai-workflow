@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
-vi.mock("../../../db/queries/workflow-owned-branches.js", () => ({
+vi.mock("../../../db/repositories/runs.js", () => ({
   findWorkflowOwnedPullRequestIdentity: (...args: unknown[]) =>
     mocks.findWorkflowOwnedPullRequestIdentity(...args),
 }));
@@ -15,7 +15,7 @@ vi.mock("../../runtime/pr-external-resources.js", async (importOriginal) => ({
   publishRunOwnedPrReview: (...args: unknown[]) =>
     mocks.publishRunOwnedPrReview(...args),
 }));
-import type { WorkflowOwnedBranchRecord } from "../../../db/queries/workflow-owned-branches.js";
+import type { WorkflowOwnedBranchRecord } from "../../../db/repositories/runs.js";
 import { makePrPayload } from "../support/test-support.js";
 import {
   postPrReviewStep,

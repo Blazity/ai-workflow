@@ -3,7 +3,7 @@ import { env } from "../../config/env.js";
 import { JiraAdapter } from "../../adapters/issue-tracker/jira.js";
 import { ChatSDKAdapter } from "../../adapters/messaging/chatsdk.js";
 import { NoopMessagingAdapter } from "../../adapters/messaging/noop.js";
-import { PostgresRunRegistry } from "../../adapters/run-registry/postgres.js";
+import { PostgresRunRegistry } from "../../db/repositories/active-runs.js";
 import { getDb } from "../../db/client.js";
 import { createVCS } from "./create-vcs.js";
 import { createRepositoryVCS } from "./vcs-runtime.js";

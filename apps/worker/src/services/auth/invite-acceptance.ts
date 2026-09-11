@@ -3,12 +3,10 @@ import { and, eq } from "drizzle-orm";
 
 import type { Auth } from "../../auth.js";
 import type { Db } from "../../db/client.js";
+import { createAuthRepository } from "../../db/repositories/auth.js";
 import {
-  account,
   invitation,
-  member as memberTable,
   organization,
-  user,
 } from "../../db/schema.js";
 import type { DashboardRole } from "./roles.js";
 import { DashboardAuthError } from "./users-read.js";
@@ -18,7 +16,6 @@ type ExistingUserWithAccounts = NonNullable<
   Awaited<ReturnType<AuthContext["internalAdapter"]["findUserByEmail"]>>
 >;
 type InviteAcceptanceReadDb = Pick<Db, "select">;
-type InviteAcceptanceMembershipDb = Pick<Db, "select" | "insert" | "update">;
 
 type AcceptedPasswordUserBase = {
   id: string;
@@ -123,39 +120,18 @@ export async function acceptDashboardInvite(
         password: input.password,
       });
 
-  await db.transaction(async (tx) => {
-    const currentInvite = await requirePendingInvite(tx, org.id, invite.id, now);
-    const role = requireInviteRole(currentInvite.role);
-    if (acceptedUser.kind === "new") {
-      await tx.insert(user).values({
-        id: acceptedUser.id,
-        email: acceptedUser.email,
-        name: acceptedUser.name,
-        emailVerified: true,
-      });
-      await tx.insert(account).values({
-        id: randomUUID(),
-        userId: acceptedUser.id,
-        providerId: "credential",
-        accountId: acceptedUser.id,
-        password: acceptedUser.passwordHash,
-      });
-    }
-
-    await ensureInviteMembership(tx, {
-      organizationId: org.id,
-      userId: acceptedUser.id,
-      role,
-    });
-    const [accepted] = await tx
-      .update(invitation)
-      .set({ status: "accepted" })
-      .where(and(eq(invitation.id, currentInvite.id), eq(invitation.status, "pending")))
-      .returning({ id: invitation.id });
-    if (!accepted) {
-      throw new DashboardAuthError(409, "Invite is no longer pending");
-    }
+  const accepted = await createAuthRepository(db).acceptPasswordInvite({
+    organizationId: org.id,
+    inviteId: invite.id,
+    now,
+    userId: acceptedUser.id,
+    userEmail: acceptedUser.email,
+    userName: acceptedUser.name,
+    newPasswordHash: acceptedUser.kind === "new" ? acceptedUser.passwordHash : null,
+    accountId: acceptedUser.kind === "new" ? randomUUID() : null,
+    membershipId: randomUUID(),
   });
+  if (!accepted) throw new DashboardAuthError(404, "Invite not found");
 
   const signIn = await auth.api.signInEmail({
     body: { email: invite.email, password: input.password },
@@ -188,25 +164,14 @@ export async function acceptDashboardSsoInvite(
     throw new DashboardAuthError(403, "Invite does not match signed-in user");
   }
 
-  await db.transaction(async (tx) => {
-    const currentInvite = await requirePendingInvite(tx, org.id, invite.id, now);
-    if (normalizeEmail(currentInvite.email) !== normalizeEmail(input.user.email)) {
-      throw new DashboardAuthError(403, "Invite does not match signed-in user");
-    }
-    await ensureInviteMembership(tx, {
-      organizationId: org.id,
-      userId: input.user.id,
-      role: requireInviteRole(currentInvite.role),
-    });
-    const [accepted] = await tx
-      .update(invitation)
-      .set({ status: "accepted" })
-      .where(and(eq(invitation.id, currentInvite.id), eq(invitation.status, "pending")))
-      .returning({ id: invitation.id });
-    if (!accepted) {
-      throw new DashboardAuthError(409, "Invite is no longer pending");
-    }
+  const accepted = await createAuthRepository(db).acceptSsoInvite({
+    organizationId: org.id,
+    inviteId: invite.id,
+    now,
+    userId: input.user.id,
+    membershipId: randomUUID(),
   });
+  if (!accepted) throw new DashboardAuthError(404, "Invite not found");
 }
 
 function requireInviteRole(role: string): DashboardRole {
@@ -291,45 +256,6 @@ async function prepareInvitedPasswordUser(
     name: input.name,
     passwordHash: hash,
   };
-}
-
-async function ensureInviteMembership(
-  db: InviteAcceptanceMembershipDb,
-  input: { organizationId: string; userId: string; role: DashboardRole },
-): Promise<void> {
-  const [existing] = await db
-    .select({ id: memberTable.id, role: memberTable.role })
-    .from(memberTable)
-    .where(
-      and(
-        eq(memberTable.organizationId, input.organizationId),
-        eq(memberTable.userId, input.userId),
-      ),
-    )
-    .limit(1);
-  if (existing) {
-    if (roleRank(input.role) > roleRank(existing.role)) {
-      await db
-        .update(memberTable)
-        .set({ role: input.role })
-        .where(eq(memberTable.id, existing.id));
-    }
-    return;
-  }
-
-  await db.insert(memberTable).values({
-    id: randomUUID(),
-    organizationId: input.organizationId,
-    userId: input.userId,
-    role: input.role,
-  });
-}
-
-function roleRank(role: string): number {
-  if (role === "owner") return 3;
-  if (role === "admin") return 2;
-  if (role === "member") return 1;
-  return 0;
 }
 
 function normalizeEmail(email: string): string {
