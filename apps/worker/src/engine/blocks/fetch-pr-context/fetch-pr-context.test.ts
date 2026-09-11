@@ -18,11 +18,9 @@ vi.mock("../../../db/client.js", () => ({ getDb: mocks.getDb }));
 
 vi.mock("../../../db/repositories/runs.js", () => ({
   listWorkflowOwnedBranchesForTicket: mocks.listWorkflowOwnedBranchesForTicket,
-}));
-
-vi.mock("../../../db/repositories/runs.js", () => ({
   findRunPrSiblings: mocks.findRunPrSiblings,
 }));
+
 
 vi.mock("../../../adapters/vcs/repository-directory.js", () => ({
   createRepositoryDirectoryForProviders: () => ({
