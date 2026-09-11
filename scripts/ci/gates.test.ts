@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -45,6 +45,77 @@ function gate(name: string, args: string[] = [], root: string = repoRoot) {
     encoding: "utf8",
   });
 }
+
+function docsStatusFixture(files: Record<string, string>): string {
+  const root = makeDepsRoot("docs-status-fixture-", files);
+  mkdirSync(join(root, "scripts/gates"), { recursive: true });
+  cpSync(
+    join(repoRoot, "scripts/gates/docs-status.mjs"),
+    join(root, "scripts/gates/docs-status.mjs"),
+  );
+  return root;
+}
+
+function filesNamed(root: string, name: string): string[] {
+  const found: string[] = [];
+  const ignored = new Set([".git", "node_modules", ".next", ".output", ".nitro"]);
+  const visit = (directory: string) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (ignored.has(entry.name)) continue;
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) visit(path);
+      else if (entry.isFile() && entry.name === name) found.push(path);
+    }
+  };
+  visit(root);
+  return found;
+}
+
+test("docs-status rejects a document with a bad header", () => {
+  const result = gate(
+    "docs-status.mjs",
+    [],
+    docsStatusFixture({ "README.md": "# Missing status\n" }),
+  );
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(result.stderr, /README\.md: first line must be/);
+});
+
+test("docs-status rejects a stale current document", () => {
+  const result = gate(
+    "docs-status.mjs",
+    [],
+    docsStatusFixture({
+      "README.md": "Status: current\nLast-verified: 2020-01-01\n\n# Old\n",
+    }),
+  );
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(result.stderr, /README\.md: Status is current but Last-verified/);
+});
+
+test("docs-status rejects a current document that is unreachable", () => {
+  const result = gate(
+    "docs-status.mjs",
+    [],
+    docsStatusFixture({
+      "README.md": "Status: current\nLast-verified: 2026-09-11\n\n# Readme\n",
+      "docs/hidden.md": "Status: current\nLast-verified: 2026-09-11\n\n# Hidden\n",
+    }),
+  );
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(result.stderr, /docs\/hidden\.md: Status is current but nothing reaches it/);
+});
+
+test("every Claude bridge starts by loading AGENTS.md", () => {
+  const bridges = filesNamed(repoRoot, "CLAUDE.md");
+  assert.deepEqual(
+    new Set(bridges.map((path) => path.slice(repoRoot.length + 1))),
+    new Set(["CLAUDE.md", "apps/dashboard/CLAUDE.md", "apps/worker/CLAUDE.md"]),
+  );
+  for (const bridge of bridges) {
+    assert.equal(readFileSync(bridge, "utf8").split("\n", 1)[0], "@AGENTS.md", bridge);
+  }
+});
 
 test("the boundary baseline passes and is stable across file renames", async () => {
   const recorded = gate("boundaries.mjs");

@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-09
+Last-verified: 2026-09-11
 
 # AGENTS.md
 
@@ -90,7 +90,8 @@ a `PASS`, and a later result does not erase an earlier `FAIL`.
 
 `pnpm run verify:changed` resolves the base from the branch upstream, then
 `origin/HEAD`, then `origin/main`, and never fetches; pass `-- --base <ref>` to
-override. Enable it as a hook once with
+override. The Claude Stop hook adds `--worktree` so committed, staged, unstaged
+and untracked paths are planned together. Enable the pre-push hook once with
 `git config --local core.hooksPath .githooks`, but only if that setting is
 currently empty. The gate is advisory and bypassable: `git push --no-verify` is
 an audited bypass, so record why it was used and do not report the gate as
@@ -111,13 +112,13 @@ not on every edit.
 
 Each is quoted verbatim from the file that owns it.
 
-**neon-http has no transactions** (`apps/worker/src/approvals/store.ts`):
+**Transactions stay inside repositories** (`apps/worker/src/db/repositories/`):
 
-> Production uses neon-http and cannot open an interactive transaction.
+> Database transactions belong inside repositories; service and engine code calls repository methods.
 
-Write multi-row changes as one statement (a data-modifying CTE, an
-insert-on-conflict) rather than `db.transaction`. The pglite test driver does
-support transactions, so unit tests will not catch this.
+Repository operations own multi-row writes and transaction boundaries. Keep
+the repository boundary intact when changing a write, because a test driver
+can support transactions even when the deployed driver contract differs.
 
 **The Workflow DevKit discovers steps by file content**
 (`docs/research/2026-09-09-architecture-audit.md`, section 10):

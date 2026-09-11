@@ -1,6 +1,7 @@
 ---
 paths:
-  - "apps/worker/src/sandbox/**"
+  - "apps/worker/src/sandbox/agents/**"
+  - "apps/worker/src/sandbox/arthur-*.ts"
   - "apps/worker/src/harness-profiles/**"
 ---
 
@@ -14,7 +15,7 @@ paths:
   keeps orphan history.
 - The Claude Code CLI rejects OAuth tokens (`sk-ant-oat...`) supplied through
   `ANTHROPIC_API_KEY`; that variable accepts standard API keys
-  (`sk-ant-api...`) only. `src/sandbox/agents/claude.ts` detects the
+  (`sk-ant-api...`) only. `apps/worker/src/sandbox/agents/claude.ts` detects the
   `sk-ant-oat` prefix and exports the value as `CLAUDE_CODE_OAUTH_TOKEN` inside
   the sandbox, so the operator still pastes one variable.
 - Codex creates `.codex/` in the working directory at runtime. Without
