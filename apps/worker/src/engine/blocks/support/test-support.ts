@@ -11,7 +11,7 @@ import type {
 import {
   BUILTIN_HARNESS_PROFILE_IDS,
   BUILTIN_HARNESS_PROFILE_MANIFESTS,
-} from "@shared/contracts";
+} from "@shared/harness";
 import {
   resolveWorkflowBlockContract,
   validateBlockOutputAgainstContract,

@@ -49,6 +49,7 @@ import { BLOCK_EXECUTORS } from "./blocks/executors.generated.js";
 import { isTriggerBlockType, RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import type { BlockOutput, BlockRunState, RunPullRequest, RunAnalysisReport, TransformConfiguration, WorkflowBlockType, WorkflowDefinitionNode, WorkflowDefinitionV2, WorkflowParamValue, HarnessRunManifestRecord } from "@shared/contracts";
 import type { CostProvider, CostProviderKind, TokenPrice } from "@shared/costs";
+import { resolveModelDefaults } from "@shared/harness";
 import type { ResolvedHarnessRuntime } from "../sandbox/harness-runtime.js";
 import { buildResearchAnalysisReportBestEffort, loadApprovedPlanAnalysisReportBestEffort, logPhaseFailure, logWorkflowExecutionErrorStep, markRunFailedOnSelfMoveStep, markRunSucceededOnSelfMoveStep, markTicketFailed, notifyTicket, notifyTicketBestEffort, postFailureReasonCommentStep, postPrLinksComment, postRunAnalysisCommentStep, postTicketComment, recordRunAnalysisCommentFailureBestEffort, recordRunAnalysisReportBestEffort, recordRunFailureReasonStep, safeRunAnalysisDeliveryError, safeRunAnalysisReportError } from "./steps/ticket-analysis.js";
 import { applyHumanRepositoryExpansion, attachResearchRepositoriesStep, checksCeilingOption, createHarnessInvocationBudget, ensurePlanningAgentSandboxForBlock, fetchAttachments, fetchModelPriceStep, listFreshRepositoryCatalogStep, parseAgentOutputStep, parseRepositoryDiscoveryStep, parseResearchStep, parseReviewStep, planPhaseStep, readRunBudgetClockStep, resolveHumanRepositoryExpansionStep, setCommitGuardStep, writeAndStartPhase, writeAttachments } from "./steps/phase.js";
@@ -520,10 +521,10 @@ async function agentWorkflowBody(
     agentKindOverride,
     env.AGENT_KIND,
   );
-  const modelDefaults = {
+  const modelDefaults = resolveModelDefaults({
     claude: env.CLAUDE_MODEL,
     codex: env.CODEX_MODEL,
-  };
+  });
   const defaultModel = modelDefaults[runDefaultKind];
   const harnessRuntimes = await resolveHarnessRuntimesStep(
     plan.definition,
@@ -904,7 +905,7 @@ async function agentWorkflowBody(
         node.type === "open_pr"
       )
     ) {
-      pricedModels.add(env.CODEX_MODEL);
+      pricedModels.add(modelDefaults.codex);
     }
     for (const [phase, usage] of Object.entries(phaseUsages)) {
       const model = phaseModels[phase];
@@ -984,7 +985,7 @@ async function agentWorkflowBody(
       publication: null,
       prePrGate: null,
       runDefaultKind,
-      defaults: { claude: env.CLAUDE_MODEL, codex: env.CODEX_MODEL },
+      defaults: modelDefaults,
       prompts,
       moveTargets: { backlog: backlogMoveTarget(), aiReview: aiReviewMoveTarget() },
       arthur: {

@@ -32,9 +32,10 @@
     "gate:resurrected": "node scripts/gates/no-resurrected-paths.mjs",
     "gate:single-schema": "node scripts/gates/single-schema-version.mjs",
     "gate:package-contracts": "node scripts/gates/package-contracts.mjs",
+    "gate:model-catalog-drift": "node scripts/gates/model-catalog-drift.mjs",
     "gate:deps-consistency": "node scripts/gates/check-deps-consistency.mjs",
     "gate:docs-status": "if [ -f scripts/gates/docs-status.mjs ]; then node scripts/gates/docs-status.mjs; else echo '[gates] docs-status.mjs is not present yet, continuing'; fi",
-    "gates": "pnpm run gate:boundaries && pnpm run gate:unused && pnpm run gate:lint && pnpm run gate:resurrected && pnpm run gate:single-schema && pnpm run gate:package-contracts && pnpm run gate:deps-consistency && pnpm run gate:docs-status",
+    "gates": "pnpm run gate:boundaries && pnpm run gate:unused && pnpm run gate:lint && pnpm run gate:resurrected && pnpm run gate:single-schema && pnpm run gate:package-contracts && pnpm run gate:model-catalog-drift && pnpm run gate:deps-consistency && pnpm run gate:docs-status",
     "gates:update-baselines": "pnpm run gate:boundaries -- --update-baseline && pnpm run gate:unused -- --update-baseline && pnpm run gate:lint -- --update-baseline"
   },
   "devDependencies": {

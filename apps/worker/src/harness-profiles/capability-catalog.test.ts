@@ -9,7 +9,7 @@ import type {
 import {
   BUILTIN_HARNESS_PROFILE_IDS,
   BUILTIN_HARNESS_PROFILE_MANIFESTS,
-} from "@shared/contracts";
+} from "@shared/harness";
 import type { Db } from "../db/client.js";
 import { organization } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
@@ -425,6 +425,17 @@ describe("Harness capability catalog", () => {
         draft as HarnessProfileDraftManifestV1,
         response,
       ),
+    ).toThrow(/no longer available/);
+
+    const advertisedOutsidePolicy = structuredClone(response);
+    advertisedOutsidePolicy.models[0]!.id = draft.model.id;
+    const unknownDraft = {
+      ...draft,
+      model: { id: "gpt-5.5", options: {} },
+    } as HarnessProfileDraftManifestV1;
+    advertisedOutsidePolicy.models[0]!.id = unknownDraft.model.id;
+    expect(() =>
+      upgradeHarnessDraftToV2(unknownDraft, advertisedOutsidePolicy),
     ).toThrow(/no longer available/);
 
     const matching = structuredClone(response);

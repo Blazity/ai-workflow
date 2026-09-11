@@ -17,6 +17,11 @@ import {
 } from "@shared/contracts";
 import { z } from "zod";
 
+export {
+  BUILTIN_HARNESS_PROFILE_MANIFESTS,
+  isRecognisedModel as isRecognisedHarnessModel,
+} from "@shared/harness";
+
 export const HARNESS_CREDENTIAL_IDS = [
   "anthropic",
   "openai",

@@ -1,4 +1,5 @@
 import type { JsonValue } from "@shared/contracts";
+import { CALL_LLM_DEFAULT_MODEL as DEFAULT_MODEL } from "@shared/harness";
 import { validateBlockOutputForDefinition } from "../../../workflow-definition/block-registry.js";
 import {
   parseJsonSchema202012,
@@ -17,8 +18,6 @@ import {
   type BlockExecuteFn,
   type BlockExecutionResult,
 } from "../support/types.js";
-
-const DEFAULT_MODEL = "claude-haiku-4-5";
 
 export function resolveCallLlmTarget(
   params: Record<string, unknown>,
@@ -75,7 +74,7 @@ blockCallLlmGenerateStep.maxRetries = 0;
  * call_llm: one in-process LLM call via engine/llm.ts generateStructured (no
  * sandbox involved). The provider is the block's provider param, else inferred
  * from an explicit model id, else the run default kind; the model is the block's
- * model param, else the claude-haiku-4-5 default for claude / CODEX_MODEL for
+ * model param, else the catalog default for Claude / CODEX_MODEL for
  * codex. With an outputSchema the parsed object is returned, otherwise plain
  * text. Usage is recorded under the "LLM <blockId>" label.
  */

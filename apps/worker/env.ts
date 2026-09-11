@@ -60,7 +60,7 @@ export const env = createEnv({
 
     // Agent
     ANTHROPIC_API_KEY: z.string().min(1).optional(),
-    CLAUDE_MODEL: z.string().default("claude-opus-4-8"),
+    CLAUDE_MODEL: z.string().min(1).optional(),
     // Optional overrides for the git identity used inside the sandbox.
     // - GitHub: when both are unset, the identity is derived from the App so
     //   commits render with the App's avatar and the `[bot]` badge in the UI.
@@ -77,7 +77,7 @@ export const env = createEnv({
     CODEX_CHATGPT_OAUTH_TOKEN: z.string().min(1).optional(),
 
     // Codex model selection.
-    CODEX_MODEL: z.string().default("gpt-5.4"),
+    CODEX_MODEL: z.string().min(1).optional(),
 
     // LiteLLM community-maintained pricing JSON. Operator overridable.
     CODEX_PRICING_URL: z

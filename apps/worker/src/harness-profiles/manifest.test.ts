@@ -3,11 +3,12 @@ import type { HarnessProfileDraftManifestV1 } from "@shared/contracts";
 import {
   BUILTIN_HARNESS_PROFILE_IDS,
   BUILTIN_HARNESS_PROFILE_MANIFESTS,
-} from "@shared/contracts";
+} from "@shared/harness";
 import {
   compileHarnessProfileManifest,
   HarnessProfileManifestError,
   hashHarnessProfileManifest,
+  isRecognisedHarnessModel,
   parseHarnessProfileDraftManifest,
 } from "./manifest.js";
 
@@ -32,6 +33,16 @@ function issuePaths(error: unknown): string[] {
 }
 
 describe("harness profile manifest validation", () => {
+  it("keeps an unknown historical model ID readable but not recognised", () => {
+    const value = draft();
+    value.model.id = "gpt-retired-custom";
+
+    expect(parseHarnessProfileDraftManifest(value).model.id).toBe(
+      "gpt-retired-custom",
+    );
+    expect(isRecognisedHarnessModel("codex", value.model.id)).toBe(false);
+  });
+
   it("accepts a code-owned provider contract and hashes it deterministically", () => {
     const parsed = parseHarnessProfileDraftManifest(
       draft(),

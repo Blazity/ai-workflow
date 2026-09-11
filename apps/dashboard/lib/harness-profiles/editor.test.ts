@@ -6,17 +6,20 @@ import {
   draftFromManifest,
   isProfileSlug,
   newProfileDraft,
+  selectableHarnessModels,
   upgradeProfileDraft,
   upsertProfile,
   withHarnessModel,
   withHarnessProvider,
 } from "./editor";
 import {
-  BUILTIN_HARNESS_PROFILE_IDS,
-  BUILTIN_HARNESS_PROFILE_MANIFESTS,
   type HarnessCapabilitiesResponse,
   type HarnessProfileDto,
 } from "@shared/contracts";
+import {
+  BUILTIN_HARNESS_PROFILE_IDS,
+  BUILTIN_HARNESS_PROFILE_MANIFESTS,
+} from "@shared/harness";
 
 function profile(overrides: Partial<HarnessProfileDto> = {}): HarnessProfileDto {
   return {
@@ -35,6 +38,24 @@ function profile(overrides: Partial<HarnessProfileDto> = {}): HarnessProfileDto 
     createdById: "user-1",
     updatedById: "user-1",
     ...overrides,
+  };
+}
+
+function modelCapability(
+  id: string,
+): HarnessCapabilitiesResponse["models"][number] {
+  return {
+    id,
+    name: id,
+    description: null,
+    contextWindowTokens: 200_000,
+    reasoningEfforts: [{ id: "high", name: "High", description: null }],
+    defaultReasoningEffort: "high",
+    serviceTiers: [{ id: "standard", name: "Standard", description: null }],
+    defaultServiceTier: "standard",
+    verbosityOptions: [],
+    defaultVerbosity: null,
+    compactionModes: ["model_default"],
   };
 }
 
@@ -156,7 +177,7 @@ test("switching a v2 profile requires fresh target capabilities and remains v2",
 test("selecting an advertised model pins its exact capability snapshot and controls", () => {
   const draft = newProfileDraft("claude");
   const model: HarnessCapabilitiesResponse["models"][number] = {
-    id: "claude-supported",
+    id: "claude-sonnet-5",
     name: "Claude Supported",
     description: null,
     contextWindowTokens: 200_000,
@@ -190,12 +211,12 @@ test("selecting an advertised model pins its exact capability snapshot and contr
   const selected = withHarnessModel(
     draft,
     capabilities,
-    "claude-supported",
+    "claude-sonnet-5",
   );
 
   assert.ok(selected);
   assert.deepEqual(selected.model, {
-    id: "claude-supported",
+    id: "claude-sonnet-5",
     reasoning: {
       selection: "medium",
       effectiveEffort: "medium",
@@ -205,6 +226,46 @@ test("selecting an advertised model pins its exact capability snapshot and contr
     catalogHash: "catalog-current",
   });
   assert.deepEqual(selected.compaction, { mode: "model_default" });
+});
+
+test("an advertised model outside policy stays readable but is not upgraded", () => {
+  const draft = {
+    ...newProfileDraft("codex"),
+    model: { id: "gpt-5.5", options: {} },
+  };
+  const capabilities: HarnessCapabilitiesResponse = {
+    ...draft.harness,
+    models: [modelCapability(draft.model.id)],
+    catalogHash: "catalog-current",
+    fetchedAt: "2026-09-11T00:00:00.000Z",
+    stale: false,
+    refreshFailure: null,
+  };
+
+  assert.equal(upgradeProfileDraft(draft, capabilities), null);
+  assert.equal(draft.model.id, "gpt-5.5");
+});
+
+test("dashboard model options use the exact catalog intersection sequence", () => {
+  const draft = newProfileDraft("codex");
+  const capabilities: HarnessCapabilitiesResponse = {
+    ...draft.harness,
+    models: [
+      modelCapability("gpt-5-mini"),
+      modelCapability("gpt-5.5"),
+      modelCapability("gpt-5.4"),
+      modelCapability("gpt-5-mini"),
+    ],
+    catalogHash: "catalog-current",
+    fetchedAt: "2026-09-11T00:00:00.000Z",
+    stale: false,
+    refreshFailure: null,
+  };
+
+  assert.deepEqual(
+    selectableHarnessModels(capabilities).map((candidate) => candidate.id),
+    ["gpt-5-mini", "gpt-5.4"],
+  );
 });
 
 test("profile slugs match the worker-owned public constraint", () => {

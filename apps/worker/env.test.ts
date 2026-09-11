@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { DEFAULT_MODELS, resolveModelDefaults } from "@shared/harness";
 
 async function importEnvModule() {
   const [config, botIdentity] = await Promise.all([
@@ -77,9 +78,19 @@ describe("env", () => {
   it("uses defaults for optional fields", async () => {
     const partial = { ...VALID_ENV };
     delete (partial as any).MAX_CONCURRENT_AGENTS;
+    delete (partial as any).CLAUDE_MODEL;
+    delete (partial as any).CODEX_MODEL;
     Object.assign(process.env, partial);
     const { env } = await importEnvModule();
     expect(env.MAX_CONCURRENT_AGENTS).toBe(3);
+    expect(env.CLAUDE_MODEL).toBeUndefined();
+    expect(env.CODEX_MODEL).toBeUndefined();
+    expect(
+      resolveModelDefaults({
+        claude: env.CLAUDE_MODEL,
+        codex: env.CODEX_MODEL,
+      }),
+    ).toEqual(DEFAULT_MODELS);
     // COMMIT_AUTHOR/EMAIL are optional with no defaults — provisionSandbox
     // derives the bot identity from the GitHub App when both are unset.
     expect(env.COMMIT_AUTHOR).toBeUndefined();

@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import {
-  BUILTIN_HARNESS_PROFILE_IDS,
-  BUILTIN_HARNESS_PROFILE_MANIFESTS,
   type HarnessProfileDraftManifestV1,
 } from "@shared/contracts";
+import {
+  BUILTIN_HARNESS_PROFILE_IDS,
+  BUILTIN_HARNESS_PROFILE_MANIFESTS,
+} from "@shared/harness";
 import type { Db } from "../db/client.js";
 import {
   harnessProfiles,

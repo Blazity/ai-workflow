@@ -5,8 +5,9 @@ Last-verified: 2026-09-09
 
 Workspace packages shared by the worker and the dashboard. `contracts` holds
 cross-application shapes and constants; `conditions` evaluates predicates;
-`costs` prices provider usage and aggregates it; `skills` owns browser-safe
-product skill contracts and validation. These pure packages may import
+`costs` prices provider usage and aggregates it; `harness` owns model policy
+and built-in compatibility profiles; `skills` owns browser-safe product skill
+contracts and validation. These pure packages may import
 `contracts` but never application infrastructure. ADR-001 owns the tiers.
 
 ## The rules that bind

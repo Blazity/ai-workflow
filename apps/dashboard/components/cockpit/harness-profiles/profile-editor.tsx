@@ -10,6 +10,7 @@ import {
   isProfileSlug,
   newProfileDraft,
   upgradeProfileDraft,
+  selectableHarnessModels,
   withHarnessModel,
   withHarnessProvider,
 } from "@/lib/harness-profiles/editor";
@@ -455,7 +456,7 @@ export function ProfileEditor({
   const catalogModels =
     capabilities?.provider === draft.harness.provider &&
     capabilities.cliVersion === draft.harness.cliVersion
-      ? capabilities.models
+      ? selectableHarnessModels(capabilities)
       : [];
   const filteredModels = catalogModels.filter((model) => {
     const query = modelSearch.trim().toLowerCase();

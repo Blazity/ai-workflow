@@ -15,7 +15,7 @@ const state = vi.hoisted(() => ({
     GENAI_ENGINE_TRACE_ENDPOINT: undefined as string | undefined,
     AGENT_KIND: "claude" as "claude" | "codex",
     CLAUDE_MODEL: "claude-opus-4-8",
-    CODEX_MODEL: "gpt-5-codex",
+    CODEX_MODEL: "gpt-5.4",
     COLUMN_AI_REVIEW: "AI Review",
     COLUMN_BACKLOG: "Backlog",
   },
@@ -39,7 +39,7 @@ beforeEach(() => {
   state.env.GENAI_ENGINE_TRACE_ENDPOINT = undefined;
   state.env.AGENT_KIND = "claude";
   state.env.CLAUDE_MODEL = "claude-opus-4-8";
-  state.env.CODEX_MODEL = "gpt-5-codex";
+  state.env.CODEX_MODEL = "gpt-5.4";
 });
 
 describe("fetchAvailableModels", () => {
@@ -130,12 +130,12 @@ describe("buildWorkflowEditorOptions", () => {
     const { buildWorkflowEditorOptions } = await import("./models.js");
     const options = buildWorkflowEditorOptions({
       claude: ["claude-opus-4-8", "claude-sonnet-5"],
-      codex: ["gpt-5-codex"],
+      codex: ["gpt-5"],
     });
     expect(options.agentKind).toBe("claude");
     expect(options.defaultModel).toBe("claude-opus-4-8");
     expect(options.models.claude).toEqual(["claude-opus-4-8", "claude-sonnet-5"]);
-    expect(options.models.codex).toEqual(["gpt-5-codex"]);
+    expect(options.models.codex).toEqual(["gpt-5.4", "gpt-5"]);
     expect(options.ticketStatusTargets).toEqual([
       { value: "ai_review", label: "AI Review" },
       { value: "backlog", label: "Backlog" },
@@ -159,7 +159,7 @@ describe("buildWorkflowEditorOptions", () => {
     ]);
   });
 
-  it("prepends the default model when absent from the active kind list", async () => {
+  it("keeps a configured execution default without exposing it outside policy", async () => {
     state.env.AGENT_KIND = "codex";
     state.env.CODEX_MODEL = "gpt-5-codex-high";
     const { buildWorkflowEditorOptions } = await import("./models.js");
@@ -169,23 +169,42 @@ describe("buildWorkflowEditorOptions", () => {
     });
     expect(options.agentKind).toBe("codex");
     expect(options.defaultModel).toBe("gpt-5-codex-high");
-    expect(options.models.codex).toEqual(["gpt-5-codex-high", "gpt-5-codex", "gpt-5"]);
+    expect(options.models.codex).toEqual(["gpt-5"]);
   });
 
   it("exposes per-provider default models and prepends each to its own list without duplicates", async () => {
     state.env.AGENT_KIND = "claude";
     state.env.CLAUDE_MODEL = "claude-opus-4-8";
-    state.env.CODEX_MODEL = "gpt-5-codex";
+    state.env.CODEX_MODEL = "gpt-5.4";
     const { buildWorkflowEditorOptions } = await import("./models.js");
     const options = buildWorkflowEditorOptions({
       claude: ["claude-opus-4-8", "claude-sonnet-5"],
-      codex: ["gpt-5-codex", "gpt-5"],
+      codex: ["gpt-5.4", "gpt-5"],
     });
-    expect(options.defaultModels).toEqual({ claude: "claude-opus-4-8", codex: "gpt-5-codex" });
+    expect(options.defaultModels).toEqual({ claude: "claude-opus-4-8", codex: "gpt-5.4" });
     expect(options.models.claude[0]).toBe("claude-opus-4-8");
-    expect(options.models.codex[0]).toBe("gpt-5-codex");
+    expect(options.models.codex[0]).toBe("gpt-5.4");
     expect(options.models.claude).toEqual(["claude-opus-4-8", "claude-sonnet-5"]);
-    expect(options.models.codex).toEqual(["gpt-5-codex", "gpt-5"]);
+    expect(options.models.codex).toEqual(["gpt-5.4", "gpt-5"]);
+  });
+
+  it("keeps the literal provider-specific picker sequences through extraction", async () => {
+    const { buildWorkflowEditorOptions } = await import("./models.js");
+    const options = buildWorkflowEditorOptions({
+      claude: [
+        "claude-sonnet-5",
+        "claude-unapproved",
+        "claude-opus-4-8",
+        "claude-sonnet-5",
+      ],
+      codex: ["gpt-5-mini", "gpt-5.5", "gpt-5.4", "gpt-5-mini"],
+    });
+
+    expect(options.models.claude).toEqual([
+      "claude-opus-4-8",
+      "claude-sonnet-5",
+    ]);
+    expect(options.models.codex).toEqual(["gpt-5.4", "gpt-5-mini"]);
   });
 
   it("exposes the complete environment-aware block registry and fixed run schema", async () => {
