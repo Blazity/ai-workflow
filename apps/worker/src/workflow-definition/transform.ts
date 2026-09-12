@@ -29,6 +29,32 @@ export interface TransformIssue {
   message: string;
 }
 
+/**
+ * One regex replacement, as data. `flags` is the RE2 flag string the evaluator
+ * compiles the pattern with, and `replacement` is literal text: a transform
+ * never substitutes capture groups, so "$1" replaces a match with those two
+ * characters.
+ */
+interface TransformRegexReplacement {
+  pattern: string;
+  flags: string;
+  input: string;
+  replacement: string;
+}
+
+/**
+ * The regex engine a transform borrows, injected by its caller.
+ *
+ * Transforms are pure and synchronous apart from this: RE2 arrives as a WASM
+ * module that only the worker can load, and loading it from here would put a
+ * `.wasm` asset behind every consumer of this file. The caller that has one
+ * passes it in; a caller without one gets a clear refusal on the regex path
+ * and the unchanged behaviour on every other operation.
+ */
+export interface TransformRegexEvaluator {
+  evaluate(replacement: TransformRegexReplacement): Promise<string>;
+}
+
 export interface TransformDefinition {
   configuration: TransformConfiguration;
   referenceSchemas?: Readonly<
@@ -267,6 +293,7 @@ function jsonSyntaxError(error: unknown): string {
 export function executeTransform(
   configuration: TransformConfiguration,
   context: V2BindingResolutionContext,
+  regex?: TransformRegexEvaluator,
 ): JsonValue | Promise<JsonValue> {
   if (configuration.operation === "format_text") {
     return resolveWorkflowPromptDataTokensV2(configuration.template, context);
@@ -307,15 +334,17 @@ export function executeTransform(
         configuration.ignoreCase,
       );
     }
-    return import("../engine/steps/transform-regex-step.js").then(
-      ({ replaceTextRegexStep }) =>
-        replaceTextRegexStep(
-          text,
-          configuration.pattern,
-          configuration.replacement,
-          configuration.ignoreCase,
-        ),
-    );
+    if (!regex) {
+      throw new TransformExecutionError(
+        "Replace text in regex mode requires a regex evaluator.",
+      );
+    }
+    return regex.evaluate({
+      pattern: configuration.pattern,
+      flags: configuration.ignoreCase ? "giu" : "gu",
+      input: text,
+      replacement: configuration.replacement,
+    });
   }
   if (configuration.operation === "number_to_text") {
     return String(requireNumber(source));

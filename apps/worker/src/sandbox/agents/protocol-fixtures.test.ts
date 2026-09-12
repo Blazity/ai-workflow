@@ -5,10 +5,8 @@ import type { CollectedPhaseArtifacts } from "./types.js";
 import { ClaudeAgentAdapter } from "./claude.js";
 import { CodexAgentAdapter } from "./codex.js";
 import { agentProtocolExecutionError } from "../../engine/blocks/support/types.js";
-import {
-  createWorkflowExecutionErrorState,
-  formatExecutionErrorForUser,
-} from "../../workflow-definition/interpreter.js";
+import { createWorkflowExecutionErrorState } from "@shared/contracts";
+import { formatExecutionErrorForUser } from "../../engine/helpers/execution-error.js";
 import { safeWorkflowExecutionLogEvent } from "../../run-observability/safe-execution-log.js";
 
 const fixtureRoot = join(import.meta.dirname, "fixtures");
