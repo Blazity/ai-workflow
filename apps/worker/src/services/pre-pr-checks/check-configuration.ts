@@ -30,6 +30,11 @@ import {
   serializePrePrCheckConfigVersion,
 } from "../../engine/pre-pr-checks/store.js";
 import {
+  getConnectedCurrentCheckConfiguration,
+  getConnectedRepositoryWithProfileByPath,
+  upsertConnectedRepositoryProfile,
+} from "../../db/repositories/repository-catalog.js";
+import {
   getConnectedDashboardUserLabel,
   type DashboardRole,
 } from "../auth/index.js";
@@ -91,13 +96,154 @@ function describeDisallowedEnvNames(config: RepoScriptsConfig): string | null {
   );
 }
 
-/** Everything the editor screen loads: the history and the deployment state. */
+/**
+ * Fan a whole-configuration save out to one profile version per repository.
+ *
+ * The screen above still edits every repository at once, and the catalog stores
+ * them one at a time, so this is the translation between the two for as long as
+ * that screen exists. Each iteration is a single-statement upsert in the
+ * repository tier; the awaits are sequential and over DIFFERENT repositories,
+ * which is the one case a loop of writes is honest here. Nothing in it is a
+ * multi-row change that a transaction would have to make atomic: a save that
+ * fails halfway leaves the repositories it reached configured and the rest as
+ * they were, which is exactly what re-saving repairs.
+ *
+ * The second loop is the half that is easy to miss. Removing a repository from
+ * this screen used to remove its checks, because the screen WAS the
+ * configuration; with profiles, a repository dropped from the submitted config
+ * would keep the profile it had and keep running its commands. So a repository
+ * that currently has script groups and is not named by this save has them
+ * dropped, as a new version with the actor and a reason, rather than silently
+ * surviving.
+ */
+async function fanOutRepositoryProfiles(input: {
+  config: RepoScriptsConfig;
+  /** The raw submitted entries, positionally aligned with `config.repositories`,
+   *  so what is stored is the bytes the operator sent and not the normalized
+   *  value, exactly as the global blob stores them. */
+  rawRepositories: unknown[];
+  actorId: string;
+  actorLabel: string;
+  reason: string;
+}): Promise<void> {
+  const named = new Set<string>();
+  for (const [index, repository] of input.config.repositories.entries()) {
+    const raw = input.rawRepositories[index];
+    const entry =
+      raw !== null && typeof raw === "object" && !Array.isArray(raw)
+        ? (raw as Record<string, unknown>)
+        : (repository as unknown as Record<string, unknown>);
+    const gateGroups = Array.isArray(entry.gateGroups)
+      ? (entry.gateGroups as string[])
+      : (repository.gateGroups ?? null);
+    named.add(`${repository.provider}:${repository.repoPath.toLowerCase()}`);
+    if (await profileAlreadyMatches({ repository, entry, gateGroups })) continue;
+    await upsertConnectedRepositoryProfile({
+      provider: repository.provider,
+      path: repository.repoPath,
+      // No description, rules or relationships: this screen does not own them,
+      // and passing empties would erase whatever the Repositories screen holds.
+      scriptGroups: entry,
+      gateGroups,
+      actorId: input.actorId,
+      actorLabel: input.actorLabel,
+      reason: input.reason,
+      // A save made by a person here is a person's row, the same as one made on
+      // the Repositories screen. `migrated` is reserved for what the build-time
+      // seed lifted out of the old blob with nobody watching.
+      source: "manual",
+    });
+  }
+  const current = await getConnectedCurrentCheckConfiguration();
+  for (const key of Object.keys(current.repositoryVersions)) {
+    if (named.has(key)) continue;
+    const [provider, ...rest] = key.split(":");
+    const path = rest.join(":");
+    if (!provider || !path) continue;
+    await upsertConnectedRepositoryProfile({
+      provider,
+      path,
+      scriptGroups: null,
+      gateGroups: null,
+      actorId: input.actorId,
+      actorLabel: input.actorLabel,
+      reason: "removed from the repository scripts configuration",
+    });
+  }
+}
+
+/**
+ * Whether this save changes anything the checks would execute for a repository.
+ *
+ * This is what keeps a legacy save of repository B from failing a run in flight
+ * on repository A. The screen submits the WHOLE configuration on every save, so
+ * without this every repository named by it would get a new profile version and
+ * a new checks version on every click, and the per-repository comparison at
+ * Finalize would be no more precise than the global counter it replaced.
+ *
+ * Compared as canonical JSON rather than by identity: the entry is stored as
+ * jsonb, which has already normalized whitespace and duplicate keys out of it,
+ * so the only honest question is whether the two values are the same value.
+ */
+async function profileAlreadyMatches(input: {
+  repository: RepoScriptsConfig["repositories"][number];
+  entry: Record<string, unknown>;
+  gateGroups: string[] | null;
+}): Promise<boolean> {
+  const found = await getConnectedRepositoryWithProfileByPath({
+    provider: input.repository.provider,
+    path: input.repository.repoPath,
+  });
+  const profile = found?.profile;
+  if (!profile?.scriptGroups) return false;
+  return (
+    canonicalJson(profile.scriptGroups) === canonicalJson(input.entry) &&
+    canonicalJson(profile.gateGroups ?? null) === canonicalJson(input.gateGroups)
+  );
+}
+
+/** Key-order-independent JSON, because jsonb round trips keys in its own order
+ *  and a plain stringify would report every stored profile as different. */
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, item]) => item !== undefined)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+  return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(",")}}`;
+}
+
+/**
+ * Everything the editor screen loads: the history and the deployment state.
+ *
+ * `current.config` is composed out of the per-repository profiles, because
+ * those are what a run executes; the history below it stays the global blob's,
+ * which is the only place a whole-configuration timeline exists and which the
+ * save path keeps appending to until the Repositories page replaces this
+ * screen. The two agree on every save made here; a profile edited through the
+ * catalog moves the composed configuration and not the history, which is the
+ * point of the catalog.
+ */
 export async function readPrePrChecksOverview(): Promise<PrePrChecksResponse> {
   const versions = (await listConnectedPrePrCheckConfigVersions()).map(
     serializePrePrCheckConfigVersion,
   );
+  const composed = await getConnectedCurrentCheckConfiguration();
+  const head = versions[0] ?? null;
+  const current =
+    composed.config.repositories.length === 0
+      ? head
+      : {
+          version: composed.version ?? 0,
+          config: composed.config,
+          createdAt:
+            composed.changedAt?.toISOString() ?? head?.createdAt ?? new Date(0).toISOString(),
+          createdById: composed.changedById ?? head?.createdById ?? "catalog",
+          createdByLabel: composed.changedByLabel ?? head?.createdByLabel ?? "repository catalog",
+          restoredFromVersion: head?.restoredFromVersion ?? null,
+        };
   return {
-    current: versions[0] ?? null,
+    current,
     versions,
     // The runner's own parse, never a second one: the editor offering a name
     // the batch would refuse is the drift this shares the helper to avoid.
@@ -150,10 +296,11 @@ export async function savePrePrChecksConfiguration(input: {
       return { kind: "version_conflict", latestVersion };
     }
   }
+  const actorLabel = await getConnectedDashboardUserLabel(input.editor.actorId);
   const saved = await saveConnectedPrePrCheckConfig({
     actorRole: input.editor.actorRole,
     actorId: input.editor.actorId,
-    actorLabel: await getConnectedDashboardUserLabel(input.editor.actorId),
+    actorLabel,
     // The RAW submitted shape, deliberately not parsed.data.
     //
     // repoScriptsConfigSchema normalizes on the way through: it fills setup
@@ -170,7 +317,23 @@ export async function savePrePrChecksConfiguration(input: {
     // type to the shared contract is deliberately not this cluster's change.
     config: input.config as PrePrCheckConfig,
   });
+  await fanOutRepositoryProfiles({
+    config: parsed.data,
+    rawRepositories: rawRepositoriesOf(input.config),
+    actorId: input.editor.actorId,
+    actorLabel,
+    reason: `repository scripts save (configuration v${saved.version})`,
+  });
   return { kind: "saved", version: serializePrePrCheckConfigVersion(saved) };
+}
+
+/** The submitted repository entries, unparsed, or an empty list when the body
+ *  was not shaped like one. Positional only: the schema preserves order, so
+ *  entry i of the parse is entry i of the submission. */
+function rawRepositoriesOf(config: unknown): unknown[] {
+  if (config === null || typeof config !== "object") return [];
+  const repositories = (config as { repositories?: unknown }).repositories;
+  return Array.isArray(repositories) ? repositories : [];
 }
 
 /** Republish a stored version as the newest one, audited to the editor. */
@@ -178,11 +341,25 @@ export async function restorePrePrChecksConfiguration(input: {
   editor: PrePrCheckEditor;
   version: number;
 }): Promise<PrePrCheckConfigVersion> {
+  const actorLabel = await getConnectedDashboardUserLabel(input.editor.actorId);
   const restored = await restoreConnectedPrePrCheckConfig({
     actorRole: input.editor.actorRole,
     actorId: input.editor.actorId,
-    actorLabel: await getConnectedDashboardUserLabel(input.editor.actorId),
+    actorLabel,
     version: input.version,
   });
+  // A restore republishes a stored configuration as the newest one, so it has
+  // to reach the profiles too: without this the screen would show the restored
+  // configuration while every run kept executing the one it replaced.
+  const parsed = repoScriptsConfigSchema.safeParse(restored.config);
+  if (parsed.success) {
+    await fanOutRepositoryProfiles({
+      config: parsed.data,
+      rawRepositories: rawRepositoriesOf(restored.config),
+      actorId: input.editor.actorId,
+      actorLabel,
+      reason: `repository scripts restore of v${input.version}`,
+    });
+  }
   return serializePrePrCheckConfigVersion(restored);
 }

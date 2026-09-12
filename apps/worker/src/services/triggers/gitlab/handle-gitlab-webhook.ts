@@ -9,6 +9,7 @@
  */
 import { createHash } from "node:crypto";
 
+import type { SettingsSnapshot } from "@shared/contracts";
 import { createConnectedPostgresRunRegistry } from "../../../db/repositories/active-runs.js";
 import { createRepositoryDirectoryForProviders } from "../../../adapters/vcs/repository-directory.js";
 import { logger } from "../../../infra/logger.js";
@@ -55,6 +56,17 @@ export type GitLabWebhookRequest = {
   idempotencyKey?: string;
   /** `x-gitlab-event-uuid`, which only identifies a delivery with the body. */
   eventUuid?: string;
+  /**
+   * The deployment's settings, on demand.
+   *
+   * A thunk rather than a value: this endpoint is public, and a delivery with
+   * the wrong token must cost nothing but the comparison. The token check below
+   * reads the secret from the environment and answers 401 without ever calling
+   * this; only the verified path, which is already writing to the database,
+   * loads it. The ingress memoises the load on the event, so calling it more
+   * than once in a request is still one query.
+   */
+  loadSettings: () => Promise<SettingsSnapshot>;
 };
 
 export async function handleGitLabWebhook(request: GitLabWebhookRequest) {
@@ -151,12 +163,13 @@ async function handleVerifiedGitLabWebhook(request: GitLabWebhookRequest) {
   });
 
   if (events.length > 0) {
+    const settings = await request.loadSettings();
     let result: DispatchTriggerResult = { result: "no_definition" };
     let claimedEvent = events[0]!;
     for (const candidate of events) {
       const candidateResult = await dispatchTriggerEvent(candidate, {
         runRegistry: createConnectedPostgresRunRegistry(),
-        maxConcurrentAgents: maxConcurrentAgents(),
+        maxConcurrentAgents: maxConcurrentAgents(settings),
       });
       result = candidateResult;
       claimedEvent = candidate;

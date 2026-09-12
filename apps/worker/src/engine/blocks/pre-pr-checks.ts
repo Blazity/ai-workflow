@@ -391,12 +391,14 @@ export async function resolveChecksProvisioningStep(): Promise<{
   "use step";
   const fallback = PRE_PR_CHECK_BATCH_MAX_MINUTES * 60_000;
   try {
-    const { getConnectedCurrentPrePrCheckConfigRow } = await import(
-      "../../db/repositories/pre-pr-checks.js"
+    const { getConnectedCurrentCheckConfiguration } = await import(
+      "../../db/repositories/repository-catalog.js"
     );
     const { repoScriptsConfigSchema } = await import("../pre-pr-checks/config.js");
-    const current = await getConnectedCurrentPrePrCheckConfigRow();
-    if (!current) return { ceilingMs: fallback, config: null };
+    // Composed out of per-repository profiles, so the setup commands this
+    // provisions with are the ones the repositories in this workspace declare.
+    const current = await getConnectedCurrentCheckConfiguration();
+    if (current.version === null) return { ceilingMs: fallback, config: null };
     const parsed = repoScriptsConfigSchema.safeParse(current.config);
     return {
       ceilingMs: parsed.success
@@ -430,7 +432,17 @@ export function recoverChecksCeilingFromSteps(steps: StepsRecord): number | null
 }
 
 /**
- * Load the dashboard's current Pre-PR check configuration.
+ * Load the check configuration this run executes, composed out of the
+ * per-repository profiles in the repository catalog.
+ *
+ * `version` is the legacy global counter the publication gate has recorded on
+ * every run ever minted. `repositoryVersions` is what the gate reasons about
+ * now, and it rides out of THIS step rather than being read again later: the
+ * gate has to record the version the checks were launched under, and a second
+ * read after they pass would adopt an edit that landed while they ran. It is
+ * also the only way to get the number without adding a step to a path that
+ * mints a gate, which would shift every later journal entry of a run already
+ * in flight.
  *
  * The version log stays inside this step: pino may only be used inside a
  * "use step", and moving it to workflow scope fails the Vercel build alone,
@@ -439,21 +451,27 @@ export function recoverChecksCeilingFromSteps(steps: StepsRecord): number | null
 export async function loadPrePrCheckConfigStep(): Promise<{
   version: number | null;
   config: PrePrCheckConfig;
+  /** Optional so a stored result from before this field existed still parses
+   *  on resume; absent behaves exactly as an empty map. */
+  repositoryVersions?: Record<string, number>;
 }> {
   "use step";
-  const { getConnectedCurrentPrePrCheckConfigRow } = await import(
-    "../../db/repositories/pre-pr-checks.js"
+  const { getConnectedCurrentCheckConfiguration } = await import(
+    "../../db/repositories/repository-catalog.js"
   );
-  const { emptyPrePrCheckConfig } = await import("../pre-pr-checks/config.js");
   const { logger } = await import("../../infra/logger.js");
-  const current = await getConnectedCurrentPrePrCheckConfigRow();
+  const current = await getConnectedCurrentCheckConfiguration();
   logger.info(
-    { version: current?.version ?? null },
+    {
+      version: current.version,
+      repositoryVersions: current.repositoryVersions,
+    },
     "pre_pr_checks_config_version",
   );
   return {
-    version: current?.version ?? null,
-    config: current?.config ?? emptyPrePrCheckConfig,
+    version: current.version,
+    config: current.config,
+    repositoryVersions: current.repositoryVersions,
   };
 }
 loadPrePrCheckConfigStep.maxRetries = 0;

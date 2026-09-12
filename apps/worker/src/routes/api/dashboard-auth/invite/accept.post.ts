@@ -8,6 +8,7 @@ import { auth } from "../../../../auth-instance.js";
 import {
   acceptDashboardInviteWithPassword,
 } from "../../../../services/auth/invite-requests.js";
+import { getRequestSettingsSnapshot } from "../../../../services/settings/index.js";
 import { toHttpError } from "../../../../services/auth/request-context.js";
 
 export default defineEventHandler(async (event) => {
@@ -28,6 +29,7 @@ export default defineEventHandler(async (event) => {
       inviteId: body.inviteId!,
       name: body.name,
       password: body.password!,
+      settings: await getRequestSettingsSnapshot(event),
     });
   } catch (error) {
     toHttpError(error);

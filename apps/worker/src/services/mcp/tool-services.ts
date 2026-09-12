@@ -1,4 +1,4 @@
-import type { RunDetail, RunStep } from "@shared/contracts";
+import type { RunDetail, RunStep, SettingsSnapshot } from "@shared/contracts";
 import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
 import type { RunRegistryAdapter } from "../../adapters/run-registry/types.js";
 import type { Db } from "../../db/types.js";
@@ -221,7 +221,10 @@ export interface McpToolServices extends McpGateServices {
  * Tests pass their pglite handle explicitly. Production construction belongs
  * to the connected factory, so this surface never obtains a generic Db itself.
  */
-export function createMcpToolServices(db: Db): McpToolServices {
+export function createMcpToolServices(
+  db: Db,
+  settings: SettingsSnapshot,
+): McpToolServices {
   return {
     ...createMcpGateServices(db),
 
@@ -286,13 +289,13 @@ export function createMcpToolServices(db: Db): McpToolServices {
       preflightManualDispatch({
         db,
         ...input,
-        maxConcurrentAgents: maxConcurrentAgents(),
+        maxConcurrentAgents: maxConcurrentAgents(settings),
       }),
     dispatchManualWorkflow: (input) =>
       dispatchManualWorkflow({
         db,
         ...input,
-        maxConcurrentAgents: maxConcurrentAgents(),
+        maxConcurrentAgents: maxConcurrentAgents(settings),
       }),
   };
 }

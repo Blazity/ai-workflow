@@ -18,3 +18,17 @@ test("Harness Profiles is always discoverable while administration remains role-
   assert.ok(adminIds.has("health"));
   assert.ok(adminIds.has("users"));
 });
+
+test("Settings is the last nav entry and is open to every role", () => {
+  // Reading what the deployment is configured to do is open to every role: a
+  // member who cannot change a limit still has to know which one is in force.
+  for (const canManageUsers of [false, true]) {
+    const items = cockpitNavItems({ canManageUsers });
+    assert.equal(
+      items.at(-1)?.id,
+      "settings",
+      `Settings was not last for canManageUsers=${canManageUsers}`,
+    );
+    assert.equal(items.at(-1)?.label, "Settings");
+  }
+});

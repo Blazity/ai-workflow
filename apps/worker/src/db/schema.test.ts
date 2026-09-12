@@ -15,7 +15,8 @@ const SQL_TABLES = [
   "mcp_idempotency_keys", "mcp_rate_limit_windows", "member", "oauth_access_token",
   "oauth_client", "oauth_consent", "oauth_refresh_token", "organization",
   "pre_pr_check_config_versions", "pr_autofix_attempts", "prompt_library",
-  "prompt_library_versions", "schedule_occurrences", "session", "settings",
+  "prompt_library_versions", "repositories", "repository_catalog_state",
+  "repository_profile_versions", "schedule_occurrences", "session", "settings",
   "settings_versions", "sso_provider",
   "system_health_observation_counters", "system_health_scans", "thread_parents",
   "trigger_deliveries", "trigger_rate_limits", "trigger_rejection_counters", "user",
@@ -29,12 +30,12 @@ const SQL_TABLES = [
 ] as const;
 
 describe("schema barrel", () => {
-  it("exports the literal 64-table schema exactly once", () => {
+  it("exports the literal 67-table schema exactly once", () => {
     const names = Object.values(schema)
       .filter((value) => is(value, PgTable))
       .map((table) => getTableName(table as PgTable))
       .sort();
     expect(names).toEqual([...SQL_TABLES].sort());
-    expect(new Set(names).size).toBe(64);
+    expect(new Set(names).size).toBe(67);
   });
 });

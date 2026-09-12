@@ -18,6 +18,18 @@ import {
 } from "../../db/repositories/pre-pr-checks.js";
 import type { PrePrCheckConfig } from "./config.js";
 
+/**
+ * The LEGACY global configuration blob, and nothing else.
+ *
+ * What a run executes is composed out of per-repository profiles in the
+ * repository catalog (`db/repositories/repository-catalog.ts`,
+ * `getCurrentCheckConfiguration`); every engine reader moved there. This store
+ * is what the Scripts screen still saves and shows a history from, so that the
+ * screen keeps working until the Repositories page replaces it. The save path
+ * fans each save out to the profiles as well, which is why a configuration
+ * saved here still reaches a run. The cleanup stage removes the table.
+ */
+
 const VERSION_LIST_LIMIT = 50;
 
 export interface PrePrCheckConfigVersionRow {

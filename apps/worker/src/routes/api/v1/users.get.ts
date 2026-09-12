@@ -4,6 +4,7 @@ import {
   requireDashboardActor,
   toHttpError,
 } from "../../../services/auth/request-context.js";
+import { getRequestSettingsSnapshot } from "../../../services/settings/index.js";
 import { canInvite } from "../../../services/auth/roles.js";
 
 export default defineEventHandler(async (event) => {
@@ -13,7 +14,8 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 403, statusMessage: "Forbidden" });
     }
 
-    const users = await listDashboardDirectory(actor.role);
+    const settings = await getRequestSettingsSnapshot(event);
+    const users = await listDashboardDirectory(actor.role, settings);
     return { users };
   } catch (error) {
     toHttpError(error);

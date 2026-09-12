@@ -23,6 +23,10 @@ vi.mock("@better-auth/oauth-provider/resource-client", () => ({
 vi.mock("../auth-instance.js", () => ({ auth: {} }));
 
 const { requireMcpActor } = await import("./request-context.js");
+const { settingsSnapshotFromEnvironment } = await import(
+  "../services/settings/snapshot.js"
+);
+const settings = settingsSnapshotFromEnvironment();
 
 let db: Db;
 
@@ -64,7 +68,7 @@ describe("requireMcpActor", () => {
   it("builds a fixed-organization member context and intersects client scopes", async () => {
     state.verifyAccessToken.mockResolvedValue(userClaims());
 
-    await expect(requireMcpActor(request())).resolves.toEqual({
+    await expect(requireMcpActor(request(), settings)).resolves.toEqual({
       kind: "user",
       subject: "user_1",
       userId: "user_1",
@@ -96,7 +100,7 @@ describe("requireMcpActor", () => {
       userClaims({ scope: "mcp:read runs:dispatch offline_access" }),
     );
 
-    const actor = await requireMcpActor(request());
+    const actor = await requireMcpActor(request(), settings);
 
     expect(actor.scopes).toEqual(new Set(["mcp:read", "runs:dispatch"]));
   });
@@ -105,7 +109,7 @@ describe("requireMcpActor", () => {
     await db.update(member).set({ role: "admin" });
     state.verifyAccessToken.mockResolvedValue(userClaims({ organization_role: "member" }));
 
-    await expect(requireMcpActor(request())).resolves.toMatchObject({ role: "admin" });
+    await expect(requireMcpActor(request(), settings)).resolves.toMatchObject({ role: "admin" });
   });
 
   it.each([
@@ -114,13 +118,13 @@ describe("requireMcpActor", () => {
     ["missing scope", userClaims({ scope: "unknown" }), "INSUFFICIENT_SCOPE"],
   ])("rejects %s", async (_name, claims, code) => {
     state.verifyAccessToken.mockResolvedValue(claims);
-    await expect(requireMcpActor(request())).rejects.toMatchObject({ code });
+    await expect(requireMcpActor(request(), settings)).rejects.toMatchObject({ code });
   });
 
   it("rejects expired or invalid tokens without leaking verifier details", async () => {
     state.verifyAccessToken.mockRejectedValue(new Error("JWT expired: raw-token-detail"));
 
-    const error = await requireMcpActor(request()).catch((value) => value as Error);
+    const error = await requireMcpActor(request(), settings).catch((value) => value as Error);
     if (!(error instanceof Error)) throw new Error("expected authentication error");
     expect(error).toMatchObject({ code: "UNAUTHENTICATED", message: "Authentication required" });
     expect(error.message).not.toContain("raw-token-detail");
@@ -130,7 +134,7 @@ describe("requireMcpActor", () => {
     await db.delete(member);
     state.verifyAccessToken.mockResolvedValue(userClaims());
 
-    await expect(requireMcpActor(request())).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(requireMcpActor(request(), settings)).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
   it("builds a service context only for a fixed-reference client", async () => {
@@ -140,7 +144,7 @@ describe("requireMcpActor", () => {
       scope: "mcp:read",
     }));
 
-    await expect(requireMcpActor(request())).resolves.toMatchObject({
+    await expect(requireMcpActor(request(), settings)).resolves.toMatchObject({
       kind: "service",
       subject: "client_1",
       userId: null,
@@ -168,7 +172,7 @@ describe("requireMcpActor", () => {
       scope: "mcp:read runs:dispatch prompts:write workflows:write",
     }));
 
-    const actor = await requireMcpActor(request());
+    const actor = await requireMcpActor(request(), settings);
 
     expect(actor.kind).toBe("service");
     expect([...actor.scopes].sort()).toEqual(["mcp:read", "runs:dispatch"]);
@@ -182,7 +186,7 @@ describe("requireMcpActor", () => {
       userClaims({ scope: "prompts:write workflows:write" }),
     );
 
-    const actor = await requireMcpActor(request());
+    const actor = await requireMcpActor(request(), settings);
 
     expect([...actor.scopes].sort()).toEqual(["prompts:write", "workflows:write"]);
   });
@@ -198,7 +202,7 @@ describe("requireMcpActor", () => {
       scope: "prompts:write workflows:write",
     }));
 
-    await expect(requireMcpActor(request())).rejects.toMatchObject({
+    await expect(requireMcpActor(request(), settings)).rejects.toMatchObject({
       code: "INSUFFICIENT_SCOPE",
     });
   });
@@ -206,7 +210,7 @@ describe("requireMcpActor", () => {
   it.each(["", "Basic abc", "Bearer one Bearer two", "Bearer one, Bearer two"])(
     "requires exactly one Bearer token: %j",
     async (authorization) => {
-      await expect(requireMcpActor(request(authorization))).rejects.toMatchObject({
+      await expect(requireMcpActor(request(authorization), settings)).rejects.toMatchObject({
         code: "UNAUTHENTICATED",
       });
       expect(state.verifyAccessToken).not.toHaveBeenCalled();

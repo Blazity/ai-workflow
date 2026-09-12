@@ -11,11 +11,16 @@ import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
 import { mcpAuditEvents, organization } from "../../db/schema.js";
 import type { McpActorContext, McpAuditInput } from "./contracts.js";
+import { settingsSnapshotFromEnvironment } from "../settings/snapshot.js";
 import {
   listMcpAuditsForOrganization,
   pruneMcpAudits,
   writeMcpAudit,
 } from "./audit-store.js";
+
+// What an entry point would hand down: no stored rows, so the retention window
+// is the one the mocked environment resolves to.
+const settings = settingsSnapshotFromEnvironment();
 
 let db: Db;
 
@@ -125,7 +130,7 @@ describe("MCP audit store", () => {
     await writeMcpAudit(db, event("org-audit-a", "success", now));
     await expect(db.select().from(mcpAuditEvents)).resolves.toHaveLength(2);
 
-    await pruneMcpAudits(db, now);
+    await pruneMcpAudits(db, now, { settings });
 
     const retained = await db.select().from(mcpAuditEvents);
     expect(retained.map((row) => row.occurredAt)).toEqual([now]);
@@ -141,10 +146,10 @@ describe("MCP audit store", () => {
       );
     }
 
-    await expect(pruneMcpAudits(db, now, { limit: 2 })).resolves.toEqual({ deleted: 2 });
+    await expect(pruneMcpAudits(db, now, { settings, limit: 2 })).resolves.toEqual({ deleted: 2 });
     await expect(db.select().from(mcpAuditEvents)).resolves.toHaveLength(1);
-    await expect(pruneMcpAudits(db, now, { limit: 2 })).resolves.toEqual({ deleted: 1 });
-    await expect(pruneMcpAudits(db, now, { limit: 2 })).resolves.toEqual({ deleted: 0 });
+    await expect(pruneMcpAudits(db, now, { settings, limit: 2 })).resolves.toEqual({ deleted: 1 });
+    await expect(pruneMcpAudits(db, now, { settings, limit: 2 })).resolves.toEqual({ deleted: 0 });
   });
 
   it("prunes strictly before the exact 365-day boundary", async () => {
@@ -155,7 +160,7 @@ describe("MCP audit store", () => {
     await writeMcpAudit(db, event("org-audit-a", "success", boundary));
     await writeMcpAudit(db, event("org-audit-b", "success", now));
 
-    await pruneMcpAudits(db, now, { retentionDays: 365 });
+    await pruneMcpAudits(db, now, { settings, retentionDays: 365 });
 
     const retained = await db
       .select()

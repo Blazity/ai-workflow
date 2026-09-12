@@ -29,7 +29,7 @@ export const MCP_SUPPORTED_PROTOCOL_VERSIONS = [
 export function createMcpServer(deps: McpToolDependencies): McpServer {
   const server = new McpServer({
     name: "ai-workflow-worker",
-    version: mcpSettings().serverVersion,
+    version: mcpSettings(deps.settings).serverVersion,
   });
 
   // Registered in FIRST_SLICE_TOOLS order, so tools/list enumerates the surface
@@ -41,7 +41,7 @@ export function createMcpServer(deps: McpToolDependencies): McpServer {
       targetRefs: [],
       operation: async () => ({
         protocolVersions: [...MCP_SUPPORTED_PROTOCOL_VERSIONS],
-        serverVersion: mcpSettings().serverVersion,
+        serverVersion: mcpSettings(deps.settings).serverVersion,
         contractHash: MCP_CONTRACT_HASH,
         deploymentClass: "dedicated-worker",
         enabledDomains: [...MCP_ENABLED_DOMAINS],

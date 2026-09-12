@@ -2,6 +2,7 @@ import { createError, defineEventHandler, getHeader, readRawBody } from "h3";
 // Cluster modules, not the barrel: the barrel also re-exports the polling
 // pass and the other providers' handlers, and this route needs neither.
 import { handleJiraWebhook } from "../../services/triggers/jira/handle-jira-webhook.js";
+import { getRequestSettingsSnapshot } from "../../services/settings/index.js";
 import { TriggerHttpError } from "../../services/triggers/trigger-http-error.js";
 
 /**
@@ -28,6 +29,9 @@ export default defineEventHandler(async (event) => {
     return await handleJiraWebhook({
       rawBody,
       signatureHeader: getHeader(event, "x-hub-signature"),
+      // Not awaited here: the service verifies the signature first and only
+      // the verified path pays for the load.
+      loadSettings: () => getRequestSettingsSnapshot(event),
     });
   } catch (error) {
     if (error instanceof TriggerHttpError) {

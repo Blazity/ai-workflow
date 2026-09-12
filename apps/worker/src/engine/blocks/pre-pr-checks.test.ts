@@ -12,9 +12,16 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
-vi.mock("../../db/repositories/pre-pr-checks.js", () => ({
-  getConnectedCurrentPrePrCheckConfigRow: (...args: unknown[]) =>
-    mocks.getCurrentPrePrCheckConfig(...args),
+// The blocks read the configuration composed out of per-repository profiles
+// now. The mock keeps the stored-row shape these cases already write and adapts
+// it, so they stay about the checks rather than about the catalog.
+vi.mock("../../db/repositories/repository-catalog.js", () => ({
+  getConnectedCurrentCheckConfiguration: async (...args: unknown[]) => {
+    const current = await mocks.getCurrentPrePrCheckConfig(...args);
+    return current === null || current === undefined
+      ? { version: null, config: { repositories: [] }, repositoryVersions: {} }
+      : { ...current, repositoryVersions: current.repositoryVersions ?? {} };
+  },
 }));
 vi.mock("../../infra/logger.js", () => ({
   logger: { info: mocks.loggerInfo, warn: vi.fn(), error: vi.fn() },
@@ -817,20 +824,23 @@ describe("loadPrePrCheckConfigStep", () => {
   });
 
   it("carries the stored version out with the configuration it loaded", async () => {
-    // The version is what records the workspace gate, so it has to travel from
-    // this step to the gate write. It used to leave with the checks result;
-    // the checks are no longer a step, so it leaves with the config instead.
+    // The versions are what record the workspace gate, so they have to travel
+    // from this step to the gate write. They leave with the config because the
+    // gate may not grow a step of its own: one more step on a path that mints a
+    // gate shifts every later journal entry of a run already in flight.
     mocks.getCurrentPrePrCheckConfig.mockResolvedValue({
       version: 7,
       config: { repositories: [] },
+      repositoryVersions: { "github:acme/api": 4 },
     });
 
     await expect(loadPrePrCheckConfigStep()).resolves.toEqual({
       version: 7,
       config: { repositories: [] },
+      repositoryVersions: { "github:acme/api": 4 },
     });
     expect(mocks.loggerInfo).toHaveBeenCalledWith(
-      { version: 7 },
+      { version: 7, repositoryVersions: { "github:acme/api": 4 } },
       "pre_pr_checks_config_version",
     );
   });
@@ -841,6 +851,7 @@ describe("loadPrePrCheckConfigStep", () => {
     await expect(loadPrePrCheckConfigStep()).resolves.toEqual({
       version: null,
       config: { repositories: [] },
+      repositoryVersions: {},
     });
   });
 });
