@@ -45,6 +45,7 @@ const JSON_BODY_SCHEMAS: Record<string, string[]> = {
   "api/v1/prompt-library/[id].patch.ts": ["promptLibraryUpdateMetaRequestSchema"],
   "api/v1/prompt-library/[id].put.ts": ["promptLibrarySaveVersionRequestSchema"],
   "api/v1/prompt-library/[id]/restore.post.ts": ["promptLibraryRestoreRequestSchema"],
+  "api/v1/settings.patch.ts": ["settingsPatchRequestSchema"],
   "api/v1/users/[userId]/role.patch.ts": ["dashboardUserRoleUpdateRequestSchema"],
   "api/v1/workflow-definitions.post.ts": ["workflowDefinitionCreateRequestSchema"],
   "api/v1/workflow-definitions/[id].patch.ts": ["workflowDefinitionMetaPatchRequestSchema"],

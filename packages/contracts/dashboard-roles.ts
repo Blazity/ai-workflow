@@ -66,3 +66,16 @@ export function canManageHarnessProfiles(role: DashboardRole): boolean {
 export function canDeleteAgentMemory(role: DashboardRole): boolean {
   return role === "owner" || role === "admin";
 }
+
+/** Changing a product-behaviour switch changes it for everyone, so the same
+ *  owner/admin rule as every other deployment-wide mutation. Reading the
+ *  settings page stays open to every member. */
+export function canEditSettings(role: DashboardRole): boolean {
+  return role === "owner" || role === "admin";
+}
+
+/** Adding, editing, disabling or activating repositories decides what the
+ *  agent may touch at all, so it follows the same rule. */
+export function canManageRepositoryCatalog(role: DashboardRole): boolean {
+  return role === "owner" || role === "admin";
+}

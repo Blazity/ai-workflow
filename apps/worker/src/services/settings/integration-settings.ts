@@ -8,6 +8,7 @@
  * module-level snapshots, because the worker's tests replace the environment
  * module per case.
  */
+import type { SettingsSnapshot } from "@shared/contracts";
 import {
   env,
   getConfiguredVcsProviders,
@@ -15,37 +16,66 @@ import {
   type VcsProviderConfig,
   type VcsProviderKind,
 } from "../../infra/vcs-config.js";
+import { settingsSnapshotFromEnvironment } from "./snapshot.js";
 
 /** Provider ids that carry a signed webhook, as system health observes them. */
 export type WebhookProviderId = "github" | "gitlab" | "jira" | "slack" | "email";
 
-/** The per-node trigger budget default a node's own params may override. */
-export function triggerRateLimitDefaults(): {
-  TRIGGER_RATE_LIMIT_MAX?: number;
-  TRIGGER_RATE_LIMIT_WINDOW?: "minute" | "hour" | "day" | "month";
-} {
+/**
+ * The per-node trigger budget default a node's own params may override.
+ *
+ * Like every accessor that reads a migrated key, the form that takes the
+ * snapshot is the one to use; the zero-argument form resolves from the
+ * environment and goes away with the environment parsing in the cleanup stage
+ * (stage H of the repository catalog and settings plan). An unset default
+ * stays `undefined` here rather than becoming null, because that is what its
+ * callers already treat as "no default".
+ */
+export function triggerRateLimitDefaults(
+  settings: SettingsSnapshot,
+): TriggerRateLimitDefaults;
+/** @deprecated Pass the snapshot. Removed with the environment in stage H. */
+export function triggerRateLimitDefaults(): TriggerRateLimitDefaults;
+export function triggerRateLimitDefaults(
+  settings?: SettingsSnapshot,
+): TriggerRateLimitDefaults {
+  const resolved = settings ?? settingsSnapshotFromEnvironment();
   return {
-    TRIGGER_RATE_LIMIT_MAX: env.TRIGGER_RATE_LIMIT_MAX,
-    TRIGGER_RATE_LIMIT_WINDOW: env.TRIGGER_RATE_LIMIT_WINDOW,
+    TRIGGER_RATE_LIMIT_MAX: resolved.TRIGGER_RATE_LIMIT_MAX ?? undefined,
+    TRIGGER_RATE_LIMIT_WINDOW: resolved.TRIGGER_RATE_LIMIT_WINDOW ?? undefined,
   };
 }
 
-/** The issue-tracker columns and project the ticket triggers are scoped to. */
-export function ticketBoardSettings(): {
+interface TriggerRateLimitDefaults {
+  TRIGGER_RATE_LIMIT_MAX?: number;
+  TRIGGER_RATE_LIMIT_WINDOW?: "minute" | "hour" | "day" | "month";
+}
+
+/** The issue-tracker columns and project the ticket triggers are scoped to.
+ *  The project key and the transition id are tracker wiring, not settings. */
+export function ticketBoardSettings(settings: SettingsSnapshot): TicketBoardSettings;
+/** @deprecated Pass the snapshot. Removed with the environment in stage H. */
+export function ticketBoardSettings(): TicketBoardSettings;
+export function ticketBoardSettings(
+  settings?: SettingsSnapshot,
+): TicketBoardSettings {
+  const resolved = settings ?? settingsSnapshotFromEnvironment();
+  return {
+    projectKey: env.JIRA_PROJECT_KEY,
+    aiColumn: resolved.COLUMN_AI,
+    aiReviewColumn: resolved.COLUMN_AI_REVIEW,
+    backlogColumn: resolved.COLUMN_BACKLOG,
+    backlogTransitionId: env.JIRA_BACKLOG_TRANSITION_ID,
+  };
+}
+
+interface TicketBoardSettings {
   projectKey: string;
   aiColumn: string;
   aiReviewColumn: string;
   backlogColumn: string;
   /** Set only where the tracker needs a transition id to reach the backlog. */
   backlogTransitionId?: string;
-} {
-  return {
-    projectKey: env.JIRA_PROJECT_KEY,
-    aiColumn: env.COLUMN_AI,
-    aiReviewColumn: env.COLUMN_AI_REVIEW,
-    backlogColumn: env.COLUMN_BACKLOG,
-    backlogTransitionId: env.JIRA_BACKLOG_TRANSITION_ID,
-  };
 }
 
 /** The shared secret Jira signs its webhook deliveries with, when configured. */

@@ -208,6 +208,9 @@ test("the source build covers worker and dashboard without deployment side effec
   );
   assert.doesNotMatch(workerPackage.scripts["build:ci"], /db:migrate/);
   assert.doesNotMatch(workerPackage.scripts["build:ci"], /seed:auth-user/);
+  // The settings seed writes rows, so it belongs to the build that owns the
+  // database and not to the one CI runs against no database at all.
+  assert.doesNotMatch(workerPackage.scripts["build:ci"], /db:seed-settings/);
 });
 
 test("the CI gate command reaches both database fences", async () => {
@@ -235,6 +238,7 @@ test("the source build uses the validator entrypoints and preserves deployment s
     "pnpm validate:pre-sandbox",
     "pnpm validate:local-skills",
     "pnpm db:migrate",
+    "pnpm db:seed-settings",
     "pnpm seed:auth-user",
     "pnpm --dir ../.. run gen:blocks -- --check",
     "rm -rf .nitro/workflow",

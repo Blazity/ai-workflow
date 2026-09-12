@@ -414,6 +414,13 @@
       "when": 1788978192502,
       "tag": "0058_odd_darkstar",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1789194356937,
+      "tag": "0059_settings_store",
+      "breakpoints": true
     }
   ]
 }
