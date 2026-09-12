@@ -2,6 +2,7 @@ import { createError, defineEventHandler, getHeader, readRawBody } from "h3";
 // Cluster modules, not the barrel: the barrel also re-exports the polling
 // pass and the other providers' handlers, and this route needs neither.
 import { handleGitHubWebhook } from "../../services/triggers/github/handle-github-webhook.js";
+import { getRequestSettingsSnapshot } from "../../services/settings/index.js";
 import { TriggerHttpError } from "../../services/triggers/trigger-http-error.js";
 
 /**
@@ -22,6 +23,9 @@ export default defineEventHandler(async (event) => {
       signatureHeader: getHeader(event, "x-hub-signature-256"),
       eventName: getHeader(event, "x-github-event") ?? "",
       deliveryId: getHeader(event, "x-github-delivery")?.trim() ?? "",
+      // Not awaited here: the service verifies the signature first and only
+      // the verified path pays for the load.
+      loadSettings: () => getRequestSettingsSnapshot(event),
     });
   } catch (error) {
     if (error instanceof TriggerHttpError) {

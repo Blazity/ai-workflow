@@ -6,13 +6,15 @@
  * included): a full pool with zero executing runs must read as full, not idle.
  * queued is the at-capacity waiting list written by the poll.
  */
-import type { DispatchCapacityResponse } from "@shared/contracts";
+import type { DispatchCapacityResponse, SettingsSnapshot } from "@shared/contracts";
 import { listConnectedQueuedDispatchTickets } from "../../db/repositories/dispatch-capacity-queue.js";
 import { maxConcurrentAgents } from "../settings/index.js";
 import { createAdapters } from "../../engine/support/adapters.js";
 import { capacityConsumerCount } from "./dispatch.js";
 
-export async function readDispatchCapacity(): Promise<DispatchCapacityResponse> {
+export async function readDispatchCapacity(
+  settings: SettingsSnapshot,
+): Promise<DispatchCapacityResponse> {
   const adapters = createAdapters();
   const [occupiedSlots, queued] = await Promise.all([
     capacityConsumerCount(adapters.runRegistry),
@@ -22,7 +24,7 @@ export async function readDispatchCapacity(): Promise<DispatchCapacityResponse> 
   return {
     generatedAt: new Date().toISOString(),
     occupiedSlots,
-    maxSlots: maxConcurrentAgents(),
+    maxSlots: maxConcurrentAgents(settings),
     queued: queued.map((row) => ({
       ticketKey: row.ticketKey,
       queuedAt: row.queuedAt.toISOString(),

@@ -1,6 +1,9 @@
 import { createError, getHeaders, type H3Event } from "h3";
 import { DashboardAuthError } from "@shared/contracts";
-import { dashboardOrganizationSettings } from "../settings/index.js";
+import {
+  dashboardOrganizationSettings,
+  getRequestSettingsSnapshot,
+} from "../settings/index.js";
 import { auth } from "./auth-instance.js";
 import { getConnectedDashboardActor } from "./users-read.js";
 
@@ -10,8 +13,9 @@ export async function requireDashboardActor(event: H3Event) {
     throw createError({ statusCode: 401, statusMessage: "Unauthorized" });
   }
 
+  const settings = await getRequestSettingsSnapshot(event);
   const actor = await getConnectedDashboardActor({
-    organizationSlug: dashboardOrganizationSettings().slug,
+    organizationSlug: dashboardOrganizationSettings(settings).slug,
     userId: session.user.id,
   });
   if (!actor) {

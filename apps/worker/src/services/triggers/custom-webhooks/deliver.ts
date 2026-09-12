@@ -26,6 +26,7 @@ import {
   verifyWebhookAuth,
   type WebhookMappingConfig,
 } from "../../webhook-trigger/index.js";
+import type { SettingsSnapshot } from "@shared/contracts";
 import { createConnectedWebhookDispatchDeps, webhookNodeOf } from "./dispatch-deps.js";
 
 /**
@@ -109,6 +110,8 @@ export interface CustomWebhookRequest {
   headers: Record<string, string | undefined>;
   /** The sender's delivery id header, when it sent one. */
   deliveryIdHeader: string | undefined;
+  /** The deployment's settings, loaded once by the ingress route. */
+  settings: SettingsSnapshot;
 }
 
 export type CustomWebhookOutcome =
@@ -236,7 +239,10 @@ export async function deliverCustomWebhook(
       entry: mapped.entry,
       verifiedWith: verified.verifiedWith,
     },
-    createConnectedWebhookDispatchDeps(createConnectedPostgresRunRegistry()),
+    createConnectedWebhookDispatchDeps(
+      createConnectedPostgresRunRegistry(),
+      request.settings,
+    ),
   );
 
   if (result.result === "started") {

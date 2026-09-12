@@ -8,6 +8,7 @@
  * and the fall back to the legacy post-PR gate, is one ordered decision and
  * lives here.
  */
+import type { SettingsSnapshot } from "@shared/contracts";
 import { createConnectedPostgresRunRegistry } from "../../../db/repositories/active-runs.js";
 import { verifyGitHubWebhookSignature } from "../../../infra/github-webhook-sig.js";
 import { logger } from "../../../infra/logger.js";
@@ -44,6 +45,17 @@ export type GitHubWebhookRequest = {
   eventName: string;
   /** `x-github-delivery`, trimmed; the empty string when the header is absent. */
   deliveryId: string;
+  /**
+   * The deployment's settings, on demand.
+   *
+   * A thunk rather than a value: this endpoint is public, and a delivery with a
+   * bad signature must cost nothing but the HMAC. Verification below reads the
+   * secret from the environment and answers 401 without ever calling this; only
+   * the verified path, which is already writing to the database, loads it. The
+   * ingress memoises the load on the event, so calling it more than once in a
+   * request is still one query.
+   */
+  loadSettings: () => Promise<SettingsSnapshot>;
 };
 
 export async function handleGitHubWebhook(request: GitHubWebhookRequest) {
@@ -139,12 +151,13 @@ async function handleVerifiedGitHubWebhook(request: GitHubWebhookRequest) {
   });
 
   if (events.length > 0) {
+    const settings = await request.loadSettings();
     let result: DispatchTriggerResult = { result: "no_definition" };
     let claimedEvent = events[0]!;
     for (const candidate of events) {
       const candidateResult = await dispatchTriggerEvent(candidate, {
         runRegistry: createConnectedPostgresRunRegistry(),
-        maxConcurrentAgents: maxConcurrentAgents(),
+        maxConcurrentAgents: maxConcurrentAgents(settings),
       });
       result = candidateResult;
       claimedEvent = candidate;

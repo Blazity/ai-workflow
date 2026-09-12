@@ -12,6 +12,7 @@ import type {
   ManualDispatchPreflightResponse,
   ManualDispatchRequest,
   ManualDispatchResponse,
+  SettingsSnapshot,
 } from "@shared/contracts";
 import { maxConcurrentAgents } from "../settings/index.js";
 import { createAdapters } from "../../engine/support/adapters.js";
@@ -27,13 +28,14 @@ export function preflightTriggerDispatch(input: {
   definitionId: number;
   triggerNodeId: string;
   dispatchInput: ManualDispatchInput;
+  settings: SettingsSnapshot;
 }): Promise<ManualDispatchPreflightResponse> {
   return preflightConnectedManualWorkflow({
     adapters: createAdapters(),
     definitionId: input.definitionId,
     triggerNodeId: input.triggerNodeId,
     dispatchInput: input.dispatchInput,
-    maxConcurrentAgents: maxConcurrentAgents(),
+    maxConcurrentAgents: maxConcurrentAgents(input.settings),
   });
 }
 
@@ -44,6 +46,7 @@ export async function dispatchTriggerManually(input: {
   request: ManualDispatchRequest;
   actorId: string;
   actorRole: DashboardRole;
+  settings: SettingsSnapshot;
 }): Promise<ManualDispatchResponse> {
   const actor = await resolveWorkflowDefinitionActor({
     role: input.actorRole,
@@ -55,6 +58,6 @@ export async function dispatchTriggerManually(input: {
     triggerNodeId: input.triggerNodeId,
     request: input.request,
     actor: { id: actor.id, label: actor.label },
-    maxConcurrentAgents: maxConcurrentAgents(),
+    maxConcurrentAgents: maxConcurrentAgents(input.settings),
   });
 }

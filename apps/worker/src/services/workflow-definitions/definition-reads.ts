@@ -8,7 +8,7 @@
  * archived definition as absent.
  */
 import { defaultWorkflowDefinitionV2 } from "../../workflow-definition/default.js";
-import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
+import { RETIRED_SCHEMA_MESSAGE, type SettingsSnapshot } from "@shared/contracts";
 import {
   buildWorkflowEditorOptions,
   fetchAvailableModels,
@@ -52,8 +52,10 @@ export interface WorkflowDefinitionDetail {
  * which agent runs and which optional phases exist decide what a starting graph
  * contains, so they are shaped here rather than by the caller.
  */
-export async function readWorkflowDefinitionsOverview(): Promise<WorkflowDefinitionsOverview> {
-  const { agentKind, includeReview, includeLeakReview } = agentRuntimeSettings();
+export async function readWorkflowDefinitionsOverview(
+  settings: SettingsSnapshot,
+): Promise<WorkflowDefinitionsOverview> {
+  const { agentKind, includeReview, includeLeakReview } = agentRuntimeSettings(settings);
   const storedDefinitions = await listConnectedWorkflowDefinitions();
   const [models, ticketStatuses, profileReference, deployments] = await Promise.all([
     fetchAvailableModels(),

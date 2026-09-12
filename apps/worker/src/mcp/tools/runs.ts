@@ -8,6 +8,7 @@ import type {
   ReplaySanitizedEnvelope,
   RunDetail,
   RunStep,
+  SettingsSnapshot,
   WorkflowReplayAttemptDetail,
   WorkflowReplayAttemptSummary,
 } from "@shared/contracts";
@@ -108,13 +109,15 @@ const TRACE_ATTEMPT_MAX_BYTES = 8_192;
 // the envelope wrapper/meta and the one-time snapshot the first page (no
 // cursor) also carries. The snapshot itself is bounded by run-observability/
 // sanitizer.ts, not by this tool -- out of this slice's file scope.
-const TRACE_PAGE_LIMIT = Math.max(
-  1,
-  Math.min(
-    MAX_REPLAY_PAGE_LIMIT,
-    Math.floor(mcpSettings().maxResultBytes / 2 / TRACE_ATTEMPT_MAX_BYTES),
-  ),
-);
+function tracePageLimit(settings: SettingsSnapshot): number {
+  return Math.max(
+    1,
+    Math.min(
+      MAX_REPLAY_PAGE_LIMIT,
+      Math.floor(mcpSettings(settings).maxResultBytes / 2 / TRACE_ATTEMPT_MAX_BYTES),
+    ),
+  );
+}
 
 function jsonByteLength(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value), "utf8");
@@ -424,7 +427,7 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
             replay = await deps.services.getRunReplay({
               runId: input.runId,
               organizationId: deps.actor.organizationId,
-              limit: TRACE_PAGE_LIMIT,
+              limit: tracePageLimit(deps.settings),
               cursor: input.cursor ?? null,
               now: deps.now(),
             });
@@ -448,7 +451,7 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
             nextCursor: replay.nextCursor,
           };
           // The page has to fit the global result cap by itself. attempts are
-          // bounded (TRACE_PAGE_LIMIT times TRACE_ATTEMPT_MAX_BYTES is half the
+          // bounded (tracePageLimit times TRACE_ATTEMPT_MAX_BYTES is half the
           // cap), snapshot is not: run-observability/sanitizer.ts admits a graph
           // and a layout at 512 KB each plus a 64 KB manifest, together more
           // than the whole MCP budget. Unbounded, sanitizeMcpData swaps the
@@ -459,7 +462,9 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
           // snapshot with an explicit marker keeps the page and the cursor
           // usable, and says which of the two happened.
           const snapshotBudget =
-            mcpSettings().maxResultBytes - jsonByteLength(page) - TRACE_ENVELOPE_HEADROOM_BYTES;
+            mcpSettings(deps.settings).maxResultBytes -
+            jsonByteLength(page) -
+            TRACE_ENVELOPE_HEADROOM_BYTES;
           const snapshotFits =
             replay.snapshot !== null && jsonByteLength(replay.snapshot) <= snapshotBudget;
           return {

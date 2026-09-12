@@ -1,5 +1,5 @@
 import { getWorkflowRegistry } from "./workflow-registry.js";
-import type { WorkflowRow } from "@shared/contracts";
+import type { SettingsSnapshot, WorkflowRow } from "@shared/contracts";
 
 export interface CollectWorkflowsResult {
   rows: WorkflowRow[];
@@ -11,8 +11,8 @@ export interface CollectWorkflowsResult {
  * as the degraded view when the run store can't be reached (e.g. local dev
  * without the Vercel runtime) — the card still lists the workflows.
  */
-export function registryRows(): CollectWorkflowsResult {
-  const rows: WorkflowRow[] = getWorkflowRegistry().map((w) => ({
+export function registryRows(settings: SettingsSnapshot): CollectWorkflowsResult {
+  const rows: WorkflowRow[] = getWorkflowRegistry(settings).map((w) => ({
     id: w.id,
     name: w.name,
     blurb: w.blurb,

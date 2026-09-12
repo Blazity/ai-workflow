@@ -13,12 +13,15 @@ import {
 } from "h3";
 import type { ZodIssue } from "zod";
 
+import type { SettingsSnapshot } from "@shared/contracts";
+
 import { createAdapters } from "../services/vcs/adapters.js";
 import { logger } from "../services/system/logger.js";
 import {
   createConnectedMcpToolServices,
   type McpToolServices,
 } from "../services/mcp/index.js";
+import { getRequestSettingsSnapshot } from "../services/settings/index.js";
 import {
   betterAuthBaseUrl,
   mcpSettings,
@@ -59,7 +62,12 @@ type GateVerdict =
   | { kind: "refused_silently" };
 
 export async function handleMcpPost(event: H3Event): Promise<void> {
-  if (!mcpSettings().enabled) {
+  // One load for the whole call, before anything reads a limit: the caps below,
+  // the actor's organization, the gate's rate limits and every tool this request
+  // reaches all answer from this object, so none of them can disagree with
+  // another because an operator saved the Settings page in between.
+  const settings = await getRequestSettingsSnapshot(event);
+  if (!mcpSettings(settings).enabled) {
     await writePublicError(
       event,
       404,
@@ -78,13 +86,13 @@ export async function handleMcpPost(event: H3Event): Promise<void> {
   }
 
   const declaredLength = Number(getHeader(event, "content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > mcpSettings().maxRequestBytes) {
+  if (Number.isFinite(declaredLength) && declaredLength > mcpSettings(settings).maxRequestBytes) {
     drainRequest(event);
     await requestTooLarge(event);
     return;
   }
 
-  const bodyResult = await readBoundedBody(event, mcpSettings().maxRequestBytes);
+  const bodyResult = await readBoundedBody(event, mcpSettings(settings).maxRequestBytes);
   if (bodyResult.kind === "too_large") {
     await requestTooLarge(event);
     return;
@@ -140,7 +148,7 @@ export async function handleMcpPost(event: H3Event): Promise<void> {
 
   let actor;
   try {
-    actor = await requireMcpActor(authRequest(event));
+    actor = await requireMcpActor(authRequest(event), settings);
   } catch (error) {
     const publicError =
       error instanceof McpPublicError
@@ -159,7 +167,7 @@ export async function handleMcpPost(event: H3Event): Promise<void> {
   if (gated) {
     let verdict: GateVerdict;
     try {
-      verdict = await gateRequest({ services, actor, requestId, request: gated });
+      verdict = await gateRequest({ services, actor, settings, requestId, request: gated });
     } catch (error) {
       const publicError =
         error instanceof McpPublicError
@@ -182,6 +190,7 @@ export async function handleMcpPost(event: H3Event): Promise<void> {
     services,
     adapters: createAdapters(),
     actor,
+    settings,
     requestId,
     traceId: requestId,
     now: () => new Date(),
@@ -216,7 +225,7 @@ export async function handleMcpPost(event: H3Event): Promise<void> {
 }
 
 export async function handleMcpMethodNotAllowed(event: H3Event): Promise<void> {
-  if (!mcpSettings().enabled) {
+  if (!mcpSettings(await getRequestSettingsSnapshot(event)).enabled) {
     await writePublicError(
       event,
       404,
@@ -261,6 +270,7 @@ function readGatedRequest(body: unknown): GatedRequest | "unnamed" | null {
 async function gateRequest(input: {
   services: McpToolServices;
   actor: McpActorContext;
+  settings: SettingsSnapshot;
   requestId: string;
   request: GatedRequest;
 }): Promise<GateVerdict> {
@@ -350,8 +360,8 @@ async function gateRequest(input: {
     toolName,
     limit:
       mutationClass === "read"
-        ? mcpSettings().readRateLimitPerMinute
-        : mcpSettings().mutationRateLimitPerMinute,
+        ? mcpSettings(input.settings).readRateLimitPerMinute
+        : mcpSettings(input.settings).mutationRateLimitPerMinute,
     now: startedAt,
   });
 

@@ -3,6 +3,7 @@ import {
   requireDashboardActor,
   toHttpError,
 } from "../../../../services/auth/request-context.js";
+import { getRequestSettingsSnapshot } from "../../../../services/settings/index.js";
 import { mcpSettings } from "../../../../services/settings/runtime-settings.js";
 import { MCP_CONTRACT_ARTIFACT } from "../../../../mcp/contract-artifact.js";
 import { MCP_PROTOCOL_VERSION } from "../../../../mcp/server.js";
@@ -45,7 +46,7 @@ export default defineEventHandler(
     try {
       await requireDashboardActor(event);
 
-      const mcp = mcpSettings();
+      const mcp = mcpSettings(await getRequestSettingsSnapshot(event));
       return {
         enabled: mcp.enabled,
         serverVersion: mcp.serverVersion,

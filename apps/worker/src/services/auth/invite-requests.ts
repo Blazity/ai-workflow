@@ -7,6 +7,7 @@
  * or which database holds them. The Better Auth instance still arrives from the
  * caller: it is built in the app tier, and no service constructs one.
  */
+import type { SettingsSnapshot } from "@shared/contracts";
 import { dashboardOrganizationSettings } from "../settings/index.js";
 import {
   acceptConnectedDashboardInvite,
@@ -27,9 +28,10 @@ type Auth = Parameters<typeof acceptConnectedDashboardInvite>[0];
 export function readDashboardInviteAcceptance(
   auth: Auth,
   inviteId: string,
+  settings: SettingsSnapshot,
 ): Promise<DashboardInviteAcceptanceState> {
   return getConnectedDashboardInviteAcceptanceState(auth, {
-    organizationSlug: dashboardOrganizationSettings().slug,
+    organizationSlug: dashboardOrganizationSettings(settings).slug,
     inviteId,
   });
 }
@@ -37,10 +39,15 @@ export function readDashboardInviteAcceptance(
 /** Accept an invite by setting a password, which also creates the session. */
 export function acceptDashboardInviteWithPassword(
   auth: Auth,
-  input: { inviteId: string; name?: string; password: string },
+  input: {
+    inviteId: string;
+    name?: string;
+    password: string;
+    settings: SettingsSnapshot;
+  },
 ): Promise<AcceptDashboardInviteResult> {
   return acceptConnectedDashboardInvite(auth, {
-    organizationSlug: dashboardOrganizationSettings().slug,
+    organizationSlug: dashboardOrganizationSettings(input.settings).slug,
     inviteId: input.inviteId,
     name: input.name,
     password: input.password,
@@ -50,10 +57,14 @@ export function acceptDashboardInviteWithPassword(
 /** Accept an invite on behalf of a user who has just signed in through SSO. */
 export function acceptDashboardSsoInviteForUser(
   auth: Auth,
-  input: { inviteId: string; user: { id: string; email: string } },
+  input: {
+    inviteId: string;
+    user: { id: string; email: string };
+    settings: SettingsSnapshot;
+  },
 ): Promise<void> {
   return acceptConnectedDashboardSsoInvite(auth, {
-    organizationSlug: dashboardOrganizationSettings().slug,
+    organizationSlug: dashboardOrganizationSettings(input.settings).slug,
     inviteId: input.inviteId,
     user: input.user,
   });
