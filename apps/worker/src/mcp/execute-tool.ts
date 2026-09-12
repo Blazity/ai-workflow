@@ -189,8 +189,8 @@ async function prepare(context: ExecutionContext): Promise<void> {
     toolName: context.toolName,
     limit:
       policy.mutation === "read"
-        ? mcpSettings().readRateLimitPerMinute
-        : mcpSettings().mutationRateLimitPerMinute,
+        ? mcpSettings(context.deps.settings).readRateLimitPerMinute
+        : mcpSettings(context.deps.settings).mutationRateLimitPerMinute,
     now: context.startedAt,
   });
   if (!verdict.allowed) await rejectRateLimited(context, verdict);
@@ -209,7 +209,7 @@ function sanitize<T>(context: ExecutionContext, data: T): McpEnvelope<T> {
     requestId: context.deps.requestId,
     traceId: context.deps.traceId,
     trust: "external_untrusted",
-    maxBytes: mcpSettings().maxResultBytes,
+    maxBytes: mcpSettings(context.deps.settings).maxResultBytes,
     secrets: configuredSecretValues(),
   });
 }
@@ -244,7 +244,7 @@ export async function executeMcpRead<T>(input: {
   try {
     envelope = sanitize(
       context,
-      await input.operation(AbortSignal.timeout(mcpSettings().toolTimeoutMs)),
+      await input.operation(AbortSignal.timeout(mcpSettings(input.deps.settings).toolTimeoutMs)),
     );
   } catch (error) {
     return auditFailure(context, error);
@@ -442,7 +442,7 @@ export async function executeMcpMutation<T>(input: {
   );
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const timedOut = new Promise<never>((_resolve, reject) => {
-    timeout = setTimeout(() => reject(timedOutError), mcpSettings().toolTimeoutMs);
+    timeout = setTimeout(() => reject(timedOutError), mcpSettings(context.deps.settings).toolTimeoutMs);
   });
   try {
     return await Promise.race([terminal, timedOut]);

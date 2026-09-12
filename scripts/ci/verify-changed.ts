@@ -16,6 +16,19 @@ export const WORKFLOW_TESTS = [
   "src/workflow-definition/block-registry.test.ts",
 ] as const;
 
+/**
+ * A change under packages/workflow-graph moves rules the worker bundles, so it
+ * plans the guards that prove the step files and the import graph still hold,
+ * then the worker suites that import the package. Later stages of the workflow
+ * graph plan add their moved suites to the second group.
+ */
+export const WORKFLOW_GRAPH_TESTS = [
+  "src/engine/workflow-import-boundary.test.ts",
+  "src/routes/import-graph-guard.test.ts",
+  "src/workflow-definition/v2-bindings.test.ts",
+  "src/workflow-definition/v2-branch.test.ts",
+] as const;
+
 export const WORKTREE_DIFF = ["git", "diff", "--check"] as const satisfies Cmd;
 export const STAGED_WORKTREE_DIFF = ["git", "diff", "--cached", "--check"] as const satisfies Cmd;
 export const candidateDiff = (merge: string, candidate: string): Cmd =>
@@ -42,6 +55,7 @@ const C = {
   mcp: ["pnpm", "--dir", "apps/worker", "run", "mcp:contract:check"],
   blockCatalog: ["pnpm", "run", "gen:blocks", "--check"],
   ci: ["pnpm", "run", "test:ci"],
+  workflowSdk: ["pnpm", "run", "test:workflow-sdk"],
   packages: ["pnpm", "run", "test:packages"],
   releaseType: ["pnpm", "run", "typecheck:release-notes"],
   releaseTest: ["pnpm", "run", "test:release-notes"],
@@ -63,7 +77,7 @@ const RELEASE_WORKFLOWS = new Set([
   ".github/workflows/sync-artur-release.yml",
   ".github/workflows/release-artur.yml",
 ]);
-const FIXED_TESTS = new Set<string>(WORKFLOW_TESTS);
+const FIXED_TESTS = new Set<string>([...WORKFLOW_TESTS, ...WORKFLOW_GRAPH_TESTS]);
 const TEST = /\.(?:test|spec)\.tsx?$/;
 export function listDirectory(
   directory: string,
@@ -104,15 +118,36 @@ const isCi = (path: string) =>
   path.startsWith(".githooks/") ||
   path.startsWith("scripts/ci/") ||
   ROOT_CI.has(path);
+const isWorkflowGraph = (path: string) =>
+  path.startsWith("packages/workflow-graph/");
 const isProduct = (path: string) =>
   path.startsWith("apps/worker/src/engine/") ||
   path.startsWith("apps/worker/src/workflow-definition/") ||
   path.startsWith("apps/worker/src/sandbox/agents/fixtures/") ||
   path.startsWith("apps/worker/workflow-test-fixtures/") ||
   path.startsWith("packages/contracts/") ||
+  isWorkflowGraph(path) ||
   path === "packages/contracts/block-catalog.generated.ts" ||
   path === "apps/worker/src/engine/blocks/executors.generated.ts" ||
   path === "apps/worker/vitest.config.ts";
+
+/**
+ * The workflow-sdk suite is the only one that builds the fixtures through the
+ * Workflow builder and then loads the emitted bundles in Node, so it is the
+ * only place that proves a `@shared/*` package reached from a step is still
+ * loadable there. Nothing else plans it: `discoveredTests` skips
+ * `workflow-sdk-tests/` on purpose, so the paths whose contents decide what
+ * those bundles contain name it here. The divergence suite under
+ * `workflow-sdk-tests/divergence/` stays out of every pull request's budget and
+ * is excluded.
+ */
+const isWorkflowSdkSubject = (path: string) =>
+  isWorkflowGraph(path) ||
+  path === "apps/worker/src/engine/agent-workflow.ts" ||
+  path.startsWith("apps/worker/src/engine/helpers/") ||
+  path.startsWith("apps/worker/workflow-test-fixtures/") ||
+  (path.startsWith("apps/worker/workflow-sdk-tests/") &&
+    !path.startsWith("apps/worker/workflow-sdk-tests/divergence/"));
 
 const isBlockCatalogSource = (path: string) =>
   path.startsWith("apps/worker/src/engine/blocks/") ||
@@ -148,6 +183,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
   const dashboard = any(paths, (path) => path.startsWith("apps/dashboard/"));
   const shared = any(paths, (path) => path.startsWith("packages/"));
   const ci = any(paths, isCi);
+  const workflowSdk = any(paths, isWorkflowSdkSubject);
   const blockCatalog = any(paths, isBlockCatalogSource);
   const gates = any(paths, (path) =>
     path.startsWith("apps/") ||
@@ -157,7 +193,10 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
   );
   const rootType = any(paths, (path) => ROOT_TYPE.has(path));
   const workerBaseline = worker || product;
-  const workerTests = new Set<string>(product ? WORKFLOW_TESTS : []);
+  const workerTests = new Set<string>([
+    ...(product ? WORKFLOW_TESTS : []),
+    ...(any(paths, isWorkflowGraph) ? WORKFLOW_GRAPH_TESTS : []),
+  ]);
   const dashboardTests = new Set<string>();
 
   for (const path of paths) {
@@ -182,6 +221,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
     ci && "ci", release && "release-notes", skills && "skills",
     gates && "gates",
     workerTests.size > 0 && "worker-tests", dashboardTests.size > 0 && "dashboard-tests",
+    workflowSdk && "workflow-sdk",
   ].filter((scope): scope is string => Boolean(scope));
   const commands: Cmd[] = [];
   const seen = new Set<string>();
@@ -214,6 +254,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
     );
     add(["pnpm", "--dir", "apps/worker", "exec", "vitest", "run", ...args]);
   }
+  if (workflowSdk) add(C.workflowSdk);
   if (blockCatalog) add(C.blockCatalog);
   if (dashboardTests.size > 0) {
     add([

@@ -4,6 +4,7 @@ import { auth } from "../auth-instance.js";
 import { resolveMcpActor } from "../services/mcp/actor-resolution.js";
 import { McpPublicError } from "../services/mcp/contracts.js";
 import { betterAuthBaseUrl } from "../services/settings/runtime-settings.js";
+import type { SettingsSnapshot } from "@shared/contracts";
 import type { McpActorContext } from "./contracts.js";
 import { canonicalMcpResource } from "./oauth.js";
 
@@ -16,7 +17,10 @@ import { canonicalMcpResource } from "./oauth.js";
  * membership role, which scopes survive) is a database-backed decision and lives
  * in the MCP service, so this file holds no query and no environment read.
  */
-export async function requireMcpActor(request: Request): Promise<McpActorContext> {
+export async function requireMcpActor(
+  request: Request,
+  settings: SettingsSnapshot,
+): Promise<McpActorContext> {
   const token = bearerToken(request.headers.get("authorization"));
   if (!token) throw unauthenticated();
 
@@ -44,14 +48,17 @@ export async function requireMcpActor(request: Request): Promise<McpActorContext
     typeof claims.organization_id === "string" ? claims.organization_id : null;
   if (!clientId || !claimOrganizationId) throw unauthenticated();
 
-  return resolveMcpActor({
-    clientId,
-    organizationId: claimOrganizationId,
-    userId: typeof claims.sub === "string" && claims.sub ? claims.sub : null,
-    serviceRole: claims.organization_role === "service",
-    issuedScope: claims.scope,
-    audience,
-  });
+  return resolveMcpActor(
+    {
+      clientId,
+      organizationId: claimOrganizationId,
+      userId: typeof claims.sub === "string" && claims.sub ? claims.sub : null,
+      serviceRole: claims.organization_role === "service",
+      issuedScope: claims.scope,
+      audience,
+    },
+    settings,
+  );
 }
 
 function bearerToken(value: string | null): string | null {

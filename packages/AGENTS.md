@@ -1,15 +1,16 @@
 Status: current
-Last-verified: 2026-09-11
+Last-verified: 2026-09-12
 
 # packages/AGENTS.md
 
 Workspace packages shared by the worker and the dashboard. `contracts` holds
 cross-application shapes and constants; `conditions` evaluates predicates;
 `costs` prices provider usage; `harness` owns model policy and built-in
-compatibility profiles; `prompts` owns prompt composition; and `skills`
-owns browser-safe product skill contracts and validation. These pure packages
-may import another shared package only through its public entry point and never
-application infrastructure. ADR-001 owns the tiers.
+compatibility profiles; `prompts` owns prompt composition; `skills`
+owns browser-safe product skill contracts and validation; and
+`workflow-graph` owns the pure rules of a workflow definition. These pure
+packages may import another shared package only through its public entry point
+and never application infrastructure. ADR-001 owns the tiers.
 
 ## The rules that bind
 
@@ -32,6 +33,29 @@ application infrastructure. ADR-001 owns the tiers.
 - **Shared dependency versions live in the root catalog.** Anything two
   projects declare goes on `catalog:`, enforced by
   `scripts/gates/check-deps-consistency.mjs`.
+
+## The workflow graph package
+
+`workflow-graph` is the home of the rules that say what a workflow definition
+is, how its blocks are scheduled and how values flow between them. Stage 0 of
+[the plan](../docs/plans/2026-09-11-workflow-graph-package.md) created it with
+`v2-bindings.ts` (reference parsing and resolution, input bindings, prompt data
+tokens) and `v2-branch.ts` (branch configuration recognition and evaluation);
+the later stages move the schema, the scheduler and the interpreter in. Source
+entry is `index.ts`, which re-exports both modules; `exports["."]` is the only
+public entry, so the worker imports `@shared/workflow-graph` and never a file
+inside it.
+
+Three traps. The package may not import worker code, `@shared/harness` or
+`@shared/prompts`: `scripts/gates/tiers.json` allows it `contracts` and
+`conditions` only, and `scripts/gates/boundaries.mjs` fails on anything else.
+It declares only the dependencies it actually imports, because knip fails the
+`gate:unused` gate on a declared dependency nothing imports, so the zod and
+`@shared/conditions` entries arrive with the stage that first needs them. And
+its vitest suites stay in the worker next to the modules that moved, so a
+change here plans them through `WORKFLOW_GRAPH_TESTS` in
+`scripts/ci/verify-changed.ts`; a stage that moves another suite's subject adds
+that suite to the same list.
 
 ## Request schemas live here
 

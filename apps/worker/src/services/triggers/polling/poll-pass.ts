@@ -1,3 +1,4 @@
+import type { SettingsSnapshot } from "@shared/contracts";
 import { getWorld } from "workflow/runtime";
 import { logger } from "../../../infra/logger.js";
 import { GateStore } from "../../../post-pr-gate/gate-store.js";
@@ -68,7 +69,7 @@ import { createConnectedWebhookDispatchDeps } from "../custom-webhooks/dispatch-
 
 const PENDING_TRIGGER_RECOVERY_SCAN_LIMIT = 20;
 
-export async function runPollPass() {
+export async function runPollPass(settings: SettingsSnapshot) {
   const board = ticketBoardSettings();
   const adapters = createAdapters();
   const clarificationExpiry = await expireConnectedHookClarifications();
@@ -113,7 +114,7 @@ export async function runPollPass() {
 
   const manualDispatchRecovery = await recoverManualDispatches({
     adapters,
-    maxConcurrentAgents: maxConcurrentAgents(),
+    maxConcurrentAgents: maxConcurrentAgents(settings),
   });
   const protectedRunSubjects = new Set(retainedClarificationSubjects);
   for (const request of await listConnectedRecoverableManualDispatches()) {
@@ -143,7 +144,7 @@ export async function runPollPass() {
       try {
         const result = await drainOldestPendingTrigger(subjectKey, {
           runRegistry: adapters.runRegistry,
-          maxConcurrentAgents: maxConcurrentAgents(),
+          maxConcurrentAgents: maxConcurrentAgents(settings),
         });
         if (result?.result === "started") releasedTriggerRecovery.started++;
         if (result?.result === "error") releasedTriggerRecovery.errors++;
@@ -162,15 +163,18 @@ export async function runPollPass() {
     adapters,
     releasedTriggerSubjects,
     releasedTriggerRecovery.started === 0,
+    settings,
   );
   const approvalRecovery = await recoverApprovedPlanDispatches(
     blockingApprovals,
     adapters,
+    settings,
   );
   const dispatchOutcome = await dispatchDiscoveredTickets(
     ticketKeys,
     adapters,
     protectedDiscoverySubjects,
+    settings,
   );
   const started = dispatchOutcome.started;
 
@@ -213,7 +217,7 @@ export async function runPollPass() {
   // capacity, a failed start) stay pending, so this is what actually starts
   // them; the two sweeps drop counter rows whose window nothing can read again.
   // Best-effort, like every other housekeeping step in this poll.
-  const webhookRecovery = await recoverPendingWebhookDeliveries(adapters);
+  const webhookRecovery = await recoverPendingWebhookDeliveries(adapters, settings);
   await sweepConnectedWebhookRateLimits().catch((err) =>
     logger.warn({ err: (err as Error).message }, "poll_webhook_rate_sweep_failed"),
   );
@@ -246,7 +250,7 @@ export async function runPollPass() {
   // trigger: it evaluates every live schedule against its cron, dispatches what is
   // due, starts what could not start earlier, and sweeps its own ledger. Bounded
   // per tick and best-effort, like every other housekeeping phase here.
-  const scheduleTriggers = await evaluateScheduleTriggers(adapters);
+  const scheduleTriggers = await evaluateScheduleTriggers(adapters, settings);
 
   const prCheckReconciliation = await reconcileConnectedPendingPrChecks().catch(
     (err) => {
@@ -280,7 +284,10 @@ export async function runPollPass() {
   // steps above include live Jira calls that throw, and retention that only
   // runs when the rest of the poll is healthy silently stops running at all.
   // Reported like replay retention, so a sweep that never fires is visible.
-  const mcpAuditRetention = await pruneConnectedMcpAudits(new Date(), { limit: 100 }).catch(
+  const mcpAuditRetention = await pruneConnectedMcpAudits(new Date(), {
+    settings,
+    limit: 100,
+  }).catch(
     (err) => {
       logger.warn({ err: (err as Error).message }, "poll_mcp_audit_prune_failed");
       return { deleted: 0 };
@@ -323,11 +330,12 @@ export async function runPollPass() {
 
 async function evaluateScheduleTriggers(
   adapters: ReturnType<typeof createAdapters>,
+  settings: SettingsSnapshot,
 ): Promise<ReturnType<typeof runScheduleTriggerPass>> {
   return await runScheduleTriggerPass(
     createConnectedScheduleDispatchDeps(
       adapters.runRegistry,
-      maxConcurrentAgents(),
+      maxConcurrentAgents(settings),
     ),
   ).catch((error) => {
     logger.warn(
@@ -361,10 +369,11 @@ async function evaluateScheduleTriggers(
 
 async function recoverPendingWebhookDeliveries(
   adapters: ReturnType<typeof createAdapters>,
+  settings: SettingsSnapshot,
 ): Promise<{ attempted: number; started: number; errors: number }> {
   try {
     const results = await redispatchPendingWebhookDeliveries(
-      createConnectedWebhookDispatchDeps(adapters.runRegistry),
+      createConnectedWebhookDispatchDeps(adapters.runRegistry, settings),
     );
     return {
       attempted: results.length,
@@ -384,6 +393,7 @@ async function recoverPendingTriggers(
   adapters: ReturnType<typeof createAdapters>,
   releasedSubjects: ReadonlySet<string>,
   mayStart: boolean,
+  settings: SettingsSnapshot,
 ): Promise<{ listed: number; attempted: number; started: number; errors: number }> {
   const metrics = { listed: 0, attempted: 0, started: 0, errors: 0 };
   if (!mayStart) return metrics;
@@ -409,7 +419,7 @@ async function recoverPendingTriggers(
     try {
       const result = await drainOldestPendingTrigger(trigger.subjectKey, {
         runRegistry: adapters.runRegistry,
-        maxConcurrentAgents: maxConcurrentAgents(),
+        maxConcurrentAgents: maxConcurrentAgents(settings),
       });
       if (result?.result === "error") metrics.errors++;
       if (result?.result === "started") {
@@ -434,6 +444,7 @@ async function recoverPendingTriggers(
 async function recoverApprovedPlanDispatches(
   blockingApprovals: ApprovalRow[],
   adapters: ReturnType<typeof createAdapters>,
+  settings: SettingsSnapshot,
 ): Promise<{ scanned: number; started: number; blocked: number; errors: number }> {
   const approved = blockingApprovals.filter(
     (row) => row.status === "approved" && row.dispatchedRunId === null,
@@ -451,7 +462,7 @@ async function recoverApprovedPlanDispatches(
             id: approval.decidedById ?? "system",
             label: approval.decidedByLabel ?? "system",
           },
-          maxConcurrentAgents: maxConcurrentAgents(),
+          maxConcurrentAgents: maxConcurrentAgents(settings),
           onClaimed: async () => {
             const fresh = await getConnectedApproval(approval.id);
             if (
@@ -521,6 +532,7 @@ async function dispatchDiscoveredTickets(
   ticketKeys: string[],
   adapters: ReturnType<typeof createAdapters>,
   protectedSubjects: ReadonlySet<string>,
+  settings: SettingsSnapshot,
 ): Promise<DispatchOutcome> {
   // Dispatch in parallel. dispatchTicket is internally atomic — the
   // post-claim fairness check in src/services/dispatch/dispatch.ts caps started
@@ -558,7 +570,7 @@ async function dispatchDiscoveredTickets(
         const result = await dispatchTicket(
           key,
           adapters,
-          maxConcurrentAgents(),
+          maxConcurrentAgents(settings),
         );
         if (!result.started) {
           // Every refusal used to vanish here; log one structured line per

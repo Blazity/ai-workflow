@@ -9,6 +9,10 @@ const state = vi.hoisted(() => ({
   read: vi.fn(),
 }));
 
+// The scan route now resolves its settings snapshot, which reaches the parsed
+// environment. Nothing here depends on a real value, so the smallest stand in
+// that satisfies the resolution keeps this file about roles and storage.
+vi.mock("../../../../infra/vcs-config.js", () => ({ env: {} }));
 vi.mock("../../../../services/auth/request-context.js", () => ({
   requireDashboardActor: vi.fn(async () => {
     if (state.role === null) {
@@ -29,6 +33,13 @@ vi.mock("../../../../services/system/last-scan.js", () => ({
 }));
 vi.mock("../../../../db/client.js", () => ({
   getDb: () => ({}),
+}));
+vi.mock("../../../../db/repositories/settings.js", () => ({
+  // The route loads one settings snapshot per request. This test hands the
+  // handler a stub database, and an empty settings table is what a deployment
+  // that has stored no decision has, so every value still resolves from the
+  // mocked environment exactly as it did before the snapshot existed.
+  readAllConnectedSettings: async () => [],
 }));
 
 const postRoute = (await import("./health.post.js")).default;

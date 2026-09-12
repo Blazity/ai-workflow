@@ -7,6 +7,7 @@ import {
   pruneConnectedMcpAuditEvents,
   pruneMcpAuditEvents,
 } from "../../db/repositories/mcp.js";
+import type { SettingsSnapshot } from "@shared/contracts";
 import { mcpSettings } from "../settings/index.js";
 import type { McpAuditInput } from "./contracts.js";
 
@@ -20,9 +21,9 @@ const PRUNE_BATCH_LIMIT = 100;
 export async function pruneMcpAudits(
   db: Db,
   now: Date,
-  options: { retentionDays?: number; limit?: number } = {},
+  options: { settings: SettingsSnapshot; retentionDays?: number; limit?: number },
 ): Promise<{ deleted: number }> {
-  const retentionDays = options.retentionDays ?? mcpSettings().auditRetentionDays;
+  const retentionDays = options.retentionDays ?? mcpSettings(options.settings).auditRetentionDays;
   const cutoff = new Date(now.getTime() - retentionDays * DAY_MS);
   return {
     deleted: await pruneMcpAuditEvents(db, {
@@ -34,9 +35,9 @@ export async function pruneMcpAudits(
 
 export async function pruneConnectedMcpAudits(
   now: Date,
-  options: { retentionDays?: number; limit?: number } = {},
+  options: { settings: SettingsSnapshot; retentionDays?: number; limit?: number },
 ): Promise<{ deleted: number }> {
-  const retentionDays = options.retentionDays ?? mcpSettings().auditRetentionDays;
+  const retentionDays = options.retentionDays ?? mcpSettings(options.settings).auditRetentionDays;
   const cutoff = new Date(now.getTime() - retentionDays * DAY_MS);
   return {
     deleted: await pruneConnectedMcpAuditEvents({

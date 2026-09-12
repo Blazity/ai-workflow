@@ -12,6 +12,7 @@ import type {
   LiveRunsResponse,
   RunBlockStatusesResponse,
   RunsResponse,
+  SettingsSnapshot,
   WorkflowsResponse,
 } from "@shared/contracts";
 import {
@@ -77,20 +78,21 @@ export async function listDashboardRuns(query: {
  * metrics rather than the empty state, so the card still lists the workflows
  * that exist when only their numbers are unreadable.
  */
-export async function listWorkflowAggregates(query: {
-  window?: unknown;
-}): Promise<Omit<WorkflowsResponse, "generatedAt">> {
+export async function listWorkflowAggregates(
+  query: { window?: unknown },
+  settings: SettingsSnapshot,
+): Promise<Omit<WorkflowsResponse, "generatedAt">> {
   try {
     const { rows, total } = await connectedWorkflowAgg({
       window: parseWindow(query.window),
       now: new Date(),
       jiraBaseUrl: issueTrackerBaseUrl(),
-      registry: getWorkflowRegistry(),
+      registry: getWorkflowRegistry(settings),
     });
     return { rows, total };
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "workflows_collect_failed");
-    return registryRows();
+    return registryRows(settings);
   }
 }
 

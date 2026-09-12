@@ -70,6 +70,10 @@ vi.mock("@octokit/auth-app", () => ({
 }));
 
 const { configFromEnvironment, probesForEnvironment } = await import("./probes.js");
+const { settingsSnapshotFromEnvironment } = await import("../settings/snapshot.js");
+// The snapshot an entry point would load on this deployment: no stored rows, so
+// every value is the one the mocked environment already resolved to.
+const settings = settingsSnapshotFromEnvironment();
 const fetchMock = vi.fn();
 vi.stubGlobal("fetch", fetchMock);
 
@@ -106,7 +110,7 @@ describe("deployment system-health probes", () => {
   });
 
   it("maps credentials for every independently checked capability", () => {
-    expect(configFromEnvironment()).toEqual({
+    expect(configFromEnvironment(settings)).toEqual({
       databaseUrl: environment.DATABASE_URL,
       jiraBaseUrl: environment.JIRA_BASE_URL,
       jiraApiToken: environment.JIRA_API_TOKEN,
@@ -169,7 +173,7 @@ describe("deployment system-health probes", () => {
       return new Response(JSON.stringify({}));
     });
 
-    const probes = probesForEnvironment(configFromEnvironment());
+    const probes = probesForEnvironment(configFromEnvironment(settings));
     const signal = new AbortController().signal;
     for (const id of [
       "github.app-installation",
@@ -206,7 +210,7 @@ describe("deployment system-health probes", () => {
       if (url.endsWith("chat.deleteScheduledMessage")) return Response.json({ ok: true });
       throw new Error(`Unexpected request: ${url}`);
     });
-    const probes = probesForEnvironment(configFromEnvironment());
+    const probes = probesForEnvironment(configFromEnvironment(settings));
     const result = await probes["slack.channel"]!(new AbortController().signal);
     expect(result).toMatchObject({ mode: "live" });
     const deletion = fetchMock.mock.calls.find(([url]) =>
@@ -219,7 +223,7 @@ describe("deployment system-health probes", () => {
     fetchMock.mockImplementation(async () =>
       Response.json({ ok: false, error: "channel_not_found" }),
     );
-    const probes = probesForEnvironment(configFromEnvironment());
+    const probes = probesForEnvironment(configFromEnvironment(settings));
     await expect(probes["slack.channel"]!(new AbortController().signal)).rejects.toThrow(
       "Slack bot cannot deliver to the configured channel (channel_not_found).",
     );
@@ -233,7 +237,7 @@ describe("deployment system-health probes", () => {
       throw new Error(`Unexpected request: ${url}`);
     });
     await expect(
-      probesForEnvironment(configFromEnvironment())["jira.api"]!(signal),
+      probesForEnvironment(configFromEnvironment(settings))["jira.api"]!(signal),
     ).rejects.toThrow("Jira authentication failed: the base URL or API token was not accepted.");
 
     fetchMock.mockImplementation(async (url: string) => {
@@ -243,7 +247,7 @@ describe("deployment system-health probes", () => {
       throw new Error(`Unexpected request: ${url}`);
     });
     await expect(
-      probesForEnvironment(configFromEnvironment())["jira.api"]!(signal),
+      probesForEnvironment(configFromEnvironment(settings))["jira.api"]!(signal),
     ).rejects.toThrow("Jira authenticated, but the configured project is not accessible");
   });
 
@@ -263,7 +267,7 @@ describe("deployment system-health probes", () => {
     });
 
     await expect(
-      probesForEnvironment(configFromEnvironment())["github.repositories"]?.(
+      probesForEnvironment(configFromEnvironment(settings))["github.repositories"]?.(
         new AbortController().signal,
       ),
     ).rejects.toThrow(/no accessible repositories/);
@@ -273,7 +277,7 @@ describe("deployment system-health probes", () => {
     fetchMock.mockResolvedValueOnce(
       new Response("[]", { headers: { "x-total": "0" } }),
     );
-    const config = { ...configFromEnvironment(), gitlabProjectId: undefined };
+    const config = { ...configFromEnvironment(settings), gitlabProjectId: undefined };
 
     await expect(
       probesForEnvironment(config)["gitlab.repositories"]?.(
@@ -298,7 +302,7 @@ describe("deployment system-health probes", () => {
     });
 
     await expect(
-      probesForEnvironment(configFromEnvironment())["github.webhook-delivery"]?.(
+      probesForEnvironment(configFromEnvironment(settings))["github.webhook-delivery"]?.(
         new AbortController().signal,
       ),
     ).rejects.toThrow(/missing required webhook events/);
@@ -321,7 +325,7 @@ describe("deployment system-health probes", () => {
       throw new Error(`Unexpected request: ${url}`);
     });
 
-    const result = await probesForEnvironment(configFromEnvironment())[
+    const result = await probesForEnvironment(configFromEnvironment(settings))[
       "github.webhook-delivery"
     ]?.(new AbortController().signal);
 
@@ -344,7 +348,7 @@ describe("deployment system-health probes", () => {
       throw new Error(`Unexpected request: ${url}`);
     });
 
-    const result = await probesForEnvironment(configFromEnvironment())[
+    const result = await probesForEnvironment(configFromEnvironment(settings))[
       "github.webhook-delivery"
     ]?.(new AbortController().signal);
 
@@ -377,7 +381,7 @@ describe("deployment system-health probes", () => {
       throw new Error(`Unexpected request: ${url}`);
     });
 
-    const result = await probesForEnvironment(configFromEnvironment())[
+    const result = await probesForEnvironment(configFromEnvironment(settings))[
       "github.webhook-delivery"
     ]?.(new AbortController().signal);
 
@@ -393,7 +397,7 @@ describe("deployment system-health probes", () => {
       },
     ]);
 
-    const result = await probesForEnvironment(configFromEnvironment())[
+    const result = await probesForEnvironment(configFromEnvironment(settings))[
       "jira.webhook-delivery"
     ]?.(new AbortController().signal);
 
@@ -410,7 +414,7 @@ describe("deployment system-health probes", () => {
     ]);
 
     await expect(
-      probesForEnvironment(configFromEnvironment())["jira.webhook-delivery"]?.(
+      probesForEnvironment(configFromEnvironment(settings))["jira.webhook-delivery"]?.(
         new AbortController().signal,
       ),
     ).rejects.toThrow(/No Jira webhook points at this worker/);
@@ -419,7 +423,7 @@ describe("deployment system-health probes", () => {
   it("falls back to delivery evidence when Jira forbids listing webhooks", async () => {
     mockJira({ status: 403 });
 
-    const result = await probesForEnvironment(configFromEnvironment())[
+    const result = await probesForEnvironment(configFromEnvironment(settings))[
       "jira.webhook-delivery"
     ]?.(new AbortController().signal);
 
@@ -446,7 +450,7 @@ describe("deployment system-health probes", () => {
       },
     ]);
 
-    const result = await probesForEnvironment(configFromEnvironment())[
+    const result = await probesForEnvironment(configFromEnvironment(settings))[
       "jira.webhook-delivery"
     ]?.(new AbortController().signal);
 
@@ -464,7 +468,7 @@ describe("deployment system-health probes", () => {
         headers: { "Content-Type": "application/json" },
       }),
     );
-    const result = await probesForEnvironment(configFromEnvironment())["email.sender"]?.(
+    const result = await probesForEnvironment(configFromEnvironment(settings))["email.sender"]?.(
       new AbortController().signal,
     );
     expect(result).toMatchObject({
@@ -477,7 +481,7 @@ describe("deployment system-health probes", () => {
     fetchMock.mockResolvedValueOnce(Response.json({}));
 
     await expect(
-      probesForEnvironment(configFromEnvironment())["email.sender"]?.(
+      probesForEnvironment(configFromEnvironment(settings))["email.sender"]?.(
         new AbortController().signal,
       ),
     ).rejects.toThrow(/sender-domain verification data/);
@@ -497,7 +501,7 @@ describe("deployment system-health probes", () => {
     );
 
     await expect(
-      probesForEnvironment(configFromEnvironment())["email.webhook-delivery"]?.(
+      probesForEnvironment(configFromEnvironment(settings))["email.webhook-delivery"]?.(
         new AbortController().signal,
       ),
     ).rejects.toThrow(/missing required events/);
@@ -546,7 +550,7 @@ describe("deployment system-health probes", () => {
       }
       throw new Error(`Unexpected request: ${url}`);
     });
-    const config = { ...configFromEnvironment(), gitlabProjectId: undefined };
+    const config = { ...configFromEnvironment(settings), gitlabProjectId: undefined };
 
     const result = await probesForEnvironment(config)[
       "gitlab.webhook-delivery"
@@ -589,7 +593,7 @@ describe("deployment system-health probes", () => {
       throw new Error(`Unexpected request: ${url}`);
     });
 
-    const result = await probesForEnvironment(configFromEnvironment())[
+    const result = await probesForEnvironment(configFromEnvironment(settings))[
       "gitlab.webhook-delivery"
     ]?.(new AbortController().signal);
 
@@ -636,7 +640,7 @@ describe("deployment system-health probes", () => {
       }
       throw new Error(`Unexpected request: ${url}`);
     });
-    const config = { ...configFromEnvironment(), gitlabProjectId: undefined };
+    const config = { ...configFromEnvironment(settings), gitlabProjectId: undefined };
 
     const result = await probesForEnvironment(config)["gitlab.webhook-delivery"]?.(
       new AbortController().signal,

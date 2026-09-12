@@ -17,6 +17,7 @@ import {
 import {
   dispatchTriggerManually,
 } from "../../../../../../../services/workflow-definitions/trigger-manual-dispatch.js";
+import { getRequestSettingsSnapshot } from "../../../../../../../services/settings/index.js";
 import { parseDefinitionId } from "../../../../workflow-definitions.get.js";
 
 export default defineEventHandler(
@@ -45,6 +46,7 @@ export default defineEventHandler(
         request,
         actorId: actor.userId,
         actorRole: actor.role,
+        settings: await getRequestSettingsSnapshot(event),
       });
       setResponseStatus(event, response.status === "started" ? 201 : 202);
       return response;

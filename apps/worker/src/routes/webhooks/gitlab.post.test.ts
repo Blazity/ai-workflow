@@ -17,6 +17,11 @@ const mocks = vi.hoisted(() => ({
   isRepoAllowed: vi.fn(),
   findWorkflowOwnedPullRequestIdentity: vi.fn(),
   observeProviderWebhook: vi.fn(),
+  // An empty settings table is what a deployment that has stored no decision
+  // has, so every value still resolves from the mocked environment exactly as
+  // it did before the snapshot existed. It is a spy because when this runs, and
+  // whether it runs at all, is itself under test below.
+  readAllConnectedSettings: vi.fn(),
 }));
 
 global.fetch = mocks.fetch;
@@ -42,6 +47,9 @@ vi.mock("../../services/dispatch/dispatch-trigger.js", () => ({
 }));
 
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
+vi.mock("../../db/repositories/settings.js", () => ({
+  readAllConnectedSettings: (...args: any[]) => mocks.readAllConnectedSettings(...args),
+}));
 vi.mock("../../db/repositories/runs.js", () => ({
   findWorkflowOwnedPullRequestIdentity: (...args: any[]) =>
     mocks.findWorkflowOwnedPullRequestIdentity(...args),
@@ -150,6 +158,9 @@ describe("POST /webhooks/gitlab", () => {
     mocks.getVcsBotLogin.mockReturnValue("blazebot");
     mocks.isRepoAllowed.mockReturnValue(true);
     mocks.findWorkflowOwnedPullRequestIdentity.mockResolvedValue(undefined);
+    // resetAllMocks above forgets implementations too, so the empty table is
+    // re-established here rather than once at the mock factory.
+    mocks.readAllConnectedSettings.mockResolvedValue([]);
     mockDispatchTriggerEvent.mockResolvedValue({ result: "no_definition" });
     mocks.getConfiguredVcsProviders.mockReturnValue([
       {
@@ -283,6 +294,26 @@ describe("POST /webhooks/gitlab", () => {
       reason: "missing_delivery_id",
     });
     expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+  });
+
+  it("refuses a wrong token without reading the settings table", async () => {
+    // The ingress is public. A delivery whose token does not match must cost
+    // the comparison and nothing else: no settings query, so an
+    // unauthenticated flood stays cheap and a database outage still answers
+    // 401 rather than a 500 GitLab would retry.
+    const response = await makeApp()(makeRequest(validMergeRequestPayload(), "not-the-secret"));
+
+    expect(response.status).toBe(401);
+    expect(mocks.readAllConnectedSettings).not.toHaveBeenCalled();
+  });
+
+  it("reads the settings table once the token checks out", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_mr" });
+
+    const response = await makeApp()(makeRequest(validMergeRequestPayload()));
+
+    expect(response.status).toBe(200);
+    expect(mocks.readAllConnectedSettings).toHaveBeenCalled();
   });
 
   it("dispatches a valid merge request webhook", async () => {

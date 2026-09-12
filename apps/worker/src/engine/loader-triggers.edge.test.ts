@@ -63,6 +63,13 @@ vi.mock("../infra/logger.js", () => ({
 }));
 
 vi.mock("../db/client.js", () => ({ getDb: vi.fn(() => ({})) }));
+vi.mock("../db/repositories/settings.js", () => ({
+  // The ingress route loads one settings snapshot per request. This file hands
+  // the handler a stub database, and an empty settings table is what a
+  // deployment that has stored no decision has, so every value still resolves
+  // from the mocked environment exactly as it did before the snapshot existed.
+  readAllConnectedSettings: async () => [],
+}));
 
 // github.post.ts consumes the mocked dispatch-trigger; the dispatchTriggerEvent
 // area re-loads the real module via vi.importActual (partial-mock pattern).

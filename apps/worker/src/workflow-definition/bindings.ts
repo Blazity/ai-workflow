@@ -1,26 +1,7 @@
 import type {
-  BlockOutput,
   JsonValue,
-  WorkflowInputBindings,
   WorkflowValueSchema,
 } from "@shared/contracts";
-import { isSafeWorkflowInputName } from "@shared/contracts";
-import type { StepsRecord } from "./interpreter.js";
-
-export { isSafeWorkflowInputName } from "@shared/contracts";
-
-const FORBIDDEN_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
-
-export type ParsedWorkflowBindingSource =
-  | { root: "trigger"; path: string[] }
-  | { root: "steps"; nodeId: string; path: string[] }
-  | { root: "run"; path: string[] };
-
-export interface WorkflowRunBindingValues {
-  id: string;
-  branchName: string;
-  defaultAgent: { provider: string; model: string };
-}
 
 export const RUN_BINDING_SCHEMA: WorkflowValueSchema = {
   type: "object",
@@ -40,60 +21,6 @@ export const RUN_BINDING_SCHEMA: WorkflowValueSchema = {
   required: ["id", "branchName", "defaultAgent"],
   additionalProperties: false,
 };
-
-function safeSegments(source: string): string[] | null {
-  if (source.trim() !== source) return null;
-  const segments = source.split(".");
-  if (
-    segments.some(
-      (segment) =>
-        segment.length === 0 || /\s/.test(segment) || FORBIDDEN_SEGMENTS.has(segment),
-    )
-  ) {
-    return null;
-  }
-  return segments;
-}
-
-export function parseWorkflowBindingSource(source: string): ParsedWorkflowBindingSource | null {
-  const segments = safeSegments(source);
-  if (!segments) return null;
-
-  if (segments[0] === "trigger" && segments.length >= 2) {
-    return { root: "trigger", path: segments.slice(1) };
-  }
-  if (segments[0] === "run" && segments.length >= 2) {
-    return { root: "run", path: segments.slice(1) };
-  }
-  if (segments[0] === "steps" && segments.length >= 4 && segments[2] === "output") {
-    return { root: "steps", nodeId: segments[1], path: segments.slice(3) };
-  }
-  return null;
-}
-
-export function resolveWorkflowSchemaPath(
-  schema: WorkflowValueSchema,
-  path: readonly string[],
-): WorkflowValueSchema | null {
-  let current = schema;
-  for (const segment of path) {
-    if (FORBIDDEN_SEGMENTS.has(segment)) return null;
-    if (current.type === "nullable") current = current.value;
-    if (current.type === "object") {
-      if (Object.prototype.hasOwnProperty.call(current.properties, segment)) {
-        current = current.properties[segment];
-        continue;
-      }
-      return current.additionalProperties ? { type: "unknown" } : null;
-    }
-    if (current.type === "array" && /^(?:0|[1-9]\d*)$/.test(segment)) {
-      current = current.items;
-      continue;
-    }
-    return null;
-  }
-  return current;
-}
 
 export function isWorkflowSchemaAssignable(
   source: WorkflowValueSchema,
@@ -259,50 +186,4 @@ function jsonValuesEqual(left: JsonValue, right: JsonValue): boolean {
         jsonValuesEqual(left[key]!, right[key]!),
     )
   );
-}
-
-function ownPathValue(root: unknown, path: readonly string[]): { found: boolean; value?: unknown } {
-  let current = root;
-  for (const segment of path) {
-    if (
-      current === null ||
-      (typeof current !== "object" && typeof current !== "function") ||
-      !Object.prototype.hasOwnProperty.call(current, segment)
-    ) {
-      return { found: false };
-    }
-    current = (current as Record<string, unknown>)[segment];
-  }
-  return { found: true, value: current };
-}
-
-export function resolveWorkflowInputBindings(
-  bindings: WorkflowInputBindings,
-  triggerOutput: BlockOutput,
-  steps: StepsRecord,
-  runValues: WorkflowRunBindingValues | undefined,
-): Record<string, unknown> {
-  const resolved: Record<string, unknown> = {};
-  for (const [name, source] of Object.entries(bindings)) {
-    if (!isSafeWorkflowInputName(name)) {
-      throw new Error(`input name "${name}" is not safe`);
-    }
-    const parsed = parseWorkflowBindingSource(source);
-    let result: { found: boolean; value?: unknown } = { found: false };
-    if (parsed?.root === "trigger") {
-      result = ownPathValue(triggerOutput, parsed.path);
-    } else if (parsed?.root === "run") {
-      result = ownPathValue(runValues, parsed.path);
-    } else if (parsed?.root === "steps") {
-      const step = Object.prototype.hasOwnProperty.call(steps, parsed.nodeId)
-        ? steps[parsed.nodeId]
-        : undefined;
-      if (step) result = ownPathValue(step.output, parsed.path);
-    }
-    if (!result.found) {
-      throw new Error(`binding "${source}" could not be resolved`);
-    }
-    resolved[name] = result.value;
-  }
-  return resolved;
 }

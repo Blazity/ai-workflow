@@ -64,6 +64,19 @@ names, harness defaults) are rows in the `settings` table, described once in
   an accessor that quietly returned a promise would read as truthy and turn a
   feature on. Load the snapshot where the work starts (an HTTP handler, a cron
   tick, the MCP transport, and later a run at its start) and hand it down.
+- **Where each entry loads it.** An HTTP handler calls
+  `getRequestSettingsSnapshot(event)`, which memoises the load on the event, so
+  the actor guard, the handler and every service below them share one read; a
+  cron tick loads once at the top of the route and passes the snapshot into the
+  pass, which hands it to every phase; the MCP transport loads once per call and
+  puts it on `McpToolDependencies`, so a tool reads `deps.settings` and never a
+  global. The transport loads before `requireMcpActor` because `MCP_ENABLED` and
+  `MCP_MAX_REQUEST_BYTES` are consulted first, which is deliberate and is the one
+  place a load before authentication is accepted: the public webhook ingresses do
+  the opposite and take a `loadSettings` thunk, so a bad signature is refused
+  without touching the database. Engine files are the exception and still call
+  the deprecated zero-argument form until the engine wave (stage X) gives a run
+  its own snapshot at run start.
 - **The transition rule.** Every accessor that reads a migrated key has two
   forms: `accessor(snapshot)`, which is the one to use, and a deprecated
   zero-argument form that resolves from the environment through
@@ -92,6 +105,16 @@ names, harness defaults) are rows in the `settings` table, described once in
   `src/engine/step-registration-coverage.test.ts` are the guards; run both
   when you move, rename or add such a file. A stray backtick in a comment can
   hide every directive below it, which is why the detector is content-based.
+- **A fixture reaches worker source without a file extension.** The Workflow
+  builder's discovery resolves a relative specifier literally, so
+  `../../src/foo.js` from `workflow-test-fixtures/` matches nothing on disk and
+  the whole chain below it drops out of the builder's import graph. The builder
+  then cannot see that a `@shared/*` package is reachable from a step, leaves it
+  external, and Node loads `packages/<name>/index.ts` raw: its extensionless
+  re-exports are unresolvable there, so every test in
+  `pnpm run test:workflow-sdk` times out on
+  `Cannot find module .../packages/<name>/<file>`. Import worker source from a
+  fixture as `../../src/foo`, and let `verify:changed` plan the suite.
 - **`engine/agent-workflow.ts` has no top-level adapter or logger imports.** Inside a step,
   `logger` and adapters are deferred `await import(...)` calls. Do not add a
   top-level import to that module, and do not assume one exists.

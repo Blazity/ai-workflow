@@ -14,6 +14,12 @@ const mocks = vi.hoisted(() => ({
   isRepoAllowed: vi.fn(),
   findWorkflowOwnedPullRequestIdentity: vi.fn(),
   observeProviderWebhook: vi.fn(),
+  verifyGitHubWebhookSignature: vi.fn(),
+  // An empty settings table is what a deployment that has stored no decision
+  // has, so every value still resolves from the mocked environment exactly as
+  // it did before the snapshot existed. It is a spy because when this runs, and
+  // whether it runs at all, is itself under test below.
+  readAllConnectedSettings: vi.fn(async () => [] as unknown[]),
 }));
 
 vi.mock("../../infra/vcs-config.js", () => ({
@@ -25,7 +31,7 @@ vi.mock("../../services/vcs/index.js", () => ({
 }));
 
 vi.mock("../../infra/github-webhook-sig.js", () => ({
-  verifyGitHubWebhookSignature: vi.fn(),
+  verifyGitHubWebhookSignature: (...args: any[]) => mocks.verifyGitHubWebhookSignature(...args),
 }));
 vi.mock("../../engine/support/repo-allowlist.js", () => ({
   isRepoAllowed: (...args: any[]) => mocks.isRepoAllowed(...args),
@@ -36,6 +42,9 @@ vi.mock("../../post-pr-gate/config.js", () => ({
 }));
 
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
+vi.mock("../../db/repositories/settings.js", () => ({
+  readAllConnectedSettings: () => mocks.readAllConnectedSettings(),
+}));
 vi.mock("../../db/repositories/runs.js", () => ({
   findWorkflowOwnedPullRequestIdentity: (...args: any[]) =>
     mocks.findWorkflowOwnedPullRequestIdentity(...args),
@@ -239,6 +248,33 @@ describe("POST /webhooks/github", () => {
       expect.objectContaining({ triggerType: "trigger_pr_review" }),
       expect.anything(),
     );
+  });
+
+  it("refuses a bad signature without reading the settings table", async () => {
+    // The ingress is public. A delivery that fails the HMAC must cost the HMAC
+    // and nothing else: no settings query, so an unauthenticated flood stays
+    // cheap and a database outage still answers 401 rather than a 500 GitHub
+    // would retry.
+    // Once: vi.clearAllMocks in beforeEach forgets the calls, not the
+    // implementation, and every later test in this file expects a delivery
+    // whose signature passes.
+    mocks.verifyGitHubWebhookSignature.mockImplementationOnce(() => {
+      throw new Error("Invalid signature");
+    });
+
+    const response = await makeApp()(makeRequest(pullRequestBody("opened")));
+
+    expect(response.status).toBe(401);
+    expect(mocks.readAllConnectedSettings).not.toHaveBeenCalled();
+  });
+
+  it("reads the settings table once the signature checks out", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_pr" });
+
+    const response = await makeApp()(makeRequest(pullRequestBody("opened")));
+
+    expect(response.status).toBe(200);
+    expect(mocks.readAllConnectedSettings).toHaveBeenCalled();
   });
 
   it("starts a definition run and supersedes the gate for a bot PR", async () => {
