@@ -238,6 +238,25 @@ describe("PUT /api/v1/repository-catalog/:id", () => {
     expect(res.status).toBe(400);
   });
 
+  it("refuses a group name the checks engine could never resolve", async () => {
+    const res = await put(0, {
+      ...PROFILE,
+      scriptGroups: {
+        provider: "github",
+        repoPath: "acme/api",
+        groups: { "Unit Tests": { commands: ["pnpm test"] } },
+      },
+      gateGroups: null,
+    });
+
+    expect(res.status).toBe(400);
+    // Refused rather than repaired: "Unit Tests" could have meant `unit-tests`
+    // or `test`, and a profile that saves and then cannot be parsed is a
+    // repository whose checks silently never run.
+    const body = await (await handlerFor(catalogGet)(new Request("http://worker.test/"))).json();
+    expect(body.repositories).toEqual([]);
+  });
+
   it("gives a member 403 and writes nothing", async () => {
     state.sessionUserId = "user_member";
     const res = await put(0, PROFILE);

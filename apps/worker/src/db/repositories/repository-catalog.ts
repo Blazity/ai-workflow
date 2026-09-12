@@ -681,6 +681,23 @@ export function getConnectedCurrentCheckConfiguration() {
 }
 
 /**
+ * The import commit, which is the seed insert under another name.
+ *
+ * Deliberately the same function. An import and the allowlist seed create the
+ * same thing, rows with no profile, and the seed's insert already is the one
+ * statement with the case-insensitive guard and the do-nothing conflict clause
+ * that neon-http forces and that the consecutive-writes gate checks for. A
+ * second spelling would be a second place for that guard to go wrong, and the
+ * only difference between the two callers is the `source` they pass.
+ */
+export function importConnectedRepositoryCatalogEntries(input: {
+  repositories: Array<{ provider: string; path: string }>;
+  enabled: boolean;
+}) {
+  return seedRepositoryCatalogEntries(getDb(), { ...input, source: "imported" });
+}
+
+/**
  * Every repository pinned by a stored workflow definition version, published or
  * draft.
  *

@@ -49,3 +49,42 @@ export async function listRepositoryDirectory(): Promise<RepositoriesResponse> {
   );
   return { repositories, providers };
 }
+
+/**
+ * How long one listing is reused. A minute, as the repositories route has
+ * always cached it.
+ *
+ * Short because the list changes when somebody creates a repository and the
+ * admin who just created it is the one reloading the picker; long enough that
+ * opening the picker, previewing an import and committing it is ONE listing
+ * rather than three. Process local, so it is per worker instance, and the worst
+ * a stale entry costs is a repository that appears a minute late.
+ */
+const DIRECTORY_CACHE_TTL_MS = 60_000;
+
+let cache: { at: number; response: RepositoriesResponse } | null = null;
+
+/**
+ * The directory, from cache when it is fresh.
+ *
+ * One cache for every caller, deliberately. The picker route, the import
+ * preview and the import commit all ask the same providers the same question,
+ * and three separate caches would let a preview and the commit that follows it
+ * disagree about which repositories exist, which is exactly the disagreement
+ * the commit reports back as "skipped".
+ */
+export async function listCachedRepositoryDirectory(): Promise<RepositoriesResponse> {
+  if (cache && Date.now() - cache.at < DIRECTORY_CACHE_TTL_MS) {
+    return cache.response;
+  }
+  const response = await listRepositoryDirectory();
+  cache = { at: Date.now(), response };
+  return response;
+}
+
+/** Drop the cached listing. Tests only: the cache is module state and a suite
+ *  that left one behind would answer the next test from the previous test's
+ *  providers. */
+export function resetRepositoryDirectoryCacheForTests(): void {
+  cache = null;
+}

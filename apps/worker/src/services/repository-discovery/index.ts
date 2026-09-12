@@ -14,7 +14,9 @@ export type {
   RepositoryCatalogEntry,
 } from "./catalog.js";
 export {
+  listCachedRepositoryDirectory,
   listRepositoryDirectory,
+  resetRepositoryDirectoryCacheForTests,
 } from "./directory.js";
 export {
   validateRepositoryDiscoveryResult,

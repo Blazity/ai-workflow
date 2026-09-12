@@ -7,14 +7,19 @@
  * split matches every other dashboard contract in this package.
  */
 import { z } from "zod";
+import type { RepositoryProviderStatus } from "./api";
 import {
   repositoryCatalogPathSchema,
   repositoryCatalogProviderSchema,
   repositoryProfileScriptGroupsSchema,
   repositoryRelationshipSchema,
   type RepositoryCatalogEntry,
+  type RepositoryCatalogProvider,
   type RepositoryCatalogState,
   type RepositoryProfileVersion,
+  type RepositorySuggestionDroppedGroup,
+  type RepositorySuggestionProposal,
+  type RepositorySuggestionUsage,
 } from "./repository-catalog";
 
 export const REPOSITORY_CATALOG_REASON_MAX_LENGTH = 500;
@@ -130,4 +135,150 @@ export interface RepositoryCatalogClaimedRepository {
 export interface RepositoryCatalogActivateConflict {
   error: "unacknowledged_repositories";
   repositories: RepositoryCatalogClaimedRepository[];
+}
+
+/**
+ * Listing the installation's repositories for the import screen.
+ *
+ * A POST with an empty body rather than a GET, because it is the first half of
+ * a two-step write: the keys the admin ticks here are the keys the commit
+ * below is checked against, and pairing the two as POSTs keeps them from
+ * drifting into a cached GET that answers with a list the commit no longer
+ * accepts.
+ */
+export const repositoryCatalogImportPreviewRequestSchema = z.object({}).strict();
+export type RepositoryCatalogImportPreviewRequest = z.infer<
+  typeof repositoryCatalogImportPreviewRequestSchema
+>;
+
+/**
+ * One repository the installation exposes, and whether the catalog already
+ * holds it.
+ *
+ * `key` is the catalog key (`provider:owner/name`, cased down) and is what the
+ * commit takes back; `path` keeps the provider's own casing, which is what the
+ * row stores. Both travel because a screen that sent the display casing back
+ * would import a second row for a repository the catalog already has under a
+ * different spelling.
+ */
+export interface RepositoryCatalogImportCandidate {
+  key: string;
+  provider: RepositoryCatalogProvider;
+  path: string;
+  name: string;
+  owner: string;
+  defaultBranch: string;
+  private: boolean;
+  archived: boolean;
+  inCatalog: boolean;
+}
+
+export interface RepositoryCatalogImportPreviewResponse {
+  repositories: RepositoryCatalogImportCandidate[];
+  /** One status per supported provider, as the repository picker reports them:
+   *  a provider nobody connected and a provider whose listing failed are
+   *  different answers and neither empties the screen. */
+  providers: RepositoryProviderStatus[];
+}
+
+/**
+ * Committing an import.
+ *
+ * `enabled` is one decision for the whole selection rather than a flag per
+ * repository: the screen asks "add these, and may the agent touch them?" once,
+ * and a per-row switch here would be a second, quieter way to grant access
+ * beside the enabled route that is audited.
+ */
+export const repositoryCatalogImportRequestSchema = z
+  .object({
+    repositoryKeys: z.array(z.string().min(1)).min(1).max(500),
+    enabled: z.boolean().default(false),
+  })
+  .strict();
+export type RepositoryCatalogImportRequest = z.infer<
+  typeof repositoryCatalogImportRequestSchema
+>;
+
+export interface RepositoryCatalogImportResponse {
+  /** Rows the insert actually created. A key already in the catalog counts
+   *  zero: the insert does nothing on conflict, so importing twice is not an
+   *  error and does not re-enable a repository somebody switched off. */
+  imported: number;
+  /**
+   * Keys a SUCCESSFUL listing of every provider did not contain.
+   *
+   * Exactly one meaning: the installation does not expose that repository any
+   * more. A provider that could not be listed at all never lands here, because
+   * "we could not ask" and "it is not there" are different facts and the whole
+   * call is refused rather than reporting the first as the second.
+   */
+  skipped: string[];
+  /**
+   * Keys the catalog already held, so nothing was created for them.
+   *
+   * Separate from `skipped` because an admin reads the two differently: a key
+   * that was already there is a no-op worth confirming, and a key the provider
+   * no longer exposes is a stale screen worth reloading. Folding them together
+   * is how an import reports "8 of 10 added" and leaves nobody able to say
+   * which two, or why.
+   */
+  alreadyPresent: string[];
+  repositories: RepositoryCatalogEntry[];
+}
+
+/**
+ * Asking for a suggestion for one repository.
+ *
+ * The id is on the body rather than in the path because this route is one
+ * call, not a sub-resource of the repository: nothing is written to the
+ * repository by it, and a POST to `.../repository-catalog/suggest` says that
+ * more honestly than a POST to the repository itself would.
+ */
+export const repositoryCatalogSuggestRequestSchema = z
+  .object({ repositoryId: z.number().int().positive() })
+  .strict();
+export type RepositoryCatalogSuggestRequest = z.infer<
+  typeof repositoryCatalogSuggestRequestSchema
+>;
+
+export interface RepositoryCatalogSuggestResponse {
+  /** What the model proposed. Nothing is stored on the profile until the admin
+   *  saves it through the upsert route. */
+  proposal: RepositorySuggestionProposal;
+  /**
+   * Groups the model proposed that the service refused, with the reason.
+   *
+   * Returned rather than dropped in silence. An admin looking at a proposal
+   * with no `test` group has to be able to tell "this repository declares no
+   * tests" from "the model proposed one and it was refused", and a screen that
+   * cannot tell them apart is a screen that teaches people the suggestion is
+   * unreliable. Empty on the ordinary answer.
+   */
+  droppedGroups: RepositorySuggestionDroppedGroup[];
+  /** The model that answered, as recorded, so the screen and the cost page
+   *  name the same thing. */
+  model: string;
+  usage: RepositorySuggestionUsage | null;
+  /** Null here always: tokens are recorded and priced by the cost page, the
+   *  way the call_llm block leaves them. The field exists so a later stage can
+   *  fill it without changing this shape. */
+  costUsd: number | null;
+}
+
+/**
+ * What a refused suggestion answers with when the repository has had too many
+ * of them too recently.
+ *
+ * A body rather than a bare status because the screen has something useful to
+ * say: the cap is per repository and it lifts on its own, so the one thing an
+ * admin needs is when. `retryAfterSeconds` is also sent as the `Retry-After`
+ * header, for the clients that read it there.
+ *
+ * No suggestion row is written for a refusal: nothing was asked of the
+ * provider and nothing was spent, and a history filling up with refusals would
+ * bury the calls that actually cost money.
+ */
+export interface RepositoryCatalogSuggestRateLimited {
+  error: "suggestion_rate_limited";
+  retryAfterSeconds: number;
 }
