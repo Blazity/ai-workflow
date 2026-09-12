@@ -44,15 +44,29 @@ tokens) and `v2-branch.ts` (branch configuration recognition and evaluation).
 Stage 4 added the structural half of the worker's old definition schema:
 `schema.ts` (the v2 parser, the deterministic stored-shape upgrade
 `normalizeV2AgentProfileConfiguration` performs, the block configuration shapes
-the params map is composed from, `upgradeStoredWorkflowDefinition`),
-`graph-issues.ts` (ids, ports, reachability, cycles, loop and branch shape,
-per-type parameter parsing, branch and transform reference compatibility, the
-two pure schedule reachability rules, the any-scope review safety check, plus
-the shared issue factory and dedupe) and `limits.ts` (`MAX_NODES`,
-`MAX_EDGES`). The scheduler and the interpreter follow in later stages. Source
-entry is `index.ts`, which re-exports every module; `exports["."]` is the only
-public entry, so the worker imports `@shared/workflow-graph` and never a file
-inside it.
+the params map is composed from), `graph-issues.ts` (ids, ports, reachability,
+cycles, loop and branch shape, per-type parameter parsing, branch and transform
+reference compatibility, the two pure schedule reachability rules, the
+any-scope review safety check, plus the shared issue factory and
+`dedupeWorkflowDefinitionIssues`, the only de-duplication in workflow
+validation) and `limits.ts` (`MAX_NODES`, `MAX_EDGES`). Stage 5 added
+`policies.ts`, one entry per validation policy: `parse` (read a stored or
+submitted graph into the runnable shape and check nothing else; it replaced
+`upgradeStoredWorkflowDefinition`), `deploy` (the structural rules plus
+everything the running deployment answers, environment availability included)
+and `runLoad` (`deploy` without the availability check, for a graph that already
+deployed). `deploy` and `runLoad` take the definition `parse` produced rather
+than parsing again, which keeps a request to one parse; each composes the
+structural rules with the worker-only half, which reaches them through the
+injected `WorkflowDeploymentIssueSource`, and de-duplicates the list it
+composed. That is one dedupe on top of the one the graph walk already does on
+its own list, because `workflowDefinitionStructuralIssues` is a public entry
+that has to return a clean list to a direct caller; both use
+`dedupeWorkflowDefinitionIssues`. There is no structural-only policy: see the
+open decision in the plan's stage 5 bullet. The scheduler
+and the interpreter follow in later stages. Source entry is `index.ts`, which
+re-exports every module; `exports["."]` is the only public entry, so the worker
+imports `@shared/workflow-graph` and never a file inside it.
 
 **Parameters, never environment.** This is the trap that decides whether a rule
 belongs here. Everything the rules need from the worker arrives as an argument:

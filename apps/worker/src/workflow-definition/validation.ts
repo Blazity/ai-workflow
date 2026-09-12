@@ -2,7 +2,6 @@ import type {
   VcsProviderKind,
   WorkflowBlockContractResolver,
   WorkflowDefinition,
-  WorkflowDefinitionValidationIssue,
   WorkflowDefinitionValidationResponse,
 } from "@shared/contracts";
 import {
@@ -10,15 +9,11 @@ import {
   WORKFLOW_SCHEMA_VERSION,
   workflowDefinitionSchemaVersionOf,
 } from "@shared/contracts";
-import type { z } from "zod";
 import {
   type WorkflowValueAnalysis,
   type WorkflowValueAnalyzer,
 } from "./available-values.js";
-import {
-  workflowDefinitionV2Schema,
-  type WorkflowBlockParamsSchemas,
-} from "@shared/workflow-graph";
+import { parse, type WorkflowBlockParamsSchemas } from "@shared/workflow-graph";
 import { validateWorkflowDefinitionIssuesForDeployment } from "./deployment-validation.js";
 
 /**
@@ -39,9 +34,11 @@ export type WorkflowDefinitionCandidateValidation =
     };
 
 /**
- * Validates one exact candidate and returns API-ready issues. Node ownership and
- * JSON paths are attached while the source validation still has that context;
- * callers never recover structure by parsing human-readable messages.
+ * Validates one exact candidate and returns API-ready issues. The parse policy
+ * attaches node ownership and JSON paths while it still has that context, so
+ * callers never recover structure by parsing human-readable messages, and the
+ * deploy policy de-duplicates the list it composes, so nothing is deduped again
+ * here.
  */
 export function validateWorkflowDefinitionCandidate(
   candidate: unknown,
@@ -70,31 +67,32 @@ export function validateWorkflowDefinitionCandidate(
       },
     };
   }
-  const parsed = workflowDefinitionV2Schema.safeParse(candidate);
-  if (!parsed.success) {
+  const parsed = parse(candidate);
+  if (parsed.definition === null) {
     return {
       parsed: null,
       analysis: null,
       response: {
         valid: false,
-        issues: structuralIssues(candidate, parsed.error),
+        issues: parsed.issues,
         nodeContracts: {},
         availableValuesByNode: {},
       },
     };
   }
 
-  const analysis = analyzeValues(parsed.data);
-  const deploymentIssues = validateWorkflowDefinitionIssuesForDeployment(
-    parsed.data,
+  const analysis = analyzeValues(parsed.definition);
+  // The deployment walk already carries this pass, so its de-duplicated list is
+  // the answer: appending the pass a second time could only repeat it.
+  const issues = validateWorkflowDefinitionIssuesForDeployment(
+    parsed.definition,
     resolveContract,
     blockParamsSchemas,
     configuredVcsProviders,
     analysis,
   );
-  const issues = dedupeIssues([...deploymentIssues, ...analysis.issues]);
   return {
-    parsed: parsed.data,
+    parsed: parsed.definition,
     analysis,
     response: {
       valid: issues.length === 0,
@@ -110,62 +108,4 @@ export function validateWorkflowDefinitionCandidate(
 export function declaresRetiredSchema(candidate: unknown): boolean {
   const version = workflowDefinitionSchemaVersionOf(candidate);
   return version !== undefined && version !== WORKFLOW_SCHEMA_VERSION;
-}
-
-function dedupeIssues(
-  issues: WorkflowDefinitionValidationIssue[],
-): WorkflowDefinitionValidationIssue[] {
-  const seen = new Set<string>();
-  return issues.filter((issue) => {
-    const key = JSON.stringify([
-      issue.code,
-      issue.nodeId,
-      issue.path ?? null,
-      issue.message,
-    ]);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-function structuralIssues(
-  candidate: unknown,
-  error: z.ZodError,
-): WorkflowDefinitionValidationIssue[] {
-  return error.issues.map((issue) => {
-    const path = jsonPointer(issue.path);
-    return {
-      code: "schema",
-      severity: "error",
-      nodeId: nodeIdAtPath(candidate, issue.path),
-      ...(path ? { path } : {}),
-      message: issue.message,
-    };
-  });
-}
-
-function nodeIdAtPath(candidate: unknown, path: PropertyKey[]): string | null {
-  if (
-    !candidate ||
-    typeof candidate !== "object" ||
-    path[0] !== "nodes" ||
-    typeof path[1] !== "number"
-  ) {
-    return null;
-  }
-  const nodes = (candidate as { nodes?: unknown }).nodes;
-  if (!Array.isArray(nodes)) return null;
-  const node = nodes[path[1]];
-  if (!node || typeof node !== "object") return null;
-  const id = (node as { id?: unknown }).id;
-  return typeof id === "string" && id.length > 0 ? id : null;
-}
-
-function jsonPointer(path: PropertyKey[]): string {
-  return path.length === 0
-    ? ""
-    : `/${path
-        .map((segment) => String(segment).replaceAll("~", "~0").replaceAll("/", "~1"))
-        .join("/")}`;
 }

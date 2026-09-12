@@ -1,6 +1,7 @@
 import type {
   WorkflowDefinitionValidationIssue,
 } from "@shared/contracts";
+import { dedupeWorkflowDefinitionIssues } from "@shared/workflow-graph";
 import type { Db } from "../db/types.js";
 import { createPromptReferenceLoader } from "../prompt-library/prompt-reference-loader.js";
 import { createConnectedPromptReferenceLoader } from "../prompt-library/prompt-reference-loader.js";
@@ -131,7 +132,7 @@ export async function previewWorkflowPromptCandidate(
       sections: resolved.compilation.sections,
       provenance: resolved.compilation.provenance,
       unresolvedSources: resolved.compilation.unresolvedSources,
-      issues: dedupeIssues([...validationIssues, ...resolved.issues]),
+      issues: dedupeWorkflowDefinitionIssues([...validationIssues, ...resolved.issues]),
     },
   };
 }
@@ -186,7 +187,7 @@ export async function previewConnectedWorkflowPromptCandidate(
     unresolvedRepositorySources: unresolvedRepositoryInstructionSources(), runtimeData: renderPreviewRuntimeData(availableValues),
   });
   const validationIssues = validated.response.issues.filter((issue) => issue.nodeId === null || issue.nodeId === input.blockId);
-  return { ok: true, preview: { blockId: input.blockId, prompt: resolved.compilation.prompt, hash: resolved.compilation.hash, sections: resolved.compilation.sections, provenance: resolved.compilation.provenance, unresolvedSources: resolved.compilation.unresolvedSources, issues: dedupeIssues([...validationIssues, ...resolved.issues]) } };
+  return { ok: true, preview: { blockId: input.blockId, prompt: resolved.compilation.prompt, hash: resolved.compilation.hash, sections: resolved.compilation.sections, provenance: resolved.compilation.provenance, unresolvedSources: resolved.compilation.unresolvedSources, issues: dedupeWorkflowDefinitionIssues([...validationIssues, ...resolved.issues]) } };
 }
 
 function renderPreviewRuntimeData(
@@ -205,21 +206,4 @@ function renderPreviewRuntimeData(
     null,
     2,
   );
-}
-
-function dedupeIssues(
-  issues: readonly WorkflowDefinitionValidationIssue[],
-): WorkflowDefinitionValidationIssue[] {
-  const seen = new Set<string>();
-  return issues.filter((issue) => {
-    const key = JSON.stringify([
-      issue.code,
-      issue.nodeId,
-      issue.path ?? null,
-      issue.message,
-    ]);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
 }
