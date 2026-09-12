@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { WorkflowDefinitionV2 } from "@shared/contracts";
 import { builtinHarnessProfileReference } from "@shared/harness";
 import type { Db } from "../db/client.js";
-import type { WorkflowBlockRegistryContext } from "./block-registry.js";
+import type { WorkflowBlockRegistryContext } from "../engine/definition/block-contract-resolver.js";
 
 const mocks = vi.hoisted(() => ({
   loadPromptReference: vi.fn(),

@@ -7,7 +7,8 @@ import { describe, expect, it } from "vitest";
 import { REVIEW_RESULT_JSON_SCHEMA } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 import * as schema from "../db/schema.js";
-import type { WorkflowBlockRegistryContext } from "./block-registry.js";
+import type { WorkflowBlockRegistryContext } from "./../engine/definition/block-contract-resolver.js";
+import { testBlockData } from "./../test-support/block-contracts.js";
 import {
   canonicalizeSchema,
   collectDefinitionEmbeds,
@@ -37,6 +38,8 @@ const registryContext: WorkflowBlockRegistryContext = {
   arthurConfigured: true,
   webhookTriggerConfigured: true,
 };
+
+const blockData = testBlockData(registryContext);
 
 interface TestDatabase {
   client: PGlite;
@@ -240,10 +243,10 @@ describe("carry schema drift", () => {
 
     // Precondition: the shipped shape validates clean, the stale copy does not.
     expect(
-      validateWorkflowDefinitionCandidate(reviewedTicketCurrent(), registryContext)
+      validateWorkflowDefinitionCandidate(reviewedTicketCurrent(), ...blockData)
         .response.valid,
     ).toBe(true);
-    const before = validateWorkflowDefinitionCandidate(oldEnumDef, registryContext);
+    const before = validateWorkflowDefinitionCandidate(oldEnumDef, ...blockData);
     expect(before.response.valid).toBe(false);
     expect(
       before.response.issues.filter((issue) => issue.code === "binding.reference_type"),
@@ -253,7 +256,7 @@ describe("carry schema drift", () => {
     await applyCarrySchemaResync(client);
 
     const migrated = await readStoredDefinition(client, id);
-    const after = validateWorkflowDefinitionCandidate(migrated, registryContext);
+    const after = validateWorkflowDefinitionCandidate(migrated, ...blockData);
     expect(after.response.valid).toBe(true);
     expect(
       after.response.issues.filter((issue) => issue.code === "binding.reference_type"),

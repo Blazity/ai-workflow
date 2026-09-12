@@ -126,7 +126,6 @@ export {
   isPromptSlotDefinition,
   parsePromptDataTokens,
   parsePromptSlotTokens,
-  PROMPT_SLOT_NAME_PATTERN,
 } from "./prompt-slots";
 export {
   DEFAULT_OPEN_PR_BODY,

@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import type { WorkflowDefinitionV2 } from "@shared/contracts";
 import type { AgentWorkflowInput } from "../../engine/agent-input.js";
-import type { WorkflowBlockRegistryContext } from "../block-registry.js";
+import type { WorkflowBlockRegistryContext } from "../../engine/definition/block-contract-resolver.js";
+import { testBlockData } from "../../test-support/block-contracts.js";
 import {
   validateWorkflowDefinitionIssuesForDeployment,
   workflowDefinitionV2Schema,
@@ -27,6 +28,8 @@ const REGISTRY_CONTEXT: WorkflowBlockRegistryContext = {
   arthurConfigured: true,
   webhookTriggerConfigured: true,
 };
+
+const BLOCK_DATA = testBlockData(REGISTRY_CONTEXT);
 
 /**
  * A customer-authored Loop shape that no shipped template can reach.
@@ -104,7 +107,7 @@ function snapshotDefinition(path: string = SNAPSHOT.path): WorkflowDefinitionV2 
 function noValidationIssues(path: string): unknown[] {
   return validateWorkflowDefinitionIssuesForDeployment(
     snapshotDefinition(path),
-    REGISTRY_CONTEXT,
+    ...BLOCK_DATA,
     { checkEnvironmentAvailability: false },
   );
 }
@@ -135,7 +138,7 @@ describe("customer-authored loop with a contested boundary", () => {
     expect(
       validateWorkflowDefinitionIssuesForDeployment(
         snapshotDefinition(),
-        REGISTRY_CONTEXT,
+        ...BLOCK_DATA,
         { checkEnvironmentAvailability: false },
       ),
     ).toEqual([]);

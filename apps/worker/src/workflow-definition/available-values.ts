@@ -8,6 +8,7 @@ import {
   type TransformConfiguration,
   type WorkflowBranchConfigurationV2,
   type WorkflowBlockContract,
+  type WorkflowBlockContractResolver,
   type WorkflowDataCatalogEntry,
   type WorkflowDataCatalogPresence,
   type WorkflowDefinitionCatalogResponse,
@@ -25,10 +26,6 @@ import {
   isWorkflowSchemaAssignable,
   RUN_BINDING_SCHEMA,
 } from "./bindings.js";
-import {
-  resolveWorkflowBlockContract,
-  type WorkflowBlockRegistryContext,
-} from "./block-registry.js";
 import {
   inspectJsonSchema202012,
   validateJsonSchemaValue,
@@ -81,14 +78,10 @@ function configurationParams(node: WorkflowDefinitionV2Node): Record<string, Wor
 
 function contractForNode(
   node: WorkflowDefinitionV2Node,
-  registryContext: WorkflowBlockRegistryContext,
+  resolveContract: WorkflowBlockContractResolver,
   referenceSchemas: TransformDefinitionReferenceSchemas = {},
 ): WorkflowBlockContract {
-  const contract = resolveWorkflowBlockContract(
-    node.type,
-    configurationParams(node),
-    registryContext,
-  );
+  const contract = resolveContract(node.type, configurationParams(node));
   if (node.type === "loop") {
     const carries = Array.isArray(node.configuration.carry)
       ? node.configuration.carry
@@ -251,16 +244,12 @@ function transformReferenceSchemas(
 
 function contractsForDefinition(
   definition: WorkflowDefinitionV2,
-  registryContext: WorkflowBlockRegistryContext,
+  resolveContract: WorkflowBlockContractResolver,
 ): Map<string, WorkflowBlockContract> {
   const contracts = new Map(
     definition.nodes.map((node) => [
       node.id,
-      resolveWorkflowBlockContract(
-        node.type,
-        configurationParams(node),
-        registryContext,
-      ),
+      resolveContract(node.type, configurationParams(node)),
     ]),
   );
   for (let pass = 0; pass < definition.nodes.length; pass += 1) {
@@ -270,7 +259,7 @@ function contractsForDefinition(
         node.id,
         contractForNode(
           node,
-          registryContext,
+          resolveContract,
           transformReferenceSchemas(node, definition, contracts),
         ),
       );
@@ -1345,7 +1334,7 @@ function validateBindings(
 
 export function analyzeWorkflowV2Bindings(
   definition: WorkflowDefinitionV2,
-  registryContext: WorkflowBlockRegistryContext,
+  resolveContract: WorkflowBlockContractResolver,
 ): WorkflowV2BindingAnalysis {
   const issues: WorkflowDefinitionValidationIssue[] = [];
   const nodeById = new Map(definition.nodes.map((node) => [node.id, node]));
@@ -1365,7 +1354,7 @@ export function analyzeWorkflowV2Bindings(
   const loopRegionsByNodeId = authoringLoopRegions(definition, nodeById);
   const formulas = activationFormulas(definition, nodeById, cyclicNodeIds);
   const triggers = definition.nodes.filter((node) => isTriggerBlockType(node.type));
-  const contracts = contractsForDefinition(definition, registryContext);
+  const contracts = contractsForDefinition(definition, resolveContract);
   const targetsByNode = new Map<string, InputTarget[]>();
   for (const [nodeIndex, node] of definition.nodes.entries()) {
     targetsByNode.set(
@@ -1631,11 +1620,11 @@ function catalogEntry(
  */
 export function analyzeWorkflowV2Catalog(
   definition: WorkflowDefinitionV2,
-  registryContext: WorkflowBlockRegistryContext,
+  resolveContract: WorkflowBlockContractResolver,
 ): WorkflowDefinitionCatalogResponse {
   const bindingAnalysis = analyzeWorkflowV2Bindings(
     definition,
-    registryContext,
+    resolveContract,
   );
   const nodeById = new Map(definition.nodes.map((node) => [node.id, node]));
   const forward = new Map(
@@ -1664,7 +1653,7 @@ export function analyzeWorkflowV2Catalog(
   const triggers = definition.nodes.filter((node) =>
     isTriggerBlockType(node.type),
   );
-  const contracts = contractsForDefinition(definition, registryContext);
+  const contracts = contractsForDefinition(definition, resolveContract);
   const targetsByNode = new Map<string, InputTarget[]>();
   for (const [nodeIndex, node] of definition.nodes.entries()) {
     targetsByNode.set(

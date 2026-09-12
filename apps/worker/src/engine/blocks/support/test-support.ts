@@ -12,11 +12,11 @@ import {
   BUILTIN_HARNESS_PROFILE_IDS,
   BUILTIN_HARNESS_PROFILE_MANIFESTS,
 } from "@shared/harness";
+import { validateBlockOutputAgainstContract } from "../../../workflow-definition/block-registry.js";
 import {
   resolveWorkflowBlockContract,
-  validateBlockOutputAgainstContract,
   type WorkflowBlockRegistryContext,
-} from "../../../workflow-definition/block-registry.js";
+} from "../../definition/block-contract-resolver.js";
 import { hashHarnessProfileManifest } from "../../../harness-profiles/manifest.js";
 import {
   resolveHarnessRuntime,

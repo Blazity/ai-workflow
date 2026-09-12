@@ -7,10 +7,6 @@ export {
 } from "../../adapters/issue-tracker/types.js";
 export { logger } from "../../infra/logger.js";
 export { ticketSubjectKey } from "../../engine/support/subject-key.js";
-export { buildWorkflowBlockRegistry } from "../../workflow-definition/block-registry.js";
-export {
-  workflowBlockRegistryContextFromEnv,
-} from "../../workflow-definition/models.js";
 export {
   isLegacyStoredWorkflowDefinition,
 } from "../../workflow-definition/stored-definition.js";

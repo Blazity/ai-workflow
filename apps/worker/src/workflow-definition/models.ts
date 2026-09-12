@@ -6,11 +6,6 @@ import {
 } from "@shared/harness";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 import { env } from "../infra/vcs-config.js";
-import { resolveVcsBotLogin } from "../adapters/vcs/vcs-bot-identity.js";
-import {
-  buildWorkflowBlockRegistry,
-  type WorkflowBlockRegistryContext,
-} from "./block-registry.js";
 import { RUN_BINDING_SCHEMA } from "./bindings.js";
 
 export const FALLBACK_MODELS = recognised;
@@ -101,9 +96,13 @@ function isCodexDiscoveryModelId(modelId: string): boolean {
   );
 }
 
+/** The editor's opening payload. The block registry arrives resolved, because
+ *  which blocks a deployment offers is environment state this module must not
+ *  read for itself. */
 export function buildWorkflowEditorOptions(
   models: AvailableModels,
-  discoveredTicketStatuses: Array<{ id: string; name: string }> = [],
+  discoveredTicketStatuses: Array<{ id: string; name: string }>,
+  blockRegistry: WorkflowEditorOptions["blockRegistry"],
 ): WorkflowEditorOptions {
   const agentKind = env.AGENT_KIND;
   const configuredModels = resolveModelDefaults({
@@ -136,7 +135,7 @@ export function buildWorkflowEditorOptions(
             { value: "ai_review", label: env.COLUMN_AI_REVIEW },
             { value: "backlog", label: env.COLUMN_BACKLOG },
           ],
-    blockRegistry: buildWorkflowBlockRegistry(workflowBlockRegistryContextFromEnv()),
+    blockRegistry,
     runBindingSchema: RUN_BINDING_SCHEMA,
   };
 }
@@ -154,47 +153,6 @@ function dedupeTicketStatuses(
     result.push({ id, name });
   }
   return result;
-}
-
-export function workflowBlockRegistryContextFromEnv(): WorkflowBlockRegistryContext {
-  const configuredModels = resolveModelDefaults({
-    claude: env.CLAUDE_MODEL,
-    codex: env.CODEX_MODEL,
-  });
-  const vcsProviders: WorkflowBlockRegistryContext["vcsProviders"] = [];
-  if (env.GITHUB_APP_ID && env.GITHUB_APP_PRIVATE_KEY && env.GITHUB_INSTALLATION_ID) {
-    vcsProviders.push("github");
-  }
-  if (env.GITLAB_TOKEN) vcsProviders.push("gitlab");
-  return {
-    agentProviders: {
-      claude: Boolean(env.ANTHROPIC_API_KEY),
-      codex: Boolean(env.CODEX_API_KEY || env.CODEX_CHATGPT_OAUTH_TOKEN),
-    },
-    llmProviders: {
-      claude: Boolean(
-        env.ANTHROPIC_API_KEY && !env.ANTHROPIC_API_KEY.startsWith("sk-ant-oat"),
-      ),
-      codex: Boolean(env.CODEX_API_KEY),
-    },
-    defaultAgent: {
-      provider: env.AGENT_KIND,
-      model: configuredModels[env.AGENT_KIND],
-    },
-    vcsProviders,
-    vcsBotIdentities: vcsProviders.filter((provider) =>
-      Boolean(
-        resolveVcsBotLogin(provider, vcsProviders, {
-          github: env.GITHUB_BOT_LOGIN,
-          gitlab: env.GITLAB_BOT_LOGIN,
-          legacy: env.VCS_BOT_LOGIN,
-        }),
-      ),
-    ),
-    slackConfigured: Boolean(env.CHAT_SDK_SLACK_TOKEN && env.CHAT_SDK_CHANNEL_ID),
-    arthurConfigured: Boolean(env.GENAI_ENGINE_API_KEY && env.GENAI_ENGINE_TRACE_ENDPOINT),
-    webhookTriggerConfigured: Boolean(env.WEBHOOK_TRIGGER_ENCRYPTION_KEY),
-  };
 }
 
 function dedupePrepend(model: string, list: string[]): string[] {

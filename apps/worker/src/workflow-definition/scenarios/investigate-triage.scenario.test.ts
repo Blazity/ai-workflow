@@ -6,7 +6,8 @@ import type {
   WorkflowDefinitionV2,
 } from "@shared/contracts";
 import type { AgentWorkflowInput } from "../../engine/agent-input.js";
-import type { WorkflowBlockRegistryContext } from "../block-registry.js";
+import type { WorkflowBlockRegistryContext } from "../../engine/definition/block-contract-resolver.js";
+import { testBlockData } from "../../test-support/block-contracts.js";
 import { executionError } from "../interpreter.js";
 import { validateWorkflowDefinitionIssuesForDeployment } from "../schema.js";
 import { executorRunsOf, expectNeverInvoked, portsOf } from "./assertions.js";
@@ -68,6 +69,8 @@ const REGISTRY_CONTEXT: WorkflowBlockRegistryContext = {
   arthurConfigured: true,
   webhookTriggerConfigured: true,
 };
+
+const BLOCK_DATA = testBlockData(REGISTRY_CONTEXT);
 
 /** The two evidence items, in the normalized shape the block emits whichever
  *  provider produced them. */
@@ -142,7 +145,7 @@ describe("investigate triage: the committed definition", () => {
     ) as WorkflowDefinitionV2;
 
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(definition, REGISTRY_CONTEXT, {
+      validateWorkflowDefinitionIssuesForDeployment(definition, ...BLOCK_DATA, {
         checkEnvironmentAvailability: false,
       }),
     ).toEqual([]);

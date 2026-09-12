@@ -5,7 +5,8 @@ import {
   builtinHarnessProfileReference,
   resolveBuiltinHarnessProfile,
 } from "@shared/harness";
-import type { WorkflowBlockRegistryContext } from "./block-registry.js";
+import type { WorkflowBlockRegistryContext } from "./../engine/definition/block-contract-resolver.js";
+import { testBlockData } from "./../test-support/block-contracts.js";
 import { defaultWorkflowDefinitionV2 } from "./default.js";
 import {
   workflowDefinitionTemplate,
@@ -28,6 +29,8 @@ const registryContext: WorkflowBlockRegistryContext = {
   arthurConfigured: true,
   webhookTriggerConfigured: true,
 };
+
+const blockData = testBlockData(registryContext);
 
 describe("built-in Harness Profiles", () => {
   it("publishes immutable versioned compatibility manifests", () => {
@@ -140,7 +143,7 @@ describe("v2 built-in authoring definitions", () => {
     );
     expect(new Set(v2.edges.map((edge) => edge.id)).size).toBe(v2.edges.length);
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(v2, registryContext),
+      validateWorkflowDefinitionIssuesForDeployment(v2, ...blockData),
     ).toEqual([]);
   });
 
@@ -215,7 +218,7 @@ describe("v2 built-in authoring definitions", () => {
         expect(
           validateWorkflowDefinitionIssuesForDeployment(
             template.definition,
-            registryContext,
+            ...blockData,
           ),
           template.id,
         ).toEqual([]);
@@ -395,7 +398,7 @@ describe("v2 Harness Profile validation", () => {
       provider: "claude",
     });
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(valid, registryContext),
+      validateWorkflowDefinitionIssuesForDeployment(valid, ...blockData),
     ).toEqual([]);
 
     const unknown = structuredClone(valid);
@@ -434,7 +437,7 @@ describe("v2 Harness Profile validation", () => {
     mixed.nodes.find((node) => node.id === "planning")!.configuration.provider =
       "claude";
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(mixed, registryContext),
+      validateWorkflowDefinitionIssuesForDeployment(mixed, ...blockData),
     ).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

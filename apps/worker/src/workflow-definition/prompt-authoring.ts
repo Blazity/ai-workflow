@@ -21,13 +21,17 @@ import type { Db } from "../db/types.js";
 import { createPromptReferenceLoader } from "../prompt-library/prompt-reference-loader.js";
 import { createConnectedPromptReferenceLoader } from "../prompt-library/prompt-reference-loader.js";
 import { compileEffectivePrompt } from "../engine/helpers/effective-prompt.js";
+import type {
+  VcsProviderKind,
+  WorkflowBlockContractResolver,
+} from "@shared/contracts";
 import {
   analyzeWorkflowV2Bindings,
   analyzeWorkflowV2Catalog,
 } from "./available-values.js";
 import { isWorkflowSchemaAssignable } from "./bindings.js";
-import type { WorkflowBlockRegistryContext } from "./block-registry.js";
 import { inspectJsonSchema202012 } from "./json-schema.js";
+import type { WorkflowBlockParamsSchemas } from "./schema.js";
 import {
   dashboardOrganizationId,
   validateHarnessProfileReferences,
@@ -73,16 +77,13 @@ export function resolveNodePromptAuthoring(
 export async function validateWorkflowPromptAuthoringIssues(
   db: Db,
   definition: WorkflowDefinition,
-  registryContext?: WorkflowBlockRegistryContext,
+  resolveContract: WorkflowBlockContractResolver,
   profileLoader?: HarnessProfileVersionLoader,
 ): Promise<WorkflowDefinitionValidationIssue[]> {
-  const context =
-    registryContext ??
-    (await import("./models.js")).workflowBlockRegistryContextFromEnv();
   const promptIssues =
     await validateWorkflowPromptAuthoringIssuesWithLoader(
       definition,
-      context,
+      resolveContract,
       createPromptReferenceLoader(db),
     );
   if (!definition.nodes.some((node) => isPromptAuthoringBlock(node))) {
@@ -107,12 +108,11 @@ export async function validateWorkflowPromptAuthoringIssues(
  * keeps prompt and profile validation here, above persistence. */
 export async function validateConnectedWorkflowPromptAuthoringIssues(
   definition: WorkflowDefinition,
-  registryContext?: WorkflowBlockRegistryContext,
+  resolveContract: WorkflowBlockContractResolver,
 ): Promise<WorkflowDefinitionValidationIssue[]> {
-  const context = registryContext ?? (await import("./models.js")).workflowBlockRegistryContextFromEnv();
   const promptIssues = await validateWorkflowPromptAuthoringIssuesWithLoader(
     definition,
-    context,
+    resolveContract,
     createConnectedPromptReferenceLoader(),
   );
   if (!definition.nodes.some((node) => isPromptAuthoringBlock(node))) return promptIssues;
@@ -132,11 +132,11 @@ export async function validateConnectedWorkflowPromptAuthoringIssues(
 
 export async function validateWorkflowPromptAuthoringIssuesWithLoader(
   definition: WorkflowDefinitionV2,
-  registryContext: WorkflowBlockRegistryContext,
+  resolveContract: WorkflowBlockContractResolver,
   loadPromptReference: PromptReferenceLoader,
 ): Promise<WorkflowDefinitionValidationIssue[]> {
-  const analysis = analyzeWorkflowV2Bindings(definition, registryContext);
-  const catalog = analyzeWorkflowV2Catalog(definition, registryContext);
+  const analysis = analyzeWorkflowV2Bindings(definition, resolveContract);
+  const catalog = analyzeWorkflowV2Catalog(definition, resolveContract);
   const issues: WorkflowDefinitionValidationIssue[] = [];
   for (const [nodeIndex, node] of definition.nodes.entries()) {
     const availableValues = analysis.availableValuesByNode[node.id] ?? [];
@@ -275,12 +275,21 @@ function removePromptDataTokens(
 
 export async function validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring(
   candidate: unknown,
-  registryContext?: WorkflowBlockRegistryContext,
+  resolveContract: WorkflowBlockContractResolver,
+  blockParamsSchemas: WorkflowBlockParamsSchemas,
+  configuredVcsProviders: readonly VcsProviderKind[],
 ): Promise<WorkflowDefinitionCandidateValidation> {
-  const context = registryContext ?? (await import("./models.js")).workflowBlockRegistryContextFromEnv();
-  const base = validateWorkflowDefinitionCandidate(candidate, context);
+  const base = validateWorkflowDefinitionCandidate(
+    candidate,
+    resolveContract,
+    blockParamsSchemas,
+    configuredVcsProviders,
+  );
   if (!base.parsed) return base;
-  const promptIssues = await validateConnectedWorkflowPromptAuthoringIssues(base.parsed, context);
+  const promptIssues = await validateConnectedWorkflowPromptAuthoringIssues(
+    base.parsed,
+    resolveContract,
+  );
   const issues = dedupeIssues([...base.response.issues, ...promptIssues]);
   return { parsed: base.parsed, response: { ...base.response, valid: issues.length === 0, issues } };
 }

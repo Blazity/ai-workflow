@@ -123,12 +123,32 @@ describe("fetchTicketStatuses", () => {
   });
 });
 
+/**
+ * The editor payload as a request assembles it: the block registry is resolved
+ * from the environment by `engine/definition`, and `buildWorkflowEditorOptions`
+ * is handed the result.
+ */
+async function editorOptions(
+  models: { claude: string[]; codex: string[] },
+  ticketStatuses: Array<{ id: string; name: string }> = [],
+) {
+  const { buildWorkflowEditorOptions } = await import("./models.js");
+  const { buildWorkflowBlockRegistry } =
+    await import("../engine/definition/block-contract-resolver.js");
+  const { workflowBlockRegistryContextFromEnv } =
+    await import("../engine/definition/block-contract-environment.js");
+  return buildWorkflowEditorOptions(
+    models,
+    ticketStatuses,
+    buildWorkflowBlockRegistry(workflowBlockRegistryContextFromEnv()),
+  );
+}
+
 describe("buildWorkflowEditorOptions", () => {
   it("dedupes the default model already present in the active kind list", async () => {
     state.env.AGENT_KIND = "claude";
     state.env.CLAUDE_MODEL = "claude-opus-4-8";
-    const { buildWorkflowEditorOptions } = await import("./models.js");
-    const options = buildWorkflowEditorOptions({
+    const options = await editorOptions({
       claude: ["claude-opus-4-8", "claude-sonnet-5"],
       codex: ["gpt-5"],
     });
@@ -143,8 +163,7 @@ describe("buildWorkflowEditorOptions", () => {
   });
 
   it("uses deduplicated provider-backed ticket statuses when discovery succeeds", async () => {
-    const { buildWorkflowEditorOptions } = await import("./models.js");
-    const options = buildWorkflowEditorOptions(
+    const options = await editorOptions(
       { claude: [], codex: [] },
       [
         { id: "3", name: "Done" },
@@ -162,8 +181,7 @@ describe("buildWorkflowEditorOptions", () => {
   it("keeps a configured execution default without exposing it outside policy", async () => {
     state.env.AGENT_KIND = "codex";
     state.env.CODEX_MODEL = "gpt-5-codex-high";
-    const { buildWorkflowEditorOptions } = await import("./models.js");
-    const options = buildWorkflowEditorOptions({
+    const options = await editorOptions({
       claude: [],
       codex: ["gpt-5-codex", "gpt-5"],
     });
@@ -176,8 +194,7 @@ describe("buildWorkflowEditorOptions", () => {
     state.env.AGENT_KIND = "claude";
     state.env.CLAUDE_MODEL = "claude-opus-4-8";
     state.env.CODEX_MODEL = "gpt-5.4";
-    const { buildWorkflowEditorOptions } = await import("./models.js");
-    const options = buildWorkflowEditorOptions({
+    const options = await editorOptions({
       claude: ["claude-opus-4-8", "claude-sonnet-5"],
       codex: ["gpt-5.4", "gpt-5"],
     });
@@ -189,8 +206,7 @@ describe("buildWorkflowEditorOptions", () => {
   });
 
   it("keeps the literal provider-specific picker sequences through extraction", async () => {
-    const { buildWorkflowEditorOptions } = await import("./models.js");
-    const options = buildWorkflowEditorOptions({
+    const options = await editorOptions({
       claude: [
         "claude-sonnet-5",
         "claude-unapproved",
@@ -212,8 +228,7 @@ describe("buildWorkflowEditorOptions", () => {
     state.env.GITHUB_APP_ID = 1;
     state.env.GITHUB_APP_PRIVATE_KEY = "key";
     state.env.GITHUB_INSTALLATION_ID = 2;
-    const { buildWorkflowEditorOptions } = await import("./models.js");
-    const options = buildWorkflowEditorOptions({ claude: [], codex: [] });
+    const options = await editorOptions({ claude: [], codex: [] });
 
     expect(options.blockRegistry.planning_agent.availability).toEqual({
       available: true,
@@ -241,9 +256,8 @@ describe("buildWorkflowEditorOptions", () => {
   it("keeps OAuth-only Codex agents available but disables in-process Call LLM", async () => {
     state.env.AGENT_KIND = "codex";
     state.env.CODEX_CHATGPT_OAUTH_TOKEN = "oauth-token";
-    const { buildWorkflowEditorOptions } = await import("./models.js");
 
-    const options = buildWorkflowEditorOptions({ claude: [], codex: [] });
+    const options = await editorOptions({ claude: [], codex: [] });
 
     expect(options.blockRegistry.generic_agent.availability).toEqual({
       available: true,
@@ -262,9 +276,8 @@ describe("buildWorkflowEditorOptions", () => {
   it("keeps Claude Code OAuth agents available but disables in-process Call LLM", async () => {
     state.env.AGENT_KIND = "claude";
     state.env.ANTHROPIC_API_KEY = "sk-ant-oat-test";
-    const { buildWorkflowEditorOptions } = await import("./models.js");
 
-    const options = buildWorkflowEditorOptions({ claude: [], codex: [] });
+    const options = await editorOptions({ claude: [], codex: [] });
 
     expect(options.blockRegistry.planning_agent.availability).toEqual({
       available: true,

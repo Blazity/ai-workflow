@@ -6,7 +6,8 @@ import type {
   WorkflowDefinitionV2ControlEdge,
   WorkflowDefinitionV2Node,
 } from "@shared/contracts";
-import type { WorkflowBlockRegistryContext } from "./block-registry.js";
+import type { WorkflowBlockRegistryContext } from "../engine/definition/block-contract-resolver.js";
+import { testBlockData } from "../test-support/block-contracts.js";
 import {
   isWorkflowDataReferenceV2,
   upgradeStoredWorkflowDefinition,
@@ -27,6 +28,8 @@ const registryContext: WorkflowBlockRegistryContext = {
   arthurConfigured: true,
   webhookTriggerConfigured: true,
 };
+
+const blockData = testBlockData(registryContext);
 
 function v2Definition(): WorkflowDefinitionV2 {
   return {
@@ -227,7 +230,7 @@ describe("Workflow Definition v2 schema", () => {
     };
     expect(workflowDefinitionV2Schema.safeParse(missingEdgeId).success).toBe(false);
     expect(
-      validateWorkflowDefinitionCandidate(missingEdgeId, registryContext).response.issues,
+      validateWorkflowDefinitionCandidate(missingEdgeId, ...blockData).response.issues,
     ).toEqual([
       expect.objectContaining({
         code: "schema",
@@ -276,7 +279,7 @@ describe("Workflow Definition v2 schema", () => {
     definition.edges.push({ id: "edge-ticket-shape", from: "ticket", to: "shape" });
     expect(workflowDefinitionV2Schema.safeParse(definition).success).toBe(true);
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(definition, registryContext),
+      validateWorkflowDefinitionIssuesForDeployment(definition, ...blockData),
     ).toEqual([]);
 
     definition.nodes[1]!.configuration = {
@@ -285,7 +288,7 @@ describe("Workflow Definition v2 schema", () => {
     };
     expect(workflowDefinitionV2Schema.safeParse(definition).success).toBe(true);
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(definition, registryContext),
+      validateWorkflowDefinitionIssuesForDeployment(definition, ...blockData),
     ).toEqual([
       expect.objectContaining({
         code: "invalid_configuration",
@@ -305,7 +308,7 @@ describe("Workflow Definition v2 schema", () => {
   it("accepts a valid v2 definition and still reports real deployment issues", () => {
     const validIssues = validateWorkflowDefinitionIssuesForDeployment(
       v2Definition(),
-      registryContext,
+      ...blockData,
     );
     expect(validIssues).toEqual([]);
 
@@ -313,7 +316,7 @@ describe("Workflow Definition v2 schema", () => {
     invalid.nodes[0]!.id = "entry";
     const invalidIssues = validateWorkflowDefinitionIssuesForDeployment(
       invalid,
-      registryContext,
+      ...blockData,
     );
     expect(invalidIssues).toEqual([
       expect.objectContaining({
@@ -354,7 +357,7 @@ describe("Workflow Definition v2 schema", () => {
     expect(
       validateWorkflowDefinitionIssuesForDeployment(
         unsupportedSchema,
-        registryContext,
+        ...blockData,
       ),
     ).toEqual([
       expect.objectContaining({
@@ -379,9 +382,9 @@ describe("Workflow Definition v2 schema", () => {
       from: "ticket",
       to: "notify",
     });
-    const noSlack = { ...registryContext, slackConfigured: false };
+    const noSlack = testBlockData({ ...registryContext, slackConfigured: false });
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(unavailable, noSlack),
+      validateWorkflowDefinitionIssuesForDeployment(unavailable, ...noSlack),
     ).toEqual([
       expect.objectContaining({
         code: "deployment",
@@ -390,7 +393,7 @@ describe("Workflow Definition v2 schema", () => {
       }),
     ]);
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(unavailable, noSlack, {
+      validateWorkflowDefinitionIssuesForDeployment(unavailable, ...noSlack, {
         checkEnvironmentAvailability: false,
       }),
     ).toEqual([]);
@@ -402,11 +405,14 @@ describe("Workflow Definition v2 schema", () => {
       configuration: {},
     };
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(defaultedReviewTrigger, {
-        ...registryContext,
-        vcsProviders: ["gitlab"],
-        vcsBotIdentities: ["gitlab"],
-      }),
+      validateWorkflowDefinitionIssuesForDeployment(
+        defaultedReviewTrigger,
+        ...testBlockData({
+          ...registryContext,
+          vcsProviders: ["gitlab"],
+          vcsBotIdentities: ["gitlab"],
+        }),
+      ),
     ).toEqual([
       expect.objectContaining({
         code: "deployment",
@@ -447,7 +453,7 @@ describe("Workflow Definition v2 schema", () => {
     expect(
       validateWorkflowDefinitionIssuesForDeployment(
         definition,
-        registryContext,
+        ...blockData,
       ),
     ).toEqual([]);
   });
@@ -464,7 +470,7 @@ describe("Workflow Definition v2 schema", () => {
     expect(
       validateWorkflowDefinitionIssuesForDeployment(
         definition,
-        registryContext,
+        ...blockData,
       ),
     ).toEqual([]);
   });
@@ -496,13 +502,13 @@ describe("Workflow Definition v2 schema", () => {
       { id: "second-edge", from: "ticket", to: "second" },
     );
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(fanOut, registryContext).map(
+      validateWorkflowDefinitionIssuesForDeployment(fanOut, ...blockData).map(
         ({ code }) => code,
       ),
     ).toEqual([]);
 
     fanOut.edges[0]!.fromPort = "failed";
-    const issues = validateWorkflowDefinitionIssuesForDeployment(fanOut, registryContext);
+    const issues = validateWorkflowDefinitionIssuesForDeployment(fanOut, ...blockData);
     expect(issues).toEqual([
       expect.objectContaining({
         code: "deployment",
@@ -522,7 +528,7 @@ describe("Workflow Definition v2 schema", () => {
     expect(
       validateWorkflowDefinitionIssuesForDeployment(
         missingContinue,
-        registryContext,
+        ...blockData,
       ),
     ).toContainEqual(
       expect.objectContaining({
@@ -552,7 +558,7 @@ describe("Workflow Definition v2 schema", () => {
       },
     );
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(noCycle, registryContext),
+      validateWorkflowDefinitionIssuesForDeployment(noCycle, ...blockData),
     ).toContainEqual(
       expect.objectContaining({
         code: "deployment",
@@ -582,7 +588,7 @@ describe("Workflow Definition v2 schema", () => {
     expect(
       validateWorkflowDefinitionIssuesForDeployment(
         definition,
-        registryContext,
+        ...blockData,
       ),
     ).toContainEqual(
       expect.objectContaining({
@@ -621,7 +627,7 @@ describe("Workflow Definition v2 schema", () => {
     expect(
       validateWorkflowDefinitionIssuesForDeployment(
         definition,
-        registryContext,
+        ...blockData,
       ),
     ).toContainEqual(
       expect.objectContaining({
@@ -668,7 +674,7 @@ describe("Workflow Definition v2 schema", () => {
     expect(
       validateWorkflowDefinitionIssuesForDeployment(
         definition,
-        registryContext,
+        ...blockData,
       ),
     ).toEqual([]);
   });
@@ -717,7 +723,7 @@ describe("Workflow Definition v2 schema", () => {
     expect(
       validateWorkflowDefinitionIssuesForDeployment(
         definition,
-        registryContext,
+        ...blockData,
       ),
     ).toEqual([]);
 
@@ -737,7 +743,7 @@ describe("Workflow Definition v2 schema", () => {
     expect(
       validateWorkflowDefinitionIssuesForDeployment(
         definition,
-        registryContext,
+        ...blockData,
       ),
     ).toContainEqual(
       expect.objectContaining({
@@ -758,7 +764,7 @@ describe("Workflow Definition v2 schema", () => {
     expect(
       validateWorkflowDefinitionIssuesForDeployment(
         definition,
-        registryContext,
+        ...blockData,
       ),
     ).toContainEqual(
       expect.objectContaining({
@@ -779,7 +785,7 @@ describe("Workflow Definition v2 schema", () => {
     expect(
       validateWorkflowDefinitionIssuesForDeployment(
         definition,
-        registryContext,
+        ...blockData,
       ),
     ).toContainEqual(
       expect.objectContaining({
@@ -795,7 +801,7 @@ describe("Workflow Definition v2 schema", () => {
     unknown.nodes[0]!.configuration = { hiddenCommand: "echo unsafe" };
     expect(workflowDefinitionV2Schema.safeParse(unknown).success).toBe(true);
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(unknown, registryContext),
+      validateWorkflowDefinitionIssuesForDeployment(unknown, ...blockData),
     ).toEqual([
       expect.objectContaining({
         code: "invalid_configuration",
@@ -817,7 +823,7 @@ describe("Workflow Definition v2 schema", () => {
     illTyped.edges.push({ id: "ticket-checks", from: "ticket", to: "checks" });
     expect(workflowDefinitionV2Schema.safeParse(illTyped).success).toBe(true);
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(illTyped, registryContext),
+      validateWorkflowDefinitionIssuesForDeployment(illTyped, ...blockData),
     ).toEqual([
       expect.objectContaining({
         code: "invalid_configuration",
@@ -834,7 +840,7 @@ describe("Workflow Definition v2 schema", () => {
       value: true,
     });
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(valid, registryContext),
+      validateWorkflowDefinitionIssuesForDeployment(valid, ...blockData),
     ).toEqual([]);
 
     const unavailable = branchingDefinition({
@@ -844,7 +850,7 @@ describe("Workflow Definition v2 schema", () => {
     expect(
       validateWorkflowDefinitionIssuesForDeployment(
         unavailable,
-        registryContext,
+        ...blockData,
       ),
     ).toEqual([
       expect.objectContaining({
@@ -906,7 +912,7 @@ describe("Workflow Definition v2 schema", () => {
     expect(
       validateWorkflowDefinitionIssuesForDeployment(
         conditionallyUnavailable,
-        registryContext,
+        ...blockData,
       ),
     ).toEqual(
       expect.arrayContaining([
@@ -929,7 +935,7 @@ describe("Workflow Definition v2 schema", () => {
     expect(
       validateWorkflowDefinitionIssuesForDeployment(
         incompatible,
-        registryContext,
+        ...blockData,
       ),
     ).toEqual([
       expect.objectContaining({
@@ -944,7 +950,7 @@ describe("Workflow Definition v2 schema", () => {
       operator: "has_value",
     });
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(nonBoolean, registryContext),
+      validateWorkflowDefinitionIssuesForDeployment(nonBoolean, ...blockData),
     ).toEqual([]);
 
     const nonScalarComparison = branchingDefinition({
@@ -955,7 +961,7 @@ describe("Workflow Definition v2 schema", () => {
     expect(
       validateWorkflowDefinitionIssuesForDeployment(
         nonScalarComparison,
-        registryContext,
+        ...blockData,
       ),
     ).toEqual([
       expect.objectContaining({
@@ -973,7 +979,7 @@ describe("Workflow Definition v2 schema", () => {
     });
     expect(workflowDefinitionV2Schema.safeParse(malformed).success).toBe(true);
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(malformed, registryContext),
+      validateWorkflowDefinitionIssuesForDeployment(malformed, ...blockData),
     ).toEqual([
       expect.objectContaining({
         code: "invalid_configuration",
@@ -1028,7 +1034,7 @@ describe("Workflow Definition v2 schema", () => {
     };
 
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(definition, registryContext),
+      validateWorkflowDefinitionIssuesForDeployment(definition, ...blockData),
     ).toContainEqual(
       expect.objectContaining({
         code: "workspace.concurrent_access",
@@ -1144,7 +1150,7 @@ describe("repository script node configuration", () => {
   ) =>
     validateWorkflowDefinitionIssuesForDeployment(
       scriptsDefinition(type, configuration),
-      registryContext,
+      ...blockData,
     ).filter((issue) => issue.code === "invalid_configuration");
 
   it("accepts one or many named groups on run_scripts", () => {
@@ -1208,7 +1214,7 @@ describe("webhook trigger configuration", () => {
   const configurationIssues = (configuration: Record<string, JsonValue>) =>
     validateWorkflowDefinitionIssuesForDeployment(
       webhookDefinition(configuration),
-      registryContext,
+      ...blockData,
     ).filter((issue) => issue.code === "invalid_configuration");
 
   it("accepts an empty configuration so a freshly dropped block deploys", () => {
@@ -1342,10 +1348,10 @@ describe("webhook trigger configuration", () => {
 
   it("is unavailable for deployment without a configured encryption key", () => {
     expect(
-      validateWorkflowDefinitionForDeployment(webhookDefinition({}), {
-        ...registryContext,
-        webhookTriggerConfigured: false,
-      }),
+      validateWorkflowDefinitionForDeployment(
+        webhookDefinition({}),
+        ...testBlockData({ ...registryContext, webhookTriggerConfigured: false }),
+      ),
     ).toContain(
       'Block "entry" (trigger_webhook) is unavailable: Webhook trigger encryption is not configured.',
     );
@@ -1374,11 +1380,11 @@ describe("schedule trigger configuration", () => {
   const configurationIssues = (configuration: Record<string, JsonValue>) =>
     validateWorkflowDefinitionIssuesForDeployment(
       scheduleDefinition(configuration),
-      registryContext,
+      ...blockData,
     ).filter((issue) => issue.code === "invalid_configuration");
 
   const deploymentIssues = (configuration: Record<string, JsonValue>) =>
-    validateWorkflowDefinitionForDeployment(scheduleDefinition(configuration), registryContext);
+    validateWorkflowDefinitionForDeployment(scheduleDefinition(configuration), ...blockData);
 
   it("applies defaults for an empty configuration so a freshly dropped block still saves", () => {
     expect(configurationIssues({})).toEqual([]);
@@ -1479,7 +1485,7 @@ describe("schedule trigger configuration", () => {
   const scheduleDeploymentIssues = (configuration: Record<string, JsonValue>) =>
     validateWorkflowDefinitionIssuesForDeployment(
       scheduleDefinition(configuration),
-      registryContext,
+      ...blockData,
     ).filter((issue) => issue.code === "deployment");
 
   const configured = (configuration: Record<string, JsonValue>) => ({
@@ -1682,7 +1688,7 @@ describe("schedule graphs run unattended", () => {
   ): WorkflowDefinitionV2 => ({ schemaVersion: 2, nodes, edges });
 
   const unattendedIssues = (definition: WorkflowDefinitionV2) =>
-    validateWorkflowDefinitionIssuesForDeployment(definition, registryContext).filter(
+    validateWorkflowDefinitionIssuesForDeployment(definition, ...blockData).filter(
       (issue) => issue.message.includes("waits for a person"),
     );
 
@@ -1759,7 +1765,7 @@ describe("schedule graphs run unattended", () => {
   // guess fails the run with no ticket to report the failure on.
   describe("and must know which repository they work in", () => {
     const pinnedIssues = (definition: WorkflowDefinitionV2) =>
-      validateWorkflowDefinitionIssuesForDeployment(definition, registryContext).filter(
+      validateWorkflowDefinitionIssuesForDeployment(definition, ...blockData).filter(
         (issue) => issue.message.includes("pins no repository"),
       );
 

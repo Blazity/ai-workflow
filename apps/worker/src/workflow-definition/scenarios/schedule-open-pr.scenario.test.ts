@@ -2,7 +2,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { WorkflowDefinitionV2 } from "@shared/contracts";
 import type { AgentWorkflowInput } from "../../engine/agent-input.js";
-import type { WorkflowBlockRegistryContext } from "../block-registry.js";
+import type { WorkflowBlockRegistryContext } from "../../engine/definition/block-contract-resolver.js";
+import { testBlockData } from "../../test-support/block-contracts.js";
 import {
   validateWorkflowDefinitionIssuesForDeployment,
   workflowDefinitionV2Schema,
@@ -53,6 +54,8 @@ const REGISTRY_CONTEXT: WorkflowBlockRegistryContext = {
   arthurConfigured: true,
   webhookTriggerConfigured: true,
 };
+
+const BLOCK_DATA = testBlockData(REGISTRY_CONTEXT);
 
 const TASK_TITLE = "Weekly dependency audit";
 const TASK_DESCRIPTION =
@@ -189,7 +192,7 @@ function snapshotDefinition(): WorkflowDefinitionV2 {
 describe("schedule trigger: the shipped snapshot", () => {
   it("deploys with no validation issues", () => {
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(snapshotDefinition(), REGISTRY_CONTEXT, {
+      validateWorkflowDefinitionIssuesForDeployment(snapshotDefinition(), ...BLOCK_DATA, {
         checkEnvironmentAvailability: false,
       }),
     ).toEqual([]);
@@ -206,7 +209,7 @@ describe("schedule trigger: the shipped snapshot", () => {
 
     const issues = validateWorkflowDefinitionIssuesForDeployment(
       unpinned as WorkflowDefinitionV2,
-      REGISTRY_CONTEXT,
+      ...BLOCK_DATA,
       { checkEnvironmentAvailability: false },
     );
 

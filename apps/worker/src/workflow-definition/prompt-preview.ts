@@ -11,7 +11,11 @@ import {
   type EffectivePromptCompilation,
 } from "../engine/helpers/effective-prompt.js";
 import { unresolvedRepositoryInstructionSources } from "../engine/steps/repository-instructions.js";
-import type { WorkflowBlockRegistryContext } from "./block-registry.js";
+import {
+  createWorkflowBlockContractResolver,
+  type WorkflowBlockRegistryContext,
+} from "../engine/definition/block-contract-resolver.js";
+import { BLOCK_PARAMS_SCHEMAS } from "../engine/definition/block-params-schemas.js";
 import {
   isPromptAuthoringBlock,
   resolveNodePromptAuthoring,
@@ -48,7 +52,9 @@ export async function previewWorkflowPromptCandidate(
 ): Promise<WorkflowPromptPreviewResult> {
   const validated = validateWorkflowDefinitionCandidate(
     candidate,
-    registryContext,
+    createWorkflowBlockContractResolver(registryContext),
+    BLOCK_PARAMS_SCHEMAS,
+    registryContext.vcsProviders,
   );
   if (!validated.parsed) {
     return {
@@ -131,8 +137,15 @@ export async function previewWorkflowPromptCandidate(
 export async function previewConnectedWorkflowPromptCandidate(
   input: { candidate: unknown; blockId: string; organizationId?: string },
 ): Promise<WorkflowPromptPreviewResult> {
-  const registryContext = (await import("./models.js")).workflowBlockRegistryContextFromEnv();
-  const validated = validateWorkflowDefinitionCandidate(input.candidate, registryContext);
+  const registryContext = (
+    await import("../engine/definition/block-contract-environment.js")
+  ).workflowBlockRegistryContextFromEnv();
+  const validated = validateWorkflowDefinitionCandidate(
+    input.candidate,
+    createWorkflowBlockContractResolver(registryContext),
+    BLOCK_PARAMS_SCHEMAS,
+    registryContext.vcsProviders,
+  );
   if (!validated.parsed) return { ok: false, statusCode: 422, message: "Prompt preview requires a structurally valid v2 definition.", issues: validated.response.issues };
   const nodeIndex = validated.parsed.nodes.findIndex((node) => node.id === input.blockId);
   const node = validated.parsed.nodes[nodeIndex];
