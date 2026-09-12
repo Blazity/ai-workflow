@@ -5,7 +5,7 @@ import type { BlockOutput } from "@shared/contracts";
 import type { PrTriggerType } from "../../engine/agent-input.js";
 import type { AgentWorkflowInput } from "../../engine/agent-input.js";
 import { RunBudgetError } from "../../engine/helpers/run-budget.js";
-import { V2_PRODUCTION_SCHEDULER_BOUNDS } from "../v2-scheduler.js";
+import { V2_PRODUCTION_SCHEDULER_BOUNDS } from "@shared/workflow-graph";
 import { expectNeverInvoked, expectStartsAfterFinishOf } from "./assertions.js";
 import {
   createScenario,

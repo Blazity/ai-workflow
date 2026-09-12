@@ -1,9 +1,11 @@
-import type { ExecutionErrorCategory } from "@shared/contracts";
-import type { AgentProtocolDiagnostic } from "../sandbox/agents/types.js";
+import type {
+  AgentProtocolDiagnostic,
+  ExecutionErrorCategory,
+} from "@shared/contracts";
 import {
   operatorFailureDetail,
   sanitizeFailureMessage,
-} from "../workflow-definition/failure-message.js";
+} from "@shared/workflow-graph";
 
 /**
  * One failed block as the operator log records it.

@@ -7,17 +7,18 @@ import type {
   WorkflowDefinitionV2Node,
   WorkflowInputBindingV2,
 } from "@shared/contracts";
-import type { BlockExecutionResult } from "./interpreter.js";
+import type { BlockExecutionResult } from "@shared/workflow-graph";
 import {
   createV2InvocationCancellationController,
   V2InvocationCancelledError,
   type V2InvocationContext,
-} from "./invocation-context.js";
+} from "@shared/workflow-graph";
 import {
   buildV2RuntimeGraph,
   executeV2Graph,
   type V2BlockExecutor,
-} from "./v2-scheduler.js";
+} from "@shared/workflow-graph";
+import { SCHEDULER_DEPENDENCIES } from "../engine/definition/scheduler-dependencies.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -93,6 +94,7 @@ describe("executeV2Graph edge tokens", () => {
     const triggers: unknown[] = [];
     const finishes: unknown[] = [];
     const result = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition: definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -183,6 +185,7 @@ describe("executeV2Graph edge tokens", () => {
       ],
     );
     const execution = executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition: def,
       entryTriggerId: "trigger",
       triggerOutput: { status: "ok" },
@@ -228,6 +231,7 @@ describe("executeV2Graph edge tokens", () => {
       activationScopeId: string;
     }> = [];
     const result = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition: definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -293,6 +297,7 @@ describe("executeV2Graph edge tokens", () => {
   it("resolves non-selected trigger paths as inactive", async () => {
     const calls: string[] = [];
     const result = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition: definition(
         [
           node("ticket", "trigger_ticket_ai"),
@@ -328,6 +333,7 @@ describe("executeV2Graph edge tokens", () => {
     // being worth anything.
     const calls: string[] = [];
     const result = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition: definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -368,6 +374,7 @@ describe("executeV2Graph edge tokens", () => {
 
   it("swallows a failing flush exactly as it swallows a failing emit", async () => {
     const result = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition: definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -401,6 +408,7 @@ describe("executeV2Graph edge tokens", () => {
     // to be stable for the whole invocation: a block cannot be asked to branch
     // on which sink it happened to get.
     const result = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition: definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -434,6 +442,7 @@ describe("executeV2Graph edge tokens", () => {
       value: unknown;
     }> = [];
     const result = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition: definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -506,6 +515,7 @@ describe("executeV2Graph edge tokens", () => {
 describe("executeV2Graph concurrency and failure", () => {
   it("fails closed when an unsafe workspace overlap bypasses deployment validation", async () => {
     const result = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition: definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -550,6 +560,7 @@ describe("executeV2Graph concurrency and failure", () => {
     let maximum = 0;
     const children = [...gates.keys()];
     const run = executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       runId: "run-serial",
       maxConcurrency: 1,
       definition: definition(
@@ -591,6 +602,7 @@ describe("executeV2Graph concurrency and failure", () => {
     let maximum = 0;
     const children = [...gates.keys()];
     const run = executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition: definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -632,6 +644,7 @@ describe("executeV2Graph concurrency and failure", () => {
     let slowContext: V2InvocationContext | undefined;
     const finishes: Array<{ nodeId: string; runtimeState: string }> = [];
     const run = executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       runId: "run-120",
       maxConcurrency: 2,
       definition: definition(
@@ -727,6 +740,7 @@ describe("executeV2Graph concurrency and failure", () => {
     error.stack = "provider failed safely\nSECRET_INTERNAL_STACK";
 
     const result = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       runId: "safe-diagnostic",
       definition: definition(
         [
@@ -760,6 +774,7 @@ describe("executeV2Graph concurrency and failure", () => {
     let maximumActiveHooks = 0;
 
     const run = executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition: definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -803,6 +818,7 @@ describe("executeV2Graph concurrency and failure", () => {
   it("promotes an invalid executor output to a top-level schema failure", async () => {
     const observations: unknown[] = [];
     const result = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       runId: "run-invalid-output",
       definition: definition(
         [
@@ -925,6 +941,7 @@ describe("executeV2Graph clarification and cancellation", () => {
     };
 
     const firstRun = executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition: def,
       entryTriggerId: "trigger",
       triggerOutput: { status: "ok" },
@@ -959,6 +976,7 @@ describe("executeV2Graph clarification and cancellation", () => {
     expect(calls.map((call) => call.nodeId)).not.toContain("after-sibling");
 
     const resumed = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition: def,
       entryTriggerId: "trigger",
       triggerOutput: { status: "ok" },
@@ -999,6 +1017,7 @@ describe("executeV2Graph clarification and cancellation", () => {
     let context: V2InvocationContext | undefined;
     const started = deferred<void>();
     const run = executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition: definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -1037,6 +1056,7 @@ describe("executeV2Graph clarification and cancellation", () => {
     let started = 0;
     let settled = false;
     const run = executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       maxConcurrency: 2,
       definition: definition(
         [
@@ -1096,6 +1116,7 @@ describe("executeV2Graph clarification and cancellation", () => {
     let started = 0;
     let siblingQuiesced = false;
     const run = executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       maxConcurrency: 2,
       definition: definition(
         [
@@ -1138,6 +1159,7 @@ describe("executeV2Graph clarification and cancellation", () => {
     let started = 0;
     let siblingQuiesced = false;
     const run = executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       maxConcurrency: 2,
       definition: definition(
         [
@@ -1181,6 +1203,7 @@ describe("executeV2Graph clarification and cancellation", () => {
       status: string;
     }> = [];
     const result = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       maxConcurrency: 2,
       definition: definition(
         [
@@ -1245,6 +1268,7 @@ describe("executeV2Graph clarification and cancellation", () => {
   it("promotes a failure raised behind a parked head block and quiesces the head", async () => {
     let headQuiesced = false;
     const result = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       maxConcurrency: 2,
       definition: definition(
         [
@@ -1330,6 +1354,7 @@ describe("executeV2Graph loop scopes", () => {
     );
 
     const result = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition: definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -1401,6 +1426,7 @@ describe("executeV2Graph loop scopes", () => {
   it("leaves the region from the initial activation when a Branch exits on the first pass", async () => {
     const calls: string[] = [];
     const result = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition: definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -1480,6 +1506,7 @@ describe("executeV2Graph loop scopes", () => {
   it("skips everything past a loop region the run never enters", async () => {
     const calls: string[] = [];
     const result = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition: definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -1598,6 +1625,7 @@ describe("executeV2Graph loop scopes", () => {
       ],
     });
     const result = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       runId: "duplicate-loop-carry",
       definition: definition(
         [
@@ -1647,6 +1675,7 @@ describe("executeV2Graph loop scopes", () => {
       diagnosticId?: string;
     }> = [];
     const result = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       runId: "loop-deadlock",
       definition: definition(
         [
@@ -1737,6 +1766,7 @@ describe("executeV2Graph loop scopes", () => {
   it("finalizes the root Loop attempt when a body failure aborts the workflow", async () => {
     const loopStates: string[] = [];
     const result = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       runId: "loop-body-failure",
       definition: definition(
         [
@@ -1801,6 +1831,7 @@ describe("executeV2Graph loop scopes", () => {
       transition: { port: string; edgeIds: string[] } | null;
     }> = [];
     const result = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition: definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -1893,6 +1924,7 @@ describe("executeV2Graph loop scopes", () => {
     const loopStarts: string[] = [];
     const loopFinishes: string[] = [];
     const result = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition: definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -2003,6 +2035,7 @@ describe("executeV2Graph loop scopes", () => {
     const loopStarts: string[] = [];
     const loopFinishes: string[] = [];
     const result = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition: definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -2079,6 +2112,7 @@ describe("executeV2Graph loop scopes", () => {
     const starts: string[] = [];
     const finishes: string[] = [];
     const result = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition: definition(
         [
           node("trigger", "trigger_ticket_ai"),

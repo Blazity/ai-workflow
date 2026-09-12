@@ -70,11 +70,16 @@ that produces the per-node contracts, the values every node may read and the
 editor's data catalog), `transform.ts` (what a Transform block means and what
 one run of it returns), `json-schema-authoring.ts` (the authoring-time reading
 of a schema an operator typed), `workspace-access.ts` (which blocks may share a
-checkout and which conflict) and `declaresRetiredSchema` in `policies.ts`. The
-scheduler and the interpreter follow in later stages. Source entry is
-`index.ts`, which re-exports every module; `exports["."]` is the only public
-entry, so the worker imports `@shared/workflow-graph` and never a file inside
-it.
+checkout and which conflict) and `declaresRetiredSchema` in `policies.ts`. Stage
+6b added the scheduler cluster: `scheduler.ts` (the v2 walk itself,
+`executeV2Graph`, loop regions, checkpoints and the production dispatch bounds),
+`invocation-context.ts` (cancellation and replay-safe observation for one
+invocation), `interpreter.ts` (what an executor is handed, what it may report
+back, and `executionError`, the one construction path for a block failure) and
+the derivation behind it, `failure-message.ts` with its `clamp-text.ts`. Source
+entry is `index.ts`, which re-exports every module; `exports["."]` is the only
+public entry, so the worker imports `@shared/workflow-graph` and never a file
+inside it.
 
 **Parameters, never environment.** This is the trap that decides whether a rule
 belongs here. Everything the rules need from the worker arrives as an argument:
@@ -84,7 +89,15 @@ resolver, the available-values catalog, the Transform shape validator, and the
 JSON Schema facility itself (`WorkflowJsonSchemaSupport`: inspect a schema,
 parse one from a source string, measure a value against one), which stays in the
 worker because ajv is a Node dependency and is bound once in
-`apps/worker/src/engine/definition/json-schema-support.ts`. A rule that would
+`apps/worker/src/engine/definition/json-schema-support.ts`. The scheduler borrows
+the same way: `SchedulerDependencies` (measure a block output against its
+contract, measure a value against a JSON Schema) is a required option of
+`executeV2Graph`, bound once in
+`apps/worker/src/engine/definition/scheduler-dependencies.ts`. What a run is
+charged against is not a parameter but the worker's own business, so
+`RunBudgetHooks` lives in `apps/worker/src/engine/helpers/run-budget.ts` and
+rides on the worker's `BlockInvocationContext`: enforcing a Harness Profile
+limit is runtime work, and this package does none. A rule that would
 have to read the environment, the block registry, stored state or a clock is not
 structural: it belongs in
 `apps/worker/src/workflow-definition/deployment-validation.ts`, which composes

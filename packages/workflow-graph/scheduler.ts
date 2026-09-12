@@ -6,6 +6,7 @@ import {
   type BlockRunState,
   type JsonSchema202012,
   type JsonValue,
+  type WorkflowBlockType,
   type WorkflowParamValue,
   type WorkflowDefinitionV2,
   type WorkflowDefinitionV2ControlEdge,
@@ -16,8 +17,8 @@ import {
 import type {
   BlockExecutionError,
   BlockExecutionResult,
-} from "./interpreter.js";
-import { executionError } from "./interpreter.js";
+} from "./interpreter";
+import { executionError } from "./interpreter";
 import {
   combineV2InvocationCancellations,
   createV2InvocationCancellationController,
@@ -28,19 +29,22 @@ import {
   type V2InvocationContext,
   type V2InvocationObservation,
   type V2InvocationObservationHooks,
-} from "./invocation-context.js";
+} from "./invocation-context";
 import {
   evaluateV2BranchCondition,
-  isJsonValue,
   isV2BranchConfiguration,
+} from "./v2-branch";
+import {
+  isJsonValue,
   resolveWorkflowInputBindingV2,
   resolveWorkflowNodeInputsV2,
+  type V2BindingResolutionContext,
+} from "./v2-bindings";
+import {
   workflowWorkspaceAccessesConflict,
   workflowWorkspaceAccessOf,
-  type V2BindingResolutionContext,
-} from "@shared/workflow-graph";
-import { validateBlockOutputForDefinition } from "./block-registry.js";
-import { validateJsonSchemaValue } from "./json-schema.js";
+} from "./workspace-access";
+import type { WorkflowJsonSchemaIssue } from "./json-schema-support";
 
 const ROOT_SCOPE_ID = "root";
 const DEFAULT_MAX_CONCURRENCY = 4;
@@ -213,8 +217,37 @@ export interface V2SchedulerHooks {
   ): V2InvocationObservationHooks;
 }
 
+/**
+ * The two questions the scheduler asks that this package cannot answer.
+ *
+ * Both read a block's authored contract through ajv, which assumption A2 of the
+ * workflow-graph plan keeps in the worker, and both are asked once per run at
+ * most: a carried loop value measured against its declared schema, and a block
+ * output measured against the contract its own params resolve to. They arrive
+ * as one object rather than as two options so that the next thing the walk has
+ * to borrow is a field here instead of another parameter, and the worker binds
+ * them exactly once (`engine/definition/scheduler-dependencies.ts`).
+ */
+export interface SchedulerDependencies {
+  /** Every complaint a produced output earns against its block's contract. */
+  validateBlockOutput(
+    type: WorkflowBlockType,
+    params: Record<string, WorkflowParamValue>,
+    output: BlockOutput,
+    options?: { requireNormalOutput?: boolean },
+  ): string[];
+  /** Every complaint a value earns against a JSON Schema 2020-12 document. */
+  validateJsonSchemaValue(
+    schema: JsonSchema202012,
+    value: unknown,
+  ): WorkflowJsonSchemaIssue[];
+}
+
 export interface ExecuteV2GraphOptions {
   runId?: string;
+  /** What the walk borrows from the worker. Required: a scheduler that cannot
+   *  check a block's output would accept anything a block returned. */
+  dependencies: SchedulerDependencies;
   definition: Pick<WorkflowDefinitionV2, "nodes" | "edges">;
   entryTriggerId: string;
   triggerOutput: BlockOutput;
@@ -1562,7 +1595,7 @@ class V2SchedulerRuntime {
           `loop "${node.id}" carried value "${carry.name}" is not JSON serializable`,
         );
       }
-      const validationIssues = validateJsonSchemaValue(
+      const validationIssues = this.options.dependencies.validateJsonSchemaValue(
         carry.schema as JsonSchema202012,
         value,
       );
@@ -1808,7 +1841,7 @@ class V2SchedulerRuntime {
     }
 
     await context.observations.emit({ kind: "output", value: result.output });
-    const outputIssues = validateBlockOutputForDefinition(
+    const outputIssues = this.options.dependencies.validateBlockOutput(
       node.type,
       node.configuration as unknown as Record<string, WorkflowParamValue>,
       result.output,

@@ -6,7 +6,7 @@ import {
 import {
   V2InvocationCancelledError,
   type V2InvocationCancellation,
-} from "../../workflow-definition/invocation-context.js";
+} from "@shared/workflow-graph";
 
 /**
  * Longest a single tick may sleep.

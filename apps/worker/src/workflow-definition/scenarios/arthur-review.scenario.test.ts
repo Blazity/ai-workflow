@@ -27,9 +27,9 @@ import {
   testBlockData,
   testDeploymentIssues,
 } from "../../test-support/block-contracts.js";
-import { clampBothEnds } from "../failure-message.js";
+import { clampBothEnds } from "@shared/workflow-graph";
 import { validateHarnessProfileReferencesWithLoader } from "../harness-profile-runtime.js";
-import { executionError } from "../interpreter.js";
+import { executionError } from "@shared/workflow-graph";
 import {
   executorRunsOf,
   expectNeverInvoked,

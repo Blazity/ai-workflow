@@ -4,7 +4,7 @@ import {
   createV2InvocationCancellationController,
   createV2InvocationContext,
   V2InvocationCancelledError,
-} from "./invocation-context.js";
+} from "@shared/workflow-graph";
 
 describe("v2 invocation context", () => {
   it("keeps invocation identity immutable while cancellation remains observable", async () => {

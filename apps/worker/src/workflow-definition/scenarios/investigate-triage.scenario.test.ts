@@ -11,7 +11,7 @@ import {
   testBlockData,
   testDeploymentIssues,
 } from "../../test-support/block-contracts.js";
-import { executionError } from "../interpreter.js";
+import { executionError } from "@shared/workflow-graph";
 import { executorRunsOf, expectNeverInvoked, portsOf } from "./assertions.js";
 import { createScenario, type Scenario } from "./harness.js";
 

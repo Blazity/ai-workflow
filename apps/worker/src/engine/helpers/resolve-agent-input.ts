@@ -1,7 +1,7 @@
 import type {
   BlockExecutionContext,
   BlockExecutionResult,
-} from "../../workflow-definition/interpreter.js";
+} from "@shared/workflow-graph";
 
 type PromptCompiler = NonNullable<
   BlockExecutionContext["compileEffectivePrompt"]

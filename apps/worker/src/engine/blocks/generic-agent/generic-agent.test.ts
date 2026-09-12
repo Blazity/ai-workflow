@@ -52,7 +52,7 @@ vi.mock("../agent-sandbox.js", () => ({
 
 import { execute } from "./execute.js";
 import { manifest } from "./manifest.js";
-import { makeCtx, makeHarnessRuntime, makeNode } from "../support/test-support.js";
+import { makeCtx, makeHarnessRuntime, makeInvocation, makeNode } from "../support/test-support.js";
 
 function pathsFor(phase: string) {
   return {
@@ -162,18 +162,20 @@ describe("generic_agent execute", () => {
     });
     mocks.ensureAgentSandbox.mockResolvedValueOnce("scratch-1");
 
+    const ctx = makeCtx({
+      sandboxId: null,
+      harnessRuntimes: { [block.id]: runtime },
+    } as never);
+
     await execute(
       block,
       {},
-      makeCtx({
-        sandboxId: null,
-        harnessRuntimes: { [block.id]: runtime },
-      } as never),
+      ctx,
       { plan: "Bound plan", count: 2 },
-      {
+      makeInvocation(ctx, {
         clarificationAnswer: "Use Redis",
         compileEffectivePrompt,
-      },
+      }),
     );
 
     expect(compileEffectivePrompt).toHaveBeenCalledWith({
@@ -249,14 +251,14 @@ describe("generic_agent execute", () => {
       {},
       ctx,
       {},
-      { attempt: 1, agentArtifactKey: "1" },
+      makeInvocation(ctx, { attempt: 1, agentArtifactKey: "1" }),
     );
     await execute(
       secondBlock,
       {},
       ctx,
       {},
-      { attempt: 1, agentArtifactKey: "2" },
+      makeInvocation(ctx, { attempt: 1, agentArtifactKey: "2" }),
     );
     expect(mocks.ensureAgentSandbox).toHaveBeenNthCalledWith(
       1,
@@ -326,12 +328,11 @@ describe("generic_agent execute", () => {
       {},
       ctx,
       {},
-      {
+      makeInvocation(ctx, {
         attempt: 1,
         agentArtifactKey: "1",
-        observeBudget,
-        recordBudgetUsage,
-      },
+        budget: { observeBudget, recordBudgetUsage },
+      }),
     );
 
     expect(mocks.pollPhaseUntilDone).toHaveBeenCalledWith(
@@ -388,14 +389,14 @@ describe("generic_agent execute", () => {
       {},
       ctx,
       {},
-      { attempt: 1, agentArtifactKey: "2" },
+      makeInvocation(ctx, { attempt: 1, agentArtifactKey: "2" }),
     );
     await execute(
       secondBlock,
       {},
       ctx,
       {},
-      { attempt: 1, agentArtifactKey: "3" },
+      makeInvocation(ctx, { attempt: 1, agentArtifactKey: "3" }),
     );
 
     expect(mocks.artifactPaths.mock.calls).toEqual([

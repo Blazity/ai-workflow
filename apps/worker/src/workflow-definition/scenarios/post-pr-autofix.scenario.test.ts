@@ -8,7 +8,7 @@ import {
   portsOf,
 } from "./assertions.js";
 import { createScenario, type Scenario } from "./harness.js";
-import { executionError } from "../interpreter.js";
+import { executionError } from "@shared/workflow-graph";
 
 const TEMPLATE = {
   id: "post-pr-autofix",

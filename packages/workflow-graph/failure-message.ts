@@ -1,8 +1,6 @@
 import { EXECUTION_DIAGNOSTIC_PREFIX } from "@shared/contracts";
 import type { ExecutionErrorCategory } from "@shared/contracts";
-import { clampBothEnds } from "../infra/clamp-text.js";
-
-export { clampBothEnds } from "../infra/clamp-text.js";
+import { clampBothEnds } from "./clamp-text";
 
 /** Longest single-line snippet of raw `detail` we append to a user-facing
  * failure message. Keeps Slack messages and Jira comments compact. Sized so the

@@ -30,7 +30,7 @@ import {
 import {
   WORKSPACE_GATE_NOT_RECORDED_MESSAGE,
   WORKSPACE_NOT_VERIFIABLE_MESSAGE,
-} from "../../workflow-definition/interpreter.js";
+} from "@shared/workflow-graph";
 import type { RepositoryScriptsOutput } from "../blocks/support/repository-scripts-output.js";
 import { fingerprintWorkspaceState } from "../helpers/workspace-gate-fingerprint.js";
 import { recoverPrePrGateFromSteps } from "../blocks/finalize-workspace/execute.js";

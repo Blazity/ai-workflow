@@ -414,7 +414,7 @@ const REPOSITORY_SCRIPT_PHASE_DETAILS: Record<string, string> = {
 /**
  * Longest refusal message this composes.
  *
- * SNIPPET_MAX_LENGTH in workflow-definition/failure-message.ts. The thrower
+ * SNIPPET_MAX_LENGTH in packages/workflow-graph/failure-message.ts. The thrower
  * uses this string as its own detail, so derivation sees a snippet identical to
  * the lead and returns the lead alone; one character more and the message is
  * clamped into a different string and appended to itself in parentheses.

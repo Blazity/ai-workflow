@@ -46,7 +46,7 @@ import {
   setupFailureMessage,
 } from "../pre-pr-checks.js";
 import { formatPrePrCheckFailures } from "../../steps/pre-pr-checks-runner.js";
-import type { BlockExecutionContext } from "../../../workflow-definition/interpreter.js";
+import type { BlockInvocationContext } from "../support/types.js";
 import type { ResolvedHarnessRuntime } from "../../../sandbox/harness-runtime.js";
 import type {
   PreSandboxRepositoryCatalogDegradation,
@@ -671,7 +671,7 @@ async function verifyRepositorySetup(
   sandboxId: string,
   config: unknown,
   checksCeilingMs: number,
-  execution?: BlockExecutionContext,
+  execution?: BlockInvocationContext,
 ): Promise<BlockExecutionResult | null> {
   if (config === null || !definitionRunsScripts(ctx.definitionNodes)) return null;
   // Cleared before the run, not only written after it. A second prepare node,
@@ -712,7 +712,7 @@ async function verifyRepositorySetup(
 
 export async function ensureWorkspace(
   ctx: Parameters<BlockExecuteFn>[2],
-  execution?: BlockExecutionContext,
+  execution?: BlockInvocationContext,
   options: {
     discoverRepositories?: (
       discovery: PreSandboxRepositoryDiscovery,
@@ -1142,7 +1142,7 @@ export async function ensureWorkspace(
 export async function promoteWorkspaceWrites(
   ctx: Parameters<BlockExecuteFn>[2],
   writeRepositories: ResearchRepository[],
-  execution?: BlockExecutionContext,
+  execution?: BlockInvocationContext,
 ): Promise<BlockExecutionResult | null> {
   if (!ctx.sandboxId || ctx.workspaceManifest?.version !== 2) {
     return executionError(
@@ -1233,7 +1233,7 @@ function promotableEntryKind(
  */
 export async function maybePromoteTicketWorkspaceWrites(
   ctx: Parameters<BlockExecuteFn>[2],
-  execution?: BlockExecutionContext,
+  execution?: BlockInvocationContext,
 ): Promise<BlockExecutionResult | null> {
   if (!promotableEntryKind(ctx.entry.kind)) return null;
   const manifest = ctx.workspaceManifest;
@@ -1305,7 +1305,7 @@ export function researchDeclaredNoWritesGuard(
 export async function maybePromoteGenericAgentWorkspace(
   ctx: Parameters<BlockExecuteFn>[2],
   node: WorkflowDefinitionNode,
-  execution?: BlockExecutionContext,
+  execution?: BlockInvocationContext,
 ): Promise<BlockExecutionResult | null> {
   if (node.type !== "generic_agent") return null;
   if (node.params.workspaceMode === "none") return null;

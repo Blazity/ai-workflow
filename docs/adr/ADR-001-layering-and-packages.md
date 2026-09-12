@@ -147,7 +147,7 @@ The 28 directories:
 | `system-health/` | services | mixed, split by file as above |
 | `test-support/` | testing | |
 | `webhook-trigger/` | services | mixed, split by file as above |
-| `workflow-definition/` | engine (`engine/definition/`) | `store.ts` to `db/repositories/definitions` in stage 7; pure schema, validation, bindings, scheduler, interpreter to `packages/workflow-graph` in stage 12 (schema, graph rules, policies, bindings, available values, transform, authored JSON Schema and workspace access moved; `deployment-validation.ts` waits for stage 5's policies before it can sit in `services/`) |
+| `workflow-definition/` | engine (`engine/definition/`) | `store.ts` to `db/repositories/definitions` in stage 7; pure schema, validation, bindings, scheduler, interpreter to `packages/workflow-graph` in stage 12 (schema, graph rules, policies, bindings, available values, transform, authored JSON Schema, workspace access, the scheduler, the interpreter and failure-message derivation moved; `deployment-validation.ts` waits for stage 5's policies before it can sit in `services/`) |
 | `workflows/` | engine | |
 
 The 8 root files:

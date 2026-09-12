@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type {
   BlockOutput,
   TransformConfiguration,
@@ -17,8 +19,8 @@ import {
   type WorkflowBlockRegistryContext,
 } from "../../engine/definition/block-contract-resolver.js";
 import { BLOCK_PARAMS_SCHEMAS } from "../../engine/definition/block-params-schemas.js";
-import { executionError, type BlockExecutionResult } from "../interpreter.js";
-import type { V2InvocationContext } from "../invocation-context.js";
+import { executionError, type BlockExecutionResult } from "@shared/workflow-graph";
+import type { V2InvocationContext } from "@shared/workflow-graph";
 import { describeWorkflowDefinitionIssues, parse } from "@shared/workflow-graph";
 import { validateWorkflowDefinitionForRunLoad } from "../deployment-validation.js";
 import { workflowDefinitionTemplate } from "../templates.js";
@@ -38,7 +40,8 @@ import {
   type V2SchedulerResult,
   type V2SelectedTransition,
   type V2StepsRecord,
-} from "../v2-scheduler.js";
+} from "@shared/workflow-graph";
+import { SCHEDULER_DEPENDENCIES } from "../../engine/definition/scheduler-dependencies.js";
 
 /**
  * Turns a workflow definition into an executable specification. The scenario
@@ -63,6 +66,55 @@ import {
  * and it never gates a pass: its only job is to turn a barrier the graph can
  * never satisfy into a legible failure instead of a hung suite.
  */
+
+/**
+ * The scheduling golden's only recording channel.
+ *
+ * Every scenario in this directory drives the production scheduler, so this is
+ * the one place that sees the emission order of all of them. When the variable
+ * names a directory, each executed scenario writes its own uniquely named JSON
+ * file into it, so the vitest workers running in parallel never share a file
+ * handle; nothing else in the suite behaves differently, and with the variable
+ * unset the recorder is a single truthiness test per run.
+ *
+ * Record with `pnpm --filter worker run capture:scheduling-golden`, which sets
+ * the variable, runs this directory and folds the files into
+ * `scenarios/scheduling.golden.json`. The fixture proves that moving the
+ * scheduler into `@shared/workflow-graph` changed no dispatch order, so only a
+ * person who decided an order should change may rewrite it (`-- --write`).
+ */
+const SCHEDULING_GOLDEN_SINK = process.env.WORKFLOW_SCHEDULING_GOLDEN_SINK;
+
+/** One invocation as the scheduler emitted it: which node, in which activation,
+ *  on which attempt, when it started and finished relative to every other
+ *  invocation of the same run, whether it reached a block executor, and which
+ *  port the scheduler chose. */
+function renderScheduledInvocation(invocation: ScenarioInvocation): string {
+  const transition = invocation.selectedTransition;
+  return [
+    `${invocation.startSeq ?? "-"}/${invocation.finishSeq ?? "-"}`,
+    `${invocation.nodeId}#${invocation.attempt}@${invocation.activationScopeId}`,
+    invocation.nodeType,
+    invocation.skipped === true ? "skipped" : "dispatched",
+    invocation.enteredExecutor ? "executor" : "scheduler",
+    invocation.runtimeState ?? "-",
+    transition ? `${transition.port}[${transition.edgeIds.join(",")}]` : "-",
+  ].join(" ");
+}
+
+function recordSchedulingGolden(
+  source: string,
+  invocations: readonly ScenarioInvocation[],
+): void {
+  if (!SCHEDULING_GOLDEN_SINK) return;
+  writeFileSync(
+    join(SCHEDULING_GOLDEN_SINK, `${randomUUID()}.json`),
+    JSON.stringify({
+      source,
+      order: invocations.map(renderScheduledInvocation),
+    }),
+  );
+}
 
 /** Macrotask turns without a new arrival before a held barrier is declared
  * unsatisfiable. Not a duration: the harness performs no I/O, so a graph that
@@ -594,6 +646,7 @@ class Scenario {
     let outcome: ScenarioOutcome | undefined;
     try {
       const result = await executeV2Graph({
+        dependencies: SCHEDULER_DEPENDENCIES,
         definition: this.definition,
         entryTriggerId: this.options.entryTriggerId,
         triggerOutput: this.triggerOutput,
@@ -618,6 +671,7 @@ class Scenario {
       failure = error;
     } finally {
       for (const gate of this.gates) gate.dispose();
+      recordSchedulingGolden(this.source, this.invocationLog);
     }
     const unused = this.scripts.filter((entry) => entry.used === 0);
     if (unused.length > 0) {

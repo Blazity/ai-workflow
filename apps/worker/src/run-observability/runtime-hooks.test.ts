@@ -6,11 +6,11 @@ import type {
   WorkflowDefinitionV2,
   WorkflowDefinitionV2Node,
 } from "@shared/contracts";
-import type { BlockExecutionResult } from "../workflow-definition/interpreter.js";
+import type { BlockExecutionResult } from "@shared/workflow-graph";
 import {
   executeV2Graph,
   type V2InvocationIdentity,
-} from "../workflow-definition/v2-scheduler.js";
+} from "@shared/workflow-graph";
 import {
   buildV2ReplayGraphSnapshot,
   createV2RunObservationHooks,
@@ -18,6 +18,7 @@ import {
   type RunObservationAttemptFinish,
   type V2RunObservationSink,
 } from "./runtime-hooks.js";
+import { SCHEDULER_DEPENDENCIES } from "../engine/definition/scheduler-dependencies.js";
 
 const STARTED_AT = new Date("2026-07-23T10:00:00.000Z");
 const COMPLETED_AT = new Date("2026-07-23T10:00:03.000Z");
@@ -570,6 +571,7 @@ describe("v2 run observation hooks", () => {
           };
 
     const paused = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition,
       entryTriggerId: "trigger",
       triggerOutput: { status: "ok" },
@@ -578,6 +580,7 @@ describe("v2 run observation hooks", () => {
     });
     expect(paused.outcome).toBe("paused");
     const resumed = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition,
       entryTriggerId: "trigger",
       triggerOutput: { status: "ok" },
@@ -628,6 +631,7 @@ describe("v2 run observation hooks", () => {
     let boundaryAt = STARTED_AT;
 
     const result = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition,
       entryTriggerId: "trigger",
       triggerOutput: { status: "ok" },
@@ -731,6 +735,7 @@ describe("v2 run observation hooks", () => {
     });
 
     const paused = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition,
       entryTriggerId: "trigger",
       triggerOutput: { status: "ok" },
@@ -740,6 +745,7 @@ describe("v2 run observation hooks", () => {
     expect(paused.outcome).toBe("paused");
 
     const resumed = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition,
       entryTriggerId: "trigger",
       triggerOutput: { status: "ok" },
@@ -853,6 +859,7 @@ describe("v2 run observation hooks", () => {
     };
 
     const paused = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition,
       entryTriggerId: "trigger",
       triggerOutput: { status: "ok" },
@@ -870,6 +877,7 @@ describe("v2 run observation hooks", () => {
     expect(ownerWhilePaused?.finish).toBeUndefined();
 
     const resumed = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition,
       entryTriggerId: "trigger",
       triggerOutput: { status: "ok" },
