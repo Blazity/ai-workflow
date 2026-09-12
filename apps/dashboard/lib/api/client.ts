@@ -39,6 +39,9 @@ import type {
   SchedulePreviewRequest,
   SchedulePreviewResponse,
   ScheduleResumeResponse,
+  SettingsPatchRequest,
+  SettingsPatchResponse,
+  SettingsVersionsResponse,
   SystemHealthResponse,
   WebhookDeliveriesResponse,
   WebhookEndpointConfigResponse,
@@ -536,6 +539,18 @@ export const apiClient = {
         { method: "POST", ...options },
         (status) => status === 200 || status === 409,
       ),
+  },
+
+  settings: {
+    /** One key's recorded changes. The listing already carries the newest one,
+     *  so this is only fetched when a history drawer is opened. */
+    history: (key: string, options?: BrowserRequestOptions) =>
+      requestJson<SettingsVersionsResponse>(
+        `/api/settings?key=${encodeURIComponent(key)}`,
+        options,
+      ),
+    update: (body: SettingsPatchRequest) =>
+      requestJson<SettingsPatchResponse>("/api/settings", jsonInit("PATCH", body)),
   },
 
   systemHealth: {

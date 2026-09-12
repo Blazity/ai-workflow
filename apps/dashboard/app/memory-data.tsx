@@ -1,6 +1,7 @@
 // apps/dashboard/app/memory-data.tsx
 import { redirect } from "next/navigation";
 
+import { canEditSettings } from "@shared/contracts";
 import { getJSON, withQuery } from "@/lib/api/server";
 import { UnauthorizedError } from "@/lib/auth/errors";
 import { requireSession, type DashboardSession } from "@/lib/auth/session";
@@ -8,6 +9,7 @@ import { MemoryScreen } from "@/components/cockpit/screens/memory";
 import type {
   MemoryDocumentResponse,
   MemoryDocumentsResponse,
+  SettingsReadResponse,
 } from "@shared/contracts";
 
 /** getJSON puts the status into the error message (lib/api/server.ts), which is
@@ -32,7 +34,7 @@ export async function MemoryData({
   const selection =
     subjectKey && docPath ? { subjectKey, docPath } : null;
   try {
-    const [session, list, detail] = await Promise.all([
+    const [session, list, detail, settings] = await Promise.all([
       requireSession(),
       getJSON<MemoryDocumentsResponse>("/api/v1/memory"),
       selection
@@ -45,6 +47,12 @@ export async function MemoryData({
             return null;
           })
         : null,
+      // The memory switches are a panel on this page, not its subject: a
+      // settings read that fails leaves the documents on screen and drops the
+      // panel rather than taking the page down with it.
+      getJSON<SettingsReadResponse>("/api/v1/settings").catch(
+        (): SettingsReadResponse | null => null,
+      ),
     ]);
     return (
       <MemoryScreen
@@ -52,6 +60,8 @@ export async function MemoryData({
         selection={selection}
         selected={detail?.document ?? null}
         canDelete={canDeleteMemory(session.role)}
+        settings={settings?.settings ?? []}
+        canEditSettings={canEditSettings(session.role)}
       />
     );
   } catch (error) {
