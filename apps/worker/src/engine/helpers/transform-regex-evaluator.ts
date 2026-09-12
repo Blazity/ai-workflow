@@ -1,11 +1,12 @@
-import type { TransformRegexEvaluator } from "../../workflow-definition/transform.js";
+import type { TransformRegexEvaluator } from "@shared/workflow-graph";
 
 /**
  * The regex engine a Transform block borrows, bound to the one step that owns
  * RE2.
  *
- * `transform.ts` states the transform semantics and takes this evaluator as a
- * parameter, so nothing about a transform reaches into the engine any more.
+ * `@shared/workflow-graph` states the transform semantics and takes this
+ * evaluator as a parameter, so nothing about a transform reaches into the
+ * engine any more.
  * The step module is still reached through a dynamic import, for two reasons
  * that outlive the inversion: `transform-regex-step.ts` loads `re2-wasm` and
  * its `.wasm` asset, and a static edge would also pull that step module into

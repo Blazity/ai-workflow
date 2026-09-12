@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { V2BindingResolutionContext } from "@shared/workflow-graph";
-import { executeTransform } from "../../workflow-definition/transform.js";
+import {
+  executeTransform,
+  type V2BindingResolutionContext,
+} from "@shared/workflow-graph";
+import { JSON_SCHEMA_SUPPORT } from "../definition/json-schema-support.js";
 import { transformRegexEvaluator } from "../helpers/transform-regex-evaluator.js";
 import { replaceTextRegexStep } from "./transform-regex-step.js";
 
@@ -54,6 +57,7 @@ describe("transform regex evaluator", () => {
           ignoreCase,
         },
         contextFor(source),
+        JSON_SCHEMA_SUPPORT,
         transformRegexEvaluator,
       );
       expect(throughTransform).toBe(expected);
@@ -76,6 +80,7 @@ describe("transform regex evaluator", () => {
             ignoreCase: false,
           },
           contextFor("  Hello world  "),
+          JSON_SCHEMA_SUPPORT,
         ))(),
     ).rejects.toThrow("Replace text in regex mode requires a regex evaluator.");
   });
@@ -92,6 +97,7 @@ describe("transform regex evaluator", () => {
           ignoreCase: false,
         },
         contextFor("  Hello world  "),
+        JSON_SCHEMA_SUPPORT,
       ),
     ).toBe("  Hello you  ");
   });

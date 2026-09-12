@@ -11,11 +11,14 @@ import type {
   WorkflowDefinitionV2,
 } from "@shared/contracts";
 import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
-import { analyzeWorkflowV2Catalog } from "../../workflow-definition/available-values.js";
 import { currentBlockContracts } from "./block-contracts.js";
 import { validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring } from "./policy-operations.js";
-import { describeWorkflowDefinitionIssues, parse } from "@shared/workflow-graph";
-import { declaresRetiredSchema } from "../../workflow-definition/validation.js";
+import {
+  analyzeWorkflowV2Catalog,
+  declaresRetiredSchema,
+  describeWorkflowDefinitionIssues,
+  parse,
+} from "@shared/workflow-graph";
 
 export type WorkflowDefinitionCandidateParse =
   | { ok: true; definition: WorkflowDefinitionV2 }

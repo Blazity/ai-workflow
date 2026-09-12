@@ -7,11 +7,12 @@
  * a question about a schema rather than reaching into the definition engine.
  */
 import type { JsonSchemaAuthoringInspectionResponse } from "@shared/contracts";
-import { inspectAuthoredJsonSchema } from "../../workflow-definition/json-schema-authoring.js";
+import { inspectAuthoredJsonSchema } from "@shared/workflow-graph";
+import { JSON_SCHEMA_SUPPORT } from "../../engine/definition/json-schema-support.js";
 
 /** Report the dialect, the usable value schema and every blocking issue. */
 export function inspectJsonSchemaSource(
   source: string,
 ): JsonSchemaAuthoringInspectionResponse {
-  return inspectAuthoredJsonSchema(source);
+  return inspectAuthoredJsonSchema(source, JSON_SCHEMA_SUPPORT);
 }

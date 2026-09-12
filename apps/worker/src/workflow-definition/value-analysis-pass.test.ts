@@ -21,7 +21,8 @@ import {
   analyzeWorkflowValues,
   analyzeWorkflowV2Catalog,
   type WorkflowValueAnalyzer,
-} from "./available-values.js";
+} from "@shared/workflow-graph";
+import { JSON_SCHEMA_SUPPORT } from "../engine/definition/json-schema-support.js";
 import { validateWorkflowPromptAuthoringIssuesWithLoader } from "./prompt-authoring.js";
 import { validateWorkflowDefinitionCandidate } from "./validation.js";
 
@@ -72,7 +73,7 @@ function countingAnalyzer(): {
   return {
     analyzeValues: (definition) => {
       walks += 1;
-      return analyzeWorkflowValues(definition, resolveContract);
+      return analyzeWorkflowValues(definition, resolveContract, JSON_SCHEMA_SUPPORT);
     },
     walks: () => walks,
   };

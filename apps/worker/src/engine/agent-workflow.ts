@@ -20,8 +20,8 @@ import { resolveAgentInput } from "./helpers/resolve-agent-input.js";
 import { assembleReviewChangeSetAddition, pullRequestChangeSetTarget } from "./steps/review-change-set.js";
 import { sanitizeReplayAttemptOutcome, sanitizeReplayGraphSnapshot, sanitizeReplayValue } from "../run-observability/sanitizer.js";
 import { safeReplayAgentProtocolMetadata, safeWorkflowExecutionLogEvent } from "../run-observability/safe-execution-log.js";
-import { executeTransform } from "../workflow-definition/transform.js";
-import { type V2BindingResolutionContext } from "@shared/workflow-graph";
+import { executeTransform, type V2BindingResolutionContext } from "@shared/workflow-graph";
+import { JSON_SCHEMA_SUPPORT } from "./definition/json-schema-support.js";
 import type { BlockExecutionContext, BlockExecutionResult, BlockExecutor } from "../workflow-definition/interpreter.js";
 import { resolveBlockAgent, resolveRunDefaultKind } from "../workflow-definition/resolve-agent.js";
 import { resolveTicketMoveTarget } from "./helpers/ticket-move-target.js";
@@ -3352,6 +3352,7 @@ async function agentWorkflowBody(
                 output: await executeTransform(
                   configuration as unknown as TransformConfiguration,
                   bindingContext,
+                  JSON_SCHEMA_SUPPORT,
                   transformRegexEvaluator,
                 ),
               },

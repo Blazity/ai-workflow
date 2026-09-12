@@ -29,6 +29,10 @@ import type {
   WorkflowDefinitionValidationIssue,
 } from "@shared/contracts";
 import {
+  WORKFLOW_SCHEMA_VERSION,
+  workflowDefinitionSchemaVersionOf,
+} from "@shared/contracts";
+import {
   dedupeWorkflowDefinitionIssues,
   workflowDefinitionStructuralIssues,
   type WorkflowTransformShapeValidator,
@@ -115,6 +119,16 @@ export function parse(input: unknown): WorkflowGraphParseResult {
     },
     error: parsed.error,
   };
+}
+
+/**
+ * A graph that names a schema this build no longer runs. `parse` would refuse
+ * it too, but with a literal mismatch an author cannot act on, so every caller
+ * asks this first and answers with the retirement message instead.
+ */
+export function declaresRetiredSchema(candidate: unknown): boolean {
+  const version = workflowDefinitionSchemaVersionOf(candidate);
+  return version !== undefined && version !== WORKFLOW_SCHEMA_VERSION;
 }
 
 /** May this graph become executable here? The structural rules plus everything

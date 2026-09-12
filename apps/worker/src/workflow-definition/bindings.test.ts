@@ -3,7 +3,7 @@ import type { WorkflowValueSchema } from "@shared/contracts";
 import {
   isWorkflowSchemaAssignable,
   RUN_BINDING_SCHEMA,
-} from "./bindings.js";
+} from "@shared/workflow-graph";
 
 const stringSchema: WorkflowValueSchema = { type: "string" };
 

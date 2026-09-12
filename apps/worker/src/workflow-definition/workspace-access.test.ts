@@ -7,7 +7,7 @@ import type {
 import {
   validateWorkflowV2WorkspaceAccessIssues,
   workflowWorkspaceAccessOf,
-} from "./workspace-access.js";
+} from "@shared/workflow-graph";
 
 function node(
   id: string,

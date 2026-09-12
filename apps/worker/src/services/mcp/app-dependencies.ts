@@ -10,7 +10,5 @@ export { ticketSubjectKey } from "../../engine/support/subject-key.js";
 export {
   isLegacyStoredWorkflowDefinition,
 } from "../../workflow-definition/stored-definition.js";
-export {
-  declaresRetiredSchema,
-  validateWorkflowDefinitionCandidate,
-} from "../../workflow-definition/validation.js";
+export { declaresRetiredSchema } from "@shared/workflow-graph";
+export { validateWorkflowDefinitionCandidate } from "../../workflow-definition/validation.js";

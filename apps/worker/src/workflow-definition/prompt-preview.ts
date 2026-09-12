@@ -1,7 +1,11 @@
 import type {
   WorkflowDefinitionValidationIssue,
 } from "@shared/contracts";
-import { dedupeWorkflowDefinitionIssues } from "@shared/workflow-graph";
+import {
+  createWorkflowValueAnalyzer,
+  dedupeWorkflowDefinitionIssues,
+} from "@shared/workflow-graph";
+import { JSON_SCHEMA_SUPPORT } from "../engine/definition/json-schema-support.js";
 import type { Db } from "../db/types.js";
 import { createPromptReferenceLoader } from "../prompt-library/prompt-reference-loader.js";
 import { createConnectedPromptReferenceLoader } from "../prompt-library/prompt-reference-loader.js";
@@ -17,7 +21,6 @@ import {
   type WorkflowBlockRegistryContext,
 } from "../engine/definition/block-contract-resolver.js";
 import { BLOCK_PARAMS_SCHEMAS } from "../engine/definition/block-params-schemas.js";
-import { createWorkflowValueAnalyzer } from "./available-values.js";
 import {
   isPromptAuthoringBlock,
   resolveNodePromptAuthoring,
@@ -58,7 +61,7 @@ export async function previewWorkflowPromptCandidate(
     resolveContract,
     BLOCK_PARAMS_SCHEMAS,
     registryContext.vcsProviders,
-    createWorkflowValueAnalyzer(resolveContract),
+    createWorkflowValueAnalyzer(resolveContract, JSON_SCHEMA_SUPPORT),
   );
   if (!validated.parsed) {
     return {
@@ -150,7 +153,7 @@ export async function previewConnectedWorkflowPromptCandidate(
     resolveContract,
     BLOCK_PARAMS_SCHEMAS,
     registryContext.vcsProviders,
-    createWorkflowValueAnalyzer(resolveContract),
+    createWorkflowValueAnalyzer(resolveContract, JSON_SCHEMA_SUPPORT),
   );
   if (!validated.parsed) return { ok: false, statusCode: 422, message: "Prompt preview requires a structurally valid v2 definition.", issues: validated.response.issues };
   const nodeIndex = validated.parsed.nodes.findIndex((node) => node.id === input.blockId);

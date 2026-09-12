@@ -154,7 +154,7 @@ into an agent prompt.
 
 Which references an author may pick is computed per node by
 `analyzeWorkflowValues` in
-`apps/worker/src/workflow-definition/available-values.ts`, which also produces
+`packages/workflow-graph/available-values.ts`, which also produces
 the per-node contracts, the available values and (through
 `analyzeWorkflowV2Catalog`) the data catalog the editor shows. A binding to an
 unknown block, or a block binding to its own output, is a validation error in
@@ -288,9 +288,9 @@ never learns what backs it. For a v2 definition the composed list runs, in one
 pass: the graph rules of section 4 and the per-type configuration schemas (the
 policy's own structural half), then the block deployment rules from
 `apps/worker/src/workflow-definition/block-registry.ts`, the binding analysis
-from `available-values.ts`, the Branch condition and Transform reference
-checks, the workspace access rules from
-`apps/worker/src/workflow-definition/workspace-access.ts`, and the repository
+from `packages/workflow-graph/available-values.ts`, the Branch condition and
+Transform reference checks, the workspace access rules from
+`packages/workflow-graph/workspace-access.ts`, and the repository
 scope pin rules. That order is behaviour: an author reads one list, and
 `__golden__/definition-deployment-issues.test.ts` pins it byte for byte.
 
@@ -394,12 +394,16 @@ Three properties matter to anyone authoring a graph through an agent:
 | Per-type block parameter schemas | `apps/worker/src/engine/definition/block-params-schemas.ts` |
 | Block data bound once per request | `apps/worker/src/services/workflow-definitions/block-contracts.ts` |
 | Binding resolution | `packages/workflow-graph/v2-bindings.ts` |
-| Available values and node contracts | `apps/worker/src/workflow-definition/available-values.ts` |
+| Available values and node contracts | `packages/workflow-graph/available-values.ts` |
+| Value schema assignability and the run binding schema | `packages/workflow-graph/bindings.ts` |
+| Transform semantics, shape and output schema | `packages/workflow-graph/transform.ts` |
+| Authored JSON Schema inspection | `packages/workflow-graph/json-schema-authoring.ts` |
+| The ajv-backed JSON Schema facility the package takes as a parameter | `apps/worker/src/workflow-definition/json-schema.ts`, bound in `apps/worker/src/engine/definition/json-schema-support.ts` |
 | Scheduler, loop regions, checkpoints | `apps/worker/src/workflow-definition/v2-scheduler.ts` |
 | Execution results and error construction | `apps/worker/src/workflow-definition/interpreter.ts` |
 | Execution error shape, category and recorded state | `packages/contracts/execution-error.ts` |
 | Execution error class, user sentence, log event | `apps/worker/src/engine/helpers/execution-error.ts` |
 | Harness profile resolution | `apps/worker/src/workflow-definition/harness-profile-runtime.ts` |
-| Workspace access rules | `apps/worker/src/workflow-definition/workspace-access.ts` |
+| Workspace access rules | `packages/workflow-graph/workspace-access.ts` |
 | Persistence and versions | `apps/worker/src/db/repositories/definitions.ts`, `apps/worker/src/services/workflow-definitions/policy-operations.ts` |
 | MCP authoring tools | `apps/worker/src/mcp/tools/workflow-authoring.ts` |

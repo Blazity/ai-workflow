@@ -1,3 +1,14 @@
+/**
+ * Which values every block of a definition may read, and the contracts that
+ * decide it.
+ *
+ * One walk answers all of it (`analyzeWorkflowValues`): the per-node contracts,
+ * the offered values, the binding issues and, on first read, the editor's data
+ * catalog. Two things it needs are parameters rather than imports: the block
+ * contract resolver, because availability follows from the deployment's
+ * environment and model catalog, and the JSON Schema support, because ajv stays
+ * in the worker.
+ */
 import {
   BLOCK_TYPE_SPECS,
   isSafeWorkflowInputName,
@@ -25,13 +36,10 @@ import {
 import {
   isWorkflowSchemaAssignable,
   RUN_BINDING_SCHEMA,
-} from "./bindings.js";
-import {
-  inspectJsonSchema202012,
-  validateJsonSchemaValue,
-} from "./json-schema.js";
-import { deriveTransformOutputSchema } from "./transform.js";
-import { parseWorkflowDataReferenceV2 } from "@shared/workflow-graph";
+} from "./bindings";
+import type { WorkflowJsonSchemaSupport } from "./json-schema-support";
+import { deriveTransformOutputSchema } from "./transform";
+import { parseWorkflowDataReferenceV2 } from "./v2-bindings";
 
 const MAX_ACTIVATION_TERMS = 256;
 const TRIGGER_GUARD = "$trigger";
@@ -68,7 +76,7 @@ export type WorkflowValueAnalyzer = (
 /**
  * What the walk found, kept private to this file: the catalog reader below is
  * its only consumer, and publishing it would put this module's internal maps
- * into the interface stage 4 moves into the package.
+ * into the package's public interface.
  */
 interface WorkflowValueWalk {
   definition: WorkflowDefinitionV2;
@@ -129,6 +137,7 @@ function configurationParams(node: WorkflowDefinitionV2Node): Record<string, Wor
 function contractForNode(
   node: WorkflowDefinitionV2Node,
   resolveContract: WorkflowBlockContractResolver,
+  jsonSchema: WorkflowJsonSchemaSupport,
   referenceSchemas: TransformDefinitionReferenceSchemas = {},
 ): WorkflowBlockContract {
   const contract = resolveContract(node.type, configurationParams(node));
@@ -149,7 +158,7 @@ function contractForNode(
       ) {
         continue;
       }
-      const inspected = inspectJsonSchema202012(
+      const inspected = jsonSchema.inspect(
         carry.schema as JsonSchema202012,
       );
       if (inspected.ok) properties[carry.name] = inspected.valueSchema;
@@ -185,12 +194,15 @@ function contractForNode(
   }
   if (node.type !== "transform") return contract;
 
-  const derived = deriveTransformOutputSchema({
-    configuration: node.configuration as unknown as TransformConfiguration,
-    referenceSchemas,
-  });
+  const derived = deriveTransformOutputSchema(
+    {
+      configuration: node.configuration as unknown as TransformConfiguration,
+      referenceSchemas,
+    },
+    jsonSchema,
+  );
   if (!derived) return contract;
-  const inspected = inspectJsonSchema202012(derived, {
+  const inspected = jsonSchema.inspect(derived, {
     requireClosedObjects: true,
   });
   if (!inspected.ok) return contract;
@@ -295,6 +307,7 @@ function transformReferenceSchemas(
 function contractsForDefinition(
   definition: WorkflowDefinitionV2,
   resolveContract: WorkflowBlockContractResolver,
+  jsonSchema: WorkflowJsonSchemaSupport,
 ): Map<string, WorkflowBlockContract> {
   const contracts = new Map(
     definition.nodes.map((node) => [
@@ -310,6 +323,7 @@ function contractsForDefinition(
         contractForNode(
           node,
           resolveContract,
+          jsonSchema,
           transformReferenceSchemas(node, definition, contracts),
         ),
       );
@@ -1116,6 +1130,7 @@ function inputTargets(
   nodeIndex: number,
   contract: WorkflowBlockContract,
   issues: WorkflowDefinitionValidationIssue[],
+  jsonSchema: WorkflowJsonSchemaSupport,
 ): InputTarget[] {
   const targets: InputTarget[] = Object.entries(contract.inputs).map(([name, input]) => ({
     name,
@@ -1144,7 +1159,7 @@ function inputTargets(
       continue;
     }
     seenAdditional.add(input.name);
-    const parsed = inspectJsonSchema202012(input.schema);
+    const parsed = jsonSchema.inspect(input.schema);
     if (!parsed.ok) {
       for (const issue of parsed.issues) {
         issues.push({
@@ -1197,7 +1212,7 @@ function inputTargets(
         continue;
       }
       seenCarry.add(rawCarry.name);
-      const parsed = inspectJsonSchema202012(
+      const parsed = jsonSchema.inspect(
         rawCarry.schema as JsonSchema202012,
       );
       if (!parsed.ok) {
@@ -1230,9 +1245,10 @@ function inputTargets(
 function validateLiteral(
   target: InputTarget,
   value: JsonValue,
+  jsonSchema: WorkflowJsonSchemaSupport,
 ): Array<{ path: string; message: string }> {
   if (target.schema.type === "unknown") return [];
-  return validateJsonSchemaValue(
+  return jsonSchema.validateValue(
     workflowValueSchemaToJsonSchema(target.schema),
     value,
   ).map((issue) => ({
@@ -1246,6 +1262,7 @@ function validateBindings(
   targetsByNode: ReadonlyMap<string, readonly InputTarget[]>,
   availableValuesByNode: WorkflowAvailableValuesByNode,
   issues: WorkflowDefinitionValidationIssue[],
+  jsonSchema: WorkflowJsonSchemaSupport,
 ): void {
   for (const [nodeIndex, node] of definition.nodes.entries()) {
     const targets = targetsByNode.get(node.id) ?? [];
@@ -1306,7 +1323,11 @@ function validateBindings(
         }
       }
       if (target.binding.kind === "literal") {
-        for (const issue of validateLiteral(target, target.binding.value)) {
+        for (const issue of validateLiteral(
+          target,
+          target.binding.value,
+          jsonSchema,
+        )) {
           issues.push({
             code: "binding.literal_type",
             severity: "error",
@@ -1332,7 +1353,7 @@ function validateBindings(
         for (const [referenceIndex, reference] of target.binding.references.entries()) {
           const available = availableByReference.get(reference);
           const parsedSource = available
-            ? inspectJsonSchema202012(available.schema)
+            ? jsonSchema.inspect(available.schema)
             : null;
           if (!available) {
             issues.push({
@@ -1391,6 +1412,7 @@ function validateBindings(
 export function analyzeWorkflowValues(
   definition: WorkflowDefinitionV2,
   resolveContract: WorkflowBlockContractResolver,
+  jsonSchema: WorkflowJsonSchemaSupport,
 ): WorkflowValueAnalysis {
   const issues: WorkflowDefinitionValidationIssue[] = [];
   const nodeById = new Map(definition.nodes.map((node) => [node.id, node]));
@@ -1410,12 +1432,12 @@ export function analyzeWorkflowValues(
   const loopRegionsByNodeId = authoringLoopRegions(definition, nodeById);
   const formulas = activationFormulas(definition, nodeById, cyclicNodeIds);
   const triggers = definition.nodes.filter((node) => isTriggerBlockType(node.type));
-  const contracts = contractsForDefinition(definition, resolveContract);
+  const contracts = contractsForDefinition(definition, resolveContract, jsonSchema);
   const targetsByNode = new Map<string, InputTarget[]>();
   for (const [nodeIndex, node] of definition.nodes.entries()) {
     targetsByNode.set(
       node.id,
-      inputTargets(node, nodeIndex, contracts.get(node.id)!, issues),
+      inputTargets(node, nodeIndex, contracts.get(node.id)!, issues, jsonSchema),
     );
   }
 
@@ -1599,7 +1621,13 @@ export function analyzeWorkflowValues(
     availableValuesByNode[consumer.id] = values;
   }
 
-  validateBindings(definition, targetsByNode, availableValuesByNode, issues);
+  validateBindings(
+    definition,
+    targetsByNode,
+    availableValuesByNode,
+    issues,
+    jsonSchema,
+  );
   const nodeContracts = Object.fromEntries(contracts);
   const walk: WorkflowValueWalk = {
     definition,
@@ -2012,6 +2040,8 @@ export function analyzeWorkflowV2Catalog(
  */
 export function createWorkflowValueAnalyzer(
   resolveContract: WorkflowBlockContractResolver,
+  jsonSchema: WorkflowJsonSchemaSupport,
 ): WorkflowValueAnalyzer {
-  return (definition) => analyzeWorkflowValues(definition, resolveContract);
+  return (definition) =>
+    analyzeWorkflowValues(definition, resolveContract, jsonSchema);
 }

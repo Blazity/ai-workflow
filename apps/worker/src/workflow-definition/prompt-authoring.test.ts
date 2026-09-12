@@ -7,7 +7,8 @@ import type {
 } from "@shared/contracts";
 import type { WorkflowBlockRegistryContext } from "../engine/definition/block-contract-resolver.js";
 import { testBlockContractResolver } from "../test-support/block-contracts.js";
-import { analyzeWorkflowValues } from "./available-values.js";
+import { analyzeWorkflowValues } from "@shared/workflow-graph";
+import { JSON_SCHEMA_SUPPORT } from "../engine/definition/json-schema-support.js";
 import {
   resolveNodePromptAuthoring,
   validateWorkflowPromptAuthoringIssuesWithLoader,
@@ -209,7 +210,7 @@ describe("v2 prompt authoring validation", () => {
 
     const issues = await validateWorkflowPromptAuthoringIssuesWithLoader(
       definition,
-      analyzeWorkflowValues(definition, resolveContract),
+      analyzeWorkflowValues(definition, resolveContract, JSON_SCHEMA_SUPPORT),
       async () => ({
         promptId: 1,
         promptName: "Implementation",
@@ -343,7 +344,7 @@ describe("v2 prompt authoring validation", () => {
     };
     const issues = await validateWorkflowPromptAuthoringIssuesWithLoader(
       definition,
-      analyzeWorkflowValues(definition, resolveContract),
+      analyzeWorkflowValues(definition, resolveContract, JSON_SCHEMA_SUPPORT),
       async () => ({
         promptId: 1,
         promptName: "Shared",
@@ -435,7 +436,7 @@ describe("v2 prompt authoring validation", () => {
 
     const issues = await validateWorkflowPromptAuthoringIssuesWithLoader(
       definition,
-      analyzeWorkflowValues(definition, resolveContract),
+      analyzeWorkflowValues(definition, resolveContract, JSON_SCHEMA_SUPPORT),
       vi.fn(),
     );
 
@@ -508,7 +509,7 @@ describe("v2 prompt authoring validation", () => {
 
     const issues = await validateWorkflowPromptAuthoringIssuesWithLoader(
       definition,
-      analyzeWorkflowValues(definition, resolveContract),
+      analyzeWorkflowValues(definition, resolveContract, JSON_SCHEMA_SUPPORT),
       vi.fn(),
     );
 
@@ -563,7 +564,7 @@ describe("v2 prompt authoring validation", () => {
 
     const issues = await validateWorkflowPromptAuthoringIssuesWithLoader(
       definition,
-      analyzeWorkflowValues(definition, resolveContract),
+      analyzeWorkflowValues(definition, resolveContract, JSON_SCHEMA_SUPPORT),
       vi.fn(),
     );
 

@@ -35,14 +35,12 @@ import {
   isV2BranchConfiguration,
   resolveWorkflowInputBindingV2,
   resolveWorkflowNodeInputsV2,
+  workflowWorkspaceAccessesConflict,
+  workflowWorkspaceAccessOf,
   type V2BindingResolutionContext,
 } from "@shared/workflow-graph";
 import { validateBlockOutputForDefinition } from "./block-registry.js";
 import { validateJsonSchemaValue } from "./json-schema.js";
-import {
-  workflowWorkspaceAccessesConflict,
-  workflowWorkspaceAccessOf,
-} from "./workspace-access.js";
 
 const ROOT_SCOPE_ID = "root";
 const DEFAULT_MAX_CONCURRENCY = 4;
