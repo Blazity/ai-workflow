@@ -1,6 +1,6 @@
 import {
   BLOCK_TYPE_SPECS,
-  EXECUTION_DIAGNOSTIC_PREFIX,
+  createWorkflowExecutionErrorState,
   isTriggerBlockType,
   type BlockOutput,
   type BlockRunState,
@@ -10,12 +10,12 @@ import {
   type WorkflowDefinitionV2,
   type WorkflowDefinitionV2ControlEdge,
   type WorkflowDefinitionV2Node,
+  type WorkflowExecutionErrorState,
   type WorkflowReplaySelectedTransition,
 } from "@shared/contracts";
 import type {
   BlockExecutionError,
   BlockExecutionResult,
-  WorkflowExecutionErrorState,
 } from "./interpreter.js";
 import { executionError } from "./interpreter.js";
 import {
@@ -2078,14 +2078,12 @@ class V2SchedulerRuntime {
     error: BlockExecutionError,
   ): Promise<void> {
     if (this.primaryFailure) return;
-    const state: WorkflowExecutionErrorState = {
-      category: error.category,
-      message: error.message,
-      ...(error.phase ? { phase: error.phase } : {}),
-      diagnosticId: `${EXECUTION_DIAGNOSTIC_PREFIX}${this.runId}-${nodeId}-${attempt}`,
+    const state = createWorkflowExecutionErrorState(
+      this.runId,
       nodeId,
       attempt,
-    };
+      error,
+    );
     this.primaryFailure = state;
     this.admissionStopped = true;
     this.schedulerCancellation.cancel(`block "${nodeId}" failed`);

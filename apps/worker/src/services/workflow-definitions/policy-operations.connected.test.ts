@@ -49,7 +49,7 @@ vi.mock("./connected-policy-dependencies.js", () => ({
   validateConnectedDefinitionPromptAuthoring: mocks.validatePrompts,
 }));
 
-vi.mock("../../workflow-definition/models.js", () => ({
+vi.mock("../../engine/definition/block-contract-environment.js", () => ({
   workflowBlockRegistryContextFromEnv: () => ({
     agentProviders: { claude: true, codex: true },
     llmProviders: { claude: true, codex: true },

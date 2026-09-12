@@ -15,10 +15,10 @@ import {
   declaresRetiredSchema,
   logger,
   validateWorkflowDefinitionCandidate,
-  workflowBlockRegistryContextFromEnv,
 } from "../../services/mcp/app-dependencies.js";
 import { isRepositoryDispatchable } from "../../services/dispatch/repo-allowlist.js";
 import type { RepositoryCatalogSnapshot } from "../../services/repository-catalog/index.js";
+import { currentBlockContracts } from "../../services/workflow-definitions/block-contracts.js";
 import {
   runnableDefinitionOf,
   WorkflowDefinitionStoreError,
@@ -516,9 +516,12 @@ export function registerWorkflowAuthoringTools(
           // authority on a legal graph is applied, and the store then parses the
           // same schema again before it stores anything.
           //
+          const contracts = currentBlockContracts();
           const candidate = validateWorkflowDefinitionCandidate(
             input.definition,
-            workflowBlockRegistryContextFromEnv(),
+            contracts.resolveContract,
+            contracts.blockParamsSchemas,
+            contracts.configuredVcsProviders,
           );
           if (!candidate.parsed) {
             throw refusal(

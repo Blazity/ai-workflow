@@ -15,6 +15,10 @@
  * engine keeps parsing exactly what it parsed before.
  */
 import { z } from "zod";
+import {
+  REPOSITORY_SCRIPT_GROUP_NAME_MAX_LENGTH,
+  REPOSITORY_SCRIPT_GROUP_NAME_PATTERN,
+} from "./repository-scripts";
 
 /**
  * How a repository entered the catalog. It is provenance, not policy: nothing
@@ -171,3 +175,271 @@ export function repositoryCatalogKey(
 // The engine spells the same field `repoPath`. There is no second helper for
 // it: the one place a `repoPath` reaches the catalog adapts it at the call
 // site, so there is exactly one definition of what this key is.
+
+/**
+ * How one suggestion call ended.
+ *
+ * Recorded for every call, not only the useful ones. A timeout and a malformed
+ * answer cost exactly what a proposal costs, and a cost page that showed only
+ * the calls that worked would under-report the bill an admin is actually
+ * paying while they retry a repository the model keeps failing on.
+ */
+export const REPOSITORY_SUGGESTION_OUTCOMES = [
+  "proposed",
+  "timeout",
+  "malformed",
+  "failed",
+  /** The provider does not have this repository any more. Recorded before any
+   *  model call, so the row carries no tokens and cost nothing: it is an event
+   *  worth seeing on the history, not a bill. */
+  "missing",
+] as const;
+export const repositorySuggestionOutcomeSchema = z.enum(REPOSITORY_SUGGESTION_OUTCOMES);
+export type RepositorySuggestionOutcome = z.infer<
+  typeof repositorySuggestionOutcomeSchema
+>;
+
+/** Longest single check command a suggestion may propose. Long enough for a
+ *  real shell line, short enough that a runaway answer is refused rather than
+ *  stored. */
+export const REPOSITORY_SUGGESTION_COMMAND_MAX_LENGTH = 2_000;
+/** How many groups, and how many commands per group, a suggestion may propose.
+ *  The admin reviews every one of them by hand, so the bound is the size of a
+ *  screen rather than the size of a repository. */
+export const REPOSITORY_SUGGESTION_MAX_GROUPS = 12;
+export const REPOSITORY_SUGGESTION_MAX_COMMANDS = 12;
+
+/**
+ * The answer the model is asked for, before it becomes a proposal.
+ *
+ * Groups arrive as a LIST of named entries rather than the stored map, and
+ * without the provider and the path, for one reason: the identity of the
+ * repository is already known here and a model that mistyped it would produce
+ * a profile pointing at a repository nobody asked about. The service assembles
+ * the proposal from this answer plus the catalog row it was called for.
+ *
+ * `name` is bounded here but NOT pattern-checked, deliberately. The pattern is
+ * in the JSON schema the model is given and is enforced when the answer is
+ * turned into a proposal, where a bad name drops one group and lists it under
+ * `droppedGroups`. Refusing it here instead would make one mistyped group name
+ * void the whole answer, which is a worse outcome for the same mistake and
+ * would make the drop mechanism unreachable.
+ */
+export const repositorySuggestionAnswerSchema = z
+  .object({
+    description: markdownSchema,
+    rules: markdownSchema,
+    groups: z
+      .array(
+        z
+          .object({
+            name: z.string().min(1).max(REPOSITORY_CATALOG_LABEL_MAX_LENGTH),
+            commands: z
+              .array(z.string().min(1).max(REPOSITORY_SUGGESTION_COMMAND_MAX_LENGTH))
+              .max(REPOSITORY_SUGGESTION_MAX_COMMANDS),
+          })
+          .strict(),
+      )
+      .max(REPOSITORY_SUGGESTION_MAX_GROUPS),
+  })
+  .strict();
+export type RepositorySuggestionAnswer = z.infer<typeof repositorySuggestionAnswerSchema>;
+
+/**
+ * Why a group the model proposed never reached the proposal.
+ *
+ * Listed rather than silently dropped: an admin who sees "no test group" has to
+ * be able to tell a repository with no tests from a model whose answer was
+ * refused, and refusing something invisibly is how a suggestion screen teaches
+ * people not to trust it.
+ */
+export const REPOSITORY_SUGGESTION_DROP_REASONS = [
+  /** The command is shaped like remote code execution. */
+  "remote_execution",
+  /** The group name is not one the checks engine can parse. */
+  "invalid_name",
+] as const;
+export const repositorySuggestionDropReasonSchema = z.enum(
+  REPOSITORY_SUGGESTION_DROP_REASONS,
+);
+export type RepositorySuggestionDropReason = z.infer<
+  typeof repositorySuggestionDropReasonSchema
+>;
+
+/**
+ * True for a command shaped like "fetch something and run it".
+ *
+ * Small and readable on purpose. This is NOT a sandbox and cannot be one: a
+ * determined attacker who controls a repository's README can write a command
+ * this does not match. What it stops is the realistic case, a model that read
+ * `curl https://install.example | sh` in a README and proposed it as a setup
+ * step, and it stops it before a human ever sees it offered as something to
+ * tick. The real defence is downstream, in a dashboard that shows every
+ * proposed command as a diff to accept one at a time.
+ */
+export function looksLikeRemoteExecution(command: string): boolean {
+  const text = command.toLowerCase();
+  return (
+    /\|\s*(?:sh|bash|zsh|dash)\b/u.test(text) ||
+    /\beval\s*(?:\$\(|")/u.test(text) ||
+    /\$\(\s*(?:curl|wget)\b/u.test(text) ||
+    /\b(?:curl|wget)\b[^|]*\|/u.test(text) ||
+    /(?:^|\s|;|&)sudo\s/u.test(text) ||
+    /\bbase64\s+(?:-d|--decode)\b/u.test(text)
+  );
+}
+
+/**
+ * True for a group name the checks engine can actually resolve.
+ *
+ * The rule is the engine's own (`REPOSITORY_SCRIPT_GROUP_NAME_PATTERN`), not a
+ * second one: a name accepted here and refused there would be a profile that
+ * saves and then fails to parse at run time, which surfaces as a repository
+ * whose checks silently never run. Both the profile save and the suggestion
+ * ask this, so the answer is the same on both paths.
+ */
+export function isRepositoryScriptGroupName(name: string): boolean {
+  return (
+    name.length > 0 &&
+    name.length <= REPOSITORY_SCRIPT_GROUP_NAME_MAX_LENGTH &&
+    REPOSITORY_SCRIPT_GROUP_NAME_PATTERN.test(name)
+  );
+}
+
+/**
+ * The group names in a stored scripts entry that the engine could not resolve.
+ *
+ * Takes the entry as `unknown` because that is how a profile carries it: the
+ * stored shape is deliberately loose, and this narrows exactly as far as it
+ * needs to (the `groups` record's keys) rather than parsing the entry a second
+ * time in a second dialect.
+ */
+export function invalidRepositoryScriptGroupNames(entry: unknown): string[] {
+  if (typeof entry !== "object" || entry === null) return [];
+  const groups = (entry as { groups?: unknown }).groups;
+  if (typeof groups !== "object" || groups === null) return [];
+  return Object.keys(groups).filter((name) => !isRepositoryScriptGroupName(name));
+}
+
+/**
+ * A group that survived into the proposal, and where it came from.
+ *
+ * `provenance` is a field rather than an implicit fact because it has to
+ * survive being mapped into a screen's own state. A proposal is not a saved
+ * profile and must never be one click away from becoming one; the only shape
+ * handed back is this one, and it is NOT the stored script groups entry, so
+ * nothing can put a proposal straight into the profile route's body.
+ */
+export const repositorySuggestionProposedGroupSchema = z
+  .object({
+    name: z.string(),
+    commands: z.array(z.string()),
+    provenance: z.literal("model"),
+  })
+  .strict();
+export type RepositorySuggestionProposedGroup = z.infer<
+  typeof repositorySuggestionProposedGroupSchema
+>;
+
+export const repositorySuggestionDroppedGroupSchema = z
+  .object({
+    name: z.string(),
+    reason: repositorySuggestionDropReasonSchema,
+    commands: z.array(z.string()),
+  })
+  .strict();
+export type RepositorySuggestionDroppedGroup = z.infer<
+  typeof repositorySuggestionDroppedGroupSchema
+>;
+
+/**
+ * The same shape as a JSON schema, for the provider's structured output.
+ *
+ * Kept beside the zod schema and asserted against it by the contracts test, so
+ * the two cannot drift: the provider is told one shape and the answer is
+ * checked against another only if somebody edits one of these and not the
+ * other.
+ *
+ * **No `$schema` key, and no other dialect marker.** This object is handed to
+ * the AI SDK's structured output as-is, and the block path strips exactly that
+ * key before sending (`jsonSchemaForProvider` in
+ * `apps/worker/src/workflow-definition/json-schema.ts`) because the providers
+ * refuse or ignore it. Declaring the dialect here would mean either shipping it
+ * to the provider or reaching into the engine to remove it again.
+ */
+export const REPOSITORY_SUGGESTION_ANSWER_JSON_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["description", "rules", "groups"],
+  properties: {
+    description: { type: "string" },
+    rules: { type: "string" },
+    groups: {
+      type: "array",
+      maxItems: REPOSITORY_SUGGESTION_MAX_GROUPS,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["name", "commands"],
+        properties: {
+          // The checks engine's own rule, so the model is told the shape rather
+          // than corrected afterwards. A name that still misses it drops one
+          // group; it never reshapes what the model wrote.
+          name: {
+            type: "string",
+            pattern: REPOSITORY_SCRIPT_GROUP_NAME_PATTERN.source,
+            maxLength: REPOSITORY_SCRIPT_GROUP_NAME_MAX_LENGTH,
+          },
+          commands: {
+            type: "array",
+            maxItems: REPOSITORY_SUGGESTION_MAX_COMMANDS,
+            items: { type: "string" },
+          },
+        },
+      },
+    },
+  },
+} as const;
+
+/**
+ * What a suggestion hands back, and it is **not** the shape a profile save
+ * takes.
+ *
+ * `source: "suggested"` and the per-group `provenance` are the point. A
+ * proposal is a model's reading of a repository's own files, README prose
+ * included, and the one thing it must never be is a body a screen can post. So
+ * `scriptGroups` here is a LIST of proposed groups, not the stored entry with
+ * its provider and path: turning it into something savable takes deliberate
+ * work in the dashboard, which is where the admin accepts each group.
+ *
+ * An empty list is a model that proposed no checks at all, which is a
+ * legitimate answer for a repository that has none.
+ */
+export const repositorySuggestionProposalSchema = z
+  .object({
+    source: z.literal("suggested"),
+    description: markdownSchema,
+    rules: markdownSchema,
+    scriptGroups: z.array(repositorySuggestionProposedGroupSchema),
+  })
+  .strict();
+export type RepositorySuggestionProposal = z.infer<
+  typeof repositorySuggestionProposalSchema
+>;
+
+/**
+ * What one suggestion call cost, as the record keeps it.
+ *
+ * Tokens are what the provider reported; the price is not resolved here,
+ * exactly as the call_llm block leaves it, so the cost page prices a whole page
+ * of rows at once. A row whose tokens are **null** is **unpriced**: the call
+ * ended before the provider reported anything (a timeout, a repository missing
+ * at the provider, a bundle that never loaded). A cost page must render those
+ * as unpriced rather than as zero, because zero would say the call was free and
+ * a timeout against a provider that had already started work is not.
+ */
+export interface RepositorySuggestionUsage {
+  inputTokens: number;
+  cachedTokens: number;
+  outputTokens: number;
+}

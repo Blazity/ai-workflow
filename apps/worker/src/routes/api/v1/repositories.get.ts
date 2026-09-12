@@ -5,26 +5,22 @@ import {
   toHttpError,
 } from "../../../services/auth/request-context.js";
 import {
-  listRepositoryDirectory,
+  listCachedRepositoryDirectory,
+  resetRepositoryDirectoryCacheForTests,
 } from "../../../services/repository-discovery/directory.js";
 
-const CACHE_TTL_MS = 60_000;
-
-let cache: { at: number; response: RepositoriesResponse } | null = null;
-
+/** Kept as this module's own export because the route's tests reset it by this
+ *  name. The cache itself moved into the discovery service, where the import
+ *  preview and the import commit share it rather than each listing every
+ *  provider again. */
 export function resetRepositoriesCacheForTests(): void {
-  cache = null;
+  resetRepositoryDirectoryCacheForTests();
 }
 
 export default defineEventHandler(async (event): Promise<RepositoriesResponse | undefined> => {
   try {
     await requireDashboardActor(event);
-    if (cache && Date.now() - cache.at < CACHE_TTL_MS) {
-      return cache.response;
-    }
-    const response = await listRepositoryDirectory();
-    cache = { at: Date.now(), response };
-    return response;
+    return await listCachedRepositoryDirectory();
   } catch (error) {
     toHttpError(error);
   }

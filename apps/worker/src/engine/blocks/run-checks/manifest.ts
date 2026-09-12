@@ -1,6 +1,11 @@
 import { z } from "zod";
 import type { BlockManifest } from "@shared/contracts";
 
+// Restated rather than imported from @shared/contracts: a block manifest is
+// parsed by the catalog generator, which allows runtime values from zod only
+// (scripts/gates/generate-block-catalog/manifest-imports.ts). The shared
+// declaration the workflow definition schema uses is
+// packages/contracts/repository-script-group.ts and the two must agree.
 const repositoryScriptGroupNameSchema = z
   .string()
   .max(40, "group name must be at most 40 characters")
@@ -8,6 +13,7 @@ const repositoryScriptGroupNameSchema = z
     /^[a-z][a-z0-9-]*$/u,
     "group name must start with a lowercase letter and contain only lowercase letters, digits, and hyphens",
   );
+
 const paramsSchema = z
   .object({
     commands: z.array(z.string().trim().min(1)).optional(),
@@ -38,9 +44,6 @@ const paramsSchema = z
       });
     }
   });
-
-export { repositoryScriptGroupNameSchema };
-
 
 export const manifest = {
   type: "run_checks",

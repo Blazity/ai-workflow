@@ -1,38 +1,34 @@
-import {
-  EXECUTION_DIAGNOSTIC_PREFIX,
-} from "@shared/contracts";
+/**
+ * How a block invocation is interpreted: what an executor is handed, what it
+ * may report back, and the one construction path for the failure it reports.
+ *
+ * The execution-error class, the sentence a user reads and the operator log
+ * event are engine concerns and live in `engine/helpers/execution-error.ts`;
+ * the recorded failure state is plain data and lives in `@shared/contracts`.
+ * What stays here is what an executor and the scheduler both need.
+ */
 import type {
   BlockOutput,
+  ExecutionErrorCategory,
+  ExecutionErrorShape,
   WorkflowDefinitionNode,
 } from "@shared/contracts";
 import type { AgentProtocolDiagnostic } from "../sandbox/agents/types.js";
 import {
   deriveFailureMessage,
-  type ExecutionErrorCategory,
   type FailureEvidence,
 } from "./failure-message.js";
 
 /** Accumulated block outputs keyed by node id, readable by later condition evaluation. */
 export type StepsRecord = Record<string, { output: BlockOutput }>;
 
-export type { ExecutionErrorCategory } from "./failure-message.js";
-
-export interface BlockExecutionError {
-  category: ExecutionErrorCategory;
-  /** Safe text that may be persisted or shown to a user. */
-  message: string;
-  /** Internal context for correlated server logs. Never persist or expose it. */
-  detail?: string;
+/**
+ * The contracts execution error plus the one field only the engine understands.
+ * Anything scheduling does with a failure it does through the contracts shape.
+ */
+export interface BlockExecutionError extends ExecutionErrorShape {
   /** Redacted internal provider-protocol context. Never persist or expose it. */
   diagnostic?: AgentProtocolDiagnostic;
-  phase?: string;
-}
-
-export interface WorkflowExecutionErrorState
-  extends Omit<BlockExecutionError, "detail" | "diagnostic"> {
-  diagnosticId: string;
-  nodeId: string;
-  attempt: number;
 }
 
 /** Exported so the AIW-254 invariant test can assert that no surface renders one
@@ -156,38 +152,6 @@ export function executionError(
   };
 }
 
-export function formatExecutionErrorForUser(
-  error: Pick<WorkflowExecutionErrorState, "message" | "diagnosticId">,
-): string {
-  return `${error.message} Diagnostic ID: ${error.diagnosticId}`;
-}
-
-export function createWorkflowExecutionErrorState(
-  runId: string,
-  nodeId: string,
-  attempt: number,
-  error: BlockExecutionError,
-): WorkflowExecutionErrorState {
-  return {
-    category: error.category,
-    message: error.message,
-    ...(error.phase ? { phase: error.phase } : {}),
-    diagnosticId: `${EXECUTION_DIAGNOSTIC_PREFIX}${runId}-${nodeId}-${attempt}`,
-    nodeId,
-    attempt,
-  };
-}
-
-export class WorkflowExecutionError extends Error {
-  readonly code: string;
-
-  constructor(error: WorkflowExecutionErrorState) {
-    super(formatExecutionErrorForUser(error));
-    this.name = "WorkflowExecutionError";
-    this.code = error.diagnosticId;
-  }
-}
-
 /** Outcome an action block reports back to the engine. */
 export type BlockExecutionResult =
   | { kind: "next"; output: BlockOutput; port?: string }
@@ -256,18 +220,4 @@ export interface BlockExecutionContext {
    * V1 omits it so existing phase names remain unchanged.
    */
   agentArtifactKey?: string;
-}
-
-export interface WorkflowExecutionLogEvent {
-  diagnosticId: string;
-  nodeId: string;
-  attempt: number;
-  category: ExecutionErrorCategory;
-  phase?: string;
-  detail?: string;
-  /** The already-derived, already-redacted customer-facing failure message,
-   *  single-sourced by deriveFailureMessage. Carried so the operator log names
-   *  the same cause every customer surface shows (AIW-312). */
-  message?: string;
-  agentProtocol?: AgentProtocolDiagnostic;
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TransformConfiguration } from "@shared/contracts";
+import { transformRegexEvaluator } from "../engine/helpers/transform-regex-evaluator.js";
 import {
   deriveTransformOutputSchema,
   executeTransform,
@@ -62,6 +63,7 @@ describe("Transform", () => {
             ignoreCase,
           },
           context,
+          transformRegexEvaluator,
         ),
       ).toBe(expected);
     },

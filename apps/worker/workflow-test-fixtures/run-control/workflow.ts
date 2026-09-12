@@ -5,7 +5,7 @@ import { getStepMetadata } from "workflow";
 // worker source without a file extension" in apps/worker/AGENTS.md.
 import { ActiveRunOwnerError } from "../../src/services/run-lifecycle/run-control-errors";
 import { isRunControlError } from "../../src/engine/helpers/run-control-error";
-import { WorkflowExecutionError } from "../../src/workflow-definition/interpreter";
+import { WorkflowExecutionError } from "../../src/engine/helpers/execution-error";
 import {
   RunBudgetError,
   runBudgetFailureFromError,

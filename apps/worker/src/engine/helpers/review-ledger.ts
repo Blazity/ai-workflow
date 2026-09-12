@@ -17,7 +17,7 @@ import {
 } from "../../adapters/vcs/vcs-bot-identity.js";
 export { selectReviewLedgerWorkItems as selectWorkItems } from "../../adapters/vcs/vcs-bot-identity.js";
 import type { ResearchResult } from "../../sandbox/agents/types.js";
-import type { ExecutionErrorCategory } from "../../workflow-definition/interpreter.js";
+import type { ExecutionErrorCategory } from "@shared/contracts";
 import type { AgentWorkflowInput } from "../agent-input.js";
 import { type RunBudgetFailure } from "./run-budget.js";
 import type { JsonValue } from "@shared/contracts";

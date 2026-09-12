@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type {
   WorkflowBlockType,
   WorkflowAvailableValue,
+  WorkflowDataReferenceV2,
   WorkflowDefinitionV2,
   WorkflowDefinitionV2Node,
   WorkflowInputBindingV2,
@@ -10,7 +11,8 @@ import {
   analyzeWorkflowV2Catalog,
   analyzeWorkflowV2Bindings,
 } from "./available-values.js";
-import type { WorkflowBlockRegistryContext } from "./block-registry.js";
+import type { WorkflowBlockRegistryContext } from "../engine/definition/block-contract-resolver.js";
+import { testBlockContractResolver } from "../test-support/block-contracts.js";
 
 const registryContext: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
@@ -22,6 +24,8 @@ const registryContext: WorkflowBlockRegistryContext = {
   arthurConfigured: true,
   webhookTriggerConfigured: true,
 };
+
+const resolveContract = testBlockContractResolver(registryContext);
 
 function node(
   id: string,
@@ -87,7 +91,7 @@ describe("v2 available values", () => {
           { id: "join-workspace", from: "workspace", to: "join" },
         ],
       ),
-      registryContext,
+      resolveContract,
     );
 
     expect(references(result, "join")).toEqual(
@@ -126,7 +130,7 @@ describe("v2 available values", () => {
           { id: "workspace-join", from: "workspace", to: "join" },
         ],
       ),
-      registryContext,
+      resolveContract,
     );
 
     expect(references(result, "join")).not.toContain("steps.plan.output.plan");
@@ -150,7 +154,7 @@ describe("v2 available values", () => {
           { id: "approval-path", from: "approval-trigger", to: "consumer" },
         ],
       ),
-      registryContext,
+      resolveContract,
     );
 
     const entry = catalogValue(
@@ -181,7 +185,7 @@ describe("v2 available values", () => {
           { id: "to-consumer", from: "trigger", to: "consumer" },
         ],
       ),
-      registryContext,
+      resolveContract,
     );
 
     expect(references(result, "consumer")).not.toContain(
@@ -205,7 +209,7 @@ describe("v2 available values", () => {
           { id: "loop-exhausted", from: "loop", fromPort: "exhausted", to: "after" },
         ],
       ),
-      registryContext,
+      resolveContract,
     );
 
     expect(references(result, "after")).not.toContain("steps.inside.output.plan");
@@ -263,7 +267,7 @@ describe("v2 available values", () => {
           { id: "fix-review", from: "fix", to: "review" },
         ],
       ),
-      registryContext,
+      resolveContract,
     );
 
     expect(references(result, "verdict")).toContain("steps.review.output.body");
@@ -300,7 +304,7 @@ describe("v2 available values", () => {
           { id: "to-consumer", from: "shape", to: "consumer" },
         ],
       ),
-      registryContext,
+      resolveContract,
     );
 
     expect(references(result, "consumer")).toEqual(
@@ -337,7 +341,7 @@ describe("v2 authoring catalog", () => {
           { id: "plan-consumer", from: "plan", to: "consumer" },
         ],
       ),
-      registryContext,
+      resolveContract,
     );
     const catalog = result.catalogByNode.consumer ?? [];
 
@@ -370,7 +374,7 @@ describe("v2 authoring catalog", () => {
           { id: "approval-consumer", from: "approval", to: "consumer" },
         ],
       ),
-      registryContext,
+      resolveContract,
     );
     const catalog = result.catalogByNode.consumer ?? [];
     const common = catalog.find(
@@ -407,7 +411,7 @@ describe("v2 authoring catalog", () => {
           { id: "approval-consumer", from: "approval", to: "consumer" },
         ],
       ),
-      registryContext,
+      resolveContract,
     );
     const catalog = result.catalogByNode.consumer ?? [];
 
@@ -448,7 +452,7 @@ describe("v2 authoring catalog", () => {
           { id: "decision-other", from: "decision", fromPort: "false", to: "other" },
         ],
       ),
-      registryContext,
+      resolveContract,
     );
     expect(
       result.catalogByNode.approved?.find(
@@ -490,7 +494,7 @@ describe("v2 authoring catalog", () => {
           { id: "to-consumer", from: "build", to: "consumer" },
         ],
       ),
-      registryContext,
+      resolveContract,
     );
 
     expect(
@@ -517,7 +521,7 @@ describe("v2 authoring catalog", () => {
           { id: "to-message", from: "open", to: "message" },
         ],
       ),
-      registryContext,
+      resolveContract,
     );
     const catalog = result.catalogByNode.message ?? [];
 
@@ -562,7 +566,7 @@ describe("v2 binding validation", () => {
           { id: "to-consumer", from: "plan", to: "consumer" },
         ],
       ),
-      registryContext,
+      resolveContract,
     );
     expect(valid.issues).toEqual([]);
 
@@ -586,7 +590,7 @@ describe("v2 binding validation", () => {
           { id: "plan-consumer", from: "plan", to: "consumer" },
         ],
       ),
-      registryContext,
+      resolveContract,
     );
     expect(unavailable.issues).toEqual([
       expect.objectContaining({
@@ -613,7 +617,7 @@ describe("v2 binding validation", () => {
         [node("trigger", "trigger_ticket_ai"), consumer],
         [{ id: "edge", from: "trigger", to: "consumer" }],
       ),
-      registryContext,
+      resolveContract,
     );
 
     expect(result.issues).toEqual(
@@ -648,7 +652,7 @@ describe("v2 binding validation", () => {
       ],
     );
     expect(
-      analyzeWorkflowV2Bindings(exact, registryContext).issues.filter(
+      analyzeWorkflowV2Bindings(exact, resolveContract).issues.filter(
         (issue) => issue.code === "binding.open_pr_finalize",
       ),
     ).toEqual([]);
@@ -670,7 +674,7 @@ describe("v2 binding validation", () => {
       },
     };
     expect(
-      analyzeWorkflowV2Bindings(literal, registryContext).issues,
+      analyzeWorkflowV2Bindings(literal, resolveContract).issues,
     ).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ code: "binding.open_pr_finalize" }),
@@ -685,7 +689,7 @@ describe("v2 binding validation", () => {
       },
     };
     expect(
-      analyzeWorkflowV2Bindings(wrongField, registryContext).issues,
+      analyzeWorkflowV2Bindings(wrongField, resolveContract).issues,
     ).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ code: "binding.open_pr_finalize" }),
@@ -717,7 +721,7 @@ describe("v2 binding validation", () => {
           { id: "to-consumer", from: "plan", to: "consumer" },
         ],
       ),
-      registryContext,
+      resolveContract,
     );
 
     expect(result.issues).toEqual([
@@ -756,7 +760,7 @@ describe("v2 binding validation", () => {
           { id: "to-finalize", from: "checks", to: "finalize" },
         ],
       ),
-      registryContext,
+      resolveContract,
     );
 
     expect(result.issues).toEqual([]);
@@ -795,7 +799,7 @@ describe("v2 binding validation", () => {
           { id: "to-consumer", from: "second", to: "consumer" },
         ],
       ),
-      registryContext,
+      resolveContract,
     );
     expect(valid.issues).toEqual([]);
     const catalog = analyzeWorkflowV2Catalog(
@@ -812,7 +816,7 @@ describe("v2 binding validation", () => {
           { id: "to-consumer", from: "second", to: "consumer" },
         ],
       ),
-      registryContext,
+      resolveContract,
     );
     const firstPlan = catalog.catalogByNode.consumer?.find(
       (entry) => entry.reference === "steps.first.output.plan",
@@ -850,11 +854,11 @@ describe("v2 binding validation", () => {
       ],
     );
     expect(
-      analyzeWorkflowV2Bindings(nullableDefinition, registryContext).issues,
+      analyzeWorkflowV2Bindings(nullableDefinition, resolveContract).issues,
     ).toEqual([]);
     const nullableCatalog = analyzeWorkflowV2Catalog(
       nullableDefinition,
-      registryContext,
+      resolveContract,
     );
     expect(
       nullableCatalog.catalogByNode["nullable-consumer"]?.find(
@@ -881,7 +885,7 @@ describe("v2 binding validation", () => {
             { id: "to-invalid", from: "first", to: "invalid" },
           ],
         ),
-        registryContext,
+        resolveContract,
       ).issues,
     ).toEqual(
       expect.arrayContaining([
@@ -890,5 +894,85 @@ describe("v2 binding validation", () => {
         }),
       ]),
     );
+  });
+});
+
+/**
+ * A Generic Agent's contract is a function of its own params: a declared output
+ * schema changes which values it offers and which bindings against it are
+ * legal. Now that the analysis takes a resolver instead of an environment, this
+ * is the property that would break silently if a resolver ever answered from
+ * the block type alone, so it is pinned here.
+ */
+describe("custom output schemas through the resolver", () => {
+  const declaredOutputAgent = (id: string) => {
+    const agent = node(id, "generic_agent");
+    agent.configuration = {
+      prompt: "classify the ticket",
+      outputSchema: JSON.stringify({
+        type: "object",
+        properties: { verdict: { type: "string" } },
+        required: ["verdict"],
+        additionalProperties: false,
+      }),
+    };
+    return agent;
+  };
+
+  const withConsumer = (reference: WorkflowDataReferenceV2) =>
+    definition(
+      [
+        node("trigger", "trigger_ticket_ai"),
+        declaredOutputAgent("classify"),
+        node("consumer", "generic_agent", {
+          prompt: { kind: "reference", reference },
+        }),
+      ],
+      [
+        { id: "to-classify", from: "trigger", to: "classify" },
+        { id: "to-consumer", from: "classify", to: "consumer" },
+      ],
+    );
+
+  it("offers a declared field and accepts a binding to it", () => {
+    const result = analyzeWorkflowV2Bindings(
+      withConsumer("steps.classify.output.verdict"),
+      resolveContract,
+    );
+    expect(result.issues).toEqual([]);
+    expect(references(result, "consumer")).toContain(
+      "steps.classify.output.verdict",
+    );
+    expect(
+      catalogValue(result, "consumer", "steps.classify.output.verdict").schema,
+    ).toMatchObject({ type: "string" });
+  });
+
+  it("refuses a binding to a field the declared schema does not carry", () => {
+    const result = analyzeWorkflowV2Bindings(
+      withConsumer("steps.classify.output.missing"),
+      resolveContract,
+    );
+    expect(references(result, "consumer")).not.toContain(
+      "steps.classify.output.missing",
+    );
+    expect(result.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          nodeId: "consumer",
+          code: "binding.unavailable_reference",
+        }),
+      ]),
+    );
+  });
+
+  it("carries the declared field into the editor's catalog", () => {
+    const catalog = analyzeWorkflowV2Catalog(
+      withConsumer("steps.classify.output.verdict"),
+      resolveContract,
+    );
+    expect(
+      catalog.catalogByNode.consumer?.map((entry) => entry.reference),
+    ).toContain("steps.classify.output.verdict");
   });
 });

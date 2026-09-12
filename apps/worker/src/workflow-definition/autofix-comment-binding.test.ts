@@ -3,7 +3,8 @@ import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
 import { describe, expect, it } from "vitest";
 import type { WorkflowDefinitionV2 } from "@shared/contracts";
-import type { WorkflowBlockRegistryContext } from "./block-registry.js";
+import type { WorkflowBlockRegistryContext } from "./../engine/definition/block-contract-resolver.js";
+import { testBlockData } from "./../test-support/block-contracts.js";
 import { workflowDefinitionTemplate } from "./templates.js";
 import { validateWorkflowDefinitionCandidate } from "./validation.js";
 
@@ -22,6 +23,8 @@ const registryContext: WorkflowBlockRegistryContext = {
   arthurConfigured: true,
   webhookTriggerConfigured: true,
 };
+
+const blockData = testBlockData(registryContext);
 
 const OLD_INSTRUCTIONS =
   "Resolve the fetched pull-request review feedback or failing checks, verify the fix, and commit the resulting changes.";
@@ -103,7 +106,7 @@ describe("0056 auto-fix comment binding", () => {
     const after = await readStoredDefinition(client, id);
     expect(after).toEqual(currentFixTemplate());
     expect(
-      validateWorkflowDefinitionCandidate(after, registryContext).response.valid,
+      validateWorkflowDefinitionCandidate(after, ...blockData).response.valid,
     ).toBe(true);
   });
 

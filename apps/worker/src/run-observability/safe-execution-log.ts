@@ -1,9 +1,30 @@
-import type { WorkflowExecutionLogEvent } from "../workflow-definition/interpreter.js";
+import type { ExecutionErrorCategory } from "@shared/contracts";
 import type { AgentProtocolDiagnostic } from "../sandbox/agents/types.js";
 import {
   operatorFailureDetail,
   sanitizeFailureMessage,
 } from "../workflow-definition/failure-message.js";
+
+/**
+ * One failed block as the operator log records it.
+ *
+ * It lives here rather than with the execution-error class because this file is
+ * the only thing that reads one: the boundary that decides which of these
+ * fields may cross into the durable logger step owns the shape that crosses it.
+ */
+export interface WorkflowExecutionLogEvent {
+  diagnosticId: string;
+  nodeId: string;
+  attempt: number;
+  category: ExecutionErrorCategory;
+  phase?: string;
+  detail?: string;
+  /** The already-derived, already-redacted customer-facing failure message,
+   *  single-sourced by deriveFailureMessage. Carried so the operator log names
+   *  the same cause every customer surface shows (AIW-312). */
+  message?: string;
+  agentProtocol?: AgentProtocolDiagnostic;
+}
 
 /**
  * Keeps replay metadata useful without persisting provider-controlled text or

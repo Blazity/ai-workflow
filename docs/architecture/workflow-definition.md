@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-09
+Last-verified: 2026-09-12
 
 # Workflow definitions (schema v2)
 
@@ -243,6 +243,23 @@ checks, the workspace access rules from
 `apps/worker/src/workflow-definition/workspace-access.ts`, and the repository
 scope pin rules.
 
+**Block data is a parameter, never a read.** Neither the schemas nor the
+binding analysis asks what this installation has configured. A block's contract
+(its output schema, its binding schema and whether it is available at all)
+follows from its own params plus the deployment, so the rules take a
+`WorkflowBlockContractResolver` (`packages/contracts/block-contract-resolver.ts`,
+`(type, params) => WorkflowBlockContract`) and the per-type parameter schema map
+composed in `apps/worker/src/engine/definition/block-params-schemas.ts`. The
+worker binds a resolver to the running deployment in
+`apps/worker/src/engine/definition/block-contract-resolver.ts`, reading the
+environment only in `block-contract-environment.ts`, and
+`apps/worker/src/services/workflow-definitions/block-contracts.ts` builds both
+once per request: validation, available values and the editor's block table then
+answer about one deployment rather than three separate reads of it. The
+definition-level repository pin belongs to no block, so it cannot be checked
+through the resolver; the same per-request object carries the configured VCS
+provider list that check takes.
+
 Workspace access deserves a note: `workflowWorkspaceAccessOf` in
 `workspace-access.ts` classifies each block as `none`, `shared_read`,
 `shared_write` or `isolated_review`, and
@@ -262,7 +279,16 @@ question and resume on the answer. Edges carry a token (`unresolved`, `active`,
 `V2_PRODUCTION_SCHEDULER_BOUNDS` (maximum concurrency and maximum total block
 executions). Execution errors are shaped by
 `apps/worker/src/workflow-definition/interpreter.ts`, which owns the safe
-message set and the error state the run records.
+message set and the one construction path a failed block reports through, while
+the execution error class, the sentence a user reads and the operator log event
+are engine concerns in `apps/worker/src/engine/helpers/execution-error.ts`. The
+failure a run records is plain data declared in
+`packages/contracts/execution-error.ts`, so the scheduler mints and carries one
+without touching the engine. A Transform block's regex replacement is the one
+transform operation that cannot be pure, so `transform.ts` takes an async regex
+evaluator as a parameter and refuses a regex transform without one, and
+`apps/worker/src/engine/steps/transform-regex-step.ts` stays the only loader of
+`re2-wasm` and supplies the evaluator the workflow injects.
 
 ## 12. Storage, versions and deployment state
 
@@ -305,10 +331,15 @@ Three properties matter to anyone authoring a graph through an agent:
 | Candidate validation for the API | `apps/worker/src/workflow-definition/validation.ts` |
 | Block catalog, ports, param keys | `packages/contracts/workflow-graph.ts` |
 | Block contracts and registry rules | `apps/worker/src/workflow-definition/block-registry.ts` |
+| Deployment-aware contracts and the resolver | `apps/worker/src/engine/definition/block-contract-resolver.ts`, `apps/worker/src/engine/definition/block-contract-environment.ts` |
+| Per-type block parameter schemas | `apps/worker/src/engine/definition/block-params-schemas.ts` |
+| Block data bound once per request | `apps/worker/src/services/workflow-definitions/block-contracts.ts` |
 | Binding resolution | `apps/worker/src/workflow-definition/v2-bindings.ts` |
 | Available values and node contracts | `apps/worker/src/workflow-definition/available-values.ts` |
 | Scheduler, loop regions, checkpoints | `apps/worker/src/workflow-definition/v2-scheduler.ts` |
-| Execution errors and runtime graph helpers | `apps/worker/src/workflow-definition/interpreter.ts` |
+| Execution results and error construction | `apps/worker/src/workflow-definition/interpreter.ts` |
+| Execution error shape, category and recorded state | `packages/contracts/execution-error.ts` |
+| Execution error class, user sentence, log event | `apps/worker/src/engine/helpers/execution-error.ts` |
 | Harness profile resolution | `apps/worker/src/workflow-definition/harness-profile-runtime.ts` |
 | Workspace access rules | `apps/worker/src/workflow-definition/workspace-access.ts` |
 | Persistence and versions | `apps/worker/src/db/repositories/definitions.ts`, `apps/worker/src/services/workflow-definitions/policy-operations.ts` |

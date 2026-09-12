@@ -137,6 +137,15 @@ names, harness defaults) are rows in the `settings` table, described once in
 - **Tests replay migrations from disk.** `src/db/test-db.ts` reads the
   `drizzle/` directory in the working tree, so a freshly generated, uncommitted
   migration is already active in unit tests.
+- **A `check()` built from interpolated values generates `$1` in the SQL.**
+  drizzle-kit serializes a parameterized `sql` fragment as placeholders, so a
+  constraint written as ``sql`${t.col} in (${sql.join(LIST)})` `` lands in the
+  migration file as `in ($1, $2)`, which no migrator can run. Every existing
+  check writes its allowed values as literals in the template
+  (`src/db/schema/repositories.ts`, `src/db/schema/repository-suggestions.ts`);
+  read the generated `.sql` before believing a constraint, because pglite
+  replays the same broken file and the failure is identical in tests and
+  production only if you look.
 - **The repository catalog is the coming grant, and is not deciding yet.**
   `repositories`, `repository_profile_versions` and the one-row
   `repository_catalog_state` (migration 0060) hold what the deployment knows
