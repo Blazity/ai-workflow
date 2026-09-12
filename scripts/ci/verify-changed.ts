@@ -55,6 +55,7 @@ const C = {
   mcp: ["pnpm", "--dir", "apps/worker", "run", "mcp:contract:check"],
   blockCatalog: ["pnpm", "run", "gen:blocks", "--check"],
   ci: ["pnpm", "run", "test:ci"],
+  workflowSdk: ["pnpm", "run", "test:workflow-sdk"],
   packages: ["pnpm", "run", "test:packages"],
   releaseType: ["pnpm", "run", "typecheck:release-notes"],
   releaseTest: ["pnpm", "run", "test:release-notes"],
@@ -130,6 +131,24 @@ const isProduct = (path: string) =>
   path === "apps/worker/src/engine/blocks/executors.generated.ts" ||
   path === "apps/worker/vitest.config.ts";
 
+/**
+ * The workflow-sdk suite is the only one that builds the fixtures through the
+ * Workflow builder and then loads the emitted bundles in Node, so it is the
+ * only place that proves a `@shared/*` package reached from a step is still
+ * loadable there. Nothing else plans it: `discoveredTests` skips
+ * `workflow-sdk-tests/` on purpose, so the paths whose contents decide what
+ * those bundles contain name it here. The divergence suite under
+ * `workflow-sdk-tests/divergence/` stays out of every pull request's budget and
+ * is excluded.
+ */
+const isWorkflowSdkSubject = (path: string) =>
+  isWorkflowGraph(path) ||
+  path === "apps/worker/src/engine/agent-workflow.ts" ||
+  path.startsWith("apps/worker/src/engine/helpers/") ||
+  path.startsWith("apps/worker/workflow-test-fixtures/") ||
+  (path.startsWith("apps/worker/workflow-sdk-tests/") &&
+    !path.startsWith("apps/worker/workflow-sdk-tests/divergence/"));
+
 const isBlockCatalogSource = (path: string) =>
   path.startsWith("apps/worker/src/engine/blocks/") ||
   path.startsWith("apps/worker/src/engine/definition/") ||
@@ -164,6 +183,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
   const dashboard = any(paths, (path) => path.startsWith("apps/dashboard/"));
   const shared = any(paths, (path) => path.startsWith("packages/"));
   const ci = any(paths, isCi);
+  const workflowSdk = any(paths, isWorkflowSdkSubject);
   const blockCatalog = any(paths, isBlockCatalogSource);
   const gates = any(paths, (path) =>
     path.startsWith("apps/") ||
@@ -201,6 +221,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
     ci && "ci", release && "release-notes", skills && "skills",
     gates && "gates",
     workerTests.size > 0 && "worker-tests", dashboardTests.size > 0 && "dashboard-tests",
+    workflowSdk && "workflow-sdk",
   ].filter((scope): scope is string => Boolean(scope));
   const commands: Cmd[] = [];
   const seen = new Set<string>();
@@ -233,6 +254,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
     );
     add(["pnpm", "--dir", "apps/worker", "exec", "vitest", "run", ...args]);
   }
+  if (workflowSdk) add(C.workflowSdk);
   if (blockCatalog) add(C.blockCatalog);
   if (dashboardTests.size > 0) {
     add([
