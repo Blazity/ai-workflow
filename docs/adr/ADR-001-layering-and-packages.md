@@ -97,7 +97,14 @@ environment, the block registry and a clock, and three engine-tier callers
 it directly, which `engine -> services` forbids until stage 5 inverts those
 call sites into package policies. Its second consumer is the dashboard, which
 the later stages of that plan connect; until then the worker is the only
-importer.
+importer. Stages 6c and 6d added the bindings cluster (`bindings.ts`,
+`available-values.ts`, `transform.ts`, `json-schema-authoring.ts`) and the
+workspace access rules. ajv stays in the worker as assumption A2 of that plan
+says, so those rules take it as `WorkflowJsonSchemaSupport`, bound once in
+`apps/worker/src/engine/definition/json-schema-support.ts`. `templates.ts` did
+not move: it is built on `workflow-definition/default.ts`, whose only impure
+import is the `@shared/harness` default for a builtin profile reference, and
+this ADR forbids that edge.
 
 The engine, the adapters, the services and the DB layer have one consumer (the
 worker) and stay directories inside `apps/worker/src`, fenced by dependency
@@ -140,7 +147,7 @@ The 28 directories:
 | `system-health/` | services | mixed, split by file as above |
 | `test-support/` | testing | |
 | `webhook-trigger/` | services | mixed, split by file as above |
-| `workflow-definition/` | engine (`engine/definition/`) | `store.ts` to `db/repositories/definitions` in stage 7; pure schema, validation, bindings, scheduler, interpreter to `packages/workflow-graph` in stage 12 (schema and graph rules moved; `deployment-validation.ts` waits for stage 5's policies before it can sit in `services/`) |
+| `workflow-definition/` | engine (`engine/definition/`) | `store.ts` to `db/repositories/definitions` in stage 7; pure schema, validation, bindings, scheduler, interpreter to `packages/workflow-graph` in stage 12 (schema, graph rules, policies, bindings, available values, transform, authored JSON Schema and workspace access moved; `deployment-validation.ts` waits for stage 5's policies before it can sit in `services/`) |
 | `workflows/` | engine | |
 
 The 8 root files:

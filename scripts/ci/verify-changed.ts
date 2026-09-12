@@ -27,9 +27,15 @@ export const WORKFLOW_GRAPH_TESTS = [
   "src/routes/import-graph-guard.test.ts",
   "src/mcp/tool-catalog.test.ts",
   "src/workflow-definition/__golden__/definition-deployment-issues.test.ts",
+  "src/workflow-definition/available-values.test.ts",
+  "src/workflow-definition/bindings.test.ts",
+  "src/workflow-definition/json-schema-authoring.test.ts",
   "src/workflow-definition/schema-v2.test.ts",
+  "src/workflow-definition/transform.test.ts",
   "src/workflow-definition/v2-bindings.test.ts",
   "src/workflow-definition/v2-branch.test.ts",
+  "src/workflow-definition/value-analysis-pass.test.ts",
+  "src/workflow-definition/workspace-access.test.ts",
 ] as const;
 
 export const WORKTREE_DIFF = ["git", "diff", "--check"] as const satisfies Cmd;

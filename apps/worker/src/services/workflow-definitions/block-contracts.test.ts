@@ -28,7 +28,7 @@ vi.mock("../../infra/vcs-config.js", () => ({
   },
 }));
 
-import { analyzeWorkflowV2Catalog } from "../../workflow-definition/available-values.js";
+import { analyzeWorkflowV2Catalog } from "@shared/workflow-graph";
 import { buildWorkflowEditorOptions } from "../../workflow-definition/models.js";
 import { validateWorkflowDefinitionCandidate } from "../../workflow-definition/validation.js";
 import { currentBlockContracts } from "./block-contracts.js";

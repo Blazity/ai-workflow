@@ -51,9 +51,10 @@ import {
  * One complaint from the Transform shape validator.
  *
  * Declared structurally rather than imported because the implementation
- * (`apps/worker/src/workflow-definition/transform.ts`) validates JSON Schema
- * through ajv, which stays in the worker, so the graph walk takes the validator
- * as a parameter and never learns what backs it.
+ * (`./transform.ts`) checks a transform's expected schema through the ajv the
+ * worker binds, so the graph walk takes the validator already bound to it and
+ * never learns what backs it. `apps/worker/src/workflow-definition/deployment-validation.ts`
+ * is where the two meet.
  */
 export interface WorkflowTransformShapeIssue {
   code: string;

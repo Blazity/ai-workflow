@@ -23,8 +23,11 @@ import { describeWorkflowDefinitionIssues, parse } from "@shared/workflow-graph"
 import { validateWorkflowDefinitionForRunLoad } from "../deployment-validation.js";
 import { workflowDefinitionTemplate } from "../templates.js";
 import { transformRegexEvaluator } from "../../engine/helpers/transform-regex-evaluator.js";
-import { executeTransform } from "../transform.js";
-import type { V2BindingResolutionContext } from "@shared/workflow-graph";
+import { JSON_SCHEMA_SUPPORT } from "../../engine/definition/json-schema-support.js";
+import {
+  executeTransform,
+  type V2BindingResolutionContext,
+} from "@shared/workflow-graph";
 import {
   executeV2Graph,
   isSchedulerOwnedBlockType,
@@ -697,6 +700,7 @@ class Scenario {
             output: await executeTransform(
               node.configuration as unknown as TransformConfiguration,
               bindingContext,
+              JSON_SCHEMA_SUPPORT,
               transformRegexEvaluator,
             ),
           },

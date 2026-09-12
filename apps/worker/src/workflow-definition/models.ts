@@ -6,7 +6,7 @@ import {
 } from "@shared/harness";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 import { env } from "../infra/vcs-config.js";
-import { RUN_BINDING_SCHEMA } from "./bindings.js";
+import { RUN_BINDING_SCHEMA } from "@shared/workflow-graph";
 
 export const FALLBACK_MODELS = recognised;
 

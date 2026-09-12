@@ -4,16 +4,14 @@ import type {
   WorkflowDefinition,
   WorkflowDefinitionValidationResponse,
 } from "@shared/contracts";
+import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import {
-  RETIRED_SCHEMA_MESSAGE,
-  WORKFLOW_SCHEMA_VERSION,
-  workflowDefinitionSchemaVersionOf,
-} from "@shared/contracts";
-import {
+  declaresRetiredSchema,
+  parse,
+  type WorkflowBlockParamsSchemas,
   type WorkflowValueAnalysis,
   type WorkflowValueAnalyzer,
-} from "./available-values.js";
-import { parse, type WorkflowBlockParamsSchemas } from "@shared/workflow-graph";
+} from "@shared/workflow-graph";
 import { validateWorkflowDefinitionIssuesForDeployment } from "./deployment-validation.js";
 
 /**
@@ -101,11 +99,4 @@ export function validateWorkflowDefinitionCandidate(
       availableValuesByNode: analysis.availableValuesByNode,
     },
   };
-}
-
-/** A graph that names a schema this build no longer runs. The parse below would
- *  refuse it too, but with a literal mismatch an author cannot act on. */
-export function declaresRetiredSchema(candidate: unknown): boolean {
-  const version = workflowDefinitionSchemaVersionOf(candidate);
-  return version !== undefined && version !== WORKFLOW_SCHEMA_VERSION;
 }

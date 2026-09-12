@@ -12,7 +12,8 @@ import {
   analyzeWorkflowV2Catalog,
   analyzeWorkflowValues,
   type WorkflowV2BindingAnalysis,
-} from "./available-values.js";
+} from "@shared/workflow-graph";
+import { JSON_SCHEMA_SUPPORT } from "../engine/definition/json-schema-support.js";
 import type { WorkflowBlockRegistryContext } from "../engine/definition/block-contract-resolver.js";
 import { testBlockContractResolver } from "../test-support/block-contracts.js";
 
@@ -38,12 +39,12 @@ const resolveContract = testBlockContractResolver(registryContext);
 const bindingsOf = (
   definition: WorkflowDefinitionV2,
   resolve: WorkflowBlockContractResolver,
-) => analyzeWorkflowValues(definition, resolve);
+) => analyzeWorkflowValues(definition, resolve, JSON_SCHEMA_SUPPORT);
 
 const catalogOf = (
   definition: WorkflowDefinitionV2,
   resolve: WorkflowBlockContractResolver,
-) => analyzeWorkflowV2Catalog(analyzeWorkflowValues(definition, resolve));
+) => analyzeWorkflowV2Catalog(analyzeWorkflowValues(definition, resolve, JSON_SCHEMA_SUPPORT));
 
 function node(
   id: string,

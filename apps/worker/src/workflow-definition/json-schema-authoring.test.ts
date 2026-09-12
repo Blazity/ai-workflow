@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   inspectAuthoredJsonSchema,
   MAX_AUTHORED_JSON_SCHEMA_BYTES,
-} from "./json-schema-authoring.js";
+} from "@shared/workflow-graph";
+import { JSON_SCHEMA_SUPPORT } from "../engine/definition/json-schema-support.js";
 
 describe("inspectAuthoredJsonSchema", () => {
   it("returns the canonical schema and derived value type for the deployable subset", () => {
@@ -16,7 +17,7 @@ describe("inspectAuthoredJsonSchema", () => {
       required: ["title"],
       additionalProperties: false,
     });
-    const result = inspectAuthoredJsonSchema(source);
+    const result = inspectAuthoredJsonSchema(source, JSON_SCHEMA_SUPPORT);
     expect(result.deployable).toBe(true);
     if (!result.deployable) return;
     expect(result.schema.properties).toBeDefined();
@@ -39,6 +40,7 @@ describe("inspectAuthoredJsonSchema", () => {
           title: { type: "string", minLength: 2 },
         },
       }),
+      JSON_SCHEMA_SUPPORT,
     );
     expect(result.deployable).toBe(false);
     if (result.deployable) return;
@@ -57,7 +59,7 @@ describe("inspectAuthoredJsonSchema", () => {
   });
 
   it("does not replace invalid raw JSON with a parsed approximation", () => {
-    const result = inspectAuthoredJsonSchema('{"type":"string"');
+    const result = inspectAuthoredJsonSchema('{"type":"string"', JSON_SCHEMA_SUPPORT);
     expect(result).toMatchObject({
       deployable: false,
       schema: null,
@@ -68,6 +70,7 @@ describe("inspectAuthoredJsonSchema", () => {
   it("bounds candidate source size before parsing", () => {
     const result = inspectAuthoredJsonSchema(
       " ".repeat(MAX_AUTHORED_JSON_SCHEMA_BYTES + 1),
+      JSON_SCHEMA_SUPPORT,
     );
     expect(result).toMatchObject({
       deployable: false,

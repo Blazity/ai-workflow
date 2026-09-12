@@ -30,15 +30,21 @@ import type {
 import { isHarnessProfileReference } from "@shared/contracts";
 import { resolveBuiltinHarnessProfile } from "@shared/harness";
 import {
+  analyzeWorkflowValues,
+  analyzeWorkflowV2Catalog,
   deploy,
   runLoad,
+  validateTransformDefinition,
+  validateWorkflowV2WorkspaceAccessIssues,
   workflowDefinitionIssue,
   workflowScheduleGraphIssues,
   workflowValueReferenceIssues,
   type WorkflowBlockParamsSchemas,
   type WorkflowDeploymentIssueSource,
   type WorkflowGraphDeploymentPolicyDeps,
+  type WorkflowValueAnalysis,
 } from "@shared/workflow-graph";
+import { JSON_SCHEMA_SUPPORT } from "../engine/definition/json-schema-support.js";
 import {
   MINIMUM_PERIOD_MS,
   parseSchedule,
@@ -48,13 +54,6 @@ import {
   workflowBlockDeploymentDefinitionIssues,
   workflowRepositoryScopeIssues,
 } from "./block-registry.js";
-import {
-  analyzeWorkflowValues,
-  analyzeWorkflowV2Catalog,
-  type WorkflowValueAnalysis,
-} from "./available-values.js";
-import { validateTransformDefinition } from "./transform.js";
-import { validateWorkflowV2WorkspaceAccessIssues } from "./workspace-access.js";
 
 /** Validation required before a definition may become executable, and today
  * also what a draft candidate is measured against: `validation.ts` runs this
@@ -112,7 +111,7 @@ function selfAnalysingPolicyMessages(
     resolveContract,
     blockParamsSchemas,
     configuredVcsProviders,
-    analyzeWorkflowValues(def, resolveContract),
+    analyzeWorkflowValues(def, resolveContract, JSON_SCHEMA_SUPPORT),
     { checkEnvironmentAvailability },
   ).map(({ message }) => message);
 }
@@ -135,7 +134,8 @@ export function validateWorkflowDefinitionIssuesForDeployment(
 ): WorkflowDefinitionValidationIssue[] {
   const deps: WorkflowGraphDeploymentPolicyDeps = {
     blockParamsSchemas,
-    validateTransformShape: (configuration) => validateTransformDefinition({ configuration }),
+    validateTransformShape: (configuration) =>
+      validateTransformDefinition({ configuration }, JSON_SCHEMA_SUPPORT),
     deploymentIssues: workerDeploymentIssues(
       def,
       resolveContract,

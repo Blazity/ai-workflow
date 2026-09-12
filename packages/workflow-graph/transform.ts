@@ -1,18 +1,28 @@
+/**
+ * What a Transform block means: which configurations are well formed, what
+ * shape each one produces and what one run of it returns.
+ *
+ * Two things it needs are not pure, so both arrive as parameters. JSON Schema
+ * reading and value validation come through `WorkflowJsonSchemaSupport`,
+ * because ajv stays in the worker. Regex replacement comes through
+ * `TransformRegexEvaluator`, because RE2 lives behind one step module
+ * (`apps/worker/src/engine/steps/transform-regex-step.ts`) that is never moved
+ * and never renamed. The directive that module carries is deliberately not
+ * spelled here: the builder and the repository guards find step files by
+ * scanning text.
+ */
 import {
   isWorkflowAddressablePathSegment,
   type JsonSchema202012,
   type JsonValue,
   type TransformConfiguration,
 } from "@shared/contracts";
-import {
-  parseJsonSchema202012,
-  validateJsonSchemaValue,
-} from "./json-schema.js";
+import type { WorkflowJsonSchemaSupport } from "./json-schema-support";
 import {
   resolveWorkflowDataReferenceV2,
   resolveWorkflowPromptDataTokensV2,
   type V2BindingResolutionContext,
-} from "@shared/workflow-graph";
+} from "./v2-bindings";
 
 const MAX_FIELDS = 100;
 const JSON_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema";
@@ -99,6 +109,7 @@ function isSupportedRegex(pattern: string): boolean {
 
 export function validateTransformDefinition(
   definition: TransformDefinition,
+  jsonSchema: WorkflowJsonSchemaSupport,
 ): TransformIssue[] {
   const config = definition.configuration;
   const issues: TransformIssue[] = [];
@@ -118,7 +129,7 @@ export function validateTransformDefinition(
     }
   }
   if (config.operation === "parse_json" && config.expectedSchema) {
-    const parsed = parseJsonSchema202012(config.expectedSchema.source, {
+    const parsed = jsonSchema.parse(config.expectedSchema.source, {
       requireClosedObjects: true,
     });
     if (!parsed.ok) {
@@ -174,8 +185,9 @@ export function validateTransformDefinition(
 
 export function deriveTransformOutputSchema(
   definition: TransformDefinition,
+  jsonSchema: WorkflowJsonSchemaSupport,
 ): JsonSchema202012 | null {
-  if (validateTransformDefinition(definition).length > 0) return null;
+  if (validateTransformDefinition(definition, jsonSchema).length > 0) return null;
   const config = definition.configuration;
   if (
     config.operation === "format_text" ||
@@ -201,7 +213,7 @@ export function deriveTransformOutputSchema(
   if (config.operation === "parse_json") {
     let valueSchema: JsonSchema202012 = {};
     if (config.expectedSchema) {
-      const parsed = parseJsonSchema202012(config.expectedSchema.source, {
+      const parsed = jsonSchema.parse(config.expectedSchema.source, {
         requireClosedObjects: true,
       });
       if (!parsed.ok) return null;
@@ -293,6 +305,7 @@ function jsonSyntaxError(error: unknown): string {
 export function executeTransform(
   configuration: TransformConfiguration,
   context: V2BindingResolutionContext,
+  jsonSchema: WorkflowJsonSchemaSupport,
   regex?: TransformRegexEvaluator,
 ): JsonValue | Promise<JsonValue> {
   if (configuration.operation === "format_text") {
@@ -373,13 +386,13 @@ export function executeTransform(
     return { success: false, value: null, error: jsonSyntaxError(error) };
   }
   if (configuration.expectedSchema) {
-    const parsed = parseJsonSchema202012(configuration.expectedSchema.source, {
+    const parsed = jsonSchema.parse(configuration.expectedSchema.source, {
       requireClosedObjects: true,
     });
     if (!parsed.ok) {
       throw new TransformExecutionError("Parse JSON expected schema is invalid.");
     }
-    const [issue] = validateJsonSchemaValue(parsed.schema, value);
+    const [issue] = jsonSchema.validateValue(parsed.schema, value);
     if (issue) {
       return {
         success: false,

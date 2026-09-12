@@ -5,7 +5,8 @@ import {
   deriveTransformOutputSchema,
   executeTransform,
   validateTransformDefinition,
-} from "./transform.js";
+} from "@shared/workflow-graph";
+import { JSON_SCHEMA_SUPPORT } from "../engine/definition/json-schema-support.js";
 
 const context = {
   entryOutput: {
@@ -31,6 +32,7 @@ describe("Transform", () => {
             "Text: {{data:steps.entry.output.text}}\nNumber: {{data:steps.entry.output.number}}",
         },
         context,
+        JSON_SCHEMA_SUPPORT,
       ),
     ).toBe("Text:   Hello world  \nNumber: 12.5");
   });
@@ -40,6 +42,7 @@ describe("Transform", () => {
       executeTransform(
         { operation: "trim_text", source: "steps.entry.output.text" },
         context,
+        JSON_SCHEMA_SUPPORT,
       ),
     ).toBe("Hello world");
   });
@@ -63,6 +66,7 @@ describe("Transform", () => {
             ignoreCase,
           },
           context,
+          JSON_SCHEMA_SUPPORT,
           transformRegexEvaluator,
         ),
       ).toBe(expected);
@@ -80,7 +84,8 @@ describe("Transform", () => {
           replacement: "",
           ignoreCase: false,
         },
-      }),
+      },
+      JSON_SCHEMA_SUPPORT),
     ).toHaveLength(1);
     expect(
       validateTransformDefinition({
@@ -92,7 +97,8 @@ describe("Transform", () => {
           replacement: "",
           ignoreCase: false,
         },
-      }),
+      },
+      JSON_SCHEMA_SUPPORT),
     ).toHaveLength(1);
   });
 
@@ -110,6 +116,7 @@ describe("Transform", () => {
       executeTransform(
         { operation: "text_to_number", source: "steps.entry.output.value" },
         { ...context, entryOutput: { status: "ok", value: text } },
+        JSON_SCHEMA_SUPPORT,
       ),
     ).toEqual({
       success,
@@ -123,6 +130,7 @@ describe("Transform", () => {
       executeTransform(
         { operation: "number_to_text", source: "steps.entry.output.number" },
         context,
+        JSON_SCHEMA_SUPPORT,
       ),
     ).toBe("12.5");
   });
@@ -132,12 +140,14 @@ describe("Transform", () => {
       executeTransform(
         { operation: "parse_json", source: "steps.entry.output.json" },
         context,
+        JSON_SCHEMA_SUPPORT,
       ),
     ).toEqual({ success: true, value: { name: "Ada", age: 37 }, error: null });
     expect(
       executeTransform(
         { operation: "parse_json", source: "steps.entry.output.invalid" },
         context,
+        JSON_SCHEMA_SUPPORT,
       ),
     ).toMatchObject({ success: false, value: null });
   });
@@ -156,7 +166,7 @@ describe("Transform", () => {
         }),
       },
     };
-    expect(executeTransform(configuration, context)).toMatchObject({
+    expect(executeTransform(configuration, context, JSON_SCHEMA_SUPPORT)).toMatchObject({
       success: false,
       value: null,
     });
@@ -195,6 +205,7 @@ describe("Transform", () => {
           ],
         },
         context,
+        JSON_SCHEMA_SUPPORT,
       ),
     ).toEqual({ literal: 0, fallback: "none", falsy: false });
   });
@@ -203,7 +214,8 @@ describe("Transform", () => {
     expect(
       validateTransformDefinition({
         configuration: { operation: "build_object", fields: [] },
-      }),
+      },
+      JSON_SCHEMA_SUPPORT),
     ).toHaveLength(1);
     expect(
       validateTransformDefinition({
@@ -215,7 +227,8 @@ describe("Transform", () => {
             { name: "ok", value: { kind: "literal", value: 2 } },
           ],
         },
-      }),
+      },
+      JSON_SCHEMA_SUPPORT),
     ).toHaveLength(2);
   });
 
@@ -226,7 +239,8 @@ describe("Transform", () => {
           operation: "text_to_number",
           source: "steps.entry.output.text",
         },
-      }),
+      },
+      JSON_SCHEMA_SUPPORT),
     ).toMatchObject({
       type: "object",
       properties: {

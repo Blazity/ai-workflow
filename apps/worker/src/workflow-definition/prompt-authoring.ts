@@ -25,16 +25,14 @@ import type {
   VcsProviderKind,
   WorkflowBlockContractResolver,
 } from "@shared/contracts";
-import {
-  analyzeWorkflowV2Catalog,
-  type WorkflowValueAnalysis,
-  type WorkflowValueAnalyzer,
-} from "./available-values.js";
-import { isWorkflowSchemaAssignable } from "./bindings.js";
 import { inspectJsonSchema202012 } from "./json-schema.js";
 import {
+  analyzeWorkflowV2Catalog,
   dedupeWorkflowDefinitionIssues,
+  isWorkflowSchemaAssignable,
   type WorkflowBlockParamsSchemas,
+  type WorkflowValueAnalysis,
+  type WorkflowValueAnalyzer,
 } from "@shared/workflow-graph";
 import {
   dashboardOrganizationId,
