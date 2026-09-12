@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-11
+Last-verified: 2026-09-12
 
 # apps/worker
 
@@ -60,6 +60,16 @@ boundary instead of copying their ownership tables here.
   `src/engine/step-registration-coverage.test.ts` are the guards; run both
   when you move, rename or add such a file. A stray backtick in a comment can
   hide every directive below it, which is why the detector is content-based.
+- **A fixture reaches worker source without a file extension.** The Workflow
+  builder's discovery resolves a relative specifier literally, so
+  `../../src/foo.js` from `workflow-test-fixtures/` matches nothing on disk and
+  the whole chain below it drops out of the builder's import graph. The builder
+  then cannot see that a `@shared/*` package is reachable from a step, leaves it
+  external, and Node loads `packages/<name>/index.ts` raw: its extensionless
+  re-exports are unresolvable there, so every test in
+  `pnpm run test:workflow-sdk` times out on
+  `Cannot find module .../packages/<name>/<file>`. Import worker source from a
+  fixture as `../../src/foo`, and let `verify:changed` plan the suite.
 - **`engine/agent-workflow.ts` has no top-level adapter or logger imports.** Inside a step,
   `logger` and adapters are deferred `await import(...)` calls. Do not add a
   top-level import to that module, and do not assume one exists.
