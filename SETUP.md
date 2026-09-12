@@ -682,6 +682,10 @@ using the Streamable HTTP transport at protocol version `2025-11-25` (`2025-06-1
 | `workflows:write` | Author workflows: create a definition, save a draft graph, publish it live. |
 | `prompts:write` | Edit the prompt library. |
 | `tickets:write` | Comment on, transition, or create a ticket in the connected tracker. |
+| `repositories:write` | Configure the repository catalog: save a profile, flip a repository's switch, import from a provider, ask for a suggestion, and end the bridge by activating the catalog. Separate from `workflows:write` because it decides which repositories the platform may enter at all. |
+| `settings:write` | Change a deployment setting, or clear one back to what the environment or the default answers. Cannot change this transport's own group, which stays on the dashboard Settings page. |
+
+The last two scopes were added after the first clients registered, and a client carries the ceiling it registered with: re-authorizing an existing client does not grant a scope its registration never included, so a client registered before `repositories:write` and `settings:write` existed cannot reach the configuration tools no matter what its next consent screen says. Register a new client, or update the stored client row's scopes, before expecting them to work.
 
 **Verifying the connection.** Ask the connected agent to call `system.capabilities` (confirms the handshake and reports the enabled tool domains) and then `blocks.list` (confirms it can read this deployment's block catalog — every block type the editor offers, with its input and output contract, so an authoring agent can compose a valid graph without guessing a field name and finding out from a `VALIDATION_FAILED`).
 

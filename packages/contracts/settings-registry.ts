@@ -67,6 +67,14 @@ export interface SettingDefinition {
    * same thing operationally: the variable has to stay set and a change to it
    * needs a redeploy, so the cleanup stage neither imports it into the store
    * nor asks the operator to remove it.
+   *
+   * For a write this means the store records the decision and changes nothing
+   * until the worker is redeployed, in both directions: the old value keeps
+   * being used and the new one is not, however the Settings page renders it.
+   * `appliesToRunsInFlight` cannot say that ("next run" is a promise this key
+   * does not keep), so a surface that shows a key to somebody about to change
+   * it has to say it separately. Absent means the ordinary case: the value in
+   * the store is the value that is read.
    */
   readonly requiresRedeploy?: boolean;
   /** For a string setting whose value is one of a fixed set. */
@@ -381,6 +389,12 @@ export const SETTINGS_REGISTRY = [
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: false,
     environmentVariable: "PRE_PR_CHECKS_ALLOWED_ENV",
+    // The checks runner reads this straight off `process.env`
+    // (`allowedRepoEnvNames`, engine/steps/pre-pr-checks-runner.ts), and says so
+    // in its own comment: only the operator, in the hosting dashboard, decides
+    // the worker may hand a value to a tenant's command. Until that read moves
+    // to the store, a name added here is still refused at save time and a name
+    // removed here still forwards, until the next deployment is live.
     requiresRedeploy: true,
   },
   {

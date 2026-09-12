@@ -9,9 +9,11 @@ import { authoringAnnouncementDelivery } from "./tools/authoring-support.js";
 import { registerBlockTools } from "./tools/blocks.js";
 import { registerDiscoveryTools } from "./tools/discovery.js";
 import { registerPromptAuthoringTools } from "./tools/prompt-authoring.js";
+import { registerRepositoryCatalogTools } from "./tools/repositories.js";
 import { registerRunControlTools } from "./tools/run-control.js";
 import { registerRunStatsTools } from "./tools/run-stats.js";
 import { registerRunLogsTool, registerRunTools } from "./tools/runs.js";
+import { registerSettingsTools } from "./tools/settings.js";
 import { registerTicketWriteTools } from "./tools/ticket-write.js";
 import { registerTicketTools } from "./tools/tickets.js";
 import {
@@ -74,6 +76,8 @@ export function createMcpServer(deps: McpToolDependencies): McpServer {
   // tools/list and the generated contract artifact are pinned to this order.
   registerWorkflowGraphTools(server, deps);
   registerRunLogsTool(server, deps);
+  registerRepositoryCatalogTools(server, deps);
+  registerSettingsTools(server, deps);
 
   return server;
 }

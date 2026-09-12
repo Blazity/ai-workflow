@@ -813,13 +813,25 @@ export interface PostPrGateWorkflowInput {
   provider: VcsProviderKind;
 }
 
-/** OAuth scopes published by the MCP transport and consumed by auth wiring. */
+/**
+ * OAuth scopes published by the MCP transport and consumed by auth wiring.
+ *
+ * Appended to, never reordered: the order is what the protected-resource and
+ * issuer metadata publish, and a client that registered for a scope keeps it.
+ * The last two are the deployment's own configuration, kept apart from
+ * `workflows:write` because authoring a workflow and deciding which
+ * repositories the platform may enter (or what limit every run executes under)
+ * are different grants: a consent screen that says "author workflows" must not
+ * also hand over the catalog and the settings registry.
+ */
 export const MCP_SCOPES = [
   "mcp:read",
   "runs:dispatch",
   "prompts:write",
   "workflows:write",
   "tickets:write",
+  "repositories:write",
+  "settings:write",
 ] as const;
 export type McpScope = (typeof MCP_SCOPES)[number];
 
@@ -853,5 +865,24 @@ export const FIRST_SLICE_TOOLS = [
   "workflows.get_graph",
   "workflows.set_enabled",
   "runs.logs",
+  // Appended, never interleaved: the array order is the order the contract
+  // publishes and the order the hash covers, so everything that shipped before
+  // keeps its published bytes. These fourteen are the catalog and settings
+  // parity slice: every action the Repositories page and the Settings page
+  // offer an owner or an admin is one of these tools.
+  "repositories.list",
+  "repositories.get",
+  "repositories.list_versions",
+  "repositories.upsert",
+  "repositories.set_enabled",
+  "repositories.activate_preview",
+  "repositories.activate",
+  "repositories.import_preview",
+  "repositories.import",
+  "repositories.suggest",
+  "settings.list",
+  "settings.get",
+  "settings.set",
+  "settings.reset",
 ] as const;
 export type McpToolName = (typeof FIRST_SLICE_TOOLS)[number];

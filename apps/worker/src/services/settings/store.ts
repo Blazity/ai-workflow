@@ -50,7 +50,10 @@ export class SettingsValidationError extends Error {
   }
 }
 
-function versionView(row: SettingsVersionRow): SettingsVersionView {
+/** One recorded change, as every settings surface publishes it. Exported so a
+ *  second reader of the same rows (the paged history) maps them the same way
+ *  rather than growing its own copy. */
+export function versionView(row: SettingsVersionRow): SettingsVersionView {
   return {
     id: row.id,
     key: row.key,
