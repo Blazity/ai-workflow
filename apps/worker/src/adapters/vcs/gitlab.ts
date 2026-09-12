@@ -31,7 +31,7 @@ import {
   REVIEW_LEDGER_MAX_CONTEXT_THREADS,
   REVIEW_LEDGER_MAX_WORK_ITEMS,
 } from "./types.js";
-import { clampBothEnds } from "../../infra/clamp-text.js";
+import { clampBothEnds } from "@shared/workflow-graph";
 import { logger } from "../../infra/logger.js";
 import {
   AI_WORKFLOW_COMMENT_MARKER,

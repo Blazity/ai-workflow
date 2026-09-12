@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { StepsRecord } from "../../../workflow-definition/interpreter.js";
+import type { StepsRecord } from "@shared/workflow-graph";
 import { execute } from "./execute.js";
 import { manifest } from "./manifest.js";
-import { makeCtx, makeNode } from "../support/test-support.js";
+import { makeCtx, makeInvocation, makeNode } from "../support/test-support.js";
 
 describe("human_question paramsSchema", () => {
   it("accepts empty params, a questions array, and rejects unknown keys", () => {
@@ -89,12 +89,13 @@ describe("human_question execute", () => {
   });
 
   it("returns a normal answered output when a parked question resumes", async () => {
+    const ctx = makeCtx();
     const result = await execute(
       makeNode("human_question", { questions: ["Approve?"] }),
       {},
-      makeCtx(),
+      ctx,
       {},
-      { clarificationAnswer: "approve" },
+      makeInvocation(ctx, { clarificationAnswer: "approve" }),
     );
     expect(result).toEqual({
       kind: "next",

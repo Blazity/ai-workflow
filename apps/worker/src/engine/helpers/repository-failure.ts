@@ -1,8 +1,7 @@
 /* eslint-disable max-lines, max-lines-per-function */
 import type { WorkflowExecutionErrorState } from "@shared/contracts";
-import { type StepsRecord } from "../../workflow-definition/interpreter.js";
-import type { BlockExecutionContext } from "../../workflow-definition/interpreter.js";
-import { type EngineCtx } from "../blocks/support/types.js";
+import { type StepsRecord } from "@shared/workflow-graph";
+import { type BlockInvocationContext, type EngineCtx } from "../blocks/support/types.js";
 import { asRepositoryScriptsOutput, repositoryScriptCoverageNotes, REPOSITORY_SCRIPTS_ABANDONED_CLASS, REPOSITORY_SCRIPTS_BUDGET_CLASS, REPOSITORY_SCRIPTS_FAILED_CLASS, REPOSITORY_SCRIPTS_NOT_STARTED_CLASS, REPOSITORY_SCRIPTS_NOTHING_RAN_CLASS, type RepositoryScriptsOutput } from "../blocks/support/repository-scripts-output.js";
 import { isChecksCeilingExceededError, isDurationAbortError, isV2InvocationCancelledError, type RunBudgetAttribution, type RunBudgetObservation } from "./run-budget.js";
 import { redactDiagnosticText } from "../../sandbox/agents/redact.js";
@@ -34,12 +33,12 @@ type BoundaryCapableBudgetObserver = (
 
 function checksBudgetObserver(
   ctx: Pick<EngineCtx, "observeBudget">,
-  execution?: BlockExecutionContext,
+  execution?: BlockInvocationContext,
 ): (
   requireRemainingDuration?: boolean,
   observedAtMs?: number,
 ) => Promise<RunBudgetObservation> {
-  const observe = (execution?.observeBudget ?? ctx.observeBudget) as BoundaryCapableBudgetObserver;
+  const observe = (execution?.budget.observeBudget ?? ctx.observeBudget) as BoundaryCapableBudgetObserver;
   return (requireRemainingDuration, observedAtMs) =>
     observe(requireRemainingDuration, "checks", observedAtMs);
 }

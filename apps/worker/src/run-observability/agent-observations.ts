@@ -4,7 +4,7 @@ import type {
   PhaseUsage,
 } from "../sandbox/agents/types.js";
 import type { ReplaySanitizationMetadata } from "@shared/contracts";
-import type { V2InvocationObservationHooks } from "../workflow-definition/invocation-context.js";
+import type { V2InvocationObservationHooks } from "@shared/workflow-graph";
 
 const PROVIDER_LOG_TAIL_CHARACTERS = 64 * 1024;
 

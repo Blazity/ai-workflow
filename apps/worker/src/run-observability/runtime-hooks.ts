@@ -10,12 +10,12 @@ import type {
   WorkflowReplayLayoutSnapshot,
   WorkflowReplaySelectedTransition,
 } from "@shared/contracts";
-import type { V2InvocationObservation } from "../workflow-definition/invocation-context.js";
+import type { V2InvocationObservation } from "@shared/workflow-graph";
 import type {
   V2InvocationIdentity,
   V2InvocationTerminalState,
   V2SchedulerHooks,
-} from "../workflow-definition/v2-scheduler.js";
+} from "@shared/workflow-graph";
 import { MAX_REPLAY_ATTEMPTS_PER_RUN } from "./limits.js";
 import {
   appendReplayLogEnvelope,

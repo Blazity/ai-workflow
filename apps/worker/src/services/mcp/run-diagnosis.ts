@@ -10,7 +10,7 @@
  *
  * Two imports, on purpose, and both of the same kind: the per-category
  * sentences this file matches on live in exactly one place each
- * (`SAFE_EXECUTION_ERROR_MESSAGES` in workflow-definition/interpreter.ts, and
+ * (`SAFE_EXECUTION_ERROR_MESSAGES` in packages/workflow-graph/interpreter.ts,
  * the repository scripts classes in workflows/blocks/repository-scripts-
  * output.ts) and the repository enforces the first with
  * `workflow-definition/execution-error-invariant.test.ts`: a copy of the table
@@ -25,7 +25,7 @@
 import {
   SAFE_EXECUTION_ERROR_MESSAGES,
   WORKSPACE_GATE_NOT_RECORDED_PREFIX,
-} from "../../workflow-definition/interpreter.js";
+} from "@shared/workflow-graph";
 import {
   isRepositoryScriptsRefusal,
   REPOSITORY_SCRIPTS_SETUP_FAILED_PREFIX,
@@ -261,11 +261,12 @@ const STOPPED_WITHOUT_REASON_PREFIX =
   "This run was stopped before it finished, but no specific reason was recorded.";
 
 // Generic sentences for schema/contract failures: SAFE_EXECUTION_ERROR_MESSAGES.schema
-// (workflow-definition/interpreter.ts:94, used by interpreter.ts:439 contractViolation
-// and block output validation) and the agent-protocol schema_mismatch message
-// (sandbox/agents/protocol.ts:211). Also SAFE_EXECUTION_ERROR_MESSAGES.binding
-// (interpreter.ts:91, an unresolvable block input reference: a workflow-definition
-// configuration defect) and .parsing (interpreter.ts:93, an unparsable response).
+// (packages/workflow-graph/interpreter.ts:50, used wherever the scheduler rejects
+// a block output against its contract) and the agent-protocol schema_mismatch
+// message (sandbox/agents/protocol.ts:211). Also
+// SAFE_EXECUTION_ERROR_MESSAGES.binding (interpreter.ts:47, an unresolvable block
+// input reference: a definition configuration defect) and .parsing
+// (interpreter.ts:49, an unparsable response).
 const VALIDATION_FAILED_PREFIXES = [
   SAFE_EXECUTION_ERROR_MESSAGES.schema,
   "The current agent phase returned an invalid structured response.",
@@ -274,14 +275,14 @@ const VALIDATION_FAILED_PREFIXES = [
 ];
 
 // Curated PROVIDER_CAUSES sentence for an AI-provider auth rejection
-// (workflow-definition/failure-message.ts:100-105). classifyProviderFailure
+// (packages/workflow-graph/failure-message.ts:148-152). classifyProviderFailure
 // gives this trusted match first shot at the raw provider error text, so this
 // rule matches ONLY the sentence it already decided on, never the raw text.
 const DEPENDENCY_AUTH_PREFIX =
   "The AI provider rejected the credentials (authentication failed).";
 
 // Curated provider sentence for an account/project spend-limit rejection
-// (workflow-definition/failure-message.ts:148-151). This is deliberately a
+// (packages/workflow-graph/failure-message.ts:130-143). This is deliberately a
 // whole trusted lead rather than a raw `spend limit` search: runs.diagnose
 // receives the already-sanitized run reason, and only this code-owned sentence
 // is safe to route to billing remediation. It stays distinct from
@@ -293,10 +294,11 @@ const PROVIDER_SPEND_LIMIT_ACTIONS = [
   "Confirm the intended provider project/account is selected and that the new limit has propagated before rerunning.",
 ] as const;
 
-// The other PROVIDER_CAUSES sentences (workflow-definition/failure-message.ts:
-// 90-113): billing/credit, rate limit, model unavailable, and overloaded. Plus
-// SAFE_EXECUTION_ERROR_MESSAGES.provider (interpreter.ts:89), the uncurated
-// fallback for a "provider"-category failure that matched none of those. Plus
+// The other PROVIDER_CAUSES sentences (packages/workflow-graph/
+// failure-message.ts:102-181): billing/credit, rate limit, model unavailable,
+// and overloaded. Plus SAFE_EXECUTION_ERROR_MESSAGES.provider
+// (interpreter.ts:45), the uncurated fallback for a "provider"-category failure
+// that matched none of those. Plus
 // the agent-CLI runtime-prep/execution sentences set directly as
 // `options.message` (protocol.ts:122/131/243/418 "The agent runtime could not
 // be prepared."; protocol.ts:173/185 "The current agent phase could not be
@@ -315,7 +317,7 @@ const DEPENDENCY_UNAVAILABLE_PREFIXES = [
   "The current agent phase could not be completed.",
 ];
 
-// SAFE_EXECUTION_ERROR_MESSAGES.timeout (workflow-definition/interpreter.ts:92),
+// SAFE_EXECUTION_ERROR_MESSAGES.timeout (packages/workflow-graph/interpreter.ts:48),
 // composed whenever a block reports `category: "timeout"` (e.g. workflows/blocks/
 // generic-agent.ts:470, engine/agent-workflow.ts).
 const SANDBOX_TIMEOUT_PREFIX = SAFE_EXECUTION_ERROR_MESSAGES.timeout;

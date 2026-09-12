@@ -123,6 +123,7 @@ import { teardownSandboxes } from "../../steps/sandbox-poll-agent.js";
 import { checksCeilingExceededError } from "../../helpers/run-budget.js";
 import {
   makeCtx as makeBaseCtx,
+  makeInvocation,
   makeNode,
   makePrPayload,
   makeRunSettings,
@@ -800,12 +801,13 @@ describe("prepare_workspace execute", () => {
     mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
     const observations = { emit: vi.fn() };
 
+    const ctx = makeCtx({ sandboxId: null, definitionNodes: SCRIPT_NODES });
     await execute(
       makeNode("prepare_workspace"),
       {},
-      makeCtx({ sandboxId: null, definitionNodes: SCRIPT_NODES }),
+      ctx,
       {},
-      { observations },
+      makeInvocation(ctx, { observations }),
     );
 
     expect(mocks.runRepositorySetup).toHaveBeenCalledWith(
@@ -1680,12 +1682,13 @@ describe("prepare_workspace execute", () => {
       },
     });
 
+    const ctx = makeCtx({ sandboxId: null });
     const result = await execute(
       makeNode("prepare_workspace"),
       {},
-      makeCtx({ sandboxId: null }),
+      ctx,
       {},
-      { observations: { emit } },
+      makeInvocation(ctx, { observations: { emit } }),
     );
 
     expect(emit).toHaveBeenCalledWith({

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentWorkflowInput } from "../../engine/agent-input.js";
-import { executionError } from "../interpreter.js";
+import { executionError } from "@shared/workflow-graph";
 import { executorRunsOf, expectNeverInvoked, portsOf } from "./assertions.js";
 import { createScenario, type Scenario } from "./harness.js";
 
@@ -16,8 +16,9 @@ import { createScenario, type Scenario } from "./harness.js";
  * in `engine/agent-workflow.ts`, called only from the production block dispatcher
  * the harness deliberately never runs (the harness's `resolvedInputs` comes
  * solely from `resolveWorkflowNodeInputsV2` over declared `inputs`/
- * `additionalInputs`, per v2-scheduler.ts). Reimplementing that substitution
- * inside a scenario would duplicate product logic the harness's own doctrine
+ * `additionalInputs`, per packages/workflow-graph/scheduler.ts). Reimplementing
+ * that substitution inside a scenario would duplicate product logic the
+ * harness's own doctrine
  * forbids duplicating. See the AIW-197 report for the recommendation.
  *
  * Provider is fixed to "claude": see ticket-workflow.scenario.test.ts for why

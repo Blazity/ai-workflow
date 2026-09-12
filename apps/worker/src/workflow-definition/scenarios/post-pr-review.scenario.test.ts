@@ -12,8 +12,8 @@ import {
   partitionReviewFindings,
   reviewPublicationDecision,
 } from "../../engine/runtime/pr-external-resources.js";
-import { clampBothEnds } from "../failure-message.js";
-import { executionError } from "../interpreter.js";
+import { clampBothEnds } from "@shared/workflow-graph";
+import { executionError } from "@shared/workflow-graph";
 import { workflowDefinitionTemplate } from "../templates.js";
 import {
   executorRunsOf,

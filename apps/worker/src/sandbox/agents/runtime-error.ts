@@ -1,7 +1,5 @@
-import type {
-  AgentProtocolDiagnostic,
-  AgentProtocolFailureCategory,
-} from "./types.js";
+import type { AgentProtocolDiagnostic } from "@shared/contracts";
+import type { AgentProtocolFailureCategory } from "./types.js";
 
 /**
  * Agent runtime failure carried across the step boundary. Lives in its own

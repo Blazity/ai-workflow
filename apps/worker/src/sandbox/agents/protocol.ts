@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import type { ZodType } from "zod";
 import type {
-  AgentCliSpec,
   AgentProtocolDiagnostic,
-  AgentProtocolFailureCategory,
   AgentProtocolFailureKind,
+} from "@shared/contracts";
+import type {
+  AgentCliSpec,
+  AgentProtocolFailureCategory,
   AgentProtocolResult,
   AgentRuntimePaths,
   CollectedPhaseArtifacts,

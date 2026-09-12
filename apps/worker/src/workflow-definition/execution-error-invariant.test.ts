@@ -13,8 +13,8 @@ import { formatExecutionErrorForUser } from "../engine/helpers/execution-error.j
 import {
   executionError,
   SAFE_EXECUTION_ERROR_MESSAGES,
-} from "./interpreter.js";
-import { sanitizeDetail, sanitizeFailureMessage } from "./failure-message.js";
+} from "@shared/workflow-graph";
+import { sanitizeDetail, sanitizeFailureMessage } from "@shared/workflow-graph";
 
 /**
  * AIW-254's headline acceptance criterion, as an executable invariant:
@@ -28,7 +28,7 @@ import { sanitizeDetail, sanitizeFailureMessage } from "./failure-message.js";
  * site, by asserting `executionError` is the only place in the worker that
  * composes a block failure message: an invariant checked in one function is
  * worth nothing while a second construction path exists, and there WAS one
- * (v2-scheduler kept its own copy of the sentence table and returned it
+ * (the scheduler kept its own copy of the sentence table and returned it
  * verbatim, so scheduler failures rendered generic text no matter what they
  * knew).
  */
@@ -122,12 +122,12 @@ describe("execution error invariant: no surface renders only the category line",
   });
 });
 
-/** Worker sources, tests excluded: the invariant is about production paths. */
-function workerSourceFiles(dir: string, found: string[] = []): string[] {
+/** Production sources, tests excluded: the invariant is about production paths. */
+function productionSourceFiles(dir: string, found: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
     const path = join(dir, entry);
     if (statSync(path).isDirectory()) {
-      workerSourceFiles(path, found);
+      productionSourceFiles(path, found);
       continue;
     }
     if (!entry.endsWith(".ts")) continue;
@@ -137,18 +137,32 @@ function workerSourceFiles(dir: string, found: string[] = []): string[] {
   return found;
 }
 
-const SOURCE_ROOT = join(import.meta.dirname, "..");
-const INTERPRETER = join(SOURCE_ROOT, "workflow-definition", "interpreter.ts");
+const WORKER_SOURCE_ROOT = join(import.meta.dirname, "..");
+/** The one construction path moved out of the worker in stage 12-6b, so the
+ *  scan has to follow it: a second path could now be written on either side. */
+const GRAPH_PACKAGE_ROOT = join(
+  import.meta.dirname,
+  "..",
+  "..",
+  "..",
+  "..",
+  "packages",
+  "workflow-graph",
+);
+const INTERPRETER = join(GRAPH_PACKAGE_ROOT, "interpreter.ts");
 
 describe("execution error invariant: one construction path", () => {
-  const files = workerSourceFiles(SOURCE_ROOT).map((path) => ({
+  const files = [
+    ...productionSourceFiles(WORKER_SOURCE_ROOT),
+    ...productionSourceFiles(GRAPH_PACKAGE_ROOT),
+  ].map((path) => ({
     path,
     text: readFileSync(path, "utf8"),
   }));
 
-  it("finds worker sources to scan at all", () => {
+  it("finds the sources to scan at all", () => {
     // Guards the two scans below against silently passing on an empty list if
-    // this file ever moves.
+    // this file or the package ever moves.
     expect(files.length).toBeGreaterThan(100);
     expect(files.some((file) => file.path === INTERPRETER)).toBe(true);
   });

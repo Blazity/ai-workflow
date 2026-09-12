@@ -35,7 +35,7 @@ function checksBudgetObserver(
   requireRemainingDuration?: boolean,
   observedAtMs?: number,
 ) => Promise<RunBudgetObservation> {
-  const observe = (execution?.observeBudget ??
+  const observe = (execution?.budget.observeBudget ??
     ctx.observeBudget) as BoundaryCapableBudgetObserver;
   return (requireRemainingDuration, observedAtMs) =>
     observe(requireRemainingDuration, "checks", observedAtMs);

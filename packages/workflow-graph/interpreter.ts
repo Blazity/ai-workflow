@@ -3,21 +3,25 @@
  * may report back, and the one construction path for the failure it reports.
  *
  * The execution-error class, the sentence a user reads and the operator log
- * event are engine concerns and live in `engine/helpers/execution-error.ts`;
- * the recorded failure state is plain data and lives in `@shared/contracts`.
- * What stays here is what an executor and the scheduler both need.
+ * event are engine concerns and live in the worker
+ * (`engine/helpers/execution-error.ts`); the recorded failure state is plain
+ * data and lives in `@shared/contracts`. The run budget an invocation is
+ * charged against is a worker concern too: it is carried beside this context
+ * as `RunBudgetHooks` (`engine/helpers/run-budget.ts`), because enforcing a
+ * Harness Profile limit is runtime work this package may not do. What stays
+ * here is what an executor and the scheduler both need.
  */
 import type {
+  AgentProtocolDiagnostic,
   BlockOutput,
   ExecutionErrorCategory,
   ExecutionErrorShape,
   WorkflowDefinitionNode,
 } from "@shared/contracts";
-import type { AgentProtocolDiagnostic } from "../sandbox/agents/types.js";
 import {
   deriveFailureMessage,
   type FailureEvidence,
-} from "./failure-message.js";
+} from "./failure-message";
 
 /** Accumulated block outputs keyed by node id, readable by later condition evaluation. */
 export type StepsRecord = Record<string, { output: BlockOutput }>;
@@ -169,12 +173,20 @@ export type BlockExecutionResult =
    * "ended", which parks the run while it awaits a human. */
   | { kind: "terminal_success"; output: BlockOutput };
 
-/** Runs a single action-category block and reports how the walk should proceed. */
-export type BlockExecutor = (
+/**
+ * Runs a single action-category block and reports how the walk should proceed.
+ *
+ * The context is the caller's: an engine that carries more per invocation than
+ * this package knows about (a run budget, say) names its own context here, and
+ * everything this package reads of it is still declared below.
+ */
+export type BlockExecutor<
+  TContext extends BlockExecutionContext = BlockExecutionContext,
+> = (
   block: WorkflowDefinitionNode,
   steps: StepsRecord,
   resolvedInputs: Record<string, unknown>,
-  execution?: BlockExecutionContext,
+  execution?: TContext,
 ) => Promise<BlockExecutionResult>;
 
 /** Invocation metadata supplied to every block. Clarification answers are
@@ -184,23 +196,9 @@ export interface BlockExecutionContext {
   /** V2 activation containing this exact invocation. */
   activationScopeId?: string;
   clarificationAnswer?: string;
-  cancellation?: import("./invocation-context.js").V2InvocationCancellation;
+  cancellation?: import("./invocation-context").V2InvocationCancellation;
   /** V2 replay-safe diagnostic capture for this exact invocation. */
-  observations?: import("./invocation-context.js").V2InvocationObservationHooks;
-  /**
-   * V2 Harness Profile budget seam. The workflow-level budget remains on
-   * EngineCtx; this observer additionally enforces only the profile selected
-   * for the current invocation.
-   */
-  observeBudget?: (
-    requireRemainingDuration?: boolean,
-    attribution?: import("../engine/helpers/run-budget.js").RunBudgetAttribution,
-  ) => Promise<import("../engine/helpers/run-budget.js").RunBudgetObservation>;
-  /** Record usage against the current invocation's Harness Profile limits. */
-  recordBudgetUsage?: (
-    usage: import("../sandbox/agents/types.js").PhaseUsage | null,
-    model: string,
-  ) => void;
+  observations?: import("./invocation-context").V2InvocationObservationHooks;
   /**
    * V2-only compiler seam. Agent executors call it after assembling the exact
    * runtime context and workspace, immediately before launching the provider.

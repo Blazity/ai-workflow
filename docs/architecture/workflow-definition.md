@@ -210,18 +210,17 @@ configuration (`v2LoopConfiguration` in the package's `schema.ts`) is `maxAttemp
 20), `onExhaust` (`fail`, `human` or `continue`), and an optional `carry` array
 of at most 100 entries, each `{name, schema, binding}`.
 
-At runtime `buildV2RuntimeGraph` in
-`apps/worker/src/workflow-definition/v2-scheduler.ts` derives a `V2LoopRegion`
-per Loop: the member blocks that belong to the cycle, plus whether the region
-has an external entry into its body. Each iteration runs in an activation
-scope (`V2ActivationScopeState`) with its own edge tokens, node states and
-outputs, so a second iteration cannot read the first iteration's values by
-accident.
+At runtime `buildV2RuntimeGraph` in the package's `scheduler.ts` derives a
+`V2LoopRegion` per Loop: the member blocks that belong to the cycle, plus
+whether the region has an external entry into its body. Each iteration runs in
+an activation scope (`V2ActivationScopeState`) with its own edge tokens, node
+states and outputs, so a second iteration cannot read the first iteration's
+values by accident.
 
 Carried values are resolved once per iteration by the scheduler, validated
 against the declared JSON Schema of the carry entry, and rejected when a name
 repeats, when the value is not JSON serializable, or when it does not match its
-schema (`v2-scheduler.ts`). A region also records that control has left it
+schema (`scheduler.ts`). A region also records that control has left it
 (`loopRegionExited`), because an active edge crossing the region boundary is
 not proof that the region was exited: a member may fan out on a port that also
 continues inside the region.
@@ -324,25 +323,28 @@ would need conflicting access to the same workspace.
 
 ## 11. Runtime
 
-`executeV2Graph` in `apps/worker/src/workflow-definition/v2-scheduler.ts` walks
-a deployed graph. It keeps a checkpoint (`V2SchedulerCheckpoint`) holding the
-entry trigger and its output, every activation scope, attempt counts, the ready
-queue, pending clarifications and answers, so a run can pause on a human
-question and resume on the answer. Edges carry a token (`unresolved`, `active`,
-`inactive`), nodes carry a status (`waiting`, `ready`, `running`,
-`waiting_loop`, `waiting_for_clarification`, `completed`, `skipped`,
-`cancelled`, `failed`), and the walk is bounded by
-`V2_PRODUCTION_SCHEDULER_BOUNDS` (maximum concurrency and maximum total block
-executions). Execution errors are shaped by
-`apps/worker/src/workflow-definition/interpreter.ts`, which owns the safe
-message set and the one construction path a failed block reports through, while
-the execution error class, the sentence a user reads and the operator log event
-are engine concerns in `apps/worker/src/engine/helpers/execution-error.ts`. The
-failure a run records is plain data declared in
-`packages/contracts/execution-error.ts`, so the scheduler mints and carries one
-without touching the engine. A Transform block's regex replacement is the one
-transform operation that cannot be pure, so `transform.ts` takes an async regex
-evaluator as a parameter and refuses a regex transform without one, and
+`executeV2Graph` in the package's `scheduler.ts` walks a deployed graph. What it
+cannot judge on its own arrives as `SchedulerDependencies`, a required option
+bound once in `apps/worker/src/engine/definition/scheduler-dependencies.ts`: a
+block output measured against its contract, and a carried loop value measured
+against its declared JSON Schema, both ajv questions that stay in the worker. It
+keeps a checkpoint (`V2SchedulerCheckpoint`) holding the entry trigger and its
+output, every activation scope, attempt counts, the ready queue, pending
+clarifications and answers, so a run can pause on a human question and resume on
+the answer. Edges carry a token (`unresolved`, `active`, `inactive`), nodes
+carry a status (`waiting`, `ready`, `running`, `waiting_loop`,
+`waiting_for_clarification`, `completed`, `skipped`, `cancelled`, `failed`), and
+the walk is bounded by `V2_PRODUCTION_SCHEDULER_BOUNDS` (maximum concurrency and
+maximum total block executions). Execution errors are shaped by the package's
+`interpreter.ts`, which owns the safe message set and the one construction path
+a failed block reports through, while the execution error class, the sentence a
+user reads and the operator log event are engine concerns in
+`apps/worker/src/engine/helpers/execution-error.ts`. The failure a run records
+is plain data declared in `packages/contracts/execution-error.ts`, so the
+scheduler mints and carries one without touching the engine. A Transform block's
+regex replacement is the one transform operation that cannot be pure, so
+`transform.ts` takes an async regex evaluator as a parameter and refuses a regex
+transform without one, and
 `apps/worker/src/engine/steps/transform-regex-step.ts` stays the only loader of
 `re2-wasm` and supplies the evaluator the workflow injects.
 
@@ -399,8 +401,12 @@ Three properties matter to anyone authoring a graph through an agent:
 | Transform semantics, shape and output schema | `packages/workflow-graph/transform.ts` |
 | Authored JSON Schema inspection | `packages/workflow-graph/json-schema-authoring.ts` |
 | The ajv-backed JSON Schema facility the package takes as a parameter | `apps/worker/src/workflow-definition/json-schema.ts`, bound in `apps/worker/src/engine/definition/json-schema-support.ts` |
-| Scheduler, loop regions, checkpoints | `apps/worker/src/workflow-definition/v2-scheduler.ts` |
-| Execution results and error construction | `apps/worker/src/workflow-definition/interpreter.ts` |
+| Scheduler, loop regions, checkpoints | `packages/workflow-graph/scheduler.ts` |
+| What the scheduler borrows from the worker | `apps/worker/src/engine/definition/scheduler-dependencies.ts` |
+| Execution results and error construction | `packages/workflow-graph/interpreter.ts` |
+| Failure message derivation | `packages/workflow-graph/failure-message.ts` |
+| Per-invocation cancellation and observation | `packages/workflow-graph/invocation-context.ts` |
+| The budget one invocation is charged against | `apps/worker/src/engine/helpers/run-budget.ts` (`RunBudgetHooks`) |
 | Execution error shape, category and recorded state | `packages/contracts/execution-error.ts` |
 | Execution error class, user sentence, log event | `apps/worker/src/engine/helpers/execution-error.ts` |
 | Harness profile resolution | `apps/worker/src/workflow-definition/harness-profile-runtime.ts` |

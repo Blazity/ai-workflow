@@ -6,7 +6,7 @@ import {
   operatorFailureDetail,
   sanitizeDetail,
   sanitizeFailureMessage,
-} from "./failure-message.js";
+} from "@shared/workflow-graph";
 
 /**
  * The exact failure family that cost a production diagnosis on 2026-07-30:
