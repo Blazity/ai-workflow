@@ -168,6 +168,7 @@ export type McpRunSummary = {
   workflowName: string;
   status: "success" | "running" | "failed" | "blocked" | "awaiting";
   terminal: boolean;
+  completionPending: boolean;
   ticketKey: string | null;
   createdAt: string;
   startedAt: string | null;
@@ -188,4 +189,11 @@ export function isTerminalRunStatus(status: McpRunSummary["status"]): boolean {
     status === "blocked" ||
     status === "awaiting"
   );
+}
+
+export function isRunCompletionPending(
+  status: McpRunSummary["status"],
+  completedAt: string | null,
+): boolean {
+  return status !== "running" && status !== "awaiting" && completedAt === null;
 }

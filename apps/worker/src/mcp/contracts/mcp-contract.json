@@ -1,5 +1,5 @@
 {
-  "contractHash": "fd9c6f7558c81729fffc7594ebab2fbe25cb3dbb470e282be16949c25946dbb3",
+  "contractHash": "51e05f06efaac58134a4c12497b659cae80555dbf83672251523b4283ed51577",
   "errorCodes": [
     "UNAUTHENTICATED",
     "INSUFFICIENT_SCOPE",
@@ -63,7 +63,7 @@
     },
     {
       "name": "tickets.list_runs",
-      "description": "List runs associated with a ticket, most recent first.",
+      "description": "List runs associated with a ticket, most recent first. A terminal run with `completionPending: true` has not persisted its completion fields yet, so its pull request data may still be incomplete.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -93,7 +93,7 @@
     },
     {
       "name": "runs.get",
-      "description": "Get a run's current status. Returns `terminal` and `pollAfterMs` so a caller knows whether to poll again and how soon.",
+      "description": "Get a run's current status. Returns `terminal` and `pollAfterMs` so a caller knows whether to poll again and how soon. A terminal run with `completionPending: true` has not persisted its completion fields yet, so its pull request data may still be incomplete.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -148,7 +148,7 @@
     },
     {
       "name": "runs.result",
-      "description": "Get a run's final outcome. While the run is still in progress this returns `result: null` and `terminal: false`, and a run parked on human input returns `result: null` with `awaitingHumanInput: true` even though it is terminal for polling, so a caller never sees a partial result that looks final.",
+      "description": "Get a run's final outcome. While the run is still in progress this returns `result: null` and `terminal: false`, and a run parked on human input returns `result: null` with `awaitingHumanInput: true` even though it is terminal for polling. A terminal run with `completionPending: true` has not persisted its completion fields yet, so its pull request data may still be incomplete.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -173,7 +173,7 @@
     },
     {
       "name": "runs.diagnose",
-      "description": "Deterministically classify why a run stands where it does (category, confidence, evidence refs, next actions). Never runs a model over log content. `confidence` is \"high\" only for structural signals, the run status and a step status; it is \"low\" whenever the category came from the wording of a recorded reason, so treat a low-confidence category as a lead to confirm, not as an established cause.",
+      "description": "Deterministically classify why a run stands where it does (category, confidence, evidence refs, next actions), including a low-confidence `completion_fields_pending` lead when a successful run has no completion timestamp. Never runs a model over log content. `confidence` is \"high\" only for structural signals, the run status and a step status; it is \"low\" for tentative leads and whenever the category came from the wording of a recorded reason, so confirm it rather than treating it as an established cause.",
       "inputSchema": {
         "type": "object",
         "properties": {

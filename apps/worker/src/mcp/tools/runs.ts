@@ -23,6 +23,7 @@ import {
 } from "../../services/mcp/tool-services.js";
 import {
   McpPublicError,
+  isRunCompletionPending,
   isTerminalRunStatus,
   type McpRunSummary,
   type McpToolDependencies,
@@ -65,11 +66,13 @@ async function loadSanitizedRun(
 }
 
 function toRunSummary(run: RunDetail): McpRunSummary {
+  const terminal = isTerminalRunStatus(run.status);
   return {
     runId: run.id,
     workflowName: run.workflowName,
     status: run.status,
-    terminal: isTerminalRunStatus(run.status),
+    terminal,
+    completionPending: isRunCompletionPending(run.status, run.completedAt),
     ticketKey: run.ticket ? run.ticket : null,
     createdAt: run.createdAt,
     startedAt: run.startedAt,
@@ -484,6 +487,7 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
         operation: async () => {
           const { run } = await loadSanitizedRun(deps.services, input.runId);
           const terminal = isTerminalRunStatus(run.status);
+          const completionPending = isRunCompletionPending(run.status, run.completedAt);
           // "awaiting" is terminal for polling, which contracts.ts freezes so an
           // agent stops instead of spinning to the timeout. It is NOT a finished
           // run: markRunAwaiting parks a live run that resumes once a human
@@ -497,6 +501,7 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
             runId: run.id,
             status: run.status,
             terminal,
+            completionPending,
             awaitingHumanInput,
             result:
               terminal && !awaitingHumanInput
@@ -532,6 +537,7 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
           const { run, steps } = await loadSanitizedRun(deps.services, input.runId);
           const diagnoseInput: DiagnoseRunInput = {
             status: run.status,
+            completedAt: run.completedAt,
             error: run.error ? { code: run.error.code, message: run.error.message } : null,
             steps: steps.map((step) => ({
               stepId: step.stepId,

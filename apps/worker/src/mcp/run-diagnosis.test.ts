@@ -38,13 +38,58 @@ describe("diagnoseRun", () => {
   });
 
   it("classifies a successful run as succeeded, with high confidence", () => {
-    const result = diagnoseRun({ status: "success", error: null, steps: [] });
+    const result = diagnoseRun({
+      status: "success",
+      completedAt: "2026-08-11T09:05:00.000Z",
+      error: null,
+      steps: [],
+    });
     expect(result).toEqual({
       category: "succeeded",
       confidence: "high",
       evidenceRefs: [],
       nextActions: expect.any(Array),
     });
+  });
+
+  // The completion write is the run's own last step, so a success with no
+  // completed_at means it did not land: the PR fields on that row may still be
+  // missing. A lead, not a cause, hence "low".
+  it("classifies a success with no completion timestamp as completion_fields_pending, with low confidence", () => {
+    const result = diagnoseRun({
+      status: "success",
+      completedAt: null,
+      error: null,
+      steps: [],
+    });
+    expect(result).toMatchObject({ category: "completion_fields_pending", confidence: "low" });
+    expect(result.nextActions.join(" ")).toMatch(/completion fields are pending/i);
+  });
+
+  // The rule is scoped to "success" on purpose. resolveAwaitingRunsForTicket
+  // writes "blocked" and markRunFailedOnSelfMove writes "failed" with no
+  // completed_at at all, so a wider rule would diagnose those rows as pending
+  // forever instead of giving their real cause - including a high-confidence
+  // structural one.
+  it("never claims completion_fields_pending for a status that legitimately has no completion timestamp", () => {
+    expect(
+      diagnoseRun({ status: "blocked", completedAt: null, error: null, steps: [] }),
+    ).toMatchObject({ category: "unknown", confidence: "low" });
+    expect(
+      diagnoseRun({
+        status: "failed",
+        completedAt: null,
+        error: null,
+        steps: [
+          {
+            stepId: "review",
+            name: "Review",
+            status: "failed",
+            error: { code: "AIW-DIAG-wrun_1-review-1" },
+          },
+        ],
+      }),
+    ).toMatchObject({ category: "step_failed", confidence: "high" });
   });
 
   it("classifies an in-flight run as running, with high confidence", () => {
@@ -66,7 +111,7 @@ describe("diagnoseRun", () => {
   // on the Approvals screen), so the wording must not promise automatic
   // resumption for every case.
   it("classifies an awaiting run as awaiting_input, with high confidence, without promising automatic resumption", () => {
-    const result = diagnoseRun({ status: "awaiting", error: null, steps: [] });
+    const result = diagnoseRun({ status: "awaiting", completedAt: null, error: null, steps: [] });
     expect(result).toEqual({
       category: "awaiting_input",
       confidence: "high",

@@ -32,6 +32,7 @@ import {
 } from "../../engine/blocks/support/repository-scripts-output.js";
 
 type RunDiagnosisCategory =
+  | "completion_fields_pending"
   | "succeeded"
   | "running"
   | "awaiting_input"
@@ -65,6 +66,7 @@ export type RunDiagnosis = {
  *  no lossy adapter to call this. */
 export interface DiagnoseRunInput {
   status: "success" | "running" | "failed" | "blocked" | "awaiting";
+  completedAt?: string | null;
   error: { code?: string; message?: string } | null;
   steps: ReadonlyArray<{
     stepId: string;
@@ -77,6 +79,10 @@ export interface DiagnoseRunInput {
 /** Closed, code-owned action phrases per category. Never assembled from
  *  input data, so a poisoned message/log can never inject a phrase here. */
 const NEXT_ACTIONS: Record<RunDiagnosisCategory, string[]> = {
+  completion_fields_pending: [
+    "Completion fields are pending; read runs.result again before relying on pull request data.",
+    "If the fields remain pending, inspect worker logs for run_completion_telemetry_persist_failed with this run id.",
+  ],
   succeeded: ["No action needed; the run completed successfully."],
   running: ["Wait for the run to finish before taking further action."],
   awaiting_input: [
@@ -365,11 +371,28 @@ interface Rule {
  * confidence) -> generic SAFE_EXECUTION_ERROR_MESSAGES-based message rules
  * (low) -> step_failed (structural, high, placed last so it never shadows a
  * more specific message-based classification) -> unknown.
+ *
+ * One deliberate exception to "non-error statuses first":
+ * completion_fields_pending sits immediately BEFORE succeeded, because it is
+ * the same structured signal seen one step earlier (a success whose completion
+ * write has not landed yet). It is scoped to status "success" for exactly that
+ * reason. Statuses that legitimately carry no completed_at are none of its
+ * business: resolveAwaitingRunsForTicket writes "blocked" and
+ * markRunFailedOnSelfMove writes "failed" without one, and widening this rule
+ * to them would diagnose those rows as pending forever instead of giving their
+ * real cause.
  */
 const RULES: readonly Rule[] = [
   {
     category: "running",
     match: (input) => (input.status === "running" ? { confidence: "high", evidenceRefs: [] } : null),
+  },
+  {
+    category: "completion_fields_pending",
+    match: (input) =>
+      input.status === "success" && input.completedAt === null
+        ? { confidence: "low", evidenceRefs: evidenceFrom(input) }
+        : null,
   },
   {
     category: "succeeded",

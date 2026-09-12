@@ -416,9 +416,16 @@
       "breakpoints": true
     },
     {
+      "idx": 59,
+      "version": "7",
+      "when": 1789194356937,
+      "tag": "0059_settings_store",
+      "breakpoints": true
+    },
+    {
       "idx": 60,
       "version": "7",
-      "when": 1789195700460,
+      "when": 1789198844726,
       "tag": "0060_repository_catalog",
       "breakpoints": true
     }

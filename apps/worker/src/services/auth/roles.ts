@@ -15,6 +15,7 @@ export {
   canDispatchWorkflowRuns,
   canEditPrePrChecks,
   canEditPromptLibrary,
+  canEditSettings,
   canEditWorkflowDefinitions,
   canInvite,
   canManageHarnessProfiles,

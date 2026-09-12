@@ -10,6 +10,7 @@ export * from "./schema/prompts.js";
 export * from "./schema/repositories.js";
 export * from "./schema/runs.js";
 export * from "./schema/schedules.js";
+export * from "./schema/settings.js";
 export * from "./schema/system.js";
 export * from "./schema/triggers.js";
 export * from "./schema/webhooks.js";
