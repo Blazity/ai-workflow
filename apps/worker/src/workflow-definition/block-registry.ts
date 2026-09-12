@@ -1,10 +1,8 @@
 import {
   BLOCK_CATALOG,
-  BLOCK_TYPE_SPECS,
   REVIEW_RESULT_JSON_SCHEMA,
   type BlockOutput,
   type VcsProviderKind,
-  type WorkflowBlockAvailability,
   type WorkflowBlockContract,
   type WorkflowBlockPresentation,
   type WorkflowBlockType,
@@ -12,7 +10,6 @@ import {
   type WorkflowRepositoryScope,
   type WorkflowValueSchema,
 } from "@shared/contracts";
-import { resolveLlmProvider, type LlmProvider } from "../infra/llm-provider.js";
 import {
   inspectJsonSchema202012,
   parseJsonSchema202012,
@@ -21,18 +18,8 @@ import {
   type ParsedJsonSchema,
 } from "./json-schema.js";
 
-export interface WorkflowBlockRegistryContext {
-  agentProviders: { claude: boolean; codex: boolean };
-  llmProviders: { claude: boolean; codex: boolean };
-  defaultAgent: { provider: "claude" | "codex"; model: string };
-  vcsProviders: VcsProviderKind[];
-  vcsBotIdentities: VcsProviderKind[];
-  slackConfigured: boolean;
-  arthurConfigured: boolean;
-  webhookTriggerConfigured: boolean;
-}
 
-interface ContractDefinition {
+export interface ContractDefinition {
   output: WorkflowValueSchema;
   /** Top-level fields guaranteed whenever the block advances through a normal
    * output port. Nested guarantees remain declared by their own schemas. */
@@ -376,11 +363,11 @@ const ticketTriggerOutputFields = {
   priorAnswers: arrayType(humanAnswerType),
 };
 
-function catalogPresentation(type: WorkflowBlockType): WorkflowBlockPresentation {
+export function catalogPresentation(type: WorkflowBlockType): WorkflowBlockPresentation {
   return { ...BLOCK_CATALOG[type].ui };
 }
 
-const definitions: Record<WorkflowBlockType, ContractDefinition> = {
+export const blockContractDefinitions: Record<WorkflowBlockType, ContractDefinition> = {
   trigger_ticket_ai: {
     output: statusOutput(
       { ticketKey: stringType(), ...ticketTriggerOutputFields },
@@ -1004,163 +991,12 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
   },
 };
 
-const vcsBlocks = new Set<WorkflowBlockType>([
-  "trigger_pr_created",
-  "trigger_pr_ready",
-  "trigger_pr_updated",
-  "trigger_pr_checks_failed",
-  "trigger_pr_review",
-  "trigger_pr_merged",
-  "prepare_workspace",
-  "finalize_workspace",
-  "run_pre_pr_checks",
-  "run_checks",
-  "fetch_pr_context",
-  "open_pr",
-  "post_pr_comment",
-  "create_pr_check",
-  "complete_pr_check",
-  "post_pr_review",
-]);
-
-const agentBlocks = new Set<WorkflowBlockType>([
-  "planning_agent",
-  "implementation_agent",
-  "review_agent",
-  "fix_agent",
-  "generic_agent",
-]);
-
-const available: WorkflowBlockAvailability = { available: true, unavailableReason: null };
-
-function unavailable(unavailableReason: string): WorkflowBlockAvailability {
-  return { available: false, unavailableReason };
-}
-
-function availabilityFor(
-  type: WorkflowBlockType,
-  params: Record<string, WorkflowParamValue>,
-  context: WorkflowBlockRegistryContext,
-): WorkflowBlockAvailability {
-  const definitionIssue = workflowBlockDefinitionIssue(type, params);
-  if (definitionIssue) return unavailable(definitionIssue);
-  if (type === "send_slack_message" && !context.slackConfigured) {
-    return unavailable("Slack messaging is not configured.");
-  }
-  if (type === "investigate" && !context.slackConfigured) {
-    // An absent selection means both providers on (the param's own default), so
-    // only a list that omits Slack opts out.
-    const providers: unknown = params.providers;
-    const slackEnabled = Array.isArray(providers)
-      ? providers.includes("slack")
-      : true;
-    if (slackEnabled) {
-      return unavailable(
-        "Slack messaging is not configured; turn off the Slack provider for a Jira-only investigation.",
-      );
-    }
-  }
-  if (type === "arthur_injection_check" && !context.arthurConfigured) {
-    return unavailable("Arthur Engine is not configured.");
-  }
-  if (type === "trigger_webhook" && !context.webhookTriggerConfigured) {
-    return unavailable("Webhook trigger encryption is not configured.");
-  }
-  const selectedProviders = Array.isArray(params.providers)
-    ? params.providers.filter(
-      (provider): provider is VcsProviderKind => provider === "github" || provider === "gitlab",
-    )
-    : [];
-  if (
-    type === "trigger_pr_review" &&
-    selectedProviders.includes("gitlab") &&
-    !(Array.isArray(params.on) && params.on.includes("commented"))
-  ) {
-    return unavailable(
-      'GitLab review triggers must include "commented"; GitLab does not emit a reliable changes-requested review event.',
-    );
-  }
-  if (vcsBlocks.has(type) && context.vcsProviders.length === 0) {
-    return unavailable("No version-control provider is configured.");
-  }
-  if (
-    vcsBlocks.has(type) &&
-    selectedProviders.length > 0 &&
-    !selectedProviders.some((provider) => context.vcsProviders.includes(provider))
-  ) {
-    return unavailable(
-      `Selected VCS providers are not configured: ${selectedProviders.join(", ")}.`,
-    );
-  }
-  if (type === "trigger_pr_review") {
-    const states = Array.isArray(params.on) ? params.on : [];
-    if (states.includes("commented")) {
-      const missingBotIdentities = selectedProviders.filter(
-        (provider) =>
-          context.vcsProviders.includes(provider) &&
-          !context.vcsBotIdentities.includes(provider),
-      );
-      if (missingBotIdentities.length > 0) {
-        const variables = missingBotIdentities.map((provider) =>
-          provider === "github" ? "GITHUB_BOT_LOGIN" : "GITLAB_BOT_LOGIN",
-        );
-        const label = missingBotIdentities[0] === "github" ? "GitHub" : "GitLab";
-        return unavailable(
-          context.vcsProviders.length === 1
-            ? `Commented ${label} review triggers require ${variables[0]} (or VCS_BOT_LOGIN in a single-provider deployment) to prevent recursive bot reviews.`
-            : missingBotIdentities.length === 1
-              ? `Commented review triggers require a configured ${variables[0]} to prevent recursive bot reviews.`
-              : `Commented review triggers require configured ${variables.join(" and ")} values to prevent recursive bot reviews.`,
-        );
-      }
-    }
-  }
-  if (type === "call_llm") {
-    const explicitProvider: LlmProvider | undefined =
-      params.provider === "claude" || params.provider === "codex"
-        ? params.provider
-        : undefined;
-    const explicitModel =
-      typeof params.model === "string" && params.model.trim() !== ""
-        ? params.model.trim()
-        : undefined;
-    const runtimeProvider =
-      explicitModel === undefined
-        ? (explicitProvider ?? context.defaultAgent.provider)
-        : explicitProvider;
-    const requested = resolveLlmProvider(
-      explicitModel ?? context.defaultAgent.model,
-      runtimeProvider,
-    );
-    if (!context.llmProviders[requested]) {
-      return unavailable(
-        requested === "codex"
-          ? "Codex API credentials are not configured for Call LLM."
-          : "Claude API credentials are not configured for Call LLM.",
-      );
-    }
-  }
-  if (agentBlocks.has(type)) {
-    const requested =
-      params.provider === "claude" || params.provider === "codex"
-        ? params.provider
-        : context.defaultAgent.provider;
-    if (!context.agentProviders[requested]) {
-      return unavailable(
-        requested === "codex"
-          ? "Codex credentials are not configured."
-          : "Claude credentials are not configured.",
-      );
-    }
-  }
-  return available;
-}
 
 /**
  * Definition-level repository pin issues. A pin is not block params, so it
- * cannot be checked through availabilityFor above and is validated once per
+ * cannot be checked through a block's own availability and is validated once per
  * definition instead. Three failures are reported, in the same message style as
- * the VCS provider check in availabilityFor:
+ * the VCS provider check a VCS block's availability reports:
  *  - no pinned provider is configured on this server, so no pinned repository
  *    could ever resolve;
  *  - a pinned repository whose own provider is not configured on this server.
@@ -1174,10 +1010,13 @@ function availabilityFor(
  * checkEnvironmentAvailability: false, keeping an already-deployed pinned
  * definition loadable after provider configuration changes. The contradiction
  * always fails closed, so it can never be silently dropped at runtime.
+ *
+ * `configuredVcsProviders` is that environment state, handed in by the caller
+ * next to the block contract resolver, so this module reads nothing itself.
  */
 export function workflowRepositoryScopeIssues(
   scope: WorkflowRepositoryScope | undefined,
-  context: WorkflowBlockRegistryContext,
+  configuredVcsProviders: readonly VcsProviderKind[],
   options: { checkEnvironmentAvailability?: boolean } = {},
 ): string[] {
   const providers = scope?.providers ?? [];
@@ -1193,7 +1032,7 @@ export function workflowRepositoryScopeIssues(
   if (options.checkEnvironmentAvailability !== false) {
     if (
       providers.length > 0 &&
-      !providers.some((provider) => context.vcsProviders.includes(provider))
+      !providers.some((provider) => configuredVcsProviders.includes(provider))
     ) {
       issues.push(`Pinned VCS providers are not configured: ${providers.join(", ")}.`);
     }
@@ -1203,7 +1042,7 @@ export function workflowRepositoryScopeIssues(
     const unconfigured = repositories.filter(
       (repository) =>
         !excluded.includes(repository) &&
-        !context.vcsProviders.includes(repository.provider),
+        !configuredVcsProviders.includes(repository.provider),
     );
     if (unconfigured.length > 0) {
       issues.push(
@@ -1296,7 +1135,7 @@ export function workflowBlockDefinitionIssue(
   return workflowBlockDefinitionIssues(type, params)[0]?.message ?? null;
 }
 
-function resolvedOutput(
+export function resolvedOutput(
   type: WorkflowBlockType,
   params: Record<string, WorkflowParamValue>,
   fallback: WorkflowValueSchema,
@@ -1345,7 +1184,7 @@ function resolvedOutput(
   return fallback;
 }
 
-function resolvedBindingOutput(
+export function resolvedBindingOutput(
   type: WorkflowBlockType,
   params: Record<string, WorkflowParamValue>,
   definition: ContractDefinition,
@@ -1497,7 +1336,7 @@ export function validateBlockOutputForDefinition(
 ): string[] {
   const definitionIssue = workflowBlockDefinitionIssue(type, params);
   if (definitionIssue) return [`output contract is invalid: ${definitionIssue}`];
-  const definition = definitions[type];
+  const definition = blockContractDefinitions[type];
   const resolved = resolvedOutput(type, params, definition.output);
   return validateBlockOutputShape(
     definition.statusVariants,
@@ -1506,66 +1345,4 @@ export function validateBlockOutputForDefinition(
       : resolved,
     output,
   );
-}
-
-export function resolveWorkflowBlockContract(
-  type: WorkflowBlockType,
-  params: Record<string, WorkflowParamValue>,
-  context: WorkflowBlockRegistryContext,
-): WorkflowBlockContract {
-  const definition = definitions[type];
-  const catalog = BLOCK_CATALOG[type];
-  const defaults = defaultsForContext(type, catalog.defaults, context);
-  const spec = BLOCK_TYPE_SPECS[type];
-  const output = resolvedOutput(type, params, definition.output);
-  return {
-    type,
-    presentation: catalogPresentation(type),
-    defaults: {
-      ...(agentBlocks.has(type)
-        ? { provider: context.defaultAgent.provider, model: context.defaultAgent.model }
-        : {}),
-      ...defaults,
-    },
-    ports: [...spec.ports],
-    allowsFailurePort: spec.allowsFailurePort,
-    inputs: catalog.inputs,
-    additionalInputs: catalog.additionalInputs,
-    output: {
-      schema: output,
-      bindingSchema: resolvedBindingOutput(type, params, definition, output),
-      statusVariants: [...definition.statusVariants],
-    },
-    availability: availabilityFor(type, params, context),
-  };
-}
-
-export function buildWorkflowBlockRegistry(
-  context: WorkflowBlockRegistryContext,
-): Record<WorkflowBlockType, WorkflowBlockContract> {
-  return Object.fromEntries(
-    (Object.keys(definitions) as WorkflowBlockType[]).map((type) => [
-      type,
-      resolveWorkflowBlockContract(
-        type,
-        defaultsForContext(type, BLOCK_CATALOG[type].defaults, context),
-        context,
-      ),
-    ]),
-  ) as Record<WorkflowBlockType, WorkflowBlockContract>;
-}
-
-function defaultsForContext(
-  type: WorkflowBlockType,
-  defaults: Record<string, WorkflowParamValue>,
-  context: WorkflowBlockRegistryContext,
-): Record<string, WorkflowParamValue> {
-  if (
-    type === "trigger_pr_review" &&
-    !context.vcsProviders.includes("github") &&
-    context.vcsProviders.includes("gitlab")
-  ) {
-    return { ...defaults, providers: ["gitlab"], on: ["commented"] };
-  }
-  return defaults;
 }

@@ -11,10 +11,12 @@ import { triggerOutputWithTicketContext, triggerTypeFor } from "../../engine/hel
 import { v2TerminalBlockResult } from "../../engine/helpers/prompt-output.js";
 import { type TerminalStatus } from "../../engine/helpers/review-ledger.js";
 import { isRunControlError } from "../../engine/helpers/run-control-error.js";
+import { validateBlockOutputForDefinition } from "../block-registry.js";
 import {
-  validateBlockOutputForDefinition,
+  createWorkflowBlockContractResolver,
   type WorkflowBlockRegistryContext,
-} from "../block-registry.js";
+} from "../../engine/definition/block-contract-resolver.js";
+import { BLOCK_PARAMS_SCHEMAS } from "../../engine/definition/block-params-schemas.js";
 import { executionError, type BlockExecutionResult } from "../interpreter.js";
 import type { V2InvocationContext } from "../invocation-context.js";
 import {
@@ -97,6 +99,12 @@ const SNAPSHOT_REGISTRY_CONTEXT: WorkflowBlockRegistryContext = {
   arthurConfigured: true,
   webhookTriggerConfigured: true,
 };
+
+const SNAPSHOT_BLOCK_DATA = [
+  createWorkflowBlockContractResolver(SNAPSHOT_REGISTRY_CONTEXT),
+  BLOCK_PARAMS_SCHEMAS,
+  SNAPSHOT_REGISTRY_CONTEXT.vcsProviders,
+] as const;
 
 type TemplateOptions = Parameters<typeof workflowDefinitionTemplate>[1];
 type TicketContext = Parameters<typeof triggerOutputWithTicketContext>[1];
@@ -322,7 +330,7 @@ function loadSnapshotGraph(path: string): ScenarioGraph {
   }
   const deploymentIssues = validateWorkflowDefinitionIssuesForDeployment(
     parsed.data,
-    SNAPSHOT_REGISTRY_CONTEXT,
+    ...SNAPSHOT_BLOCK_DATA,
     { checkEnvironmentAvailability: false },
   );
   if (deploymentIssues.length > 0) {

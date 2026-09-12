@@ -74,8 +74,11 @@ export async function loadWorkflowDefinitionFor(
     validateWorkflowDefinitionForDeployment,
     describeWorkflowDefinitionIssues,
   } = await import("../../workflow-definition/schema.js");
+  const { createWorkflowBlockContractResolver } =
+    await import("../definition/block-contract-resolver.js");
   const { workflowBlockRegistryContextFromEnv } =
-    await import("../../workflow-definition/models.js");
+    await import("../definition/block-contract-environment.js");
+  const { BLOCK_PARAMS_SCHEMAS } = await import("../definition/block-params-schemas.js");
   const { defaultWorkflowDefinitionV2 } = await import("../../workflow-definition/default.js");
   const { logger } = await import("../../infra/logger.js");
 
@@ -202,10 +205,13 @@ export async function loadWorkflowDefinitionFor(
     throw new Error(RETIRED_SCHEMA_MESSAGE);
   }
   const parsed = workflowDefinitionV2Schema.safeParse(row.definition);
+  const registryContext = workflowBlockRegistryContextFromEnv();
   const graphIssues = parsed.success
     ? validateWorkflowDefinitionForDeployment(
         parsed.data,
-        workflowBlockRegistryContextFromEnv(),
+        createWorkflowBlockContractResolver(registryContext),
+        BLOCK_PARAMS_SCHEMAS,
+        registryContext.vcsProviders,
         { checkEnvironmentAvailability: false },
       )
     : [];

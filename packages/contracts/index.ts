@@ -10,11 +10,13 @@ export type {
   WebhookVerifiedWith,
 } from "./trigger-events";
 export * from "./block-catalog.generated";
+export * from "./block-contract-resolver";
 export * from "./api";
 export * from "./workflow-graph";
 export * from "./workflow-layout";
 export * from "./prompt-references";
 export * from "./prompt-slots";
+export * from "./prompt-slot-name";
 export * from "./harness-profiles";
 export * from "./run-replay";
 export * from "./workflow-value-compatibility";
@@ -22,6 +24,7 @@ export * from "./review-result";
 export * from "./repository-catalog";
 export * from "./repository-catalog-api";
 export * from "./repository-scripts";
+export * from "./repository-script-group";
 export * from "./run-analysis";
 export * from "./request-parsing";
 export * from "./requests-dashboard-auth";

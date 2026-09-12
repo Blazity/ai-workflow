@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { WorkflowDefinitionNode, WorkflowParamValue } from "@shared/contracts";
+import { validateBlockOutputAgainstContract } from "../../workflow-definition/block-registry.js";
 import {
   resolveWorkflowBlockContract,
-  validateBlockOutputAgainstContract,
   type WorkflowBlockRegistryContext,
-} from "../../workflow-definition/block-registry.js";
+} from "../definition/block-contract-resolver.js";
 import type { AgentWorkflowInput, PrTriggerPayload } from "../agent-input.js";
 import { assertScheduledRunMayNotPark, SCHEDULED_RUN_CANNOT_PARK_REASON } from "../agent-workflow.js";
 import { selectEntryTriggerNode, triggerOutputFor, triggerOutputWithTicketContext, triggerTypeFor } from "../helpers/trigger-input.js";

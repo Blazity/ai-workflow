@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { BlockOutput, JsonValue, WorkflowDefinitionV2 } from "@shared/contracts";
 import type { AgentWorkflowInput } from "../../engine/agent-input.js";
-import type { WorkflowBlockRegistryContext } from "../block-registry.js";
+import type { WorkflowBlockRegistryContext } from "../../engine/definition/block-contract-resolver.js";
+import { testBlockData } from "../../test-support/block-contracts.js";
 import { validateWorkflowDefinitionIssuesForDeployment } from "../schema.js";
 import { workflowDefinitionTemplate } from "../templates.js";
 import {
@@ -50,6 +51,8 @@ const REGISTRY_CONTEXT: WorkflowBlockRegistryContext = {
   arthurConfigured: true,
   webhookTriggerConfigured: true,
 };
+
+const BLOCK_DATA = testBlockData(REGISTRY_CONTEXT);
 
 const WEBHOOK_ENTRY: AgentWorkflowInput = {
   kind: "webhook_trigger",
@@ -163,7 +166,7 @@ describe("webhook ticket triage: the shipped definition", () => {
     const template = workflowDefinitionTemplate(TEMPLATE.id, TEMPLATE.options);
     const definition = template?.definition as WorkflowDefinitionV2;
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(definition, REGISTRY_CONTEXT, {
+      validateWorkflowDefinitionIssuesForDeployment(definition, ...BLOCK_DATA, {
         checkEnvironmentAvailability: false,
       }),
     ).toEqual([]);
