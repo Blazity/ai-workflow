@@ -13,7 +13,7 @@ import {
 } from "../test-support/block-contracts.js";
 import {
   isWorkflowDataReferenceV2,
-  upgradeStoredWorkflowDefinition,
+  parse,
   workflowDefinitionV2Schema,
 } from "@shared/workflow-graph";
 import { validateWorkflowDefinitionForDeployment } from "./deployment-validation.js";
@@ -1055,7 +1055,7 @@ describe("Workflow Definition v2 schema", () => {
 
   it("round-trips stored v2 snapshots without applying v1 upgrades", () => {
     const definition = v2Definition();
-    expect(upgradeStoredWorkflowDefinition(definition)).toEqual(definition);
+    expect(parse(definition).definition).toEqual(definition);
   });
 
   it("normalizes duplicate agent provider and model fields to the pinned profile", () => {

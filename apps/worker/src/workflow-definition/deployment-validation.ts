@@ -1,20 +1,22 @@
 /**
- * Deployment validation: the structural rules of `@shared/workflow-graph` plus
- * everything the worker alone can answer.
+ * Deployment validation: the `deploy` and `runLoad` policies of
+ * `@shared/workflow-graph` wrapped in everything the worker alone can answer.
  *
  * The worker-only half is what reads the environment, the block registry or a
  * clock: whether a schedule's cron parses and fires often enough, whether a
  * block's definition-time output schema is well formed, whether the block is
  * available in this deployment at all, whether the repository pin names
  * providers this installation has, and the workspace-access and available-value
- * passes that need the block contract resolver.
+ * passes that need the block contract resolver. It reaches the policy as one
+ * injected source, so the package never learns what backs it.
  *
  * The composition below is the contract. An author reads one ordered list, so
  * the sequence the halves are spliced in is behaviour: graph and configuration
- * first, then the per-node deployment walk with the two pure schedule rules at
- * its tail, then the available-values pass, then branch and transform
- * references, then workspace access, then the repository pin. The golden
- * fixture under `__golden__/` pins that order byte for byte.
+ * first (the policy's own structural rules), then the per-node deployment walk
+ * with the two pure schedule rules at its tail, then the available-values pass,
+ * then branch and transform references, then workspace access, then the
+ * repository pin. The policy de-duplicates that list once, and the golden
+ * fixture under `__golden__/` pins the order byte for byte.
  */
 import type {
   VcsProviderKind,
@@ -28,12 +30,14 @@ import type {
 import { isHarnessProfileReference } from "@shared/contracts";
 import { resolveBuiltinHarnessProfile } from "@shared/harness";
 import {
-  dedupeWorkflowDefinitionIssues,
+  deploy,
+  runLoad,
   workflowDefinitionIssue,
-  workflowDefinitionStructuralIssues,
   workflowScheduleGraphIssues,
   workflowValueReferenceIssues,
   type WorkflowBlockParamsSchemas,
+  type WorkflowDeploymentIssueSource,
+  type WorkflowGraphDeploymentPolicyDeps,
 } from "@shared/workflow-graph";
 import {
   MINIMUM_PERIOD_MS,
@@ -56,21 +60,52 @@ import { validateWorkflowV2WorkspaceAccessIssues } from "./workspace-access.js";
  * also what a draft candidate is measured against: `validation.ts` runs this
  * same walk and reports its issues without refusing the save, so an operator
  * keeps editing an incomplete graph while seeing what would block a deploy.
- * Stage 5's `draft` policy is what will narrow that path to the structural
- * rules alone.
  *
- * It analyses the definition itself, because its caller is the run loader: it
- * validates one stored definition once and holds no request-level analysis. A
- * caller that does hold one takes `validateWorkflowDefinitionIssuesForDeployment`
- * below and passes it, so the request keeps to a single pass. */
+ * It analyses the definition itself, because its callers hold no request-level
+ * analysis. A caller that does hold one takes
+ * `validateWorkflowDefinitionIssuesForDeployment` below and passes it, so the
+ * request keeps to a single pass. */
 export function validateWorkflowDefinitionForDeployment(
   def: WorkflowDefinition,
   resolveContract: WorkflowBlockContractResolver,
   blockParamsSchemas: WorkflowBlockParamsSchemas,
   configuredVcsProviders: readonly VcsProviderKind[],
-  options: {
-    checkEnvironmentAvailability?: boolean;
-  } = {},
+): string[] {
+  return selfAnalysingPolicyMessages(
+    def,
+    resolveContract,
+    blockParamsSchemas,
+    configuredVcsProviders,
+    true,
+  );
+}
+
+/** The same walk for a graph that already deployed: the `runLoad` policy, which
+ *  skips the environment availability check, so a run under way is not refused
+ *  because the deployment changed after it started. */
+export function validateWorkflowDefinitionForRunLoad(
+  def: WorkflowDefinition,
+  resolveContract: WorkflowBlockContractResolver,
+  blockParamsSchemas: WorkflowBlockParamsSchemas,
+  configuredVcsProviders: readonly VcsProviderKind[],
+): string[] {
+  return selfAnalysingPolicyMessages(
+    def,
+    resolveContract,
+    blockParamsSchemas,
+    configuredVcsProviders,
+    false,
+  );
+}
+
+/** The body both wrappers above share. They differ only in which policy they
+ *  name, and a caller that holds no analysis makes one here. */
+function selfAnalysingPolicyMessages(
+  def: WorkflowDefinition,
+  resolveContract: WorkflowBlockContractResolver,
+  blockParamsSchemas: WorkflowBlockParamsSchemas,
+  configuredVcsProviders: readonly VcsProviderKind[],
+  checkEnvironmentAvailability: boolean,
 ): string[] {
   return validateWorkflowDefinitionIssuesForDeployment(
     def,
@@ -78,7 +113,7 @@ export function validateWorkflowDefinitionForDeployment(
     blockParamsSchemas,
     configuredVcsProviders,
     analyzeWorkflowValues(def, resolveContract),
-    options,
+    { checkEnvironmentAvailability },
   ).map(({ message }) => message);
 }
 
@@ -98,23 +133,51 @@ export function validateWorkflowDefinitionIssuesForDeployment(
     checkEnvironmentAvailability?: boolean;
   } = {},
 ): WorkflowDefinitionValidationIssue[] {
-  const catalogAnalysis = analyzeWorkflowV2Catalog(analysis);
-  const issues = dedupeWorkflowDefinitionIssues([
-    ...workflowDefinitionStructuralIssues(def, blockParamsSchemas, (configuration) =>
-      validateTransformDefinition({ configuration }),
+  const deps: WorkflowGraphDeploymentPolicyDeps = {
+    blockParamsSchemas,
+    validateTransformShape: (configuration) => validateTransformDefinition({ configuration }),
+    deploymentIssues: workerDeploymentIssues(
+      def,
+      resolveContract,
+      blockParamsSchemas,
+      configuredVcsProviders,
+      analysis,
     ),
+  };
+  const policy = options.checkEnvironmentAvailability === false ? runLoad : deploy;
+  return policy(def, deps).issues;
+}
+
+/**
+ * Everything the policy cannot answer, in the order an author reads it.
+ *
+ * The definition and its available-values pass are taken here, once, and the
+ * source holds both: a definition and an analysis of a different graph can
+ * never be paired, and the catalog view of the pass is derived once rather than
+ * per call, the way it was when this list was spliced inline. `analysis` must
+ * be the pass over `def`, which is what the single caller below guarantees by
+ * building the source from the same definition it hands the policy.
+ */
+function workerDeploymentIssues(
+  def: WorkflowDefinition,
+  resolveContract: WorkflowBlockContractResolver,
+  blockParamsSchemas: WorkflowBlockParamsSchemas,
+  configuredVcsProviders: readonly VcsProviderKind[],
+  analysis: WorkflowValueAnalysis,
+): WorkflowDeploymentIssueSource {
+  const catalogAnalysis = analyzeWorkflowV2Catalog(analysis);
+  return ({ checkEnvironmentAvailability }) => [
     ...validateWorkflowV2BlockDeploymentIssues(
       def,
       resolveContract,
       blockParamsSchemas,
-      options,
+      { checkEnvironmentAvailability },
     ),
     ...analysis.issues,
     ...workflowValueReferenceIssues(def, catalogAnalysis.catalogByNode),
     ...validateWorkflowV2WorkspaceAccessIssues(def),
-    ...repositoryScopePinIssues(def, configuredVcsProviders, options),
-  ]);
-  return issues;
+    ...repositoryScopePinIssues(def, configuredVcsProviders, { checkEnvironmentAvailability }),
+  ];
 }
 
 function v2ConfigurationParams(

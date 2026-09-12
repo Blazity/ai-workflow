@@ -12,10 +12,7 @@ import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 // pure zod and contracts: it pulls in no node built-in wherever it lands. The
 // deployment validator below stays dynamic, because its graph reaches the block
 // registry.
-import {
-  describeWorkflowDefinitionIssues,
-  workflowDefinitionV2Schema,
-} from "@shared/workflow-graph";
+import { describeWorkflowDefinitionIssues, parse } from "@shared/workflow-graph";
 import type { WorkflowDefinitionVersionRow } from "../../db/repositories/definitions.js";
 import {
   BUILTIN_FALLBACK_DEFINITION_VERSION,
@@ -78,7 +75,7 @@ export async function loadWorkflowDefinitionFor(
   } = await import("../../db/repositories/definitions/connected.js");
   const { getConnectedEnabledWorkflowDefinitionForTrigger } =
     await import("../definition-trigger-routing.js");
-  const { validateWorkflowDefinitionForDeployment } =
+  const { validateWorkflowDefinitionForRunLoad } =
     await import("../../workflow-definition/deployment-validation.js");
   const { createWorkflowBlockContractResolver } =
     await import("../definition/block-contract-resolver.js");
@@ -210,21 +207,21 @@ export async function loadWorkflowDefinitionFor(
     );
     throw new Error(RETIRED_SCHEMA_MESSAGE);
   }
-  const parsed = workflowDefinitionV2Schema.safeParse(row.definition);
+  const parsed = parse(row.definition);
   const registryContext = workflowBlockRegistryContextFromEnv();
-  const graphIssues = parsed.success
-    ? validateWorkflowDefinitionForDeployment(
-        parsed.data,
+  const graphIssues = parsed.definition
+    ? validateWorkflowDefinitionForRunLoad(
+        parsed.definition,
         createWorkflowBlockContractResolver(registryContext),
         BLOCK_PARAMS_SCHEMAS,
         registryContext.vcsProviders,
-        { checkEnvironmentAvailability: false },
       )
     : [];
-  if (!parsed.success || graphIssues.length > 0) {
-    const issues = parsed.success
-      ? graphIssues.join("; ")
-      : describeWorkflowDefinitionIssues(parsed.error);
+  if (parsed.definition === null || graphIssues.length > 0) {
+    const issues =
+      parsed.definition === null
+        ? describeWorkflowDefinitionIssues(parsed.error)
+        : graphIssues.join("; ");
     logger.error(
       { definitionId: row.definitionId, version: row.version, issues },
       "workflow_definition_invalid",
@@ -232,6 +229,6 @@ export async function loadWorkflowDefinitionFor(
     return null;
   }
 
-  return toPlan(parsed.data, row.version, row.definitionId);
+  return toPlan(parsed.definition, row.version, row.definitionId);
 }
 loadWorkflowDefinitionFor.maxRetries = 0;

@@ -84,19 +84,26 @@ export function workflowDefinitionIssue(
   };
 }
 
+/**
+ * The one issue de-duplication in the repository. Every composed list runs
+ * through it exactly once, keeping the first occurrence, because a complaint an
+ * author already read further up the list is noise the second time.
+ */
 export function dedupeWorkflowDefinitionIssues(
-  issues: WorkflowDefinitionValidationIssue[],
+  issues: readonly WorkflowDefinitionValidationIssue[],
 ): WorkflowDefinitionValidationIssue[] {
-  return issues.filter(
-    (issue, index) =>
-      issues.findIndex(
-        (candidate) =>
-          candidate.code === issue.code &&
-          candidate.nodeId === issue.nodeId &&
-          candidate.path === issue.path &&
-          candidate.message === issue.message,
-      ) === index,
-  );
+  const seen = new Set<string>();
+  return issues.filter((issue) => {
+    const key = JSON.stringify([
+      issue.code,
+      issue.nodeId,
+      issue.path ?? null,
+      issue.message,
+    ]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 interface GraphEdge {

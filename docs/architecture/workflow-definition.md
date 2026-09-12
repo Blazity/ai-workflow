@@ -240,27 +240,59 @@ reads a field no upstream block produces fails validation rather than the run.
 
 ## 10. Validation and deployment
 
-There are two levels, and the difference is deliberate.
+One entry per policy: three questions a caller can ask about a definition, each
+declared in `packages/workflow-graph/policies.ts`. `parse` produces the upgraded
+definition; `deploy` and `runLoad` take that definition rather than parsing
+again, which is what keeps a request to one parse, and each composes the
+structural rules with the worker-only half and de-duplicates the list it
+composed.
 
-**Save.** A draft is parsed with the schema and the graph rules only, so an
-operator can keep editing a structurally sound but incomplete graph. The entry
+| Policy | Question | Who calls it |
+|---|---|---|
+| `parse` | Read this graph into the runnable shape, check nothing else | the repository read path (`workflow-definition/stored-definition.ts`, reached through `engine/stored-definition-reads.ts`), `validation.ts`, `services/workflow-definitions/definition-candidates.ts`, `engine/steps/definition-step.ts`, `workflow-definition/scenarios/harness.ts`. One exception remains: `services/workflow-definitions/policy-operations.ts:82` still parses with `workflowDefinitionV2Schema.safeParse` and throws a flat 400 string, and nine call sites in that file go through it; the stage that owns `policy-operations.ts` repoints them |
+| `deploy` | May it become executable here, environment availability included | `deployment-validation.ts`, and through it `validation.ts` and `services/workflow-definitions/policy-operations.ts` |
+| `runLoad` | The same about a graph that already deployed, availability skipped | `deployment-validation.ts` (`validateWorkflowDefinitionForRunLoad`), called by `engine/steps/definition-step.ts` and the scenario harness |
+
+**De-duplication is not single-pass, on purpose.** The graph walk dedupes its
+own list inside `graph-issues.ts:1039`, because
+`workflowDefinitionStructuralIssues` is a public entry that has to return a
+clean list to anyone calling it directly; the policy then dedupes once across
+the composed list, which is the only dedupe a caller of a policy has to think
+about. Both use `dedupeWorkflowDefinitionIssues`, the only de-duplication in
+workflow validation. `packages/prompts` still keeps two of its own,
+`prompt-authoring.ts:271` (identical) and `effective-prompt.ts:686` (keyed on
+`code`, `path` and `message`, so it merges the same complaint on different
+nodes); folding them in needs a `@shared/workflow-graph` edge that package does
+not have yet.
+
+**Save.** An unsaved candidate is parsed with the schema and then measured
+against the `deploy` policy, and its issues are reported without refusing the
+save, so an operator can keep editing a structurally sound but incomplete graph.
+There is deliberately no structural-only policy: narrowing the save path to one
+would drop block availability and cron rules, binding analysis, branch and
+transform reference checks, workspace access and the repository pin out of what
+an operator sees at save time, and that decision is open. The entry
 point is `validateWorkflowDefinitionCandidate` in
-`apps/worker/src/workflow-definition/validation.ts`, which picks the schema by
-`schemaVersion`, returns machine-readable issues carrying `code`, `severity`,
-`nodeId` and a JSON pointer `path`, and attaches per-node contracts and
-available values for the editor. Callers never recover structure by parsing
-messages.
+`apps/worker/src/workflow-definition/validation.ts`, which refuses a retired
+`schemaVersion` by name, runs `parse`, and returns machine-readable issues
+carrying `code`, `severity`, `nodeId` and a JSON pointer `path`, with per-node
+contracts and available values attached for the editor. Callers never recover
+structure by parsing messages.
 
 **Deployment.** `validateWorkflowDefinitionIssuesForDeployment` in
 `apps/worker/src/workflow-definition/deployment-validation.ts` is what a
-definition must pass before it can run. For a v2 definition it runs,
-in one pass: the graph rules of section 4, the per-type configuration schemas,
-the block deployment rules from
+definition must pass before it can run: it wraps the `deploy` policy (or
+`runLoad` when the caller passes `checkEnvironmentAvailability: false`) and
+hands it the worker-only half as one injected issue source, so the package
+never learns what backs it. For a v2 definition the composed list runs, in one
+pass: the graph rules of section 4 and the per-type configuration schemas (the
+policy's own structural half), then the block deployment rules from
 `apps/worker/src/workflow-definition/block-registry.ts`, the binding analysis
 from `available-values.ts`, the Branch condition and Transform reference
 checks, the workspace access rules from
 `apps/worker/src/workflow-definition/workspace-access.ts`, and the repository
-scope pin rules.
+scope pin rules. That order is behaviour: an author reads one list, and
+`__golden__/definition-deployment-issues.test.ts` pins it byte for byte.
 
 **Block data is a parameter, never a read.** Neither the schemas nor the
 binding analysis asks what this installation has configured. A block's contract

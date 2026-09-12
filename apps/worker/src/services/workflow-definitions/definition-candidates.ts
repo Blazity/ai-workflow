@@ -14,10 +14,7 @@ import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import { analyzeWorkflowV2Catalog } from "../../workflow-definition/available-values.js";
 import { currentBlockContracts } from "./block-contracts.js";
 import { validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring } from "./policy-operations.js";
-import {
-  describeWorkflowDefinitionIssues,
-  workflowDefinitionV2Schema,
-} from "@shared/workflow-graph";
+import { describeWorkflowDefinitionIssues, parse } from "@shared/workflow-graph";
 import { declaresRetiredSchema } from "../../workflow-definition/validation.js";
 
 export type WorkflowDefinitionCandidateParse =
@@ -34,8 +31,8 @@ export type WorkflowDefinitionCandidateParse =
 export function parseWorkflowDefinitionCandidate(
   candidate: unknown,
 ): WorkflowDefinitionCandidateParse {
-  const parsed = workflowDefinitionV2Schema.safeParse(candidate);
-  if (parsed.success) return { ok: true, definition: parsed.data as WorkflowDefinitionV2 };
+  const parsed = parse(candidate);
+  if (parsed.definition !== null) return { ok: true, definition: parsed.definition };
   return {
     ok: false,
     message: declaresRetiredSchema(candidate)
