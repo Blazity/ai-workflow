@@ -1,13 +1,14 @@
-import { env } from "../../infra/vcs-config.js";
-import type { WorkflowMeta } from "@shared/contracts";
+import type { SettingsSnapshot, WorkflowMeta } from "@shared/contracts";
+import { agentRuntimeSettings } from "../settings/index.js";
 
 /**
  * Workflows the worker actually runs. Names and blurbs are static; the
  * registry holds only identity fields — the API layer widens each entry to a
  * full `WorkflowRow` by attaching `null` metric fields.
  */
-export function getWorkflowRegistry(): WorkflowMeta[] {
-  const gateway = env.AGENT_KIND === "codex" ? "openai" : "anthropic";
+export function getWorkflowRegistry(settings: SettingsSnapshot): WorkflowMeta[] {
+  const gateway =
+    agentRuntimeSettings(settings).agentKind === "codex" ? "openai" : "anthropic";
   return [
     {
       id: "wf_agent",

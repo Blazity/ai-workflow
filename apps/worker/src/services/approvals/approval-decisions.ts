@@ -8,7 +8,7 @@
  * way. The refusals are returned as outcomes, so the transport chooses the
  * status code and this file never says 409.
  */
-import type { ApprovalRequest } from "@shared/contracts";
+import type { ApprovalRequest, SettingsSnapshot } from "@shared/contracts";
 import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js";
 import {
   ApprovalStoreError,
@@ -53,6 +53,7 @@ export async function listDashboardApprovals(status: "all" | "pending"): Promise
 export async function approveApproval(
   id: string,
   actor: { userId: string },
+  settings: SettingsSnapshot,
 ): Promise<ApprovalDecisionOutcome> {
   const row = await getConnectedApproval(id);
   if (!row) return { kind: "unknown_approval" };
@@ -100,7 +101,7 @@ export async function approveApproval(
       issueTracker: adapters.issueTracker,
       approval: row,
       actor: approver,
-      maxConcurrentAgents: maxConcurrentAgents(),
+      maxConcurrentAgents: maxConcurrentAgents(settings),
       onClaimed: isDispatchRetry
         ? async () => {
             const fresh = await getConnectedApproval(id);

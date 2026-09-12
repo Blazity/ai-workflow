@@ -51,7 +51,8 @@ vi.mock("../services/mcp/audit-store.js", async (importOriginal) => {
 
 import type { Db } from "../db/client.js";
 import { createTestDb } from "../db/test-db.js";
-import { mcpAuditEvents, mcpRateLimitWindows, organization } from "../db/schema.js";
+import { mcpAuditEvents, mcpRateLimitWindows, organization, settings } from "../db/schema.js";
+import { writeManySettings } from "../db/repositories/settings.js";
 import { MCP_CONTRACT_HASH } from "./contract-artifact.js";
 
 const mcpPost = (await import("../routes/mcp.post.js")).default;
@@ -94,6 +95,7 @@ beforeEach(async () => {
   state.writeMcpAudit.mockImplementation((...args) => state.realWriteMcpAudit(...args));
   await db().delete(mcpAuditEvents);
   await db().delete(mcpRateLimitWindows);
+  await db().delete(settings);
 });
 
 function db(): Db {
@@ -449,6 +451,30 @@ describe("gate before the tool handler", () => {
 
     await expect(spentBudget()).resolves.toEqual([["unrecognized", 3]]);
     await expect(auditTrail()).resolves.toHaveLength(3);
+  });
+
+  it("charges a served call against the stored budget, not the variable", async () => {
+    // The environment still says 120 a minute. One stored row is the whole
+    // change, and it reaches the tool through the snapshot the transport loaded
+    // for this call: nothing here redeploys or restarts anything.
+    await writeManySettings(db(), {
+      patch: { MCP_READ_RATE_LIMIT_PER_MINUTE: 1 },
+      actor: "user_admin",
+      reason: "throttled while an agent misbehaves",
+    });
+
+    const first = await postToolCall(toolCall(90, "system.capabilities", {}));
+    const second = await postToolCall(toolCall(91, "system.capabilities", {}));
+
+    expect(state.env.MCP_READ_RATE_LIMIT_PER_MINUTE).toBe(120);
+    expect(first.status).toBe(200);
+    // A served call is charged inside the tool wrapper, so its refusal travels
+    // as a tool error rather than as an HTTP status.
+    const refused = (await second.json()) as {
+      result?: { isError?: boolean; content?: Array<{ text?: string }> };
+    };
+    expect(refused.result?.isError).toBe(true);
+    expect(refused.result?.content?.[0]?.text ?? "").toContain("RATE_LIMITED");
   });
 
   it("answers 429 once refused probes exhaust the budget", async () => {

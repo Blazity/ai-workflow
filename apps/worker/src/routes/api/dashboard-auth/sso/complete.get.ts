@@ -4,6 +4,7 @@ import { auth } from "../../../../auth-instance.js";
 import {
   acceptDashboardSsoInviteForUser,
 } from "../../../../services/auth/invite-requests.js";
+import { getRequestSettingsSnapshot } from "../../../../services/settings/index.js";
 import { toHttpError } from "../../../../services/auth/request-context.js";
 import {
   dashboardLoginUrl,
@@ -24,6 +25,7 @@ export default defineEventHandler(async (event) => {
       await acceptDashboardSsoInviteForUser(auth, {
         inviteId,
         user: { id: session.user.id, email: session.user.email },
+        settings: await getRequestSettingsSnapshot(event),
       });
     } catch (error) {
       toHttpError(error);

@@ -1,3 +1,4 @@
+import type { SettingsSnapshot } from "@shared/contracts";
 import type { RunRegistryAdapter } from "../../../adapters/run-registry/types.js";
 import type { Db } from "../../../db/types.js";
 import {
@@ -40,29 +41,34 @@ import {
 export function createWebhookDispatchDeps(
   db: Db,
   runRegistry: RunRegistryAdapter,
+  settings: SettingsSnapshot,
 ): WebhookDispatchDeps {
   return {
     db,
     runRegistry,
-    maxConcurrentAgents: maxConcurrentAgents(),
+    maxConcurrentAgents: maxConcurrentAgents(settings),
     ensureStillDispatchable: (target) => ensureStillDispatchable(db, target),
-    resolveTriggerRateLimit: (target) => resolveWebhookTriggerRateLimit(db, target),
+    resolveTriggerRateLimit: (target) =>
+      resolveWebhookTriggerRateLimit(db, target, settings),
   };
 }
 
 export function createConnectedWebhookDispatchDeps(
   runRegistry: RunRegistryAdapter,
+  settings: SettingsSnapshot,
 ): WebhookDispatchDeps {
   return {
     runRegistry,
-    maxConcurrentAgents: maxConcurrentAgents(),
+    maxConcurrentAgents: maxConcurrentAgents(settings),
     ensureStillDispatchable: ensureConnectedStillDispatchable,
-    resolveTriggerRateLimit: resolveConnectedWebhookTriggerRateLimit,
+    resolveTriggerRateLimit: (target) =>
+      resolveConnectedWebhookTriggerRateLimit(target, settings),
   };
 }
 
 async function resolveConnectedWebhookTriggerRateLimit(
   target: WebhookDispatchTarget,
+  settings: SettingsSnapshot,
 ): Promise<TriggerRateLimitConfig | null> {
   const pinned = await readConnectedWorkflowDefinitionVersion(
     target.definitionId,
@@ -70,7 +76,7 @@ async function resolveConnectedWebhookTriggerRateLimit(
   );
   return resolveTriggerRateLimit(
     triggerNodeRateLimitParams(runnableDefinitionOf(pinned), target.nodeId),
-    envTriggerRateLimitDefault(triggerRateLimitDefaults()),
+    envTriggerRateLimitDefault(triggerRateLimitDefaults(settings)),
   );
 }
 
@@ -110,6 +116,7 @@ async function ensureConnectedStillDispatchable(
 async function resolveWebhookTriggerRateLimit(
   db: Db,
   target: WebhookDispatchTarget,
+  settings: SettingsSnapshot,
 ): Promise<TriggerRateLimitConfig | null> {
   const pinned = await readWorkflowDefinitionVersion(
     db,
@@ -118,7 +125,7 @@ async function resolveWebhookTriggerRateLimit(
   );
   return resolveTriggerRateLimit(
     triggerNodeRateLimitParams(runnableDefinitionOf(pinned), target.nodeId),
-    envTriggerRateLimitDefault(triggerRateLimitDefaults()),
+    envTriggerRateLimitDefault(triggerRateLimitDefaults(settings)),
   );
 }
 

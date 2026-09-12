@@ -64,6 +64,19 @@ names, harness defaults) are rows in the `settings` table, described once in
   an accessor that quietly returned a promise would read as truthy and turn a
   feature on. Load the snapshot where the work starts (an HTTP handler, a cron
   tick, the MCP transport, and later a run at its start) and hand it down.
+- **Where each entry loads it.** An HTTP handler calls
+  `getRequestSettingsSnapshot(event)`, which memoises the load on the event, so
+  the actor guard, the handler and every service below them share one read; a
+  cron tick loads once at the top of the route and passes the snapshot into the
+  pass, which hands it to every phase; the MCP transport loads once per call and
+  puts it on `McpToolDependencies`, so a tool reads `deps.settings` and never a
+  global. The transport loads before `requireMcpActor` because `MCP_ENABLED` and
+  `MCP_MAX_REQUEST_BYTES` are consulted first, which is deliberate and is the one
+  place a load before authentication is accepted: the public webhook ingresses do
+  the opposite and take a `loadSettings` thunk, so a bad signature is refused
+  without touching the database. Engine files are the exception and still call
+  the deprecated zero-argument form until the engine wave (stage X) gives a run
+  its own snapshot at run start.
 - **The transition rule.** Every accessor that reads a migrated key has two
   forms: `accessor(snapshot)`, which is the one to use, and a deprecated
   zero-argument form that resolves from the environment through

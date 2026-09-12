@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
+import type { SettingsSnapshot } from "@shared/contracts";
 import { IssueTrackerNotFoundError } from "../../../adapters/issue-tracker/types.js";
 import { listConnectedApprovalParkedSubjects } from "../../../db/repositories/approvals.js";
 import { classifyConnectedProtectedClarificationSubjects } from "../../../db/repositories/clarifications.js";
@@ -43,6 +44,17 @@ export interface JiraWebhookRequest {
   rawBody: string;
   /** The `x-hub-signature` header, when the sender sent one. */
   signatureHeader: string | undefined;
+  /**
+   * The deployment's settings, on demand.
+   *
+   * A thunk rather than a value: this endpoint is public, and a delivery whose
+   * signature does not check out must cost nothing but the HMAC. The
+   * verification below reads the secret from the environment and throws without
+   * ever calling this; only the paths that go on to dispatch load it. The
+   * ingress memoises the load on the event, so the two dispatch sites below
+   * still share one query.
+   */
+  loadSettings: () => Promise<SettingsSnapshot>;
 }
 
 export async function handleJiraWebhook(request: JiraWebhookRequest) {
@@ -57,7 +69,7 @@ export async function handleJiraWebhook(request: JiraWebhookRequest) {
     throw error;
   }
   try {
-    const result = await handleVerifiedJiraWebhook(request.rawBody);
+    const result = await handleVerifiedJiraWebhook(request.rawBody, request.loadSettings);
     observeProviderWebhook("jira", "accepted", "request_succeeded");
     return result;
   } catch (error) {
@@ -66,7 +78,10 @@ export async function handleJiraWebhook(request: JiraWebhookRequest) {
   }
 }
 
-async function handleVerifiedJiraWebhook(rawBody: string) {
+async function handleVerifiedJiraWebhook(
+  rawBody: string,
+  loadSettings: () => Promise<SettingsSnapshot>,
+) {
   const body = parseJiraWebhookBody(rawBody);
   const board = ticketBoardSettings();
 
@@ -224,15 +239,18 @@ async function handleVerifiedJiraWebhook(rawBody: string) {
       );
       if (resumeResult) return resumeResult;
 
+      // The first read of the settings on this path, and the last: the ingress
+      // memoises the load, so the default dispatch below shares this query.
+      const settings = await loadSettings();
       logger.info(
         {
           ticketKey,
-          maxConcurrentAgents: maxConcurrentAgents(),
+          maxConcurrentAgents: maxConcurrentAgents(settings),
           dispatchContext: "payload_outdated_live_ticket_in_ai",
         },
         "webhook_dispatch_started",
       );
-      const result = await dispatchTicket(ticketKey, adapters, maxConcurrentAgents());
+      const result = await dispatchTicket(ticketKey, adapters, maxConcurrentAgents(settings));
       logger.info(
         {
           ticketKey,
@@ -478,15 +496,16 @@ async function handleVerifiedJiraWebhook(rawBody: string) {
   );
   if (resumeResult) return resumeResult;
 
+  const settings = await loadSettings();
   logger.info(
     {
       ticketKey,
-      maxConcurrentAgents: maxConcurrentAgents(),
+      maxConcurrentAgents: maxConcurrentAgents(settings),
       dispatchContext: "default",
     },
     "webhook_dispatch_started",
   );
-  const result = await dispatchTicket(ticketKey, adapters, maxConcurrentAgents());
+  const result = await dispatchTicket(ticketKey, adapters, maxConcurrentAgents(settings));
 
   logger.info(
     { ticketKey, started: result.started, reason: result.reason, runId: result.runId },

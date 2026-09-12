@@ -1,4 +1,4 @@
-import { normalizeDashboardRole } from "@shared/contracts";
+import { normalizeDashboardRole, type SettingsSnapshot } from "@shared/contracts";
 
 import {
   findConnectedMcpMemberRole,
@@ -36,9 +36,10 @@ export interface VerifiedMcpTokenClaims {
  */
 export async function resolveMcpActor(
   claims: VerifiedMcpTokenClaims,
+  settings: SettingsSnapshot,
 ): Promise<McpActorContext> {
   const fixedOrganization = await findConnectedMcpOrganizationBySlug(
-    dashboardOrganizationSettings().slug,
+    dashboardOrganizationSettings(settings).slug,
   );
   if (!fixedOrganization || claims.organizationId !== fixedOrganization.id) {
     throw new McpPublicError("FORBIDDEN", "Access denied", false);

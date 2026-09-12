@@ -2,6 +2,7 @@ import { createError, defineEventHandler, getHeader } from "h3";
 import {
   cronRequestIsAuthorized,
 } from "../../services/triggers/polling/cron-authorization.js";
+import { getRequestSettingsSnapshot } from "../../services/settings/index.js";
 import { runPollPass } from "../../services/triggers/polling/poll-pass.js";
 
 /**
@@ -15,5 +16,8 @@ export default defineEventHandler(async (event) => {
   if (!cronRequestIsAuthorized(getHeader(event, "authorization"))) {
     throw createError({ statusCode: 401, statusMessage: "Unauthorized" });
   }
-  return await runPollPass();
+  // One load at the start of the tick, handed to every phase below: a pass that
+  // re-read the store per phase could dispatch under one ceiling and reconcile
+  // under another.
+  return await runPollPass(await getRequestSettingsSnapshot(event));
 });

@@ -9,6 +9,7 @@ import {
   parseRequestBody,
   workflowDefinitionCreateRequestSchema,
 } from "@shared/contracts";
+import { getRequestSettingsSnapshot } from "../../../services/settings/index.js";
 import { requireDashboardActor } from "../../../services/auth/request-context.js";
 import { canEditWorkflowDefinitions } from "../../../services/auth/roles.js";
 import {
@@ -44,6 +45,7 @@ export default defineEventHandler(
         name: parsed.value.name,
         source: parsed.value.source,
         actor: { role: actor.role, userId: actor.userId },
+        settings: await getRequestSettingsSnapshot(event),
       });
       if (!created.ok) {
         throw created.reason === "unknown_definition"

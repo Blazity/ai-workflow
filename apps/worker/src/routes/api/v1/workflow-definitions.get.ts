@@ -10,6 +10,7 @@ import type {
   WorkflowDefinitionMeta,
   WorkflowDefinitionsResponse,
 } from "@shared/contracts";
+import { getRequestSettingsSnapshot } from "../../../services/settings/index.js";
 import {
   requireDashboardActor,
   toHttpError,
@@ -77,7 +78,9 @@ export default defineEventHandler(
   async (event): Promise<WorkflowDefinitionsResponse | undefined> => {
     try {
       await requireDashboardActor(event);
-      const overview = await readWorkflowDefinitionsOverview();
+      const overview = await readWorkflowDefinitionsOverview(
+        await getRequestSettingsSnapshot(event),
+      );
       return {
         definitions: overview.definitions.map((row) => serializeDefinitionMeta(row)),
         templates: overview.templates,

@@ -4,6 +4,7 @@ import {
   parseRequestBody,
 } from "@shared/contracts";
 import { createInviteForActor } from "../../../services/auth/dashboard-invites.js";
+import { getRequestSettingsSnapshot } from "../../../services/settings/index.js";
 import {
   requireDashboardActor,
   toHttpError,
@@ -22,7 +23,11 @@ export default defineEventHandler(async (event) => {
   }
 
   try {
-    return await createInviteForActor({ actor, email: parsed.value.email });
+    return await createInviteForActor({
+      actor,
+      email: parsed.value.email,
+      settings: await getRequestSettingsSnapshot(event),
+    });
   } catch (error) {
     toHttpError(error);
   }

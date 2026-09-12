@@ -8,6 +8,7 @@
  * tools keep importing them from one place, and adds the one type that only makes
  * sense up here: what a registered tool is handed when it runs.
  */
+import type { SettingsSnapshot } from "@shared/contracts";
 import type { Adapters } from "../services/vcs/adapters.js";
 import type { McpActorContext } from "../services/mcp/contracts.js";
 import type { McpToolServices } from "../services/mcp/tool-services.js";
@@ -50,6 +51,9 @@ export type McpToolDependencies = {
   services: McpToolServices;
   adapters: Adapters;
   actor: McpActorContext;
+  /** The deployment's settings as the transport read them for this call. One
+   *  load per request, so every tool in it sees the same limits. */
+  settings: SettingsSnapshot;
   requestId: string;
   traceId: string;
   now: () => Date;

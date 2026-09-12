@@ -5,6 +5,7 @@ import {
   toHttpError,
 } from "../../../../services/auth/request-context.js";
 import { canInvite } from "../../../../services/auth/roles.js";
+import { getRequestSettingsSnapshot } from "../../../../services/settings/index.js";
 import { runSystemHealthScan } from "../../../../services/system/health-scan.js";
 
 /** The only way a scan runs: an explicit request from the Health screen's
@@ -18,7 +19,7 @@ export default defineEventHandler(
       if (!canInvite(actor.role)) {
         throw createError({ statusCode: 403, statusMessage: "Forbidden" });
       }
-      return await runSystemHealthScan();
+      return await runSystemHealthScan(await getRequestSettingsSnapshot(event));
     } catch (error) {
       toHttpError(error);
     }

@@ -1,3 +1,5 @@
+import type { SettingsSnapshot } from "@shared/contracts";
+import { settingsSnapshotFromEnvironment } from "../services/settings/snapshot.js";
 import type { Db } from "../db/types.js";
 import type { McpActorContext, McpToolDependencies } from "../mcp/contracts.js";
 import { createMcpToolServices } from "../services/mcp/tool-services.js";
@@ -30,10 +32,13 @@ export function depsFor(
   now: () => Date,
   overrides: Partial<McpToolDependencies> = {},
 ): McpToolDependencies {
+  const settings: SettingsSnapshot =
+    overrides.settings ?? settingsSnapshotFromEnvironment();
   return {
-    services: createMcpToolServices(db),
+    services: createMcpToolServices(db, settings),
     adapters: {} as Adapters,
     actor: actorFor(),
+    settings,
     requestId: "request-execute",
     traceId: "trace-execute",
     now,

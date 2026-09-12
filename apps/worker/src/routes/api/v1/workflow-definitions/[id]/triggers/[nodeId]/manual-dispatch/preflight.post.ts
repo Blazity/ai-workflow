@@ -18,6 +18,7 @@ import {
 import {
   preflightTriggerDispatch,
 } from "../../../../../../../../services/workflow-definitions/trigger-manual-dispatch.js";
+import { getRequestSettingsSnapshot } from "../../../../../../../../services/settings/index.js";
 import { parseDefinitionId } from "../../../../../workflow-definitions.get.js";
 
 export default defineEventHandler(
@@ -44,6 +45,7 @@ export default defineEventHandler(
         definitionId,
         triggerNodeId,
         dispatchInput,
+        settings: await getRequestSettingsSnapshot(event),
       });
     } catch (error) {
       toManualDispatchHttpError(error);

@@ -9,6 +9,7 @@ import {
 import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 // The cluster module this route delivers through, not the barrel, which also
 // re-exports the polling pass and the other providers' handlers.
+import { getRequestSettingsSnapshot } from "../../../services/settings/index.js";
 import {
   deliverCustomWebhook,
   type WebhookRejectionReason,
@@ -74,6 +75,7 @@ export default defineEventHandler(async (event) => {
     readRawBody: async () => (await readRawBody(event, "utf8")) ?? "",
     headers: getHeaders(event),
     deliveryIdHeader: getHeader(event, DELIVERY_ID_HEADER),
+    settings: await getRequestSettingsSnapshot(event),
   });
 
   switch (outcome.outcome) {

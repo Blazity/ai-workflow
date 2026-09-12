@@ -14,7 +14,7 @@ import type {
   WorkflowDefinition,
   WorkflowDefinitionLayoutInput,
 } from "@shared/contracts";
-import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
+import { RETIRED_SCHEMA_MESSAGE, type SettingsSnapshot } from "@shared/contracts";
 import { canEditWorkflowDefinitions } from "@shared/contracts";
 import { getConnectedDashboardUserLabel } from "../../db/repositories/auth.js";
 import { logger } from "../../infra/logger.js";
@@ -99,9 +99,10 @@ export async function createWorkflowDefinitionFromSource(input: {
   name: string;
   source: WorkflowDefinitionSeedSource;
   actor: WorkflowDefinitionRequestActor;
+  settings: SettingsSnapshot;
 }): Promise<CreateWorkflowDefinitionResult> {
   requireWorkflowDefinitionEditor(input.actor.role);
-  const { agentKind, includeReview, includeLeakReview } = agentRuntimeSettings();
+  const { agentKind, includeReview, includeLeakReview } = agentRuntimeSettings(input.settings);
   const profileReference = await currentSystemHarnessProfileReference(agentKind);
   const seedOptions = {
     includeReview,

@@ -21,9 +21,17 @@ const state = vi.hoisted(() => ({
   classifyProtected: vi.fn(),
   listApprovalParked: vi.fn(),
   observeProviderWebhook: vi.fn(),
+  // An empty settings table is what a deployment that has stored no decision
+  // has, so every value still resolves from the mocked environment exactly as
+  // it did before the snapshot existed. It is a spy because when this runs, and
+  // whether it runs at all, is itself under test below.
+  readAllConnectedSettings: vi.fn(async () => [] as unknown[]),
 }));
 
 vi.mock("../../infra/vcs-config.js", () => ({ env: state.env }));
+vi.mock("../../db/repositories/settings.js", () => ({
+  readAllConnectedSettings: () => state.readAllConnectedSettings(),
+}));
 vi.mock("../../engine/support/adapters.js", () => ({ createAdapters: state.createAdapters }));
 vi.mock("../../services/dispatch/dispatch.js", () => ({ dispatchTicket: state.dispatch }));
 vi.mock("../../services/run-lifecycle/cancel-run.js", () => ({ cancelRunDetailed: state.cancel }));
@@ -146,6 +154,35 @@ describe("POST /webhooks/jira", () => {
       "rejected",
       "secret_not_configured",
     );
+  });
+
+  it("refuses a forged signature without reading the settings table", async () => {
+    // The ingress is public. A delivery that fails the HMAC must cost the HMAC
+    // and nothing else: no settings query, so an unauthenticated flood stays
+    // cheap and a database outage still answers 401 instead of 500.
+    const raw = JSON.stringify({ webhookEvent: "jira:issue_updated" });
+    const response = await app()(
+      new Request("http://localhost/", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-hub-signature": "sha256=deadbeef" },
+        body: raw,
+      }),
+    );
+
+    expect(response.status).toBe(401);
+    expect(state.readAllConnectedSettings).not.toHaveBeenCalled();
+  });
+
+  it("reads the settings table once the signature checks out", async () => {
+    const connected = adapters();
+    state.createAdapters.mockReturnValue(connected);
+    state.resume.mockResolvedValue({ status: "no_clarification" });
+    state.dispatch.mockResolvedValue({ started: true, reason: "dispatched" });
+
+    const response = await app()(request({ status: "AI" }));
+
+    await expect(response.json()).resolves.toMatchObject({ status: "dispatched" });
+    expect(state.readAllConnectedSettings).toHaveBeenCalled();
   });
 
   it("ignores a status transition authored by the workflow Jira account", async () => {

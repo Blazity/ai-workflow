@@ -4,6 +4,7 @@ import { auth } from "../../../../auth-instance.js";
 import {
   readDashboardInviteAcceptance,
 } from "../../../../services/auth/invite-requests.js";
+import { getRequestSettingsSnapshot } from "../../../../services/settings/index.js";
 import { toHttpError } from "../../../../services/auth/request-context.js";
 
 export default defineEventHandler(async (event) => {
@@ -13,7 +14,11 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 400, statusMessage: "Missing invite id" });
     }
 
-    return await readDashboardInviteAcceptance(auth, inviteId);
+    return await readDashboardInviteAcceptance(
+      auth,
+      inviteId,
+      await getRequestSettingsSnapshot(event),
+    );
   } catch (error) {
     toHttpError(error);
   }
