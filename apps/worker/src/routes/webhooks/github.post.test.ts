@@ -297,6 +297,24 @@ describe("POST /webhooks/github", () => {
     expect(mocks.getConnectedRepositoryCatalogStateRow).toHaveBeenCalled();
   });
 
+  // Fail closed, the same bargain the poll pass strikes from the other side
+  // (routes/cron/poll.get.test.ts, "keeps the maintenance phases when the
+  // repository catalog cannot be read"): the tick may skip a dispatch phase
+  // because nothing is waiting on its answer, but an ingress holding a real
+  // delivery has to refuse it. Dispatching without the catalog would run a
+  // workflow on a repository an operator may have disabled, and the 5xx is
+  // what makes GitHub redeliver once the database answers again.
+  it("refuses the delivery and dispatches nothing when the repository catalog cannot be read", async () => {
+    mocks.getConnectedRepositoryCatalogStateRow.mockRejectedValueOnce(
+      new Error("neon: connection reset"),
+    );
+
+    const response = await makeApp()(makeRequest(pullRequestBody("opened")));
+
+    expect(response.status).toBeGreaterThanOrEqual(500);
+    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+  });
+
   it("starts a definition run and supersedes the gate for a bot PR", async () => {
     mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_pr" });
 

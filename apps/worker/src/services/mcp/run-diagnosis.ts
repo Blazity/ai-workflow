@@ -13,7 +13,7 @@
  * (`SAFE_EXECUTION_ERROR_MESSAGES` in packages/workflow-graph/interpreter.ts,
  * the repository scripts classes in workflows/blocks/repository-scripts-
  * output.ts) and the repository enforces the first with
- * `workflow-definition/execution-error-invariant.test.ts`: a copy of the table
+ * `engine/execution-error-invariant.test.ts`: a copy of the table
  * is how the scheduler path once drifted into producing a right-looking
  * sentence while skipping derivation. Re-typing those sentences here to keep
  * the file import-free would recreate exactly that failure surface, and it
@@ -198,11 +198,12 @@ const NO_WORKFLOW_MATCHED_MESSAGE =
 // generic "checks" category sentence, so it needs its own rule.
 const LEAK_REVIEW_GATE_PREFIX = "Leak review blocked publication before the branch was pushed:";
 
-// Prefix produced by SAFE_EXECUTION_ERROR_MESSAGES.checks (workflow-definition/
-// interpreter.ts:95) whenever a block reports `category: "checks"`. The pre-pr-gate
-// failure (AIW-223) is one of two sources of that category; the other is an
-// unrelated unmet-checks message, so a keyword from the WorkspaceGateError
-// messages (workflows/workspace-gate.ts:122-137) is required too.
+// Prefix produced by SAFE_EXECUTION_ERROR_MESSAGES.checks
+// (packages/workflow-graph/interpreter.ts) whenever a block reports
+// `category: "checks"`. The pre-pr-gate failure (AIW-223) is one of two sources
+// of that category; the other is an unrelated unmet-checks message, so a keyword
+// from the WorkspaceGateError messages (workflows/workspace-gate.ts:122-137) is
+// required too.
 const WORKSPACE_GATE_PREFIX = SAFE_EXECUTION_ERROR_MESSAGES.checks;
 const WORKSPACE_GATE_KEYWORDS = ["Run Workspace", "pre-publication check"];
 // The gate having no record leads with its own sentence rather than the checks
@@ -261,12 +262,12 @@ const STOPPED_WITHOUT_REASON_PREFIX =
   "This run was stopped before it finished, but no specific reason was recorded.";
 
 // Generic sentences for schema/contract failures: SAFE_EXECUTION_ERROR_MESSAGES.schema
-// (packages/workflow-graph/interpreter.ts:50, used wherever the scheduler rejects
+// (packages/workflow-graph/interpreter.ts, used wherever the scheduler rejects
 // a block output against its contract) and the agent-protocol schema_mismatch
-// message (sandbox/agents/protocol.ts:211). Also
-// SAFE_EXECUTION_ERROR_MESSAGES.binding (interpreter.ts:47, an unresolvable block
-// input reference: a definition configuration defect) and .parsing
-// (interpreter.ts:49, an unparsable response).
+// message (sandbox/agents/protocol.ts, validateStructuredValue). Also
+// SAFE_EXECUTION_ERROR_MESSAGES.binding (an unresolvable block input reference:
+// a definition configuration defect) and .parsing (an unparsable response),
+// both from the same table.
 const VALIDATION_FAILED_PREFIXES = [
   SAFE_EXECUTION_ERROR_MESSAGES.schema,
   "The current agent phase returned an invalid structured response.",
@@ -297,7 +298,7 @@ const PROVIDER_SPEND_LIMIT_ACTIONS = [
 // The other PROVIDER_CAUSES sentences (packages/workflow-graph/
 // failure-message.ts:102-181): billing/credit, rate limit, model unavailable,
 // and overloaded. Plus SAFE_EXECUTION_ERROR_MESSAGES.provider
-// (interpreter.ts:45), the uncurated fallback for a "provider"-category failure
+// (same table), the uncurated fallback for a "provider"-category failure
 // that matched none of those. Plus
 // the agent-CLI runtime-prep/execution sentences set directly as
 // `options.message` (protocol.ts:122/131/243/418 "The agent runtime could not
@@ -317,19 +318,19 @@ const DEPENDENCY_UNAVAILABLE_PREFIXES = [
   "The current agent phase could not be completed.",
 ];
 
-// SAFE_EXECUTION_ERROR_MESSAGES.timeout (packages/workflow-graph/interpreter.ts:48),
+// SAFE_EXECUTION_ERROR_MESSAGES.timeout (packages/workflow-graph/interpreter.ts),
 // composed whenever a block reports `category: "timeout"` (e.g. workflows/blocks/
 // generic-agent.ts:470, engine/agent-workflow.ts).
 const SANDBOX_TIMEOUT_PREFIX = SAFE_EXECUTION_ERROR_MESSAGES.timeout;
 
-// SAFE_EXECUTION_ERROR_MESSAGES.sandbox (interpreter.ts:88), the generic
+// SAFE_EXECUTION_ERROR_MESSAGES.sandbox (same table), the generic
 // "sandbox"-category sentence (e.g. workflows/blocks/prepare-workspace.ts's
 // outer catches, `category: "sandbox"`).
 const WORKSPACE_UNAVAILABLE_PREFIX = SAFE_EXECUTION_ERROR_MESSAGES.sandbox;
 
-// SAFE_EXECUTION_ERROR_MESSAGES.engine (interpreter.ts:90), used for
+// SAFE_EXECUTION_ERROR_MESSAGES.engine (same table), used for
 // engine-level failures (e.g. an unresolvable entry trigger or waiting node,
-// interpreter.ts:409-422).
+// V2SchedulerDefinitionError in packages/workflow-graph/scheduler.ts).
 const ENGINE_ERROR_PREFIX = SAFE_EXECUTION_ERROR_MESSAGES.engine;
 
 /** Stable references only: stepId of steps that failed, plus their error

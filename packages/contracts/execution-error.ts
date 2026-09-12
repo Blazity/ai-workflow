@@ -82,23 +82,3 @@ export function createWorkflowExecutionErrorState(
     attempt,
   };
 }
-
-/**
- * Recognises a stored or journaled value as an execution error state. Written
- * structurally on purpose: the value arrives from a checkpoint or a database
- * row, so it has no prototype to test and no class to be an instance of.
- */
-export function isWorkflowExecutionErrorState(
-  value: unknown,
-): value is WorkflowExecutionErrorState {
-  if (typeof value !== "object" || value === null) return false;
-  const candidate = value as Record<string, unknown>;
-  return (
-    typeof candidate.category === "string" &&
-    typeof candidate.message === "string" &&
-    typeof candidate.diagnosticId === "string" &&
-    typeof candidate.nodeId === "string" &&
-    typeof candidate.attempt === "number" &&
-    (candidate.phase === undefined || typeof candidate.phase === "string")
-  );
-}

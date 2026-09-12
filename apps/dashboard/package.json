@@ -7,7 +7,6 @@
     "dev": "next dev -p 3001",
     "build": "tsx ../../scripts/gates/generate-block-catalog.ts --check && next build",
     "start": "next start",
-    "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-test-module-mocks --import tsx --test \"**/*.test.ts\" \"**/*.test.tsx\""
   },

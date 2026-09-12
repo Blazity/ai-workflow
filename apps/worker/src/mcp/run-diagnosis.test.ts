@@ -185,7 +185,7 @@ describe("diagnoseRun", () => {
   // publication (workflows/blocks/finalize-workspace.ts:70-74), and
   // publication.reason is one of the WorkspaceGateError messages
   // (workflows/workspace-gate.ts:135-137). deriveFailureMessage then composes
-  // "The checks could not be started. (<reason>)" (workflow-definition/
+  // "The checks could not be started. (<reason>)" (packages/workflow-graph/
   // failure-message.ts, interpreter.ts for the generic sentence).
   it("classifies a workspace-gate failure message as workspace_gate, with low confidence", () => {
     const result = diagnoseRun({
@@ -379,11 +379,13 @@ describe("diagnoseRun", () => {
     });
   });
 
-  // Real shape: SAFE_EXECUTION_ERROR_MESSAGES.schema (workflow-definition/
-  // interpreter.ts:94) is the generic sentence used whenever a block or trigger
-  // output fails contract validation (interpreter.ts:439 contractViolation,
-  // block-registry output checks), and validateStructuredValue's schema_mismatch
-  // (sandbox/agents/protocol.ts:205-219) produces the agent-protocol variant.
+  // Real shape: SAFE_EXECUTION_ERROR_MESSAGES.schema (packages/workflow-graph/
+  // interpreter.ts) is the generic sentence used whenever a block or trigger
+  // output fails contract validation (V2Scheduler.processResult in
+  // packages/workflow-graph/scheduler.ts, `{ category: "schema", phase:
+  // "contract" }`, plus the block-registry output checks), and
+  // validateStructuredValue's schema_mismatch (sandbox/agents/protocol.ts:205-219)
+  // produces the agent-protocol variant.
   it("classifies a schema/contract-violation message as validation_failed, with low confidence", () => {
     const result = diagnoseRun({
       status: "failed",
@@ -401,8 +403,8 @@ describe("diagnoseRun", () => {
     });
   });
 
-  // Real shape: SAFE_EXECUTION_ERROR_MESSAGES.binding (interpreter.ts:91),
-  // used when a block input reference cannot be resolved: a workflow-definition
+  // Real shape: SAFE_EXECUTION_ERROR_MESSAGES.binding (same table),
+  // used when a block input reference cannot be resolved: a workflow definition
   // configuration defect, not a transient runtime problem, so nextActions
   // should point at the block/trigger configuration.
   it("classifies a block-input-binding failure message as validation_failed, pointing at the block configuration", () => {
@@ -416,7 +418,7 @@ describe("diagnoseRun", () => {
     expect(result.nextActions.join(" ")).toMatch(/config/i);
   });
 
-  // Real shape: SAFE_EXECUTION_ERROR_MESSAGES.parsing (interpreter.ts:93).
+  // Real shape: SAFE_EXECUTION_ERROR_MESSAGES.parsing (same table).
   it("classifies a response-parsing failure message as validation_failed, with low confidence", () => {
     const result = diagnoseRun({
       status: "failed",
@@ -477,7 +479,7 @@ describe("diagnoseRun", () => {
     expect(result.nextActions.join(" ")).not.toMatch(/status page/i);
   });
 
-  // Real shape: PROVIDER_CAUSES rate-limit entry (workflow-definition/
+  // Real shape: PROVIDER_CAUSES rate-limit entry (packages/workflow-graph/
   // failure-message.ts), reached the same way as the auth case above.
   it("classifies the curated AI-provider rate-limit message as dependency_unavailable, with low confidence", () => {
     const result = diagnoseRun({
@@ -493,7 +495,7 @@ describe("diagnoseRun", () => {
     });
   });
 
-  // Real shape: SAFE_EXECUTION_ERROR_MESSAGES.provider (interpreter.ts:89), the
+  // Real shape: SAFE_EXECUTION_ERROR_MESSAGES.provider (same table), the
   // uncurated fallback for a "provider"-category block whose raw error text
   // matched none of the curated PROVIDER_CAUSES patterns.
   it("classifies the generic external-service failure message as dependency_unavailable, with low confidence", () => {
@@ -567,8 +569,8 @@ describe("diagnoseRun", () => {
     });
   });
 
-  // Real shape: SAFE_EXECUTION_ERROR_MESSAGES.timeout (workflow-definition/
-  // interpreter.ts:92) composed with a "phase timed out" detail, e.g.
+  // Real shape: SAFE_EXECUTION_ERROR_MESSAGES.timeout (packages/workflow-graph/
+  // interpreter.ts) composed with a "phase timed out" detail, e.g.
   // workflows/blocks/generic-agent.ts:470 ("agent phase timed out") or
   // engine/agent-workflow.ts ("phase timed out").
   it("classifies a phase-timeout message as sandbox_timeout, with low confidence", () => {
@@ -585,7 +587,7 @@ describe("diagnoseRun", () => {
     });
   });
 
-  // Real shape: SAFE_EXECUTION_ERROR_MESSAGES.sandbox (interpreter.ts:88), the
+  // Real shape: SAFE_EXECUTION_ERROR_MESSAGES.sandbox (same table), the
   // generic "sandbox"-category sentence (e.g. workflows/blocks/prepare-workspace.ts's
   // outer catch, `category: "sandbox"`).
   it("classifies a workspace-environment failure message as workspace_unavailable, with low confidence", () => {
@@ -602,9 +604,9 @@ describe("diagnoseRun", () => {
     });
   });
 
-  // Real shape: SAFE_EXECUTION_ERROR_MESSAGES.engine (interpreter.ts:90), used
+  // Real shape: SAFE_EXECUTION_ERROR_MESSAGES.engine (same table), used
   // for engine-level failures (e.g. an unresolvable entry trigger or waiting
-  // node, interpreter.ts:409-422).
+  // node, V2SchedulerDefinitionError in packages/workflow-graph/scheduler.ts).
   it("classifies a workflow-engine failure message as engine_error, with low confidence", () => {
     const result = diagnoseRun({
       status: "failed",

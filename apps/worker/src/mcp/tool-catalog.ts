@@ -79,16 +79,18 @@ const WORKFLOW_NAME_MAX_LENGTH = 200;
 // reach the agent as INTERNAL_ERROR instead of NOT_FOUND.
 const DEFINITION_ID_MAX = 2_147_483_647;
 // Exactly the ceilings the definition schema already enforces on a graph
-// (workflow-definition/schema.ts, MAX_NODES and MAX_EDGES, applied to the v1 and the
-// v2 shape alike), deliberately neither higher nor lower: higher would let a graph
-// through that the store then refuses, and lower would leave an agent able to READ a
+// (`MAX_NODES` and `MAX_EDGES` in packages/workflow-graph/limits.ts, applied to the
+// v1 and the v2 shape alike), deliberately neither higher nor lower: higher would
+// let a graph through that the store then refuses, and lower would leave an agent able to READ a
 // deployed workflow it can never save back. Restated here so an oversized graph is
 // refused before it is hashed, audited and charged a mutation slot. The outer bound
 // stays MCP_MAX_REQUEST_BYTES, which caps the whole request rather than this field.
 //
-// Restated and not imported because that schema drags every block module in, which
-// the module doc above forbids on the transport path, so the equality is a claim a
-// test has to hold: tool-catalog.test.ts asserts it against the exported constants.
+// Restated and not imported because @shared/workflow-graph publishes only its
+// barrel, so importing the two numbers would load the whole definition schema on the
+// transport path, which the module doc above forbids; the equality is therefore a
+// claim a test has to hold: tool-catalog.test.ts asserts it against the exported
+// constants.
 export const WORKFLOW_MAX_NODES = 200;
 export const WORKFLOW_MAX_EDGES = 400;
 const RUN_ID_MAX_LENGTH = 200;
@@ -238,7 +240,8 @@ const preflightInputSchema = z
  * A graph, admitted by SIZE only. Deliberately not the real definition schema:
  * this module is loaded by the transport gate on every request before it has
  * decided whether a call is servable, so it must stay free of the database and the
- * block registry, and workflow-definition/schema.ts pulls in every block module
+ * block registry, and the definition schema (@shared/workflow-graph, resolved
+ * against engine/definition/block-registry.ts) pulls in every block module
  * behind it. The one authority on whether a graph is legal is that schema, called
  * from the tool where a validation failure can be answered as VALIDATION_FAILED;
  * a second copy here would be a second set of domain rules to keep in step.

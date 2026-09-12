@@ -56,9 +56,9 @@ const BLOCK_DATA = testBlockData(REGISTRY_CONTEXT);
  * exactly this shape, from the boundary being resolved twice. It does not fire,
  * but not because a repeated write is harmless. `setEdgeToken` only tolerates a
  * write of the value an edge already carries
- * (`packages/workflow-graph/scheduler.ts:874`); writing "active" over an
- * "inactive" a first pass left is still a contradiction, and a
- * region with two exits produces exactly that write. What keeps the boundary
+ * (`setEdgeToken` in `packages/workflow-graph/scheduler.ts`); writing "active"
+ * over an "inactive" a first pass left is still a contradiction, and a region
+ * with two exits produces exactly that write. What keeps the boundary
  * consistent is the deferral: a member resolves only the edges its own selected
  * port takes, leaves the rest of the region's boundary unresolved because a
  * retry may still select it, and `settleLoopBoundaryEdges` fills in the leftover
@@ -69,12 +69,12 @@ const BLOCK_DATA = testBlockData(REGISTRY_CONTEXT);
  * What the shape really tests is quieter, and for an agent block worse.
  * `seed -> loop` goes active the moment `seed` finishes, and a node is admitted
  * when *any* incoming edge is active rather than when a particular one is
- * (`resolveNodeIfReady`, `packages/workflow-graph/scheduler.ts:956-959`), so the
+ * (`resolveNodeIfReady`, `packages/workflow-graph/scheduler.ts`), so the
  * Loop's own arm going inactive is not enough to keep it from running. AIW-242
  * was exactly that: the Loop was admitted after `gate` had already left the
  * region, and its fresh branch spawned an iteration
- * (`packages/workflow-graph/scheduler.ts:1363`) that re-ran the whole region in
- * a child scope. Nothing surfaced it, because the run's bookkeeping is
+ * (`spawnLoopIteration`, `packages/workflow-graph/scheduler.ts`) that re-ran the
+ * whole region in a child scope. Nothing surfaced it, because the run's bookkeeping is
  * reconciled afterwards and the outcome reads `completed` with no error while
  * `work` had really executed twice.
  *

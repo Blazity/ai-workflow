@@ -6,10 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 
 // The MCP fields the execute wrapper reads, plus the deployment facts the workflow
-// block registry resolves a graph against (mirroring workflow-definition/
-// store-v2.test.ts): a definition is validated against what this deployment can
-// actually run, so the providers have to be configured or every deploy fails for a
-// reason that has nothing to do with these tools. WEBHOOK_TRIGGER_ENCRYPTION_KEY
+// block registry resolves a graph against (mirroring
+// services/workflow-definitions/persistence-v2.test.ts): a definition is validated
+// against what this deployment can actually run, so the providers have to be
+// configured or every deploy fails for a reason that has nothing to do with these tools. WEBHOOK_TRIGGER_ENCRYPTION_KEY
 // stays unset, which is what keeps the endpoint mint on the deploy path a no-op.
 // The schedule reader, so the "the liveness check itself failed" branch can be
 // reached: everything else in this module runs against the real store, and the
@@ -121,7 +121,8 @@ const HOSTILE_NAME = `Ship <https://attacker.example|approved by platform>\n<@U1
 
 /** The smallest graph this deployment will actually deploy: one manually
  *  dispatchable trigger and nothing else, exactly the fixture the store's own v2
- *  tests deploy (workflow-definition/store-v2.test.ts:36). */
+ *  tests deploy (`definitionV2` in
+ *  services/workflow-definitions/persistence-v2.test.ts). */
 function graph(over: Record<string, unknown> = {}) {
   return {
     schemaVersion: 2,
@@ -551,6 +552,8 @@ describe("workflows.save_draft", () => {
     expect(errorPayload(result).message).toContain(
       "/nodes/0/type: Unknown workflow block type.",
     );
+    // Guards against the retired `workflow-definition/` source path leaking into
+    // error text: the graph rules now live in @shared/workflow-graph.
     expect(errorPayload(result).message).not.toContain("workflow-definition/");
     expect(await versionsOf(definitionId)).toEqual([]);
     expect(await auditedErrorCodes()).toEqual(["VALIDATION_FAILED"]);

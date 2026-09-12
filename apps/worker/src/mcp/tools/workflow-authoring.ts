@@ -45,8 +45,9 @@ import {
  *   - a scope of its own (contracts.ts:12) and a role list without "service"
  *     (policy.ts), with request-context.ts stripping the scope out of an
  *     unattended token's actor;
- *   - every graph goes through workflow-definition/schema.ts, and a publish
- *     through the deployment gate inside deployWorkflowDefinition, which is the
+ *   - every graph goes through the definition schema in @shared/workflow-graph
+ *     (`workflowDefinitionV2Schema`, packages/workflow-graph/schema.ts), and a
+ *     publish through the deployment gate inside deployWorkflowDefinition, which is the
  *     whole of what the dashboard's Deploy button calls
  *     (routes/api/v1/workflow-definitions/[id]/deploy.post.ts:51);
  *   - compare-and-set on both writes that touch existing state, enforced by the
