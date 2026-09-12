@@ -31,14 +31,12 @@ import {
 } from "./invocation-context.js";
 import {
   evaluateV2BranchCondition,
-  isV2BranchConfiguration,
-} from "./v2-branch.js";
-import {
   isJsonValue,
+  isV2BranchConfiguration,
   resolveWorkflowInputBindingV2,
   resolveWorkflowNodeInputsV2,
   type V2BindingResolutionContext,
-} from "./v2-bindings.js";
+} from "@shared/workflow-graph";
 import { validateBlockOutputForDefinition } from "./block-registry.js";
 import { validateJsonSchemaValue } from "./json-schema.js";
 import {
