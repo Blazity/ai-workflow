@@ -166,6 +166,9 @@ export function registerWorkflowTools(server: McpServer, deps: McpToolDependenci
               definitionId: input.definitionId,
               triggerNodeId: input.triggerNodeId,
               dispatchInput: input.input,
+              // The transport's one load for this call, so the preflight and the
+              // dispatch that follows judge the repository the same way.
+              repositoryCatalog: await deps.loadRepositoryCatalog(),
             });
           } catch (error) {
             throwPublicDispatchError(error);
@@ -241,6 +244,7 @@ export function registerWorkflowTools(server: McpServer, deps: McpToolDependenci
               adapters: deps.adapters,
               definitionId: input.definitionId,
               triggerNodeId: input.triggerNodeId,
+              repositoryCatalog: await deps.loadRepositoryCatalog(),
               request: {
                 requestId: requestIdForLease(leaseId),
                 expectedDeployedVersion: input.expectedDeployedVersion,

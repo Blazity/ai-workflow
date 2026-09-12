@@ -70,6 +70,19 @@ vi.mock("../db/repositories/settings.js", () => ({
   // from the mocked environment exactly as it did before the snapshot existed.
   readAllConnectedSettings: async () => [],
 }));
+vi.mock("../db/repositories/repository-catalog.js", () => ({
+  // Same story as the settings table: the ingress route now also loads one
+  // repository catalog snapshot per request, and an empty catalog nobody
+  // activated is the bridge, which passes every repository. These cases are
+  // about trigger normalization, not about who may be dispatched.
+  listConnectedRepositoryCatalogKeys: async () => [],
+  getConnectedRepositoryCatalogStateRow: async () => ({
+    activated: false,
+    activatedAt: null,
+    activatedById: null,
+    activatedByLabel: null,
+  }),
+}));
 
 // github.post.ts consumes the mocked dispatch-trigger; the dispatchTriggerEvent
 // area re-loads the real module via vi.importActual (partial-mock pattern).

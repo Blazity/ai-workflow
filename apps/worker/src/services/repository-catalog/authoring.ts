@@ -8,6 +8,8 @@
 import {
   canManageRepositoryCatalog,
   DashboardAuthError,
+  invalidRepositoryScriptGroupNames,
+  REPOSITORY_SCRIPT_GROUP_NAME_MESSAGE,
   type RepositoryCatalogActivateResponse,
   type RepositoryCatalogClaimedRepository,
   type RepositoryCatalogEntryResponse,
@@ -27,7 +29,7 @@ import {
   upsertConnectedRepositoryProfile,
 } from "../../db/repositories/repository-catalog.js";
 import { getConnectedDashboardUserLabel, type DashboardRole } from "../auth/index.js";
-import { loadRepositoryCatalogSnapshot, serializeRepositoryCatalogEntry } from "./store.js";
+import { loadRepositoryCatalogEntries, serializeRepositoryCatalogEntry } from "./store.js";
 import { serializeRepositoryProfileVersion } from "./versions.js";
 
 /** Who is acting, as the profile version records them. */
@@ -36,7 +38,10 @@ export interface RepositoryCatalogActor {
   id: string;
 }
 
-function requireCatalogManager(actor: RepositoryCatalogActor): void {
+/** The one role check the catalog has. Exported so the import and the
+ *  suggestion enforce the same predicate as the profile save rather than each
+ *  deciding for itself what an admin is. */
+export function requireCatalogManager(actor: RepositoryCatalogActor): void {
   if (!canManageRepositoryCatalog(actor.role)) {
     throw new DashboardAuthError(403, "Forbidden");
   }
@@ -51,8 +56,11 @@ async function requireRow(id: number) {
 /** Reads are open to every role: knowing which repositories exist is not a
  *  privilege, and a member who cannot see the list cannot read a run either. */
 export async function readRepositoryCatalog(): Promise<RepositoryCatalogListResponse> {
-  const snapshot = await loadRepositoryCatalogSnapshot();
-  return { state: snapshot.state, repositories: [...snapshot.entries] };
+  // The full rows, not the dispatch snapshot: this is the screen that renders
+  // descriptions, rules and relationships, and it is the only caller that needs
+  // them.
+  const { state, entries } = await loadRepositoryCatalogEntries();
+  return { state, repositories: entries };
 }
 
 export async function readRepositoryCatalogEntry(
@@ -95,6 +103,20 @@ export async function saveRepositoryProfile(input: {
   expectedId?: number;
 }): Promise<RepositoryCatalogMutationResponse> {
   requireCatalogManager(input.actor);
+  // The one thing checked about the scripts entry before it is stored raw.
+  // The engine's schema normalizes as it parses and this deliberately does not
+  // repeat it, but a group name the engine cannot resolve is not a difference
+  // of dialect: it saves, and then the repository's checks silently never run,
+  // which is the failure nobody goes looking for. Refused here rather than
+  // repaired, because "Unit Tests" could mean `unit-tests` or `test` and only
+  // the person typing it knows which.
+  const badGroupNames = invalidRepositoryScriptGroupNames(input.request.scriptGroups);
+  if (badGroupNames.length > 0) {
+    throw new DashboardAuthError(
+      400,
+      `invalid_script_group_name: ${badGroupNames.join(", ")} (${REPOSITORY_SCRIPT_GROUP_NAME_MESSAGE})`,
+    );
+  }
   if (input.expectedId !== undefined && input.expectedId !== 0) {
     const existing = await getConnectedRepositoryCatalogRowByPath({
       provider: input.request.provider,

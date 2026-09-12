@@ -9,6 +9,7 @@ import {
   workflowDefinitionVersions,
 } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
+import { unactivatedRepositoryCatalog } from "../../test-support/repository-catalog.js";
 import {
   acknowledgeManualDispatchStarted,
   getManualDispatchRequest,
@@ -175,6 +176,7 @@ describe("manual dispatch durability", () => {
         request: request(),
         actor: { id: "user-admin", label: "Karol" },
         maxConcurrentAgents: 4,
+        repositoryCatalog: unactivatedRepositoryCatalog(),
       }),
     ).resolves.toEqual({
       requestId: request().requestId,
@@ -208,6 +210,7 @@ describe("manual dispatch durability", () => {
       request: request(),
       actor: { id: "user-admin", label: "Karol" },
       maxConcurrentAgents: 4,
+      repositoryCatalog: unactivatedRepositoryCatalog(),
     };
     await dispatchManualWorkflow(input);
     testState.order.length = 0;
@@ -228,6 +231,7 @@ describe("manual dispatch durability", () => {
       triggerNodeId: "ticket-trigger",
       actor: { id: "user-admin", label: "Karol" },
       maxConcurrentAgents: 4,
+      repositoryCatalog: unactivatedRepositoryCatalog(),
     };
     await dispatchManualWorkflow({ ...base, request: request() });
 
@@ -250,6 +254,7 @@ describe("manual dispatch durability", () => {
         request: { ...request(), expectedDeployedVersion: 2 },
         actor: { id: "user-admin", label: "Karol" },
         maxConcurrentAgents: 4,
+        repositoryCatalog: unactivatedRepositoryCatalog(),
       }),
     ).rejects.toMatchObject({
       statusCode: 409,
@@ -269,6 +274,7 @@ describe("manual dispatch durability", () => {
         request: request(),
         actor: { id: "user-admin", label: "Karol" },
         maxConcurrentAgents: 4,
+        repositoryCatalog: unactivatedRepositoryCatalog(),
       }),
     ).rejects.toMatchObject({ statusCode: 409, code: "at_capacity" });
     expect(await getManualDispatchRequest(db, request().requestId)).toMatchObject({
@@ -290,6 +296,7 @@ describe("manual dispatch durability", () => {
         request: request(),
         actor: { id: "user-admin", label: "Karol" },
         maxConcurrentAgents: 4,
+        repositoryCatalog: unactivatedRepositoryCatalog(),
       }),
     ).rejects.toMatchObject({
       statusCode: 502,
@@ -313,6 +320,7 @@ describe("manual dispatch durability", () => {
       request: request(),
       actor: { id: "user-admin", label: "Karol" },
       maxConcurrentAgents: 4,
+      repositoryCatalog: unactivatedRepositoryCatalog(),
     };
     await expect(dispatchManualWorkflow(input)).resolves.toEqual({
       requestId: request().requestId,
@@ -320,7 +328,12 @@ describe("manual dispatch durability", () => {
     });
 
     await expect(
-      recoverManualDispatches({ db, adapters, maxConcurrentAgents: 4 }),
+      recoverManualDispatches({
+        db,
+        adapters,
+        maxConcurrentAgents: 4,
+        repositoryCatalog: unactivatedRepositoryCatalog(),
+      }),
     ).resolves.toMatchObject({ scanned: 1, started: 1, failed: 0 });
     expect(mockResolve).toHaveBeenLastCalledWith(
       expect.objectContaining({ definitionVersion: 3 }),
@@ -341,6 +354,7 @@ describe("manual dispatch durability", () => {
       request: request(),
       actor: { id: "user-admin", label: "Karol" },
       maxConcurrentAgents: 4,
+      repositoryCatalog: unactivatedRepositoryCatalog(),
     });
     const row = await getManualDispatchRequest(db, request().requestId);
 

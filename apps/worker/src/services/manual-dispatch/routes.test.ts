@@ -13,6 +13,18 @@ vi.mock("../../infra/vcs-config.js", () => ({
 vi.mock("../../db/client.js", () => ({
   getDb: () => ({ kind: "db" }),
 }));
+vi.mock("../../db/repositories/repository-catalog.js", () => ({
+  // Same story as the settings table: the route loads one catalog snapshot per
+  // request against a stub database, and an empty catalog nobody activated is
+  // the bridge, which passes every repository.
+  listConnectedRepositoryCatalogKeys: async () => [],
+  getConnectedRepositoryCatalogStateRow: async () => ({
+    activated: false,
+    activatedAt: null,
+    activatedById: null,
+    activatedByLabel: null,
+  }),
+}));
 vi.mock("../../db/repositories/settings.js", () => ({
   // The route loads one settings snapshot per request. This test hands the
   // handler a stub database, and an empty settings table is what a deployment

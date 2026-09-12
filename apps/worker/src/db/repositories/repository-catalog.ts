@@ -119,6 +119,29 @@ export function listRepositoryCatalogRows(
   return filtered.orderBy(asc(repositories.provider), asc(repositories.path));
 }
 
+/**
+ * The three columns a dispatch decision needs, and nothing else.
+ *
+ * Every HTTP request, cron tick and MCP call loads this, while the rules blob,
+ * the relationships and the descriptions on the full row are read by the two
+ * screens that render them. Selecting them on the dispatch path would move the
+ * whole catalog across the wire on every webhook delivery for no answer it can
+ * give.
+ *
+ * Not exported: its only caller is the connected wrapper below, and the
+ * unused-code gate is right that a second entry point nobody has asked for is
+ * not worth the export.
+ */
+function listRepositoryCatalogKeys(db: Db) {
+  return db
+    .select({
+      provider: repositories.provider,
+      path: repositories.path,
+      enabled: repositories.enabled,
+    })
+    .from(repositories);
+}
+
 export async function getRepositoryCatalogRow(db: Db, id: number) {
   const [row] = await db.select().from(repositories).where(eq(repositories.id, id)).limit(1);
   return row ?? null;
@@ -620,6 +643,10 @@ export function listConnectedRepositoryCatalogRows(
   return listRepositoryCatalogRows(getDb(), options);
 }
 
+export function listConnectedRepositoryCatalogKeys() {
+  return listRepositoryCatalogKeys(getDb());
+}
+
 export function getConnectedRepositoryCatalogRow(id: number) {
   return getRepositoryCatalogRow(getDb(), id);
 }
@@ -678,6 +705,23 @@ export function listConnectedClaimedRepositoriesNotEnabled() {
 
 export function getConnectedCurrentCheckConfiguration() {
   return getCurrentCheckConfiguration(getDb());
+}
+
+/**
+ * The import commit, which is the seed insert under another name.
+ *
+ * Deliberately the same function. An import and the allowlist seed create the
+ * same thing, rows with no profile, and the seed's insert already is the one
+ * statement with the case-insensitive guard and the do-nothing conflict clause
+ * that neon-http forces and that the consecutive-writes gate checks for. A
+ * second spelling would be a second place for that guard to go wrong, and the
+ * only difference between the two callers is the `source` they pass.
+ */
+export function importConnectedRepositoryCatalogEntries(input: {
+  repositories: Array<{ provider: string; path: string }>;
+  enabled: boolean;
+}) {
+  return seedRepositoryCatalogEntries(getDb(), { ...input, source: "imported" });
 }
 
 /**

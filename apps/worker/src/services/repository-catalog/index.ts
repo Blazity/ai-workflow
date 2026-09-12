@@ -17,9 +17,24 @@ export type {
   RepositoryCatalogActivateOutcome,
   RepositoryCatalogActor,
 } from "./authoring.js";
+export {
+  ENGINE_ALLOWLIST_GAP_WARNING,
+  engineAllowlistWarnings,
+} from "./engine-allowlist-gap.js";
+export { commitRepositoryImport, previewRepositoryImport } from "./import.js";
+export {
+  REPOSITORY_SUGGESTION_RATE_LIMIT,
+  REPOSITORY_SUGGESTION_RATE_WINDOW_MS,
+  REPOSITORY_SUGGESTION_TIMEOUT_MS,
+  RepositorySuggestionRateLimitedError,
+  resetRepositorySuggestionsInFlightForTests,
+  suggestRepositoryProfile,
+} from "./suggest.js";
 export { isRepositoryEnabled, reportBridge } from "./policy.js";
 export type { RepositoryCatalogBridgeReport } from "./policy.js";
+export { getRequestRepositoryCatalogSnapshot } from "./request-snapshot.js";
 export {
+  loadRepositoryCatalogEntries,
   loadRepositoryCatalogSnapshot,
   serializeRepositoryCatalogEntry,
 } from "./store.js";

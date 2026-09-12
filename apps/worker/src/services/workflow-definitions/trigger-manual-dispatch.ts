@@ -15,6 +15,7 @@ import type {
   SettingsSnapshot,
 } from "@shared/contracts";
 import { maxConcurrentAgents } from "../settings/index.js";
+import type { RepositoryCatalogSnapshot } from "../repository-catalog/index.js";
 import { createAdapters } from "../../engine/support/adapters.js";
 import { resolveWorkflowDefinitionActor } from "./definition-authoring.js";
 import {
@@ -29,6 +30,7 @@ export function preflightTriggerDispatch(input: {
   triggerNodeId: string;
   dispatchInput: ManualDispatchInput;
   settings: SettingsSnapshot;
+  repositoryCatalog: RepositoryCatalogSnapshot;
 }): Promise<ManualDispatchPreflightResponse> {
   return preflightConnectedManualWorkflow({
     adapters: createAdapters(),
@@ -36,6 +38,7 @@ export function preflightTriggerDispatch(input: {
     triggerNodeId: input.triggerNodeId,
     dispatchInput: input.dispatchInput,
     maxConcurrentAgents: maxConcurrentAgents(input.settings),
+    repositoryCatalog: input.repositoryCatalog,
   });
 }
 
@@ -47,6 +50,7 @@ export async function dispatchTriggerManually(input: {
   actorId: string;
   actorRole: DashboardRole;
   settings: SettingsSnapshot;
+  repositoryCatalog: RepositoryCatalogSnapshot;
 }): Promise<ManualDispatchResponse> {
   const actor = await resolveWorkflowDefinitionActor({
     role: input.actorRole,
@@ -59,5 +63,6 @@ export async function dispatchTriggerManually(input: {
     request: input.request,
     actor: { id: actor.id, label: actor.label },
     maxConcurrentAgents: maxConcurrentAgents(input.settings),
+    repositoryCatalog: input.repositoryCatalog,
   });
 }

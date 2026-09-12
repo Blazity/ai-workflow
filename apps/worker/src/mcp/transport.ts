@@ -22,6 +22,7 @@ import {
   type McpToolServices,
 } from "../services/mcp/index.js";
 import { getRequestSettingsSnapshot } from "../services/settings/index.js";
+import { getRequestRepositoryCatalogSnapshot } from "../services/repository-catalog/index.js";
 import {
   betterAuthBaseUrl,
   mcpSettings,
@@ -186,11 +187,15 @@ export async function handleMcpPost(event: H3Event): Promise<void> {
     }
   }
 
+  // After the gate, not before it: a refused call needs no catalog, and this is
+  // the one load every tool in this call answers from.
+
   const server = createMcpServer({
     services,
     adapters: createAdapters(),
     actor,
     settings,
+    loadRepositoryCatalog: () => getRequestRepositoryCatalogSnapshot(event),
     requestId,
     traceId: requestId,
     now: () => new Date(),

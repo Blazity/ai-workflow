@@ -16,11 +16,12 @@ import { logger } from "../../../infra/logger.js";
 import {
   dispatchPostPrGateWebhook,
   dispatchTriggerEvent,
-  isRepoAllowed,
+  isRepositoryDispatchable,
   normalizeGitLabEvents,
   recordIngestionFailure,
   type DispatchTriggerResult,
 } from "../../dispatch/index.js";
+import type { RepositoryCatalogSnapshot } from "../../repository-catalog/index.js";
 import {
   isWorkflowGeneratedPush,
   connectedWorkflowPushNormalizationOptions,
@@ -67,6 +68,14 @@ export type GitLabWebhookRequest = {
    * than once in a request is still one query.
    */
   loadSettings: () => Promise<SettingsSnapshot>;
+  /**
+   * The repository catalog, on demand, for the same reason `loadSettings` is a
+   * thunk: a delivery whose token does not match must cost the comparison and
+   * nothing else, so neither store is touched before verification. The ingress
+   * memoises the load on the event, so every candidate event of one delivery
+   * and the legacy gate below them all judge against the same snapshot.
+   */
+  loadRepositoryCatalog: () => Promise<RepositoryCatalogSnapshot>;
 };
 
 export async function handleGitLabWebhook(request: GitLabWebhookRequest) {
@@ -163,20 +172,27 @@ async function handleVerifiedGitLabWebhook(request: GitLabWebhookRequest) {
   });
 
   if (events.length > 0) {
-    const settings = await request.loadSettings();
+    // Two independent reads at one point, so one round trip rather than two:
+    // neither decides anything about the other.
+    const [settings, repositoryCatalog] = await Promise.all([
+      request.loadSettings(),
+      request.loadRepositoryCatalog(),
+    ]);
     let result: DispatchTriggerResult = { result: "no_definition" };
     let claimedEvent = events[0]!;
     for (const candidate of events) {
       const candidateResult = await dispatchTriggerEvent(candidate, {
         runRegistry: createConnectedPostgresRunRegistry(),
         maxConcurrentAgents: maxConcurrentAgents(settings),
+        repositoryCatalog,
       });
       result = candidateResult;
       claimedEvent = candidate;
       if (
         candidateResult.result !== "no_definition" &&
         candidateResult.result !== "ignored_not_workflow_owned" &&
-        candidateResult.result !== "ignored_provider"
+        candidateResult.result !== "ignored_provider" &&
+        candidateResult.result !== "ignored_repository_not_enabled"
       ) {
         break;
       }
@@ -188,11 +204,12 @@ async function handleVerifiedGitLabWebhook(request: GitLabWebhookRequest) {
     if (
       (result.result === "no_definition" ||
         result.result === "ignored_not_workflow_owned" ||
-        result.result === "ignored_provider") &&
+        result.result === "ignored_provider" ||
+        result.result === "ignored_repository_not_enabled") &&
       gitLabEvent === "Merge Request Hook" &&
       isLegacyGateAction(body)
     ) {
-      return dispatchMergeRequestGate(body);
+      return dispatchMergeRequestGate(body, repositoryCatalog);
     }
     if (ticketKeyFromBranch(claimedEvent.pr.headRef)) {
       logger.info(
@@ -204,7 +221,7 @@ async function handleVerifiedGitLabWebhook(request: GitLabWebhookRequest) {
   }
 
   if (gitLabEvent === "Merge Request Hook") {
-    return dispatchMergeRequestGate(body);
+    return dispatchMergeRequestGate(body, await request.loadRepositoryCatalog());
   }
   if (gitLabEvent === "Note Hook") {
     return { status: "ignored", reason: "note_ignored" };
@@ -212,7 +229,10 @@ async function handleVerifiedGitLabWebhook(request: GitLabWebhookRequest) {
   return { status: "ignored", reason: "pipeline_ignored" };
 }
 
-async function dispatchMergeRequestGate(body: any) {
+async function dispatchMergeRequestGate(
+  body: any,
+  repositoryCatalog: RepositoryCatalogSnapshot,
+) {
   let normalized;
   try {
     normalized = normalizeGitLabMergeRequestEvent(body);
@@ -224,7 +244,7 @@ async function dispatchMergeRequestGate(body: any) {
     return { status: "ignored", reason: `action_${normalized.action}` };
   }
 
-  const scope = await checkProjectScope(body);
+  const scope = await checkProjectScope(body, repositoryCatalog);
   if (scope) return scope;
 
   return dispatchPostPrGateWebhook(normalized);
@@ -240,8 +260,9 @@ function isLegacyGateAction(body: any): boolean {
 
 async function checkProjectScope(
   body: any,
+  repositoryCatalog: RepositoryCatalogSnapshot,
 ): Promise<{ status: "ignored"; reason: "other_project" } | null> {
-  if (body?.project && !(await gitLabProjectIsAllowed(body.project))) {
+  if (body?.project && !(await gitLabProjectIsAllowed(body.project, repositoryCatalog))) {
     logger.info(
       {
         project: body.project,
@@ -288,8 +309,23 @@ function triggerResponse(result: DispatchTriggerResult) {
   return { status: "ignored", reason: result.result };
 }
 
-async function gitLabProjectIsAllowed(project: GitLabProject): Promise<boolean> {
-  if (!project.path_with_namespace || !isRepoAllowed(project.path_with_namespace)) {
+async function gitLabProjectIsAllowed(
+  project: GitLabProject,
+  repositoryCatalog: RepositoryCatalogSnapshot,
+): Promise<boolean> {
+  if (!project.path_with_namespace) return false;
+  if (
+    !isRepositoryDispatchable(repositoryCatalog, {
+      provider: "gitlab",
+      path: project.path_with_namespace,
+    })
+  ) {
+    // Provider and path, because that pair is the catalog key an operator has to
+    // find on the Repositories page to answer this.
+    logger.info(
+      { provider: "gitlab", repoPath: project.path_with_namespace },
+      "gitlab_webhook_skipped_repo_not_enabled_in_catalog",
+    );
     return false;
   }
   const configuredProjectId = gitlabWebhookSettings().projectId;

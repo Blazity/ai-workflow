@@ -4,6 +4,7 @@ import type { Db } from "../db/types.js";
 import type { McpActorContext, McpToolDependencies } from "../mcp/contracts.js";
 import { createMcpToolServices } from "../services/mcp/tool-services.js";
 import type { Adapters } from "../engine/support/adapters.js";
+import { unactivatedRepositoryCatalog } from "./repository-catalog.js";
 
 export function actorFor(overrides: Partial<McpActorContext> = {}): McpActorContext {
   return {
@@ -39,6 +40,10 @@ export function depsFor(
     adapters: {} as Adapters,
     actor: actorFor(),
     settings,
+    // The bridge, which is what a deployment that has not activated the catalog
+    // loads: a test that is about the catalog overrides this with its own. A
+    // thunk, like the transport's, so a tool that never dispatches never asks.
+    loadRepositoryCatalog: async () => unactivatedRepositoryCatalog(),
     requestId: "request-execute",
     traceId: "trace-execute",
     now,
