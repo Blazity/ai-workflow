@@ -514,6 +514,8 @@ message.
 | `suggestion_provider_unavailable` | 503 | yes | The model provider was rate limited or down (`APICallError.isRetryable`, or HTTP 429 or 5xx). Recorded as `failed`. |
 | `suggestion_failed` | 502 | no | The model provider refused (a 401 or 403 is a key, and no retry fixes one). Recorded as `failed`. |
 | `suggestion_malformed` | 502 | no | The answer did not parse against the contract. Recorded as `malformed`, tokens included. |
+| `repository_profile_conflict` | 409 | no, reload first | The save carried `expectedProfileVersion` and the stored profile has moved since. Nothing was written; the body carries `currentVersion`. |
+| `invalid_cursor` | 400 | no | A suggestion history request carried a cursor this deployment did not issue. |
 
 Every row of that table except the first two and `suggestion_rate_limited`
 writes exactly one `repository_suggestions` row. A 403 (wrong role) and a 404
@@ -529,14 +531,99 @@ mints no profile version and moves no run already in flight. The not-activated
 banner sits above the list while the bridge is on, and its Activate opens the
 dialog that states both populations (how many repositories stop passing, and
 which of those hold a run claim right now), takes a typed reason, and only then
-confirms.
+confirms. The reason is required by
+`repositoryCatalogActivateRequestSchema` and stored on
+`repository_catalog_state.activation_reason`, so the banner an activated catalog
+shows carries who ended the bridge, when, and why. An activation nobody clicked
+reads as provenance rather than as a person: the build-time seed writes the
+actor label `seeded from AGENT_ALLOWED_REPOS` and the same words as its reason,
+and the banner renders "Catalog activated on \<date\> (seeded from
+AGENT_ALLOWED_REPOS)".
+
+The list row says how many script groups the repository's current profile
+declares (`scriptGroupCount` on the list response, computed in the same query
+that reads the rows). The field is OPTIONAL and an absent one means "this
+response did not compute it", never zero. Beside the switches the list says what
+disabling does not reach: "Disabling stops the next run. A run already in flight
+keeps the list it started with; cancel it to stop it." The list a run froze at
+its start is on the run row (`workflow_runs.repository_access`) and on the run
+detail, so what a run could touch can be answered after the fact.
 
 One repository is `repositories/[id]`, five tabs over one Save bar: Overview,
 Rules, Scripts (the script group editor this document describes, bound to this
 repository's profile), Memory and History. A tab reports the reason Save is
 disabled upward rather than rendering its own bar, and the save is one
-`PUT /api/v1/repository-catalog/:id` carrying the WHOLE merged profile, because
-the upsert defaults the fields a request omits rather than leaving them alone.
+`PUT /api/v1/repository-catalog/:id` carrying ONLY the fields that changed: the
+upsert reads an omitted field as unchanged and carries the stored value forward
+inside the statement that mints the version, so a Rules save never rewrites the
+script groups and a save that changes nothing mints nothing and answers
+`unchanged: true`. The same request carries `expectedProfileVersion`, the
+version this screen loaded; a profile that has moved since is refused by the
+write itself with a 409 naming the version it actually sits at, which is what
+replaced the pre-flight read the screen used to do.
+
+Rules and Description are edited in the prompt editor
+(`apps/dashboard/components/cockpit/prompt-editor/prompt-editor.tsx`), the same
+component the prompt library uses. Markdown is still what is stored and what the
+contract declares; the editor only changes how it is typed.
+
+**Where rules reach the agent.** The `rules` field of a repository's current
+profile version is appended to a compiled agent prompt as its own section,
+headed `Repository rules for <owner/name>`, next to that repository's committed
+`AGENTS.md` and `CLAUDE.md` and ahead of anything under `.ai/memory`. Three
+things gate it. The harness profile's `includeRepositoryInstructions` decides
+whether the prompt carries repository instructions at all, and a profile with it
+off gets no rules either. The run's frozen access list decides which
+repositories may contribute, intersected with the ones the run actually checked
+out. Frozen means frozen: the list is the catalog as it stood when the run
+started, so a repository switched OFF after that keeps contributing its rules
+for the rest of that run, and one switched on after that contributes none until
+the next run. A repository the run never opened contributes nothing either way.
+The run header states the frozen list (`repositoryAccess` on `RunDetail`,
+rendered by `apps/dashboard/lib/run-repository-access.ts`), because the question
+asked afterwards is what the run could reach and not what the catalog says
+today. And the rules have to be non-empty: a repository nobody has configured
+yet produces no heading rather than an empty one. The read is `listRepositoryRules` in
+`apps/worker/src/db/repositories/repository-catalog.ts`, one query over the same
+current-profile-version relation `getCurrentCheckConfiguration` composes the
+script groups from, issued from inside
+`loadRepositoryInstructionSources`. Rules are best effort in every direction: an
+unreachable catalog, a malformed row and a field over 32 KiB cost the rules and
+never the run, which is the opposite of the rule for a committed `AGENTS.md`.
+
+Rules are rendered with the prompt template renderer
+(`substitutePromptVariables`) before they are compiled in, using the run's own
+variables at that point in the run. The resolvable set is NOT the whole prompt
+catalog. It is `REPOSITORY_RULES_VARIABLES` in
+`packages/prompts/prompt-variables.ts`, the seven names that identify the run
+itself: `ticket_key`, `ticket_url`, `branch_name`, `run_id`, `pr_number`,
+`pr_url` and `repo_path`. Only run identity renders here; ticket, plan and
+review text never enters rules. Everything left out of the set
+(`ticket_title`, `ticket_description`, `ticket_acceptance_criteria`,
+`ticket_labels`, `change_summary`, `plan_markdown`, `pr_title` and
+`pr_review_feedback`) is text somebody outside the deployment wrote, and a rules
+section is an instruction heading: rendering a ticket description inside one
+would let anybody who can file a ticket write standing instructions for the
+agent. The Rules editor's variable palette offers exactly these seven, so the
+menu, the inline highlight and the renderer agree. `repo_path` is per
+repository, the path of the repository whose rules are being rendered, so the
+same text compiled for two repositories resolves it differently. The `pr_*`
+names are legitimately empty before a pull request exists, and an empty value
+renders as nothing. A name outside the set is left standing in the text, braces
+and all, so a typo reads as a typo rather than as a blank line, and it is logged
+once per compiled prompt as `repository_rules_unresolved_variable` with the
+names and nothing else. A description is not injected anywhere and its variables
+are never rendered.
+
+The Scripts tab also carries the repository's **checks ceiling**
+(`batchTimeoutMinutes`, 1 to 120, empty for the operator ceiling). A run that
+touches several repositories takes the highest claim among them, because the
+ceiling bounds the whole batch of checks rather than one repository's share of
+it. The History tab lists the profile versions and, under them, every suggestion
+call this repository has spent
+(`GET /api/v1/repository-catalog/:id/suggestions`, open to every role, cursor
+paginated 50 at a time, newest first) with its outcome, model, actor, duration
+and cost, where a call the provider never reported usage for reads `unpriced`.
 "Suggest from repository" lives on the entry and never prefills a form: the
 proposal is shown beside the current values with one tick per script group, a
 dropped group is shown greyed out with its reason and its commands and can never

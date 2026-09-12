@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { AVAILABLE_VARIABLES } from "@shared/prompts";
+import { AVAILABLE_VARIABLES, type PromptVariableSpec } from "@shared/prompts";
 import { useEnterExit } from "@/lib/use-enter-exit";
 
 interface Placement {
@@ -27,11 +27,16 @@ export function VariablePickerPopover<T extends HTMLElement>({
   anchorRef,
   onPick,
   onClose,
+  variables = AVAILABLE_VARIABLES,
 }: {
   open: boolean;
   anchorRef: RefObject<T | null>;
   onPick: (token: string) => void;
   onClose: () => void;
+  /** The names this field can actually resolve. Defaults to the whole catalog,
+   *  which is what a workflow prompt gets; a field the renderer hands fewer
+   *  values passes its own list rather than offering names it leaves literal. */
+  variables?: readonly PromptVariableSpec[];
 }) {
   const { mounted, state } = useEnterExit(open, 160);
   const popRef = useRef<HTMLDivElement>(null);
@@ -108,7 +113,7 @@ export function VariablePickerPopover<T extends HTMLElement>({
           : `opacity-0 scale-[0.98] ${pos.up ? "translate-y-1" : "-translate-y-1"}`
       }`}
     >
-      {AVAILABLE_VARIABLES.map((spec) => (
+      {variables.map((spec) => (
         <button
           key={spec.name}
           type="button"

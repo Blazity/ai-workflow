@@ -45,6 +45,7 @@ export default defineEventHandler(
       const outcome = await activateRepositoryCatalog({
         actor: { role: actor.role, id: actor.userId },
         acknowledgedRepositoryKeys: parsed.value.acknowledgedRepositoryKeys,
+        reason: parsed.value.reason,
       });
       if (outcome.kind === "unacknowledged") {
         setResponseStatus(event, 409);

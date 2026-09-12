@@ -458,7 +458,8 @@ function checksCeilingUserMessage(ceilingMs: number): string {
   const minutes = Math.round(ceilingMs / 60_000);
   return (
     `The repository checks did not finish within the ${minutes} minute checks ceiling. ` +
-    "Raise batchTimeoutMinutes for this definition or split the run."
+    "Raise the checks ceiling on the Repositories page (open the repository, " +
+    "Scripts tab, checks ceiling), or split the run."
   );
 }
 

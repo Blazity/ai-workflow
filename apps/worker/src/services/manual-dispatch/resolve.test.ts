@@ -298,7 +298,7 @@ describe("manual dispatch against a definition repository pin", () => {
         await setRepositoryEnabled(catalogDb, { id: saved.id, enabled: false });
       }
     }
-    await activateRepositoryCatalog(catalogDb, { actorId: "user-1" });
+    await activateRepositoryCatalog(catalogDb, { actorId: "user-1", reason: "the bridge is over" });
     return loadRepositoryCatalogSnapshot();
   }
 

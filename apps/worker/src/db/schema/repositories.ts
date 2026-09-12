@@ -106,6 +106,18 @@ export const repositoryProfileVersions = pgTable(
       .default(sql`'[]'::jsonb`),
     scriptGroups: jsonb("script_groups").$type<Record<string, unknown>>(),
     gateGroups: jsonb("gate_groups").$type<string[]>(),
+    /**
+     * The whole-run checks ceiling this repository asks for, in minutes, or
+     * null for "use the operator ceiling".
+     *
+     * Its own column rather than a key inside `script_groups`, because that
+     * jsonb is the repository scripts ENTRY, stored verbatim and parsed by a
+     * strict schema at the engine boundary: an extra key there would be refused
+     * at run time by the very parse the verbatim storage exists to preserve.
+     * The value lived in the global checks blob until the Scripts page was
+     * replaced, after which no screen could reach it at all.
+     */
+    batchTimeoutMinutes: integer("batch_timeout_minutes"),
     /** The checks version this profile version carries: equal to the previous
      *  one when the save changed neither `script_groups` nor `gate_groups`. 0
      *  means this profile configures no checks at all. */
@@ -144,6 +156,15 @@ export const repositoryCatalogState = pgTable(
      *  the Repositories screen can tell an operator's deliberate activation
      *  apart from the one a deploy performed on their behalf. */
     activatedByLabel: text("activated_by_label"),
+    /**
+     * Why the bridge was ended, as the admin typed it, or as the seed records
+     * for the activation a build performed.
+     *
+     * Nullable rather than defaulted to empty: a deployment that activated
+     * before this column existed recorded no reason, which is a different fact
+     * from an admin who left the box blank (the route refuses that).
+     */
+    activationReason: text("activation_reason"),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [check("repository_catalog_state_single_row", sql`${t.id} = 1`)],

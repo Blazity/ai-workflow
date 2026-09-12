@@ -71,7 +71,7 @@ describe("isRepositoryDispatchable", () => {
     await addRepository("github", "Acme/Api", true);
     await addRepository("github", "acme/web", false);
     await addRepository("gitlab", "group/team/tool", true);
-    await activateRepositoryCatalog(db, { actorId: "user-1" });
+    await activateRepositoryCatalog(db, { actorId: "user-1", reason: "the bridge is over" });
 
     const snapshot = await loadRepositoryCatalogSnapshot();
 
@@ -91,7 +91,7 @@ describe("isRepositoryDispatchable", () => {
 
   it("does not let an enabled row on one provider authorize the same path on another", async () => {
     await addRepository("gitlab", "group/tool", true);
-    await activateRepositoryCatalog(db, { actorId: "user-1" });
+    await activateRepositoryCatalog(db, { actorId: "user-1", reason: "the bridge is over" });
 
     const snapshot = await loadRepositoryCatalogSnapshot();
 

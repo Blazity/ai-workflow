@@ -31,6 +31,7 @@ import {
   checksBudgetExhaustedFailure,
   checksCeilingMsOf,
   loadPrePrCheckConfigStep,
+  runChecksScopeKeys,
   runPrePrChecksWithFixes,
   recoverChecksCeilingFromSteps,
   runRepoCheckBatch,
@@ -256,6 +257,9 @@ async function runConfiguredChecks(
   /** The operator's PRE_PR_COMMAND_TIMEOUT_MINUTES, from the run's frozen
    *  settings. */
   defaultCommandTimeoutMinutes: number,
+  /** The run's repository keys, so the composed ceiling is the highest claim
+   *  among the repositories this run entered. */
+  repositoryKeys: readonly string[] | undefined,
 ): Promise<
   Omit<RunChecksStepResult, "outcome"> & {
     outcome: Exclude<CheckOutcome, "skipped">;
@@ -268,7 +272,7 @@ async function runConfiguredChecks(
     groupCoverage: RepositoryScriptGroupCoverage[];
   }
 > {
-  const current = await loadPrePrCheckConfigStep();
+  const current = await loadPrePrCheckConfigStep(repositoryKeys);
   const run = await runPrePrChecksWithFixes({
     sandboxId,
     config: current.config,
@@ -392,6 +396,7 @@ export const execute: BlockExecuteFn = async (
             groups,
             checksCeilingMs,
             ctx.settings.PRE_PR_COMMAND_TIMEOUT_MINUTES,
+            runChecksScopeKeys(ctx),
           );
     if (
       "configurationVersion" in result &&

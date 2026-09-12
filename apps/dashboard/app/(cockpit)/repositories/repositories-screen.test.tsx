@@ -47,6 +47,7 @@ function state(activated: boolean): RepositoryCatalogState {
     activatedAt: activated ? "2026-09-11T08:30:00.000Z" : null,
     activatedById: activated ? "user-7" : null,
     activatedByLabel: activated ? "Seed" : null,
+    activationReason: activated ? "the bridge is over" : null,
   };
 }
 
@@ -257,4 +258,60 @@ test("a server refresh supersedes the optimistic row the switch left behind", (t
     "aria-label": "Let the agent touch acme/web",
   });
   assert.equal(toggle.props.checked, false, "the server row wins over a local one");
+});
+
+test("a row says how many script groups it has, and an absent count is not zero", (t) => {
+  const withCount = text(
+    render(t, { repositories: [entry({ scriptGroupCount: 2 })] }),
+  );
+  assert.match(withCount, /2 script groups/);
+  assert.match(withCount, /script groups v2/);
+
+  // The count is optional and absent means "this response did not compute it".
+  // A row that printed "0 script groups" there would tell an operator their
+  // groups are gone.
+  const without = text(render(t, { repositories: [entry()] }));
+  assert.doesNotMatch(without, /script groups\b(?! v)/);
+  assert.match(without, /script groups v2/);
+});
+
+test("one script group is said in the singular", (t) => {
+  assert.match(
+    text(render(t, { repositories: [entry({ scriptGroupCount: 1 })] })),
+    /1 script group ·/,
+  );
+});
+
+test("the switch says what disabling does not reach", (t) => {
+  // Disabling is not a cancel. A run already in flight froze its list at the
+  // start, so the only way to stop it is to cancel it.
+  assert.match(
+    text(render(t, {})),
+    /Disabling stops the next run\. A run already in flight keeps the list it started with; cancel it to stop it\./,
+  );
+});
+
+test("an activation nobody clicked is shown as provenance, not as a person", (t) => {
+  const seeded = text(
+    render(t, {
+      state: {
+        activated: true,
+        bridge: false,
+        activatedAt: "2026-09-11T08:30:00.000Z",
+        activatedById: "seed",
+        activatedByLabel: "seeded from AGENT_ALLOWED_REPOS",
+        activationReason: "seeded from AGENT_ALLOWED_REPOS",
+      },
+    }),
+  );
+  assert.match(seeded, /Catalog activated on /);
+  assert.match(seeded, /\(seeded from AGENT_ALLOWED_REPOS\)/);
+  // "activated by seeded from AGENT_ALLOWED_REPOS" would read like a name.
+  assert.doesNotMatch(seeded, /by seeded from/);
+});
+
+test("an activation somebody clicked names them and their reason", (t) => {
+  const banner = text(render(t, { state: state(true) }));
+  assert.match(banner, /Catalog activated by Seed on /);
+  assert.match(banner, /reason: the bridge is over/);
 });

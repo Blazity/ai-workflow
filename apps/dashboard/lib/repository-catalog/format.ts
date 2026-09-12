@@ -8,6 +8,7 @@ import type {
   RepositoryCatalogEntry,
   RepositoryCatalogSource,
   RepositoryProfileVersion,
+  RepositorySuggestionRecord,
   RepositorySuggestionUsage,
 } from "@shared/contracts";
 
@@ -88,6 +89,47 @@ export function usageLabel(usage: RepositorySuggestionUsage | null): string {
   const total = usage.inputTokens + usage.outputTokens;
   const cached = usage.cachedTokens > 0 ? `, ${usage.cachedTokens} cached` : "";
   return `${total} tokens (${usage.inputTokens} in, ${usage.outputTokens} out${cached})`;
+}
+
+/**
+ * What one row of the suggestion history cost.
+ *
+ * Reads `priced` rather than deciding from the numbers: the worker writes null
+ * tokens AND `priced: false` for the same call, and a screen that inferred
+ * "unpriced" from a zero would call a free call unpriced and a timed-out call
+ * free. `usageLabel` still owns the wording, so the History tab and the
+ * suggestion panel cannot drift apart.
+ */
+export function suggestionUsageLabel(record: RepositorySuggestionRecord): string {
+  if (!record.priced || record.tokensInput === null || record.tokensOutput === null) {
+    return usageLabel(null);
+  }
+  return usageLabel({
+    inputTokens: record.tokensInput,
+    outputTokens: record.tokensOutput,
+    cachedTokens: 0,
+  });
+}
+
+/** How long a call took, in the shortest form that stays honest. Null is "not
+ *  recorded", which is what a row written before the column existed carries. */
+export function durationLabel(durationMs: number | null): string {
+  if (durationMs === null) return "duration not recorded";
+  return durationMs < 1000
+    ? `${durationMs} ms`
+    : `${(durationMs / 1000).toFixed(durationMs < 10_000 ? 1 : 0)} s`;
+}
+
+/**
+ * How many script groups a list row should say the repository has.
+ *
+ * `undefined` is "this response did not compute it", never zero: a list that
+ * printed "0 groups" for a response that simply did not carry the count would
+ * tell an operator their groups are gone.
+ */
+export function scriptGroupCountLabel(count: number | undefined): string | null {
+  if (count === undefined) return null;
+  return count === 1 ? "1 script group" : `${count} script groups`;
 }
 
 /** The row's one-line identity for a dialog or a link title. */

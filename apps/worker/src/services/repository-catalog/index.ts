@@ -10,6 +10,8 @@ export {
   readRepositoryCatalog,
   readRepositoryCatalogEntry,
   readRepositoryCatalogVersions,
+  readRepositorySuggestions,
+  RepositoryProfileConflictError,
   saveRepositoryProfile,
   setRepositoryCatalogEnabled,
 } from "./authoring.js";
@@ -17,6 +19,7 @@ export type {
   RepositoryCatalogActivateOutcome,
   RepositoryCatalogActor,
 } from "./authoring.js";
+export { pinnedRepositoriesNotEnabled } from "./pins.js";
 export { commitRepositoryImport, previewRepositoryImport } from "./import.js";
 export {
   REPOSITORY_SUGGESTION_RATE_LIMIT,

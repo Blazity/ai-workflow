@@ -918,6 +918,81 @@ describe("POST /api/v1/workflow-definitions/:id/deploy", () => {
     });
   });
 
+  it("carries the pins the catalog does not enable, in the publish's own words", async () => {
+    // The same finding `workflows.publish` announces, from the same service
+    // function, so an operator deploying from the editor and an agent
+    // publishing over MCP are told the same thing.
+    const { activateRepositoryCatalog, seedRepositoryCatalogEntries } = await import(
+      "../../../db/repositories/repository-catalog.js"
+    );
+    await seedRepositoryCatalogEntries(db, {
+      repositories: [{ provider: "github", path: "acme/api" }],
+      source: "seeded",
+      enabled: false,
+    });
+    await activateRepositoryCatalog(db, {
+      actorId: "user_admin",
+      reason: "the bridge is over",
+    });
+
+    await saveDraft(
+      {
+        ...VALID_DEFINITION,
+        repositoryScope: {
+          repositories: [{ provider: "github", repoPath: "acme/api" }],
+        },
+      },
+      0,
+    );
+    const res = await deploy(
+      jsonRequest(
+        "POST",
+        { expectedDraftRevision: 1, expectedDeployedVersion: null },
+        "http://worker.test/d/1/deploy",
+      ),
+    );
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).pinnedRepositoriesNotEnabled).toEqual(["github:acme/api"]);
+  });
+
+  it("reports an empty list, not an absent one, when every pin is enabled", async () => {
+    // Absent means the deploy did not compute it. A caller must be able to tell
+    // "nothing is wrong" from "nobody looked".
+    const { activateRepositoryCatalog, seedRepositoryCatalogEntries } = await import(
+      "../../../db/repositories/repository-catalog.js"
+    );
+    await seedRepositoryCatalogEntries(db, {
+      repositories: [{ provider: "github", path: "acme/api" }],
+      source: "seeded",
+      enabled: true,
+    });
+    await activateRepositoryCatalog(db, {
+      actorId: "user_admin",
+      reason: "the bridge is over",
+    });
+
+    await saveDraft(
+      {
+        ...VALID_DEFINITION,
+        repositoryScope: {
+          repositories: [{ provider: "github", repoPath: "acme/api" }],
+        },
+      },
+      0,
+    );
+    const res = await deploy(
+      jsonRequest(
+        "POST",
+        { expectedDraftRevision: 1, expectedDeployedVersion: null },
+        "http://worker.test/d/1/deploy",
+      ),
+    );
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).pinnedRepositoriesNotEnabled).toEqual([]);
+  });
+
   it("409s on stale expected state", async () => {
     await saveDraft(VALID_DEFINITION, 0);
     const res = await deploy(

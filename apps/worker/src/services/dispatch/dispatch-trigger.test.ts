@@ -192,7 +192,7 @@ async function activatedCatalogWith(
     });
     if (!entry.enabled) await setRepositoryEnabled(db, { id: saved.id, enabled: false });
   }
-  await activateRepositoryCatalog(db, { actorId: "user-1" });
+  await activateRepositoryCatalog(db, { actorId: "user-1", reason: "the bridge is over" });
   return loadRepositoryCatalogSnapshot();
 }
 

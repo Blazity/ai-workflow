@@ -43,15 +43,36 @@ function deferred<T>() {
   return { promise, settle };
 }
 
+/** Every activate request the dialog sent, in order. */
+const sent: Array<Record<string, unknown>> = [];
+
 function render(
   t: TestContext,
   options: {
     repositories?: RepositoryCatalogEntry[];
     directory?: Promise<Response>;
+    onActivate?: () => Response;
   } = {},
 ): ReactTestInstance {
+  sent.length = 0;
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = ((url: string) => {
+  globalThis.fetch = ((url: string, init?: RequestInit) => {
+    if (String(url) === "/api/repository-catalog/activate") {
+      sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return Promise.resolve(
+        options.onActivate?.() ??
+          Response.json({
+            state: {
+              activated: true,
+              bridge: false,
+              activatedAt: "2026-09-12T00:00:00.000Z",
+              activatedById: "user-1",
+              activatedByLabel: "Ada",
+              activationReason: "the bridge is over",
+            },
+          }),
+      );
+    }
     assert.equal(String(url), "/api/repositories");
     return options.directory ?? Promise.resolve(Response.json({ repositories: [] }));
   }) as typeof globalThis.fetch;
@@ -134,4 +155,31 @@ test("a catalog with nothing enabled refuses outright rather than disabling a bu
   assert.equal(confirmButton(root).props.disabled, true);
   // One statement, not two: the refusal replaces the ordinary blocker line.
   assert.doesNotMatch(text(root), /Activate is disabled:/);
+});
+
+test("the typed reason travels with the request and is not left on the screen", async (t) => {
+  // It used to stay here: the schema was strict and carried only the keys, so
+  // the copy promised an audit line nobody wrote. It is stored now, and the
+  // dialog is where it comes from.
+  const root = render(t);
+  await act(async () => undefined);
+
+  const reason = root.findByProps({ placeholder: "Why the bridge is ending" });
+  act(() => reason.props.onChange({ target: { value: "  the bridge is over  " } }));
+  assert.equal(confirmButton(root).props.disabled, false);
+
+  await act(async () => {
+    confirmButton(root).props.onClick();
+  });
+
+  assert.deepEqual(sent, [
+    { acknowledgedRepositoryKeys: [], reason: "the bridge is over" },
+  ]);
+});
+
+test("the copy says the reason is stored, because it is", async (t) => {
+  const root = render(t);
+  await act(async () => undefined);
+  assert.match(text(root), /Your name, the time and this reason are stored/);
+  assert.doesNotMatch(text(root), /The reason is not:/);
 });

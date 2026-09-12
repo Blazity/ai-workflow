@@ -380,9 +380,12 @@ test("an activated catalog offers no row it does not enable, and names a pin it 
     repositories: [{ ...option(), enabledInCatalog: true }],
   });
 
+  // The sentence is `pinnedRepositoriesNotEnabledSentence` from the contracts
+  // now, shared with `workflows.publish` and with the deploy response, so this
+  // asserts the shared wording rather than a second copy of it.
   assert.match(
     visibleText(html),
-    /It pins a repository the repository catalog does not enable, so dispatch refuses events from it and, until the engine stage lands, a run that starts anyway still reaches it through this pin: github:Blazity\/unlisted\./,
+    /It pins a repository the repository catalog does not enable, so dispatch refuses events from it and a run that starts some other way cannot reach it either: github:Blazity\/unlisted\./,
   );
   // Not the bridge's "the catalog does not list" wording, which says nothing
   // about dispatch refusing anything.

@@ -22,6 +22,7 @@ export function unactivatedRepositoryCatalog(): RepositoryCatalogSnapshot {
       activatedAt: null,
       activatedById: null,
       activatedByLabel: null,
+      activationReason: null,
     },
   };
 }
@@ -39,6 +40,7 @@ export function activatedRepositoryCatalog(
       activatedAt: "2026-09-11T00:00:00.000Z",
       activatedById: "user-1",
       activatedByLabel: "Ada",
+      activationReason: "the bridge is over",
     },
   };
 }

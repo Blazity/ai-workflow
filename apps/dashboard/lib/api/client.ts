@@ -36,8 +36,10 @@ import type {
   RepositoryCatalogImportResponse,
   RepositoryCatalogListResponse,
   RepositoryCatalogMutationResponse,
+  RepositoryCatalogProfileConflict,
   RepositoryCatalogSuggestRateLimited,
   RepositoryCatalogSuggestResponse,
+  RepositoryCatalogSuggestionsResponse,
   RepositoryCatalogUpsertRequest,
   RepositoryCatalogVersionsResponse,
   RunCancelResponse,
@@ -517,10 +519,17 @@ export const apiClient = {
         cache: "no-store",
         ...options,
       }),
+    /** The 409 naming the version the profile actually sits at is the answer to
+     *  `expectedProfileVersion`, not a failure: the screen reloads rather than
+     *  retries, so it is taken as data and the caller reads `currentVersion`. */
     save: (id: number, body: RepositoryCatalogUpsertRequest) =>
-      requestJson<RepositoryCatalogMutationResponse>(
+      requestJson<
+        RepositoryCatalogMutationResponse | RepositoryCatalogProfileConflict,
+        RepositoryCatalogProfileConflict
+      >(
         `/api/repository-catalog/${id}`,
         jsonInit("PUT", body),
+        (status) => status === 200 || status === 409,
       ),
     /** The switch, and nothing else: it mints no profile version, so a run in
      *  flight never sees its checks configuration move because of it. */
@@ -537,14 +546,26 @@ export const apiClient = {
     /** The 409 naming the repositories the dialog has not acknowledged is the
      *  normal first answer, so it is accepted as data rather than treated as a
      *  failure with a message. */
-    activate: (acknowledgedRepositoryKeys: string[]) =>
+    activate: (acknowledgedRepositoryKeys: string[], reason: string) =>
       requestJson<
         RepositoryCatalogActivateResponse | RepositoryCatalogActivateConflict,
         RepositoryCatalogActivateConflict
       >(
         "/api/repository-catalog/activate",
-        jsonInit("POST", { acknowledgedRepositoryKeys }),
+        jsonInit("POST", { acknowledgedRepositoryKeys, reason }),
         (status) => status === 200 || status === 409,
+      ),
+    /** The suggestion attempts this repository has spent, newest first. Cursor
+     *  paginated: the caller passes back `nextCursor` and never an offset, so a
+     *  row written between two pages cannot shift the page boundary. */
+    suggestions: (id: number, cursor?: string | null, options?: BrowserRequestOptions) =>
+      requestJson<RepositoryCatalogSuggestionsResponse>(
+        `/api/repository-catalog/${id}/suggestions${
+          cursor === undefined || cursor === null
+            ? ""
+            : `?cursor=${encodeURIComponent(cursor)}`
+        }`,
+        { cache: "no-store", ...options },
       ),
     importPreview: (options?: BrowserRequestOptions) =>
       requestJson<RepositoryCatalogImportPreviewResponse>(

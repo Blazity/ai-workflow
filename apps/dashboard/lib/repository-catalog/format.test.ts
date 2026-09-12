@@ -4,11 +4,14 @@ import test from "node:test";
 import type { RepositoryCatalogEntry, RepositoryProfileVersion } from "@shared/contracts";
 
 import {
+  durationLabel,
   firstLine,
   lastChangeLabel,
   repositoryLabel,
+  scriptGroupCountLabel,
   sortRepositories,
   sourceLabel,
+  suggestionUsageLabel,
   usageLabel,
 } from "./format";
 
@@ -48,6 +51,7 @@ test("last change reads the profile version, so flipping a switch is not reporte
     relationships: [],
     scriptGroups: null,
     gateGroups: null,
+    batchTimeoutMinutes: null,
     checksVersion: 2,
     actorId: "u1",
     actorLabel: "Filip",
@@ -99,4 +103,50 @@ test("the list order does not follow the enabled switch, so a row never moves un
     rows.map((row) => ({ ...row, enabled: !row.enabled })),
   ).map((row) => row.id);
   assert.deepEqual(flipped, sortRepositories(rows).map((row) => row.id));
+});
+
+test("a suggestion row that reported no usage is unpriced, never free", () => {
+  const row = {
+    id: 1,
+    createdAt: "2026-09-11T08:30:00.000Z",
+    outcome: "timeout" as const,
+    model: "claude-sonnet",
+    actorLabel: "Ada",
+    tokensInput: null,
+    tokensOutput: null,
+    durationMs: null,
+    priced: false,
+  };
+  assert.equal(suggestionUsageLabel(row), "unpriced");
+  assert.equal(
+    suggestionUsageLabel({
+      ...row,
+      outcome: "proposed",
+      tokensInput: 100,
+      tokensOutput: 20,
+      priced: true,
+    }),
+    "120 tokens (100 in, 20 out)",
+  );
+  // `priced` is the field that decides, not the numbers: a provider that
+  // genuinely reported zero is a different fact from one that reported nothing.
+  assert.equal(
+    suggestionUsageLabel({ ...row, tokensInput: 0, tokensOutput: 0, priced: true }),
+    "0 tokens (0 in, 0 out)",
+  );
+});
+
+test("a duration nobody recorded says so instead of showing zero", () => {
+  assert.equal(durationLabel(null), "duration not recorded");
+  assert.equal(durationLabel(0), "0 ms");
+  assert.equal(durationLabel(900), "900 ms");
+  assert.equal(durationLabel(1500), "1.5 s");
+  assert.equal(durationLabel(62_000), "62 s");
+});
+
+test("an uncomputed script group count is not a count of zero", () => {
+  assert.equal(scriptGroupCountLabel(undefined), null);
+  assert.equal(scriptGroupCountLabel(0), "0 script groups");
+  assert.equal(scriptGroupCountLabel(1), "1 script group");
+  assert.equal(scriptGroupCountLabel(4), "4 script groups");
 });

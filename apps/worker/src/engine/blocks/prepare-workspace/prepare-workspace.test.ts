@@ -230,7 +230,8 @@ const SETUP_BOUNDARY_ERROR_CASES = [
       name: "ChecksCeilingExceededError",
       message:
         "The repository checks did not finish within the 15 minute checks ceiling. " +
-        "Raise batchTimeoutMinutes for this definition or split the run. " +
+        "Raise the checks ceiling on the Repositories page (open the repository, " +
+      "Scripts tab, checks ceiling), or split the run. " +
         "(checks_ceiling_exceeded: Setup batch for github:acme/api reached the 15 minute checks ceiling)",
     },
   },

@@ -1981,7 +1981,8 @@ describe("v2 terminal failure exit", () => {
   it("keeps the actionable checks ceiling text in the run reason, telemetry and Jira comment", () => {
     const ceilingReason =
       "The repository checks did not finish within the 15 minute checks ceiling. " +
-      "Raise batchTimeoutMinutes for this definition or split the run. " +
+      "Raise the checks ceiling on the Repositories page (open the repository, " +
+      "Scripts tab, checks ceiling), or split the run. " +
       "(checks_ceiling_exceeded: Checks batch for github:acme/web reached the 15 minute checks ceiling)";
     const failure = executionError(
       "checks_ceiling_exceeded: Checks batch for github:acme/web reached the 15 minute checks ceiling",
@@ -1998,7 +1999,8 @@ describe("v2 terminal failure exit", () => {
     };
     const expected =
       "The repository checks did not finish within the 15 minute checks ceiling. " +
-      "Raise batchTimeoutMinutes for this definition or split the run. " +
+      "Raise the checks ceiling on the Repositories page (open the repository, " +
+      "Scripts tab, checks ceiling), or split the run. " +
       "(checks_ceiling_exceeded: Checks batch for github:acme/web reached the 15 minute checks ceiling) " +
       "Diagnostic ID: AIW-DIAG-wrun-checks-checks-1";
 

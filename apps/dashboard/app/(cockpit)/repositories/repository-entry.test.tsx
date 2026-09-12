@@ -1,11 +1,11 @@
 // apps/dashboard/app/(cockpit)/repositories/repository-entry.test.tsx
 //
-// The three things the entry screen does that cannot be undone by reloading:
-// it saves a whole profile over whatever is stored, it restores an old version
-// by saving it forward, and it erases a memory document. Each has its own guard
-// and this file is those guards.
+// The things the entry screen does that cannot be undone by reloading: it
+// writes a profile, it restores an old version by saving it forward, and it
+// erases a memory document. Each has its own guard and this file is those
+// guards.
 import assert from "node:assert/strict";
-import test, { type TestContext } from "node:test";
+import test, { mock, type TestContext } from "node:test";
 import React from "react";
 import { act, create, type ReactTestInstance } from "react-test-renderer";
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
@@ -15,7 +15,34 @@ import type {
   RepositoryProfileVersion,
 } from "@shared/contracts";
 
-import { RepositoryEntryScreen } from "./repository-entry";
+// Rules and Description are edited in the prompt editor now. It is Tiptap,
+// which needs a DOM this runner does not have, so it is replaced by the
+// smallest thing with the same contract: a value in, a markdown string out.
+// What the screen does with that string is what these tests are about.
+mock.module("../../../components/cockpit/prompt-editor/prompt-editor.tsx", {
+  exports: {
+    PromptEditor: ({
+      value,
+      onChange,
+      disabled,
+    }: {
+      value: string;
+      onChange: (markdown: string) => void;
+      disabled?: boolean;
+    }) =>
+      React.createElement("textarea", {
+        value,
+        disabled,
+        "data-prompt-editor": true,
+        onChange: (event: { target: { value: string } }) => onChange(event.target.value),
+      }),
+  },
+} as unknown as Parameters<typeof mock.module>[1]);
+
+// `require` rather than a top-level `await import`: this package transpiles to
+// CommonJS, and the screen has to be loaded AFTER the mock is registered.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { RepositoryEntryScreen } = require("./repository-entry") as typeof import("./repository-entry");
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -46,6 +73,7 @@ function version(n: number, overrides: Partial<RepositoryProfileVersion> = {}) {
     relationships: [],
     scriptGroups: null,
     gateGroups: null,
+    batchTimeoutMinutes: null,
     checksVersion: n,
     actorLabel: "Someone",
     reason: `reason for v${n}`,
@@ -68,9 +96,8 @@ interface Harness {
 /**
  * Mounts the screen over a fetch stub answering by URL.
  *
- * By URL and not by turn: every save is now two requests, the pre-flight read
- * and the write, so a queue keyed by position would hand the write's answer to
- * the read.
+ * By URL and not by turn: the History tab loads the suggestion history of its
+ * own accord, so a queue keyed by position would hand that answer to a save.
  */
 function render(
   t: TestContext,
@@ -78,8 +105,6 @@ function render(
     versions?: RepositoryProfileVersion[];
     currentProfile?: RepositoryProfileVersion | null;
     memory?: React.ComponentProps<typeof RepositoryEntryScreen>["memory"];
-    storedVersion?: number;
-    onPreflight?: () => Response;
     onSave?: (body: unknown) => Response;
     onDelete?: () => Response;
   } = {},
@@ -90,17 +115,8 @@ function render(
     const method = init?.method ?? "GET";
     const body = init?.body === undefined ? null : JSON.parse(String(init.body));
     calls.push({ url: String(url), method, body });
-    if (String(url) === "/api/repository-catalog/7" && method === "GET") {
-      if (options.onPreflight) return Promise.resolve(options.onPreflight());
-      return Promise.resolve(
-        Response.json({
-          repository: {
-            ...REPOSITORY,
-            profileVersion: options.storedVersion ?? REPOSITORY.profileVersion,
-          },
-          currentProfile: null,
-        }),
-      );
+    if (String(url).startsWith("/api/repository-catalog/7/suggestions")) {
+      return Promise.resolve(Response.json({ suggestions: [], nextCursor: null }));
     }
     if (String(url) === "/api/repository-catalog/7" && method === "PUT") {
       return Promise.resolve(
@@ -171,17 +187,58 @@ function openTab(root: ReactTestInstance, label: string) {
   });
 }
 
-test("a profile that moved while the screen held a draft refuses the save instead of overwriting it", async (t) => {
-  // The upsert sends the whole merged profile and the route takes no version
-  // token, so a save on a stale baseline REPLACES the other edit. The screen
-  // re-reads the row first and stops.
-  const harness = render(t, { storedVersion: 5 });
+/** Types into the prompt editor under the field with this label. */
+function typeInto(root: ReactTestInstance, label: string, value: string) {
+  const field = root
+    .findByProps({ "aria-label": label })
+    .findByProps({ "data-prompt-editor": true });
+  act(() => field.props.onChange({ target: { value } }));
+}
+
+function typeReason(root: ReactTestInstance, value: string) {
+  act(() =>
+    root.findByProps({ "aria-label": "Reason" }).props.onChange({ target: { value } }),
+  );
+}
+
+test("the save carries the version this screen loaded, and only the field that moved", async (t) => {
+  // No pre-flight read any more: the write itself is conditional on the token,
+  // so there is no window between a read and a write for the other admin's
+  // edit to land in.
+  const harness = render(t);
 
   openTab(harness.root, "Rules");
-  const rules = harness.root.findByProps({ "aria-label": "Rules" });
-  act(() => rules.props.onChange({ target: { value: "new rules" } }));
-  const reason = harness.root.findByProps({ "aria-label": "Reason" });
-  act(() => reason.props.onChange({ target: { value: "because" } }));
+  typeInto(harness.root, "Rules", "new rules");
+  typeReason(harness.root, "because");
+
+  await act(async () => {
+    button(harness.root, "Save changes").props.onClick();
+  });
+
+  assert.deepEqual(
+    harness.calls.map((call) => call.method),
+    ["PUT"],
+    "a save is one request now",
+  );
+  const body = harness.calls[0].body as Record<string, unknown>;
+  assert.equal(body.rules, "new rules");
+  assert.equal(body.expectedProfileVersion, 3);
+  assert.equal("description" in body, false);
+  assert.equal("scriptGroups" in body, false);
+  assert.match(text(harness.root), /Saved as version 4/);
+});
+
+test("a 409 says which version the profile moved to and keeps the draft", async (t) => {
+  const harness = render(t, {
+    onSave: () =>
+      Response.json({ error: "repository_profile_conflict", currentVersion: 5 }, {
+        status: 409,
+      }),
+  });
+
+  openTab(harness.root, "Rules");
+  typeInto(harness.root, "Rules", "new rules");
+  typeReason(harness.root, "because");
 
   await act(async () => {
     button(harness.root, "Save changes").props.onClick();
@@ -191,50 +248,34 @@ test("a profile that moved while the screen held a draft refuses the save instea
     text(harness.root),
     /This repository moved to v5 while you were editing\. Reload to see the change before saving\./,
   );
-  assert.equal(
-    harness.calls.filter((call) => call.method === "PUT").length,
-    0,
-    "a refused save must not have sent anything",
-  );
+  // The draft is still on screen and still unsaved, so nothing the operator
+  // typed was lost by the refusal.
+  assert.match(text(harness.root), /Unsaved changes: rules/);
 });
 
-test("an unmoved profile is saved, and the pre-flight read runs before the write", async (t) => {
-  const harness = render(t);
+test("a save the worker answers as unchanged is reported as such, not as a version", async (t) => {
+  const harness = render(t, {
+    onSave: () =>
+      Response.json({ repository: REPOSITORY, version: 3, unchanged: true, changedFields: [] }),
+  });
 
   openTab(harness.root, "Rules");
-  act(() =>
-    harness.root
-      .findByProps({ "aria-label": "Rules" })
-      .props.onChange({ target: { value: "new rules" } }),
-  );
-  act(() =>
-    harness.root
-      .findByProps({ "aria-label": "Reason" })
-      .props.onChange({ target: { value: "because" } }),
-  );
+  typeInto(harness.root, "Rules", "new rules");
+  typeReason(harness.root, "because");
 
   await act(async () => {
     button(harness.root, "Save changes").props.onClick();
   });
 
-  assert.deepEqual(
-    harness.calls.map((call) => call.method),
-    ["GET", "PUT"],
-  );
-  assert.match(text(harness.root), /Saved as version 4\./);
+  assert.match(text(harness.root), /Nothing was saved/);
+  assert.doesNotMatch(text(harness.root), /Saved as version/);
 });
 
-test("a group name the Scripts tab stored is blamed on the Scripts tab, not on what was edited", async (t) => {
-  // Every save sends the whole profile, so a stored group name refuses a save
-  // whose only edit was the Rules text.
+test("a refused group name still points at the Scripts tab", async (t) => {
+  // A Rules save no longer carries the groups, so this refusal can only come
+  // from a value the request did send. The notice still names the tab, because
+  // that is where the operator has to go.
   const harness = render(t, {
-    currentProfile: version(3, {
-      scriptGroups: {
-        provider: "github",
-        repoPath: "acme/web",
-        groups: { "Bad Name": { commands: ["pnpm test"] } },
-      } as unknown as Record<string, unknown>,
-    }),
     onSave: () =>
       Response.json(
         { error: "invalid_script_group_name: Bad Name (must be lower case)" },
@@ -243,23 +284,30 @@ test("a group name the Scripts tab stored is blamed on the Scripts tab, not on w
   });
 
   openTab(harness.root, "Rules");
-  act(() =>
-    harness.root
-      .findByProps({ "aria-label": "Rules" })
-      .props.onChange({ target: { value: "new rules" } }),
-  );
-  act(() =>
-    harness.root
-      .findByProps({ "aria-label": "Reason" })
-      .props.onChange({ target: { value: "because" } }),
-  );
+  typeInto(harness.root, "Rules", "new rules");
+  typeReason(harness.root, "because");
   await act(async () => {
     button(harness.root, "Save changes").props.onClick();
   });
 
-  const rendered = text(harness.root);
-  assert.match(rendered, /The stored script group "Bad Name" is not valid/);
-  assert.match(rendered, /The Scripts tab holds it/);
+  assert.match(text(harness.root), /A script group name is not valid/);
+  assert.match(text(harness.root), /The Scripts tab holds/);
+});
+
+test("the rules editor hands the markdown back unchanged", async (t) => {
+  // The stored value is markdown and the editor is a markdown editor: what the
+  // screen sends must be exactly what the editor produced, headings and all.
+  const markdown = "# Rules\n\n- never force push\n";
+  const harness = render(t);
+
+  openTab(harness.root, "Rules");
+  typeInto(harness.root, "Rules", markdown);
+  typeReason(harness.root, "because");
+  await act(async () => {
+    button(harness.root, "Save changes").props.onClick();
+  });
+
+  assert.equal((harness.calls[0].body as { rules: string }).rules, markdown);
 });
 
 test("restoring an old version saves it forward with a reason that says what it was", async (t) => {
@@ -276,25 +324,17 @@ test("restoring an old version saves it forward with a reason that says what it 
   });
 
   const put = harness.calls.find((call) => call.method === "PUT");
-  assert.ok(put, "restore sends the same full-profile PUT");
-  const body = put.body as { reason: string; description: string; rules: string };
+  assert.ok(put, "restore sends a PUT like any other save");
+  const body = put.body as {
+    reason: string;
+    description: string;
+    rules: string;
+    expectedProfileVersion: number;
+  };
   assert.equal(body.reason, "Restore v2");
   assert.equal(body.description, "description at v2");
   assert.equal(body.rules, "rules at v2");
-});
-
-test("a restore refuses on a moved profile exactly as a save does", async (t) => {
-  const harness = render(t, { storedVersion: 9 });
-  openTab(harness.root, "History");
-
-  await act(async () => {
-    harness.root
-      .findAll((node) => node.type === "button" && text(node).includes("Restore this version"))[0]
-      .props.onClick();
-  });
-
-  assert.match(text(harness.root), /This repository moved to v9 while you were editing/);
-  assert.equal(harness.calls.filter((call) => call.method === "PUT").length, 0);
+  assert.equal(body.expectedProfileVersion, 3);
 });
 
 const MEMORY = [
@@ -385,32 +425,87 @@ test("cancelling an armed erase leaves the document alone", async (t) => {
   assert.doesNotMatch(text(harness.root), /Erased\./);
 });
 
-test("a pre-flight read that fails stops the save instead of quietly turning the guard off", async (t) => {
-  // "Could not read" is not "unmoved". Treating it as a pass would mean one
-  // flaky GET lets a stale full-profile overwrite through, which is the exact
-  // outcome the pre-flight exists to prevent.
-  const harness = render(t, {
-    onPreflight: () => Response.json({ error: "nope" }, { status: 503 }),
-  });
+/** Types into the checks ceiling input and returns it. */
+function typeCeiling(root: ReactTestInstance, value: string): ReactTestInstance {
+  const field = root.findByProps({ "aria-label": "Checks ceiling" });
+  act(() => field.props.onChange({ target: { value } }));
+  return root.findByProps({ "aria-label": "Checks ceiling" });
+}
 
-  openTab(harness.root, "Rules");
-  act(() =>
-    harness.root
-      .findByProps({ "aria-label": "Rules" })
-      .props.onChange({ target: { value: "new rules" } }),
-  );
-  act(() =>
-    harness.root
-      .findByProps({ "aria-label": "Reason" })
-      .props.onChange({ target: { value: "because" } }),
-  );
+test("a checks ceiling the contract would refuse disables Save and stays on screen", async (t) => {
+  // The field never pushes a refused value into the draft, so before this the
+  // Save button stayed armed and saved the previous number while the screen
+  // showed the new one. Blocking the save is what makes the two agree.
+  const harness = render(t);
+  openTab(harness.root, "Scripts");
+
+  typeCeiling(harness.root, "30");
+  typeReason(harness.root, "because");
+  assert.equal(button(harness.root, "Save changes").props.disabled, false);
+
+  const overMax = typeCeiling(harness.root, "999");
+  assert.equal(button(harness.root, "Save changes").props.disabled, true);
+  assert.match(text(harness.root), /Save is disabled: the checks ceiling must be a whole number of minutes between 1 and 120, or empty/);
+  assert.equal(overMax.props.value, "999", "what was typed stays until it is fixed");
+
+  typeCeiling(harness.root, "45");
+  assert.equal(button(harness.root, "Save changes").props.disabled, false);
   await act(async () => {
     button(harness.root, "Save changes").props.onClick();
   });
 
-  assert.match(
-    text(harness.root),
-    /The current version could not be read, so this save was not sent\. Try again\./,
+  assert.equal(
+    (harness.calls[0].body as { batchTimeoutMinutes: number }).batchTimeoutMinutes,
+    45,
   );
-  assert.equal(harness.calls.filter((call) => call.method === "PUT").length, 0);
+});
+
+test("zero and a fraction are refused the same way, and an empty ceiling is not", async (t) => {
+  // The saved profile already claims a ceiling, so withdrawing it is a change
+  // like any other and the Save bar stays on screen through the whole test.
+  const harness = render(t, {
+    currentProfile: version(3, { batchTimeoutMinutes: 30 }),
+  });
+  openTab(harness.root, "Scripts");
+  typeCeiling(harness.root, "45");
+  typeReason(harness.root, "because");
+
+  for (const refused of ["0", "1.5", "x"]) {
+    typeCeiling(harness.root, refused);
+    assert.equal(
+      button(harness.root, "Save changes").props.disabled,
+      true,
+      `"${refused}" is not a ceiling the route would accept`,
+    );
+  }
+
+  // Blank is the claim being withdrawn, not a typo: the run keeps whatever the
+  // operator configuration sets, which is what every repository did before the
+  // field existed.
+  typeCeiling(harness.root, "");
+  assert.equal(button(harness.root, "Save changes").props.disabled, false);
+  assert.doesNotMatch(text(harness.root), /Save is disabled: the checks ceiling/);
+});
+
+test("leaving the tab with a refused ceiling takes the blocker with it", async (t) => {
+  // The typed text lives in the field, so the field going away takes it with
+  // it and the input comes back showing the draft's value. A blocker that
+  // outlived the message would wedge Save behind something nothing renders.
+  const harness = render(t);
+  openTab(harness.root, "Scripts");
+
+  typeCeiling(harness.root, "20");
+  typeReason(harness.root, "because");
+  typeCeiling(harness.root, "999");
+  assert.equal(button(harness.root, "Save changes").props.disabled, true);
+
+  openTab(harness.root, "Overview");
+  assert.equal(button(harness.root, "Save changes").props.disabled, false);
+
+  openTab(harness.root, "Scripts");
+  assert.equal(
+    harness.root.findByProps({ "aria-label": "Checks ceiling" }).props.value,
+    "20",
+    "the field returns showing the value the draft actually holds",
+  );
 });

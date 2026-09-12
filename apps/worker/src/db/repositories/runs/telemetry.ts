@@ -20,6 +20,7 @@ import type {
   BlockRunState,
   HarnessRunManifestRecord,
   ResolvedPromptReference,
+  RunRepositoryAccess,
   RunPullRequest,
   RunStep,
   WorkflowRunBudgetFailure,
@@ -303,6 +304,10 @@ export interface RunBlockStatusWrite {
   blockStatuses: Record<string, Omit<BlockRunState, "output">>;
   promptManifest?: ResolvedPromptReference[];
   harnessManifests?: HarnessRunManifestRecord[];
+  /** What the run froze at its start: whether the catalog decides, and the
+   *  enabled keys it decided from. A manifest, written once, exactly like the
+   *  two above. */
+  repositoryAccess?: RunRepositoryAccess;
 }
 
 /**
@@ -332,6 +337,7 @@ export async function recordBlockStatuses(
       blockStatuses: write.blockStatuses,
       promptManifest: write.promptManifest,
       harnessManifests: write.harnessManifests,
+      repositoryAccess: write.repositoryAccess,
     })
     .onConflictDoUpdate({
       target: workflowRuns.runId,
@@ -343,6 +349,13 @@ export async function recordBlockStatuses(
         harnessManifests: keepIfNull(
           workflowRuns.harnessManifests,
           workflowRuns.harnessManifests,
+        ),
+        // Written once, like the two manifests above: the run froze this list
+        // at its start, so a later write of the same row must not replace it
+        // with a fresher read of a catalog that has moved since.
+        repositoryAccess: keepIfNull(
+          workflowRuns.repositoryAccess,
+          workflowRuns.repositoryAccess,
         ),
         updatedAt: sql`now()`,
       },

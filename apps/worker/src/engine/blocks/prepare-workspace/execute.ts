@@ -42,6 +42,7 @@ import {
 } from "../support/types.js";
 import {
   resolveChecksProvisioningStep,
+  runChecksScopeKeys,
   runRepositorySetup,
   setupFailureMessage,
 } from "../pre-pr-checks.js";
@@ -628,10 +629,15 @@ export function sandboxLifetimeMs(baseMs: number, checksCeilingMs: number): numb
  * touches checks pays exactly one extra step for it.
  */
 export async function ensureChecksCeiling(
-  ctx: Pick<Parameters<BlockExecuteFn>[2], "checksCeilingMs">,
+  ctx: Pick<
+    Parameters<BlockExecuteFn>[2],
+    "checksCeilingMs" | "workspaceManifest" | "selectedRepositories"
+  >,
 ): Promise<number> {
   if (ctx.checksCeilingMs !== null) return ctx.checksCeilingMs;
-  const { ceilingMs } = await resolveChecksProvisioningStep();
+  const { ceilingMs } = await resolveChecksProvisioningStep(
+    runChecksScopeKeys(ctx),
+  );
   ctx.checksCeilingMs = ceilingMs;
   return ceilingMs;
 }
@@ -736,7 +742,7 @@ export async function ensureWorkspace(
   const provisioning =
     ctx.checksCeilingMs !== null && !needsScripts
       ? { ceilingMs: ctx.checksCeilingMs, config: null }
-      : await resolveChecksProvisioningStep();
+      : await resolveChecksProvisioningStep(runChecksScopeKeys(ctx));
   ctx.checksCeilingMs ??= provisioning.ceilingMs;
   const checksCeilingMs = ctx.checksCeilingMs;
   if (ctx.sandboxId) {

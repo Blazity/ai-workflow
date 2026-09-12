@@ -35,6 +35,8 @@ const entryPut = (await import("./repository-catalog/[id].put.js")).default;
 const enabledPatch = (await import("./repository-catalog/[id]/enabled.patch.js")).default;
 const versionsGet = (await import("./repository-catalog/[id]/versions.get.js")).default;
 const activatePost = (await import("./repository-catalog/activate.post.js")).default;
+const suggestionsGet = (await import("./repository-catalog/[id]/suggestions.get.js"))
+  .default;
 const { upsertRepositoryProfile, setRepositoryEnabled } = await import(
   "../../../db/repositories/repository-catalog.js"
 );
@@ -104,6 +106,12 @@ const setEnabled = (id: number, body: unknown) =>
       body,
     ),
   );
+const suggestions = (id: number, query = "") =>
+  paramHandler("get", "/api/v1/repository-catalog/:id/suggestions", suggestionsGet)(
+    new Request(
+      `http://worker.test/api/v1/repository-catalog/${id}/suggestions${query}`,
+    ),
+  );
 const activate = (body: unknown) =>
   handlerFor(activatePost)(
     jsonRequest("http://worker.test/", "POST", body),
@@ -154,6 +162,7 @@ describe("GET /api/v1/repository-catalog", () => {
         activatedAt: null,
         activatedById: null,
         activatedByLabel: null,
+        activationReason: null,
       },
       repositories: [],
     });
@@ -339,9 +348,18 @@ describe("PATCH /api/v1/repository-catalog/:id/enabled", () => {
 
 describe("POST /api/v1/repository-catalog/activate", () => {
   it("activates when nothing is in flight", async () => {
-    const res = await activate({ acknowledgedRepositoryKeys: [] });
+    const res = await activate({ acknowledgedRepositoryKeys: [], reason: "the bridge is over" });
     expect(res.status).toBe(200);
-    expect((await res.json()).state).toMatchObject({ activated: true, bridge: false });
+    expect((await res.json()).state).toMatchObject({
+      activated: true,
+      bridge: false,
+      activationReason: "the bridge is over",
+    });
+  });
+
+  it("refuses an activation with no reason, so the audit line is never empty", async () => {
+    const res = await activate({ acknowledgedRepositoryKeys: [], reason: "  " });
+    expect(res.status).toBe(400);
   });
 
   it("refuses with the list when a live claim works in a repository that is not enabled", async () => {
@@ -361,7 +379,7 @@ describe("POST /api/v1/repository-catalog/activate", () => {
       branchName: "ai/AIW-1",
     });
 
-    const refused = await activate({ acknowledgedRepositoryKeys: [] });
+    const refused = await activate({ acknowledgedRepositoryKeys: [], reason: "the bridge is over" });
     expect(refused.status).toBe(409);
     expect(await refused.json()).toEqual({
       error: "unacknowledged_repositories",
@@ -377,14 +395,155 @@ describe("POST /api/v1/repository-catalog/activate", () => {
 
     const accepted = await activate({
       acknowledgedRepositoryKeys: ["github:acme/web"],
+      reason: "the bridge is over",
     });
     expect(accepted.status).toBe(200);
   });
 
   it("gives a member 403 and leaves the bridge up", async () => {
     state.sessionUserId = "user_member";
-    expect((await activate({ acknowledgedRepositoryKeys: [] })).status).toBe(403);
+    expect((await activate({ acknowledgedRepositoryKeys: [], reason: "the bridge is over" })).status).toBe(403);
     const body = await (await handlerFor(catalogGet)(new Request("http://worker.test/"))).json();
     expect(body.state.bridge).toBe(true);
+  });
+});
+
+describe("PUT /api/v1/repository-catalog/:id as a patch", () => {
+  it("leaves an omitted field alone and names only what moved", async () => {
+    const id = await seedProfile();
+    const stored = await get(id);
+    const before = (await stored.json()).currentProfile;
+
+    const res = await put(id, {
+      provider: "github",
+      path: "acme/api",
+      rules: "never force push",
+      reason: "rules only",
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.changedFields).toEqual(["rules"]);
+    expect(body.unchanged).toBe(false);
+    const after = (await (await get(id)).json()).currentProfile;
+    expect(after.scriptGroups).toEqual(before.scriptGroups);
+    expect(after.rules).toBe("never force push");
+  });
+
+  it("mints nothing and says so when the request changes nothing", async () => {
+    const id = await seedProfile();
+    const res = await put(id, {
+      provider: "github",
+      path: "acme/api",
+      rules: "",
+      reason: "clicked twice",
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.unchanged).toBe(true);
+    expect(body.changedFields).toEqual([]);
+    expect((await (await versions(id)).json()).versions).toHaveLength(1);
+  });
+
+  it("answers 409 with the version the profile actually sits at", async () => {
+    const id = await seedProfile();
+    await put(id, {
+      provider: "github",
+      path: "acme/api",
+      rules: "somebody else got here first",
+      reason: "their edit",
+    });
+
+    const refused = await put(id, {
+      provider: "github",
+      path: "acme/api",
+      rules: "built on a stale baseline",
+      expectedProfileVersion: 1,
+      reason: "my edit",
+    });
+
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({
+      error: "repository_profile_conflict",
+      currentVersion: 2,
+    });
+    // Refused, not merged: the other edit is still what is stored.
+    const after = (await (await get(id)).json()).currentProfile;
+    expect(after.rules).toBe("somebody else got here first");
+    expect(after.version).toBe(2);
+  });
+
+  it("takes the token when the profile has not moved", async () => {
+    const id = await seedProfile();
+    const res = await put(id, {
+      provider: "github",
+      path: "acme/api",
+      rules: "still current",
+      expectedProfileVersion: 1,
+      reason: "my edit",
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).version).toBe(2);
+  });
+});
+
+describe("GET /api/v1/repository-catalog/:id/suggestions", () => {
+  it("lists the calls newest first, unpriced when the provider reported nothing", async () => {
+    const id = await seedProfile();
+    const { insertRepositorySuggestion } = await import(
+      "../../../db/repositories/repository-suggestions.js"
+    );
+    await insertRepositorySuggestion(db, {
+      repositoryId: id,
+      actorId: "user_admin",
+      actorLabel: "Admin",
+      model: "claude-sonnet",
+      outcome: "proposed",
+      usage: { inputTokens: 100, cachedTokens: 0, outputTokens: 20 },
+      durationMs: 1500,
+    });
+    await insertRepositorySuggestion(db, {
+      repositoryId: id,
+      actorId: "user_admin",
+      actorLabel: "Admin",
+      model: "claude-sonnet",
+      outcome: "timeout",
+      usage: null,
+    });
+
+    const res = await suggestions(id);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.nextCursor).toBe(null);
+    expect(body.suggestions.map((row: { outcome: string }) => row.outcome)).toEqual([
+      "timeout",
+      "proposed",
+    ]);
+    // A timeout reported no usage. Unpriced, never zero: zero would say the
+    // call was free.
+    expect(body.suggestions[0]).toMatchObject({
+      priced: false,
+      tokensInput: null,
+      tokensOutput: null,
+      durationMs: null,
+    });
+    expect(body.suggestions[1]).toMatchObject({
+      priced: true,
+      tokensInput: 100,
+      tokensOutput: 20,
+      durationMs: 1500,
+    });
+  });
+
+  it("refuses a cursor nobody issued rather than answering somebody else's page", async () => {
+    const id = await seedProfile();
+    expect((await suggestions(id, "?cursor=not-a-cursor")).status).toBe(400);
+  });
+
+  it("is open to a member, because a cost history is a read", async () => {
+    const id = await seedProfile();
+    state.sessionUserId = "user_member";
+    expect((await suggestions(id)).status).toBe(200);
   });
 });

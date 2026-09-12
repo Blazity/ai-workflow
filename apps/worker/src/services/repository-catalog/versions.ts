@@ -25,6 +25,7 @@ export function serializeRepositoryProfileVersion(
     relationships: (row.relationships ?? []) as RepositoryRelationship[],
     scriptGroups: (row.scriptGroups ?? null) as Record<string, unknown> | null,
     gateGroups: (row.gateGroups ?? null) as string[] | null,
+    batchTimeoutMinutes: row.batchTimeoutMinutes ?? null,
     checksVersion: row.checksVersion,
     actorId: row.actorId,
     actorLabel: row.actorLabel,

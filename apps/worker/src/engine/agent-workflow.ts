@@ -33,7 +33,7 @@ import { moveTicketStep } from "./steps/ticket-transition-step.js";
 import { agentArtifactPhase, agentProtocolExecutionError as agentProtocolBlockError, blockBudgetObserver, buildV2AgentArtifactKeys, recordBlockPhaseUsage, type EngineCtx } from "./blocks/support/types.js";
 import { VARIABLE_PARAM_KEYS } from "@shared/prompts";
 import { compatibilityPromptSourceForV2Node, compileEffectivePrompt, effectivePromptProfileSource } from "./helpers/effective-prompt.js";
-import { loadInvocationRepositoryInstructionSources } from "./steps/repository-instructions.js";
+import { loadInvocationRepositoryInstructionSources, shouldLoadRepositoryInstructionSources } from "./steps/repository-instructions.js";
 import { transformRegexEvaluator } from "./helpers/transform-regex-evaluator.js";
 import { publicationPrsForTelemetry } from "./helpers/publication-prs-for-telemetry.js";
 import { withAnalysisDelivery, withAnalysisPublication } from "./support/run-analysis-report.js";
@@ -49,7 +49,7 @@ import { prepareHarnessAgentInvocationStep } from "./blocks/agent-sandbox.js";
 import { recoverScriptDriftFromSteps } from "./blocks/finalize-workspace/execute.js";
 import { resolveCallLlmTarget } from "./blocks/call-llm/execute.js";
 import { pollPhaseUntilDone } from "./blocks/poll-phase.js";
-import { loadPrePrCheckConfigStep, recoverChecksCeilingFromSteps, runPrePrChecksWithFixes } from "./blocks/pre-pr-checks.js";
+import { loadPrePrCheckConfigStep, recoverChecksCeilingFromSteps, runChecksScopeKeys, runPrePrChecksWithFixes } from "./blocks/pre-pr-checks.js";
 import { type PrePrCheckRunResult } from "./steps/pre-pr-checks-runner.js";
 import { isRepositoryScriptsRefusal, repositoryScriptFailureEntry, repositoryScriptsOutput, repositoryScriptsStatus } from "./blocks/support/repository-scripts-output.js";
 import { RunBudgetError, addElapsed, checksCeilingErrorDetail, createRunBudgetState, isChecksCeilingExceededError, isDurationAbortError, isV2InvocationCancelledError, observeRunBudget, propagateInvocationInterruption, recordBudgetUsage, runBudgetFailureFromError, type RunBudgetAttribution, type RunBudgetLimits, type RunBudgetFailure, type RunBudgetObservation, type RunBudgetState } from "./helpers/run-budget.js";
@@ -665,6 +665,11 @@ async function agentWorkflowBody(
       blockStatuses: { ...blockStatuses },
       promptManifest: resolvedPrompts.manifest,
       harnessManifests,
+      // The list this run froze at its start, on the row. The run-start step
+      // logs it, which answers "what could this run touch" for whoever is
+      // watching at the time; the same question asked a week later needs the
+      // answer beside the run, not in a log retention window.
+      repositoryAccess: runRepositories,
     }).catch(() => {});
   await writeBlockStatuses();
   let v2RunObservation: V2RunObservationHooks | null = null;
@@ -2926,7 +2931,9 @@ async function agentWorkflowBody(
             // client tenant's real checks outlive the 300s one function
             // invocation gets and used to kill the run with no recoverable
             // cause. See workflows/blocks/pre-pr-checks.ts.
-            const prePrConfig = await loadPrePrCheckConfigStep();
+            const prePrConfig = await loadPrePrCheckConfigStep(
+              runChecksScopeKeys(ctx),
+            );
             let prePrChecks: PrePrCheckRunResult;
             try {
               prePrChecks = await runPrePrChecksWithFixes({
@@ -3316,7 +3323,13 @@ async function agentWorkflowBody(
             ReturnType<typeof loadInvocationRepositoryInstructionSources>
           > = [];
           if (
-            runtime.manifest.context.includeRepositoryInstructions &&
+            shouldLoadRepositoryInstructionSources({
+              includeRepositoryInstructions:
+                runtime.manifest.context.includeRepositoryInstructions,
+              manifest: ctx.workspaceManifest,
+            }) &&
+            // The predicate already requires a manifest; this repeats it only
+            // so the compiler narrows it away from null for the call below.
             ctx.workspaceManifest
           ) {
             try {
@@ -3327,6 +3340,8 @@ async function agentWorkflowBody(
                   sharedCodeSandboxId: ctx.sandboxId,
                   manifest: ctx.workspaceManifest,
                   enableRepoMemory: runSettings.ENABLE_REPO_MEMORY,
+                  repositoryAccess: ctx.repositories,
+                  ruleVariables: buildPromptVariables(ctx),
                 });
             } catch (error) {
               if (isRunControlError(error)) throw error;

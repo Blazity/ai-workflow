@@ -9,6 +9,9 @@ import {
   repositoryCatalogEntrySchema,
   repositoryCatalogKey,
   repositoryCatalogStateSchema,
+  REPOSITORY_CATALOG_SEED_ACTIVATION_REASON,
+  REPOSITORY_CATALOG_SEED_ACTOR_LABEL,
+  pinnedRepositoriesNotEnabledSentence,
   repositoryProfileVersionSchema,
   REPOSITORY_SCRIPT_GROUP_NAME_MAX_LENGTH,
   REPOSITORY_SUGGESTION_ANSWER_JSON_SCHEMA,
@@ -84,6 +87,62 @@ describe("repositoryCatalogEntrySchema", () => {
   });
 });
 
+describe("repositoryCatalogEntrySchema script group count", () => {
+  it("is optional, and absent is not zero", () => {
+    // Absent means "this response did not compute the count". A list that
+    // rendered a missing count as 0 would tell an operator their script groups
+    // are gone, so the field has to stay distinguishable from a real zero.
+    const without = parseRequestBody(repositoryCatalogEntrySchema, entry);
+    expect(without.ok).toBe(true);
+    expect(without.ok && "scriptGroupCount" in without.value).toBe(false);
+
+    expect(
+      parseRequestBody(repositoryCatalogEntrySchema, { ...entry, scriptGroupCount: 0 }),
+    ).toMatchObject({ ok: true, value: { scriptGroupCount: 0 } });
+    expect(
+      parseRequestBody(repositoryCatalogEntrySchema, { ...entry, scriptGroupCount: -1 })
+        .ok,
+    ).toBe(false);
+  });
+});
+
+describe("pinnedRepositoriesNotEnabledSentence", () => {
+  it("says the same thing to the editor and to an MCP publish", () => {
+    const one = pinnedRepositoriesNotEnabledSentence(["github:acme/api"]);
+    expect(one.includes("It pins a repository the repository catalog does not enable")).toBe(
+      true,
+    );
+    expect(one.endsWith("github:acme/api.")).toBe(true);
+
+    const two = pinnedRepositoriesNotEnabledSentence([
+      "github:acme/api",
+      "github:acme/web",
+    ]);
+    expect(two.includes("It pins 2 repositories")).toBe(true);
+    expect(two.endsWith("github:acme/api, github:acme/web.")).toBe(true);
+  });
+
+  it("takes the label a surface prefers without changing the sentence around it", () => {
+    expect(
+      pinnedRepositoriesNotEnabledSentence(["github:acme/api"], (key) =>
+        key.replace("github:", ""),
+      ).endsWith("acme/api."),
+    ).toBe(true);
+  });
+});
+
+describe("the seed actor", () => {
+  it("labels itself as provenance, and records the same words as its reason", () => {
+    // The banner reads "(seeded from AGENT_ALLOWED_REPOS)" off the label, so
+    // the two constants moving apart would silently turn the seed into what
+    // looks like a person who clicked Activate.
+    expect(REPOSITORY_CATALOG_SEED_ACTOR_LABEL).toBe("seeded from AGENT_ALLOWED_REPOS");
+    expect(REPOSITORY_CATALOG_SEED_ACTIVATION_REASON).toBe(
+      REPOSITORY_CATALOG_SEED_ACTOR_LABEL,
+    );
+  });
+});
+
 describe("repositoryProfileVersionSchema", () => {
   const version = {
     version: 1,
@@ -92,6 +151,7 @@ describe("repositoryProfileVersionSchema", () => {
     relationships: [],
     scriptGroups: { provider: "github", repoPath: "acme/api", groups: {} },
     gateGroups: ["verify"],
+    batchTimeoutMinutes: null,
     checksVersion: 1,
     actorId: "migration",
     actorLabel: "migration",
@@ -121,6 +181,22 @@ describe("repositoryProfileVersionSchema", () => {
       parseRequestBody(repositoryProfileVersionSchema, { ...version, version: 0 }).ok,
     ).toBe(false);
   });
+
+  it("carries the checks ceiling, and null is the operator ceiling rather than a gap", () => {
+    expect(
+      parseRequestBody(repositoryProfileVersionSchema, {
+        ...version,
+        batchTimeoutMinutes: 45,
+      }),
+    ).toMatchObject({ ok: true, value: { batchTimeoutMinutes: 45 } });
+    // Required and nullable, not optional: a stored version always says whether
+    // the repository claims a ceiling, and a missing field would leave a reader
+    // guessing between "no claim" and "not read".
+    const { batchTimeoutMinutes: _omitted, ...withoutCeiling } = version;
+    expect(parseRequestBody(repositoryProfileVersionSchema, withoutCeiling).ok).toBe(
+      false,
+    );
+  });
 });
 
 describe("repositoryCatalogStateSchema", () => {
@@ -132,6 +208,7 @@ describe("repositoryCatalogStateSchema", () => {
         activatedAt: null,
         activatedById: null,
         activatedByLabel: null,
+        activationReason: null,
       }),
     ).toEqual({
       ok: true,
@@ -141,6 +218,7 @@ describe("repositoryCatalogStateSchema", () => {
         activatedAt: null,
         activatedById: null,
         activatedByLabel: null,
+        activationReason: null,
       },
     });
   });
@@ -152,6 +230,7 @@ describe("repositoryCatalogStateSchema", () => {
       activatedAt: "2026-09-12T10:00:00.000Z",
       activatedById: "seed",
       activatedByLabel: "seeded from AGENT_ALLOWED_REPOS",
+      activationReason: "seeded from AGENT_ALLOWED_REPOS",
     };
     expect(parseRequestBody(repositoryCatalogStateSchema, seeded)).toEqual({
       ok: true,

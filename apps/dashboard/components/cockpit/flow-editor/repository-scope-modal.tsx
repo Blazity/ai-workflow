@@ -3,6 +3,7 @@
 import { useEffect, useId, useMemo, useState } from "react";
 
 import type { VcsProviderKind, WorkflowRepositoryScope } from "@shared/contracts";
+import { pinnedRepositoriesNotEnabledSentence } from "@shared/contracts";
 import { Listbox } from "@/components/cockpit/listbox";
 import {
   addPinnedRepositories,
@@ -44,29 +45,7 @@ const NOT_ENABLED_YET_ROW_NOTE =
   `Rows marked "${NOT_ENABLED_YET_REASON}" can be pinned and work today. They stop the day somebody activates the catalog; enabling a repository happens on the Repositories page.`;
 
 /**
- * The sentence `workflows.publish` announces for the same finding, word for
- * word (apps/worker/src/mcp/tools/workflow-authoring.ts:368).
- *
- * Two surfaces describing one fact in two different ways is how an operator
- * ends up believing the milder one, so this is copied rather than reworded, and
- * it says exactly what is true in this window: dispatch refuses the events, and
- * until the engine stage lands a run that started some other way still reaches
- * the repository through the pin.
- */
-export function pinnedNotEnabledSentence(
-  pins: readonly { provider: string; repoPath: string }[],
-): string {
-  const one = pins.length === 1;
-  return `It pins ${one ? "a repository" : `${pins.length} repositories`} the repository catalog does not enable, so dispatch refuses events from ${
-    one ? "it" : "them"
-  } and, until the engine stage lands, a run that starts anyway still reaches ${
-    one ? "it" : "them"
-  } through this pin: ${pins
-    .map((repository) => `${repository.provider}:${repository.repoPath}`)
-    .join(", ")}.`;
-}
-
-/** The same finding while the bridge is on, where the pin still works. Saying
+ * The same finding while the bridge is on, where the pin still works. Saying
  *  the activated sentence here would be a refusal that has not happened. */
 function pinnedNotEnabledYetSentence(
   pins: readonly { provider: string; repoPath: string }[],
@@ -516,7 +495,11 @@ export function RepositoryScopeModal({
                 className="mt-3 rounded-[4px] border border-amber-300 bg-amber-50 px-3 py-2 font-body text-[11px] text-amber-800"
               >
                 {catalog.activated
-                  ? pinnedNotEnabledSentence(notEnabledPins)
+                  ? pinnedRepositoriesNotEnabledSentence(
+                      notEnabledPins.map(
+                        (repository) => `${repository.provider}:${repository.repoPath}`,
+                      ),
+                    )
                   : pinnedNotEnabledYetSentence(notEnabledPins)}{" "}
                 The pin is kept exactly as saved; enabling a repository happens
                 on the Repositories page.
