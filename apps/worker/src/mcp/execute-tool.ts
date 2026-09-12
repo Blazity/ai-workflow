@@ -1,3 +1,4 @@
+import type { SettingsSnapshot } from "@shared/contracts";
 import type {
   McpAuditInput,
   McpEnvelope,
@@ -32,6 +33,48 @@ const MUTATION_LEASE_TTL_MS = 15 * 60 * 1_000;
 // Deep enough for the wrappers a transport failure arrives in, shallow enough
 // that a cyclic chain cannot spin here.
 const MAX_CAUSE_DEPTH = 5;
+
+/**
+ * The wall clock one call may take: the deployment's setting, unless the tool
+ * asked for longer.
+ *
+ * MCP_TOOL_TIMEOUT_MS (30 s by default) is a bound on the ordinary tool, which
+ * reads a row or writes one. One tool on this surface is not that:
+ * repositories.suggest reads a whole repository from its provider and then asks
+ * a model about it, and the route it mirrors declares its own two bounds for
+ * exactly that reason (60 s for the profile bundle, 90 s for the model call,
+ * 150 s in total). Served under the 30 s setting it could only ever time out.
+ *
+ * So a MUTATION may raise its own ceiling and never lower it: `Math.max` here
+ * means an operator who raises MCP_TOOL_TIMEOUT_MS still raises every tool, and
+ * one who lowers it cannot silently shorten the one call that needs the room.
+ * Reads have no such door, deliberately: a read that cannot answer inside the
+ * deployment's own bound is a read that needs a narrower question.
+ *
+ * Both are then clamped. The platform kills an invocation at 300 s, and at
+ * exactly the limit the kill races the abort, so the tool would surface an
+ * opaque platform error instead of the clean TIMEOUT this bound exists to
+ * produce. MCP_MAX_TOOL_TIMEOUT_MS leaves a minute of room under that for the
+ * audit row and the response to be written, and it binds the operator's setting
+ * as well as a tool's request: a deployment that configures ten minutes gets
+ * four, not a kill.
+ */
+export const MCP_MAX_TOOL_TIMEOUT_MS = 240_000;
+
+export function mcpToolTimeoutMs(
+  settings: SettingsSnapshot,
+  minimumMs?: number,
+): number {
+  const configured = mcpSettings(settings).toolTimeoutMs;
+  const asked = minimumMs === undefined ? configured : Math.max(configured, minimumMs);
+  return Math.min(asked, MCP_MAX_TOOL_TIMEOUT_MS);
+}
+
+/** The read path's deadline: the deployment's setting, clamped. No tool raises
+ *  it, which is the difference R-Std1 asked for. */
+function readTimeoutMs(settings: SettingsSnapshot): number {
+  return mcpToolTimeoutMs(settings);
+}
 
 type ExecutionContext = {
   deps: McpToolDependencies;
@@ -244,7 +287,7 @@ export async function executeMcpRead<T>(input: {
   try {
     envelope = sanitize(
       context,
-      await input.operation(AbortSignal.timeout(mcpSettings(input.deps.settings).toolTimeoutMs)),
+      await input.operation(AbortSignal.timeout(readTimeoutMs(input.deps.settings))),
     );
   } catch (error) {
     return auditFailure(context, error);
@@ -260,6 +303,9 @@ export async function executeMcpMutation<T>(input: {
   targetRefs: string[];
   idempotencyKey: string;
   payloadHash: string;
+  /** A floor under this call's deadline, for a tool whose own bounds exceed the
+   *  deployment's setting. See mcpToolTimeoutMs. */
+  minimumTimeoutMs?: number;
   /**
    * Extra target refs derived from the answer, appended to the row that carries an
    * outcome and to no other. targetRefs above are read off the ARGUMENTS, so they
@@ -442,7 +488,10 @@ export async function executeMcpMutation<T>(input: {
   );
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const timedOut = new Promise<never>((_resolve, reject) => {
-    timeout = setTimeout(() => reject(timedOutError), mcpSettings(context.deps.settings).toolTimeoutMs);
+    timeout = setTimeout(
+      () => reject(timedOutError),
+      mcpToolTimeoutMs(context.deps.settings, input.minimumTimeoutMs),
+    );
   });
   try {
     return await Promise.race([terminal, timedOut]);

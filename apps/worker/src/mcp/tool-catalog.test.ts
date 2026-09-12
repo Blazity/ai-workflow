@@ -66,6 +66,20 @@ const CATALOGUED = [
   "workflows.get_graph",
   "workflows.set_enabled",
   "runs.logs",
+  "repositories.list",
+  "repositories.get",
+  "repositories.list_versions",
+  "repositories.upsert",
+  "repositories.set_enabled",
+  "repositories.activate_preview",
+  "repositories.activate",
+  "repositories.import_preview",
+  "repositories.import",
+  "repositories.suggest",
+  "settings.list",
+  "settings.get",
+  "settings.set",
+  "settings.reset",
 ] as const;
 
 // Captured off the real McpServer, through the real createMcpServer, because the

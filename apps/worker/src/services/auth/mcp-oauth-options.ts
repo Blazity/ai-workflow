@@ -48,13 +48,20 @@ export function createMcpOAuthOptions(deployment: McpOAuthDeployment) {
   // here only means a client that registered with no scopes at all is not handed
   // more than it asked for.
   //
-  // The filter names the two authoring scopes rather than listing what to keep, so
+  // The filter names the person-only scopes rather than listing what to keep, so
   // "tickets:write" stays in this default deliberately: the same rule request-context.ts
   // applies, for the same reason. The platform comments on and moves tickets on every
   // run it executes with nobody behind it, so an unattended client doing that is the
   // ordinary case, and dogfood automation needs it to drive a ticket at all.
   const automationScopes = scopes.filter(
-    (scope) => scope !== "prompts:write" && scope !== "workflows:write",
+    (scope) =>
+      scope !== "prompts:write" &&
+      scope !== "workflows:write" &&
+      // The catalog and the settings registry are configuration of the
+      // deployment itself, and request-context.ts strips them from a token with
+      // no `sub` for the same reason it strips the two above.
+      scope !== "repositories:write" &&
+      scope !== "settings:write",
   );
   // offline_access is the standard OAuth2/OIDC marker a client sends to ask for a
   // refresh token, the same way Atlassian and Supabase do it. It is advertised and

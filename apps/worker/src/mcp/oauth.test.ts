@@ -35,6 +35,11 @@ describe("MCP OAuth provider options", () => {
     // reading the actor rather than this option.
     expect(options.clientCredentialGrantDefaultScopes).not.toContain("prompts:write");
     expect(options.clientCredentialGrantDefaultScopes).not.toContain("workflows:write");
+    // The deployment's own configuration is out of this default for the same
+    // reason: which repositories the platform may enter, and the limits every
+    // run executes under, are not things an unattended client decides.
+    expect(options.clientCredentialGrantDefaultScopes).not.toContain("repositories:write");
+    expect(options.clientCredentialGrantDefaultScopes).not.toContain("settings:write");
     // tickets:write is IN this default, and that is the intended asymmetry: writing to a
     // tracker is what the platform already does unattended on every run, so it is not a
     // class of action a fresh consent screen guards, unlike authoring a prompt or a
@@ -47,8 +52,12 @@ describe("MCP OAuth provider options", () => {
     // Interactive clients still reach them, because there a human grants consent.
     expect(options.clientRegistrationAllowedScopes).toContain("prompts:write");
     expect(options.clientRegistrationAllowedScopes).toContain("workflows:write");
+    expect(options.clientRegistrationAllowedScopes).toContain("repositories:write");
+    expect(options.clientRegistrationAllowedScopes).toContain("settings:write");
     expect(options.scopes).toContain("prompts:write");
     expect(options.scopes).toContain("workflows:write");
+    expect(options.scopes).toContain("repositories:write");
+    expect(options.scopes).toContain("settings:write");
   });
 
   it("advertises the exact scopes, S256, and supported grants", () => {

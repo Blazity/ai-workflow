@@ -57,3 +57,15 @@ export {
   readSettingsHistory,
   updateSettings,
 } from "./store.js";
+export {
+  SETTINGS_EDIT_ROLE,
+  isSettingEditableThroughApi,
+  isSettingEditableThroughMcp,
+  settingEditRole,
+  settingMcpEditRefusal,
+  settingsNotEditableThroughApi,
+} from "./api-editability.js";
+export { resetSetting } from "./reset.js";
+export type { SettingsResetOutcome } from "./reset.js";
+export { readSettingsHistoryPage } from "./history-page.js";
+export type { SettingsHistoryPage } from "./history-page.js";

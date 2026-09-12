@@ -98,10 +98,12 @@ export async function resolveMcpActor(
 }
 
 /** A token with no `sub` has nobody behind it: it is the shape smoke and dogfood
- * automation uses, and it must not act as an author. The prompt library is the
- * instruction set every future run is handed, and a workflow definition is what the
- * platform then carries out with its own repository credentials, so both writes need
- * a consent screen a person stood in front of.
+ * automation uses, and it must not act as an author or reconfigure the deployment.
+ * The prompt library is the instruction set every future run is handed, a workflow
+ * definition is what the platform then carries out with its own repository
+ * credentials, the repository catalog decides which repositories it may enter at
+ * all, and the settings registry decides the limits it executes under: every one of
+ * those needs a consent screen a person stood in front of.
  *
  * This is where the narrowing has to happen, because it is where the actor's scope
  * set is materialized. oauth.ts declares clientCredentialGrantDefaultScopes, but
@@ -110,7 +112,7 @@ export async function resolveMcpActor(
  * every advertised scope into those when the request names none
  * (dist/index.mjs:1244), and an explicit `scope` on the token request is checked
  * against the same full list (dist/index.mjs:708-724). So a client_credentials
- * token really can arrive holding these two, and taking them away from the issued
+ * token really can arrive holding any of them, and taking them away from the issued
  * set is the only step that stops it. The role lists on those tools refuse
  * `service` as well; this is the lock that does not depend on somebody remembering
  * to keep those lists closed.
@@ -118,11 +120,21 @@ export async function resolveMcpActor(
  * "tickets:write" is deliberately NOT taken away, and the difference is the point: the
  * platform comments on and transitions tickets without a human behind it on every run
  * it executes, so that is not a class of action a fresh consent screen guards. Writing
- * a prompt or a workflow definition is. */
+ * a prompt, a workflow definition, a catalog row or a setting is. */
+const PERSON_ONLY_SCOPES: ReadonlySet<McpScope> = new Set<McpScope>([
+  "prompts:write",
+  "workflows:write",
+  // The deployment's own configuration, by the same argument one step further
+  // out: the catalog decides which repositories the platform may enter at all,
+  // and the settings registry decides the limits every run then executes under.
+  // Neither is a thing an unattended client should be able to change because it
+  // once registered for every advertised scope.
+  "repositories:write",
+  "settings:write",
+]);
+
 function withoutAuthoringScopes(scopes: ReadonlySet<McpScope>): ReadonlySet<McpScope> {
-  return new Set(
-    [...scopes].filter((scope) => scope !== "prompts:write" && scope !== "workflows:write"),
-  );
+  return new Set([...scopes].filter((scope) => !PERSON_ONLY_SCOPES.has(scope)));
 }
 
 function intersectScopes(

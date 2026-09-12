@@ -582,7 +582,11 @@ the next run. A repository the run never opened contributes nothing either way.
 The run header states the frozen list (`repositoryAccess` on `RunDetail`,
 rendered by `apps/dashboard/lib/run-repository-access.ts`), because the question
 asked afterwards is what the run could reach and not what the catalog says
-today. And the rules have to be non-empty: a repository nobody has configured
+today. `runs.get` and `runs.diagnose` carry the same field verbatim, so an agent
+reading a failure has the same answer without a second call: `activated: false`
+is the bridge, where the keys mean nothing and everything the installation
+exposes was reachable, and `null` means the run started before the list was
+recorded, which is not an empty list. And the rules have to be non-empty: a repository nobody has configured
 yet produces no heading rather than an empty one. The read is `listRepositoryRules` in
 `apps/worker/src/db/repositories/repository-catalog.ts`, one query over the same
 current-profile-version relation `getCurrentCheckConfiguration` composes the
@@ -637,6 +641,123 @@ linked to the old screen links to the new page. The editor's own repository
 picker reads the catalog as well as the provider directory: once the catalog is
 activated only the rows it enables can be pinned, and while the bridge is on a
 row the catalog does not enable is shown and marked.
+
+## The same actions through MCP
+
+Every action the Repositories page and the Settings page offer an owner or an
+admin is also a tool on the remote MCP server (`apps/worker/src/mcp/tools/`),
+under the same rules, with the same reason recorded and the same refusals.
+
+| On the screen | Tool | Kind | Scope | Roles |
+|---|---|---|---|---|
+| The Repositories list | `repositories.list` | read | `mcp:read` | any role |
+| Opening one repository (Overview, Rules, Scripts) | `repositories.get` | read | `mcp:read` | any role |
+| The History tab | `repositories.list_versions` | read | `mcp:read` | any role |
+| Save on the entry, and "Add repository" | `repositories.upsert` | mutation | `repositories:write` | admin, owner |
+| The switch on a row | `repositories.set_enabled` | mutation | `repositories:write` | admin, owner |
+| The Activate dialog, before confirming | `repositories.activate_preview` | read | `repositories:write` | admin, owner |
+| Activate, confirmed | `repositories.activate` | mutation | `repositories:write` | owner |
+| The import picker | `repositories.import_preview` | read | `repositories:write` | admin, owner |
+| Import selected | `repositories.import` | mutation | `repositories:write` | admin, owner |
+| "Suggest from repository" | `repositories.suggest` | mutation | `repositories:write` | admin, owner |
+| The Settings page | `settings.list` | read | `mcp:read` | any role |
+| One setting with its history | `settings.get` | read | `mcp:read` | any role |
+| Saving one setting | `settings.set` | mutation | `settings:write` | admin, owner |
+| Clearing a setting back to its default | `settings.reset` | mutation | `settings:write` | owner |
+
+The plain reads are open to every token that holds `mcp:read`, a
+client-credentials token included: knowing which repositories exist and what
+limit is in force is not a privilege. The two previews are not plain reads -- the
+activation preview names the tickets and runs in flight and the import preview
+lists everything the installation exposes -- so they sit behind the same scope
+and the same admin-or-owner list as the writes they feed, and are person-backed
+like them.
+
+**The two configuration scopes are new and deliberate.** `repositories:write`
+and `settings:write` are separate from `workflows:write`: authoring a workflow
+says what the platform should do, while the catalog says which repositories it
+may do it to and the settings registry says under what limits. A token granted
+the authoring scope to draft a definition holds neither. A client-credentials
+token holds neither either, whatever it registered for, because
+`withoutAuthoringScopes` strips both from a token with no `sub` exactly as it
+strips `prompts:write` and `workflows:write`.
+
+Rolling this out is not automatic. A client carries the ceiling it registered
+with, so a client registered before these two scopes existed cannot reach the
+configuration tools however it re-authorizes: the next consent screen can only
+offer what its registration already allows. Register a new client, or update the
+stored client row's scopes, before expecting the catalog and settings tools to
+answer.
+
+Seven things differ from the HTTP routes the dashboard calls, each on purpose:
+
+- **A create is never quietly an edit.** Omitted means unchanged on both
+  surfaces: a request carries only the fields it sets and the statement that
+  writes carries every other stored value forward, so a caller that sends only
+  `rules` clears nothing. Clearing is explicit, with a `null` on `scriptGroups`,
+  `gateGroups` or `batchTimeoutMinutes`; `scriptGroups` is otherwise the full set
+  that should remain, so a group left out of that object is deleted. Where the
+  two surfaces differ is `repositoryId: 0`. The route reconciles it into an edit
+  of the row that already holds that provider and path, which is safe from a
+  screen that has just been told the repository is new and is not safe from an
+  agent working off a stale list, so `repositories.upsert` refuses it with
+  `CONFLICT` naming the id to send instead. Both take `expectedProfileVersion`
+  and answer a stale one with the version to reload; that refusal is carried by
+  the statement that writes, so it cannot be raced. The reply says what the write
+  did: `unchanged` is true when the profile already said everything the call
+  asked for, in which case no version was minted, and `changedFields` names what
+  moved.
+- **Activation is confirmed against what the caller was shown.**
+  `repositories.activate_preview` returns a `previewDigest` over the two
+  populations and the run claims; `repositories.activate` takes that digest back
+  and refuses when the catalog moved in between. That is the agent's equivalent
+  of reading the dialog before pressing the button. A catalog with nothing
+  enabled is refused outright, in the dialog's own words.
+- **Activation and clearing a setting are owner only.** The HTTP routes admit an
+  admin. Ending the bridge changes what every future run may enter, and clearing
+  a setting hands the key back to a value nobody on the call stated (the
+  environment's, on a deployment that sets the variable), so through MCP both are
+  the owner's, the same way `runs.answer_clarification` is a person's.
+- **Every mutation is person backed**, by the scope mechanism above.
+- **A reason is asked for exactly where one is recorded.** `repositories.upsert`
+  and `settings.set` write the reason to the profile or settings version, as the
+  screens do, and `repositories.activate` stores it with the activation state.
+  `repositories.set_enabled`, `repositories.import` and `repositories.suggest`
+  take no reason at all: nothing behind them has a column for one and the
+  dashboard asks for none either, so requiring one would promise a record
+  nobody could later find.
+- **`repositories.activate_preview` counts only the catalog.** The dashboard
+  dialog also counts repositories the provider directory lists that the catalog
+  has never seen; the tool does not read the provider directory, and says so.
+  Both derivations of that population have to move together: the dialog builds
+  it from the activate route's 409 body, the tool from
+  `services/repository-catalog/activation-preview.ts`, and the service's own
+  acknowledgement check is what refuses an activation either of them got wrong.
+- **Both histories are paged.** `repositories.list_versions` and `settings.get`
+  take `limit` (50 by default, 200 at most) and a `before` cursor and answer with
+  `hasMore`, because an agent has no scrollbar to tell it there is more.
+  `repositories.get` reports `versionsCount` from a count query rather than the
+  length of a page, and `changedFields` is null for a version whose predecessor
+  is on the next page rather than a diff against something the caller was not
+  shown. There is no per-version cost: a profile save spends nothing, and what a
+  suggestion cost is on the suggestion, which `repositories.suggest` returns as
+  `usage` (null there means unpriced, not free).
+
+`settings.set` and `settings.reset` refuse two groups. The `repositories` group
+is the same refusal `PATCH /api/v1/settings` gives: `catalog.activated` moves
+through `repositories.activate` and its preview, never through a settings write.
+The `mcp` group and `MCP_ENABLED` are refused on the MCP surface only, and the
+HTTP patch still writes them: those keys are the transport itself, so a client
+that could write them could raise the ceilings it is held to, or switch off the
+surface it is talking through and leave nobody able to switch it back from
+there. Both point at the dashboard Settings page.
+
+`settings.list` also carries `requiresRedeploy`, and reports
+`appliesToRunsInFlight: "after redeploy"` for those keys. Today that is
+`PRE_PR_CHECKS_ALLOWED_ENV`, which the checks runner still reads straight from
+`process.env`: storing it records the decision and changes nothing until the
+worker is redeployed, and saying "next run" would be a promise the key does not
+keep.
 
 ## Legacy shape (still accepted)
 
