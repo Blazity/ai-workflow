@@ -126,10 +126,20 @@ names, harness defaults) are rows in the `settings` table, described once in
   never in `build:ci`) imports the allowlist variable and every pinned
   repository, activates only a deployment whose allowlist was already
   restricting it, and moves the global script groups blob into profiles; every
-  write in it is guarded on existence, so a redeploy seeds nothing new. The
-  workspace gate gained an optional `repositoryVersions` field recording which
-  profile version each repository's checks passed under, and recovery accepts a
-  gate with or without it indefinitely.
+  write in it is guarded on existence, so a redeploy seeds nothing new. It
+  refuses to guess a provider: an allowlist entry nothing else names on a
+  deployment with no configured provider fails the build rather than creating a
+  row that grants the wrong thing. A row is created **disabled** by every path
+  except the seed and the enabled route: writing a profile configures a
+  repository, it never grants one. Each repository carries two counters,
+  `current_profile_version` (every save) and `current_checks_version` (only a
+  change to the script groups or the gate selection); the workspace gate records
+  the CHECKS version, pinned when the checks were launched and carried out of
+  `loadPrePrCheckConfigStep`, in an optional `repositoryVersions` field, and
+  recovery accepts a gate with or without it indefinitely. **Nothing on the gate
+  path may become a step:** one extra step call there shifts every later journal
+  entry of a run already in flight, and the Workflow DevKit resumes by consuming
+  that journal in order.
 
 - **The MCP contract is generated.** After changing a tool, run
   `pnpm run mcp:contract:generate`, and `mcp:contract:check` in CI proves it.

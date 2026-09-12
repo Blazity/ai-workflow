@@ -78,6 +78,11 @@ export const repositoryCatalogEntrySchema = z
      *  created (by an import or the allowlist seed) and never given a profile,
      *  which is how "known but not configured" is spelled. */
     profileVersion: z.number().int().nonnegative(),
+    /** The version of what this repository's CHECKS run. It moves only when
+     *  the script groups or the gate group selection change, so an edit to the
+     *  description or the rules leaves it alone, and with it every publication
+     *  gate recorded by a run still in flight. */
+    checksVersion: z.number().int().nonnegative(),
     createdAt: z.string(),
     updatedAt: z.string(),
   })
@@ -112,6 +117,9 @@ export const repositoryProfileVersionSchema = z
      *  group this repository declares", which is what omitting it has always
      *  meant; an empty array is refused by the scripts schema, not here. */
     gateGroups: z.array(z.string()).nullable(),
+    /** The checks version this profile version carries. Equal to the previous
+     *  one when the save changed nothing the checks execute. */
+    checksVersion: z.number().int().nonnegative(),
     actorId: z.string(),
     actorLabel: z.string(),
     reason: z.string(),
@@ -136,6 +144,9 @@ export const repositoryCatalogStateSchema = z
     bridge: z.boolean(),
     activatedAt: z.string().nullable(),
     activatedById: z.string().nullable(),
+    /** Who activated it, in words. The build-time seed writes its own name here
+     *  so a screen can offer a review of an activation nobody clicked. */
+    activatedByLabel: z.string().nullable(),
   })
   .strict();
 export type RepositoryCatalogState = z.infer<typeof repositoryCatalogStateSchema>;
@@ -157,10 +168,6 @@ export function repositoryCatalogKey(
   return `${repository.provider}:${repository.path.toLowerCase()}`;
 }
 
-/** The same key from the engine's spelling of a repository, which calls the
- *  path `repoPath`. Two call sites, one rule. */
-export function repositoryCatalogKeyOfRepoPath(
-  repository: { provider: string; repoPath: string },
-): string {
-  return `${repository.provider}:${repository.repoPath.toLowerCase()}`;
-}
+// The engine spells the same field `repoPath`. There is no second helper for
+// it: the one place a `repoPath` reaches the catalog adapts it at the call
+// site, so there is exactly one definition of what this key is.

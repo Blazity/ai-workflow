@@ -5,13 +5,12 @@
  * Reads only. Writing a profile is `saveRepositoryProfile` in this cluster's
  * index, which is one statement in the repository tier; nothing here appends.
  */
-import {
-  repositoryCatalogKey,
-  type RepositoryProfileVersion,
-  type RepositoryRelationship,
+import type {
+  RepositoryProfileVersion,
+  RepositoryRelationship,
 } from "@shared/contracts";
 import {
-  listConnectedRepositoriesWithProfiles,
+  getConnectedRepositoryWithProfileByPath,
   listConnectedRepositoryProfileVersionRows,
   type RepositoryProfileVersionRow,
 } from "../../db/repositories/repository-catalog.js";
@@ -26,6 +25,7 @@ export function serializeRepositoryProfileVersion(
     relationships: (row.relationships ?? []) as RepositoryRelationship[],
     scriptGroups: (row.scriptGroups ?? null) as Record<string, unknown> | null,
     gateGroups: (row.gateGroups ?? null) as string[] | null,
+    checksVersion: row.checksVersion,
     actorId: row.actorId,
     actorLabel: row.actorLabel,
     reason: row.reason,
@@ -46,16 +46,19 @@ export async function listRepositoryProfileVersions(
  *
  * Keyed rather than taken by id because the callers that ask this question hold
  * a `provider:owner/name` and not a database id: a run knows which repositories
- * it is working in, never which rows they are.
+ * it is working in, never which rows they are. The read is keyed all the way
+ * down, too: the repository tier resolves the row and its current profile by
+ * path, rather than this file listing every repository and scanning for one.
  */
 export async function getCurrentRepositoryProfile(
   key: string,
 ): Promise<RepositoryProfileVersion | null> {
-  const wanted = key.toLowerCase();
-  const rows = await listConnectedRepositoriesWithProfiles();
-  for (const row of rows) {
-    if (repositoryCatalogKey(row.repository) !== wanted) continue;
-    return row.profile ? serializeRepositoryProfileVersion(row.profile) : null;
-  }
-  return null;
+  const separator = key.indexOf(":");
+  if (separator <= 0) return null;
+  const found = await getConnectedRepositoryWithProfileByPath({
+    provider: key.slice(0, separator),
+    path: key.slice(separator + 1),
+  });
+  if (!found?.profile) return null;
+  return serializeRepositoryProfileVersion(found.profile);
 }

@@ -122,11 +122,36 @@ describe("catalog seed", () => {
     await expect(db.select().from(repositories)).resolves.toHaveLength(1);
   });
 
+  it("collapses one allowlist spelling and one pin spelling into a single row", async () => {
+    const db = await createTestDb();
+    // The exact overlap the build hits: AGENT_ALLOWED_REPOS says `Acme/Api`,
+    // a stored definition pins `acme/api`, and they are one repository.
+    await expect(
+      seedRepositoryCatalogEntries(db, {
+        repositories: [
+          { provider: "github", path: "Acme/Api" },
+          { provider: "github", path: "acme/api" },
+        ],
+        source: "seeded",
+        enabled: true,
+      }),
+    ).resolves.toBe(1);
+    const rows = await db.select().from(repositories);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ path: "Acme/Api", enabled: true });
+  });
+
   it("writes the state row once and never re-decides activation", async () => {
     const db = await createTestDb();
     await expect(
       seedRepositoryCatalogState(db, { activated: true }),
-    ).resolves.toMatchObject({ activated: true, activatedById: "seed" });
+    ).resolves.toMatchObject({
+      activated: true,
+      // Named so a later screen can offer a review of an activation nobody
+      // clicked, rather than presenting it as somebody's decision.
+      activatedById: "seed",
+      activatedByLabel: "seeded from AGENT_ALLOWED_REPOS",
+    });
     await expect(
       seedRepositoryCatalogState(db, { activated: false }),
     ).resolves.toMatchObject({ activated: true });

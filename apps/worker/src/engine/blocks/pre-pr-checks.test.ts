@@ -824,20 +824,23 @@ describe("loadPrePrCheckConfigStep", () => {
   });
 
   it("carries the stored version out with the configuration it loaded", async () => {
-    // The version is what records the workspace gate, so it has to travel from
-    // this step to the gate write. It used to leave with the checks result;
-    // the checks are no longer a step, so it leaves with the config instead.
+    // The versions are what record the workspace gate, so they have to travel
+    // from this step to the gate write. They leave with the config because the
+    // gate may not grow a step of its own: one more step on a path that mints a
+    // gate shifts every later journal entry of a run already in flight.
     mocks.getCurrentPrePrCheckConfig.mockResolvedValue({
       version: 7,
       config: { repositories: [] },
+      repositoryVersions: { "github:acme/api": 4 },
     });
 
     await expect(loadPrePrCheckConfigStep()).resolves.toEqual({
       version: 7,
       config: { repositories: [] },
+      repositoryVersions: { "github:acme/api": 4 },
     });
     expect(mocks.loggerInfo).toHaveBeenCalledWith(
-      { version: 7, repositoryVersions: {} },
+      { version: 7, repositoryVersions: { "github:acme/api": 4 } },
       "pre_pr_checks_config_version",
     );
   });
@@ -848,6 +851,7 @@ describe("loadPrePrCheckConfigStep", () => {
     await expect(loadPrePrCheckConfigStep()).resolves.toEqual({
       version: null,
       config: { repositories: [] },
+      repositoryVersions: {},
     });
   });
 });

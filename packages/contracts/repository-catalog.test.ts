@@ -5,7 +5,6 @@ import {
   parseRequestBody,
   repositoryCatalogEntrySchema,
   repositoryCatalogKey,
-  repositoryCatalogKeyOfRepoPath,
   repositoryCatalogStateSchema,
   repositoryProfileVersionSchema,
 } from "@shared/contracts";
@@ -22,6 +21,7 @@ const entry = {
   enabled: true,
   source: "manual",
   profileVersion: 3,
+  checksVersion: 2,
   createdAt: "2026-09-12T10:00:00.000Z",
   updatedAt: "2026-09-12T10:00:00.000Z",
 };
@@ -56,7 +56,22 @@ describe("repositoryCatalogEntrySchema", () => {
 
   it("accepts a row that has no profile yet", () => {
     expect(
-      parseRequestBody(repositoryCatalogEntrySchema, { ...entry, profileVersion: 0 }).ok,
+      parseRequestBody(repositoryCatalogEntrySchema, {
+        ...entry,
+        profileVersion: 0,
+        checksVersion: 0,
+      }).ok,
+    ).toBe(true);
+  });
+
+  it("accepts a profile version that has outrun the checks version", () => {
+    // The normal state of any repository whose description was ever edited.
+    expect(
+      parseRequestBody(repositoryCatalogEntrySchema, {
+        ...entry,
+        profileVersion: 9,
+        checksVersion: 1,
+      }).ok,
     ).toBe(true);
   });
 });
@@ -69,6 +84,7 @@ describe("repositoryProfileVersionSchema", () => {
     relationships: [],
     scriptGroups: { provider: "github", repoPath: "acme/api", groups: {} },
     gateGroups: ["verify"],
+    checksVersion: 1,
     actorId: "migration",
     actorLabel: "migration",
     reason: "script groups migration from pre_pr_check_config_versions",
@@ -107,10 +123,31 @@ describe("repositoryCatalogStateSchema", () => {
         bridge: true,
         activatedAt: null,
         activatedById: null,
+        activatedByLabel: null,
       }),
     ).toEqual({
       ok: true,
-      value: { activated: false, bridge: true, activatedAt: null, activatedById: null },
+      value: {
+        activated: false,
+        bridge: true,
+        activatedAt: null,
+        activatedById: null,
+        activatedByLabel: null,
+      },
+    });
+  });
+
+  it("carries the name of an activation nobody clicked", () => {
+    const seeded = {
+      activated: true,
+      bridge: false,
+      activatedAt: "2026-09-12T10:00:00.000Z",
+      activatedById: "seed",
+      activatedByLabel: "seeded from AGENT_ALLOWED_REPOS",
+    };
+    expect(parseRequestBody(repositoryCatalogStateSchema, seeded)).toEqual({
+      ok: true,
+      value: seeded,
     });
   });
 });
@@ -123,8 +160,11 @@ describe("repositoryCatalogKey", () => {
   });
 
   it("reads the engine spelling of a repository to the same key", () => {
+    // One helper, adapted at the call site. The engine calls the field
+    // `repoPath`; a second helper for that spelling was a second definition of
+    // the rule, and the two would eventually disagree.
     expect(
-      repositoryCatalogKeyOfRepoPath({ provider: "github", repoPath: "Acme/Api" }),
+      repositoryCatalogKey({ provider: "github", path: "Acme/Api" }),
     ).toBe(repositoryCatalogKey({ provider: "github", path: "acme/api" }));
   });
 

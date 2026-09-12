@@ -9,6 +9,7 @@ import {
   canManageRepositoryCatalog,
   DashboardAuthError,
   type RepositoryCatalogActivateResponse,
+  type RepositoryCatalogClaimedRepository,
   type RepositoryCatalogEntryResponse,
   type RepositoryCatalogListResponse,
   type RepositoryCatalogMutationResponse,
@@ -19,6 +20,7 @@ import {
   activateConnectedRepositoryCatalog,
   getConnectedRepositoryCatalogRow,
   getConnectedRepositoryCatalogRowByPath,
+  getConnectedRepositoryProfileVersionRow,
   listConnectedClaimedRepositoriesNotEnabled,
   listConnectedRepositoryProfileVersionRows,
   setConnectedRepositoryEnabled,
@@ -57,8 +59,12 @@ export async function readRepositoryCatalogEntry(
   id: number,
 ): Promise<RepositoryCatalogEntryResponse> {
   const row = await requireRow(id);
-  const versions = await listConnectedRepositoryProfileVersionRows(id, 1);
-  const current = versions.find((version) => version.version === row.currentProfileVersion);
+  // Keyed, not "list a page and hope the one we want is on it": the row already
+  // says which version it resolves to, so ask for that version.
+  const current =
+    row.currentProfileVersion > 0
+      ? await getConnectedRepositoryProfileVersionRow(id, row.currentProfileVersion)
+      : null;
   return {
     repository: serializeRepositoryCatalogEntry(row),
     currentProfile: current ? serializeRepositoryProfileVersion(current) : null,
@@ -115,6 +121,10 @@ export async function saveRepositoryProfile(input: {
     actorId: input.actor.id,
     actorLabel: await getConnectedDashboardUserLabel(input.actor.id),
     reason: input.request.reason,
+    // A profile save is not a grant. Creating a repository here leaves it
+    // switched off unless this request said otherwise, and says nothing at all
+    // about a repository that already exists.
+    enabled: input.request.enabled ?? false,
   });
   const row = await requireRow(saved.id);
   return { repository: serializeRepositoryCatalogEntry(row), version: saved.version };
@@ -135,7 +145,7 @@ export async function setRepositoryCatalogEnabled(input: {
 /** Activation refused because the dialog the admin confirmed is out of date. */
 export type RepositoryCatalogActivateOutcome =
   | { kind: "activated"; response: RepositoryCatalogActivateResponse }
-  | { kind: "unacknowledged"; repositories: string[] };
+  | { kind: "unacknowledged"; repositories: RepositoryCatalogClaimedRepository[] };
 
 /**
  * End the bridge, but only against the list the admin was actually shown.
@@ -155,11 +165,14 @@ export async function activateRepositoryCatalog(input: {
   const acknowledged = new Set(
     input.acknowledgedRepositoryKeys.map((key) => key.toLowerCase()),
   );
-  const missing = claimed.filter((key) => !acknowledged.has(key));
+  const missing = claimed.filter((entry) => !acknowledged.has(entry.key));
   if (missing.length > 0) {
     return { kind: "unacknowledged", repositories: missing };
   }
-  const state = await activateConnectedRepositoryCatalog({ actorId: input.actor.id });
+  const state = await activateConnectedRepositoryCatalog({
+    actorId: input.actor.id,
+    actorLabel: await getConnectedDashboardUserLabel(input.actor.id),
+  });
   return {
     kind: "activated",
     response: {
@@ -168,6 +181,7 @@ export async function activateRepositoryCatalog(input: {
         bridge: !state.activated,
         activatedAt: state.activatedAt?.toISOString() ?? null,
         activatedById: state.activatedById,
+        activatedByLabel: state.activatedByLabel,
       },
     },
   };

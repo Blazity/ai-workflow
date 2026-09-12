@@ -63,6 +63,15 @@ export const repositoryCatalogUpsertRequestSchema = z
     /** The repository scripts entry for this repository, stored verbatim. */
     scriptGroups: repositoryProfileScriptGroupsSchema.default(null),
     gateGroups: z.array(z.string()).nullable().default(null),
+    /**
+     * Whether a repository this call CREATES may be touched by the agent.
+     *
+     * Omitted means false, and it is ignored for a repository that already
+     * exists. Writing a profile says what to run in a repository; it never says
+     * the agent may enter one. Granting is the enabled route, which is a
+     * separate click and a separate audit line.
+     */
+    enabled: z.boolean().optional(),
     reason: z.string().max(REPOSITORY_CATALOG_REASON_MAX_LENGTH).default(""),
   })
   .strict();
@@ -100,9 +109,25 @@ export interface RepositoryCatalogActivateResponse {
   state: RepositoryCatalogState;
 }
 
-/** What a refused activation answers with: the keys the dialog has to show
- *  before the admin can confirm again. */
+/**
+ * One repository a refused activation names.
+ *
+ * It carries the tickets and runs it was found through, because the population
+ * is honest about being approximate: no table ties a workflow-owned branch to
+ * the run that created it, so this is "repositories with branches on tickets
+ * that currently hold a claim". An admin has to be able to check, not just
+ * trust, before ending the bridge.
+ */
+export interface RepositoryCatalogClaimedRepository {
+  key: string;
+  displayName: string;
+  ticketKeys: string[];
+  runIds: string[];
+}
+
+/** What a refused activation answers with: what the dialog has to show before
+ *  the admin can confirm again. */
 export interface RepositoryCatalogActivateConflict {
   error: "unacknowledged_repositories";
-  repositories: string[];
+  repositories: RepositoryCatalogClaimedRepository[];
 }

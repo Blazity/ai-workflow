@@ -148,7 +148,13 @@ describe("GET /api/v1/repository-catalog", () => {
     const res = await handlerFor(catalogGet)(new Request("http://worker.test/"));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      state: { activated: false, bridge: true, activatedAt: null, activatedById: null },
+      state: {
+        activated: false,
+        bridge: true,
+        activatedAt: null,
+        activatedById: null,
+        activatedByLabel: null,
+      },
       repositories: [],
     });
   });
@@ -183,9 +189,33 @@ describe("PUT /api/v1/repository-catalog/:id", () => {
       path: "acme/api",
       rules: "never force push",
       source: "manual",
-      enabled: true,
+      // Saving a profile configures a repository; it never grants one.
+      enabled: false,
       profileVersion: 1,
+      checksVersion: 1,
     });
+  });
+
+  it("creates an enabled repository only when the body asks for it", async () => {
+    const body = await (await put(0, { ...PROFILE, enabled: true })).json();
+    expect(body.repository.enabled).toBe(true);
+  });
+
+  it("leaves the checks version alone when only the prose changes", async () => {
+    const created = await (await put(0, PROFILE)).json();
+    const again = await (
+      await put(created.repository.id, { ...PROFILE, description: "Now with words" })
+    ).json();
+    expect(again.version).toBe(2);
+    expect(again.repository.checksVersion).toBe(1);
+  });
+
+  it("never revokes a grant somebody made", async () => {
+    const created = await (await put(0, { ...PROFILE, enabled: true })).json();
+    const again = await (
+      await put(created.repository.id, { ...PROFILE, enabled: false })
+    ).json();
+    expect(again.repository.enabled).toBe(true);
   });
 
   it("mints the next version when the same repository is saved again", async () => {
@@ -299,7 +329,14 @@ describe("POST /api/v1/repository-catalog/activate", () => {
     expect(refused.status).toBe(409);
     expect(await refused.json()).toEqual({
       error: "unacknowledged_repositories",
-      repositories: ["github:acme/web"],
+      repositories: [
+        {
+          key: "github:acme/web",
+          displayName: "acme/web",
+          ticketKeys: ["AIW-1"],
+          runIds: ["run-1"],
+        },
+      ],
     });
 
     const accepted = await activate({

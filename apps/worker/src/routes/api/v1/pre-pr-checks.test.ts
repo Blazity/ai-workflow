@@ -339,6 +339,109 @@ describe("PUT /api/v1/pre-pr-checks", () => {
   });
 });
 
+describe("what a legacy checks save does to the repository catalog", () => {
+  async function catalogRow(path: string) {
+    const { getRepositoryCatalogRowByPath } = await import(
+      "../../../db/repositories/repository-catalog.js"
+    );
+    return getRepositoryCatalogRowByPath(db, { provider: "github", path });
+  }
+
+  it("does not erase what the Repositories screen holds", async () => {
+    const { upsertRepositoryProfile } = await import(
+      "../../../db/repositories/repository-catalog.js"
+    );
+    await upsertRepositoryProfile(db, {
+      provider: "github",
+      path: "acme/web",
+      description: "The web app",
+      rules: "never force push",
+      relationships: [{ repositoryId: 1, label: "consumes" }],
+      scriptGroups: null,
+      gateGroups: null,
+      actorId: "user_admin",
+      actorLabel: "Admin",
+      reason: "authored on the Repositories screen",
+    });
+
+    const res = await handlerFor(checksPut)(jsonRequest("PUT", { config: VALID_CONFIG }));
+    expect(res.status).toBe(200);
+
+    // The checks screen owns commands and nothing else. A save here that wrote
+    // empties into these columns would delete an operator's work from a screen
+    // they were not even looking at.
+    await expect(catalogRow("acme/web")).resolves.toMatchObject({
+      description: "The web app",
+      rules: "never force push",
+      relationships: [{ repositoryId: 1, label: "consumes" }],
+    });
+  });
+
+  it("creates the repository switched off, because configuring is not granting", async () => {
+    await handlerFor(checksPut)(jsonRequest("PUT", { config: VALID_CONFIG }));
+    await expect(catalogRow("acme/web")).resolves.toMatchObject({
+      enabled: false,
+      source: "manual",
+    });
+  });
+
+  it("changes nothing when the save re-submits the same commands", async () => {
+    await handlerFor(checksPut)(jsonRequest("PUT", { config: VALID_CONFIG }));
+    const first = await catalogRow("acme/web");
+    expect(first).toMatchObject({ currentProfileVersion: 1, currentChecksVersion: 1 });
+
+    // The screen submits the whole configuration on every click. Without the
+    // no-op, saving repository B would mint a new version for A and fail every
+    // run in flight on A, which is exactly the precision this stage bought.
+    const res = await handlerFor(checksPut)(
+      jsonRequest("PUT", { config: VALID_CONFIG, baseVersion: 1 }),
+    );
+    expect(res.status).toBe(200);
+    await expect(catalogRow("acme/web")).resolves.toMatchObject({
+      currentProfileVersion: 1,
+      currentChecksVersion: 1,
+      updatedAt: first?.updatedAt,
+    });
+  });
+
+  it("moves the checks version when the commands actually change", async () => {
+    await handlerFor(checksPut)(jsonRequest("PUT", { config: VALID_CONFIG }));
+    const res = await handlerFor(checksPut)(
+      jsonRequest("PUT", {
+        baseVersion: 1,
+        config: {
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "acme/web",
+              commands: ["pnpm test", "pnpm lint"],
+            },
+          ],
+        },
+      }),
+    );
+    expect(res.status).toBe(200);
+    await expect(catalogRow("acme/web")).resolves.toMatchObject({
+      currentProfileVersion: 2,
+      currentChecksVersion: 2,
+    });
+  });
+
+  it("drops the groups of a repository the save no longer names", async () => {
+    await handlerFor(checksPut)(jsonRequest("PUT", { config: VALID_CONFIG }));
+    const res = await handlerFor(checksPut)(
+      jsonRequest("PUT", { baseVersion: 1, config: { repositories: [] } }),
+    );
+    expect(res.status).toBe(200);
+    // Removing a repository from this screen used to remove its checks, and
+    // still must: the row survives, its commands do not.
+    await expect(catalogRow("acme/web")).resolves.toMatchObject({
+      currentProfileVersion: 2,
+      currentChecksVersion: 2,
+    });
+  });
+});
+
 describe("POST /api/v1/pre-pr-checks/restore", () => {
   it("appends a copy of the requested version", async () => {
     await savePrePrCheckConfig(db, { ...ACTOR, config: VALID_CONFIG });

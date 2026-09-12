@@ -689,6 +689,48 @@ describe("run_checks execute", () => {
     expect(result.output!.gate).toEqual(gate);
   });
 
+  it("hands the gate the very versions the configuration step returned, and reads them nowhere else", async () => {
+    mocks.recordSuccessfulWorkspaceGate.mockResolvedValue({
+      configurationVersion: 5,
+      fingerprint: "fp-run-checks",
+    });
+    mocks.loadPrePrCheckConfigStep.mockResolvedValue({
+      version: 5,
+      config: {
+        repositories: [
+          { provider: "github", repoPath: "acme/api", commands: ["pnpm lint"] },
+        ],
+      },
+      repositoryVersions: { "github:acme/api": 4 },
+    });
+    mocks.runPrePrChecksWithFixes.mockResolvedValue({
+      outcome: "passed",
+      passed: true,
+      fixCycles: 0,
+      results: [],
+      failures: [],
+      summary: "passed",
+      groupCoverage: [],
+    });
+
+    await execute(
+      makeNode("run_checks"),
+      {},
+      makeCtx({ workspaceManifest: trustedManifest }),
+    );
+
+    // The seam the publication gate rests on: the number recorded is the number
+    // the checks were launched under, carried straight from the one step that
+    // read it. One read per run, and the gate never performs a second.
+    expect(mocks.loadPrePrCheckConfigStep).toHaveBeenCalledOnce();
+    expect(mocks.recordSuccessfulWorkspaceGate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        configurationVersion: 5,
+        repositoryVersions: { "github:acme/api": 4 },
+      }),
+    );
+  });
+
   it("emits a null gate when a configured run passes but records no gate", async () => {
     // No workspace manifest -> the record branch is skipped, so no durable gate.
     mocks.loadPrePrCheckConfigStep.mockResolvedValue({

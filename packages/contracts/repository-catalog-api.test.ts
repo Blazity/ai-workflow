@@ -53,9 +53,25 @@ describe("repositoryCatalogUpsertRequestSchema", () => {
       parseRequestBody(repositoryCatalogUpsertRequestSchema, {
         provider: "github",
         path: "acme/api",
-        enabled: true,
+        colour: "blue",
       }).ok,
     ).toBe(false);
+  });
+
+  it("takes enabled, and defaults it to nothing rather than to a grant", () => {
+    const granting = parseRequestBody(repositoryCatalogUpsertRequestSchema, {
+      provider: "github",
+      path: "acme/api",
+      enabled: true,
+    });
+    expect(granting.ok && granting.value.enabled).toBe(true);
+    const silent = parseRequestBody(repositoryCatalogUpsertRequestSchema, {
+      provider: "github",
+      path: "acme/api",
+    });
+    // Absent, not false: the service turns absence into "do not grant", and the
+    // contract does not pretend the caller made a decision it never made.
+    expect(silent.ok && silent.value.enabled).toBe(undefined);
   });
 
   it("refuses a provider the worker cannot talk to", () => {

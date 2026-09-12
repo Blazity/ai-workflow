@@ -17,11 +17,7 @@ export type {
   RepositoryCatalogActivateOutcome,
   RepositoryCatalogActor,
 } from "./authoring.js";
-export {
-  isRepositoryEnabled,
-  isRepositoryEnabledForRepo,
-  reportBridge,
-} from "./policy.js";
+export { isRepositoryEnabled, reportBridge } from "./policy.js";
 export type { RepositoryCatalogBridgeReport } from "./policy.js";
 export {
   loadRepositoryCatalogSnapshot,

@@ -17,6 +17,15 @@ import { activateRepositoryCatalog } from "../../../../services/repository-catal
  * A 409 carrying the repositories the admin has not acknowledged is the normal
  * path, not an error path: it is how the dialog learns what to render. The
  * admin confirms against that list and the second request goes through.
+ *
+ * What that list actually contains, stated plainly because the dialog has to
+ * say it too: **repositories with branches on tickets that currently hold a
+ * claim**, and that are not enabled. No table ties a workflow-owned branch to
+ * the run that created it, so this cannot be narrowed to "what the live run is
+ * writing to right now": a ticket re-run after an earlier run touched a
+ * repository still lists that repository. Each entry therefore carries the
+ * tickets and run ids it was found through, so the admin can check rather than
+ * trust.
  */
 export default defineEventHandler(
   async (

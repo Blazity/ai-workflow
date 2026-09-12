@@ -973,15 +973,31 @@ describe("workspace gate", () => {
       });
     }
 
+    /**
+     * Mint a gate the way the two real callers do: with the versions the checks
+     * were LAUNCHED under in hand, never re-read here.
+     *
+     * The recorder performs no configuration read of its own, which is the
+     * property the blocker was about: a step call on this path would insert a
+     * journal entry ahead of every later step and diverge a resumed run.
+     */
+    async function record(launchedUnder: Record<string, number>) {
+      mocks.getCurrentPrePrCheckConfig.mockClear();
+      const gate = await recordSuccessfulWorkspaceGate({
+        sandboxId: "sbx-1",
+        workspaceManifest: manifest,
+        configurationVersion: 7,
+        repositoryVersions: launchedUnder,
+      });
+      expect(mocks.getCurrentPrePrCheckConfig).not.toHaveBeenCalled();
+      return gate;
+    }
+
     it("records the version each repository's checks ran under, keyed as the catalog keys it", async () => {
       configuredForBoth({ "github:acme/web": 3, "gitlab:acme/api": 1 });
 
       await expect(
-        recordSuccessfulWorkspaceGate({
-          sandboxId: "sbx-1",
-          workspaceManifest: manifest,
-          configurationVersion: 7,
-        }),
+        record({ "github:acme/web": 3, "gitlab:acme/api": 1 }),
       ).resolves.toMatchObject({
         configurationVersion: 7,
         repositoryVersions: { "github:acme/web": 3, "gitlab:acme/api": 1 },
@@ -991,46 +1007,50 @@ describe("workspace gate", () => {
     it("records nothing for a workspace repository the configuration does not cover", async () => {
       configuredForBoth({ "github:acme/web": 3 });
 
-      const gate = await recordSuccessfulWorkspaceGate({
-        sandboxId: "sbx-1",
-        workspaceManifest: manifest,
-        configurationVersion: 7,
-      });
+      const gate = await record({ "github:acme/web": 3 });
       expect(gate.repositoryVersions).toEqual({ "github:acme/web": 3 });
     });
 
     it("does not fail a run on A because B's script groups were edited", async () => {
-      configuredForBoth({ "github:acme/web": 3, "gitlab:acme/api": 1 });
-      const gate = await recordSuccessfulWorkspaceGate({
-        sandboxId: "sbx-1",
-        workspaceManifest: manifest,
-        configurationVersion: 7,
-      });
+      // Only A is configured when the checks launch, so only A is recorded.
+      configuredForBoth({ "github:acme/web": 3 });
+      const gate = await record({ "github:acme/web": 3 });
+      expect(gate.repositoryVersions).toEqual({ "github:acme/web": 3 });
 
       // B moved, A did not, and the global counter did not move either: that is
-      // the whole point of the per-repository record.
+      // the whole point of the per-repository record. The gate goes to the
+      // boundary exactly as it was minted, with nothing edited into it.
       configuredForBoth({ "github:acme/web": 3, "gitlab:acme/api": 2 });
-      // The gate this run recorded covers only A, because only A's checks ran.
       await expect(
         assertCurrentWorkspaceGate({
           sandboxId: "sbx-1",
           workspaceManifest: manifest,
-          gate: {
-            configurationVersion: gate.configurationVersion,
-            fingerprint: gate.fingerprint,
-            repositoryVersions: { "github:acme/web": 3 },
-          },
+          gate,
         }),
       ).resolves.toMatchObject({ required: true, configurationVersion: 7 });
     });
 
+    it("fails the run when A is re-configured WHILE its own checks are running", async () => {
+      // The edit lands after the batch was launched and before it finished, so
+      // the checks executed v3 and the deployment now serves v4. Pinning at
+      // launch is what catches it; a read taken after the checks passed would
+      // have recorded v4 and called the run clean.
+      configuredForBoth({ "github:acme/web": 3, "gitlab:acme/api": 1 });
+      const gate = await record({ "github:acme/web": 3, "gitlab:acme/api": 1 });
+
+      configuredForBoth({ "github:acme/web": 4, "gitlab:acme/api": 1 });
+      await expect(
+        assertCurrentWorkspaceGate({
+          sandboxId: "sbx-1",
+          workspaceManifest: manifest,
+          gate,
+        }),
+      ).rejects.toMatchObject({ code: "configuration_changed" });
+    });
+
     it("fails the run on A when A's own script groups were edited after its checks passed", async () => {
       configuredForBoth({ "github:acme/web": 3, "gitlab:acme/api": 1 });
-      const gate = await recordSuccessfulWorkspaceGate({
-        sandboxId: "sbx-1",
-        workspaceManifest: manifest,
-        configurationVersion: 7,
-      });
+      const gate = await record({ "github:acme/web": 3, "gitlab:acme/api": 1 });
 
       configuredForBoth({ "github:acme/web": 4, "gitlab:acme/api": 1 });
       await expect(
@@ -1043,17 +1063,13 @@ describe("workspace gate", () => {
         code: "configuration_changed",
         message:
           "The repository scripts configuration for github:acme/web changed after checks " +
-          "passed: profile moved from v3 to v4 while this run was in flight.",
+          "passed: checks moved from v3 to v4 while this run was in flight.",
       });
     });
 
     it("fails the run when the profile it ran under was dropped entirely", async () => {
       configuredForBoth({ "github:acme/web": 3, "gitlab:acme/api": 1 });
-      const gate = await recordSuccessfulWorkspaceGate({
-        sandboxId: "sbx-1",
-        workspaceManifest: manifest,
-        configurationVersion: 7,
-      });
+      const gate = await record({ "github:acme/web": 3, "gitlab:acme/api": 1 });
 
       configuredForBoth({ "gitlab:acme/api": 1 });
       await expect(
@@ -1066,7 +1082,7 @@ describe("workspace gate", () => {
         code: "configuration_changed",
         message:
           "The repository scripts configuration for github:acme/web changed after checks " +
-          "passed: profile moved from v3 to none while this run was in flight.",
+          "passed: checks moved from v3 to none while this run was in flight.",
       });
     });
 

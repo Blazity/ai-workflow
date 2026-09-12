@@ -68,6 +68,9 @@ function allowlistPaths(): string[] {
  * per provider, one of which is a repository that does not exist; that row
  * grants access to nothing and an operator can disable it, which is a better
  * failure than silently dropping a repository from the allowlist.
+ *
+ * An empty answer means nothing knows. The caller fails the build rather than
+ * guessing, so a wrong row is never written in the first place.
  */
 function providersFor(
   path: string,
@@ -77,20 +80,27 @@ function providersFor(
   return known.get(path.toLowerCase()) ?? configured;
 }
 
+/**
+ * The providers this deployment is actually configured for, or nothing.
+ *
+ * It never guesses. Assuming github for an allowlist entry nothing else names
+ * would create a granted row for a repository that may not exist, on a
+ * deployment that might be GitLab only, and the operator would have no way to
+ * tell that row apart from one they meant. The caller turns "nothing" into a
+ * failed build when the allowlist is non-empty, which is loud, reversible and
+ * happens before anything is written.
+ */
 async function configuredProviderKinds(): Promise<string[]> {
   try {
     const { getConfiguredVcsProviders } = await import("../src/infra/vcs-config.js");
-    const kinds = getConfiguredVcsProviders().map((provider) => provider.kind);
-    return kinds.length > 0 ? kinds : ["github"];
+    return getConfiguredVcsProviders().map((provider) => provider.kind);
   } catch (error) {
-    // The environment schema refusing to validate is the build's problem, not
-    // this seed's: it has already failed the step that owns it, or is about to.
     console.warn(
-      `[seed-repository-catalog] could not read the configured VCS providers (${
+      `[seed-repository-catalog] could not read the configured VCS providers: ${
         error instanceof Error ? error.message : String(error)
-      }); assuming github for allowlist entries that nothing else names.`,
+      }`,
     );
-    return ["github"];
+    return [];
   }
 }
 
@@ -119,12 +129,44 @@ const activated = allowlist.length > 0;
 const configured = await configuredProviderKinds();
 const known = await knownProviders(db);
 
-const granted = [
+const unresolved = allowlist.filter(
+  (path) => providersFor(path, known, configured).length === 0,
+);
+if (unresolved.length > 0) {
+  console.error(
+    `[seed-repository-catalog] AGENT_ALLOWED_REPOS names ${unresolved.length} ` +
+      `repositor${unresolved.length === 1 ? "y" : "ies"} (${unresolved.join(", ")}) ` +
+      "whose VCS provider cannot be determined: no workflow definition pins them, " +
+      "no catalog row names them, and this deployment has no configured VCS " +
+      "provider to attribute them to. Configure the provider credentials, or " +
+      "remove the entries from AGENT_ALLOWED_REPOS.",
+  );
+  process.exit(1);
+}
+
+/** One row per provider and path, compared the way the catalog compares them.
+ *  The allowlist and the definition pins overlap constantly, and `Acme/Api` in
+ *  the variable with `acme/api` on a pin is the same repository. */
+function dedupe(
+  entries: Array<{ provider: string; path: string }>,
+): Array<{ provider: string; path: string }> {
+  const seen = new Set<string>();
+  const unique: Array<{ provider: string; path: string }> = [];
+  for (const entry of entries) {
+    const key = `${entry.provider}:${entry.path.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(entry);
+  }
+  return unique;
+}
+
+const granted = dedupe([
   ...allowlist.flatMap((path) =>
     providersFor(path, known, configured).map((provider) => ({ provider, path })),
   ),
   ...(await listPinnedRepositoriesFromDefinitions(db)),
-];
+]);
 const seeded = await seedRepositoryCatalogEntries(db, {
   repositories: granted,
   source: "seeded",

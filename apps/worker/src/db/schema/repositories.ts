@@ -50,9 +50,23 @@ export const repositories = pgTable(
       .$type<RepositoryRelationship[]>()
       .notNull()
       .default(sql`'[]'::jsonb`),
-    enabled: boolean("enabled").notNull().default(true),
+    /** Defaults to false so that a row created by a path that forgot to decide
+     *  grants nothing. Only the enabled route and the seed ever say true. */
+    enabled: boolean("enabled").notNull().default(false),
     source: text("source").$type<RepositoryCatalogSource>().notNull(),
     currentProfileVersion: integer("current_profile_version").notNull().default(0),
+    /**
+     * The version of what this repository's checks RUN, as opposed to what an
+     * operator wrote about it.
+     *
+     * Separate from `currentProfileVersion` because the publication gate must
+     * fail a run whose checks configuration moved under it and must not fail one
+     * because somebody fixed a typo in the repository's description. It moves
+     * only when `script_groups` or `gate_groups` actually change, so a
+     * description, rules or relationships edit mints a profile version and
+     * leaves every gate in flight valid.
+     */
+    currentChecksVersion: integer("current_checks_version").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -92,6 +106,10 @@ export const repositoryProfileVersions = pgTable(
       .default(sql`'[]'::jsonb`),
     scriptGroups: jsonb("script_groups").$type<Record<string, unknown>>(),
     gateGroups: jsonb("gate_groups").$type<string[]>(),
+    /** The checks version this profile version carries: equal to the previous
+     *  one when the save changed neither `script_groups` nor `gate_groups`. 0
+     *  means this profile configures no checks at all. */
+    checksVersion: integer("checks_version").notNull().default(0),
     actorId: text("actor_id").notNull(),
     actorLabel: text("actor_label").notNull(),
     reason: text("reason").notNull().default(""),
@@ -122,6 +140,10 @@ export const repositoryCatalogState = pgTable(
     activated: boolean("activated").notNull().default(false),
     activatedAt: timestamp("activated_at", { withTimezone: true }),
     activatedById: text("activated_by_id"),
+    /** Who, in words. The seed writes "seeded from AGENT_ALLOWED_REPOS" here so
+     *  the Repositories screen can tell an operator's deliberate activation
+     *  apart from the one a deploy performed on their behalf. */
+    activatedByLabel: text("activated_by_label"),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [check("repository_catalog_state_single_row", sql`${t.id} = 1`)],

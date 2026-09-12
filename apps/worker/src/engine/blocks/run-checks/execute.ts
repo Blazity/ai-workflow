@@ -257,6 +257,10 @@ async function runConfiguredChecks(
   Omit<RunChecksStepResult, "outcome"> & {
     outcome: Exclude<CheckOutcome, "skipped">;
     configurationVersion: number | null;
+    /** The checks version of every configured repository at LAUNCH time, so
+     *  the gate records what these checks ran under and not what somebody saved
+     *  while they were running. */
+    repositoryVersions: Record<string, number>;
     summary: string;
     groupCoverage: RepositoryScriptGroupCoverage[];
   }
@@ -294,6 +298,7 @@ async function runConfiguredChecks(
   return {
     outcome,
     configurationVersion: current.version,
+    repositoryVersions: current.repositoryVersions ?? {},
     results,
     failures,
     summary: run.summary,
@@ -401,6 +406,12 @@ export const execute: BlockExecuteFn = async (
         sandboxId: ctx.sandboxId,
         workspaceManifest: ctx.workspaceManifest,
         configurationVersion: result.configurationVersion,
+        // Launch-time versions, carried out of the configuration load this run
+        // already performed. Never re-read here: that would adopt an edit the
+        // checks never executed.
+        ...("repositoryVersions" in result
+          ? { repositoryVersions: result.repositoryVersions }
+          : {}),
       });
     }
     const coverage =

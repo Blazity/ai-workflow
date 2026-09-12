@@ -7,9 +7,10 @@ CREATE TABLE "repositories" (
 	"description" text DEFAULT '' NOT NULL,
 	"rules" text DEFAULT '' NOT NULL,
 	"relationships" jsonb DEFAULT '[]'::jsonb NOT NULL,
-	"enabled" boolean DEFAULT true NOT NULL,
+	"enabled" boolean DEFAULT false NOT NULL,
 	"source" text NOT NULL,
 	"current_profile_version" integer DEFAULT 0 NOT NULL,
+	"current_checks_version" integer DEFAULT 0 NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "repositories_provider_check" CHECK ("repositories"."provider" in ('github', 'gitlab')),
@@ -21,6 +22,7 @@ CREATE TABLE "repository_catalog_state" (
 	"activated" boolean DEFAULT false NOT NULL,
 	"activated_at" timestamp with time zone,
 	"activated_by_id" text,
+	"activated_by_label" text,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "repository_catalog_state_single_row" CHECK ("repository_catalog_state"."id" = 1)
 );
@@ -34,6 +36,7 @@ CREATE TABLE "repository_profile_versions" (
 	"relationships" jsonb DEFAULT '[]'::jsonb NOT NULL,
 	"script_groups" jsonb,
 	"gate_groups" jsonb,
+	"checks_version" integer DEFAULT 0 NOT NULL,
 	"actor_id" text NOT NULL,
 	"actor_label" text NOT NULL,
 	"reason" text DEFAULT '' NOT NULL,

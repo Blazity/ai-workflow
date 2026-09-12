@@ -1,9 +1,6 @@
+import { repositoryCatalogKey } from "@shared/contracts";
 import { describe, expect, it } from "vitest";
-import {
-  isRepositoryEnabled,
-  isRepositoryEnabledForRepo,
-  reportBridge,
-} from "./policy.js";
+import { isRepositoryEnabled, reportBridge } from "./policy.js";
 import type { RepositoryCatalogSnapshot } from "./store.js";
 
 function snapshot(input: {
@@ -19,6 +16,7 @@ function snapshot(input: {
       bridge: !input.activated,
       activatedAt: null,
       activatedById: null,
+      activatedByLabel: null,
     },
   };
 }
@@ -56,7 +54,10 @@ describe("the catalog gate", () => {
     const activated = snapshot({ activated: true, enabled: ["github:acme/api"] });
     expect(isRepositoryEnabled(activated, "github:Acme/Api")).toBe(true);
     expect(
-      isRepositoryEnabledForRepo(activated, { provider: "github", repoPath: "ACME/API" }),
+      isRepositoryEnabled(
+        activated,
+        repositoryCatalogKey({ provider: "github", path: "ACME/API" }),
+      ),
     ).toBe(true);
   });
 });

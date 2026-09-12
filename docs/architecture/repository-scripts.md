@@ -237,21 +237,42 @@ normalizes it at the same boundary it always did.
 and the publication gate compares the version its checks ran under with the
 version now. So saving repository B's groups failed a run in flight on
 repository A at Finalize with `configuration_changed`, having verified nothing
-about A. The gate now also records, per repository, the profile version that
-repository's checks actually passed under, and Finalize compares those:
+about A. The gate now also records, per repository, the **checks version** that
+repository's checks were launched under, and Finalize compares those.
+
+The checks version is not the profile version. A profile version is minted by
+every save; the checks version moves only when the script groups or the gate
+group selection actually change. Editing a repository's description, its rules
+or its relationships therefore mints a profile version and fails no run.
+
+The versions are pinned when the checks are **launched**, not when they pass:
+they ride out of the one step that loads the configuration
+(`loadPrePrCheckConfigStep`) and are handed to the gate. An edit that lands
+while the checks are running is caught at Finalize rather than silently adopted,
+and nothing on the gate path performs a second read.
+
+Finalize then compares, per repository:
 
 - a repository the gate did not record is not checked (it has no profile, or it
   joined the workspace after the gate was minted and records its own version
   when its own checks pass);
-- a repository whose profile moved fails the run, naming the repository and both
-  versions;
+- a repository whose checks version moved fails the run, naming the repository
+  and both versions;
 - a gate checkpointed before profiles existed carries no per-repository record
   at all and still recovers and still passes. Both shapes are accepted
   indefinitely.
 
-The advice above still holds for the legacy screen, and is now narrower: editing
-**this** repository's groups while a run on **this** repository is in flight
-fails that run at Finalize. Editing another repository's does not.
+**What the legacy screen still does.** On the catalog path the per-repository
+check is precise: editing **this** repository's groups while a run on **this**
+repository is in flight fails that run at Finalize, and editing another
+repository's does not. A save on the legacy Scripts screen still appends a blob
+row and still moves the **global** counter, which every run in flight compares,
+so a save there fails every run in flight until stage G removes the page. What
+that save no longer does is move another repository's checks version: the screen
+submits the whole configuration on every click, and the fan-out is a no-op for a
+repository whose stored script groups and gate group selection are identical to
+the incoming ones, so it writes nothing and mints no version for a repository
+the operator did not actually change.
 
 **The migration.** The build-time seed
 (`apps/worker/scripts/db-seed-repository-catalog.ts`) copies the newest stored

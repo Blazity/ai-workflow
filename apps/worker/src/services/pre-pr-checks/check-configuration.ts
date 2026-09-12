@@ -31,6 +31,7 @@ import {
 } from "../../engine/pre-pr-checks/store.js";
 import {
   getConnectedCurrentCheckConfiguration,
+  getConnectedRepositoryWithProfileByPath,
   upsertConnectedRepositoryProfile,
 } from "../../db/repositories/repository-catalog.js";
 import {
@@ -136,18 +137,21 @@ async function fanOutRepositoryProfiles(input: {
       ? (entry.gateGroups as string[])
       : (repository.gateGroups ?? null);
     named.add(`${repository.provider}:${repository.repoPath.toLowerCase()}`);
+    if (await profileAlreadyMatches({ repository, entry, gateGroups })) continue;
     await upsertConnectedRepositoryProfile({
       provider: repository.provider,
       path: repository.repoPath,
-      description: "",
-      rules: "",
-      relationships: [],
+      // No description, rules or relationships: this screen does not own them,
+      // and passing empties would erase whatever the Repositories screen holds.
       scriptGroups: entry,
       gateGroups,
       actorId: input.actorId,
       actorLabel: input.actorLabel,
       reason: input.reason,
-      source: "migrated",
+      // A save made by a person here is a person's row, the same as one made on
+      // the Repositories screen. `migrated` is reserved for what the build-time
+      // seed lifted out of the old blob with nobody watching.
+      source: "manual",
     });
   }
   const current = await getConnectedCurrentCheckConfiguration();
@@ -159,9 +163,6 @@ async function fanOutRepositoryProfiles(input: {
     await upsertConnectedRepositoryProfile({
       provider,
       path,
-      description: "",
-      rules: "",
-      relationships: [],
       scriptGroups: null,
       gateGroups: null,
       actorId: input.actorId,
@@ -169,6 +170,47 @@ async function fanOutRepositoryProfiles(input: {
       reason: "removed from the repository scripts configuration",
     });
   }
+}
+
+/**
+ * Whether this save changes anything the checks would execute for a repository.
+ *
+ * This is what keeps a legacy save of repository B from failing a run in flight
+ * on repository A. The screen submits the WHOLE configuration on every save, so
+ * without this every repository named by it would get a new profile version and
+ * a new checks version on every click, and the per-repository comparison at
+ * Finalize would be no more precise than the global counter it replaced.
+ *
+ * Compared as canonical JSON rather than by identity: the entry is stored as
+ * jsonb, which has already normalized whitespace and duplicate keys out of it,
+ * so the only honest question is whether the two values are the same value.
+ */
+async function profileAlreadyMatches(input: {
+  repository: RepoScriptsConfig["repositories"][number];
+  entry: Record<string, unknown>;
+  gateGroups: string[] | null;
+}): Promise<boolean> {
+  const found = await getConnectedRepositoryWithProfileByPath({
+    provider: input.repository.provider,
+    path: input.repository.repoPath,
+  });
+  const profile = found?.profile;
+  if (!profile?.scriptGroups) return false;
+  return (
+    canonicalJson(profile.scriptGroups) === canonicalJson(input.entry) &&
+    canonicalJson(profile.gateGroups ?? null) === canonicalJson(input.gateGroups)
+  );
+}
+
+/** Key-order-independent JSON, because jsonb round trips keys in its own order
+ *  and a plain stringify would report every stored profile as different. */
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, item]) => item !== undefined)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+  return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(",")}}`;
 }
 
 /**

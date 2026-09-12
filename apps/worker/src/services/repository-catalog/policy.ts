@@ -19,7 +19,10 @@
  *       repository: { provider: VcsProviderKind; repoPath: string },
  *       catalog: RepositoryCatalogSnapshot,
  *     ): boolean {
- *       return isRepositoryEnabled(catalog, repositoryCatalogKeyOfRepoPath(repository));
+ *       return isRepositoryEnabled(
+ *         catalog,
+ *         repositoryCatalogKey({ provider: repository.provider, path: repository.repoPath }),
+ *       );
  *     }
  *
  * Nothing is rewired here, and the allowlist module keeps deciding access on
@@ -27,7 +30,6 @@
  * moment its tables existed would change what an unactivated deployment selects
  * with nobody having asked for it.
  */
-import { repositoryCatalogKeyOfRepoPath } from "@shared/contracts";
 import type { RepositoryCatalogSnapshot } from "./store.js";
 
 /**
@@ -45,14 +47,6 @@ export function isRepositoryEnabled(
 ): boolean {
   if (!snapshot.activated) return true;
   return snapshot.enabled.has(key.toLowerCase());
-}
-
-/** The same answer for a repository spelled the way the engine spells it. */
-export function isRepositoryEnabledForRepo(
-  snapshot: RepositoryCatalogSnapshot,
-  repository: { provider: string; repoPath: string },
-): boolean {
-  return isRepositoryEnabled(snapshot, repositoryCatalogKeyOfRepoPath(repository));
 }
 
 export interface RepositoryCatalogBridgeReport {

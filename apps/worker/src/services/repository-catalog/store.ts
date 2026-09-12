@@ -47,6 +47,7 @@ export function serializeRepositoryCatalogEntry(
     enabled: row.enabled,
     source: row.source as RepositoryCatalogSource,
     profileVersion: row.currentProfileVersion,
+    checksVersion: row.currentChecksVersion,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -71,6 +72,7 @@ export async function loadRepositoryCatalogSnapshot(): Promise<RepositoryCatalog
       bridge: !stateRow.activated,
       activatedAt: stateRow.activatedAt?.toISOString() ?? null,
       activatedById: stateRow.activatedById,
+      activatedByLabel: stateRow.activatedByLabel,
     },
   };
 }

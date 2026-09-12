@@ -35,6 +35,7 @@ async function addRepository(path: string, enabled: boolean): Promise<number> {
     actorId: "user-1",
     actorLabel: "Ada",
     reason: "",
+    enabled,
   });
   if (!enabled) await setRepositoryEnabled(db, { id: saved.id, enabled: false });
   return saved.id;

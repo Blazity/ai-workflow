@@ -36,6 +36,7 @@ export interface RepositoryCatalogStateRow {
   activated: boolean;
   activatedAt: Date | null;
   activatedById: string | null;
+  activatedByLabel: string | null;
 }
 
 /**
@@ -65,10 +66,15 @@ type StoredCheckConfig = {
 export interface CurrentCheckConfiguration {
   version: number | null;
   config: StoredCheckConfig;
-  /** `provider:owner/name` (cased down) to the profile version composed into
-   *  `config` for it. Only repositories whose profile carries script groups
-   *  appear: a profile with none applies to nothing, exactly as a repository
-   *  missing from the blob did. */
+  /**
+   * `provider:owner/name` (cased down) to the CHECKS version composed into
+   * `config` for it, never the profile version.
+   *
+   * Two counters exist precisely so this map can move only when the commands
+   * change. Only repositories whose profile carries script groups appear: a
+   * profile with none applies to nothing, exactly as a repository missing from
+   * the blob did.
+   */
   repositoryVersions: Record<string, number>;
   /** The newest profile composed into `config`: when it was written and by
    *  whom. Null when no profile carries script groups. The legacy checks screen
@@ -92,6 +98,11 @@ export interface CurrentCheckConfiguration {
 const LEGACY_CONFIGURATION_VERSION_FALLBACK = 1;
 
 const DEFAULT_VERSION_LIST_LIMIT = 50;
+
+/** Who the seed says activated the catalog, so a later screen can offer the
+ *  review that an operator's own click would not need. */
+const SEED_ACTOR_ID = "seed";
+const SEED_ACTOR_LABEL = "seeded from AGENT_ALLOWED_REPOS";
 
 function repositoryKeyOf(repository: { provider: string; path: string }): string {
   return `${repository.provider}:${repository.path.toLowerCase()}`;
@@ -135,17 +146,38 @@ export async function getRepositoryCatalogRowByPath(
 export interface UpsertRepositoryProfileInput {
   provider: string;
   path: string;
+  /**
+   * The fields an operator authors about a repository. Every one of them is
+   * optional and ABSENT MEANS UNCHANGED, not "set to empty".
+   *
+   * The legacy repository-scripts screen knows nothing about descriptions,
+   * rules or relationships; when its save fans out into profiles it must carry
+   * only what it actually owns, or a save on the checks screen would silently
+   * erase what somebody wrote on the Repositories screen. The carry-forward
+   * happens inside the statement, against the row as it is at write time, so
+   * two writers cannot resurrect a stale value between a read and a write.
+   */
   displayName?: string;
   defaultBranch?: string;
-  description: string;
-  rules: string;
-  relationships: RepositoryRelationship[];
+  description?: string;
+  rules?: string;
+  relationships?: RepositoryRelationship[];
   scriptGroups: Record<string, unknown> | null;
   gateGroups: string[] | null;
   actorId: string;
   actorLabel: string;
   reason: string;
   source?: RepositoryCatalogSource;
+  /**
+   * Whether a repository CREATED by this call may be touched by the agent.
+   *
+   * Defaults to false, and is ignored for a repository that already exists: a
+   * profile save is never a grant. Configuring what to run in a repository and
+   * deciding that the agent may enter it are two different decisions, made by
+   * the enabled route and by the seed, and the authoring path must not make the
+   * second one as a side effect of the first.
+   */
+  enabled?: boolean;
 }
 
 /**
@@ -154,42 +186,95 @@ export interface UpsertRepositoryProfileInput {
  * One statement and not a transaction: production runs on neon-http, which
  * cannot open an interactive one, and the pglite driver used by the tests can,
  * so a two-statement version would pass every unit test and leave production
- * able to store a repository row whose version row never arrived. The three
+ * able to store a repository row whose version row never arrived. The
  * data-modifying CTEs are mutually exclusive by construction: `existing`
  * decides which of `inserted` and `updated` fires, and the version row is then
  * written against whichever returned.
  *
+ * `resolved` is what makes absent fields mean unchanged: it reads the current
+ * row and the profile it resolves to, and every value the statement writes is
+ * taken from there unless this call supplied one.
+ *
+ * The checks version moves only when `script_groups` or `gate_groups` actually
+ * change, compared with `IS NOT DISTINCT FROM` so that null and null match.
+ * That is the whole point of keeping two counters: a run in flight fails at
+ * Finalize when the commands it ran were re-configured under it, and survives
+ * somebody fixing a typo in the repository's description.
+ *
  * The `ON CONFLICT` clause is not redundant with `existing`: the lookup is case
  * insensitive and the unique index is not, so two writers racing on the exact
- * same casing still resolve to an update rather than a duplicate key error.
+ * same casing still resolve to an update rather than a duplicate key error. It
+ * bumps the checks version unconditionally, because in that race `resolved`
+ * computed against no row at all; bumping fails an in-flight gate that might
+ * have survived, which is the safe direction.
  */
 export async function upsertRepositoryProfile(
   db: Db,
   input: UpsertRepositoryProfileInput,
-): Promise<{ id: number; version: number }> {
-  const displayName = input.displayName ?? input.path;
-  const defaultBranch = input.defaultBranch ?? "";
-  const relationships = JSON.stringify(input.relationships);
-  const scriptGroups =
-    input.scriptGroups === null ? null : JSON.stringify(input.scriptGroups);
-  const gateGroups = input.gateGroups === null ? null : JSON.stringify(input.gateGroups);
+): Promise<{ id: number; version: number; checksVersion: number }> {
+  const text = (value: string | undefined) =>
+    value === undefined ? sql`NULL::text` : sql`${value}::text`;
+  const json = (value: unknown | null | undefined) =>
+    value === undefined || value === null
+      ? sql`NULL::jsonb`
+      : sql`${JSON.stringify(value)}::jsonb`;
+  const scriptGroups = json(input.scriptGroups);
+  const gateGroups = json(input.gateGroups);
   const source = input.source ?? "manual";
   const result = await db.execute(sql`
     WITH existing AS (
-      SELECT id
-      FROM ${repositories}
-      WHERE provider = ${input.provider}
-        AND lower(path) = ${input.path.toLowerCase()}
+      SELECT
+        stored.id AS id,
+        stored.display_name AS display_name,
+        stored.default_branch AS default_branch,
+        stored.description AS description,
+        stored.rules AS rules,
+        stored.relationships AS relationships,
+        stored.current_checks_version AS current_checks_version,
+        current_profile.script_groups AS script_groups,
+        current_profile.gate_groups AS gate_groups
+      FROM ${repositories} AS stored
+      LEFT JOIN ${repositoryProfileVersions} AS current_profile
+        ON current_profile.repository_id = stored.id
+       AND current_profile.version = stored.current_profile_version
+      WHERE stored.provider = ${input.provider}
+        AND lower(stored.path) = ${input.path.toLowerCase()}
       LIMIT 1
+    ), resolved AS (
+      SELECT
+        COALESCE(${text(input.displayName)}, existing.display_name, ${input.path})
+          AS display_name,
+        COALESCE(${text(input.defaultBranch)}, existing.default_branch, '')
+          AS default_branch,
+        COALESCE(${text(input.description)}, existing.description, '') AS description,
+        COALESCE(${text(input.rules)}, existing.rules, '') AS rules,
+        COALESCE(${json(input.relationships)}, existing.relationships, '[]'::jsonb)
+          AS relationships,
+        CASE
+          WHEN existing.id IS NULL
+            THEN CASE
+              WHEN ${scriptGroups} IS NULL AND ${gateGroups} IS NULL THEN 0
+              ELSE 1
+            END
+          WHEN existing.script_groups IS NOT DISTINCT FROM ${scriptGroups}
+           AND existing.gate_groups IS NOT DISTINCT FROM ${gateGroups}
+            THEN existing.current_checks_version
+          ELSE existing.current_checks_version + 1
+        END AS checks_version
+      FROM (SELECT 1) AS anchor
+      LEFT JOIN existing ON true
     ), inserted AS (
       INSERT INTO ${repositories} (
         provider, path, display_name, default_branch, description, rules,
-        relationships, enabled, source, current_profile_version
+        relationships, enabled, source, current_profile_version,
+        current_checks_version
       )
       SELECT
-        ${input.provider}, ${input.path}, ${displayName}, ${defaultBranch},
-        ${input.description}, ${input.rules}, ${relationships}::jsonb, true,
-        ${source}, 1
+        ${input.provider}, ${input.path}, resolved.display_name,
+        resolved.default_branch, resolved.description, resolved.rules,
+        resolved.relationships, ${input.enabled ?? false}, ${source}, 1,
+        resolved.checks_version
+      FROM resolved
       WHERE NOT EXISTS (SELECT 1 FROM existing)
       ON CONFLICT (provider, path) DO UPDATE SET
         display_name = EXCLUDED.display_name,
@@ -198,40 +283,49 @@ export async function upsertRepositoryProfile(
         rules = EXCLUDED.rules,
         relationships = EXCLUDED.relationships,
         current_profile_version = ${repositories}.current_profile_version + 1,
+        current_checks_version = ${repositories}.current_checks_version + 1,
         updated_at = now()
-      RETURNING id, current_profile_version
+      RETURNING id, current_profile_version, current_checks_version
     ), updated AS (
       UPDATE ${repositories} SET
-        display_name = ${displayName},
-        default_branch = ${defaultBranch},
-        description = ${input.description},
-        rules = ${input.rules},
-        relationships = ${relationships}::jsonb,
+        display_name = resolved.display_name,
+        default_branch = resolved.default_branch,
+        description = resolved.description,
+        rules = resolved.rules,
+        relationships = resolved.relationships,
         current_profile_version = ${repositories}.current_profile_version + 1,
+        current_checks_version = resolved.checks_version,
         updated_at = now()
-      WHERE id IN (SELECT id FROM existing)
-      RETURNING id, current_profile_version
+      FROM resolved
+      WHERE ${repositories}.id IN (SELECT id FROM existing)
+      RETURNING ${repositories}.id, ${repositories}.current_profile_version,
+        ${repositories}.current_checks_version
     ), target AS (
-      SELECT id, current_profile_version FROM inserted
+      SELECT id, current_profile_version, current_checks_version FROM inserted
       UNION ALL
-      SELECT id, current_profile_version FROM updated
+      SELECT id, current_profile_version, current_checks_version FROM updated
     )
     INSERT INTO ${repositoryProfileVersions} (
       repository_id, version, description, rules, relationships,
-      script_groups, gate_groups, actor_id, actor_label, reason
+      script_groups, gate_groups, checks_version, actor_id, actor_label, reason
     )
     SELECT
-      target.id, target.current_profile_version, ${input.description}, ${input.rules},
-      ${relationships}::jsonb,
-      ${scriptGroups === null ? sql`NULL::jsonb` : sql`${scriptGroups}::jsonb`},
-      ${gateGroups === null ? sql`NULL::jsonb` : sql`${gateGroups}::jsonb`},
-      ${input.actorId}, ${input.actorLabel}, ${input.reason}
-    FROM target
-    RETURNING repository_id AS id, version
+      target.id, target.current_profile_version, resolved.description,
+      resolved.rules, resolved.relationships, ${scriptGroups}, ${gateGroups},
+      target.current_checks_version, ${input.actorId}, ${input.actorLabel},
+      ${input.reason}
+    FROM target, resolved
+    RETURNING repository_id AS id, version, checks_version
   `);
-  const row = (result as { rows?: Array<{ id: number; version: number }> }).rows?.[0];
+  const row = (
+    result as { rows?: Array<{ id: number; version: number; checks_version: number }> }
+  ).rows?.[0];
   if (!row) throw new Error("repository profile upsert returned no version");
-  return { id: Number(row.id), version: Number(row.version) };
+  return {
+    id: Number(row.id),
+    version: Number(row.version),
+    checksVersion: Number(row.checks_version),
+  };
 }
 
 /**
@@ -249,6 +343,47 @@ export async function setRepositoryEnabled(
     .where(eq(repositories.id, input.id))
     .returning();
   return row ?? null;
+}
+
+/** One profile version, by its key. The screens that want "the version this
+ *  repository currently resolves to" ask for it directly rather than listing a
+ *  page of history and scanning it for a number they already hold. */
+export async function getRepositoryProfileVersionRow(
+  db: Db,
+  repositoryId: number,
+  version: number,
+): Promise<RepositoryProfileVersionRow | null> {
+  const [row] = await db
+    .select()
+    .from(repositoryProfileVersions)
+    .where(
+      and(
+        eq(repositoryProfileVersions.repositoryId, repositoryId),
+        eq(repositoryProfileVersions.version, version),
+      ),
+    )
+    .limit(1);
+  return row ?? null;
+}
+
+/** A repository and the profile it currently resolves to, by path, in one
+ *  keyed read. The legacy fan-out uses it to decide whether a save changes
+ *  anything at all before it writes. */
+export async function getRepositoryWithProfileByPath(
+  db: Db,
+  input: { provider: string; path: string },
+): Promise<RepositoryWithProfile | null> {
+  const repository = await getRepositoryCatalogRowByPath(db, input);
+  if (!repository) return null;
+  const profile =
+    repository.currentProfileVersion > 0
+      ? await getRepositoryProfileVersionRow(
+          db,
+          repository.id,
+          repository.currentProfileVersion,
+        )
+      : null;
+  return { repository, profile };
 }
 
 export function listRepositoryProfileVersionRows(
@@ -299,16 +434,23 @@ export async function getRepositoryCatalogStateRow(
         activated: row.activated,
         activatedAt: row.activatedAt,
         activatedById: row.activatedById,
+        activatedByLabel: row.activatedByLabel,
       }
-    : { activated: false, activatedAt: null, activatedById: null };
+    : {
+        activated: false,
+        activatedAt: null,
+        activatedById: null,
+        activatedByLabel: null,
+      };
 }
 
 /** One statement, so a second click cannot create a second state row. */
 export async function activateRepositoryCatalog(
   db: Db,
-  input: { actorId: string; now?: Date },
+  input: { actorId: string; actorLabel?: string; now?: Date },
 ): Promise<RepositoryCatalogStateRow> {
   const now = input.now ?? new Date();
+  const actorLabel = input.actorLabel ?? null;
   const [row] = await db
     .insert(repositoryCatalogState)
     .values({
@@ -316,6 +458,7 @@ export async function activateRepositoryCatalog(
       activated: true,
       activatedAt: now,
       activatedById: input.actorId,
+      activatedByLabel: actorLabel,
       updatedAt: now,
     })
     .onConflictDoUpdate({
@@ -324,6 +467,7 @@ export async function activateRepositoryCatalog(
         activated: true,
         activatedAt: now,
         activatedById: input.actorId,
+        activatedByLabel: actorLabel,
         updatedAt: now,
       },
     })
@@ -332,34 +476,71 @@ export async function activateRepositoryCatalog(
     activated: row?.activated ?? true,
     activatedAt: row?.activatedAt ?? now,
     activatedById: row?.activatedById ?? input.actorId,
+    activatedByLabel: row?.activatedByLabel ?? actorLabel,
   };
 }
 
 /**
- * Repositories a live run is currently working in that the catalog would stop
- * selecting once it is activated.
+ * Repositories a live claim is working in that the catalog would stop selecting
+ * once it is activated.
  *
- * `active_runs` carries no repository identity at all (it claims a subject, and
- * a ticket), so the only table that ties a live claim to repositories is the
- * workflow-owned branch registry, which records one row per ticket and
- * repository for the branch a run published into. Joining the two is what lets
- * the activation dialog say "this repository has work in flight and is not
- * enabled" instead of asking an admin to guess.
+ * The population is honest about what it can see. `active_runs` carries a
+ * subject and a ticket and no repository at all, and `workflow_owned_branches`
+ * records one row per ticket and repository with NO run id, so there is no
+ * column anywhere that ties a branch to the run that created it. The join is
+ * therefore on the ticket key, and what comes back is "repositories with
+ * branches on tickets that currently hold a claim", not "repositories this run
+ * is writing to right now": a ticket re-run after an earlier run touched a
+ * repository still lists that repository.
+ *
+ * That is why each entry carries the tickets and the run ids it came from. An
+ * admin about to end the bridge can see WHY a repository is listed and go look
+ * at the run, instead of being handed a bare name and asked to trust it.
  */
-export async function listClaimedRepositoriesNotEnabled(db: Db): Promise<string[]> {
+export interface ClaimedRepositoryNotEnabled {
+  /** `provider:owner/name`, cased down: the acknowledgement key. */
+  key: string;
+  /** The repository as the branch registry spells it, for display. */
+  displayName: string;
+  ticketKeys: string[];
+  runIds: string[];
+}
+
+export async function listClaimedRepositoriesNotEnabled(
+  db: Db,
+): Promise<ClaimedRepositoryNotEnabled[]> {
   const result = await db.execute(sql`
-    SELECT DISTINCT branches.provider AS provider, branches.repo_path AS repo_path
+    SELECT
+      branches.provider AS provider,
+      min(branches.repo_path) AS repo_path,
+      array_agg(DISTINCT claims.ticket_key) AS ticket_keys,
+      array_remove(array_agg(DISTINCT claims.run_id), NULL) AS run_ids
     FROM workflow_owned_branches AS branches
     JOIN active_runs AS claims ON claims.ticket_key = branches.ticket_key
     LEFT JOIN ${repositories} AS catalog
       ON catalog.provider = branches.provider
      AND lower(catalog.path) = lower(branches.repo_path)
     WHERE catalog.id IS NULL OR catalog.enabled = false
-    ORDER BY branches.provider, branches.repo_path
+    GROUP BY branches.provider, lower(branches.repo_path)
+    ORDER BY branches.provider, lower(branches.repo_path)
   `);
   const rows =
-    (result as { rows?: Array<{ provider: string; repo_path: string }> }).rows ?? [];
-  return rows.map((row) => `${row.provider}:${row.repo_path.toLowerCase()}`);
+    (
+      result as {
+        rows?: Array<{
+          provider: string;
+          repo_path: string;
+          ticket_keys: string[] | null;
+          run_ids: string[] | null;
+        }>;
+      }
+    ).rows ?? [];
+  return rows.map((row) => ({
+    key: `${row.provider}:${row.repo_path.toLowerCase()}`,
+    displayName: row.repo_path,
+    ticketKeys: [...(row.ticket_keys ?? [])].sort(),
+    runIds: [...(row.run_ids ?? [])].sort(),
+  }));
 }
 
 /**
@@ -375,6 +556,14 @@ export async function listClaimedRepositoriesNotEnabled(db: Db): Promise<string[
  * `batchTimeoutMinutes`, which is a deployment-wide bound rather than anything
  * a repository owns. Its `repositories` payload is read by nobody after this
  * stage; the cleanup stage drops the table.
+ *
+ * `enabled` is deliberately NOT a filter here. This composes what to run in a
+ * repository, and a run never reaches a repository it may not touch: the run
+ * carries its own enabled set, decided once when it was dispatched, so a
+ * repository switched off while checks are in flight must not have its commands
+ * vanish from under the run that is already inside it. Filtering here would
+ * also make the catalog's on/off switch move what the checks do, which is the
+ * one thing `setRepositoryEnabled` promises it never does.
  */
 export async function getCurrentCheckConfiguration(
   db: Db,
@@ -401,7 +590,7 @@ export async function getCurrentCheckConfiguration(
       ...(profile.gateGroups ? { gateGroups: profile.gateGroups } : {}),
     } as PrePrCheckRepositoryConfig;
     entries.push(entry);
-    repositoryVersions[repositoryKeyOf(repository)] = profile.version;
+    repositoryVersions[repositoryKeyOf(repository)] = profile.checksVersion;
   }
   const batchTimeoutMinutes = (legacy?.config as { batchTimeoutMinutes?: number } | undefined)
     ?.batchTimeoutMinutes;
@@ -450,17 +639,25 @@ export function setConnectedRepositoryEnabled(input: { id: number; enabled: bool
   return setRepositoryEnabled(getDb(), input);
 }
 
+export function getConnectedRepositoryProfileVersionRow(
+  repositoryId: number,
+  version: number,
+) {
+  return getRepositoryProfileVersionRow(getDb(), repositoryId, version);
+}
+
+export function getConnectedRepositoryWithProfileByPath(input: {
+  provider: string;
+  path: string;
+}) {
+  return getRepositoryWithProfileByPath(getDb(), input);
+}
+
 export function listConnectedRepositoryProfileVersionRows(
   repositoryId: number,
   limit?: number,
 ) {
   return listRepositoryProfileVersionRows(getDb(), repositoryId, limit);
-}
-
-export function listConnectedRepositoriesWithProfiles(
-  options: { enabledOnly?: boolean } = {},
-) {
-  return listRepositoriesWithProfiles(getDb(), options);
 }
 
 export function getConnectedRepositoryCatalogStateRow() {
@@ -469,6 +666,7 @@ export function getConnectedRepositoryCatalogStateRow() {
 
 export function activateConnectedRepositoryCatalog(input: {
   actorId: string;
+  actorLabel?: string;
   now?: Date;
 }) {
   return activateRepositoryCatalog(getDb(), input);
@@ -528,11 +726,22 @@ export async function seedRepositoryCatalogEntries(
     enabled: boolean;
   },
 ): Promise<number> {
-  if (input.repositories.length === 0) return 0;
+  // Deduplicated first, and the same way the catalog compares repositories.
+  // The allowlist variable and the definition pins overlap constantly, and the
+  // guard below only sees the table: two candidates spelled `Acme/Api` and
+  // `acme/api` in ONE call would both pass it and the unique index, which is
+  // exact-case, would not stop them either.
+  const seen = new Set<string>();
+  const unique: Array<{ provider: string; path: string }> = [];
+  for (const repository of input.repositories) {
+    const key = `${repository.provider}:${repository.path.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(repository);
+  }
+  if (unique.length === 0) return 0;
   const values = sql.join(
-    input.repositories.map(
-      (repository) => sql`(${repository.provider}, ${repository.path})`,
-    ),
+    unique.map((repository) => sql`(${repository.provider}, ${repository.path})`),
     sql`, `,
   );
   const result = await db.execute(sql`
@@ -573,7 +782,12 @@ export async function seedRepositoryCatalogState(
       id: 1,
       activated: input.activated,
       activatedAt: input.activated ? now : null,
-      activatedById: input.activated ? "seed" : null,
+      // Named, not anonymous. An activation nobody clicked is still an
+      // activation, and the Repositories screen has to be able to say so: the
+      // deployment was already restricted to this exact list, and the seed
+      // wrote that list down rather than widening it.
+      activatedById: input.activated ? SEED_ACTOR_ID : null,
+      activatedByLabel: input.activated ? SEED_ACTOR_LABEL : null,
       updatedAt: now,
     })
     .onConflictDoNothing();
@@ -632,7 +846,7 @@ export async function migrateScriptGroupsIntoProfiles(
   const profiles = await db.execute(sql`
     ${blobEntries}, bumped AS (
       UPDATE ${repositories} AS target
-      SET current_profile_version = 1, updated_at = now()
+      SET current_profile_version = 1, current_checks_version = 1, updated_at = now()
       FROM entries
       WHERE target.provider = entries.provider
         AND lower(target.path) = lower(entries.path)
@@ -640,7 +854,7 @@ export async function migrateScriptGroupsIntoProfiles(
       RETURNING target.id AS id, entries.entry AS entry
     )
     INSERT INTO ${repositoryProfileVersions} (
-      repository_id, version, script_groups, gate_groups,
+      repository_id, version, script_groups, gate_groups, checks_version,
       actor_id, actor_label, reason
     )
     SELECT
@@ -650,6 +864,7 @@ export async function migrateScriptGroupsIntoProfiles(
         THEN bumped.entry->'gateGroups'
         ELSE NULL
       END,
+      1,
       'migration', 'migration',
       'script groups migration from pre_pr_check_config_versions'
     FROM bumped

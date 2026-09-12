@@ -13,10 +13,13 @@ import {
   getRepositoryCatalogRow,
   getRepositoryCatalogRowByPath,
   getRepositoryCatalogStateRow,
+  getRepositoryProfileVersionRow,
+  getRepositoryWithProfileByPath,
   listClaimedRepositoriesNotEnabled,
   listRepositoriesWithProfiles,
   listRepositoryCatalogRows,
   listRepositoryProfileVersionRows,
+  seedRepositoryCatalogEntries,
   setRepositoryEnabled,
   upsertRepositoryProfile,
   type UpsertRepositoryProfileInput,
@@ -52,16 +55,20 @@ describe("repository catalog repository", () => {
     expect(first.version).toBe(1);
 
     const second = await upsertRepositoryProfile(db, profile({ rules: "no force push, ever" }));
-    expect(second).toEqual({ id: first.id, version: 2 });
+    // The profile moved, the checks did not: the script groups are the same
+    // bytes, and no run in flight ran anything different because of this save.
+    expect(second).toEqual({ id: first.id, version: 2, checksVersion: 1 });
 
     const row = await getRepositoryCatalogRow(db, first.id);
     expect(row).toMatchObject({
       provider: "github",
       path: "acme/api",
       currentProfileVersion: 2,
+      currentChecksVersion: 1,
       rules: "no force push, ever",
       source: "manual",
-      enabled: true,
+      // Created by a profile save, so granted to nobody until somebody says so.
+      enabled: false,
     });
     await expect(db.select().from(repositories)).resolves.toHaveLength(1);
     await expect(db.select().from(repositoryProfileVersions)).resolves.toHaveLength(2);
@@ -107,7 +114,10 @@ describe("repository catalog repository", () => {
 
   it("lists every row, and only the enabled ones when asked", async () => {
     const db = await createTestDb();
-    const kept = await upsertRepositoryProfile(db, profile({ path: "acme/api" }));
+    const kept = await upsertRepositoryProfile(
+      db,
+      profile({ path: "acme/api", enabled: true }),
+    );
     const dropped = await upsertRepositoryProfile(db, profile({ path: "acme/web" }));
     await setRepositoryEnabled(db, { id: dropped.id, enabled: false });
 
@@ -135,6 +145,44 @@ describe("repository catalog repository", () => {
     expect(versions[0]).toMatchObject({ reason: "second", actorLabel: "Ada" });
   });
 
+  it("reads one profile version by its key, and the pair by path", async () => {
+    const db = await createTestDb();
+    const created = await upsertRepositoryProfile(db, profile({ rules: "first" }));
+    await upsertRepositoryProfile(db, profile({ rules: "second" }));
+
+    await expect(
+      getRepositoryProfileVersionRow(db, created.id, 1),
+    ).resolves.toMatchObject({ version: 1, rules: "first" });
+    await expect(getRepositoryProfileVersionRow(db, created.id, 9)).resolves.toBeNull();
+
+    // Case insensitive on the path, like every other lookup that decides which
+    // repository a caller means.
+    const found = await getRepositoryWithProfileByPath(db, {
+      provider: "github",
+      path: "ACME/API",
+    });
+    expect(found?.repository.id).toBe(created.id);
+    expect(found?.profile).toMatchObject({ version: 2, rules: "second" });
+    await expect(
+      getRepositoryWithProfileByPath(db, { provider: "gitlab", path: "acme/api" }),
+    ).resolves.toBeNull();
+  });
+
+  it("answers with a null profile for a row nobody has configured", async () => {
+    const db = await createTestDb();
+    await seedRepositoryCatalogEntries(db, {
+      repositories: [{ provider: "github", path: "acme/api" }],
+      source: "seeded",
+      enabled: true,
+    });
+    const found = await getRepositoryWithProfileByPath(db, {
+      provider: "github",
+      path: "acme/api",
+    });
+    expect(found?.repository.currentProfileVersion).toBe(0);
+    expect(found?.profile).toBeNull();
+  });
+
   it("resolves each repository to its current profile version", async () => {
     const db = await createTestDb();
     await upsertRepositoryProfile(db, profile({ path: "acme/api" }));
@@ -153,11 +201,21 @@ describe("repository catalog repository", () => {
       activated: false,
       activatedAt: null,
       activatedById: null,
+      activatedByLabel: null,
     });
 
     const at = new Date("2026-09-12T09:00:00.000Z");
-    const state = await activateRepositoryCatalog(db, { actorId: "user-1", now: at });
-    expect(state).toEqual({ activated: true, activatedAt: at, activatedById: "user-1" });
+    const state = await activateRepositoryCatalog(db, {
+      actorId: "user-1",
+      actorLabel: "Ada",
+      now: at,
+    });
+    expect(state).toEqual({
+      activated: true,
+      activatedAt: at,
+      activatedById: "user-1",
+      activatedByLabel: "Ada",
+    });
 
     await activateRepositoryCatalog(db, { actorId: "user-2" });
     await expect(getRepositoryCatalogStateRow(db)).resolves.toMatchObject({
@@ -168,7 +226,10 @@ describe("repository catalog repository", () => {
 
   it("names a repository a live claim is working in that the catalog would stop selecting", async () => {
     const db = await createTestDb();
-    const enabled = await upsertRepositoryProfile(db, profile({ path: "acme/api" }));
+    const enabled = await upsertRepositoryProfile(
+      db,
+      profile({ path: "acme/api", enabled: true }),
+    );
     const disabled = await upsertRepositoryProfile(db, profile({ path: "acme/web" }));
     await setRepositoryEnabled(db, { id: disabled.id, enabled: false });
     expect(enabled.version).toBe(1);
@@ -201,10 +262,157 @@ describe("repository catalog repository", () => {
       },
     ]);
 
+    // Named with the tickets and runs it was found through, because the join is
+    // on the ticket and cannot prove the live run is the one that made the
+    // branch: an admin has to be able to go and look.
     await expect(listClaimedRepositoriesNotEnabled(db)).resolves.toEqual([
-      "github:acme/unknown",
-      "github:acme/web",
+      {
+        key: "github:acme/unknown",
+        displayName: "acme/unknown",
+        ticketKeys: ["AIW-1"],
+        runIds: ["run-1"],
+      },
+      {
+        key: "github:acme/web",
+        displayName: "acme/web",
+        ticketKeys: ["AIW-1"],
+        runIds: ["run-1"],
+      },
     ]);
+  });
+});
+
+describe("what a profile save may and may not overwrite", () => {
+  it("carries a catalog-authored description, rules and relationships through a save that omits them", async () => {
+    const db = await createTestDb();
+    const created = await upsertRepositoryProfile(
+      db,
+      profile({
+        description: "The public API",
+        rules: "never force push",
+        relationships: [{ repositoryId: 7, label: "consumes" }],
+      }),
+    );
+
+    // Exactly what the legacy repository-scripts fan-out sends: the script
+    // groups it owns, and not one field it does not.
+    await upsertRepositoryProfile(db, {
+      provider: "github",
+      path: "acme/api",
+      scriptGroups: { provider: "github", repoPath: "acme/api", groups: { lint: {} } },
+      gateGroups: null,
+      actorId: "user-2",
+      actorLabel: "Legacy screen",
+      reason: "repository scripts save",
+    });
+
+    const row = await getRepositoryCatalogRow(db, created.id);
+    expect(row).toMatchObject({
+      description: "The public API",
+      rules: "never force push",
+      relationships: [{ repositoryId: 7, label: "consumes" }],
+    });
+    const versions = await listRepositoryProfileVersionRows(db, created.id);
+    expect(versions[0]).toMatchObject({
+      version: 2,
+      description: "The public API",
+      rules: "never force push",
+    });
+  });
+
+  it("still lets a save clear a field on purpose", async () => {
+    const db = await createTestDb();
+    const created = await upsertRepositoryProfile(db, profile({ rules: "no force push" }));
+    await upsertRepositoryProfile(db, profile({ rules: "" }));
+    await expect(getRepositoryCatalogRow(db, created.id)).resolves.toMatchObject({
+      rules: "",
+    });
+  });
+
+  it("creates a repository switched off, and never grants one that already exists", async () => {
+    const db = await createTestDb();
+    const created = await upsertRepositoryProfile(db, profile());
+    await expect(getRepositoryCatalogRow(db, created.id)).resolves.toMatchObject({
+      enabled: false,
+    });
+
+    await setRepositoryEnabled(db, { id: created.id, enabled: true });
+    await upsertRepositoryProfile(db, profile({ description: "again", enabled: false }));
+    // The flag decides creation only: a later save must not revoke a grant an
+    // operator made, any more than it may hand one out.
+    await expect(getRepositoryCatalogRow(db, created.id)).resolves.toMatchObject({
+      enabled: true,
+    });
+  });
+
+  it("creates an enabled repository when the caller says so", async () => {
+    const db = await createTestDb();
+    const created = await upsertRepositoryProfile(db, profile({ enabled: true }));
+    await expect(getRepositoryCatalogRow(db, created.id)).resolves.toMatchObject({
+      enabled: true,
+    });
+  });
+});
+
+describe("the checks version", () => {
+  it("stands still while only the authored fields move", async () => {
+    const db = await createTestDb();
+    const first = await upsertRepositoryProfile(db, profile());
+    expect(first.checksVersion).toBe(1);
+
+    const second = await upsertRepositoryProfile(db, profile({ description: "edited" }));
+    expect(second).toMatchObject({ version: 2, checksVersion: 1 });
+
+    const third = await upsertRepositoryProfile(db, profile({ rules: "be careful" }));
+    expect(third).toMatchObject({ version: 3, checksVersion: 1 });
+  });
+
+  it("moves when a command changes, and when the gate selection changes", async () => {
+    const db = await createTestDb();
+    await upsertRepositoryProfile(db, profile());
+    const edited = await upsertRepositoryProfile(
+      db,
+      profile({
+        scriptGroups: {
+          provider: "github",
+          repoPath: "acme/api",
+          groups: { test: { commands: ["pnpm test --run"] } },
+        },
+      }),
+    );
+    expect(edited.checksVersion).toBe(2);
+
+    const gated = await upsertRepositoryProfile(
+      db,
+      profile({
+        scriptGroups: {
+          provider: "github",
+          repoPath: "acme/api",
+          groups: { test: { commands: ["pnpm test --run"] } },
+        },
+        gateGroups: ["test"],
+      }),
+    );
+    expect(gated.checksVersion).toBe(3);
+  });
+
+  it("moves when a repository's script groups are dropped altogether", async () => {
+    const db = await createTestDb();
+    await upsertRepositoryProfile(db, profile());
+    const dropped = await upsertRepositoryProfile(db, profile({ scriptGroups: null }));
+    expect(dropped.checksVersion).toBe(2);
+  });
+
+  it("is 0 for a repository whose first profile configures no checks", async () => {
+    const db = await createTestDb();
+    const created = await upsertRepositoryProfile(
+      db,
+      profile({ scriptGroups: null, gateGroups: null }),
+    );
+    expect(created.checksVersion).toBe(0);
+    await expect(getRepositoryCatalogRow(db, created.id)).resolves.toMatchObject({
+      currentChecksVersion: 0,
+    });
   });
 });
 
@@ -235,7 +443,9 @@ describe("getCurrentCheckConfiguration", () => {
         groups: { test: { commands: ["pnpm test"] } },
       },
     ]);
-    expect(current.repositoryVersions).toEqual({ "github:acme/api": 2 });
+    // The checks version, not the profile version: the second save changed the
+    // description and nothing a check executes.
+    expect(current.repositoryVersions).toEqual({ "github:acme/api": 1 });
     expect(current.version).toBe(1);
   });
 

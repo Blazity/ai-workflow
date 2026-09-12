@@ -436,8 +436,13 @@ export function recoverChecksCeilingFromSteps(steps: StepsRecord): number | null
  * per-repository profiles in the repository catalog.
  *
  * `version` is the legacy global counter the publication gate has recorded on
- * every run ever minted; the per-repository versions are what the gate reasons
- * about now, and they are read again when the gate is minted rather than here.
+ * every run ever minted. `repositoryVersions` is what the gate reasons about
+ * now, and it rides out of THIS step rather than being read again later: the
+ * gate has to record the version the checks were launched under, and a second
+ * read after they pass would adopt an edit that landed while they ran. It is
+ * also the only way to get the number without adding a step to a path that
+ * mints a gate, which would shift every later journal entry of a run already
+ * in flight.
  *
  * The version log stays inside this step: pino may only be used inside a
  * "use step", and moving it to workflow scope fails the Vercel build alone,
@@ -446,6 +451,9 @@ export function recoverChecksCeilingFromSteps(steps: StepsRecord): number | null
 export async function loadPrePrCheckConfigStep(): Promise<{
   version: number | null;
   config: PrePrCheckConfig;
+  /** Optional so a stored result from before this field existed still parses
+   *  on resume; absent behaves exactly as an empty map. */
+  repositoryVersions?: Record<string, number>;
 }> {
   "use step";
   const { getConnectedCurrentCheckConfiguration } = await import(
@@ -460,7 +468,11 @@ export async function loadPrePrCheckConfigStep(): Promise<{
     },
     "pre_pr_checks_config_version",
   );
-  return { version: current.version, config: current.config };
+  return {
+    version: current.version,
+    config: current.config,
+    repositoryVersions: current.repositoryVersions,
+  };
 }
 loadPrePrCheckConfigStep.maxRetries = 0;
 

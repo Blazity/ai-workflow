@@ -2935,6 +2935,13 @@ async function agentWorkflowBody(
                 sandboxId: ctx.sandboxId,
                 workspaceManifest: ctx.workspaceManifest,
                 configurationVersion: prePrConfig.version,
+                // The versions these checks were LAUNCHED under, straight off
+                // the configuration load above. No second read, so an edit that
+                // landed while the checks ran is caught at Finalize instead of
+                // being adopted here.
+                ...(prePrConfig.repositoryVersions
+                  ? { repositoryVersions: prePrConfig.repositoryVersions }
+                  : {}),
               });
             }
             return {
