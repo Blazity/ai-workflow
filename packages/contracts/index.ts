@@ -26,6 +26,7 @@ export * from "./repository-catalog-api";
 export * from "./repository-scripts";
 export * from "./repository-script-group";
 export * from "./run-analysis";
+export * from "./execution-error";
 export * from "./request-parsing";
 export * from "./requests-dashboard-auth";
 export * from "./requests-harness";

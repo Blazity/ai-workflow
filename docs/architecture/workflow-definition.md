@@ -279,7 +279,16 @@ question and resume on the answer. Edges carry a token (`unresolved`, `active`,
 `V2_PRODUCTION_SCHEDULER_BOUNDS` (maximum concurrency and maximum total block
 executions). Execution errors are shaped by
 `apps/worker/src/workflow-definition/interpreter.ts`, which owns the safe
-message set and the error state the run records.
+message set and the one construction path a failed block reports through, while
+the execution error class, the sentence a user reads and the operator log event
+are engine concerns in `apps/worker/src/engine/helpers/execution-error.ts`. The
+failure a run records is plain data declared in
+`packages/contracts/execution-error.ts`, so the scheduler mints and carries one
+without touching the engine. A Transform block's regex replacement is the one
+transform operation that cannot be pure, so `transform.ts` takes an async regex
+evaluator as a parameter and refuses a regex transform without one, and
+`apps/worker/src/engine/steps/transform-regex-step.ts` stays the only loader of
+`re2-wasm` and supplies the evaluator the workflow injects.
 
 ## 12. Storage, versions and deployment state
 
@@ -328,7 +337,9 @@ Three properties matter to anyone authoring a graph through an agent:
 | Binding resolution | `apps/worker/src/workflow-definition/v2-bindings.ts` |
 | Available values and node contracts | `apps/worker/src/workflow-definition/available-values.ts` |
 | Scheduler, loop regions, checkpoints | `apps/worker/src/workflow-definition/v2-scheduler.ts` |
-| Execution errors and runtime graph helpers | `apps/worker/src/workflow-definition/interpreter.ts` |
+| Execution results and error construction | `apps/worker/src/workflow-definition/interpreter.ts` |
+| Execution error shape, category and recorded state | `packages/contracts/execution-error.ts` |
+| Execution error class, user sentence, log event | `apps/worker/src/engine/helpers/execution-error.ts` |
 | Harness profile resolution | `apps/worker/src/workflow-definition/harness-profile-runtime.ts` |
 | Workspace access rules | `apps/worker/src/workflow-definition/workspace-access.ts` |
 | Persistence and versions | `apps/worker/src/db/repositories/definitions.ts`, `apps/worker/src/services/workflow-definitions/policy-operations.ts` |

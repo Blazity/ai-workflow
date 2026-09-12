@@ -8,7 +8,8 @@ import type { AgentKind } from "../sandbox/agents/index.js";
 import type { IssueTrackerMoveTarget } from "../adapters/issue-tracker/types.js";
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
 import { selectWorkItems } from "./helpers/review-ledger.js";
-import { createWorkflowExecutionErrorState, executionError, formatExecutionErrorForUser, WorkflowExecutionError, WORKSPACE_GATE_NOT_RECORDED_PREFIX, type StepsRecord, type WorkflowExecutionErrorState } from "../workflow-definition/interpreter.js";
+import { executionError, WORKSPACE_GATE_NOT_RECORDED_PREFIX, type StepsRecord } from "../workflow-definition/interpreter.js";
+import { formatExecutionErrorForUser, WorkflowExecutionError } from "./helpers/execution-error.js";
 import { executeV2Graph, V2_PRODUCTION_SCHEDULER_BOUNDS, type V2BlockExecutor, type V2SchedulerCheckpoint, type V2SchedulerHooks } from "../workflow-definition/v2-scheduler.js";
 import { buildV2ReplayGraphSnapshot, createV2RunObservationHooks, type V2RunObservationHooks } from "../run-observability/runtime-hooks.js";
 import { configuredReplaySecrets } from "../run-observability/configured-secrets.js";
@@ -30,6 +31,7 @@ import { agentArtifactPhase, agentProtocolExecutionError as agentProtocolBlockEr
 import { VARIABLE_PARAM_KEYS } from "@shared/prompts";
 import { compatibilityPromptSourceForV2Node, compileEffectivePrompt, effectivePromptProfileSource } from "./helpers/effective-prompt.js";
 import { loadInvocationRepositoryInstructionSources } from "./steps/repository-instructions.js";
+import { transformRegexEvaluator } from "./helpers/transform-regex-evaluator.js";
 import { publicationPrsForTelemetry } from "./helpers/publication-prs-for-telemetry.js";
 import { withAnalysisDelivery, withAnalysisPublication } from "./support/run-analysis-report.js";
 import {
@@ -50,8 +52,8 @@ import { isRepositoryScriptsRefusal, repositoryScriptFailureEntry, repositoryScr
 import { RunBudgetError, addElapsed, checksCeilingErrorDetail, createRunBudgetState, isChecksCeilingExceededError, isDurationAbortError, isV2InvocationCancelledError, observeRunBudget, propagateInvocationInterruption, recordBudgetUsage, runBudgetFailureFromError, type RunBudgetAttribution, type RunBudgetLimits, type RunBudgetFailure, type RunBudgetObservation, type RunBudgetState } from "./helpers/run-budget.js";
 import { isRunControlError } from "./helpers/run-control-error.js";
 import { BLOCK_EXECUTORS } from "./blocks/executors.generated.js";
-import { isTriggerBlockType, RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
-import type { BlockOutput, BlockRunState, RunPullRequest, RunAnalysisReport, TransformConfiguration, WorkflowBlockType, WorkflowDefinitionNode, WorkflowDefinitionV2, WorkflowParamValue, HarnessRunManifestRecord } from "@shared/contracts";
+import { createWorkflowExecutionErrorState, isTriggerBlockType, RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
+import type { BlockOutput, BlockRunState, RunPullRequest, RunAnalysisReport, TransformConfiguration, WorkflowBlockType, WorkflowDefinitionNode, WorkflowDefinitionV2, WorkflowExecutionErrorState, WorkflowParamValue, HarnessRunManifestRecord } from "@shared/contracts";
 import type { CostProvider, CostProviderKind, TokenPrice } from "@shared/costs";
 import type { ResolvedHarnessRuntime } from "../sandbox/harness-runtime.js";
 import { buildResearchAnalysisReportBestEffort, loadApprovedPlanAnalysisReportBestEffort, logPhaseFailure, logWorkflowExecutionErrorStep, markRunFailedOnSelfMoveStep, markRunSucceededOnSelfMoveStep, markTicketFailed, notifyTicket, notifyTicketBestEffort, postFailureReasonCommentStep, postPrLinksComment, postRunAnalysisCommentStep, postTicketComment, recordRunAnalysisCommentFailureBestEffort, recordRunAnalysisReportBestEffort, recordRunFailureReasonStep, safeRunAnalysisDeliveryError, safeRunAnalysisReportError } from "./steps/ticket-analysis.js";
@@ -3350,6 +3352,7 @@ async function agentWorkflowBody(
                 output: await executeTransform(
                   configuration as unknown as TransformConfiguration,
                   bindingContext,
+                  transformRegexEvaluator,
                 ),
               },
             };
