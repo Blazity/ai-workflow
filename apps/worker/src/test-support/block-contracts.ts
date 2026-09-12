@@ -25,7 +25,7 @@ import {
   createWorkflowValueAnalyzer,
   type WorkflowValueAnalyzer,
 } from "../workflow-definition/available-values.js";
-import { validateWorkflowDefinitionIssuesForDeployment } from "../workflow-definition/schema.js";
+import { validateWorkflowDefinitionIssuesForDeployment } from "../workflow-definition/deployment-validation.js";
 
 export function testBlockContractResolver(
   context: WorkflowBlockRegistryContext,

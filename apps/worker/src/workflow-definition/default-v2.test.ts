@@ -15,9 +15,7 @@ import {
   workflowDefinitionTemplate,
   workflowDefinitionTemplates,
 } from "./templates.js";
-import {
-  workflowDefinitionV2Schema,
-} from "./schema.js";
+import { workflowDefinitionV2Schema } from "@shared/workflow-graph";
 import { validateHarnessProfileReferencesWithLoader } from "./harness-profile-runtime.js";
 import { hashHarnessProfileManifest } from "../harness-profiles/manifest.js";
 

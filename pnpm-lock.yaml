@@ -355,6 +355,9 @@ importers:
       '@shared/contracts':
         specifier: workspace:*
         version: link:../contracts
+      zod:
+        specifier: 'catalog:'
+        version: 3.25.76
 
 packages:
 

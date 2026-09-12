@@ -16,10 +16,10 @@ import {
   type WorkflowValueAnalyzer,
 } from "./available-values.js";
 import {
-  validateWorkflowDefinitionIssuesForDeployment,
   workflowDefinitionV2Schema,
   type WorkflowBlockParamsSchemas,
-} from "./schema.js";
+} from "@shared/workflow-graph";
+import { validateWorkflowDefinitionIssuesForDeployment } from "./deployment-validation.js";
 
 /**
  * `analysis` is the one available-values pass this validation ran. A caller

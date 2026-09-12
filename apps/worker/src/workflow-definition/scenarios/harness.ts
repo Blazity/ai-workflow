@@ -22,9 +22,9 @@ import { executionError, type BlockExecutionResult } from "../interpreter.js";
 import type { V2InvocationContext } from "../invocation-context.js";
 import {
   describeWorkflowDefinitionIssues,
-  validateWorkflowDefinitionIssuesForDeployment,
   workflowDefinitionV2Schema,
-} from "../schema.js";
+} from "@shared/workflow-graph";
+import { validateWorkflowDefinitionIssuesForDeployment } from "../deployment-validation.js";
 import { workflowDefinitionTemplate } from "../templates.js";
 import { transformRegexEvaluator } from "../../engine/helpers/transform-regex-evaluator.js";
 import { executeTransform } from "../transform.js";

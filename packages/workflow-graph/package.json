@@ -13,7 +13,8 @@
     }
   },
   "dependencies": {
-    "@shared/contracts": "workspace:*"
+    "@shared/contracts": "workspace:*",
+    "zod": "catalog:"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

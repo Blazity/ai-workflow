@@ -40,19 +40,41 @@ and never application infrastructure. ADR-001 owns the tiers.
 is, how its blocks are scheduled and how values flow between them. Stage 0 of
 [the plan](../docs/plans/2026-09-11-workflow-graph-package.md) created it with
 `v2-bindings.ts` (reference parsing and resolution, input bindings, prompt data
-tokens) and `v2-branch.ts` (branch configuration recognition and evaluation);
-the later stages move the schema, the scheduler and the interpreter in. Source
-entry is `index.ts`, which re-exports both modules; `exports["."]` is the only
+tokens) and `v2-branch.ts` (branch configuration recognition and evaluation).
+Stage 4 added the structural half of the worker's old definition schema:
+`schema.ts` (the v2 parser, the deterministic stored-shape upgrade
+`normalizeV2AgentProfileConfiguration` performs, the block configuration shapes
+the params map is composed from, `upgradeStoredWorkflowDefinition`),
+`graph-issues.ts` (ids, ports, reachability, cycles, loop and branch shape,
+per-type parameter parsing, branch and transform reference compatibility, the
+two pure schedule reachability rules, the any-scope review safety check, plus
+the shared issue factory and dedupe) and `limits.ts` (`MAX_NODES`,
+`MAX_EDGES`). The scheduler and the interpreter follow in later stages. Source
+entry is `index.ts`, which re-exports every module; `exports["."]` is the only
 public entry, so the worker imports `@shared/workflow-graph` and never a file
 inside it.
 
-Three traps. The package may not import worker code, `@shared/harness` or
+**Parameters, never environment.** This is the trap that decides whether a rule
+belongs here. Everything the rules need from the worker arrives as an argument:
+the per-type block parameter schemas (`WorkflowBlockParamsSchemas`, composed in
+`apps/worker/src/engine/definition/block-params-schemas.ts`), the block contract
+resolver, the available-values catalog, and the Transform shape validator, which
+stays in the worker because it checks JSON Schema through ajv. A rule that would
+have to read the environment, the block registry, stored state or a clock is not
+structural: it belongs in
+`apps/worker/src/workflow-definition/deployment-validation.ts`, which composes
+both halves. The order the halves compose in is behaviour, because an author
+reads one list, and
+`apps/worker/src/workflow-definition/__golden__/definition-deployment-issues.json`
+pins it byte for byte.
+
+Three more traps. The package may not import worker code, `@shared/harness` or
 `@shared/prompts`: `scripts/gates/tiers.json` allows it `contracts` and
 `conditions` only, and `scripts/gates/boundaries.mjs` fails on anything else.
 It declares only the dependencies it actually imports, because knip fails the
-`gate:unused` gate on a declared dependency nothing imports, so the zod and
-`@shared/conditions` entries arrive with the stage that first needs them. And
-its vitest suites stay in the worker next to the modules that moved, so a
+`gate:unused` gate on a declared dependency nothing imports, so zod arrived with
+stage 4 and the `@shared/conditions` entry waits for the stage that needs it.
+And its vitest suites stay in the worker next to the modules that moved, so a
 change here plans them through `WORKFLOW_GRAPH_TESTS` in
 `scripts/ci/verify-changed.ts`; a stage that moves another suite's subject adds
 that suite to the same list.

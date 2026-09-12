@@ -17,7 +17,7 @@ import { validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring } from 
 import {
   describeWorkflowDefinitionIssues,
   workflowDefinitionV2Schema,
-} from "../../workflow-definition/schema.js";
+} from "@shared/workflow-graph";
 import { declaresRetiredSchema } from "../../workflow-definition/validation.js";
 
 export type WorkflowDefinitionCandidateParse =

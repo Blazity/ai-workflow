@@ -32,7 +32,7 @@ import {
 } from "./available-values.js";
 import { isWorkflowSchemaAssignable } from "./bindings.js";
 import { inspectJsonSchema202012 } from "./json-schema.js";
-import type { WorkflowBlockParamsSchemas } from "./schema.js";
+import type { WorkflowBlockParamsSchemas } from "@shared/workflow-graph";
 import {
   dashboardOrganizationId,
   validateHarnessProfileReferences,
