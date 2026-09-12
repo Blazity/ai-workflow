@@ -12,7 +12,6 @@ import type {
   TransformConfiguration,
   WorkflowBlockType,
   WorkflowDataReferenceV2,
-  WorkflowDefinition,
 } from "@shared/contracts";
 import {
   BLOCK_TYPE_SPECS,
@@ -392,14 +391,6 @@ function normalizeV2AgentProfileConfiguration(value: unknown): unknown {
     return { ...node, configuration: normalized };
   });
   return changed ? { ...definition, nodes } : value;
-}
-
-/** Parses a stored row into the runnable graph, applying the deterministic
- * normalizations the live schema owns. Throws on anything it cannot read, so
- * the worker's stored-definition.ts settles the retired schema before calling
- * this. */
-export function upgradeStoredWorkflowDefinition(raw: unknown): WorkflowDefinition {
-  return workflowDefinitionV2Schema.parse(raw);
 }
 
 export function describeWorkflowDefinitionIssues(error: z.ZodError): string {

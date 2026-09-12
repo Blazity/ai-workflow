@@ -32,7 +32,10 @@ import {
 } from "./available-values.js";
 import { isWorkflowSchemaAssignable } from "./bindings.js";
 import { inspectJsonSchema202012 } from "./json-schema.js";
-import type { WorkflowBlockParamsSchemas } from "@shared/workflow-graph";
+import {
+  dedupeWorkflowDefinitionIssues,
+  type WorkflowBlockParamsSchemas,
+} from "@shared/workflow-graph";
 import {
   dashboardOrganizationId,
   validateHarnessProfileReferences,
@@ -102,7 +105,7 @@ export async function validateWorkflowPromptAuthoringIssues(
           (await import("../infra/vcs-config.js")).env.DASHBOARD_ORG_SLUG,
         ),
       });
-  return dedupeIssues([...promptIssues, ...profileIssues]);
+  return dedupeWorkflowDefinitionIssues([...promptIssues, ...profileIssues]);
 }
 
 /** Production binding composed from named repository reads. It intentionally
@@ -128,7 +131,7 @@ export async function validateConnectedWorkflowPromptAuthoringIssues(
       version,
     }),
   );
-  return dedupeIssues([...promptIssues, ...profileIssues]);
+  return dedupeWorkflowDefinitionIssues([...promptIssues, ...profileIssues]);
 }
 
 export async function validateWorkflowPromptAuthoringIssuesWithLoader(
@@ -163,7 +166,7 @@ export async function validateWorkflowPromptAuthoringIssuesWithLoader(
       );
     }
   }
-  return dedupeIssues(issues);
+  return dedupeWorkflowDefinitionIssues(issues);
 }
 
 async function validateNonAgentPromptAuthoring(
@@ -257,7 +260,7 @@ async function validateNonAgentPromptAuthoring(
       }
     }
   }
-  return dedupeIssues(issues);
+  return dedupeWorkflowDefinitionIssues(issues);
 }
 
 function removePromptDataTokens(
@@ -292,7 +295,7 @@ export async function validateConnectedWorkflowDefinitionCandidateWithPromptAuth
     base.parsed,
     base.analysis,
   );
-  const issues = dedupeIssues([...base.response.issues, ...promptIssues]);
+  const issues = dedupeWorkflowDefinitionIssues([...base.response.issues, ...promptIssues]);
   return {
     parsed: base.parsed,
     analysis: base.analysis,
@@ -313,21 +316,4 @@ function nodeIssue(
     path: `/nodes/${input.nodeIndex}/configuration/${fieldPath}`,
     message,
   };
-}
-
-function dedupeIssues(
-  issues: readonly WorkflowDefinitionValidationIssue[],
-): WorkflowDefinitionValidationIssue[] {
-  const seen = new Set<string>();
-  return issues.filter((issue) => {
-    const key = JSON.stringify([
-      issue.code,
-      issue.nodeId,
-      issue.path ?? null,
-      issue.message,
-    ]);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
 }

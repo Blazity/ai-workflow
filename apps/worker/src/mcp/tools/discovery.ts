@@ -67,12 +67,13 @@ type PromptGetData = {
 };
 
 // The two fields a dispatch needs, read structurally rather than through
-// upgradeStoredWorkflowDefinition: that one parses the whole graph and THROWS on
-// a stored shape today's schema no longer accepts, which would turn one retired
-// block in one deployed version into an INTERNAL_ERROR for the entire page. Both
-// stored schema versions keep nodes as { id, type, ... }, so these are the same
-// node ids manual-dispatch resolves against (manual-dispatch/resolve.ts:144).
-// Same shape of minimal structural read as prompt-library/store.ts:44.
+// parseStoredWorkflowDefinition: that one runs the parse policy over the whole
+// graph and THROWS on a stored shape today's schema no longer accepts, which
+// would turn one retired block in one deployed version into an INTERNAL_ERROR
+// for the entire page. Both stored schema versions keep nodes as
+// { id, type, ... }, so these are the same node ids manual-dispatch resolves
+// against (manual-dispatch/resolve.ts:144). Same shape of minimal structural
+// read as prompt-library/store.ts:44.
 const graphScanSchema = z
   .object({ nodes: z.array(z.unknown()).catch([]) })
   .catch({ nodes: [] });

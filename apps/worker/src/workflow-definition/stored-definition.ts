@@ -11,7 +11,7 @@
  */
 import type { StoredWorkflowDefinition } from "@shared/contracts";
 import { workflowDefinitionSchemaVersionOf } from "@shared/contracts";
-import { upgradeStoredWorkflowDefinition } from "@shared/workflow-graph";
+import { parse } from "@shared/workflow-graph";
 
 /** The discriminator is the only fact this reader needs to classify a legacy
  *  row. Historical content is deliberately not parsed, normalized or trimmed. */
@@ -23,7 +23,9 @@ export function parseStoredWorkflowDefinition(raw: unknown): StoredWorkflowDefin
   if (isLegacyStoredWorkflowDefinition(raw)) {
     return { schema: "legacy-v1", definition: raw };
   }
-  // Not a v1 row, so it has to be a runnable one. An unreadable row throws here
-  // exactly as it did before v1 was retired.
-  return { schema: "v2", definition: upgradeStoredWorkflowDefinition(raw) };
+  // Not a v1 row, so it has to be a runnable one. An unreadable row throws the
+  // parser's own error here, exactly as it did before v1 was retired.
+  const parsed = parse(raw);
+  if (parsed.definition === null) throw parsed.error;
+  return { schema: "v2", definition: parsed.definition };
 }

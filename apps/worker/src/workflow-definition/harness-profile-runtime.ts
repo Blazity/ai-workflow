@@ -12,6 +12,7 @@ import {
   BUILTIN_HARNESS_PROFILE_MANIFESTS,
   builtinHarnessProfileReference,
 } from "@shared/harness";
+import { dedupeWorkflowDefinitionIssues } from "@shared/workflow-graph";
 import type { Db } from "../db/types.js";
 import { createAuthRepository } from "../db/repositories/auth.js";
 import {
@@ -280,7 +281,7 @@ export async function validateHarnessProfileReferencesWithLoader(
       });
     }
   }
-  return dedupeIssues(issues);
+  return dedupeWorkflowDefinitionIssues(issues);
 }
 
 function codeWorkspaceRequired(
@@ -330,21 +331,4 @@ function builtinResolvedVersion(
     manifestHash: hashHarnessProfileManifest(cloned),
     skillArtifacts: [],
   };
-}
-
-function dedupeIssues(
-  issues: readonly WorkflowDefinitionValidationIssue[],
-): WorkflowDefinitionValidationIssue[] {
-  const seen = new Set<string>();
-  return issues.filter((issue) => {
-    const key = JSON.stringify([
-      issue.code,
-      issue.nodeId,
-      issue.path ?? null,
-      issue.message,
-    ]);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
 }

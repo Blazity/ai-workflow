@@ -11,7 +11,6 @@ import { triggerOutputWithTicketContext, triggerTypeFor } from "../../engine/hel
 import { v2TerminalBlockResult } from "../../engine/helpers/prompt-output.js";
 import { type TerminalStatus } from "../../engine/helpers/review-ledger.js";
 import { isRunControlError } from "../../engine/helpers/run-control-error.js";
-import { analyzeWorkflowValues } from "../available-values.js";
 import { validateBlockOutputForDefinition } from "../block-registry.js";
 import {
   createWorkflowBlockContractResolver,
@@ -20,11 +19,8 @@ import {
 import { BLOCK_PARAMS_SCHEMAS } from "../../engine/definition/block-params-schemas.js";
 import { executionError, type BlockExecutionResult } from "../interpreter.js";
 import type { V2InvocationContext } from "../invocation-context.js";
-import {
-  describeWorkflowDefinitionIssues,
-  workflowDefinitionV2Schema,
-} from "@shared/workflow-graph";
-import { validateWorkflowDefinitionIssuesForDeployment } from "../deployment-validation.js";
+import { describeWorkflowDefinitionIssues, parse } from "@shared/workflow-graph";
+import { validateWorkflowDefinitionForRunLoad } from "../deployment-validation.js";
 import { workflowDefinitionTemplate } from "../templates.js";
 import { transformRegexEvaluator } from "../../engine/helpers/transform-regex-evaluator.js";
 import { executeTransform } from "../transform.js";
@@ -328,24 +324,25 @@ function loadSnapshotGraph(path: string): ScenarioGraph {
       `Workflow ${source} could not be read as JSON: ${error instanceof Error ? error.message : String(error)}.`,
     );
   }
-  const parsed = workflowDefinitionV2Schema.safeParse(raw);
-  if (!parsed.success) {
+  const parsed = parse(raw);
+  if (parsed.definition === null) {
     throw new ScenarioViolation(
       `Workflow ${source} is not a valid workflow definition: ${describeWorkflowDefinitionIssues(parsed.error)}.`,
     );
   }
-  const deploymentIssues = validateWorkflowDefinitionIssuesForDeployment(
-    parsed.data,
+  const definition = parsed.definition;
+  // The run-load policy, because a committed snapshot is a graph that already
+  // deployed: the scenario proves the graph, not this machine's environment.
+  const deploymentIssues = validateWorkflowDefinitionForRunLoad(
+    definition,
     ...SNAPSHOT_BLOCK_DATA,
-    analyzeWorkflowValues(parsed.data, SNAPSHOT_CONTRACT_RESOLVER),
-    { checkEnvironmentAvailability: false },
   );
   if (deploymentIssues.length > 0) {
     throw new ScenarioViolation(
-      `Workflow ${source} would not deploy: ${deploymentIssues.map((issue) => issue.message).join("; ")}.`,
+      `Workflow ${source} would not deploy: ${deploymentIssues.join("; ")}.`,
     );
   }
-  return { source, definition: parsed.data };
+  return { source, definition };
 }
 
 function loadScenarioGraph(options: CreateScenarioOptions): ScenarioGraph {
