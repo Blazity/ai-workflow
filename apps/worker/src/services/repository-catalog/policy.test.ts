@@ -10,7 +10,6 @@ function snapshot(input: {
   return {
     activated: input.activated,
     enabled: new Set(input.enabled ?? []),
-    entries: [],
     state: {
       activated: input.activated,
       bridge: !input.activated,

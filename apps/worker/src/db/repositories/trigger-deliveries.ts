@@ -196,6 +196,7 @@ export async function completeTriggerDelivery(
       | "coalesced"
       | "at_capacity"
       | "ignored_provider"
+      | "ignored_repository_not_enabled"
       | "ignored_stale_head"
       | "ignored_not_workflow_owned";
     runId?: string;
@@ -220,7 +221,16 @@ export async function completeTriggerDelivery(
           and ${result.result} = 'error'
           then ${serializedResult}::jsonb
         when ${triggerDeliveries.result}->>'result' in ('candidate_started', 'coalesced', 'error')
-          and ${result.result} in ('ignored_stale_head', 'ignored_not_workflow_owned')
+          and ${result.result} in (
+            'ignored_stale_head',
+            'ignored_not_workflow_owned',
+            -- A queued successor the drain retires because the catalog no
+            -- longer enables its repository. Same class as a stale head: the
+            -- row is being closed by the tick that was going to dispatch it,
+            -- and the reason an operator can act on must survive the earlier
+            -- 'coalesced'.
+            'ignored_repository_not_enabled'
+          )
           then ${serializedResult}::jsonb
         else ${triggerDeliveries.result}
       end`,

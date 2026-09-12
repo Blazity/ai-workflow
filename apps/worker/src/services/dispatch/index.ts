@@ -34,10 +34,8 @@ export {
   dispatchPostPrGateWebhook,
 } from "./post-pr-gate-dispatch.js";
 export {
-  filterAllowedRepositories,
-  filterRepositoriesForScope,
-  isRepoAllowed,
-  isRepoAllowedForScope,
+  isRepositoryDispatchable,
+  REPOSITORY_NOT_IN_CATALOG_REASON,
 } from "./repo-allowlist.js";
 export {
   listConnectedPendingTriggers,

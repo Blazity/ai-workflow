@@ -17,6 +17,7 @@ import {
 } from "@shared/contracts";
 import {
   getConnectedRepositoryCatalogStateRow,
+  listConnectedRepositoryCatalogKeys,
   listConnectedRepositoryCatalogRows,
   type RepositoryCatalogRow,
 } from "../../db/repositories/repository-catalog.js";
@@ -28,7 +29,6 @@ export interface RepositoryCatalogSnapshot {
    *  while `activated` is false, and policy.ts is the only thing that may read
    *  it, precisely so no caller forgets that. */
   readonly enabled: ReadonlySet<string>;
-  readonly entries: readonly RepositoryCatalogEntry[];
   readonly state: RepositoryCatalogState;
 }
 
@@ -53,26 +53,52 @@ export function serializeRepositoryCatalogEntry(
   };
 }
 
+function stateOf(stateRow: {
+  activated: boolean;
+  activatedAt: Date | null;
+  activatedById: string | null;
+  activatedByLabel: string | null;
+}): RepositoryCatalogState {
+  return {
+    activated: stateRow.activated,
+    // Derived here, once, rather than by each surface that shows the banner.
+    bridge: !stateRow.activated,
+    activatedAt: stateRow.activatedAt?.toISOString() ?? null,
+    activatedById: stateRow.activatedById,
+    activatedByLabel: stateRow.activatedByLabel,
+  };
+}
+
+/**
+ * The dispatch snapshot: the activation flag and the enabled keys, nothing else.
+ *
+ * Deliberately narrow. This runs on every HTTP request, cron tick and MCP call,
+ * and the only question it answers is a set membership, so it selects three
+ * columns rather than dragging every profile blob, description and relationship
+ * list across the wire for an answer none of them can give. The screens that
+ * render those rows load them through `loadRepositoryCatalogEntries` instead.
+ */
 export async function loadRepositoryCatalogSnapshot(): Promise<RepositoryCatalogSnapshot> {
+  const [stateRow, keys] = await Promise.all([
+    getConnectedRepositoryCatalogStateRow(),
+    listConnectedRepositoryCatalogKeys(),
+  ]);
+  const enabled = new Set(
+    keys
+      .filter((key) => key.enabled)
+      .map((key) => repositoryCatalogKey({ provider: key.provider, path: key.path })),
+  );
+  return { activated: stateRow.activated, enabled, state: stateOf(stateRow) };
+}
+
+/** The full rows, for the two screens that render them. */
+export async function loadRepositoryCatalogEntries(): Promise<{
+  state: RepositoryCatalogState;
+  entries: RepositoryCatalogEntry[];
+}> {
   const [stateRow, rows] = await Promise.all([
     getConnectedRepositoryCatalogStateRow(),
     listConnectedRepositoryCatalogRows(),
   ]);
-  const entries = rows.map(serializeRepositoryCatalogEntry);
-  const enabled = new Set(
-    entries.filter((entry) => entry.enabled).map((entry) => repositoryCatalogKey(entry)),
-  );
-  return {
-    activated: stateRow.activated,
-    enabled,
-    entries,
-    state: {
-      activated: stateRow.activated,
-      // Derived here, once, rather than by each surface that shows the banner.
-      bridge: !stateRow.activated,
-      activatedAt: stateRow.activatedAt?.toISOString() ?? null,
-      activatedById: stateRow.activatedById,
-      activatedByLabel: stateRow.activatedByLabel,
-    },
-  };
+  return { state: stateOf(stateRow), entries: rows.map(serializeRepositoryCatalogEntry) };
 }

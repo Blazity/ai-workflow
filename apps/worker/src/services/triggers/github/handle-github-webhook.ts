@@ -16,11 +16,12 @@ import { loadPostPrGateConfig } from "../../../post-pr-gate/config.js";
 import {
   dispatchPostPrGateWebhook,
   dispatchTriggerEvent,
-  isRepoAllowed,
+  isRepositoryDispatchable,
   normalizeGitHubEvents,
   recordIngestionFailure,
   type DispatchTriggerResult,
 } from "../../dispatch/index.js";
+import type { RepositoryCatalogSnapshot } from "../../repository-catalog/index.js";
 import {
   isWorkflowGeneratedPush,
   connectedWorkflowPushNormalizationOptions,
@@ -56,6 +57,14 @@ export type GitHubWebhookRequest = {
    * request is still one query.
    */
   loadSettings: () => Promise<SettingsSnapshot>;
+  /**
+   * The repository catalog, on demand, for the same reason `loadSettings` is a
+   * thunk: a delivery with a bad signature must cost the HMAC and nothing else,
+   * so neither store is touched before verification. The ingress memoises the
+   * load on the event, so every candidate event of one delivery and the legacy
+   * gate below them all judge against the same snapshot.
+   */
+  loadRepositoryCatalog: () => Promise<RepositoryCatalogSnapshot>;
 };
 
 export async function handleGitHubWebhook(request: GitHubWebhookRequest) {
@@ -151,20 +160,27 @@ async function handleVerifiedGitHubWebhook(request: GitHubWebhookRequest) {
   });
 
   if (events.length > 0) {
-    const settings = await request.loadSettings();
+    // Two independent reads at one point, so one round trip rather than two:
+    // neither decides anything about the other.
+    const [settings, repositoryCatalog] = await Promise.all([
+      request.loadSettings(),
+      request.loadRepositoryCatalog(),
+    ]);
     let result: DispatchTriggerResult = { result: "no_definition" };
     let claimedEvent = events[0]!;
     for (const candidate of events) {
       const candidateResult = await dispatchTriggerEvent(candidate, {
         runRegistry: createConnectedPostgresRunRegistry(),
         maxConcurrentAgents: maxConcurrentAgents(settings),
+        repositoryCatalog,
       });
       result = candidateResult;
       claimedEvent = candidate;
       if (
         candidateResult.result !== "no_definition" &&
         candidateResult.result !== "ignored_not_workflow_owned" &&
-        candidateResult.result !== "ignored_provider"
+        candidateResult.result !== "ignored_provider" &&
+        candidateResult.result !== "ignored_repository_not_enabled"
       ) {
         break;
       }
@@ -176,11 +192,12 @@ async function handleVerifiedGitHubWebhook(request: GitHubWebhookRequest) {
     if (
       (result.result === "no_definition" ||
         result.result === "ignored_not_workflow_owned" ||
-        result.result === "ignored_provider") &&
+        result.result === "ignored_provider" ||
+        result.result === "ignored_repository_not_enabled") &&
       ghEvent === "pull_request" &&
       GATE_ACTIONS.has(body.action)
     ) {
-      if (!isLegacyGateRepositoryAllowed(ownerRepo)) {
+      if (!isLegacyGateRepositoryAllowed(ownerRepo, repositoryCatalog)) {
         return { status: "ignored", reason: "other_repo" };
       }
       return dispatchPostPrGateWebhook(buildGateInput(body, ownerRepo));
@@ -201,7 +218,9 @@ async function handleVerifiedGitHubWebhook(request: GitHubWebhookRequest) {
     if (!GATE_ACTIONS.has(body.action)) {
       return { status: "ignored", reason: `action_${body.action}` };
     }
-    if (!isLegacyGateRepositoryAllowed(ownerRepo)) {
+    if (
+      !isLegacyGateRepositoryAllowed(ownerRepo, await request.loadRepositoryCatalog())
+    ) {
       return { status: "ignored", reason: "other_repo" };
     }
     return dispatchPostPrGateWebhook(buildGateInput(body, ownerRepo));
@@ -241,9 +260,17 @@ function reportRepositoryRename(body: any, ownerRepo: string) {
   return { status: "ignored", reason: "repository_renamed", diagnosticId };
 }
 
-function isLegacyGateRepositoryAllowed(ownerRepo: string): boolean {
-  if (!isRepoAllowed(ownerRepo)) {
-    logger.info({ ownerRepo }, "github_webhook_skipped_repo_not_allowed");
+function isLegacyGateRepositoryAllowed(
+  ownerRepo: string,
+  repositoryCatalog: RepositoryCatalogSnapshot,
+): boolean {
+  if (!isRepositoryDispatchable(repositoryCatalog, { provider: "github", path: ownerRepo })) {
+    // Provider and path, because that pair is the catalog key an operator has to
+    // find on the Repositories page to answer this.
+    logger.info(
+      { provider: "github", repoPath: ownerRepo },
+      "github_webhook_skipped_repo_not_enabled_in_catalog",
+    );
     return false;
   }
   const { owner, repo } = githubWebhookSettings();

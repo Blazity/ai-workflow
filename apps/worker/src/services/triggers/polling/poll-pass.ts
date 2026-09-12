@@ -27,6 +27,7 @@ import {
   sweepConnectedTriggerRejectionCounters,
 } from "../../dispatch/index.js";
 import { reconcileAtCapacityQueue } from "../../dispatch-queue/index.js";
+import type { RepositoryCatalogSnapshot } from "../../repository-catalog/index.js";
 import { recoverManualDispatches } from "../../manual-dispatch/index.js";
 import {
   pruneConnectedMcpAudits,
@@ -69,10 +70,41 @@ import { createConnectedWebhookDispatchDeps } from "../custom-webhooks/dispatch-
 
 const PENDING_TRIGGER_RECOVERY_SCAN_LIMIT = 20;
 
-export async function runPollPass(settings: SettingsSnapshot) {
+export async function runPollPass(
+  settings: SettingsSnapshot,
+  loadRepositoryCatalog: () => Promise<RepositoryCatalogSnapshot>,
+) {
   const board = ticketBoardSettings();
   const adapters = createAdapters();
   const clarificationExpiry = await expireConnectedHookClarifications();
+
+  /**
+   * The catalog, once per tick, and only for the phases that dispatch.
+   *
+   * A thunk rather than a value for the same reason the webhook ingresses take
+   * one: this pass is also the deployment's housekeeping, and clarification
+   * expiry, the at-capacity queue, claim release, the rate sweeps and the stall
+   * backstop have no dispatch decision to make. A catalog read that fails must
+   * cost the dispatch phases and nothing else, so the failure is caught here and
+   * every phase that needs a snapshot asks for one and skips itself without it.
+   * Memoised by the route, so this is one query however many phases ask.
+   */
+  let catalogFailed = false;
+  const repositoryCatalogOrNull = async (
+    phase: string,
+  ): Promise<RepositoryCatalogSnapshot | null> => {
+    if (catalogFailed) return null;
+    try {
+      return await loadRepositoryCatalog();
+    } catch (error) {
+      catalogFailed = true;
+      logger.warn(
+        { phase, error: error instanceof Error ? error.message : String(error) },
+        "poll_repository_catalog_load_failed",
+      );
+      return null;
+    }
+  };
 
   const clarificationProtection =
     await classifyConnectedProtectedClarificationSubjects();
@@ -112,10 +144,14 @@ export async function runPollPass(settings: SettingsSnapshot) {
   // protected and cannot be replaced by a fresh ticket workflow.
   const ticketKeys = await discoverAiColumnTickets(adapters, board);
 
-  const manualDispatchRecovery = await recoverManualDispatches({
-    adapters,
-    maxConcurrentAgents: maxConcurrentAgents(settings),
-  });
+  const manualDispatchCatalog = await repositoryCatalogOrNull("manual_dispatch_recovery");
+  const manualDispatchRecovery = manualDispatchCatalog
+    ? await recoverManualDispatches({
+        adapters,
+        maxConcurrentAgents: maxConcurrentAgents(settings),
+        repositoryCatalog: manualDispatchCatalog,
+      })
+    : { scanned: 0, started: 0, recovering: 0, failed: 0 };
   const protectedRunSubjects = new Set(retainedClarificationSubjects);
   for (const request of await listConnectedRecoverableManualDispatches()) {
     protectedRunSubjects.add(request.subjectKey);
@@ -140,11 +176,16 @@ export async function runPollPass(settings: SettingsSnapshot) {
     async (subjectKey) => {
       releasedTriggerSubjects.add(subjectKey);
       if (releasedTriggerRecovery.started > 0) return;
+      // The claim release around this callback is housekeeping and has already
+      // happened; only the successor it could start needs the catalog.
+      const drainCatalog = await repositoryCatalogOrNull("released_trigger_drain");
+      if (!drainCatalog) return;
       releasedTriggerRecovery.attempted++;
       try {
         const result = await drainOldestPendingTrigger(subjectKey, {
           runRegistry: adapters.runRegistry,
           maxConcurrentAgents: maxConcurrentAgents(settings),
+          repositoryCatalog: drainCatalog,
         });
         if (result?.result === "started") releasedTriggerRecovery.started++;
         if (result?.result === "error") releasedTriggerRecovery.errors++;
@@ -164,6 +205,7 @@ export async function runPollPass(settings: SettingsSnapshot) {
     releasedTriggerSubjects,
     releasedTriggerRecovery.started === 0,
     settings,
+    await repositoryCatalogOrNull("pending_trigger_recovery"),
   );
   const approvalRecovery = await recoverApprovedPlanDispatches(
     blockingApprovals,
@@ -394,9 +436,10 @@ async function recoverPendingTriggers(
   releasedSubjects: ReadonlySet<string>,
   mayStart: boolean,
   settings: SettingsSnapshot,
+  repositoryCatalog: RepositoryCatalogSnapshot | null,
 ): Promise<{ listed: number; attempted: number; started: number; errors: number }> {
   const metrics = { listed: 0, attempted: 0, started: 0, errors: 0 };
-  if (!mayStart) return metrics;
+  if (!mayStart || !repositoryCatalog) return metrics;
 
   let pending: Awaited<ReturnType<typeof listConnectedPendingTriggers>>;
   try {
@@ -420,6 +463,7 @@ async function recoverPendingTriggers(
       const result = await drainOldestPendingTrigger(trigger.subjectKey, {
         runRegistry: adapters.runRegistry,
         maxConcurrentAgents: maxConcurrentAgents(settings),
+        repositoryCatalog,
       });
       if (result?.result === "error") metrics.errors++;
       if (result?.result === "started") {

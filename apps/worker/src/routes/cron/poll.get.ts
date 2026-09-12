@@ -3,6 +3,7 @@ import {
   cronRequestIsAuthorized,
 } from "../../services/triggers/polling/cron-authorization.js";
 import { getRequestSettingsSnapshot } from "../../services/settings/index.js";
+import { getRequestRepositoryCatalogSnapshot } from "../../services/repository-catalog/index.js";
 import { runPollPass } from "../../services/triggers/polling/poll-pass.js";
 
 /**
@@ -16,8 +17,14 @@ export default defineEventHandler(async (event) => {
   if (!cronRequestIsAuthorized(getHeader(event, "authorization"))) {
     throw createError({ statusCode: 401, statusMessage: "Unauthorized" });
   }
-  // One load at the start of the tick, handed to every phase below: a pass that
-  // re-read the store per phase could dispatch under one ceiling and reconcile
-  // under another.
-  return await runPollPass(await getRequestSettingsSnapshot(event));
+  // One load of each per tick: a pass that re-read a store per phase could
+  // dispatch under one ceiling and reconcile under another, or refuse a
+  // repository one phase had accepted. The catalog goes in as a thunk because
+  // only the dispatch phases need it and the read is memoised on the event, so
+  // a tick that does no dispatching never touches the table and a catalog that
+  // cannot be read costs those phases alone rather than the housekeeping.
+  return await runPollPass(
+    await getRequestSettingsSnapshot(event),
+    () => getRequestRepositoryCatalogSnapshot(event),
+  );
 });

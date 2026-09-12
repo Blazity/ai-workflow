@@ -24,11 +24,13 @@ import { findConnectedWorkflowOwnedPullRequest } from "../../db/repositories/run
 import {
   isGateCheckName,
   isConfiguredTriggerRepository,
-  isRepoAllowedForScope,
+  isRepositoryDispatchable,
+  REPOSITORY_NOT_IN_CATALOG_REASON,
   selectEligibleEvent,
   triggerNodeParams,
   TriggerEvent,
 } from "../dispatch/index.js";
+import type { RepositoryCatalogSnapshot } from "../repository-catalog/index.js";
 import { prSubjectKey, ticketSubjectKey } from "../../engine/support/subject-key.js";
 import { createRepositoryVCS } from "../../engine/support/vcs-runtime.js";
 import { loadPostPrGateConfig } from "../../post-pr-gate/config.js";
@@ -132,6 +134,10 @@ export async function resolveManualDispatch(input: {
   definitionId: number;
   triggerNodeId: string;
   dispatchInput: ManualDispatchInput;
+  /** The catalog as the entry point read it: one load per HTTP request, per MCP
+   *  call or per poll tick, so a preflight and the dispatch it authorized cannot
+   *  answer from two different enabled lists. */
+  repositoryCatalog: RepositoryCatalogSnapshot;
   /** Resolve an already-accepted request against its immutable pinned graph. */
   definitionVersion?: number;
 }): Promise<ResolvedManualDispatch> {
@@ -294,6 +300,7 @@ async function resolvePullRequestDispatch(
     definitionId: number;
     triggerNodeId: string;
     dispatchInput: Extract<ManualDispatchInput, { kind: "pull_request" }>;
+    repositoryCatalog: RepositoryCatalogSnapshot;
   },
   deployed: {
     definition: WorkflowDefinitionVersionRow;
@@ -350,15 +357,17 @@ async function resolvePullRequestDispatch(
   const pinnedScope = runnableDefinitionOf(deployed.definition)?.repositoryScope;
   if (
     scope === "any" &&
-    !isRepoAllowedForScope(
-      { provider: parsed.provider, repoPath: parsed.repoPath },
-      pinnedScope,
-    )
+    !isRepositoryDispatchable(input.repositoryCatalog, {
+      provider: parsed.provider,
+      path: parsed.repoPath,
+    })
   ) {
+    // The definition's own pin is deliberately not consulted: a pin selects
+    // inside the catalog and no longer grants past it.
     throw new ManualDispatchError(
       422,
       "not_eligible",
-      "This repository is outside the configured allowlist.",
+      REPOSITORY_NOT_IN_CATALOG_REASON,
     );
   }
   // Mirrors the automatic trigger gate in dispatch-trigger.ts, including its

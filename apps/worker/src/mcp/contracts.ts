@@ -12,6 +12,9 @@ import type { SettingsSnapshot } from "@shared/contracts";
 import type { Adapters } from "../services/vcs/adapters.js";
 import type { McpActorContext } from "../services/mcp/contracts.js";
 import type { McpToolServices } from "../services/mcp/tool-services.js";
+// Type-only, so it is erased and adds no runtime edge: the paragraph below is
+// about modules this file would actually load.
+import type { RepositoryCatalogSnapshot } from "../services/repository-catalog/index.js";
 
 // Deliberately the two modules and not the cluster's index.ts. The barrel also
 // publishes the ledgers and the tool services, which reach the database client and from
@@ -54,6 +57,17 @@ export type McpToolDependencies = {
   /** The deployment's settings as the transport read them for this call. One
    *  load per request, so every tool in it sees the same limits. */
   settings: SettingsSnapshot;
+  /**
+   * The repository catalog, on demand.
+   *
+   * A thunk rather than a value, because most tools here read runs, tickets and
+   * logs and have no dispatch decision to make: loading the catalog for every
+   * call would put one more table between `runs_logs` and its answer, and a
+   * catalog read that fails would take the whole surface down with it. The
+   * transport memoises the load on the request, so the tools that DO decide (a
+   * dispatch, a save, a publish) still share one snapshot within a call.
+   */
+  loadRepositoryCatalog: () => Promise<RepositoryCatalogSnapshot>;
   requestId: string;
   traceId: string;
   now: () => Date;

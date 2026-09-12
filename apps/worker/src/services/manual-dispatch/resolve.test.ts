@@ -2,6 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import type { ManualDispatchPullRequestSnapshot } from "../../adapters/vcs/types.js";
 import type { PrTriggerPayload } from "../../engine/agent-input.js";
+import type { Db } from "../../db/client.js";
+import { createTestDb } from "../../db/test-db.js";
+
+// The catalog snapshot is read through the connected reads, so this file needs a
+// client mock; every other query here is stubbed outright.
+const dbState = vi.hoisted(() => ({ db: undefined as unknown }));
+vi.mock("../../db/client.js", () => ({ getDb: () => dbState.db }));
 
 vi.mock("../../infra/vcs-config.js", () => ({
   env: {},
@@ -64,6 +71,17 @@ vi.mock("../../post-pr-gate/config.js", () => ({
 
 const { parsePullRequestUrl, resolveManualDispatch, selectManualTriggerEvent } =
   await import("./resolve.js");
+const {
+  activateRepositoryCatalog,
+  setRepositoryEnabled,
+  upsertRepositoryProfile,
+} = await import("../../db/repositories/repository-catalog.js");
+const { loadRepositoryCatalogSnapshot } = await import(
+  "../repository-catalog/index.js"
+);
+const { REPOSITORY_NOT_IN_CATALOG_REASON } = await import(
+  "../dispatch/repo-allowlist.js"
+);
 
 const pr: PrTriggerPayload = {
   provider: "github",
@@ -241,13 +259,48 @@ describe("manual dispatch against a definition repository pin", () => {
     };
   }
 
-  beforeEach(() => {
+  let catalogDb: Db;
+  /** The bridge, read out of the test database rather than invented: an empty
+   *  catalog nobody activated passes every repository. */
+  let repositoryCatalog: Awaited<ReturnType<typeof loadRepositoryCatalogSnapshot>>;
+
+  beforeEach(async () => {
     vi.clearAllMocks();
     mocks.getManualDispatchPullRequest.mockResolvedValue(snapshot());
     mocks.isConfiguredTriggerRepository.mockResolvedValue(true);
     mocks.hasDispatchBlockingApprovalForTicket.mockResolvedValue(false);
     mocks.findWorkflowOwnedPullRequest.mockResolvedValue({ ticketKey: "AIW-1" });
+    catalogDb = await createTestDb();
+    dbState.db = catalogDb;
+    repositoryCatalog = await loadRepositoryCatalogSnapshot();
   });
+
+  /** Put these repositories in the catalog, switch it on, and read the snapshot
+   *  back the way an entry point would. */
+  async function activatedCatalogWith(
+    entries: ReadonlyArray<{ path: string; enabled: boolean }>,
+  ) {
+    for (const entry of entries) {
+      const saved = await upsertRepositoryProfile(catalogDb, {
+        provider: "github",
+        path: entry.path,
+        description: "",
+        rules: "",
+        relationships: [],
+        scriptGroups: { provider: "github", repoPath: entry.path, groups: {} },
+        gateGroups: null,
+        actorId: "user-1",
+        actorLabel: "Ada",
+        reason: "",
+        enabled: entry.enabled,
+      });
+      if (!entry.enabled) {
+        await setRepositoryEnabled(catalogDb, { id: saved.id, enabled: false });
+      }
+    }
+    await activateRepositoryCatalog(catalogDb, { actorId: "user-1" });
+    return loadRepositoryCatalogSnapshot();
+  }
 
   it("rejects an any-scope pull request outside the pin", async () => {
     mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(
@@ -261,6 +314,7 @@ describe("manual dispatch against a definition repository pin", () => {
         definitionId: 5,
         triggerNodeId: "trigger",
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
+        repositoryCatalog,
       }),
     ).rejects.toThrow("outside the repositories pinned to this workflow");
   });
@@ -277,60 +331,72 @@ describe("manual dispatch against a definition repository pin", () => {
         definitionId: 5,
         triggerNodeId: "trigger",
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
+        repositoryCatalog,
       }),
     ).resolves.toMatchObject({
       inputPayload: { scope: "any", pr: expect.objectContaining({ repoPath: "acme/api" }) },
     });
   });
 
-  it("lets an exact definition pin extend the global allowlist", async () => {
-    const original = process.env.AGENT_ALLOWED_REPOS;
-    process.env.AGENT_ALLOWED_REPOS = "acme/other";
+  it("accepts a pull request whose repository the activated catalog enables", async () => {
+    const catalog = await activatedCatalogWith([{ path: "Acme/Api", enabled: true }]);
     mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(
-      deployed("any", {
-        repositories: [{ provider: "github", repoPath: "Acme/API" }],
-      }),
+      deployed("any", { repositories: [{ provider: "github", repoPath: "Acme/API" }] }),
     );
 
-    try {
-      await expect(
-        resolveManualDispatch({
-          db: definitionDb,
-          issueTracker,
-          definitionId: 5,
-          triggerNodeId: "trigger",
-          dispatchInput: { kind: "pull_request", url: pr.prUrl },
-        }),
-      ).resolves.toMatchObject({
-        inputPayload: { scope: "any", pr: expect.objectContaining({ repoPath: "acme/api" }) },
-      });
-    } finally {
-      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
-      else process.env.AGENT_ALLOWED_REPOS = original;
-    }
+    await expect(
+      resolveManualDispatch({
+        db: definitionDb,
+        issueTracker,
+        definitionId: 5,
+        triggerNodeId: "trigger",
+        dispatchInput: { kind: "pull_request", url: pr.prUrl },
+        repositoryCatalog: catalog,
+      }),
+    ).resolves.toMatchObject({
+      inputPayload: { scope: "any", pr: expect.objectContaining({ repoPath: "acme/api" }) },
+    });
   });
 
-  it("does not let provider-only scope extend the global allowlist", async () => {
-    const original = process.env.AGENT_ALLOWED_REPOS;
-    process.env.AGENT_ALLOWED_REPOS = "acme/other";
+  it("refuses a pull request the activated catalog has disabled, naming the catalog", async () => {
+    const catalog = await activatedCatalogWith([{ path: "acme/api", enabled: false }]);
     mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(
       deployed("any", { providers: ["github"] }),
     );
 
-    try {
-      await expect(
-        resolveManualDispatch({
-          db: definitionDb,
-          issueTracker,
-          definitionId: 5,
-          triggerNodeId: "trigger",
-          dispatchInput: { kind: "pull_request", url: pr.prUrl },
-        }),
-      ).rejects.toThrow("outside the configured allowlist");
-    } finally {
-      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
-      else process.env.AGENT_ALLOWED_REPOS = original;
-    }
+    await expect(
+      resolveManualDispatch({
+        db: definitionDb,
+        issueTracker,
+        definitionId: 5,
+        triggerNodeId: "trigger",
+        dispatchInput: { kind: "pull_request", url: pr.prUrl },
+        repositoryCatalog: catalog,
+      }),
+    ).rejects.toThrow(REPOSITORY_NOT_IN_CATALOG_REASON);
+  });
+
+  // A pin used to be a grant. It is a selection inside the catalog now, so
+  // pinning a repository nobody enabled reaches nothing.
+  it("does not let a definition pin reach a repository the catalog leaves disabled", async () => {
+    const catalog = await activatedCatalogWith([
+      { path: "acme/api", enabled: false },
+      { path: "acme/other", enabled: true },
+    ]);
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(
+      deployed("any", { repositories: [{ provider: "github", repoPath: "Acme/API" }] }),
+    );
+
+    await expect(
+      resolveManualDispatch({
+        db: definitionDb,
+        issueTracker,
+        definitionId: 5,
+        triggerNodeId: "trigger",
+        dispatchInput: { kind: "pull_request", url: pr.prUrl },
+        repositoryCatalog: catalog,
+      }),
+    ).rejects.toThrow(REPOSITORY_NOT_IN_CATALOG_REASON);
   });
 
   it("rejects a trigger type manual dispatch cannot start", async () => {
@@ -345,6 +411,7 @@ describe("manual dispatch against a definition repository pin", () => {
         definitionId: 5,
         triggerNodeId: "trigger",
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
+        repositoryCatalog,
       }),
     ).rejects.toThrow("not present in the deployed workflow");
   });
@@ -363,6 +430,7 @@ describe("manual dispatch against a definition repository pin", () => {
         definitionId: 5,
         triggerNodeId: "trigger",
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
+        repositoryCatalog,
       }),
     ).rejects.toMatchObject({
       statusCode: 422,
@@ -385,6 +453,7 @@ describe("manual dispatch against a definition repository pin", () => {
         definitionId: 5,
         triggerNodeId: "trigger",
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
+        repositoryCatalog,
       }),
     ).resolves.toMatchObject({ ticketKey: "AIW-1" });
   });
@@ -401,6 +470,7 @@ describe("manual dispatch against a definition repository pin", () => {
         definitionId: 5,
         triggerNodeId: "trigger",
         dispatchInput: { kind: "pull_request", url: pr.prUrl },
+        repositoryCatalog,
       }),
     ).resolves.toMatchObject({
       subjectKey: "pr:github:acme/api#42",

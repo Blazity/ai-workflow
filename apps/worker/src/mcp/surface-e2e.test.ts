@@ -1198,7 +1198,7 @@ describe("C. a mutation, end to end", () => {
       triggerTypes: ["trigger_ticket_ai"],
       liveOnRealEvents: false,
       dormantTriggerNodeIds: [AUTHORED_TRIGGER_NODE_ID],
-      repositoriesOutsideAllowlist: [],
+      pinnedRepositoriesNotEnabled: [],
     });
     // And the operators' channel was told, through the adapter the platform builds
     // for the request rather than a stub wired into the tool: an agent authoring

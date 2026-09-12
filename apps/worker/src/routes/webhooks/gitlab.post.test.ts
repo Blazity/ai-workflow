@@ -14,7 +14,16 @@ const mocks = vi.hoisted(() => ({
   getVcsBotLogin: vi.fn(),
   listRepositories: vi.fn(),
   fetch: vi.fn(),
-  isRepoAllowed: vi.fn(),
+  isRepositoryDispatchable: vi.fn(),
+  // The catalog is loaded exactly like the settings table, and like it, when it
+  // is loaded (and whether it is loaded at all) is itself under test below.
+  listConnectedRepositoryCatalogKeys: vi.fn(async () => [] as unknown[]),
+  getConnectedRepositoryCatalogStateRow: vi.fn(async () => ({
+    activated: false,
+    activatedAt: null,
+    activatedById: null,
+    activatedByLabel: null,
+  })),
   findWorkflowOwnedPullRequestIdentity: vi.fn(),
   observeProviderWebhook: vi.fn(),
   // An empty settings table is what a deployment that has stored no decision
@@ -56,9 +65,16 @@ vi.mock("../../db/repositories/runs.js", () => ({
   findConnectedWorkflowOwnedPullRequestIdentity: (...args: any[]) =>
     mocks.findWorkflowOwnedPullRequestIdentity(...args),
 }));
-vi.mock("../../engine/support/repo-allowlist.js", () => ({
-  isRepoAllowed: (...args: any[]) => mocks.isRepoAllowed(...args),
+vi.mock("../../services/dispatch/repo-allowlist.js", () => ({
+  isRepositoryDispatchable: (...args: any[]) => mocks.isRepositoryDispatchable(...args),
+  REPOSITORY_NOT_IN_CATALOG_REASON: "This repository is not enabled in the repository catalog.",
 }));
+vi.mock("../../db/repositories/repository-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../db/repositories/repository-catalog.js")>()),
+  listConnectedRepositoryCatalogKeys: () => mocks.listConnectedRepositoryCatalogKeys(),
+  getConnectedRepositoryCatalogStateRow: () => mocks.getConnectedRepositoryCatalogStateRow(),
+}));
+
 vi.mock("../../services/system/provider-webhook-observation.js", () => ({
   observeProviderWebhook: mocks.observeProviderWebhook,
 }));
@@ -156,7 +172,7 @@ describe("POST /webhooks/gitlab", () => {
     mocks.env.GITLAB_PROJECT_ID = undefined;
     mocks.env.GITLAB_BOT_LOGIN = undefined;
     mocks.getVcsBotLogin.mockReturnValue("blazebot");
-    mocks.isRepoAllowed.mockReturnValue(true);
+    mocks.isRepositoryDispatchable.mockReturnValue(true);
     mocks.findWorkflowOwnedPullRequestIdentity.mockResolvedValue(undefined);
     // resetAllMocks above forgets implementations too, so the empty table is
     // re-established here rather than once at the mock factory.
@@ -305,6 +321,10 @@ describe("POST /webhooks/gitlab", () => {
 
     expect(response.status).toBe(401);
     expect(mocks.readAllConnectedSettings).not.toHaveBeenCalled();
+    // Same bargain for the repository catalog: it is behind the same thunk, so
+    // an unauthenticated flood cannot make the ingress query it either.
+    expect(mocks.getConnectedRepositoryCatalogStateRow).not.toHaveBeenCalled();
+    expect(mocks.listConnectedRepositoryCatalogKeys).not.toHaveBeenCalled();
   });
 
   it("reads the settings table once the token checks out", async () => {
@@ -314,6 +334,7 @@ describe("POST /webhooks/gitlab", () => {
 
     expect(response.status).toBe(200);
     expect(mocks.readAllConnectedSettings).toHaveBeenCalled();
+    expect(mocks.getConnectedRepositoryCatalogStateRow).toHaveBeenCalled();
   });
 
   it("dispatches a valid merge request webhook", async () => {
@@ -362,7 +383,7 @@ describe("POST /webhooks/gitlab", () => {
 
   it("keeps the legacy gate restricted after definition dispatch declines an off-allowlist project", async () => {
     mocks.env.GITLAB_PROJECT_ID = "123";
-    mocks.isRepoAllowed.mockReturnValueOnce(false);
+    mocks.isRepositoryDispatchable.mockReturnValueOnce(false);
 
     const response = await makeApp()(makeRequest(validMergeRequestPayload()));
 
@@ -371,7 +392,10 @@ describe("POST /webhooks/gitlab", () => {
       status: "ignored",
       reason: "other_project",
     });
-    expect(mocks.isRepoAllowed).toHaveBeenCalledWith("group/demo");
+    expect(mocks.isRepositoryDispatchable).toHaveBeenCalledWith(expect.anything(), {
+      provider: "gitlab",
+      path: "group/demo",
+    });
     expect(mocks.listRepositories).not.toHaveBeenCalled();
     expect(mockDispatchTriggerEvent).toHaveBeenCalled();
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();

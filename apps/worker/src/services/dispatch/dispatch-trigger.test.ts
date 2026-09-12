@@ -9,6 +9,13 @@ import {
   workflowDefinitionVersions,
 } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
+import {
+  activateRepositoryCatalog,
+  setRepositoryEnabled,
+  upsertRepositoryProfile,
+} from "../../db/repositories/repository-catalog.js";
+import { loadRepositoryCatalogSnapshot } from "../repository-catalog/index.js";
+import type { RepositoryCatalogSnapshot } from "../repository-catalog/index.js";
 import { upsertWorkflowOwnedBranch } from "../../db/repositories/runs.js";
 import { PostgresRunRegistry } from "../../db/repositories/active-runs.js";
 import { prSubjectKey } from "../run-lifecycle/subject-key.js";
@@ -30,6 +37,10 @@ vi.mock("../../infra/vcs-config.js", () => ({
   env: testEnv,
   getConfiguredVcsProviders: vi.fn(() => []),
 }));
+// The catalog snapshot is loaded through the connected reads, which is the only
+// reason this file needs a client mock: every other query here takes `db`.
+const dbState = vi.hoisted(() => ({ db: undefined as unknown }));
+vi.mock("../../db/client.js", () => ({ getDb: () => dbState.db }));
 vi.mock("../vcs/index.js", () => ({
   getVcsBotLogin: vi.fn((provider: "github" | "gitlab") =>
     provider === "github" ? testEnv.GITHUB_BOT_LOGIN : testEnv.GITLAB_BOT_LOGIN),
@@ -76,9 +87,15 @@ vi.mock("../../db/repositories/definitions.js", () => ({
 
 let db: Db;
 let registry: PostgresRunRegistry;
+/** The bridge, read out of the test database rather than invented: an empty
+ *  catalog nobody activated passes every repository, which is what every case
+ *  below that is not about the catalog assumes. */
+let repositoryCatalog: RepositoryCatalogSnapshot;
 
 beforeEach(async () => {
   db = await createTestDb();
+  dbState.db = db;
+  repositoryCatalog = await loadRepositoryCatalogSnapshot();
   await db.insert(workflowDefinitions).values({
     id: 5,
     name: "PR flow",
@@ -154,11 +171,37 @@ function event(overrides: Partial<TriggerEvent> = {}): TriggerEvent {
   };
 }
 
+/** Put one repository in the catalog and switch the catalog on, then read the
+ *  snapshot back the way an entry point would. */
+async function activatedCatalogWith(
+  entries: ReadonlyArray<{ provider: "github" | "gitlab"; path: string; enabled: boolean }>,
+): Promise<RepositoryCatalogSnapshot> {
+  for (const entry of entries) {
+    const saved = await upsertRepositoryProfile(db, {
+      provider: entry.provider,
+      path: entry.path,
+      description: "",
+      rules: "",
+      relationships: [],
+      scriptGroups: { provider: entry.provider, repoPath: entry.path, groups: {} },
+      gateGroups: null,
+      actorId: "user-1",
+      actorLabel: "Ada",
+      reason: "",
+      enabled: entry.enabled,
+    });
+    if (!entry.enabled) await setRepositoryEnabled(db, { id: saved.id, enabled: false });
+  }
+  await activateRepositoryCatalog(db, { actorId: "user-1" });
+  return loadRepositoryCatalogSnapshot();
+}
+
 function deps(overrides: Record<string, unknown> = {}) {
   return {
     db,
     runRegistry: registry,
     maxConcurrentAgents: 3,
+    repositoryCatalog,
     getCurrentHead: vi.fn().mockResolvedValue("abc123"),
     getLatestCheckRuns: vi.fn().mockResolvedValue([]),
     issueTracker: { fetchTicket: vi.fn().mockResolvedValue({ identifier: "AIW-1" }) },
@@ -449,6 +492,49 @@ describe("provider trigger dispatch", () => {
     expect(mockStart).toHaveBeenCalledTimes(2);
   });
 
+  // The gap the live gate alone leaves open: an event accepted while the
+  // repository was enabled sits in the inbox until the deployment has room, and
+  // the tick that finally drains it must ask the catalog again rather than
+  // dispatching on an answer given before somebody flipped the switch.
+  it("drops a pending event whose repository the catalog disabled while it waited", async () => {
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }, "trigger_pr_created"));
+    mockStart.mockResolvedValueOnce({ runId: "run-1" });
+    const { dispatchTriggerEvent, drainOldestPendingTrigger } = await import(
+      "./dispatch-trigger.js"
+    );
+    const subjectKey = "pr:github:acme/app#7";
+
+    await dispatchTriggerEvent(event(), deps());
+    const first = (await listPendingTriggersForSubject(db, subjectKey))[0]!;
+    expect(await acknowledgeStartedTriggerDelivery(db, first, "run-1")).toBe(true);
+    await expect(
+      dispatchTriggerEvent(
+        event({ delivery: { provider: "github", producer: "bob", deliveryId: "delivery-2" } }),
+        deps(),
+      ),
+    ).resolves.toEqual({ result: "coalesced" });
+    const owner = await registry.get(subjectKey);
+    expect(await registry.release(subjectKey, owner!.ownerToken, "run-1")).toBe(true);
+
+    const disabled = await activatedCatalogWith([
+      { provider: "github", path: "acme/app", enabled: false },
+    ]);
+    await expect(
+      drainOldestPendingTrigger(subjectKey, deps({ repositoryCatalog: disabled })),
+    ).resolves.toBeNull();
+
+    // No second run, nothing left pending, and the inbox says why rather than
+    // leaving a row an operator cannot tell from a provider mismatch.
+    expect(mockStart).toHaveBeenCalledTimes(1);
+    expect(await listPendingTriggersForSubject(db, subjectKey)).toHaveLength(0);
+    const stored = await getTriggerDelivery(db, "github", "delivery-2");
+    expect(stored?.result).toEqual({ result: "ignored_repository_not_enabled" });
+    expect(loggerMock.info).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "github", repoPath: "acme/app" }),
+      "trigger_repo_not_enabled_in_catalog",
+    );
+  });
+
   // AIW-219: an event from another repository the same connection can reach must
   // neither run nor claim the delivery, so the whole inbox stays empty rather than
   // just this delivery id.
@@ -482,9 +568,44 @@ describe("provider trigger dispatch", () => {
     });
   });
 
-  it("lets an exact definition pin extend the global allowlist", async () => {
-    const original = process.env.AGENT_ALLOWED_REPOS;
-    process.env.AGENT_ALLOWED_REPOS = "acme/other";
+  it("dispatches an any-scope PR whose repository the activated catalog enables", async () => {
+    const repositoryCatalog = await activatedCatalogWith([
+      { provider: "github", path: "Acme/App", enabled: true },
+    ]);
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }, "trigger_pr_created"));
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(event(), deps({ repositoryCatalog })),
+    ).resolves.toEqual({ result: "started", runId: "run-pr" });
+  });
+
+  it("ignores an any-scope PR whose repository the activated catalog has disabled", async () => {
+    const repositoryCatalog = await activatedCatalogWith([
+      { provider: "github", path: "acme/app", enabled: false },
+    ]);
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }, "trigger_pr_created"));
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    // Its own outcome, not ignored_provider: the inbox has to distinguish "no
+    // definition wanted this provider" from "an operator can enable this row".
+    await expect(
+      dispatchTriggerEvent(event(), deps({ repositoryCatalog })),
+    ).resolves.toEqual({ result: "ignored_repository_not_enabled" });
+    expect(mockStart).not.toHaveBeenCalled();
+    expect(loggerMock.info).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "github", repoPath: "acme/app" }),
+      "trigger_repo_not_enabled_in_catalog",
+    );
+  });
+
+  // The pin used to be a grant. Since the catalog decides, it selects INSIDE the
+  // catalog: a definition that pins a repository nobody enabled reaches nothing.
+  it("does not let a definition pin reach a repository the catalog leaves disabled", async () => {
+    const repositoryCatalog = await activatedCatalogWith([
+      { provider: "github", path: "acme/app", enabled: false },
+      { provider: "github", path: "acme/other", enabled: true },
+    ]);
     mockGetEnabled.mockResolvedValue(
       enabled({ scope: "any" }, "trigger_pr_created", {
         repositories: [{ provider: "github", repoPath: "Acme/App" }],
@@ -492,35 +613,11 @@ describe("provider trigger dispatch", () => {
     );
     const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
 
-    try {
-      await expect(dispatchTriggerEvent(event(), deps())).resolves.toEqual({
-        result: "started",
-        runId: "run-pr",
-      });
-    } finally {
-      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
-      else process.env.AGENT_ALLOWED_REPOS = original;
-    }
-  });
-
-  it("does not let provider-only scope extend the global allowlist", async () => {
-    const original = process.env.AGENT_ALLOWED_REPOS;
-    process.env.AGENT_ALLOWED_REPOS = "acme/other";
-    mockGetEnabled.mockResolvedValue(
-      enabled({ scope: "any" }, "trigger_pr_created", {
-        providers: ["github"],
-      }),
-    );
-    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
-
-    try {
-      await expect(dispatchTriggerEvent(event(), deps())).resolves.toEqual({
-        result: "ignored_provider",
-      });
-    } finally {
-      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
-      else process.env.AGENT_ALLOWED_REPOS = original;
-    }
+    await expect(
+      dispatchTriggerEvent(event(), deps({ repositoryCatalog })),
+    ).resolves.toEqual({ result: "ignored_repository_not_enabled" });
+    expect(mockStart).not.toHaveBeenCalled();
+    await expect(db.select().from(triggerDeliveries)).resolves.toEqual([]);
   });
 
   it("persists a retryable supersession cancellation failure on the accepted delivery", async () => {

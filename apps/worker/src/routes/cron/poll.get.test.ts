@@ -44,6 +44,9 @@ const mocks = vi.hoisted(() => ({
   createWebhookDispatchDeps: vi.fn(),
   runScheduleTriggerPass: vi.fn(),
   createScheduleDispatchDeps: vi.fn(),
+  // Spied rather than stubbed: "loaded once per tick, then handed down" is the
+  // rule under test, so how often this runs is the assertion.
+  getConnectedRepositoryCatalogStateRow: vi.fn(),
 }));
 
 vi.mock("../../infra/vcs-config.js", () => ({
@@ -59,6 +62,11 @@ vi.mock("../../infra/vcs-config.js", () => ({
 }));
 vi.mock("workflow/runtime", () => ({ getWorld: () => ({ runs: {} }) }));
 vi.mock("../../db/client.js", () => ({ getDb: () => state.db }));
+vi.mock("../../db/repositories/repository-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../db/repositories/repository-catalog.js")>()),
+  getConnectedRepositoryCatalogStateRow: (...args: any[]) =>
+    mocks.getConnectedRepositoryCatalogStateRow(...args),
+}));
 vi.mock("../../engine/support/adapters.js", () => ({
   createAdapters: () => ({
     issueTracker: {
@@ -310,6 +318,12 @@ describe("cron clarification recovery ordering", () => {
     mocks.dispatchPlanApproved.mockResolvedValue({ status: "run_in_flight" });
     mocks.drainOldestPendingTrigger.mockResolvedValue(null);
     mocks.listPendingTriggers.mockResolvedValue([]);
+    mocks.getConnectedRepositoryCatalogStateRow.mockResolvedValue({
+      activated: false,
+      activatedAt: null,
+      activatedById: null,
+      activatedByLabel: null,
+    });
     mocks.deleteExpiredRunObservations.mockResolvedValue({
       deleted: 0,
       runIds: [],
@@ -679,6 +693,51 @@ describe("cron clarification recovery ordering", () => {
         polled: { listed: 3, attempted: 2, started: 1, errors: 1 },
       },
     });
+  });
+
+  // One load at the top of the tick, handed to every phase: two reads could
+  // refuse a repository one phase had already accepted.
+  it("loads the repository catalog once per tick and hands the same snapshot to every phase", async () => {
+    // Reset rather than clear: a queued mockResolvedValueOnce from an earlier
+    // case would start a run here and cut the drain loop short.
+    mocks.drainOldestPendingTrigger.mockReset().mockResolvedValue(null);
+    mocks.listPendingTriggers.mockResolvedValue([
+      { subjectKey: "pr:github:acme/app#1" },
+      { subjectKey: "pr:github:acme/app#2" },
+    ]);
+
+    const response = await request();
+
+    expect(response.status).toBe(200);
+    expect(mocks.getConnectedRepositoryCatalogStateRow).toHaveBeenCalledTimes(1);
+    const snapshots = [
+      mocks.recoverManualDispatches.mock.calls[0]![0].repositoryCatalog,
+      ...mocks.drainOldestPendingTrigger.mock.calls.map(([, deps]: any[]) => deps.repositoryCatalog),
+    ];
+    expect(snapshots).toHaveLength(3);
+    for (const snapshot of snapshots) expect(snapshot).toBe(snapshots[0]);
+  });
+
+  // Housekeeping is most of this route, and none of it decides a dispatch. A
+  // catalog the database cannot answer for must therefore cost the dispatch
+  // phases and leave the sweeps, the queue and the claim release running.
+  it("keeps the maintenance phases when the repository catalog cannot be read", async () => {
+    mocks.drainOldestPendingTrigger.mockReset().mockResolvedValue(null);
+    mocks.getConnectedRepositoryCatalogStateRow.mockRejectedValue(
+      new Error("neon: connection reset"),
+    );
+    mocks.listPendingTriggers.mockResolvedValue([{ subjectKey: "pr:github:acme/app#1" }]);
+
+    const response = await request();
+
+    expect(response.status).toBe(200);
+    // The phases that would have dispatched are skipped rather than throwing.
+    expect(mocks.recoverManualDispatches).not.toHaveBeenCalled();
+    expect(mocks.drainOldestPendingTrigger).not.toHaveBeenCalled();
+    // Everything downstream of them still ran.
+    expect(mocks.reconcileAtCapacityQueue).toHaveBeenCalled();
+    expect(mocks.sweepMcpRateLimits).toHaveBeenCalled();
+    expect(mocks.runScheduleTriggerPass).toHaveBeenCalled();
   });
 
   it("does not add a polled start after released-owner recovery starts one", async () => {
