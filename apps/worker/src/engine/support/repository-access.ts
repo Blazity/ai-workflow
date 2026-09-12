@@ -65,8 +65,13 @@ export function filterRunRepositories<
  * started" because that is the fact an operator gets wrong otherwise: the row
  * may well be enabled by the time they read the failure, and the run still
  * refuses, because the list was frozen at run start.
+ *
+ * Deliberately module-local: the two functions below are the only sanctioned
+ * readers, and an exported marker invites a caller to hand-roll the sentence
+ * or the test instead of going through `repositoryNotEnabledMessage` and
+ * `isRepositoryCatalogRefusal`.
  */
-export const REPOSITORY_NOT_ENABLED_MARKER =
+const REPOSITORY_NOT_ENABLED_MARKER =
   "was not enabled in the repository catalog when this run started";
 
 /** What a caller refused by the catalog inside a run is told. One sentence,

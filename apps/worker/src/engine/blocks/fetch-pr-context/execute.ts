@@ -47,7 +47,7 @@ export async function blockPrTriggerRepositoriesWithSiblingsStep(
   const { getConfiguredVcsProviders } = await import("../../../infra/vcs-config.js");
   const { createRepositoryVCS } = await import("../../../engine/support/vcs-runtime.js");
   const { logger } = await import("../../../infra/logger.js");
-  const { mayRunTouchRepository, repositoryNotEnabledMessage } = await import(
+  const { mayRunTouchRepository } = await import(
     "../../support/repository-access.js"
   );
 

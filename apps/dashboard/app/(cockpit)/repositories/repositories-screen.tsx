@@ -43,7 +43,7 @@ function EnabledSwitch({
 }: {
   repository: RepositoryCatalogEntry;
   canManage: boolean;
-  onChanged: (next: RepositoryCatalogEntry, warnings: string[]) => void;
+  onChanged: (next: RepositoryCatalogEntry) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -77,7 +77,7 @@ function EnabledSwitch({
                 setError(result.errorMessage);
                 return;
               }
-              onChanged(result.data.repository, result.data.warnings ?? []);
+              onChanged(result.data.repository);
             } catch {
               setError("Could not reach the server.");
             } finally {
@@ -118,7 +118,6 @@ export function RepositoriesScreen({
   const [overrides, setOverrides] = useState<Record<number, RepositoryCatalogEntry>>({});
   const [activated, setActivated] = useState<RepositoryCatalogState | null>(null);
   const [dialog, setDialog] = useState<"none" | "activate" | "import">("none");
-  const [warnings, setWarnings] = useState<string[]>([]);
 
   // A fresh server render supersedes every optimistic row: keeping one would
   // shadow the value the refresh was fetched to show.
@@ -133,9 +132,8 @@ export function RepositoriesScreen({
   );
   const catalogState = activated ?? state;
 
-  function replaceRow(next: RepositoryCatalogEntry, nextWarnings: string[]) {
+  function replaceRow(next: RepositoryCatalogEntry) {
     setOverrides((prev) => ({ ...prev, [next.id]: next }));
-    setWarnings(nextWarnings);
   }
 
   return (
@@ -200,17 +198,6 @@ export function RepositoriesScreen({
         <div className="rounded-[3px] border border-neutral-200 bg-app-bg px-3 py-2 font-body text-[12px] text-neutral-600">
           Read-only: every repository is shown, and changing one needs the owner
           or admin role.
-        </div>
-      )}
-
-      {warnings.length > 0 && (
-        <div
-          role="status"
-          className="rounded-[3px] border border-orange-300 bg-orange-100 px-3 py-2 font-body text-[12px] text-[#A23E18]"
-        >
-          {warnings.map((warning) => (
-            <div key={warning}>{warning}</div>
-          ))}
         </div>
       )}
 
