@@ -520,6 +520,7 @@ export function registerWorkflowAuthoringTools(
             contracts.resolveContract,
             contracts.blockParamsSchemas,
             contracts.configuredVcsProviders,
+            contracts.analyzeValues,
           );
           if (!candidate.parsed) {
             throw refusal(

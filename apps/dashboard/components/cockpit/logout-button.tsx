@@ -6,8 +6,8 @@ import { apiClient } from "@/lib/api/client";
 
 import {
   DISCARD_UNSAVED_PROMPT,
-  hasUnsavedRepositoryScripts,
-} from "@/components/cockpit/screens/repository-scripts";
+  hasUnsavedSettings,
+} from "@/lib/settings/unsaved";
 
 export function LogoutButton() {
   const router = useRouter();
@@ -27,7 +27,7 @@ export function LogoutButton() {
           // Asked before the POST, because a session killed by a request that
           // already went out cannot be handed back.
           if (
-            hasUnsavedRepositoryScripts() &&
+            hasUnsavedSettings() &&
             typeof window !== "undefined" &&
             typeof window.confirm === "function" &&
             !window.confirm(DISCARD_UNSAVED_PROMPT)

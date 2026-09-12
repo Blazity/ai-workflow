@@ -69,6 +69,7 @@ test("scanReadable false makes issue tracker row read Not available", () => {
     settings,
     scan: null,
     scanReadable: false,
+    catalogState: null,
   });
   const issueTrackerRow = overview.rows.find((r) => r.id === "issue-tracker");
   assert.ok(issueTrackerRow);
@@ -82,6 +83,7 @@ test("scanReadable false makes version control row read Not available", () => {
     settings,
     scan: null,
     scanReadable: false,
+    catalogState: null,
   });
   const vcsRow = overview.rows.find((r) => r.id === "vcs");
   assert.ok(vcsRow);
@@ -95,6 +97,7 @@ test("scanReadable true with scan null makes tracker Unknown", () => {
     settings,
     scan: null,
     scanReadable: true,
+    catalogState: null,
   });
   const issueTrackerRow = overview.rows.find((r) => r.id === "issue-tracker");
   assert.ok(issueTrackerRow);
@@ -110,6 +113,7 @@ test("jira live mode makes issue tracker Connected", () => {
     settings,
     scan,
     scanReadable: true,
+    catalogState: null,
   });
   const issueTrackerRow = overview.rows.find((r) => r.id === "issue-tracker");
   assert.ok(issueTrackerRow);
@@ -127,6 +131,7 @@ test("github live and gitlab not-configured reports github state", () => {
     settings,
     scan,
     scanReadable: true,
+    catalogState: null,
   });
   const vcsRow = overview.rows.find((r) => r.id === "vcs");
   assert.ok(vcsRow);
@@ -136,30 +141,65 @@ test("github live and gitlab not-configured reports github state", () => {
   assert.ok(vcsRow.detail.includes("Also seen:"));
 });
 
-test("catalog activated is on when catalog.activated is true", () => {
-  const settings = [entry("catalog.activated", true)];
+test("an activated catalog reads Activated even though nothing wrote the registry key", () => {
+  // The production bug this covers: the seed activated the catalog, the
+  // `catalog.activated` key was never written by anything, and this card read
+  // the key and told an operator with six enabled repositories that the agent
+  // could see everything.
   const overview = buildSetupOverview({
-    settings,
+    settings: [],
     scan: null,
     scanReadable: true,
+    catalogState: {
+      activated: true,
+      bridge: false,
+      activatedAt: "2026-09-11T08:30:00.000Z",
+      activatedById: "user-7",
+      activatedByLabel: "Seed",
+    },
   });
   const catalogRow = overview.rows.find((r) => r.id === "catalog");
   assert.ok(catalogRow);
   assert.equal(catalogRow.value, "Activated");
   assert.equal(catalogRow.tone, "ok");
+  assert.match(catalogRow.detail, /Only repositories enabled in the catalog are selected\./);
+  // Who and when, so an activation nobody in the room clicked can be reviewed.
+  assert.match(catalogRow.detail, /Activated by Seed on /);
 });
 
-test("catalog not activated is off when catalog.activated is false", () => {
-  const settings = [entry("catalog.activated", false)];
+test("a registry key claiming the catalog is activated does not move the row", () => {
+  // The key is still in the registry (its removal is a worker change), and this
+  // asserts the dashboard stopped reading it: the state row is the only input.
   const overview = buildSetupOverview({
-    settings,
+    settings: [entry("catalog.activated", true)],
     scan: null,
     scanReadable: true,
+    catalogState: {
+      activated: false,
+      bridge: true,
+      activatedAt: null,
+      activatedById: null,
+      activatedByLabel: null,
+    },
   });
   const catalogRow = overview.rows.find((r) => r.id === "catalog");
   assert.ok(catalogRow);
   assert.equal(catalogRow.value, "Not activated");
   assert.equal(catalogRow.tone, "warn");
+  assert.match(catalogRow.detail, /Activate the catalog on the Repositories page\./);
+});
+
+test("a catalog read the worker did not answer is Unknown, not Not activated", () => {
+  const overview = buildSetupOverview({
+    settings: [],
+    scan: null,
+    scanReadable: true,
+    catalogState: null,
+  });
+  const catalogRow = overview.rows.find((r) => r.id === "catalog");
+  assert.ok(catalogRow);
+  assert.equal(catalogRow.value, "Unknown");
+  assert.equal(catalogRow.tone, "unknown");
 });
 
 test("features row counts on switches", () => {
@@ -173,6 +213,7 @@ test("features row counts on switches", () => {
     settings,
     scan: null,
     scanReadable: true,
+    catalogState: null,
   });
   const featuresRow = overview.rows.find((r) => r.id === "features");
   assert.ok(featuresRow);
@@ -190,6 +231,7 @@ test("features row names enabled features", () => {
     settings,
     scan: null,
     scanReadable: true,
+    catalogState: null,
   });
   const featuresRow = overview.rows.find((r) => r.id === "features");
   assert.ok(featuresRow);
@@ -203,6 +245,7 @@ test("MCP row reads Serving when MCP_ENABLED is true", () => {
     settings,
     scan: null,
     scanReadable: true,
+    catalogState: null,
   });
   const mcpRow = overview.rows.find((r) => r.id === "mcp");
   assert.ok(mcpRow);
@@ -216,6 +259,7 @@ test("MCP row reads Off when MCP_ENABLED is false", () => {
     settings,
     scan: null,
     scanReadable: true,
+    catalogState: null,
   });
   const mcpRow = overview.rows.find((r) => r.id === "mcp");
   assert.ok(mcpRow);
@@ -229,6 +273,7 @@ test("memory row is Off when ENABLE_REPO_MEMORY is false", () => {
     settings,
     scan: null,
     scanReadable: true,
+    catalogState: null,
   });
   const memoryRow = overview.rows.find((r) => r.id === "memory");
   assert.ok(memoryRow);
@@ -246,6 +291,7 @@ test("memory row detail says promotion and routing have no effect when repo memo
     settings,
     scan: null,
     scanReadable: true,
+    catalogState: null,
   });
   const memoryRow = overview.rows.find((r) => r.id === "memory");
   assert.ok(memoryRow);
@@ -266,6 +312,7 @@ test("memory row is On when ENABLE_REPO_MEMORY is true", () => {
     settings,
     scan: null,
     scanReadable: true,
+    catalogState: null,
   });
   const memoryRow = overview.rows.find((r) => r.id === "memory");
   assert.ok(memoryRow);
@@ -283,6 +330,7 @@ test("storedRows carries one row per group with stored and total", () => {
     settings,
     scan: null,
     scanReadable: true,
+    catalogState: null,
   });
   const capacityRow = overview.storedRows.find((r) => r.id === "capacity");
   assert.ok(capacityRow);
@@ -309,6 +357,7 @@ test("hasStoredRows is false when nothing is stored", () => {
     settings,
     scan: null,
     scanReadable: true,
+    catalogState: null,
   });
   assert.equal(overview.hasStoredRows, false);
 });
@@ -322,6 +371,7 @@ test("hasStoredRows is true when something is stored", () => {
     settings,
     scan: null,
     scanReadable: true,
+    catalogState: null,
   });
   assert.equal(overview.hasStoredRows, true);
 });
@@ -334,14 +384,26 @@ test("the behaviour rows say the value is a stored setting, not what the worker 
   const settings = [
     entry("MCP_ENABLED", true),
     entry("ENABLE_REPO_MEMORY", true),
-    entry("catalog.activated", true),
   ];
-  const overview = buildSetupOverview({ settings, scan: null, scanReadable: true });
+  const overview = buildSetupOverview({
+    settings,
+    scan: null,
+    scanReadable: true,
+    catalogState: {
+      activated: true,
+      bridge: false,
+      activatedAt: null,
+      activatedById: null,
+      activatedByLabel: null,
+    },
+  });
   const row = (id: string) => overview.rows.find((r) => r.id === id);
 
   assert.equal(row("mcp")?.label, "Stored setting: Remote MCP");
   assert.equal(row("memory")?.label, "Stored setting: Agent memory");
-  assert.equal(row("catalog")?.label, "Stored setting: Repository catalog");
+  // Not "Stored setting": the catalog row is the worker's state row, and
+  // labelling it as a stored setting was half of why it was believed.
+  assert.equal(row("catalog")?.label, "Repository catalog");
   // The values themselves are unchanged.
   assert.equal(row("mcp")?.value, "Serving");
   assert.equal(row("memory")?.value, "On");
@@ -355,7 +417,7 @@ test("the MCP row counts only the numeric ceilings, not the switch beside them",
     entry("MCP_MAX_REQUEST_BYTES", 1_048_576),
     entry("MCP_TOOL_TIMEOUT_MS", 30_000),
   ];
-  const overview = buildSetupOverview({ settings, scan: null, scanReadable: true });
+  const overview = buildSetupOverview({ settings, scan: null, scanReadable: true, catalogState: null });
   const mcpRow = overview.rows.find((r) => r.id === "mcp");
   assert.match(mcpRow?.detail ?? "", /2 limits are in force/);
   assert.doesNotMatch(mcpRow?.detail ?? "", /3 limits/);
@@ -395,6 +457,7 @@ test("a member is told the secrets row is not theirs to see, not that it is empt
     settings: [],
     scan: null,
     scanReadable: false,
+    catalogState: null,
   });
   assert.equal(secretsRow(overview)?.value, "Not available");
   assert.equal(secretsRow(overview)?.tone, "unknown");
@@ -405,6 +468,7 @@ test("no scan yet leaves the secrets row unknown rather than claiming nothing is
     settings: [],
     scan: null,
     scanReadable: true,
+    catalogState: null,
   });
   assert.equal(secretsRow(overview)?.value, "Unknown");
   assert.equal(secretsRow(overview)?.tone, "unknown");
@@ -421,7 +485,7 @@ test("a missing variable is counted and named, and an unconfigured one is neithe
     ]),
   ]);
   const row = secretsRow(
-    buildSetupOverview({ settings: [], scan, scanReadable: true }),
+    buildSetupOverview({ settings: [], scan, scanReadable: true, catalogState: null }),
   );
 
   assert.equal(row?.value, "1 present, 2 missing");
@@ -440,7 +504,7 @@ test("a variable one check calls missing and another calls present counts as pre
     ]),
   ]);
   const row = secretsRow(
-    buildSetupOverview({ settings: [], scan, scanReadable: true }),
+    buildSetupOverview({ settings: [], scan, scanReadable: true, catalogState: null }),
   );
   assert.equal(row?.value, "1 present, 1 missing");
   assert.match(row?.detail ?? "", /Missing: GITHUB_INSTALLATION_ID\./);
@@ -453,7 +517,7 @@ test("nothing missing reads as ok and still promises no value ever leaves the wo
     withChecks("jira", "live", [check("auth", ["JIRA_API_TOKEN"], "configured")]),
   ]);
   const row = secretsRow(
-    buildSetupOverview({ settings: [], scan, scanReadable: true }),
+    buildSetupOverview({ settings: [], scan, scanReadable: true, catalogState: null }),
   );
   assert.equal(row?.value, "2 present, 0 missing");
   assert.equal(row?.tone, "ok");
@@ -467,6 +531,7 @@ test("the scan derived rows are grouped ahead of the stored setting rows", () =>
     settings: [],
     scan: null,
     scanReadable: true,
+    catalogState: null,
   });
   assert.deepEqual(
     overview.rows.map((row) => row.id),

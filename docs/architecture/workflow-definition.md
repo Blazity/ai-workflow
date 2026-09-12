@@ -16,9 +16,22 @@ without line numbers on purpose: line numbers go stale, file ownership does not.
 
 ## 1. Shape of a definition
 
+The rules below have three homes, and which home a rule has says what it is
+allowed to know. Structural rules, the ones that need only the graph, live in
+the workspace package `@shared/workflow-graph` (`packages/workflow-graph/`):
+`schema.ts` parses, `graph-issues.ts` reports, `limits.ts` holds the two size
+caps. Deployment rules, the ones that read the environment, the block registry
+or a clock, live in `apps/worker/src/workflow-definition/deployment-validation.ts`,
+which composes both halves into the one ordered list an author reads. The block
+parameter schemas and the block contract resolver the structural rules need are
+handed in as parameters, never imported, which is what keeps the package free of
+the worker. `apps/worker/src/workflow-definition/schema.ts` is a re-export left
+for two engine importers and is deleted by stage 7 of
+[the workflow graph plan](../plans/2026-09-11-workflow-graph-package.md).
+
 A definition is an object with `schemaVersion: 2`, `nodes`, `edges`, and two
 optional graph-level fields, validated by `workflowDefinitionV2Schema` in
-`apps/worker/src/workflow-definition/schema.ts`:
+`packages/workflow-graph/schema.ts`:
 
 | Field | Meaning |
 |---|---|
@@ -34,7 +47,7 @@ an ignored field.
 ## 2. Nodes
 
 Each node carries identity, position, and three data surfaces
-(`workflowDefinitionV2NodeSchema` in `schema.ts`):
+(`workflowDefinitionV2NodeSchema` in the package's `schema.ts`):
 
 | Field | Meaning |
 |---|---|
@@ -47,8 +60,10 @@ Each node carries identity, position, and three data surfaces
 | `additionalInputs` | up to 100 author-declared inputs, each `{name, schema, binding}` |
 
 `configuration` is stored as a plain JSON record and validated per block type
-against `v2ConfigurationSchemas` in `schema.ts`. Transform and Branch have
-their own typed configuration validators there and accept no generic input
+against the per-type parameter schemas the worker composes in
+`apps/worker/src/engine/definition/block-params-schemas.ts` and hands to
+`workflowDefinitionStructuralIssues`. Transform and Branch have their own typed
+configuration validators in the package and accept no generic input
 mappings at all: a mapped input on either block type is an `unknown_input`
 issue.
 
@@ -79,15 +94,16 @@ Control blocks have fixed ports: `branch` has `true` and `false`, `loop` has
 `continue` and `exhausted`, `terminate` has none. `send_plan_approval` also has
 no outgoing port: it ends its path.
 
-The failure port is v1 vocabulary. In v2 the validator in `schema.ts` rejects
+The failure port is v1 vocabulary. In v2 the validator in `graph-issues.ts` rejects
 any edge whose `fromPort` is the failure port.
 
 ## 4. Edges
 
 An edge is `{id, from, to, fromPort?}` (`workflowDefinitionV2ControlEdgeSchema`
-in `schema.ts`). The port defaults to the block type's first port, so an edge
-out of a multi-port block must name its port explicitly. The graph validator
-`validateWorkflowGraphV2Issues` in `schema.ts` enforces:
+in the package's `schema.ts`). The port defaults to the block type's first port,
+so an edge out of a multi-port block must name its port explicitly. The graph
+validator behind `workflowDefinitionStructuralIssues` in
+`packages/workflow-graph/graph-issues.ts` enforces:
 
 - unique edge ids, and no duplicate `from` plus port plus `to` triple;
 - both endpoints exist, and no self connection;
@@ -107,9 +123,9 @@ Two triggers may point at the same block; in-degree is not capped.
 
 Data flows through bindings, not through edges. Edges carry control only.
 
-A binding is one of three kinds (`workflowInputBindingV2Schema` in
-`schema.ts`), resolved by
-`apps/worker/src/workflow-definition/v2-bindings.ts`:
+A binding is one of three kinds (`workflowInputBindingV2Schema` in the
+package's `schema.ts`), resolved by
+`packages/workflow-graph/v2-bindings.ts`:
 
 | Kind | Payload | Resolves to |
 |---|---|---|
@@ -137,16 +153,17 @@ again at invocation time so a stale checkpoint cannot leak a raw placeholder
 into an agent prompt.
 
 Which references an author may pick is computed per node by
-`analyzeWorkflowV2Bindings` and `analyzeWorkflowV2Catalog` in
-`apps/worker/src/workflow-definition/available-values.ts`, which also produce
-the per-node contracts and available values the editor shows. A binding to an
+`analyzeWorkflowValues` in
+`apps/worker/src/workflow-definition/available-values.ts`, which also produces
+the per-node contracts, the available values and (through
+`analyzeWorkflowV2Catalog`) the data catalog the editor shows. A binding to an
 unknown block, or a block binding to its own output, is a validation error in
-`schema.ts`.
+`graph-issues.ts`.
 
 ## 6. Triggers
 
 Trigger blocks are the entry points. Their configuration is validated by the
-per-type schemas in `schema.ts` and their runtime selection happens in
+per-type parameter schemas and their runtime selection happens in
 `apps/worker/src/services/dispatch/dispatch.ts` and
 `apps/worker/src/services/dispatch/dispatch-trigger.ts`.
 
@@ -165,19 +182,20 @@ requires at least one trigger and no incoming edge into one.
 One deployment rule is worth naming because it is easy to hit: a
 `prepare_workspace` block reachable from a schedule trigger in a workflow that
 pins no repository is rejected, because a scheduled run carries no ticket and
-therefore nothing that names a repository (`schema.ts`).
+therefore nothing that names a repository (`workflowScheduleGraphIssues` in
+`graph-issues.ts`, reported at the tail of the worker's deployment walk).
 
 ## 7. Harness profiles and prompts
 
 Agent blocks (`planning_agent`, `implementation_agent`, `review_agent`,
 `fix_agent`, `generic_agent`) accept two authoring fields inside
-`configuration`, defined by `v2PromptAuthoringConfiguration` in `schema.ts`:
+`configuration`, allowed through the per-type parameter schemas:
 
 - `harnessProfile`: `{profileId, version}`, a pinned reference to a stored
   harness profile;
 - `promptSlotBindings`: a binding per named prompt slot.
 
-`normalizeV2AgentProfileConfiguration` in `schema.ts` normalizes the profile
+`normalizeV2AgentProfileConfiguration` in the package's `schema.ts` normalizes the profile
 reference before parsing. Resolution and existence checks live in
 `apps/worker/src/workflow-definition/harness-profile-runtime.ts`
 (`resolveHarnessRuntimesForDefinition`, `validateHarnessProfileReferences`),
@@ -188,7 +206,7 @@ with. Prompt authoring and the prompt reference shape are handled by
 ## 8. Loops, regions and carries
 
 A Loop block bounds the single legal re-entry point of a cycle. Its
-configuration (`v2LoopConfiguration` in `schema.ts`) is `maxAttempts` (1 to
+configuration (`v2LoopConfiguration` in the package's `schema.ts`) is `maxAttempts` (1 to
 20), `onExhaust` (`fail`, `human` or `continue`), and an optional `carry` array
 of at most 100 entries, each `{name, schema, binding}`.
 
@@ -215,9 +233,9 @@ A Branch is typed data, not an expression string. Its configuration is
 condition is `{reference, operator, value?, ignoreCase?}` with the operator
 drawn from a fixed list (`equals`, `not_equals`, `contains`, `not_contains`,
 the four comparisons, `has_value`, `has_no_value`), defined by
-`v2BranchConfigurationSchema` in `schema.ts`. Conditions are checked against
-the available-values catalog of the node in
-`validateWorkflowV2BranchConditionIssues` in `schema.ts`, so a Branch that
+`v2BranchConfigurationSchema` in the package's `schema.ts`. Conditions are
+checked against the available-values catalog of the node in
+`workflowValueReferenceIssues` in `graph-issues.ts`, so a Branch that
 reads a field no upstream block produces fails validation rather than the run.
 
 ## 10. Validation and deployment
@@ -233,8 +251,9 @@ point is `validateWorkflowDefinitionCandidate` in
 available values for the editor. Callers never recover structure by parsing
 messages.
 
-**Deployment.** `validateWorkflowDefinitionIssuesForDeployment` in `schema.ts`
-is what a definition must pass before it can run. For a v2 definition it runs,
+**Deployment.** `validateWorkflowDefinitionIssuesForDeployment` in
+`apps/worker/src/workflow-definition/deployment-validation.ts` is what a
+definition must pass before it can run. For a v2 definition it runs,
 in one pass: the graph rules of section 4, the per-type configuration schemas,
 the block deployment rules from
 `apps/worker/src/workflow-definition/block-registry.ts`, the binding analysis
@@ -258,7 +277,12 @@ once per request: validation, available values and the editor's block table then
 answer about one deployment rather than three separate reads of it. The
 definition-level repository pin belongs to no block, so it cannot be checked
 through the resolver; the same per-request object carries the configured VCS
-provider list that check takes.
+provider list that check takes. That object also carries the analyser
+(`analyzeValues`) behind the single available-values pass
+(`analyzeWorkflowValues` in `available-values.ts`): one request walks the graph,
+resolves its contracts and builds its offered catalog once, and hands that
+`WorkflowValueAnalysis` to draft validation, the data catalog and prompt
+authoring instead of each walking it again.
 
 Workspace access deserves a note: `workflowWorkspaceAccessOf` in
 `workspace-access.ts` classifies each block as `none`, `shared_read`,
@@ -327,14 +351,17 @@ Three properties matter to anyone authoring a graph through an agent:
 
 | Concern | File |
 |---|---|
-| Schemas, graph rules, deployment validation | `apps/worker/src/workflow-definition/schema.ts` |
+| Definition schema, stored-shape upgrade, size limits | `packages/workflow-graph/schema.ts`, `packages/workflow-graph/limits.ts` |
+| Structural graph rules, branch and transform references, any-scope review safety | `packages/workflow-graph/graph-issues.ts` |
+| Deployment validation and the order the two halves compose in | `apps/worker/src/workflow-definition/deployment-validation.ts` |
+| The golden fixture that pins that order | `apps/worker/src/workflow-definition/__golden__/`, recorded by `apps/worker/scripts/capture-definition-issue-golden.ts` |
 | Candidate validation for the API | `apps/worker/src/workflow-definition/validation.ts` |
 | Block catalog, ports, param keys | `packages/contracts/workflow-graph.ts` |
 | Block contracts and registry rules | `apps/worker/src/workflow-definition/block-registry.ts` |
 | Deployment-aware contracts and the resolver | `apps/worker/src/engine/definition/block-contract-resolver.ts`, `apps/worker/src/engine/definition/block-contract-environment.ts` |
 | Per-type block parameter schemas | `apps/worker/src/engine/definition/block-params-schemas.ts` |
 | Block data bound once per request | `apps/worker/src/services/workflow-definitions/block-contracts.ts` |
-| Binding resolution | `apps/worker/src/workflow-definition/v2-bindings.ts` |
+| Binding resolution | `packages/workflow-graph/v2-bindings.ts` |
 | Available values and node contracts | `apps/worker/src/workflow-definition/available-values.ts` |
 | Scheduler, loop regions, checkpoints | `apps/worker/src/workflow-definition/v2-scheduler.ts` |
 | Execution results and error construction | `apps/worker/src/workflow-definition/interpreter.ts` |

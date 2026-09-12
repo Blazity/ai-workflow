@@ -26,9 +26,8 @@ import { LogoutButton } from "@/components/cockpit/logout-button";
 import { CkActivityDrawer } from "@/components/cockpit/activity-drawer";
 import {
   DISCARD_UNSAVED_PROMPT,
-  hasUnsavedRepositoryScripts,
-} from "@/components/cockpit/screens/repository-scripts";
-import { hasUnsavedSettings } from "@/lib/settings/unsaved";
+  hasUnsavedSettings,
+} from "@/lib/settings/unsaved";
 import { SpotlightSearch } from "@/components/cockpit/spotlight-search";
 import { BottomTabBar } from "@/components/cockpit/mobile/bottom-tab-bar";
 import { MobileHeader } from "@/components/cockpit/mobile/mobile-header";
@@ -62,7 +61,7 @@ const TITLE_FOR_SCREEN: Record<string, string> = {
   cost: "Cost & usage",
   editor: "Workflow editor",
   profiles: "Harness profiles",
-  scripts: "Repository scripts",
+  repositories: "Repositories",
   health: "System health",
   users: "Users",
   settings: "Settings",
@@ -133,10 +132,7 @@ export function CockpitShell({
         router.push(href);
         return true;
       }
-      if (
-        (hasUnsavedRepositoryScripts() || hasUnsavedSettings()) &&
-        !leaving.current
-      ) {
+      if (hasUnsavedSettings() && !leaving.current) {
         if (
           typeof window !== "undefined" &&
           typeof window.confirm === "function" &&

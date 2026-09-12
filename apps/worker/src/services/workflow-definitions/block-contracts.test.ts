@@ -58,8 +58,9 @@ describe("block contracts per request", () => {
       contracts.resolveContract,
       contracts.blockParamsSchemas,
       contracts.configuredVcsProviders,
+      contracts.analyzeValues,
     );
-    analyzeWorkflowV2Catalog(definition, contracts.resolveContract);
+    analyzeWorkflowV2Catalog(contracts.analyzeValues(definition));
     const options = buildWorkflowEditorOptions(
       testSettingsSnapshot(),
       { claude: [], codex: [] },

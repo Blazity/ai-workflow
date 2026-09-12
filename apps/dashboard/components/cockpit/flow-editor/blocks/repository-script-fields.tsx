@@ -15,12 +15,12 @@ import { apiClient } from "@/lib/api/client";
 export function RepositoryScriptsLink() {
   return (
     <Link
-      href="/scripts"
+      href="/repositories"
       target="_blank"
       rel="noreferrer"
       className="text-mariner underline"
     >
-      Repository scripts<span aria-hidden="true"> ↗</span>
+      Repositories<span aria-hidden="true"> ↗</span>
     </Link>
   );
 }
@@ -162,7 +162,7 @@ function useScriptGroupCatalog(): {
     };
   }, [attempt, pinKey]);
   const reload = useCallback(() => setAttempt((n) => n + 1), []);
-  // The /scripts links open in a new tab on purpose, so coming back to the
+  // The Repositories links open in a new tab on purpose, so coming back to the
   // editor with a group just renamed there is the normal flow, not the edge
   // case. Refetching on return keeps the picker from warning about a name that
   // now exists.

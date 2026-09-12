@@ -1,20 +1,22 @@
+// apps/dashboard/components/cockpit/screens/repositories/script-groups.tsx
+//
+// The script group editor, moved here from the retired Repository scripts
+// screen and bound to one repository.
+//
+// Everything below the component at the bottom of this file is the old card
+// verbatim: the validation, the group cards, the command list, the env names,
+// the gate selection and the run-order preview. Rewriting any of it would have
+// meant re-proving behaviour the tests beside this file already hold, and the
+// engine parses exactly the entry this produces.
 "use client";
 
 import React, { useEffect, useId, useRef, useState } from "react";
 import { expandGroupCommands, findExtendsCycle, sortedGroupNames } from "@shared/contracts";
 import type {
-  PrePrCheckConfig,
-  PrePrCheckConfigVersion,
   PrePrCheckGroupConfig,
   PrePrCheckRepositoryConfig,
-  PrePrChecksResponse,
-  RepositoriesResponse,
-  RepositoryOption,
-  RepositoryProviderStatus,
   RepoScriptsExpandedCommand,
 } from "@shared/contracts";
-import { apiClient } from "@/lib/api/client";
-import { Listbox } from "@/components/cockpit/listbox";
 
 /** Shared wording between GateGroupsEditor (after the fact) and the group
  *  delete site (before the fact), so a user sees the exact same phrase. */
@@ -24,9 +26,6 @@ const GATING_ALL_GROUPS_NOTE = "Now gating on all groups.";
  *  GroupCard already shows while a group is being renamed. */
 const GROUP_REMOVAL_NOTE =
   "Workflow blocks that name this group will not follow the removal and will report not_run.";
-
-const REPOSITORY_REMOVAL_NOTE =
-  "Removes this repository along with all its groups, setup commands and env settings.";
 
 /** Saving is not scoped to runs that start later, so the Save control says so
  *  where the click happens rather than leaving it to be discovered. */
@@ -178,10 +177,6 @@ function isPositiveInt(value: number): boolean {
   return Number.isInteger(value) && value >= 1;
 }
 
-function emptyConfig(): PrePrCheckConfig {
-  return { repositories: [] };
-}
-
 function groupIsValid(group: PrePrCheckGroupConfig): boolean {
   const commands = group.commands ?? [];
   const extendsList = group.extends ?? [];
@@ -226,15 +221,6 @@ function firstSetupIssue(repo: PrePrCheckRepositoryConfig): string | null {
 interface EnvPolicy {
   allowed: string[] | undefined;
   saved: string[];
-}
-
-function envPolicyFor(
-  repo: PrePrCheckRepositoryConfig,
-  savedConfig: PrePrCheckConfig,
-  allowedEnv: string[] | undefined,
-): EnvPolicy {
-  const saved = savedConfig.repositories.find((r) => repoKey(r) === repoKey(repo));
-  return { allowed: allowedEnv, saved: saved?.env ?? [] };
 }
 
 /** A well formed name this deployment does not forward. A malformed one is not
@@ -338,41 +324,6 @@ interface PendingGroupNameDraft {
   reason: "duplicate" | "invalid" | "uncommitted";
 }
 
-function firstConfigIssue(
-  config: PrePrCheckConfig,
-  /** The last configuration loaded from the server, which decides whether an
-   *  off-allowlist env name blocks Save or only warns (see EnvPolicy). */
-  savedConfig: PrePrCheckConfig,
-  allowedEnv: string[] | undefined,
-  draft?: PendingGroupNameDraft | null,
-): string | null {
-  if (draft) {
-    if (draft.reason === "duplicate") {
-      return `${draft.repoPath}: group name "${draft.attempted}" duplicates an existing group`;
-    }
-    if (draft.reason === "invalid") {
-      return `${draft.repoPath}: group name "${draft.attempted}" is invalid (${GROUP_NAME_RULE})`;
-    }
-    return `${draft.repoPath}: group name "${draft.attempted}" is not applied yet; press Enter or click outside the field`;
-  }
-  if (config.batchTimeoutMinutes !== undefined && !isPositiveInt(config.batchTimeoutMinutes)) {
-    return "batch timeout must be a whole number of minutes, 1 or more";
-  }
-  // The same path is allowed once per provider, and a message naming only the
-  // path would then point at two cards.
-  const paths = config.repositories.map((r) => r.repoPath);
-  for (const repo of config.repositories) {
-    const issue = firstRepoIssue(repo, envPolicyFor(repo, savedConfig, allowedEnv));
-    if (!issue) continue;
-    const label =
-      paths.indexOf(repo.repoPath) !== paths.lastIndexOf(repo.repoPath)
-        ? `${repo.provider}:${repo.repoPath}`
-        : repo.repoPath;
-    return `${label}: ${issue}`;
-  }
-  return null;
-}
-
 function nextGroupName(existing: string[]): string {
   let n = existing.length + 1;
   let candidate = `group-${n}`;
@@ -411,6 +362,30 @@ function withoutKey(set: ReadonlySet<string>, key: string): ReadonlySet<string> 
   return next;
 }
 
+/**
+ * The entry with no gate selection at all: the key absent, not present and
+ * undefined.
+ *
+ * `{ ...repo, gateGroups: undefined }` keeps the key, and the entry page
+ * compares the draft against the saved profile field by field, so an explicit
+ * undefined would read as a change nobody made and arm Save on a round trip
+ * back to the default.
+ */
+function withEveryGroupGated(repo: PrePrCheckRepositoryConfig): PrePrCheckRepositoryConfig {
+  const next = { ...repo };
+  delete next.gateGroups;
+  return next;
+}
+
+/** The legacy flat-commands entry as the engine reads it: one group, and the
+ *  `commands` key gone rather than present and undefined, for the same reason
+ *  `withEveryGroupGated` deletes its key. */
+function convertedToGroups(repo: PrePrCheckRepositoryConfig): PrePrCheckRepositoryConfig {
+  const next = { ...repo, groups: { [LEGACY_GROUP_NAME]: { commands: repo.commands ?? [] } } };
+  delete next.commands;
+  return next;
+}
+
 function withRenamedKey(
   set: ReadonlySet<string>,
   from: string,
@@ -442,31 +417,10 @@ function countLabel(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? "" : "s"}`;
 }
 
-/** What the gate actually runs for this repository: the explicit selection, or
- *  every group when there is none. */
-function gateSummary(repo: PrePrCheckRepositoryConfig): string {
-  return repo.gateGroups === undefined ? "all groups" : repo.gateGroups.join(", ");
-}
-
 function runsAtGate(repo: PrePrCheckRepositoryConfig, name: string): boolean {
   return repo.gateGroups === undefined || repo.gateGroups.includes(name);
 }
 
-/** The one-line stand-in for a collapsed repository card. */
-function repoSummary(repo: PrePrCheckRepositoryConfig): string {
-  const groupNames = Object.keys(repo.groups ?? {});
-  const segments: string[] = [];
-  if (groupNames.length > 0) {
-    segments.push(countLabel(groupNames.length, "group"), `gate: ${gateSummary(repo)}`);
-  } else {
-    segments.push(countLabel((repo.commands ?? []).length, "command"));
-  }
-  const setup = (repo.setup ?? []).length;
-  if (setup > 0) segments.push(`setup ${setup}`);
-  const env = (repo.env ?? []).length;
-  if (env > 0) segments.push(`env ${env}`);
-  return segments.join(" · ");
-}
 
 /** The one-line stand-in for a collapsed group card, minus the name, which the
  *  row renders on its own so it keeps the weight it has when expanded. The
@@ -672,54 +626,11 @@ function RunOrderPreview({
   );
 }
 
-/** Whether the catalog says this configured path exists.
- *
- *  `null` is "nobody asked, or nobody could answer": the catalog is fetched
- *  lazily by the picker, and a provider that failed to list (a stale GitLab
- *  token, 401 on the metadata call) returns nothing at all. Calling every one
- *  of that provider's repositories missing would be the loudest possible lie. */
-function catalogVerdict(
-  catalog: RepositoriesResponse | null,
-  repo: PrePrCheckRepositoryConfig,
-): boolean | null {
-  if (catalog === null) return null;
-  const provider = catalog.providers.find((p) => p.provider === repo.provider);
-  if (provider === undefined || provider.status !== "ready") return null;
-  return catalog.repositories.some(
-    (o) => o.provider === repo.provider && o.repoPath === repo.repoPath,
-  );
-}
-
-/** A repository the user just added and has not typed anything into yet. Every
- *  SAVED entry carries at least one non-blank command (Save blocks otherwise),
- *  so "not in the saved config and not one non-blank command anywhere" can only
- *  ever describe a fresh seed. It buys the new card a neutral hint instead of
- *  the red errors an empty group would otherwise be born with, and blanking a
- *  configured repository's only command still reports normally. */
-function isUntouchedNewEntry(
-  repo: PrePrCheckRepositoryConfig,
-  savedKeys: ReadonlySet<string>,
-): boolean {
-  if (savedKeys.has(repoKey(repo))) return false;
-  const groups = repo.groups ?? {};
-  const names = Object.keys(groups);
-  if (names.length === 0) return false;
-  return names.every(
-    (name) =>
-      (groups[name].extends ?? []).length === 0 &&
-      (groups[name].commands ?? []).every((command) => !nonBlank(command)),
-  );
-}
-
 /** A DOM id for the repository card, so the Save blocker can scroll to the card
  *  it names. Derived from repoKey, which is already unique per card. */
 function repoDomId(key: string): string {
   return `repo-card-${key.replace(/[^A-Za-z0-9]+/g, "-")}`;
 }
-
-/** The one field that belongs to no repository, and the only place the Save
- *  blocker can point at when the batch timeout is what is wrong. */
-const BATCH_TIMEOUT_DOM_ID = "batch-timeout-field";
 
 /** The open key of a repository's secondary section. Namespaced, because a
  *  section id and a group name share one key space: "setup", "env" and
@@ -729,773 +640,6 @@ const BATCH_TIMEOUT_DOM_ID = "batch-timeout-field";
  *  cards keep bare names. */
 function sectionKeyOf(repoKeyValue: string, id: string): string {
   return uiKey(repoKeyValue, `sec:${id}`);
-}
-
-/** Best effort, and only that: the test renderer has no document, and a card
- *  that is not on screen yet has no element until React has painted it. */
-function scrollIntoView(domId: string): void {
-  if (typeof document === "undefined") return;
-  document.querySelector<HTMLElement>(`#${domId}`)?.scrollIntoView({ block: "center" });
-}
-
-/**
- * Unsaved edits on this screen, readable by the cockpit shell before it
- * navigates. The shell renders a screen as opaque `children` (the rendered
- * output of a server component), so there is no provider boundary between the
- * two to thread state through, and `router.push` never fires `beforeunload`.
- * A module-level single slot: only one Repository scripts screen is ever
- * mounted, and it clears the flag when it unmounts.
- */
-let unsavedRepositoryScripts = false;
-
-export function hasUnsavedRepositoryScripts(): boolean {
-  return unsavedRepositoryScripts;
-}
-
-/** Asked by the shell before it navigates away from unsaved edits. */
-export const DISCARD_UNSAVED_PROMPT = "Discard unsaved changes?";
-
-export function RepositoryScriptsScreen({
-  initial,
-  canEdit,
-}: {
-  initial: PrePrChecksResponse;
-  canEdit: boolean;
-}) {
-  const [config, setConfig] = useState<PrePrCheckConfig>(
-    structuredClone(initial.current?.config ?? emptyConfig()),
-  );
-  const [versions, setVersions] = useState<PrePrCheckConfigVersion[]>(initial.versions);
-  // The version the draft in the editor is built on, and the concurrency token
-  // Save sends. It moves only when the editor content itself is rebased (a save
-  // or restore that came back, a discard onto a newer version, a live refresh
-  // adopted while nothing was edited), never because a refreshed server render
-  // merely shows a newer version while an edit is in progress: a token that
-  // followed the poll would let the save pass and overwrite what it had seen.
-  const [base, setBase] = useState<PrePrCheckConfigVersion | null>(initial.versions[0] ?? null);
-  // Set right before a reload this screen itself asked for, so the unsaved
-  // changes guard does not ask a second time about a discard already confirmed.
-  const leaving = useRef(false);
-  const [confirmLoadLatest, setConfirmLoadLatest] = useState(false);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [confirmRestore, setConfirmRestore] = useState<number | null>(null);
-  const [confirmDiscard, setConfirmDiscard] = useState(false);
-  // What the last Preview click did, reported on the History row itself so it
-  // is visible whether or not the load changed anything.
-  const [previewNote, setPreviewNote] = useState<{
-    version: number;
-    identical: boolean;
-  } | null>(null);
-  // A save the server refused because someone else saved first. Kept separate
-  // from `error`: it is not a failure to explain, it is a newer version to go
-  // and read, and the edit in the editor is still worth keeping.
-  const [conflict, setConflict] = useState<{ latestVersion: number | null } | null>(null);
-  // Bumped by Discard to remount the repository cards, which is what actually
-  // clears the state they own: a half-typed rename, an armed remove confirm.
-  const [editorEpoch, setEditorEpoch] = useState(0);
-  // The repository catalog. Fetched once per mount when there is at least one
-  // configured repository, because the "not in the catalog" badge is exactly
-  // the thing nobody thinks to go looking for. The endpoint is cached for 60s
-  // on the worker, and the picker reuses whatever landed here.
-  const [catalog, setCatalog] = useState<RepositoriesResponse | null>(null);
-  const [catalogFailed, setCatalogFailed] = useState(false);
-  const catalogRequested = useRef(false);
-  // Single slot, owned by whichever GroupCard instance last reported: a
-  // human only ever has one rename field focused at a time. `id` (a stable
-  // per-GroupCard React useId()) means an unrelated GroupCard clearing its
-  // own settled draft never wipes someone else's active one.
-  const [groupDraft, setGroupDraftState] = useState<
-    ({ id: string } & PendingGroupNameDraft) | null
-  >(null);
-  // A disabled button takes no focus and announces nothing, so the reason it
-  // is disabled has to be reachable on its own.
-  const blockerId = useId();
-  // Which repository card is expanded: one at a time, because a configured
-  // fleet is several screens of always-open cards otherwise. `undefined` is
-  // "the user has not chosen yet", which auto-expands a lone repository;
-  // removing a repository resets to it, so the survivor of a two-repo config
-  // opens on its own.
-  const [openRepo, setOpenRepo] = useState<string | null | undefined>();
-  // Group cards and secondary sections that are open, and groups the last add
-  // put into the gate selection. Both keyed by repository and name (see
-  // uiKey), both here rather than inside the cards, so closing a repository or
-  // saving does not reset them.
-  const [openKeys, setOpenKeys] = useState<ReadonlySet<string>>(() => new Set());
-  const [autoGatedKeys, setAutoGatedKeys] = useState<ReadonlySet<string>>(() => new Set());
-
-  const savedConfig = base?.config ?? emptyConfig();
-  const baseVersion = base?.version ?? 0;
-  // A version History holds that the editor is not built on yet: what the
-  // conflict banner offers to load without a page reload.
-  const latestKnown =
-    versions[0] !== undefined && versions[0].version > baseVersion ? versions[0] : undefined;
-  const dirty = JSON.stringify(config) !== JSON.stringify(savedConfig);
-  const issue = firstConfigIssue(config, savedConfig, initial.allowedEnv, groupDraft);
-  const valid = issue === null;
-  const savedKeys = new Set(savedConfig.repositories.map(repoKey));
-  const openRepoKey =
-    openRepo === undefined
-      ? config.repositories.length === 1
-        ? repoKey(config.repositories[0])
-        : null
-      : openRepo;
-
-  const ui: EditorUi = {
-    isOpen: (key) => openKeys.has(key),
-    toggle: (key) =>
-      setOpenKeys((prev) => (prev.has(key) ? withoutKey(prev, key) : withKey(prev, key))),
-    reveal: (key) => setOpenKeys((prev) => withKey(prev, key)),
-    renameKey: (from, to) => {
-      setOpenKeys((prev) => withRenamedKey(prev, from, to));
-      setAutoGatedKeys((prev) => withRenamedKey(prev, from, to));
-    },
-    autoGatedNames: (repo) => {
-      const prefix = `${repo}${UI_KEY_SEP}`;
-      return [...autoGatedKeys]
-        .filter((key) => key.startsWith(prefix))
-        .map((key) => key.slice(prefix.length));
-    },
-    markAutoGated: (key) => setAutoGatedKeys((prev) => withKey(prev, key)),
-    clearAutoGated: (key) => setAutoGatedKeys((prev) => withoutKey(prev, key)),
-  };
-
-  function reportGroupDraft(id: string, draft: PendingGroupNameDraft | null) {
-    setGroupDraftState((prev) => {
-      if (draft === null) return prev?.id === id ? null : prev;
-      if (
-        prev?.id === id &&
-        prev.repoPath === draft.repoPath &&
-        prev.attempted === draft.attempted &&
-        prev.reason === draft.reason
-      ) {
-        return prev;
-      }
-      return { id, ...draft };
-    });
-  }
-
-  /** The catalog the picker also uses. Once per mount, and never twice: an
-   *  operator opening the picker after this has landed gets it instantly. */
-  async function loadCatalog() {
-    if (catalogRequested.current) return;
-    catalogRequested.current = true;
-    try {
-      const res = await apiClient.repositories.list();
-      if (!res.ok) throw new Error("failed");
-      setCatalog(res.data);
-    } catch {
-      setCatalogFailed(true);
-    }
-  }
-
-  // A configured repository the catalog does not list runs nothing, forever,
-  // and says so nowhere else. Waiting for someone to open the Add repository
-  // picker made the badge depend on the one action a settled fleet never takes.
-  useEffect(() => {
-    if (initial.current?.config.repositories.length) void loadCatalog();
-    // Once per mount: loadCatalog latches on its own ref.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // History is rendered from state so a save can prepend to it without a round
-  // trip, which means a server render carrying someone else's newer version has
-  // to be adopted, or this list is stale for the rest of the session. Never
-  // backwards: our own just-saved version outranks a prop that predates it.
-  //
-  // The editor content follows only while nothing is edited. With an edit in
-  // progress the newer version raises the conflict banner, and the draft, its
-  // token and the banner all stay put until the person decides: the cockpit's
-  // live poll refreshes this render on a timer, so anything else here would
-  // hand a stale draft a fresh token a few seconds after a refusal.
-  useEffect(() => {
-    const newest = initial.versions[0];
-    const newestVersion = newest?.version ?? 0;
-    setVersions((prev) => (newestVersion >= (prev[0]?.version ?? 0) ? initial.versions : prev));
-    if (newest === undefined || newestVersion <= baseVersion) return;
-    if (dirty) {
-      setConflict({ latestVersion: newestVersion });
-    } else {
-      applyVersion(newest);
-    }
-    // A changed server render is the event; everything else is read as it is then.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initial.versions]);
-
-  // A closed tab loses whatever isn't saved yet. Back and forward are NOT
-  // covered by this event (a same-document history move never fires it), which
-  // is what the popstate guard below is for.
-  useEffect(() => {
-    if (!dirty) return;
-    if (typeof window === "undefined") return;
-    // Captured once: a cleanup has to unsubscribe from the same object it
-    // subscribed to, whatever the global points at by then.
-    const w = window;
-    const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      // A reload the conflict banner asked for has already been confirmed.
-      if (leaving.current) return;
-      e.preventDefault();
-      // Legacy prompt trigger, still required by Chrome/Edge before 119. An
-      // empty string does not count as set, so this has to be truthy.
-      e.returnValue = true;
-    };
-    w.addEventListener("beforeunload", onBeforeUnload);
-    return () => w.removeEventListener("beforeunload", onBeforeUnload);
-  }, [dirty]);
-
-  // The cockpit navigates with router.push, which beforeunload never sees, so
-  // the shell asks this module instead (see hasUnsavedRepositoryScripts).
-  useEffect(() => {
-    unsavedRepositoryScripts = dirty;
-    return () => {
-      unsavedRepositoryScripts = false;
-    };
-  }, [dirty]);
-
-  // Browser Back is the third exit, and the quietest one: no unload, no
-  // router.push, just a same-document history move. The guard is the standard
-  // sentinel: while there are unsaved edits an extra entry sits on the stack,
-  // Back lands on it instead of leaving, and the answer decides whether we
-  // follow the user out or put the sentinel back. The sentinel outlives the
-  // dirty state as one extra same-URL entry, which costs one more Back press
-  // and is the reason it is never popped from a cleanup: doing that would
-  // navigate someone who never asked to go anywhere.
-  useEffect(() => {
-    if (!dirty) return;
-    if (typeof window === "undefined" || !window.history) return;
-    const w = window;
-    w.history.pushState({ repositoryScriptsGuard: true }, "");
-    const onPopState = () => {
-      if (typeof w.confirm === "function" && !w.confirm(DISCARD_UNSAVED_PROMPT)) {
-        w.history.pushState({ repositoryScriptsGuard: true }, "");
-        return;
-      }
-      // The sentinel has already been popped by this event, so one more step
-      // back reaches the entry the person actually asked for.
-      w.removeEventListener("popstate", onPopState);
-      w.history.go(-1);
-    };
-    w.addEventListener("popstate", onPopState);
-    return () => w.removeEventListener("popstate", onPopState);
-  }, [dirty]);
-
-  /** Makes `version` what the editor is built on: content, token and History
-   *  together, so no two of them can disagree. Idempotent on History, because
-   *  a version adopted from a server render is already listed there. */
-  function applyVersion(version: PrePrCheckConfigVersion) {
-    setVersions((prev) =>
-      prev.some((v) => v.version === version.version) ? prev : [version, ...prev],
-    );
-    setBase(version);
-    setConfig(structuredClone(version.config));
-    // A save comes back with the same repositories, so the one being worked in
-    // stays open; a restore can drop it, and then the choice goes back to
-    // "not chosen yet" so a lone survivor auto-expands.
-    setOpenRepo((prev) =>
-      prev != null && version.config.repositories.some((r) => repoKey(r) === prev)
-        ? prev
-        : undefined,
-    );
-    // The auto-add note is about an unsaved edit; the version that just landed
-    // has the selection in it.
-    setAutoGatedKeys((prev) => (prev.size === 0 ? prev : new Set()));
-    setPreviewNote(null);
-    setConfirmDiscard(false);
-    setConfirmLoadLatest(false);
-    setConflict(null);
-  }
-
-  /** Loads an older version into the editor as an unsaved edit. It writes
-   *  nothing on its own: the normal dirty state, the Save blocker and Save
-   *  itself all apply, so a version can be read, adjusted and then saved
-   *  forward instead of being restored blind. */
-  function previewVersion(version: PrePrCheckConfigVersion) {
-    // An older version identical to what is already in the editor changes
-    // nothing, and a control that answers a click with no visible effect reads
-    // as broken. Say so instead.
-    if (JSON.stringify(version.config) === JSON.stringify(config)) {
-      setPreviewNote({ version: version.version, identical: true });
-      return;
-    }
-    if (
-      dirty &&
-      typeof window !== "undefined" &&
-      typeof window.confirm === "function" &&
-      !window.confirm("Discard unsaved changes and load this version into the editor?")
-    ) {
-      return;
-    }
-    setConfig(structuredClone(version.config));
-    setOpenRepo((prev) =>
-      prev != null && version.config.repositories.some((r) => repoKey(r) === prev)
-        ? prev
-        : undefined,
-    );
-    setAutoGatedKeys((prev) => (prev.size === 0 ? prev : new Set()));
-    setPreviewNote({ version: version.version, identical: false });
-    setConfirmDiscard(false);
-  }
-
-  /** Back to the config as it was last loaded from the server. Two steps, like
-   *  every other destructive control on this screen. */
-  function discard() {
-    // A newer version learned of meanwhile (a live refresh, a refused save) is
-    // what "as last saved" means by now, so the discard lands on it.
-    if (latestKnown !== undefined) {
-      applyVersion(latestKnown);
-    } else {
-      setConfig(structuredClone(savedConfig));
-      setAutoGatedKeys((prev) => (prev.size === 0 ? prev : new Set()));
-      setPreviewNote(null);
-      setConfirmDiscard(false);
-      setConflict(null);
-    }
-    // Everything the discarded edit left behind goes with it: the banner from a
-    // save that failed, and the card-owned state a re-render cannot reach (a
-    // rename typed but never committed, an armed remove confirm). Remounting
-    // the cards is what clears the latter, and it also drops the pending-rename
-    // report that would otherwise keep blocking Save from behind a field that
-    // no longer holds anything.
-    setError(null);
-    setEditorEpoch((n) => n + 1);
-  }
-
-  // What the conflict banner can load: the newer version itself when History
-  // holds it (a live refresh or the fetch after a refused save brought it), or
-  // a page reload when it does not.
-  const loadLatestLabel =
-    latestKnown !== undefined
-      ? `version ${latestKnown.version}`
-      : "the newer version (reloads the page)";
-  const conflictActionClass =
-    "appearance-none border-none bg-transparent px-0 font-body text-[12px] font-semibold text-red-700 underline cursor-pointer";
-  function loadLatest() {
-    setConfirmLoadLatest(false);
-    if (latestKnown !== undefined) {
-      discard();
-      return;
-    }
-    leaving.current = true;
-    if (typeof window !== "undefined") window.location.reload();
-  }
-
-  /** After a refused save the newer version exists only as a number in the
-   *  banner. Fetching the list puts it into History, where it can be previewed
-   *  before anyone discards an edit for it, and lets the banner load it without
-   *  a page reload. The editor content and its token are untouched: this reads
-   *  what exists, it adopts nothing. */
-  async function refreshHistory() {
-    try {
-      const res = await apiClient.prePrChecks.get();
-      if (!res.ok) return;
-      const latest = res.data as Partial<PrePrChecksResponse> | null;
-      if (!Array.isArray(latest?.versions)) return;
-      const fetched = latest.versions;
-      setVersions((prev) =>
-        (fetched[0]?.version ?? 0) >= (prev[0]?.version ?? 0) ? fetched : prev,
-      );
-    } catch {
-      // The banner already says what happened; History just stays as it was.
-    }
-  }
-
-  /** The Save blocker names a repository that may be collapsed, three cards
-   *  down. Clicking it opens that repository and its offending group and
-   *  scrolls the card into view, so the sentence is a way back to the problem
-   *  rather than only a description of it. */
-  function revealIssue() {
-    const policyOf = (repo: PrePrCheckRepositoryConfig) =>
-      envPolicyFor(repo, savedConfig, initial.allowedEnv);
-    const target = groupDraft
-      ? config.repositories.find((r) => r.repoPath === groupDraft.repoPath)
-      : config.repositories.find((r) => firstRepoIssue(r, policyOf(r)) !== null);
-    // The batch timeout belongs to no repository. It is still somewhere on a
-    // page taller than the viewport, so the blocker still has to go to it.
-    if (target === undefined) {
-      scrollIntoView(BATCH_TIMEOUT_DOM_ID);
-      return;
-    }
-    const key = repoKey(target);
-    setOpenRepo(key);
-    // A collapsed section hides its own error behind a header, so opening the
-    // repository is not enough: the row that produced the issue has to open
-    // too, or the blocker lands someone on a card that looks fine.
-    const section = firstSetupIssue(target)
-      ? "setup"
-      : firstEnvIssue(target, policyOf(target))
-        ? "env"
-        : firstTimeoutIssue(target)
-          ? "timeout"
-          : null;
-    const groups = target.groups ?? {};
-    const offending = Object.keys(groups).find(
-      (name) => !isValidGroupName(name) || firstGroupIssue(groups[name]) !== null,
-    );
-    if (section !== null) {
-      setOpenKeys((prev) => withKey(prev, sectionKeyOf(key, section)));
-    } else if (offending !== undefined) {
-      setOpenKeys((prev) => withKey(prev, uiKey(key, offending)));
-    }
-    scrollIntoView(repoDomId(key));
-  }
-
-  // Sends the whole fetched-and-edited config object back, never a shape
-  // rebuilt from a subset of state: that is what used to silently drop
-  // top-level fields (batchTimeoutMinutes) that this screen never rendered.
-  async function save() {
-    setBusy("save");
-    setError(null);
-    try {
-      const res = await apiClient.prePrChecks.save({
-        // The version this edit started from. The worker refuses the write when
-        // a newer one exists, which is the only thing standing between two
-        // operators and one of them silently overwriting the other.
-        //
-        // 0, never undefined, when nothing has ever been stored: absent means
-        // "do not check" to the worker, so it is how a legacy dashboard saves,
-        // and an empty store is exactly where two people both save a first
-        // configuration and one of them loses it without being told.
-        config,
-        baseVersion,
-      });
-      if (res.status === 409) {
-        setConflict({
-          latestVersion: !res.ok ? res.error?.latestVersion ?? null : null,
-        });
-        void refreshHistory();
-        return;
-      }
-      if (!res.ok) {
-        setError(res.errorMessage);
-        return;
-      }
-      applyVersion(res.data.version);
-    } catch {
-      // A network failure (offline, DNS, CORS) never reaches readErrorMessage
-      // because there is no Response; without this the button just stops
-      // spinning and nothing tells the operator the edit wasn't saved.
-      setError("Could not reach the server. Check your connection and try again.");
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function restore(version: number) {
-    // Restoring overwrites the in-progress edit, same risk as switching
-    // Harness Profiles with unsaved changes, so it gets the same confirm gate.
-    if (
-      dirty &&
-      typeof window !== "undefined" &&
-      !window.confirm("Discard unsaved changes and restore this version?")
-    ) {
-      return;
-    }
-    setBusy(`restore-${version}`);
-    setError(null);
-    try {
-      const res = await apiClient.prePrChecks.restore(version);
-      if (!res.ok) {
-        setError(res.errorMessage);
-        return;
-      }
-      applyVersion(res.data.version);
-      setConfirmRestore(null);
-    } catch {
-      setError("Could not reach the server. Check your connection and try again.");
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  function updateRepo(index: number, next: PrePrCheckRepositoryConfig) {
-    setConfig((prev) => ({
-      ...prev,
-      repositories: prev.repositories.map((r, i) => (i === index ? next : r)),
-    }));
-  }
-
-  return (
-    <div className="p-6 max-w-[860px]">
-      <div className="flex items-baseline justify-between mb-1">
-        <h1 className="font-body text-[18px] font-semibold text-neutral-900">Repository scripts</h1>
-        {canEdit && (
-          <button
-            onClick={save}
-            disabled={!dirty || !valid || busy !== null}
-            aria-describedby={issue ? blockerId : undefined}
-            className="appearance-none border-none rounded-[3px] px-4 py-2 font-body text-[13px] font-semibold cursor-pointer bg-mariner text-white disabled:opacity-40 disabled:cursor-default"
-          >
-            {busy === "save" ? "Saving…" : "Save changes"}
-          </button>
-        )}
-      </div>
-      {canEdit && issue && (
-        <p id={blockerId} role="status" className="font-body text-[11px] text-red-600 mb-2">
-          Save is disabled: {issue}.{" "}
-          <button
-            onClick={revealIssue}
-            className="appearance-none border-none bg-transparent px-0 font-body text-[11px] text-red-600 underline cursor-pointer"
-          >
-            Show me
-          </button>
-        </p>
-      )}
-      <p className="font-body text-[13px] text-neutral-600 mb-4">
-        Setup commands run once per repository to provision a toolchain the sandbox does not ship.
-        Named script groups then run for changed repositories after implementation and before
-        branch push / PR creation. At the publication gate a repository runs every group by
-        default, or only the groups you select.
-      </p>
-      {conflict && (
-        <div className="mb-3 rounded-[3px] border border-red-300 bg-red-50 px-3 py-2 font-body text-[12px] text-red-700">
-          {conflict.latestVersion === null
-            ? "A newer version was saved by someone else while you were editing."
-            : `Version ${conflict.latestVersion} was saved by someone else while you were editing.`}{" "}
-          Your changes here stay until you load it, and loading it discards them.{" "}
-          {confirmLoadLatest ? (
-            <>
-              Discard your changes and load {loadLatestLabel}?{" "}
-              <button onClick={loadLatest} className={conflictActionClass}>
-                Yes, discard and load
-              </button>{" "}
-              <button onClick={() => setConfirmLoadLatest(false)} className={conflictActionClass}>
-                Keep editing
-              </button>
-            </>
-          ) : (
-            <button onClick={() => setConfirmLoadLatest(true)} className={conflictActionClass}>
-              Load {loadLatestLabel}
-            </button>
-          )}
-        </div>
-      )}
-      {error && (
-        <div className="mb-3 rounded-[3px] border border-red-300 bg-red-50 px-3 py-2 font-body text-[12px] text-red-700">
-          {error}
-        </div>
-      )}
-      {!canEdit && (
-        <div className="mb-3 rounded-[3px] border border-neutral-200 bg-app-bg px-3 py-2 font-body text-[12px] text-neutral-600">
-          Read-only: ask an admin or owner to change repository scripts.
-        </div>
-      )}
-
-      <div
-        id={BATCH_TIMEOUT_DOM_ID}
-        className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3 mb-3"
-      >
-        <div className="font-body text-[12px] font-semibold text-neutral-800">Batch timeout</div>
-        <p className="font-body text-[11px] text-neutral-500 mb-[6px]">
-          Whole-batch limit across every repository&apos;s script groups, in minutes. Leave blank
-          for the default. Not deducted from the run&apos;s duration budget; it does extend how
-          long the run holds a dispatch slot.
-        </p>
-        <TimeoutMinutesField
-          value={config.batchTimeoutMinutes}
-          disabled={!canEdit}
-          placeholder="60"
-          max={180}
-          onChange={(v) => setConfig((prev) => ({ ...prev, batchTimeoutMinutes: v }))}
-        />
-      </div>
-
-      {config.repositories.length === 0 && (
-        <div className="rounded-[3px] border border-dashed border-neutral-300 px-4 py-6 font-body text-[13px] text-neutral-500 mb-3">
-          No repository scripts configured. The gate is disabled.
-        </div>
-      )}
-
-      {config.repositories.map((repo, index) => (
-        <RepoCard
-          // The epoch remounts every card, which is how Discard clears the
-          // state the cards own (a half-typed rename, an armed confirm).
-          key={`${editorEpoch}:${repoKey(repo)}`}
-          repo={repo}
-          open={openRepoKey === repoKey(repo)}
-          disabled={!canEdit}
-          ui={ui}
-          envPolicy={envPolicyFor(repo, savedConfig, initial.allowedEnv)}
-          inCatalog={catalogVerdict(catalog, repo)}
-          pristine={isUntouchedNewEntry(repo, savedKeys)}
-          onToggle={() =>
-            setOpenRepo(openRepoKey === repoKey(repo) ? null : repoKey(repo))
-          }
-          onChange={(next) => updateRepo(index, next)}
-          onRemove={() => {
-            // Only the removed repository gives up its open slot: removing a
-            // third repository must leave the one the user is working in open.
-            setOpenRepo((prev) => (prev === repoKey(repo) ? undefined : prev));
-            setConfig((prev) => ({
-              ...prev,
-              repositories: prev.repositories.filter((_, i) => i !== index),
-            }));
-          }}
-          onGroupDraft={reportGroupDraft}
-        />
-      ))}
-
-      {canEdit && (
-        <AddRepository
-          configured={config.repositories}
-          catalog={catalog}
-          catalogFailed={catalogFailed}
-          onOpen={loadCatalog}
-          onAdd={(repo) => {
-            // A repository added to a fleet would otherwise land collapsed,
-            // with nothing to fill in on screen, and its lone group would land
-            // collapsed behind a row that already reads as an error.
-            setOpenRepo(repoKey(repo));
-            ui.reveal(uiKey(repoKey(repo), "checks"));
-            setConfig((prev) => ({
-              ...prev,
-              repositories: [
-                ...prev.repositories,
-                // No command row at all, rather than one blank row: a
-                // repository nobody has typed into yet is not a mistake, and
-                // being born with a red error taught nothing.
-                { ...repo, groups: { checks: { commands: [] } } },
-              ],
-            }));
-          }}
-        />
-      )}
-
-      <h2 className="font-body text-[14px] font-semibold text-neutral-900 mt-8 mb-2">History</h2>
-      {versions.length === 0 && (
-        <div className="font-body text-[12px] text-neutral-500">No versions yet.</div>
-      )}
-      {versions.map((v) => (
-        <div
-          key={v.version}
-          className="flex items-center gap-3 border-b border-neutral-100 py-2 font-body text-[12px] text-neutral-700"
-        >
-          <span className="font-mono text-neutral-900">v{v.version}</span>
-          <span>{v.createdByLabel}</span>
-          <span className="text-neutral-400">{new Date(v.createdAt).toLocaleString()}</span>
-          {v.restoredFromVersion !== null && (
-            <span className="rounded-[3px] bg-app-bg px-[6px] py-[2px] font-mono text-[10px] text-neutral-600">
-              restored from v{v.restoredFromVersion}
-            </span>
-          )}
-          {v.version === versions[0]?.version && (
-            <span className="rounded-[3px] bg-mariner px-[6px] py-[2px] font-mono text-[10px] text-white">
-              current
-            </span>
-          )}
-          {previewNote?.version === v.version && (
-            // On the row rather than only in the save bar: a preview that
-            // changed nothing produces no unsaved edit, so the bar never
-            // appears and the click looked like it did nothing at all.
-            <span className="font-body text-[11px] text-neutral-600">
-              {previewNote.identical
-                ? `v${v.version} is identical to the current version`
-                : "loaded into the editor"}
-            </span>
-          )}
-          {canEdit && v.version !== versions[0]?.version && (
-            <span className="ml-auto">
-              {/* Loads the version into the editor as an unsaved edit: nothing
-                  is written until Save, and the Save blocker still applies. */}
-              <button
-                onClick={() => previewVersion(v)}
-                className="appearance-none border-none bg-transparent font-body text-[12px] text-mariner cursor-pointer mr-3"
-              >
-                Preview
-              </button>
-              {confirmRestore === v.version ? (
-                <>
-                  <button
-                    onClick={() => restore(v.version)}
-                    disabled={busy !== null}
-                    className="appearance-none border-none bg-transparent font-body text-[12px] font-semibold text-red-600 cursor-pointer disabled:opacity-40"
-                  >
-                    {busy === `restore-${v.version}` ? "Restoring…" : "Confirm restore"}
-                  </button>
-                  <button
-                    onClick={() => setConfirmRestore(null)}
-                    className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer ml-2"
-                  >
-                    Cancel
-                  </button>
-                </>
-              ) : (
-                <button
-                  onClick={() => setConfirmRestore(v.version)}
-                  className="appearance-none border-none bg-transparent font-body text-[12px] text-mariner cursor-pointer"
-                >
-                  Restore
-                </button>
-              )}
-            </span>
-          )}
-        </div>
-      ))}
-
-      {canEdit && dirty && (
-        // Sticky rather than a second header block: the cards are taller than
-        // the viewport, and the Save button being three screens up is how an
-        // edit gets left unsaved.
-        <div className="sticky bottom-0 -mx-6 mt-6 border-t border-neutral-200 bg-panel px-6 py-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="font-body text-[12px] font-semibold text-neutral-900">
-              Unsaved changes
-            </span>
-            {previewNote !== null && !previewNote.identical && (
-              <span className="rounded-[3px] bg-app-bg px-[6px] py-[2px] font-mono text-[10px] text-neutral-600">
-                loaded from v{previewNote.version}
-              </span>
-            )}
-            {issue && (
-              <button
-                onClick={revealIssue}
-                className="appearance-none border-none bg-transparent px-0 text-left font-body text-[11px] text-red-600 underline cursor-pointer"
-              >
-                Save is disabled: {issue}. Show me
-              </button>
-            )}
-            <span className="ml-auto flex items-center gap-2">
-              {confirmDiscard ? (
-                <>
-                  <button
-                    onClick={discard}
-                    // A discard that lands while the save it is racing is still
-                    // in flight would revert the editor and then have the
-                    // response overwrite it back.
-                    disabled={busy !== null}
-                    className="appearance-none border-none bg-transparent font-body text-[12px] font-semibold text-red-600 cursor-pointer disabled:opacity-40 disabled:cursor-default"
-                  >
-                    Confirm discard
-                  </button>
-                  <button
-                    onClick={() => setConfirmDiscard(false)}
-                    className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                </>
-              ) : (
-                <button
-                  onClick={() => setConfirmDiscard(true)}
-                  disabled={busy !== null}
-                  className="appearance-none rounded-[3px] border border-neutral-300 bg-white px-3 py-[6px] font-body text-[12px] text-neutral-700 cursor-pointer hover:bg-app-bg disabled:opacity-40 disabled:cursor-default"
-                >
-                  Discard
-                </button>
-              )}
-              <button
-                onClick={save}
-                disabled={!valid || busy !== null}
-                className="appearance-none border-none rounded-[3px] px-4 py-2 font-body text-[13px] font-semibold cursor-pointer bg-mariner text-white disabled:opacity-40 disabled:cursor-default"
-              >
-                {busy === "save" ? "Saving…" : "Save changes"}
-              </button>
-            </span>
-          </div>
-          <p className="mt-[6px] font-body text-[10px] text-neutral-500">{SAVE_SCOPE_NOTE}</p>
-        </div>
-      )}
-    </div>
-  );
 }
 
 function TimeoutMinutesField({
@@ -2350,11 +1494,14 @@ function GroupsSection({
       nextGroups[n] = nextExtends ? { ...g, extends: nextExtends.length > 0 ? nextExtends : undefined } : g;
     }
     const gateGroups = repo.gateGroups?.filter((g) => g !== name);
-    onChange({
-      ...repo,
-      groups: nextGroups,
-      ...(gateGroups !== undefined ? { gateGroups: gateGroups.length > 0 ? gateGroups : undefined } : {}),
-    });
+    const next: PrePrCheckRepositoryConfig = { ...repo, groups: nextGroups };
+    // An explicit selection the delete empties falls back to every group, which
+    // is what the warning above the button promised it would do.
+    if (gateGroups !== undefined && gateGroups.length === 0) {
+      onChange(withEveryGroupGated(next));
+      return;
+    }
+    onChange(gateGroups === undefined ? next : { ...next, gateGroups });
   }
 
   function addGroup() {
@@ -2470,7 +1617,7 @@ function GroupsSection({
             for (const name of repo.gateGroups ?? []) {
               if (next === undefined || !next.includes(name)) ui.clearAutoGated(groupKey(name));
             }
-            onChange({ ...repo, gateGroups: next });
+            onChange(next === undefined ? withEveryGroupGated(repo) : { ...repo, gateGroups: next });
           }}
         />
       </div>
@@ -2478,115 +1625,51 @@ function GroupsSection({
   );
 }
 
+/**
+ * One repository's script groups, setup, env names and per-command timeout.
+ *
+ * The body of what used to be the Repository scripts screen's repository card,
+ * with the accordion header and the Remove control gone: inside a repository
+ * entry the identity is the page, and a repository is not removed by clearing
+ * its checks. Everything below the header is unchanged, which is the point of
+ * the move: the engine keeps parsing exactly what it parsed before.
+ */
 function RepoCard({
   repo,
-  open,
   disabled,
   ui,
   envPolicy,
-  inCatalog,
   pristine,
-  onToggle,
   onChange,
-  onRemove,
   onGroupDraft,
 }: {
   repo: PrePrCheckRepositoryConfig;
-  open: boolean;
   disabled: boolean;
   ui: EditorUi;
   /** What this deployment forwards and what this repository is already saved
    *  with, which is what separates a rejected save from a broken run. */
   envPolicy: EnvPolicy;
-  /** Whether the repository catalog lists this path: `null` while nobody has
-   *  asked it, or when the provider could not be listed at all. */
-  inCatalog: boolean | null;
-  /** Added a moment ago and not typed into yet (see isUntouchedNewEntry). */
+  /** A profile nobody has typed into yet: it buys the first group a neutral
+   *  hint instead of the red error an empty group would be born with. */
   pristine: boolean;
-  onToggle: () => void;
   onChange: (next: PrePrCheckRepositoryConfig) => void;
-  onRemove: () => void;
   onGroupDraft: (id: string, draft: PendingGroupNameDraft | null) => void;
 }) {
   const isGrouped = Object.keys(repo.groups ?? {}).length > 0;
   const setupCount = (repo.setup ?? []).length;
   const envCount = (repo.env ?? []).length;
   const sectionKey = (id: string) => sectionKeyOf(repoKey(repo), id);
-  // Collapsing must never hide a reason Save is disabled, so the summary row
-  // carries the repository's first problem verbatim.
-  const rowProblem = firstRepoIssue(repo, envPolicy);
-  // Removing a repository takes its groups, setup and env with it and cannot be
-  // undone from this screen, so it takes two clicks like a restore does.
-  const [confirmRemove, setConfirmRemove] = useState(false);
   const plan = gatePlan(repo);
 
   return (
-    <div
-      id={repoDomId(repoKey(repo))}
-      className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3 mb-3"
-    >
-      <div className="flex items-center gap-2">
-        <button
-          onClick={onToggle}
-          aria-expanded={open}
-          className="flex flex-1 items-center gap-2 appearance-none border-none bg-transparent px-0 text-left cursor-pointer"
-        >
-          <Caret open={open} />
-          <span className="font-mono text-[13px] text-neutral-900">{repo.repoPath}</span>
-          <span className="rounded-[3px] bg-app-bg px-[6px] py-[2px] font-mono text-[10px] uppercase tracking-[0.05em] text-neutral-600">
-            {repo.provider}
-          </span>
-          {!isGrouped && (
-            <span className="rounded-[3px] bg-app-bg px-[6px] py-[2px] font-mono text-[10px] text-neutral-600">
-              runs as group &quot;{LEGACY_GROUP_NAME}&quot;
-            </span>
-          )}
-          {!open && (
-            <span className="font-body text-[11px] text-neutral-500">
-              {" · "}
-              {repoSummary(repo)}
-            </span>
-          )}
-        </button>
-        {!disabled && !confirmRemove && (
-          <button
-            onClick={() => setConfirmRemove(true)}
-            className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 hover:text-red-600 cursor-pointer"
-          >
-            Remove
-          </button>
-        )}
-        {!disabled && confirmRemove && (
-          <>
-            <button
-              onClick={onRemove}
-              className="appearance-none border-none bg-transparent font-body text-[12px] font-semibold text-red-600 cursor-pointer"
-            >
-              Confirm remove
-            </button>
-            <button
-              onClick={() => setConfirmRemove(false)}
-              className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer"
-            >
-              Cancel
-            </button>
-          </>
-        )}
-      </div>
-      {confirmRemove && (
-        <div className="mt-[3px] font-body text-[11px] text-burnt-orange">
-          {REPOSITORY_REMOVAL_NOTE}
+    <div id={repoDomId(repoKey(repo))}>
+      {!isGrouped && (
+        <div className="mb-2 font-body text-[11px] text-neutral-600">
+          Legacy flat command list: the engine runs it as the single group
+          &quot;{LEGACY_GROUP_NAME}&quot;.
         </div>
       )}
-      {!open && rowProblem && <ProblemLine text={rowProblem} />}
-      {inCatalog === false && (
-        <WarningLine
-          text={`Not found in the ${repo.provider} catalog. Scripts for this path will never run.`}
-        />
-      )}
-
-      {open && (
-        <div className="mt-2">
+      <div>
           <div className="font-body text-[12px] font-semibold text-neutral-800 mb-[6px]">
             {isGrouped ? "Script groups" : "Commands (legacy)"}
           </div>
@@ -2612,13 +1695,7 @@ function RepoCard({
               />
               {!disabled && (
                 <button
-                  onClick={() =>
-                    onChange({
-                      ...repo,
-                      groups: { [LEGACY_GROUP_NAME]: { commands: repo.commands ?? [] } },
-                      commands: undefined,
-                    })
-                  }
+                  onClick={() => onChange(convertedToGroups(repo))}
                   className="mt-2 appearance-none rounded-[3px] border border-neutral-300 bg-white px-2 py-1 font-body text-[11px] text-neutral-700 cursor-pointer hover:bg-app-bg"
                 >
                   Convert to groups
@@ -2702,231 +1779,241 @@ function RepoCard({
             />
           </SecondaryRow>
         </div>
-      )}
     </div>
   );
 }
 
-function providerStatusLabel(status: RepositoryProviderStatus): string {
-  if (status.status === "not_connected") return "not connected";
-  if (status.status === "error") return status.error ?? "could not list repositories";
-  return "ready";
+/**
+ * A scripts entry for a repository that has none yet.
+ *
+ * One group, no command rows. Not one blank row: a repository nobody has typed
+ * into yet is not a mistake, and being born with a red error taught nothing.
+ *
+ * Exported because the suggestion panel accepts groups into the same base: two
+ * spellings of "the entry this repository does not have yet" is how a GitLab
+ * repository ends up written into the audited profile blob as a GitHub one.
+ */
+export function emptyScriptsEntry(repository: {
+  provider: "github" | "gitlab";
+  path: string;
+}): PrePrCheckRepositoryConfig {
+  return {
+    provider: repository.provider,
+    repoPath: repository.path,
+    groups: { [LEGACY_GROUP_NAME]: { commands: [] } },
+  };
 }
 
-/** One path segment: a repository or namespace name as both providers spell
- *  them. Deliberately narrow, because a path that is not one of these can never
- *  match a repository the runner sees. */
-const REPO_PATH_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-
-/** GitHub is always owner/repo. GitLab allows subgroups, so two segments or
- *  more. Exported for the tests, which is cheaper than proving the shape
- *  through the picker. */
-function isValidRepoPath(provider: "github" | "gitlab", path: string): boolean {
-  const segments = path.split("/");
-  if (!segments.every((segment) => REPO_PATH_SEGMENT.test(segment))) return false;
-  return provider === "github" ? segments.length === 2 : segments.length >= 2;
+/**
+ * The reason this repository's scripts cannot be saved, or null.
+ *
+ * The screen-level `firstConfigIssue` used to answer this for a whole fleet and
+ * prefix every message with a repository path. Inside one repository's entry
+ * the path is the page, so the message is the issue alone; the pending rename
+ * draft is still first, because a name typed and never committed is invisible
+ * to the config and used to let Save write the old name.
+ */
+function firstScriptsEntryIssue(input: {
+  entry: PrePrCheckRepositoryConfig | null;
+  savedEntry: PrePrCheckRepositoryConfig | null;
+  allowedEnv: string[] | undefined;
+  draft?: PendingGroupNameDraft | null;
+}): string | null {
+  if (input.draft) {
+    if (input.draft.reason === "duplicate") {
+      return `group name "${input.draft.attempted}" duplicates an existing group`;
+    }
+    if (input.draft.reason === "invalid") {
+      return `group name "${input.draft.attempted}" is invalid (${GROUP_NAME_RULE})`;
+    }
+    return `group name "${input.draft.attempted}" is not applied yet; press Enter or click outside the field`;
+  }
+  // No entry at all is a legitimate profile: it behaves exactly as a repository
+  // absent from the old global blob did, and no checks apply to it.
+  if (input.entry === null) return null;
+  return firstRepoIssue(input.entry, {
+    allowed: input.allowedEnv,
+    saved: input.savedEntry?.env ?? [],
+  });
 }
 
-/** A pasted browser URL reduced to the path the config stores. Anything that is
- *  not an http(s) URL is returned untouched, so typing is never fought: the
- *  rewrite only fires once a value actually carries a scheme and a host. */
-function stripRepoUrl(value: string): string {
-  const match = /^https?:\/\/[^/]+\/(.+)$/.exec(value.trim());
-  if (match === null) return value;
-  const path = match[1]
-    .split(/[?#]/)[0]
-    .replace(/\.git$/, "")
-    .replace(/^\/+|\/+$/g, "")
-    // GitLab hangs everything that is not the project path off `/-/`.
-    .split("/-/")[0];
-  const segments = path.split("/");
-  // GitHub deep links (/tree/main/..., /blob/..., /pull/12) sit directly after
-  // owner/repo, so anything from there on is not part of the path.
-  const cut = segments.findIndex(
-    (segment, i) => i > 1 && ["tree", "blob", "pull", "issues", "commits"].includes(segment),
-  );
-  return (cut === -1 ? segments : segments.slice(0, cut)).join("/");
-}
-
-function AddRepository({
-  configured,
-  catalog,
-  catalogFailed,
-  onOpen,
-  onAdd,
+/**
+ * The Scripts tab's editor: one repository's script groups, bound to the
+ * catalog profile rather than to the global configuration blob.
+ *
+ * Controlled. It owns nothing but the accordion state, the auto-gated note and
+ * the pending rename draft; the entry itself lives in the tab, which is what
+ * sends it to `PUT /api/v1/repository-catalog/:id` with a reason.
+ */
+export function RepositoryScriptGroupsEditor({
+  repository,
+  entry,
+  savedEntry,
+  allowedEnv,
+  disabled,
+  onChange,
+  onBlockerChange,
 }: {
-  configured: PrePrCheckRepositoryConfig[];
-  /** Fetched and held by the screen, which also badges a configured repository
-   *  the catalog does not list, so the picker renders whatever already landed
-   *  instead of asking for it again. */
-  catalog: RepositoriesResponse | null;
-  catalogFailed: boolean;
-  /** Asks the screen to load the catalog if it has not already. */
-  onOpen: () => void;
-  onAdd: (repo: { provider: "github" | "gitlab"; repoPath: string }) => void;
+  repository: { provider: "github" | "gitlab"; path: string };
+  entry: PrePrCheckRepositoryConfig | null;
+  /** The entry as the current profile version holds it. An off-allowlist env
+   *  name already stored is a warning about the runs, not a Save blocker. */
+  savedEntry: PrePrCheckRepositoryConfig | null;
+  /** Names this worker forwards, or undefined from a worker that did not report
+   *  an allowlist at all, which is not the same as an empty one. */
+  allowedEnv: string[] | undefined;
+  disabled: boolean;
+  onChange: (next: PrePrCheckRepositoryConfig | null) => void;
+  /** The reason Save is disabled, reported upward so one Save bar can speak for
+   *  every tab. */
+  onBlockerChange?: (blocker: string | null) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const [filter, setFilter] = useState("");
-  const [manualProvider, setManualProvider] = useState<"github" | "gitlab">("github");
-  const [manualPath, setManualPath] = useState("");
+  const [openKeys, setOpenKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const [autoGatedKeys, setAutoGatedKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const [groupDraft, setGroupDraftState] = useState<
+    ({ id: string } & PendingGroupNameDraft) | null
+  >(null);
+  const [confirmClear, setConfirmClear] = useState(false);
 
-  const options: RepositoryOption[] | null = catalog?.repositories ?? null;
-  const providers: RepositoryProviderStatus[] = catalog?.providers ?? [];
-  const failed = catalogFailed;
+  const ui: EditorUi = {
+    isOpen: (key) => openKeys.has(key),
+    toggle: (key) =>
+      setOpenKeys((prev) => (prev.has(key) ? withoutKey(prev, key) : withKey(prev, key))),
+    reveal: (key) => setOpenKeys((prev) => withKey(prev, key)),
+    renameKey: (from, to) => {
+      setOpenKeys((prev) => withRenamedKey(prev, from, to));
+      setAutoGatedKeys((prev) => withRenamedKey(prev, from, to));
+    },
+    autoGatedNames: (repo) => {
+      const prefix = `${repo}${UI_KEY_SEP}`;
+      return [...autoGatedKeys]
+        .filter((key) => key.startsWith(prefix))
+        .map((key) => key.slice(prefix.length));
+    },
+    markAutoGated: (key) => setAutoGatedKeys((prev) => withKey(prev, key)),
+    clearAutoGated: (key) => setAutoGatedKeys((prev) => withoutKey(prev, key)),
+  };
 
-  const isConfigured = (provider: string, repoPath: string) =>
-    configured.some((r) => r.provider === provider && r.repoPath === repoPath);
-
-  function openPicker() {
-    setOpen(true);
-    onOpen();
+  function reportGroupDraft(id: string, draft: PendingGroupNameDraft | null) {
+    setGroupDraftState((prev) => {
+      if (draft === null) return prev?.id === id ? null : prev;
+      if (
+        prev?.id === id &&
+        prev.repoPath === draft.repoPath &&
+        prev.attempted === draft.attempted &&
+        prev.reason === draft.reason
+      ) {
+        return prev;
+      }
+      return { id, ...draft };
+    });
   }
 
-  const manualTrimmed = manualPath.trim();
-  const manualIssue =
-    manualTrimmed === ""
-      ? null
-      : !isValidRepoPath(manualProvider, manualTrimmed)
-        ? manualProvider === "github"
-          ? "Enter owner/repo, or paste the repository URL."
-          : "Enter group/repo or group/subgroup/repo, or paste the repository URL."
-        : isConfigured(manualProvider, manualTrimmed)
-          ? "This repository is already configured."
-          : null;
+  const issue = firstScriptsEntryIssue({
+    entry,
+    savedEntry,
+    allowedEnv,
+    draft: groupDraft,
+  });
+  // Reported rather than rendered here: the Save bar belongs to the entry, so
+  // one blocker line speaks for whichever tab produced it.
+  const report = onBlockerChange;
+  useEffect(() => {
+    report?.(issue);
+  }, [issue, report]);
 
-  function addManual() {
-    if (manualTrimmed === "" || manualIssue !== null) return;
-    onAdd({ provider: manualProvider, repoPath: manualTrimmed });
-    setManualPath("");
-    setOpen(false);
-  }
+  // A profile nobody has typed into yet. Every SAVED entry carries at least one
+  // non-blank command (Save blocks otherwise), so "nothing saved and not one
+  // non-blank command" can only describe a fresh seed.
+  const groups = entry?.groups ?? {};
+  const pristine =
+    savedEntry === null &&
+    Object.keys(groups).length > 0 &&
+    Object.keys(groups).every(
+      (name) =>
+        (groups[name].extends ?? []).length === 0 &&
+        (groups[name].commands ?? []).every((command) => !nonBlank(command)),
+    );
 
-  if (!open) {
+  if (entry === null) {
     return (
-      <button
-        onClick={openPicker}
-        className="appearance-none rounded-[3px] border border-neutral-300 bg-panel px-3 py-2 font-body text-[13px] text-neutral-800 cursor-pointer hover:bg-app-bg"
-      >
-        + Add repository
-      </button>
+      <div className="rounded-[3px] border border-dashed border-neutral-300 px-4 py-6">
+        <p className="m-0 font-body text-[13px] text-neutral-600">
+          No script groups. Nothing runs for this repository at the publication
+          gate, exactly as a repository absent from the old configuration did.
+        </p>
+        {!disabled && (
+          <button
+            onClick={() => {
+              onChange(emptyScriptsEntry(repository));
+              ui.reveal(
+                uiKey(
+                  repoKey({ provider: repository.provider, repoPath: repository.path }),
+                  LEGACY_GROUP_NAME,
+                ),
+              );
+            }}
+            className="mt-3 appearance-none rounded-[3px] border border-neutral-300 bg-panel px-3 py-2 font-body text-[13px] text-neutral-800 cursor-pointer hover:bg-app-bg"
+          >
+            Add script groups
+          </button>
+        )}
+      </div>
     );
   }
 
-  const listed = (options ?? [])
-    .filter((o) => !o.archived)
-    .filter((o) => o.repoPath.toLowerCase().includes(filter.toLowerCase()));
-  // A provider the catalog couldn't list from (most often a stale or missing
-  // GitLab token, 401 on the metadata call) is exactly the case where an
-  // operator needs to type the repository in by hand, so its status is
-  // surfaced rather than swallowed into a generic "failed" state.
-  const problemProviders = providers.filter((p) => p.status !== "ready");
-
   return (
-    <div className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3">
-      <div className="flex items-center justify-between mb-2">
-        <span className="font-body text-[13px] font-semibold text-neutral-900">Add repository</span>
-        <button
-          onClick={() => setOpen(false)}
-          className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer"
-        >
-          Close
-        </button>
-      </div>
-      {options === null && !failed && (
-        <div className="font-body text-[12px] text-neutral-500 py-2">Loading repositories…</div>
-      )}
-      {failed && (
-        <div className="mb-2 rounded-[3px] border border-red-200 bg-red-50 px-2 py-[6px] font-body text-[11px] text-red-700">
-          Couldn&apos;t reach the repository catalog. Enter the repository manually below.
-        </div>
-      )}
-      {problemProviders.length > 0 && (
-        <div className="mb-2 flex flex-col gap-1">
-          {problemProviders.map((p) => (
-            <div
-              key={p.provider}
-              className="rounded-[3px] border border-red-200 bg-red-50 px-2 py-[6px] font-body text-[11px] text-red-700"
-            >
-              {p.provider}: {providerStatusLabel(p)}. Enter a {p.provider} repository manually
-              below.
-            </div>
-          ))}
-        </div>
-      )}
-      {options !== null && !failed && (
-        <>
-          <input
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            placeholder="Filter…"
-            className="w-full rounded-[3px] border border-neutral-200 bg-white px-2 py-[6px] font-mono text-[12px] mb-2"
-          />
-          {listed.length === 0 ? (
-            <div className="font-body text-[12px] text-neutral-500 py-2">
-              No repositories available{filter ? " matching the filter" : " from a connected provider"}
-              . Enter one manually below.
-            </div>
+    <div>
+      <p className="font-body text-[12px] text-neutral-600 mb-3">
+        Setup commands run once to provision a toolchain the sandbox does not
+        ship. Named script groups then run for this repository after
+        implementation and before branch push / PR creation. At the publication
+        gate the repository runs every group by default, or only the groups you
+        select.
+      </p>
+      <RepoCard
+        repo={entry}
+        disabled={disabled}
+        ui={ui}
+        envPolicy={{ allowed: allowedEnv, saved: savedEntry?.env ?? [] }}
+        pristine={pristine}
+        onChange={onChange}
+        onGroupDraft={reportGroupDraft}
+      />
+      <p className="mt-2 font-body text-[10px] text-neutral-500">{SAVE_SCOPE_NOTE}</p>
+      {!disabled && (
+        <div className="mt-2">
+          {confirmClear ? (
+            <>
+              <span className="font-body text-[11px] text-burnt-orange mr-2">
+                {GROUP_REMOVAL_NOTE}
+              </span>
+              <button
+                onClick={() => {
+                  onChange(null);
+                  setConfirmClear(false);
+                }}
+                className="appearance-none border-none bg-transparent font-body text-[12px] font-semibold text-red-600 cursor-pointer"
+              >
+                Confirm remove all
+              </button>
+              <button
+                onClick={() => setConfirmClear(false)}
+                className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer ml-2"
+              >
+                Cancel
+              </button>
+            </>
           ) : (
-            <div className="max-h-[220px] overflow-y-auto">
-              {listed.map((o) => {
-                const taken = isConfigured(o.provider, o.repoPath);
-                return (
-                  <button
-                    key={`${o.provider}:${o.repoPath}`}
-                    disabled={taken}
-                    onClick={() => {
-                      onAdd({ provider: o.provider, repoPath: o.repoPath });
-                      setOpen(false);
-                    }}
-                    className="w-full appearance-none border-none bg-transparent text-left flex items-center gap-2 px-1 py-[6px] font-mono text-[12px] text-neutral-800 cursor-pointer hover:bg-app-bg rounded-[3px] disabled:opacity-40 disabled:cursor-default"
-                  >
-                    {o.repoPath}
-                    <span className="rounded-[3px] bg-app-bg px-[5px] py-[1px] font-mono text-[10px] uppercase text-neutral-500">
-                      {o.provider}
-                    </span>
-                    {taken && <span className="ml-auto font-body text-[11px] text-neutral-400">added</span>}
-                  </button>
-                );
-              })}
-            </div>
+            <button
+              onClick={() => setConfirmClear(true)}
+              className="appearance-none border-none bg-transparent px-0 font-body text-[12px] text-neutral-500 hover:text-red-600 cursor-pointer"
+            >
+              Remove all script groups
+            </button>
           )}
-        </>
-      )}
-      <div className="mt-2 border-t border-neutral-200 pt-2">
-        <div className="flex items-center gap-2">
-          <span className="font-body text-[11px] text-neutral-500">Add manually:</span>
-          <div className="w-[120px]">
-            <Listbox
-              options={[
-                { value: "github", label: "github" },
-                { value: "gitlab", label: "gitlab" },
-              ]}
-              value={manualProvider}
-              ariaLabel="VCS provider"
-              onChange={(v) => setManualProvider(v as "github" | "gitlab")}
-            />
-          </div>
-          <input
-            value={manualPath}
-            // A pasted browser URL is reduced to the path here rather than
-            // stored as one: a repoPath of "https://github.com/acme/web" never
-            // matches a repository, and nothing downstream would ever say so.
-            onChange={(e) => setManualPath(stripRepoUrl(e.target.value))}
-            placeholder="owner/repo"
-            className="flex-1 rounded-[3px] border border-neutral-200 bg-white px-2 py-[5px] font-mono text-[12px]"
-          />
-          <button
-            onClick={addManual}
-            disabled={manualTrimmed === "" || manualIssue !== null}
-            className="appearance-none rounded-[3px] border border-neutral-300 bg-panel px-2 py-[5px] font-body text-[12px] cursor-pointer disabled:opacity-40 disabled:cursor-default"
-          >
-            Add
-          </button>
         </div>
-        {manualIssue && (
-          <div className="mt-[3px] font-body text-[11px] text-red-600">{manualIssue}</div>
-        )}
-      </div>
+      )}
     </div>
   );
 }

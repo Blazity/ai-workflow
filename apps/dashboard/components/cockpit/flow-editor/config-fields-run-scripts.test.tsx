@@ -12,7 +12,7 @@ import { RepositoryScopeProvider } from "./repository-scope-context";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 // next/link's prefetch idle callback reaches for `self`, which the plain
 // Node test environment does not provide (same gap memory.test.tsx and
-// overview.test.tsx work around); the run_scripts panel links to /scripts.
+// overview.test.tsx work around); the run_scripts panel links to /repositories.
 (globalThis as { self?: unknown }).self = globalThis;
 
 const options = {
@@ -396,7 +396,7 @@ test("the panel keeps the runtime notes and opens Repository scripts in a new ta
       nodeText(renderer.root),
       /The block runs the\s+selected groups on every repository in the run workspace, whether or not that\s+repository changed\./,
     );
-    const link = renderer.root.findAll((i) => i.props.href === "/scripts")[0];
+    const link = renderer.root.findAll((i) => i.props.href === "/repositories")[0];
     assert.ok(link, "expected a link to Repository scripts");
     // Client-side navigation out of the editor discards the unsaved canvas.
     assert.equal(link!.props.target, "_blank");

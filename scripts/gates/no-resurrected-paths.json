@@ -96,5 +96,11 @@
   "apps/worker/src/engine/support/repo-allowlist.ts",
   "apps/worker/src/engine/support/repo-allowlist.test.ts",
   "apps/worker/src/infra/repository-allowlist-env.ts",
-  "apps/worker/src/services/repository-catalog/engine-allowlist-gap.ts"
+  "apps/worker/src/services/repository-catalog/engine-allowlist-gap.ts",
+  "apps/dashboard/app/(cockpit)/scripts",
+  "apps/dashboard/app/scripts-data.tsx",
+  "apps/dashboard/components/cockpit/screens/repository-scripts.tsx",
+  "apps/dashboard/components/cockpit/screens/repository-scripts.test.tsx",
+  "apps/dashboard/app/(cockpit)/settings/stored-only-notice.tsx",
+  "apps/dashboard/app/api/pre-pr-checks/restore"
 ]

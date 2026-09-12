@@ -503,7 +503,24 @@ test("catalog refresh drops a newly selected repository that disappears", async 
     [gh("Blazity/ai-workflow-prod"), gh("Blazity/ai-workflow-demo")],
     [gh("Blazity/ai-workflow-demo")],
   ];
-  globalThis.fetch = (() => {
+  // One refresh is two reads now: the catalog decides what may be pinned and
+  // the directory is the fleet the bridge still offers, so the stub answers by
+  // URL rather than by turn.
+  globalThis.fetch = ((url: string) => {
+    if (String(url).startsWith("/api/repository-catalog")) {
+      return Promise.resolve(
+        Response.json({
+          state: {
+            activated: false,
+            bridge: true,
+            activatedAt: null,
+            activatedById: null,
+            activatedByLabel: null,
+          },
+          repositories: [],
+        }),
+      );
+    }
     const repositories = queue.shift();
     assert.notEqual(repositories, undefined);
     return Promise.resolve(

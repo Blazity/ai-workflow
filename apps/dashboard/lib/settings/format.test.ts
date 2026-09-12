@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   RESOLVED_VALUE_LABEL,
-  STORED_ONLY_NOTICE,
+  SETTINGS_CADENCE_NOTICE,
   appliesToNote,
   displaySettingValue,
   formatSettingActor,
@@ -84,19 +84,25 @@ test("sourceHint for default says nothing is stored", () => {
   );
 });
 
-test("appliesToNote states when a change reaches a run, with no hedge", () => {
-  // The hedge was honest while the store shipped ahead of its consumers. The
-  // engine wave converted them: an entry point loads a snapshot per request or
-  // tick and a run freezes one at its start, so a note still reading "Once the
-  // worker reads stored settings" would now understate what saving does.
+test("appliesToNote states the cadence, without the retired \"once the worker reads\" prefix", () => {
+  // The worker has read one settings snapshot per request, cron tick and MCP
+  // call since stage B1, so a prefix saying a stored value reaches nothing was
+  // the claim that had become false, not the cadence itself.
   assert.equal(appliesToNote("immediate"), "Applies immediately");
-  assert.equal(appliesToNote("next run"), "Applies to the next run");
+  assert.equal(
+    appliesToNote("next run"),
+    "Applies to the next run; a run already under way keeps the settings it started with",
+  );
+  assert.doesNotMatch(appliesToNote("immediate"), /Once the worker reads/);
 });
 
-test("the standing notice says values are stored and the worker still reads its environment", () => {
-  assert.match(STORED_ONLY_NOTICE, /stored now/);
-  assert.match(STORED_ONLY_NOTICE, /still reads most settings from its environment/);
-  assert.match(STORED_ONLY_NOTICE, /not what the worker currently uses/);
+test("the standing notice states the read cadence instead of claiming the worker ignores the store", () => {
+  assert.match(SETTINGS_CADENCE_NOTICE, /stored and read/);
+  assert.match(SETTINGS_CADENCE_NOTICE, /per request, cron tick and MCP call/);
+  assert.match(SETTINGS_CADENCE_NOTICE, /immediately or on the next run/);
+  // The sentence this banner used to carry, contradicted by stage B1.
+  assert.doesNotMatch(SETTINGS_CADENCE_NOTICE, /still reads most settings from its environment/);
+  assert.doesNotMatch(SETTINGS_CADENCE_NOTICE, /consumers stages/);
 });
 
 test("the resolved value label does not claim a value is in force", () => {

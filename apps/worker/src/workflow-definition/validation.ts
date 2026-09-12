@@ -11,16 +11,32 @@ import {
   workflowDefinitionSchemaVersionOf,
 } from "@shared/contracts";
 import type { z } from "zod";
-import { analyzeWorkflowV2Bindings } from "./available-values.js";
 import {
-  validateWorkflowDefinitionIssuesForDeployment,
+  type WorkflowValueAnalysis,
+  type WorkflowValueAnalyzer,
+} from "./available-values.js";
+import {
   workflowDefinitionV2Schema,
   type WorkflowBlockParamsSchemas,
-} from "./schema.js";
+} from "@shared/workflow-graph";
+import { validateWorkflowDefinitionIssuesForDeployment } from "./deployment-validation.js";
 
+/**
+ * `analysis` is the one available-values pass this validation ran. A caller
+ * that goes on to check prompt authoring, or to render what the graph offers,
+ * reads it instead of walking the graph again.
+ */
 export type WorkflowDefinitionCandidateValidation =
-  | { parsed: WorkflowDefinition; response: WorkflowDefinitionValidationResponse }
-  | { parsed: null; response: WorkflowDefinitionValidationResponse };
+  | {
+      parsed: WorkflowDefinition;
+      analysis: WorkflowValueAnalysis;
+      response: WorkflowDefinitionValidationResponse;
+    }
+  | {
+      parsed: null;
+      analysis: null;
+      response: WorkflowDefinitionValidationResponse;
+    };
 
 /**
  * Validates one exact candidate and returns API-ready issues. Node ownership and
@@ -32,10 +48,12 @@ export function validateWorkflowDefinitionCandidate(
   resolveContract: WorkflowBlockContractResolver,
   blockParamsSchemas: WorkflowBlockParamsSchemas,
   configuredVcsProviders: readonly VcsProviderKind[],
+  analyzeValues: WorkflowValueAnalyzer,
 ): WorkflowDefinitionCandidateValidation {
   if (declaresRetiredSchema(candidate)) {
     return {
       parsed: null,
+      analysis: null,
       response: {
         valid: false,
         issues: [
@@ -56,6 +74,7 @@ export function validateWorkflowDefinitionCandidate(
   if (!parsed.success) {
     return {
       parsed: null,
+      analysis: null,
       response: {
         valid: false,
         issues: structuralIssues(candidate, parsed.error),
@@ -65,21 +84,23 @@ export function validateWorkflowDefinitionCandidate(
     };
   }
 
+  const analysis = analyzeValues(parsed.data);
   const deploymentIssues = validateWorkflowDefinitionIssuesForDeployment(
     parsed.data,
     resolveContract,
     blockParamsSchemas,
     configuredVcsProviders,
+    analysis,
   );
-  const v2Analysis = analyzeWorkflowV2Bindings(parsed.data, resolveContract);
-  const issues = dedupeIssues([...deploymentIssues, ...v2Analysis.issues]);
+  const issues = dedupeIssues([...deploymentIssues, ...analysis.issues]);
   return {
     parsed: parsed.data,
+    analysis,
     response: {
       valid: issues.length === 0,
       issues,
-      nodeContracts: v2Analysis.nodeContracts,
-      availableValuesByNode: v2Analysis.availableValuesByNode,
+      nodeContracts: analysis.nodeContracts,
+      availableValuesByNode: analysis.availableValuesByNode,
     },
   };
 }

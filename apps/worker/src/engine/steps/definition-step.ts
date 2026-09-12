@@ -8,6 +8,15 @@ import type {
   WorkflowDefinitionNode,
 } from "@shared/contracts";
 import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
+// Static because both symbols are used only inside the step body, so they land
+// in the steps bundle rather than in workflow scope, and because the package is
+// pure zod and contracts: it pulls in no node built-in wherever it lands. The
+// deployment validator below stays dynamic, because its graph reaches the block
+// registry.
+import {
+  describeWorkflowDefinitionIssues,
+  workflowDefinitionV2Schema,
+} from "@shared/workflow-graph";
 import type { WorkflowDefinitionVersionRow } from "../../db/repositories/definitions.js";
 import {
   BUILTIN_FALLBACK_DEFINITION_VERSION,
@@ -74,11 +83,8 @@ export async function loadWorkflowDefinitionFor(
   } = await import("../../db/repositories/definitions/connected.js");
   const { getConnectedEnabledWorkflowDefinitionForTrigger } =
     await import("../definition-trigger-routing.js");
-  const {
-    workflowDefinitionV2Schema,
-    validateWorkflowDefinitionForDeployment,
-    describeWorkflowDefinitionIssues,
-  } = await import("../../workflow-definition/schema.js");
+  const { validateWorkflowDefinitionForDeployment } =
+    await import("../../workflow-definition/deployment-validation.js");
   const { createWorkflowBlockContractResolver } =
     await import("../definition/block-contract-resolver.js");
   const { workflowBlockRegistryContextForRun } =

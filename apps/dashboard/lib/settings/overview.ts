@@ -1,15 +1,19 @@
 // apps/dashboard/lib/settings/overview.ts
 //
 // "What is this deployment actually set up to do", as a handful of rows.
-// Everything here is derived from two reads the dashboard already makes: the
-// settings the worker resolved, and the last stored system health scan.
+// Everything here is derived from three reads the dashboard already makes: the
+// settings the worker resolved, the last stored system health scan, and the
+// repository catalog state.
 import type {
+  RepositoryCatalogState,
   SettingsEntryView,
   SettingsGroup,
   SystemHealthIntegration,
   SystemHealthMode,
   SystemHealthResponse,
 } from "@shared/contracts";
+
+import { activationDetail, activationValue } from "@/lib/repository-catalog/activation";
 
 import { groupSettings, storedRowCount } from "./groups";
 import { settingLabel } from "./format";
@@ -76,7 +80,6 @@ const MEMORY_PROMOTION_KEY = "ENABLE_ORG_MEMORY_PROMOTION";
 const MEMORY_ROUTING_KEY = "ENABLE_REPO_ROUTING_MEMORY";
 const MCP_KEY = "MCP_ENABLED";
 const MCP_PUBLIC_DCR_KEY = "MCP_ALLOW_PUBLIC_DCR";
-const CATALOG_KEY = "catalog.activated";
 
 function valueOf(
   settings: readonly SettingsEntryView[],
@@ -201,16 +204,23 @@ function memoryRow(settings: readonly SettingsEntryView[]): SetupOverviewRow {
   };
 }
 
-function catalogRow(settings: readonly SettingsEntryView[]): SetupOverviewRow {
-  const activated = isOn(settings, CATALOG_KEY);
+/**
+ * Whether the catalog decides what the agent may touch.
+ *
+ * Read from the catalog state row, never from the `catalog.activated` settings
+ * key: nothing writes that key, so a deployment whose seed activated the
+ * catalog resolved it to the default and this card called an activated catalog
+ * "Not activated". The label says "Repository catalog", not "Stored setting",
+ * because this row is not a stored setting and never was.
+ */
+function catalogRow(state: RepositoryCatalogState | null): SetupOverviewRow {
+  const value = activationValue(state);
   return {
     id: "catalog",
-    label: "Stored setting: Repository catalog",
-    value: activated ? "Activated" : "Not activated",
-    tone: activated ? "ok" : "warn",
-    detail: activated
-      ? "Only repositories enabled in the catalog are selected."
-      : "The agent sees everything the installation sees. Activate the catalog on the Repositories page.",
+    label: "Repository catalog",
+    value,
+    tone: value === "Activated" ? "ok" : value === "Unknown" ? "unknown" : "warn",
+    detail: activationDetail(state),
   };
 }
 
@@ -291,8 +301,11 @@ export function buildSetupOverview(input: {
   settings: readonly SettingsEntryView[];
   scan: SystemHealthResponse | null;
   scanReadable: boolean;
+  /** The catalog state the worker returned, or null when it did not answer the
+   *  catalog read. Activation lives in that row, not in the settings. */
+  catalogState: RepositoryCatalogState | null;
 }): SetupOverview {
-  const { settings, scan, scanReadable } = input;
+  const { settings, scan, scanReadable, catalogState } = input;
   const byId = (...ids: string[]): SystemHealthIntegration[] | null =>
     scan ? scan.integrations.filter((entry) => ids.includes(entry.id)) : null;
 
@@ -310,7 +323,7 @@ export function buildSetupOverview(input: {
       integrationRow("issue-tracker", "Issue tracker", byId("jira"), scanReadable),
       integrationRow("vcs", "Version control", byId("github", "gitlab"), scanReadable),
       secretsRow(scan, scanReadable),
-      catalogRow(settings),
+      catalogRow(catalogState),
       featureRow(settings),
       mcpRow(settings),
       memoryRow(settings),
