@@ -593,24 +593,30 @@ touch ${paths.sentinel}
 /**
  * Per-command timeout that actually applies, in minutes.
  *
- * The repository's own value wins, then the operator's, then the constant. Read
- * from process.env rather than the parsed env module because that module is
- * out of this change's reach; a nonsense value falls back rather than throwing,
- * since a malformed operator variable must not stop every check in the fleet.
+ * The repository's own value wins, then the operator's, then the constant.
+ *
+ * The operator's value arrives as a step input rather than from `process.env`.
+ * This function runs inside a "use step", and a step that reads the environment
+ * answers a replay with whatever the deployment holds NOW: the same batch could
+ * be launched under a ten minute bound and collected under a twenty minute one,
+ * and the collect is what decides whether a command reads as a timeout. A
+ * nonsense value still falls back rather than throwing, since a malformed
+ * setting must not stop every check in the fleet.
  */
-function resolveCommandTimeoutMinutes(configured?: number): number {
-  if (
-    typeof configured === "number" &&
-    Number.isFinite(configured) &&
-    configured >= 1
-  ) {
-    return Math.floor(configured);
+function resolveCommandTimeoutMinutes(
+  configured?: number,
+  operatorDefault?: number,
+): number {
+  for (const candidate of [configured, operatorDefault]) {
+    if (
+      typeof candidate === "number" &&
+      Number.isFinite(candidate) &&
+      candidate >= 1
+    ) {
+      return Math.floor(candidate);
+    }
   }
-  const raw = process.env.PRE_PR_COMMAND_TIMEOUT_MINUTES;
-  const parsed = raw === undefined || raw.trim() === "" ? Number.NaN : Number(raw);
-  return Number.isFinite(parsed) && parsed >= 1
-    ? Math.floor(parsed)
-    : DEFAULT_COMMAND_TIMEOUT_MINUTES;
+  return DEFAULT_COMMAND_TIMEOUT_MINUTES;
 }
 
 /** Names, with values, the worker is willing to hand to a tenant's commands. */
@@ -720,6 +726,11 @@ export interface RepoCheckBatchStartOptions {
   envNames?: string[];
   /** The repository's own per-command bound, in minutes, if it set one. */
   commandTimeoutMinutes?: number;
+  /** The operator's PRE_PR_COMMAND_TIMEOUT_MINUTES, from the run's frozen
+   *  settings. Used only when the repository names no bound of its own.
+   *  Optional so a journal written before this field existed still replays;
+   *  absent falls back to the built-in constant. */
+  defaultCommandTimeoutMinutes?: number;
   /** Whether the batch restores the tracked files its commands modified.
    *  Default true; false for a selection that includes a tree-editing group. */
   restoreTree?: boolean;
@@ -827,7 +838,10 @@ export async function startRepoCheckBatchStep(
           setup,
           commands,
           commandTimeoutSeconds:
-            resolveCommandTimeoutMinutes(options.commandTimeoutMinutes) * 60,
+            resolveCommandTimeoutMinutes(
+              options.commandTimeoutMinutes,
+              options.defaultCommandTimeoutMinutes,
+            ) * 60,
           setupMarker: setup.length > 0 ? await setupMarkerPath(repo.slug, setup) : null,
           restoreTree: options.restoreTree ?? true,
         }),
@@ -951,6 +965,10 @@ export interface RepoCheckBatchCollectOptions {
   envNames?: string[];
   /** Minutes each command was given, so a timeout can say which bound bit. */
   commandTimeoutMinutes?: number;
+  /** As on the start options: the operator's bound, from the run's settings.
+   *  It must be the SAME value the start step was given, or launch and collect
+   *  would disagree about which command timed out. */
+  defaultCommandTimeoutMinutes?: number;
 }
 
 /**
@@ -992,7 +1010,10 @@ export async function collectRepoCheckBatchStep(
   // config normalizer gives a flat command list.
   const groupAt = (index: number): string =>
     options.commandGroups?.[index - setup.length] ?? LEGACY_GROUP_NAME;
-  const timeoutMinutes = resolveCommandTimeoutMinutes(options.commandTimeoutMinutes);
+  const timeoutMinutes = resolveCommandTimeoutMinutes(
+    options.commandTimeoutMinutes,
+    options.defaultCommandTimeoutMinutes,
+  );
   // Re-resolved here rather than carried from the start step, because carrying
   // it would mean a secret value sitting in a step argument in the event log.
   // Same names, same worker, same process.env.

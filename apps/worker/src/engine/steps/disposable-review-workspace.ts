@@ -55,6 +55,8 @@ export interface ProvisionDisposableReviewWorkspaceInput {
   agentKind: AgentKind;
   model: string;
   arthurTaskId: string | null;
+  /** The run's job timeout, from the settings it started with. */
+  jobTimeoutMs: number;
   runtime?: ResolvedHarnessRuntime;
   /**
    * Ticket identifier whose session memory document the reviewer should see. The
@@ -210,7 +212,7 @@ export async function provisionDisposableReviewWorkspaceStep(
   const sandbox = await Sandbox.create({
     ...getSandboxCredentials(),
     runtime: "node24",
-    timeout: env.JOB_TIMEOUT_MS,
+    timeout: input.jobTimeoutMs,
   });
   const { runRegistry } = createAdapters();
 

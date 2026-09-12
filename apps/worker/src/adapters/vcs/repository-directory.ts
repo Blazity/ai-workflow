@@ -166,11 +166,13 @@ class RepositoryListingError extends Error {
 
 /**
  * Intersect a repository listing with the repositories pinned to a workflow
- * definition. Composes AFTER filterAllowedRepositories and can only remove
- * entries the server already offered: it never fetches, never builds a path, and
- * never re-admits an entry the allowlist dropped, so a pin can never widen
- * access. An absent or fully empty scope returns the input untouched, which is
- * what keeps a workflow without a pin on exactly its pre-pin behavior.
+ * definition. It can only remove entries the caller already offered: it never
+ * fetches, never builds a path, and never re-admits an entry that was dropped
+ * before it, so a pin can never widen access. Inside a run the catalog filter
+ * (`engine/support/repository-access.ts`) composes before this one, and a pin
+ * the catalog withholds is refused by name earlier still, in the pre-sandbox
+ * selection. An absent or fully empty scope returns the input untouched, which
+ * is what keeps a workflow without a pin on exactly its pre-pin behavior.
  */
 export function filterPinnedRepositories<
   T extends { provider: VcsProvider; repoPath: string },

@@ -16,7 +16,6 @@ const mocks = vi.hoisted(() => ({
   sourceCommand: vi.fn(),
   readBundle: vi.fn(),
   createSandbox: vi.fn(),
-  isRepoAllowed: vi.fn(),
 }));
 
 vi.mock("../steps/repository-prs.js", () => ({
@@ -39,12 +38,11 @@ vi.mock("../../engine/support/vcs-runtime.js", () => ({
 vi.mock("../../sandbox/credentials.js", () => ({
   getSandboxCredentials: () => ({ teamId: "team" }),
 }));
-vi.mock("../../engine/support/repo-allowlist.js", () => ({
-  isRepoAllowed: mocks.isRepoAllowed,
-  isRepoAllowedForScope: (repository: { repoPath: string }) =>
-    mocks.isRepoAllowed(repository.repoPath),
-}));
 vi.mock("../../infra/vcs-config.js", () => ({ env: { JOB_TIMEOUT_MS: 120_000 } }));
+
+/** These cases are about multi-repository publication, not about the catalog:
+ *  the bridge, where every repository the installation exposes is reachable. */
+const UNRESTRICTED = { activated: false, enabledKeys: [] as string[] };
 vi.mock("@vercel/sandbox", () => ({
   Sandbox: {
     get: vi.fn(async () => ({
@@ -225,6 +223,7 @@ describe("multi-repository research workflow scenarios", () => {
       subjectKey: "ticket:jira:AIW-147",
       ownerToken: "owner-1",
       ticketKey: "AIW-147",
+      repositoryAccess: UNRESTRICTED,
       repositories: [finalizedX],
       title: "AIW-147",
       body: "Change the shared owner only",
@@ -497,6 +496,8 @@ describe("scenario 3: changes in two repositories produce two PRs", () => {
     subjectKey: "ticket:jira:AIW-147",
     ownerToken: "owner-1",
     ticketKey: "AIW-147",
+    repositoryAccess: UNRESTRICTED,
+    jobTimeoutMs: 120_000,
   };
   const repoX: FinalizedBranch = {
     provider: "github",
@@ -567,6 +568,8 @@ describe("scenario 6: a read-only repository mutation produces zero pushes", () 
     subjectKey: "ticket:jira:AIW-147",
     ownerToken: "owner-1",
     runId: "run-1",
+    repositoryAccess: UNRESTRICTED,
+    jobTimeoutMs: 120_000,
   };
 
   function writeRepo() {
@@ -598,7 +601,6 @@ describe("scenario 6: a read-only repository mutation produces zero pushes", () 
   }
 
   it("fails every publication before any push when a read-only repository changed", async () => {
-    mocks.isRepoAllowed.mockReset().mockReturnValue(true);
     mocks.getToken.mockReset().mockResolvedValue("secret");
     mocks.getBranchSha.mockReset().mockResolvedValue("before-acme/service");
     mocks.getPrHead

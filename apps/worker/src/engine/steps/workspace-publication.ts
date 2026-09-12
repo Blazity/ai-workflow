@@ -1,5 +1,5 @@
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
-import type { WorkflowRepositoryScope } from "@shared/contracts";
+import type { RunRepositoryAccess } from "@shared/contracts";
 import type { PullRequestHead } from "../../adapters/vcs/types.js";
 import type { HumanDecision } from "../support/human-decisions-memory.js";
 import type { WorkspaceManifest } from "../../sandbox/repo-workspace.js";
@@ -77,7 +77,10 @@ export async function finalizeWorkspacePublication(input: {
   sandboxId: string;
   ticketKey: string;
   workspaceManifest: WorkspaceManifest;
-  repositoryScope?: WorkflowRepositoryScope;
+  /** Which repositories this run may publish to, frozen at its start. */
+  repositoryAccess: RunRepositoryAccess;
+  /** The run's job timeout, from the settings it started with. */
+  jobTimeoutMs: number;
   prePrGate?: WorkspaceGate | null;
   /** What this run's repository scripts left in the trees, so a gate failure
    *  can say whether the drift is theirs or the agent's. Absent for a run whose
@@ -133,7 +136,8 @@ export async function finalizeWorkspacePublication(input: {
       subjectKey: input.subjectKey,
       ownerToken: input.ownerToken,
       runId: input.runId,
-      repositoryScope: input.repositoryScope,
+      repositoryAccess: input.repositoryAccess,
+      jobTimeoutMs: input.jobTimeoutMs,
       ...(input.sourcePullRequest ? { sourcePullRequest: input.sourcePullRequest } : {}),
       ...(input.reviewLedger ? { reviewLedger: input.reviewLedger } : {}),
     });
@@ -167,7 +171,8 @@ export async function openPullRequestsForPublication(input: {
   ticketKey: string;
   title: string;
   body: string;
-  repositoryScope?: WorkflowRepositoryScope;
+  /** Which repositories this run may publish to, frozen at its start. */
+  repositoryAccess: RunRepositoryAccess;
   sourcePullRequest?: SourcePullRequestIdentity;
 }): Promise<WorkspacePublicationResult> {
   if (input.repositories.length === 0) {
@@ -236,7 +241,7 @@ export async function openPullRequestsForPublication(input: {
             ownerToken: input.ownerToken,
             runId: input.runId,
           },
-          repositoryScope: input.repositoryScope,
+          repositoryAccess: input.repositoryAccess,
         });
       }
 

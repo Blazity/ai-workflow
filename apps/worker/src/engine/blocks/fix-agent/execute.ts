@@ -1,6 +1,6 @@
 import type {
+  RunRepositoryAccess,
   WorkflowDefinitionNode,
-  WorkflowRepositoryScope,
 } from "@shared/contracts";
 import type { AgentKind } from "../../../sandbox/agents/index.js";
 import type {
@@ -125,7 +125,10 @@ type PrFixPublicationInput = {
   subjectKey: string;
   ownerToken: string;
   runId: string;
-  repositoryScope?: WorkflowRepositoryScope;
+  /** Which repositories this run may publish to, frozen at its start. */
+  repositoryAccess: RunRepositoryAccess;
+  /** The run's job timeout, from the settings it started with. */
+  jobTimeoutMs: number;
   pr: PrTriggerPayload;
   /** Head this publication will create, registered before the push so the
    *  provider's own synchronize event is recognised as ours. */
@@ -161,7 +164,8 @@ function buildPrFixPublicationInput(
     subjectKey: ctx.entry.subjectKey,
     ownerToken: ctx.entry.ownerToken,
     runId: ctx.runId,
-    repositoryScope: ctx.repositoryScope,
+    repositoryAccess: ctx.repositories,
+    jobTimeoutMs: ctx.settings.JOB_TIMEOUT_MS,
     pr,
     ...(intendedHead ? { intendedHead } : {}),
     ...(reviewLedger ? { reviewLedger } : {}),
@@ -195,7 +199,8 @@ async function publishPrFixStep(input: PrFixPublicationInput): Promise<string | 
     subjectKey: input.subjectKey,
     ownerToken: input.ownerToken,
     runId: input.runId,
-    repositoryScope: input.repositoryScope,
+    repositoryAccess: input.repositoryAccess,
+    jobTimeoutMs: input.jobTimeoutMs,
     ...(input.reviewLedger ? { reviewLedger: input.reviewLedger } : {}),
   });
   if (result.error) throw new Error(`Fix push failed: ${result.error}`);

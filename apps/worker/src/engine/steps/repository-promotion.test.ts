@@ -63,7 +63,9 @@ function setup(overrides: {
     resetOwnedBranch: vi.fn().mockResolvedValue(undefined),
     recordOwnedBranch: vi.fn().mockResolvedValue(undefined),
     assertRepositoryAllowed: vi.fn(async () => {
-      if (overrides.allowed === false) throw new Error("not in AGENT_ALLOWED_REPOS");
+      if (overrides.allowed === false) {
+        throw new Error("this repository is not enabled in the repository catalog");
+      }
     }),
     getBranchSha: vi.fn().mockResolvedValue("base-sha"),
   };
@@ -375,7 +377,7 @@ describe("repository write-scope promotion", () => {
     expect(controller.createBranchIfMissing).not.toHaveBeenCalled();
   });
 
-  it("rechecks the allowlist immediately before ownership and provider mutations", async () => {
+  it("rechecks the run's catalog immediately before ownership and provider mutations", async () => {
     const { sandbox, controller } = setup({ allowed: false });
 
     await expect(promoteRepositoryWriteScope({
@@ -387,7 +389,7 @@ describe("repository write-scope promotion", () => {
       branchName: "blazebot/aiw-147",
       controller,
       providers,
-    })).rejects.toThrow("AGENT_ALLOWED_REPOS");
+    })).rejects.toThrow("not enabled in the repository catalog");
 
     expect(controller.recordOwnedBranch).not.toHaveBeenCalled();
     expect(controller.createBranchIfMissing).not.toHaveBeenCalled();

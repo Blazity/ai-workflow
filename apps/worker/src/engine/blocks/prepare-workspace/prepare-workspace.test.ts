@@ -8,7 +8,6 @@ const mocks = vi.hoisted(() => ({
     CLAUDE_MODEL: "claude-model",
     CODEX_MODEL: "codex-model",
     JOB_TIMEOUT_MS: 1000,
-    ENABLE_REPO_MEMORY: true,
   } as Record<string, unknown>,
   runPreSandboxPhase: vi.fn(),
   blockFetchPrContextsStep: vi.fn(),
@@ -123,11 +122,31 @@ import type { WorkspaceManifestV2 } from "../../../sandbox/repo-workspace.js";
 import { teardownSandboxes } from "../../steps/sandbox-poll-agent.js";
 import { checksCeilingExceededError } from "../../helpers/run-budget.js";
 import {
-  makeCtx,
+  makeCtx as makeBaseCtx,
   makeNode,
   makePrPayload,
+  makeRunSettings,
   runControlErrorCases,
 } from "../support/test-support.js";
+
+/**
+ * The run's ENABLE_REPO_MEMORY, as this block now reads it: off the run context
+ * that the run-start step froze, never from the environment. Mutated per test,
+ * because most cases here are about the memory steps and the registry default
+ * for the key is off.
+ */
+let memoryEnabled = true;
+
+/** `makeCtx` with this file's memory flag already on the run's settings. A case
+ *  that passes its own `settings` decides for itself. */
+function makeCtx(
+  overrides: Parameters<typeof makeBaseCtx>[0] = {},
+): ReturnType<typeof makeBaseCtx> {
+  return makeBaseCtx({
+    settings: makeRunSettings({ ENABLE_REPO_MEMORY: memoryEnabled }),
+    ...overrides,
+  });
+}
 
 const repo: SelectedRepository = {
   provider: "github",
@@ -157,7 +176,7 @@ function restoreAgentAdapterMock(): void {
 // plain object it never touches at all. Both leak across tests: a memory step
 // left rejecting with a run-control error would now fail every later test.
 beforeEach(() => {
-  mocks.env.ENABLE_REPO_MEMORY = true;
+  memoryEnabled = true;
   mocks.hydrateWorkspaceMemoryStep.mockReset();
   mocks.seedRepoMemoryStep.mockReset();
   mocks.captureDefaultBranchFilesStep.mockReset();
@@ -328,7 +347,7 @@ describe("prepare_workspace execute", () => {
   // on every run even when its body returns immediately. Workspace memory
   // hydration is a different feature and stays on.
   it("does not invoke repo memory seeding when ENABLE_REPO_MEMORY is off", async () => {
-    mocks.env.ENABLE_REPO_MEMORY = false;
+    memoryEnabled = false;
     mocks.runPreSandboxPhase.mockResolvedValue({
       status: "continue",
       promptAdditions: { research: [], implementation: [], review: [] },
@@ -663,7 +682,16 @@ describe("prepare_workspace execute", () => {
     });
     mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
 
-    await execute(makeNode("prepare_workspace"), {}, makeCtx({ sandboxId: null }));
+    await execute(
+      makeNode("prepare_workspace"),
+      {},
+      // The run's budget comes from the snapshot it froze at start, not from
+      // the environment this process happens to have.
+      makeCtx({
+        sandboxId: null,
+        settings: makeRunSettings({ JOB_TIMEOUT_MS: 1000, ENABLE_REPO_MEMORY: memoryEnabled }),
+      }),
+    );
 
     expect(mocks.sandboxManagerCtor).toHaveBeenCalledWith(
       expect.objectContaining({ jobTimeoutMs: 1000 + 900_000 }),
@@ -1152,7 +1180,11 @@ describe("prepare_workspace execute", () => {
 
     const result = await execute(makeNode("prepare_workspace"), {}, ctx);
 
-    expect(mocks.blockPrTriggerRepositoriesStep).toHaveBeenCalledWith("run-1", pr);
+    expect(mocks.blockPrTriggerRepositoriesStep).toHaveBeenCalledWith(
+      "run-1",
+      pr,
+      ctx.repositories,
+    );
     expect(mocks.runPreSandboxPhase).not.toHaveBeenCalled();
     expect(result.kind).toBe("next");
   });
@@ -1285,56 +1317,63 @@ describe("prepare_workspace execute", () => {
     expect(mocks.getBranchShaIfExists).toHaveBeenCalledWith("main");
   });
 
-  it("recreates an approved run for an exact definition pin outside the global allowlist", async () => {
-    const original = process.env.AGENT_ALLOWED_REPOS;
-    process.env.AGENT_ALLOWED_REPOS = "acme/other";
+  it("recreates an approved run for a repository the run's catalog enables", async () => {
     mocks.listRepositories.mockResolvedValue([availableApiRepo()]);
     mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
 
-    try {
-      const ctx = makeCtx({
+    const ctx = makeCtx({
+      sandboxId: null,
+      entry: approvedScopeEntry(validApprovedScope),
+      repositories: { activated: true, enabledKeys: ["github:acme/api"] },
+      repositoryScope: {
+        repositories: [{ provider: "github", repoPath: "acme/api" }],
+      },
+    });
+
+    const result = await execute(makeNode("prepare_workspace"), {}, ctx);
+
+    expect(result.kind).toBe("next");
+    expect(ctx.selectedRepositories).toEqual([
+      { ...repo, expectedResearchBaseSha: BASE_SHA },
+    ]);
+  });
+
+  it("refuses an approved repository the run's catalog withholds by name, before any sandbox", async () => {
+    // The pin used to widen the allowlist; it no longer does, so the same
+    // definition that reached acme/api above cannot reach it here. The refusal
+    // is the catalog's own sentence, not the generic availability one: the
+    // operator's next action is to enable the row, not to hunt a provider
+    // change. And it happens before provisioning, so no agent invocation and no
+    // sandbox is spent on a run that cannot finish.
+    mocks.listRepositories.mockResolvedValue([availableApiRepo()]);
+
+    const result = await execute(
+      makeNode("prepare_workspace"),
+      {},
+      makeCtx({
         sandboxId: null,
         entry: approvedScopeEntry(validApprovedScope),
+        repositories: { activated: true, enabledKeys: ["github:acme/other"] },
         repositoryScope: {
           repositories: [{ provider: "github", repoPath: "acme/api" }],
         },
-      });
+      }),
+    );
 
-      const result = await execute(makeNode("prepare_workspace"), {}, ctx);
-
-      expect(result.kind).toBe("next");
-      expect(ctx.selectedRepositories).toEqual([
-        { ...repo, expectedResearchBaseSha: BASE_SHA },
-      ]);
-    } finally {
-      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
-      else process.env.AGENT_ALLOWED_REPOS = original;
-    }
-  });
-
-  it("rejects an approved outside repository without an exact definition pin", async () => {
-    const original = process.env.AGENT_ALLOWED_REPOS;
-    process.env.AGENT_ALLOWED_REPOS = "acme/other";
-    mocks.listRepositories.mockResolvedValue([availableApiRepo()]);
-
-    try {
-      const result = await execute(
-        makeNode("prepare_workspace"),
-        {},
-        makeCtx({
-          sandboxId: null,
-          entry: approvedScopeEntry(validApprovedScope),
-        }),
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") {
+      expect(result.error.detail).toContain(
+        "Refusing to prepare github:acme/api: this repository was not enabled " +
+          "in the repository catalog when this run started. Enable it on the " +
+          "Repositories page and re-dispatch the ticket.",
       );
-
-      expect(result.kind).toBe("execution_error");
-      if (result.kind === "execution_error") {
-        expect(result.error.detail).toContain("unavailable or no longer allowed");
-      }
-    } finally {
-      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
-      else process.env.AGENT_ALLOWED_REPOS = original;
+      // Not a sandbox fault, and the category is what decides which sentence
+      // leads the ticket comment.
+      expect(result.error.category).toBe("configuration");
+      expect(result.error.detail).not.toContain("unavailable or no longer allowed");
     }
+    expect(mocks.provisionMultiRepo).not.toHaveBeenCalled();
+    expect(mocks.runPreSandboxPhase).not.toHaveBeenCalled();
   });
 
   it("requires replanning when an approved repository head moved", async () => {
@@ -1615,6 +1654,12 @@ describe("prepare_workspace execute", () => {
       ticket: expect.objectContaining({ identifier: "AWT-1" }),
       run: { branchName: "blazebot/awt-1" },
       repositoryScope,
+      // The pre-sandbox phase filters against the run's frozen list, not the
+      // environment: a pin narrows inside the catalog and never widens it.
+      repositoryAccess: ctx.repositories,
+      // And the run's frozen settings, so a step inside the phase reads a flag
+      // from the snapshot rather than from the deployment's environment.
+      settings: ctx.settings,
     });
     expect(ctx.repositoryScopeNarrowing).toEqual({
       catalogSize: 4,
@@ -1689,6 +1734,7 @@ describe("prepare_workspace execute", () => {
     expect(mocks.blockPrTriggerRepositoriesStep).toHaveBeenCalledWith(
       "run-1",
       pr,
+      ctx.repositories,
     );
     expect(result.kind).toBe("next");
   });

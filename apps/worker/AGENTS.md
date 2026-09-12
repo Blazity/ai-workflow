@@ -63,7 +63,7 @@ names, harness defaults) are rows in the `settings` table, described once in
   asynchronous and everything below it is not: an accessor returns a value, and
   an accessor that quietly returned a promise would read as truthy and turn a
   feature on. Load the snapshot where the work starts (an HTTP handler, a cron
-  tick, the MCP transport, and later a run at its start) and hand it down.
+  tick, the MCP transport, a run at its start) and hand it down.
 - **Where each entry loads it.** An HTTP handler calls
   `getRequestSettingsSnapshot(event)`, which memoises the load on the event, so
   the actor guard, the handler and every service below them share one read; a
@@ -74,19 +74,41 @@ names, harness defaults) are rows in the `settings` table, described once in
   `MCP_MAX_REQUEST_BYTES` are consulted first, which is deliberate and is the one
   place a load before authentication is accepted: the public webhook ingresses do
   the opposite and take a `loadSettings` thunk, so a bad signature is refused
-  without touching the database. Engine files are the exception and still call
-  the deprecated zero-argument form until the engine wave (stage X) gives a run
-  its own snapshot at run start. The repository catalog snapshot obeys the same
+  without touching the database. A RUN loads it in one `"use step"` at the top of
+  the workflow body (`loadRunStartSettingsStep`,
+  `engine/steps/run-start-settings.ts`) and carries the result on the run
+  context as `ctx.settings` and `ctx.repositories`; see the run context rule
+  below. The repository catalog snapshot obeys the same
   rule in the same places: `getRequestRepositoryCatalogSnapshot(event)` memoised
   on the event, a `loadRepositoryCatalog` thunk beside `loadSettings` on both
   signed webhook ingresses, one load per cron tick handed into the poll pass,
   and `deps.repositoryCatalog` on `McpToolDependencies`.
-- **The transition rule.** Every accessor that reads a migrated key has two
-  forms: `accessor(snapshot)`, which is the one to use, and a deprecated
-  zero-argument form that resolves from the environment through
-  `settingsSnapshotFromEnvironment()`. The second exists only so callers that
-  have not been converted yet behave exactly as before; both disappear into one
+- **The run context rule.** Inside a run, NOTHING re-reads either store. A step
+  or a block takes its values from `ctx.settings` / `ctx.repositories` or from
+  an explicit parameter, never from `env`, never from a settings accessor,
+  never from a module-level cache. Two reasons, and both bite silently: a run
+  outlives its read by hours, so a second read gives one run two different
+  answers and a replay a different branch than the first execution took; and a
+  read per element inside a loop over repositories is a database round trip per
+  element. `engine/steps/run-start-settings.ts` is the only engine file allowed
+  to touch `db/repositories/settings.ts` or
+  `db/repositories/repository-catalog.ts`, and nothing reachable from the
+  workflow isolate may import `services/settings`, `services/repository-catalog`
+  or the database client at all (ADR-001 gives the engine no edge to a service;
+  `engine/workflow-import-boundary.test.ts` is the guard). Because that step is
+  called before every other step, a change to it changes the journal of every
+  run in flight: it merges only after a production drain.
+- **The transition rule.** Every accessor that reads a migrated key takes the
+  snapshot: `accessor(snapshot)`. The deprecated zero-argument forms that
+  resolved from the environment are gone, with one exception,
+  `ticketBoardSettings()`, which three trigger entry points still call; it goes
   when the cleanup stage removes the environment parsing.
+  `services/settings/consumers-guard.test.ts` scans `routes`, `services`, `mcp`,
+  `infra`, `engine`, `pre-sandbox` and `workflow-definition` and fails on a
+  reintroduced `env.<migrated key>`, on a zero-argument accessor, on an import
+  of a deleted allowlist module and on a read of `AGENT_ALLOWED_REPOS` inside a
+  run. Its exemptions are written down with reasons; add one only with a reason
+  that names the stage that removes it.
 - **Resolution order.** Stored row, then the value the environment already
   resolved to, then the registry default. A deployment with a configured
   environment and an empty table behaves exactly as it did before the table
@@ -163,15 +185,19 @@ names, harness defaults) are rows in the `settings` table, described once in
   pins). Each asks `isRepositoryDispatchable`
   (`services/dispatch/repo-allowlist.ts`, snapshot in, boolean out) with the
   snapshot its entry point loaded. A definition's repository pin is a **selection
-  inside the catalog** and no longer extends dispatch, which is why the stage C
-  seed imported every pinned repository as an enabled row. Two things the catalog
-  does NOT decide yet: a ticket-driven run (`dispatchTicket`, from the Jira
-  webhook and the poll) still chooses its repositories inside the run, from
-  discovery and the expansion protocol; and inside any run
-  `engine/support/repo-allowlist.ts` still guards discovery, branch and PR
-  creation from the environment, so a repository enabled here but missing from
-  `AGENT_ALLOWED_REPOS` is dispatched and then fails late. Both move to the run's
-  own enabled list in the engine wave (stage X). The build-time seed
+  inside the catalog** and extends nothing, neither dispatch nor in-run access,
+  which is why the stage C seed imported every pinned repository as an enabled
+  row. The same catalog decides
+  access INSIDE a run: the run-start step freezes the enabled key list onto
+  `ctx.repositories`, and discovery, the expansion protocol, the publisher,
+  promotion, pull requests, comments and fetch-context all answer from it
+  through `engine/support/repository-access.ts`. A repository enabled here is
+  therefore reachable, with no variable to keep in step. A ticket-driven run
+  (`dispatchTicket`, from the Jira webhook and the poll) still chooses WHICH
+  repositories it works on inside the run, from discovery and the expansion
+  protocol, but it chooses from that frozen list. The list is frozen at run
+  start on purpose: disabling a repository stops the NEXT run, not one already
+  in flight. The build-time seed
   `scripts/db-seed-repository-catalog.ts` (wired after `db:migrate` in `build`,
   never in `build:ci`) imports the allowlist variable and every pinned
   repository, activates only a deployment whose allowlist was already

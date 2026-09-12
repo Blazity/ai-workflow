@@ -1,8 +1,11 @@
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
-import type { WorkflowRepositoryScope } from "@shared/contracts";
+import type { RunRepositoryAccess } from "@shared/contracts";
 import type { PullRequest, VCSAdapter } from "../../adapters/vcs/types.js";
 import type { ActiveRunOwner } from "../../db/repositories/active-runs.js";
 import { scrubForPublication } from "../support/publication-scrub.js";
+// Pure and contracts-only, so a static import here drags nothing into the
+// bundle that a dynamic one would have kept out.
+import { repositoryNotEnabledMessage } from "../support/repository-access.js";
 import { isRunControlError } from "../helpers/run-control-error.js";
 
 export interface WorkflowPrLink {
@@ -48,20 +51,24 @@ export async function createOrFindWorkflowOwnedPullRequest(input: {
   title: string;
   body: string;
   owner: ActiveRunOwner;
-  repositoryScope?: WorkflowRepositoryScope;
+  /** Which repositories this run may open a pull request on, frozen at its
+   *  start. */
+  repositoryAccess: RunRepositoryAccess;
 }): Promise<WorkflowPrLink> {
   "use step";
   const { assertConnectedActiveRunOwner } = await import("../../db/repositories/active-runs.js");
   const { createRepositoryVCS } = await import("../../engine/support/vcs-runtime.js");
-  const { isRepoAllowedForScope } = await import("../../engine/support/repo-allowlist.js");
+  const { mayRunTouchRepository } = await import(
+    "../../engine/support/repository-access.js"
+  );
   return resolveWorkflowOwnedPullRequest(
     input,
     createRepositoryVCS,
     (repoPath) =>
-      isRepoAllowedForScope(
-        { provider: input.repository.provider, repoPath },
-        input.repositoryScope,
-      ),
+      mayRunTouchRepository(input.repositoryAccess, {
+        provider: input.repository.provider,
+        repoPath,
+      }),
     () => assertConnectedActiveRunOwner(input.owner),
   );
 }
@@ -137,7 +144,11 @@ async function resolveWorkflowOwnedPullRequest(
 ): Promise<WorkflowPrLink> {
   const repo = input.repository;
   if (!isAllowed(repo.repoPath)) {
-    throw new Error(`Refusing to open a PR on ${repo.repoPath}: not in AGENT_ALLOWED_REPOS`);
+    // One sentence for every catalog refusal in the engine, from one function.
+    // Spelling it here by hand is how this site came to say something the
+    // promotion and publication guards did not, which left an operator matching
+    // three near-identical sentences to three different fixes.
+    throw new Error(repositoryNotEnabledMessage("open a pull request on", repo));
   }
   const existing = repo.workflowOwnedBranch?.pr;
   if (existing) {

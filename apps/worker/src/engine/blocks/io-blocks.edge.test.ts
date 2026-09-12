@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // One consolidated file per the task constraints (single new test file, no edits
 // elsewhere). All the module mocks below form a superset shared by every block
-// executor and repository adapter exercised here; repo-allowlist.js is left REAL
-// so process.env.AGENT_ALLOWED_REPOS drives the actual guard/filter.
+// executor and repository adapter exercised here; repository-access.js is left
+// REAL so the run's frozen catalog list drives the actual guard/filter.
 const mocks = vi.hoisted(() => ({
   postComment: vi.fn(),
   createRepositoryVCS: vi.fn(),
@@ -83,7 +83,11 @@ import type {
   WorkspaceRepositoryInput,
 } from "../../sandbox/repo-workspace.js";
 import { emptyPrePrCheckConfig } from "../pre-pr-checks/config.js";
-import { isRepoAllowed, filterAllowedRepositories } from "../../engine/support/repo-allowlist.js";
+import {
+  filterRunRepositories,
+  mayRunTouchRepository,
+} from "../../engine/support/repository-access.js";
+import { TEST_BRIDGE_REPOSITORY_ACCESS } from "../../test-support/settings.js";
 import { AI_WORKFLOW_COMMENT_MARKER } from "../../adapters/vcs/vcs-bot-identity.js";
 import {
   createRepositoryDirectory,
@@ -98,9 +102,12 @@ import { execute as executePostTicketComment } from "./post-ticket-comment/execu
 import { execute as executeRunChecks } from "./run-checks/execute.js";
 import { makeCtx, makeNode, makePrPayload } from "./support/test-support.js";
 
-// AGENT_ALLOWED_REPOS is unset globally. Restore after every test so a value set
-// by one test never leaks into another (which would break the no-op assumption).
-const ORIGINAL_ALLOWED_REPOS = process.env.AGENT_ALLOWED_REPOS;
+// The repository catalog reaches a run as a frozen list on the run context, so
+// these cases hand the list in directly: there is no environment to set or
+// restore any more, and nothing can leak from one case into the next.
+const BRIDGE = TEST_BRIDGE_REPOSITORY_ACCESS;
+const github = (repoPath: string) => ({ provider: "github" as const, repoPath });
+const enabled = (...enabledKeys: string[]) => ({ activated: true, enabledKeys });
 const activeOwner = {
   subjectKey: "ticket:jira:AWT-1",
   ownerToken: "owner-1",
@@ -109,105 +116,81 @@ const activeOwner = {
 
 const marked = (body: string) => `${body}\n\n${AI_WORKFLOW_COMMENT_MARKER}`;
 
-function setAllowlist(value: string | undefined): void {
-  if (value === undefined) delete process.env.AGENT_ALLOWED_REPOS;
-  else process.env.AGENT_ALLOWED_REPOS = value;
-}
-
 afterEach(() => {
-  setAllowlist(ORIGINAL_ALLOWED_REPOS);
   vi.unstubAllGlobals();
 });
 
 // ---------------------------------------------------------------------------
-// repo-allowlist.ts: isRepoAllowed (real, env-driven)
+// repository-access.ts: mayRunTouchRepository (pure, over the run's frozen list)
 // ---------------------------------------------------------------------------
-describe("isRepoAllowed", () => {
-  it("allows any repo when AGENT_ALLOWED_REPOS is unset", () => {
-    setAllowlist(undefined);
-    expect(isRepoAllowed("acme/anything")).toBe(true);
+describe("mayRunTouchRepository", () => {
+  it("allows any repository while the catalog is not activated (the bridge)", () => {
+    expect(mayRunTouchRepository(BRIDGE, { provider: "github", repoPath: "acme/anything" })).toBe(
+      true,
+    );
   });
 
-  it("allows all when AGENT_ALLOWED_REPOS is an empty string", () => {
-    setAllowlist("");
-    expect(isRepoAllowed("x/y")).toBe(true);
+  it("allows nothing once activated with an empty enabled list", () => {
+    expect(
+      mayRunTouchRepository({ activated: true, enabledKeys: [] }, github("acme/api")),
+    ).toBe(false);
   });
 
-  it("allows all when the allowlist is whitespace/comma-only (misconfig is a no-op)", () => {
-    setAllowlist(" , , ");
-    expect(isRepoAllowed("acme/off")).toBe(true);
+  it("returns true for an enabled repository", () => {
+    expect(mayRunTouchRepository(enabled("github:acme/api"), github("acme/api"))).toBe(true);
   });
 
-  it("returns true for an exact on-list match", () => {
-    setAllowlist("acme/api");
-    expect(isRepoAllowed("acme/api")).toBe(true);
+  it("matches case-insensitively on the path", () => {
+    expect(mayRunTouchRepository(enabled("github:acme/api"), github("Acme/API"))).toBe(true);
   });
 
-  it("matches case-insensitively in both directions", () => {
-    setAllowlist("ACME/API");
-    expect(isRepoAllowed("acme/api")).toBe(true);
-    setAllowlist("acme/api");
-    expect(isRepoAllowed("Acme/API")).toBe(true);
+  it("returns false for a repository the list does not carry", () => {
+    expect(mayRunTouchRepository(enabled("github:acme/api"), github("acme/web"))).toBe(false);
   });
 
-  it("returns false for an off-list repo", () => {
-    setAllowlist("acme/api");
-    expect(isRepoAllowed("acme/web")).toBe(false);
-  });
-
-  it("parses multiple entries with whitespace and a trailing comma", () => {
-    setAllowlist("acme/api, acme/web,");
-    expect(isRepoAllowed("acme/web")).toBe(true);
-    expect(isRepoAllowed("acme/api")).toBe(true);
-    expect(isRepoAllowed("acme/other")).toBe(false);
-  });
-
-  it("does not trim the query argument (only lowercases it)", () => {
-    setAllowlist("acme/api");
-    expect(isRepoAllowed(" acme/api")).toBe(false);
+  it("does not confuse two providers sharing a path", () => {
+    const access = enabled("github:acme/api");
+    expect(mayRunTouchRepository(access, github("acme/api"))).toBe(true);
+    expect(mayRunTouchRepository(access, { provider: "gitlab", repoPath: "acme/api" })).toBe(false);
   });
 });
 
 // ---------------------------------------------------------------------------
-// repo-allowlist.ts: filterAllowedRepositories (real, env-driven)
+// repository-access.ts: filterRunRepositories (pure, over the run's frozen list)
 // ---------------------------------------------------------------------------
-describe("filterAllowedRepositories", () => {
-  it("returns the input unchanged (same reference) when unset", () => {
-    setAllowlist(undefined);
-    const list = [{ repoPath: "acme/api" }, { repoPath: "acme/web" }];
-    expect(filterAllowedRepositories(list)).toBe(list);
+describe("filterRunRepositories", () => {
+  it("returns the input unchanged (same reference) on the bridge", () => {
+    const list = [github("acme/api"), github("acme/web")];
+    expect(filterRunRepositories(BRIDGE, list)).toBe(list);
   });
 
-  it("drops off-list entries, preserving order and extra fields", () => {
-    setAllowlist("acme/api");
-    const result = filterAllowedRepositories([
-      { repoPath: "acme/api", x: 1 },
-      { repoPath: "acme/web", x: 2 },
+  it("drops disabled entries, preserving order and extra fields", () => {
+    const result = filterRunRepositories(enabled("github:acme/api"), [
+      { ...github("acme/api"), x: 1 },
+      { ...github("acme/web"), x: 2 },
     ]);
-    expect(result).toEqual([{ repoPath: "acme/api", x: 1 }]);
+    expect(result).toEqual([{ ...github("acme/api"), x: 1 }]);
   });
 
-  it("keeps a case-differing on-list entry", () => {
-    setAllowlist("acme/api");
-    const result = filterAllowedRepositories([
-      { repoPath: "Acme/API" },
-      { repoPath: "Other/Repo" },
+  it("keeps a case-differing enabled entry", () => {
+    const result = filterRunRepositories(enabled("github:acme/api"), [
+      github("Acme/API"),
+      github("Other/Repo"),
     ]);
-    expect(result).toEqual([{ repoPath: "Acme/API" }]);
+    expect(result).toEqual([github("Acme/API")]);
   });
 
   it("returns an empty array when the list matches nothing", () => {
-    setAllowlist("acme/none");
-    expect(filterAllowedRepositories([{ repoPath: "acme/api" }, { repoPath: "acme/web" }])).toEqual(
-      [],
-    );
+    expect(
+      filterRunRepositories(enabled("github:acme/none"), [github("acme/api"), github("acme/web")]),
+    ).toEqual([]);
   });
 });
 
 // ---------------------------------------------------------------------------
-// repository-directory.ts: allowlist applied to normalized listings
+// repository-directory.ts: the complete listing, filtered by nobody
 // ---------------------------------------------------------------------------
-describe("repository directory allowlist", () => {
+describe("repository directory listings", () => {
   const mockFetch = vi.fn();
 
   function gitLabResponse(body: unknown, headers: Record<string, string> = {}) {
@@ -249,8 +232,7 @@ describe("repository directory allowlist", () => {
     mocks.buildOctokit.mockReturnValue(octokitReturning([]));
   });
 
-  it("returns the complete normalized GitHub catalog independently of the runtime allowlist", async () => {
-    setAllowlist("acme/api");
+  it("returns the complete normalized GitHub catalog, unfiltered", async () => {
     mocks.buildOctokit.mockReturnValue(octokitReturning(["acme/api", "acme/web"]));
 
     const result = await createRepositoryDirectory(githubConfig).listRepositories();
@@ -259,7 +241,6 @@ describe("repository directory allowlist", () => {
   });
 
   it("preserves GitHub path casing in the complete catalog", async () => {
-    setAllowlist("acme/api");
     mocks.buildOctokit.mockReturnValue(octokitReturning(["Acme/API", "other/repo"]));
 
     const result = await createRepositoryDirectory(githubConfig).listRepositories();
@@ -267,8 +248,7 @@ describe("repository directory allowlist", () => {
     expect(result.map((r) => r.repoPath)).toEqual(["Acme/API", "other/repo"]);
   });
 
-  it("returns the complete normalized GitLab catalog independently of the runtime allowlist", async () => {
-    setAllowlist("acme/api");
+  it("returns the complete normalized GitLab catalog, unfiltered", async () => {
     mockFetch.mockResolvedValueOnce(
       gitLabResponse([{ path_with_namespace: "acme/api" }, { path_with_namespace: "acme/web" }], {
         "x-next-page": "",
@@ -281,7 +261,6 @@ describe("repository directory allowlist", () => {
   });
 
   it("merges complete catalogs from every configured provider", async () => {
-    setAllowlist("acme/api");
     mocks.buildOctokit.mockReturnValue(octokitReturning(["acme/web"]));
     mockFetch.mockResolvedValueOnce(
       gitLabResponse([{ path_with_namespace: "acme/api" }], { "x-next-page": "" }),
@@ -302,17 +281,16 @@ describe("repository directory allowlist", () => {
 });
 
 // ---------------------------------------------------------------------------
-// repository-prs.ts: allowlist guards (real repo-allowlist, mocked db/vcs)
+// repository-prs.ts: catalog guard (real repository-access, mocked db/vcs)
 // ---------------------------------------------------------------------------
-describe("repository-prs allowlist guard", () => {
+describe("repository-prs catalog guard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getDb.mockReturnValue({ db: true });
     mocks.assertActiveRunOwner.mockResolvedValue(undefined);
   });
 
-  it("refuses to open a PR on an off-list repo without calling the provider", async () => {
-    setAllowlist("acme/allowed");
+  it("refuses to open a PR on a repository the catalog does not enable, without calling the provider", async () => {
     const createPR = vi.fn();
     const findPR = vi.fn();
     mocks.createRepositoryVCS.mockReturnValue({ createPR, findPR });
@@ -330,8 +308,9 @@ describe("repository-prs allowlist guard", () => {
         title: "Fix API",
         body: "",
         owner: activeOwner,
+        repositoryAccess: enabled("github:acme/allowed"),
       }),
-    ).rejects.toThrow("Refusing to open a PR on acme/api");
+    ).rejects.toThrow("Refusing to open a pull request on github:acme/api");
 
     expect(createPR).not.toHaveBeenCalled();
     expect(findPR).not.toHaveBeenCalled();
@@ -441,18 +420,29 @@ describe("post_pr_comment edge cases", () => {
     vi.clearAllMocks();
   });
 
-  it("refuses to comment on an off-allowlist PR without creating a provider client", async () => {
-    setAllowlist("acme/allowed");
-
+  it("refuses to comment on a PR the run's catalog does not enable, without creating a provider client", async () => {
     const result = await executePostPrComment(
       makeNode("post_pr_comment", { body: "LGTM" }),
       {},
-      makeCtx({ publication: singlePublication() }),
+      makeCtx({
+        publication: singlePublication(),
+        repositories: enabled("github:acme/allowed"),
+      }),
     );
 
     expect(result.kind).toBe("execution_error");
     if (result.kind === "execution_error") {
-      expect(result.error.detail).toContain("not in AGENT_ALLOWED_REPOS");
+      expect(result.error.detail).toContain(
+        "was not enabled in the repository catalog when this run started",
+      );
+      // Named the way an operator can act on: the page, and the fact that
+      // enabling it now does not rescue THIS run.
+      expect(result.error.detail).toContain(
+        "Enable it on the Repositories page and re-dispatch the ticket.",
+      );
+      // And classified as configuration, so the failure sentence stops blaming
+      // a sandbox or a provider that did exactly what it was told.
+      expect(result.error.category).toBe("configuration");
     }
     expect(mocks.createRepositoryVCS).not.toHaveBeenCalled();
   });
@@ -815,18 +805,29 @@ describe("fetch_pr_context edge cases", () => {
     mocks.getDb.mockReturnValue({ db: true });
   });
 
-  it("refuses to read an off-allowlist PR without creating a provider client", async () => {
-    setAllowlist("acme/allowed");
-
+  it("refuses to read a PR the run's catalog does not enable, without creating a provider client", async () => {
     const result = await executeFetchPrContext(
       makeNode("fetch_pr_context"),
       {},
-      makeCtx({ selectedRepositories: [repoWithPr] }),
+      makeCtx({
+        selectedRepositories: [repoWithPr],
+        repositories: enabled("github:acme/allowed"),
+      }),
     );
 
     expect(result.kind).toBe("execution_error");
     if (result.kind === "execution_error") {
-      expect(result.error.detail).toContain("not in AGENT_ALLOWED_REPOS");
+      expect(result.error.detail).toContain(
+        "was not enabled in the repository catalog when this run started",
+      );
+      // Named the way an operator can act on: the page, and the fact that
+      // enabling it now does not rescue THIS run.
+      expect(result.error.detail).toContain(
+        "Enable it on the Repositories page and re-dispatch the ticket.",
+      );
+      // And classified as configuration, so the failure sentence stops blaming
+      // a sandbox or a provider that did exactly what it was told.
+      expect(result.error.category).toBe("configuration");
     }
     expect(mocks.createRepositoryVCS).not.toHaveBeenCalled();
   });

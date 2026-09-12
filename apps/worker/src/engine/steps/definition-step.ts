@@ -1,4 +1,5 @@
 import type {
+  SettingsSnapshot,
   WorkflowExecutionBudgets,
   WorkflowRepositoryScope,
   WorkflowBlockType,
@@ -62,12 +63,16 @@ function describeZodLikeError(error: ZodLikeError): string {
  * invalid stored versions otherwise fail closed.
  */
 export async function loadWorkflowDefinitionFor(
+  /** The settings this run started with, loaded once by the run-start step.
+   *  The built-in fallback graph and every block contract below are shaped
+   *  from these, so a run that spans an operator saving the Settings page
+   *  still resolves one definition. */
+  settings: SettingsSnapshot,
   triggerType: WorkflowBlockType,
   definitionId?: number,
   version?: WorkflowDefinitionVersionPin,
 ): Promise<LoadedWorkflowPlan | null> {
   "use step";
-  const { env } = await import("../../infra/vcs-config.js");
   const {
     getConnectedDeployedWorkflowDefinitionVersion,
     getConnectedWorkflowDefinition,
@@ -79,7 +84,7 @@ export async function loadWorkflowDefinitionFor(
     await import("../../workflow-definition/deployment-validation.js");
   const { createWorkflowBlockContractResolver } =
     await import("../definition/block-contract-resolver.js");
-  const { workflowBlockRegistryContextFromEnv } =
+  const { workflowBlockRegistryContextForRun } =
     await import("../definition/block-contract-environment.js");
   const { BLOCK_PARAMS_SCHEMAS } = await import("../definition/block-params-schemas.js");
   const { defaultWorkflowDefinitionV2 } = await import("../../workflow-definition/default.js");
@@ -128,9 +133,9 @@ export async function loadWorkflowDefinitionFor(
   const buildDefault = (selectedDefinitionId: number | null = null): LoadedWorkflowPlan =>
     toPlan(
       defaultWorkflowDefinitionV2({
-        includeReview: env.ENABLE_REVIEW_PHASE,
-        includeLeakReview: env.ENABLE_LEAK_REVIEW,
-        provider: env.AGENT_KIND,
+        includeReview: settings.ENABLE_REVIEW_PHASE,
+        includeLeakReview: settings.ENABLE_LEAK_REVIEW,
+        provider: settings.AGENT_KIND,
       }),
       null,
       selectedDefinitionId,
@@ -145,7 +150,7 @@ export async function loadWorkflowDefinitionFor(
       return null;
     }
     logger.info(
-      { definitionId, version, reviewEnabled: env.ENABLE_REVIEW_PHASE },
+      { definitionId, version, reviewEnabled: settings.ENABLE_REVIEW_PHASE },
       "workflow_definition_default",
     );
     return buildDefault(definitionId);
@@ -168,7 +173,7 @@ export async function loadWorkflowDefinitionFor(
           definition.triggerTypes.includes("trigger_ticket_ai")
         ) {
           logger.info(
-            { definitionId, version, reviewEnabled: env.ENABLE_REVIEW_PHASE },
+            { definitionId, version, reviewEnabled: settings.ENABLE_REVIEW_PHASE },
             "workflow_definition_default",
           );
           return buildDefault();
@@ -180,7 +185,7 @@ export async function loadWorkflowDefinitionFor(
       const match = await getConnectedEnabledWorkflowDefinitionForTrigger(triggerType);
       if (!match || !match.current) {
         if (isTicket && match) {
-          logger.info({ reviewEnabled: env.ENABLE_REVIEW_PHASE }, "workflow_definition_default");
+          logger.info({ reviewEnabled: settings.ENABLE_REVIEW_PHASE }, "workflow_definition_default");
           return buildDefault();
         }
         logger.info({ triggerType }, "workflow_definition_none");
@@ -208,7 +213,7 @@ export async function loadWorkflowDefinitionFor(
     throw new Error(RETIRED_SCHEMA_MESSAGE);
   }
   const parsed = parse(row.definition);
-  const registryContext = workflowBlockRegistryContextFromEnv();
+  const registryContext = workflowBlockRegistryContextForRun(settings);
   const graphIssues = parsed.definition
     ? validateWorkflowDefinitionForRunLoad(
         parsed.definition,

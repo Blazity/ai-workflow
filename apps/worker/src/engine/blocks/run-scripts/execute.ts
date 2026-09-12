@@ -75,6 +75,7 @@ export const execute: BlockExecuteFn = async (
       agentKind: ctx.runDefaultKind,
       model: ctx.defaults[ctx.runDefaultKind],
       groupSelection: { kind: "named", groups },
+      defaultCommandTimeoutMinutes: ctx.settings.PRE_PR_COMMAND_TIMEOUT_MINUTES,
       observeBudget: blockBudgetObserver(ctx, execution),
       observeChecksBudget: checksBudgetObserver(ctx, execution),
       ...checksCeilingOption(steps),

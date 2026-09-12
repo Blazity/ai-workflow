@@ -177,6 +177,61 @@ export function repositoryCatalogKey(
 // site, so there is exactly one definition of what this key is.
 
 /**
+ * Which repositories a run may touch, frozen at its start.
+ *
+ * The run-start step loads this once and the run context carries it, so a run
+ * finishes under the rules it began with and no step or loop pays a database
+ * read per repository. It is plain JSON on purpose: it is journaled as a step
+ * result and replayed on resume.
+ *
+ * The bridge (nobody has activated the catalog, so the agent sees everything
+ * the installation exposes) is carried as `activated: false` with an empty
+ * list, NOT as a list of every repository the providers expose. Listing them
+ * would mean a provider call per configured provider at every run start, and
+ * the answer would be a second list that the catalog does not own and that
+ * could disagree with `isRepositoryDispatchable`, which decides the same
+ * question for the same deployment off the same flag.
+ */
+export interface RunRepositoryAccess {
+  /** Whether the catalog decides access. False is the bridge. */
+  readonly activated: boolean;
+  /** `provider:owner/name`, cased down, for every enabled row, sorted.
+   *  Meaningless while `activated` is false. Sorted so two executions of the
+   *  run-start step journal the same bytes for the same catalog. */
+  readonly enabledKeys: readonly string[];
+}
+
+/**
+ * May this run touch this repository? Pure, synchronous, no I/O.
+ *
+ * The shape the engine can accept: the callers are inside loops over
+ * repository listings, expansion protocols and workflow bodies, and an await
+ * per element would be a database round trip per element. It is deliberately
+ * the same question `isRepositoryEnabled` answers for dispatch, off the same
+ * two fields, so a repository that may be dispatched may also be reached.
+ */
+export function isRepositoryAccessible(
+  access: RunRepositoryAccess,
+  repository: { provider: string; path: string },
+): boolean {
+  if (!access.activated) return true;
+  return access.enabledKeys.includes(repositoryCatalogKey(repository));
+}
+
+/** The enabled keys of a catalog listing, sorted, as a run carries them. */
+export function runRepositoryEnabledKeys(
+  rows: readonly { provider: string; path: string; enabled: boolean }[],
+): string[] {
+  return [
+    ...new Set(
+      rows
+        .filter((row) => row.enabled)
+        .map((row) => repositoryCatalogKey({ provider: row.provider, path: row.path })),
+    ),
+  ].sort();
+}
+
+/**
  * How one suggestion call ended.
  *
  * Recorded for every call, not only the useful ones. A timeout and a malformed

@@ -33,16 +33,10 @@ export type WebhookProviderId = "github" | "gitlab" | "jira" | "slack" | "email"
  */
 export function triggerRateLimitDefaults(
   settings: SettingsSnapshot,
-): TriggerRateLimitDefaults;
-/** @deprecated Pass the snapshot. Removed with the environment in stage H. */
-export function triggerRateLimitDefaults(): TriggerRateLimitDefaults;
-export function triggerRateLimitDefaults(
-  settings?: SettingsSnapshot,
 ): TriggerRateLimitDefaults {
-  const resolved = settings ?? settingsSnapshotFromEnvironment();
   return {
-    TRIGGER_RATE_LIMIT_MAX: resolved.TRIGGER_RATE_LIMIT_MAX ?? undefined,
-    TRIGGER_RATE_LIMIT_WINDOW: resolved.TRIGGER_RATE_LIMIT_WINDOW ?? undefined,
+    TRIGGER_RATE_LIMIT_MAX: settings.TRIGGER_RATE_LIMIT_MAX ?? undefined,
+    TRIGGER_RATE_LIMIT_WINDOW: settings.TRIGGER_RATE_LIMIT_WINDOW ?? undefined,
   };
 }
 
@@ -54,7 +48,11 @@ interface TriggerRateLimitDefaults {
 /** The issue-tracker columns and project the ticket triggers are scoped to.
  *  The project key and the transition id are tracker wiring, not settings. */
 export function ticketBoardSettings(settings: SettingsSnapshot): TicketBoardSettings;
-/** @deprecated Pass the snapshot. Removed with the environment in stage H. */
+/** @deprecated Pass the snapshot. The last zero-argument accessor: three
+ *  trigger entry points (`triggers/polling/poll-pass.ts`,
+ *  `triggers/jira/handle-jira-webhook.ts`, `slack/handle-slash-command.ts`)
+ *  still resolve their board on the spot; it goes away with the environment
+ *  parsing in the cleanup stage (stage H). */
 export function ticketBoardSettings(): TicketBoardSettings;
 export function ticketBoardSettings(
   settings?: SettingsSnapshot,

@@ -12,7 +12,6 @@ const mocks = vi.hoisted(() => ({
   getPrHead: vi.fn(),
   getToken: vi.fn(),
   registerSandbox: vi.fn(),
-  isRepoAllowed: vi.fn(),
 }));
 
 vi.mock("@vercel/sandbox", () => ({
@@ -52,23 +51,6 @@ vi.mock("../engine/support/vcs-runtime.js", () => ({
 vi.mock("../infra/vcs-config.js", () => ({ env: { JOB_TIMEOUT_MS: 120_000 } }));
 vi.mock("../engine/support/adapters.js", () => ({
   createAdapters: () => ({ runRegistry: { registerSandbox: mocks.registerSandbox } }),
-}));
-vi.mock("../engine/support/repo-allowlist.js", () => ({
-  isRepoAllowed: mocks.isRepoAllowed,
-  isRepoAllowedForScope: (
-    repository: { provider: string; repoPath: string },
-    scope?: {
-      repositories?: Array<{ provider: string; repoPath: string }>;
-    },
-  ) =>
-    mocks.isRepoAllowed(repository.repoPath) ||
-    Boolean(
-      scope?.repositories?.some(
-        (pinned) =>
-          pinned.provider === repository.provider &&
-          pinned.repoPath.toLowerCase() === repository.repoPath.toLowerCase(),
-      ),
-    ),
 }));
 
 import { publishTrustedWorkspaceFromSandbox } from "../engine/steps/trusted-workspace-publisher.js";
@@ -111,6 +93,10 @@ const owner = {
   subjectKey: "ticket:jira:AIW-100",
   ownerToken: "owner-1",
   runId: "run-1",
+  // The bridge, plus the run's budget: these cases are about pushing, not about
+  // the catalog. The one case that is about the catalog passes its own list.
+  repositoryAccess: { activated: false, enabledKeys: [] as string[] },
+  jobTimeoutMs: 120_000,
 };
 
 function installHappyCommands(targetHead = "after") {
@@ -144,7 +130,6 @@ describe("trusted workspace publisher", () => {
     mocks.stop.mockResolvedValue({ status: "stopped" });
     mocks.getToken.mockResolvedValue("secret");
     mocks.registerSandbox.mockResolvedValue(undefined);
-    mocks.isRepoAllowed.mockReturnValue(true);
     mocks.getBranchSha.mockResolvedValueOnce("before-acme/api").mockResolvedValueOnce("after");
     mocks.getPrHead.mockResolvedValue({ headSha: "trigger", baseRef: "main", state: "open" });
     installHappyCommands();
@@ -170,16 +155,12 @@ describe("trusted workspace publisher", () => {
     expect(mocks.stop).toHaveBeenCalledWith({ blocking: true });
   });
 
-  it("rechecks the allowlist immediately before push", async () => {
-    mocks.isRepoAllowed
-      .mockReturnValueOnce(true)
-      .mockReturnValueOnce(true)
-      .mockReturnValueOnce(false);
-
+  it("refuses to push a repository the run's catalog does not enable", async () => {
     const result = await publishTrustedWorkspaceFromSandbox({
       sourceSandboxId: "source-sandbox",
       workspaceManifest: manifest,
       ...owner,
+      repositoryAccess: { activated: true, enabledKeys: ["github:acme/other"] },
     });
 
     expect(result.repositories[0]).toMatchObject({

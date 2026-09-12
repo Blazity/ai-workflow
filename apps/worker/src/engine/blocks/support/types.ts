@@ -1,4 +1,6 @@
 import type {
+  RunRepositoryAccess,
+  SettingsSnapshot,
   WorkflowDefinitionNode,
   WorkflowDefinitionV2Node,
   WorkflowRepositoryScope,
@@ -61,6 +63,26 @@ import type { PrePrCheckFailure } from "../../steps/pre-pr-checks-runner.js";
 export interface EngineCtx {
   /** Durable workflow run id (getWorkflowMetadata().workflowRunId). */
   runId: string;
+  /**
+   * The deployment settings this run started under, loaded once by
+   * `loadRunStartSettingsStep` before any other step.
+   *
+   * Read-only for every executor and never re-read: an operator who saves the
+   * Settings page while this run is in flight moves the NEXT run, which is
+   * what `appliesToRunsInFlight: "next run"` promises in the registry and what
+   * keeps a replay from taking a different branch than the first execution.
+   */
+  settings: SettingsSnapshot;
+  /**
+   * The repositories this run may read, branch, promote or open a pull
+   * request on, frozen at run start by the same step.
+   *
+   * Passed to `mayRunTouchRepository` / `filterRunRepositories`
+   * (`engine/support/repository-access.ts`), never consulted directly, and
+   * never replaced by a fresh catalog read: disabling a repository mid-run
+   * stops the next run, not this one.
+   */
+  repositories: RunRepositoryAccess;
   /**
    * The setup failures that stopped workspace creation, when one did.
    *

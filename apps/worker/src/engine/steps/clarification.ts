@@ -147,17 +147,21 @@ export async function postClarificationQuestionsCommentStep(
     suggestedAnswers: string[] | null;
     dashboardUrl: string;
     expiresAtIso: string | null;
+    /** The board column the comment tells a human to move the ticket back to,
+     *  from the run's frozen settings. Optional only so a journal written
+     *  before this field existed still replays; absent falls back to the
+     *  registry default for the key. */
+    aiColumnName?: string;
   },
   owner: ActiveRunOwner,
 ): Promise<string | null> {
   "use step";
-  const { loadAdaptersPort, loadEnvironmentPort } =
-    await import("../internal/ports.js");
+  const { loadAdaptersPort } = await import("../internal/ports.js");
   const { assertConnectedActiveRunOwner } = await import(
     "../../db/repositories/active-runs.js"
   );
+  const { defaultSettingsSnapshot } = await import("@shared/contracts");
   const { createAdapters } = await loadAdaptersPort();
-  const { env } = await loadEnvironmentPort();
   const { formatClarificationQuestionsComment } = await import(
     "../support/clarification-comment-format.js"
   );
@@ -173,7 +177,7 @@ export async function postClarificationQuestionsCommentStep(
         questions: input.questions,
         suggestedAnswers: input.suggestedAnswers,
         dashboardUrl: input.dashboardUrl,
-        aiColumnName: env.COLUMN_AI,
+        aiColumnName: input.aiColumnName ?? defaultSettingsSnapshot().COLUMN_AI,
         expiresAtIso: input.expiresAtIso,
       }),
     );

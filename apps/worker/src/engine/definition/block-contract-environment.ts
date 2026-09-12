@@ -6,7 +6,10 @@
  * deliberate statement that the caller wants the running deployment rather than
  * a declared one.
  */
-import type { WorkflowBlockContractResolver } from "@shared/contracts";
+import type {
+  SettingsSnapshot,
+  WorkflowBlockContractResolver,
+} from "@shared/contracts";
 import { resolveModelDefaults } from "@shared/harness";
 import { resolveVcsBotLogin } from "../../adapters/vcs/vcs-bot-identity.js";
 import { env } from "../../infra/vcs-config.js";
@@ -54,6 +57,53 @@ export function workflowBlockRegistryContextFromEnv(): WorkflowBlockRegistryCont
     slackConfigured: Boolean(env.CHAT_SDK_SLACK_TOKEN && env.CHAT_SDK_CHANNEL_ID),
     arthurConfigured: Boolean(env.GENAI_ENGINE_API_KEY && env.GENAI_ENGINE_TRACE_ENDPOINT),
     webhookTriggerConfigured: Boolean(env.WEBHOOK_TRIGGER_ENCRYPTION_KEY),
+  };
+}
+
+/**
+ * The default model per agent kind, for a run holding a settings snapshot.
+ *
+ * The registry stores both model keys as "unset means the catalog's default",
+ * exactly as the environment schema left them optional, so the same resolver
+ * the environment read went through still runs here: an empty string or a null
+ * must reach `resolveModelDefaults` as an ABSENT key, not as a falsy value it
+ * would then treat as a model name.
+ *
+ * One function rather than the spread written out twice. The two sites that
+ * needed it (the workflow body's own defaults and the block contract context)
+ * are the run's two answers to "which model does this deployment default to",
+ * and two copies of the spread is exactly how those two answers drift apart.
+ */
+export function runModelDefaults(
+  settings: SettingsSnapshot,
+): ReturnType<typeof resolveModelDefaults> {
+  return resolveModelDefaults({
+    ...(settings.CLAUDE_MODEL ? { claude: settings.CLAUDE_MODEL } : {}),
+    ...(settings.CODEX_MODEL ? { codex: settings.CODEX_MODEL } : {}),
+  });
+}
+
+/**
+ * The deployment as a RUN sees it: the same wiring, with the operator-editable
+ * agent defaults taken from the snapshot the run started with rather than from
+ * the environment, so a run that spans an operator saving the Settings page
+ * resolves every block contract against one answer.
+ *
+ * The zero-argument form above stays for the callers that are not a run: the
+ * editor's block table and the block contract MCP tools reach it through
+ * `services/workflow-definitions/block-contracts.ts`, which is in the app and
+ * service tiers this stage does not own.
+ */
+export function workflowBlockRegistryContextForRun(
+  settings: SettingsSnapshot,
+): WorkflowBlockRegistryContext {
+  const configuredModels = runModelDefaults(settings);
+  return {
+    ...workflowBlockRegistryContextFromEnv(),
+    defaultAgent: {
+      provider: settings.AGENT_KIND,
+      model: configuredModels[settings.AGENT_KIND],
+    },
   };
 }
 

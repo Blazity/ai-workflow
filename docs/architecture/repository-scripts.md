@@ -302,25 +302,35 @@ repository nobody enabled are refused whatever the graph pins; MCP authoring
 reports exactly that list as `pinnedRepositoriesNotEnabled` on a save and a
 publish.
 
-**What the catalog does not decide yet.** A ticket-driven run is the gap:
-`dispatchTicket`, the path the Jira webhook and the poll take, does not consult
-the catalog at all, because such a run chooses its repositories INSIDE the run,
-from discovery and the expansion protocol. The engine stage moves that choice
-onto the run's own enabled list; until it does, a ticket run selects repositories
-exactly as it does today.
+**Who may be touched INSIDE a run.** The same catalog, read once. A run's first
+step (`loadRunStartSettingsStep`,
+`apps/worker/src/engine/steps/run-start-settings.ts`) loads the settings
+snapshot and the list of enabled repository keys and puts both on the run
+context; every step and block below it answers from that list through
+`mayRunTouchRepository` / `filterRunRepositories`
+(`apps/worker/src/engine/support/repository-access.ts`), which are synchronous
+and side effect free, so no loop over a repository listing costs a database
+read. Repository discovery drops a repository the list does not carry, and a
+direct action on one fails the run with `Refusing to ... : this repository is
+not enabled in the repository catalog`. Enabling a row on the Repositories page
+is therefore the whole action: there is no variable to keep in step with it.
 
-**Until the engine stage, enabling a row is not enough.** Inside a run
-`AGENT_ALLOWED_REPOS` is still the guard
-(`apps/worker/src/engine/support/repo-allowlist.ts`): repository discovery drops
-an off-list repository silently through `filterRepositoriesForScope`, and a
-direct action on one fails the run with
-`Refusing to ... : not in AGENT_ALLOWED_REPOS`. So a repository enabled in the
-catalog but absent from the variable is dispatched and then fails late, at
-promotion or at pull request creation, after an agent invocation has already been
-spent. The enable route says so in a `warnings` field at the moment the switch is
-flipped. Keep the variable in step with the catalog until the engine stage moves
-that guard onto the run's own enabled list, which is the same instruction
-SETUP.md gives next to the variable.
+Two consequences worth stating plainly:
+
+- **A run finishes under the rules it started with.** The list is frozen at run
+  start, so an operator who disables a repository at 14:03 does not move a run
+  that started at 14:00; the next run sees the change. This is the same promise
+  `appliesToRunsInFlight: "next run"` makes for settings, and it is what keeps a
+  replay of a suspended run from taking a different branch than its first
+  execution did.
+- **A pin never widens access.** A workflow definition's repository pin is a
+  selection inside the catalog for a run exactly as it is for dispatch: a graph
+  that pins a repository nobody enabled cannot reach it, whichever way the run
+  started.
+
+A ticket-driven run still chooses WHICH repositories it works on inside the run,
+from discovery and the expansion protocol; what changed is that it chooses from
+the catalog's enabled rows rather than from an environment variable.
 
 **What still reads the blob.** The `pre_pr_check_config_versions` table is read
 by the legacy Scripts screen alone: its history list and its restore, plus two

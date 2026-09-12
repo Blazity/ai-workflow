@@ -1,4 +1,8 @@
-import type { WorkflowRepositoryScope } from "@shared/contracts";
+import type {
+  RunRepositoryAccess,
+  SettingsSnapshot,
+  WorkflowRepositoryScope,
+} from "@shared/contracts";
 import type {
   SelectedRepository,
   VcsProvider,
@@ -97,6 +101,19 @@ export interface PreSandboxStepContext {
   };
   /** Repositories pinned to the workflow definition; absent when none are. */
   repositoryScope?: WorkflowRepositoryScope;
+  /** Which repositories this run may touch, frozen at its start.
+   *
+   *  Required, with no default. A default would be a fail-open one (the
+   *  bridge), so a caller that forgot to thread it would silently offer
+   *  repositories nobody enabled instead of failing to compile. A caller
+   *  outside a run says so explicitly, with `{ activated: false, enabledKeys:
+   *  [] }`. */
+  repositoryAccess: RunRepositoryAccess;
+  /** The deployment's settings, frozen at this run's start, for the same reason
+   *  and by the same step as `repositoryAccess`. Required, and for the same
+   *  reason: a step that reads a setting from the environment instead would
+   *  answer differently on a replay. */
+  settings: SettingsSnapshot;
   /**
    * The human reply this attempt is resuming from, present only when the block
    * that raised the clarification is the one that owns repository selection.
@@ -156,6 +173,11 @@ export type PreSandboxStepRegistry = Record<string, PreSandboxStepHandler>;
 export interface RunPreSandboxPhaseInput {
   ticket: PreSandboxStepContext["ticket"];
   run: PreSandboxStepContext["run"];
+  /** Forwarded onto every step's context by the runner. Required for the same
+   *  reason it is required there: there is no safe default. */
+  repositoryAccess: PreSandboxStepContext["repositoryAccess"];
+  /** Forwarded onto every step's context by the runner, same as above. */
+  settings: PreSandboxStepContext["settings"];
   repositoryScope?: PreSandboxStepContext["repositoryScope"];
   clarification?: PreSandboxStepContext["clarification"];
 }
