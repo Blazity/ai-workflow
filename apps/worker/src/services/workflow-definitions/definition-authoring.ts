@@ -18,7 +18,7 @@ import { RETIRED_SCHEMA_MESSAGE, type SettingsSnapshot } from "@shared/contracts
 import { canEditWorkflowDefinitions } from "@shared/contracts";
 import { getConnectedDashboardUserLabel } from "../../db/repositories/auth.js";
 import { logger } from "../../infra/logger.js";
-import { defaultWorkflowDefinitionV2 } from "../../workflow-definition/default.js";
+import { defaultWorkflowDefinitionV2 } from "../../engine/definition/default.js";
 import {
   WorkflowDefinitionStoreError,
   type WorkflowDefinitionActor,
@@ -29,7 +29,7 @@ import {
 import {
   getConnectedWorkflowDefinition,
 } from "../../db/repositories/definitions/connected.js";
-import { workflowDefinitionTemplate } from "../../workflow-definition/templates.js";
+import { workflowDefinitionTemplate } from "../../engine/definition/templates.js";
 import { agentRuntimeSettings } from "../settings/index.js";
 import { currentSystemHarnessProfileReference } from "../harness/index.js";
 import {

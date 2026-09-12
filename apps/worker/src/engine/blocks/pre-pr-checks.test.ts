@@ -50,7 +50,7 @@ import {
   createV2InvocationContext,
   V2InvocationCancelledError,
   type V2InvocationObservationHooks,
-} from "../../workflow-definition/invocation-context.js";
+} from "@shared/workflow-graph";
 
 const config: PrePrCheckConfig = {
   repositories: [

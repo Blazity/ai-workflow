@@ -27,7 +27,7 @@ import { drizzle } from "drizzle-orm/neon-http";
 import type { Db } from "../src/db/client.js";
 import * as schema from "../src/db/schema.js";
 import { getCurrentSystemHarnessProfileReference } from "../src/db/repositories/harness-profiles.js";
-import { seedWorkflowDefinitionTemplates } from "../src/workflow-definition/template-seed.js";
+import { seedWorkflowDefinitionTemplates } from "../src/services/workflow-definitions/template-seed.js";
 
 const url = process.env.DATABASE_URL;
 if (!url) {

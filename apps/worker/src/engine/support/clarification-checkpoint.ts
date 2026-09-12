@@ -1,4 +1,4 @@
-import type { StepsRecord } from "../../workflow-definition/interpreter.js";
+import type { StepsRecord } from "@shared/workflow-graph";
 
 /** Engine checkpoint state retained across clarification suspensions. */
 

@@ -368,7 +368,7 @@ export const execute: BlockExecuteFn = async (
   // Two views of one budget context: the plain observer closes the run's clock
   // at each launch, the checks one carries every tick the poll waits through.
   const observeBudget = blockBudgetObserver(ctx, execution);
-  const boundaryObserver = (execution?.observeBudget ?? ctx.observeBudget) as
+  const boundaryObserver = (execution?.budget.observeBudget ?? ctx.observeBudget) as
     BoundaryCapableBudgetObserver;
   const observeChecksBudget = (
     requireRemainingDuration?: boolean,

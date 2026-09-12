@@ -1,5 +1,12 @@
 import type { Sandbox as SandboxType } from "@vercel/sandbox";
 import { z } from "zod";
+// AgentProtocolDiagnostic, its failure-kind union and the provider name are
+// plain serializable data that `@shared/workflow-graph` also names, so they
+// live in contracts.
+import type {
+  AgentProtocolDiagnostic,
+  AgentProtocolProvider,
+} from "@shared/contracts";
 
 // Open union: "research" | "impl" | "review" remain the built-in phases, but
 // new block executors label phases freely (e.g. "fix", "agent-<blockId>").
@@ -502,21 +509,8 @@ export interface CollectedPhaseArtifacts {
   exitCode: number | null;
 }
 
-export type AgentProtocolFailureKind =
-  | "install_failed"
-  | "setup_failed"
-  | "version_unreadable"
-  | "version_mismatch"
-  | "missing_exit_code"
-  | "cli_exit"
-  | "provider_error"
-  | "missing_result"
-  | "invalid_json"
-  | "schema_mismatch"
-  | "protocol_mismatch";
-
 export interface SerializableAgentCliSpec {
-  kind: "claude" | "codex";
+  kind: AgentProtocolProvider;
   packageName: string;
   version: string;
   executable: string;
@@ -530,45 +524,6 @@ export interface AgentCliSpec extends SerializableAgentCliSpec {
    *  reflect the raw capture. Like `parseVersion`, this member is not part of
    *  the serializable identity a Harness Profile pins. */
   stderrNoise?: readonly RegExp[];
-}
-
-export interface AgentProtocolDiagnostic {
-  provider: AgentCliSpec["kind"];
-  packageName: string;
-  cliVersion: string;
-  protocol: string;
-  phase: string;
-  failureKind: AgentProtocolFailureKind;
-  exitCode: number | null;
-  event?: {
-    type?: string;
-    subtype?: string;
-    isError?: boolean;
-    itemType?: string;
-  };
-  artifacts?: {
-    stdoutBytes: number;
-    stderrBytes: number;
-    structuredOutputBytes: number;
-    stdoutSha256: string;
-    stderrSha256: string;
-    structuredOutputSha256: string | null;
-  };
-  schema?: {
-    identity: string;
-    sha256: string;
-    issues: Array<{ path: string; code: string; message: string }>;
-  };
-  stdoutTail?: string;
-  stderrTail?: string;
-  /**
-   * Redacted error text the provider itself reported in its structured result
-   * (a Claude error envelope's message, a Codex `error`/`turn.failed` event).
-   * The highest-signal evidence a failed phase carries: it is the provider's own
-   * one-line reason, already isolated from the surrounding stream.
-   */
-  providerError?: string;
-  detail?: string;
 }
 
 export type AgentProtocolFailureCategory = "provider" | "parsing" | "schema";

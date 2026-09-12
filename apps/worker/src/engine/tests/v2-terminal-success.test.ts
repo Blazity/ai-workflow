@@ -6,7 +6,8 @@ import type {
   WorkflowDefinitionV2,
   WorkflowDefinitionV2Node,
 } from "@shared/contracts";
-import { executeV2Graph } from "../../workflow-definition/v2-scheduler.js";
+import { executeV2Graph } from "@shared/workflow-graph";
+import { SCHEDULER_DEPENDENCIES } from "../definition/scheduler-dependencies.js";
 
 function node(
   id: string,
@@ -53,6 +54,7 @@ describe("v2 terminal_success", () => {
     };
 
     const result = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition,
       entryTriggerId: "trigger",
       triggerOutput: { status: "fired" },
@@ -121,6 +123,7 @@ describe("v2 terminal_success", () => {
     };
 
     const result = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition,
       entryTriggerId: "trigger",
       triggerOutput: { status: "fired" },
@@ -149,6 +152,7 @@ describe("v2 terminal_success", () => {
 
   it("validates the terminating output against the declared contract", async () => {
     const result = await executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       runId: "run-terminal-success-contract",
       definition: {
         nodes: [

@@ -63,23 +63,47 @@ composed. That is one dedupe on top of the one the graph walk already does on
 its own list, because `workflowDefinitionStructuralIssues` is a public entry
 that has to return a clean list to a direct caller; both use
 `dedupeWorkflowDefinitionIssues`. There is no structural-only policy: see the
-open decision in the plan's stage 5 bullet. The scheduler
-and the interpreter follow in later stages. Source entry is `index.ts`, which
-re-exports every module; `exports["."]` is the only public entry, so the worker
-imports `@shared/workflow-graph` and never a file inside it.
+open decision in the plan's stage 5 bullet. Stages 6c and 6d added the bindings
+and authoring clusters: `bindings.ts` (workflow value schema assignability and
+`RUN_BINDING_SCHEMA`), `available-values.ts` (the one graph walk per request
+that produces the per-node contracts, the values every node may read and the
+editor's data catalog), `transform.ts` (what a Transform block means and what
+one run of it returns), `json-schema-authoring.ts` (the authoring-time reading
+of a schema an operator typed), `workspace-access.ts` (which blocks may share a
+checkout and which conflict) and `declaresRetiredSchema` in `policies.ts`. Stage
+6b added the scheduler cluster: `scheduler.ts` (the v2 walk itself,
+`executeV2Graph`, loop regions, checkpoints and the production dispatch bounds),
+`invocation-context.ts` (cancellation and replay-safe observation for one
+invocation), `interpreter.ts` (what an executor is handed, what it may report
+back, and `executionError`, the one construction path for a block failure) and
+the derivation behind it, `failure-message.ts` with its `clamp-text.ts`. Source
+entry is `index.ts`, which re-exports every module; `exports["."]` is the only
+public entry, so the worker imports `@shared/workflow-graph` and never a file
+inside it.
 
 **Parameters, never environment.** This is the trap that decides whether a rule
 belongs here. Everything the rules need from the worker arrives as an argument:
 the per-type block parameter schemas (`WorkflowBlockParamsSchemas`, composed in
 `apps/worker/src/engine/definition/block-params-schemas.ts`), the block contract
-resolver, the available-values catalog, and the Transform shape validator, which
-stays in the worker because it checks JSON Schema through ajv. A rule that would
+resolver, the available-values catalog, the Transform shape validator, and the
+JSON Schema facility itself (`WorkflowJsonSchemaSupport`: inspect a schema,
+parse one from a source string, measure a value against one), which stays in the
+worker because ajv is a Node dependency and is bound once in
+`apps/worker/src/engine/definition/json-schema-support.ts`. The scheduler borrows
+the same way: `SchedulerDependencies` (measure a block output against its
+contract, measure a value against a JSON Schema) is a required option of
+`executeV2Graph`, bound once in
+`apps/worker/src/engine/definition/scheduler-dependencies.ts`. What a run is
+charged against is not a parameter but the worker's own business, so
+`RunBudgetHooks` lives in `apps/worker/src/engine/helpers/run-budget.ts` and
+rides on the worker's `BlockInvocationContext`: enforcing a Harness Profile
+limit is runtime work, and this package does none. A rule that would
 have to read the environment, the block registry, stored state or a clock is not
 structural: it belongs in
-`apps/worker/src/workflow-definition/deployment-validation.ts`, which composes
+`apps/worker/src/engine/definition/deployment-validation.ts`, which composes
 both halves. The order the halves compose in is behaviour, because an author
 reads one list, and
-`apps/worker/src/workflow-definition/__golden__/definition-deployment-issues.json`
+`apps/worker/src/engine/definition/__golden__/definition-deployment-issues.json`
 pins it byte for byte.
 
 Three more traps. The package may not import worker code, `@shared/harness` or

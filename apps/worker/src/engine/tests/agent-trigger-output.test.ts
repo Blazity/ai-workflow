@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WorkflowDefinitionNode, WorkflowParamValue } from "@shared/contracts";
-import { validateBlockOutputAgainstContract } from "../../workflow-definition/block-registry.js";
+import { validateBlockOutputAgainstContract } from "../definition/block-registry.js";
 import {
   resolveWorkflowBlockContract,
   type WorkflowBlockRegistryContext,

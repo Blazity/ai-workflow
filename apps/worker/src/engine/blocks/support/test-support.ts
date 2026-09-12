@@ -14,7 +14,7 @@ import {
   BUILTIN_HARNESS_PROFILE_IDS,
   BUILTIN_HARNESS_PROFILE_MANIFESTS,
 } from "@shared/harness";
-import { validateBlockOutputAgainstContract } from "../../../workflow-definition/block-registry.js";
+import { validateBlockOutputAgainstContract } from "../../definition/block-registry.js";
 import {
   resolveWorkflowBlockContract,
   type WorkflowBlockRegistryContext,
@@ -25,7 +25,7 @@ import {
   type ResolvedHarnessRuntime,
 } from "../../../sandbox/harness-runtime.js";
 import type { PrTriggerPayload } from "../../agent-input.js";
-import type { EngineCtx } from "./types.js";
+import type { BlockInvocationContext, EngineCtx } from "./types.js";
 
 const registryContext: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
@@ -211,6 +211,29 @@ export function makeCtx(overrides: Partial<EngineCtx> = {}): EngineCtx {
     }),
     recordUsage: vi.fn(),
     markLaunched: vi.fn(),
+    ...overrides,
+  };
+}
+
+/**
+ * The invocation context a block test hands an executor.
+ *
+ * Its budget defers to the EngineCtx the test built, which is exactly what an
+ * absent invocation budget meant before stage 12-6b: `blockBudgetObserver` fell
+ * back to `ctx.observeBudget`, and phase usage was recorded against no profile
+ * limit. One helper rather than a literal per suite, so the next field the
+ * context grows is supplied in one place; a test that is about the profile
+ * budget passes its own `budget` through the overrides.
+ */
+export function makeInvocation(
+  ctx: Pick<EngineCtx, "observeBudget">,
+  overrides: Partial<BlockInvocationContext> = {},
+): BlockInvocationContext {
+  return {
+    budget: {
+      observeBudget: ctx.observeBudget,
+      recordBudgetUsage: () => {},
+    },
     ...overrides,
   };
 }

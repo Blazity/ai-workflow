@@ -18,7 +18,7 @@ import {
 import {
   inspectJsonSchema202012,
   validateJsonSchemaValue,
-} from "../../workflow-definition/json-schema.js";
+} from "../definition/json-schema.js";
 import {
   isJsonValue,
   resolveWorkflowDataReferenceV2,

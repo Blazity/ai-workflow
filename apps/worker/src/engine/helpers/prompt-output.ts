@@ -3,10 +3,10 @@ import type { TokenPrice } from "@shared/costs";
 import { type PriceLookup } from "../../sandbox/usage.js";
 import type { ResearchRepository, ReviewOutput } from "../../sandbox/agents/types.js";
 import type { AgentKind } from "../../sandbox/agents/index.js";
-import { executionError, type StepsRecord } from "../../workflow-definition/interpreter.js";
+import { executionError, type StepsRecord } from "@shared/workflow-graph";
 import { parseWorkflowDataReferenceV2, resolveWorkflowPromptDataTokensV2, type V2BindingResolutionContext } from "@shared/workflow-graph";
-import type { BlockExecutionResult } from "../../workflow-definition/interpreter.js";
-import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
+import type { BlockExecutionResult } from "@shared/workflow-graph";
+import { resolveBlockAgent } from "../definition/resolve-agent.js";
 import { substitutePromptVariables, VARIABLE_PARAM_KEYS, type PromptVariableValues } from "@shared/prompts";
 import type { WorkspacePublicationResult } from "../steps/workspace-publication.js";
 import { type WorkspaceManifest } from "../../sandbox/repo-workspace.js";
@@ -91,7 +91,7 @@ export function appendClarificationRound(
  * the cheap catalog default on the claude path, but its codex branch returns
  * CODEX_MODEL, the full agent model, at roughly ten times the cost for the same
  * job. Not invented here: it is the cheapest codex id the deployment already
- * offers, FALLBACK_MODELS.codex in workflow-definition/models.ts. Only the
+ * offers, FALLBACK_MODELS.codex in engine/definition/models.ts. Only the
  * distill reads this; every other resolveCallLlmTarget consumer is unchanged.
  * Exported so a test can assert it against the deployment's own catalog: a
  * wrong id fails every distill on the codex path and the failure is only

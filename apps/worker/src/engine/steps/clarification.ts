@@ -225,7 +225,7 @@ async function validateReviewSafePlanStep(
   edges: Array<{ from: string; to: string; fromPort?: string }>,
 ): Promise<string[]> {
   "use step";
-  const { validateAnyScopeReviewSafety } = await import("../../workflow-definition/schema.js");
+  const { validateAnyScopeReviewSafety } = await import("@shared/workflow-graph");
   return validateAnyScopeReviewSafety({ nodes, edges });
 }
 validateReviewSafePlanStep.maxRetries = 0;
@@ -246,7 +246,7 @@ async function resolveHarnessRuntimesStep(
   const { env } = await loadEnvironmentPort();
   const {
     resolveConnectedHarnessRuntimesForDefinition,
-  } = await import("../../workflow-definition/harness-profile-runtime.js");
+  } = await import("../definition/harness-profile-runtime.js");
   return resolveConnectedHarnessRuntimesForDefinition({
     definition,
     organizationSlug: env.DASHBOARD_ORG_SLUG,

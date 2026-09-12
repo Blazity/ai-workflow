@@ -3,7 +3,7 @@ import {
   type ReviewResult,
   type ReviewResultFinding,
 } from "@shared/contracts";
-import { validateJsonSchemaValue } from "../../workflow-definition/json-schema.js";
+import { validateJsonSchemaValue } from "../definition/json-schema.js";
 
 export type ReviewResultsResolution =
   | { ok: true; value: ReviewResult[] | undefined }

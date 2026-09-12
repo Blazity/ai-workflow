@@ -4,10 +4,6 @@
   "apps/worker/src/routes/api/v1/workflow-definition.put.ts",
   "apps/worker/src/routes/api/v1/workflow-definition/restore.post.ts",
   "apps/worker/src/routes/api/v1/workflow-definitions/[id]/migrate.post.ts",
-  "apps/worker/src/workflow-definition/v2-converter.ts",
-  "apps/worker/src/workflow-definition/v2-migration.ts",
-  "apps/worker/src/workflow-definition/v2-migration-prompts.ts",
-  "apps/worker/src/workflow-definition/v2-migration-harness-profiles.ts",
   "apps/dashboard/components/cockpit/flow-editor/workflow-migration-drawer.tsx",
   "apps/worker/src/workflows/blocks",
   "apps/worker/src/harness-profiles/skill-artifact.test.ts",
@@ -19,7 +15,7 @@
   "apps/worker/src/sandbox/disposable-review-workspace.ts",
   "apps/worker/src/sandbox/trusted-workspace-publisher.ts",
   "apps/worker/src/sandbox/write-human-decisions-memory.ts",
-  "apps/worker/src/workflow-definition/transform-regex-step.ts",
+  "apps/worker/src/infra/clamp-text.ts",
   "apps/dashboard/lib/prompt-library",
   "apps/worker/src/lib",
   "apps/worker/src/db/queries/run-detail-read.ts",
@@ -32,9 +28,6 @@
   "apps/worker/src/db/queries/workflow-owned-branches.test.ts",
   "apps/worker/src/adapters/run-registry/postgres.ts",
   "apps/worker/src/adapters/run-registry/postgres.test.ts",
-  "apps/worker/src/workflow-definition/store.ts",
-  "apps/worker/src/workflow-definition/store.test.ts",
-  "apps/worker/src/workflow-definition/store-v2.test.ts",
   "apps/worker/src/approvals/store.ts",
   "apps/worker/src/approvals/store.test.ts",
   "apps/worker/src/clarifications/store.ts",
@@ -102,5 +95,6 @@
   "apps/dashboard/components/cockpit/screens/repository-scripts.tsx",
   "apps/dashboard/components/cockpit/screens/repository-scripts.test.tsx",
   "apps/dashboard/app/(cockpit)/settings/stored-only-notice.tsx",
-  "apps/dashboard/app/api/pre-pr-checks/restore"
+  "apps/dashboard/app/api/pre-pr-checks/restore",
+  "apps/worker/src/workflow-definition"
 ]

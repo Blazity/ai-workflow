@@ -6,7 +6,7 @@ import { AGENT_ENV_CLAUDE_PATH, AGENT_ENV_CODEX_PATH, AGENT_ENV_PATH, AGENT_ENV_
 import {
   deriveFailureMessage,
   failureEvidenceFromDiagnostic,
-} from "../../workflow-definition/failure-message.js";
+} from "@shared/workflow-graph";
 
 const adapter = new CodexAgentAdapter();
 

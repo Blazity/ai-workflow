@@ -79,6 +79,31 @@ export interface RunBudgetObservation {
  */
 export type RunBudgetAttribution = "duration" | "checks";
 
+/**
+ * The budget a single block invocation is charged against.
+ *
+ * The workflow-level budget stays on `EngineCtx`; these two are the Harness
+ * Profile selected for the current invocation, so they travel beside the
+ * invocation context rather than on it. They used to be two optional fields of
+ * the scheduler's `BlockExecutionContext`, which put a run-budget seam inside
+ * the pure graph package: enforcing a limit is runtime work, and
+ * `@shared/workflow-graph` does none.
+ */
+export interface RunBudgetHooks {
+  /**
+   * Observe and enforce the invocation's budget before further agent work.
+   *
+   * `attribution` charges the time since the previous observation to the run's
+   * duration (the default) or to the checks phase.
+   */
+  observeBudget(
+    requireRemainingDuration?: boolean,
+    attribution?: RunBudgetAttribution,
+  ): Promise<RunBudgetObservation>;
+  /** Record usage against the current invocation's Harness Profile limits. */
+  recordBudgetUsage(usage: PhaseUsage | null, model: string): void;
+}
+
 export class RunBudgetError extends Error {
   readonly failure: RunBudgetFailure;
 

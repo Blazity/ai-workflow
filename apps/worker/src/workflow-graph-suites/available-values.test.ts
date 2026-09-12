@@ -1,0 +1,997 @@
+import { describe, expect, it } from "vitest";
+import type {
+  WorkflowBlockContractResolver,
+  WorkflowBlockType,
+  WorkflowAvailableValue,
+  WorkflowDataReferenceV2,
+  WorkflowDefinitionV2,
+  WorkflowDefinitionV2Node,
+  WorkflowInputBindingV2,
+} from "@shared/contracts";
+import {
+  analyzeWorkflowV2Catalog,
+  analyzeWorkflowValues,
+  type WorkflowV2BindingAnalysis,
+} from "@shared/workflow-graph";
+import { JSON_SCHEMA_SUPPORT } from "../engine/definition/json-schema-support.js";
+import type { WorkflowBlockRegistryContext } from "../engine/definition/block-contract-resolver.js";
+import { testBlockContractResolver } from "../test-support/block-contracts.js";
+
+const registryContext: WorkflowBlockRegistryContext = {
+  agentProviders: { claude: true, codex: true },
+  llmProviders: { claude: true, codex: true },
+  defaultAgent: { provider: "claude", model: "claude-test" },
+  vcsProviders: ["github", "gitlab"],
+  vcsBotIdentities: ["github", "gitlab"],
+  slackConfigured: true,
+  arthurConfigured: true,
+  webhookTriggerConfigured: true,
+};
+
+const resolveContract = testBlockContractResolver(registryContext);
+
+/**
+ * These cases are about what the readers report, so each one runs the analysis
+ * pass and reads it in a single step. Where a request keeps that pass lives in
+ * `services/workflow-definitions/block-contracts.ts`, and the call-count case
+ * in `value-analysis-pass.test.ts` is what proves a request runs it once.
+ */
+const bindingsOf = (
+  definition: WorkflowDefinitionV2,
+  resolve: WorkflowBlockContractResolver,
+) => analyzeWorkflowValues(definition, resolve, JSON_SCHEMA_SUPPORT);
+
+const catalogOf = (
+  definition: WorkflowDefinitionV2,
+  resolve: WorkflowBlockContractResolver,
+) => analyzeWorkflowV2Catalog(analyzeWorkflowValues(definition, resolve, JSON_SCHEMA_SUPPORT));
+
+function node(
+  id: string,
+  type: WorkflowBlockType,
+  inputBindings: Record<string, WorkflowInputBindingV2> = {},
+): WorkflowDefinitionV2Node {
+  return {
+    id,
+    type,
+    x: 0,
+    y: 0,
+    configuration: {},
+    inputs: inputBindings,
+    additionalInputs: [],
+  };
+}
+
+function definition(
+  nodes: WorkflowDefinitionV2Node[],
+  edges: Array<{
+    id: string;
+    from: string;
+    to: string;
+    fromPort?: string;
+  }>,
+): WorkflowDefinitionV2 {
+  return { schemaVersion: 2, nodes, edges };
+}
+
+function references(
+  result: WorkflowV2BindingAnalysis,
+  consumerId: string,
+): string[] {
+  return result.availableValuesByNode[consumerId]?.map((value) => value.reference) ?? [];
+}
+
+function catalogValue(
+  result: WorkflowV2BindingAnalysis,
+  consumerId: string,
+  reference: string,
+): WorkflowAvailableValue {
+  const value = result.availableValuesByNode[consumerId]?.find(
+    (candidate) => candidate.reference === reference,
+  );
+  expect(value, `missing ${reference}`).toBeDefined();
+  return value!;
+}
+
+describe("v2 available values", () => {
+  it("includes every unconditional fan-out producer at a fan-in join", () => {
+    const result = bindingsOf(
+      definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("plan", "planning_agent"),
+          node("workspace", "prepare_workspace"),
+          node("join", "post_ticket_comment"),
+        ],
+        [
+          { id: "split-plan", from: "trigger", to: "plan" },
+          { id: "split-workspace", from: "trigger", to: "workspace" },
+          { id: "join-plan", from: "plan", to: "join" },
+          { id: "join-workspace", from: "workspace", to: "join" },
+        ],
+      ),
+      resolveContract,
+    );
+
+    expect(references(result, "join")).toEqual(
+      expect.arrayContaining([
+        "steps.plan.output.plan",
+        "steps.workspace.output.sandboxId",
+      ]),
+    );
+    expect(catalogValue(result, "join", "steps.plan.output.plan")).toMatchObject({
+      source: { kind: "step", nodeId: "plan", blockType: "planning_agent" },
+      guarantee: {
+        kind: "join",
+        triggerNodeIds: ["trigger"],
+        viaEdgeIds: ["join-plan"],
+      },
+      schema: { type: "string" },
+      compatibleInputNames: ["body"],
+    });
+  });
+
+  it("excludes values produced on only one conditional branch", () => {
+    const result = bindingsOf(
+      definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("decision", "branch"),
+          node("plan", "planning_agent"),
+          node("workspace", "prepare_workspace"),
+          node("join", "post_ticket_comment"),
+        ],
+        [
+          { id: "to-decision", from: "trigger", to: "decision" },
+          { id: "true-plan", from: "decision", fromPort: "true", to: "plan" },
+          { id: "false-workspace", from: "decision", fromPort: "false", to: "workspace" },
+          { id: "plan-join", from: "plan", to: "join" },
+          { id: "workspace-join", from: "workspace", to: "join" },
+        ],
+      ),
+      resolveContract,
+    );
+
+    expect(references(result, "join")).not.toContain("steps.plan.output.plan");
+    expect(references(result, "join")).not.toContain(
+      "steps.workspace.output.sandboxId",
+    );
+    expect(references(result, "join")).toContain("steps.entry.output.ticketKey");
+    expect(references(result, "join")).toContain("run.id");
+  });
+
+  it("intersects active trigger contracts behind the virtual entry source", () => {
+    const result = bindingsOf(
+      definition(
+        [
+          node("ticket-trigger", "trigger_ticket_ai"),
+          node("approval-trigger", "trigger_plan_approved"),
+          node("consumer", "post_ticket_comment"),
+        ],
+        [
+          { id: "ticket-path", from: "ticket-trigger", to: "consumer" },
+          { id: "approval-path", from: "approval-trigger", to: "consumer" },
+        ],
+      ),
+      resolveContract,
+    );
+
+    const entry = catalogValue(
+      result,
+      "consumer",
+      "steps.entry.output.ticketKey",
+    );
+    expect(entry.guarantee).toEqual({
+      kind: "active_entry",
+      triggerNodeIds: ["approval-trigger", "ticket-trigger"],
+      viaEdgeIds: [],
+    });
+    expect(references(result, "consumer")).not.toContain(
+      "steps.entry.output.approvedPlan",
+    );
+  });
+
+  it("requires a causal path even when producer and consumer activation match", () => {
+    const result = bindingsOf(
+      definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("unrelated", "planning_agent"),
+          node("consumer", "post_ticket_comment"),
+        ],
+        [
+          { id: "to-unrelated", from: "trigger", to: "unrelated" },
+          { id: "to-consumer", from: "trigger", to: "consumer" },
+        ],
+      ),
+      resolveContract,
+    );
+
+    expect(references(result, "consumer")).not.toContain(
+      "steps.unrelated.output.plan",
+    );
+  });
+
+  it("conservatively excludes outputs produced inside a loop SCC", () => {
+    const result = bindingsOf(
+      definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("loop", "loop"),
+          node("inside", "planning_agent"),
+          node("after", "post_ticket_comment"),
+        ],
+        [
+          { id: "to-loop", from: "trigger", to: "loop" },
+          { id: "loop-continue", from: "loop", fromPort: "continue", to: "inside" },
+          { id: "inside-back", from: "inside", to: "loop" },
+          { id: "loop-exhausted", from: "loop", fromPort: "exhausted", to: "after" },
+        ],
+      ),
+      resolveContract,
+    );
+
+    expect(references(result, "after")).not.toContain("steps.inside.output.plan");
+    expect(references(result, "after")).toContain("steps.entry.output.ticketKey");
+    expect(references(result, "after")).toContain("run.branchName");
+  });
+
+  it("proves same-activation values in an externally entered review retry cycle", () => {
+    const verdict = node("verdict", "branch");
+    verdict.configuration = {
+      combinator: "all",
+      conditions: [{
+        reference: "steps.review.output.body",
+        operator: "equals",
+        value: "approve",
+      }],
+    };
+    const loop = node("retry", "loop");
+    loop.configuration = {
+      maxAttempts: 3,
+      onExhaust: "fail",
+      carry: [{
+        name: "reviewBody",
+        schema: { type: "string" },
+        binding: {
+          kind: "reference",
+          reference: "steps.review.output.body",
+        },
+      }],
+    };
+    const fix = node("fix", "generic_agent", {
+      prompt: {
+        kind: "reference",
+        reference: "steps.retry.output.values.reviewBody",
+      },
+    });
+    const result = bindingsOf(
+      definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("implementation", "generic_agent"),
+          node("review", "generic_agent"),
+          verdict,
+          loop,
+          fix,
+          node("done", "post_ticket_comment"),
+        ],
+        [
+          { id: "trigger-implementation", from: "trigger", to: "implementation" },
+          { id: "implementation-review", from: "implementation", to: "review" },
+          { id: "review-verdict", from: "review", to: "verdict" },
+          { id: "verdict-done", from: "verdict", fromPort: "true", to: "done" },
+          { id: "verdict-loop", from: "verdict", fromPort: "false", to: "retry" },
+          { id: "loop-fix", from: "retry", fromPort: "continue", to: "fix" },
+          { id: "fix-review", from: "fix", to: "review" },
+        ],
+      ),
+      resolveContract,
+    );
+
+    expect(references(result, "verdict")).toContain("steps.review.output.body");
+    expect(references(result, "retry")).toContain("steps.review.output.body");
+    expect(references(result, "fix")).toContain(
+      "steps.retry.output.values.reviewBody",
+    );
+    expect(references(result, "fix")).toContain(
+      "steps.implementation.output.body",
+    );
+    expect(references(result, "review")).not.toContain(
+      "steps.fix.output.body",
+    );
+    expect(result.issues).toEqual([]);
+  });
+
+  it("derives downstream Transform result paths from its operation", () => {
+    const transform = node("shape", "transform");
+    transform.configuration = {
+      operation: "text_to_number",
+      source: "steps.plan.output.plan",
+    };
+    const result = bindingsOf(
+      definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("plan", "planning_agent"),
+          transform,
+          node("consumer", "post_ticket_comment"),
+        ],
+        [
+          { id: "to-plan", from: "trigger", to: "plan" },
+          { id: "to-transform", from: "plan", to: "shape" },
+          { id: "to-consumer", from: "shape", to: "consumer" },
+        ],
+      ),
+      resolveContract,
+    );
+
+    expect(references(result, "consumer")).toEqual(
+      expect.arrayContaining([
+        "steps.shape.output.output",
+        "steps.shape.output.output.success",
+        "steps.shape.output.output.value",
+      ]),
+    );
+    expect(
+      catalogValue(
+        result,
+        "consumer",
+        "steps.shape.output.output.success",
+      ).schema,
+    ).toEqual({ type: "boolean" });
+  });
+});
+
+describe("v2 authoring catalog", () => {
+  it("includes whole outputs and marks conditional producers unavailable", () => {
+    const result = catalogOf(
+      definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("decision", "branch"),
+          node("plan", "planning_agent"),
+          node("consumer", "post_ticket_comment"),
+        ],
+        [
+          { id: "to-decision", from: "trigger", to: "decision" },
+          { id: "true-plan", from: "decision", fromPort: "true", to: "plan" },
+          { id: "false-consumer", from: "decision", fromPort: "false", to: "consumer" },
+          { id: "plan-consumer", from: "plan", to: "consumer" },
+        ],
+      ),
+      resolveContract,
+    );
+    const catalog = result.catalogByNode.consumer ?? [];
+
+    expect(catalog).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          reference: "steps.entry.output",
+          source: { kind: "trigger", nodeId: "trigger" },
+          availability: expect.objectContaining({ state: "available" }),
+        }),
+        expect.objectContaining({
+          reference: "steps.plan.output",
+          source: { kind: "step", nodeId: "plan" },
+          availability: expect.objectContaining({ state: "unavailable" }),
+        }),
+      ]),
+    );
+  });
+
+  it("describes common and trigger-specific values for multiple triggers", () => {
+    const result = catalogOf(
+      definition(
+        [
+          node("ticket", "trigger_ticket_ai"),
+          node("approval", "trigger_plan_approved"),
+          node("consumer", "post_ticket_comment"),
+        ],
+        [
+          { id: "ticket-consumer", from: "ticket", to: "consumer" },
+          { id: "approval-consumer", from: "approval", to: "consumer" },
+        ],
+      ),
+      resolveContract,
+    );
+    const catalog = result.catalogByNode.consumer ?? [];
+    const common = catalog.find(
+      (entry) => entry.reference === "steps.entry.output.ticketKey",
+    );
+    const triggerSpecific = catalog.find(
+      (entry) => entry.reference === "steps.entry.output.approvedPlan",
+    );
+
+    expect(common).toMatchObject({
+      label: "Trigger that started this run · ticketKey",
+      availability: { state: "available" },
+    });
+    expect(triggerSpecific).toMatchObject({
+      availability: { state: "unavailable" },
+    });
+    expect(
+      triggerSpecific?.availability.state === "unavailable"
+        ? triggerSpecific.availability.reason
+        : "",
+    ).toContain("Trigger ID or Trigger type");
+  });
+
+  it("publishes friendly typed run trigger enums", () => {
+    const result = catalogOf(
+      definition(
+        [
+          node("ticket", "trigger_ticket_ai"),
+          node("approval", "trigger_plan_approved"),
+          node("consumer", "post_ticket_comment"),
+        ],
+        [
+          { id: "ticket-consumer", from: "ticket", to: "consumer" },
+          { id: "approval-consumer", from: "approval", to: "consumer" },
+        ],
+      ),
+      resolveContract,
+    );
+    const catalog = result.catalogByNode.consumer ?? [];
+
+    expect(
+      catalog.find((entry) => entry.reference === "run.trigger.id")?.schema,
+    ).toMatchObject({ type: "string", enum: ["ticket", "approval"] });
+    expect(
+      catalog.find((entry) => entry.reference === "run.trigger.type")?.schema,
+    ).toMatchObject({
+      type: "string",
+      enum: ["trigger_ticket_ai", "trigger_plan_approved"],
+    });
+  });
+
+  it("narrows trigger-specific fields after a guaranteed trigger branch", () => {
+    const decision = node("decision", "branch");
+    decision.configuration = {
+      combinator: "all",
+      conditions: [{
+        reference: "run.trigger.id",
+        operator: "equals",
+        value: "approval",
+      }],
+    };
+    const result = catalogOf(
+      definition(
+        [
+          node("ticket", "trigger_ticket_ai"),
+          node("approval", "trigger_plan_approved"),
+          decision,
+          node("approved", "post_ticket_comment"),
+          node("other", "post_ticket_comment"),
+        ],
+        [
+          { id: "ticket-decision", from: "ticket", to: "decision" },
+          { id: "approval-decision", from: "approval", to: "decision" },
+          { id: "decision-approved", from: "decision", fromPort: "true", to: "approved" },
+          { id: "decision-other", from: "decision", fromPort: "false", to: "other" },
+        ],
+      ),
+      resolveContract,
+    );
+    expect(
+      result.catalogByNode.approved?.find(
+        (entry) => entry.reference === "steps.entry.output.approvedPlan",
+      ),
+    ).toMatchObject({ availability: { state: "available" } });
+    expect(
+      result.catalogByNode.approved?.find(
+        (entry) => entry.reference === "run.trigger.id",
+      )?.schema,
+    ).toMatchObject({ enum: ["approval"] });
+  });
+
+  it("derives Build object fields from their referenced value schemas", () => {
+    const build = node("build", "transform");
+    build.configuration = {
+      operation: "build_object",
+      fields: [
+        {
+          name: "planText",
+          value: {
+            kind: "reference",
+            reference: "steps.plan.output.plan",
+          },
+        },
+      ],
+    };
+    const result = catalogOf(
+      definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("plan", "planning_agent"),
+          build,
+          node("consumer", "post_ticket_comment"),
+        ],
+        [
+          { id: "to-plan", from: "trigger", to: "plan" },
+          { id: "to-build", from: "plan", to: "build" },
+          { id: "to-consumer", from: "build", to: "consumer" },
+        ],
+      ),
+      resolveContract,
+    );
+
+    expect(
+      result.catalogByNode.consumer?.find(
+        (entry) => entry.reference === "steps.build.output.output.planText",
+      ),
+    ).toMatchObject({
+      schema: { type: "string" },
+      presence: "required",
+      availability: { state: "available" },
+    });
+  });
+
+  it("exposes required Open PR fields and distinguishes whole and nested output labels", () => {
+    const result = catalogOf(
+      definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("open", "open_pr"),
+          node("message", "send_slack_message"),
+        ],
+        [
+          { id: "to-open", from: "trigger", to: "open" },
+          { id: "to-message", from: "open", to: "message" },
+        ],
+      ),
+      resolveContract,
+    );
+    const catalog = result.catalogByNode.message ?? [];
+
+    expect(
+      catalog.find(
+        (entry) => entry.reference === "steps.open.output.prNumber",
+      ),
+    ).toMatchObject({
+      presence: "required",
+      schema: { type: "number" },
+    });
+    expect(
+      catalog.find(
+        (entry) => entry.reference === "steps.open.output.prUrl",
+      ),
+    ).toMatchObject({
+      presence: "required",
+      schema: { type: "string" },
+    });
+    expect(
+      catalog.find((entry) => entry.reference === "steps.open.output")?.label,
+    ).toBe("Open PR/MR · Entire output");
+  });
+});
+
+describe("v2 binding validation", () => {
+  it("accepts a guaranteed compatible reference and rejects a conditional one", () => {
+    const valid = bindingsOf(
+      definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("plan", "planning_agent"),
+          node("consumer", "post_ticket_comment", {
+            body: {
+              kind: "reference",
+              reference: "steps.plan.output.plan",
+            },
+          }),
+        ],
+        [
+          { id: "to-plan", from: "trigger", to: "plan" },
+          { id: "to-consumer", from: "plan", to: "consumer" },
+        ],
+      ),
+      resolveContract,
+    );
+    expect(valid.issues).toEqual([]);
+
+    const unavailable = bindingsOf(
+      definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("decision", "branch"),
+          node("plan", "planning_agent"),
+          node("consumer", "post_ticket_comment", {
+            body: {
+              kind: "reference",
+              reference: "steps.plan.output.plan",
+            },
+          }),
+        ],
+        [
+          { id: "to-decision", from: "trigger", to: "decision" },
+          { id: "true-plan", from: "decision", fromPort: "true", to: "plan" },
+          { id: "false-consumer", from: "decision", fromPort: "false", to: "consumer" },
+          { id: "plan-consumer", from: "plan", to: "consumer" },
+        ],
+      ),
+      resolveContract,
+    );
+    expect(unavailable.issues).toEqual([
+      expect.objectContaining({
+        code: "binding.unavailable_reference",
+        nodeId: "consumer",
+        path: "/nodes/3/inputs/body/reference",
+      }),
+    ]);
+  });
+
+  it("validates fixed and author-defined literals against canonical schemas", () => {
+    const consumer = node("consumer", "post_ticket_comment", {
+      body: { kind: "literal", value: 42 },
+    });
+    consumer.additionalInputs = [
+      {
+        name: "score",
+        schema: { type: "number" },
+        binding: { kind: "literal", value: "wrong" },
+      },
+    ];
+    const result = bindingsOf(
+      definition(
+        [node("trigger", "trigger_ticket_ai"), consumer],
+        [{ id: "edge", from: "trigger", to: "consumer" }],
+      ),
+      resolveContract,
+    );
+
+    expect(result.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "binding.literal_type",
+          path: "/nodes/1/inputs/body/value",
+        }),
+        expect.objectContaining({
+          code: "binding.literal_type",
+          path: "/nodes/1/additionalInputs/0/binding/value",
+        }),
+      ]),
+    );
+  });
+
+  it("requires Open PR repositories to come from the exact guaranteed Finalize output", () => {
+    const exact = definition(
+      [
+        node("trigger", "trigger_ticket_ai"),
+        node("finalize", "finalize_workspace"),
+        node("open", "open_pr", {
+          repositories: {
+            kind: "reference",
+            reference: "steps.finalize.output.repositories",
+          },
+        }),
+      ],
+      [
+        { id: "trigger-finalize", from: "trigger", to: "finalize" },
+        { id: "finalize-open", from: "finalize", to: "open" },
+      ],
+    );
+    expect(
+      bindingsOf(exact, resolveContract).issues.filter(
+        (issue) => issue.code === "binding.open_pr_finalize",
+      ),
+    ).toEqual([]);
+
+    const literal = structuredClone(exact);
+    literal.nodes.find((candidate) => candidate.id === "open")!.inputs = {
+      repositories: {
+        kind: "literal",
+        value: [
+          {
+            provider: "github",
+            repoPath: "acme/app",
+            branch: "forged",
+            defaultBranch: "main",
+            expectedHead: "before",
+            pushedHead: "after",
+          },
+        ],
+      },
+    };
+    expect(
+      bindingsOf(literal, resolveContract).issues,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "binding.open_pr_finalize" }),
+      ]),
+    );
+
+    const wrongField = structuredClone(exact);
+    wrongField.nodes.find((candidate) => candidate.id === "open")!.inputs = {
+      repositories: {
+        kind: "reference",
+        reference: "steps.finalize.output.status",
+      },
+    };
+    expect(
+      bindingsOf(wrongField, resolveContract).issues,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "binding.open_pr_finalize" }),
+      ]),
+    );
+  });
+
+  it("reports incompatible references and preserves per-target compatibility", () => {
+    const consumer = node("consumer", "post_ticket_comment");
+    consumer.additionalInputs = [
+      {
+        name: "score",
+        schema: { type: "number" },
+        binding: {
+          kind: "reference",
+          reference: "steps.plan.output.plan",
+        },
+      },
+    ];
+    const result = bindingsOf(
+      definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("plan", "planning_agent"),
+          consumer,
+        ],
+        [
+          { id: "to-plan", from: "trigger", to: "plan" },
+          { id: "to-consumer", from: "plan", to: "consumer" },
+        ],
+      ),
+      resolveContract,
+    );
+
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        code: "binding.reference_type",
+        path: "/nodes/2/additionalInputs/0/binding/reference",
+      }),
+    ]);
+    expect(
+      catalogValue(result, "consumer", "steps.plan.output.plan")
+        .compatibleInputNames,
+    ).toEqual(["body"]);
+  });
+
+  it("accepts safe dotted additional input names used by existing contracts", () => {
+    const finalize = node("finalize", "finalize_workspace");
+    finalize.additionalInputs = [
+      {
+        name: "checks.lint",
+        schema: { type: "string" },
+        binding: {
+          kind: "reference",
+          reference: "steps.checks.output.status",
+        },
+      },
+    ];
+    const result = bindingsOf(
+      definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("checks", "run_checks"),
+          finalize,
+        ],
+        [
+          { id: "to-checks", from: "trigger", to: "checks" },
+          { id: "to-finalize", from: "checks", to: "finalize" },
+        ],
+      ),
+      resolveContract,
+    );
+
+    expect(result.issues).toEqual([]);
+    expect(
+      catalogValue(result, "finalize", "steps.checks.output.status")
+        .compatibleInputNames,
+    ).toContain("checks.lint");
+  });
+
+  it("validates ordered reference lists only for compatible array items", () => {
+    const consumer = node("consumer", "generic_agent");
+    consumer.additionalInputs = [
+      {
+        name: "reviews",
+        schema: { type: "array", items: { type: "string" } },
+        binding: {
+          kind: "reference_list",
+          references: [
+            "steps.first.output.plan",
+            "steps.second.output.plan",
+          ],
+        },
+      },
+    ];
+    const valid = bindingsOf(
+      definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("first", "planning_agent"),
+          node("second", "planning_agent"),
+          consumer,
+        ],
+        [
+          { id: "to-first", from: "trigger", to: "first" },
+          { id: "to-second", from: "first", to: "second" },
+          { id: "to-consumer", from: "second", to: "consumer" },
+        ],
+      ),
+      resolveContract,
+    );
+    expect(valid.issues).toEqual([]);
+    const catalog = catalogOf(
+      definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("first", "planning_agent"),
+          node("second", "planning_agent"),
+          consumer,
+        ],
+        [
+          { id: "to-first", from: "trigger", to: "first" },
+          { id: "to-second", from: "first", to: "second" },
+          { id: "to-consumer", from: "second", to: "consumer" },
+        ],
+      ),
+      resolveContract,
+    );
+    const firstPlan = catalog.catalogByNode.consumer?.find(
+      (entry) => entry.reference === "steps.first.output.plan",
+    );
+    expect(firstPlan?.compatibleInputNames).not.toContain("reviews");
+    expect(firstPlan?.compatibleListInputNames).toContain("reviews");
+
+    const nullableConsumer = node("nullable-consumer", "generic_agent");
+    nullableConsumer.additionalInputs = [
+      {
+        name: "reviews",
+        schema: {
+          type: ["array", "null"],
+          items: { type: "string" },
+        },
+        binding: {
+          kind: "reference_list",
+          references: ["steps.first.output.plan"],
+        },
+      },
+    ];
+    const nullableDefinition = definition(
+      [
+        node("trigger", "trigger_ticket_ai"),
+        node("first", "planning_agent"),
+        nullableConsumer,
+      ],
+      [
+        { id: "to-first", from: "trigger", to: "first" },
+        {
+          id: "to-nullable-consumer",
+          from: "first",
+          to: "nullable-consumer",
+        },
+      ],
+    );
+    expect(
+      bindingsOf(nullableDefinition, resolveContract).issues,
+    ).toEqual([]);
+    const nullableCatalog = catalogOf(
+      nullableDefinition,
+      resolveContract,
+    );
+    expect(
+      nullableCatalog.catalogByNode["nullable-consumer"]?.find(
+        (entry) => entry.reference === "steps.first.output.plan",
+      )?.compatibleListInputNames,
+    ).toContain("reviews");
+
+    const invalid = node("invalid", "post_ticket_comment", {
+      body: {
+        kind: "reference_list",
+        references: ["steps.first.output.plan"],
+      },
+    });
+    expect(
+      bindingsOf(
+        definition(
+          [
+            node("trigger", "trigger_ticket_ai"),
+            node("first", "planning_agent"),
+            invalid,
+          ],
+          [
+            { id: "to-first", from: "trigger", to: "first" },
+            { id: "to-invalid", from: "first", to: "invalid" },
+          ],
+        ),
+        resolveContract,
+      ).issues,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "binding.reference_list_destination",
+        }),
+      ]),
+    );
+  });
+});
+
+/**
+ * A Generic Agent's contract is a function of its own params: a declared output
+ * schema changes which values it offers and which bindings against it are
+ * legal. Now that the analysis takes a resolver instead of an environment, this
+ * is the property that would break silently if a resolver ever answered from
+ * the block type alone, so it is pinned here.
+ */
+describe("custom output schemas through the resolver", () => {
+  const declaredOutputAgent = (id: string) => {
+    const agent = node(id, "generic_agent");
+    agent.configuration = {
+      prompt: "classify the ticket",
+      outputSchema: JSON.stringify({
+        type: "object",
+        properties: { verdict: { type: "string" } },
+        required: ["verdict"],
+        additionalProperties: false,
+      }),
+    };
+    return agent;
+  };
+
+  const withConsumer = (reference: WorkflowDataReferenceV2) =>
+    definition(
+      [
+        node("trigger", "trigger_ticket_ai"),
+        declaredOutputAgent("classify"),
+        node("consumer", "generic_agent", {
+          prompt: { kind: "reference", reference },
+        }),
+      ],
+      [
+        { id: "to-classify", from: "trigger", to: "classify" },
+        { id: "to-consumer", from: "classify", to: "consumer" },
+      ],
+    );
+
+  it("offers a declared field and accepts a binding to it", () => {
+    const result = bindingsOf(
+      withConsumer("steps.classify.output.verdict"),
+      resolveContract,
+    );
+    expect(result.issues).toEqual([]);
+    expect(references(result, "consumer")).toContain(
+      "steps.classify.output.verdict",
+    );
+    expect(
+      catalogValue(result, "consumer", "steps.classify.output.verdict").schema,
+    ).toMatchObject({ type: "string" });
+  });
+
+  it("refuses a binding to a field the declared schema does not carry", () => {
+    const result = bindingsOf(
+      withConsumer("steps.classify.output.missing"),
+      resolveContract,
+    );
+    expect(references(result, "consumer")).not.toContain(
+      "steps.classify.output.missing",
+    );
+    expect(result.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          nodeId: "consumer",
+          code: "binding.unavailable_reference",
+        }),
+      ]),
+    );
+  });
+
+  it("carries the declared field into the editor's catalog", () => {
+    const catalog = catalogOf(
+      withConsumer("steps.classify.output.verdict"),
+      resolveContract,
+    );
+    expect(
+      catalog.catalogByNode.consumer?.map((entry) => entry.reference),
+    ).toContain("steps.classify.output.verdict");
+  });
+});

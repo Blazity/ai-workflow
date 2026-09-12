@@ -31,7 +31,7 @@ import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
 import type {
   V2InvocationCancellation,
   V2InvocationObservationHooks,
-} from "../../workflow-definition/invocation-context.js";
+} from "@shared/workflow-graph";
 import {
   checksCeilingExceededError,
   RunBudgetError,
@@ -49,7 +49,7 @@ import {
   type PhasePollOutcome,
   type PhasePollTuning,
 } from "./poll-phase.js";
-import type { StepsRecord } from "../../workflow-definition/interpreter.js";
+import type { StepsRecord } from "@shared/workflow-graph";
 
 /**
  * Which of a repository's script groups one run executes.

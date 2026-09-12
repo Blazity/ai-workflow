@@ -10,11 +10,11 @@ import {
 import { DEFAULT_AGENT_PROMPTS } from "@shared/prompts";
 import type { Db } from "../db/client.js";
 import * as schema from "../db/schema.js";
-import { defaultWorkflowDefinitionV2 } from "../workflow-definition/default.js";
+import { defaultWorkflowDefinitionV2 } from "../engine/definition/default.js";
 import { evaluateBuiltInPromptDriftGate } from "@shared/prompts";
 import {
   findBuiltInPromptDrift,
-} from "../workflow-definition/builtin-prompt-drift.js";
+} from "../services/workflow-definitions/builtin-prompt-drift.js";
 import { describeBuiltInPromptDrift } from "@shared/prompts";
 
 const migrationsDir = fileURLToPath(new URL("../../drizzle/", import.meta.url));

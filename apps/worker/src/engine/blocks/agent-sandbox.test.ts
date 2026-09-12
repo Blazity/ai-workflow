@@ -33,7 +33,7 @@ vi.mock("@vercel/sandbox", () => ({
 }));
 vi.mock("../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
-vi.mock("../../workflow-definition/harness-profile-runtime.js", () => ({
+vi.mock("../definition/harness-profile-runtime.js", () => ({
   dashboardOrganizationId: mocks.dashboardOrganizationId,
 }));
 vi.mock("../../db/repositories/harness-profiles.js", () => ({

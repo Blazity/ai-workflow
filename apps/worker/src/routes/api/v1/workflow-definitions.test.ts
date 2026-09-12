@@ -14,7 +14,7 @@ import {
   workflowDefinitionVersions,
 } from "../../../db/schema.js";
 import { createTestDb } from "../../../db/test-db.js";
-import { defaultWorkflowDefinitionV2 } from "../../../workflow-definition/default.js";
+import { defaultWorkflowDefinitionV2 } from "../../../engine/definition/default.js";
 import {
   deployWorkflowDefinition,
   saveWorkflowDefinitionDraft,
@@ -44,9 +44,9 @@ const state = vi.hoisted(() => ({
 
 vi.mock("../../../infra/vcs-config.js", () => ({ env: state.env }));
 vi.mock("../../../db/client.js", () => ({ getDb: () => state.db }));
-vi.mock("../../../workflow-definition/validation.js", async (importOriginal) => {
+vi.mock("../../../engine/definition/validation.js", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("../../../workflow-definition/validation.js")>();
+    await importOriginal<typeof import("../../../engine/definition/validation.js")>();
   return {
     ...actual,
     validateWorkflowDefinitionCandidate: (
@@ -67,8 +67,8 @@ vi.mock("../../../services/auth/auth-instance.js", () => ({
     },
   },
 }));
-vi.mock("../../../workflow-definition/models.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../workflow-definition/models.js")>();
+vi.mock("../../../engine/definition/models.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../engine/definition/models.js")>();
   return {
     ...actual,
     fetchAvailableModels: vi.fn(async () => ({

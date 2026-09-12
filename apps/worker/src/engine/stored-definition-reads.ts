@@ -12,7 +12,7 @@ import {
   getConnectedWorkflowDefinitionVersion as getConnectedVersionRow,
   listConnectedWorkflowDefinitionVersionRows as listConnectedVersionRows,
 } from "../db/repositories/definitions/connected.js";
-import { parseStoredWorkflowDefinition } from "../workflow-definition/stored-definition.js";
+import { parseStoredWorkflowDefinition } from "./definition/stored-definition.js";
 
 type VersionMetadata = Omit<WorkflowDefinitionVersionRow, keyof StoredWorkflowDefinition>;
 
