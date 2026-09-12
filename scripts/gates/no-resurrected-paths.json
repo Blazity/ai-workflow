@@ -92,5 +92,9 @@
   "apps/worker/src/webhook-trigger/rejection-counters.test.ts",
   "apps/worker/src/webhook-trigger/rejection-counters.ts",
   "apps/worker/src/webhook-trigger/verify.test.ts",
-  "apps/worker/src/webhook-trigger/verify.ts"
+  "apps/worker/src/webhook-trigger/verify.ts",
+  "apps/worker/src/engine/support/repo-allowlist.ts",
+  "apps/worker/src/engine/support/repo-allowlist.test.ts",
+  "apps/worker/src/infra/repository-allowlist-env.ts",
+  "apps/worker/src/services/repository-catalog/engine-allowlist-gap.ts"
 ]

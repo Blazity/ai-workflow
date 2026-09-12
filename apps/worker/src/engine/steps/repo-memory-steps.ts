@@ -633,6 +633,12 @@ function pathToken(raw: string): string | null {
 
 export interface DistillRepoMemoryInput {
   runId: string;
+  /** The run's frozen ENABLE_ORG_MEMORY_PROMOTION. Optional so a journal
+   *  written before this field existed still replays; absent reads as off,
+   *  which is the registry default and the behaviour before promotion existed.
+   *  Promotion is the only path that carries text across a repository
+   *  boundary, so "off when unsure" is the only safe reading. */
+  promoteOrgMemory?: boolean;
   /** The run's own subject (ticket or PR), which owns the ticket memory
    * document. Not the repository subject the distilled documents are stored
    * under. */
@@ -1065,8 +1071,7 @@ export async function distillRepoMemoryStep(
     // the read path keeps injecting an owner document that already exists,
     // because flipping a flag must not silently hide knowledge that is already
     // stored and already correct.
-    const { env } = await import("../../infra/vcs-config.js");
-    for (const group of env.ENABLE_ORG_MEMORY_PROMOTION ? groupByOwner(states) : []) {
+    for (const group of input.promoteOrgMemory ? groupByOwner(states) : []) {
       if (group.members.length < PROMOTION_MIN_REPOSITORIES) continue;
       // Re-read rather than reuse the merge results above, so promotion
       // reflects what is actually stored, this run's own writes and any

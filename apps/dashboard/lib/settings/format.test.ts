@@ -84,18 +84,13 @@ test("sourceHint for default says nothing is stored", () => {
   );
 });
 
-test("appliesToNote says nothing applies until the worker reads stored settings", () => {
-  // The prefix is the honest part: the store ships before the consumers, so a
-  // note that read "Applies immediately" would be claiming a behaviour change
-  // that has not happened yet.
-  assert.equal(
-    appliesToNote("immediate"),
-    "Once the worker reads stored settings, this applies immediately",
-  );
-  assert.equal(
-    appliesToNote("next run"),
-    "Once the worker reads stored settings, this applies to the next run",
-  );
+test("appliesToNote states when a change reaches a run, with no hedge", () => {
+  // The hedge was honest while the store shipped ahead of its consumers. The
+  // engine wave converted them: an entry point loads a snapshot per request or
+  // tick and a run freezes one at its start, so a note still reading "Once the
+  // worker reads stored settings" would now understate what saving does.
+  assert.equal(appliesToNote("immediate"), "Applies immediately");
+  assert.equal(appliesToNote("next run"), "Applies to the next run");
 });
 
 test("the standing notice says values are stored and the worker still reads its environment", () => {

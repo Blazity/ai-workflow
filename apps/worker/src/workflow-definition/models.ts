@@ -1,4 +1,4 @@
-import type { WorkflowEditorOptions } from "@shared/contracts";
+import type { SettingsSnapshot, WorkflowEditorOptions } from "@shared/contracts";
 import {
   recognised,
   resolveModelDefaults,
@@ -100,14 +100,19 @@ function isCodexDiscoveryModelId(modelId: string): boolean {
  *  which blocks a deployment offers is environment state this module must not
  *  read for itself. */
 export function buildWorkflowEditorOptions(
+  /** The deployment's settings, loaded once by the caller's entry point. The
+   *  agent defaults are operator-editable, so reading them here would answer a
+   *  request from the environment while the same request answered everything
+   *  else from the snapshot. */
+  settings: SettingsSnapshot,
   models: AvailableModels,
   discoveredTicketStatuses: Array<{ id: string; name: string }>,
   blockRegistry: WorkflowEditorOptions["blockRegistry"],
 ): WorkflowEditorOptions {
-  const agentKind = env.AGENT_KIND;
+  const agentKind = settings.AGENT_KIND;
   const configuredModels = resolveModelDefaults({
-    claude: env.CLAUDE_MODEL,
-    codex: env.CODEX_MODEL,
+    ...(settings.CLAUDE_MODEL ? { claude: settings.CLAUDE_MODEL } : {}),
+    ...(settings.CODEX_MODEL ? { codex: settings.CODEX_MODEL } : {}),
   });
   const defaultModel = configuredModels[agentKind];
   const ticketStatuses = dedupeTicketStatuses(discoveredTicketStatuses);
@@ -132,8 +137,8 @@ export function buildWorkflowEditorOptions(
             label: status.name,
           }))
         : [
-            { value: "ai_review", label: env.COLUMN_AI_REVIEW },
-            { value: "backlog", label: env.COLUMN_BACKLOG },
+            { value: "ai_review", label: settings.COLUMN_AI_REVIEW },
+            { value: "backlog", label: settings.COLUMN_BACKLOG },
           ],
     blockRegistry,
     runBindingSchema: RUN_BINDING_SCHEMA,

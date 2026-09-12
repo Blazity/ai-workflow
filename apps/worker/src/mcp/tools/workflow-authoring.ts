@@ -128,12 +128,11 @@ type PublishData = {
   // be run.
   dormantTriggerNodeIds: string[];
   // "provider:owner/repo" for every repository the published graph PINS that the
-  // repository catalog does not enable. Since the catalog consumers stage a pin
-  // no longer extends DISPATCH: an event from a repository nobody enabled is
-  // refused whatever the graph pins, and the deployment gate checks a graph's
-  // shape rather than this. It is not yet the whole story: until the engine
-  // stage lands, `engine/support/repo-allowlist.ts` still reads the pin inside a
-  // run, so a run that started some other way does reach a pinned repository.
+  // repository catalog does not enable. A pin extends nothing: an event from a
+  // repository nobody enabled is refused whatever the graph pins, and a run that
+  // started some other way cannot reach one either, because the run carries the
+  // catalog's enabled list from its start. The deployment gate checks a graph's
+  // shape rather than this.
   // Empty on a deployment whose catalog is not activated yet, because there every
   // accessible repository still counts as enabled.
   //
@@ -361,11 +360,10 @@ function publishAnnouncement(publish: {
   }
   if (publish.notEnabled.length > 0) {
     sentences.push(
-      // Exactly what is true in the window between the catalog consumers stage
-      // and the engine stage: dispatch refuses the events, and a pin still
-      // reaches the repository from inside a run that started some other way.
-      // Claiming the workflow cannot touch it at all would be a false promise.
-      `It pins ${publish.notEnabled.length === 1 ? "a repository" : `${publish.notEnabled.length} repositories`} the repository catalog does not enable, so dispatch refuses events from ${publish.notEnabled.length === 1 ? "it" : "them"} and, until the engine stage lands, a run that starts anyway still reaches ${publish.notEnabled.length === 1 ? "it" : "them"} through this pin: ${publish.notEnabled
+      // The catalog decides both halves now: it refuses the events, and a run
+      // that starts some other way cannot reach the repository either, because
+      // the run carries the same enabled list.
+      `It pins ${publish.notEnabled.length === 1 ? "a repository" : `${publish.notEnabled.length} repositories`} the repository catalog does not enable, so dispatch refuses events from ${publish.notEnabled.length === 1 ? "it" : "them"} and a run that starts some other way cannot reach ${publish.notEnabled.length === 1 ? "it" : "them"} either: ${publish.notEnabled
         .map((repository) => announcementLabel(repository))
         .join(", ")}.`,
     );

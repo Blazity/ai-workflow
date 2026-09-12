@@ -32,9 +32,11 @@ import {
   listPinnedRepositoriesFromDefinitions,
   listRepositoryCatalogRows,
   migrateScriptGroupsIntoProfiles,
+  readRepositoryCatalogStateRow,
   seedRepositoryCatalogEntries,
   seedRepositoryCatalogState,
 } from "../src/db/repositories/repository-catalog.js";
+import { seedActivationConflict } from "../src/services/repository-catalog/policy.js";
 
 const url = process.env.DATABASE_URL;
 if (!url) {
@@ -141,6 +143,22 @@ if (unresolved.length > 0) {
       "provider to attribute them to. Configure the provider credentials, or " +
       "remove the entries from AGENT_ALLOWED_REPOS.",
   );
+  process.exit(1);
+}
+
+// Before anything is written: a restricted deployment whose stored state says
+// the catalog is off would deploy a worker that reaches everything. The state
+// row is written once and never re-decided, so this build cannot fix it by
+// writing; it fails and says which two facts disagree. Checked here, next to
+// the unresolved-provider gate above, so a refused build leaves nothing
+// half-seeded behind it.
+const priorState = await readRepositoryCatalogStateRow(db);
+const activationConflict = seedActivationConflict({
+  allowlistSize: allowlist.length,
+  storedActivated: priorState ? priorState.activated : null,
+});
+if (activationConflict) {
+  console.error(`[seed-repository-catalog] ${activationConflict}`);
   process.exit(1);
 }
 

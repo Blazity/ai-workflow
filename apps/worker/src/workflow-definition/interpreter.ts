@@ -45,6 +45,7 @@ export const SAFE_EXECUTION_ERROR_MESSAGES: Record<
   parsing: "The block response could not be parsed.",
   schema: "The block returned an invalid result.",
   checks: "The checks could not be started.",
+  configuration: "This deployment's configuration does not allow this run to continue.",
   unknown: "The block could not be completed.",
 };
 

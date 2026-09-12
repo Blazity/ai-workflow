@@ -151,36 +151,32 @@ describe("createRepositoryDirectory", () => {
     ]);
   });
 
-  it("returns provider-visible repositories without applying the runtime allowlist", async () => {
-    const original = process.env.AGENT_ALLOWED_REPOS;
-    process.env.AGENT_ALLOWED_REPOS = "acme/allowed";
+  it("returns every provider-visible repository, filtering none of them out", async () => {
+    // The directory answers "what the installation exposes". Which of those a
+    // run or a dispatch may touch is the repository catalog's decision, made by
+    // its callers, so nothing here narrows the listing.
     mockOctokit.paginate.mockResolvedValueOnce([
       {
-        full_name: "acme/outside-env-allowlist",
-        name: "outside-env-allowlist",
+        full_name: "acme/not-in-the-catalog",
+        name: "not-in-the-catalog",
         owner: { login: "acme" },
         default_branch: "main",
         description: "",
-        html_url: "https://github.com/acme/outside-env-allowlist",
+        html_url: "https://github.com/acme/not-in-the-catalog",
         topics: [],
         archived: false,
         private: true,
       },
     ]);
 
-    try {
-      await expect(
-        createRepositoryDirectory(githubProvider).listRepositories(),
-      ).resolves.toEqual([
-        expect.objectContaining({
-          provider: "github",
-          repoPath: "acme/outside-env-allowlist",
-        }),
-      ]);
-    } finally {
-      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
-      else process.env.AGENT_ALLOWED_REPOS = original;
-    }
+    await expect(
+      createRepositoryDirectory(githubProvider).listRepositories(),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        provider: "github",
+        repoPath: "acme/not-in-the-catalog",
+      }),
+    ]);
   });
 
   it("lists GitLab accessible projects with normalized metadata", async () => {

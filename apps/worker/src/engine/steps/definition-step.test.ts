@@ -60,13 +60,34 @@ vi.mock("../../infra/logger.js", () => ({
 
 import { loadWorkflowDefinitionFor } from "./definition-step.js";
 import { defaultWorkflowDefinitionV2 } from "../../workflow-definition/default.js";
+import { testSettingsSnapshot } from "../../test-support/settings.js";
+
+/**
+ * The settings this run started under. The step reads its agent defaults and
+ * its optional phases from here rather than from the environment, so these
+ * cases move this and leave the env mock to the credentials and provider
+ * wiring the block registry still reads from it.
+ */
+let settings = testSettingsSnapshot();
 
 async function setEnv(partial: Record<string, unknown>) {
   const mod = (await import("../../infra/vcs-config.js")) as unknown as { env: Record<string, unknown> };
   mod.env = { ...mod.env, ...partial };
+  const settingKeys = [
+    "ENABLE_REVIEW_PHASE",
+    "ENABLE_LEAK_REVIEW",
+    "AGENT_KIND",
+    "CLAUDE_MODEL",
+    "CODEX_MODEL",
+  ] as const;
+  const moved = Object.fromEntries(
+    settingKeys.filter((key) => key in partial).map((key) => [key, partial[key]]),
+  );
+  settings = testSettingsSnapshot({ ...settings, ...moved });
 }
 
 async function resetEnv(enableReviewPhase: boolean) {
+  settings = testSettingsSnapshot();
   await setEnv({
     ENABLE_REVIEW_PHASE: enableReviewPhase,
     AGENT_KIND: "claude",
@@ -129,7 +150,7 @@ describe("loadWorkflowDefinitionFor", () => {
 
   it("loads a pinned definition by id", async () => {
     mockGetDeployedVersion.mockResolvedValue(row(defaultWorkflowDefinitionV2({ includeReview: true }), 3, 55));
-    const plan = await loadWorkflowDefinitionFor("trigger_ticket_ai", 55);
+    const plan = await loadWorkflowDefinitionFor(settings, "trigger_ticket_ai", 55);
     expect(plan).not.toBeNull();
     expect(plan!.version).toBe(3);
     expect(plan!.definitionId).toBe(55);
@@ -139,7 +160,7 @@ describe("loadWorkflowDefinitionFor", () => {
 
   it("loads the pinned version when an explicit version is given", async () => {
     mockGetVersion.mockResolvedValue(row(defaultWorkflowDefinitionV2({ includeReview: true }), 4, 55));
-    const plan = await loadWorkflowDefinitionFor("trigger_plan_approved", 55, 4);
+    const plan = await loadWorkflowDefinitionFor(settings, "trigger_plan_approved", 55, 4);
     expect(plan).not.toBeNull();
     expect(plan!.version).toBe(4);
     expect(plan!.definitionId).toBe(55);
@@ -149,27 +170,27 @@ describe("loadWorkflowDefinitionFor", () => {
 
   it("returns null when the pinned version is missing for a non-ticket trigger", async () => {
     mockGetVersion.mockResolvedValue(null);
-    const plan = await loadWorkflowDefinitionFor("trigger_plan_approved", 55, 99);
+    const plan = await loadWorkflowDefinitionFor(settings, "trigger_plan_approved", 55, 99);
     expect(plan).toBeNull();
     expect(mockGetVersion).toHaveBeenCalledWith(55, 99);
   });
 
   it("returns null for a non-ticket trigger with no enabled definition", async () => {
     mockGetEnabled.mockResolvedValue(null);
-    const plan = await loadWorkflowDefinitionFor("planning_agent");
+    const plan = await loadWorkflowDefinitionFor(settings, "planning_agent");
     expect(plan).toBeNull();
   });
 
   it("does not fall back when an arbitrary pinned ticket definition is missing", async () => {
     mockGetDeployedVersion.mockResolvedValue(null);
     mockGetDefinition.mockResolvedValue(null);
-    const plan = await loadWorkflowDefinitionFor("trigger_ticket_ai", 999);
+    const plan = await loadWorkflowDefinitionFor(settings, "trigger_ticket_ai", 999);
     expect(plan).toBeNull();
   });
 
   it("uses the built-in graph only for the explicit fallback row", async () => {
     mockGetEnabled.mockResolvedValue({ definition: { id: 1 }, current: null });
-    const plan = await loadWorkflowDefinitionFor("trigger_ticket_ai");
+    const plan = await loadWorkflowDefinitionFor(settings, "trigger_ticket_ai");
     expect(plan).toMatchObject({ version: null, definitionId: null, reviewEnabled: true });
   });
 
@@ -177,7 +198,7 @@ describe("loadWorkflowDefinitionFor", () => {
     await setEnv({ AGENT_KIND: "codex" });
     mockGetEnabled.mockResolvedValue({ definition: { id: 1 }, current: null });
 
-    const plan = await loadWorkflowDefinitionFor("trigger_ticket_ai");
+    const plan = await loadWorkflowDefinitionFor(settings, "trigger_ticket_ai");
 
     expect(plan?.definition.nodes.find((node) => node.id === "planning")?.configuration).toMatchObject({
       harnessProfile: { profileId: "builtin-codex", version: 2 },
@@ -193,7 +214,7 @@ describe("loadWorkflowDefinitionFor", () => {
       }),
     );
 
-    await expect(loadWorkflowDefinitionFor("trigger_ticket_ai", 1)).rejects.toThrow(
+    await expect(loadWorkflowDefinitionFor(settings, "trigger_ticket_ai", 1)).rejects.toThrow(
       RETIRED_SCHEMA_MESSAGE,
     );
   });
@@ -205,6 +226,7 @@ describe("loadWorkflowDefinitionFor", () => {
     );
 
     const plan = await loadWorkflowDefinitionFor(
+      settings,
       "trigger_ticket_ai",
       1,
       "builtin_fallback" as never,
@@ -231,20 +253,20 @@ describe("loadWorkflowDefinitionFor, ticket trigger", () => {
 
   it("fails closed when there is no enabled definition", async () => {
     mockGetEnabled.mockResolvedValue(null);
-    const plan = await loadWorkflowDefinitionFor("trigger_ticket_ai");
+    const plan = await loadWorkflowDefinitionFor(settings, "trigger_ticket_ai");
     expect(plan).toBeNull();
   });
 
   it("does not synthesize a default solely because the review flag is on", async () => {
     await setEnv({ ENABLE_REVIEW_PHASE: true });
     mockGetEnabled.mockResolvedValue(null);
-    const plan = await loadWorkflowDefinitionFor("trigger_ticket_ai");
+    const plan = await loadWorkflowDefinitionFor(settings, "trigger_ticket_ai");
     expect(plan).toBeNull();
   });
 
   it("uses the enabled definition matched by trigger type when the row is valid", async () => {
     mockGetEnabled.mockResolvedValue(enabled(defaultWorkflowDefinitionV2({ includeReview: true }), 7, 3));
-    const plan = await loadWorkflowDefinitionFor("trigger_ticket_ai");
+    const plan = await loadWorkflowDefinitionFor(settings, "trigger_ticket_ai");
     expect(plan).not.toBeNull();
     expect(plan!.version).toBe(7);
     expect(plan!.definitionId).toBe(3);
@@ -272,7 +294,7 @@ describe("loadWorkflowDefinitionFor, ticket trigger", () => {
     };
     mockGetEnabled.mockResolvedValue(enabled(definition, 8, 4));
 
-    const plan = await loadWorkflowDefinitionFor("trigger_ticket_ai");
+    const plan = await loadWorkflowDefinitionFor(settings, "trigger_ticket_ai");
 
     expect(plan).not.toBeNull();
     expect(plan!.budgets).toEqual({ maxDurationMs: 12_000, maxTokens: 500, maxCostUsd: 1.25 });
@@ -292,7 +314,7 @@ describe("loadWorkflowDefinitionFor, ticket trigger", () => {
     };
     mockGetEnabled.mockResolvedValue(enabled(definition, 8, 4));
 
-    const plan = await loadWorkflowDefinitionFor("trigger_ticket_ai");
+    const plan = await loadWorkflowDefinitionFor(settings, "trigger_ticket_ai");
 
     expect(plan).not.toBeNull();
     expect(plan!.repositoryScope).toEqual(repositoryScope);
@@ -303,7 +325,7 @@ describe("loadWorkflowDefinitionFor, ticket trigger", () => {
       enabled(defaultWorkflowDefinitionV2({ includeReview: false }), 8, 4),
     );
 
-    const plan = await loadWorkflowDefinitionFor("trigger_ticket_ai");
+    const plan = await loadWorkflowDefinitionFor(settings, "trigger_ticket_ai");
 
     expect(plan).not.toBeNull();
     expect(plan!.repositoryScope).toBeUndefined();
@@ -318,7 +340,7 @@ describe("loadWorkflowDefinitionFor, ticket trigger", () => {
     };
     mockGetEnabled.mockResolvedValue(enabled(definition, 11, 6));
 
-    const plan = await loadWorkflowDefinitionFor("trigger_ticket_ai");
+    const plan = await loadWorkflowDefinitionFor(settings, "trigger_ticket_ai");
 
     expect(plan).not.toBeNull();
     expect(plan!.repositoryScope).toEqual(repositoryScope);
@@ -326,7 +348,7 @@ describe("loadWorkflowDefinitionFor, ticket trigger", () => {
 
   it("reflects reviewEnabled=false for a valid stored definition without a review block", async () => {
     mockGetEnabled.mockResolvedValue(enabled(defaultWorkflowDefinitionV2({ includeReview: false }), 4, 2));
-    const plan = await loadWorkflowDefinitionFor("trigger_ticket_ai");
+    const plan = await loadWorkflowDefinitionFor(settings, "trigger_ticket_ai");
     expect(plan).not.toBeNull();
     expect(plan!.version).toBe(4);
     expect(plan!.definitionId).toBe(2);
@@ -370,7 +392,7 @@ describe("loadWorkflowDefinitionFor, ticket trigger", () => {
     mockGetEnabled.mockResolvedValue(
       enabled(definition, 9, 5),
     );
-    const plan = await loadWorkflowDefinitionFor("trigger_ticket_ai");
+    const plan = await loadWorkflowDefinitionFor(settings, "trigger_ticket_ai");
     expect(plan).not.toBeNull();
     expect(plan).toMatchObject({
       definition,
@@ -413,7 +435,7 @@ describe("loadWorkflowDefinitionFor, ticket trigger", () => {
     });
     mockGetEnabled.mockResolvedValue(enabled(definition, 10, 6));
 
-    const plan = await loadWorkflowDefinitionFor("trigger_ticket_ai");
+    const plan = await loadWorkflowDefinitionFor(settings, "trigger_ticket_ai");
 
     expect(plan).not.toBeNull();
     expect(
@@ -440,7 +462,7 @@ describe("loadWorkflowDefinitionFor, ticket trigger", () => {
       }),
     );
 
-    const plan = await loadWorkflowDefinitionFor("trigger_ticket_ai");
+    const plan = await loadWorkflowDefinitionFor(settings, "trigger_ticket_ai");
 
     expect(plan).toBeNull();
     expect(loggerError).toHaveBeenCalledWith(
@@ -452,7 +474,7 @@ describe("loadWorkflowDefinitionFor, ticket trigger", () => {
   it("does not swallow database or network read failures", async () => {
     mockGetEnabled.mockRejectedValue(new Error("database unavailable"));
 
-    await expect(loadWorkflowDefinitionFor("trigger_ticket_ai")).rejects.toThrow("database unavailable");
+    await expect(loadWorkflowDefinitionFor(settings, "trigger_ticket_ai")).rejects.toThrow("database unavailable");
   });
 
   it("fails closed and logs when the graph is invalid", async () => {
@@ -481,7 +503,7 @@ describe("loadWorkflowDefinitionFor, ticket trigger", () => {
       edges: [],
     };
     mockGetEnabled.mockResolvedValue(enabled(invalidGraph, 12, 6));
-    const plan = await loadWorkflowDefinitionFor("trigger_ticket_ai");
+    const plan = await loadWorkflowDefinitionFor(settings, "trigger_ticket_ai");
     expect(plan).toBeNull();
     expect(loggerError).toHaveBeenCalledTimes(1);
     expect(loggerError.mock.calls[0][0]).toMatchObject({ version: 12, definitionId: 6 });
@@ -514,7 +536,7 @@ describe("loadWorkflowDefinitionFor, ticket trigger", () => {
     };
     mockGetEnabled.mockResolvedValue(enabled(invalidBinding, 13, 7));
 
-    const plan = await loadWorkflowDefinitionFor("trigger_ticket_ai");
+    const plan = await loadWorkflowDefinitionFor(settings, "trigger_ticket_ai");
 
     expect(plan).toBeNull();
     expect(loggerError).toHaveBeenCalledTimes(1);
@@ -535,7 +557,7 @@ describe("loadWorkflowDefinitionFor, ticket trigger", () => {
       CHAT_SDK_CHANNEL_ID: undefined,
     });
 
-    const plan = await loadWorkflowDefinitionFor("trigger_ticket_ai");
+    const plan = await loadWorkflowDefinitionFor(settings, "trigger_ticket_ai");
 
     expect(plan).not.toBeNull();
     expect(plan!.definitionId).toBe(10);

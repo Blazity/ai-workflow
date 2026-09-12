@@ -40,4 +40,5 @@ export * from "./requests-workflow-triggers";
 export * from "./requests-admin";
 export * from "./settings-api";
 export * from "./settings-registry";
+export * from "./settings-resolution";
 export * from "./run-registry";

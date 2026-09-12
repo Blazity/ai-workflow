@@ -633,15 +633,17 @@ describe("scenario harness", () => {
     );
     // The call site may lower concurrency operationally through
     // V2_MAX_BLOCK_CONCURRENCY, but it must never raise it above the
-    // code-owned bound these scenarios assert, so the env value has to pass
-    // through a Math.min against that bound rather than replace it.
+    // code-owned bound these scenarios assert, so the setting has to pass
+    // through a Math.min against that bound rather than replace it. It is read
+    // from the snapshot the run froze at its start, not from the environment,
+    // so a change mid-run cannot move a run that is already scheduling.
     const concurrencyIndex = agentSource.indexOf("maxConcurrency: Math.min(");
     expect(concurrencyIndex).toBeGreaterThan(-1);
     const concurrencyCallSite = agentSource.slice(
       concurrencyIndex,
       concurrencyIndex + 300,
     );
-    expect(concurrencyCallSite).toContain("env.V2_MAX_BLOCK_CONCURRENCY");
+    expect(concurrencyCallSite).toContain("runSettings.V2_MAX_BLOCK_CONCURRENCY");
     expect(concurrencyCallSite).toContain(
       "V2_PRODUCTION_SCHEDULER_BOUNDS.maxConcurrency",
     );

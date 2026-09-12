@@ -205,32 +205,27 @@ describe("settings snapshot", () => {
 });
 
 describe("settings accessors", () => {
-  it("answer from the snapshot and from the environment alike, synchronously", async () => {
+  it("answer from the snapshot synchronously, and follow the environment when nothing is stored", async () => {
     const snapshot = await loadSettingsSnapshot();
 
     expect(maxConcurrentAgents(snapshot)).toBe(7);
-    expect(maxConcurrentAgents()).toBe(7);
-    expect(maxConcurrentAgents()).not.toBeInstanceOf(Promise);
+    expect(maxConcurrentAgents(snapshot)).not.toBeInstanceOf(Promise);
     expect(dashboardOrganizationSettings(snapshot)).toEqual({
       slug: "acme",
       name: "Acme",
       origin: "https://dash.acme.test",
     });
-    expect(dashboardOrganizationSettings(snapshot)).toEqual(
-      dashboardOrganizationSettings(),
-    );
     expect(agentRuntimeSettings(snapshot)).toEqual({
       agentKind: "codex",
       includeReview: true,
       includeLeakReview: false,
     });
-    expect(agentRuntimeSettings(snapshot)).toEqual(agentRuntimeSettings());
-    expect(mcpSettings(snapshot)).toEqual(mcpSettings());
     expect(mcpSettings(snapshot)).toMatchObject({
       enabled: true,
       serverVersion: "0.1.0",
       maxResultBytes: 524_288,
     });
+    // The one surviving zero-argument form still answers from the environment.
     expect(ticketBoardSettings(snapshot)).toEqual(ticketBoardSettings());
     expect(ticketBoardSettings(snapshot)).toMatchObject({
       projectKey: "AIW",
@@ -242,7 +237,6 @@ describe("settings accessors", () => {
       TRIGGER_RATE_LIMIT_MAX: 12,
       TRIGGER_RATE_LIMIT_WINDOW: "hour",
     });
-    expect(triggerRateLimitDefaults(snapshot)).toEqual(triggerRateLimitDefaults());
   });
 
   it("never return a promise, in either form", async () => {
@@ -253,20 +247,15 @@ describe("settings accessors", () => {
     // migrated key here.
     const results: unknown[] = [
       maxConcurrentAgents(snapshot),
-      maxConcurrentAgents(),
       dashboardOrganizationSettings(snapshot),
-      dashboardOrganizationSettings(),
       mcpSettings(snapshot),
-      mcpSettings(),
       agentRuntimeSettings(snapshot),
-      agentRuntimeSettings(),
       ticketBoardSettings(snapshot),
       ticketBoardSettings(),
       triggerRateLimitDefaults(snapshot),
-      triggerRateLimitDefaults(),
     ];
 
-    expect(results).toHaveLength(12);
+    expect(results).toHaveLength(7);
     for (const result of results) {
       expect(result).not.toBeInstanceOf(Promise);
       expect(typeof (result as { then?: unknown })?.then === "function").toBe(false);
@@ -284,8 +273,8 @@ describe("settings accessors", () => {
     expect(maxConcurrentAgents(snapshot)).toBe(2);
     expect(ticketBoardSettings(snapshot).aiColumn).toBe("Agent");
     expect(agentRuntimeSettings(snapshot).agentKind).toBe("claude");
-    // The deprecated zero-argument form still answers from the environment,
-    // which is what every caller that has not been converted yet relies on.
-    expect(maxConcurrentAgents()).toBe(7);
+    // The one surviving zero-argument form still answers from the environment,
+    // which is what the three trigger entry points that use it rely on.
+    expect(ticketBoardSettings().aiColumn).toBe("AI");
   });
 });

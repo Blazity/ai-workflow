@@ -308,50 +308,21 @@ describe("PATCH /api/v1/repository-catalog/:id/enabled", () => {
     expect(history.versions).toHaveLength(1);
   });
 
-  // Enabling a row the engine's allowlist variable still omits buys a run that
-  // starts and then fails at promotion or pull request creation, which costs an
-  // agent invocation before it says no. Until stage X removes that variable, the
-  // operator hears about it at the moment they flip the switch.
-  it("warns when the engine allowlist does not carry a repository being enabled", async () => {
-    const original = process.env.AGENT_ALLOWED_REPOS;
-    process.env.AGENT_ALLOWED_REPOS = "acme/other";
-    try {
-      const id = await seedProfile("acme/api");
-      await setEnabled(id, { enabled: false });
+  // Stage D1 answered an enable with a warning whenever the engine's allowlist
+  // variable omitted the repository: enabling a row was not enough on its own.
+  // The engine now reads the catalog itself, so enabling IS enough and the
+  // response carries the row and nothing else.
+  it("answers an enable with the row alone, with no transitional warning", async () => {
+    const id = await seedProfile("acme/api");
+    await setEnabled(id, { enabled: false });
 
-      const res = await setEnabled(id, { enabled: true });
+    const res = await setEnabled(id, { enabled: true });
 
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.repository).toMatchObject({ enabled: true });
-      expect(body.warnings).toHaveLength(1);
-      expect(body.warnings[0]).toContain("AGENT_ALLOWED_REPOS");
-    } finally {
-      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
-      else process.env.AGENT_ALLOWED_REPOS = original;
-    }
-  });
-
-  it("says nothing when the variable carries it, and nothing on a disable", async () => {
-    const original = process.env.AGENT_ALLOWED_REPOS;
-    process.env.AGENT_ALLOWED_REPOS = "Acme/API";
-    try {
-      const id = await seedProfile("acme/api");
-      await setEnabled(id, { enabled: false });
-
-      // On the allowlist, case-insensitively, exactly as the run will read it.
-      expect(await (await setEnabled(id, { enabled: true })).json()).not.toHaveProperty(
-        "warnings",
-      );
-      // A disable starts nothing, so there is nothing to warn about.
-      process.env.AGENT_ALLOWED_REPOS = "acme/other";
-      expect(await (await setEnabled(id, { enabled: false })).json()).not.toHaveProperty(
-        "warnings",
-      );
-    } finally {
-      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
-      else process.env.AGENT_ALLOWED_REPOS = original;
-    }
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.repository).toMatchObject({ enabled: true });
+    expect(body).not.toHaveProperty("warnings");
+    expect(Object.keys(body)).toEqual(["repository"]);
   });
 
   it("refuses a non-boolean", async () => {

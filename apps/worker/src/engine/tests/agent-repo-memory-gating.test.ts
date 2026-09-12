@@ -189,7 +189,10 @@ describe("repository memory call sites in agent.ts", () => {
 
       const window = agentLines.slice(Math.max(0, index - GUARD_WINDOW), index);
       expect(
-        window.some((line) => line.includes("env.ENABLE_REPO_MEMORY")),
+        // The run's frozen snapshot, not the environment: the engine wave moved
+        // this flag onto the run context, so `env.ENABLE_REPO_MEMORY` above a
+        // call site would now be the defect rather than the guard.
+        window.some((line) => line.includes("runSettings.ENABLE_REPO_MEMORY")),
         `no ENABLE_REPO_MEMORY reference guards ${step}, so every installation with the flag off still runs it`,
       ).toBe(true);
     },

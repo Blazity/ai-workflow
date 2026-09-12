@@ -125,8 +125,9 @@ describe("fetchTicketStatuses", () => {
 
 /**
  * The editor payload as a request assembles it: the block registry is resolved
- * from the environment by `engine/definition`, and `buildWorkflowEditorOptions`
- * is handed the result.
+ * from the environment by `engine/definition`, the settings snapshot is
+ * resolved by the settings service, and `buildWorkflowEditorOptions` is handed
+ * both results.
  */
 async function editorOptions(
   models: { claude: string[]; codex: string[] },
@@ -137,7 +138,13 @@ async function editorOptions(
     await import("../engine/definition/block-contract-resolver.js");
   const { workflowBlockRegistryContextFromEnv } =
     await import("../engine/definition/block-contract-environment.js");
+  const { testSettingsSnapshot } = await import("../test-support/settings.js");
   return buildWorkflowEditorOptions(
+    testSettingsSnapshot({
+      AGENT_KIND: state.env.AGENT_KIND,
+      CLAUDE_MODEL: state.env.CLAUDE_MODEL,
+      CODEX_MODEL: state.env.CODEX_MODEL,
+    }),
     models,
     ticketStatuses,
     buildWorkflowBlockRegistry(workflowBlockRegistryContextFromEnv()),

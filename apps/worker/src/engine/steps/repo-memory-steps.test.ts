@@ -22,9 +22,6 @@ const mocks = vi.hoisted(() => ({
   /** Makes the secret source unavailable, which is the one way redaction fails
    * and `prepareMemoryContent` answers null. */
   redactionThrows: false,
-  /** Promotion is gated on its own flag. On here for every case that is not
-   * about the gate, so the promotion suite keeps exercising promotion. */
-  env: { ENABLE_ORG_MEMORY_PROMOTION: true } as Record<string, unknown>,
   /**
    * Answers reads instead of the store, for the deadline case. A read that never
    * settles is what a database at the far end of a degraded link looks like from
@@ -69,7 +66,7 @@ vi.mock("../../infra/logger.js", () => ({
   },
 }));
 vi.mock("../../db/client.js", () => ({ getDb: () => mocks.db }));
-vi.mock("../../infra/vcs-config.js", () => ({ env: mocks.env }));
+vi.mock("../../infra/vcs-config.js", () => ({ env: {} }));
 vi.mock("../llm.js", () => ({ generateStructured: mocks.generateStructured }));
 // Passthrough by default. `prepareMemoryContent` wraps its whole redaction call,
 // this one included, so failing it here is what drives the null-result branch.
@@ -192,6 +189,10 @@ const DOC_CAP = 12 * 1024;
 
 const input = {
   runId: "run_1",
+  // Promotion is gated on the run's own frozen flag, not on the environment.
+  // On here for every case that is not about the gate, so the promotion suite
+  // keeps exercising promotion; the gate cases override it to false.
+  promoteOrgMemory: true,
   subjectKey: SUBJECT_KEY,
   taskId: TASK_ID,
   repositories: [{ provider: "github" as const, repoPath: REPO_PATH }],
@@ -586,7 +587,6 @@ beforeEach(async () => {
   mocks.beforeUpsert = null;
   mocks.readOverride = null;
   mocks.redactionThrows = false;
-  mocks.env.ENABLE_ORG_MEMORY_PROMOTION = true;
   mocks.gitCommands = [];
   mocks.lsTree = new Map();
   mocks.fetchExit = 128;
@@ -1794,7 +1794,6 @@ describe("distillRepoMemoryStep", () => {
     // Promotion off: this case is about the prompt the model is shown, and eight
     // repositories carrying identical mature text would also corroborate every
     // one of those entries into an owner document, which is a different concern.
-    mocks.env.ENABLE_ORG_MEMORY_PROMOTION = false;
     const manifest = matureManifest(8);
     for (const repository of manifest) await storeMatureRepository(repository.repoPath);
     await storeTicketDocument("# AIW-300\nsome run material");
@@ -1815,7 +1814,15 @@ describe("distillRepoMemoryStep", () => {
       ],
     });
 
-    expect((await distillRepoMemoryStep({ ...input, repositories: manifest })).written).toBe(1);
+    expect(
+      (
+        await distillRepoMemoryStep({
+          ...input,
+          promoteOrgMemory: false,
+          repositories: manifest,
+        })
+      ).written,
+    ).toBe(1);
     const prompt = promptOf();
     const known = prompt.slice(0, prompt.indexOf("## change summary"));
     expect(Buffer.byteLength(known, "utf8")).toBeLessThanOrEqual(24 * 1024);
@@ -2476,7 +2483,12 @@ describe("distillRepoMemoryStep org promotion", () => {
     };
     respond({ repositories: [] });
 
-    expect(await distillRepoMemoryStep({ ...input, repositories: SIBLINGS })).toEqual({
+    expect(
+      await distillRepoMemoryStep({
+        ...input,
+        repositories: SIBLINGS,
+      }),
+    ).toEqual({
       written: 0,
       usage: USAGE,
       providerCalled: true,
@@ -2501,7 +2513,12 @@ describe("distillRepoMemoryStep org promotion", () => {
     mocks.redactionThrows = true;
     respond({ repositories: [] });
 
-    expect(await distillRepoMemoryStep({ ...input, repositories: SIBLINGS })).toEqual({
+    expect(
+      await distillRepoMemoryStep({
+        ...input,
+        repositories: SIBLINGS,
+      }),
+    ).toEqual({
       written: 0,
       usage: USAGE,
       providerCalled: true,
@@ -2550,7 +2567,12 @@ describe("distillRepoMemoryStep org promotion", () => {
     await storeFacts("github", SIBLING_REPO_PATH, promoted);
     respond({ repositories: [] });
 
-    expect(await distillRepoMemoryStep({ ...input, repositories: SIBLINGS })).toEqual({
+    expect(
+      await distillRepoMemoryStep({
+        ...input,
+        repositories: SIBLINGS,
+      }),
+    ).toEqual({
       written: 0,
       usage: USAGE,
       providerCalled: true,
@@ -2688,14 +2710,19 @@ describe("distillRepoMemoryStep org promotion", () => {
   });
 
   it("promotes nothing while the promotion flag is off", async () => {
-    mocks.env.ENABLE_ORG_MEMORY_PROMOTION = false;
     await storeFacts("github", REPO_PATH, ["Package manager is pnpm"]);
     await storeFacts("github", SIBLING_REPO_PATH, ["Package manager is pnpm"]);
     respond({ repositories: [] });
 
     // Promotion is the only path that carries text across a repository boundary
     // between runs, so it is gated on its own flag rather than on the feature's.
-    expect(await distillRepoMemoryStep({ ...input, repositories: SIBLINGS })).toEqual({
+    expect(
+      await distillRepoMemoryStep({
+        ...input,
+        promoteOrgMemory: false,
+        repositories: SIBLINGS,
+      }),
+    ).toEqual({
       written: 0,
       usage: USAGE,
       providerCalled: true,
@@ -2706,7 +2733,6 @@ describe("distillRepoMemoryStep org promotion", () => {
   });
 
   it("still writes the repository documents while the promotion flag is off", async () => {
-    mocks.env.ENABLE_ORG_MEMORY_PROMOTION = false;
     await storeFacts("github", SIBLING_REPO_PATH, ["Package manager is pnpm"]);
     respond({
       repositories: [{ repository: REPO_KEY, facts: ["Package manager is pnpm"], lessons: [] }],
@@ -2714,7 +2740,11 @@ describe("distillRepoMemoryStep org promotion", () => {
 
     // The gate is on promotion alone. Turning it off must not cost a repository
     // its own memory.
-    expect((await distillRepoMemoryStep({ ...input, repositories: SIBLINGS })).written).toBe(1);
+    expect((await distillRepoMemoryStep({
+        ...input,
+        promoteOrgMemory: false,
+        repositories: SIBLINGS,
+      })).written).toBe(1);
     expect(await readFacts("github", REPO_PATH)).toEqual([
       { text: "Package manager is pnpm", runId: "run_1" },
     ]);
@@ -2931,7 +2961,9 @@ describe("loadRepoMemorySourcesStep", () => {
   });
 
   it("keeps injecting an owner document that already exists with promotion off", async () => {
-    mocks.env.ENABLE_ORG_MEMORY_PROMOTION = false;
+    // Nothing to switch off on this path, which is the point: the READ never
+    // consulted the promotion flag, so an owner document that exists is
+    // injected whatever the flag says.
     await storeOrgFacts("github", OWNER, ["Release tags are signed"]);
 
     const sources = await loadRepoMemorySourcesStep({ repositories: SIBLINGS });

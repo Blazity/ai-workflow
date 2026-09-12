@@ -86,6 +86,7 @@ export async function readWorkflowDefinitionsOverview(
     templates: workflowDefinitionTemplates(seedOptions),
     defaultDefinition: defaultWorkflowDefinitionV2(seedOptions),
     options: buildWorkflowEditorOptions(
+      settings,
       models,
       ticketStatuses,
       currentBlockContracts().blockRegistry(),

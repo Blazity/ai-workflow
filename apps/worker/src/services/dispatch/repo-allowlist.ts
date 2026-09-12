@@ -2,28 +2,25 @@
  * May this repository be dispatched? One synchronous answer, from a catalog
  * snapshot somebody already loaded.
  *
- * This file used to re-export the environment-backed allowlist
- * (`engine/support/repo-allowlist.ts`), which read the allowlist variable on
- * every call and let a workflow definition's repository pin EXTEND that list.
- * Neither is true here any more:
+ * This file used to re-export an environment-backed allowlist, which read
+ * `AGENT_ALLOWED_REPOS` on every call and let a workflow definition's
+ * repository pin EXTEND that list. Neither is true anywhere any more:
  *
  *   - the decision comes from the repository catalog, read once per invocation
  *     (an HTTP request, a cron tick, an MCP call) and handed in;
  *   - a pin is a selection INSIDE the catalog. A definition that pins a
- *     repository the catalog does not enable no longer has its EVENTS
- *     dispatched, which is why stage C's seed imported every pinned repository
- *     as an enabled row: no deployment loses a repository at the switchover.
- *     The pin is not dead yet, and this comment must not pretend otherwise:
- *     until the engine wave (stage X) `engine/support/repo-allowlist.ts` still
- *     reads it inside a run, so a run that starts some other way reaches a
- *     pinned repository whatever the catalog says.
+ *     repository the catalog does not enable has neither its EVENTS dispatched
+ *     nor that repository reachable inside a run, which is why stage C's seed
+ *     imported every pinned repository as an enabled row: no deployment loses a
+ *     repository at the switchover.
  *
  * While the catalog is not activated every repository passes, which is the
  * bridge `services/repository-catalog/policy.ts` describes and the behaviour a
  * deployment that has never opened the Repositories page still has.
  *
- * The engine keeps its own allowlist module until the engine wave (stage X)
- * gives a run its enabled list at run start; nothing here imports it.
+ * The engine asks the same question of the same two fields, off the list its
+ * run-start step froze into the run context
+ * (`engine/support/repository-access.ts`); nothing here imports it.
  */
 import { repositoryCatalogKey, type VcsProviderKind } from "@shared/contracts";
 import {

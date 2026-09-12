@@ -17,10 +17,6 @@ export type {
   RepositoryCatalogActivateOutcome,
   RepositoryCatalogActor,
 } from "./authoring.js";
-export {
-  ENGINE_ALLOWLIST_GAP_WARNING,
-  engineAllowlistWarnings,
-} from "./engine-allowlist-gap.js";
 export { commitRepositoryImport, previewRepositoryImport } from "./import.js";
 export {
   REPOSITORY_SUGGESTION_RATE_LIMIT,

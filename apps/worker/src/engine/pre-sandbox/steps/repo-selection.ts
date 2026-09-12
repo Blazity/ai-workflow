@@ -26,17 +26,22 @@ import {
   parseRepositoryExpansionAnswer,
   type ParsedRepositoryIdentity,
 } from "../../repository-discovery/runner.js";
-import { filterRepositoriesForScope } from "../../support/repo-allowlist.js";
+import {
+  filterRunRepositories,
+  mayRunTouchRepository,
+  NO_ENABLED_REPOSITORIES_MESSAGE,
+  repositoryNotEnabledMessage,
+} from "../../support/repository-access.js";
 // Type only, so importing this file never pulls the routing module in with it.
 //
 // This file is NOT in the workflow isolate: the bundles were built and checked, and
 // repoSelectionStep lands in the steps bundle, never in the workflows one. It is
 // reached through a dynamic import inside a step body and runs in Node, which is why
-// the isolate's no-Node-builtins rule does not apply here and why the pre-existing
-// module-scope pino edge through lib/repo-allowlist.js has never failed. The values
-// below are still imported lazily, for the reason that does apply: importing this
-// module must not drag the VCS adapters, the database client and the store in behind
-// it on a path that only needs the pure selection function.
+// the isolate's no-Node-builtins rule does not apply here. The values below are
+// still imported lazily, for the reason that does apply: importing this module must
+// not drag the VCS adapters, the database client and the store in behind it on a
+// path that only needs the pure selection function. The access predicate above is
+// pure and imports nothing but the contracts package, so it stays static.
 import type { RepoRoutingEntry } from "../../../memory/repo-routing.js";
 
 export interface WorkflowOwnedBranchSelectionInput {
@@ -46,11 +51,36 @@ export interface WorkflowOwnedBranchSelectionInput {
 }
 
 export const repoSelectionStep: PreSandboxStepHandler = async ({ context, step }) => {
+  // A repository named by the definition is a repository this run is ASKED to
+  // touch, so a pin the catalog withholds is refused here, by name, before the
+  // provider listing and long before a sandbox. What happened instead was worse
+  // than a late failure: the pin narrowed the listing to nothing and the run
+  // parked on "Repositories pinned to this workflow are unavailable ... Restore
+  // access", which is false (the provider is fine, the catalog said no) and
+  // parks a run that then holds a dispatch claim while a human looks for an
+  // outage that never happened.
+  //
+  // A halt rather than a throw, for two reasons. A throw is wrapped in
+  // step-naming prose and is subject to the step's `onFailure`, which an
+  // operator may set to `continue`; an authorization refusal must not be
+  // continuable. And the refusal deliberately does NOT depend on the listing,
+  // so it reads the same whether or not the provider is reachable.
+  //
+  // A pin the PROVIDER cannot reach is a different question and keeps its
+  // clarification below: that one really can be restored without touching the
+  // catalog.
+  const pinnedOutsideCatalog = (context.repositoryScope?.repositories ?? []).find(
+    (pinned) => !mayRunTouchRepository(context.repositoryAccess, pinned),
+  );
+  if (pinnedOutsideCatalog) {
+    const refusal = repositoryNotEnabledMessage("prepare", pinnedOutsideCatalog);
+    return { status: "halt", outcome: "failed", message: refusal, cause: refusal };
+  }
   const { listRepositoriesAcrossProviders } = await import("../../../adapters/vcs/repository-directory.js");
   const { listConnectedWorkflowOwnedBranchesForTicket } = await import(
     "../../../db/repositories/runs.js"
   );
-  const { env, getConfiguredVcsProviders } = await import("../../../infra/vcs-config.js");
+  const { getConfiguredVcsProviders } = await import("../../../infra/vcs-config.js");
   const ticketIdentifier = context.ticket.identifier;
   const workflowOwnedBranches = ticketIdentifier
     ? (await listConnectedWorkflowOwnedBranchesForTicket(ticketIdentifier)).map((record) => ({
@@ -70,10 +100,29 @@ export const repoSelectionStep: PreSandboxStepHandler = async ({ context, step }
       workflowOwnedBranches,
     ),
   );
-  const repositories = filterRepositoriesForScope(
+  const repositories = filterRunRepositories(
+    context.repositoryAccess,
     listing.repositories,
-    repositoryScope,
   );
+  // The catalog is on and everything the providers offered was dropped by it.
+  // Discovery below would be handed an empty catalog and would ask a human
+  // which repository to use, a question whose only honest answer is "none of
+  // them", so the run is stopped here with the sentence that names the fix.
+  // Only when the listing itself was not empty: a provider that returned
+  // nothing is an infrastructure question, and the listing-failure paths below
+  // already have the right words for it.
+  if (
+    context.repositoryAccess.activated &&
+    repositories.length === 0 &&
+    listing.repositories.length > 0
+  ) {
+    return {
+      status: "halt",
+      outcome: "failed",
+      message: NO_ENABLED_REPOSITORIES_MESSAGE,
+      cause: NO_ENABLED_REPOSITORIES_MESSAGE,
+    };
+  }
   const incompleteCatalogProviders = listing.failures
     .filter(
       (failure) =>
@@ -156,7 +205,7 @@ export const repoSelectionStep: PreSandboxStepHandler = async ({ context, step }
     // mandatoryRepositories is provably empty here for the same reason. What a
     // remembered answer replaces is therefore exactly the question this branch
     // leads to, never a decision something else already made.
-    const remembered = routingMemoryEnabled(env)
+    const remembered = routingMemoryEnabled(context.settings)
       ? await rememberedRoutingSelection(context.ticket.labels ?? [], selected.catalog)
       : null;
     if (remembered) return selectionResult([remembered]);
@@ -171,7 +220,7 @@ export const repoSelectionStep: PreSandboxStepHandler = async ({ context, step }
     };
   }
 
-  if (routingMemoryEnabled(env)) {
+  if (routingMemoryEnabled(context.settings)) {
     await rememberRoutingAnswer({
       labels: context.ticket.labels ?? [],
       ...(context.clarification ? { clarification: context.clarification } : {}),
@@ -193,11 +242,11 @@ export const repoSelectionStep: PreSandboxStepHandler = async ({ context, step }
  * would have handed an org-scoped document to an operator who deliberately left
  * the org switches off.
  */
-function routingMemoryEnabled(env: {
+function routingMemoryEnabled(settings: {
   ENABLE_REPO_MEMORY: boolean;
   ENABLE_REPO_ROUTING_MEMORY: boolean;
 }): boolean {
-  return env.ENABLE_REPO_MEMORY && env.ENABLE_REPO_ROUTING_MEMORY;
+  return settings.ENABLE_REPO_MEMORY && settings.ENABLE_REPO_ROUTING_MEMORY;
 }
 
 /**

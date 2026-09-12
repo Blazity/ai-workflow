@@ -22,9 +22,6 @@ const mocks = vi.hoisted(() => {
     getConfiguredVcsProviders: vi.fn(),
     getDb: vi.fn(),
     listWorkflowOwnedBranchesForTicket: vi.fn(),
-    // Both routing kill switches. Off in every pre-existing test, which is what
-    // makes those tests the flag-off regression proof.
-    env: { ENABLE_REPO_MEMORY: false, ENABLE_REPO_ROUTING_MEMORY: false },
     getMemoryDocument: vi.fn(),
     upsertMemoryDocument: vi.fn(),
     logger: { info: vi.fn(), warn: vi.fn() },
@@ -41,7 +38,11 @@ vi.mock("../../adapters/vcs/repository-directory.js", async (importOriginal) => 
 }));
 
 vi.mock("../../infra/vcs-config.js", () => ({
-  env: mocks.env,
+  // The two routing kill switches used to be read here. They ride on the run's
+  // frozen settings now, which is what every `settings:` in a context literal
+  // below carries: off by registry default in every pre-existing test, which is
+  // what makes those tests the flag-off regression proof.
+  env: {},
   getConfiguredVcsProviders: mocks.getConfiguredVcsProviders,
 }));
 
@@ -72,7 +73,12 @@ vi.mock("../../memory/store.js", () => ({
 vi.mock("../../infra/logger.js", () => ({ logger: mocks.logger }));
 
 import { repoSelectionStep, selectRepositoriesFromMetadata } from "./repo-selection.js";
+import { executePreSandboxPhase } from "../../engine/steps/pre-sandbox-runner.js";
 import { MAX_ACCESSIBLE_REPOSITORIES } from "../../engine/repository-discovery/catalog.js";
+import {
+  TEST_BRIDGE_REPOSITORY_ACCESS,
+  testSettingsSnapshot,
+} from "../../test-support/settings.js";
 
 const repos: RepositoryMetadata[] = [
   {
@@ -986,8 +992,6 @@ describe("repoSelectionStep", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Pinned off, so no describe order can leak a flag into this block.
-    mocks.env.ENABLE_REPO_MEMORY = false;
-    mocks.env.ENABLE_REPO_ROUTING_MEMORY = false;
     mocks.getDb.mockReturnValue({ db: true });
     mocks.getConfiguredVcsProviders.mockReturnValue([
       {
@@ -1023,6 +1027,8 @@ describe("repoSelectionStep", () => {
 
     const result = await repoSelectionStep({
       context: {
+        repositoryAccess: TEST_BRIDGE_REPOSITORY_ACCESS,
+      settings: testSettingsSnapshot(),
         ticket: {
           identifier: "AIW-45",
           title: "Address review feedback",
@@ -1056,6 +1062,8 @@ describe("repoSelectionStep", () => {
 
     const result = await repoSelectionStep({
       context: {
+        repositoryAccess: TEST_BRIDGE_REPOSITORY_ACCESS,
+      settings: testSettingsSnapshot(),
         ticket: {
           identifier: "AIW-45",
           title: "Fix billing webhook retry behavior",
@@ -1089,6 +1097,8 @@ describe("repoSelectionStep", () => {
 
     const result = await repoSelectionStep({
       context: {
+        repositoryAccess: TEST_BRIDGE_REPOSITORY_ACCESS,
+      settings: testSettingsSnapshot(),
         ticket: { identifier: "AIW-45", title: "Update copy" },
         run: { branchName: "blazebot/aiw-45" },
         repositoryScope: {
@@ -1126,6 +1136,8 @@ describe("repoSelectionStep", () => {
 
     await repoSelectionStep({
       context: {
+        repositoryAccess: TEST_BRIDGE_REPOSITORY_ACCESS,
+      settings: testSettingsSnapshot(),
         ticket: { identifier: "AIW-45", title: "Address review feedback" },
         run: { branchName: "blazebot/aiw-45" },
         repositoryScope: { providers: ["gitlab"] },
@@ -1146,6 +1158,8 @@ describe("repoSelectionStep", () => {
 
     const result = await repoSelectionStep({
       context: {
+        repositoryAccess: TEST_BRIDGE_REPOSITORY_ACCESS,
+      settings: testSettingsSnapshot(),
         ticket: { identifier: "AIW-45", title: "Update copy" },
         run: { branchName: "blazebot/aiw-45" },
       },
@@ -1166,9 +1180,176 @@ describe("repoSelectionStep", () => {
     ]);
   });
 
-  it("selects an exact workflow pin outside the global allowlist", async () => {
-    const original = process.env.AGENT_ALLOWED_REPOS;
-    process.env.AGENT_ALLOWED_REPOS = "acme/api";
+  it("fails the run when the catalog is on and enables nothing this run can reach", async () => {
+    // The state that used to pass silently: the catalog is activated, every
+    // repository the providers offer is filtered out, and the step fell through
+    // to discovery with an empty catalog. The run then asked a human which
+    // repository to use, a question whose only honest answer is "none of them",
+    // and the one action that fixes it (enable a row) appeared nowhere.
+    mocks.listRepositories.mockResolvedValueOnce([repos[0], repos[1]]);
+    mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValueOnce([]);
+
+    const result = await repoSelectionStep({
+      context: {
+        ticket: { identifier: "AIW-45", title: "Update copy" },
+        run: { branchName: "blazebot/aiw-45" },
+        repositoryAccess: { activated: true, enabledKeys: ["github:other/thing"] },
+        settings: testSettingsSnapshot(),
+      },
+      config: undefined,
+      step: { uses: "repo-selection", onFailure: "fail" },
+    });
+
+    expect(result.status).toBe("halt");
+    if (result.status !== "halt") return;
+    expect(result.outcome).toBe("failed");
+    expect(result.message).toBe(
+      "The repository catalog is activated and enables no repository this run " +
+        "can reach. Enable repositories on the Repositories page and re-dispatch.",
+    );
+    expect(result.repositoryDiscovery).toBeUndefined();
+  });
+
+  it("leaves an empty provider listing to the paths that already explain it", async () => {
+    // The other side of the halt above. Nothing was filtered out here, because
+    // there was nothing to filter: the providers returned no repository at all,
+    // which is an infrastructure question and not a catalog one, so the catalog
+    // sentence must not be what an operator is shown.
+    mocks.listRepositories.mockResolvedValueOnce([]);
+    mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValueOnce([]);
+
+    const result = await repoSelectionStep({
+      context: {
+        ticket: { identifier: "AIW-45", title: "Update copy" },
+        run: { branchName: "blazebot/aiw-45" },
+        repositoryAccess: { activated: true, enabledKeys: ["github:acme/api"] },
+        settings: testSettingsSnapshot(),
+      },
+      config: undefined,
+      step: { uses: "repo-selection", onFailure: "fail" },
+    });
+
+    if (result.status === "halt") {
+      expect(result.message).not.toContain("enables no repository this run can reach");
+    }
+  });
+
+  it("fails the run by name when a workflow pin is outside the run's catalog", async () => {
+    // The pin is a selection inside the catalog, not a second grant: a run
+    // whose catalog enables only acme/api cannot be pointed at group/tool by
+    // editing the definition.
+    //
+    // What it must NOT do is park. Before this, the pinned repository was
+    // filtered out of the listing and the run reached the "pinned repositories
+    // are unavailable, restore access" clarification, which is false twice
+    // over: nothing is unavailable, and there is no access to restore. A parked
+    // run also holds its dispatch claim while a human hunts a provider outage
+    // that never happened.
+    //
+    // No listing is mocked on purpose: the refusal must not depend on reaching
+    // a provider at all.
+    const result = await repoSelectionStep({
+      context: {
+        ticket: { identifier: "AIW-45", title: "Fix group/tool" },
+        run: { branchName: "blazebot/aiw-45" },
+        repositoryAccess: { activated: true, enabledKeys: ["github:acme/api"] },
+        settings: testSettingsSnapshot(),
+        repositoryScope: {
+          repositories: [{ provider: "gitlab", repoPath: "group/tool" }],
+        },
+      },
+      config: undefined,
+      step: { uses: "repo-selection", onFailure: "fail" },
+    });
+
+    expect(result.status).toBe("halt");
+    if (result.status !== "halt") return;
+    expect(result.outcome).toBe("failed");
+    expect(result.message).toBe(
+      "Refusing to prepare gitlab:group/tool: this repository was not enabled " +
+        "in the repository catalog when this run started. Enable it on the " +
+        "Repositories page and re-dispatch the ticket.",
+    );
+    expect(result.message).not.toContain("Restore access");
+    expect(mocks.listRepositories).not.toHaveBeenCalled();
+  });
+
+  it("keeps the clarification when a pin the catalog allows is missing from the provider", async () => {
+    // The other branch of the same decision, and the reason the refusal above
+    // is not simply "a pin that selects nothing fails". This pin IS enabled;
+    // the provider just does not offer it (renamed, moved, or the app lost its
+    // installation). That is genuinely restorable without touching the catalog,
+    // so it keeps asking rather than failing the run.
+    mocks.listRepositories.mockResolvedValueOnce([repos[0], repos[1]]);
+    mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValueOnce([]);
+
+    const result = await repoSelectionStep({
+      context: {
+        ticket: { identifier: "AIW-45", title: "Fix group/tool" },
+        run: { branchName: "blazebot/aiw-45" },
+        repositoryAccess: {
+          activated: true,
+          enabledKeys: ["github:acme/api", "gitlab:group/tool"],
+        },
+        settings: testSettingsSnapshot(),
+        repositoryScope: {
+          repositories: [{ provider: "gitlab", repoPath: "group/tool" }],
+        },
+      },
+      config: undefined,
+      step: { uses: "repo-selection", onFailure: "fail" },
+    });
+
+    expect(result.status).toBe("halt");
+    if (result.status !== "halt") return;
+    expect(result.outcome).toBe("needs_clarification");
+    expect(result.message).toContain("Restore access");
+    expect(result.message).not.toContain("repository catalog");
+  });
+
+  it("drops a repository the run's catalog withholds when driven through the phase", async () => {
+    // Deliberately NOT a hand-built context: the phase builds it. The defect
+    // this pins lived in the runner's context literal, which forwarded four
+    // fields and dropped the access, so every case that called the step
+    // directly stayed green while the deployment fell open.
+    mocks.listRepositories.mockResolvedValueOnce([repos[0], repos[1]]);
+    mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValueOnce([]);
+
+    const result = await executePreSandboxPhase(
+      {
+        ticket: {
+          identifier: "AIW-45",
+          title: "Update copy",
+          description: "",
+          acceptanceCriteria: "",
+          comments: [],
+          labels: [],
+        },
+        run: { branchName: "blazebot/aiw-45" },
+        repositoryAccess: { activated: true, enabledKeys: ["github:acme/web"] },
+      settings: testSettingsSnapshot(),
+      },
+      { preSandbox: { steps: [{ uses: "repo-selection", onFailure: "fail" }] } },
+      { "repo-selection": repoSelectionStep },
+    );
+
+    expect(result.status).toBe("continue");
+    if (result.status !== "continue") return;
+    // acme/api was in the listing and is not in the run's list, so the phase
+    // never offers it: what is left is the one enabled repository, chosen for
+    // being the only one this run can reach.
+    expect(result.selectedRepositories).toEqual([
+      expect.objectContaining({
+        repoPath: "acme/web",
+        selectedRationale: "only accessible repository",
+      }),
+    ]);
+    expect(
+      result.selectedRepositories?.map((repository) => repository.repoPath),
+    ).not.toContain("acme/api");
+  });
+
+  it("selects an exact workflow pin inside the run's catalog", async () => {
     mocks.listRepositories.mockResolvedValueOnce([
       repos[0],
       repos[1],
@@ -1176,69 +1357,64 @@ describe("repoSelectionStep", () => {
     ]);
     mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValueOnce([]);
 
-    try {
-      const result = await repoSelectionStep({
-        context: {
-          ticket: {
-            identifier: "AIW-45",
-            title: "Fix group/tool",
-          },
-          run: { branchName: "blazebot/aiw-45" },
-          repositoryScope: {
-            repositories: [
-              { provider: "gitlab", repoPath: "group/tool" },
-            ],
-          },
+    const result = await repoSelectionStep({
+      context: {
+        ticket: {
+          identifier: "AIW-45",
+          title: "Fix group/tool",
         },
-        config: undefined,
-        step: { uses: "repo-selection", onFailure: "fail" },
-      });
+        run: { branchName: "blazebot/aiw-45" },
+        repositoryAccess: {
+          activated: true,
+          enabledKeys: ["github:acme/api", "gitlab:group/tool"],
+        },
+        settings: testSettingsSnapshot(),
+        repositoryScope: {
+          repositories: [
+            { provider: "gitlab", repoPath: "group/tool" },
+          ],
+        },
+      },
+      config: undefined,
+      step: { uses: "repo-selection", onFailure: "fail" },
+    });
 
-      expect(result.selectedRepositories).toEqual([
-        expect.objectContaining({
-          provider: "gitlab",
-          repoPath: "group/tool",
-        }),
-      ]);
-      expect(result.repositoryScopeNarrowing).toEqual({
-        catalogSize: 2,
-        scopedCatalogSize: 1,
-      });
-    } finally {
-      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
-      else process.env.AGENT_ALLOWED_REPOS = original;
-    }
+    expect(result.selectedRepositories).toEqual([
+      expect.objectContaining({
+        provider: "gitlab",
+        repoPath: "group/tool",
+      }),
+    ]);
+    expect(result.repositoryScopeNarrowing).toEqual({
+      catalogSize: 2,
+      scopedCatalogSize: 1,
+    });
   });
 
-  it("does not expose an outside repository through provider-only scope", async () => {
-    const original = process.env.AGENT_ALLOWED_REPOS;
-    process.env.AGENT_ALLOWED_REPOS = "acme/api";
+  it("does not expose a repository outside the run's catalog through provider-only scope", async () => {
     mocks.listRepositories.mockResolvedValueOnce([
       repos[1],
       { ...repos[0], provider: "gitlab", repoPath: "group/tool" },
     ]);
     mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValueOnce([]);
 
-    try {
-      const result = await repoSelectionStep({
-        context: {
-          ticket: {
-            identifier: "AIW-45",
-            title: "Fix group/tool",
-          },
-          run: { branchName: "blazebot/aiw-45" },
-          repositoryScope: { providers: ["gitlab"] },
+    const result = await repoSelectionStep({
+      context: {
+        ticket: {
+          identifier: "AIW-45",
+          title: "Fix group/tool",
         },
-        config: undefined,
-        step: { uses: "repo-selection", onFailure: "fail" },
-      });
+        run: { branchName: "blazebot/aiw-45" },
+        repositoryAccess: { activated: true, enabledKeys: ["github:acme/api"] },
+      settings: testSettingsSnapshot(),
+        repositoryScope: { providers: ["gitlab"] },
+      },
+      config: undefined,
+      step: { uses: "repo-selection", onFailure: "fail" },
+    });
 
-      expect(result.selectedRepositories).toBeUndefined();
-      expect(result.repositoryDiscovery?.catalog).toEqual([]);
-    } finally {
-      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
-      else process.env.AGENT_ALLOWED_REPOS = original;
-    }
+    expect(result.selectedRepositories).toBeUndefined();
+    expect(result.repositoryDiscovery?.catalog).toEqual([]);
   });
 
   it("keeps workflow-owned branches provider-scoped when repo paths overlap", () => {
@@ -1293,8 +1469,6 @@ describe("repoSelectionStep with a provider that never answered", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.env.ENABLE_REPO_MEMORY = false;
-    mocks.env.ENABLE_REPO_ROUTING_MEMORY = false;
     mocks.getDb.mockReturnValue({ db: true });
     mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValue([]);
     mocks.getConfiguredVcsProviders.mockReturnValue([
@@ -1321,6 +1495,8 @@ describe("repoSelectionStep with a provider that never answered", () => {
 
     const result = await repoSelectionStep({
       context: {
+        repositoryAccess: TEST_BRIDGE_REPOSITORY_ACCESS,
+      settings: testSettingsSnapshot(),
         ticket: {
           identifier: "AIW-45",
           title: "Fix the billing callback in acme/api",
@@ -1353,6 +1529,8 @@ describe("repoSelectionStep with a provider that never answered", () => {
 
     const result = await repoSelectionStep({
       context: {
+        repositoryAccess: TEST_BRIDGE_REPOSITORY_ACCESS,
+      settings: testSettingsSnapshot(),
         ticket: { identifier: "AIW-45", title: "Fix billing webhook retry behavior" },
         run: { branchName: "blazebot/aiw-45" },
       },
@@ -1388,6 +1566,8 @@ describe("repoSelectionStep with a provider that never answered", () => {
 
     const result = await repoSelectionStep({
       context: {
+        repositoryAccess: TEST_BRIDGE_REPOSITORY_ACCESS,
+      settings: testSettingsSnapshot(),
         ticket: { identifier: "AIW-45", title: "Update copy" },
         run: { branchName: "blazebot/aiw-45" },
         // No provider list, so GitLab is still queried, but nothing it could have
@@ -1433,6 +1613,8 @@ describe("repoSelectionStep with a provider that never answered", () => {
 
     const result = await repoSelectionStep({
       context: {
+        repositoryAccess: TEST_BRIDGE_REPOSITORY_ACCESS,
+      settings: testSettingsSnapshot(),
         ticket: { identifier: "AIW-45", title: "Address review feedback" },
         run: { branchName: "blazebot/aiw-45" },
         repositoryScope: { providers: ["github"] },
@@ -1456,6 +1638,8 @@ describe("repoSelectionStep with a provider that never answered", () => {
 
     const result = await repoSelectionStep({
       context: {
+        repositoryAccess: TEST_BRIDGE_REPOSITORY_ACCESS,
+      settings: testSettingsSnapshot(),
         ticket: {
           identifier: "AIW-45",
           title: "Fix the billing callback in acme/api",
@@ -1512,6 +1696,10 @@ describe("repoSelectionStep remembered repository routing", () => {
     };
   }
 
+  /** Both routing switches, as the step now reads them: off the run's frozen
+   *  settings rather than the environment. */
+  let routingFlags = { ENABLE_REPO_MEMORY: true, ENABLE_REPO_ROUTING_MEMORY: true };
+
   async function run(
     ticket: Record<string, unknown>,
     repositoryScope?: Record<string, unknown>,
@@ -1519,6 +1707,8 @@ describe("repoSelectionStep remembered repository routing", () => {
   ) {
     return repoSelectionStep({
       context: {
+        repositoryAccess: TEST_BRIDGE_REPOSITORY_ACCESS,
+        settings: testSettingsSnapshot(routingFlags),
         ticket: ticket as never,
         run: { branchName: "blazebot/aiw-45" },
         ...(repositoryScope ? { repositoryScope: repositoryScope as never } : {}),
@@ -1543,8 +1733,7 @@ describe("repoSelectionStep remembered repository routing", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.env.ENABLE_REPO_MEMORY = true;
-    mocks.env.ENABLE_REPO_ROUTING_MEMORY = true;
+    routingFlags = { ENABLE_REPO_MEMORY: true, ENABLE_REPO_ROUTING_MEMORY: true };
     mocks.getDb.mockReturnValue({ db: true });
     mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValue([]);
     mocks.listRepositories.mockResolvedValue(catalog);
@@ -1563,12 +1752,12 @@ describe("repoSelectionStep remembered repository routing", () => {
   describe("reading", () => {
     it("resolves a ticket that would otherwise ask", async () => {
       // Without the entry this ticket reaches discovery, which is what asks.
-      mocks.env.ENABLE_REPO_MEMORY = false;
+      routingFlags = { ...routingFlags, ENABLE_REPO_MEMORY: false };
       const asked = await run({ identifier: "AIW-1", title: "Invoices are wrong", labels: ["billing"] });
       expect(asked.selectedRepositories).toBeUndefined();
       expect(asked.repositoryDiscovery).toBeDefined();
 
-      mocks.env.ENABLE_REPO_MEMORY = true;
+      routingFlags = { ...routingFlags, ENABLE_REPO_MEMORY: true };
       mocks.getMemoryDocument.mockResolvedValue(routingDocument(ROUTING_DOC));
       const result = await run({
         identifier: "AIW-1",
@@ -2498,8 +2687,10 @@ describe("repoSelectionStep remembered repository routing", () => {
     it.each(switchStates)(
       "touches no memory with %s",
       async (_name, repoMemory, routingMemory) => {
-        mocks.env.ENABLE_REPO_MEMORY = repoMemory;
-        mocks.env.ENABLE_REPO_ROUTING_MEMORY = routingMemory;
+        routingFlags = {
+          ENABLE_REPO_MEMORY: repoMemory,
+          ENABLE_REPO_ROUTING_MEMORY: routingMemory,
+        };
         mocks.getMemoryDocument.mockResolvedValue(routingDocument(ROUTING_DOC));
 
         for (const { ticket, scope } of scenarios) {
@@ -2516,8 +2707,7 @@ describe("repoSelectionStep remembered repository routing", () => {
     );
 
     it.each(scenarios)("touches no memory on the $name branch", async ({ ticket, scope }) => {
-      mocks.env.ENABLE_REPO_MEMORY = false;
-      mocks.env.ENABLE_REPO_ROUTING_MEMORY = false;
+      routingFlags = { ENABLE_REPO_MEMORY: false, ENABLE_REPO_ROUTING_MEMORY: false };
       mocks.getMemoryDocument.mockResolvedValue(routingDocument(ROUTING_DOC));
 
       await run(ticket, scope, ticket.comments ? resolvesRepositories("acme/api") : undefined);
@@ -2531,13 +2721,11 @@ describe("repoSelectionStep remembered repository routing", () => {
       // and not the absence of data are what keep the output unchanged.
       const ticket = { identifier: "AIW-1", title: "Invoices are wrong", labels: ["billing"] };
 
-      mocks.env.ENABLE_REPO_MEMORY = false;
-      mocks.env.ENABLE_REPO_ROUTING_MEMORY = false;
+      routingFlags = { ENABLE_REPO_MEMORY: false, ENABLE_REPO_ROUTING_MEMORY: false };
       mocks.getMemoryDocument.mockResolvedValue(routingDocument(ROUTING_DOC));
       const off = await run(ticket);
 
-      mocks.env.ENABLE_REPO_MEMORY = true;
-      mocks.env.ENABLE_REPO_ROUTING_MEMORY = true;
+      routingFlags = { ENABLE_REPO_MEMORY: true, ENABLE_REPO_ROUTING_MEMORY: true };
       const on = await run(ticket);
 
       expect(off.selectedRepositories).toBeUndefined();

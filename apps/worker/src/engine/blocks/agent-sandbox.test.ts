@@ -63,6 +63,7 @@ import { teardownSandboxes } from "../steps/sandbox-poll-agent.js";
 import {
   makeCtx,
   makeHarnessRuntime,
+  makeRunSettings,
   runControlErrorCases,
 } from "./support/test-support.js";
 
@@ -90,7 +91,13 @@ describe("ensureAgentSandbox", () => {
   });
 
   it("provisions and reuses a repository-free sandbox for one agent kind", async () => {
-    const ctx = makeCtx({ sandboxId: null, agentSandboxIds: {}, sandboxIds: new Set() });
+    const ctx = makeCtx({
+      sandboxId: null,
+      agentSandboxIds: {},
+      sandboxIds: new Set(),
+      // The run's budget comes from the snapshot it froze at start.
+      settings: makeRunSettings({ JOB_TIMEOUT_MS: 120_000 }),
+    });
 
     const first = await ensureAgentSandbox(ctx, "claude", "claude-model");
     const second = await ensureAgentSandbox(ctx, "claude", "claude-model");

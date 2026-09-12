@@ -89,12 +89,13 @@ export function sourceHint(source: SettingsSource): string {
   return "Nothing is stored, so the built-in default is what the store resolves.";
 }
 
-/** When a change to this key would reach a run, once the worker reads the
- *  store at all. The prefix is the honest part: today it reaches nothing. */
+/** When a change to this key reaches a run. The worker now reads the store: an
+ *  entry point loads a snapshot per request or tick, and a run freezes one at
+ *  its start, so the hedge these sentences carried is no longer true. */
 export function appliesToNote(rule: SettingsInFlightRule): string {
   return rule === "immediate"
-    ? "Once the worker reads stored settings, this applies immediately"
-    : "Once the worker reads stored settings, this applies to the next run";
+    ? "Applies immediately"
+    : "Applies to the next run";
 }
 
 /**
