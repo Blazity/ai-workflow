@@ -1,13 +1,12 @@
-import type {
-  JsonValue,
-  ParsedPromptDataToken,
-  ParsedPromptSlotToken,
-  PromptSlotBinding,
-  PromptSlotDefinition,
-  WorkflowDataReferenceV2,
+import {
+  PROMPT_SLOT_NAME_PATTERN,
+  type JsonValue,
+  type ParsedPromptDataToken,
+  type ParsedPromptSlotToken,
+  type PromptSlotBinding,
+  type PromptSlotDefinition,
+  type WorkflowDataReferenceV2,
 } from "@shared/contracts";
-
-export const PROMPT_SLOT_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
 
 const PROMPT_SLOT_TOKEN_SOURCE =
   String.raw`\{\{slot:([A-Za-z_][A-Za-z0-9_-]{0,63})\}\}`;

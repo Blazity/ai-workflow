@@ -22,7 +22,8 @@ import {
   partitionReviewFindings,
   reviewPublicationDecision,
 } from "../../engine/runtime/pr-external-resources.js";
-import type { WorkflowBlockRegistryContext } from "../block-registry.js";
+import type { WorkflowBlockRegistryContext } from "../../engine/definition/block-contract-resolver.js";
+import { testBlockData } from "../../test-support/block-contracts.js";
 import { clampBothEnds } from "../failure-message.js";
 import { validateHarnessProfileReferencesWithLoader } from "../harness-profile-runtime.js";
 import { executionError } from "../interpreter.js";
@@ -441,6 +442,8 @@ const REGISTRY_CONTEXT: WorkflowBlockRegistryContext = {
   webhookTriggerConfigured: true,
 };
 
+const BLOCK_DATA = testBlockData(REGISTRY_CONTEXT);
+
 /** One arm of the graph: the blocks that review one repository and decide its
  * check. The shape descriptor exists so the same scenario body covers a single
  * reviewer and a per-repository reviewer without branching inside an
@@ -717,7 +720,7 @@ describe("Arthur post-PR review: the committed definition", () => {
       expect(
         validateWorkflowDefinitionIssuesForDeployment(
           committed,
-          REGISTRY_CONTEXT,
+          ...BLOCK_DATA,
           { checkEnvironmentAvailability: false },
         ),
       ).toEqual([]);
@@ -1176,7 +1179,7 @@ describe("Arthur post-PR review: one review agent per repository", () => {
     expect(
       validateWorkflowDefinitionIssuesForDeployment(
         perRepository,
-        REGISTRY_CONTEXT,
+        ...BLOCK_DATA,
         { checkEnvironmentAvailability: false },
       ),
     ).toEqual(

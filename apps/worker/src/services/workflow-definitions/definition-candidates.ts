@@ -12,7 +12,7 @@ import type {
 } from "@shared/contracts";
 import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import { analyzeWorkflowV2Catalog } from "../../workflow-definition/available-values.js";
-import { workflowBlockRegistryContextFromEnv } from "../../workflow-definition/models.js";
+import { currentBlockContracts } from "./block-contracts.js";
 import { validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring } from "./policy-operations.js";
 import {
   describeWorkflowDefinitionIssues,
@@ -57,5 +57,5 @@ export async function validateWorkflowDefinitionDraftCandidate(candidate: unknow
 export function analyzeWorkflowDefinitionCatalog(
   definition: WorkflowDefinitionV2,
 ): WorkflowDefinitionCatalogResponse {
-  return analyzeWorkflowV2Catalog(definition, workflowBlockRegistryContextFromEnv());
+  return analyzeWorkflowV2Catalog(definition, currentBlockContracts().resolveContract);
 }

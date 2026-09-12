@@ -30,6 +30,7 @@ import {
   readConnectedWorkflowDefinitionVersionRows,
 } from "../../engine/stored-definition-reads.js";
 import { readConnectedWorkflowDefinitionDraft } from "../../engine/definition-draft-read.js";
+import { currentBlockContracts } from "./block-contracts.js";
 
 export interface WorkflowDefinitionsOverview {
   definitions: WorkflowDefinitionRow[];
@@ -84,7 +85,11 @@ export async function readWorkflowDefinitionsOverview(
     definitions,
     templates: workflowDefinitionTemplates(seedOptions),
     defaultDefinition: defaultWorkflowDefinitionV2(seedOptions),
-    options: buildWorkflowEditorOptions(models, ticketStatuses),
+    options: buildWorkflowEditorOptions(
+      models,
+      ticketStatuses,
+      currentBlockContracts().blockRegistry(),
+    ),
   };
 }
 

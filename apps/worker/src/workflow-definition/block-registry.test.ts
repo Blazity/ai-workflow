@@ -9,14 +9,16 @@ import {
   type WorkflowBlockType,
 } from "@shared/contracts";
 import {
-  buildWorkflowBlockRegistry,
-  resolveWorkflowBlockContract,
   validateBlockOutputForDefinition,
   workflowBlockDefinitionIssues,
   workflowBlockDeploymentDefinitionIssues,
   workflowRepositoryScopeIssues,
-  type WorkflowBlockRegistryContext,
 } from "./block-registry.js";
+import {
+  buildWorkflowBlockRegistry,
+  resolveWorkflowBlockContract,
+  type WorkflowBlockRegistryContext,
+} from "../engine/definition/block-contract-resolver.js";
 import { LEGACY_BLOCK_METADATA } from "./legacy-block-metadata.fixture.js";
 
 const context: WorkflowBlockRegistryContext = {
@@ -974,25 +976,25 @@ describe("workflow block registry", () => {
 
 describe("definition repository pin validation", () => {
   it("accepts an absent, empty, or fully configured pin", () => {
-    expect(workflowRepositoryScopeIssues(undefined, context)).toEqual([]);
-    expect(workflowRepositoryScopeIssues({}, context)).toEqual([]);
+    expect(workflowRepositoryScopeIssues(undefined, context.vcsProviders)).toEqual([]);
+    expect(workflowRepositoryScopeIssues({}, context.vcsProviders)).toEqual([]);
     expect(
       workflowRepositoryScopeIssues(
         {
           providers: ["github"],
           repositories: [{ provider: "github", repoPath: "acme/api" }],
         },
-        context,
+        context.vcsProviders,
       ),
     ).toEqual([]);
   });
 
   it("reports pinned providers none of which this server has configured", () => {
-    expect(workflowRepositoryScopeIssues({ providers: ["gitlab"] }, context)).toEqual([
+    expect(workflowRepositoryScopeIssues({ providers: ["gitlab"] }, context.vcsProviders)).toEqual([
       "Pinned VCS providers are not configured: gitlab.",
     ]);
     expect(
-      workflowRepositoryScopeIssues({ providers: ["github", "gitlab"] }, context),
+      workflowRepositoryScopeIssues({ providers: ["github", "gitlab"] }, context.vcsProviders),
     ).toEqual([]);
   });
 
@@ -1000,7 +1002,7 @@ describe("definition repository pin validation", () => {
   // already-deployed pinned definition loadable after that state changes.
   it("skips the provider check when environment availability is not checked", () => {
     expect(
-      workflowRepositoryScopeIssues({ providers: ["gitlab"] }, context, {
+      workflowRepositoryScopeIssues({ providers: ["gitlab"] }, context.vcsProviders, {
         checkEnvironmentAvailability: false,
       }),
     ).toEqual([]);
@@ -1019,7 +1021,7 @@ describe("definition repository pin validation", () => {
             { provider: "gitlab", repoPath: "acme/docs" },
           ],
         },
-        context,
+        context.vcsProviders,
       ),
     ).toEqual([
       "Pinned repositories use VCS providers that are not configured: gitlab:acme/shared, gitlab:acme/docs.",
@@ -1027,7 +1029,7 @@ describe("definition repository pin validation", () => {
     expect(
       workflowRepositoryScopeIssues(
         { repositories: [{ provider: "github", repoPath: "acme/api" }] },
-        context,
+        context.vcsProviders,
       ),
     ).toEqual([]);
   });
@@ -1044,11 +1046,11 @@ describe("definition repository pin validation", () => {
       ],
     };
 
-    expect(workflowRepositoryScopeIssues(mixed, context)).toEqual([
+    expect(workflowRepositoryScopeIssues(mixed, context.vcsProviders)).toEqual([
       "Pinned repositories use VCS providers that are not configured: gitlab:acme/app.",
     ]);
     expect(
-      workflowRepositoryScopeIssues(mixed, context, {
+      workflowRepositoryScopeIssues(mixed, context.vcsProviders, {
         checkEnvironmentAvailability: false,
       }),
     ).toEqual([]);
@@ -1060,7 +1062,7 @@ describe("definition repository pin validation", () => {
     expect(
       workflowRepositoryScopeIssues(
         { repositories: [{ provider: "gitlab", repoPath: "acme/shared" }] },
-        context,
+        context.vcsProviders,
         { checkEnvironmentAvailability: false },
       ),
     ).toEqual([]);
@@ -1081,9 +1083,9 @@ describe("definition repository pin validation", () => {
       "Pinned repositories use providers excluded by the pinned provider list: gitlab:acme/shared.",
     ];
 
-    expect(workflowRepositoryScopeIssues(contradiction, context)).toEqual(expected);
+    expect(workflowRepositoryScopeIssues(contradiction, context.vcsProviders)).toEqual(expected);
     expect(
-      workflowRepositoryScopeIssues(contradiction, context, {
+      workflowRepositoryScopeIssues(contradiction, context.vcsProviders, {
         checkEnvironmentAvailability: false,
       }),
     ).toEqual(expected);

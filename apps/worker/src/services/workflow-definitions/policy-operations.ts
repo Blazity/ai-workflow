@@ -24,8 +24,8 @@ import {
 } from "../../engine/definition-trigger-routing.js";
 import * as raw from "../../db/repositories/definitions.js";
 import { createDefinitionsRepository } from "../../db/repositories/definitions.js";
-import { workflowBlockRegistryContextFromEnv } from "../../workflow-definition/models.js";
 import { validateWorkflowPromptAuthoringIssues } from "../../workflow-definition/prompt-authoring.js";
+import { currentBlockContracts } from "./block-contracts.js";
 import {
   dispatchManualWorkflow,
   preflightManualDispatch,
@@ -89,8 +89,12 @@ function structural(definition: WorkflowDefinition): WorkflowDefinition {
 
 function validStored(definition: WorkflowDefinition): WorkflowDefinition {
   const parsed = structural(definition);
+  const contracts = currentBlockContracts();
   const issues = validateWorkflowDefinitionIssuesForDeployment(
-    parsed, workflowBlockRegistryContextFromEnv(),
+    parsed,
+    contracts.resolveContract,
+    contracts.blockParamsSchemas,
+    contracts.configuredVcsProviders,
   );
   if (issues.length > 0) {
     throw new raw.WorkflowDefinitionStoreError(400, `Invalid workflow: ${issues.map(({ message }) => message).join("; ")}`);
@@ -149,9 +153,19 @@ const TRIGGER_TAKEN_MESSAGE = "Its trigger is already handled by another enabled
 
 async function deployable(db: Db, definition: WorkflowDefinition): Promise<WorkflowDefinition> {
   const parsed = structural(definition);
-  const issues = validateWorkflowDefinitionIssuesForDeployment(parsed, workflowBlockRegistryContextFromEnv());
+  const contracts = currentBlockContracts();
+  const issues = validateWorkflowDefinitionIssuesForDeployment(
+    parsed,
+    contracts.resolveContract,
+    contracts.blockParamsSchemas,
+    contracts.configuredVcsProviders,
+  );
   if (issues.length > 0) throw new raw.WorkflowDefinitionValidationError(issues);
-  const promptIssues = await validateWorkflowPromptAuthoringIssues(db, parsed);
+  const promptIssues = await validateWorkflowPromptAuthoringIssues(
+    db,
+    parsed,
+    contracts.resolveContract,
+  );
   if (promptIssues.length > 0) throw new raw.WorkflowDefinitionValidationError(promptIssues);
   return parsed;
 }
@@ -798,9 +812,18 @@ async function updateWorkflowDefinitionConnected(input: Parameters<typeof update
 
 async function deployableConnected(definition: WorkflowDefinition): Promise<WorkflowDefinition> {
   const parsed = structural(definition);
-  const issues = validateWorkflowDefinitionIssuesForDeployment(parsed, workflowBlockRegistryContextFromEnv());
+  const contracts = currentBlockContracts();
+  const issues = validateWorkflowDefinitionIssuesForDeployment(
+    parsed,
+    contracts.resolveContract,
+    contracts.blockParamsSchemas,
+    contracts.configuredVcsProviders,
+  );
   if (issues.length > 0) throw new raw.WorkflowDefinitionValidationError(issues);
-  const promptIssues = await validateConnectedDefinitionPromptAuthoring(parsed);
+  const promptIssues = await validateConnectedDefinitionPromptAuthoring(
+    parsed,
+    contracts.resolveContract,
+  );
   if (promptIssues.length > 0) throw new raw.WorkflowDefinitionValidationError(promptIssues);
   return parsed;
 }

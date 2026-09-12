@@ -1,7 +1,5 @@
-import {
-  isPromptDataReference,
-  PROMPT_SLOT_NAME_PATTERN,
-} from "./prompt-slots";
+import { PROMPT_SLOT_NAME_PATTERN } from "@shared/contracts";
+import { isPromptDataReference } from "./prompt-slots";
 
 export type CanonicalPromptTokenKind = "data" | "prompt" | "slot";
 

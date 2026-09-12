@@ -1,4 +1,6 @@
 import type {
+  VcsProviderKind,
+  WorkflowBlockContractResolver,
   WorkflowDefinition,
   WorkflowDefinitionValidationIssue,
   WorkflowDefinitionValidationResponse,
@@ -10,10 +12,10 @@ import {
 } from "@shared/contracts";
 import type { z } from "zod";
 import { analyzeWorkflowV2Bindings } from "./available-values.js";
-import type { WorkflowBlockRegistryContext } from "./block-registry.js";
 import {
   validateWorkflowDefinitionIssuesForDeployment,
   workflowDefinitionV2Schema,
+  type WorkflowBlockParamsSchemas,
 } from "./schema.js";
 
 export type WorkflowDefinitionCandidateValidation =
@@ -27,7 +29,9 @@ export type WorkflowDefinitionCandidateValidation =
  */
 export function validateWorkflowDefinitionCandidate(
   candidate: unknown,
-  registryContext: WorkflowBlockRegistryContext,
+  resolveContract: WorkflowBlockContractResolver,
+  blockParamsSchemas: WorkflowBlockParamsSchemas,
+  configuredVcsProviders: readonly VcsProviderKind[],
 ): WorkflowDefinitionCandidateValidation {
   if (declaresRetiredSchema(candidate)) {
     return {
@@ -63,9 +67,11 @@ export function validateWorkflowDefinitionCandidate(
 
   const deploymentIssues = validateWorkflowDefinitionIssuesForDeployment(
     parsed.data,
-    registryContext,
+    resolveContract,
+    blockParamsSchemas,
+    configuredVcsProviders,
   );
-  const v2Analysis = analyzeWorkflowV2Bindings(parsed.data, registryContext);
+  const v2Analysis = analyzeWorkflowV2Bindings(parsed.data, resolveContract);
   const issues = dedupeIssues([...deploymentIssues, ...v2Analysis.issues]);
   return {
     parsed: parsed.data,
