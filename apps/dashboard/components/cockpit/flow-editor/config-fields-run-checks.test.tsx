@@ -11,7 +11,7 @@ import { RepositoryScopeProvider } from "./repository-scope-context";
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 // next/link's prefetch idle callback reaches for `self`, which the plain
-// Node test environment does not provide; the panel links to /scripts.
+// Node test environment does not provide; the panel links to /repositories.
 (globalThis as { self?: unknown }).self = globalThis;
 
 const options = {

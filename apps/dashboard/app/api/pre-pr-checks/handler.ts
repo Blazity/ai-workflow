@@ -8,22 +8,6 @@ export async function handlePrePrChecksGet(workerProxy: WorkerProxy) {
   return forward(workerProxy, "/api/v1/pre-pr-checks", { method: "GET" });
 }
 
-export async function handlePrePrChecksPut(req: Request, workerProxy: WorkerProxy) {
-  return forward(workerProxy, "/api/v1/pre-pr-checks", {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: await req.text(),
-  });
-}
-
-export async function handlePrePrChecksRestore(req: Request, workerProxy: WorkerProxy) {
-  return forward(workerProxy, "/api/v1/pre-pr-checks/restore", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: await req.text(),
-  });
-}
-
 export async function handleRepositoriesGet(workerProxy: WorkerProxy) {
   return forward(workerProxy, "/api/v1/repositories", { method: "GET" });
 }

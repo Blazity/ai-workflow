@@ -2,6 +2,7 @@
 
 import { useRef, useState, useSyncExternalStore } from "react";
 import type {
+  RepositoryCatalogState,
   SettingsEntryView,
   SystemHealthCheck,
   SystemHealthGroup,
@@ -11,7 +12,7 @@ import type {
 } from "@shared/contracts";
 import { apiClient } from "@/lib/api/client";
 import { SetupOverview } from "@/app/(cockpit)/settings/setup-overview";
-import { StoredOnlyNotice } from "@/app/(cockpit)/settings/stored-only-notice";
+import { SettingsCadenceNotice } from "@/app/(cockpit)/settings/settings-cadence-notice";
 
 const GROUPS: Array<{
   id: SystemHealthGroup;
@@ -101,12 +102,16 @@ const SCAN_TIMEOUT_MS = 15_000;
 export function HealthScreen({
   initialData = null,
   settings = [],
+  catalogState = null,
 }: {
   initialData?: SystemHealthResponse | null;
   /** Every resolved setting; empty when the settings read failed. The setup
    *  overview is computed from these and from the scan below it, so a fresh
    *  Scan moves the overview as well as the probes. */
   settings?: readonly SettingsEntryView[];
+  /** The repository catalog state row, or null when the catalog read failed.
+   *  The overview's catalog line is read from it and never from a setting. */
+  catalogState?: RepositoryCatalogState | null;
 }) {
   const [data, setData] = useState<SystemHealthResponse | null>(initialData);
   const hydrated = useSyncExternalStore(subscribeNever, () => true, () => false);
@@ -197,11 +202,12 @@ export function HealthScreen({
 
       {settings.length > 0 && (
         <div className="mb-5 flex flex-col gap-2">
-          <StoredOnlyNotice />
+          <SettingsCadenceNotice />
           <SetupOverview
             settings={settings}
             scan={data}
             scanReadable
+            catalogState={catalogState}
             emptyStoredNote="No setting has been changed from this dashboard yet."
           />
         </div>

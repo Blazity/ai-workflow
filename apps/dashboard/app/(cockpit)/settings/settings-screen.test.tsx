@@ -4,7 +4,7 @@ import React from "react";
 import { act, create, type ReactTestInstance } from "react-test-renderer";
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
 import { findSettingDefinition } from "@shared/contracts";
-import type { SettingsEntryView } from "@shared/contracts";
+import type { RepositoryCatalogState, SettingsEntryView } from "@shared/contracts";
 
 import { hasUnsavedSettings, resetUnsavedSettings } from "@/lib/settings/unsaved";
 import { SettingsScreen } from "./settings-screen";
@@ -15,6 +15,9 @@ import { SettingsScreen } from "./settings-screen";
   addEventListener: () => {},
   removeEventListener: () => {},
 };
+// next/link's intersection observer reaches for `self` on mount, and the page
+// links to the Repositories page from two places.
+(globalThis as { self?: typeof globalThis }).self ??= globalThis;
 
 function entry(
   key: string,
@@ -39,8 +42,22 @@ function entry(
 const SETTINGS = [
   entry("MAX_CONCURRENT_AGENTS", 3),
   entry("ENABLE_REPO_MEMORY", false),
+  // Still in the registry, still never written by anything, and deliberately
+  // set to the value that used to drive this page so a test would catch the
+  // page reading it again.
   entry("catalog.activated", false),
 ];
+
+/** The catalog state row the worker returns, which is where activation lives. */
+function catalogState(activated: boolean): RepositoryCatalogState {
+  return {
+    activated,
+    bridge: !activated,
+    activatedAt: activated ? "2026-09-11T08:30:00.000Z" : null,
+    activatedById: activated ? "user-7" : null,
+    activatedByLabel: activated ? "Seed" : null,
+  };
+}
 
 function render(
   t: TestContext,
@@ -65,6 +82,7 @@ function render(
           settings={SETTINGS}
           scan={null}
           scanReadable
+          catalogState={catalogState(false)}
           canEdit
           available
           {...props}
@@ -88,12 +106,13 @@ function text(root: ReactTestInstance): string {
     .join(" ");
 }
 
-test("the standing caveat is on the page, unconditionally", (t) => {
-  // The one failure this surface could cause is somebody believing a saved
-  // value already changed what the worker does.
+test("the standing caveat states the read cadence, not a worker that ignores the store", (t) => {
+  // Since stage B1 the worker loads a settings snapshot per request, cron tick
+  // and MCP call, so the old sentence was the falsehood on this page.
   const root = render(t);
-  assert.match(text(root), /Values saved here are stored now/);
-  assert.match(text(root), /still reads most settings from its environment/);
+  assert.match(text(root), /Values saved here are stored and read/);
+  assert.match(text(root), /per request, cron tick and MCP call/);
+  assert.doesNotMatch(text(root), /still reads most settings from its environment/);
 });
 
 test("a catalog that is not activated says so above the forms", (t) => {
@@ -104,13 +123,23 @@ test("a catalog that is not activated says so above the forms", (t) => {
   );
 });
 
-test("an activated catalog drops the banner but keeps the overview row", (t) => {
-  const root = render(t, {
-    settings: [...SETTINGS.slice(0, 2), entry("catalog.activated", true)],
-  });
+test("an activated catalog drops the banner and names who activated it", (t) => {
+  // The state row is the input, not the registry key: this render leaves the
+  // key at false, which is exactly the production shape (seed activated the
+  // catalog, nothing ever wrote the key) that made the page say "Not activated".
+  const root = render(t, { catalogState: catalogState(true) });
   const rendered = text(root);
   assert.doesNotMatch(rendered, /Repository catalog not activated/);
-  assert.match(rendered, /Stored setting: Repository catalog/);
+  assert.match(rendered, /Repository catalog/);
+  assert.match(rendered, /Activated by Seed on /);
+});
+
+test("a catalog read the worker did not answer shows no activation banner at all", (t) => {
+  // Null is "not known", and an orange banner announcing the bridge is on would
+  // be a claim nothing observed.
+  const root = render(t, { catalogState: null });
+  assert.doesNotMatch(text(root), /Repository catalog not activated/);
+  assert.match(text(root), /the worker did not answer the catalog read/i);
 });
 
 test("a member sees every value and no way to change one", (t) => {

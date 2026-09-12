@@ -1,14 +1,18 @@
 // apps/dashboard/lib/settings/unsaved.ts
 //
-// Unsaved settings edits, readable by the cockpit shell before it navigates.
+// Unsaved edits anywhere in the cockpit, readable by the shell before it
+// navigates.
 //
-// Same problem the Repository scripts screen already solved: the shell renders a
-// screen as opaque `children` (a server component's rendered output), so there
-// is no provider boundary to thread state through, and `router.push` never
-// fires `beforeunload`. The difference is the count. One Repository scripts
-// screen is ever mounted, so one module-level boolean is enough there; the
-// Settings page mounts nine forms at once and the Memory page mounts a tenth,
-// so this keeps a set of the dirty ones and answers "any".
+// The shell renders a screen as opaque `children` (a server component's
+// rendered output), so there is no provider boundary to thread state through,
+// and `router.push` never fires `beforeunload`. A set of dirty form ids rather
+// than one boolean, because the Settings page mounts nine forms at once, the
+// Memory page mounts a tenth, and a repository entry mounts one per tab.
+//
+// It lives under lib/settings because that is where the registry was written;
+// it is not settings-only, and every screen that can hold an unsaved draft
+// registers here rather than growing a second flag the shell would have to
+// remember to ask.
 
 const dirtyForms = new Set<string>();
 
@@ -34,3 +38,8 @@ export function trackUnsavedSettings(formId: string, dirty: boolean): () => void
 export function resetUnsavedSettings(): void {
   dirtyForms.clear();
 }
+
+/** Asked by the shell, the logout button and any screen guarding its own exit
+ *  before an unsaved draft is thrown away. One sentence, so a user is never
+ *  asked the same question in two different words. */
+export const DISCARD_UNSAVED_PROMPT = "Discard unsaved changes?";

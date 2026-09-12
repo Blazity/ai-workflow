@@ -10,7 +10,12 @@ import {
   repositoryKey,
   type PinnedRepository,
 } from "@/lib/workflow-editor/repository-scope";
-import { useRepositoryCatalog } from "./repository-catalog-context";
+import {
+  CATALOG_UNAVAILABLE_NOTE,
+  DIRECTORY_UNAVAILABLE_NOTE,
+  splitPins,
+  useRepositoryCatalog,
+} from "./repository-catalog-context";
 import { RepositoryScopeModal } from "./repository-scope-modal";
 
 const attentionBadgeClass =
@@ -45,12 +50,8 @@ export function RepositoryScopeBar({
       ),
     [catalog.repositories],
   );
-  const unknownPins =
-    catalog.status === "ready"
-      ? pinned.filter(
-          (repository) => !catalogByKey.has(repositoryKey(repository)),
-        )
-      : [];
+  // One split, shared with the picker modal and the deploy warning.
+  const { unknown: unknownPins, notEnabled: notEnabledPins } = splitPins(catalog, pinned);
   const archivedPins = pinned.filter(
     (repository) =>
       catalogByKey.get(repositoryKey(repository))?.archived === true,
@@ -72,18 +73,31 @@ export function RepositoryScopeBar({
   const missingPins = unknownPins.filter(
     (repository) => !disconnectedPins.includes(repository),
   );
+  const notEnabled = notEnabledPins.filter(
+    (repository) => !disconnectedPins.includes(repository),
+  );
   // The badge stays a badge: the reasons ride along as its accessible label so an
   // operator learns which pin is broken without the bar growing a warning panel
   // that duplicates the modal.
   const attentionReasons = [
     reason("provider not connected", disconnectedPins),
     reason("not in catalog", missingPins),
+    reason("not enabled in the catalog", notEnabled),
     reason("archived", archivedPins),
     reason(
       "excluded by the pinned providers",
       contradictingPinnedRepositories(scope),
     ),
     catalog.status === "error" ? "Repository catalog could not be loaded" : null,
+    // Degraded, not broken. Both of these used to be invisible: the directory
+    // failing left every provider stamped "ready", and the catalog failing lost
+    // the picker outright.
+    catalog.status === "ready" && !catalog.directoryAvailable
+      ? DIRECTORY_UNAVAILABLE_NOTE
+      : null,
+    catalog.status === "ready" && !catalog.catalogAvailable
+      ? CATALOG_UNAVAILABLE_NOTE
+      : null,
   ].filter((entry) => entry !== null);
 
   useEffect(() => {

@@ -1,6 +1,10 @@
 "use client";
 
-import type { SettingsEntryView, SystemHealthResponse } from "@shared/contracts";
+import type {
+  RepositoryCatalogState,
+  SettingsEntryView,
+  SystemHealthResponse,
+} from "@shared/contracts";
 
 import { CkChip, type ChipTone } from "@/components/ui";
 import {
@@ -27,6 +31,7 @@ export function SetupOverview({
   settings,
   scan,
   scanReadable,
+  catalogState,
   emptyStoredNote = "No stored rows yet. Every value below comes from this deployment's environment or from the built-in default.",
 }: {
   settings: readonly SettingsEntryView[];
@@ -34,11 +39,14 @@ export function SetupOverview({
   scan: SystemHealthResponse | null;
   /** False for a role that may not read the scan at all. */
   scanReadable: boolean;
+  /** The repository catalog state row, or null when the worker did not answer
+   *  the catalog read. Activation is read from it and from nothing else. */
+  catalogState: RepositoryCatalogState | null;
   /** What to say when nothing has been stored. The default points at the forms
    *  under it, which only exist on the Settings page. */
   emptyStoredNote?: string;
 }) {
-  const overview = buildSetupOverview({ settings, scan, scanReadable });
+  const overview = buildSetupOverview({ settings, scan, scanReadable, catalogState });
 
   return (
     <section className="rounded-[4px] border border-neutral-200 bg-panel">

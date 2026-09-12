@@ -10,7 +10,7 @@ import { ConfigFields } from "./config-fields";
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 // next/link's prefetch idle callback reaches for `self`, which the plain
-// Node test environment does not provide; the panel links to /scripts.
+// Node test environment does not provide; the panel links to /repositories.
 (globalThis as { self?: unknown }).self = globalThis;
 
 const options = {
@@ -102,14 +102,14 @@ test("the gate panel names what it will require, per repository, instead of poin
   }
 });
 
-test("the gate panel opens Repository scripts in a new tab", async () => {
+test("the gate panel opens the Repositories page in a new tab", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async () => Response.json(RESPONSE)) as typeof fetch;
 
   const renderer = await renderPanelWithConfig(node({}));
   try {
-    const link = renderer.root.findAll((i) => i.props.href === "/scripts")[0];
-    assert.ok(link, "expected a link to Repository scripts");
+    const link = renderer.root.findAll((i) => i.props.href === "/repositories")[0];
+    assert.ok(link, "expected a link to the Repositories page");
     // A client-side navigation out of the editor discards the unsaved canvas.
     assert.equal(link!.props.target, "_blank");
     assert.equal(link!.props.rel, "noreferrer");

@@ -509,6 +509,38 @@ Every row of that table except the first two and `suggestion_rate_limited`
 writes exactly one `repository_suggestions` row. A 403 (wrong role) and a 404
 (`Unknown repository`) write none: neither reached the provider.
 
+## Where an operator edits all of this
+
+The dashboard's Repositories page (`apps/dashboard/app/(cockpit)/repositories/`)
+is the whole surface. The list carries the display name, the provider and path,
+the first line of the description, the source badge, the checks version and one
+switch per row; the switch is the enabled flag and nothing else, so flipping it
+mints no profile version and moves no run already in flight. The not-activated
+banner sits above the list while the bridge is on, and its Activate opens the
+dialog that states both populations (how many repositories stop passing, and
+which of those hold a run claim right now), takes a typed reason, and only then
+confirms.
+
+One repository is `repositories/[id]`, five tabs over one Save bar: Overview,
+Rules, Scripts (the script group editor this document describes, bound to this
+repository's profile), Memory and History. A tab reports the reason Save is
+disabled upward rather than rendering its own bar, and the save is one
+`PUT /api/v1/repository-catalog/:id` carrying the WHOLE merged profile, because
+the upsert defaults the fields a request omits rather than leaving them alone.
+"Suggest from repository" lives on the entry and never prefills a form: the
+proposal is shown beside the current values with one tick per script group, a
+dropped group is shown greyed out with its reason and its commands and can never
+be accepted, and accepted groups land in the Scripts tab's draft, which the
+admin still saves with a reason.
+
+The Repository scripts screen that used to own all of this is gone. `/scripts`
+redirects permanently to `/repositories` (`apps/dashboard/next.config.ts`), the
+older `/checks` path redirects there too, and every workflow editor panel that
+linked to the old screen links to the new page. The editor's own repository
+picker reads the catalog as well as the provider directory: once the catalog is
+activated only the rows it enables can be pinned, and while the bridge is on a
+row the catalog does not enable is shown and marked.
+
 ## Legacy shape (still accepted)
 
 A repository entry stored before repository scripts existed looked like

@@ -58,19 +58,22 @@ export function settingLabel(key: string): string {
 /**
  * The one thing every settings surface has to say out loud.
  *
- * The store and this screen ship before the stages that rewire the worker's
- * readers, so a value saved here is recorded and shadows the environment in the
- * store while the worker itself still reads most keys from its environment. A
- * page that showed a saved value without saying that would be claiming a
- * behaviour change that has not happened.
+ * Not "stored only" any more: the worker loads one settings snapshot per
+ * request, per cron tick and per MCP call, so a saved value is a value the
+ * worker reads. What an admin still cannot see from the form alone is WHEN it
+ * reaches work already running, and that is per key: the rows say "immediately"
+ * or "next run", and a run carries the snapshot it started with so a replay
+ * sees what the first execution saw.
  */
-export const STORED_ONLY_NOTICE =
-  "Values saved here are stored now. This deployment's worker still reads most " +
-  "settings from its environment until the consumers stages ship; the source " +
-  "badge says where a value is stored, not what the worker currently uses.";
+export const SETTINGS_CADENCE_NOTICE =
+  "Values saved here are stored and read: the worker loads a settings snapshot " +
+  "per request, cron tick and MCP call. When a change reaches work already " +
+  "running is per setting, and each row says which it is, immediately or on the " +
+  "next run.";
 
 /** The label above a field's resolved value. Deliberately not "in force": what
- *  is in force is the worker's business until the consumers stages ship. */
+ *  a run already under way uses is the snapshot it started with, which the
+ *  row's own cadence line states. */
 export const RESOLVED_VALUE_LABEL = "Resolved value";
 
 /** The badge on a field: where the value the store resolved came from. */
@@ -89,12 +92,14 @@ export function sourceHint(source: SettingsSource): string {
   return "Nothing is stored, so the built-in default is what the store resolves.";
 }
 
-/** When a change to this key would reach a run, once the worker reads the
- *  store at all. The prefix is the honest part: today it reaches nothing. */
+/** When a change to this key reaches work already running. The worker loads one
+ *  settings snapshot per request, cron tick and MCP call, so a stored value is
+ *  read from the next entry onward either way; what differs per key is whether
+ *  a run already under way picks it up. */
 export function appliesToNote(rule: SettingsInFlightRule): string {
   return rule === "immediate"
-    ? "Once the worker reads stored settings, this applies immediately"
-    : "Once the worker reads stored settings, this applies to the next run";
+    ? "Applies immediately"
+    : "Applies to the next run; a run already under way keeps the settings it started with";
 }
 
 /**

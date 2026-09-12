@@ -2,11 +2,7 @@
 
 import { useEffect, useId, useMemo, useState } from "react";
 
-import type {
-  RepositoryOption,
-  VcsProviderKind,
-  WorkflowRepositoryScope,
-} from "@shared/contracts";
+import type { VcsProviderKind, WorkflowRepositoryScope } from "@shared/contracts";
 import { Listbox } from "@/components/cockpit/listbox";
 import {
   addPinnedRepositories,
@@ -20,14 +16,77 @@ import {
   removePinnedRepository,
   repositoryKey,
 } from "@/lib/workflow-editor/repository-scope";
-import { useRepositoryCatalog } from "./repository-catalog-context";
+import {
+  CATALOG_UNAVAILABLE_NOTE,
+  DIRECTORY_UNAVAILABLE_NOTE,
+  splitPins,
+  useRepositoryCatalog,
+  type RepositoryPickerOption,
+} from "./repository-catalog-context";
 
 const CATALOG_CACHE_NOTE =
   "The repository catalog is cached for 60 seconds, so access granted a moment ago can still be missing here.";
 
+/** What a row the catalog does not enable says, once the catalog is the grant.
+ *  A pin is a selection inside the catalog then, so such a row is not one. */
+const NOT_ENABLED_REASON = "Not enabled in the repository catalog";
+
+/** What the same row says while the bridge is on. Dispatch accepts it TODAY, so
+ *  refusing the pin would be the picker inventing a rule the worker does not
+ *  have; the row is pinnable and says what will happen on activation day. */
+const NOT_ENABLED_YET_REASON =
+  "Not enabled in the catalog: refused once the catalog is activated";
+
+const NOT_ENABLED_ROW_NOTE =
+  `Rows marked "${NOT_ENABLED_REASON}" cannot be pinned. Enabling a repository happens on the Repositories page.`;
+
+const NOT_ENABLED_YET_ROW_NOTE =
+  `Rows marked "${NOT_ENABLED_YET_REASON}" can be pinned and work today. They stop the day somebody activates the catalog; enabling a repository happens on the Repositories page.`;
+
+/**
+ * The sentence `workflows.publish` announces for the same finding, word for
+ * word (apps/worker/src/mcp/tools/workflow-authoring.ts:368).
+ *
+ * Two surfaces describing one fact in two different ways is how an operator
+ * ends up believing the milder one, so this is copied rather than reworded, and
+ * it says exactly what is true in this window: dispatch refuses the events, and
+ * until the engine stage lands a run that started some other way still reaches
+ * the repository through the pin.
+ */
+export function pinnedNotEnabledSentence(
+  pins: readonly { provider: string; repoPath: string }[],
+): string {
+  const one = pins.length === 1;
+  return `It pins ${one ? "a repository" : `${pins.length} repositories`} the repository catalog does not enable, so dispatch refuses events from ${
+    one ? "it" : "them"
+  } and, until the engine stage lands, a run that starts anyway still reaches ${
+    one ? "it" : "them"
+  } through this pin: ${pins
+    .map((repository) => `${repository.provider}:${repository.repoPath}`)
+    .join(", ")}.`;
+}
+
+/** The same finding while the bridge is on, where the pin still works. Saying
+ *  the activated sentence here would be a refusal that has not happened. */
+function pinnedNotEnabledYetSentence(
+  pins: readonly { provider: string; repoPath: string }[],
+): string {
+  const one = pins.length === 1;
+  return `It pins ${one ? "a repository" : `${pins.length} repositories`} the repository catalog does not enable. ${
+    one ? "It passes" : "They pass"
+  } today because the catalog is not activated; the day somebody activates it, dispatch starts refusing events from ${
+    one ? "it" : "them"
+  }: ${pins
+    .map((repository) => `${repository.provider}:${repository.repoPath}`)
+    .join(", ")}.`;
+}
+
 interface CatalogEntry {
-  option: RepositoryOption;
+  option: RepositoryPickerOption;
+  /** Why this row cannot be ticked, or null when it can. */
   disabledReason: string | null;
+  /** What the row says about itself either way, pinned or not. */
+  note: string | null;
 }
 
 export interface RepositoryScopeModalProps {
@@ -120,10 +179,8 @@ export function RepositoryScopeModal({
   if (!open) return null;
   const pinned = pinnedRepositories(draft);
   const remaining = MAX_PINNED_REPOSITORIES - pinned.length;
-  const catalogSettled = catalog.status === "ready";
-  const unknownPins = catalogSettled
-    ? pinned.filter((repository) => !catalogByKey.has(repositoryKey(repository)))
-    : [];
+  // One split, shared with the scope bar and the deploy warning.
+  const { unknown: unknownPins, notEnabled: notEnabledPins } = splitPins(catalog, pinned);
   const archivedPins = pinned.filter(
     (repository) =>
       catalogByKey.get(repositoryKey(repository))?.archived === true,
@@ -137,15 +194,26 @@ export function RepositoryScopeModal({
     .filter((option) => option.repoPath.toLowerCase().includes(query))
     .map((option) => {
       const selected = isRepositoryPinned(draft, option);
-      return {
-        option,
-        disabledReason:
-          option.archived && !selected
+      // What is TRUE of the row, said whether or not it is already pinned: a
+      // pinned row the catalog refuses used to render as an ordinary healthy
+      // row, which is the one case an operator needed to see.
+      const note =
+        option.enabledInCatalog === false
+          ? catalog.activated
+            ? NOT_ENABLED_REASON
+            : NOT_ENABLED_YET_REASON
+          : option.archived
             ? "Archived in the provider"
-            : remaining <= 0 && !selected
-              ? `Limit of ${MAX_PINNED_REPOSITORIES} reached`
-              : null,
-      };
+            : null;
+      // What BLOCKS a new tick. Never a row already pinned: unticking a pin the
+      // catalog refuses is exactly the repair to leave available. And never the
+      // not-enabled row under the bridge, because dispatch accepts it today.
+      const blocker =
+        selected || (note === NOT_ENABLED_YET_REASON)
+          ? null
+          : (note ??
+            (remaining <= 0 ? `Limit of ${MAX_PINNED_REPOSITORIES} reached` : null));
+      return { option, disabledReason: blocker, note: note ?? blocker };
     });
   const catalogEmpty =
     catalog.status === "ready" && visibleRepositories.length === 0;
@@ -163,7 +231,7 @@ export function RepositoryScopeModal({
     remaining > 0 &&
     !manualAlreadyPinned;
 
-  function toggleRepository(option: RepositoryOption, checked: boolean) {
+  function toggleRepository(option: RepositoryPickerOption, checked: boolean) {
     setDraft((current) =>
       checked
         ? addPinnedRepositories(current, [
@@ -407,6 +475,29 @@ export function RepositoryScopeModal({
               </div>
             )}
 
+            {catalog.status === "ready" && !catalog.catalogAvailable && (
+              <div
+                role="status"
+                className="mt-3 rounded-[4px] border border-amber-300 bg-amber-50 px-3 py-2 font-body text-[11px] text-amber-800"
+              >
+                {CATALOG_UNAVAILABLE_NOTE}. Every repository the installation
+                exposes is listed and can be pinned; which of them the catalog
+                enables is not known here. Dispatch enforces the catalog
+                whatever this list shows.
+              </div>
+            )}
+
+            {catalog.status === "ready" && !catalog.directoryAvailable && (
+              <div
+                role="status"
+                className="mt-3 rounded-[4px] border border-amber-300 bg-amber-50 px-3 py-2 font-body text-[11px] text-amber-800"
+              >
+                {DIRECTORY_UNAVAILABLE_NOTE}. The rows below are the catalog&apos;s
+                own, so whether a provider is still connected and whether a
+                repository has been archived cannot be shown.
+              </div>
+            )}
+
             {unknownPins.length > 0 && (
               <div
                 role="status"
@@ -416,6 +507,19 @@ export function RepositoryScopeModal({
                 {unknownPins.map((repository) => repository.repoPath).join(", ")}.
                 The pin is kept exactly as saved. Access may have been revoked,
                 or the catalog may be stale. {CATALOG_CACHE_NOTE}
+              </div>
+            )}
+
+            {notEnabledPins.length > 0 && (
+              <div
+                role="status"
+                className="mt-3 rounded-[4px] border border-amber-300 bg-amber-50 px-3 py-2 font-body text-[11px] text-amber-800"
+              >
+                {catalog.activated
+                  ? pinnedNotEnabledSentence(notEnabledPins)
+                  : pinnedNotEnabledYetSentence(notEnabledPins)}{" "}
+                The pin is kept exactly as saved; enabling a repository happens
+                on the Repositories page.
               </div>
             )}
 
@@ -452,7 +556,7 @@ export function RepositoryScopeModal({
                       No repository in the catalog matches this filter.
                     </div>
                   ) : (
-                    entries.map(({ option, disabledReason }) => {
+                    entries.map(({ option, disabledReason, note }) => {
                       const checked = isRepositoryPinned(draft, option);
                       return (
                         <label
@@ -490,9 +594,9 @@ export function RepositoryScopeModal({
                               ? "no default branch"
                               : option.defaultBranch}
                           </span>
-                          {disabledReason !== null && (
+                          {note !== null && (
                             <span className="font-body text-[10px] text-neutral-500">
-                              {disabledReason}
+                              {note}
                             </span>
                           )}
                         </label>
@@ -500,6 +604,11 @@ export function RepositoryScopeModal({
                     })
                   )}
                 </div>
+                {entries.some(({ option }) => option.enabledInCatalog === false) && (
+                  <div className="mt-2 font-body text-[10px] text-neutral-500">
+                    {catalog.activated ? NOT_ENABLED_ROW_NOTE : NOT_ENABLED_YET_ROW_NOTE}
+                  </div>
+                )}
                 <div className="mt-2 flex items-start justify-between gap-3 font-body text-[10px] text-neutral-500">
                   <span className="tabular-nums">
                     {remaining} of {MAX_PINNED_REPOSITORIES} slots left.

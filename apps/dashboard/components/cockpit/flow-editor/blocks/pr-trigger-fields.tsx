@@ -134,6 +134,6 @@ export function PrRepositoriesField({
   );
 }
 
-/** Panels link to Repository scripts in a new tab. A client-side navigation out
+/** Panels link to the Repositories page in a new tab. A client-side navigation out
  *  of the editor silently discards the unsaved canvas, and "see what a group
  *  runs" is exactly the errand an author runs mid-edit. */

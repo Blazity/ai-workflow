@@ -1,20 +1,28 @@
 "use client";
 
-import type { SettingsEntryView, SystemHealthResponse } from "@shared/contracts";
+import Link from "next/link";
 
+import type {
+  RepositoryCatalogState,
+  SettingsEntryView,
+  SystemHealthResponse,
+} from "@shared/contracts";
+
+import {
+  activationDetail,
+  activationValue,
+} from "@/lib/repository-catalog/activation";
 import { displaySettingValue, settingLabel, sourceLabel } from "@/lib/settings/format";
 import { groupSettings, type SettingsGroupView } from "@/lib/settings/groups";
 
 import { SettingsGroupForm } from "./settings-group-form";
 import { SetupOverview } from "./setup-overview";
-import { StoredOnlyNotice } from "./stored-only-notice";
+import { SettingsCadenceNotice } from "./settings-cadence-notice";
 
-/** Activation is one explicit action with its own dialog, on a page this stage
- *  does not ship yet, so the page is named in text rather than linked. */
+/** Activation is one explicit action with its own dialog, which lives on the
+ *  Repositories page. Said here, linked there. */
 const REPOSITORIES_NOTE =
   "Not editable here. Activating the catalog decides what the agent may touch at all, so it happens on the Repositories page, where the dialog names every repository that holds an active run claim and is not enabled.";
-
-const CATALOG_KEY = "catalog.activated";
 
 /**
  * The repositories group, as a summary rather than a form.
@@ -23,7 +31,13 @@ const CATALOG_KEY = "catalog.activated";
  * does nothing; one line that states the value and says where the action lives
  * does not.
  */
-function RepositoriesSummary({ group }: { group: SettingsGroupView }) {
+function RepositoriesSummary({
+  group,
+  catalogState,
+}: {
+  group: SettingsGroupView;
+  catalogState: RepositoryCatalogState | null;
+}) {
   return (
     <section className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -34,6 +48,14 @@ function RepositoriesSummary({ group }: { group: SettingsGroupView }) {
           {group.storedCount} of {group.entries.length} stored
         </span>
       </div>
+      {/* Activation first, and from the catalog state row rather than from any
+          settings key below it: the key nothing writes used to contradict the
+          worker on a deployment whose catalog was activated by the seed. */}
+      <p className="m-0 mt-2 font-body text-[12px] text-neutral-800">
+        <span className="font-semibold">Activation:</span>{" "}
+        {activationValue(catalogState)}{" "}
+        <span className="text-neutral-600">{activationDetail(catalogState)}</span>
+      </p>
       <ul className="list-none m-0 mt-2 p-0 flex flex-col gap-1">
         {group.entries.map((entry) => (
           <li key={entry.key} className="font-body text-[11px] text-neutral-700">
@@ -48,7 +70,11 @@ function RepositoriesSummary({ group }: { group: SettingsGroupView }) {
         ))}
       </ul>
       <p className="m-0 mt-2 font-body text-[11px] text-neutral-600">
-        {REPOSITORIES_NOTE}
+        {REPOSITORIES_NOTE}{" "}
+        <Link href="/repositories" className="text-mariner underline">
+          Open the Repositories page
+        </Link>
+        .
       </p>
     </section>
   );
@@ -58,6 +84,7 @@ export function SettingsScreen({
   settings,
   scan,
   scanReadable,
+  catalogState,
   canEdit,
   available,
 }: {
@@ -65,14 +92,15 @@ export function SettingsScreen({
   scan: SystemHealthResponse | null;
   /** False for a role whose session may not read the system health scan. */
   scanReadable: boolean;
+  /** The repository catalog state row, or null when the worker did not answer
+   *  the catalog read. The only thing this page reads activation from. */
+  catalogState: RepositoryCatalogState | null;
   /** canEditSettings(role): owners and admins. */
   canEdit: boolean;
   /** False when the worker did not answer the settings read. */
   available: boolean;
 }) {
   const groups = groupSettings(settings);
-  const catalogActivated =
-    settings.find((entry) => entry.key === CATALOG_KEY)?.value === true;
 
   return (
     <div className="flex flex-col gap-4 px-4 lg:px-6 pt-5 pb-8">
@@ -98,12 +126,16 @@ export function SettingsScreen({
         </div>
       )}
 
-      {available && <StoredOnlyNotice />}
+      {available && <SettingsCadenceNotice />}
 
-      {available && !catalogActivated && (
+      {available && catalogState !== null && !catalogState.activated && (
         <div className="rounded-[3px] border border-orange-300 bg-orange-100 px-3 py-2 font-body text-[12px] text-[#A23E18]">
           Repository catalog not activated: the agent sees everything the
-          installation sees. Activate it on the Repositories page.
+          installation sees.{" "}
+          <Link href="/repositories" className="underline">
+            Activate it on the Repositories page
+          </Link>
+          .
         </div>
       )}
 
@@ -120,10 +152,15 @@ export function SettingsScreen({
             settings={settings}
             scan={scan}
             scanReadable={scanReadable}
+            catalogState={catalogState}
           />
           {groups.map((group) =>
             group.id === "repositories" ? (
-              <RepositoriesSummary key={group.id} group={group} />
+              <RepositoriesSummary
+                key={group.id}
+                group={group}
+                catalogState={catalogState}
+              />
             ) : (
               <SettingsGroupForm
                 key={group.id}
