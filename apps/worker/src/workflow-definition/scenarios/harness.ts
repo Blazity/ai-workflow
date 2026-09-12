@@ -23,6 +23,7 @@ import {
   workflowDefinitionV2Schema,
 } from "../schema.js";
 import { workflowDefinitionTemplate } from "../templates.js";
+import { transformRegexEvaluator } from "../../engine/helpers/transform-regex-evaluator.js";
 import { executeTransform } from "../transform.js";
 import type { V2BindingResolutionContext } from "@shared/workflow-graph";
 import {
@@ -685,6 +686,7 @@ class Scenario {
             output: await executeTransform(
               node.configuration as unknown as TransformConfiguration,
               bindingContext,
+              transformRegexEvaluator,
             ),
           },
         };

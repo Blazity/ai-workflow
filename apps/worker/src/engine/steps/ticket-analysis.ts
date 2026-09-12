@@ -2,7 +2,7 @@
 import { ticketRunUrl } from "../support/dashboard-links.js";
 import type { TicketEvent } from "../../adapters/messaging/types.js";
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
-import { type WorkflowExecutionLogEvent } from "../../workflow-definition/interpreter.js";
+import { type WorkflowExecutionLogEvent } from "../../run-observability/safe-execution-log.js";
 import { configuredReplaySecrets } from "../../run-observability/configured-secrets.js";
 import { sanitizeReplayValue } from "../../run-observability/sanitizer.js";
 import { type AgentWorkflowInput } from "../agent-input.js";

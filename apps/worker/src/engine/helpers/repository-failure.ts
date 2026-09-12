@@ -1,5 +1,6 @@
 /* eslint-disable max-lines, max-lines-per-function */
-import { type StepsRecord, type WorkflowExecutionErrorState } from "../../workflow-definition/interpreter.js";
+import type { WorkflowExecutionErrorState } from "@shared/contracts";
+import { type StepsRecord } from "../../workflow-definition/interpreter.js";
 import type { BlockExecutionContext } from "../../workflow-definition/interpreter.js";
 import { type EngineCtx } from "../blocks/support/types.js";
 import { asRepositoryScriptsOutput, repositoryScriptCoverageNotes, REPOSITORY_SCRIPTS_ABANDONED_CLASS, REPOSITORY_SCRIPTS_BUDGET_CLASS, REPOSITORY_SCRIPTS_FAILED_CLASS, REPOSITORY_SCRIPTS_NOT_STARTED_CLASS, REPOSITORY_SCRIPTS_NOTHING_RAN_CLASS, type RepositoryScriptsOutput } from "../blocks/support/repository-scripts-output.js";

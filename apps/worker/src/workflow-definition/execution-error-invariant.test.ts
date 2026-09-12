@@ -7,10 +7,12 @@ import { scrubForPublication } from "../engine/support/publication-scrub.js";
 import { sanitizeRunError } from "../services/overview/sanitize-run-detail.js";
 import {
   createWorkflowExecutionErrorState,
-  executionError,
-  formatExecutionErrorForUser,
-  SAFE_EXECUTION_ERROR_MESSAGES,
   type ExecutionErrorCategory,
+} from "@shared/contracts";
+import { formatExecutionErrorForUser } from "../engine/helpers/execution-error.js";
+import {
+  executionError,
+  SAFE_EXECUTION_ERROR_MESSAGES,
 } from "./interpreter.js";
 import { sanitizeDetail, sanitizeFailureMessage } from "./failure-message.js";
 

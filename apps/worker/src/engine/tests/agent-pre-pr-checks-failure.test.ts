@@ -42,12 +42,12 @@ import type {
   WorkflowDefinitionNode,
   WorkflowDefinitionV2,
   WorkflowDefinitionV2Node,
+  WorkflowExecutionErrorState,
 } from "@shared/contracts";
+import { formatExecutionErrorForUser } from "../helpers/execution-error.js";
 import {
   executionError,
-  formatExecutionErrorForUser,
   type StepsRecord,
-  type WorkflowExecutionErrorState,
 } from "../../workflow-definition/interpreter.js";
 import { executeV2Graph } from "../../workflow-definition/v2-scheduler.js";
 import {
