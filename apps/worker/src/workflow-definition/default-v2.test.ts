@@ -6,14 +6,16 @@ import {
   resolveBuiltinHarnessProfile,
 } from "@shared/harness";
 import type { WorkflowBlockRegistryContext } from "./../engine/definition/block-contract-resolver.js";
-import { testBlockData } from "./../test-support/block-contracts.js";
+import {
+  testBlockData,
+  testDeploymentIssues,
+} from "./../test-support/block-contracts.js";
 import { defaultWorkflowDefinitionV2 } from "./default.js";
 import {
   workflowDefinitionTemplate,
   workflowDefinitionTemplates,
 } from "./templates.js";
 import {
-  validateWorkflowDefinitionIssuesForDeployment,
   workflowDefinitionV2Schema,
 } from "./schema.js";
 import { validateHarnessProfileReferencesWithLoader } from "./harness-profile-runtime.js";
@@ -143,7 +145,7 @@ describe("v2 built-in authoring definitions", () => {
     );
     expect(new Set(v2.edges.map((edge) => edge.id)).size).toBe(v2.edges.length);
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(v2, ...blockData),
+      testDeploymentIssues(v2, ...blockData),
     ).toEqual([]);
   });
 
@@ -216,7 +218,7 @@ describe("v2 built-in authoring definitions", () => {
         expect(workflowDefinitionV2Schema.safeParse(template.definition).success)
           .toBe(true);
         expect(
-          validateWorkflowDefinitionIssuesForDeployment(
+          testDeploymentIssues(
             template.definition,
             ...blockData,
           ),
@@ -398,7 +400,7 @@ describe("v2 Harness Profile validation", () => {
       provider: "claude",
     });
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(valid, ...blockData),
+      testDeploymentIssues(valid, ...blockData),
     ).toEqual([]);
 
     const unknown = structuredClone(valid);
@@ -437,7 +439,7 @@ describe("v2 Harness Profile validation", () => {
     mixed.nodes.find((node) => node.id === "planning")!.configuration.provider =
       "claude";
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(mixed, ...blockData),
+      testDeploymentIssues(mixed, ...blockData),
     ).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

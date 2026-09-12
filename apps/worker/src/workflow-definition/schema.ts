@@ -38,8 +38,9 @@ import {
   workflowRepositoryScopeIssues,
 } from "./block-registry.js";
 import {
-  analyzeWorkflowV2Bindings,
+  analyzeWorkflowValues,
   analyzeWorkflowV2Catalog,
+  type WorkflowValueAnalysis,
 } from "./available-values.js";
 import { validateTransformDefinition } from "./transform.js";
 import { validateWorkflowV2WorkspaceAccessIssues } from "./workspace-access.js";
@@ -1538,7 +1539,12 @@ function validateWorkflowGraphV2Issues(
 
 /** Validation required before a definition may become executable. Draft saves
  * use `workflowDefinitionSchema` plus `validateWorkflowGraph` only so an
- * operator can keep editing a structurally sound but incomplete graph. */
+ * operator can keep editing a structurally sound but incomplete graph.
+ *
+ * It analyses the definition itself, because its caller is the run loader: it
+ * validates one stored definition once and holds no request-level analysis. A
+ * caller that does hold one takes `validateWorkflowDefinitionIssuesForDeployment`
+ * below and passes it, so the request keeps to a single pass. */
 export function validateWorkflowDefinitionForDeployment(
   def: WorkflowDefinition,
   resolveContract: WorkflowBlockContractResolver,
@@ -1553,21 +1559,28 @@ export function validateWorkflowDefinitionForDeployment(
     resolveContract,
     blockParamsSchemas,
     configuredVcsProviders,
+    analyzeWorkflowValues(def, resolveContract),
     options,
   ).map(({ message }) => message);
 }
 
+/**
+ * `analysis` is the request's available-values pass over `def`. Passing the
+ * pass rather than the analyser is what keeps a request to one walk: the
+ * candidate validator and the deployment policies read the same pass again
+ * afterwards.
+ */
 export function validateWorkflowDefinitionIssuesForDeployment(
   def: WorkflowDefinition,
   resolveContract: WorkflowBlockContractResolver,
   blockParamsSchemas: WorkflowBlockParamsSchemas,
   configuredVcsProviders: readonly VcsProviderKind[],
+  analysis: WorkflowValueAnalysis,
   options: {
     checkEnvironmentAvailability?: boolean;
   } = {},
 ): WorkflowDefinitionValidationIssue[] {
-  const bindingAnalysis = analyzeWorkflowV2Bindings(def, resolveContract);
-  const catalogAnalysis = analyzeWorkflowV2Catalog(def, resolveContract);
+  const catalogAnalysis = analyzeWorkflowV2Catalog(analysis);
   const issues = dedupeDeploymentIssues([
     ...validateWorkflowGraphV2Issues(def),
     ...validateWorkflowV2ConfigurationIssues(def, blockParamsSchemas),
@@ -1577,7 +1590,7 @@ export function validateWorkflowDefinitionIssuesForDeployment(
       blockParamsSchemas,
       options,
     ),
-    ...bindingAnalysis.issues,
+    ...analysis.issues,
     ...validateWorkflowV2BranchConditionIssues(
       def,
       catalogAnalysis.catalogByNode,

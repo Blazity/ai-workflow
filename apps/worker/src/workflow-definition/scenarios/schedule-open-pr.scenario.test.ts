@@ -3,9 +3,11 @@ import { describe, expect, it } from "vitest";
 import type { WorkflowDefinitionV2 } from "@shared/contracts";
 import type { AgentWorkflowInput } from "../../engine/agent-input.js";
 import type { WorkflowBlockRegistryContext } from "../../engine/definition/block-contract-resolver.js";
-import { testBlockData } from "../../test-support/block-contracts.js";
 import {
-  validateWorkflowDefinitionIssuesForDeployment,
+  testBlockData,
+  testDeploymentIssues,
+} from "../../test-support/block-contracts.js";
+import {
   workflowDefinitionV2Schema,
 } from "../schema.js";
 import { executorRunsOf, expectStartsAfterFinishOf } from "./assertions.js";
@@ -192,7 +194,7 @@ function snapshotDefinition(): WorkflowDefinitionV2 {
 describe("schedule trigger: the shipped snapshot", () => {
   it("deploys with no validation issues", () => {
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(snapshotDefinition(), ...BLOCK_DATA, {
+      testDeploymentIssues(snapshotDefinition(), ...BLOCK_DATA, {
         checkEnvironmentAvailability: false,
       }),
     ).toEqual([]);
@@ -207,7 +209,7 @@ describe("schedule trigger: the shipped snapshot", () => {
     const { repositoryScope: _pin, ...unpinned } = snapshotDefinition();
     expect(_pin?.repositories).toHaveLength(1);
 
-    const issues = validateWorkflowDefinitionIssuesForDeployment(
+    const issues = testDeploymentIssues(
       unpinned as WorkflowDefinitionV2,
       ...BLOCK_DATA,
       { checkEnvironmentAvailability: false },
