@@ -90,7 +90,7 @@ function structural(definition: WorkflowDefinition): WorkflowDefinition {
 function validStored(definition: WorkflowDefinition): WorkflowDefinition {
   const parsed = structural(definition);
   const issues = validateWorkflowDefinitionIssuesForDeployment(
-    parsed, workflowBlockRegistryContextFromEnv(), { allowLegacyCompatibility: true },
+    parsed, workflowBlockRegistryContextFromEnv(),
   );
   if (issues.length > 0) {
     throw new raw.WorkflowDefinitionStoreError(400, `Invalid workflow: ${issues.map(({ message }) => message).join("; ")}`);

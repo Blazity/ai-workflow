@@ -304,7 +304,9 @@ test("repository and allowlisted writes pass the consecutive-writes gate", () =>
       "",
     ].join("\n"),
   });
-  const result = gate("consecutive-writes.mjs", ["--root", root]);
+  const allowlist = join(root, "allowlist.json");
+  writeFileSync(allowlist, '["apps/worker/src/workflow-definition/template-seed.ts"]\n');
+  const result = gate("consecutive-writes.mjs", ["--root", root, "--allowlist", allowlist]);
   assert.equal(result.status, gateSuccess, result.stderr || result.stdout);
   assert.match(result.stdout, /consecutive-writes PASS/);
 });

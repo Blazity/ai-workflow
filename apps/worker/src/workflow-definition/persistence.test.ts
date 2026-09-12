@@ -205,10 +205,21 @@ describe("migration seed", () => {
 
 describe("starter template seed", () => {
   it("adds the eight disabled starter workflows exactly once", async () => {
-    await seedWorkflowDefinitionTemplates(db, { includeReview: true });
-    await seedWorkflowDefinitionTemplates(db, { includeReview: true });
+    const executeSpy = vi.spyOn(db, "execute");
+    let firstIds: number[];
+    let secondIds: number[];
+    try {
+      firstIds = await seedWorkflowDefinitionTemplates(db, { includeReview: true });
+      expect(executeSpy).toHaveBeenCalledTimes(8);
+      secondIds = await seedWorkflowDefinitionTemplates(db, { includeReview: true });
+      expect(executeSpy).toHaveBeenCalledTimes(16);
+    } finally {
+      executeSpy.mockRestore();
+    }
+    expect(secondIds!).toEqual(firstIds!);
 
     const defs = await listWorkflowDefinitions(db);
+    expect(firstIds!).toEqual(defs.slice(1).map((definition) => definition.id));
     expect(defs.map((definition) => definition.name)).toEqual([
       "Ticket workflow",
       "Human-approved plan",

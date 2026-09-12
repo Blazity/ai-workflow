@@ -82,7 +82,7 @@ import type {
   WorkspaceManifest,
   WorkspaceRepositoryInput,
 } from "../../sandbox/repo-workspace.js";
-import { emptyPrePrCheckConfig } from "../../pre-pr-checks/config.js";
+import { emptyPrePrCheckConfig } from "../pre-pr-checks/config.js";
 import { isRepoAllowed, filterAllowedRepositories } from "../../engine/support/repo-allowlist.js";
 import { AI_WORKFLOW_COMMENT_MARKER } from "../../adapters/vcs/vcs-bot-identity.js";
 import {

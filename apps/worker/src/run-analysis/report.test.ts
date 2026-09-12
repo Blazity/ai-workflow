@@ -10,7 +10,7 @@ import {
   usageSnapshot,
   withAnalysisDelivery,
   withAnalysisPublication,
-} from "./report.js";
+} from "../engine/support/run-analysis-report.js";
 
 const usage = {
   costUsd: 1.23,

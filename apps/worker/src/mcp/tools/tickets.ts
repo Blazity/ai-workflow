@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { IssueTrackerNotFoundError } from "../../services/mcp/app-dependencies.js";
 import {
   McpPublicError,
+  isRunCompletionPending,
   isTerminalRunStatus,
   type McpRunSummary,
   type McpToolDependencies,
@@ -136,6 +137,10 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
               workflowName: r.workflowName ?? r.workflowId ?? "wf_unknown",
               status,
               terminal: isTerminalRunStatus(status),
+              completionPending: isRunCompletionPending(
+                status,
+                r.completedAt ? r.completedAt.toISOString() : null,
+              ),
               ticketKey: r.ticketKey,
               createdAt: (r.createdAt ?? r.firstSeenAt).toISOString(),
               startedAt: r.startedAt ? r.startedAt.toISOString() : null,

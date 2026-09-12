@@ -69,7 +69,7 @@ export function findTriggerScheduleRow(
  *
  * Reading also heals, exactly like the webhook endpoint's config route: a
  * schedule row is minted when the definition deploys (syncSchedulesForLiveHead in
- * workflow-definition/persistence.ts), so healing here covers the definition that was
+ * services/workflow-definitions/policy-operations.ts), so healing here covers the definition that was
  * deployed before this trigger existed and the deploy whose best-effort sync did
  * not land. The heal is a write, so the caller says whether this request is
  * allowed to make it: a plain member's read must not.

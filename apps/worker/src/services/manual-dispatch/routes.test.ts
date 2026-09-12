@@ -23,7 +23,7 @@ vi.mock("../auth/request-context.js", () => ({
     organizationName: "AI Workflow",
   }),
 }));
-vi.mock("../../pre-pr-checks/store.js", () => ({
+vi.mock("../../engine/pre-pr-checks/store.js", () => ({
   dashboardUserLabel: async () => "Karol",
 }));
 vi.mock("../workflow-definitions/trigger-manual-dispatch.js", () => {

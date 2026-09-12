@@ -34,8 +34,12 @@ async function persistPreparedReplayAttempt(input: {
 /**
  * Persist the run's cost/usage (+ agent PR + ticket) to the durable telemetry
  * table. Called from the workflow's outer finally so cost is recorded on every
- * exit — success, clarification, or failure. maxRetries = 0 and the caller
- * swallows errors: telemetry must never retry or fail the run.
+ * exit - success, clarification, or failure. The repository write is an
+ * idempotent upsert, so the durable step retries transient failures before the
+ * caller gives up without changing the run's already-decided outcome. Every
+ * failed attempt is logged here with the run id and ticket key, so a silent
+ * break (e.g. a schema drift like a missing column on the run's Neon branch)
+ * surfaces immediately instead of dropping run history for days unnoticed.
  */
 export async function recordRunTelemetryStep(payload: {
   runId: string;
@@ -53,79 +57,110 @@ export async function recordRunTelemetryStep(payload: {
   harnessManifests?: HarnessRunManifestRecord[];
 }) {
   "use step";
-  const { loadRunTelemetryPort } = await import("../internal/ports.js");
-  const { recordConnectedRunUsage } = await loadRunTelemetryPort();
-  const { finalizeConnectedRunAnalysisUsage } = await import("../../run-analysis/persistence.js");
-  const { getWorld } = await import("workflow/runtime");
-  const collectRunDetailMod = await import(
-    "../support/collect-run-detail.js"
-  );
-  const capturedSteps = await collectRunDetailMod.captureRunStepsBestEffort(
-    getWorld() as unknown as import("../support/collect-run-detail.js").RunDetailSource,
-    payload.runId,
-  );
-  const steps = collectRunDetailMod.sanitizeRunStepsForDiagnosticError(
-    capturedSteps,
-    payload.executionError,
-  );
-  const { totals } = payload;
-  await recordConnectedRunUsage({
-    runId: payload.runId,
-    // This is the agent workflow — its canonical identity (mirrors
-    // WORKFLOW_MAP.agentWorkflow in lib/overview/collect-runs.ts). Recorded here
-    // so the run is attributed even when no cron snapshot ever observes it.
-    workflowId: "wf_agent",
-    workflowName: "Agent",
-    subjectKey: payload.subjectKey,
-    status: payload.status,
-    // Durable "why" for a failed run: the user-facing execution error when one
-    // was captured, else a short derivation from the structured budget stop.
-    statusReason:
-      payload.status === "failed"
-        ? payload.executionError?.message ??
-          (payload.budgetFailure
-            ? `Run stopped on budget: ${payload.budgetFailure.reason}`
-            : null)
-        : null,
-    ticketKey: payload.ticketKey,
-    ticketTitle: payload.ticketTitle,
-    ticketUrl: payload.ticketUrl,
-    model: payload.model,
-    costUsd: totals.costUsd,
-    costKnown: totals.costKnown,
-    tokensInput: totals.tokensInput,
-    tokensCached: totals.tokensCached,
-    tokensOutput: totals.tokensOutput,
-    phases: totals.phases,
-    steps,
-    budgetFailure: payload.budgetFailure,
-    prUrl: payload.pr?.url ?? null,
-    prNumber: payload.pr?.number ?? null,
-    prs: payload.prs,
-    harnessManifests: payload.harnessManifests,
-  });
+  // The whole body is guarded, not just the upsert: the dynamic imports and the
+  // world capture below can reject too, and a failure that produced no log was
+  // how run history could go missing for days unnoticed. Every attempt logs and
+  // rethrows, so the durable retry still happens and the caller still sees the
+  // exhausted budget.
   try {
-    await finalizeConnectedRunAnalysisUsage(
-      payload.runId,
-      usageSnapshot(payload.totals, new Date().toISOString()),
+    const { loadRunTelemetryPort } = await import("../internal/ports.js");
+    const { recordConnectedRunUsage } = await loadRunTelemetryPort();
+    const { finalizeConnectedRunAnalysisUsage } = await import("../../run-analysis/persistence.js");
+    const { getWorld } = await import("workflow/runtime");
+    const collectRunDetailMod = await import(
+      "../support/collect-run-detail.js"
     );
+    const capturedSteps = await collectRunDetailMod.captureRunStepsBestEffort(
+      getWorld() as unknown as import("../support/collect-run-detail.js").RunDetailSource,
+      payload.runId,
+    );
+    const steps = collectRunDetailMod.sanitizeRunStepsForDiagnosticError(
+      capturedSteps,
+      payload.executionError,
+    );
+    const { totals } = payload;
+    await recordConnectedRunUsage({
+      runId: payload.runId,
+      // This is the agent workflow - its canonical identity (mirrors
+      // WORKFLOW_MAP.agentWorkflow in lib/overview/collect-runs.ts). Recorded here
+      // so the run is attributed even when no cron snapshot ever observes it.
+      workflowId: "wf_agent",
+      workflowName: "Agent",
+      subjectKey: payload.subjectKey,
+      status: payload.status,
+      // Durable "why" for a failed run: the user-facing execution error when one
+      // was captured, else a short derivation from the structured budget stop.
+      statusReason:
+        payload.status === "failed"
+          ? payload.executionError?.message ??
+            (payload.budgetFailure
+              ? `Run stopped on budget: ${payload.budgetFailure.reason}`
+              : null)
+          : null,
+      ticketKey: payload.ticketKey,
+      ticketTitle: payload.ticketTitle,
+      ticketUrl: payload.ticketUrl,
+      model: payload.model,
+      costUsd: totals.costUsd,
+      costKnown: totals.costKnown,
+      tokensInput: totals.tokensInput,
+      tokensCached: totals.tokensCached,
+      tokensOutput: totals.tokensOutput,
+      phases: totals.phases,
+      steps,
+      budgetFailure: payload.budgetFailure,
+      prUrl: payload.pr?.url ?? null,
+      prNumber: payload.pr?.number ?? null,
+      prs: payload.prs,
+      harnessManifests: payload.harnessManifests,
+    });
+    // Deliberately inside the guarded body but swallowed on its own: the
+    // analysis snapshot is a nice-to-have, so it must not fail an otherwise
+    // persisted telemetry write.
+    try {
+      await finalizeConnectedRunAnalysisUsage(
+        payload.runId,
+        usageSnapshot(payload.totals, new Date().toISOString()),
+      );
+    } catch (error) {
+      console.error(
+        "run_analysis_final_usage_failed",
+        payload.runId,
+        redactDiagnosticText(errorMessage(error)),
+      );
+    }
   } catch (error) {
-    console.error(
-      "run_analysis_final_usage_failed",
-      payload.runId,
-      redactDiagnosticText(errorMessage(error)),
+    const { logger } = await import("../../infra/logger.js");
+    logger.error(
+      {
+        runId: payload.runId,
+        ticketKey: payload.ticketKey,
+        error: redactDiagnosticText(errorMessage(error)),
+      },
+      "run_completion_telemetry_persist_failed",
     );
+    throw error;
   }
 }
-recordRunTelemetryStep.maxRetries = 0;
+recordRunTelemetryStep.maxRetries = 3;
 
+/**
+ * Last-resort guard around the durable step, called from the workflow body.
+ * console.error and not the pino logger on purpose: this function runs in the
+ * workflow bundle, which rejects any module reaching a Node builtin
+ * (workflow-import-boundary.test.ts fails the build on `import
+ * "../../infra/logger.js"` here with "You are attempting to use pino"), so the
+ * structured log lives inside the step and this keeps the base's console line.
+ */
 async function persistRunTelemetryBestEffort(
   payload: Parameters<typeof recordRunTelemetryStep>[0],
-  ticketIdentifier: string,
 ): Promise<void> {
-  await recordRunTelemetryStep(payload).catch(() => {
+  await recordRunTelemetryStep(payload).catch((error: unknown) => {
     console.error(
-      `Run telemetry failed to persist for ${ticketIdentifier} (run ${payload.runId})`,
+      "run_completion_telemetry_persist_exhausted",
+      payload.runId,
+      payload.ticketKey,
+      redactDiagnosticText(errorMessage(error)),
     );
   });
 }

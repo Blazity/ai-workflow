@@ -4,12 +4,7 @@ import {
   type HarnessProfileReference,
 } from "@shared/contracts";
 import type { Db } from "../db/types.js";
-import {
-  createWorkflowDefinitionTemplate,
-  deleteWorkflowDefinitionTemplate,
-  findWorkflowDefinitionTemplate,
-  writeWorkflowDefinitionTemplateVersion,
-} from "../db/repositories/definitions.js";
+import { seedWorkflowDefinitionTemplate } from "../db/repositories/definitions.js";
 import { canonicalizeWorkflowDefinition, extractWorkflowDefinitionLayout } from "./layout.js";
 import { workflowDefinitionTemplates } from "./templates.js";
 
@@ -27,36 +22,19 @@ export async function seedWorkflowDefinitionTemplates(
     provider?: HarnessProvider;
     profileReference?: HarnessProfileReference;
   },
-): Promise<void> {
+): Promise<number[]> {
+  const definitionIds: number[] = [];
   for (const template of workflowDefinitionTemplates(options).slice(1)) {
     const marker = `System template:${template.id}`;
-    const findExisting = () => findWorkflowDefinitionTemplate(db, { marker, name: template.name });
-    if ((await findExisting()) !== null) continue;
-
-    let definitionId: number;
-    try {
-      definitionId = await createWorkflowDefinitionTemplate(db, {
-        name: template.name,
-        marker,
-        layout: extractWorkflowDefinitionLayout(template.definition),
-      });
-    } catch (error) {
-      if ((await findExisting()) !== null) continue;
-      throw error;
-    }
-
-    try {
-      await writeWorkflowDefinitionTemplateVersion(db, {
-        definitionId,
-        definition: canonicalizeWorkflowDefinition(template.definition),
-        marker,
-        triggerTypes: template.definition.nodes
-          .map((node) => node.type)
-          .filter(isTriggerBlockType),
-      });
-    } catch (error) {
-      await deleteWorkflowDefinitionTemplate(db, definitionId);
-      throw error;
-    }
+    definitionIds.push(await seedWorkflowDefinitionTemplate(db, {
+      name: template.name,
+      marker,
+      layout: extractWorkflowDefinitionLayout(template.definition),
+      definition: canonicalizeWorkflowDefinition(template.definition),
+      triggerTypes: template.definition.nodes
+        .map((node) => node.type)
+        .filter(isTriggerBlockType),
+    }));
   }
+  return definitionIds;
 }

@@ -266,18 +266,24 @@ describe("purgeExpired", () => {
       gateStatusRefs: [],
     });
     await store.claimRun("o/r", 2, "sha9", "run_keep");
+    await store.acquireLock("o/r", 2);
+    await store.setCurrent("o/r", 2, {
+      runId: "run_keep",
+      headSha: "sha9",
+      gateStatusRefs: [],
+    });
     // Expire everything for PR 1 only.
     await db.execute(sql`UPDATE gate_locks SET expires_at = now() - interval '1 second' WHERE pr = 1`);
     await db.execute(sql`UPDATE gate_dedupe SET expires_at = now() - interval '1 second' WHERE pr = 1`);
     await db.execute(sql`UPDATE gate_current SET expires_at = now() - interval '1 second' WHERE pr = 1`);
 
-    await store.purgeExpired();
+    await expect(store.purgeExpired()).resolves.toBeUndefined();
 
     const locks = await db.execute(sql`SELECT count(*)::int AS n FROM gate_locks`);
     const dedupe = await db.execute(sql`SELECT count(*)::int AS n FROM gate_dedupe`);
     const cur = await db.execute(sql`SELECT count(*)::int AS n FROM gate_current`);
-    expect(locks.rows[0].n).toBe(0);
+    expect(locks.rows[0].n).toBe(1);
     expect(dedupe.rows[0].n).toBe(1); // run_keep survives
-    expect(cur.rows[0].n).toBe(0);
+    expect(cur.rows[0].n).toBe(1);
   });
 });

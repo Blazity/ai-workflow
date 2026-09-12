@@ -1,8 +1,28 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Sandbox } from "@vercel/sandbox";
 
-const mockRunCommand = vi.fn();
-const mockStop = vi.fn();
+const {
+  failUnexpectedSandboxGet,
+  mockRunCommand,
+  mockSandboxGet,
+  mockStop,
+  sandboxModule,
+} = vi.hoisted(() => {
+  const mockRunCommand = vi.fn();
+  const mockStop = vi.fn();
+  const failUnexpectedSandboxGet = (..._args: unknown[]): unknown => {
+    throw new Error(
+      "Unexpected Sandbox.get in poll-agent unit test; install an explicit mock implementation before invoking sandbox code",
+    );
+  };
+  const mockSandboxGet = vi.fn(failUnexpectedSandboxGet);
+  return {
+    failUnexpectedSandboxGet,
+    mockRunCommand,
+    mockSandboxGet,
+    mockStop,
+    sandboxModule: { Sandbox: { get: mockSandboxGet } },
+  };
+});
 const trackedFixturePromises = new Set<Promise<void>>();
 const fixtureCleanups = new Set<() => void>();
 
@@ -76,24 +96,16 @@ async function cleanupFixtures() {
   fixtureCleanups.clear();
 }
 
-vi.mock("@vercel/sandbox", () => ({
-  Sandbox: {
-    get: vi.fn(() => ({
-      sandboxId: "sbx-test-123",
-      status: "running",
-      runCommand: mockRunCommand,
-      stop: mockStop,
-    })),
-  },
-}));
+vi.mock("@vercel/sandbox", () => sandboxModule);
 
 vi.mock("./credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
 
-const mockSandboxGet = Sandbox.get as unknown as ReturnType<typeof vi.fn>;
-
 function expectCurrentSandboxGet(sandboxId = "sbx-test-123") {
   expect(mockSandboxGet).toHaveBeenCalledTimes(1);
-  const signal = mockSandboxGet.mock.calls[0]?.[0].signal as AbortSignal;
+  const [options] = mockSandboxGet.mock.calls[0] as [
+    { signal: AbortSignal },
+  ];
+  const signal = options.signal;
   expect(mockSandboxGet).toHaveBeenCalledWith(
     expect.objectContaining({ sandboxId, signal }),
   );
@@ -120,6 +132,7 @@ function resetSandboxMocks() {
   if (trackedFixturePromises.size > 0 || fixtureCleanups.size > 0) {
     throw new Error("sandbox fixtures must be drained before mock reset");
   }
+  vi.doMock("@vercel/sandbox", () => sandboxModule);
   vi.clearAllMocks();
   mockRunCommand.mockReset();
   mockStop.mockReset();
@@ -133,6 +146,7 @@ function resetSandboxMocks() {
 
 afterEach(async () => {
   try {
+    mockSandboxGet.mockReset().mockImplementation(failUnexpectedSandboxGet);
     await cleanupFixtures();
   } finally {
     vi.useRealTimers();
@@ -449,6 +463,7 @@ describe("collectPhase", () => {
   });
 
   it("bounds replay-only partial artifact reads", async () => {
+    vi.useFakeTimers();
     const pendingStdout = createDeferred<string>();
     mockRunCommand.mockResolvedValue({
       exitCode: null,
@@ -463,6 +478,13 @@ describe("collectPhase", () => {
         5,
       ),
     );
+
+    await vi.dynamicImportSettled();
+    expect(mockSandboxGet).toHaveBeenCalledTimes(1);
+    expect(mockSandboxGet).toHaveBeenCalledWith({ sandboxId: "sbx-test-123" });
+    expect(mockRunCommand).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(5);
+
     const error = await failure;
     expect(error).toMatchObject({ message: expect.stringContaining("Replay capture timed out") });
   });

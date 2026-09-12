@@ -460,7 +460,6 @@ async function agentWorkflowBody(
           },
           harnessManifests: [],
         },
-        ticket.identifier,
       );
     }
   };
@@ -3875,11 +3874,10 @@ async function agentWorkflowBody(
     // costKnown=false instead of a misleading costUsd=0 / costKnown=true.
     reconcileMissingPhaseUsages();
     // Durable cost/usage telemetry, recorded on every exit path (success,
-    // clarification, or failure). Best-effort: the step never retries and we
-    // swallow errors so telemetry can't break or delay the run — but we LOG
-    // the failure so a silent break (e.g. a schema drift like a missing column
-    // on the run's Neon branch) surfaces immediately instead of dropping run
-    // history for days unnoticed.
+    // clarification, or failure). Its idempotent upsert retries as a durable
+    // step and each failed attempt is logged inside that step; an exhausted
+    // retry budget is logged once more and then swallowed here so telemetry
+    // cannot replace the run's decided outcome.
     await persistRunTelemetryBestEffort(
       {
         runId: workflowRunId,
@@ -3911,7 +3909,6 @@ async function agentWorkflowBody(
           : null,
         harnessManifests,
       },
-      ticket.identifier,
     );
   }
   return terminalExecutionError
