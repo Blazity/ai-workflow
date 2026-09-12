@@ -18,15 +18,16 @@ import {
   type DashboardInviteRow,
   type SendInviteEmail,
 } from "./invites.js";
-import { DashboardAuthError } from "@shared/contracts";
+import { DashboardAuthError, type SettingsSnapshot } from "@shared/contracts";
 import type { DashboardActor } from "./users-read.js";
 
 /** Every invite this actor is allowed to see. */
 export function listInvitesForActor(
   actor: DashboardActor,
+  settings: SettingsSnapshot,
 ): Promise<DashboardInviteRow[]> {
   return listConnectedDashboardInvites({
-    organizationSlug: dashboardOrganizationSettings().slug,
+    organizationSlug: dashboardOrganizationSettings(settings).slug,
     actor,
   });
 }
@@ -35,9 +36,10 @@ export function listInvitesForActor(
 export function createInviteForActor(input: {
   actor: DashboardActor;
   email: string;
+  settings: SettingsSnapshot;
 }): Promise<DashboardInviteRow> {
   const sendInviteEmail = inviteEmailSender();
-  const organization = dashboardOrganizationSettings();
+  const organization = dashboardOrganizationSettings(input.settings);
   return createConnectedDashboardInvite({
     organizationSlug: organization.slug,
     organizationName: organization.name,
@@ -52,9 +54,10 @@ export function createInviteForActor(input: {
 export function resendInviteForActor(input: {
   actor: DashboardActor;
   inviteId: string;
+  settings: SettingsSnapshot;
 }): Promise<DashboardInviteRow> {
   const sendInviteEmail = inviteEmailSender();
-  const organization = dashboardOrganizationSettings();
+  const organization = dashboardOrganizationSettings(input.settings);
   return resendConnectedDashboardInvite({
     organizationSlug: organization.slug,
     organizationName: organization.name,
@@ -69,9 +72,10 @@ export function resendInviteForActor(input: {
 export function cancelInviteForActor(input: {
   actor: DashboardActor;
   inviteId: string;
+  settings: SettingsSnapshot;
 }): Promise<DashboardInviteRow> {
   return cancelConnectedDashboardInvite({
-    organizationSlug: dashboardOrganizationSettings().slug,
+    organizationSlug: dashboardOrganizationSettings(input.settings).slug,
     actor: input.actor,
     inviteId: input.inviteId,
   });

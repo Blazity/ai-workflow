@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-11
+Last-verified: 2026-09-12
 
 # apps/dashboard
 
@@ -34,7 +34,7 @@ package.
 
 | Directory | What lives there |
 |---|---|
-| `app/(cockpit)/` | the routed screens: runs, tickets, editor, approvals, cost, evals, health, memory, prompts, harness profiles |
+| `app/(cockpit)/` | the routed screens: runs, tickets, editor, approvals, cost, evals, health, memory, prompts, harness profiles, settings |
 | `app/*-data.tsx`, `app/*-skeleton.tsx` | the server components that fetch a screen's data and its loading shape |
 | `app/api/` | route handlers that proxy to the worker or serve dashboard-only reads |
 | `components/cockpit/screens/` | the screen bodies |
@@ -45,6 +45,54 @@ package.
 | `lib/data/` | the mock dataset a screen falls back to when a source is not configured |
 | `lib/auth/`, `middleware.ts` | session handling and route protection |
 | `lib/*.ts` | pure helpers with colocated tests (run model, run hrefs, live polling, ticket shaping) |
+
+## Settings
+
+The Settings screen is `app/(cockpit)/settings/`: `page.tsx` streams
+`settings-data.tsx` (the server read), which renders `settings-screen.tsx`. The
+pieces under that directory are shared rather than page-local: `setup-overview.tsx`
+and `stored-only-notice.tsx` are also mounted by the System health screen, and
+`settings-area-panel.tsx` wraps `settings-group-form.tsx` with a key filter for
+the Memory panel (`ENABLE_REPO_MEMORY`, `ENABLE_ORG_MEMORY_PROMOTION`,
+`ENABLE_REPO_ROUTING_MEMORY`). The Repository scripts screen carries no settings
+panel: its own instructions to edit `PRE_PR_CHECKS_ALLOWED_ENV` and redeploy are
+the true ones until the consumers stages land, and stage G mounts the Checks
+panel once they have.
+
+**A saved value is stored, not applied.** The store and this screen ship before
+the stages that rewire the worker's readers, so the worker still reads most keys
+from `process.env`. `STORED_ONLY_NOTICE` says so on every surface that shows a
+settings value, the badge says where a value is *stored*, the overview labels
+the behaviour rows "Stored setting: ...", and nothing here claims a change took
+effect. Delete that wording only together with the consumers stage that makes it
+false.
+
+Both reads and the write go through `app/api/settings/` (`route.ts` plus
+`handler.ts`), which forwards `GET /api/v1/settings`, the `?key=` history read
+and `PATCH /api/v1/settings`. The browser calls it through
+`apiClient.settings`. Everything derived lives in `lib/settings/` with colocated
+`node:test` tests: `groups.ts` panels the entries in registry order, `format.ts`
+builds the label, badge, applies-to note, timestamps and the per-key sentences
+parsed out of the worker's 400, `patch.ts` turns the form draft back into
+registry values (trimming strings, deduping lists) and keeps only the changed
+keys plus the refusals the form makes itself, `overview.ts` computes the setup
+overview including the secrets row, and `unsaved.ts` is the dirty-form registry.
+
+**Unsaved settings edits use the same guard as the scripts editor, with a set
+instead of a boolean.** Up to ten forms are mounted at once, so `unsaved.ts`
+keeps the dirty ones and `cockpit-shell.tsx` asks `hasUnsavedSettings()`
+alongside `hasUnsavedRepositoryScripts()` before every `router.push`. Each form
+installs its own `beforeunload`. There is deliberately no popstate sentinel: one
+per dirty form would push up to ten history entries nobody asked for.
+
+Role gating is `canEditSettings` from `@shared/contracts`, applied to
+`session.role` in the data components. Reading is open to every role, so the
+route and the nav entry are not gated; a member sees every form read only with
+the notice, and the worker is what actually refuses the write. A member also
+gets a 403 from the system health read, which the Settings page renders as
+"Not available" rather than "no scan yet". The `repositories` group renders as a
+one-line summary card rather than a form, because activating the catalog is its
+own action on the Repositories page and `settings.patch.ts` refuses that group.
 
 ## Traps specific to this app
 

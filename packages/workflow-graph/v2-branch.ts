@@ -6,7 +6,7 @@ import {
   parseWorkflowDataReferenceV2,
   resolveWorkflowDataReferenceV2,
   type V2BindingResolutionContext,
-} from "./v2-bindings.js";
+} from "./v2-bindings";
 
 const PRESENCE_OPERATORS = new Set(["has_value", "has_no_value"]);
 

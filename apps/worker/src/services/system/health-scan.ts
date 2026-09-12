@@ -5,7 +5,7 @@
  * "run a scan" as one operation so that a scan which ran is always a scan that
  * was stored.
  */
-import type { SystemHealthResponse } from "@shared/contracts";
+import type { SettingsSnapshot, SystemHealthResponse } from "@shared/contracts";
 import { readSystemHealthScan, saveSystemHealthScan } from "./last-scan.js";
 import { collectDeploymentSystemHealth } from "./probes.js";
 
@@ -15,8 +15,10 @@ export function readLastSystemHealthScan(): Promise<SystemHealthResponse | null>
 }
 
 /** Probe every integration now, store the report, and return it. */
-export async function runSystemHealthScan(): Promise<SystemHealthResponse> {
-  const report = await collectDeploymentSystemHealth();
+export async function runSystemHealthScan(
+  settings: SettingsSnapshot,
+): Promise<SystemHealthResponse> {
+  const report = await collectDeploymentSystemHealth(settings);
   await saveSystemHealthScan(report);
   return report;
 }

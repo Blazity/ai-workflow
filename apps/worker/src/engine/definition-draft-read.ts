@@ -1,4 +1,3 @@
-import type { WorkflowDefinition } from "@shared/contracts";
 import type { Db } from "../db/types.js";
 import {
   getWorkflowDefinitionDraftState,
@@ -6,20 +5,8 @@ import {
   type WorkflowDefinitionDraftStateRow,
 } from "../db/repositories/definitions.js";
 import { getConnectedWorkflowDefinitionDraftState } from "../db/repositories/definitions/connected.js";
+import { applyWorkflowDefinitionLayout } from "../workflow-definition/layout.js";
 import { parseOptionalWorkflowDefinitionVersionRow } from "./stored-definition-reads.js";
-
-function applyLayout(
-  definition: WorkflowDefinition,
-  layout: WorkflowDefinitionDraftStateRow["definition"]["layout"],
-): WorkflowDefinition {
-  return {
-    ...definition,
-    nodes: definition.nodes.map((node) => {
-      const position = layout.nodes[node.id];
-      return position ? { ...node, ...position } : node;
-    }),
-  };
-}
 
 function materializeWorkflowDefinitionDraft(
   state: WorkflowDefinitionDraftStateRow | null,
@@ -29,7 +16,7 @@ function materializeWorkflowDefinitionDraft(
   if (!current || current.schema !== "v2") return null;
   return {
     definition: state.definition,
-    draft: applyLayout(current.definition, state.definition.layout),
+    draft: applyWorkflowDefinitionLayout(current.definition, state.definition.layout),
     draftRevision: current.version,
   };
 }

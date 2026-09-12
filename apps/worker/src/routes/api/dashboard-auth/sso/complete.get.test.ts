@@ -14,6 +14,13 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../../infra/vcs-config.js", () => ({ env: state.env }));
+vi.mock("../../../../db/repositories/settings.js", () => ({
+  // The route loads one settings snapshot per request. This test hands the
+  // handler a stub database, and an empty settings table is what a deployment
+  // that has stored no decision has, so every value still resolves from the
+  // mocked environment exactly as it did before the snapshot existed.
+  readAllConnectedSettings: async () => [],
+}));
 vi.mock("../../../../auth-instance.js", () => ({
   auth: { api: { getSession: state.getSession } },
 }));
@@ -86,6 +93,7 @@ describe("SSO completion", () => {
     expect(state.acceptInvite).toHaveBeenCalledWith(expect.anything(), {
       inviteId: "invite_1",
       user: { id: "user_1", email: "user@example.com" },
+      settings: expect.anything(),
     });
   });
 

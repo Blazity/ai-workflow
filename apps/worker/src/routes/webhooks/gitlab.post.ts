@@ -2,6 +2,7 @@ import { createError, defineEventHandler, getHeader, readRawBody } from "h3";
 // Cluster modules, not the barrel: the barrel also re-exports the polling
 // pass and the other providers' handlers, and this route needs neither.
 import { handleGitLabWebhook } from "../../services/triggers/gitlab/handle-gitlab-webhook.js";
+import { getRequestSettingsSnapshot } from "../../services/settings/index.js";
 import { TriggerHttpError } from "../../services/triggers/trigger-http-error.js";
 
 /**
@@ -23,6 +24,9 @@ export default defineEventHandler(async (event) => {
       messageId: getHeader(event, "webhook-id"),
       idempotencyKey: getHeader(event, "idempotency-key"),
       eventUuid: getHeader(event, "x-gitlab-event-uuid"),
+      // Not awaited here: the service checks the token first and only the
+      // verified path pays for the load.
+      loadSettings: () => getRequestSettingsSnapshot(event),
     });
   } catch (error) {
     if (error instanceof TriggerHttpError) {

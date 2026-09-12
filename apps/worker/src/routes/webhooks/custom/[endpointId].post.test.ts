@@ -42,6 +42,9 @@ vi.mock("../../../db/client.js", () => ({ getDb: () => state.db }));
 vi.mock("workflow/api", () => ({ start: (...args: unknown[]) => mockStart(...args) }));
 vi.mock("../../../engine/index.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
 
+const { settingsSnapshotFromEnvironment } = await import(
+  "../../../services/settings/snapshot.js"
+);
 const route = (await import("./[endpointId].post.js")).default;
 const { deliverCustomWebhook } = await import(
   "../../../services/triggers/custom-webhooks/deliver.js"
@@ -851,6 +854,7 @@ function deliverWithReader(readRawBody: () => Promise<string>, body = BODY) {
       "x-workflow-signature": createHmac("sha256", secret).update(body).digest("hex"),
     },
     deliveryIdHeader: "d-lazy",
+    settings: settingsSnapshotFromEnvironment(),
   });
 }
 
@@ -897,6 +901,7 @@ describe("deliverCustomWebhook and the declared length", () => {
         readRawBody: read,
         headers: { "content-type": "application/json" },
         deliveryIdHeader: undefined,
+        settings: settingsSnapshotFromEnvironment(),
       }),
     ).resolves.toEqual({ outcome: "refused", reason: "payload_too_large" });
     expect(read).not.toHaveBeenCalled();

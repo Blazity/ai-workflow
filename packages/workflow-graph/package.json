@@ -1,0 +1,22 @@
+{
+  "name": "@shared/workflow-graph",
+  "description": "Pure workflow graph rules that may parse, validate, schedule and resolve values for a workflow definition, and may not perform runtime work, reach infrastructure or import any workspace package other than contracts and conditions.",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "default": "./index.ts"
+    }
+  },
+  "dependencies": {
+    "@shared/contracts": "workspace:*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test \"*.test.ts\""
+  }
+}

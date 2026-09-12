@@ -38,9 +38,12 @@ import { executeMcpMutation, executeMcpRead } from "./execute-tool.js";
 import { beginMcpMutation, failMcpMutation } from "../services/mcp/idempotency-store.js";
 import { createMcpToolServices } from "../services/mcp/tool-services.js";
 import { actorFor as actor, depsFor } from "../test-support/mcp.js";
+import { settingsSnapshotFromEnvironment } from "../services/settings/snapshot.js";
 
 let db: Db;
 let clock: Date;
+
+const settings = settingsSnapshotFromEnvironment();
 
 function deps(overrides: Partial<McpToolDependencies> = {}): McpToolDependencies {
   return depsFor(db, () => clock, overrides);
@@ -163,7 +166,7 @@ describe("executeMcpRead", () => {
 
     await expect(
       executeMcpRead({
-        deps: deps({ services: createMcpToolServices(auditFailingDb) }),
+        deps: deps({ services: createMcpToolServices(auditFailingDb, settings) }),
         toolName: "runs.get",
         targetRefs: [],
         operation: async () => {
@@ -224,7 +227,7 @@ describe("executeMcpRead", () => {
   it("still answers a read whose outcome audit cannot be written, and signals it", async () => {
     await expect(
       executeMcpRead({
-        deps: deps({ services: createMcpToolServices(auditInsertFailingDb(db, 1)) }),
+        deps: deps({ services: createMcpToolServices(auditInsertFailingDb(db, 1), settings) }),
         toolName: "runs.get",
         targetRefs: ["run:fail-open"],
         operation: async () => ({ status: "completed" }),
@@ -318,7 +321,7 @@ describe("executeMcpRead", () => {
 
     await expect(
       executeMcpRead({
-        deps: deps({ services: createMcpToolServices(rateFailingDb) }),
+        deps: deps({ services: createMcpToolServices(rateFailingDb, settings) }),
         toolName: "runs.get",
         targetRefs: [],
         operation: async () => {
@@ -522,7 +525,7 @@ describe("executeMcpMutation", () => {
 
     await expect(
       executeMcpMutation({
-        deps: deps({ services: createMcpToolServices(beginFailingDb) }),
+        deps: deps({ services: createMcpToolServices(beginFailingDb, settings) }),
         toolName: "workflows.dispatch",
         targetRefs: ["workflow:begin-failure"],
         idempotencyKey: "dispatch-key-begin-failure",
@@ -563,7 +566,7 @@ describe("executeMcpMutation", () => {
 
     await expect(
       executeMcpMutation({
-        deps: deps({ services: createMcpToolServices(completionFailingDb) }),
+        deps: deps({ services: createMcpToolServices(completionFailingDb, settings) }),
         toolName: "workflows.dispatch",
         targetRefs: ["workflow:complete-failure"],
         idempotencyKey: "dispatch-key-complete-failure",
@@ -603,7 +606,7 @@ describe("executeMcpMutation", () => {
 
     await expect(
       executeMcpMutation({
-        deps: deps({ services: createMcpToolServices(failureFailingDb) }),
+        deps: deps({ services: createMcpToolServices(failureFailingDb, settings) }),
         toolName: "workflows.dispatch",
         targetRefs: ["workflow:fail-failure"],
         idempotencyKey: "dispatch-key-fail-failure",
@@ -628,7 +631,7 @@ describe("executeMcpMutation", () => {
   it("fails a dispatch whose outcome audit cannot be written", async () => {
     await expect(
       executeMcpMutation({
-        deps: deps({ services: createMcpToolServices(auditInsertFailingDb(db, 1)) }),
+        deps: deps({ services: createMcpToolServices(auditInsertFailingDb(db, 1), settings) }),
         toolName: "workflows.dispatch",
         targetRefs: ["workflow:fail-closed"],
         idempotencyKey: "dispatch-key-fail-closed",

@@ -2,6 +2,7 @@ import { createError, defineEventHandler, getRouterParam } from "h3";
 import {
   resendInviteForActor,
 } from "../../../../../services/auth/dashboard-invites.js";
+import { getRequestSettingsSnapshot } from "../../../../../services/settings/index.js";
 import {
   requireDashboardActor,
   toHttpError,
@@ -15,7 +16,11 @@ export default defineEventHandler(async (event) => {
   }
 
   try {
-    return await resendInviteForActor({ actor, inviteId });
+    return await resendInviteForActor({
+      actor,
+      inviteId,
+      settings: await getRequestSettingsSnapshot(event),
+    });
   } catch (error) {
     toHttpError(error);
   }

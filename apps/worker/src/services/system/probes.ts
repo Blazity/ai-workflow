@@ -1,8 +1,9 @@
 import { createAppAuth } from "@octokit/auth-app";
-import type { SystemHealthResponse } from "@shared/contracts";
+import type { SettingsSnapshot, SystemHealthResponse } from "@shared/contracts";
 import { FIRST_SLICE_TOOLS } from "@shared/contracts";
 import { resolveModelDefaults } from "@shared/harness";
 import { env } from "../../infra/vcs-config.js";
+import { agentRuntimeSettings, mcpSettings } from "../settings/index.js";
 import { JiraAdapter } from "../../adapters/issue-tracker/jira.js";
 import {
   checkConnectedDatabaseConnectivity,
@@ -46,8 +47,10 @@ const REQUIRED_RESEND_WEBHOOK_EVENTS = [
 /** Runs only when an admin presses Scan. Every probe is active (GitLab gets a
  * real test delivery), and the observation-table housekeeping rides on the
  * same request so nothing health-related runs from cron or page rendering. */
-export async function collectDeploymentSystemHealth(): Promise<SystemHealthResponse> {
-  const config = configFromEnvironment();
+export async function collectDeploymentSystemHealth(
+  settings: SettingsSnapshot,
+): Promise<SystemHealthResponse> {
+  const config = configFromEnvironment(settings);
   await sweepSystemHealthObservations().catch(() => {});
   return collectSystemHealth({
     config,
@@ -55,10 +58,10 @@ export async function collectDeploymentSystemHealth(): Promise<SystemHealthRespo
   });
 }
 
-export function configFromEnvironment(): SystemHealthConfig {
+export function configFromEnvironment(settings: SettingsSnapshot): SystemHealthConfig {
   const models = resolveModelDefaults({
-    claude: env.CLAUDE_MODEL,
-    codex: env.CODEX_MODEL,
+    claude: settings.CLAUDE_MODEL ?? undefined,
+    codex: settings.CODEX_MODEL ?? undefined,
   });
   return {
     databaseUrl: env.DATABASE_URL,
@@ -74,7 +77,7 @@ export function configFromEnvironment(): SystemHealthConfig {
     gitlabHost: env.GITLAB_HOST,
     gitlabWebhookSecret: env.GITLAB_WEBHOOK_SECRET,
     gitlabProjectId: env.GITLAB_PROJECT_ID,
-    agentKind: env.AGENT_KIND,
+    agentKind: agentRuntimeSettings(settings).agentKind,
     anthropicApiKey: env.ANTHROPIC_API_KEY,
     anthropicModel: models.claude,
     codexApiKey: env.CODEX_API_KEY,
@@ -96,7 +99,7 @@ export function configFromEnvironment(): SystemHealthConfig {
     slackAllowedUserIds: env.SLACK_ALLOWED_USER_IDS,
     arthurApiKey: env.GENAI_ENGINE_API_KEY,
     arthurTraceEndpoint: env.GENAI_ENGINE_TRACE_ENDPOINT,
-    mcpEnabled: env.MCP_ENABLED,
+    mcpEnabled: mcpSettings(settings).enabled,
     webhookTriggerEncryptionKey: env.WEBHOOK_TRIGGER_ENCRYPTION_KEY,
   };
 }

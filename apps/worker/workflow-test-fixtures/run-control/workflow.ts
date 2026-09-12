@@ -1,11 +1,15 @@
 import { getStepMetadata } from "workflow";
-import { ActiveRunOwnerError } from "../../src/services/run-lifecycle/run-control-errors.js";
-import { isRunControlError } from "../../src/engine/helpers/run-control-error.js";
-import { WorkflowExecutionError } from "../../src/workflow-definition/interpreter.js";
+// Worker source carries no ".js" suffix here: the Workflow builder's discovery
+// resolves a relative specifier literally, and a suffix no file on disk carries
+// drops this fixture's chain out of its import graph. See "A fixture reaches
+// worker source without a file extension" in apps/worker/AGENTS.md.
+import { ActiveRunOwnerError } from "../../src/services/run-lifecycle/run-control-errors";
+import { isRunControlError } from "../../src/engine/helpers/run-control-error";
+import { WorkflowExecutionError } from "../../src/workflow-definition/interpreter";
 import {
   RunBudgetError,
   runBudgetFailureFromError,
-} from "../../src/engine/helpers/run-budget.js";
+} from "../../src/engine/helpers/run-budget";
 
 type ProbeKind =
   | "owner_no_retries"

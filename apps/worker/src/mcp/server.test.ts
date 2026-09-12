@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { McpPublicError, type McpToolDependencies, type McpToolName } from "./contracts.js";
 import { policyFor } from "./policy.js";
 import { createMcpServer } from "./server.js";
+import { settingsSnapshotFromEnvironment } from "../services/settings/snapshot.js";
 
 const state = vi.hoisted(() => ({
   executeMcpRead: vi.fn(),
@@ -65,6 +66,7 @@ const cleanups: Array<() => Promise<void>> = [];
 const deps = {
   services: {} as McpToolDependencies["services"],
   adapters: {} as McpToolDependencies["adapters"],
+  settings: settingsSnapshotFromEnvironment(),
   actor: {
     kind: "user",
     subject: "user_1",

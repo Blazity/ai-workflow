@@ -20,6 +20,7 @@ import {
   FAILURE_PORT,
   WEBHOOK_AUTH_SCHEMES,
   isHarnessProfileReference,
+  isSafeWorkflowInputName,
   isTriggerBlockType,
   isV2AgentBlockType,
   isWorkflowAddressablePathSegment,
@@ -49,9 +50,6 @@ import {
   parseSchedule,
   violatesMinimumPeriod,
 } from "../engine/definition/schedule-occurrence.js";
-import {
-  isSafeWorkflowInputName,
-} from "./bindings.js";
 import {
   resolveWorkflowBlockContract,
   workflowBlockDeploymentDefinitionIssues,

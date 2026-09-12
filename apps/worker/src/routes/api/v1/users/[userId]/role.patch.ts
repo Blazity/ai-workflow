@@ -6,6 +6,7 @@ import {
 import {
   changeDashboardUserRole,
 } from "../../../../../services/auth/dashboard-directory.js";
+import { getRequestSettingsSnapshot } from "../../../../../services/settings/index.js";
 import {
   requireDashboardActor,
   toHttpError,
@@ -31,6 +32,7 @@ export default defineEventHandler(async (event) => {
       actorRole: actor.role,
       targetUserId: userId,
       nextRole: parsed.value.role,
+      settings: await getRequestSettingsSnapshot(event),
     });
   } catch (error) {
     toHttpError(error);

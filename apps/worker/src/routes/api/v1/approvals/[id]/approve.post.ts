@@ -5,6 +5,7 @@ import { canApproveWorkflowPlans } from "../../../../../services/auth/roles.js";
 import {
   approveApproval,
 } from "../../../../../services/approvals/approval-decisions.js";
+import { getRequestSettingsSnapshot } from "../../../../../services/settings/index.js";
 import { toApprovalHttpError } from "../../approvals.get.js";
 
 export default defineEventHandler(async (event): Promise<ApprovalDecisionResponse | undefined> => {
@@ -16,7 +17,11 @@ export default defineEventHandler(async (event): Promise<ApprovalDecisionRespons
     const id = getRouterParam(event, "id");
     if (!id) throw createError({ statusCode: 404, statusMessage: "Unknown approval" });
 
-    const outcome = await approveApproval(id, { userId: actor.userId });
+    const outcome = await approveApproval(
+      id,
+      { userId: actor.userId },
+      await getRequestSettingsSnapshot(event),
+    );
     switch (outcome.kind) {
       case "unknown_approval":
         throw createError({ statusCode: 404, statusMessage: "Unknown approval" });

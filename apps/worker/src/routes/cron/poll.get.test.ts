@@ -1,10 +1,13 @@
 import { createApp, toWebHandler } from "h3";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { logger } from "../../infra/logger.js";
 
 const state = vi.hoisted(() => ({
   order: [] as string[],
   discovered: [] as string[],
+  // The tick's own settings store. Every other repository this file reaches is
+  // mocked, so this handle serves the settings read and nothing else.
+  db: undefined as unknown,
 }));
 const mocks = vi.hoisted(() => ({
   dispatchTicket: vi.fn(),
@@ -55,7 +58,7 @@ vi.mock("../../infra/vcs-config.js", () => ({
   },
 }));
 vi.mock("workflow/runtime", () => ({ getWorld: () => ({ runs: {} }) }));
-vi.mock("../../db/client.js", () => ({ getDb: () => ({ db: true }) }));
+vi.mock("../../db/client.js", () => ({ getDb: () => state.db }));
 vi.mock("../../engine/support/adapters.js", () => ({
   createAdapters: () => ({
     issueTracker: {
@@ -241,6 +244,11 @@ vi.mock("../../engine/runtime/pr-external-resources.js", () => ({
 }));
 
 const poll = (await import("./poll.get.js")).default;
+const { createTestDb } = await import("../../db/test-db.js");
+const { writeManyConnectedSettings } = await import(
+  "../../db/repositories/settings.js"
+);
+const { settings: settingsTable } = await import("../../db/schema.js");
 
 function request() {
   const app = createApp();
@@ -249,8 +257,14 @@ function request() {
 }
 
 describe("cron clarification recovery ordering", () => {
-  beforeEach(() => {
+  beforeAll(async () => {
+    state.db = await createTestDb();
+  });
+
+  beforeEach(async () => {
     vi.clearAllMocks();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (state.db as any).delete(settingsTable);
     state.order = [];
     state.discovered = [];
     mocks.reconcileAtCapacityQueue.mockResolvedValue({ queued: 0, commented: 0 });
@@ -358,7 +372,10 @@ describe("cron clarification recovery ordering", () => {
     const response = await request();
 
     expect(response.status).toBe(200);
-    expect(mocks.createWebhookDispatchDeps).toHaveBeenCalledWith({});
+    expect(mocks.createWebhookDispatchDeps).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({ MAX_CONCURRENT_AGENTS: expect.anything() }),
+    );
     expect(mocks.redispatchPendingWebhookDeliveries).toHaveBeenCalledWith({
       kind: "webhook-deps",
     });
@@ -397,7 +414,7 @@ describe("cron clarification recovery ordering", () => {
     expect(mocks.sweepMcpRateLimits).toHaveBeenCalledWith();
     expect(mocks.pruneMcpAudits).toHaveBeenCalledWith(
       expect.any(Date),
-      { limit: 100 },
+      { settings: expect.anything(), limit: 100 },
     );
     // Nothing on the request path deletes a spent idempotency key either, so
     // the same retention shape carries it: bounded batch, reported count.
@@ -753,6 +770,37 @@ describe("cron clarification recovery ordering", () => {
       "poll_dispatch_refused",
     );
     infoSpy.mockRestore();
+  });
+
+  it("dispatches under the stored run-slot ceiling, not the variable", async () => {
+    state.discovered = ["AIW-400"];
+    mocks.classifyProtectedClarifications.mockResolvedValue({
+      all: [],
+      retained: [],
+      terminal: [],
+    });
+
+    // No decision stored yet: the tick runs on what the deployment booted with.
+    expect((await request()).status).toBe(200);
+    expect(mocks.dispatchTicket).toHaveBeenCalledWith(
+      "AIW-400",
+      expect.anything(),
+      1,
+    );
+
+    await writeManyConnectedSettings({
+      patch: { MAX_CONCURRENT_AGENTS: 6 },
+      actor: "user_admin",
+      reason: "capacity raised from the Settings page",
+    });
+    mocks.dispatchTicket.mockClear();
+
+    expect((await request()).status).toBe(200);
+    expect(mocks.dispatchTicket).toHaveBeenCalledWith(
+      "AIW-400",
+      expect.anything(),
+      6,
+    );
   });
 
   it("feeds only the at_capacity refusals into the at-capacity queue pass", async () => {
