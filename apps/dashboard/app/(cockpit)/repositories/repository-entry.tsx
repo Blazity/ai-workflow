@@ -1,16 +1,21 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 import type {
   MemoryDocumentDto,
   PrePrCheckRepositoryConfig,
   RepositoryCatalogEntry,
   RepositoryProfileVersion,
+  RepositoryProfileWarning,
   RepositorySuggestionRecord,
 } from "@shared/contracts";
-import { REPOSITORY_BATCH_TIMEOUT_MAX_MINUTES } from "@shared/contracts";
+import {
+  REPOSITORY_BATCH_TIMEOUT_MAX_MINUTES,
+  REPOSITORY_RELATIONSHIPS_MAX,
+  repositoryProfileRemoteExecutionWarnings,
+} from "@shared/contracts";
 import { REPOSITORY_RULES_VARIABLES } from "@shared/prompts";
 
 import { apiClient } from "@/lib/api/client";
@@ -55,6 +60,18 @@ const RULES_DESTINATION_NOTE =
 
 const TABS = ["overview", "rules", "scripts", "memory", "history"] as const;
 type Tab = (typeof TABS)[number];
+
+/** The query parameter the open tab lives in, so "the Scripts tab of repository
+ *  7" is a link. A run failure and a Jira comment both have to be able to point
+ *  at one, and a tab held in local state cannot be pointed at. */
+const TAB_PARAM = "tab";
+
+/** The tab a URL asks for, or null for "whatever the screen defaults to". An
+ *  unknown value is null rather than an error: a stale link must open the
+ *  entry, not a broken screen. */
+function tabFromParam(value: string | null | undefined): Tab | null {
+  return TABS.includes((value ?? "") as Tab) ? (value as Tab) : null;
+}
 
 const TAB_LABELS: Record<Tab, string> = {
   overview: "Overview",
@@ -126,6 +143,7 @@ export function RepositoryEntryScreen({
   repository,
   currentProfile,
   versions,
+  versionsHasMore = false,
   catalog,
   allowedEnv,
   memory,
@@ -133,7 +151,10 @@ export function RepositoryEntryScreen({
 }: {
   repository: RepositoryCatalogEntry;
   currentProfile: RepositoryProfileVersion | null;
+  /** The NEWEST page of the profile history. The tab asks for older pages. */
   versions: readonly RepositoryProfileVersion[];
+  /** Whether versions older than the last one on that page exist. */
+  versionsHasMore?: boolean;
   /** Every catalog row, so a relationship can name the repository it points at
    *  rather than showing an id. */
   catalog: readonly RepositoryCatalogEntry[];
@@ -143,7 +164,61 @@ export function RepositoryEntryScreen({
   canManage: boolean;
 }) {
   const router = useRouter();
-  const [tab, setTab] = useState<Tab>("overview");
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  // The open tab lives in the URL: a link to the Scripts tab of one repository
+  // is what a run failure or a Jira comment points at, and a reload used to
+  // land on Overview whatever was open. No param means today's default, so
+  // every link written before this still opens the same screen.
+  //
+  // Held in state as well as in the URL, and the click writes both. A tab that
+  // read only the param would not open until the router had finished a
+  // round-trip it does not need to make, which is a visible stall on a purely
+  // local change; the effect below keeps the param the authority when it moves
+  // under the screen (the back button, or a link opened into this same entry).
+  const paramTab = tabFromParam(searchParams?.get(TAB_PARAM));
+  const [tab, setOpenTab] = useState<Tab>(paramTab ?? "overview");
+  useEffect(() => {
+    if (paramTab !== null) setOpenTab(paramTab);
+  }, [paramTab]);
+  const setTab = useCallback(
+    (next: Tab) => {
+      setOpenTab(next);
+      const params = new URLSearchParams(searchParams?.toString() ?? "");
+      params.set(TAB_PARAM, next);
+      // The browser's own replaceState, NOT router.replace. Next keeps
+      // useSearchParams in sync with a native history entry, so the param is
+      // still a link and the back button still works, but no navigation is
+      // started: router.replace re-runs this route's server component, which
+      // refetches the entry and throws away the history pages the History tab
+      // has already loaded. A tab click is a local change and must cost
+      // nothing. Replace rather than push, because switching tabs is not a
+      // step to walk back through.
+      if (typeof window !== "undefined") {
+        window.history.replaceState(null, "", `${pathname}?${params.toString()}`);
+      }
+    },
+    [pathname, searchParams],
+  );
+  // The history pages this screen has asked for, above the newest page the
+  // server rendered. Held here, not in the History tab: only the open tab is
+  // mounted, so state living in that tab would be thrown away by a glance at
+  // Rules and the reader would come back to the first page.
+  const [olderVersions, setOlderVersions] = useState<RepositoryProfileVersion[]>([]);
+  const [moreVersions, setMoreVersions] = useState(versionsHasMore);
+  // A fresh server page replaces everything paged in: keeping it would show
+  // rows from before a save beside rows from after it.
+  useEffect(() => {
+    setOlderVersions([]);
+    setMoreVersions(versionsHasMore);
+  }, [versions, versionsHasMore]);
+  const appendVersionPage = useCallback(
+    (page: { versions: readonly RepositoryProfileVersion[]; hasMore: boolean }) => {
+      setOlderVersions((prev) => [...prev, ...page.versions]);
+      setMoreVersions(page.hasMore);
+    },
+    [],
+  );
   const [saved, setSaved] = useState<RepositoryProfileDraft>(() =>
     draftFromProfile(currentProfile),
   );
@@ -242,10 +317,25 @@ export function RepositoryEntryScreen({
         moved === undefined || moved.length === 0
           ? ""
           : `: ${moved.map((field) => FIELD_LABELS[field]).join(", ")}`;
+      // The worker reports what THIS SAVE carried that the suggestion path would
+      // have dropped, which is a count of the request and not of the profile:
+      // it is derived from the body that was just sent, so a command an earlier
+      // save stored and this one left untouched is not in it. Said here as well
+      // as on the Scripts tab, because a save made from the Rules tab carries
+      // those commands without ever showing them.
+      const flagged = mutation.warnings?.length ?? 0;
+      const remote =
+        flagged === 0
+          ? ""
+          : ` This save carried ${flagged} ${
+              flagged === 1 ? "command" : "commands"
+            } that download and run remote code; the Scripts tab names ${
+              flagged === 1 ? "it" : "them"
+            }.`;
       setNotice(
         mutation.version === undefined
-          ? "Saved."
-          : `Saved as version ${mutation.version}${what}.`,
+          ? `Saved.${remote}`
+          : `Saved as version ${mutation.version}${what}.${remote}`,
       );
       router.refresh();
     } catch {
@@ -375,6 +465,7 @@ export function RepositoryEntryScreen({
           <h3 className="m-0 font-display text-[15px] font-medium text-coal">
             Script groups
           </h3>
+          <RemoteExecutionWarnings entry={scriptsEntryOf(draft)} />
           <div className="mt-2">
             <RepositoryScriptGroupsEditor
               repository={{ provider: repository.provider, path: repository.path }}
@@ -408,7 +499,11 @@ export function RepositoryEntryScreen({
       {tab === "history" && (
         <>
           <HistoryTab
+            repositoryId={repository.id}
             versions={versions}
+            older={olderVersions}
+            more={moreVersions}
+            onPage={appendVersionPage}
             currentVersion={repository.profileVersion}
             onRestore={canManage && !busy ? restore : null}
           />
@@ -502,9 +597,22 @@ function OverviewTab({
   disabled: boolean;
   onChange: (next: RepositoryProfileDraft) => void;
 }) {
+  // Never this repository: the route refuses a self-reference, and a picker
+  // offering one would be a form that arms a refusal.
   const others = catalog.filter((entry) => entry.id !== repository.id);
   const [target, setTarget] = useState("");
   const [label, setLabel] = useState("");
+  // Already related, so adding it again would be refused: one relationship per
+  // repository, which is the rule the contract's schema applies.
+  const related = new Set(
+    draft.relationships.map((relationship) => relationship.repositoryId),
+  );
+  const duplicate = target !== "" && related.has(Number(target));
+  // The contract caps the list, and the cap is reached on the form rather than
+  // at save: a 51st relationship is refused by the schema for the WHOLE body,
+  // so an admin who also retitled the description and rewrote the rules would
+  // lose those edits to a raw zod message about an array length.
+  const full = draft.relationships.length >= REPOSITORY_RELATIONSHIPS_MAX;
 
   const nameOf = (id: number) =>
     catalog.find((entry) => entry.id === id)?.path ?? `repository ${id}`;
@@ -551,7 +659,10 @@ function OverviewTab({
       </p>
 
       <div className="mt-3 font-body text-[12px] font-semibold text-neutral-800">
-        Relationships
+        Relationships{" "}
+        <span className="font-normal text-neutral-500">
+          {draft.relationships.length} of {REPOSITORY_RELATIONSHIPS_MAX}
+        </span>
       </div>
       <p className="m-0 mt-1 font-body text-[11px] text-neutral-500">
         How this repository relates to others in the catalog, in your own words
@@ -612,7 +723,7 @@ function OverviewTab({
             className="rounded-[3px] border border-neutral-200 bg-white px-2 py-[5px] font-body text-[12px]"
           />
           <button
-            disabled={target === "" || label.trim().length === 0}
+            disabled={target === "" || label.trim().length === 0 || duplicate || full}
             onClick={() => {
               onChange({
                 ...draft,
@@ -628,9 +739,67 @@ function OverviewTab({
           >
             Add
           </button>
+          {(duplicate || full) && (
+            <span role="status" className="font-body text-[11px] text-red-600">
+              {full ? RELATIONSHIP_CAP_NOTE : DUPLICATE_RELATIONSHIP_NOTE}
+            </span>
+          )}
         </div>
       )}
     </section>
+  );
+}
+
+/** Why Add is disabled for a repository this profile already relates to. The
+ *  save would be refused for it: the contract allows one relationship per
+ *  repository, so the form says so before the button does. */
+const DUPLICATE_RELATIONSHIP_NOTE =
+  "This repository is already related. Remove the existing relationship to change its label.";
+
+/** Why Add is disabled once the list is full. Said in the same place and the
+ *  same voice as the duplicate note, and for the same reason: the save would be
+ *  refused for the whole body, taking every unrelated edit on the tab with it. */
+const RELATIONSHIP_CAP_NOTE = `A profile records at most ${REPOSITORY_RELATIONSHIPS_MAX} relationships. Remove one to add another.`;
+
+/** Said beside every command the suggestion filter would have dropped. Quoted
+ *  as the decision wrote it: the save is permitted, and the sentence says whose
+ *  decision that is. */
+const REMOTE_EXECUTION_WARNING =
+  "This command downloads and runs remote code. Suggestions never propose it; saving it is your decision.";
+
+/**
+ * The commands on this tab that look like remote code execution.
+ *
+ * Read off the DRAFT, so it appears as the command is typed or pasted rather
+ * than only after a save, and computed by the contract's own matcher, the same
+ * one the suggestion path drops groups with. Non-blocking by design: the
+ * documented uv setup preset is exactly this shape, so refusing it here would
+ * refuse the preset this repository publishes.
+ */
+function RemoteExecutionWarnings({ entry }: { entry: PrePrCheckRepositoryConfig | null }) {
+  const warnings: RepositoryProfileWarning[] = useMemo(
+    () => repositoryProfileRemoteExecutionWarnings(entry),
+    [entry],
+  );
+  if (warnings.length === 0) return null;
+  return (
+    <ul
+      role="status"
+      aria-label="Remote execution warnings"
+      className="list-none m-0 mt-2 p-0 flex flex-col gap-1"
+    >
+      {warnings.map((warning) => (
+        <li
+          key={`${warning.group}:${warning.command}`}
+          className="rounded-[3px] border border-orange-300 bg-orange-100 px-2 py-[6px] font-body text-[12px] text-[#A23E18]"
+        >
+          <code className="font-mono text-[11px] text-[#A23E18]">
+            {warning.group}: {warning.command}
+          </code>
+          <div>{REMOTE_EXECUTION_WARNING}</div>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -757,16 +926,59 @@ function MemoryTab({
 }
 
 function HistoryTab({
+  repositoryId,
   versions,
+  older,
+  more,
+  onPage,
   currentVersion,
   onRestore,
 }: {
+  repositoryId: number;
+  /** The newest page, as the server rendered it. */
   versions: readonly RepositoryProfileVersion[];
+  /** The older pages already asked for, held by the screen rather than here.
+   *  Tab content is mounted only while its tab is open, so a reader who paged
+   *  three times and glanced at Rules would otherwise come back to one page. */
+  older: readonly RepositoryProfileVersion[];
+  /** Whether older versions than what is on screen exist. */
+  more: boolean;
+  /** Hands the screen one page more. */
+  onPage: (page: { versions: readonly RepositoryProfileVersion[]; hasMore: boolean }) => void;
   currentVersion: number;
   /** Null for a role that may not write, or while a save is in flight. */
   onRestore: ((version: RepositoryProfileVersion) => void) | null;
 }) {
-  if (versions.length === 0) {
+  // In flight and what went wrong are the two things that may be forgotten by a
+  // tab switch: neither outlives the click that caused it.
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const all = useMemo(() => [...versions, ...older], [versions, older]);
+
+  async function loadMore() {
+    const oldest = all.at(-1);
+    if (oldest === undefined) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await apiClient.repositoryCatalog.versions(
+        repositoryId,
+        oldest.version,
+      );
+      if (!result.ok) {
+        setError(result.errorMessage);
+        return;
+      }
+      onPage(result.data);
+    } catch {
+      setError("Could not reach the server.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (all.length === 0) {
     return (
       <section className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3">
         <h3 className="m-0 font-display text-[15px] font-medium text-coal">History</h3>
@@ -779,7 +991,7 @@ function HistoryTab({
   }
   // Newest first from the worker; "what changed" compares each version with the
   // one below it, which is the version it replaced.
-  const ordered = [...versions].sort((a, b) => b.version - a.version);
+  const ordered = [...all].sort((a, b) => b.version - a.version);
   return (
     <section className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3">
       <h3 className="m-0 font-display text-[15px] font-medium text-coal">History</h3>
@@ -834,6 +1046,16 @@ function HistoryTab({
           </li>
         ))}
       </ul>
+      {error && <p className="m-0 mt-2 font-body text-[12px] text-red-600">{error}</p>}
+      {more && (
+        <button
+          onClick={loadMore}
+          disabled={busy}
+          className="mt-2 appearance-none rounded-[3px] border border-neutral-300 bg-white px-2 py-[5px] font-body text-[12px] cursor-pointer disabled:opacity-40 disabled:cursor-default"
+        >
+          {busy ? "Loading…" : "Load more"}
+        </button>
+      )}
     </section>
   );
 }

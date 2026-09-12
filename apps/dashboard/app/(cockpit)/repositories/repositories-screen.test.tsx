@@ -15,7 +15,7 @@ import type {
   RepositoryCatalogState,
 } from "@shared/contracts";
 
-import { RepositoriesScreen } from "./repositories-screen";
+import { NO_ENABLED_REPOSITORY_WARNING, RepositoriesScreen } from "./repositories-screen";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -314,4 +314,92 @@ test("an activation somebody clicked names them and their reason", (t) => {
   const banner = text(render(t, { state: state(true) }));
   assert.match(banner, /Catalog activated by Seed on /);
   assert.match(banner, /reason: the bridge is over/);
+});
+
+// D2 / row L25. Turning the last switch off is a decision with a consequence
+// nowhere on the screen: on an activated catalog every next run is refused. The
+// warning is what the list owes whoever flipped it.
+test("an activated catalog with nothing enabled says every dispatch is refused until one is", (t) => {
+  const rendered = text(
+    render(t, { state: state(true), repositories: [entry({ enabled: false })] }),
+  );
+
+  assert.match(rendered, /No repository is enabled\./);
+  assert.match(rendered, /Every dispatch is refused until one is enabled again\./);
+});
+
+test("the bridge is never warned about, because nothing is refused there yet", (t) => {
+  // The flags are recorded and not yet enforced while the catalog is not
+  // activated, so "every dispatch is refused" would be false, and it would sit
+  // directly under the banner saying the agent sees everything.
+  const rendered = text(
+    render(t, { state: state(false), repositories: [entry({ enabled: false })] }),
+  );
+
+  assert.match(rendered, /Catalog not activated/);
+  assert.doesNotMatch(rendered, /Every dispatch is refused/);
+  // Nor when the worker answered no state at all.
+  assert.doesNotMatch(
+    text(render(t, { state: null, repositories: [entry({ enabled: false })] })),
+    /Every dispatch is refused/,
+  );
+});
+
+test("the warning is gone while anything at all is enabled", (t) => {
+  const rendered = text(
+    render(t, {
+      state: state(true),
+      repositories: [entry({ enabled: true }), entry({ id: 2, path: "acme/api", enabled: false })],
+    }),
+  );
+
+  assert.doesNotMatch(rendered, /Every dispatch is refused/);
+});
+
+test("an empty catalog is not warned about: there is nothing to enable yet", (t) => {
+  // "Import the repositories this installation exposes" is the action there,
+  // and a second red box saying dispatch is refused would be noise on top of
+  // it.
+  assert.doesNotMatch(
+    text(render(t, { state: state(true), repositories: [] })),
+    /Every dispatch is refused/,
+  );
+  assert.doesNotMatch(
+    text(render(t, { state: state(true), repositories: [], available: false })),
+    /Every dispatch is refused/,
+  );
+});
+
+test("the last switch off raises the warning on the worker's count, not on the rendered rows", async (t) => {
+  // The flip answers `enabledRemaining`, which counted the whole catalog in the
+  // database. This screen may be holding a page of it, so the number it shows
+  // the warning off is the worker's, never its own arithmetic.
+  const originalFetch = globalThis.fetch;
+  const only = entry({ enabled: true });
+  globalThis.fetch = (() =>
+    Promise.resolve(
+      Response.json({
+        repository: { ...only, enabled: false },
+        enabledRemaining: 0,
+      }),
+    )) as typeof globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  let renderer!: ReturnType<typeof create>;
+  act(() => {
+    renderer = create(screen({ state: state(true), repositories: [only] }));
+  });
+  t.after(() => act(() => renderer.unmount()));
+  assert.doesNotMatch(text(renderer.root), /Every dispatch is refused/);
+
+  const toggle = renderer.root.findByProps({
+    "aria-label": "Let the agent touch acme/web",
+  });
+  await act(async () => {
+    await toggle.props.onChange({ target: { checked: false } });
+  });
+
+  assert.match(text(renderer.root), new RegExp(NO_ENABLED_REPOSITORY_WARNING.slice(0, 30)));
 });

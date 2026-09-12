@@ -39,12 +39,17 @@ export async function RepositoryData({ id }: { id: number }) {
     const subjectKey = `repo:${entry.repository.provider}:${entry.repository.path}`;
 
     const [versions, catalog, checks, ...memory] = await Promise.all([
-      // The History tab. Loaded with the page rather than on the tab click: it
-      // is one small query and a tab that has to fetch before it can say
-      // anything is a tab that shows a spinner every time it is opened.
+      // The History tab's FIRST PAGE. Loaded with the page rather than on the
+      // tab click: it is one small query and a tab that has to fetch before it
+      // can say anything is a tab that shows a spinner every time it is opened.
+      // The route is paged, so this is the newest page and the tab asks for
+      // older ones; `hasMore` is what puts the button there.
       getJSON<RepositoryCatalogVersionsResponse>(
         `/api/v1/repository-catalog/${id}/versions`,
-      ).catch((): RepositoryCatalogVersionsResponse => ({ versions: [] })),
+      ).catch((): RepositoryCatalogVersionsResponse => ({
+        versions: [],
+        hasMore: false,
+      })),
       // Relationships point at catalog ids, and an id is not a name.
       getJSON<RepositoryCatalogListResponse>("/api/v1/repository-catalog").catch(
         (): RepositoryCatalogListResponse | null => null,
@@ -73,6 +78,7 @@ export async function RepositoryData({ id }: { id: number }) {
         repository={entry.repository}
         currentProfile={entry.currentProfile}
         versions={versions.versions}
+        versionsHasMore={versions.hasMore}
         catalog={catalog?.repositories ?? []}
         allowedEnv={checks?.allowedEnv}
         memory={MEMORY_DOC_PATHS.map((docPath, index) => ({

@@ -3,7 +3,8 @@
 // The import dialog's arithmetic and its copy.
 //
 // Three buckets come back and an admin reads all three differently: rows that
-// were created, keys the provider no longer exposes (a stale screen, reload
+// were created, keys this installation's listing did not contain (removed at
+// the provider, or invisible to the configured token: a stale screen, reload
 // it), and keys the catalog already held (a no-op worth confirming). Folding
 // any two of them together is how an import reports "8 of 10 added" and leaves
 // nobody able to say which two, or why.
@@ -12,6 +13,7 @@ import type {
   RepositoryCatalogImportResponse,
   RepositoryProviderStatus,
 } from "@shared/contracts";
+import { REPOSITORY_IMPORT_SKIPPED_NOTE } from "@shared/contracts";
 
 /** Said beside a candidate the catalog already holds, ticked off and disabled.
  *  Quoted from the brief, because the point of the sentence is that importing
@@ -70,12 +72,17 @@ function repositories(n: number): string {
  * Even the zeroes: "0 already in the catalog" is what tells an admin the check
  * ran, and leaving a bucket out when it is empty is how a screen teaches people
  * that the missing number means something.
+ *
+ * The skipped bucket is named in three words here and explained in full on its
+ * detail row below. A one-line summary that carries both causes of a skip reads
+ * as a paragraph the moment a repository is skipped, which is exactly when the
+ * two numbers before it need to stay legible.
  */
 export function importSummary(result: RepositoryCatalogImportResponse): string {
   return [
     `${repositories(result.imported)} added`,
     `${result.alreadyPresent.length} already in the catalog`,
-    `${result.skipped.length} no longer exposed by the provider`,
+    `${result.skipped.length} not in the listing`,
   ].join(", ");
 }
 
@@ -93,8 +100,11 @@ export function importDetails(
   }
   if (result.skipped.length > 0) {
     details.push({
-      label:
-        "The provider no longer exposes these, so they were skipped. Reload the list before importing again",
+      // Two causes, one bucket: the listing cannot tell a repository deleted
+      // at the provider from one the configured token cannot see, and a screen
+      // that claimed only the first sent people looking for a deletion that
+      // never happened.
+      label: `Skipped: ${REPOSITORY_IMPORT_SKIPPED_NOTE}. Reload the list before importing again`,
       keys: [...result.skipped],
     });
   }

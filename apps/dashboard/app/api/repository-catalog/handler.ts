@@ -119,8 +119,30 @@ export async function handleCatalogEnabledPatch(
   return forward(workerProxy, path, { method: "PATCH", ...(await body(request)) });
 }
 
-export function handleCatalogVersionsGet(id: string, workerProxy: WorkerProxy) {
-  const path = repositoryPath(id, "/versions");
+/**
+ * One page of a repository's profile history, newest first.
+ *
+ * `before` is the version number of the oldest row the screen already holds,
+ * and it has to reach the worker or "Load more" asks for the first page again
+ * and pages for ever. Checked as digits before it is put back on a proxied
+ * path: the worker refuses anything else anyway, and a hostile value never
+ * belongs in a URL this builds.
+ */
+export function handleCatalogVersionsGet(
+  id: string,
+  before: string | null,
+  workerProxy: WorkerProxy,
+) {
+  if (before !== null && !/^[0-9]{1,9}$/.test(before)) {
+    return NextResponse.json(
+      { error: "invalid_cursor" },
+      { status: 400, headers: { "cache-control": "no-store" } },
+    );
+  }
+  const path = repositoryPath(
+    id,
+    `/versions${before === null ? "" : `?before=${encodeURIComponent(before)}`}`,
+  );
   return path === null ? badId() : forward(workerProxy, path, { method: "GET" });
 }
 

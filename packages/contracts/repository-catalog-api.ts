@@ -17,6 +17,8 @@ import {
   type RepositoryCatalogProvider,
   type RepositoryCatalogState,
   type RepositoryProfileVersion,
+  type RepositoryProfileWarning,
+  type RepositoryRelationship,
   type RepositorySuggestionDroppedGroup,
   type RepositorySuggestionProposal,
   type RepositorySuggestionRecord,
@@ -24,6 +26,95 @@ import {
 } from "./repository-catalog";
 
 export const REPOSITORY_CATALOG_REASON_MAX_LENGTH = 500;
+
+/**
+ * Why activating the catalog is refused while nothing is enabled.
+ *
+ * One sentence, in one place. It used to be typed out in the dashboard dialog
+ * and again in the MCP tool, with the service that both go through checking
+ * neither, so an activation that reached the route directly went through. The
+ * check lives in `activateRepositoryCatalog` now and this is the sentence it
+ * refuses with, which is why both surfaces can show it without owning a copy.
+ */
+export const REPOSITORY_CATALOG_NO_ENABLED_MESSAGE =
+  "no repository in this catalog is enabled, so activating would stop dispatch selecting every repository at once; enable at least one first";
+
+/** The 409 body that refusal takes on the HTTP surface, shaped like
+ *  `RepositoryCatalogProfileConflict`: a stable `error` code a screen can branch
+ *  on, plus the sentence it shows. */
+export interface RepositoryCatalogActivateBlocked {
+  error: "no_enabled_repository";
+  message: string;
+}
+
+/** The most repositories one profile may relate itself to. A relationship list
+ *  is read by a person on the Overview tab; past this it is a data dump nobody
+ *  reads and a payload every save carries. */
+export const REPOSITORY_RELATIONSHIPS_MAX = 50;
+
+/**
+ * The relationships a profile save may carry.
+ *
+ * Refused rather than repaired, and refused HERE rather than on one surface:
+ * a self-reference, the same repository twice and an unbounded list are all
+ * shapes the Overview tab cannot render usefully, and the dashboard, the HTTP
+ * route and the MCP tool all parse this same schema. An unknown repository id
+ * is deliberately still accepted: the row it names may be imported later, and
+ * the tab renders it as `repository <id>` rather than crashing.
+ */
+export const repositoryProfileRelationshipsSchema = z
+  .array(repositoryRelationshipSchema)
+  .max(
+    REPOSITORY_RELATIONSHIPS_MAX,
+    `at most ${REPOSITORY_RELATIONSHIPS_MAX} relationships`,
+  )
+  .superRefine((relationships, ctx) => {
+    const seen = new Set<number>();
+    for (const [index, relationship] of relationships.entries()) {
+      if (!seen.has(relationship.repositoryId)) {
+        seen.add(relationship.repositoryId);
+        continue;
+      }
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [index, "repositoryId"],
+        message: `repository ${relationship.repositoryId} is related twice; one relationship per repository`,
+      });
+    }
+  });
+
+/** The message a save that relates a repository to itself is refused with. The
+ *  id is not on the body (identity is the provider and path), so this is the one
+ *  relationship rule the schema cannot apply and the service does. */
+export function selfRelationshipMessage(repositoryId: number): string {
+  return `relationship_self_reference: repository ${repositoryId} cannot be related to itself`;
+}
+
+/** True when the list relates the repository to itself. */
+export function relatesToItself(
+  repositoryId: number,
+  relationships: readonly RepositoryRelationship[] | undefined,
+): boolean {
+  if (repositoryId <= 0 || relationships === undefined) return false;
+  return relationships.some(
+    (relationship) => relationship.repositoryId === repositoryId,
+  );
+}
+
+/**
+ * The message an upsert is refused with when it carries an `enabled` for a
+ * repository that already exists AND that value differs from the switch's
+ * current position.
+ *
+ * Accepting and discarding it taught callers that the field was a second,
+ * quieter way to grant access, so a save that would MOVE the switch is refused
+ * rather than silently ignored. A save that merely repeats where the switch
+ * already stands is not refused: callers were told for a long time that the
+ * field was ignored here, and failing an idempotent payload would break a
+ * caller that changes nothing.
+ */
+export const REPOSITORY_ENABLED_NOT_A_PROFILE_FIELD =
+  "enabled is not a profile field and this save would change it; use the switch on the Repositories list or repositories.set_enabled";
 
 /** The longest whole-run checks ceiling a repository profile may ask for, in
  *  minutes. Below the engine's own 180 minute bound on the same value, because
@@ -43,8 +134,41 @@ export interface RepositoryCatalogEntryResponse {
   currentProfile: RepositoryProfileVersion | null;
 }
 
+/** How many profile versions one page of the history carries, and the most one
+ *  page may ask for. The same two numbers the MCP `repositories.list_versions`
+ *  tool pages by, imported there rather than typed again: a History tab and an
+ *  agent reading the same history must not disagree about where a page ends. */
+export const REPOSITORY_VERSION_PAGE_DEFAULT = 50;
+export const REPOSITORY_VERSION_PAGE_MAX = 200;
+
+/**
+ * How the versions route is paged.
+ *
+ * `before` takes a version number and means "older than this", exactly as the
+ * MCP tool's cursor does: rows are only ever appended, and a version number is
+ * a cursor that cannot shift under a reader the way an offset would.
+ */
+export const repositoryCatalogVersionsQuerySchema = z
+  .object({
+    limit: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(REPOSITORY_VERSION_PAGE_MAX)
+      .optional(),
+    before: z.coerce.number().int().positive().optional(),
+  })
+  .strict();
+export type RepositoryCatalogVersionsQuery = z.infer<
+  typeof repositoryCatalogVersionsQuerySchema
+>;
+
 export interface RepositoryCatalogVersionsResponse {
   versions: RepositoryProfileVersion[];
+  /** Whether versions older than the last one on this page exist. The same
+   *  field name the MCP tool answers with, so one History tab and one agent
+   *  read the same envelope. */
+  hasMore: boolean;
 }
 
 export interface RepositoryCatalogMutationResponse {
@@ -77,6 +201,26 @@ export interface RepositoryCatalogMutationResponse {
    * happened"; `unchanged` is the field that answers that.
    */
   changedFields?: RepositoryProfileField[];
+  /**
+   * How many repositories the catalog enables after this write.
+   *
+   * Answered by the enabled route only, which is the only write that can move
+   * it, and the same number `repositories.set_enabled` reports through MCP. A
+   * screen needs it because taking it to zero on an activated catalog halts
+   * every next run, and a row that reads "not enabled" says nothing about the
+   * other ninety.
+   */
+  enabledRemaining?: number;
+  /**
+   * Commands this save stored that the suggestion path would have dropped.
+   *
+   * Empty on the ordinary save, and never a refusal: the profile route is
+   * deliberately permissive, because the documented uv preset is exactly the
+   * shape the matcher flags. It is returned so the Scripts tab can say so
+   * beside the command, rather than leaving an operator to discover that the
+   * suggestion filter and the save disagree.
+   */
+  warnings?: RepositoryProfileWarning[];
 }
 
 /** A profile field an upsert can move. The names are the request's own, so a
@@ -114,7 +258,7 @@ export const repositoryCatalogUpsertRequestSchema = z
     defaultBranch: z.string().max(200).optional(),
     description: z.string().max(20_000).optional(),
     rules: z.string().max(20_000).optional(),
-    relationships: z.array(repositoryRelationshipSchema).optional(),
+    relationships: repositoryProfileRelationshipsSchema.optional(),
     /** The repository scripts entry for this repository, stored verbatim.
      *  Explicit null clears it ("no checks apply"); omitted leaves it alone. */
     scriptGroups: repositoryProfileScriptGroupsSchema.optional(),
@@ -131,13 +275,28 @@ export const repositoryCatalogUpsertRequestSchema = z
     /**
      * Whether a repository this call CREATES may be touched by the agent.
      *
-     * Omitted means false, and it is ignored for a repository that already
-     * exists. Writing a profile says what to run in a repository; it never says
-     * the agent may enter one. Granting is the enabled route, which is a
-     * separate click and a separate audit line.
+     * Omitted means false, and it is REFUSED for a repository that already
+     * exists (`REPOSITORY_ENABLED_NOT_A_PROFILE_FIELD`) rather than accepted
+     * and discarded, which is what it used to be: a field that looks like it
+     * grants access and silently does not is worse than one that is not there.
+     * Writing a profile says what to run in a repository; it never says the
+     * agent may enter one. Granting is the enabled route, which is a separate
+     * click and a separate audit line.
      */
     enabled: z.boolean().optional(),
-    reason: z.string().max(REPOSITORY_CATALOG_REASON_MAX_LENGTH).default(""),
+    /**
+     * Why this version was minted, shown on the History tab.
+     *
+     * Required, and trimmed, exactly as the MCP tool requires it. It carried
+     * `.default("")` until stage F: a save that reached this route without one
+     * minted a version attributed to nobody, and the History tab then read
+     * "No reason recorded" for a change somebody made on purpose.
+     */
+    reason: z
+      .string()
+      .trim()
+      .min(1, "a reason is required")
+      .max(REPOSITORY_CATALOG_REASON_MAX_LENGTH),
     /**
      * The profile version the caller loaded, as a concurrency token.
      *
@@ -295,18 +454,28 @@ export type RepositoryCatalogImportRequest = z.infer<
   typeof repositoryCatalogImportRequestSchema
 >;
 
+/** What the `skipped` bucket means, in the words the import dialog shows. One
+ *  constant, because the response's own description and the screen that renders
+ *  it are the same claim and drifted apart once already. */
+export const REPOSITORY_IMPORT_SKIPPED_NOTE =
+  "not in this installation's listing (removed, or not visible to the configured token)";
+
 export interface RepositoryCatalogImportResponse {
   /** Rows the insert actually created. A key already in the catalog counts
    *  zero: the insert does nothing on conflict, so importing twice is not an
    *  error and does not re-enable a repository somebody switched off. */
   imported: number;
   /**
-   * Keys a SUCCESSFUL listing of every provider did not contain.
+   * Keys a SUCCESSFUL listing of every provider did not contain: **not in this
+   * installation's listing (removed, or not visible to the configured token)**.
    *
-   * Exactly one meaning: the installation does not expose that repository any
-   * more. A provider that could not be listed at all never lands here, because
-   * "we could not ask" and "it is not there" are different facts and the whole
-   * call is refused rather than reporting the first as the second.
+   * Two causes, one bucket, and the copy says both. The listing cannot tell
+   * them apart -- a repository deleted at the provider and one the configured
+   * token cannot see are the same absence -- and a screen that claimed only the
+   * first sent operators looking for a deletion that never happened. A provider
+   * that could not be listed at all never lands here, because "we could not
+   * ask" and "it is not there" are different facts and the whole call is
+   * refused rather than reporting the first as the second.
    */
   skipped: string[];
   /**

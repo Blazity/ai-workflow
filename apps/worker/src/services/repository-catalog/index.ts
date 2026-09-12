@@ -9,12 +9,17 @@ export {
   activateRepositoryCatalog,
   readRepositoryCatalog,
   readRepositoryCatalogEntry,
-  readRepositoryCatalogVersions,
   readRepositorySuggestions,
+  RepositoryCatalogNoEnabledError,
   RepositoryProfileConflictError,
   saveRepositoryProfile,
   setRepositoryCatalogEnabled,
 } from "./authoring.js";
+export {
+  countRepositoryProfileVersions,
+  readRepositoryCatalogVersions,
+  readRepositoryProfileVersionPage,
+} from "./version-history.js";
 export type {
   RepositoryCatalogActivateOutcome,
   RepositoryCatalogActor,
@@ -22,6 +27,7 @@ export type {
 export { pinnedRepositoriesNotEnabled } from "./pins.js";
 export { commitRepositoryImport, previewRepositoryImport } from "./import.js";
 export {
+  joinRepositorySuggestionInFlight,
   REPOSITORY_SUGGESTION_RATE_LIMIT,
   REPOSITORY_SUGGESTION_RATE_WINDOW_MS,
   REPOSITORY_SUGGESTION_TIMEOUT_MS,

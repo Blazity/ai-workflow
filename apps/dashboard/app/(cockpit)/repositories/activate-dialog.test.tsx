@@ -157,6 +157,40 @@ test("a catalog with nothing enabled refuses outright rather than disabling a bu
   assert.doesNotMatch(text(root), /Activate is disabled:/);
 });
 
+// D1 / row L18. The dialog's own blocker is not the guard: it reads the rows
+// this screen is holding, and somebody switching the last one off while the
+// dialog is open moves it underneath. The service checks too, and its 409
+// carries a sentence rather than a population, so it gets its own arm.
+test("a 409 saying nothing is enabled is shown as the sentence it carries", async (t) => {
+  const root = render(t, {
+    repositories: [entry("acme/web", true)],
+    onActivate: () =>
+      Response.json(
+        {
+          error: "no_enabled_repository",
+          message:
+            "no repository in this catalog is enabled, so activating would stop dispatch selecting every repository at once; enable at least one first",
+        },
+        { status: 409 },
+      ),
+  });
+  await act(async () => undefined);
+  act(() => {
+    root
+      .findByProps({ placeholder: "Why the bridge is ending" })
+      .props.onChange({ target: { value: "the bridge is over" } });
+  });
+
+  await act(async () => {
+    await confirmButton(root).props.onClick();
+  });
+
+  assert.match(text(root), /no repository in this catalog is enabled/);
+  // Not rendered as a population to acknowledge: there is nothing to tick, and
+  // an empty "these hold a run claim" list would read as a different refusal.
+  assert.doesNotMatch(text(root), /currently hold a run claim/);
+});
+
 test("the typed reason travels with the request and is not left on the screen", async (t) => {
   // It used to stay here: the schema was strict and carried only the keys, so
   // the copy promised an audit line nobody wrote. It is stored now, and the

@@ -70,6 +70,98 @@ import { createConnectedWebhookDispatchDeps } from "../custom-webhooks/dispatch-
 
 const PENDING_TRIGGER_RECOVERY_SCAN_LIMIT = 20;
 
+/**
+ * What the tick reports about its one catalog read.
+ *
+ * `ok` when a phase asked and got it, `failed` when the read threw, and
+ * `not_needed` when no phase on this tick had a dispatch decision to make and
+ * the table was never touched.
+ *
+ * `failed` holds exactly four phases, and they are worth naming because the
+ * field is the only place a reader can see it happened: ticket dispatch
+ * (`ticket_dispatch`), manual dispatch recovery, the released-trigger drain and
+ * pending-trigger recovery. Each starts nothing on this tick; the work stays
+ * where it was and the next tick picks it up.
+ *
+ * Two dispatch paths deliberately do NOT hold, because neither runs inside this
+ * pass: a schedule fires from its own route with its own catalog read, and a
+ * webhook redelivery is the provider retrying an ingress. Both have a caller to
+ * answer to and a retry of their own, which a ticket sitting in a column does
+ * not.
+ */
+export type PollCatalogRead = "ok" | "failed" | "not_needed";
+
+/**
+ * The catalog, once per tick, and only for the phases that dispatch.
+ *
+ * A thunk rather than a value for the same reason the webhook ingresses take
+ * one: this pass is also the deployment's housekeeping, and clarification
+ * expiry, the at-capacity queue, claim release, the rate sweeps and the stall
+ * backstop have no dispatch decision to make. A catalog read that fails must
+ * cost the dispatch phases and nothing else, so the failure is caught here and
+ * every phase that needs a snapshot asks for one and skips itself without it.
+ * Memoised by the route, so this is one query however many phases ask.
+ *
+ * The phases that ask, and therefore hold: `ticket_dispatch`,
+ * `manual_dispatch_recovery`, `released_trigger_drain` and
+ * `pending_trigger_recovery`. See `PollCatalogRead` for the two dispatch paths
+ * that deliberately do not.
+ *
+ * Fail-closed and no longer QUIET. Every skipped phase is logged at ERROR with
+ * the message and the stack of the read that failed, because the shape of this
+ * incident is "dispatch stopped for a tick and the log said nothing an alert
+ * could fire on". The event name stays `poll_repository_catalog_skipped`, and
+ * the tick result carries `catalogRead` so the run summary shows it without
+ * anybody having to grep.
+ *
+ * Extracted from `runPollPass` so exactly this can be tested: the pass itself
+ * reaches half the deployment and the behaviour worth pinning is here.
+ */
+export function createRepositoryCatalogReader(
+  load: () => Promise<RepositoryCatalogSnapshot>,
+): {
+  read: (phase: string) => Promise<RepositoryCatalogSnapshot | null>;
+  outcome: () => PollCatalogRead;
+} {
+  let failure: unknown = null;
+  let asked = false;
+  return {
+    read: async (phase: string): Promise<RepositoryCatalogSnapshot | null> => {
+      asked = true;
+      if (failure === null) {
+        try {
+          return await load();
+        } catch (error) {
+          failure = error;
+          logger.error(
+            {
+              phase,
+              error: error instanceof Error ? error.message : String(error),
+              stack: error instanceof Error ? error.stack : undefined,
+            },
+            "poll_repository_catalog_load_failed",
+          );
+        }
+      }
+      // Every phase that goes without a catalog says so by name, INCLUDING the
+      // one whose read failed. Without this the tick reported one failed load
+      // and silently skipped however many dispatch phases came after it, which
+      // reads in the log as those phases simply having nothing to do.
+      logger.error(
+        {
+          phase,
+          error: failure instanceof Error ? failure.message : String(failure),
+          stack: failure instanceof Error ? failure.stack : undefined,
+        },
+        "poll_repository_catalog_skipped",
+      );
+      return null;
+    },
+    outcome: (): PollCatalogRead =>
+      failure !== null ? "failed" : asked ? "ok" : "not_needed",
+  };
+}
+
 export async function runPollPass(
   settings: SettingsSnapshot,
   loadRepositoryCatalog: () => Promise<RepositoryCatalogSnapshot>,
@@ -89,28 +181,8 @@ export async function runPollPass(
    * every phase that needs a snapshot asks for one and skips itself without it.
    * Memoised by the route, so this is one query however many phases ask.
    */
-  let catalogFailed = false;
-  const repositoryCatalogOrNull = async (
-    phase: string,
-  ): Promise<RepositoryCatalogSnapshot | null> => {
-    if (catalogFailed) {
-      // Every later phase says so by name. Without this the tick reports one
-      // failed load and silently skips however many dispatch phases came after
-      // it, which reads in the log as those phases simply having nothing to do.
-      logger.warn({ phase }, "poll_repository_catalog_skipped");
-      return null;
-    }
-    try {
-      return await loadRepositoryCatalog();
-    } catch (error) {
-      catalogFailed = true;
-      logger.warn(
-        { phase, error: error instanceof Error ? error.message : String(error) },
-        "poll_repository_catalog_load_failed",
-      );
-      return null;
-    }
-  };
+  const catalogReader = createRepositoryCatalogReader(loadRepositoryCatalog);
+  const repositoryCatalogOrNull = catalogReader.read;
 
   const clarificationProtection =
     await classifyConnectedProtectedClarificationSubjects();
@@ -218,12 +290,26 @@ export async function runPollPass(
     adapters,
     settings,
   );
-  const dispatchOutcome = await dispatchDiscoveredTickets(
-    ticketKeys,
-    adapters,
-    protectedDiscoverySubjects,
-    settings,
-  );
+  // Ticket dispatch consults the same reader the recovery phases do, and for a
+  // worse failure than theirs: a run started on a tick whose catalog cannot be
+  // read does not fail here, it fails INSIDE the workflow, in
+  // `loadRunStartSettingsStep`, and the ticket gets a raw database error in
+  // front of whoever moved it. Held instead. Nothing is claimed, the ticket
+  // stays in the AI column, and the next tick dispatches it.
+  //
+  // Asked only when there is something to dispatch, so a quiet tick still
+  // reports `not_needed` rather than touching the table to decide nothing.
+  const dispatchCatalog =
+    ticketKeys.length === 0 ? null : await repositoryCatalogOrNull("ticket_dispatch");
+  const ticketsHeld = ticketKeys.length > 0 && dispatchCatalog === null;
+  const dispatchOutcome: DispatchOutcome = ticketsHeld
+    ? { started: [], atCapacity: [] }
+    : await dispatchDiscoveredTickets(
+        ticketKeys,
+        adapters,
+        protectedDiscoverySubjects,
+        settings,
+      );
   const started = dispatchOutcome.started;
 
   // Surface every at-capacity refusal on the ticket: queue each refused ticket
@@ -351,8 +437,29 @@ export async function runPollPass(
     return { deleted: 0 };
   });
 
+  // The pass summary, in the LOG and not only on the cron response. The
+  // response body is read by whoever invoked the tick; an incident is read in
+  // the log, and "dispatch held for a tick" was a fact only the response
+  // carried. Info, because a healthy tick says the same line with catalogRead
+  // "ok" and that is what makes the failed one findable.
+  logger.info(
+    {
+      catalogRead: catalogReader.outcome(),
+      discovered: ticketKeys.length,
+      started: started.length,
+      ticketsHeld: ticketsHeld ? ticketKeys.length : 0,
+      pendingRecovered: releasedTriggerRecovery.started + polledTriggerRecovery.started,
+      manualDispatchStarted: manualDispatchRecovery.started,
+    },
+    "poll_pass_summary",
+  );
+
   return {
     status: "ok",
+    // Said out loud in the tick's own result: "failed" means every dispatch
+    // phase on this tick skipped itself, which the counts below cannot show
+    // because they are indistinguishable from a quiet tick.
+    catalogRead: catalogReader.outcome(),
     discovered: ticketKeys.length,
     started: started.length,
     atCapacityQueue,

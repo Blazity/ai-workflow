@@ -12,7 +12,11 @@
  * repository with four hundred, and it would be wrong precisely on the
  * repositories somebody has been configuring hardest.
  */
-import type { RepositoryProfileVersion } from "@shared/contracts";
+import {
+  REPOSITORY_VERSION_PAGE_DEFAULT,
+  type RepositoryCatalogVersionsResponse,
+  type RepositoryProfileVersion,
+} from "@shared/contracts";
 import {
   countConnectedRepositoryProfileVersionRows,
   listConnectedRepositoryProfileVersionPageRows,
@@ -58,6 +62,34 @@ export async function readRepositoryProfileVersionPage(input: {
     versions: rows.slice(0, input.limit).map(serializeRepositoryProfileVersion),
     hasMore: rows.length > input.limit,
   };
+}
+
+/**
+ * One page of a repository's history, as the HTTP versions route answers it.
+ *
+ * The same page the MCP tool reads, through the same function, with the same
+ * default and the same ceiling: an unpaged route was a latency and payload
+ * cliff the agent surface did not have, and two pagers over one table is how
+ * the two answers start disagreeing about where a page ends.
+ *
+ * The BOUND is not restated here. `repositoryCatalogVersionsQuerySchema` owns
+ * it for both callers, and a second clamp in this function would be a second
+ * place the ceiling could be raised in, quietly disagreeing with the number the
+ * query is refused against. Only the default is applied, because a caller that
+ * names no limit gives the schema nothing to refuse.
+ */
+export async function readRepositoryCatalogVersions(input: {
+  id: number;
+  limit?: number;
+  before?: number;
+}): Promise<RepositoryCatalogVersionsResponse> {
+  const limit = input.limit ?? REPOSITORY_VERSION_PAGE_DEFAULT;
+  const page = await readRepositoryProfileVersionPage({
+    repositoryId: input.id,
+    limit,
+    ...(input.before === undefined ? {} : { before: input.before }),
+  });
+  return { versions: page.versions, hasMore: page.hasMore };
 }
 
 /** How many profile versions a repository has. Counted in the database. */

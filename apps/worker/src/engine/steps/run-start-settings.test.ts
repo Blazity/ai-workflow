@@ -29,8 +29,12 @@ vi.mock("../../infra/logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-const { loadRunStartSettingsStep, runStartRepositoryAccess, runStartSettings } =
-  await import("./run-start-settings.js");
+const {
+  loadRunStartSettingsStep,
+  runStartHasNoEnabledRepository,
+  runStartRepositoryAccess,
+  runStartSettings,
+} = await import("./run-start-settings.js");
 
 let db: Db;
 
@@ -183,5 +187,67 @@ describe("loadRunStartSettingsStep", () => {
       activated: false,
       enabledKeys: [],
     });
+  });
+});
+
+/**
+ * D8 / row R04. A ticket moved into the AI column starts a run whatever the
+ * catalog says, because a ticket trigger is not one of the four paths the
+ * catalog decides dispatch on. Until stage F that run prepared a workspace
+ * before finding out there was nothing it was allowed to touch.
+ *
+ * The predicate is pure and reads the FROZEN run-start result, so a run refuses
+ * on the list it started with, exactly as every other repository decision in
+ * the run does. `agentWorkflowBody` calls it right after the clarification
+ * cleanup and exits through `runRetiredWorkflowFailureExit`, the AIW-254
+ * transparent-failure path, with this message.
+ */
+describe("runStartHasNoEnabledRepository", () => {
+  it("stops a run whose activated catalog enables nothing", async () => {
+    await seedRepositoryCatalogEntries(db, {
+      repositories: [{ provider: "github", path: "acme/api" }],
+      source: "seeded",
+      enabled: true,
+    });
+    await activateRepositoryCatalog(db, {
+      actorId: "user_admin",
+      reason: "the bridge is over",
+    });
+    const rows = await db.select().from(repositories);
+    await setRepositoryEnabled(db, { id: rows[0]!.id, enabled: false });
+
+    const stored = await loadRunStartSettingsStep();
+
+    expect(runStartHasNoEnabledRepository(stored)).toBe(true);
+  });
+
+  it("lets a run through while one repository is still enabled", async () => {
+    await seedRepositoryCatalogEntries(db, {
+      repositories: [{ provider: "github", path: "acme/api" }],
+      source: "seeded",
+      enabled: true,
+    });
+    await activateRepositoryCatalog(db, {
+      actorId: "user_admin",
+      reason: "the bridge is over",
+    });
+
+    expect(runStartHasNoEnabledRepository(await loadRunStartSettingsStep())).toBe(false);
+  });
+
+  it("lets a run through on the bridge, where the catalog decides nothing", async () => {
+    // Not activated and nothing enabled is not an empty allowlist, it is a
+    // deployment that has never opened the Repositories page: the agent sees
+    // everything the installation exposes, which is what it did before the
+    // catalog existed.
+    const stored = await loadRunStartSettingsStep();
+
+    expect(runStartRepositoryAccess(stored)).toEqual({ activated: false, enabledKeys: [] });
+    expect(runStartHasNoEnabledRepository(stored)).toBe(false);
+  });
+
+  it("reads a stored result from before the repositories field as the bridge too", () => {
+    const stored = { settings: {} } as Parameters<typeof runStartHasNoEnabledRepository>[0];
+    expect(runStartHasNoEnabledRepository(stored)).toBe(false);
   });
 });

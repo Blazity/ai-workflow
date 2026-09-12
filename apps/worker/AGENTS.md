@@ -178,7 +178,7 @@ names, harness defaults) are rows in the `settings` table, described once in
   read the generated `.sql` before believing a constraint, because pglite
   replays the same broken file and the failure is identical in tests and
   production only if you look.
-- **The repository catalog is the coming grant, and is not deciding yet.**
+- **The catalog decides dispatch on four paths and access inside a run.**
   `repositories`, `repository_profile_versions` and the one-row
   `repository_catalog_state` (migration 0060) hold what the deployment knows
   about each repository and the versioned profile carrying its description,
@@ -207,7 +207,16 @@ names, harness defaults) are rows in the `settings` table, described once in
   repositories it works on inside the run, from discovery and the expansion
   protocol, but it chooses from that frozen list. The list is frozen at run
   start on purpose: disabling a repository stops the NEXT run, not one already
-  in flight. The build-time seed
+  in flight. A ticket trigger is not one of the four dispatch paths, so a ticket
+  moved into the AI column starts a run whatever the catalog says; on an
+  ACTIVATED catalog that enables nothing, a run whose DEPLOYED graph needs a
+  checkout (`runStartHasNoEnabledRepository` and
+  `workflowNeedsRepositoryAccess`, applied once the definition has loaded) fails
+  through the transparent-failure exit rather than preparing a workspace it may
+  not touch, while a triage graph that needs no repository runs as it always
+  did. The refusal sentence is the record: it is the run's status reason and the
+  ticket comment, and there is no failure-kind column behind it. The build-time
+  seed
   `scripts/db-seed-repository-catalog.ts` (wired after `db:migrate` in `build`,
   never in `build:ci`) imports the allowlist variable and every pinned
   repository, activates only a deployment whose allowlist was already

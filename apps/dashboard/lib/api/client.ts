@@ -29,6 +29,7 @@ import type {
   PromptLibraryVersionResponse,
   PromptSlotDefinition,
   RepositoriesResponse,
+  RepositoryCatalogActivateBlocked,
   RepositoryCatalogActivateConflict,
   RepositoryCatalogActivateResponse,
   RepositoryCatalogEntryResponse,
@@ -538,17 +539,27 @@ export const apiClient = {
         `/api/repository-catalog/${id}/enabled`,
         jsonInit("PATCH", { enabled }),
       ),
-    versions: (id: number, options?: BrowserRequestOptions) =>
+    /** One page of the profile history, newest first. `before` takes the version
+     *  number of the oldest row already held, the same cursor the MCP history
+     *  tool pages by: rows are only appended, so a version number cannot shift
+     *  under a reader the way an offset would. */
+    versions: (id: number, before?: number, options?: BrowserRequestOptions) =>
       requestJson<RepositoryCatalogVersionsResponse>(
-        `/api/repository-catalog/${id}/versions`,
+        `/api/repository-catalog/${id}/versions${
+          before === undefined ? "" : `?before=${before}`
+        }`,
         { cache: "no-store", ...options },
       ),
     /** The 409 naming the repositories the dialog has not acknowledged is the
      *  normal first answer, so it is accepted as data rather than treated as a
-     *  failure with a message. */
+     *  failure with a message. The other 409 is the catalog that enables
+     *  nothing, which carries `error: "no_enabled_repository"` and a sentence
+     *  rather than a population. */
     activate: (acknowledgedRepositoryKeys: string[], reason: string) =>
       requestJson<
-        RepositoryCatalogActivateResponse | RepositoryCatalogActivateConflict,
+        | RepositoryCatalogActivateResponse
+        | RepositoryCatalogActivateConflict
+        | RepositoryCatalogActivateBlocked,
         RepositoryCatalogActivateConflict
       >(
         "/api/repository-catalog/activate",

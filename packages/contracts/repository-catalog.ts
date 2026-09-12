@@ -425,6 +425,59 @@ export function looksLikeRemoteExecution(command: string): boolean {
 }
 
 /**
+ * One command a saved profile carries that the suggestion filter would have
+ * dropped.
+ *
+ * A WARNING and never a refusal: the save path stays permissive because the
+ * documented uv preset is exactly this shape (`docs/architecture/repository-scripts.md`,
+ * "Setup presets"), and a route that refused it would refuse the preset this
+ * repository publishes. What it buys is that an operator pasting a proposal
+ * sees what the suggestion path silently drops, beside the command itself.
+ */
+export interface RepositoryProfileWarning {
+  /** The group the command sits in. The entry-level arrays report as their own
+   *  names, `setup` and `commands`, because that is where an operator finds
+   *  them on the Scripts tab. */
+  group: string;
+  command: string;
+  kind: "remote_execution";
+}
+
+/**
+ * Every command of a stored scripts entry that looks like remote execution.
+ *
+ * Takes the entry as `unknown` for the same reason
+ * `invalidRepositoryScriptGroupNames` does: the stored shape is deliberately
+ * loose, so this narrows exactly as far as it needs to and never parses the
+ * entry a second time in a second dialect. Order is the order an operator reads
+ * the tab in: setup, the legacy flat commands, then the named groups.
+ */
+export function repositoryProfileRemoteExecutionWarnings(
+  entry: unknown,
+): RepositoryProfileWarning[] {
+  if (typeof entry !== "object" || entry === null) return [];
+  const warnings: RepositoryProfileWarning[] = [];
+  const collect = (group: string, commands: unknown): void => {
+    if (!Array.isArray(commands)) return;
+    for (const command of commands) {
+      if (typeof command !== "string") continue;
+      if (!looksLikeRemoteExecution(command)) continue;
+      warnings.push({ group, command, kind: "remote_execution" });
+    }
+  };
+  const record = entry as { setup?: unknown; commands?: unknown; groups?: unknown };
+  collect("setup", record.setup);
+  collect("commands", record.commands);
+  if (typeof record.groups === "object" && record.groups !== null) {
+    for (const [name, group] of Object.entries(record.groups as Record<string, unknown>)) {
+      if (typeof group !== "object" || group === null) continue;
+      collect(name, (group as { commands?: unknown }).commands);
+    }
+  }
+  return warnings;
+}
+
+/**
  * True for a group name the checks engine can actually resolve.
  *
  * The rule is the engine's own (`REPOSITORY_SCRIPT_GROUP_NAME_PATTERN`), not a

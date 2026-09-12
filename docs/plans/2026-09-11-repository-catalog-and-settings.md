@@ -68,7 +68,7 @@ The dashboard gains two things. A **Repositories** page lists every repository t
 ## Out of scope
 
 - Per-trigger overrides of column mapping and repository scope (roadmap P1, trigger-owned configuration; the registry only marks which settings may be overridden later).
-- MCP tools for the catalog and settings (a follow-up once the HTTP contract has been used by the dashboard for a while).
+- ~~MCP tools for the catalog and settings~~ (retired: stage M delivered them, `apps/worker/src/mcp/tools/repositories.ts` and `settings.ts`).
 - Moving secrets, provider identity, database and auth URLs, the bot account identity, or the pricing endpoint out of the environment.
 - Repository setup commands and sandbox runtimes (roadmap P0, repository environments); the profile leaves room for them but this plan adds none.
 - Memory content editing beyond linking the existing documents on the repository entry.

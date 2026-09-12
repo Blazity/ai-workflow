@@ -60,7 +60,7 @@ test("every route forwards to its worker path with the body untouched", async ()
     }),
     proxy,
   );
-  await handleCatalogVersionsGet("12", proxy);
+  await handleCatalogVersionsGet("12", null, proxy);
   await handleCatalogActivate(
     post("https://dashboard.test/api/repository-catalog/activate", {
       acknowledgedRepositoryKeys: ["github:acme/web"],
@@ -103,12 +103,28 @@ test("every route forwards to its worker path with the body untouched", async ()
   });
 });
 
+// D5 / row P34. The history is paged now, so the cursor has to survive this
+// proxy: a Load more whose `before` was dropped asks for the first page again
+// and pages for ever.
+test("the history cursor reaches the worker, and a cursor nobody issued does not", async () => {
+  const { calls, proxy } = recorder(() => Response.json({ versions: [], hasMore: false }));
+
+  await handleCatalogVersionsGet("12", "7", proxy);
+  const refused = await handleCatalogVersionsGet("12", "7; drop", proxy);
+
+  assert.deepEqual(
+    calls.map((call) => `${call.method ?? "GET"} ${call.path}`),
+    ["GET /api/v1/repository-catalog/12/versions?before=7"],
+  );
+  assert.equal(refused.status, 400);
+});
+
 test("a path segment that is not an id is refused here instead of reaching the worker", async () => {
   const { calls, proxy } = recorder(() => Response.json({}));
 
   const responses = await Promise.all([
     handleCatalogEntryGet("../../v1/settings", proxy),
-    handleCatalogVersionsGet("12;rm", proxy),
+    handleCatalogVersionsGet("12;rm", null, proxy),
     handleCatalogEnabledPatch(
       "",
       new Request("https://dashboard.test", { method: "PATCH", body: "{}" }),

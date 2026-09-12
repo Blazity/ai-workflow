@@ -158,8 +158,12 @@ Field reference:
 - `repositories[].commandTimeoutMinutes`: optional per-command timeout
   override (whole minutes, at least 1).
 - `batchTimeoutMinutes`: the checks phase's budget for one run, in whole
-  minutes, between 1 and 180. Defaults to `PRE_PR_CHECK_BATCH_MAX_MINUTES`,
-  which ships at 60. The upper bound is the sandbox's, not a preference: the
+  minutes. A repository profile asks for **1 to 120** of them
+  (`REPOSITORY_BATCH_TIMEOUT_MAX_MINUTES`), which is the field the Scripts tab
+  edits and the only one an operator can reach today; the **legacy** global
+  blob described by this section accepted 1 to 180, and that range survives
+  only for a deployment still reading it. Defaults to
+  `PRE_PR_CHECK_BATCH_MAX_MINUTES`, which ships at 60. The upper bound is the sandbox's, not a preference: the
   ceiling is added to a sandbox lifetime, and a number large enough to overflow
   that lifetime buys a workspace that disappears instead of a batch that
   reports.
@@ -548,6 +552,50 @@ actor label `seeded from AGENT_ALLOWED_REPOS` and the same words as its reason,
 and the banner renders "Catalog activated on \<date\> (seeded from
 AGENT_ALLOWED_REPOS)".
 
+**One refusal, two protocols.** Activating a catalog that enables nothing is
+refused by `activateRepositoryCatalog` itself, not by the screen: HTTP answers
+409 `{ error: "no_enabled_repository", message }` and MCP answers
+VALIDATION_FAILED with that same sentence, so a caller reaching the route
+directly gets the answer the dialog gives. The two surfaces differ only in how
+they bind to the population they were shown. HTTP uses the **acknowledgement**
+protocol: the 409 body lists the repositories holding a run claim and the dialog
+sends their keys back in `acknowledgedRepositoryKeys`, because a person is
+looking at the list. MCP uses the **digest** protocol:
+`repositories.activate_preview` returns a `previewDigest` over both populations
+and the claims, and `repositories.activate` takes it back, because there is no
+dialog to render and an agent has to prove it read the same population. There is
+no `previewDigest` on HTTP and no acknowledgement list on MCP; the service's own
+acknowledgement check is what refuses an activation either protocol got wrong.
+
+A ticket trigger is not one of the four paths the catalog decides dispatch on,
+so a ticket moved into the AI column starts a run whatever the catalog says. On
+an **activated** catalog that enables nothing, the run is refused once its
+deployed graph is known, before it prepares a workspace, with a ticket comment
+through the transparent-failure path: "No repository is enabled in the catalog.
+Enable one on the Repositories page and move the ticket again." That sentence is
+the whole record: it is written as the run's status reason and posted on the
+ticket, and no separate failure kind is stored. Only a graph that needs a
+repository is refused, decided by the scheduler's own workspace-access
+derivation (`workflowWorkspaceAccessOf`, anything above `none`), so a triage
+graph that calls an LLM, comments and moves the ticket runs exactly as it did:
+it never wanted a checkout, and failing it for an empty catalog would fail work
+the catalog has no opinion about. The per-repository refusal inside discovery
+and expansion is unchanged and asks its own question, naming the switch: "Enable
+it on the Repositories page, or answer with another repository."
+
+**A profile save warns rather than refuses.** Every command a save stores that
+looks like remote code execution (`curl … | sh` and its family, the matcher the
+suggestion path drops groups with) comes back on the response as `warnings`,
+one entry per command with the group it sits in, and the Scripts tab shows it
+beside the command. Permissive on purpose: the documented uv setup preset above
+is exactly that shape. `enabled` is not a profile field: an upsert carrying it
+for a repository that already exists is refused (400, VALIDATION_FAILED on MCP)
+rather than accepted and discarded, and granting access is the switch on the
+list or `repositories.set_enabled`. Relationships may not name the profile's own
+repository, may not name one repository twice, and are capped at 50; an id the
+catalog does not hold yet is still accepted, because the row it names may be
+imported later.
+
 The list row says how many script groups the repository's current profile
 declares (`scriptGroupCount` on the list response, computed in the same query
 that reads the rows). The field is OPTIONAL and an absent one means "this
@@ -631,8 +679,12 @@ The Scripts tab also carries the repository's **checks ceiling**
 (`batchTimeoutMinutes`, 1 to 120, empty for the operator ceiling). A run that
 touches several repositories takes the highest claim among them, because the
 ceiling bounds the whole batch of checks rather than one repository's share of
-it. The History tab lists the profile versions and, under them, every suggestion
-call this repository has spent
+it. The History tab lists the profile versions, newest first and PAGED the way
+the MCP history tool pages (`GET /api/v1/repository-catalog/:id/versions?limit=&
+before=`, default 50, ceiling 200, `before` a version number rather than an
+offset, `hasMore` on the response); the tab loads the first page with the screen
+and offers "Load more" while `hasMore` says older versions exist. Under them it
+lists every suggestion call this repository has spent
 (`GET /api/v1/repository-catalog/:id/suggestions`, open to every role, cursor
 paginated 50 at a time, newest first) with its outcome, model, actor, duration
 and cost, where a call the provider never reported usage for reads `unpriced`.
@@ -641,6 +693,12 @@ proposal is shown beside the current values with one tick per script group, a
 dropped group is shown greyed out with its reason and its commands and can never
 be accepted, and accepted groups land in the Scripts tab's draft, which the
 admin still saves with a reason.
+
+The open tab lives in the URL (`?tab=overview|rules|scripts|memory|history`), so
+"the Scripts tab of repository 7" is a link a run failure or a Jira comment can
+point at. A load carrying the parameter opens that tab; switching tabs replaces
+the parameter without scrolling the reader back to the top; no parameter, or one
+nobody wrote, opens Overview as it always did.
 
 The Repository scripts screen that used to own all of this is gone. `/scripts`
 redirects permanently to `/repositories` (`apps/dashboard/next.config.ts`), the

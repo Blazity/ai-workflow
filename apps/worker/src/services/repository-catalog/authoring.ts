@@ -9,8 +9,13 @@ import {
   canManageRepositoryCatalog,
   DashboardAuthError,
   invalidRepositoryScriptGroupNames,
+  relatesToItself,
+  REPOSITORY_CATALOG_NO_ENABLED_MESSAGE,
+  REPOSITORY_ENABLED_NOT_A_PROFILE_FIELD,
   REPOSITORY_SCRIPT_GROUP_NAME_MESSAGE,
   REPOSITORY_SUGGESTION_PAGE_SIZE,
+  repositoryProfileRemoteExecutionWarnings,
+  selfRelationshipMessage,
   type RepositoryCatalogActivateResponse,
   type RepositoryCatalogClaimedRepository,
   type RepositoryCatalogEntryResponse,
@@ -18,7 +23,6 @@ import {
   type RepositoryCatalogMutationResponse,
   type RepositoryCatalogSuggestionsResponse,
   type RepositoryCatalogUpsertRequest,
-  type RepositoryCatalogVersionsResponse,
   type RepositorySuggestionOutcome,
   type RepositorySuggestionRecord,
 } from "@shared/contracts";
@@ -28,7 +32,6 @@ import {
   getConnectedRepositoryCatalogRowByPath,
   getConnectedRepositoryProfileVersionRow,
   listConnectedClaimedRepositoriesNotEnabled,
-  listConnectedRepositoryProfileVersionRows,
   setConnectedRepositoryEnabled,
   upsertConnectedRepositoryProfile,
 } from "../../db/repositories/repository-catalog.js";
@@ -87,14 +90,6 @@ export async function readRepositoryCatalogEntry(
   };
 }
 
-export async function readRepositoryCatalogVersions(
-  id: number,
-): Promise<RepositoryCatalogVersionsResponse> {
-  await requireRow(id);
-  const rows = await listConnectedRepositoryProfileVersionRows(id);
-  return { versions: rows.map(serializeRepositoryProfileVersion) };
-}
-
 export async function saveRepositoryProfile(input: {
   actor: RepositoryCatalogActor;
   request: RepositoryCatalogUpsertRequest;
@@ -125,6 +120,16 @@ export async function saveRepositoryProfile(input: {
       `invalid_script_group_name: ${badGroupNames.join(", ")} (${REPOSITORY_SCRIPT_GROUP_NAME_MESSAGE})`,
     );
   }
+  // The one relationship rule the schema cannot apply: identity is the provider
+  // and path on the body, so the id a relationship would point at is not on the
+  // body at all. Refused rather than dropped, because only the person editing
+  // knows which other repository they meant.
+  if (relatesToItself(input.expectedId ?? 0, input.request.relationships)) {
+    throw new DashboardAuthError(
+      400,
+      selfRelationshipMessage(input.expectedId ?? 0),
+    );
+  }
   if (input.expectedId !== undefined && input.expectedId !== 0) {
     const existing = await getConnectedRepositoryCatalogRowByPath({
       provider: input.request.provider,
@@ -132,6 +137,26 @@ export async function saveRepositoryProfile(input: {
     });
     if (!existing || existing.id !== input.expectedId) {
       throw new DashboardAuthError(409, "repository_mismatch");
+    }
+    // A grant is never a profile field. It used to be accepted here and
+    // discarded, which reads on the wire exactly like a grant that landed.
+    // Only a value that would MOVE the switch is refused: repeating where the
+    // switch already stands changes nothing, and callers were told for a long
+    // time that this field was ignored here.
+    if (input.request.enabled !== undefined && input.request.enabled !== existing.enabled) {
+      throw new DashboardAuthError(400, REPOSITORY_ENABLED_NOT_A_PROFILE_FIELD);
+    }
+  } else if (input.request.enabled !== undefined) {
+    // A "create" the route reconciles into an edit, because the provider and
+    // path are already in the catalog. Same rule: the row exists, so this
+    // `enabled` would be discarded exactly as the one above would, and it is
+    // refused on the same condition.
+    const existing = await getConnectedRepositoryCatalogRowByPath({
+      provider: input.request.provider,
+      path: input.request.path,
+    });
+    if (existing && input.request.enabled !== existing.enabled) {
+      throw new DashboardAuthError(400, REPOSITORY_ENABLED_NOT_A_PROFILE_FIELD);
     }
   }
   // Every optional field is forwarded ONLY when the request carried it. The
@@ -194,6 +219,11 @@ export async function saveRepositoryProfile(input: {
     // repository tier's spelling onto the wire's and says nothing of its own.
     unchanged: !saved.minted,
     changedFields: saved.changedFields,
+    // Read off the entry this request carried, not off the stored profile: a
+    // save that did not touch the scripts warns about nothing, which is what
+    // keeps the warning attached to something the operator just typed. Never a
+    // refusal -- see the field's declaration.
+    warnings: repositoryProfileRemoteExecutionWarnings(input.request.scriptGroups),
   };
 }
 
@@ -266,7 +296,34 @@ export async function setRepositoryCatalogEnabled(input: {
   await requireRow(input.id);
   const row = await setConnectedRepositoryEnabled({ id: input.id, enabled: input.enabled });
   if (!row) throw new DashboardAuthError(404, "Unknown repository");
-  return { repository: serializeRepositoryCatalogEntry(row) };
+  // Read AFTER the write, and counted here rather than on each surface: the
+  // number that matters after a flip is not this row's flag but how many rows
+  // are left enabled, because taking it to zero on an activated catalog stops
+  // dispatch selecting anything at all. Both surfaces report the same number
+  // because both get it from here.
+  const { entries } = await loadRepositoryCatalogEntries();
+  return {
+    repository: serializeRepositoryCatalogEntry(row),
+    enabledRemaining: entries.filter((entry) => entry.enabled).length,
+  };
+}
+
+/**
+ * Activation refused because the catalog enables nothing.
+ *
+ * Here rather than on the two surfaces that used to say it: the dashboard
+ * dialog hid the button and the MCP tool raised its own copy of the sentence,
+ * and the route both of them go through checked neither, so a POST straight to
+ * `/api/v1/repository-catalog/activate` activated a catalog that then refused
+ * every dispatch. Its own error rather than a `DashboardAuthError`, because the
+ * route answers it with a BODY carrying a stable code, the way a stale profile
+ * save is answered.
+ */
+export class RepositoryCatalogNoEnabledError extends Error {
+  constructor() {
+    super(REPOSITORY_CATALOG_NO_ENABLED_MESSAGE);
+    this.name = "RepositoryCatalogNoEnabledError";
+  }
 }
 
 /** Activation refused because the dialog the admin confirmed is out of date. */
@@ -291,6 +348,14 @@ export async function activateRepositoryCatalog(input: {
   reason: string;
 }): Promise<RepositoryCatalogActivateOutcome> {
   requireCatalogManager(input.actor);
+  // Before the acknowledgement check and before anything is written: a catalog
+  // with nothing enabled is the one case where confirming is never the right
+  // answer, whichever surface asked, and the repair (enable a row) is one click
+  // away on the same screen.
+  const { entries } = await loadRepositoryCatalogEntries();
+  if (!entries.some((entry) => entry.enabled)) {
+    throw new RepositoryCatalogNoEnabledError();
+  }
   const claimed = await listConnectedClaimedRepositoriesNotEnabled();
   const acknowledged = new Set(
     input.acknowledgedRepositoryKeys.map((key) => key.toLowerCase()),

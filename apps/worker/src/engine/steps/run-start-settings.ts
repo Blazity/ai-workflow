@@ -136,3 +136,38 @@ export function runStartRepositoryAccess(
 ): RunRepositoryAccess {
   return stored.repositories ?? { activated: false, enabledKeys: [] };
 }
+
+/**
+ * What the ticket is told when the catalog enables nothing.
+ *
+ * A ticket trigger is NOT one of the four paths the catalog decides dispatch
+ * on, so a ticket moved into the AI column starts a run whatever the catalog
+ * says. Until stage F that run prepared a workspace before finding out, and the
+ * refusal arrived after the deployment had paid for it. The fix is the same
+ * frozen list this step already reads, applied once the deployed graph is known
+ * to need a repository, and the sentence names the switch because that is the
+ * operator's next action.
+ *
+ * The sentence IS the record: it is written to the run's status reason and
+ * posted as the ticket comment, and there is no separate failure-kind column
+ * behind it to group by.
+ */
+export const NO_ENABLED_REPOSITORY_MESSAGE =
+  "No repository is enabled in the catalog. Enable one on the Repositories page and move the ticket again.";
+
+/**
+ * Should this run stop before it does anything?
+ *
+ * True only when the catalog DECIDES access (an unactivated catalog is the
+ * bridge, where the agent sees everything the installation exposes) and enables
+ * nothing at all. A repository that is merely not enabled is a different
+ * question, answered per repository inside the run, where the name is known.
+ *
+ * Pure, so the workflow body may call it, and read off the frozen result rather
+ * than off the store: a run refuses on the list it started with, exactly as
+ * every other repository decision in the run does.
+ */
+export function runStartHasNoEnabledRepository(stored: RunStartSettings): boolean {
+  const access = runStartRepositoryAccess(stored);
+  return access.activated && access.enabledKeys.length === 0;
+}

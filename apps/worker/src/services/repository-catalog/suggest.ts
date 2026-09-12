@@ -186,6 +186,22 @@ export async function suggestRepositoryProfile(input: {
   return work;
 }
 
+/**
+ * The call already running for this repository, or null.
+ *
+ * For the one caller that cannot simply ask again: the MCP mutation wrapper
+ * refuses a second call under the same idempotency key while the first holds
+ * the lease, and the honest answer to "the suggestion you asked for is still
+ * running" is the answer itself, exactly as a second browser click gets it.
+ * Null rather than starting one, because a caller that reached here because of
+ * a lease must never buy a second model call by accident.
+ */
+export function joinRepositorySuggestionInFlight(
+  repositoryId: number,
+): Promise<RepositoryCatalogSuggestResponse> | null {
+  return inFlight.get(repositoryId) ?? null;
+}
+
 async function runSuggestion(input: {
   repositoryId: number;
   actorId: string;

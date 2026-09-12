@@ -4,7 +4,10 @@ import { branchForTicket } from "./support/workflow-naming.js";
 import { ticketRunUrl, hasDashboardLinkComment } from "./support/dashboard-links.js";
 // Pure and contracts-only, like the two support modules above it, so the
 // workflow isolate stays free of Node builtins.
-import { isRepositoryCatalogRefusal } from "./support/repository-access.js";
+import {
+  isRepositoryCatalogRefusal,
+  workflowNeedsRepositoryAccess,
+} from "./support/repository-access.js";
 import { computeUsageTotals } from "../sandbox/usage.js";
 import type { AgentOutput, PhaseUsage, ResearchResult, ReviewOutput } from "../sandbox/agents/types.js";
 import type { AgentKind } from "../sandbox/agents/index.js";
@@ -206,11 +209,14 @@ export interface RetiredWorkflowFailureDeps {
   notifyTicket(reason: string): Promise<void>;
 }
 
-/** The concrete standard failure exit for a retired plan. It records the run
- * state and reason before provider side effects, preserves the Jira comment
- * path, and returns the durable workflow outcome. */
+/** The concrete standard failure exit for a run that stops before it can do its
+ * work: a retired plan, and a ticket run whose catalog enables no repository at
+ * all. It records the run state and reason before provider side effects,
+ * preserves the Jira comment path (AIW-254), and returns the durable workflow
+ * outcome. The reason is a plain string because there is more than one of them
+ * now; each caller owns its own sentence. */
 export async function runRetiredWorkflowFailureExit(
-  reason: typeof RETIRED_SCHEMA_MESSAGE,
+  reason: string,
   deps: RetiredWorkflowFailureDeps,
 ): Promise<"failed"> {
   await deps.cleanupClarifications();
@@ -368,8 +374,13 @@ async function agentWorkflowBody(
   // two values, never off the environment or a store, so an operator who saves
   // the Settings page or disables a repository while this run is in flight
   // moves the NEXT run and leaves this one's journal consistent on replay.
-  const { loadRunStartSettingsStep, runStartRepositoryAccess, runStartSettings } =
-    await import("./steps/run-start-settings.js");
+  const {
+    loadRunStartSettingsStep,
+    NO_ENABLED_REPOSITORY_MESSAGE,
+    runStartHasNoEnabledRepository,
+    runStartRepositoryAccess,
+    runStartSettings,
+  } = await import("./steps/run-start-settings.js");
   const runStart = await loadRunStartSettingsStep();
   // Through the accessors, never off the stored result: a run suspended across
   // a deploy that adds a registry key replays a snapshot written without it,
@@ -438,6 +449,32 @@ async function agentWorkflowBody(
       );
     }
   };
+  /**
+   * The run stops before it starts, and the ticket is told why.
+   *
+   * The same exit the retired-plan refusal takes, without the execution-error
+   * telemetry that one records for a definition problem: this is a
+   * configuration refusal with one sentence to give and nothing to diagnose.
+   */
+  const failBeforeWork = async (reason: string): Promise<"failed"> =>
+    await runRetiredWorkflowFailureExit(reason, {
+      ticketKey: entry.ticketKey ?? undefined,
+      cleanupClarifications,
+      markRunFailed: () => markRunFailedOnSelfMoveStep(workflowRunId),
+      recordFailureReason: (failureReason) =>
+        recordRunFailureReasonStep(workflowRunId, failureReason),
+      logFailure: (failureReason) =>
+        logPhaseFailure(entry.subjectKey, "engine", failureReason),
+      commentFailure: (failureReason) =>
+        postFailureReasonCommentStep(ticket.identifier, failureReason, transitionOwner),
+      moveTicket: () => moveTicketStep(ticketId, backlogMoveTarget(), transitionOwner),
+      notifyTicket: (failureReason) =>
+        notifyTicket(
+          ticket.identifier,
+          { kind: "failed", reason: failureReason },
+          transitionOwner,
+        ),
+    });
   const failRetiredDefinition = async (
     reason: typeof RETIRED_SCHEMA_MESSAGE,
   ): Promise<"failed"> => {
@@ -556,6 +593,25 @@ async function agentWorkflowBody(
     if (issues.length > 0) {
       throw new Error(`scope:any workflow is not review-safe: ${issues.join("; ")}`);
     }
+  }
+
+  // The catalog is activated and enables NOTHING, so there is no repository
+  // this run could be given. A ticket trigger is not one of the four paths the
+  // catalog decides dispatch on, so the run started anyway; refusing here costs
+  // a ticket comment instead of a workspace and an agent invocation.
+  //
+  // After the definition, deliberately, and only for a graph that needs a
+  // repository: a triage graph (call an LLM, comment, move the ticket) does
+  // its whole job without a checkout, and failing it for an empty catalog would
+  // fail work that never needed one. The enabled list is the FROZEN run-start
+  // one, so the run refuses on the list it started with, exactly as every other
+  // repository decision in it does.
+  if (
+    entry.kind === "ticket" &&
+    runStartHasNoEnabledRepository(runStart) &&
+    workflowNeedsRepositoryAccess(plan.definition.nodes)
+  ) {
+    return await failBeforeWork(NO_ENABLED_REPOSITORY_MESSAGE);
   }
 
   const agentKindOverride = await resolveAgentKindOverride(ticket.labels);

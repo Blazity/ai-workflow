@@ -2,36 +2,66 @@ import { describe, it } from "node:test";
 import { expect } from "./test-expect.js";
 import {
   parseRequestBody,
+  relatesToItself,
   repositoryCatalogActivateRequestSchema,
   repositoryCatalogEnabledRequestSchema,
   repositoryCatalogImportPreviewRequestSchema,
   repositoryCatalogImportRequestSchema,
   repositoryCatalogSuggestRequestSchema,
   repositoryCatalogUpsertRequestSchema,
+  repositoryCatalogVersionsQuerySchema,
+  REPOSITORY_RELATIONSHIPS_MAX,
+  REPOSITORY_VERSION_PAGE_DEFAULT,
+  REPOSITORY_VERSION_PAGE_MAX,
+  selfRelationshipMessage,
 } from "@shared/contracts";
+
+/** Every upsert body below carries one, because a profile version with no
+ *  audit line is what D4 stopped accepting. */
+const REASON = "first profile";
 
 describe("repositoryCatalogUpsertRequestSchema", () => {
   it("leaves an omitted profile field out, because omitted means unchanged", () => {
     // The route reads an absent field as "carry the stored value forward". A
     // default here would turn a Rules-only save into a body that also clears
     // the description and the script groups, which is the exact bug this
-    // schema change exists to close. Only `reason` still defaults, because it
-    // describes the write rather than the profile.
+    // schema change exists to close.
     expect(
       parseRequestBody(repositoryCatalogUpsertRequestSchema, {
         provider: "github",
         path: "acme/api",
+        reason: REASON,
       }),
     ).toEqual({
       ok: true,
-      value: { provider: "github", path: "acme/api", reason: "" },
+      value: { provider: "github", path: "acme/api", reason: REASON },
     });
+  });
+
+  // D4 / row P31. MCP has always required one. HTTP defaulted it to the empty
+  // string, so a profile version could be minted with a blank audit line and
+  // the History tab had nothing to show for it.
+  it("refuses a save with no reason, because the version history is the point", () => {
+    expect(
+      parseRequestBody(repositoryCatalogUpsertRequestSchema, {
+        provider: "github",
+        path: "acme/api",
+      }).ok,
+    ).toBe(false);
+    expect(
+      parseRequestBody(repositoryCatalogUpsertRequestSchema, {
+        provider: "github",
+        path: "acme/api",
+        reason: "   ",
+      }),
+    ).toEqual({ ok: false, message: "a reason is required" });
   });
 
   it("keeps null apart from absent, because one clears and the other does not", () => {
     const parsed = parseRequestBody(repositoryCatalogUpsertRequestSchema, {
       provider: "github",
       path: "acme/api",
+      reason: REASON,
       scriptGroups: null,
     });
     expect(parsed.ok).toEqual(true);
@@ -44,6 +74,7 @@ describe("repositoryCatalogUpsertRequestSchema", () => {
       parseRequestBody(repositoryCatalogUpsertRequestSchema, {
         provider: "github",
         path: "acme/api",
+        reason: REASON,
         expectedProfileVersion: 4,
         batchTimeoutMinutes: 90,
       }),
@@ -57,6 +88,7 @@ describe("repositoryCatalogUpsertRequestSchema", () => {
       parseRequestBody(repositoryCatalogUpsertRequestSchema, {
         provider: "github",
         path: "acme/api",
+        reason: REASON,
         expectedProfileVersion: 0,
       }).ok,
     ).toEqual(true);
@@ -64,6 +96,7 @@ describe("repositoryCatalogUpsertRequestSchema", () => {
       parseRequestBody(repositoryCatalogUpsertRequestSchema, {
         provider: "github",
         path: "acme/api",
+        reason: REASON,
         batchTimeoutMinutes: 0,
       }).ok,
     ).toEqual(false);
@@ -71,6 +104,7 @@ describe("repositoryCatalogUpsertRequestSchema", () => {
       parseRequestBody(repositoryCatalogUpsertRequestSchema, {
         provider: "github",
         path: "acme/api",
+        reason: REASON,
         batchTimeoutMinutes: 121,
       }).ok,
     ).toEqual(false);
@@ -79,6 +113,7 @@ describe("repositoryCatalogUpsertRequestSchema", () => {
       parseRequestBody(repositoryCatalogUpsertRequestSchema, {
         provider: "github",
         path: "acme/api",
+        reason: REASON,
         batchTimeoutMinutes: null,
       }).ok,
     ).toEqual(true);
@@ -117,12 +152,14 @@ describe("repositoryCatalogUpsertRequestSchema", () => {
     const granting = parseRequestBody(repositoryCatalogUpsertRequestSchema, {
       provider: "github",
       path: "acme/api",
+      reason: REASON,
       enabled: true,
     });
     expect(granting.ok && granting.value.enabled).toBe(true);
     const silent = parseRequestBody(repositoryCatalogUpsertRequestSchema, {
       provider: "github",
       path: "acme/api",
+      reason: REASON,
     });
     // Absent, not false: the service turns absence into "do not grant", and the
     // contract does not pretend the caller made a decision it never made.
@@ -134,6 +171,7 @@ describe("repositoryCatalogUpsertRequestSchema", () => {
       parseRequestBody(repositoryCatalogUpsertRequestSchema, {
         provider: "bitbucket",
         path: "acme/api",
+        reason: REASON,
       }).ok,
     ).toBe(false);
   });
@@ -143,8 +181,134 @@ describe("repositoryCatalogUpsertRequestSchema", () => {
       parseRequestBody(repositoryCatalogUpsertRequestSchema, {
         provider: "github",
         path: "api",
+        reason: REASON,
       }),
     ).toEqual({ ok: false, message: 'repository path must look like "owner/name"' });
+  });
+
+  // D12 / rows P29, P30. Refused HERE rather than on one surface, because the
+  // dashboard, the HTTP route and the MCP tool all parse this same schema.
+  it("refuses the same repository related twice", () => {
+    expect(
+      parseRequestBody(repositoryCatalogUpsertRequestSchema, {
+        provider: "github",
+        path: "acme/api",
+        reason: REASON,
+        relationships: [
+          { repositoryId: 8, label: "the client" },
+          { repositoryId: 8, label: "again" },
+        ],
+      }),
+    ).toEqual({
+      ok: false,
+      message: "repository 8 is related twice; one relationship per repository",
+    });
+  });
+
+  it("caps a relationship list at what the Overview tab can be read from", () => {
+    const withinBound = Array.from({ length: REPOSITORY_RELATIONSHIPS_MAX }, (_, index) => ({
+      repositoryId: index + 1,
+      label: "related",
+    }));
+    expect(
+      parseRequestBody(repositoryCatalogUpsertRequestSchema, {
+        provider: "github",
+        path: "acme/api",
+        reason: REASON,
+        relationships: withinBound,
+      }).ok,
+    ).toBe(true);
+    expect(
+      parseRequestBody(repositoryCatalogUpsertRequestSchema, {
+        provider: "github",
+        path: "acme/api",
+        reason: REASON,
+        relationships: [...withinBound, { repositoryId: 999, label: "one too many" }],
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("accepts a relationship to a repository the catalog does not hold yet", () => {
+    // Deliberately unchanged: the row it names may be imported later, and the
+    // Overview tab renders an unresolved id as `repository <id>`.
+    expect(
+      parseRequestBody(repositoryCatalogUpsertRequestSchema, {
+        provider: "github",
+        path: "acme/api",
+        reason: REASON,
+        relationships: [{ repositoryId: 4242, label: "imported next week" }],
+      }).ok,
+    ).toBe(true);
+  });
+});
+
+// The one relationship rule the schema cannot apply: identity on the body is
+// the provider and the path, so the id a relationship would point at is not on
+// the body at all and the caller has to supply it.
+describe("relatesToItself", () => {
+  it("finds a repository related to itself, whatever else the list holds", () => {
+    expect(
+      relatesToItself(7, [
+        { repositoryId: 8, label: "the client" },
+        { repositoryId: 7, label: "itself" },
+      ]),
+    ).toBe(true);
+    expect(relatesToItself(7, [{ repositoryId: 8, label: "the client" }])).toBe(false);
+  });
+
+  it("says no for a repository that does not exist yet, and for an absent list", () => {
+    // A create has no id, so nothing on its list can be itself.
+    expect(relatesToItself(0, [{ repositoryId: 7, label: "somebody" }])).toBe(false);
+    expect(relatesToItself(7, undefined)).toBe(false);
+  });
+
+  it("names the repository in the refusal, under one stable prefix", () => {
+    expect(selfRelationshipMessage(7)).toEqual(
+      "relationship_self_reference: repository 7 cannot be related to itself",
+    );
+  });
+});
+
+// D5 / row P34. The History tab and an agent reading the same history must not
+// disagree about where a page ends, so the route pages by the numbers the MCP
+// tool pages by.
+describe("repositoryCatalogVersionsQuerySchema", () => {
+  it("reads a query string's numbers, because a query string has none", () => {
+    expect(
+      parseRequestBody(repositoryCatalogVersionsQuerySchema, { limit: "25", before: "12" }),
+    ).toEqual({ ok: true, value: { limit: 25, before: 12 } });
+  });
+
+  it("leaves both out when the caller asked for the first page", () => {
+    expect(parseRequestBody(repositoryCatalogVersionsQuerySchema, {})).toEqual({
+      ok: true,
+      value: {},
+    });
+  });
+
+  it("refuses a page size nobody could mean rather than answering a different one", () => {
+    expect(parseRequestBody(repositoryCatalogVersionsQuerySchema, { limit: "0" }).ok).toBe(false);
+    expect(
+      parseRequestBody(repositoryCatalogVersionsQuerySchema, {
+        limit: String(REPOSITORY_VERSION_PAGE_MAX + 1),
+      }).ok,
+    ).toBe(false);
+    expect(parseRequestBody(repositoryCatalogVersionsQuerySchema, { before: "nope" }).ok).toBe(
+      false,
+    );
+    expect(parseRequestBody(repositoryCatalogVersionsQuerySchema, { cursor: "12" }).ok).toBe(
+      false,
+    );
+  });
+
+  it("states a default and a ceiling the MCP history tool can import", () => {
+    expect(REPOSITORY_VERSION_PAGE_DEFAULT).toEqual(50);
+    expect(REPOSITORY_VERSION_PAGE_MAX).toEqual(200);
+    expect(
+      parseRequestBody(repositoryCatalogVersionsQuerySchema, {
+        limit: String(REPOSITORY_VERSION_PAGE_MAX),
+      }).ok,
+    ).toBe(true);
   });
 });
 
