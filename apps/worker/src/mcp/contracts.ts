@@ -24,6 +24,7 @@ export {
   MCP_UNRECOGNIZED_TOOL,
   McpPublicError,
   FIRST_SLICE_TOOLS,
+  isRunCompletionPending,
   isTerminalRunStatus,
 } from "../services/mcp/contracts.js";
 export type {

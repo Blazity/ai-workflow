@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { createTestDb } from "../../test-db.js";
 import type { Db } from "../../client.js";
@@ -595,7 +595,9 @@ describe("markRunFailedByWatchdog", () => {
       startedAt: new Date("2026-06-15T10:00:05Z"),
     });
 
+    const execute = vi.spyOn(db, "execute");
     await expect(markRunFailedByWatchdog(db, "wrun_watchdog_running", reason)).resolves.toBe(true);
+    expect(execute).toHaveBeenCalledOnce();
 
     const r = await row("wrun_watchdog_running");
     expect(r.status).toBe("failed");
@@ -627,6 +629,52 @@ describe("markRunFailedByWatchdog", () => {
     const r = await row("wrun_watchdog_missing");
     expect(r.status).toBe("failed");
     expect(r.statusReason).toBe(reason);
+  });
+
+  it("leaves a completed success untouched, completion fields included", async () => {
+    const completedAt = new Date("2026-06-15T10:05:05Z");
+    await db.insert(workflowRuns).values({
+      runId: "wrun_watchdog_completed_success",
+      subjectKey: "ticket:jira:PROJ-1",
+      workflowId: "wf_agent",
+      workflowName: "Agent",
+      status: "success",
+      statusReason: "original reason",
+      startedAt: new Date("2026-06-15T10:00:05Z"),
+      completedAt,
+      durationSec: 300,
+    });
+
+    await expect(
+      markRunFailedByWatchdog(db, "wrun_watchdog_completed_success", reason),
+    ).resolves.toBe(false);
+
+    const r = await row("wrun_watchdog_completed_success");
+    expect(r.status).toBe("success");
+    expect(r.statusReason).toBe("original reason");
+    expect(r.completedAt).toEqual(completedAt);
+    expect(r.durationSec).toBe(300);
+  });
+
+  // Issued together, but the pglite driver runs them one after the other on a
+  // single connection, so this pins the create-then-confirm sequence of the
+  // statement (the second write finds a frozen 'failed' row and still reports
+  // the watchdog outcome), NOT concurrent behaviour. Real overlap is the
+  // production Neon HTTP case, which this harness cannot reproduce.
+  it("confirms a second watchdog write once the first created the missing row", async () => {
+    const laterReason =
+      'Run engine stalled: step "checkPhaseDone" has been running for 33 minutes';
+
+    await expect(
+      Promise.all([
+        markRunFailedByWatchdog(db, "wrun_watchdog_second_write", reason),
+        markRunFailedByWatchdog(db, "wrun_watchdog_second_write", laterReason),
+      ]),
+    ).resolves.toEqual([true, true]);
+
+    const r = await row("wrun_watchdog_second_write");
+    expect(r.status).toBe("failed");
+    expect([reason, laterReason]).toContain(r.statusReason);
   });
 
   it("treats an identical watchdog failure as an idempotent success", async () => {

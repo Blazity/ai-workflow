@@ -673,62 +673,66 @@ export function markConnectedRunBlockedByOperator(runId: string, reason: string)
  * elapsed-minute detail; the first watchdog reason remains untouched. Other
  * terminal outcomes are not clobbered and return false so the watchdog retains
  * the claim.
+ *
+ * The return value is read back from the row this one statement returns, and it
+ * is true only when the stored status_reason starts with
+ * WATCHDOG_FAILURE_REASON_PREFIX: that prefix is what distinguishes a watchdog
+ * outcome from an ordinary failure recordRunUsage owns. So `reason` must carry
+ * it. The only caller, services/run-lifecycle/run-stall-watchdog.ts, always
+ * does; a caller passing any other wording would get false even though the
+ * write landed, and would keep re-claiming the run.
  */
 export async function markRunFailedByWatchdog(
   db: Db,
   runId: string,
   reason: string,
 ): Promise<boolean> {
-  const updated = await db
-    .update(workflowRuns)
-    .set({
-      status: "failed",
-      statusReason: reason,
-      completedAt: sql`coalesce(${workflowRuns.completedAt}, now())`,
-      durationSec: durationFromStart(),
-      updatedAt: sql`now()`,
-    })
-    .where(
-      and(
-        eq(workflowRuns.runId, runId),
-        or(
-          isNull(workflowRuns.status),
-          inArray(workflowRuns.status, ["awaiting", "running"]),
-        ),
-      ),
+  // Only-advance-from-in-flight, evaluated against the stored row in every
+  // assignment below so a losing writer leaves the frozen outcome untouched.
+  const inFlight = sql`
+    ${workflowRuns.status} is null
+      or ${workflowRuns.status} in ('awaiting', 'running')
+  `;
+  // The insert column list and the assignment targets stay bare identifiers:
+  // Postgres rejects a table-qualified name in either position. Every reference
+  // to the stored row is a drizzle column, so a schema rename reaches here.
+  const result = await db.execute(sql`
+    INSERT INTO workflow_runs (
+      run_id,
+      status,
+      status_reason,
+      completed_at
+    ) VALUES (
+      ${runId},
+      'failed',
+      ${reason},
+      now()
     )
-    .returning({
-      status: workflowRuns.status,
-      statusReason: workflowRuns.statusReason,
-    });
-  if (updated.length > 0) return true;
-
-  const inserted = await db
-    .insert(workflowRuns)
-    .values({
-      runId,
-      status: "failed",
-      statusReason: reason,
-      completedAt: sql`now()`,
-    })
-    .onConflictDoNothing({ target: workflowRuns.runId })
-    .returning({
-      status: workflowRuns.status,
-      statusReason: workflowRuns.statusReason,
-    });
-  if (inserted.length > 0) return true;
-
-  const [existing] = await db
-    .select({
-      status: workflowRuns.status,
-      statusReason: workflowRuns.statusReason,
-    })
-    .from(workflowRuns)
-    .where(eq(workflowRuns.runId, runId));
+    ON CONFLICT (run_id) DO UPDATE SET
+      status = case when ${inFlight} then 'failed' else ${workflowRuns.status} end,
+      status_reason = case
+        when ${inFlight} then excluded.status_reason
+        else ${workflowRuns.statusReason}
+      end,
+      completed_at = case
+        when ${inFlight} then coalesce(${workflowRuns.completedAt}, now())
+        else ${workflowRuns.completedAt}
+      end,
+      duration_sec = case
+        when ${inFlight} then ${durationFromStart()}
+        else ${workflowRuns.durationSec}
+      end,
+      updated_at = case when ${inFlight} then now() else ${workflowRuns.updatedAt} end
+    RETURNING ${workflowRuns.status}, ${workflowRuns.statusReason}
+  `);
+  const [existing] = (result as { rows?: Array<{
+    status: string | null;
+    status_reason: string | null;
+  }> }).rows ?? [];
   return (
     existing?.status === "failed" &&
-    typeof existing.statusReason === "string" &&
-    existing.statusReason.startsWith(WATCHDOG_FAILURE_REASON_PREFIX)
+    typeof existing.status_reason === "string" &&
+    existing.status_reason.startsWith(WATCHDOG_FAILURE_REASON_PREFIX)
   );
 }
 
