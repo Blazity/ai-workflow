@@ -26,7 +26,7 @@ const { commitRepositoryImport, previewRepositoryImport } = await import("./impo
 const { upsertRepositoryProfile } = await import(
   "../../db/repositories/repository-catalog.js"
 );
-const { loadRepositoryCatalogSnapshot } = await import("./store.js");
+const { loadRepositoryCatalogEntries } = await import("./store.js");
 
 const ADMIN = { role: "admin" as const, id: "user_admin" };
 const MEMBER = { role: "member" as const, id: "user_member" };
@@ -113,8 +113,8 @@ describe("commitRepositoryImport", () => {
       request: { repositoryKeys: ["github:acme/web"], enabled: true },
     });
 
-    const snapshot = await loadRepositoryCatalogSnapshot();
-    expect(snapshot.entries.map((entry) => [entry.path, entry.enabled])).toEqual([
+    const catalog = await loadRepositoryCatalogEntries();
+    expect(catalog.entries.map((entry) => [entry.path, entry.enabled])).toEqual([
       ["acme/web", true],
     ]);
   });
@@ -171,8 +171,8 @@ describe("commitRepositoryImport", () => {
 
     // Nothing was written: a partial import against a provider nobody could
     // list is worse than no import at all.
-    const snapshot = await loadRepositoryCatalogSnapshot();
-    expect(snapshot.entries).toEqual([]);
+    const catalog = await loadRepositoryCatalogEntries();
+    expect(catalog.entries).toEqual([]);
   });
 
   it("still imports when the provider that failed owns none of the selected keys", async () => {
@@ -225,7 +225,7 @@ describe("commitRepositoryImport", () => {
       }),
     ).rejects.toMatchObject({ statusCode: 403 });
 
-    const snapshot = await loadRepositoryCatalogSnapshot();
-    expect(snapshot.entries).toEqual([]);
+    const catalog = await loadRepositoryCatalogEntries();
+    expect(catalog.entries).toEqual([]);
   });
 });

@@ -25,7 +25,7 @@ import {
 import { importConnectedRepositoryCatalogEntries } from "../../db/repositories/repository-catalog.js";
 import { listCachedRepositoryDirectory } from "../repository-discovery/index.js";
 import { requireCatalogManager, type RepositoryCatalogActor } from "./authoring.js";
-import { loadRepositoryCatalogSnapshot } from "./store.js";
+import { loadRepositoryCatalogEntries } from "./store.js";
 
 /**
  * What the installation exposes, marked with what the catalog already holds.
@@ -37,11 +37,15 @@ import { loadRepositoryCatalogSnapshot } from "./store.js";
  * is one admin's own sequence of clicks fanning out into a listing per click.
  */
 export async function previewRepositoryImport(): Promise<RepositoryCatalogImportPreviewResponse> {
-  const [directory, snapshot] = await Promise.all([
+  const [directory, catalog] = await Promise.all([
     listCachedRepositoryDirectory(),
-    loadRepositoryCatalogSnapshot(),
+    // The rows, not the dispatch snapshot: "already in the catalog" is a
+    // question about PRESENCE, and a repository somebody switched off is
+    // present. The snapshot's enabled set would answer it wrong for exactly
+    // the rows an admin is most likely to re-import by mistake.
+    loadRepositoryCatalogEntries(),
   ]);
-  const known = new Set(snapshot.entries.map((entry) => repositoryCatalogKey(entry)));
+  const known = new Set(catalog.entries.map((entry) => repositoryCatalogKey(entry)));
   const repositories = directory.repositories.map(
     (repository): RepositoryCatalogImportCandidate => {
       const key = repositoryCatalogKey({
@@ -94,7 +98,10 @@ export async function commitRepositoryImport(input: {
   requireCatalogManager(input.actor);
   const [directory, before] = await Promise.all([
     listCachedRepositoryDirectory(),
-    loadRepositoryCatalogSnapshot(),
+    // Presence again, and here it decides `alreadyPresent`: a disabled row must
+    // report as already present rather than be re-imported, which is what keeps
+    // the insert from re-enabling a repository somebody switched off.
+    loadRepositoryCatalogEntries(),
   ]);
 
   const requested: string[] = [];
@@ -159,6 +166,6 @@ export async function commitRepositoryImport(input: {
           repositories: selected,
           enabled: input.request.enabled,
         });
-  const snapshot = await loadRepositoryCatalogSnapshot();
-  return { imported, skipped, alreadyPresent, repositories: [...snapshot.entries] };
+  const after = await loadRepositoryCatalogEntries();
+  return { imported, skipped, alreadyPresent, repositories: [...after.entries] };
 }
