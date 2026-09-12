@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-09
+Last-verified: 2026-09-12
 
 # ADR-001: Layering and packages
 
@@ -82,6 +82,14 @@ are pure, so they become `packages/*`. Each `package.json` carries a
 `description` that states what the package may and may not do; a gate fails
 when one is missing. Each package exposes a curated `exports` map, one entry
 per public module, not one per file.
+
+2026-09-12: `packages/workflow-graph` now exists on disk, created by stage 0 of
+[docs/plans/2026-09-11-workflow-graph-package.md](../plans/2026-09-11-workflow-graph-package.md)
+with the v2 binding and branch modules as its first content. It declares only
+the dependencies it imports, so the `conditions` edge this ADR allows and the
+zod dependency the plan foresees are added by the stage that first needs them.
+Its second consumer is the dashboard, which the later stages of that plan
+connect; until then the worker is the only importer.
 
 The engine, the adapters, the services and the DB layer have one consumer (the
 worker) and stay directories inside `apps/worker/src`, fenced by dependency

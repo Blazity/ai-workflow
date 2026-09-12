@@ -34,7 +34,7 @@ import {
   validateJsonSchemaValue,
 } from "./json-schema.js";
 import { deriveTransformOutputSchema } from "./transform.js";
-import { parseWorkflowDataReferenceV2 } from "./v2-bindings.js";
+import { parseWorkflowDataReferenceV2 } from "@shared/workflow-graph";
 
 const MAX_ACTIVATION_TERMS = 256;
 const TRIGGER_GUARD = "$trigger";

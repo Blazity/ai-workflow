@@ -20,7 +20,7 @@ import { assembleReviewChangeSetAddition, pullRequestChangeSetTarget } from "./s
 import { sanitizeReplayAttemptOutcome, sanitizeReplayGraphSnapshot, sanitizeReplayValue } from "../run-observability/sanitizer.js";
 import { safeReplayAgentProtocolMetadata, safeWorkflowExecutionLogEvent } from "../run-observability/safe-execution-log.js";
 import { executeTransform } from "../workflow-definition/transform.js";
-import { type V2BindingResolutionContext } from "../workflow-definition/v2-bindings.js";
+import { type V2BindingResolutionContext } from "@shared/workflow-graph";
 import type { BlockExecutionContext, BlockExecutionResult, BlockExecutor } from "../workflow-definition/interpreter.js";
 import { resolveBlockAgent, resolveRunDefaultKind } from "../workflow-definition/resolve-agent.js";
 import { resolveTicketMoveTarget } from "./helpers/ticket-move-target.js";
