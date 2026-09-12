@@ -68,6 +68,12 @@ each `apps/*/AGENTS.md`, `packages/AGENTS.md`, and `README.md`, `AGENTS.md`,
 | [releases/artur/upgrade-preflight.md](./releases/artur/upgrade-preflight.md) | The tenant database check that has to pass before a release pull request merges |
 | [releases/artur/rehearsals/README.md](./releases/artur/rehearsals/README.md) | How to rehearse a pinned source commit and record the result the sync requires |
 
+## Quality
+
+| Document | What it is for |
+|---|---|
+| [qa/repository-catalog-matrix.md](./qa/repository-catalog-matrix.md) | The repository catalog's 143 scenarios and the automated test holding each one, with the rows nobody pins yet |
+
 ## Research
 
 Measurements and primary-source notes. They are dated and never restamped: a
