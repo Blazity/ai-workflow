@@ -10,10 +10,20 @@ import { useRouter } from "next/navigation";
 
 import { CkCard, CkChip } from "@/components/ui";
 import { apiClient } from "@/lib/api/client";
+import { SettingsAreaPanel } from "@/app/(cockpit)/settings/settings-area-panel";
 import type {
   MemoryDocumentDto,
   MemoryDocumentSummaryDto,
+  SettingsEntryView,
 } from "@shared/contracts";
+
+/** The three switches that decide whether anything on this page is read or
+ *  written at all. They live in the Features group of the settings registry. */
+const MEMORY_SETTING_KEYS = [
+  "ENABLE_REPO_MEMORY",
+  "ENABLE_ORG_MEMORY_PROMOTION",
+  "ENABLE_REPO_ROUTING_MEMORY",
+] as const;
 
 const ROW_GRID =
   "grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_70px] lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_70px_120px_150px] items-center gap-3";
@@ -41,6 +51,8 @@ export function MemoryScreen({
   selection,
   selected,
   canDelete = false,
+  settings = [],
+  canEditSettings = false,
 }: {
   documents: MemoryDocumentSummaryDto[];
   /** The document key taken from the URL, or null on the plain listing. */
@@ -49,6 +61,10 @@ export function MemoryScreen({
   selected: MemoryDocumentDto | null;
   /** Owners and admins only, mirroring the worker's role rule. */
   canDelete?: boolean;
+  /** Every resolved setting; empty when the settings read failed. */
+  settings?: readonly SettingsEntryView[];
+  /** canEditSettings(role) on the worker, mirrored here to gate the panel. */
+  canEditSettings?: boolean;
 }) {
   const router = useRouter();
   const [deleteState, setDeleteState] = useState<DeleteState | null>(null);
@@ -100,6 +116,15 @@ export function MemoryScreen({
           {visible.length} {visible.length === 1 ? "document" : "documents"}
         </h2>
       </div>
+
+      <SettingsAreaPanel
+        settings={settings}
+        group="features"
+        keys={MEMORY_SETTING_KEYS}
+        heading="Memory switches"
+        description="Whether the agent reads and writes memory at all. A change reaches the next run, never one already in flight, and stored documents are left untouched either way."
+        canEdit={canEditSettings}
+      />
 
       {selection ? (
         <CkCard
