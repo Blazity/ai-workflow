@@ -335,6 +335,8 @@ Both failure modes are logged rather than silent: an empty effective allowlist l
 
 Unlike most variables here, `AGENT_ALLOWED_REPOS` is read from `process.env` directly (in `apps/worker/src/services/dispatch/repo-allowlist.ts`) rather than through the validated `env.ts` singleton, so it is deliberately absent from `env.ts` and a malformed value will not crash startup.
 
+Every deploy imports this variable into the repository catalog: the build-time seed (`apps/worker/scripts/db-seed-repository-catalog.ts`) creates one enabled catalog row per entry, plus one for every repository a stored workflow definition pins, and activates the catalog exactly when the variable is non-empty. The variable still decides access until the catalog consumers stage lands, and the cleanup stage removes it entirely, after which a value set here fails environment validation with a message naming the Repositories page that replaced it.
+
 Repository scripts (per-repo commands run before push/PR creation) are configured in the dashboard:
 **Repository scripts** in the cockpit sidebar. Admins and owners can edit; changes are versioned
 with one-click restore.

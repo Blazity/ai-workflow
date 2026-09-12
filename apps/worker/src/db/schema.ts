@@ -7,6 +7,7 @@ export * from "./schema/mcp.js";
 export * from "./schema/post-pr.js";
 export * from "./schema/pre-pr.js";
 export * from "./schema/prompts.js";
+export * from "./schema/repositories.js";
 export * from "./schema/runs.js";
 export * from "./schema/schedules.js";
 export * from "./schema/system.js";

@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-11
+Last-verified: 2026-09-12
 
 # apps/worker
 
@@ -78,6 +78,27 @@ boundary instead of copying their ownership tables here.
 - **Tests replay migrations from disk.** `src/db/test-db.ts` reads the
   `drizzle/` directory in the working tree, so a freshly generated, uncommitted
   migration is already active in unit tests.
+- **The repository catalog is the coming grant, and is not deciding yet.**
+  `repositories`, `repository_profile_versions` and the one-row
+  `repository_catalog_state` (migration 0060) hold what the deployment knows
+  about each repository and the versioned profile carrying its description,
+  rules, relationships and script groups. Every access goes through
+  `src/db/repositories/repository-catalog.ts`; `src/services/repository-catalog/`
+  loads one immutable snapshot per entry point (`store.ts`) and answers the
+  synchronous predicate from it (`policy.ts`). While `repository_catalog_state`
+  says not activated the catalog is a **bridge**: it answers "enabled" for every
+  repository and reports that it is doing so, which is exactly how the
+  deployment behaves today. Nothing is rewired onto it yet;
+  `engine/support/repo-allowlist.ts` still decides access. The build-time seed
+  `scripts/db-seed-repository-catalog.ts` (wired after `db:migrate` in `build`,
+  never in `build:ci`) imports the allowlist variable and every pinned
+  repository, activates only a deployment whose allowlist was already
+  restricting it, and moves the global script groups blob into profiles; every
+  write in it is guarded on existence, so a redeploy seeds nothing new. The
+  workspace gate gained an optional `repositoryVersions` field recording which
+  profile version each repository's checks passed under, and recovery accepts a
+  gate with or without it indefinitely.
+
 - **The MCP contract is generated.** After changing a tool, run
   `pnpm run mcp:contract:generate`, and `mcp:contract:check` in CI proves it.
 

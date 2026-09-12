@@ -16,6 +16,42 @@ import {
 export interface WorkspaceGate {
   configurationVersion: number;
   fingerprint: string;
+  /**
+   * The profile version each repository's checks actually ran under, keyed by
+   * `provider:owner/name` cased down.
+   *
+   * Optional forever, in both directions. Every gate minted before repository
+   * profiles existed lacks it and must keep recovering, and a run whose
+   * repositories have no profiles mints one without it; recovery accepts both
+   * shapes indefinitely and nothing is ever removed from this type.
+   *
+   * This is what replaced `configurationVersion` as the signal. The global
+   * counter moved whenever ANY repository's configuration was saved, so editing
+   * repository B failed a run in flight on repository A at the publication
+   * boundary, having verified nothing about A. The per-repository record fails
+   * exactly the repository whose configuration moved.
+   */
+  repositoryVersions?: Record<string, number>;
+}
+
+/**
+ * The gate as a plain JSON object for a block's durable output.
+ *
+ * Shared by the two blocks that mint a gate, because `recoverPrePrGateFromSteps`
+ * keys on the exact shape checkpointed here and two hand-written copies of it
+ * is how one of them would quietly stop being recoverable.
+ */
+export function serializeWorkspaceGate(gate: WorkspaceGate | null): {
+  configurationVersion: number;
+  fingerprint: string;
+  repositoryVersions?: Record<string, number>;
+} | null {
+  if (!gate) return null;
+  return {
+    configurationVersion: gate.configurationVersion,
+    fingerprint: gate.fingerprint,
+    ...(gate.repositoryVersions ? { repositoryVersions: gate.repositoryVersions } : {}),
+  };
 }
 
 /** Minimal state shape shared-workspace mutators use to revoke an earlier gate. */
@@ -108,9 +144,31 @@ export async function recordSuccessfulWorkspaceGate(input: {
     input.sandboxId,
     input.workspaceManifest,
   );
+  // Read AFTER the checks passed and after the workspace was inspected, never
+  // from the configuration the batch was launched with. The invariant the gate
+  // defends is "the version the checks ran under equals the version now", and a
+  // version captured before the run would assert it about a configuration the
+  // checks had already stopped reading.
+  //
+  // Its own step function, deliberately not a second call to
+  // loadCurrentPrePrCheckConfigStep: a step's identity is its module path and
+  // its name, so an extra call to the existing one would shift the occurrence
+  // the publication boundary's own call resolves to, and every run suspended
+  // between the two would resume against the wrong journal entry.
+  const current = await loadCurrentRepositoryProfileVersionsStep();
+  const repositoryVersions: Record<string, number> = {};
+  for (const repository of inspected.repositories) {
+    const key = `${repository.provider}:${repository.repoPath.toLowerCase()}`;
+    const version = current[key];
+    // Only repositories the configuration actually covers. A workspace
+    // repository with no profile has nothing to compare later, and recording a
+    // zero for it would invent a change the next edit could "differ" from.
+    if (typeof version === "number") repositoryVersions[key] = version;
+  }
   return {
     configurationVersion: input.configurationVersion,
     fingerprint: inspected.fingerprint,
+    ...(Object.keys(repositoryVersions).length > 0 ? { repositoryVersions } : {}),
   };
 }
 
@@ -210,6 +268,29 @@ export async function assertCurrentWorkspaceGate(input: {
       attribution.trim() || undefined,
     );
   }
+  // Per repository, and only for the repositories this gate actually recorded.
+  // A repository the gate says nothing about is not checked here: it either has
+  // no profile, or it was added to the workspace after the gate was minted and
+  // records its own version when its own checks pass.
+  //
+  // Absence on the current side is a failure and not a pass. A profile whose
+  // script groups were dropped is a configuration change like any other, and
+  // the only way to reach this line with one missing is that some OTHER
+  // repository still has scripts, so the run really did verify a configuration
+  // that is no longer the current one.
+  for (const [key, recorded] of Object.entries(input.gate.repositoryVersions ?? {})) {
+    const currentVersion = current.repositoryVersions[key];
+    if (currentVersion === recorded) continue;
+    const attribution = attributeScriptDrift(input.dirtied);
+    throw new WorkspaceGateError(
+      "configuration_changed",
+      `The repository scripts configuration for ${key} changed after checks passed: ` +
+        `profile moved from v${recorded} to ` +
+        `${currentVersion === undefined ? "none" : `v${currentVersion}`} ` +
+        `while this run was in flight.${attribution}`,
+      attribution.trim() || undefined,
+    );
+  }
   if (input.gate.fingerprint !== inspected.fingerprint) {
     // The tree moved after a gate was minted, which is the case where naming
     // the culprit matters most: a group configured with restoreTree false is
@@ -232,15 +313,36 @@ export async function assertCurrentWorkspaceGate(input: {
 async function loadCurrentPrePrCheckConfigStep(): Promise<{
   version: number;
   config: PrePrCheckConfig;
+  repositoryVersions: Record<string, number>;
 } | null> {
   "use step";
-  const { getConnectedCurrentPrePrCheckConfigRow } = await import(
-    "../../db/repositories/pre-pr-checks.js"
+  const { getConnectedCurrentCheckConfiguration } = await import(
+    "../../db/repositories/repository-catalog.js"
   );
-  const current = await getConnectedCurrentPrePrCheckConfigRow();
-  return current ? { version: current.version, config: current.config } : null;
+  const current = await getConnectedCurrentCheckConfiguration();
+  return current.version === null
+    ? null
+    : {
+        version: current.version,
+        config: current.config,
+        repositoryVersions: current.repositoryVersions,
+      };
 }
 loadCurrentPrePrCheckConfigStep.maxRetries = 0;
+
+/** The current profile version of every repository whose profile carries
+ *  script groups, keyed as the gate keys them. Its own step so the read happens
+ *  at gate-minting time; see recordSuccessfulWorkspaceGate. */
+async function loadCurrentRepositoryProfileVersionsStep(): Promise<
+  Record<string, number>
+> {
+  "use step";
+  const { getConnectedCurrentCheckConfiguration } = await import(
+    "../../db/repositories/repository-catalog.js"
+  );
+  return (await getConnectedCurrentCheckConfiguration()).repositoryVersions;
+}
+loadCurrentRepositoryProfileVersionsStep.maxRetries = 0;
 
 async function inspectWorkspaceForGateStep(
   sandboxId: string,

@@ -8,8 +8,18 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.sandboxGet } }));
 vi.mock("../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
-vi.mock("../../db/repositories/pre-pr-checks.js", () => ({
-  getConnectedCurrentPrePrCheckConfigRow: mocks.getCurrentPrePrCheckConfig,
+// The boundary reads the configuration composed out of per-repository profiles
+// now. The mock keeps the stored-row shape every case below already writes and
+// adapts it, so the cases stay about the gate rather than about the catalog:
+// `repositoryVersions` defaults to none, which is the old-shape deployment, and
+// a case that cares sets it explicitly.
+vi.mock("../../db/repositories/repository-catalog.js", () => ({
+  getConnectedCurrentCheckConfiguration: async () => {
+    const current = await mocks.getCurrentPrePrCheckConfig();
+    return current === null || current === undefined
+      ? { version: null, config: { repositories: [] }, repositoryVersions: {} }
+      : { ...current, repositoryVersions: current.repositoryVersions ?? {} };
+  },
 }));
 
 import {
@@ -944,6 +954,164 @@ describe("workspace gate", () => {
       // structural cause for the boundary to promote either.
       message: "The Run Workspace changed after pre-publication checks passed.",
       attribution: undefined,
+    });
+  });
+
+  describe("the Finalize configuration check, per repository", () => {
+    /** Both workspace repositories configured, each with its own profile
+     *  version, which is the shape the catalog composes. */
+    function configuredForBoth(versions: Record<string, number>) {
+      mocks.getCurrentPrePrCheckConfig.mockResolvedValue({
+        version: 7,
+        config: {
+          repositories: [
+            { provider: "github", repoPath: "acme/web", commands: ["pnpm test"] },
+            { provider: "gitlab", repoPath: "acme/api", commands: ["pnpm test"] },
+          ],
+        },
+        repositoryVersions: versions,
+      });
+    }
+
+    it("records the version each repository's checks ran under, keyed as the catalog keys it", async () => {
+      configuredForBoth({ "github:acme/web": 3, "gitlab:acme/api": 1 });
+
+      await expect(
+        recordSuccessfulWorkspaceGate({
+          sandboxId: "sbx-1",
+          workspaceManifest: manifest,
+          configurationVersion: 7,
+        }),
+      ).resolves.toMatchObject({
+        configurationVersion: 7,
+        repositoryVersions: { "github:acme/web": 3, "gitlab:acme/api": 1 },
+      });
+    });
+
+    it("records nothing for a workspace repository the configuration does not cover", async () => {
+      configuredForBoth({ "github:acme/web": 3 });
+
+      const gate = await recordSuccessfulWorkspaceGate({
+        sandboxId: "sbx-1",
+        workspaceManifest: manifest,
+        configurationVersion: 7,
+      });
+      expect(gate.repositoryVersions).toEqual({ "github:acme/web": 3 });
+    });
+
+    it("does not fail a run on A because B's script groups were edited", async () => {
+      configuredForBoth({ "github:acme/web": 3, "gitlab:acme/api": 1 });
+      const gate = await recordSuccessfulWorkspaceGate({
+        sandboxId: "sbx-1",
+        workspaceManifest: manifest,
+        configurationVersion: 7,
+      });
+
+      // B moved, A did not, and the global counter did not move either: that is
+      // the whole point of the per-repository record.
+      configuredForBoth({ "github:acme/web": 3, "gitlab:acme/api": 2 });
+      // The gate this run recorded covers only A, because only A's checks ran.
+      await expect(
+        assertCurrentWorkspaceGate({
+          sandboxId: "sbx-1",
+          workspaceManifest: manifest,
+          gate: {
+            configurationVersion: gate.configurationVersion,
+            fingerprint: gate.fingerprint,
+            repositoryVersions: { "github:acme/web": 3 },
+          },
+        }),
+      ).resolves.toMatchObject({ required: true, configurationVersion: 7 });
+    });
+
+    it("fails the run on A when A's own script groups were edited after its checks passed", async () => {
+      configuredForBoth({ "github:acme/web": 3, "gitlab:acme/api": 1 });
+      const gate = await recordSuccessfulWorkspaceGate({
+        sandboxId: "sbx-1",
+        workspaceManifest: manifest,
+        configurationVersion: 7,
+      });
+
+      configuredForBoth({ "github:acme/web": 4, "gitlab:acme/api": 1 });
+      await expect(
+        assertCurrentWorkspaceGate({
+          sandboxId: "sbx-1",
+          workspaceManifest: manifest,
+          gate,
+        }),
+      ).rejects.toMatchObject({
+        code: "configuration_changed",
+        message:
+          "The repository scripts configuration for github:acme/web changed after checks " +
+          "passed: profile moved from v3 to v4 while this run was in flight.",
+      });
+    });
+
+    it("fails the run when the profile it ran under was dropped entirely", async () => {
+      configuredForBoth({ "github:acme/web": 3, "gitlab:acme/api": 1 });
+      const gate = await recordSuccessfulWorkspaceGate({
+        sandboxId: "sbx-1",
+        workspaceManifest: manifest,
+        configurationVersion: 7,
+      });
+
+      configuredForBoth({ "gitlab:acme/api": 1 });
+      await expect(
+        assertCurrentWorkspaceGate({
+          sandboxId: "sbx-1",
+          workspaceManifest: manifest,
+          gate,
+        }),
+      ).rejects.toMatchObject({
+        code: "configuration_changed",
+        message:
+          "The repository scripts configuration for github:acme/web changed after checks " +
+          "passed: profile moved from v3 to none while this run was in flight.",
+      });
+    });
+
+    it("still passes a gate of the old shape, which records no repository at all", async () => {
+      configuredForBoth({ "github:acme/web": 9, "gitlab:acme/api": 9 });
+
+      await expect(
+        assertCurrentWorkspaceGate({
+          sandboxId: "sbx-1",
+          workspaceManifest: manifest,
+          gate: {
+            configurationVersion: 7,
+            fingerprint: fingerprintWorkspaceState(manifest, ["web-head", "api-base"]),
+          },
+        }),
+      ).resolves.toMatchObject({ required: true, configurationVersion: 7 });
+    });
+
+    it("round-trips the new shape through a durable checkpoint, and the old one unchanged", () => {
+      const withVersions = {
+        configurationVersion: 7,
+        fingerprint: "fingerprint",
+        repositoryVersions: { "github:acme/web": 3 },
+      };
+      expect(recoverPrePrGateFromSteps(checksStepsWithGate(withVersions))).toEqual(
+        withVersions,
+      );
+      const oldShape = { configurationVersion: 7, fingerprint: "fingerprint" };
+      expect(recoverPrePrGateFromSteps(checksStepsWithGate(oldShape))).toEqual(oldShape);
+    });
+
+    it("drops a checkpointed repositoryVersions entry that is not a number", () => {
+      expect(
+        recoverPrePrGateFromSteps(
+          checksStepsWithGate({
+            configurationVersion: 7,
+            fingerprint: "fingerprint",
+            repositoryVersions: { "github:acme/web": 3, "gitlab:acme/api": "two" },
+          } as unknown as { configurationVersion: number; fingerprint: string }),
+        ),
+      ).toEqual({
+        configurationVersion: 7,
+        fingerprint: "fingerprint",
+        repositoryVersions: { "github:acme/web": 3 },
+      });
     });
   });
 

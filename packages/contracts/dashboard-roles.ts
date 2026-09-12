@@ -60,6 +60,10 @@ export function canManageHarnessProfiles(role: DashboardRole): boolean {
   return role === "owner" || role === "admin";
 }
 
+export function canManageRepositoryCatalog(role: DashboardRole): boolean {
+  return role === "owner" || role === "admin";
+}
+
 /** Reading agent memory is open to every member; erasing it is a hard delete
  *  nobody can undo, so it follows the same owner/admin rule as every other
  *  cockpit mutation. */

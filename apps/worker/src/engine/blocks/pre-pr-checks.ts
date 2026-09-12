@@ -391,12 +391,14 @@ export async function resolveChecksProvisioningStep(): Promise<{
   "use step";
   const fallback = PRE_PR_CHECK_BATCH_MAX_MINUTES * 60_000;
   try {
-    const { getConnectedCurrentPrePrCheckConfigRow } = await import(
-      "../../db/repositories/pre-pr-checks.js"
+    const { getConnectedCurrentCheckConfiguration } = await import(
+      "../../db/repositories/repository-catalog.js"
     );
     const { repoScriptsConfigSchema } = await import("../pre-pr-checks/config.js");
-    const current = await getConnectedCurrentPrePrCheckConfigRow();
-    if (!current) return { ceilingMs: fallback, config: null };
+    // Composed out of per-repository profiles, so the setup commands this
+    // provisions with are the ones the repositories in this workspace declare.
+    const current = await getConnectedCurrentCheckConfiguration();
+    if (current.version === null) return { ceilingMs: fallback, config: null };
     const parsed = repoScriptsConfigSchema.safeParse(current.config);
     return {
       ceilingMs: parsed.success
@@ -430,7 +432,12 @@ export function recoverChecksCeilingFromSteps(steps: StepsRecord): number | null
 }
 
 /**
- * Load the dashboard's current Pre-PR check configuration.
+ * Load the check configuration this run executes, composed out of the
+ * per-repository profiles in the repository catalog.
+ *
+ * `version` is the legacy global counter the publication gate has recorded on
+ * every run ever minted; the per-repository versions are what the gate reasons
+ * about now, and they are read again when the gate is minted rather than here.
  *
  * The version log stays inside this step: pino may only be used inside a
  * "use step", and moving it to workflow scope fails the Vercel build alone,
@@ -441,20 +448,19 @@ export async function loadPrePrCheckConfigStep(): Promise<{
   config: PrePrCheckConfig;
 }> {
   "use step";
-  const { getConnectedCurrentPrePrCheckConfigRow } = await import(
-    "../../db/repositories/pre-pr-checks.js"
+  const { getConnectedCurrentCheckConfiguration } = await import(
+    "../../db/repositories/repository-catalog.js"
   );
-  const { emptyPrePrCheckConfig } = await import("../pre-pr-checks/config.js");
   const { logger } = await import("../../infra/logger.js");
-  const current = await getConnectedCurrentPrePrCheckConfigRow();
+  const current = await getConnectedCurrentCheckConfiguration();
   logger.info(
-    { version: current?.version ?? null },
+    {
+      version: current.version,
+      repositoryVersions: current.repositoryVersions,
+    },
     "pre_pr_checks_config_version",
   );
-  return {
-    version: current?.version ?? null,
-    config: current?.config ?? emptyPrePrCheckConfig,
-  };
+  return { version: current.version, config: current.config };
 }
 loadPrePrCheckConfigStep.maxRetries = 0;
 

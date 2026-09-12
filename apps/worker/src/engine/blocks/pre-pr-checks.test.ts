@@ -12,9 +12,16 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
-vi.mock("../../db/repositories/pre-pr-checks.js", () => ({
-  getConnectedCurrentPrePrCheckConfigRow: (...args: unknown[]) =>
-    mocks.getCurrentPrePrCheckConfig(...args),
+// The blocks read the configuration composed out of per-repository profiles
+// now. The mock keeps the stored-row shape these cases already write and adapts
+// it, so they stay about the checks rather than about the catalog.
+vi.mock("../../db/repositories/repository-catalog.js", () => ({
+  getConnectedCurrentCheckConfiguration: async (...args: unknown[]) => {
+    const current = await mocks.getCurrentPrePrCheckConfig(...args);
+    return current === null || current === undefined
+      ? { version: null, config: { repositories: [] }, repositoryVersions: {} }
+      : { ...current, repositoryVersions: current.repositoryVersions ?? {} };
+  },
 }));
 vi.mock("../../infra/logger.js", () => ({
   logger: { info: mocks.loggerInfo, warn: vi.fn(), error: vi.fn() },
@@ -830,7 +837,7 @@ describe("loadPrePrCheckConfigStep", () => {
       config: { repositories: [] },
     });
     expect(mocks.loggerInfo).toHaveBeenCalledWith(
-      { version: 7 },
+      { version: 7, repositoryVersions: {} },
       "pre_pr_checks_config_version",
     );
   });

@@ -24,6 +24,7 @@ import { isRunControlError } from "../../helpers/run-control-error.js";
 import {
   invalidateWorkspaceGate,
   recordSuccessfulWorkspaceGate,
+  serializeWorkspaceGate,
 } from "../../steps/workspace-gate.js";
 import {
   batchStallReason,
@@ -426,12 +427,7 @@ export const execute: BlockExecuteFn = async (
         // can recover it on a cold scheduler resume. Spread into a plain JSON
         // object for the BlockOutput contract. Null when no gate was recorded
         // (commands path, failed/missing config, or no workspace manifest).
-        gate: ctx.prePrGate
-          ? {
-              configurationVersion: ctx.prePrGate.configurationVersion,
-              fingerprint: ctx.prePrGate.fingerprint,
-            }
-          : null,
+        gate: serializeWorkspaceGate(ctx.prePrGate),
       },
     };
   } catch (err) {

@@ -41,6 +41,23 @@ vi.mock("../../steps/workspace-gate.js", () => ({
     state.prePrGate = null;
   },
   recordSuccessfulWorkspaceGate: mocks.recordSuccessfulWorkspaceGate,
+  // The real one: it is a pure projection of the gate onto the durable output,
+  // and the recovery in finalize keys on exactly the shape it produces, so a
+  // fake here would let the two drift without a test noticing.
+  serializeWorkspaceGate: (gate: {
+    configurationVersion: number;
+    fingerprint: string;
+    repositoryVersions?: Record<string, number>;
+  } | null) =>
+    gate
+      ? {
+          configurationVersion: gate.configurationVersion,
+          fingerprint: gate.fingerprint,
+          ...(gate.repositoryVersions
+            ? { repositoryVersions: gate.repositoryVersions }
+            : {}),
+        }
+      : null,
 }));
 
 import type { WorkspaceManifest } from "../../../sandbox/repo-workspace.js";

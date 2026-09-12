@@ -751,10 +751,20 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       // ephemeral ctx.prePrGate is lost on a cold scheduler resume. Kept out of
       // normalOutputRequired so old runs and replays without it still validate.
       gate: nullableType(
-        objectType({
-          configurationVersion: numberType(),
-          fingerprint: stringType(),
-        }),
+        objectType(
+          {
+            configurationVersion: numberType(),
+            fingerprint: stringType(),
+            // The profile version each repository's checks ran under, as an
+            // open map from `provider:owner/name` to a number. Optional, and
+            // absent from every gate checkpointed before repository profiles
+            // existed, which is why it is not in the required list: recovery
+            // accepts both shapes indefinitely and a replay of an old run must
+            // keep validating.
+            repositoryVersions: objectType({}, [], true),
+          },
+          ["configurationVersion", "fingerprint"],
+        ),
       ),
     }),
     normalOutputRequired: [...REPO_SCRIPT_OUTPUT_REQUIRED, "fixCycles"],
@@ -813,10 +823,20 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       // ctx.prePrGate on a passing configured run, so finalize can recover it on
       // a cold scheduler resume. Optional, and kept out of normalOutputRequired.
       gate: nullableType(
-        objectType({
-          configurationVersion: numberType(),
-          fingerprint: stringType(),
-        }),
+        objectType(
+          {
+            configurationVersion: numberType(),
+            fingerprint: stringType(),
+            // The profile version each repository's checks ran under, as an
+            // open map from `provider:owner/name` to a number. Optional, and
+            // absent from every gate checkpointed before repository profiles
+            // existed, which is why it is not in the required list: recovery
+            // accepts both shapes indefinitely and a replay of an old run must
+            // keep validating.
+            repositoryVersions: objectType({}, [], true),
+          },
+          ["configurationVersion", "fingerprint"],
+        ),
       ),
     }),
     normalOutputRequired: ["ok", "outcome", "results", "failures"],
