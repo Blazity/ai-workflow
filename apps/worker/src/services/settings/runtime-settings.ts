@@ -11,11 +11,26 @@
  * Accessors are functions, not constants: the worker's tests replace the env
  * module per case, and a module-level snapshot would freeze the first value.
  */
+import type { SettingsSnapshot } from "@shared/contracts";
 import { env } from "../../infra/vcs-config.js";
+import { settingsSnapshotFromEnvironment } from "./snapshot.js";
+
+/**
+ * Every accessor below that reads a migrated key comes in two forms. The form
+ * that takes a snapshot is the one to use: the caller loaded it once at its
+ * entry point, so the value cannot change under it halfway through. The
+ * zero-argument form resolves a snapshot from the environment on the spot and
+ * exists only so callers that have not been converted yet keep compiling and
+ * behaving exactly as before; it goes away with the environment parsing in the
+ * cleanup stage (stage H of the repository catalog and settings plan).
+ */
 
 /** The run-slot ceiling every dispatch path shares. */
-export function maxConcurrentAgents(): number {
-  return env.MAX_CONCURRENT_AGENTS;
+export function maxConcurrentAgents(settings: SettingsSnapshot): number;
+/** @deprecated Pass the snapshot. Removed with the environment in stage H. */
+export function maxConcurrentAgents(): number;
+export function maxConcurrentAgents(settings?: SettingsSnapshot): number {
+  return (settings ?? settingsSnapshotFromEnvironment()).MAX_CONCURRENT_AGENTS;
 }
 
 /** The shared secret the platform sends on scheduled cron invocations. */
@@ -23,21 +38,53 @@ export function cronSecret(): string | undefined {
   return env.CRON_SECRET;
 }
 
-/** Dashboard identity: the organization invites are minted for and its origin. */
+/** Dashboard identity: the organization invites are minted for and its origin.
+ *  The origin stays deployment wiring and is not a setting. */
+export function dashboardOrganizationSettings(settings: SettingsSnapshot): {
+  slug: string;
+  name: string;
+  origin: string;
+};
+/** @deprecated Pass the snapshot. Removed with the environment in stage H. */
 export function dashboardOrganizationSettings(): {
   slug: string;
   name: string;
   origin: string;
+};
+export function dashboardOrganizationSettings(settings?: SettingsSnapshot): {
+  slug: string;
+  name: string;
+  origin: string;
 } {
+  const resolved = settings ?? settingsSnapshotFromEnvironment();
   return {
-    slug: env.DASHBOARD_ORG_SLUG,
-    name: env.DASHBOARD_ORG_NAME,
+    slug: resolved.DASHBOARD_ORG_SLUG,
+    name: resolved.DASHBOARD_ORG_NAME,
     origin: env.DASHBOARD_ORIGIN,
   };
 }
 
-/** MCP protocol limits and switches the transport and its services share. */
-export function mcpSettings(): {
+/** MCP protocol limits and switches the transport and its services share.
+ *  The server version is build metadata, not an operator decision. */
+export function mcpSettings(settings: SettingsSnapshot): McpSettings;
+/** @deprecated Pass the snapshot. Removed with the environment in stage H. */
+export function mcpSettings(): McpSettings;
+export function mcpSettings(settings?: SettingsSnapshot): McpSettings {
+  const resolved = settings ?? settingsSnapshotFromEnvironment();
+  return {
+    enabled: resolved.MCP_ENABLED,
+    serverVersion: env.MCP_SERVER_VERSION,
+    allowPublicDcr: resolved.MCP_ALLOW_PUBLIC_DCR,
+    maxRequestBytes: resolved.MCP_MAX_REQUEST_BYTES,
+    maxResultBytes: resolved.MCP_MAX_RESULT_BYTES,
+    toolTimeoutMs: resolved.MCP_TOOL_TIMEOUT_MS,
+    readRateLimitPerMinute: resolved.MCP_READ_RATE_LIMIT_PER_MINUTE,
+    mutationRateLimitPerMinute: resolved.MCP_MUTATION_RATE_LIMIT_PER_MINUTE,
+    auditRetentionDays: resolved.MCP_AUDIT_RETENTION_DAYS,
+  };
+}
+
+interface McpSettings {
   enabled: boolean;
   serverVersion: string;
   allowPublicDcr: boolean;
@@ -47,18 +94,6 @@ export function mcpSettings(): {
   readRateLimitPerMinute: number;
   mutationRateLimitPerMinute: number;
   auditRetentionDays: number;
-} {
-  return {
-    enabled: env.MCP_ENABLED,
-    serverVersion: env.MCP_SERVER_VERSION,
-    allowPublicDcr: env.MCP_ALLOW_PUBLIC_DCR,
-    maxRequestBytes: env.MCP_MAX_REQUEST_BYTES,
-    maxResultBytes: env.MCP_MAX_RESULT_BYTES,
-    toolTimeoutMs: env.MCP_TOOL_TIMEOUT_MS,
-    readRateLimitPerMinute: env.MCP_READ_RATE_LIMIT_PER_MINUTE,
-    mutationRateLimitPerMinute: env.MCP_MUTATION_RATE_LIMIT_PER_MINUTE,
-    auditRetentionDays: env.MCP_AUDIT_RETENTION_DAYS,
-  };
 }
 
 /** Where the dashboard lives, for links and for the auth cookie's origin. */
@@ -127,16 +162,24 @@ export function configuredSecretValues(): string[] {
  * carries. Read together because every caller that shapes a default definition
  * needs all three at once.
  */
-export function agentRuntimeSettings(): {
+export function agentRuntimeSettings(settings: SettingsSnapshot): AgentRuntimeSettings;
+/** @deprecated Pass the snapshot. Removed with the environment in stage H. */
+export function agentRuntimeSettings(): AgentRuntimeSettings;
+export function agentRuntimeSettings(
+  settings?: SettingsSnapshot,
+): AgentRuntimeSettings {
+  const resolved = settings ?? settingsSnapshotFromEnvironment();
+  return {
+    agentKind: resolved.AGENT_KIND,
+    includeReview: resolved.ENABLE_REVIEW_PHASE,
+    includeLeakReview: resolved.ENABLE_LEAK_REVIEW,
+  };
+}
+
+interface AgentRuntimeSettings {
   agentKind: typeof env.AGENT_KIND;
   includeReview: boolean;
   includeLeakReview: boolean;
-} {
-  return {
-    agentKind: env.AGENT_KIND,
-    includeReview: env.ENABLE_REVIEW_PHASE,
-    includeLeakReview: env.ENABLE_LEAK_REVIEW,
-  };
 }
 
 /**

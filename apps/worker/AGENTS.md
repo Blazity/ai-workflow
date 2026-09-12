@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-11
+Last-verified: 2026-09-12
 
 # apps/worker
 
@@ -50,6 +50,38 @@ service-cluster contracts. The current runtime entrypoints are under
 under `src/routes` and `src/mcp`, and configuration helpers are under
 `src/config` and `src/infra`. Use those documents when a change crosses a
 boundary instead of copying their ownership tables here.
+
+## Settings
+
+Product-behaviour switches (limits, feature flags, MCP bounds, board column
+names, harness defaults) are rows in the `settings` table, described once in
+`packages/contracts/settings-registry.ts` and changed through
+`PATCH /api/v1/settings` by an owner or admin, with every change recorded in
+`settings_versions` with the actor and a reason.
+
+- **One snapshot per entry, passed down.** `loadSettingsSnapshot()` is
+  asynchronous and everything below it is not: an accessor returns a value, and
+  an accessor that quietly returned a promise would read as truthy and turn a
+  feature on. Load the snapshot where the work starts (an HTTP handler, a cron
+  tick, the MCP transport, and later a run at its start) and hand it down.
+- **The transition rule.** Every accessor that reads a migrated key has two
+  forms: `accessor(snapshot)`, which is the one to use, and a deprecated
+  zero-argument form that resolves from the environment through
+  `settingsSnapshotFromEnvironment()`. The second exists only so callers that
+  have not been converted yet behave exactly as before; both disappear into one
+  when the cleanup stage removes the environment parsing.
+- **Resolution order.** Stored row, then the value the environment already
+  resolved to, then the registry default. A deployment with a configured
+  environment and an empty table behaves exactly as it did before the table
+  existed, which is what makes the migration safe to deploy on its own.
+- **The seed.** `pnpm db:seed-settings` runs right after `db:migrate` in
+  `build` (not in `build:ci`) and inserts one row per key whose variable this
+  deployment actually sets, doing nothing on conflict. It never overwrites a
+  decision made in the dashboard, and it writes no version rows: the
+  environment is not an actor. A later save of the same value writes no version
+  row either, because the write skips a row whose value is not distinct from
+  the one stored, so an empty history on a seeded key means "never changed",
+  not "never decided".
 
 ## Traps specific to this app
 
