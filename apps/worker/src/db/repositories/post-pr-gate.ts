@@ -280,8 +280,24 @@ export class GateStore {
    * poll cron (src/routes/cron/poll.get.ts), best-effort.
    */
   async purgeExpired(): Promise<void> {
-    await this.db.delete(gateLocks).where(sql`${gateLocks.expiresAt} < now()`);
-    await this.db.delete(gateDedupe).where(sql`${gateDedupe.expiresAt} < now()`);
-    await this.db.delete(gateCurrent).where(sql`${gateCurrent.expiresAt} < now()`);
+    await this.db.execute(sql`
+      WITH deleted_locks AS (
+        DELETE FROM ${gateLocks}
+        WHERE ${gateLocks.expiresAt} < now()
+        RETURNING 1
+      ), deleted_dedupe AS (
+        DELETE FROM ${gateDedupe}
+        WHERE ${gateDedupe.expiresAt} < now()
+        RETURNING 1
+      ), deleted_current AS (
+        DELETE FROM ${gateCurrent}
+        WHERE ${gateCurrent.expiresAt} < now()
+        RETURNING 1
+      )
+      SELECT
+        (SELECT count(*) FROM deleted_locks) AS locks_deleted,
+        (SELECT count(*) FROM deleted_dedupe) AS dedupe_deleted,
+        (SELECT count(*) FROM deleted_current) AS current_deleted
+    `);
   }
 }

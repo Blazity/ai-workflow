@@ -1849,7 +1849,6 @@ export function validateWorkflowDefinitionForDeployment(
   def: WorkflowDefinition,
   registryContext: WorkflowBlockRegistryContext,
   options: {
-    allowLegacyCompatibility?: boolean;
     checkEnvironmentAvailability?: boolean;
   } = {},
 ): string[] {
@@ -1862,7 +1861,6 @@ export function validateWorkflowDefinitionIssuesForDeployment(
   def: WorkflowDefinition,
   registryContext: WorkflowBlockRegistryContext,
   options: {
-    allowLegacyCompatibility?: boolean;
     checkEnvironmentAvailability?: boolean;
   } = {},
 ): WorkflowDefinitionValidationIssue[] {

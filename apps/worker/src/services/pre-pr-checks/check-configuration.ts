@@ -21,14 +21,14 @@ import {
   repoScriptsConfigSchema,
   type PrePrCheckConfig,
   type RepoScriptsConfig,
-} from "../../pre-pr-checks/config.js";
+} from "../../engine/pre-pr-checks/config.js";
 import {
   getConnectedCurrentPrePrCheckConfig,
   listConnectedPrePrCheckConfigVersions,
   restoreConnectedPrePrCheckConfig,
   saveConnectedPrePrCheckConfig,
   serializePrePrCheckConfigVersion,
-} from "../../pre-pr-checks/store.js";
+} from "../../engine/pre-pr-checks/store.js";
 import {
   getConnectedDashboardUserLabel,
   type DashboardRole,
