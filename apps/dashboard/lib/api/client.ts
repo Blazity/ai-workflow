@@ -21,9 +21,6 @@ import type {
   ManualDispatchPreflightResponse,
   ManualDispatchRequest,
   ManualDispatchResponse,
-  PrePrCheckSaveConflict,
-  PrePrCheckSaveRequest,
-  PrePrCheckSaveResponse,
   PrePrChecksResponse,
   PromptLibraryDetailResponse,
   PromptLibraryListResponse,
@@ -32,6 +29,17 @@ import type {
   PromptLibraryVersionResponse,
   PromptSlotDefinition,
   RepositoriesResponse,
+  RepositoryCatalogActivateConflict,
+  RepositoryCatalogActivateResponse,
+  RepositoryCatalogEntryResponse,
+  RepositoryCatalogImportPreviewResponse,
+  RepositoryCatalogImportResponse,
+  RepositoryCatalogListResponse,
+  RepositoryCatalogMutationResponse,
+  RepositoryCatalogSuggestRateLimited,
+  RepositoryCatalogSuggestResponse,
+  RepositoryCatalogUpsertRequest,
+  RepositoryCatalogVersionsResponse,
   RunCancelResponse,
   RunStatus,
   ScheduleConfigResponse,
@@ -436,19 +444,12 @@ export const apiClient = {
       ),
   },
 
+  /** Read only: the composed check configuration, which the editor's group
+   *  picker reads to offer real group names. A repository's script groups are
+   *  written through `repositoryCatalog.save`, with a reason. */
   prePrChecks: {
     get: (options?: BrowserRequestOptions) =>
       requestJson<PrePrChecksResponse>("/api/pre-pr-checks", options),
-    save: (body: PrePrCheckSaveRequest) =>
-      requestJson<PrePrCheckSaveResponse, PrePrCheckSaveConflict>(
-        "/api/pre-pr-checks",
-        jsonInit("PUT", body),
-      ),
-    restore: (version: number) =>
-      requestJson<PrePrCheckSaveResponse>(
-        "/api/pre-pr-checks/restore",
-        jsonInit("POST", { version }),
-      ),
   },
 
   prompts: {
@@ -503,6 +504,69 @@ export const apiClient = {
   repositories: {
     list: (options?: BrowserRequestOptions) =>
       requestJson<RepositoriesResponse>("/api/repositories", options),
+  },
+
+  repositoryCatalog: {
+    list: (options?: BrowserRequestOptions) =>
+      requestJson<RepositoryCatalogListResponse>("/api/repository-catalog", {
+        cache: "no-store",
+        ...options,
+      }),
+    entry: (id: number, options?: BrowserRequestOptions) =>
+      requestJson<RepositoryCatalogEntryResponse>(`/api/repository-catalog/${id}`, {
+        cache: "no-store",
+        ...options,
+      }),
+    save: (id: number, body: RepositoryCatalogUpsertRequest) =>
+      requestJson<RepositoryCatalogMutationResponse>(
+        `/api/repository-catalog/${id}`,
+        jsonInit("PUT", body),
+      ),
+    /** The switch, and nothing else: it mints no profile version, so a run in
+     *  flight never sees its checks configuration move because of it. */
+    setEnabled: (id: number, enabled: boolean) =>
+      requestJson<RepositoryCatalogMutationResponse>(
+        `/api/repository-catalog/${id}/enabled`,
+        jsonInit("PATCH", { enabled }),
+      ),
+    versions: (id: number, options?: BrowserRequestOptions) =>
+      requestJson<RepositoryCatalogVersionsResponse>(
+        `/api/repository-catalog/${id}/versions`,
+        { cache: "no-store", ...options },
+      ),
+    /** The 409 naming the repositories the dialog has not acknowledged is the
+     *  normal first answer, so it is accepted as data rather than treated as a
+     *  failure with a message. */
+    activate: (acknowledgedRepositoryKeys: string[]) =>
+      requestJson<
+        RepositoryCatalogActivateResponse | RepositoryCatalogActivateConflict,
+        RepositoryCatalogActivateConflict
+      >(
+        "/api/repository-catalog/activate",
+        jsonInit("POST", { acknowledgedRepositoryKeys }),
+        (status) => status === 200 || status === 409,
+      ),
+    importPreview: (options?: BrowserRequestOptions) =>
+      requestJson<RepositoryCatalogImportPreviewResponse>(
+        "/api/repository-catalog/import-preview",
+        jsonInit("POST", {}, { cache: "no-store", ...options }),
+      ),
+    import: (repositoryKeys: string[], enabled: boolean) =>
+      requestJson<RepositoryCatalogImportResponse>(
+        "/api/repository-catalog/import",
+        jsonInit("POST", { repositoryKeys, enabled }),
+      ),
+    /** The one call that waits on a model. The 429 carries the wait, so it is
+     *  accepted as data the way the activation conflict is. */
+    suggest: (repositoryId: number, options?: BrowserRequestOptions) =>
+      requestJson<
+        RepositoryCatalogSuggestResponse | RepositoryCatalogSuggestRateLimited,
+        { statusMessage?: string; message?: string; error?: string }
+      >(
+        "/api/repository-catalog/suggest",
+        jsonInit("POST", { repositoryId }, options),
+        (status) => status === 200 || status === 429,
+      ),
   },
 
   runs: {

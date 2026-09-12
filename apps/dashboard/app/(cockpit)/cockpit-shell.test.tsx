@@ -21,7 +21,6 @@ import {
   resetUnsavedSettings,
   trackUnsavedSettings,
 } from "@/lib/settings/unsaved";
-import { RepositoryScriptsScreen } from "@/components/cockpit/screens/repository-scripts";
 import { RunsScreen } from "@/components/cockpit/screens/runs";
 import { TraceDetail, TraceScreen } from "@/components/cockpit/screens/trace";
 import {
@@ -29,8 +28,6 @@ import {
   DetailArea,
 } from "@/components/cockpit/screens/ticket-selection";
 import type {
-  PrePrCheckConfig,
-  PrePrChecksResponse,
   Run,
   RunsResponse,
   RunDetailResponse,
@@ -483,48 +480,31 @@ test("the badge reports live data while the loop really is running", (t) => {
 // ── Navigating away from unsaved edits ──────────────────────────────────────
 //
 // The cockpit never reloads the document: every nav item is a router.push, and
-// beforeunload (which the scripts screen also installs) is never consulted for
+// beforeunload (which a screen holding a draft also installs) is never consulted for
 // one. Without the guard below, a sidebar click throws away an edit silently.
 
-const SCRIPTS_CONFIG: PrePrCheckConfig = {
-  repositories: [
-    {
-      provider: "github",
-      repoPath: "acme/web",
-      groups: { checks: { commands: ["pnpm test"] } },
-    },
-  ],
-  batchTimeoutMinutes: 45,
-};
-
-const SCRIPTS_INITIAL: PrePrChecksResponse = {
-  current: {
-    version: 1,
-    config: SCRIPTS_CONFIG,
-    createdAt: "2026-08-01T00:00:00.000Z",
-    createdById: "u1",
-    createdByLabel: "Filip",
-    restoredFromVersion: null,
-  },
-  versions: [
-    {
-      version: 1,
-      config: SCRIPTS_CONFIG,
-      createdAt: "2026-08-01T00:00:00.000Z",
-      createdById: "u1",
-      createdByLabel: "Filip",
-      restoredFromVersion: null,
-    },
-  ],
-};
-
-function scriptsScreen(t: TestContext) {
-  beginTest(t);
-  return mountShell(
-    t,
-    "/scripts",
-    <RepositoryScriptsScreen initial={SCRIPTS_INITIAL} canEdit />,
+/**
+ * A screen holding an unsaved draft, reduced to what the shell can actually
+ * see: a form id in the dirty registry. Every cockpit screen that can hold one
+ * registers the same way (the settings forms, the memory panel, each tab of a
+ * repository entry), so the guard is tested against the contract rather than
+ * against one screen's fields.
+ */
+function UnsavedDraftScreen() {
+  const [dirty, setDirty] = React.useState(false);
+  React.useEffect(() => trackUnsavedSettings("repository:1", dirty), [dirty]);
+  return (
+    <button type="button" onClick={() => setDirty(true)}>
+      Edit
+    </button>
   );
+}
+
+function draftScreen(t: TestContext) {
+  beginTest(t);
+  resetUnsavedSettings();
+  t.after(() => resetUnsavedSettings());
+  return mountShell(t, "/repositories", <UnsavedDraftScreen />);
 }
 
 /** The sidebar's own nav callback, which is what a click on a nav item runs. */
@@ -538,27 +518,27 @@ function navigateTo(root: ReactTestInstance, id: string): void {
   });
 }
 
-/** Makes the screen dirty the cheapest way there is: the one top-level field. */
-function editBatchTimeout(root: ReactTestInstance): void {
-  const field = root.findAll(
-    (node) => node.type === "input" && node.props.type === "number" && node.props.value === 45,
+/** Makes the screen dirty the way a real one does: by registering. */
+function makeDirty(root: ReactTestInstance): void {
+  const button = root.findAll(
+    (node) => node.type === "button" && node.children[0] === "Edit",
   )[0];
-  assert.ok(field, "expected the batch timeout field");
+  assert.ok(button, "expected the draft screen's edit control");
   act(() => {
-    field.props.onChange({ target: { value: "60" } });
+    button.props.onClick();
   });
 }
 
 test("navigating away from a clean screen is not interrupted", (t) => {
-  const { root, pushes } = scriptsScreen(t);
+  const { root, pushes } = draftScreen(t);
   navigateTo(root, "runs");
   assert.deepEqual(pushes, ["/runs"]);
   assert.deepEqual(confirmPrompts, [], "nothing was unsaved, so nothing should have been asked");
 });
 
-test("navigating away from unsaved repository scripts asks first and can be called off", (t) => {
-  const { root, pushes } = scriptsScreen(t);
-  editBatchTimeout(root);
+test("navigating away from an unsaved draft asks first and can be called off", (t) => {
+  const { root, pushes } = draftScreen(t);
+  makeDirty(root);
 
   confirmAnswer = false;
   navigateTo(root, "runs");
@@ -571,8 +551,8 @@ test("navigating away from unsaved repository scripts asks first and can be call
 });
 
 test("the guard is dropped when the screen holding the edit unmounts", (t) => {
-  const { root, pushes, rerender } = scriptsScreen(t);
-  editBatchTimeout(root);
+  const { root, pushes, rerender } = draftScreen(t);
+  makeDirty(root);
   // Whatever the shell renders next has no unsaved edits of its own, and the
   // flag is the screen's, not the shell's.
   rerender(<div>Something else</div>);
@@ -602,8 +582,8 @@ function spotlightNavigate(root: ReactTestInstance): (href: string) => boolean {
 }
 
 test("Cmd+K navigation goes through the same guard as the sidebar", (t) => {
-  const { root, pushes } = scriptsScreen(t);
-  editBatchTimeout(root);
+  const { root, pushes } = draftScreen(t);
+  makeDirty(root);
 
   confirmAnswer = false;
   let jumped = true;
@@ -623,22 +603,22 @@ test("Cmd+K navigation goes through the same guard as the sidebar", (t) => {
 });
 
 test("re-selecting the screen already open is not a departure and asks nothing", (t) => {
-  const { root, pushes } = scriptsScreen(t);
-  editBatchTimeout(root);
+  const { root, pushes } = draftScreen(t);
+  makeDirty(root);
 
   confirmAnswer = false;
-  navigateTo(root, "scripts");
+  navigateTo(root, "repositories");
 
   assert.deepEqual(confirmPrompts, [], "nothing is being left, so nothing can be lost");
-  assert.deepEqual(pushes, ["/scripts"]);
+  assert.deepEqual(pushes, ["/repositories"]);
 });
 
 test("an accepted discard is not asked about again while the push is still landing", (t) => {
   // router.push is not instant, and the screen stays mounted (and dirty) until
   // the new route renders. A second nav click in that window used to re-ask,
   // which reads as the app not having heard the first answer.
-  const { root, pushes } = scriptsScreen(t);
-  editBatchTimeout(root);
+  const { root, pushes } = draftScreen(t);
+  makeDirty(root);
 
   confirmAnswer = true;
   navigateTo(root, "runs");
@@ -649,8 +629,8 @@ test("an accepted discard is not asked about again while the push is still landi
 });
 
 test("signing out asks before the session is gone, and a declined answer keeps it", async (t) => {
-  const { root } = scriptsScreen(t);
-  editBatchTimeout(root);
+  const { root } = draftScreen(t);
+  makeDirty(root);
 
   const signOut = root
     .findAll((node) => node.type === "button")
@@ -696,7 +676,7 @@ test("the shell carries a Settings entry that navigates and titles the screen", 
   assert.deepEqual(pushes, ["/settings"]);
 });
 
-test("navigating away from an unsaved settings form asks first, like the scripts editor", (t) => {
+test("navigating away from an unsaved settings form asks first, like every other draft", (t) => {
   // The Settings page mounts nine forms and the Memory page mounts a tenth, so
   // the guard answers "any of them is dirty" rather than living in one screen.
   beginTest(t);

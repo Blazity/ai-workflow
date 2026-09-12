@@ -1,7 +1,8 @@
 import { redirect } from "next/navigation";
 
-// Repository scripts replaced pre-PR checks; this route only forwards anyone
-// who still has the old link bookmarked.
+// The Repositories page replaced the Repository scripts screen, which had
+// already replaced pre-PR checks; this route only forwards anyone who still has
+// the oldest link bookmarked.
 export default function ChecksPage() {
-  redirect("/scripts");
+  redirect("/repositories");
 }

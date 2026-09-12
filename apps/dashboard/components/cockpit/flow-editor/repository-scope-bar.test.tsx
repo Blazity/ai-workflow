@@ -11,6 +11,7 @@ import { MAX_PINNED_REPOSITORIES } from "@/lib/workflow-editor/repository-scope"
 import {
   RepositoryCatalogProvider,
   type RepositoryCatalogStatus,
+  type RepositoryPickerOption,
 } from "./repository-catalog-context";
 import { RepositoryScopeBar } from "./repository-scope-bar";
 import { RepositoryScopeModal } from "./repository-scope-modal";
@@ -272,4 +273,143 @@ test("a closed modal renders nothing", () => {
   );
 
   assert.equal(html, "");
+});
+
+// ── The repository catalog decides what may be pinned ────────────────────────
+
+/** The modal over a catalog whose activation and per-row enablement matter,
+ *  which the positional helper above cannot express. */
+function renderCatalogModal(input: {
+  scope: WorkflowRepositoryScope;
+  repositories: RepositoryPickerOption[];
+  activated: boolean;
+}): string {
+  return renderToStaticMarkup(
+    <RepositoryCatalogProvider
+      initial={{
+        status: "ready",
+        repositories: input.repositories,
+        activated: input.activated,
+        providers: [
+          { provider: "github", status: "ready" },
+          { provider: "gitlab", status: "ready" },
+        ],
+      }}
+    >
+      <RepositoryScopeModal
+        open
+        scope={input.scope}
+        canEdit
+        onApply={() => undefined}
+        onCancel={() => undefined}
+      />
+    </RepositoryCatalogProvider>,
+  );
+}
+
+test("a repository the catalog does not enable is offered AND pinnable while the bridge is on", () => {
+  // Marked rather than hidden, and pinnable rather than refused: dispatch
+  // accepts it today, so refusing the pin would be the picker inventing a rule
+  // the worker does not have. The label says what changes on activation day.
+  const html = renderCatalogModal({
+    scope: {},
+    activated: false,
+    repositories: [
+      { ...option(), enabledInCatalog: true },
+      { ...option({ repoPath: "Blazity/unlisted", name: "unlisted" }), enabledInCatalog: false },
+    ],
+  });
+
+  assert.match(html, /Blazity\/unlisted/);
+  assert.doesNotMatch(html, /disabled=""[^>]*aria-label="Pin Blazity\/unlisted"/);
+  assert.match(
+    visibleText(html),
+    /Not enabled in the catalog: refused once the catalog is activated/,
+  );
+  assert.match(
+    visibleText(html),
+    /can be pinned and work today\. They stop the day somebody activates the catalog/,
+  );
+  // The enabled row beside it is untouched.
+  assert.doesNotMatch(html, /disabled=""[^>]*aria-label="Pin Blazity\/ai-workflow"/);
+});
+
+test("an already-pinned row the catalog refuses still says so, and can still be unticked", () => {
+  // The one row an operator needs to see used to render as an ordinary healthy
+  // row, because the label was suppressed for anything already selected.
+  const html = renderCatalogModal({
+    scope: { repositories: [{ provider: "github", repoPath: "Blazity/unlisted" }] },
+    activated: true,
+    repositories: [
+      { ...option(), enabledInCatalog: true },
+      { ...option({ repoPath: "Blazity/unlisted", name: "unlisted" }), enabledInCatalog: false },
+    ],
+  });
+
+  assert.match(visibleText(html), /Not enabled in the repository catalog/);
+  // Unticking a pin the catalog refuses is exactly the repair to leave open.
+  assert.doesNotMatch(html, /disabled=""[^>]*aria-label="Pin Blazity\/unlisted"/);
+});
+
+test("a pin the catalog does not enable is named without claiming a refusal that has not happened", () => {
+  // Under the bridge the pin works. The publish's sentence says dispatch refuses
+  // the events, which would be false today, so the bridge gets its own wording.
+  const html = renderCatalogModal({
+    scope: { repositories: [{ provider: "github", repoPath: "Blazity/unlisted" }] },
+    activated: false,
+    repositories: [
+      { ...option(), enabledInCatalog: true },
+      { ...option({ repoPath: "Blazity/unlisted", name: "unlisted" }), enabledInCatalog: false },
+    ],
+  });
+
+  assert.match(
+    visibleText(html),
+    /It passes today because the catalog is not activated; the day somebody activates it, dispatch starts refusing events from it: github:Blazity\/unlisted\./,
+  );
+  assert.doesNotMatch(visibleText(html), /so dispatch refuses events from it and/);
+});
+
+test("an activated catalog offers no row it does not enable, and names a pin it does not in the publish's own words", () => {
+  // The dashboard and workflows.publish describe one fact, so they describe it
+  // with one sentence: an operator who reads both must not have to decide which
+  // is true.
+  const html = renderCatalogModal({
+    scope: { repositories: [{ provider: "github", repoPath: "Blazity/unlisted" }] },
+    activated: true,
+    repositories: [{ ...option(), enabledInCatalog: true }],
+  });
+
+  assert.match(
+    visibleText(html),
+    /It pins a repository the repository catalog does not enable, so dispatch refuses events from it and, until the engine stage lands, a run that starts anyway still reaches it through this pin: github:Blazity\/unlisted\./,
+  );
+  // Not the bridge's "the catalog does not list" wording, which says nothing
+  // about dispatch refusing anything.
+  assert.doesNotMatch(visibleText(html), /The catalog does not list/);
+  // The pin itself is kept: dropping somebody's saved configuration silently is
+  // how an operator loses a repository without being told.
+  assert.match(html, /aria-label="Remove Blazity\/unlisted"/);
+});
+
+test("the bar's attention badge separates a pin the catalog does not enable from one it cannot see", () => {
+  const activated = renderToStaticMarkup(
+    <RepositoryCatalogProvider
+      initial={{
+        status: "ready",
+        activated: true,
+        repositories: [{ ...option(), enabledInCatalog: true }],
+        providers: [{ provider: "github", status: "ready" }],
+      }}
+    >
+      <RepositoryScopeBar
+        scope={{ repositories: [{ provider: "github", repoPath: "Blazity/unlisted" }] }}
+        canEdit
+        onChange={() => undefined}
+      />
+    </RepositoryCatalogProvider>,
+  );
+
+  assert.match(activated, /Blazity\/unlisted: not enabled in the catalog/);
+  assert.doesNotMatch(activated, /Blazity\/unlisted: not in catalog/);
 });

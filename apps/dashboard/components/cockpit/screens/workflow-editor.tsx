@@ -32,6 +32,7 @@ import { FlowEditor } from "@/components/cockpit/flow-editor/flow-editor";
 import { PromptLibraryProvider } from "@/components/cockpit/flow-editor/prompt-library-context";
 import { HarnessProfileCatalogProvider } from "@/components/cockpit/flow-editor/harness-profile-context";
 import { RepositoryCatalogProvider } from "@/components/cockpit/flow-editor/repository-catalog-context";
+import { DeployPinWarning } from "@/components/cockpit/flow-editor/deploy-pin-warning";
 import { Listbox } from "@/components/cockpit/listbox";
 import { ManualDispatchModal } from "@/components/cockpit/manual-dispatch-modal";
 import {
@@ -1207,6 +1208,9 @@ export function WorkflowEditorScreen({
                   {repositoryScopeSummary}
                 </span>
               )}
+              {/* Beside Deploy, because deploying is when the pin starts
+                  mattering to dispatch. */}
+              <DeployPinWarning scope={repositoryScope} />
               {deployedIsRetiredSchema && (
                 <span
                   title={RETIRED_DEPLOYED_NOTE}
