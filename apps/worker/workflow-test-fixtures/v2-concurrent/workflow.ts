@@ -6,13 +6,17 @@ import type {
   WorkflowDefinitionV2,
   WorkflowDefinitionV2Node,
 } from "@shared/contracts";
-import type { V2InvocationObservation } from "../../src/workflow-definition/invocation-context.js";
+// Worker source carries no ".js" suffix here: the Workflow builder's discovery
+// resolves a relative specifier literally, and a suffix no file on disk carries
+// drops this fixture's chain out of its import graph. See "A fixture reaches
+// worker source without a file extension" in apps/worker/AGENTS.md.
+import type { V2InvocationObservation } from "../../src/workflow-definition/invocation-context";
 import {
   executeV2Graph,
   type V2BlockExecutor,
   type V2InvocationIdentity,
   type V2SchedulerHooks,
-} from "../../src/workflow-definition/v2-scheduler.js";
+} from "../../src/workflow-definition/v2-scheduler";
 
 // A probe for AIW-233: production pinned V2_MAX_BLOCK_CONCURRENCY to 1 for as
 // long as a fan-out of blocks that suspend on a Workflow wait could corrupt the

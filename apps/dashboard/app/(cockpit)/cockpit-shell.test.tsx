@@ -17,6 +17,10 @@ import {
 } from "next/dist/shared/lib/hooks-client-context.shared-runtime";
 
 import { CockpitShell } from "./cockpit-shell";
+import {
+  resetUnsavedSettings,
+  trackUnsavedSettings,
+} from "@/lib/settings/unsaved";
 import { RepositoryScriptsScreen } from "@/components/cockpit/screens/repository-scripts";
 import { RunsScreen } from "@/components/cockpit/screens/runs";
 import { TraceDetail, TraceScreen } from "@/components/cockpit/screens/trace";
@@ -671,4 +675,54 @@ test("signing out asks before the session is gone, and a declined answer keeps i
   assert.deepEqual(fetched.filter((call) => call.includes("/api/auth/logout")), [
     "POST /api/auth/logout",
   ]);
+});
+
+// ── Settings: last in the sidebar, and open to every role ────────────────────
+
+test("the shell carries a Settings entry that navigates and titles the screen", (t) => {
+  beginTest(t);
+  const { root, pushes } = mountShell(t, "/settings", <div>Settings</div>);
+
+  assert.ok(
+    root.findAllByProps({ "aria-label": "Settings" }).length > 0,
+    "the sidebar had no Settings entry",
+  );
+  assert.ok(
+    root.findAllByProps({ title: "Settings" }).length > 0,
+    "the screen was mounted without the Settings title",
+  );
+
+  navigateTo(root, "settings");
+  assert.deepEqual(pushes, ["/settings"]);
+});
+
+test("navigating away from an unsaved settings form asks first, like the scripts editor", (t) => {
+  // The Settings page mounts nine forms and the Memory page mounts a tenth, so
+  // the guard answers "any of them is dirty" rather than living in one screen.
+  beginTest(t);
+  resetUnsavedSettings();
+  const { root, pushes } = mountShell(t, "/settings", <div>Settings</div>);
+  const release = trackUnsavedSettings("group:capacity", true);
+  t.after(() => {
+    release();
+    resetUnsavedSettings();
+  });
+
+  confirmAnswer = false;
+  navigateTo(root, "runs");
+  assert.deepEqual(confirmPrompts, ["Discard unsaved changes?"]);
+  assert.deepEqual(pushes, [], "the settings edit would have been thrown away");
+
+  confirmAnswer = true;
+  navigateTo(root, "runs");
+  assert.deepEqual(pushes, ["/runs"], "confirming still navigates");
+});
+
+test("a settings form with nothing typed in it never interrupts a navigation", (t) => {
+  beginTest(t);
+  resetUnsavedSettings();
+  const { root, pushes } = mountShell(t, "/settings", <div>Settings</div>);
+  navigateTo(root, "runs");
+  assert.deepEqual(pushes, ["/runs"]);
+  assert.deepEqual(confirmPrompts, []);
 });

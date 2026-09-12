@@ -16,6 +16,9 @@ const NAV = [
   { id: "scripts", label: "Repository scripts", glyph: "☑", group: "flow" },
   { id: "health", label: "System health", glyph: "＋", group: "team" },
   { id: "users", label: "Users", glyph: "U", group: "team" },
+  // Last, and never role gated: reading what the deployment is configured to do
+  // is open to every role, and only the forms on it are owner and admin only.
+  { id: "settings", label: "Settings", glyph: "⚙", group: "team" },
 ];
 
 const NAV_GROUPS = [
@@ -34,6 +37,7 @@ const MOBILE_MORE_NAV_IDS = [
   "scripts",
   "health",
   "users",
+  "settings",
 ] as const;
 
 export function isMobileMoreNavItem(id: string): boolean {

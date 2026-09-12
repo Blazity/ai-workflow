@@ -14,6 +14,7 @@ import {
   show,
   stagedNamesDiff,
   STAGED_WORKTREE_DIFF,
+  WORKFLOW_GRAPH_TESTS,
   WORKFLOW_TESTS,
   WORKTREE_DIFF,
   worktreeNamesDiff,
@@ -54,7 +55,11 @@ const WB = [
 ];
 const PACK =
   "pnpm --dir apps/worker exec vitest run " + WORKFLOW_TESTS.join(" ");
+const GRAPH_PACK =
+  "pnpm --dir apps/worker exec vitest run " +
+  [...WORKFLOW_TESTS, ...WORKFLOW_GRAPH_TESTS].join(" ");
 const PACKAGES = "pnpm run test:packages";
+const SDK = "pnpm run test:workflow-sdk";
 const GATES = "pnpm run gates";
 const commands = (paths: string[], repo?: Repo) =>
   plan(paths, repo).commands.map(show);
@@ -124,11 +129,16 @@ test("scope table selects only exact narrow commands", () => {
   const rows: Array<[string[], string[]]> = [
     [["README.md", "docs/guide.md"], ["pnpm run gate:docs-status"]],
     [["apps/worker/src/lib/value.ts"], [...WB, GATES]],
-    [["apps/worker/src/engine/helpers/value.ts"], [...WB, PACK, GATES]],
+    [["apps/worker/src/engine/helpers/value.ts"], [...WB, PACK, SDK, GATES]],
+    [["apps/worker/src/engine/agent-workflow.ts"], [...WB, PACK, SDK, GATES]],
+    [["apps/worker/workflow-test-fixtures/run-control/workflow.ts"], [...WB, PACK, SDK, GATES]],
+    [["apps/worker/workflow-sdk-tests/run-control-workflow-sdk.test.ts"], [...WB, SDK, GATES]],
+    [["apps/worker/workflow-sdk-tests/divergence/wdk-wait-divergence.test.ts"], [...WB, GATES]],
     [["apps/dashboard/lib/value.ts"], ["pnpm --filter ai-workflow-dashboard run typecheck", GATES]],
     [["packages/conditions/index.ts"], ["pnpm run typecheck", PACKAGES, GATES]],
     [["packages/costs/index.ts"], ["pnpm run typecheck", PACKAGES, GATES]],
     [["packages/contracts/workflow-graph.ts"], ["pnpm run typecheck", ...WB.slice(1), PACK, PACKAGES, GATES]],
+    [["packages/workflow-graph/v2-branch.ts"], ["pnpm run typecheck", ...WB.slice(1), GRAPH_PACK, SDK, PACKAGES, GATES]],
     [["apps/worker/vitest.config.ts"], [...WB, PACK, GATES]],
     [["apps/worker/nitro.config.ts"], [...WB, GATES]],
     [["apps/worker/vitest.run-control-workflow.config.ts", "apps/worker/vitest.workflow-divergence.config.ts", "apps/worker/e2e/vitest.e2e.config.ts"], [...WB, GATES]],
@@ -146,6 +156,43 @@ test("scope table selects only exact narrow commands", () => {
     [[".dependency-cruiser.cjs"], [GATES]],
   ];
   for (const [paths, expected] of rows) assert.deepEqual(commands(paths), expected, paths.join(","));
+});
+
+test("a workflow graph package change plans the worker guards and the suites that import the package", () => {
+  const planned = commands(["packages/workflow-graph/v2-bindings.ts"]).find(
+    (command) => command.includes("vitest run"),
+  );
+  for (const suite of [
+    "src/engine/workflow-import-boundary.test.ts",
+    "src/engine/step-registration-coverage.test.ts",
+    "src/routes/import-graph-guard.test.ts",
+    "src/workflow-definition/v2-bindings.test.ts",
+    "src/workflow-definition/v2-branch.test.ts",
+  ]) {
+    assert.equal(planned?.includes(` ${suite}`), true, suite);
+  }
+});
+
+test("the workflow-sdk suite is planned by every path that decides its bundles", () => {
+  const planned = [
+    "packages/workflow-graph/v2-bindings.ts",
+    "apps/worker/src/engine/agent-workflow.ts",
+    "apps/worker/src/engine/helpers/prompt-output.ts",
+    "apps/worker/src/engine/helpers/effective-prompt.ts",
+    "apps/worker/workflow-test-fixtures/v2-concurrent/workflow.ts",
+    "apps/worker/workflow-sdk-tests/v2-concurrent.test.ts",
+  ];
+  for (const path of planned) {
+    assert.equal(commands([path]).includes(SDK), true, path);
+  }
+  const skipped = [
+    "apps/worker/src/engine/blocks/call-llm.ts",
+    "apps/worker/workflow-sdk-tests/divergence/wdk-sleep-repro.test.ts",
+    "packages/contracts/workflow-graph.ts",
+  ];
+  for (const path of skipped) {
+    assert.equal(commands([path]).includes(SDK), false, path);
+  }
 });
 
 test("directory discovery includes test variants, direct tests, safety prefixes, and excludes deleted tests", () => {

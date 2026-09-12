@@ -189,6 +189,9 @@ importers:
       '@shared/skills':
         specifier: workspace:*
         version: link:../../packages/skills
+      '@shared/workflow-graph':
+        specifier: workspace:*
+        version: link:../../packages/workflow-graph
       '@t3-oss/env-core':
         specifier: ^0.13.10
         version: 0.13.10(typescript@5.9.3)(zod@3.25.76)
@@ -346,6 +349,12 @@ importers:
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
+
+  packages/workflow-graph:
+    dependencies:
+      '@shared/contracts':
+        specifier: workspace:*
+        version: link:../contracts
 
 packages:
 

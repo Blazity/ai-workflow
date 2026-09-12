@@ -10,7 +10,7 @@ import {
   resolveWorkflowNodeInputsV2,
   resolveWorkflowPromptDataTokensV2,
   type V2BindingResolutionContext,
-} from "./v2-bindings.js";
+} from "@shared/workflow-graph";
 
 const entryOutput: BlockOutput = {
   status: "ok",

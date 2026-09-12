@@ -4,7 +4,7 @@ import { type PriceLookup } from "../../sandbox/usage.js";
 import type { ResearchRepository, ReviewOutput } from "../../sandbox/agents/types.js";
 import type { AgentKind } from "../../sandbox/agents/index.js";
 import { executionError, type StepsRecord } from "../../workflow-definition/interpreter.js";
-import { parseWorkflowDataReferenceV2, resolveWorkflowPromptDataTokensV2, type V2BindingResolutionContext } from "../../workflow-definition/v2-bindings.js";
+import { parseWorkflowDataReferenceV2, resolveWorkflowPromptDataTokensV2, type V2BindingResolutionContext } from "@shared/workflow-graph";
 import type { BlockExecutionResult } from "../../workflow-definition/interpreter.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
 import { substitutePromptVariables, VARIABLE_PARAM_KEYS, type PromptVariableValues } from "@shared/prompts";

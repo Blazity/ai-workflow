@@ -7,7 +7,7 @@ import {
   evaluateV2BranchCondition,
   isV2BranchConfiguration,
   V2BranchEvaluationError,
-} from "./v2-branch.js";
+} from "@shared/workflow-graph";
 
 const context = {
   entryOutput: { status: "ok", text: "Hello WORLD", count: 4, ready: false, empty: "", nil: null },

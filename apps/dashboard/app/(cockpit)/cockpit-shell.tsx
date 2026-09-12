@@ -28,6 +28,7 @@ import {
   DISCARD_UNSAVED_PROMPT,
   hasUnsavedRepositoryScripts,
 } from "@/components/cockpit/screens/repository-scripts";
+import { hasUnsavedSettings } from "@/lib/settings/unsaved";
 import { SpotlightSearch } from "@/components/cockpit/spotlight-search";
 import { BottomTabBar } from "@/components/cockpit/mobile/bottom-tab-bar";
 import { MobileHeader } from "@/components/cockpit/mobile/mobile-header";
@@ -64,6 +65,7 @@ const TITLE_FOR_SCREEN: Record<string, string> = {
   scripts: "Repository scripts",
   health: "System health",
   users: "Users",
+  settings: "Settings",
   trace: "Run trace",
   ticket: "Ticket runs",
 };
@@ -109,7 +111,9 @@ export function CockpitShell({
   // own beforeunload guard never sees: a screen holding unsaved edits would be
   // unmounted without a word. Screens that can hold them say so through a
   // module-level flag (there is no provider boundary between the shell and its
-  // `children`, which are a server component's rendered output).
+  // `children`, which are a server component's rendered output). Two of them
+  // answer now: the Repository scripts editor and any settings form, including
+  // the one embedded in the Memory page.
   // Set once a discard has been agreed to, and cleared when the destination
   // actually arrives: a push is not instant, and asking twice for one departure
   // ("are you sure" on the nav item, then again on the tab bar underneath it)
@@ -129,7 +133,10 @@ export function CockpitShell({
         router.push(href);
         return true;
       }
-      if (hasUnsavedRepositoryScripts() && !leaving.current) {
+      if (
+        (hasUnsavedRepositoryScripts() || hasUnsavedSettings()) &&
+        !leaving.current
+      ) {
         if (
           typeof window !== "undefined" &&
           typeof window.confirm === "function" &&
