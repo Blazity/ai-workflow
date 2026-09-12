@@ -1,5 +1,6 @@
 import {
   BLOCK_TYPE_SPECS,
+  isSafeWorkflowInputName,
   isTriggerBlockType,
   isWorkflowAddressablePathSegment,
   type JsonSchema202012,
@@ -21,7 +22,6 @@ import {
   type WorkflowValueSchema,
 } from "@shared/contracts";
 import {
-  isSafeWorkflowInputName,
   isWorkflowSchemaAssignable,
   RUN_BINDING_SCHEMA,
 } from "./bindings.js";
