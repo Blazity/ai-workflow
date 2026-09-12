@@ -11,6 +11,15 @@ const state = vi.hoisted(() => ({
 
 vi.mock("../../infra/vcs-config.js", () => ({ env: state.env }));
 vi.mock("../../db/client.js", () => ({ getDb: () => state.db }));
+// The environment import is a write, and this file is about the READ: with it
+// running, every variable a case stubs would be a stored row by the time the
+// case looked, and "where did this value come from" would answer "stored" for
+// all of them. Its own behaviour is pinned in environment-import.test.ts,
+// including the fact that it runs at the first snapshot.
+vi.mock("./environment-import.js", () => ({
+  ensureEnvironmentSettingsImported: async () => {},
+  migratedVariablesSet: () => [],
+}));
 
 const {
   loadSettingsResolution,
@@ -169,10 +178,12 @@ describe("settings snapshot", () => {
     const rows = new Map(settingsSeedRows().map((row) => [row.key, row.value]));
     expect(rows.get("MAX_CONCURRENT_AGENTS")).toBe(7);
     expect(rows.get("COLUMN_AI")).toBe("AI");
-    expect(rows.get("PRE_PR_CHECKS_ALLOWED_ENV")).toEqual(["NPM_TOKEN"]);
     // No variable, so nothing to seed from; and an unset variable makes no row.
     expect(rows.has("catalog.activated")).toBe(false);
     expect(rows.has("CLAUDE_MODEL")).toBe(false);
+    // Set, but the checks runner reads the variable itself inside a step, so a
+    // stored row would decide nothing: `requiresRedeploy` keeps it out.
+    expect(rows.has("PRE_PR_CHECKS_ALLOWED_ENV")).toBe(false);
   });
 
   it("seeds the same rows however often the build runs", async () => {
@@ -225,8 +236,6 @@ describe("settings accessors", () => {
       serverVersion: "0.1.0",
       maxResultBytes: 524_288,
     });
-    // The one surviving zero-argument form still answers from the environment.
-    expect(ticketBoardSettings(snapshot)).toEqual(ticketBoardSettings());
     expect(ticketBoardSettings(snapshot)).toMatchObject({
       projectKey: "AIW",
       aiColumn: "AI",
@@ -251,11 +260,10 @@ describe("settings accessors", () => {
       mcpSettings(snapshot),
       agentRuntimeSettings(snapshot),
       ticketBoardSettings(snapshot),
-      ticketBoardSettings(),
       triggerRateLimitDefaults(snapshot),
     ];
 
-    expect(results).toHaveLength(7);
+    expect(results).toHaveLength(6);
     for (const result of results) {
       expect(result).not.toBeInstanceOf(Promise);
       expect(typeof (result as { then?: unknown })?.then === "function").toBe(false);
@@ -273,8 +281,5 @@ describe("settings accessors", () => {
     expect(maxConcurrentAgents(snapshot)).toBe(2);
     expect(ticketBoardSettings(snapshot).aiColumn).toBe("Agent");
     expect(agentRuntimeSettings(snapshot).agentKind).toBe("claude");
-    // The one surviving zero-argument form still answers from the environment,
-    // which is what the three trigger entry points that use it rely on.
-    expect(ticketBoardSettings().aiColumn).toBe("AI");
   });
 });

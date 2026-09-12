@@ -34,6 +34,7 @@ import type { RepositoryCatalogSnapshot } from "../repository-catalog/index.js";
 import { prSubjectKey, ticketSubjectKey } from "../../engine/support/subject-key.js";
 import { createRepositoryVCS } from "../../engine/support/vcs-runtime.js";
 import { loadPostPrGateConfig } from "../../post-pr-gate/config.js";
+import { loadSettingsSnapshot } from "../settings/index.js";
 import {
   getWorkflowDefinitionName,
   runnableDefinitionOf,
@@ -319,10 +320,19 @@ async function resolvePullRequestDispatch(
       `${parsed.provider === "github" ? "GitHub" : "GitLab"} is not configured.`,
     );
   }
+  const settings = await loadSettingsSnapshot();
   const vcs = createRepositoryVCS({
     provider: parsed.provider,
     repoPath: parsed.repoPath,
-    baseBranch: providerConfig.legacyBaseBranch,
+    // The deployment's default target branch, from the stored settings rather
+    // than from a variable the cleanup release deletes. A shim: threading a
+    // snapshot through `resolveManualDispatch` would reshape the manual
+    // dispatch API, which this stage does not own, and a manual dispatch is a
+    // human action that already costs several reads.
+    baseBranch:
+      parsed.provider === "github"
+        ? settings.GITHUB_BASE_BRANCH
+        : settings.GITLAB_BASE_BRANCH,
   });
   if (!hasManualDispatchPrCapability(vcs)) {
     throw new ManualDispatchError(

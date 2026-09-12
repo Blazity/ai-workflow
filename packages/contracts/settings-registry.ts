@@ -56,6 +56,19 @@ export interface SettingDefinition {
   readonly overridablePerTrigger: boolean;
   /** The variable a missing row still falls back to, until the cleanup stage. */
   readonly environmentVariable: string | null;
+  /**
+   * Whether this deployment still reads the variable itself, so a stored row
+   * cannot decide the value alone.
+   *
+   * Two kinds of key are marked: deployment identity that is read once at
+   * module load, before any request exists to resolve a snapshot (the Better
+   * Auth instance's organization slug and its public-registration switch), and
+   * a key a run reads straight off `process.env` inside a step. Both mean the
+   * same thing operationally: the variable has to stay set and a change to it
+   * needs a redeploy, so the cleanup stage neither imports it into the store
+   * nor asks the operator to remove it.
+   */
+  readonly requiresRedeploy?: boolean;
   /** For a string setting whose value is one of a fixed set. */
   readonly enumValues?: readonly string[];
   /** For an integer setting, the smallest value its schema accepts today. */
@@ -83,6 +96,7 @@ export const SETTINGS_REGISTRY = [
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: false,
     environmentVariable: "DASHBOARD_ORG_SLUG",
+    requiresRedeploy: true,
   },
   {
     key: "GITHUB_BASE_BRANCH",
@@ -277,6 +291,7 @@ export const SETTINGS_REGISTRY = [
     appliesToRunsInFlight: "immediate",
     overridablePerTrigger: false,
     environmentVariable: "MCP_ALLOW_PUBLIC_DCR",
+    requiresRedeploy: true,
   },
   {
     key: "MCP_AUDIT_RETENTION_DAYS",
@@ -366,6 +381,7 @@ export const SETTINGS_REGISTRY = [
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: false,
     environmentVariable: "PRE_PR_CHECKS_ALLOWED_ENV",
+    requiresRedeploy: true,
   },
   {
     key: "AGENT_KIND",

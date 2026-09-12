@@ -6,8 +6,11 @@ import { createGitLabProfileSource } from "./gitlab/profile-source.js";
 import type { RepositoryProfileSource } from "./repository-profile-source.js";
 import type { VCSAdapter } from "./types.js";
 
-export function createVCS(): VCSAdapter {
-  const vcs = getVcsConfig();
+/** The legacy single-repository adapter. The base branch comes from the
+ *  caller's settings snapshot; omitted it falls back to the registry default,
+ *  which is what the variable this replaced defaulted to. */
+export function createVCS(baseBranch?: string): VCSAdapter {
+  const vcs = getVcsConfig(baseBranch);
   return createVCSForRepository(vcs, {
     repoPath: vcs.repoPath,
     baseBranch: vcs.baseBranch,

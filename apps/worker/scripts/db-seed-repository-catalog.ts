@@ -47,9 +47,23 @@ if (!url) {
 
 /** The allowlist, parsed exactly as the runtime predicate parses it: comma
  *  separated, trimmed, and an entry with no slash ignored rather than widening
- *  the list to "everything". */
+ *  the list to "everything".
+ *
+ *  Deprecated. `AGENT_ALLOWED_REPOS` is replaced by the Repositories page, and
+ *  the cleanup release (stage H2) deletes this script and refuses to boot with
+ *  the variable set; a deployment that still sets it is told so on every
+ *  build. */
 function allowlistPaths(): string[] {
   const raw = process.env.AGENT_ALLOWED_REPOS ?? "";
+  if (raw.trim() !== "") {
+    console.warn(
+      "[seed-repository-catalog] AGENT_ALLOWED_REPOS is deprecated: the " +
+        "Repositories page decides repository access now, and this seed is " +
+        "removed in the cleanup release (stage H2), which refuses to boot " +
+        "while the variable is set. Curate the catalog on the Repositories " +
+        "page, then remove AGENT_ALLOWED_REPOS from this deployment.",
+    );
+  }
   return [
     ...new Set(
       raw
@@ -177,6 +191,25 @@ const db = drizzle({ client: sql, schema }) as unknown as Db;
 
 const allowlist = allowlistPaths();
 const activated = allowlist.length > 0;
+
+// Before any read the seed would act on: an activated catalog is a curated
+// one. Somebody opened the Repositories page, read the dialog naming every
+// repository that holds an active run claim, and decided. Re-running a seed
+// built from `AGENT_ALLOWED_REPOS` over that would re-add rows an admin left
+// out and re-enable rows an admin disabled, so it refuses and says where the
+// decision lives. First, so a curated deployment is not failed by a stale
+// entry in a variable it no longer uses.
+const priorState = await readRepositoryCatalogStateRow(db);
+if (priorState?.activated) {
+  console.log(
+    "[seed-repository-catalog] the catalog is activated, so it is curated on " +
+      "the Repositories page and this seed writes nothing. Remove " +
+      "AGENT_ALLOWED_REPOS from this deployment; the cleanup release (stage " +
+      "H2) deletes this script.",
+  );
+  process.exit(0);
+}
+
 const configured = await configuredProviderKinds();
 const known = await knownProviders(db);
 
@@ -201,7 +234,6 @@ if (unresolved.length > 0) {
 // writing; it fails and says which two facts disagree. Checked here, next to
 // the unresolved-provider gate above, so a refused build leaves nothing
 // half-seeded behind it.
-const priorState = await readRepositoryCatalogStateRow(db);
 const activationConflict = seedActivationConflict({
   allowlistSize: allowlist.length,
   storedActivated: priorState ? priorState.activated : null,

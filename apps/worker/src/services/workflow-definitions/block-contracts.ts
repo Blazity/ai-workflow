@@ -13,12 +13,15 @@
  * reads could make one answer disagree with the next about the same definition.
  */
 import type {
+  SettingsSnapshot,
   VcsProviderKind,
   WorkflowBlockContract,
   WorkflowBlockContractResolver,
   WorkflowBlockType,
 } from "@shared/contracts";
-import { workflowBlockRegistryContextFromEnv } from "../../engine/definition/block-contract-environment.js";
+import { workflowBlockRegistryContext } from "../../engine/definition/block-contract-environment.js";
+import { loadSettingsSnapshot, loadSettingsSnapshotOn } from "../settings/index.js";
+import type { Db } from "../../db/types.js";
 import {
   buildWorkflowBlockRegistry,
   createWorkflowBlockContractResolver,
@@ -63,8 +66,16 @@ export interface RequestBlockContracts {
   blockRegistry(): Record<WorkflowBlockType, WorkflowBlockContract>;
 }
 
-export function currentBlockContracts(): RequestBlockContracts {
-  const context = workflowBlockRegistryContextFromEnv();
+/**
+ * The block data for a caller that already holds a settings snapshot.
+ *
+ * The snapshot decides the default agent and model every contract resolves
+ * against, so passing the one the entry point loaded is what keeps a request
+ * answering about itself rather than about whatever the deployment's variables
+ * used to say.
+ */
+export function blockContractsFor(settings: SettingsSnapshot): RequestBlockContracts {
+  const context = workflowBlockRegistryContext(settings);
   const resolveContract = createWorkflowBlockContractResolver(context);
   let registry: Record<WorkflowBlockType, WorkflowBlockContract> | null = null;
   return {
@@ -74,4 +85,29 @@ export function currentBlockContracts(): RequestBlockContracts {
     configuredVcsProviders: context.vcsProviders,
     blockRegistry: () => (registry ??= buildWorkflowBlockRegistry(context)),
   };
+}
+
+/**
+ * The same block data for a caller that has no snapshot to hand.
+ *
+ * The definition store's own validation helpers are reached from an HTTP
+ * route, from an MCP call and from another service, and threading a snapshot
+ * through every one of those signatures is a change to the definition API this
+ * stage does not own. So they load one here instead: a real read of the stored
+ * rows, never the environment, which is the same answer the entry point above
+ * them would have resolved. One query on a save, a deploy or a preview, all of
+ * which already cost several.
+ *
+ * Every caller of this shim is listed in the stage report, and the stage that
+ * threads the snapshot through the definition API deletes it.
+ */
+export async function connectedBlockContracts(): Promise<RequestBlockContracts> {
+  return blockContractsFor(await loadSettingsSnapshot());
+}
+
+/** The same shim for the db-bound half of the definition services, which must
+ *  read the settings from the connection the caller handed them rather than
+ *  from the deployment's own. */
+export async function blockContractsOn(db: Db): Promise<RequestBlockContracts> {
+  return blockContractsFor(await loadSettingsSnapshotOn(db));
 }

@@ -3,6 +3,15 @@ import { env } from "./runtime-env.js";
 export { env };
 export type { Env } from "./runtime-env.js";
 
+/**
+ * What both base-branch settings default to in the registry.
+ *
+ * Repeated here rather than imported: the infra tier has no outgoing edges
+ * under ADR-001, so it cannot read the registry that declares it.
+ * `vcs-config.test.ts` fails if the two ever disagree.
+ */
+export const DEFAULT_BASE_BRANCH = "main";
+
 export interface GitHubAppAuth {
   appId: number;
   privateKeyBase64: string;
@@ -19,18 +28,16 @@ export type VcsProviderConfig =
       auth: GitHubAppAuth;
       host: string;
       legacyRepoPath?: string;
-      legacyBaseBranch: string;
     }
   | {
       kind: "gitlab";
       token: string;
       host: string;
       legacyRepoPath?: string;
-      legacyBaseBranch: string;
     };
 
 type LegacyVcsConfig<T extends VcsProviderConfig> = T extends unknown
-  ? Omit<T, "legacyRepoPath" | "legacyBaseBranch"> & {
+  ? Omit<T, "legacyRepoPath"> & {
       repoPath: string;
       baseBranch: string;
     }
@@ -59,7 +66,6 @@ export function getConfiguredVcsProviders(): VcsProviderConfig[] {
       ...(env.GITHUB_OWNER && env.GITHUB_REPO
         ? { legacyRepoPath: `${env.GITHUB_OWNER}/${env.GITHUB_REPO}` }
         : {}),
-      legacyBaseBranch: env.GITHUB_BASE_BRANCH ?? "main",
     });
   }
 
@@ -69,7 +75,6 @@ export function getConfiguredVcsProviders(): VcsProviderConfig[] {
       token: env.GITLAB_TOKEN,
       host: env.GITLAB_HOST,
       ...(env.GITLAB_PROJECT_ID ? { legacyRepoPath: env.GITLAB_PROJECT_ID } : {}),
-      legacyBaseBranch: env.GITLAB_BASE_BRANCH ?? "main",
     });
   }
 
@@ -97,8 +102,18 @@ export function getVcsProviderConfig(kind: VcsProviderKind): VcsProviderConfig {
   return provider;
 }
 
-/** Resolve legacy single-repo VCS config. New multi-repo code should use provider configs. */
-export function getVcsConfig(): VcsConfig {
+/**
+ * Resolve legacy single-repo VCS config. New multi-repo code should use
+ * provider configs.
+ *
+ * The base branch is a parameter now rather than a variable read here. It is a
+ * setting an operator edits on the Settings page (`GITHUB_BASE_BRANCH`,
+ * `GITLAB_BASE_BRANCH`), and this tier may not reach the registry that holds
+ * it: ADR-001 gives infra no outgoing edges. So the caller, which has a
+ * snapshot, says which branch it means, and the fallback below is the registry
+ * default for both keys, pinned by a test in the settings service.
+ */
+export function getVcsConfig(baseBranch: string = DEFAULT_BASE_BRANCH): VcsConfig {
   const providers = getConfiguredVcsProviders();
   const selectedProvider = env.VCS_KIND
     ? providers.find((provider) => provider.kind === env.VCS_KIND)
@@ -118,7 +133,7 @@ export function getVcsConfig(): VcsConfig {
       kind: "gitlab",
       token: selectedProvider.token,
       repoPath: selectedProvider.legacyRepoPath,
-      baseBranch: selectedProvider.legacyBaseBranch,
+      baseBranch,
       host: selectedProvider.host,
     };
   }
@@ -126,7 +141,7 @@ export function getVcsConfig(): VcsConfig {
     kind: "github",
     auth: selectedProvider.auth,
     repoPath: selectedProvider.legacyRepoPath,
-    baseBranch: selectedProvider.legacyBaseBranch,
+    baseBranch,
     host: selectedProvider.host,
   };
 }

@@ -39,11 +39,17 @@ export type {
   WebhookProviderId,
 } from "./integration-settings.js";
 export {
+  ensureEnvironmentSettingsImported,
+  importEnvironmentSettings,
+  migratedVariablesSet,
+} from "./environment-import.js";
+export {
   getRequestSettingsSnapshot,
 } from "./request-snapshot.js";
 export {
   loadSettingsResolution,
   loadSettingsSnapshot,
+  loadSettingsSnapshotOn,
   settingsSeedRows,
   settingsSnapshotFromEnvironment,
 } from "./snapshot.js";

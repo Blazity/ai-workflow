@@ -127,76 +127,33 @@ const EXEMPT: Array<{ path: string; because: string }> = [
     because: "this file IS the environment half of the resolution",
   },
   {
-    // `workflowBlockRegistryContextFromEnv()` reads AGENT_KIND, CLAUDE_MODEL
-    // and CODEX_MODEL for the seven callers in `mcp/` and `services/` that
-    // build an editor payload outside any run. Inside a run the sibling
-    // `workflowBlockRegistryContextForRun(settings)` takes the snapshot, and
-    // `engine/steps/definition-step.ts` is the only engine caller. The cleanup
-    // stage (H) converts the remaining seven and deletes the zero-argument
-    // form with the environment parsing.
-    path: "engine/definition/block-contract-environment.ts",
-    because: "the zero-argument registry context serves callers outside any run",
-  },
-  {
-    // The parsed environment itself, which every remaining `env.X` read goes
-    // through. GITHUB_BASE_BRANCH and GITLAB_BASE_BRANCH are still read here by
-    // the legacy single-repository path (getVcsConfig, createVCS): neither key
-    // is in the engine wave's list, converting them means reshaping
-    // `adapters/vcs/create-vcs.ts`, and the infra tier may not import the
-    // settings service (ADR-001 allows infra no outgoing edges). The cleanup
-    // stage (H) deletes the parsing and takes them with it.
-    path: "infra/vcs-config.ts",
-    because: "the parsed environment module itself; its two base-branch keys are not in this wave",
-  },
-  {
-    // DASHBOARD_ORG_SLUG and MCP_ALLOW_PUBLIC_DCR. Both are handed to Better
-    // Auth as static plugin options when the instance is composed at module
-    // load (src/auth-instance.ts), before any request, tick or call exists to
-    // load a snapshot, and the provider reads neither again. Making them
-    // operator-editable needs the auth instance to be built per request, which
-    // is its own slice.
+    // DASHBOARD_ORG_SLUG and MCP_ALLOW_PUBLIC_DCR, the last two. Both are
+    // handed to Better Auth as static plugin options when the instance is
+    // composed at module load (src/auth-instance.ts), before any request, tick
+    // or call exists to load a snapshot, and the provider reads neither again.
+    // Making them operator-editable needs the auth instance to be built per
+    // request, which is its own slice. Stage H1 settled the consequence
+    // instead: both keys are marked `requiresRedeploy` in the registry, so the
+    // environment import leaves them alone and the cleanup release neither
+    // deletes their parsing nor asks the operator to unset them.
     path: "services/auth/auth-deployment.ts",
     because: "the Better Auth instance is composed at module load, not at an entry point",
   },
 ];
 
 /**
- * The one key this scan still tolerates in the run tiers, and the exact files
- * that read it. A file exemption would hide a reintroduced `env.JOB_TIMEOUT_MS`
- * in the same file, so the pair is pinned instead: a NEW file reading the key,
- * or a NEW key in one of these files, still fails.
+ * The `key`/`path` pairs this scan still tolerates in the run tiers.
  *
- * `DASHBOARD_ORG_SLUG` names the dashboard organization row every one of these
- * step bodies looks up before it can reach an organization-scoped table. It is
- * not in the engine wave's key list, converting it means a parameter on three
- * step signatures (the directive is left unspelled here on purpose: the step
- * set diff a stage pastes greps for it), and one of the four files
- * (`services/workflow-definitions/prompt-authoring.ts`) belongs to another lane's
- * stage.
- * The cleanup stage (H) deletes the environment parsing and takes it with it.
+ * Empty, and that is the point: stage H1 converted the last of them
+ * (`DASHBOARD_ORG_SLUG` in `engine/blocks/agent-sandbox.ts`,
+ * `engine/steps/clarification.ts`, `engine/steps/telemetry.ts` and
+ * `services/workflow-definitions/prompt-authoring.ts`), so a run now takes
+ * every migrated value from the settings it froze at its start. A file
+ * exemption would hide a reintroduced `env.JOB_TIMEOUT_MS` in the same file,
+ * so the pair is what gets pinned here, and an entry added back has to say
+ * which key in which file and why.
  */
-const RUN_TIER_RESIDUE: Array<{ path: string; key: string; because: string }> = [
-  {
-    path: "engine/blocks/agent-sandbox.ts",
-    key: "DASHBOARD_ORG_SLUG",
-    because: "the organization row a pinned harness profile is verified against",
-  },
-  {
-    path: "engine/steps/clarification.ts",
-    key: "DASHBOARD_ORG_SLUG",
-    because: "the organization slug harness runtime resolution is scoped to",
-  },
-  {
-    path: "engine/steps/telemetry.ts",
-    key: "DASHBOARD_ORG_SLUG",
-    because: "the organization row a replay capture is written under",
-  },
-  {
-    path: "services/workflow-definitions/prompt-authoring.ts",
-    key: "DASHBOARD_ORG_SLUG",
-    because: "another lane's stage owns this file",
-  },
-];
+const RUN_TIER_RESIDUE: Array<{ path: string; key: string; because: string }> = [];
 
 /** Drop the findings `RUN_TIER_RESIDUE` names, and nothing else. */
 function withoutKnownResidue(findings: string[]): string[] {

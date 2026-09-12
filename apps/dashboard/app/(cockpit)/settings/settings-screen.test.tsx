@@ -81,6 +81,7 @@ function render(
       <AppRouterContext.Provider value={router as never}>
         <SettingsScreen
           settings={SETTINGS}
+          migratedVariablesSet={[]}
           scan={null}
           scanReadable
           catalogState={catalogState(false)}
@@ -114,6 +115,20 @@ test("the standing caveat states the read cadence, not a worker that ignores the
   assert.match(text(root), /Values saved here are stored and read/);
   assert.match(text(root), /per request, cron tick and MCP call/);
   assert.doesNotMatch(text(root), /still reads most settings from its environment/);
+});
+
+test("the variables still set on the deployment are named, not counted", (t) => {
+  const root = render(t, {
+    migratedVariablesSet: ["MAX_CONCURRENT_AGENTS", "COLUMN_AI"],
+  });
+  assert.match(text(root), /2 environment variables are still set on this deployment/);
+  assert.match(text(root), /MAX_CONCURRENT_AGENTS, COLUMN_AI/);
+  assert.match(text(root), /remove them from the deployment before the next cleanup release/);
+});
+
+test("a deployment with none of them set shows no such banner", (t) => {
+  const root = render(t, { migratedVariablesSet: [] });
+  assert.doesNotMatch(text(root), /still set on this deployment/);
 });
 
 test("a catalog that is not activated says so above the forms", (t) => {

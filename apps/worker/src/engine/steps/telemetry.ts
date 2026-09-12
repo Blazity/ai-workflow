@@ -10,6 +10,7 @@ import { type RunBudgetFailure } from "../helpers/run-budget.js";
 import { redactDiagnosticText } from "../../sandbox/agents/redact.js";
 import { errorMessage } from "../helpers/repository-failure.js";
 import type { BlockRunState, ReplayAttemptOutcome, ReplayObservationKind, ReplaySanitizedEnvelope, ResolvedPromptReference, RunPullRequest, RunRepositoryAccess, WorkflowReplayGraphSnapshot, WorkflowReplaySelectedTransition, HarnessRunManifestRecord } from "@shared/contracts";
+import { defaultSettingsSnapshot } from "@shared/contracts";
 import type {
   PreparedReplayAttemptPersistence,
   ReplayAttemptPersistenceState,
@@ -281,9 +282,13 @@ async function captureV2RunObservationStartStep(payload: {
   definitionVersion: number | null;
   graph: WorkflowReplayGraphSnapshot;
   runtimeManifest: ReplaySanitizedEnvelope;
+  /** The organization a replay capture is written under, from the settings the
+   *  run froze at its start. Optional because a result stored before the field
+   *  existed replays as it was written; absent means the deployment's registry
+   *  default, which is what the environment read it replaced resolved to. */
+  organizationSlug?: string;
 }): Promise<{ organizationId: string } | null> {
   "use step";
-  const { loadEnvironmentPort } = await import("../internal/ports.js");
   if (
     payload.definitionId === null ||
     payload.definitionVersion === null
@@ -295,7 +300,6 @@ async function captureV2RunObservationStartStep(payload: {
   try {
     const capture = await replayCaptureWithinTimeout(
       (async () => {
-        const { env } = await loadEnvironmentPort();
         const { createConnectedAuthRepository } = await import(
           "../../db/repositories/auth.js"
         );
@@ -308,11 +312,13 @@ async function captureV2RunObservationStartStep(payload: {
         const { sanitizeV2ReplaySnapshotForCapture } = await import(
           "../../run-observability/runtime-hooks.js"
         );
+        const organizationSlug =
+          payload.organizationSlug ?? defaultSettingsSnapshot().DASHBOARD_ORG_SLUG;
         const organization = await createConnectedAuthRepository().findOrganizationBySlug(
-          env.DASHBOARD_ORG_SLUG,
+          organizationSlug,
         );
         if (!organization) {
-          throw new Error(`Dashboard organization "${env.DASHBOARD_ORG_SLUG}" is unavailable.`);
+          throw new Error(`Dashboard organization "${organizationSlug}" is unavailable.`);
         }
         organizationId = organization.id;
         if (captureAbandoned) {

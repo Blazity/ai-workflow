@@ -13,6 +13,7 @@ import { logger } from "../../infra/logger.js";
 import { cancelRun } from "../run-lifecycle/index.js";
 import {
   issueTrackerBaseUrl,
+  loadSettingsSnapshot,
   slackAllowedUserIds,
   slackSigningSecret,
   ticketBoardSettings,
@@ -175,7 +176,10 @@ async function runHandler(parsed: ParsedCommand, responseUrl: string, userId: st
 async function executeCommand(parsed: ParsedCommand, userId?: string): Promise<string> {
   const adapters = createAdapters();
   const { runRegistry, issueTracker } = adapters;
-  const board = ticketBoardSettings();
+  // The deferred handler is its own entry point: it runs after the three-second
+  // acknowledgement, so it reads the deployment's settings here rather than on
+  // the path Slack is timing.
+  const board = ticketBoardSettings(await loadSettingsSnapshot());
   const trackerBaseUrl = issueTrackerBaseUrl();
   const backlogMoveTarget = board.backlogTransitionId
     ? { name: board.backlogColumn, transitionId: board.backlogTransitionId }

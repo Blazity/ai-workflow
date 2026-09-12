@@ -13,6 +13,11 @@ const mocks = vi.hoisted(() => ({
   updateLifecycle: vi.fn(),
 }));
 
+// The settings cluster reads the deployment's environment through this module,
+// and its real one validates every variable at import. The contracts below are
+// mocked, so an empty environment is all this suite needs.
+vi.mock("../../infra/vcs-config.js", () => ({ env: {} }));
+
 vi.mock("../../db/repositories/definitions/connected.js", () => ({
   archiveConnectedDefinition: vi.fn(),
   createConnectedDefinition: vi.fn(),
@@ -49,8 +54,17 @@ vi.mock("./connected-policy-dependencies.js", () => ({
   validateConnectedDefinitionPromptAuthoring: mocks.validatePrompts,
 }));
 
+// The settings snapshot every block contract resolves against. This file is
+// about trigger convergence, so it is answered without a database: the stored
+// rows are somebody else's test, and reaching for a connection here would make
+// this suite need a DATABASE_URL to deploy a definition.
+vi.mock("../settings/snapshot.js", () => ({
+  loadSettingsSnapshot: async () => ({}),
+  loadSettingsSnapshotOn: async () => ({}),
+}));
+
 vi.mock("../../engine/definition/block-contract-environment.js", () => ({
-  workflowBlockRegistryContextFromEnv: () => ({
+  workflowBlockRegistryContext: () => ({
     agentProviders: { claude: true, codex: true },
     llmProviders: { claude: true, codex: true },
     defaultAgent: { provider: "codex", model: "codex-test" },

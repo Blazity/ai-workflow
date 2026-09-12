@@ -240,16 +240,17 @@ async function resolveHarnessRuntimesStep(
   definition: WorkflowDefinition,
   defaultProvider: AgentKind,
   providerOverride: AgentKind | null,
+  /** The organization the run's harness runtimes are scoped to, from the
+   *  settings the run froze at its start. */
+  organizationSlug: string,
 ): Promise<Record<string, ResolvedHarnessRuntime>> {
   "use step";
-  const { loadEnvironmentPort } = await import("../internal/ports.js");
-  const { env } = await loadEnvironmentPort();
   const {
     resolveConnectedHarnessRuntimesForDefinition,
   } = await import("../definition/harness-profile-runtime.js");
   return resolveConnectedHarnessRuntimesForDefinition({
     definition,
-    organizationSlug: env.DASHBOARD_ORG_SLUG,
+    organizationSlug,
     defaultProvider,
     providerOverride,
   });

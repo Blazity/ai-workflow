@@ -151,6 +151,11 @@ export async function prepareHarnessAgentInvocationStep(
   agentKind: AgentKind,
   model: string,
   arthurTaskId: string | null,
+  /** The dashboard organization the pinned profile is verified against, taken
+   *  from the settings the run froze at its start rather than from this
+   *  process's environment: a run that outlives an operator's change must
+   *  verify its profile against the organization it started under. */
+  organizationSlug: string,
   runtime?: ResolvedHarnessRuntime,
 ): Promise<AgentProtocolResult<void>> {
   "use step";
@@ -179,11 +184,11 @@ export async function prepareHarnessAgentInvocationStep(
     });
     await resetHarnessRuntimeHomes(sandbox);
     const organization = await createConnectedAuthRepository().findOrganizationBySlug(
-      env.DASHBOARD_ORG_SLUG,
+      organizationSlug,
     );
     if (!organization) {
       throw new Error(
-        `Dashboard organization "${env.DASHBOARD_ORG_SLUG}" is unavailable.`,
+        `Dashboard organization "${organizationSlug}" is unavailable.`,
       );
     }
     const resolved = await resolveConnectedVerifiedHarnessProfileVersion({

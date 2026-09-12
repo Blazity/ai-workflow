@@ -26,6 +26,7 @@ import {
   writeManyConnectedSettings,
   type SettingsVersionRow,
 } from "../../db/repositories/settings.js";
+import { migratedVariablesSet } from "./environment-import.js";
 import { loadSettingsResolution, type SettingsResolution } from "./snapshot.js";
 
 /** How many past changes of one key the history answers with. */
@@ -78,13 +79,17 @@ function entryViews(
   }));
 }
 
-/** Every setting, resolved, with the change that last touched it. */
+/** Every setting, resolved, with the change that last touched it, and the
+ *  migrated variables this deployment has yet to remove. */
 export async function readSettings(): Promise<SettingsReadResponse> {
   const [resolution, latest] = await Promise.all([
     loadSettingsResolution(),
     latestConnectedSettingsVersions(),
   ]);
-  return { settings: entryViews(resolution, latest) };
+  return {
+    settings: entryViews(resolution, latest),
+    migratedVariablesSet: migratedVariablesSet(),
+  };
 }
 
 /** One key's recorded changes, newest first. A key that is not a setting is

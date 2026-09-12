@@ -166,6 +166,59 @@ export async function seedSettings(
   return result.rows.length;
 }
 
+/**
+ * Store the deployment's environment values for keys nobody has decided yet,
+ * and record each one as a change.
+ *
+ * The sibling above it seeds silently; this one leaves a trail. It runs on a
+ * live deployment rather than in a build step, so "where did this row come
+ * from" has to be answerable from the history the Settings page already shows,
+ * with the actor naming the import rather than a person.
+ *
+ * One statement, because production is neon-http and cannot open an
+ * interactive transaction: the rows and their version rows travel as one
+ * data-modifying CTE, so a crash leaves both or neither. `do nothing` on
+ * conflict is what makes it idempotent AND what keeps an operator's stored
+ * decision: a key that already has a row is not written and not recorded, even
+ * when the environment disagrees with it.
+ *
+ * Returns the keys it actually created, in order, so the caller can log them.
+ */
+export async function importEnvironmentSettings(
+  db: Db,
+  input: {
+    rows: ReadonlyArray<{ key: string; value: SettingValue }>;
+    actor: string;
+    reason: string;
+  },
+): Promise<string[]> {
+  const entries = input.rows.map((row) => ({
+    key: row.key,
+    value: JSON.stringify(row.value ?? null),
+  }));
+  if (entries.length === 0) return [];
+
+  const result = (await db.execute(sql`
+    with input as (
+      select entry.key, entry.value::jsonb as value
+      from jsonb_to_recordset(${JSON.stringify(entries)}::jsonb)
+        as entry(key text, value text)
+    ), written as (
+      insert into ${settings} (key, value, updated_at, updated_by)
+      select input.key, input.value, now(), ${input.actor} from input
+      on conflict (key) do nothing
+      returning key, value
+    ), recorded as (
+      insert into ${settingsVersions} (key, previous_value, new_value, actor, reason)
+      select written.key, null, written.value, ${input.actor}, ${input.reason}
+      from written
+      returning key
+    )
+    select key from recorded order by key
+  `)) as ExecuteRows<{ key: string }>;
+  return result.rows.map((row) => row.key);
+}
+
 /** One key's history, newest first. */
 export async function listSettingsVersions(
   db: Db,
@@ -214,6 +267,13 @@ export function writeManyConnectedSettings(
   input: Parameters<typeof writeManySettings>[1],
 ): Promise<SettingsVersionRow[]> {
   return writeManySettings(getDb(), input);
+}
+
+/** Import the environment's values on the deployment's own connection. */
+export function importConnectedEnvironmentSettings(
+  input: Parameters<typeof importEnvironmentSettings>[1],
+): Promise<string[]> {
+  return importEnvironmentSettings(getDb(), input);
 }
 
 /** One key's history, on the deployment's own connection. */

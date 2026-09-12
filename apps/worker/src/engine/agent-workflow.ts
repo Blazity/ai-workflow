@@ -572,6 +572,7 @@ async function agentWorkflowBody(
     plan.definition,
     runDefaultKind,
     agentKindOverride,
+    runSettings.DASHBOARD_ORG_SLUG,
   );
   const harnessManifests: HarnessRunManifestRecord[] = Object.values(
     harnessRuntimes,
@@ -686,6 +687,7 @@ async function agentWorkflowBody(
           runId: workflowRunId,
           definitionId: plan.definitionId,
           definitionVersion: plan.version,
+          organizationSlug: runSettings.DASHBOARD_ORG_SLUG,
           graph: replayGraph,
           runtimeManifest: sanitizeReplayValue(
             {
@@ -1532,6 +1534,7 @@ async function agentWorkflowBody(
           ctx.runDefaultKind,
           defaultModel,
           ctx.arthur.taskId,
+          ctx.settings.DASHBOARD_ORG_SLUG,
         );
         if (!prepared.ok) return agentProtocolBlockError(prepared);
         const guard = await setCommitGuardStep(
@@ -2010,6 +2013,7 @@ async function agentWorkflowBody(
               kind,
               model,
               ctx.arthur.taskId,
+              ctx.settings.DASHBOARD_ORG_SLUG,
               runtime,
             );
             if (!researchRuntime.ok) {
@@ -2513,6 +2517,7 @@ async function agentWorkflowBody(
                 kind,
                 model,
                 ctx.arthur.taskId,
+                ctx.settings.DASHBOARD_ORG_SLUG,
                 runtime,
               );
             if (!implementationRuntime.ok) {
@@ -2775,6 +2780,7 @@ async function agentWorkflowBody(
                 kind,
                 model,
                 ctx.arthur.taskId,
+                ctx.settings.DASHBOARD_ORG_SLUG,
                 runtime,
               );
               if (!reviewRuntime.ok) {

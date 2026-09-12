@@ -22,6 +22,7 @@ End-to-end instructions for deploying ai-workflow to your own Vercel account. Re
 11. [CI / GitHub Actions](#11-ci--github-actions)
 12. [Optional integrations](#12-optional-integrations)
 13. [Troubleshooting](#13-troubleshooting)
+14. [Removing migrated environment variables](#14-removing-migrated-environment-variables)
 
 ---
 
@@ -447,8 +448,13 @@ If you set `SLACK_ALLOWED_USER_IDS`, only those Slack user IDs can invoke the co
 
 ```bash
 curl https://<your-vercel-domain>/health
-# → {"status":"ok","timestamp":"..."}
+# → {"status":"ok","timestamp":"...","commit":"...","settings":{"migratedVariablesSet":[]}}
 ```
+
+`settings.migratedVariablesSet` lists, by name, the environment variables this
+deployment still sets that the Settings page now owns. An empty list is what a
+deployment ready for the next release looks like; see
+[Removing migrated environment variables](#14-removing-migrated-environment-variables).
 
 ### Cron auth
 
@@ -715,6 +721,57 @@ trigger_ticket_ai -> planning_agent -> branch(gate)
 - **Vercel runtime logs:** `vercel logs <deployment-url>` or **Project → Logs**.
 - **Workflow runs:** **Project → Workflows** in the Vercel dashboard — shows step-by-step state, failures, retries.
 - **Local logs:** Pino prints structured JSON. Pipe through `pnpm dlx pino-pretty`.
+
+---
+
+## 14. Removing migrated environment variables
+
+Most product-behaviour variables in section 5 are now settings: the deployment
+stores one row per setting and the Settings page is where they are changed. The
+variables are still read as a fallback, and the next release removes that
+fallback, so each deployment has one job to do first.
+
+**What the deployment already did for you.** The first settings read after this
+release writes a stored row for every migrated variable that is set and has no
+row yet, with the value the deployment was already running on, recorded in the
+history under the actor `environment import`. It never overwrites a row you
+saved yourself: where the variable and the stored value disagree, your stored
+value is the decision and the variable is the leftover. Running it again writes
+nothing.
+
+**How to see what is left.**
+
+```bash
+curl https://<your-vercel-domain>/health | jq '.settings.migratedVariablesSet'
+# → ["MAX_CONCURRENT_AGENTS", "COLUMN_AI"]
+```
+
+The Settings page shows the same list as a banner, and the MCP tool
+`settings.list` carries it as `migratedVariablesSet`. Names only, never values.
+
+**What to do.** For each name in that list: check the value on the Settings page
+(it is already stored, with its history), then delete the variable from the
+deployment in the Vercel dashboard. The list is empty when you are done, and
+nothing needs a redeploy for the settings themselves: the worker reads the
+stored rows per request, cron tick and MCP call.
+
+**What is NOT on the list, and must stay set.** A handful of keys are marked
+"requires redeploy" because this deployment reads the variable itself rather
+than the stored row: `DASHBOARD_ORG_SLUG` and `MCP_ALLOW_PUBLIC_DCR` are handed
+to the auth instance when the process starts, and `PRE_PR_CHECKS_ALLOWED_ENV` is
+read inside a check step as the operator-side gate on what a tenant's command
+may be handed. They are never imported and never listed; leave them where they
+are.
+
+**`AGENT_ALLOWED_REPOS`.** Replaced by the Repositories page. The build-time
+seed still reads it, warns that it is deprecated, and refuses to run at all once
+the catalog is activated, because an activated catalog is one somebody curated.
+Curate the catalog, then remove the variable.
+
+**Why the hurry.** The cleanup release deletes the environment parsing for every
+migrated key and refuses to boot with one of them set, naming the dashboard page
+that replaced it. A deployment that empties the list first upgrades without
+noticing; one that does not will not start.
 
 ---
 

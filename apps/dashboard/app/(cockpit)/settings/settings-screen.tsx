@@ -80,8 +80,31 @@ function RepositoriesSummary({
   );
 }
 
+/**
+ * The variables this deployment has yet to delete.
+ *
+ * Named, not counted: the operator's next action is to open the hosting
+ * dashboard and remove exactly these, and "4 variables" cannot be acted on.
+ * Values never appear here; the worker publishes names alone.
+ */
+function MigratedVariablesNotice({ variables }: { variables: readonly string[] }) {
+  return (
+    <div
+      role="note"
+      className="rounded-[3px] border border-orange-300 bg-orange-100 px-3 py-2 font-body text-[12px] leading-4 text-[#A23E18]"
+    >
+      {variables.length === 1
+        ? "1 environment variable is still set on this deployment: "
+        : `${variables.length} environment variables are still set on this deployment: `}
+      <span className="font-mono text-[11px]">{variables.join(", ")}</span>
+      {". Every value is stored; remove them from the deployment before the next cleanup release."}
+    </div>
+  );
+}
+
 export function SettingsScreen({
   settings,
+  migratedVariablesSet,
   scan,
   scanReadable,
   catalogState,
@@ -89,6 +112,8 @@ export function SettingsScreen({
   available,
 }: {
   settings: readonly SettingsEntryView[];
+  /** The migrated environment variables the worker still sees set, by name. */
+  migratedVariablesSet: readonly string[];
   scan: SystemHealthResponse | null;
   /** False for a role whose session may not read the system health scan. */
   scanReadable: boolean;
@@ -127,6 +152,10 @@ export function SettingsScreen({
       )}
 
       {available && <SettingsCadenceNotice />}
+
+      {available && migratedVariablesSet.length > 0 && (
+        <MigratedVariablesNotice variables={migratedVariablesSet} />
+      )}
 
       {available && catalogState !== null && !catalogState.activated && (
         <div className="rounded-[3px] border border-orange-300 bg-orange-100 px-3 py-2 font-body text-[12px] text-[#A23E18]">
