@@ -146,11 +146,12 @@ function buildPrFixPublicationInput(
   const pr = ctx.entry.pr;
   // The last commit this workspace holds for the reviewed repository is the head
   // the push will create, so anti-recursion can be armed before pushing.
-  const intendedHead = workspace?.commits
-    .filter(
-      (commit) => commit.provider === pr.provider && commit.repoPath === pr.repoPath,
-    )
-    .at(-1)?.sha;
+  let intendedHead: string | undefined;
+  for (const commit of workspace?.commits ?? []) {
+    if (commit.provider === pr.provider && commit.repoPath === pr.repoPath) {
+      intendedHead = commit.sha;
+    }
+  }
   const reviewLedger = ctx.reviewLedger
     ? buildReviewLedgerGuardSummary(ctx.reviewLedger)
     : null;
@@ -365,8 +366,10 @@ async function blockFixAgentStartPhaseStep(
     }
     return { ok: true, commandId: command.cmdId };
   } catch (error) {
-    const { isRunControlError } = await import("../../helpers/run-control-error.js");
-    if (isRunControlError(error)) throw error;
+    const { isRunControlError: isRunControlInterruption } = await import(
+      "../../helpers/run-control-error.js",
+    );
+    if (isRunControlInterruption(error)) throw error;
     const failure = protocolFailure({
       spec,
       phase,
@@ -376,7 +379,7 @@ async function blockFixAgentStartPhaseStep(
       message: "The current agent phase could not be completed.",
       detail: "The agent phase process could not be launched.",
     });
-    if (failure.ok) throw new Error("unreachable");
+    if (failure.ok) throw new Error("unreachable", { cause: error });
     return { ok: false, failure };
   }
 }
@@ -455,12 +458,11 @@ async function verifyFixReviewDispositions(
   const workItems = selectWorkItems(ledger.feed);
   if (workItems.length === 0) return null;
   const repoLocalPath = fixLedgerRepoLocalPath(ctx);
-  const dispositions = (output.reviewThreads ?? []).map((entry) => ({
-    alias: entry.alias,
-    disposition: entry.disposition,
-    ...(entry.reply != null ? { reply: entry.reply } : {}),
-    ...(entry.evidence != null ? { evidence: entry.evidence } : {}),
-  }));
+  const dispositions = (output.reviewThreads ?? []).map((entry) => Object.assign(
+    { alias: entry.alias, disposition: entry.disposition },
+    entry.reply != null ? { reply: entry.reply } : {},
+    entry.evidence != null ? { evidence: entry.evidence } : {},
+  ));
   const verification = await verifyDispositions({
     workItems,
     dispositions,

@@ -26,7 +26,7 @@ export type WorkflowDefinitionVersionPin =
   | number
   | typeof BUILTIN_FALLBACK_DEFINITION_VERSION;
 
-export interface ClarificationContinuationMarker {
+interface ClarificationContinuationMarker {
   kind: "clarification";
   clarificationRequestId: string;
 }

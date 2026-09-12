@@ -21,7 +21,7 @@ export {
   isRecognisedModel as isRecognisedHarnessModel,
 } from "@shared/harness";
 
-export const HARNESS_CREDENTIAL_IDS = [
+const HARNESS_CREDENTIAL_IDS = [
   "anthropic",
   "openai",
   "github",

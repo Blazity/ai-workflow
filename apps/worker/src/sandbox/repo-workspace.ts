@@ -28,18 +28,18 @@ const workspaceRepoBaseShape = {
   }).optional(),
 };
 
-export const workspaceRepoV1Schema = z.object(workspaceRepoBaseShape);
-export const workspaceRepoV2Schema = z.object({
+const workspaceRepoV1Schema = z.object(workspaceRepoBaseShape);
+const workspaceRepoV2Schema = z.object({
   ...workspaceRepoBaseShape,
   access: z.enum(["read", "write"]),
   researchBaseSha: z.string().min(1).optional(),
 });
 
-export const workspaceManifestV1Schema = z.object({
+const workspaceManifestV1Schema = z.object({
   version: z.literal(1),
   repositories: z.array(workspaceRepoV1Schema),
 });
-export const workspaceManifestV2Schema = z.object({
+const workspaceManifestV2Schema = z.object({
   version: z.literal(2),
   repositories: z.array(workspaceRepoV2Schema).max(8),
 });
@@ -49,7 +49,7 @@ export const workspaceManifestSchema = z.discriminatedUnion("version", [
   workspaceManifestV2Schema,
 ]);
 
-export type WorkspaceRepoV1 = z.infer<typeof workspaceRepoV1Schema>;
+type WorkspaceRepoV1 = z.infer<typeof workspaceRepoV1Schema>;
 export type WorkspaceRepoV2 = z.infer<typeof workspaceRepoV2Schema>;
 export type WorkspaceRepo = WorkspaceRepoV1 | WorkspaceRepoV2;
 export type WorkspaceManifest = z.infer<typeof workspaceManifestSchema>;

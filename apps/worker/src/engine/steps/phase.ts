@@ -128,7 +128,7 @@ export async function applyHumanRepositoryExpansion(
   | { kind: "clarification"; questions: string[] }
 > {
   const rounds = ctx.clarifications ?? [];
-  const latest = rounds[rounds.length - 1];
+  const latest = rounds.at(-1);
   if (!latest || ctx.workspaceManifest?.version !== 2 || !ctx.sandboxId) {
     return { kind: "noop" };
   }
@@ -329,8 +329,10 @@ async function writeAndStartPhase(
     }
     return { ok: true, commandId: command.cmdId };
   } catch (error) {
-    const { isRunControlError } = await import("../helpers/run-control-error.js");
-    if (isRunControlError(error)) throw error;
+    const { isRunControlError: isRunControlInterruption } = await import(
+      "../helpers/run-control-error.js",
+    );
+    if (isRunControlInterruption(error)) throw error;
     const failure = protocolFailure({
       spec,
       phase,
@@ -340,7 +342,7 @@ async function writeAndStartPhase(
       message: "The current agent phase could not be completed.",
       detail: "The agent phase process could not be launched.",
     });
-    if (failure.ok) throw new Error("unreachable");
+    if (failure.ok) throw new Error("unreachable", { cause: error });
     return { ok: false, failure };
   }
 }

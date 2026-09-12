@@ -42,14 +42,14 @@ export function formatInspectTicket(
   snap: InspectTicketSnapshot,
 ): string {
   const link = jiraLink(ticketKey, jiraBaseUrl);
-  const lines: string[] = [`*Inspect ${link}*`];
-  lines.push(`• runId: ${snap.runId ? `\`${snap.runId}\`` : "_none_"}`);
-  lines.push(`• sandboxId: ${snap.sandboxId ? `\`${snap.sandboxId}\`` : "_none_"}`);
-  lines.push(
+  const lines: string[] = [
+    `*Inspect ${link}*`,
+    `• runId: ${snap.runId ? `\`${snap.runId}\`` : "_none_"}`,
+    `• sandboxId: ${snap.sandboxId ? `\`${snap.sandboxId}\`` : "_none_"}`,
     `• entryCreatedAt: ${snap.entryCreatedAt ? new Date(snap.entryCreatedAt).toISOString() : "_none_"}`,
-  );
-  lines.push(`• threadParent: ${snap.threadParent ? `\`${snap.threadParent}\`` : "_none_"}`);
-  lines.push(`• failed: ${snap.isFailed ? "yes" : "no"}`);
+    `• threadParent: ${snap.threadParent ? `\`${snap.threadParent}\`` : "_none_"}`,
+    `• failed: ${snap.isFailed ? "yes" : "no"}`,
+  ];
   return lines.join("\n");
 }
 
@@ -58,8 +58,7 @@ export function formatInspectAll(
   failed: Array<{ ticketKey: string; meta: FailedTicketMeta }>,
   jiraBaseUrl: string,
 ): string {
-  const lines: string[] = ["*Redis snapshot*"];
-  lines.push(`*Active runs (${active.length}):*`);
+  const lines: string[] = ["*Redis snapshot*", `*Active runs (${active.length}):*`];
   if (active.length === 0) {
     lines.push("• _none_");
   } else {

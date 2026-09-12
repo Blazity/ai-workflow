@@ -27,7 +27,7 @@ export interface PreSandboxRepositoryCatalogDegradation {
   outcome: "continued_degraded" | "failed_closed";
 }
 
-export const preSandboxPromptTargets = ["research", "implementation", "review"] as const;
+const preSandboxPromptTargets = ["research", "implementation", "review"] as const;
 export type PreSandboxPromptTarget = (typeof preSandboxPromptTargets)[number];
 
 export interface PreSandboxPromptAddition {
@@ -125,7 +125,7 @@ export interface PreSandboxStepContext {
   };
 }
 
-export type PreSandboxOnFailure = "continue" | "fail" | "move_to_backlog";
+type PreSandboxOnFailure = "continue" | "fail" | "move_to_backlog";
 
 export interface PreSandboxConfigStep<StepId extends string = string> {
   uses: StepId;
@@ -141,7 +141,7 @@ export interface PreSandboxConfig<StepId extends string = string> {
   };
 }
 
-export interface PreSandboxStepExecutionInput {
+interface PreSandboxStepExecutionInput {
   context: PreSandboxStepContext;
   config: unknown;
   step: PreSandboxConfigStep;

@@ -102,13 +102,13 @@ export async function loadWorkflowDefinitionFor(
 
   const toPlan = (
     def: WorkflowDefinition,
-    version: number | null,
+    planVersion: number | null,
     id: number | null,
   ): LoadedWorkflowPlan => {
     const normalized = toRuntimeShape(def);
     return {
       definition: def,
-      version,
+      version: planVersion,
       definitionId: id,
       nodes: normalized.nodes,
       edges: normalized.edges,

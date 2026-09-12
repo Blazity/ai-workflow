@@ -20,7 +20,7 @@ export interface RepositoryExcludesSandbox<
  * globs in clarification-snapshot-steps.ts (agent-env*.sh, *arthur*credential*,
  * *tracer*credential*, .aiw-clarification-credential-patterns-*).
  */
-export const REPOSITORY_EXCLUDES_PATH = "/tmp/aiw-primary-git-excludes";
+const REPOSITORY_EXCLUDES_PATH = "/tmp/aiw-primary-git-excludes";
 
 /**
  * Runtime excludes shared by every checkout of a workspace. All three patterns
@@ -31,7 +31,7 @@ export const REPOSITORY_EXCLUDES_PATH = "/tmp/aiw-primary-git-excludes";
  * document: the platform stores it outside the repository and restores it
  * between runs, so no checkout may ever offer it for commit.
  */
-export const REPOSITORY_EXCLUDES =
+const REPOSITORY_EXCLUDES =
   "/aiw-repos.json\n/repos/\n/ai-workflow/memory/\n/blazebot/memory/\n";
 
 /** Written once per sandbox; the content is identical for every checkout. */

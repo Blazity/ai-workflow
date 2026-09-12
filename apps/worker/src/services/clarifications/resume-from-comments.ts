@@ -271,7 +271,7 @@ export async function resumeClarificationFromComments(input: {
   // Attribute to the LAST commenter: their comment completed the answer and the
   // choice is stable across identical retries. The label lists every unique
   // author in first-appearance order.
-  const lastCommenter = qualifying[qualifying.length - 1];
+  const lastCommenter = qualifying.at(-1)!;
   const answeredById = `jira:${lastCommenter.accountId}`;
   const uniqueAuthors: string[] = [];
   for (const c of qualifying) {

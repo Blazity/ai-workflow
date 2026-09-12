@@ -176,8 +176,10 @@ async function blockGenericAgentStartPhaseStep(
     }
     return { ok: true, commandId: command.cmdId };
   } catch (error) {
-    const { isRunControlError } = await import("../../helpers/run-control-error.js");
-    if (isRunControlError(error)) throw error;
+    const { isRunControlError: isRunControlInterruption } = await import(
+      "../../helpers/run-control-error.js",
+    );
+    if (isRunControlInterruption(error)) throw error;
     const failure = protocolFailure({
       spec,
       phase,
@@ -187,7 +189,7 @@ async function blockGenericAgentStartPhaseStep(
       message: "The current agent phase could not be completed.",
       detail: "The agent phase process could not be launched.",
     });
-    if (failure.ok) throw new Error("unreachable");
+    if (failure.ok) throw new Error("unreachable", { cause: error });
     return { ok: false, failure };
   }
 }

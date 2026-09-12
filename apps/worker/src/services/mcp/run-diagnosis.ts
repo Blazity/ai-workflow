@@ -31,7 +31,7 @@ import {
   REPOSITORY_SCRIPTS_SETUP_FAILED_PREFIX,
 } from "../../engine/blocks/support/repository-scripts-output.js";
 
-export type RunDiagnosisCategory =
+type RunDiagnosisCategory =
   | "succeeded"
   | "running"
   | "awaiting_input"

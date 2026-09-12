@@ -28,7 +28,7 @@ export interface ReviewResultsNormalizationOptions {
  * against the review target's repoPath, so echoing the agent's casing would mark
  * a finding about the reviewed repository as belonging to another one.
  */
-export function normalizeFindingRepository(
+function normalizeFindingRepository(
   value: unknown,
   knownRepositories: readonly string[] = [],
 ): string | undefined {

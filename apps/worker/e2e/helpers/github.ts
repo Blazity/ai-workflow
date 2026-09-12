@@ -137,14 +137,6 @@ export async function openPR(
   return { number: data.number, url: data.html_url };
 }
 
-export async function reopenPR(prNumber: number): Promise<void> {
-  await octokit.pulls.update({
-    ...ownerRepo,
-    pull_number: prNumber,
-    state: "open",
-  });
-}
-
 export async function getPRFiles(
   prNumber: number,
 ): Promise<Array<{ filename: string; status: string }>> {

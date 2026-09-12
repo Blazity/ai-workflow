@@ -73,12 +73,15 @@ function ticketBindingFields(
     body: comment.body,
     createdAt: comment.createdAt ?? "",
   }));
-  const priorAnswers = (ticket.clarifications ?? []).map((answer) => ({
-    questions: answer.questions,
-    answer: answer.answer,
-    ...(answer.answeredBy === undefined ? {} : { answeredBy: answer.answeredBy }),
-    ...(answer.answeredAt === undefined ? {} : { answeredAt: answer.answeredAt }),
-  }));
+  const priorAnswers = (ticket.clarifications ?? []).map((answer): Record<string, JsonValue> => {
+    const output: Record<string, JsonValue> = {
+      questions: answer.questions,
+      answer: answer.answer,
+    };
+    if (answer.answeredBy !== undefined) output.answeredBy = answer.answeredBy;
+    if (answer.answeredAt !== undefined) output.answeredAt = answer.answeredAt;
+    return output;
+  });
   return {
     ticket: {
       identifier: ticket.identifier,
@@ -119,11 +122,14 @@ export function triggerOutputWithTicketContext(
       ...ticketFields,
     };
     if (pr.failedChecks) {
-      output.failedChecks = pr.failedChecks.map((check) => ({
-        name: check.name,
-        conclusion: check.conclusion,
-        ...(check.detailsUrl !== undefined ? { detailsUrl: check.detailsUrl } : {}),
-      }));
+      output.failedChecks = pr.failedChecks.map((check): Record<string, JsonValue> => {
+        const failedCheck: Record<string, JsonValue> = {
+          name: check.name,
+          conclusion: check.conclusion,
+        };
+        if (check.detailsUrl !== undefined) failedCheck.detailsUrl = check.detailsUrl;
+        return failedCheck;
+      });
     }
     if (pr.review) {
       output.review = {
@@ -185,6 +191,7 @@ export function resolveImplementationPlanInput(
 ): string {
   if (!Object.prototype.hasOwnProperty.call(resolvedInputs, "plan")) return legacyPlan;
   if (typeof resolvedInputs.plan !== "string") {
+    // oxlint-disable-next-line unicorn/prefer-type-error -- Preserve the established Error type and message contract for callers and tests.
     throw new Error('Implementation input "plan" must be a string.');
   }
   return resolvedInputs.plan;
@@ -230,9 +237,11 @@ function resolveAgentTicketInputFromBindings(
     ? resolvedInputs.priorAnswers
     : ticket.priorAnswers ?? ticket.clarifications ?? [];
   if (!Array.isArray(comments)) {
+    // oxlint-disable-next-line unicorn/prefer-type-error -- Preserve the established Error type and message contract for callers and tests.
     throw new Error('Planning input "comments" must be an array.');
   }
   if (!Array.isArray(priorAnswers)) {
+    // oxlint-disable-next-line unicorn/prefer-type-error -- Preserve the established Error type and message contract for callers and tests.
     throw new Error('Planning input "priorAnswers" must be an array.');
   }
   return {

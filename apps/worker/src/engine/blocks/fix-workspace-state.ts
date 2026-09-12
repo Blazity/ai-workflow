@@ -7,7 +7,7 @@ import {
   WORKSPACE_MANIFEST_PATH,
 } from "../../sandbox/repo-workspace.js";
 
-export interface FixCommitRef extends Record<string, JsonValue> {
+interface FixCommitRef extends Record<string, JsonValue> {
   provider: "github" | "gitlab";
   repoPath: string;
   sha: string;

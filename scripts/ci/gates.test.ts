@@ -9,7 +9,7 @@ import {
   classify,
   crossClusterDeepImport,
   deepImportRegression,
-  exceedsFileCycleBaseline,
+  hasFileCycles,
   normalizeFileCycles,
 } from "../gates/boundaries.mjs";
 
@@ -19,7 +19,6 @@ const boundaryFixture = (root: string): string => {
     mkdirSync(join(source, "db"), { recursive: true });
     writeFileSync(join(source, "db/client.ts"), "export const db = 1;\n");
     writeFileSync(join(source, "routes/entry.ts"), 'import { db } from "../db/client.js";\nvoid db;\n');
-    writeFileSync(join(root, "boundaries.baseline.json"), '{"tierPairs":{},"fileCycleCount":0,"fileCycles":[]}\n');
     return root;
   },
   gateFailure = 1,
@@ -117,30 +116,28 @@ test("every Claude bridge starts by loading AGENTS.md", () => {
   }
 });
 
-test("the boundary baseline passes and is stable across file renames", async () => {
+test("the boundary gate is a hard zero and reports file changes", async () => {
   const recorded = gate("boundaries.mjs");
   assert.equal(recorded.status, 0, recorded.stderr || recorded.stdout);
 
   const root = await mkdtemp(join(tmpdir(), "boundary-gate-"));
   const source = join(root, "apps/worker/src");
-  const baseline = join(root, "boundaries.baseline.json");
   boundaryFixture(root);
 
-  const common = ["--root", root, "--baseline", baseline];
-  const updated = gate("boundaries.mjs", [...common, "--update-baseline"]);
-  assert.equal(updated.status, 0, updated.stderr || updated.stdout);
+  const common = ["--root", root];
   const before = gate("boundaries.mjs", common);
-  assert.equal(before.status, 0, before.stderr || before.stdout);
+  assert.equal(before.status, gateFailure, before.stderr || before.stdout);
+  assert.match(before.stdout, /app->db\s+1/u);
 
   await rename(join(source, "routes/entry.ts"), join(source, "routes/renamed.ts"));
   const after = gate("boundaries.mjs", common);
-  assert.equal(after.status, 0, after.stderr || after.stdout);
-  assert.equal(after.stdout, before.stdout);
+  assert.equal(after.status, gateFailure, after.stderr || after.stdout);
+  assert.match(after.stdout, /renamed\.ts -> apps\/worker\/src\/db\/client\.ts/u);
 
   await writeFile(join(source, "routes/second.ts"), 'import { db } from "../db/client.js";\nvoid db;\n');
   const regression = gate("boundaries.mjs", common);
-  assert.equal(regression.status, 1, regression.stderr || regression.stdout);
-  assert.match(regression.stdout, /app->db\s+1\s+2/);
+  assert.equal(regression.status, gateFailure, regression.stderr || regression.stdout);
+  assert.match(regression.stdout, /app->db\s+2/u);
   assert.match(
     regression.stdout,
     /apps\/worker\/src\/routes\/renamed\.ts -> apps\/worker\/src\/db\/client\.ts  \(app->db\)/u,
@@ -151,47 +148,30 @@ test("the boundary baseline passes and is stable across file renames", async () 
   );
 });
 
-test("the boundary gate prints forbidden edges on request even when the ratchet passes", async () => {
+test("the boundary gate prints forbidden edges on request", async () => {
   const root = await mkdtemp(join(tmpdir(), "boundary-print-edges-gate-"));
-  const baseline = join(root, "boundaries.baseline.json");
   boundaryFixture(root);
 
-  const common = ["--root", root, "--baseline", baseline];
-  const updated = gate("boundaries.mjs", [...common, "--update-baseline"]);
-  assert.equal(updated.status, gateSuccess, updated.stderr || updated.stdout);
-  const printed = gate("boundaries.mjs", [...common, "--print-edges"]);
-  assert.equal(printed.status, gateSuccess, printed.stderr || printed.stdout);
+  const printed = gate("boundaries.mjs", ["--root", root, "--print-edges"]);
+  assert.equal(printed.status, gateFailure, printed.stderr || printed.stdout);
   assert.match(
     printed.stdout,
     /apps\/worker\/src\/routes\/entry\.ts -> apps\/worker\/src\/db\/client\.ts  \(app->db\)/u,
   );
 });
 
-test("an empty tier-pair baseline is a hard zero", async () => {
-  const root = await mkdtemp(join(tmpdir(), "boundary-hard-zero-gate-"));
-  const baseline = join(root, "boundaries.baseline.json");
+test("the boundary gate rejects retired baseline options", async () => {
+  const root = await mkdtemp(join(tmpdir(), "boundary-options-gate-"));
   boundaryFixture(root);
 
-  const result = gate("boundaries.mjs", ["--root", root, "--baseline", baseline]);
-  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
-  assert.match(result.stdout, /app->db\s+0\s+1/u);
-  assert.match(
-    result.stdout,
-    /apps\/worker\/src\/routes\/entry\.ts -> apps\/worker\/src\/db\/client\.ts  \(app->db\)/u,
-  );
+  for (const option of ["--baseline", "--update-baseline"]) {
+    const result = gate("boundaries.mjs", ["--root", root, option]);
+    assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+    assert.match(result.stderr, /Unknown or incomplete argument/u);
+  }
 });
 
-test("a missing boundary baseline is a hard zero", async () => {
-  const root = await mkdtemp(join(tmpdir(), "boundary-missing-baseline-gate-"));
-  const baseline = join(root, "missing-boundaries.baseline.json");
-  boundaryFixture(root);
-
-  const result = gate("boundaries.mjs", ["--root", root, "--baseline", baseline]);
-  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
-  assert.match(result.stdout, /app->db\s+0\s+1/u);
-});
-
-test("file cycle normalization dedupes reports and detects count regression", () => {
+test("file cycle normalization dedupes reports and detects any cycle", () => {
   const report = {
     modules: [
       {
@@ -223,23 +203,17 @@ test("file cycle normalization dedupes reports and detects count regression", ()
     ["src/alpha.ts", "src/beta.ts"],
     ["src/delta.ts", "src/gamma.ts"],
   ]);
-  const baseline = {
-    fileCycleCount: 1,
-    fileCycles: [["src/old-alpha.ts", "src/old-beta.ts"]],
-  };
-  assert.equal(exceedsFileCycleBaseline(fileCycles.slice(0, 1), baseline), false);
-  assert.equal(exceedsFileCycleBaseline(fileCycles, baseline), true);
+  assert.equal(hasFileCycles([]), false);
+  assert.equal(hasFileCycles(fileCycles), true);
 });
 
 test("an unknown worker source path fails the boundary gate", async () => {
   const root = await mkdtemp(join(tmpdir(), "boundary-unknown-gate-"));
   const source = join(root, "apps/worker/src/unknown-tier");
-  const baseline = join(root, "boundaries.baseline.json");
   await mkdir(source, { recursive: true });
   await writeFile(join(source, "x.ts"), "export const value = 1;\n");
-  await writeFile(baseline, '{"tierPairs":{},"fileCycleCount":0,"fileCycles":[]}\n');
 
-  const result = gate("boundaries.mjs", ["--root", root, "--baseline", baseline]);
+  const result = gate("boundaries.mjs", ["--root", root]);
   assert.equal(result.status, 1, result.stderr || result.stdout);
   assert.match(result.stdout, /Unknown paths\napps\/worker\/src\/unknown-tier\/x\.ts/);
 });
@@ -248,11 +222,11 @@ test("the boundary gate reads a fixture the same way at any path depth", () => {
   const base = mkdtempSync(join(tmpdir(), "boundary-depth-gate-")),
     deepRoot = boundaryFixture(join(base, "far/down/the/tree")),
     nearRoot = boundaryFixture(join(base, "near")),
-    runDeep = gate("boundaries.mjs", ["--root", deepRoot, "--baseline", join(deepRoot, "boundaries.baseline.json")]),
-    runNear = gate("boundaries.mjs", ["--root", nearRoot, "--baseline", join(nearRoot, "boundaries.baseline.json")]);
+    runDeep = gate("boundaries.mjs", ["--root", deepRoot]),
+    runNear = gate("boundaries.mjs", ["--root", nearRoot]);
   assert.equal(runNear.status, gateFailure, runNear.stderr || runNear.stdout);
   assert.equal(runDeep.status, gateFailure, runDeep.stderr || runDeep.stdout);
-  assert.match(runNear.stdout, /app->db\s+0\s+1/u);
+  assert.match(runNear.stdout, /app->db\s+1/u);
   assert.equal(runNear.stdout, runDeep.stdout);
 });
 
@@ -677,13 +651,30 @@ test("a catalogued shared dependency passes deps consistency", () => {
   assert.match(result.stdout, /check-deps-consistency PASS/u);
 });
 
-test("gate baselines are machine readable JSON", async () => {
-  for (const file of [
-    "unused-code.baseline.json",
-    "lint.baseline.json",
-    "no-resurrected-paths.json",
-  ]) {
-    JSON.parse(await readFile(join(repoRoot, "scripts/gates", file), "utf8"));
+test("lint and unused-code gates are unconditional", () => {
+  const lint = gate("lint.mjs");
+  assert.equal(lint.status, gateSuccess, lint.stderr || lint.stdout);
+  assert.match(lint.stdout, /lint PASS/u);
+
+  const unused = gate("unused-code.mjs");
+  assert.equal(unused.status, gateSuccess, unused.stderr || unused.stdout);
+  assert.match(unused.stdout, /unused-code PASS/u);
+});
+
+test("retired gate baselines and update commands are absent", async () => {
+  assert.deepEqual(
+    readdirSync(join(repoRoot, "scripts/gates"))
+      .filter((file) => file.endsWith(".baseline.json")),
+    [],
+  );
+  const rootPackage = JSON.parse(
+    readFileSync(join(repoRoot, "package.json"), "utf8"),
+  ) as { scripts: Record<string, string> };
+  assert.equal(rootPackage.scripts["gates:update-baselines"], undefined);
+  for (const file of readdirSync(join(repoRoot, "scripts/gates"))) {
+    if (!file.endsWith(".mjs")) continue;
+    const source = readFileSync(join(repoRoot, "scripts/gates", file), "utf8");
+    assert.doesNotMatch(source, /--update-baseline|--baseline|countRegression|writeJson/u, file);
   }
 });
 
@@ -696,9 +687,7 @@ test("the composite gate ladder includes both database fences", async () => {
   assert.match(rootPackage.scripts.gates, /gate:db-client-fence/u);
   assert.equal(rootPackage.scripts["gate:docs-status"], "node scripts/gates/docs-status.mjs");
   assert.doesNotMatch(rootPackage.scripts["gate:docs-status"], /if \[ -f/u);
-  assert.match(rootPackage.scripts["gates:update-baselines"], /gate:db-client-fence/u);
-  assert.doesNotMatch(rootPackage.scripts["gates:update-baselines"], /gate:boundaries/u);
-  assert.doesNotMatch(rootPackage.scripts["gates:update-baselines"], /gate:transactions/u);
+  assert.equal(rootPackage.scripts["gates:update-baselines"], undefined);
 });
 
 // Two service clusters, where beta reaches past alpha's interface.
@@ -714,7 +703,6 @@ const clusterFixture = async (deep: boolean): Promise<{ root: string; deepImport
     `import { thing } from "../alpha/${deep ? "thing" : "index"}.js";\nexport const used = thing;\n`,
   );
   await writeFile(join(services, "beta/index.ts"), 'export { used } from "./user.js";\n');
-  await writeFile(join(root, "boundaries.baseline.json"), '{"tierPairs":{},"fileCycleCount":0,"fileCycles":[]}\n');
   const deepImports = join(root, "cluster-deep-imports.json");
   await writeFile(deepImports, "[]\n");
   return { root, deepImports };
@@ -758,7 +746,6 @@ test("an unlisted cross-cluster deep import fails the boundary gate", async () =
   const deepCase = await clusterFixture(true);
   const failing = gate("boundaries.mjs", [
     "--root", deepCase.root,
-    "--baseline", join(deepCase.root, "boundaries.baseline.json"),
     "--cluster-deep-imports", deepCase.deepImports,
   ]);
   assert.equal(failing.status, gateFailure, failing.stderr || failing.stdout);
@@ -770,7 +757,6 @@ test("an unlisted cross-cluster deep import fails the boundary gate", async () =
   const interfaceCase = await clusterFixture(false);
   const passing = gate("boundaries.mjs", [
     "--root", interfaceCase.root,
-    "--baseline", join(interfaceCase.root, "boundaries.baseline.json"),
     "--cluster-deep-imports", interfaceCase.deepImports,
   ]);
   assert.equal(passing.status, gateSuccess, passing.stderr || passing.stdout);

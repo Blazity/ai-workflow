@@ -29,9 +29,7 @@ export function renderReport(report: DogfoodReport): string {
     byTool.set(result.tool, [...(byTool.get(result.tool) ?? []), result]);
   }
 
-  out.push("MCP dogfood report");
-  out.push(
-    ...[
+  out.push("MCP dogfood report", ...[
       line("endpoint", report.baseUrl),
       line("outcome", report.outcome.toUpperCase()),
       line("token", report.tokenLength === null ? "none supplied" : `supplied, ${report.tokenLength} chars`),
@@ -40,36 +38,36 @@ export function renderReport(report: DogfoodReport): string {
       line("server hash", report.serverContractHash?.slice(0, 12)),
       line("server version", report.serverVersion),
       line("protocol", report.protocolVersion),
-    ].filter((entry): entry is string => entry !== null),
-  );
+    ].filter((entry): entry is string => entry !== null));
 
   if (report.outcome === "auth_rejected") {
     out.push("");
     if (report.tokenLength === null) {
-      out.push("  Every call was refused by auth. That is the deployment behaving correctly,");
-      out.push("  not a defect. Nothing behind the auth gate was reached, so no tool below");
-      out.push("  has been checked. Re-run with a token to exercise the surface.");
+      out.push(
+        "  Every call was refused by auth. That is the deployment behaving correctly,",
+        "  not a defect. Nothing behind the auth gate was reached, so no tool below",
+        "  has been checked. Re-run with a token to exercise the surface.",
+      );
     } else {
-      out.push("  The supplied token was rejected. Authenticated MCP was not exercised and");
-      out.push("  this run fails even though the unauthenticated boundary remained closed.");
+      out.push("  The supplied token was rejected. Authenticated MCP was not exercised and", "  this run fails even though the unauthenticated boundary remained closed.");
     }
     if (report.rejection) {
       out.push(`  HTTP ${report.rejection.status}, WWW-Authenticate: ${report.rejection.wwwAuthenticate ?? "absent"}`);
     }
   }
   if (report.error) {
-    out.push("");
-    out.push(`  Could not complete: ${report.error}`);
+    out.push("", `  Could not complete: ${report.error}`);
   }
   if (report.outcome !== "auth_rejected" && report.serverContractHash !== report.contractHash) {
-    out.push("");
-    out.push("  The deployment answers with a different contract hash than the one in this");
-    out.push("  checkout. The surface below was planned from the checkout, so treat any");
-    out.push("  mismatch as this harness being out of date rather than the server.");
+    out.push(
+      "",
+      "  The deployment answers with a different contract hash than the one in this",
+      "  checkout. The surface below was planned from the checkout, so treat any",
+      "  mismatch as this harness being out of date rather than the server.",
+    );
   }
 
-  out.push("");
-  out.push("Per tool");
+  out.push("", "Per tool");
   for (const [tool, results] of byTool) {
     const verdict = verdictFor(results);
     out.push(`  ${verdict.padEnd(17)} ${tool}`);
@@ -86,8 +84,7 @@ export function renderReport(report: DogfoodReport): string {
 
   // A silent coverage hole reads as a clean sweep, so it gets its own section
   // even when it is empty.
-  out.push("");
-  out.push("Coverage");
+  out.push("", "Coverage");
   const notExercised = report.notExercised;
   out.push(
     notExercised.length === 0
@@ -127,8 +124,7 @@ export function renderReport(report: DogfoodReport): string {
     const tools = [...new Set(placeholders.map((result) => result.tool))];
     out.push(
       `  Called with placeholder identifiers, so a refusal proves reachability only: ${tools.join(", ")}`,
-    );
-    out.push("  Pass --ticket / --run / --definition / --trigger to exercise the real path.");
+     "  Pass --ticket / --run / --definition / --trigger to exercise the real path.");
   }
 
   return out.join("\n");

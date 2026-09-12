@@ -1,4 +1,4 @@
-export class WaitTimeoutError extends Error {
+class WaitTimeoutError extends Error {
   constructor(description: string, timeoutMs: number) {
     super(`Timed out after ${timeoutMs}ms waiting for: ${description}`);
     this.name = "WaitTimeoutError";

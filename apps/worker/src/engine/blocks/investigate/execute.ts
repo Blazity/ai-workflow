@@ -152,6 +152,7 @@ function slackEvidence(
   match: SlackSearchResult["matches"][number],
 ): InvestigateEvidence {
   const text = truncateExcerpt(match.text);
+  // oxlint-disable-next-line unicorn/prefer-number-coercion -- Preserve numeric-prefix parsing for Slack timestamps.
   const seconds = Number.parseFloat(match.ts);
   return {
     ref: `slack:${match.channel}/${match.ts}`,
@@ -458,8 +459,7 @@ async function blockInvestigateRetrievalStep(input: {
   );
   const secrets = configuredReplaySecrets();
   return {
-    evidence: evidence.map((item) => ({
-      ...item,
+    evidence: evidence.map((item) => Object.assign({}, item, {
       title: redactConfiguredSecretsInText(item.title, secrets),
       excerpt: redactConfiguredSecretsInText(item.excerpt, secrets),
     })),

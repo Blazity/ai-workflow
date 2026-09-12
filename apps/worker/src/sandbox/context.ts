@@ -29,7 +29,7 @@ interface TicketData {
   }>;
 }
 
-export type PreSandboxPromptTarget = "research" | "implementation" | "review";
+type PreSandboxPromptTarget = "research" | "implementation" | "review";
 
 export interface PreSandboxPromptAddition {
   target: PreSandboxPromptTarget[];
@@ -426,7 +426,7 @@ function renderClarificationsSection(
     // and answer separately, the answer first. The answer is what a resume run
     // exists to consume, so it must survive even when the questions alone
     // would eat the whole budget; the questions get whatever room remains.
-    const newest = roundParts[roundParts.length - 1]!;
+    const newest = roundParts.at(-1)!;
     const answerPart = newest.answer.slice(0, Math.max(0, bodyBudget));
     const headBudget = bodyBudget - answerPart.length - separator.length;
     const headPart = headBudget > 0 ? newest.head.slice(0, headBudget) : "";
@@ -654,10 +654,7 @@ function renderReviewThreads(feed: ReviewThreadFeed, repoLabel?: string): string
   }
 
   if (contextOnly.length > 0) {
-    parts.push("### Context only: do not disposition these");
-    parts.push(
-      "These threads are part of the review and their content matters, but they are not yours to answer. Leave them out of `reviewThreads`.",
-    );
+    parts.push("### Context only: do not disposition these", "These threads are part of the review and their content matters, but they are not yours to answer. Leave them out of `reviewThreads`.");
     for (const thread of contextOnly) {
       const location = reviewThreadLocation(thread);
       const reason = thread.awaitingHuman
@@ -675,17 +672,14 @@ function renderReviewThreads(feed: ReviewThreadFeed, repoLabel?: string): string
   }
 
   if (workItems.length > 0) {
-    parts.push("### How to answer");
-    parts.push(
-      [
+    parts.push("### How to answer", [
         "Return one entry in `reviewThreads` for every alias listed above the context block, and for no other alias:",
         "",
         "- `actionable`: this run changes the code the thread asks about. Describe the change in `reply` in one line.",
         "- `already_addressed`: `already_addressed` means the change is on the branch right now. Set `evidence.filePath` to the thread's own file and `evidence.quote` to a literal excerpt copied from that file, close to the commented line. If it only comes into existence during this run, the disposition is `actionable`, not `already_addressed`.",
         "- `question`: the thread asks something. Answer it in `reply`.",
         "- `out_of_scope`: the request belongs somewhere else. Justify that in `reply`.",
-      ].join("\n"),
-    );
+      ].join("\n"));
   }
 
   if (feed.truncated > 0) {

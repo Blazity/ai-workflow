@@ -16,7 +16,7 @@ const REQUEST_TIMEOUT_MS = 10_000;
  */
 export type RetrievalFailureReason = "permission" | "timeout" | "unavailable";
 
-export interface SlackSearchMatch {
+interface SlackSearchMatch {
   channel: string;
   ts: string;
   text: string;
@@ -26,7 +26,7 @@ export interface SlackSearchMatch {
 }
 
 /** A channel that was configured but contributed nothing, and why. */
-export interface SlackChannelSkip {
+interface SlackChannelSkip {
   channel: string;
   reason: RetrievalFailureReason;
 }

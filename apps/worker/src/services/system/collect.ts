@@ -58,7 +58,7 @@ export type SystemHealthProbeResult = {
   coverage?: { checked: number; total: number };
 };
 
-export type SystemHealthProbe = (
+type SystemHealthProbe = (
   signal: AbortSignal,
 ) => Promise<SystemHealthProbeResult | void>;
 
@@ -136,7 +136,7 @@ export async function collectSystemHealth(input: {
     }),
   );
 
-  const checks = integrations.flatMap((integration) => integration.checks);
+  const checks = integrations.flatMap((entry) => entry.checks);
   return {
     generatedAt,
     summary: {

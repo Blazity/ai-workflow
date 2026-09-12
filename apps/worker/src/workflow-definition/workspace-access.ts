@@ -91,8 +91,7 @@ function guardFormula(
   for (const term of source.terms.values()) {
     const existing = term.get(key);
     if (existing !== undefined && existing !== value) continue;
-    const next = new Map(term);
-    next.set(key, value);
+    const next = new Map([...term, [key, value]]);
     guarded.terms.set(termKey(next), next);
   }
   return guarded;

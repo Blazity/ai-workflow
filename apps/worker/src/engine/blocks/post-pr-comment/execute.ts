@@ -116,7 +116,7 @@ function assertCurrentPrCommentTarget(
 const REPLIED_ONLY_COMMENT =
   "Replied to review threads; no code changes were needed.";
 
-export type ReviewLedgerCommentDecision =
+type ReviewLedgerCommentDecision =
   | { kind: "post"; body: string }
   | { kind: "skip" };
 
@@ -129,7 +129,7 @@ export type ReviewLedgerCommentDecision =
  *
  * Inert without a ledger, so a flag-off run keeps today's behaviour exactly.
  */
-export function resolveReviewLedgerCommentBody(input: {
+function resolveReviewLedgerCommentBody(input: {
   ledgerActive: boolean;
   /** Head this run published for the PR's own repository, if any. */
   pushedHead?: string;

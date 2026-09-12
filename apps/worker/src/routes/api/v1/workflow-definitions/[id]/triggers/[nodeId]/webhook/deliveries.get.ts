@@ -22,10 +22,9 @@ export default defineEventHandler(
 
       const deliveries = await listWebhookEndpointDeliveries(endpoint.id);
       return {
-        deliveries: deliveries.map((delivery) => ({
-          ...delivery,
-          receivedAt: delivery.receivedAt.toISOString(),
-        })),
+        deliveries: deliveries.map((delivery) =>
+          Object.assign({}, delivery, { receivedAt: delivery.receivedAt.toISOString() }),
+        ),
       };
     } catch (error) {
       toHttpError(error);

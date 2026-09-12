@@ -1,3 +1,4 @@
+import type { JsonValue } from "@shared/contracts";
 import { isRunControlError } from "../../helpers/run-control-error.js";
 import { detectBlatantInjection } from "../support/injection-markers.js";
 import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "../support/types.js";
@@ -129,11 +130,14 @@ export const execute: BlockExecuteFn = async (
       output: {
         status: ok ? "ok" : "flagged",
         backend: "arthur_engine",
-        findings: findings.map((finding) => ({
-          rule: finding.rule,
-          result: finding.result,
-          ...(finding.details ? { details: finding.details } : {}),
-        })),
+        findings: findings.map((finding): Record<string, JsonValue> => {
+          const output: Record<string, JsonValue> = {
+            rule: finding.rule,
+            result: finding.result,
+          };
+          if (finding.details) output.details = finding.details;
+          return output;
+        }),
       },
     };
   } catch (err) {

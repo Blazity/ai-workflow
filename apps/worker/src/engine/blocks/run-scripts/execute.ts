@@ -86,7 +86,7 @@ export const execute: BlockExecuteFn = async (
     propagateInvocationInterruption(err);
     const after = await ctx.observeBudget(false, "checks");
     if (after.check.status !== "ok") throw new RunBudgetError(after.check);
-    throw new Error(await ctx.prePrChecksFailureMessage(err, current.version));
+    throw new Error(await ctx.prePrChecksFailureMessage(err, current.version), { cause: err });
   }
   const output = repositoryScriptsOutput(run, groups);
   return {

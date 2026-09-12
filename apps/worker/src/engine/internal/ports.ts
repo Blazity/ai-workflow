@@ -77,7 +77,7 @@ export async function loadRunTelemetryPort() {
   };
 }
 
-export async function loadTicketTransitionPort() {
+async function loadTicketTransitionPort() {
   const { moveTicketForRun } = await import("../support/ticket-transition.js");
   return { moveTicketForRun };
 }

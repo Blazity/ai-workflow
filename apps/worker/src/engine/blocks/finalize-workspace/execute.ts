@@ -110,7 +110,7 @@ export function recoverPrePrGateFromSteps(steps: StepsRecord): WorkspaceGate | n
  * last one is a wiring bug, and it has to be loud in the block output rather
  * than degrade into the silent no-ledger path.
  */
-export function recoverReviewLedgerFromSteps(
+function recoverReviewLedgerFromSteps(
   steps: StepsRecord,
 ): { state: ReviewLedgerDurableState } | { error: string } | null {
   const outputs = Object.values(steps);
@@ -189,7 +189,7 @@ export function recoverScriptDriftFromSteps(
  * workflows/ imports the workflow entry point, and this question is answerable
  * from the durable output alone.
  */
-export function recoverScriptsFailureFromSteps(
+function recoverScriptsFailureFromSteps(
   steps: StepsRecord,
 ): RepositoryScriptsOutput | null {
   for (const step of Object.values(steps)) {

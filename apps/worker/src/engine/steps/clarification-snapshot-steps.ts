@@ -118,7 +118,7 @@ try {
 // Never write a backtick in a comment in a file that declares steps: the builder
 // masks template literals before it strips comments, so one comment backtick
 // flips backtick parity and hides every "use step" directive below it.
-export function profileRuntimeCredentialScrubScript(
+function profileRuntimeCredentialScrubScript(
   root = "/tmp/aiw-harness",
 ): string {
   const quotedRoot = shellQuote(root);
@@ -262,6 +262,7 @@ export async function snapshotClarificationSandboxStep(
   }
   const requestedAt = new Date(input.snapshotRequestedAt);
   if (!Number.isFinite(requestedAt.getTime())) {
+    // oxlint-disable-next-line unicorn/prefer-type-error -- Preserve the established Error type and message contract for callers and tests.
     throw new Error("clarification snapshot attempt boundary is invalid");
   }
   // Snapshot identity is the exact source sandbox (a successful snapshot stops
@@ -277,17 +278,19 @@ export async function snapshotClarificationSandboxStep(
     | undefined;
   let until: number | undefined;
   const seenCursors = new Set<number>();
+  const listSnapshotPage = (cursor: number | undefined, signal: AbortSignal) =>
+    Snapshot.list({
+      ...credentials,
+      limit: 100,
+      since: recoverySince,
+      ...(cursor === undefined ? {} : { until: cursor }),
+      signal,
+    });
   for (let page = 0; page < MAX_SNAPSHOT_LIST_PAGES; page += 1) {
     const listed = await withinSnapshotDeadline(
       deadline,
       "snapshot listing",
-      (signal) => Snapshot.list({
-        ...credentials,
-        limit: 100,
-        since: recoverySince,
-        ...(until === undefined ? {} : { until }),
-        signal,
-      }),
+      listSnapshotPage.bind(null, until),
     );
     recovered = listed.json.snapshots
       .filter(
@@ -450,9 +453,9 @@ export async function snapshotClarificationSandboxStep(
     }
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) break;
-    await new Promise<void>((resolve) =>
-      setTimeout(resolve, Math.min(pollIntervalMs, remainingMs)),
-    );
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, Math.min(pollIntervalMs, remainingMs));
+    });
   }
   if (!stopped) {
     throw new Error(

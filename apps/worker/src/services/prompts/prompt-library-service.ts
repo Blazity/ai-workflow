@@ -107,7 +107,7 @@ const usageScanNodeSchema = z.object({
   promptRefs: z
     .record(z.string(), z.object({ promptId: z.number(), version: z.number() }))
     .optional()
-    .catch(undefined),
+    .catch(void 0),
 });
 const usageScanDefinitionSchema = z.object({
   nodes: z.array(z.unknown()).catch([]),

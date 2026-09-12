@@ -38,7 +38,7 @@ interface TraceListResponse {
 }
 
 /** One rule outcome from `validate_prompt`, coerced to a stable minimal shape. */
-export interface PromptValidationFinding {
+interface PromptValidationFinding {
   rule: string;
   result: string;
   details?: string;
@@ -89,7 +89,7 @@ export class ArthurClient {
         "Authorization": `Bearer ${this.apiKey}`,
         "Content-Type": "application/json",
         "ngrok-skip-browser-warning": "true",
-        ...(init.headers ?? {}),
+        ...init.headers,
       },
     });
     if (!res.ok) {
@@ -157,7 +157,7 @@ export class ArthurClient {
     let max = 0;
     for (const t of existing) {
       const m = t.name.match(suffixRe);
-      if (m) max = Math.max(max, parseInt(m[1], 10));
+      if (m) max = Math.max(max, Math.trunc(Number(m[1])));
     }
     return this.createTask(`${identifier}.${max + 1}`);
   }
@@ -177,6 +177,7 @@ export class ArthurClient {
     );
     const raw = response?.rule_results;
     if (!Array.isArray(raw)) {
+      // oxlint-disable-next-line unicorn/prefer-type-error -- Preserve the established Error type and message contract for callers and tests.
       throw new Error("unexpected validate_prompt response shape");
     }
     const findings: PromptValidationFinding[] = raw.map((entry) => {

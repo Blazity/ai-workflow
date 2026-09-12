@@ -9,7 +9,7 @@ import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { resolveMcpEndpoint } from "../mcp/smoke-client.js";
 import { type Contract, type DogfoodFixtures, planProbes, type Probe, type ProbeKind } from "./plan.js";
 
-export type ProbeStatus = "ok" | "refused" | "failed" | "withheld" | "auth_rejected";
+type ProbeStatus = "ok" | "refused" | "failed" | "withheld" | "auth_rejected";
 
 export type ProbeResult = {
   tool: string;

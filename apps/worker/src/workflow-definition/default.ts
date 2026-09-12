@@ -30,7 +30,7 @@ export function builtinHarnessProfileConfiguration(
   };
 }
 
-export function stableBuiltinV2EdgeId(
+function stableBuiltinV2EdgeId(
   namespace: string,
   index: number,
   from: string,

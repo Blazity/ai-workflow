@@ -161,6 +161,6 @@ export async function collectConnectedCostAggregate(
     })).sort((left, right) => right.cost - left.cost),
     daily: [...byDay.entries()]
       .sort(([left], [right]) => left.localeCompare(right))
-      .map(([date, value]) => ({ date, ...value })),
+      .map(([date, value]) => Object.assign({ date }, value)),
   };
 }

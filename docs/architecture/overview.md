@@ -70,14 +70,14 @@ symbol becomes public.
 One cluster may not reach past another cluster's `index.ts`.
 `scripts/gates/boundaries.mjs` enforces that rule and prints the current count.
 The imports that predate the rule are recorded in
-`scripts/gates/cluster-deep-imports.json`, a shrink-only ratchet: a new deep
+`scripts/gates/cluster-deep-imports.json`, an explicit reviewed list: a new deep
 import fails the gate, and an entry that no longer exists must be removed from
 the list. Two things are outside the rule by design. A lazy `import()` keeps its
 deep path, because a cluster interface would load the whole cluster where the
 code deliberately loads one module. Test files are outside it too, because the
-boundary gate never analyzes them. `knip.json` lists `src/services/*/index.ts`
-as entries so the unused-code gate never counts an interface as a dead file,
-whatever the current set of importers is.
+boundary gate never analyzes them. `knip.json` lists service interfaces and
+test tooling entries so the unused-code gate never counts an interface or a
+test entry as a dead file, whatever the current set of importers is.
 
 Consumers in other tiers (`routes/`, `mcp/`, `engine/`, `adapters/`, `db/`)
 import cluster files directly. Routing them through the interface would pull

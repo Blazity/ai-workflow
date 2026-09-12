@@ -157,7 +157,7 @@ async function reviewFile(
     return {
       kind: "issues",
       path: file.path,
-      issues: raw.map((r) => ({ path: file.path, ...r })),
+      issues: raw.map((r) => Object.assign({ path: file.path }, r)),
     };
   } catch (err) {
     return {
@@ -173,7 +173,7 @@ async function runWithConcurrency<T, R>(
   concurrency: number,
   worker: (item: T) => Promise<R>,
 ): Promise<R[]> {
-  const results: R[] = new Array(items.length);
+  const results: R[] = Array.from({ length: items.length }, () => undefined as R);
   let cursor = 0;
   const workerCount = Math.min(concurrency, items.length);
   await Promise.all(

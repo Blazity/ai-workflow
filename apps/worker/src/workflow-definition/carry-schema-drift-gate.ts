@@ -1,4 +1,3 @@
-import { fileURLToPath } from "node:url";
 import type { Db } from "../db/types.js";
 import {
   describeCarrySchemaDrift,
@@ -132,7 +131,7 @@ export async function runCarrySchemaDriftGate(): Promise<number> {
 // Only when executed directly, never on import.
 if (
   process.argv[1] !== undefined &&
-  process.argv[1] === fileURLToPath(import.meta.url)
+  process.argv[1] === import.meta.filename
 ) {
   process.exitCode = await runCarrySchemaDriftGate();
 }

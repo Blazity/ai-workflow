@@ -220,7 +220,7 @@ export function registerTicketWriteTools(
           // an unknown answer has to stop the write rather than be read as a free pass.
           const claim = await deps.adapters.runRegistry
             .get(subjectKey)
-            .catch(() => undefined);
+            .catch(() => {});
           if (claim === undefined) {
             throw refused(
               "DEPENDENCY_UNAVAILABLE",

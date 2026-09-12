@@ -152,7 +152,7 @@ function sparkSpec(window: TimeWindow, now: Date, times: number[]): SparkSpec {
   if (window === "24h") return { start: end - DAY, end, n: 24 };
   if (window === "7d") return { start: end - 7 * DAY, end, n: 7 };
   if (window === "30d") return { start: end - 30 * DAY, end, n: 30 };
-  return { start: times.length ? Math.min(...times) : end - 30 * DAY, end, n: 30 };
+  return { start: times.length > 0 ? Math.min(...times) : end - 30 * DAY, end, n: 30 };
 }
 
 function bucketIndex(time: number, spec: SparkSpec): number {
@@ -253,10 +253,10 @@ async function workflowAggWithQueries(queries: Queries, options: WorkflowAggOpti
     return {
       ...workflow,
       runs24h: selected.length,
-      p50: durations.length ? percentile(durations, 50) : null,
-      p95: durations.length ? percentile(durations, 95) : null,
-      errRate: selected.length ? failed / selected.length : null,
-      costToday: selected.length ? sum(selected.map((row) => row.costUsd ?? 0)) : null,
+      p50: durations.length > 0 ? percentile(durations, 50) : null,
+      p95: durations.length > 0 ? percentile(durations, 95) : null,
+      errRate: selected.length > 0 ? failed / selected.length : null,
+      costToday: selected.length > 0 ? sum(selected.map((row) => row.costUsd ?? 0)) : null,
       latestRun: latest ? {
         ticket: latest.ticketKey ?? "",
         ticketUrl: latest.ticketUrl ?? (latest.ticketKey ? `${origin}/browse/${latest.ticketKey}` : ""),
@@ -265,7 +265,7 @@ async function workflowAggWithQueries(queries: Queries, options: WorkflowAggOpti
         prUrl: latest.prUrl,
         prs: latest.prs,
       } : null,
-      trend24h: selected.length ? countBuckets(times, sparkSpec(options.window, options.now, times)) : null,
+      trend24h: selected.length > 0 ? countBuckets(times, sparkSpec(options.window, options.now, times)) : null,
     };
   });
   return { rows, total: rows.length };
@@ -329,7 +329,7 @@ async function costAggWithQueries(
     .sort((left, right) => left.date.localeCompare(right.date));
   const start = cutoff
     ? cutoff.toISOString()
-    : enriched.length
+    : enriched.length > 0
       ? new Date(Math.min(...enriched.map((row) => row.time.getTime()))).toISOString()
       : options.now.toISOString();
   return {

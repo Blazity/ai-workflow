@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /* oxlint-disable eslint/sort-vars, unicorn/no-array-sort */
 /**
- * The database client is a db-tier implementation detail. This shrink-only
- * ratchet counts production worker files outside src/db that reach db/client
- * directly or through a re-exporting local barrel. Tests, fixtures, e2e,
- * test support, and test-db are intentionally excluded.
+ * The database client is a db-tier implementation detail. This gate fails on
+ * production worker files outside src/db that reach db/client directly or
+ * through a re-exporting local barrel. Tests, fixtures, e2e, test support,
+ * and test-db are intentionally excluded.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, join, relative, resolve } from "node:path";

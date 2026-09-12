@@ -58,7 +58,7 @@ export {
   DEFAULT_WEBHOOK_TOKEN_HEADER,
 };
 
-export function defaultWebhookHeaderName(scheme: WebhookAuthScheme): string {
+function defaultWebhookHeaderName(scheme: WebhookAuthScheme): string {
   return scheme === "shared_token"
     ? DEFAULT_WEBHOOK_TOKEN_HEADER
     : DEFAULT_WEBHOOK_SIGNATURE_HEADER;
@@ -119,7 +119,7 @@ export function verifyWebhookAuth(params: VerifyWebhookAuthParams): VerifyWebhoo
     if (!rawTs || !/^[0-9]+$/.test(rawTs)) {
       return { ok: false, reason: "stale_timestamp" };
     }
-    const ts = Number.parseInt(rawTs, 10);
+    const ts = Math.trunc(Number(rawTs));
     const nowSec = Math.floor((params.now ?? new Date()).getTime() / 1000);
     const tolerance =
       params.timestampToleranceSeconds ?? DEFAULT_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS;

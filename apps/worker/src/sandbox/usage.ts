@@ -7,7 +7,7 @@ import {
 import type { PhaseUsage } from "./agents/types.js";
 
 export type { PhaseUsage } from "./agents/types.js";
-export type { CostProviderKind } from "@shared/costs";
+;
 
 export type PriceLookup = (model: string) => TokenPrice | null;
 export type PhaseProviders = Record<string, CostProviderKind | undefined>;
@@ -87,7 +87,7 @@ export function formatUsageReport(
   return `Usage: ${total} | ${parts.join(" | ")}`;
 }
 
-export interface PhaseTotal {
+interface PhaseTotal {
   costUsd: number | null;
   tokens: PhaseUsage["tokens"];
   durationMs: number;

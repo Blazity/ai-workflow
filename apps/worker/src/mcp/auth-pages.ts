@@ -8,8 +8,8 @@ import { MCP_SCOPES } from "./contracts.js";
 // which is why the consent allowlist is MCP_SCOPES plus this single marker. Every
 // consent spot (the get-gate, the rendered screen, and the post-grant) reads it through
 // allowedScopes, so this one list keeps all three in agreement by construction.
-export const OFFLINE_ACCESS_SCOPE = "offline_access";
-export const CONSENT_SCOPES = [...MCP_SCOPES, OFFLINE_ACCESS_SCOPE] as const;
+const OFFLINE_ACCESS_SCOPE = "offline_access";
+const CONSENT_SCOPES = [...MCP_SCOPES, OFFLINE_ACCESS_SCOPE] as const;
 export type ConsentScope = (typeof CONSENT_SCOPES)[number];
 
 export function isOAuthAuthorizationQuery(query: URLSearchParams): boolean {

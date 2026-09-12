@@ -46,7 +46,7 @@ export const MAX_PRE_PR_FIX_CYCLES = 0;
  * never got to run. Ten minutes is above every real check we have measured
  * (a client tenant's slowest suite is roughly six) and far below the batch cap.
  */
-export const DEFAULT_COMMAND_TIMEOUT_MINUTES = 10;
+const DEFAULT_COMMAND_TIMEOUT_MINUTES = 10;
 
 /** Grace `timeout` leaves between SIGTERM and SIGKILL. Long enough for a test
  *  runner to flush its output file, short enough not to matter to the batch. */
@@ -598,7 +598,7 @@ touch ${paths.sentinel}
  * out of this change's reach; a nonsense value falls back rather than throwing,
  * since a malformed operator variable must not stop every check in the fleet.
  */
-export function resolveCommandTimeoutMinutes(configured?: number): number {
+function resolveCommandTimeoutMinutes(configured?: number): number {
   if (
     typeof configured === "number" &&
     Number.isFinite(configured) &&
@@ -614,7 +614,7 @@ export function resolveCommandTimeoutMinutes(configured?: number): number {
 }
 
 /** Names, with values, the worker is willing to hand to a tenant's commands. */
-export interface ResolvedRepoEnv {
+interface ResolvedRepoEnv {
   values: Record<string, string>;
   /** Configured names that will not be forwarded, and why. Never a value. */
   rejected: Array<{ name: string; reason: "not_allowed" | "unset" }>;
@@ -648,7 +648,7 @@ export function allowedRepoEnvNames(): Set<string> {
   );
 }
 
-export function resolveRepoEnv(names: string[]): ResolvedRepoEnv {
+function resolveRepoEnv(names: string[]): ResolvedRepoEnv {
   const allowed = allowedRepoEnvNames();
   const values: Record<string, string> = {};
   const rejected: ResolvedRepoEnv["rejected"] = [];
@@ -676,7 +676,7 @@ export function resolveRepoEnv(names: string[]): ResolvedRepoEnv {
  * operator reads one sentence naming every variable to fix. Names only: this
  * text is persisted in the run's event log and shown in the run summary.
  */
-export function repoEnvFailure(
+function repoEnvFailure(
   provider: WorkspaceRepo["provider"],
   repoPath: string,
   rejected: ResolvedRepoEnv["rejected"],
@@ -1252,7 +1252,7 @@ collectRepoCheckBatchStep.maxRetries = 0;
  * what the variable is called. Longest values first, so a value that contains
  * another is replaced as a whole rather than leaving a half-redacted tail.
  */
-export function scrubEnvValues(
+function scrubEnvValues(
   text: string,
   secrets: Array<{ name: string; value: string }>,
 ): string {
@@ -1336,7 +1336,7 @@ function parseDirtyFiles(text: string): string[] {
     .split("\n")
     .map((line) => {
       const renamed = line.split(" -> ");
-      return (renamed[renamed.length - 1] ?? "").trim();
+      return (renamed.at(-1) ?? "").trim();
     })
     .filter((path) => path.length > 0);
 }

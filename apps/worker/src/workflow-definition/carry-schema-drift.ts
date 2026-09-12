@@ -64,7 +64,7 @@ import { PR_CHECK_OUTPUT_SCHEMA } from "./templates.js";
 
 /** Why a definition snapshot is reachable, so a finding says which dispatch path
  *  can still serve it. Mirrors builtin-prompt-drift's pin sources. */
-export type CarrySchemaPinSource =
+type CarrySchemaPinSource =
   | "deployed"
   | "fresh_install_default"
   | "approval"
@@ -187,17 +187,6 @@ export const EMBEDDED_SCHEMA_SOURCES: EmbeddedSchemaSource[] = [
   },
 ];
 
-/** Prior shapes the resync migration rewrites, keyed to the current shape it
- *  rewrites them to. Only sources that actually have known prior shapes appear.
- *  Consumed by scripts/generate-carry-schema-resync-migration.ts. */
-export const RESYNC_TARGETS = EMBEDDED_SCHEMA_SOURCES.filter(
-  (source) => source.knownPrior.length > 0,
-).map((source) => ({
-  key: source.key,
-  current: source.current,
-  knownPrior: source.knownPrior,
-}));
-
 /** Deterministic serialization with recursively sorted object keys. JSON Schema
  *  treats object key order as meaningless, and a stored embed comes back from
  *  jsonb in the driver's own key order, so structural equality is the only
@@ -241,14 +230,14 @@ const SCHEMA_INDEX: Map<string, SourceMatch> = (() => {
 
 /** Keys one embedded schema to its code-owned source. Returns null when it
  *  matches nothing known (a customer schema or a template-local outputSchema). */
-export function classifyEmbeddedSchema(schema: unknown): SourceMatch | null {
+function classifyEmbeddedSchema(schema: unknown): SourceMatch | null {
   if (schema === null || typeof schema !== "object" || Array.isArray(schema)) {
     return null;
   }
   return SCHEMA_INDEX.get(canonicalizeSchema(schema)) ?? null;
 }
 
-export type EmbeddedSchemaKind = "carry" | "output_schema";
+type EmbeddedSchemaKind = "carry" | "output_schema";
 
 export interface EmbeddedSchemaFinding {
   definitionId: number;
@@ -438,9 +427,15 @@ async function collectWalkTargets(
     definitionVersion: number | null;
     source: CarrySchemaPinSource;
   }[] = [
-    ...(await store.listPendingApprovalDefinitionPins()).map((row) => ({ ...row, source: "approval" as const })),
-    ...(await store.listPendingTriggerDeliveryDefinitionPins()).map((row) => ({ ...row, source: "trigger_delivery" as const })),
-    ...(await store.listLiveManualDispatchDefinitionPins(LIVE_MANUAL_DISPATCH_STATUSES)).map((row) => ({ ...row, source: "manual_dispatch" as const })),
+    ...(await store.listPendingApprovalDefinitionPins()).map((row) =>
+      Object.assign({}, row, { source: "approval" as const }),
+    ),
+    ...(await store.listPendingTriggerDeliveryDefinitionPins()).map((row) =>
+      Object.assign({}, row, { source: "trigger_delivery" as const }),
+    ),
+    ...(await store.listLiveManualDispatchDefinitionPins(LIVE_MANUAL_DISPATCH_STATUSES)).map((row) =>
+      Object.assign({}, row, { source: "manual_dispatch" as const }),
+    ),
   ];
 
   const pending = new Map<string, (typeof reachable)[number]>();

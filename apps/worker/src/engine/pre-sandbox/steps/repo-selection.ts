@@ -766,9 +766,9 @@ export function selectRepositoriesFromMetadata(input: {
     return { status: "selected", repositories: [...selected.values()] };
   }
 
-  const ticketText = input.ticketText.toLowerCase();
+  const normalizedTicketText = input.ticketText.toLowerCase();
   const exactMatches = scopedRepositories.filter((repo) =>
-    mentionsRepositoryPath(ticketText, repo.repoPath),
+    mentionsRepositoryPath(normalizedTicketText, repo.repoPath),
   );
   for (const repo of exactMatches) {
     const key = repositoryKey(repo);
@@ -930,10 +930,10 @@ function selectedRepository(
   };
 }
 
-function mentionsRepositoryPath(ticketText: string, repoPath: string): boolean {
+function mentionsRepositoryPath(candidateText: string, repoPath: string): boolean {
   const escaped = repoPath.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const boundary = "[^a-z0-9/_-]";
-  return new RegExp(`(^|${boundary})${escaped}($|${boundary})`).test(ticketText);
+  return new RegExp(`(^|${boundary})${escaped}($|${boundary})`).test(candidateText);
 }
 
 /** The most recent direct answer to a which-repo clarification, or null when
@@ -1033,7 +1033,7 @@ function fuzzyRepoMatches(
 function editDistance(a: string, b: string): number {
   const rows = a.length + 1;
   const cols = b.length + 1;
-  const dp: number[][] = Array.from({ length: rows }, () => new Array<number>(cols).fill(0));
+  const dp: number[][] = Array.from({ length: rows }, () => Array.from({ length: cols }, () => 0));
   for (let i = 0; i < rows; i++) dp[i]![0] = i;
   for (let j = 0; j < cols; j++) dp[0]![j] = j;
   for (let i = 1; i < rows; i++) {

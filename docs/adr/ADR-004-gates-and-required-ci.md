@@ -39,15 +39,15 @@ the bypass has to be narrow enough that using it is visible.
 ### 1. One shape for every gate
 
 Gates are dependency-free Node scripts under `scripts/gates/`, each with a
-header stating why it exists and what makes it exit non-zero, a baseline JSON
-where a ratchet is needed, a test under `scripts/ci/`, and one entry each in
-`verify:changed` and `.github/workflows/ci.yml`. Third-party tools
+header stating why it exists and what makes it exit non-zero, a test under
+`scripts/ci/`, and one entry each in `verify:changed` and
+`.github/workflows/ci.yml`. Third-party tools
 (dependency-cruiser, knip, oxlint) are invoked by those scripts rather than
 configured separately, so the ladder has one shape and one place to read.
 
 ### 2. The ladder
 
-One line per gate: what it observes, and whether it carries a baseline.
+One line per gate: what it observes, and whether it carries a recorded list.
 
 | Gate | Observes | Baseline | Lands in |
 |---|---|---|---|
@@ -56,9 +56,9 @@ One line per gate: what it observes, and whether it carries a baseline.
 | unit tests | worker (4 shards), dashboard, workflow-sdk | no | exists |
 | `build:ci` | pre-sandbox config, local skills, MCP contract, Nitro build | no | exists |
 | generated files current | MCP contract, prompt drift, carry-schema drift, and from stage 4 the block catalog (`gen:blocks --check`) | no | three exist, block catalog in stage 4 |
-| import boundaries and cycles | dependency-cruiser with the tier rules of ADR-001 plus `no-circular` | yes, keyed by tier pair and distinct file cycle count | stage 1 |
-| unused files, exports, dependencies | knip | yes, today's count | stage 1 |
-| lint | oxlint on `apps/worker`, `apps/dashboard`, `scripts` and `packages` when present, `correctness` deny, `suspicious`, `perf` and `pedantic` warn, `style`, `restriction` and `nursery` off | yes, warning count ratcheted | stage 1 |
+| import boundaries and cycles | dependency-cruiser with the tier rules of ADR-001 plus `no-circular` | no | stage 1 |
+| unused files, exports, dependencies | knip | no | stage 1 |
+| lint | oxlint on `apps/worker`, `apps/dashboard`, `scripts` and `packages` when present, `correctness` deny, `suspicious`, `perf` and `pedantic` warn, `style`, `restriction` and `nursery` off | no | stage 1 |
 | workflow bundle imports | executable Node imports inside workflow VM code, distinguished from import-like text in string literals (AIW-325) | no | stage 1 |
 | `no-resurrected-paths` | a path a completed stage deleted reappearing after a rebase | yes, a path list that starts empty and each stage appends to | stage 1 |
 | `package-contracts` | every `packages/*/package.json` has a `description` | no | stage 1 |
@@ -66,14 +66,13 @@ One line per gate: what it observes, and whether it carries a baseline.
 | `check-deps-consistency` | the pnpm catalog and the four dependency rules | no | stage 3 |
 | `single-schema-version` | a reinstated `schemaVersion === 1` branch | no | stage 3b |
 | `transactions-in-repositories` | `.transaction(` in every non-test file under `apps/worker/src` | no | stage 7 |
-| `db-client-fence` | `db/client` imports outside `db/` | yes, 357 ratcheted down | stage 7 |
+| `db-client-fence` | `db/client` imports outside `db/` | no | stage 7 |
 
-Baselines that ratchet are driven to zero and deleted in stage 11, at which
-point the rules become hard. When a new root enters the lint scope, its
-existing debt is stamped into the baseline once, in the stage that adds the
-root, with the count recorded in that commit; from then on the baseline only
-shrinks. The lint ratchet holds `correctness` at deny and `suspicious`, `perf`
-and `pedantic` at warn, while `style`, `restriction` and `nursery` are off:
+As of 2026-09-11, stage 11 has driven the ratchets to zero. Import boundaries,
+unused code, lint, and the database client fence are hard checks; their
+`.baseline.json` files and baseline-update command no longer exist. The lint
+policy holds `correctness` at deny and `suspicious`, `perf` and `pedantic` at
+warn, while `style`, `restriction` and `nursery` are off:
 those three encode taste rather than defect (declaration order, magic numbers,
 identifier length, key sorting, ternaries), they carried about 115000 of the
 123000 warnings the ratchet once tracked, and because every added file grew

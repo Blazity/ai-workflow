@@ -16,7 +16,7 @@ import { confirmWorkflowStepsDrained } from "./workflow-step-drain.js";
 /** Claim identity observed by a route before it delegates cancellation. Keeping
  * the owner as well as the stage lets cancellation follow an in-flight
  * reserved-to-bound promotion without ever targeting a replacement owner. */
-export interface ObservedRunClaim {
+interface ObservedRunClaim {
   ownerToken: string;
   runId: string | null;
 }
@@ -330,13 +330,6 @@ export async function cancelRunById(
   return { outcome: "not_found" };
 }
 
-export function cancelConnectedRunById(
-  runId: string,
-  opts: CancelRunByIdDeps,
-): Promise<CancelRunByIdResult> {
-  return cancelRunById(undefined as unknown as Db, runId, opts);
-}
-
 /**
  * A confirmed cancel plus the one piece of bookkeeping that does not belong to any
  * single caller: the schedule ledger. `scheduleOccurrenceSettled` is null unless a
@@ -429,7 +422,7 @@ async function cancelOwnedSubject(
 ): Promise<CancelRunResult> {
   let observed: ObservedRunClaim;
   if (typeof target === "string") {
-    const entry = await runRegistry.get(subjectKey).catch(() => undefined);
+    const entry = await runRegistry.get(subjectKey).catch(() => {});
     if (
       entry === undefined ||
       entry === null ||
@@ -464,7 +457,7 @@ async function cancelOwnedSubject(
     return { cancelled: false, released: false };
   }
 
-  const afterTombstone = await runRegistry.get(subjectKey).catch(() => undefined);
+  const afterTombstone = await runRegistry.get(subjectKey).catch(() => {});
   if (afterTombstone === undefined) {
     return { cancelled: false, released: false };
   }
@@ -492,7 +485,7 @@ async function cancelOwnedSubject(
       closed = { ...current, state: "cancelling" };
       break;
     }
-    const refreshed = await runRegistry.get(subjectKey).catch(() => undefined);
+    const refreshed = await runRegistry.get(subjectKey).catch(() => {});
     if (refreshed === undefined) {
       return { cancelled: false, released: false };
     }
@@ -582,17 +575,15 @@ async function cancelOwnedSubject(
     await settleCancelledPark(subjectKey, closed.runId);
   }
 
-  if (beforeRelease) {
-    if (!(await confirmBeforeRelease(subjectKey, closed, beforeRelease))) {
-      return { cancelled: false, released: false, tornDown };
-    }
+  if (beforeRelease && !(await confirmBeforeRelease(subjectKey, closed, beforeRelease))) {
+    return { cancelled: false, released: false, tornDown };
   }
 
   const released = await runRegistry
     .releaseCancellation(subjectKey, closed.ownerToken, closed.runId)
     .catch(() => false);
   if (!released) {
-    const refreshed = await runRegistry.get(subjectKey).catch(() => undefined);
+    const refreshed = await runRegistry.get(subjectKey).catch(() => {});
     if (refreshed !== null) return { cancelled: false, released: false, tornDown };
   }
   await notifyReleased(subjectKey, onReleased);

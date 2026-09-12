@@ -23,7 +23,7 @@ function summarizeDirtyStatus(statusText: string): string {
   return statusText
     .split(/\r?\n/u)
     .slice(0, DIRTY_STATUS_ENTRY_LIMIT)
-    .map((line) => line.replace(/[\u0000-\u001f\u007f]/gu, " ").trim())
+    .map((line) => line.replace(new RegExp(String.raw`[\u0000-\u001F\u007F]`, "gu"), " ").trim())
     .filter(Boolean)
     .join("; ")
     .slice(0, DIRTY_STATUS_CHARACTER_LIMIT);
@@ -174,7 +174,7 @@ export async function provisionDisposableReviewWorkspaceStep(
         bundle: bytes,
       });
     } finally {
-      await source.runCommand("rm", ["-f", sourceBundlePath]).catch(() => undefined);
+      await source.runCommand("rm", ["-f", sourceBundlePath]).catch(() => {});
     }
   }
 

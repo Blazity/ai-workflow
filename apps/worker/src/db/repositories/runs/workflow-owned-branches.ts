@@ -32,19 +32,21 @@ export async function listWorkflowOwnedBranchesForTicket(
     .from(workflowOwnedBranches)
     .where(eq(workflowOwnedBranches.ticketKey, ticketKey));
 
-  return rows.map((row) => ({
-    ticketKey: row.ticketKey,
-    provider: row.provider as VcsProvider,
-    repoPath: row.repoPath,
-    branchName: row.branchName,
-    ...(row.publishedHeadSha ? { publishedHeadSha: row.publishedHeadSha } : {}),
-    ...(row.prTargetBranch ?? row.targetBranch
+  return rows.map((row) => Object.assign(
+    {
+      ticketKey: row.ticketKey,
+      provider: row.provider as VcsProvider,
+      repoPath: row.repoPath,
+      branchName: row.branchName,
+    },
+    row.publishedHeadSha ? { publishedHeadSha: row.publishedHeadSha } : {},
+    row.prTargetBranch ?? row.targetBranch
       ? { targetBranch: (row.prTargetBranch ?? row.targetBranch) as string }
-      : {}),
-    ...(!row.prCorrelationPending && row.prId !== null && row.prUrl && row.prBranchName
+      : {},
+    !row.prCorrelationPending && row.prId !== null && row.prUrl && row.prBranchName
       ? { pr: { id: row.prId, url: row.prUrl, branch: row.prBranchName } }
-      : {}),
-  }));
+      : {},
+  ));
 }
 
 export function listConnectedWorkflowOwnedBranchesForTicket(ticketKey: string) {

@@ -14,7 +14,7 @@ import {
   type V2BlockSpec,
 } from "./default.js";
 
-export const DEFAULT_WORKFLOW_TEMPLATE_ID = "ticket-workflow";
+const DEFAULT_WORKFLOW_TEMPLATE_ID = "ticket-workflow";
 
 interface TemplateOptions {
   includeReview: boolean;

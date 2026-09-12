@@ -14,7 +14,7 @@ export interface PullRequestChangeSetTarget {
   baseRef: string;
 }
 
-export const PULL_REQUEST_CHANGE_SET_TITLE = "Pull request change set";
+const PULL_REQUEST_CHANGE_SET_TITLE = "Pull request change set";
 
 // Prompt-budget protection. The review checkout is the agent's only source of
 // code, and this section its only source of the change, so the caps are

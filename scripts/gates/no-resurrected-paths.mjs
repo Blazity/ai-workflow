@@ -39,7 +39,7 @@ function main() {
   const listPath = options.list ?? fileURLToPath(new URL("./no-resurrected-paths.json", import.meta.url));
   const paths = readJson(listPath);
   if (!Array.isArray(paths) || paths.some((path) => typeof path !== "string" || !path)) {
-    throw new Error("The resurrected path baseline must be a list of non-empty strings.");
+    throw new Error("The resurrected path list must be a list of non-empty strings.");
   }
   const files = repositoryFiles(options.root);
   const rows = paths.map((path) => [path, pathState(options.root, path, files)]);

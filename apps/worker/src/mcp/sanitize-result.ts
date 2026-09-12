@@ -13,8 +13,11 @@ import { McpPublicError, type McpEnvelope, type SanitizeOptions } from "./contra
 // execute-tool.ts's input hashes -- import from one place, as they already did.
 export { canonicalJson, hashCanonicalJson, MCP_CONTRACT_HASH };
 
-const ANSI_SEQUENCE = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\))/gu;
-const CONTROL_BYTES = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu;
+const ANSI_SEQUENCE = new RegExp(
+  String.raw`\u001B(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001B\\))`,
+  "gu",
+);
+const CONTROL_BYTES = new RegExp(String.raw`[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]`, "gu");
 const BEARER_CREDENTIAL = /(Authorization\s*:\s*Bearer\s+)[^\s"'\\]+/giu;
 const GITHUB_CREDENTIAL = /\bgh[pousr]_[A-Za-z0-9]{36,255}\b/gu;
 const PRIVATE_KEY = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)/gu;

@@ -109,7 +109,7 @@ export function createReplayCanaryFixture(nonce: string): ReplayCanaryFixture {
   };
 }
 
-export interface ReplayCanaryDatabaseRows {
+interface ReplayCanaryDatabaseRows {
   observation: unknown;
   attempts: unknown[];
 }

@@ -290,7 +290,7 @@ function jsonSchemaMetadata(
 
 /** Convert the registry's derived type language back to the canonical schema
  * shape exposed by the v2 catalog and consumed by the PR 1 validator. */
-export function workflowValueSchemaToJsonSchema(
+function workflowValueSchemaToJsonSchema(
   schema: WorkflowValueSchema,
 ): JsonSchema202012 {
   const metadata = jsonSchemaMetadata(schema);
@@ -350,8 +350,7 @@ function requiredSchemaPaths(
     const child = schema.properties[name];
     if (!child) continue;
     const path = [...prefix, name];
-    result.push({ path, schema: child });
-    result.push(...requiredSchemaPaths(child, path));
+    result.push({ path, schema: child }, ...requiredSchemaPaths(child, path));
   }
   return result;
 }
@@ -399,8 +398,7 @@ function catalogSchemaPaths(
       path,
       schema: child,
       presence: catalogPresence(optional, childUnwrapped.nullable),
-    });
-    result.push(...catalogSchemaPaths(child, path, optional));
+    }, ...catalogSchemaPaths(child, path, optional));
   }
   return result;
 }
@@ -551,8 +549,7 @@ function guardedFormula(
   for (const term of formula.terms.values()) {
     const existing = term.get(variable);
     if (existing !== undefined && existing !== value) continue;
-    const guarded = new Map(term);
-    guarded.set(variable, value);
+    const guarded = new Map([...term, [variable, value]]);
     result.terms.set(termKey(guarded), guarded);
   }
   return result;

@@ -9,14 +9,10 @@ import {
   type GenerateProviderTextResult,
 } from "../infra/llm.js";
 import {
-  inferProvider,
   resolveLlmProvider,
   type LlmProvider,
 } from "../infra/llm-provider.js";
 import { loadEnvironmentPort } from "./internal/ports.js";
-
-export { inferProvider };
-export type { LlmProvider };
 
 export interface GenerateStructuredInput {
   model: string;

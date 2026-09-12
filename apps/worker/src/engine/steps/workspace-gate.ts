@@ -341,7 +341,7 @@ function driftedFiles(porcelain: string): string[] {
     .map((line) => {
       const path = line.length > 3 ? line.slice(3) : line.trim();
       const renamed = path.split(" -> ");
-      return (renamed[renamed.length - 1] ?? "").trim();
+      return (renamed.at(-1) ?? "").trim();
     })
     .filter((path) => path.length > 0);
 }

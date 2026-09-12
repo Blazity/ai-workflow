@@ -1063,14 +1063,14 @@ function availabilityFor(
   if (vcsBlocks.has(type) && context.vcsProviders.length === 0) {
     return unavailable("No version-control provider is configured.");
   }
-  if (vcsBlocks.has(type) && selectedProviders.length > 0) {
-    if (
-      !selectedProviders.some((provider) => context.vcsProviders.includes(provider))
-    ) {
-      return unavailable(
-        `Selected VCS providers are not configured: ${selectedProviders.join(", ")}.`,
-      );
-    }
+  if (
+    vcsBlocks.has(type) &&
+    selectedProviders.length > 0 &&
+    !selectedProviders.some((provider) => context.vcsProviders.includes(provider))
+  ) {
+    return unavailable(
+      `Selected VCS providers are not configured: ${selectedProviders.join(", ")}.`,
+    );
   }
   if (type === "trigger_pr_review") {
     const states = Array.isArray(params.on) ? params.on : [];

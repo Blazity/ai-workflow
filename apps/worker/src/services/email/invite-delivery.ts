@@ -24,7 +24,7 @@ export interface UpdateInviteEmailDeliveryInput {
   error?: string | null;
 }
 
-export interface UpdateInviteEmailDeliveryByIdInput {
+interface UpdateInviteEmailDeliveryByIdInput {
   id: string;
   resendEmailId?: string | null;
   status: InviteEmailDeliveryStatus;

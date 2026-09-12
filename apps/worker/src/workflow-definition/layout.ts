@@ -2,9 +2,6 @@ import type {
   WorkflowDefinition,
   WorkflowDefinitionLayout,
 } from "@shared/contracts";
-import { EMPTY_WORKFLOW_DEFINITION_LAYOUT } from "@shared/contracts";
-
-export const EMPTY_WORKFLOW_LAYOUT = EMPTY_WORKFLOW_DEFINITION_LAYOUT;
 
 /** Strip presentation coordinates from the semantic graph deterministically. */
 export function canonicalizeWorkflowDefinition(

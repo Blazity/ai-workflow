@@ -31,8 +31,6 @@ const ATTEMPT_ROW_BUDGET_OVERHEAD = 1024;
 const MAX_SELECTED_EDGE_IDS = 400;
 const MAX_TRANSITION_IDENTIFIER_CHARACTERS = 200;
 
-export const REPLAY_ATTEMPT_CAS_ATTEMPTS = 64;
-
 export interface ReplayAttemptPersistenceState {
   state: ReplayAttemptState;
   outcome: ReplayAttemptOutcome | null;
@@ -159,12 +157,12 @@ function safeSelectedTransition(
 ): WorkflowReplaySelectedTransition | null {
   if (
     !transition ||
-    transition.port.length < 1 ||
+    transition.port.length === 0 ||
     transition.port.length > MAX_TRANSITION_IDENTIFIER_CHARACTERS ||
     transition.edgeIds.length > MAX_SELECTED_EDGE_IDS ||
     transition.edgeIds.some(
       (edgeId) =>
-        edgeId.length < 1 ||
+        edgeId.length === 0 ||
         edgeId.length > MAX_TRANSITION_IDENTIFIER_CHARACTERS,
     )
   ) {
@@ -611,7 +609,7 @@ export function createV2RunObservationHooks(input: {
     },
     async finalize(reason) {
       if (captureDisabled) {
-        await Promise.allSettled([...persistenceTasks]);
+        await Promise.allSettled(persistenceTasks);
         return;
       }
       const openAttempts = [...attempts.entries()];
@@ -630,7 +628,7 @@ export function createV2RunObservationHooks(input: {
         );
         attempts.delete(key);
       }
-      await Promise.allSettled([...persistenceTasks]);
+      await Promise.allSettled(persistenceTasks);
     },
   };
 }

@@ -95,9 +95,11 @@ export class CodexAgentAdapter implements AgentAdapter {
     // Arthur tracer runs as a hook subprocess; expose its env so it picks up
     // config without depending on the discovery file paths.
     if (opts.arthur) {
-      envLines.push(`export GENAI_ENGINE_API_KEY=${shellQuote(opts.arthur.apiKey)}`);
-      envLines.push(`export GENAI_ENGINE_TASK_ID=${shellQuote(opts.arthur.taskId)}`);
-      envLines.push(`export GENAI_ENGINE_TRACE_ENDPOINT=${shellQuote(opts.arthur.endpoint)}`);
+      envLines.push(
+        `export GENAI_ENGINE_API_KEY=${shellQuote(opts.arthur.apiKey)}`,
+        `export GENAI_ENGINE_TASK_ID=${shellQuote(opts.arthur.taskId)}`,
+        `export GENAI_ENGINE_TRACE_ENDPOINT=${shellQuote(opts.arthur.endpoint)}`,
+      );
     }
     const envPath = opts.runtime?.envPath ?? AGENT_ENV_CODEX_PATH;
     await sandbox.writeFiles([

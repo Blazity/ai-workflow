@@ -199,12 +199,11 @@ async function loadClarificationHistoryStep(
   const rows = await listConnectedAnsweredClarificationsForTicket(ticketKey);
   return rows
     .filter((r) => r.answer !== null)
-    .map((r) => ({
-      questions: r.questions,
-      answer: r.answer as string,
-      ...(r.answeredByLabel ? { answeredBy: r.answeredByLabel } : {}),
-      ...(r.answeredAt ? { answeredAt: r.answeredAt.toISOString() } : {}),
-    }));
+    .map((r) => Object.assign(
+      { questions: r.questions, answer: r.answer as string },
+      r.answeredByLabel ? { answeredBy: r.answeredByLabel } : {},
+      r.answeredAt ? { answeredAt: r.answeredAt.toISOString() } : {},
+    ));
 }
 
 async function logClarificationHistoryFailure(ticketKey: string, reason: string): Promise<void> {

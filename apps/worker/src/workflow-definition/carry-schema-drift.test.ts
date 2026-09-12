@@ -350,8 +350,8 @@ describe("carry schema drift", () => {
       expect(
         shapeHash(source.current),
         `${source.label} changed shape. When you change a code-owned schema embedded by value: ` +
-          `add its previous shape to knownPrior in carry-schema-drift.ts, write a resync migration ` +
-          `(see AIW-245 / scripts/generate-carry-schema-resync-migration.ts), then update ` +
+          `add its previous shape to knownPrior in carry-schema-drift.ts, write a dedicated resync migration, ` +
+          `then update ` +
           `EXPECTED_SHAPE_HASHES.current for "${source.key}".`,
       ).toBe(expected!.current);
       expect(

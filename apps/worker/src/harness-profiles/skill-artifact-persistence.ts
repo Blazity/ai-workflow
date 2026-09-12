@@ -9,11 +9,9 @@ import {
   verifyHarnessSkillArtifact,
 } from "@shared/skills";
 import { sql } from "drizzle-orm";
-import type { Db } from "../db/types.js";
 import { sha256Digest } from "./skill-artifact-digest.js";
 import { HarnessSkillImportError } from "./skill-errors.js";
 import {
-  createConnectedHarnessProfileRepository,
   createHarnessProfileRepository,
   readHarnessSkillArtifactSource,
 } from "../db/repositories/harness-profiles.js";
@@ -26,33 +24,6 @@ export interface PersistableSkillArtifact {
   description: string;
   source: HarnessSkillSource;
   files: Array<HarnessSkillArtifactFile & { contentBase64: string }>;
-}
-
-export async function persistHarnessSkillArtifacts(
-  db: Db,
-  input: {
-    organizationId: string;
-    actorId: string;
-    artifacts: PersistableSkillArtifact[];
-  },
-): Promise<HarnessSkillArtifact[]> {
-  return persistHarnessSkillArtifactsFromRepository(
-    createHarnessProfileRepository(db),
-    input,
-  );
-}
-
-export function persistConnectedHarnessSkillArtifacts(
-  input: {
-    organizationId: string;
-    actorId: string;
-    artifacts: PersistableSkillArtifact[];
-  },
-): Promise<HarnessSkillArtifact[]> {
-  return persistHarnessSkillArtifactsFromRepository(
-    createConnectedHarnessProfileRepository(),
-    input,
-  );
 }
 
 export async function persistHarnessSkillArtifactsFromRepository(

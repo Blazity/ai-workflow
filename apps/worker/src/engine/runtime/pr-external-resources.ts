@@ -398,10 +398,14 @@ export function closeConnectedRunPrChecks(
 }
 
 /** Statuses a run never leaves, so a check it still owes will never be paid. */
-const ENDED_RUN_STATUSES = ["success", "failed", "blocked", "cancelled"];
+const ENDED_RUN_STATUSES = new Set(["success", "failed", "blocked", "cancelled"]);
 
 /** Long enough for a terminating run to finish closing its own checks. */
 const ABANDONED_CHECK_GRACE_MS = 60 * 1000;
+
+function defaultReviewCounts(): { reportedCount: number; distinctCount: number } {
+  return { reportedCount: 0, distinctCount: 0 };
+}
 
 /**
  * A run that dies between creating its check and deciding a verdict leaves the
@@ -428,7 +432,7 @@ async function abandonedPendingCheckIds(
   const runs = await persistence.listRunStatuses(runIds);
   const ended = new Set(
     runs
-      .filter((run) => run.status && ENDED_RUN_STATUSES.includes(run.status))
+      .filter((run) => run.status && ENDED_RUN_STATUSES.has(run.status))
       .map((run) => run.runId),
   );
   return new Set(
@@ -857,10 +861,7 @@ export function reviewSummary(
   results: ReviewResult[],
   fallback: MergedReviewFinding[],
   withheld: MergedReviewFinding[] = [],
-  counts: { reportedCount: number; distinctCount: number } = {
-    reportedCount: 0,
-    distinctCount: 0,
-  },
+  counts: { reportedCount: number; distinctCount: number } = defaultReviewCounts(),
   siblingRepositories: ReadonlyMap<string, { url: string; headSha?: string }> = new Map(),
 ): string {
   const feedback = results
@@ -969,7 +970,7 @@ export function reviewSummary(
  * one, and otherwise the cluster's group key, which is the same normalised path an
  * anchor would have carried.
  */
-export function reviewFindingIdentityDigest(
+function reviewFindingIdentityDigest(
   finding: MergedReviewFinding,
 ): string {
   return reviewFindingDigest({
@@ -989,7 +990,7 @@ export function reviewFindingIdentityDigest(
  * hidden as outdated while the same finding was listed as standing three lines below
  * in the summary.
  */
-export function deferredReviewFindingDigests(
+function deferredReviewFindingDigests(
   deferred: readonly MergedReviewFinding[],
 ): string[] {
   return deferred.map(reviewFindingIdentityDigest);
@@ -1087,10 +1088,9 @@ async function publishRunOwnedPrReviewWithPersistence(
   // the summary here rather than at the publish call also covers the value
   // returned to the workflow, which complete_pr_check binds into the check run
   // details shown on the pull request.
-  const comments = placedComments.map((comment) => ({
-    ...comment,
-    body: scrubForPublication(comment.body),
-  }));
+  const comments = placedComments.map((comment) =>
+    Object.assign({}, comment, { body: scrubForPublication(comment.body) }),
+  );
   const decision = reviewPublicationDecision(merged, args.reviewResults.length);
   const summary = scrubForPublication(
     reviewSummary(args.reviewResults, fallback, withheld, {
@@ -1276,7 +1276,7 @@ async function publishRunOwnedPrReviewWithPersistence(
     );
     await persistence.markPrReviewPublicationFailed({ id: publicationId, diagnosticId });
     throw new Error(
-      `PR review publication failed. Diagnostic ID: ${diagnosticId}`,
+      `PR review publication failed. Diagnostic ID: ${diagnosticId}`, { cause: error },
     );
   }
   await persistence.markPrReviewPublicationPublished({

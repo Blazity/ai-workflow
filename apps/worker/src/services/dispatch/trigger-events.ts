@@ -21,7 +21,7 @@ export interface NormalizeGitHubOptions {
   workflowOwnedPullRequest?: boolean;
 }
 
-export const DEFAULT_REVIEW_STATES: readonly string[] = ["changes_requested"];
+const DEFAULT_REVIEW_STATES: readonly string[] = ["changes_requested"];
 
 const GITHUB_FAILED_CONCLUSIONS: ReadonlySet<string> = new Set([
   "failure",
@@ -365,7 +365,7 @@ export function normalizeGitLabEvent(
       }
       return null;
     }
-    if (action === "reopen" && !Boolean(attrs.draft ?? attrs.work_in_progress)) {
+    if (action === "reopen" && !(attrs.draft ?? attrs.work_in_progress)) {
       return {
         delivery: gitLabDelivery(options.deliveryId, producer),
         triggerType: "trigger_pr_ready",
@@ -486,7 +486,7 @@ export function normalizeGitLabEvents(
   if (
     eventName === "Merge Request Hook" &&
     attrs?.action === "open" &&
-    !Boolean(attrs?.draft ?? attrs?.work_in_progress) &&
+    !(attrs?.draft ?? attrs?.work_in_progress) &&
     primary.triggerType === "trigger_pr_created"
   ) {
     return [{ ...primary, triggerType: "trigger_pr_ready" }, primary];

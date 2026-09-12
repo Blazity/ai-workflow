@@ -23,7 +23,7 @@ async function createApprovalRequestStep(input: {
 }
 createApprovalRequestStep.maxRetries = 1;
 
-export function approvedRepositoryScopeFromManifest(
+function approvedRepositoryScopeFromManifest(
   manifest: WorkspaceManifest | null,
   writeRepositories: readonly ResearchRepository[] = [],
 ): ApprovedRepositoryScope | null {

@@ -82,6 +82,7 @@ export function normalizeGitLabMergeRequestEvent(
   const ownerRepo = project.path_with_namespace ?? stringId(project.id);
 
   if (typeof prNumber !== "number") {
+    // oxlint-disable-next-line unicorn/prefer-type-error -- Preserve the established Error type and message contract for callers and tests.
     throw new Error("Malformed GitLab merge request payload: missing iid");
   }
   if (!attrs.action) {

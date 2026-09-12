@@ -168,33 +168,12 @@ export async function getTicketComments(
   }));
 }
 
-export async function postComment(
-  ticketKey: string,
-  comment: string,
-): Promise<void> {
-  await jiraRequest(`/rest/api/3/issue/${ticketKey}/comment`, {
-    method: "POST",
-    body: JSON.stringify({
-      body: {
-        type: "doc",
-        version: 1,
-        content: [
-          {
-            type: "paragraph",
-            content: [{ type: "text", text: comment }],
-          },
-        ],
-      },
-    }),
-  });
-}
-
 /**
  * Post a comment as a SECOND Jira identity (a bearer token distinct from
  * JIRA_API_TOKEN). Used by US-06 so the clarification answer comes from a
  * non-bot account: the resume path filters the bot's own comments by accountId,
- * so an answer posted with the bot token can never resume the run. Additive:
- * `postComment` (bot identity) is unchanged. The per-call auth override rides
+ * so an answer posted with the bot token can never resume the run. The
+ * per-call auth override rides
  * jiraRequest's header merge (options.headers wins over the default header).
  */
 export async function postCommentAs(
@@ -286,47 +265,6 @@ export async function addAttachment(
     const text = await res.text().catch(() => "");
     throw new Error(`Jira attachment upload failed: ${res.status} — ${text}`);
   }
-}
-
-export async function getTicketAttachments(
-  ticketKey: string,
-): Promise<
-  Array<{
-    id: string;
-    filename: string;
-    size: number;
-    mimeType: string;
-    contentUrl: string;
-  }>
-> {
-  const data = await jiraRequest(
-    `/rest/api/3/issue/${ticketKey}?fields=attachment`,
-  );
-  return (data.fields.attachment ?? []).map((a: any) => ({
-    id: a.id,
-    filename: a.filename,
-    size: a.size,
-    mimeType: a.mimeType,
-    contentUrl: a.content,
-  }));
-}
-
-export async function downloadJiraAttachment(
-  contentUrl: string,
-): Promise<Buffer> {
-  const tenantOrigin = new URL(e2eEnv.JIRA_BASE_URL).origin;
-  const parsed = new URL(contentUrl);
-  const url =
-    parsed.origin === tenantOrigin
-      ? `${ATLASSIAN_API_ORIGIN}/ex/jira/${await getCloudId()}${parsed.pathname}${parsed.search}`
-      : contentUrl;
-  const res = await fetch(url, {
-    headers: { Authorization: authHeader },
-  });
-  if (!res.ok) {
-    throw new Error(`Attachment download failed: ${res.status}`);
-  }
-  return Buffer.from(await res.arrayBuffer());
 }
 
 function extractAdfText(adf: any): string {

@@ -24,7 +24,7 @@ import { MCP_TOOL_CATALOG, type McpToolDefinition } from "./tool-catalog.js";
  *    change without the diff showing what a client's view of it becomes.
  */
 
-export type McpContractTool = {
+type McpContractTool = {
   name: string;
   description: string;
   /** JSON Schema exactly as tools/list advertises it; see advertisedInputSchema. */

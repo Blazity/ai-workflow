@@ -590,7 +590,7 @@ async function agentWorkflowBody(
             configuration[key] = structuredClone(value);
           }
         }
-        return { ...node, configuration };
+        return Object.assign({}, node, { configuration });
       }),
     } as WorkflowDefinitionV2;
   }
@@ -806,7 +806,7 @@ async function agentWorkflowBody(
   // Returns the formatted usage report when any phase has produced usage,
   // otherwise undefined so the messaging formatter can omit the trailing block.
   const usageReportOrUndefined = (): string | undefined =>
-    Object.keys(phaseUsages).length
+    Object.keys(phaseUsages).length > 0
       ? formatUsageReport(
           phaseUsages,
           phaseProviders,
@@ -1119,7 +1119,7 @@ async function agentWorkflowBody(
           // notifications a human can act on. Best-effort like the other two
           // park writes: dashboard bookkeeping must never sink a real park (the
           // cron sweep settles a marker that never landed).
-          await markRunAwaitingStep(workflowRunId).catch(() => undefined);
+          await markRunAwaitingStep(workflowRunId).catch(() => {});
           if (entry.ticketKey) {
             await parkForClarificationStep(
               ticketId,
@@ -1160,7 +1160,7 @@ async function agentWorkflowBody(
           // later exit can record its real outcome. Best-effort: the answer is
           // already consumed at this point, so a status write must never be what
           // fails the resumed run.
-          await markRunResumedStep(workflowRunId).catch(() => undefined);
+          await markRunResumedStep(workflowRunId).catch(() => {});
           lastBudgetClockMs = await readRunBudgetClockStep();
           if ("expired" in answered) {
             throw new Error("clarification expired before it was answered");
@@ -1269,11 +1269,11 @@ async function agentWorkflowBody(
           }
           return answered.answer;
         } catch (error) {
-          await supersedeClarificationHookStep(clarification.id).catch(() => undefined);
+          await supersedeClarificationHookStep(clarification.id).catch(() => {});
           // A park that ends in a throw must not leave the row awaiting either.
           // Guarded on "awaiting", so this is a no-op for a failure raised
           // before the park and for a run a cancellation already flipped.
-          await markRunResumedStep(workflowRunId).catch(() => undefined);
+          await markRunResumedStep(workflowRunId).catch(() => {});
           throw error;
         } finally {
           hook.dispose();
@@ -1301,8 +1301,8 @@ async function agentWorkflowBody(
         }
         // Flag off must reproduce byte-for-byte pre-ledger behavior, and the
         // pre-ledger run never posted a failure note on this path.
-        const { env } = await import("./harness-profiles/model-env.js");
-        if (!env.REVIEW_LEDGER_ENABLED) {
+        const { env: modelEnv } = await import("./harness-profiles/model-env.js");
+        if (!modelEnv.REVIEW_LEDGER_ENABLED) {
           return;
         }
         const ledger = ctx.reviewLedger;
@@ -1330,7 +1330,7 @@ async function agentWorkflowBody(
           // Counted off what settlement actually wrote, so a run that answered
           // every thread before dying does not apologise for silence.
           answeredCount: settledAnswerCount(ctx.reviewLedgerSettled ?? []),
-        }).catch(() => undefined);
+        }).catch(() => {});
       };
 
       const failureExit = async (
@@ -2403,6 +2403,7 @@ async function agentWorkflowBody(
             };
             }
           }
+          // falls through
 
           case "implementation_agent": {
             const workspace = await ensureCodeWorkspace(execution, {
@@ -2899,7 +2900,7 @@ async function agentWorkflowBody(
               // the operator, and before #316 that arrived as Workflow's own
               // "exceeded max retries" with no name, no message and nothing in
               // the runtime logs.
-              throw new Error(await prePrChecksFailureMessage(err, prePrConfig.version));
+              throw new Error(await prePrChecksFailureMessage(err, prePrConfig.version), { cause: err });
             }
             recordPrePrFixCycleUsages(
               ctx,
@@ -3159,8 +3160,8 @@ async function agentWorkflowBody(
           blockStatuses[nodeId] = { status: "running", attempt };
           await writeBlockStatuses();
         },
-        async onBlockFinish(nodeId: string, state: BlockRunState) {
-          blockStatuses[nodeId] = blockRunStateSummary(state);
+        async onBlockFinish(nodeId: string, blockState: BlockRunState) {
+          blockStatuses[nodeId] = blockRunStateSummary(blockState);
           await writeBlockStatuses();
           activeBlockIds.delete(nodeId);
           syncCurrentBlockId();
@@ -3695,15 +3696,17 @@ async function agentWorkflowBody(
                   // it would confirm exactly the entries the listing rejects.
                   const defaultBranchFiles =
                     ctx.defaultBranchFiles?.[`${repo.provider}:${repo.repoPath}`];
-                  return {
-                    provider: repo.provider,
-                    repoPath: repo.repoPath,
+                  return Object.assign(
+                    {
+                      provider: repo.provider,
+                      repoPath: repo.repoPath,
+                    },
                     // Omitted rather than sent empty: absent means the capture
                     // had no trusted listing, which leaves the filter off.
-                    ...(defaultBranchFiles && defaultBranchFiles.length > 0
+                    defaultBranchFiles && defaultBranchFiles.length > 0
                       ? { defaultBranchFiles }
-                      : {}),
-                  };
+                      : {},
+                  );
                 }),
               changeSummary: ctx.changeSummary,
               model,

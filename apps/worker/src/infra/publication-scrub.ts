@@ -268,8 +268,8 @@ function scrubBlocks(text: string): string {
  */
 function bodyEndingOnHeading(text: string): string | null {
   const lines = text.split("\n");
-  while (lines.length > 0 && lines[lines.length - 1]!.trim() === "") lines.pop();
-  const last = lines[lines.length - 1];
+  while (lines.length > 0 && lines.at(-1)!.trim() === "") lines.pop();
+  const last = lines.at(-1);
   if (last === undefined || !HEADING_LINE.test(last)) return null;
   return lines.join("\n");
 }

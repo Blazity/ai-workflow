@@ -20,7 +20,7 @@ export function sanitizeFilename(name: string, id: string): string {
   // Strip path separators, null bytes, and leading dots (no hidden files).
   const cleaned = (name ?? "")
     .replace(/[\\/]/g, "")
-    .replace(/\u0000/g, "")
+    .replace(new RegExp(String.raw`\u0000`, "gu"), "")
     .replace(/^\.+/, "");
 
   // Fallback to `attachment-{id}` only when the result is empty, per spec.
@@ -50,14 +50,13 @@ export function formatAttachmentsIndex(
 ): string {
   if (attachments.length === 0) return "";
 
-  const lines: string[] = [];
-  lines.push("## Attachments");
-  lines.push("");
-  lines.push(
+  const lines: string[] = [
+    "## Attachments",
+    "",
     "The following files from the Jira ticket are available in `/tmp/attachments/`.",
-  );
-  lines.push("Read them when relevant to the task.");
-  lines.push("");
+    "Read them when relevant to the task.",
+    "",
+  ];
 
   for (const a of attachments) {
     if (a.failed) {
@@ -165,7 +164,9 @@ export async function fetchAttachmentsWithRetry(
         // not surfaced. Static backoff is sufficient for v1; revisit if Atlassian
         // rate-limiting causes repeated retry storms.
         const delay = Math.min(BACKOFFS_MS[attempts - 1] ?? 5000, 10_000);
-        await new Promise((r) => setTimeout(r, delay));
+        await new Promise((r) => {
+          setTimeout(r, delay);
+        });
       }
     }
 

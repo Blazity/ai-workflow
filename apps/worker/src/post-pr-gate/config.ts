@@ -41,7 +41,7 @@ const postPrGateConfigSchema = z
   })
   .strict();
 
-export function defaultPostPrGateConfigPath(): string {
+function defaultPostPrGateConfigPath(): string {
   return process.env.POST_PR_GATE_CONFIG_PATH
     ?? resolve(process.cwd(), "post-pr-gate.yaml");
 }
@@ -57,7 +57,7 @@ export function loadPostPrGateConfig(
       return defaultPostPrGateConfig;
     }
     throw new Error(
-      `Failed to read post-pr-gate config at ${configPath}: ${errorMessage(err)}`,
+      `Failed to read post-pr-gate config at ${configPath}: ${errorMessage(err)}`, { cause: err },
     );
   }
   const config = parsePostPrGateConfig(parse(raw));

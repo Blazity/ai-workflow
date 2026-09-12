@@ -37,7 +37,7 @@ export function findLiveBlockStatusRow(db: Db = getDb(), input: {
   runIds: string[];
   definitionId?: number;
 }) {
-  if (input.runIds.length === 0) return Promise.resolve(undefined);
+  if (input.runIds.length === 0) return Promise.resolve();
   const definition = input.definitionId === undefined
     ? []
     : [eq(workflowRuns.definitionId, input.definitionId)];
@@ -59,16 +59,4 @@ export function findLastBlockStatusRow(db: Db = getDb(), definitionId?: number) 
     ...definition,
   )).orderBy(desc(sql`coalesce(${workflowRuns.completedAt}, ${workflowRuns.updatedAt})`))
     .limit(1).then(([row]) => row);
-}
-
-export function listConnectedAwaitingRunRows() {
-  return listAwaitingRunRows();
-}
-
-export function findConnectedLiveBlockStatusRow(input: Parameters<typeof findLiveBlockStatusRow>[1]) {
-  return findLiveBlockStatusRow(getDb(), input);
-}
-
-export function findConnectedLastBlockStatusRow(definitionId?: number) {
-  return findLastBlockStatusRow(getDb(), definitionId);
 }

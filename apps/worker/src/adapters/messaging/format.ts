@@ -181,7 +181,7 @@ export function formatTicketEvent(
  * so they are left untouched.
  */
 export function neutralizeSlackBroadcasts(text: string): string {
-  return text.replace(/<!(channel|here|everyone|subteam\^[^>]*)>/g, "<\u200b!$1>");
+  return text.replace(/<!(channel|here|everyone|subteam\^[^>]*)>/g, "<\u200B!$1>");
 }
 
 /**

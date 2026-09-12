@@ -9,7 +9,7 @@ import { z } from "zod";
 
 // Repository check configuration is consumed directly by engine blocks.
 
-export interface PrePrCheckRepositoryConfig {
+interface PrePrCheckRepositoryConfig {
   provider: "github" | "gitlab";
   repoPath: string;
   /**
@@ -61,7 +61,7 @@ export function describePrePrCheckIssues(error: z.ZodError): string {
 // without a migration, normalized to groups.checks.
 // ---------------------------------------------------------------------------
 
-export interface RepoScriptsGroupConfig {
+interface RepoScriptsGroupConfig {
   commands: string[]; // default []
   extends?: string[]; // names of sibling groups within the same repository entry
   /**
@@ -142,7 +142,7 @@ const repoScriptsGroupConfigSchema = z
 
 const repoScriptsGroupsSchema = z
   .record(repoScriptsGroupNameSchema, repoScriptsGroupConfigSchema)
-  .refine((groups) => Object.keys(groups).length >= 1, {
+  .refine((groups) => Object.keys(groups).length > 0, {
     message: "groups must contain at least one entry",
   });
 

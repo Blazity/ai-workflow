@@ -56,7 +56,7 @@ function conditions(input: { cutoff: Date | null; q?: string | null }): SQL | un
     const pattern = `%${input.q.replace(/[\\%_]/g, (match) => `\\${match}`)}%`;
     values.push(sql`(${workflowRuns.ticketKey} ilike ${pattern} or ${workflowRuns.ticketTitle} ilike ${pattern})`);
   }
-  return values.length ? and(...values) : undefined;
+  return values.length > 0 ? and(...values) : undefined;
 }
 
 export function listDashboardRunRows(

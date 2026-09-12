@@ -235,7 +235,7 @@ export class GitLabAdapter implements
       );
     } catch (err: any) {
       throw new Error(
-        `Failed to seed empty repository ${this.projectId}: ${err.message}`,
+        `Failed to seed empty repository ${this.projectId}: ${err.message}`, { cause: err },
       );
     }
   }
@@ -1263,7 +1263,7 @@ export class GitLabAdapter implements
           alias: "",
           source: this.reviewThreadSource(first, botUsername),
           resolvable: true,
-          awaitingHuman: mappedNotes[mappedNotes.length - 1]?.isLedgerReply === true,
+          awaitingHuman: mappedNotes.at(-1)?.isLedgerReply === true,
           notes: mappedNotes,
         };
         const filePath = first.position?.new_path ?? first.position?.old_path;
@@ -1348,7 +1348,7 @@ export class GitLabAdapter implements
     const notes = (discussion.notes ?? []).filter((note) => note.system !== true);
     const botUsername = await this.currentUsername();
 
-    const last = notes[notes.length - 1];
+    const last = notes.at(-1);
     // Any marker variant, and only on a note this token wrote: the reply we may
     // have posted last time was stale or resolved, and failing to recognise it is
     // what duplicates notes, while a reviewer quoting our reply back at us would
@@ -1423,7 +1423,9 @@ function parseTimestamp(value: string | undefined): number {
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function countDiffStats(diff: string): Pick<PRFile, "additions" | "deletions"> {

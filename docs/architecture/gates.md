@@ -8,14 +8,14 @@ stops the ladder when its check fails.
 
 | Gate | Checks | Script | Fails when |
 |---|---|---|---|
-| Boundaries | Worker tier edges, unknown source paths, file-cycle growth, and unlisted cross-cluster deep imports | `scripts/gates/boundaries.mjs` | A dependency crosses an unallowed edge, a path is unknown, a cycle count grows, or a new deep import is found |
-| Unused code | Knip findings by workspace and category | `scripts/gates/unused-code.mjs` | A finding is above its current ratchet |
-| Lint | Oxlint diagnostics for worker, dashboard, scripts, and packages | `scripts/gates/lint.mjs` | A correctness error or warning is above its current ratchet, or a rule with a zero baseline reports a diagnostic |
+| Boundaries | Worker tier edges, unknown source paths, file cycles, and unlisted cross-cluster deep imports | `scripts/gates/boundaries.mjs` | A dependency crosses an unallowed edge, a path is unknown, a file cycle is found, or a deep import is unlisted |
+| Unused code | Knip findings by workspace and category | `scripts/gates/unused-code.mjs` | Any finding is reported |
+| Lint | Oxlint diagnostics for worker, dashboard, scripts, and packages | `scripts/gates/lint.mjs` | Any diagnostic is reported |
 | Resurrected paths | Retired paths using tracked and non-ignored files | `scripts/gates/no-resurrected-paths.mjs` | A retired path has a tracked or non-ignored file |
 | Single schema | Retired workflow schema v1 spellings and production references | `scripts/gates/single-schema-version.mjs` | A retired schema branch, helper, type, or production test import is found |
 | Transactions | Production worker source for `.transaction(` | `scripts/gates/transactions-in-repositories.mjs` | Any production transaction call is found |
 | Consecutive writes | Awaited `db.insert`, `db.update`, `db.delete`, or `db.execute` calls in one non-repository production function | `scripts/gates/consecutive-writes.mjs` | A function contains two or more awaited database writes outside the repository tier and allowlist |
-| Database client fence | Direct or local-barrel reaches from production worker files to `db/client` | `scripts/gates/db-client-fence.mjs` | A file reaches `db/client` above its current ratchet |
+| Database client fence | Direct or local-barrel reaches from production worker files to `db/client` | `scripts/gates/db-client-fence.mjs` | Any file reaches `db/client` |
 | Package contracts | Descriptions for every package under `packages/` | `scripts/gates/package-contracts.mjs` | A package has no non-empty description |
 | Model catalog drift | Model literals outside the catalog's declared exclusions | `scripts/gates/model-catalog-drift.mjs` | A model identifier is duplicated outside an approved owner or exclusion |
 | Dependency consistency | Shared dependency versions against the pnpm catalog | `scripts/gates/check-deps-consistency.mjs` | A shared dependency is not cataloged, is split across specifiers, or is missing from the catalog |
@@ -66,21 +66,3 @@ The override does not affect production source.
 `eqeqeq` remains enabled with the narrow `null` exception so deliberate
 nullish checks retain their behavior. Inline rule suppressions are exceptional;
 each has to explain the behavior or test contract it preserves.
-
-## In flight (stage 11)
-
-At the end of this phase, the GATES-owned ratchets still above zero are:
-
-| Ratchet | Remaining count | Phase 2 |
-|---|---:|---|
-| Lint correctness errors in worker production source | 25 | Remove `scripts/gates/lint.baseline.json` after the worker remainder is fixed |
-| Lint warnings in worker production source | 183 | Remove `scripts/gates/lint.baseline.json` after the worker remainder is fixed |
-| Knip worker files | 7 | Remove `scripts/gates/unused-code.baseline.json` after the worker remainder is fixed |
-| Knip worker dependencies | 2 | Remove `scripts/gates/unused-code.baseline.json` after the worker remainder is fixed |
-| Knip worker devDependencies | 1 | Remove `scripts/gates/unused-code.baseline.json` after the worker remainder is fixed |
-| Knip worker exports | 113 | Remove `scripts/gates/unused-code.baseline.json` after the worker remainder is fixed |
-| Knip worker types | 78 | Remove `scripts/gates/unused-code.baseline.json` after the worker remainder is fixed |
-
-Dashboard, root, packages, worker tests, end-to-end files, test support, and
-the scripts in this phase have no remaining lint or Knip findings. The worker
-production findings remain ratcheted until the worker production lanes finish.

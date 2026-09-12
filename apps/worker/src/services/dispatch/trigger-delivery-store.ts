@@ -114,7 +114,7 @@ export async function getTriggerDelivery(
 
 /** Resolve the delivery that owns a semantic key (the winner of a
  * semantic-key conflict). */
-export async function getTriggerDeliveryBySemanticKey(
+async function getTriggerDeliveryBySemanticKey(
   db: Db,
   provider: "github" | "gitlab",
   semanticKey: string,

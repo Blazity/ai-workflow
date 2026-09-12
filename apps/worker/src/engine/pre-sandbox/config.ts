@@ -33,7 +33,7 @@ const preSandboxConfigSchema = z
   })
   .strict();
 
-export function defaultPreSandboxConfigPath(): string {
+function defaultPreSandboxConfigPath(): string {
   return resolve(process.cwd(), "pre-sandbox.yaml");
 }
 
@@ -49,7 +49,7 @@ export function loadPreSandboxConfig(
       return defaultPreSandboxConfig;
     }
 
-    throw new Error(`Failed to read pre-sandbox config at ${configPath}: ${errorMessage(err)}`);
+    throw new Error(`Failed to read pre-sandbox config at ${configPath}: ${errorMessage(err)}`, { cause: err });
   }
 
   const config = parsePreSandboxConfig(parse(raw));

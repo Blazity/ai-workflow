@@ -1015,7 +1015,9 @@ describe("postReviewLedgerFailureNoteOnFailureExit flag gate", () => {
 
     const window = agentLines.slice(Math.max(0, index - 20), index);
     expect(
-      window.some((line) => line.includes("env.REVIEW_LEDGER_ENABLED")),
+      window.some((line) =>
+        /(?:env|modelEnv)\.REVIEW_LEDGER_ENABLED/u.test(line),
+      ),
       "no REVIEW_LEDGER_ENABLED reference guards postReviewLedgerFailureNoteStep, so a flag-off run still posts the failure note",
     ).toBe(true);
   });

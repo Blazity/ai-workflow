@@ -23,7 +23,7 @@ export type SystemHealthObservation = {
   observedAt: Date;
 };
 
-export function observationWindowStart(now: Date = new Date()): Date {
+function observationWindowStart(now: Date = new Date()): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 }
 

@@ -384,11 +384,15 @@ export function recordConnectedBlockStatuses(
  */
 export type RunStatusReasonKind = "failure" | "cancellation";
 
+function defaultRunStatusReasonOptions(): { kind: RunStatusReasonKind } {
+  return { kind: "cancellation" };
+}
+
 export async function recordRunStatusReason(
   db: Db,
   runId: string,
   reason: string,
-  options: { kind: RunStatusReasonKind } = { kind: "cancellation" },
+  options: { kind: RunStatusReasonKind } = defaultRunStatusReasonOptions(),
 ): Promise<void> {
   await db
     .insert(workflowRuns)

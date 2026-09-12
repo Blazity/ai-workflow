@@ -18,12 +18,12 @@ import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js"
 import { logger } from "../../infra/logger.js";
 
 /** Jira calls made per poll tick. Caps CONFIRMED comments, never row creation. */
-export const AT_CAPACITY_COMMENT_BOUND = 10;
+const AT_CAPACITY_COMMENT_BOUND = 10;
 
 /** Hard cap on a single at-capacity comment POST. Must stay well under the
  *  claim lease so an aborted call cannot outlive its claim and let an
  *  overlapping tick re-post. */
-export const COMMENT_POST_TIMEOUT_MS = 30_000;
+const COMMENT_POST_TIMEOUT_MS = 30_000;
 
 /**
  * Claim lease: how long an unconfirmed attempted_at blocks a re-attempt. It must
@@ -31,7 +31,7 @@ export const COMMENT_POST_TIMEOUT_MS = 30_000;
  * a claim can never be held longer) yet be short enough that a genuinely failed
  * send is retried on a later tick. The poll cadence is one minute.
  */
-export const CLAIM_LEASE_MS = 120_000;
+const CLAIM_LEASE_MS = 120_000;
 
 export interface QueuedTicket {
   ticketKey: string;
@@ -112,7 +112,7 @@ export async function listQueued(db: Db): Promise<QueuedTicket[]> {
  *  promise that the ticket WILL start (capacity is checked before the
  *  eligibility guards, so a ticket may still be refused for another reason) and
  *  carries no exact in-use count (which could contradict "every slot"). */
-export function atCapacityComment(): string {
+function atCapacityComment(): string {
   return (
     "This ticket is waiting for a free workflow execution slot: every slot is " +
     "currently in use. It will be retried automatically on the next dispatch cycle."

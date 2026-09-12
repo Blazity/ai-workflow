@@ -433,7 +433,7 @@ export async function importLocalSkills(
   return importLocalSkillsFromRepository(createHarnessProfileRepository(db), input);
 }
 
-export async function importLocalSkillsFromRepository(
+async function importLocalSkillsFromRepository(
   persistence: HarnessProfileRepository,
   input: {
     organizationId: string;
@@ -580,7 +580,7 @@ function validateSelections(
 ): HarnessLocalSkillSelection[] {
   if (
     !Array.isArray(selections) ||
-    selections.length < 1 ||
+    selections.length === 0 ||
     selections.length > 100
   ) {
     throw new HarnessSkillImportError(

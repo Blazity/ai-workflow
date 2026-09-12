@@ -201,7 +201,7 @@ async function blockApprovedRepositoryScopeStep(
       throw new Error(
         `Approved repository ${key} scope recheck could not reach the provider; transient infrastructure failure: ${
           error instanceof Error ? error.message : String(error)
-        }`,
+        }`, { cause: error },
       );
     }
     if (currentSha === null) {
@@ -365,11 +365,13 @@ async function blockPrepareWorkspaceProvisionStep(
 
   const [primary, ...rest] = requiredAgents;
   const additionalAgents = await Promise.all(
-    rest.map(async (entry) => ({
-      agent: createAgentAdapter(entry.kind, entry.runtime?.cliSpec),
-      configureOpts: await configureOptsFor(entry),
-      ...(entry.runtime ? { runtime: entry.runtime } : {}),
-    })),
+    rest.map(async (entry) => Object.assign(
+      {
+        agent: createAgentAdapter(entry.kind, entry.runtime?.cliSpec),
+        configureOpts: await configureOptsFor(entry),
+      },
+      entry.runtime ? { runtime: entry.runtime } : {},
+    )),
   );
 
   const manager = new SandboxManager({
@@ -628,7 +630,7 @@ const SCRIPT_ENGINE_BLOCK_TYPES: ReadonlySet<string> = new Set([
   "run_checks",
 ]);
 
-export function definitionRunsScripts(
+function definitionRunsScripts(
   nodes: ReadonlyArray<{ type: string }>,
 ): boolean {
   return nodes.some((node) => SCRIPT_ENGINE_BLOCK_TYPES.has(node.type));

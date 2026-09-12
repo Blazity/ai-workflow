@@ -1,4 +1,4 @@
-import type { StoredWorkflowDefinition, WorkflowDefinition } from "@shared/contracts";
+import type { StoredWorkflowDefinition } from "@shared/contracts";
 import type { WorkflowDefinitionVersionRow } from "../db/repositories/definitions.js";
 import type { Db } from "../db/types.js";
 import {
@@ -40,12 +40,6 @@ function parseWorkflowDefinitionVersionRows(
   rows: WorkflowDefinitionVersionRow[],
 ): WorkflowDefinitionVersionRow[] {
   return rows.map(parseWorkflowDefinitionVersionRow);
-}
-
-export function parseRunnableWorkflowDefinition(raw: unknown): WorkflowDefinition {
-  const stored = parseStoredWorkflowDefinition(raw);
-  if (stored.schema !== "v2") throw new Error("A retired workflow definition is not runnable");
-  return stored.definition;
 }
 
 export async function readWorkflowDefinitionVersion(db: Db, definitionId: number, version: number) {
