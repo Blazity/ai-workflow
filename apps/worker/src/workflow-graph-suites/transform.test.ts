@@ -75,30 +75,34 @@ describe("Transform", () => {
 
   it("rejects empty and unsupported regex patterns at deployment", () => {
     expect(
-      validateTransformDefinition({
-        configuration: {
-          operation: "replace_text",
-          source: "steps.entry.output.text",
-          mode: "plain",
-          pattern: "",
-          replacement: "",
-          ignoreCase: false,
+      validateTransformDefinition(
+        {
+          configuration: {
+            operation: "replace_text",
+            source: "steps.entry.output.text",
+            mode: "plain",
+            pattern: "",
+            replacement: "",
+            ignoreCase: false,
+          },
         },
-      },
-      JSON_SCHEMA_SUPPORT),
+        JSON_SCHEMA_SUPPORT,
+      ),
     ).toHaveLength(1);
     expect(
-      validateTransformDefinition({
-        configuration: {
-          operation: "replace_text",
-          source: "steps.entry.output.text",
-          mode: "regex",
-          pattern: "(?=x)",
-          replacement: "",
-          ignoreCase: false,
+      validateTransformDefinition(
+        {
+          configuration: {
+            operation: "replace_text",
+            source: "steps.entry.output.text",
+            mode: "regex",
+            pattern: "(?=x)",
+            replacement: "",
+            ignoreCase: false,
+          },
         },
-      },
-      JSON_SCHEMA_SUPPORT),
+        JSON_SCHEMA_SUPPORT,
+      ),
     ).toHaveLength(1);
   });
 
@@ -212,35 +216,41 @@ describe("Transform", () => {
 
   it("validates object names and zero-row drafts", () => {
     expect(
-      validateTransformDefinition({
-        configuration: { operation: "build_object", fields: [] },
-      },
-      JSON_SCHEMA_SUPPORT),
+      validateTransformDefinition(
+        {
+          configuration: { operation: "build_object", fields: [] },
+        },
+        JSON_SCHEMA_SUPPORT,
+      ),
     ).toHaveLength(1);
     expect(
-      validateTransformDefinition({
-        configuration: {
-          operation: "build_object",
-          fields: [
-            { name: "__proto__", value: { kind: "literal", value: 1 } },
-            { name: "ok", value: { kind: "literal", value: 1 } },
-            { name: "ok", value: { kind: "literal", value: 2 } },
-          ],
+      validateTransformDefinition(
+        {
+          configuration: {
+            operation: "build_object",
+            fields: [
+              { name: "__proto__", value: { kind: "literal", value: 1 } },
+              { name: "ok", value: { kind: "literal", value: 1 } },
+              { name: "ok", value: { kind: "literal", value: 2 } },
+            ],
+          },
         },
-      },
-      JSON_SCHEMA_SUPPORT),
+        JSON_SCHEMA_SUPPORT,
+      ),
     ).toHaveLength(2);
   });
 
   it("derives deterministic result schemas", () => {
     expect(
-      deriveTransformOutputSchema({
-        configuration: {
-          operation: "text_to_number",
-          source: "steps.entry.output.text",
+      deriveTransformOutputSchema(
+        {
+          configuration: {
+            operation: "text_to_number",
+            source: "steps.entry.output.text",
+          },
         },
-      },
-      JSON_SCHEMA_SUPPORT),
+        JSON_SCHEMA_SUPPORT,
+      ),
     ).toMatchObject({
       type: "object",
       properties: {

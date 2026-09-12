@@ -93,7 +93,13 @@ export async function runPollPass(
   const repositoryCatalogOrNull = async (
     phase: string,
   ): Promise<RepositoryCatalogSnapshot | null> => {
-    if (catalogFailed) return null;
+    if (catalogFailed) {
+      // Every later phase says so by name. Without this the tick reports one
+      // failed load and silently skips however many dispatch phases came after
+      // it, which reads in the log as those phases simply having nothing to do.
+      logger.warn({ phase }, "poll_repository_catalog_skipped");
+      return null;
+    }
     try {
       return await loadRepositoryCatalog();
     } catch (error) {

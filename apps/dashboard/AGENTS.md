@@ -22,8 +22,10 @@ pnpm run dev        # next dev on port 3001
 pnpm run build      # next build
 pnpm run typecheck  # tsc --noEmit
 pnpm test           # node --test with tsx over **/*.test.ts and **/*.test.tsx
-pnpm run lint       # next lint, defined but not part of any gate today
 ```
+
+Linting is the root `pnpm run gate:lint` (oxlint over `apps/dashboard` among
+others), not a script in this package.
 
 The test runner is the Node test runner with module mocks, not vitest: tests
 are colocated (`lib/*.test.ts`, `components/**/**.test.tsx`) and render through
@@ -180,8 +182,9 @@ worker.
   form code under `components/cockpit/flow-editor/blocks/`, with shared
   primitives in its support modules and `config-fields.tsx` as the stable
   compatibility facade.
-- **`next lint` exists but no gate runs it.** Do not assume lint feedback; the
-  gate ladder for both apps is [ADR-004](../../docs/adr/ADR-004-gates-and-required-ci.md).
+- **There is no per-app lint script.** Lint feedback comes from the root
+  `pnpm run gate:lint` (oxlint), the same gate the worker answers to; the gate
+  ladder for both apps is [ADR-004](../../docs/adr/ADR-004-gates-and-required-ci.md).
 - **Editor forms are hand-written per block type.** A new block type needs its
   config fields here as well as its worker-side definition and generated
   catalog entry.

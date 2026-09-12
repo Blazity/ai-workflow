@@ -29,6 +29,27 @@ describe("definition deployment issue golden", () => {
     );
   });
 
+  /**
+   * The byte assertion above is the contract; this is its diagnosis. A whole-file
+   * `toBe` on a fixture this size reports the first differing character and
+   * leaves the reader to work out which definition moved, so compare record by
+   * record as well: the failure then carries the fixture name and only that
+   * fixture's issues.
+   */
+  it("reports which fixture's issues moved", () => {
+    type GoldenRecord = { fixture: string; issues: unknown[] };
+    const rendered = JSON.parse(renderDefinitionGolden()) as GoldenRecord[];
+    const recorded = JSON.parse(
+      readFileSync(DEFINITION_GOLDEN_PATH, "utf8"),
+    ) as GoldenRecord[];
+    expect(rendered.map((record) => record.fixture)).toEqual(
+      recorded.map((record) => record.fixture),
+    );
+    for (const [index, record] of rendered.entries()) {
+      expect(record).toEqual(recorded[index]);
+    }
+  });
+
   it("is recomputed, not read: every corpus fixture appears once", () => {
     const names = definitionGoldenCorpus().map((entry) => entry.fixture);
     const recorded = (
