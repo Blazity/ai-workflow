@@ -152,7 +152,8 @@ function slackEvidence(
   match: SlackSearchResult["matches"][number],
 ): InvestigateEvidence {
   const text = truncateExcerpt(match.text);
-  const seconds = Number(match.ts);
+  // oxlint-disable-next-line unicorn/prefer-number-coercion -- Preserve numeric-prefix parsing for Slack timestamps.
+  const seconds = Number.parseFloat(match.ts);
   return {
     ref: `slack:${match.channel}/${match.ts}`,
     source: "slack",
