@@ -23,7 +23,7 @@ import {
   isJsonValue,
   resolveWorkflowDataReferenceV2,
   type V2BindingResolutionContext,
-} from "../../workflow-definition/v2-bindings.js";
+} from "@shared/workflow-graph";
 import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
 
 export type {

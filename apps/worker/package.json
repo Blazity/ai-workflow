@@ -54,6 +54,7 @@
     "@shared/harness": "workspace:*",
     "@shared/prompts": "workspace:*",
     "@shared/skills": "workspace:*",
+    "@shared/workflow-graph": "workspace:*",
     "@t3-oss/env-core": "^0.13.10",
     "@vercel/functions": "^3.5.0",
     "@vercel/sandbox": "^1.8.1",

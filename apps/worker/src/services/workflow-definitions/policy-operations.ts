@@ -35,7 +35,7 @@ import {
   describeWorkflowDefinitionIssues,
   validateWorkflowDefinitionIssuesForDeployment,
   workflowDefinitionV2Schema,
-} from "../../workflow-definition/stored-definition.js";
+} from "../../workflow-definition/schema.js";
 import {
   syncConnectedLiveDefinitionTriggers,
   syncLiveDefinitionTriggers,

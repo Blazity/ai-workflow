@@ -24,7 +24,7 @@ import {
 } from "../schema.js";
 import { workflowDefinitionTemplate } from "../templates.js";
 import { executeTransform } from "../transform.js";
-import type { V2BindingResolutionContext } from "../v2-bindings.js";
+import type { V2BindingResolutionContext } from "@shared/workflow-graph";
 import {
   executeV2Graph,
   isSchedulerOwnedBlockType,

@@ -12,7 +12,7 @@ import {
   resolveWorkflowDataReferenceV2,
   resolveWorkflowPromptDataTokensV2,
   type V2BindingResolutionContext,
-} from "./v2-bindings.js";
+} from "@shared/workflow-graph";
 
 const MAX_FIELDS = 100;
 const JSON_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema";

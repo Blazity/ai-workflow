@@ -1,5 +1,6 @@
 import {
   BLOCK_TYPE_SPECS,
+  isSafeWorkflowInputName,
   isTriggerBlockType,
   isWorkflowAddressablePathSegment,
   type JsonSchema202012,
@@ -21,7 +22,6 @@ import {
   type WorkflowValueSchema,
 } from "@shared/contracts";
 import {
-  isSafeWorkflowInputName,
   isWorkflowSchemaAssignable,
   RUN_BINDING_SCHEMA,
 } from "./bindings.js";
@@ -34,7 +34,7 @@ import {
   validateJsonSchemaValue,
 } from "./json-schema.js";
 import { deriveTransformOutputSchema } from "./transform.js";
-import { parseWorkflowDataReferenceV2 } from "./v2-bindings.js";
+import { parseWorkflowDataReferenceV2 } from "@shared/workflow-graph";
 
 const MAX_ACTIVATION_TERMS = 256;
 const TRIGGER_GUARD = "$trigger";
