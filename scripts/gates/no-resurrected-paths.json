@@ -92,5 +92,11 @@
   "apps/worker/src/webhook-trigger/rejection-counters.test.ts",
   "apps/worker/src/webhook-trigger/rejection-counters.ts",
   "apps/worker/src/webhook-trigger/verify.test.ts",
-  "apps/worker/src/webhook-trigger/verify.ts"
+  "apps/worker/src/webhook-trigger/verify.ts",
+  "apps/dashboard/app/(cockpit)/scripts",
+  "apps/dashboard/app/scripts-data.tsx",
+  "apps/dashboard/components/cockpit/screens/repository-scripts.tsx",
+  "apps/dashboard/components/cockpit/screens/repository-scripts.test.tsx",
+  "apps/dashboard/app/(cockpit)/settings/stored-only-notice.tsx",
+  "apps/dashboard/app/api/pre-pr-checks/restore"
 ]

@@ -5,7 +5,7 @@ import type { SettingsEntryView, SettingsGroup } from "@shared/contracts";
 import { groupSettings, selectGroupKeys } from "@/lib/settings/groups";
 
 import { SettingsGroupForm } from "./settings-group-form";
-import { StoredOnlyNotice } from "./stored-only-notice";
+import { SettingsCadenceNotice } from "./settings-cadence-notice";
 
 /**
  * A few keys of one group, on the page they belong to.
@@ -37,7 +37,7 @@ export function SettingsAreaPanel({
   if (!found || selectGroupKeys(found, keys).length === 0) return null;
   return (
     <div className="flex flex-col gap-2">
-      <StoredOnlyNotice />
+      <SettingsCadenceNotice />
       <SettingsGroupForm
         group={found}
         keys={keys}

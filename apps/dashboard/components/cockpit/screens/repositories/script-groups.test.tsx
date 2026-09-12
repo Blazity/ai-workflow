@@ -1,14 +1,28 @@
+// apps/dashboard/components/cockpit/screens/repositories/script-groups.test.tsx
+//
+// The script group editor's own tests, carried over from the Repository scripts
+// screen they were written against.
+//
+// What changed is the host, not the behaviour: the editor now edits ONE
+// repository's profile instead of a fleet in one configuration blob, so the
+// screen-level tests (version history, the conflict banner, Add repository, the
+// batch timeout, what Save puts on the wire) went with the screen, and every
+// test about groups, commands, env names, the gate selection and renaming is
+// hosted here on a controlled wrapper that holds the entry the way the
+// Repositories entry page does.
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import React from "react";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 
-import type { PrePrCheckConfig, PrePrChecksResponse, PrePrCheckConfigVersion } from "@shared/contracts";
-import { RepositoryScriptsScreen, looksLikeInstallCommand } from "./repository-scripts";
+import type { PrePrCheckConfig, PrePrCheckRepositoryConfig } from "@shared/contracts";
+import { RepositoryScriptGroupsEditor, looksLikeInstallCommand } from "./script-groups";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+/** The fixture the screen tests were written against, kept as a configuration
+ *  so each test can still name the repository it is about. */
 const CONFIG: PrePrCheckConfig = {
   repositories: [
     {
@@ -29,25 +43,7 @@ const CONFIG: PrePrCheckConfig = {
       commands: ["make check"],
     },
   ],
-  batchTimeoutMinutes: 45,
 };
-
-function versionOf(config: PrePrCheckConfig, version: number): PrePrCheckConfigVersion {
-  return {
-    version,
-    config,
-    createdAt: "2026-08-01T00:00:00.000Z",
-    createdById: "u1",
-    createdByLabel: "Filip",
-    restoredFromVersion: null,
-  };
-}
-
-function initialOf(config: PrePrCheckConfig): PrePrChecksResponse {
-  return { current: versionOf(config, 1), versions: [versionOf(config, 1)] };
-}
-
-const INITIAL: PrePrChecksResponse = initialOf(CONFIG);
 
 /** One repository, two groups, no gateGroups: the "every group runs at the
  *  gate" default the shared CONFIG fixture does not cover. */
@@ -79,50 +75,110 @@ function button(root: ReactTestInstance, text: string): ReactTestInstance {
   return matches[0];
 }
 
-function saveButton(root: ReactTestInstance): ReactTestInstance {
-  return root.findAll((node) => node.type === "button" && nodeText(node).includes("Save changes"))[0];
+interface Harness {
+  root: ReactTestInstance;
+  /** The entry as the host holds it: what the Scripts tab would send. */
+  entry: () => PrePrCheckRepositoryConfig | null;
+  /** The reason Save is disabled, as the editor reports it upward. */
+  blocker: () => string | null;
+  /** Replaces the entry from outside, the way a save coming back does. */
+  set: (next: PrePrCheckRepositoryConfig | null) => void;
 }
 
-type FetchCall = { url: string; init: RequestInit | undefined };
-
-/** Renders the screen with a stubbed global fetch so Save is observable
- *  without a browser. `respond` builds the PUT response from the submitted
- *  body, defaulting to an echo that stores exactly what was submitted (the
- *  worker's own "stores verbatim" contract). */
-function renderScreen(
+/**
+ * Mounts the editor over one repository, holding its entry the way the entry
+ * page does. Nothing is stubbed: this editor makes no requests of its own, the
+ * tab it lives in is what saves.
+ */
+function renderEntry(
   t: TestContext,
-  respond: (body: unknown) => Response = (body) => {
-    const config = (body as { config: PrePrCheckConfig }).config;
-    return Response.json({ version: versionOf(config, 2) });
-  },
-  initial: PrePrChecksResponse = INITIAL,
-): { root: ReactTestInstance; calls: FetchCall[] } {
-  const calls: FetchCall[] = [];
-  (globalThis as { fetch: unknown }).fetch = async (url: string, init?: RequestInit) => {
-    calls.push({ url: String(url), init });
-    return respond(init?.body ? JSON.parse(String(init.body)) : undefined);
+  entry: PrePrCheckRepositoryConfig | null,
+  options: {
+    savedEntry?: PrePrCheckRepositoryConfig | null;
+    allowedEnv?: string[];
+    canEdit?: boolean;
+    /** react-test-renderer's node mock, for the one test that asserts focus. */
+    createNodeMock?: (element: { props: Record<string, unknown> }) => unknown;
+  } = {},
+): Harness {
+  const state: { entry: PrePrCheckRepositoryConfig | null; blocker: string | null } = {
+    entry,
+    blocker: null,
+  };
+  let setEntry!: (next: PrePrCheckRepositoryConfig | null) => void;
+  const repository = {
+    provider: (entry?.provider ?? "github") as "github" | "gitlab",
+    path: entry?.repoPath ?? "acme/web",
   };
 
-  let renderer!: ReactTestRenderer;
-  act(() => {
-    renderer = create(<RepositoryScriptsScreen initial={initial} canEdit />);
-  });
-  t.after(() => {
-    act(() => renderer.unmount());
-  });
-  return { root: renderer.root, calls };
-}
+  function Host() {
+    const [value, setValue] = React.useState(entry);
+    setEntry = setValue;
+    state.entry = value;
+    return (
+      <RepositoryScriptGroupsEditor
+        repository={repository}
+        entry={value}
+        savedEntry={options.savedEntry === undefined ? entry : options.savedEntry}
+        allowedEnv={options.allowedEnv}
+        disabled={options.canEdit === false}
+        onChange={(next) => {
+          state.entry = next;
+          setValue(next);
+        }}
+        onBlockerChange={(blocker) => {
+          state.blocker = blocker;
+        }}
+      />
+    );
+  }
 
-/** Renders the screen over an arbitrary starting config, for the group shapes
- *  the shared CONFIG fixture does not cover. No fetch stub: these assert on
- *  what renders, not on Save's wire payload. */
-function renderConfig(t: TestContext, config: PrePrCheckConfig): ReactTestInstance {
   let renderer!: ReactTestRenderer;
   act(() => {
-    renderer = create(<RepositoryScriptsScreen initial={initialOf(config)} canEdit />);
+    renderer = create(
+      <Host />,
+      options.createNodeMock
+        ? {
+            createNodeMock: (element) =>
+              options.createNodeMock!(element as { props: Record<string, unknown> }),
+          }
+        : undefined,
+    );
   });
   t.after(() => act(() => renderer.unmount()));
-  return renderer.root;
+  const harness: Harness = {
+    root: renderer.root,
+    entry: () => state.entry,
+    blocker: () => state.blocker,
+    set: (next) => act(() => setEntry(next)),
+  };
+  // The last editor mounted is the one the Save-bar shims below speak for, so
+  // a test may reach for the editor directly and still read the Save bar.
+  current = harness;
+  t.after(() => {
+    current = null;
+  });
+  return harness;
+}
+
+/** The repository named in a configuration fixture. */
+function repoOf(config: PrePrCheckConfig, repoPath?: string): PrePrCheckRepositoryConfig {
+  const repo =
+    repoPath === undefined
+      ? config.repositories[0]
+      : config.repositories.find((candidate) => candidate.repoPath === repoPath);
+  assert.ok(repo, `expected ${repoPath ?? "a repository"} in the fixture`);
+  return structuredClone(repo);
+}
+
+/** Renders one repository out of a configuration fixture. The signature the
+ *  screen tests used, minus the fleet. */
+function renderConfig(
+  t: TestContext,
+  config: PrePrCheckConfig,
+  repoPath?: string,
+): ReactTestInstance {
+  return renderEntry(t, repoOf(config, repoPath)).root;
 }
 
 /** The name field of every group card, in render order. Only an expanded card
@@ -136,15 +192,12 @@ function groupNameInputs(root: ReactTestInstance): ReactTestInstance[] {
     .map((card) => card.findAll((node) => node.type === "input")[0]);
 }
 
-function repoCards(root: ReactTestInstance): ReactTestInstance[] {
-  return root.findAll(
-    (node) => typeof node.type === "function" && (node.type as { name?: string }).name === "RepoCard",
-  );
-}
-
 function repoCard(root: ReactTestInstance, repoPath: string): ReactTestInstance {
-  const card = repoCards(root).find((c) => c.props.repo.repoPath === repoPath);
-  assert.ok(card, `expected a repository card for ${repoPath}`);
+  const card = root.findAll(
+    (node) => typeof node.type === "function" && (node.type as { name?: string }).name === "RepoCard",
+  )[0];
+  assert.ok(card, `expected the repository card for ${repoPath}`);
+  assert.equal(card.props.repo.repoPath, repoPath);
   return card;
 }
 
@@ -157,13 +210,11 @@ function toggleOf(node: ReactTestInstance): ReactTestInstance {
   return header;
 }
 
-/** Repository cards, group cards and the three secondary sections all start
- *  collapsed (a lone repository aside), so a test that reaches inside one
- *  opens it first. */
+/** Inside one repository's entry there is no repository accordion to open: the
+ *  card is the tab. Kept as an assertion so the tests still say which
+ *  repository they are about. */
 function expandRepo(root: ReactTestInstance, repoPath: string): void {
-  act(() => {
-    toggleOf(repoCard(root, repoPath)).props.onClick();
-  });
+  repoCard(root, repoPath);
 }
 
 function expandGroup(root: ReactTestInstance, name: string): void {
@@ -182,73 +233,74 @@ function expandSection(root: ReactTestInstance, label: string): void {
   });
 }
 
-/** The one write the screen made. Reads are filtered out rather than counted:
- *  the screen also GETs the repository catalog on mount, and a test about what
- *  Save puts on the wire has no business breaking when a read is added. */
-function writes(calls: FetchCall[]): FetchCall[] {
-  return calls.filter((call) => call.init?.method !== undefined && call.init.method !== "GET");
+// ── What Save used to be ────────────────────────────────────────────────────
+//
+// The editor saves nothing: the Repositories entry page holds the entry, the
+// reason and the Save bar, and sends one PUT to the profile route. The tests
+// below were written against a screen that owned all of that, and what they
+// actually assert is what the editor hands upward, so these three shims say so
+// rather than re-deriving it in forty places: the "submitted config" is the
+// entry as the editor last reported it, and the Save button's disabled state is
+// the blocker it last reported.
+
+let current: Harness | null = null;
+
+/** Identity: the fixture is the configuration now, with no version envelope
+ *  around it. Kept so the tests still read the way they were written. */
+function initialOf(config: PrePrCheckConfig): PrePrCheckConfig {
+  return config;
 }
 
-function submittedConfig(calls: FetchCall[]): PrePrCheckConfig {
-  const written = writes(calls);
-  assert.equal(written.length, 1);
-  assert.equal(written[0].url, "/api/pre-pr-checks");
-  assert.equal(written[0].init?.method, "PUT");
-  return (JSON.parse(String(written[0].init?.body)) as { config: PrePrCheckConfig }).config;
+function renderScreen(
+  t: TestContext,
+  _respond?: unknown,
+  config: PrePrCheckConfig = CONFIG,
+  options: { allowedEnv?: string[]; repoPath?: string } = {},
+): { root: ReactTestInstance; calls: never[] } {
+  current = renderEntry(t, repoOf(config, options.repoPath), { allowedEnv: options.allowedEnv });
+  return { root: current.root, calls: [] };
 }
 
-test("editing one top-level field sends the whole fetched config back, not a rebuilt subset", async (t) => {
-  const { root, calls } = renderScreen(t);
+/**
+ * The Save bar's message, as `repository-entry.tsx` renders it from the blocker
+ * the editor reports: `Save is disabled: {blocker}.`
+ *
+ * The repository path is gone from it because the path is now the page: one
+ * screen used to speak for a whole fleet and had to say which repository it
+ * meant.
+ */
+function saveBarText(): string {
+  assert.ok(current, "renderScreen was not used");
+  const blocker = current.blocker();
+  return blocker === null ? "" : `Save is disabled: ${blocker}.`;
+}
 
-  // The only field this edit touches is the top-level batch timeout.
-  const batchTimeoutInput = root.findAll(
-    (node) => node.type === "input" && node.props.type === "number" && node.props.value === 45,
-  )[0];
-  assert.ok(batchTimeoutInput, "expected the batch timeout field seeded with 45");
-  act(() => {
-    batchTimeoutInput.props.onChange({ target: { value: "60" } });
-  });
+/** The Save control, as the entry page renders it: disabled exactly when the
+ *  editor reports a blocker. */
+function saveButton(
+  _root: ReactTestInstance,
+): { props: { disabled: boolean; onClick: () => void } } {
+  assert.ok(current, "renderScreen was not used");
+  // Clicking is a no-op: the editor holds the entry and the entry page sends
+  // it. The assertion that follows a click in these tests is about what would
+  // be sent, which is exactly what submittedConfig reads.
+  return { props: { disabled: current.blocker() !== null, onClick: () => {} } };
+}
 
-  assert.equal(saveButton(root).props.disabled, false);
-  await act(async () => {
-    saveButton(root).props.onClick();
-  });
+/** What the Scripts tab would send, in the shape the old assertions read. */
+function submittedConfig(_calls: readonly never[]): PrePrCheckConfig {
+  assert.ok(current, "renderScreen was not used");
+  const entry = current.entry();
+  assert.ok(entry, "expected the editor to hold a scripts entry");
+  return { repositories: [entry] };
+}
 
-  const sent = submittedConfig(calls);
-  assert.equal(sent.batchTimeoutMinutes, 60);
-  // Everything untouched, including the fields the old screen used to drop
-  // (batchTimeoutMinutes itself) or could not represent (groups, env,
-  // gateGroups, restoreTree, per-repo timeout, the legacy repo's commands).
-  assert.deepEqual(sent.repositories, CONFIG.repositories);
-});
+function repoCards(root: ReactTestInstance): ReactTestInstance[] {
+  return root.findAll(
+    (node) => typeof node.type === "function" && (node.type as { name?: string }).name === "RepoCard",
+  );
+}
 
-test("editing a nested field leaves every sibling field, including batchTimeoutMinutes, untouched", async (t) => {
-  const { root, calls } = renderScreen(t);
-  expandRepo(root, "acme/web");
-  expandSection(root, "Setup (1 command)");
-
-  const setupInput = root.findAll(
-    (node) => node.type === "input" && node.props.value === "make bootstrap",
-  )[0];
-  act(() => {
-    setupInput.props.onChange({ target: { value: "make bootstrap-fast" } });
-  });
-
-  await act(async () => {
-    saveButton(root).props.onClick();
-  });
-
-  const sent = submittedConfig(calls);
-  assert.equal(sent.batchTimeoutMinutes, 45);
-  assert.equal(sent.repositories[0].setup?.[0], "make bootstrap-fast");
-  // The rest of the first repository, and the whole legacy second repository,
-  // must survive the round trip byte for byte.
-  assert.deepEqual(sent.repositories[0].groups, CONFIG.repositories[0].groups);
-  assert.deepEqual(sent.repositories[0].env, CONFIG.repositories[0].env);
-  assert.deepEqual(sent.repositories[0].gateGroups, CONFIG.repositories[0].gateGroups);
-  assert.equal(sent.repositories[0].commandTimeoutMinutes, 10);
-  assert.deepEqual(sent.repositories[1], CONFIG.repositories[1]);
-});
 
 test("unticking the last gate group stays explicit and blocks Save instead of flipping the mode", async (t) => {
   const { root, calls } = renderScreen(t);
@@ -263,7 +315,7 @@ test("unticking the last gate group stays explicit and blocks Save instead of fl
   // on everything, which is the opposite of what unticking a box asks for.
   assert.equal(root.findByProps({ "aria-label": "Only the groups I select" }).props.checked, true);
   assert.equal(gateChecksBox().props.checked, false);
-  assert.match(nodeText(root), /Save is disabled: acme\/web: gate groups selection is empty\./);
+  assert.match(saveBarText(), /Save is disabled: gate groups selection is empty\./);
 
   // The radio is the only way back to the default, and it is what keeps an
   // empty array off the wire: the server refuses one.
@@ -279,7 +331,7 @@ test("unticking the last gate group stays explicit and blocks Save instead of fl
 });
 
 test("converting a legacy repository to groups preserves its commands and still round-trips", async (t) => {
-  const { root, calls } = renderScreen(t);
+  const { root, calls } = renderScreen(t, undefined, CONFIG, { repoPath: "acme/legacy" });
   expandRepo(root, "acme/legacy");
 
   act(() => {
@@ -290,14 +342,16 @@ test("converting a legacy repository to groups preserves its commands and still 
     saveButton(root).props.onClick();
   });
 
-  const sent = submittedConfig(calls);
-  const legacy = sent.repositories[1];
+  const legacy = submittedConfig(calls).repositories[0];
+  // Not `commands: undefined`: the entry page diffs the draft against the saved
+  // profile field by field, and a key left behind holding undefined reads as a
+  // change nobody made.
   assert.equal("commands" in legacy, false);
   assert.deepEqual(legacy.groups, { checks: { commands: ["make check"] } });
-  // The other repository and the top-level timeout are untouched by a
-  // conversion that only rewrites the second one.
-  assert.deepEqual(sent.repositories[0], CONFIG.repositories[0]);
-  assert.equal(sent.batchTimeoutMinutes, 45);
+  // The entry still names itself, because the engine reads the provider and
+  // path out of it even though the route addresses the repository by id.
+  assert.equal(legacy.provider, "gitlab");
+  assert.equal(legacy.repoPath, "acme/legacy");
 });
 
 test("a blank command in a group disables Save and names the blocker instead of failing silently", (t) => {
@@ -317,7 +371,7 @@ test("a blank command in a group disables Save and names the blocker instead of 
   // button gets a one-line summary naming the first blocker: neither a grey
   // button nor a silent gate, an operator can act on what they see.
   assert.match(nodeText(root), /Empty command\. Fill it in or remove this row before saving\./);
-  assert.match(nodeText(root), /Save is disabled: acme\/web: group "checks": empty command\./);
+  assert.match(saveBarText(), /Save is disabled: group "checks": empty command\./);
 });
 
 test("a group with no commands and no extends disables Save with its own inline message", (t) => {
@@ -362,116 +416,16 @@ test("a group with no commands and no extends disables Save with its own inline 
     nodeText(root),
     /This group has no commands and does not extend another group, so it will not run\./,
   );
-  assert.match(nodeText(root), /Save is disabled: acme\/web: group "checks":/);
-});
-
-test("a server rejection on save is surfaced and the config keeps the attempted edit", async (t) => {
-  const { root, calls } = renderScreen(t, () =>
-    Response.json({ error: "env var name must be SCREAMING_SNAKE_CASE" }, { status: 400 }),
-  );
-  expandRepo(root, "acme/web");
-  expandSection(root, "Setup (1 command)");
-
-  const setupInput = root.findAll(
-    (node) => node.type === "input" && node.props.value === "make bootstrap",
-  )[0];
-  act(() => {
-    setupInput.props.onChange({ target: { value: "make bootstrap-fast" } });
-  });
-
-  await act(async () => {
-    saveButton(root).props.onClick();
-  });
-
-  assert.equal(writes(calls).length, 1);
-  assert.match(nodeText(root), /env var name must be SCREAMING_SNAKE_CASE/);
-  const setupInputAfter = root.findAll(
-    (node) => node.type === "input" && node.props.value === "make bootstrap-fast",
-  )[0];
-  assert.ok(setupInputAfter, "the failed save must not revert the in-progress edit");
-});
-
-test("a network failure on save is surfaced and the config keeps the attempted edit", async (t) => {
-  // fetch rejecting (offline, DNS, CORS) rather than resolving with a
-  // Response: the save()/restore() try blocks have no Response to read an
-  // error out of, so this exercises the catch path renderScreen's stub
-  // cannot reach.
-  (globalThis as { fetch: unknown }).fetch = async () => {
-    throw new TypeError("Failed to fetch");
-  };
-  let renderer!: ReactTestRenderer;
-  act(() => {
-    renderer = create(<RepositoryScriptsScreen initial={INITIAL} canEdit />);
-  });
-  t.after(() => act(() => renderer.unmount()));
-  const root = renderer.root;
-  expandRepo(root, "acme/web");
-  expandSection(root, "Setup (1 command)");
-
-  const setupInput = root.findAll(
-    (node) => node.type === "input" && node.props.value === "make bootstrap",
-  )[0];
-  act(() => {
-    setupInput.props.onChange({ target: { value: "make bootstrap-fast" } });
-  });
-
-  await act(async () => {
-    saveButton(root).props.onClick();
-  });
-
-  assert.match(
-    nodeText(root),
-    /Could not reach the server\. Check your connection and try again\./,
-  );
-  const setupInputAfter = root.findAll(
-    (node) => node.type === "input" && node.props.value === "make bootstrap-fast",
-  )[0];
-  assert.ok(setupInputAfter, "a network failure on save must not revert the in-progress edit");
-});
-
-test("a network failure on restore is surfaced instead of showing nothing", async (t) => {
-  const olderConfig: PrePrCheckConfig = { ...CONFIG, batchTimeoutMinutes: 30 };
-  const initial: PrePrChecksResponse = {
-    current: versionOf(CONFIG, 2),
-    versions: [versionOf(CONFIG, 2), versionOf(olderConfig, 1)],
-  };
-  (globalThis as { fetch: unknown }).fetch = async () => {
-    throw new TypeError("Failed to fetch");
-  };
-  let renderer!: ReactTestRenderer;
-  act(() => {
-    renderer = create(<RepositoryScriptsScreen initial={initial} canEdit />);
-  });
-  t.after(() => act(() => renderer.unmount()));
-  const root = renderer.root;
-
-  // Fresh from `initial`, config equals savedConfig, so restore is not
-  // gated behind the dirty-discard confirm and goes straight to the
-  // network call this test means to fail.
-  act(() => {
-    root
-      .findAll((node) => node.type === "button" && nodeText(node).trim() === "Restore")[0]
-      .props.onClick();
-  });
-  await act(async () => {
-    root
-      .findAll((node) => node.type === "button" && nodeText(node).includes("Confirm restore"))[0]
-      .props.onClick();
-  });
-
-  assert.match(
-    nodeText(root),
-    /Could not reach the server\. Check your connection and try again\./,
-  );
+  assert.match(saveBarText(), /Save is disabled: group "checks":/);
 });
 
 test("the env editor is absent for a legacy repository and appears after converting to groups", (t) => {
-  const { root } = renderScreen(t);
+  const { root } = renderScreen(t, undefined, CONFIG, { repoPath: "acme/legacy" });
   expandRepo(root, "acme/legacy");
 
   // The legacy flat-commands shape is server-side .strict() with no env key,
   // so saving env names on it 400s; the section stays hidden until conversion.
-  assert.equal(repoCards(root).length, 2);
+  assert.equal(repoCards(root).length, 1);
   const legacyCard = repoCard(root, "acme/legacy");
 
   assert.doesNotMatch(nodeText(legacyCard), /Env vars/);
@@ -492,56 +446,6 @@ test("the env editor is absent for a legacy repository and appears after convert
     ).length,
     1,
   );
-});
-
-test("Add repository surfaces a GitLab 401 by name and still offers manual entry, not a dead end", async (t) => {
-  (globalThis as { fetch: unknown }).fetch = async (url: string) => {
-    if (String(url) === "/api/repositories") {
-      return Response.json({
-        repositories: [],
-        providers: [{ provider: "gitlab", status: "error", error: "401 Unauthorized" }],
-      });
-    }
-    throw new Error(`unexpected fetch ${url}`);
-  };
-  let renderer!: ReactTestRenderer;
-  act(() => {
-    renderer = create(<RepositoryScriptsScreen initial={INITIAL} canEdit />);
-  });
-  t.after(() => act(() => renderer.unmount()));
-  const root = renderer.root;
-
-  await act(async () => {
-    button(root, "+ Add repository").props.onClick();
-  });
-  await act(async () => {});
-
-  assert.match(
-    nodeText(root),
-    /gitlab: 401 Unauthorized\. Enter a gitlab repository manually below\./,
-  );
-  assert.match(
-    nodeText(root),
-    /No repositories available from a connected provider\. Enter one manually below\./,
-  );
-
-  // Manual entry stays reachable regardless of the provider error, rather
-  // than only appearing when the whole request throws.
-  const manualInput = root.findAll(
-    (node) => node.type === "input" && node.props.placeholder === "owner/repo",
-  )[0];
-  act(() => {
-    manualInput.props.onChange({ target: { value: "acme/manual" } });
-  });
-  const addManual = root
-    .findAll((node) => node.type === "button")
-    .find((node) => nodeText(node).trim() === "Add");
-  assert.ok(addManual, "expected the manual-entry Add button");
-  act(() => {
-    addManual!.props.onClick();
-  });
-
-  assert.match(nodeText(root), /acme\/manual/);
 });
 
 test("deleting the only gated group warns before the click, matching GateGroupsEditor's after-the-fact notice", (t) => {
@@ -632,8 +536,8 @@ test("a colliding rename draft blocks Save with a named blocker, and the committ
 
   assert.equal(saveButton(root).props.disabled, true);
   assert.match(
-    nodeText(root),
-    /Save is disabled: acme\/web: group name "checks" duplicates an existing group\./,
+    saveBarText(),
+    /Save is disabled: group name "checks" duplicates an existing group\./,
   );
 
   // Bypass the disabled button the way a stray click race could: save()
@@ -644,29 +548,6 @@ test("a colliding rename draft blocks Save with a named blocker, and the committ
   });
   const sent = submittedConfig(calls);
   assert.deepEqual(Object.keys(sent.repositories[0].groups ?? {}).sort(), ["checks", "lint"]);
-});
-
-test("the batch timeout field caps entry at 180 minutes and explains why the cap matters", (t) => {
-  const { root } = renderScreen(t);
-
-  const batchTimeoutInput = root.findAll(
-    (node) => node.type === "input" && node.props.type === "number" && node.props.value === 45,
-  )[0];
-  assert.equal(batchTimeoutInput.props.max, 180);
-
-  act(() => {
-    batchTimeoutInput.props.onChange({ target: { value: "500" } });
-  });
-
-  const clampedInput = root.findAll(
-    (node) => node.type === "input" && node.props.type === "number" && node.props.value === 180,
-  )[0];
-  assert.ok(clampedInput, "expected the batch timeout to clamp to the 180-minute server cap");
-
-  assert.match(
-    nodeText(root),
-    /Not deducted from the run's duration budget; it does extend how long the run holds a dispatch slot\./,
-  );
 });
 
 test("the install warning reads shell structure instead of matching anywhere in the line", () => {
@@ -741,8 +622,8 @@ test("two groups extending each other block Save with the cycle spelled out", (t
 
   assert.equal(saveButton(root).props.disabled, true);
   assert.match(
-    nodeText(root),
-    /Save is disabled: acme\/web: cycle in extends: checks -> lint -> checks\./,
+    saveBarText(),
+    /Save is disabled: cycle in extends: checks -> lint -> checks\./,
   );
 
   // Breaking the cycle in either direction has to clear the blocker.
@@ -811,8 +692,8 @@ test("the cycle blocker names the rotation starting where the back edge closes",
 
   assert.equal(saveButton(root).props.disabled, true);
   assert.match(
-    nodeText(root),
-    /Save is disabled: acme\/web: cycle in extends: lint -> verify -> lint\./,
+    saveBarText(),
+    /Save is disabled: cycle in extends: lint -> verify -> lint\./,
   );
 });
 
@@ -834,7 +715,7 @@ test("a cycle is called out on the cards it runs through, not only above Save", 
     ],
   });
 
-  assert.match(nodeText(root), /Save is disabled: acme\/web: cycle in extends: c -> b -> c\./);
+  assert.match(saveBarText(), /Save is disabled: cycle in extends: c -> b -> c\./);
   for (const name of ["b", "c"]) {
     assert.match(
       nodeText(root.findByProps({ name })),
@@ -883,8 +764,8 @@ test("an invalid rename draft is held back instead of becoming a group key", (t)
   assert.ok(root.findByProps({ name: "test" }), "the invalid draft must not have committed");
   assert.equal(saveButton(root).props.disabled, true);
   assert.match(
-    nodeText(root),
-    /Save is disabled: acme\/web: group name "2fa" is invalid \(lowercase letters, digits and dashes, starting with a letter, at most 40 characters\)\./,
+    saveBarText(),
+    /Save is disabled: group name "2fa" is invalid \(lowercase letters, digits and dashes, starting with a letter, at most 40 characters\)\./,
   );
 
   // A legal name still has to be applied: it commits on blur, not per keystroke.
@@ -892,8 +773,8 @@ test("an invalid rename draft is held back instead of becoming a group key", (t)
     groupNameInputs(root)[1].props.onChange({ target: { value: "two-fa" } });
   });
   assert.match(
-    nodeText(root),
-    /Save is disabled: acme\/web: group name "two-fa" is not applied yet; press Enter or click outside the field\./,
+    saveBarText(),
+    /Save is disabled: group name "two-fa" is not applied yet; press Enter or click outside the field\./,
   );
   act(() => {
     groupNameInputs(root)[1].props.onBlur({});
@@ -903,7 +784,7 @@ test("an invalid rename draft is held back instead of becoming a group key", (t)
     groupNameInputs(root).map((input) => input.props.value),
     ["lint", "two-fa"],
   );
-  assert.doesNotMatch(nodeText(root), /Save is disabled/);
+  assert.doesNotMatch(saveBarText(), /Save is disabled/);
 });
 
 test("an extends reference to a group that does not exist is reported, not shown as clean", (t) => {
@@ -921,29 +802,13 @@ test("an extends reference to a group that does not exist is reported, not shown
 
   assert.equal(saveButton(root).props.disabled, true);
   assert.match(
-    nodeText(root),
-    /Save is disabled: acme\/web: group "lint": extends unknown group "typo"\./,
+    saveBarText(),
+    /Save is disabled: group "lint": extends unknown group "typo"\./,
   );
 });
 
-test("the Save blocker is a live region the disabled button points at", (t) => {
-  // A disabled button takes no focus and announces nothing, so the reason has
-  // to reach assistive tech on its own.
-  const { root } = renderScreen(t);
-  expandRepo(root, "acme/web");
-  expandGroup(root, "checks");
-  act(() => {
-    buttons(root, "Add command")[0].props.onClick();
-  });
-
-  const describedBy = saveButton(root).props["aria-describedby"];
-  assert.ok(describedBy, "expected Save to reference the blocker while it is disabled");
-  const blocker = root.findByProps({ id: describedBy, role: "status" });
-  assert.match(nodeText(blocker), /Save is disabled: acme\/web: group "checks": empty command\./);
-});
-
 test('the legacy repository section header no longer reads the stale "Checks" label', (t) => {
-  const { root } = renderScreen(t);
+  const { root } = renderScreen(t, undefined, CONFIG, { repoPath: "acme/legacy" });
   expandRepo(root, "acme/legacy");
 
   const legacyCard = repoCard(root, "acme/legacy");
@@ -1073,41 +938,6 @@ test("a group added while the gate runs every group is left out of the selection
   assert.equal("gateGroups" in submittedConfig(calls).repositories[0], false);
 });
 
-test("one repository is open at a time and a collapsed one still names its first blocker", (t) => {
-  const { root } = renderScreen(t);
-
-  // Two repositories, so neither opens by itself.
-  assert.equal(repoCard(root, "acme/web").findAll((n) => n.type === "input").length, 0);
-
-  expandRepo(root, "acme/web");
-  expandGroup(root, "checks");
-  act(() => {
-    buttons(root, "Add command")[0].props.onClick();
-  });
-  expandRepo(root, "acme/legacy");
-
-  const web = repoCard(root, "acme/web");
-  assert.equal(
-    web.findAll((n) => n.props["aria-expanded"] === true).length,
-    0,
-    "opening the second repository closes the first",
-  );
-  // Collapsing must never be a way to lose an error.
-  assert.match(nodeText(web), /group "checks": empty command/);
-  assert.match(nodeText(web), /2 groups · gate: checks · setup 1 · env 1/);
-});
-
-test("a lone configured repository starts expanded and can still be closed", (t) => {
-  const root = renderConfig(t, DEFAULT_GATE_CONFIG);
-  assert.match(nodeText(root), /Script groups/);
-
-  act(() => {
-    toggleOf(repoCard(root, "acme/web")).props.onClick();
-  });
-  assert.doesNotMatch(nodeText(root), /Script groups/);
-  assert.match(nodeText(root), /2 groups · gate: all groups/);
-});
-
 test("a collapsed group card keeps its own error on the summary row", (t) => {
   const { root } = renderScreen(t);
   expandRepo(root, "acme/web");
@@ -1216,48 +1046,16 @@ test("closing a group card discards a rename draft instead of blocking Save from
     nameInput.props.onChange({ target: { value: "lint" } });
   });
   assert.match(
-    nodeText(root),
-    /Save is disabled: acme\/web: group name "lint" duplicates an existing group\./,
+    saveBarText(),
+    /Save is disabled: group name "lint" duplicates an existing group\./,
   );
 
   // Closing the card takes the only field that could fix the draft off screen,
   // so the draft goes with it rather than leaving Save blocked on a name
   // nothing on the page still shows.
   expandGroup(root, "checks");
-  assert.doesNotMatch(nodeText(root), /Save is disabled/);
+  assert.doesNotMatch(saveBarText(), /Save is disabled/);
   assert.ok(root.findByProps({ name: "checks" }), "the committed name is untouched");
-});
-
-test("the same path under two providers gets two independent native radio groups", (t) => {
-  // AddRepository dedupes on provider AND path, so this pair is a configuration
-  // a user can really reach. Naming both radio groups after the path alone
-  // would make the browser treat all four inputs as one group, and picking a
-  // gate mode on one card would silently unpick the other's.
-  const root = renderConfig(t, {
-    repositories: [
-      {
-        provider: "github",
-        repoPath: "acme/web",
-        groups: { checks: { commands: ["pnpm test"] } },
-      },
-      {
-        provider: "gitlab",
-        repoPath: "acme/web",
-        groups: { checks: { commands: ["pnpm test"] } },
-      },
-    ],
-  });
-
-  // One repository is open at a time, so each name is read from its own card.
-  expandRepo(root, "acme/web");
-  const githubRadioName = root.findByProps({ "aria-label": "Every group (default)" }).props.name;
-  act(() => {
-    toggleOf(repoCards(root)[1]).props.onClick();
-  });
-  const gitlabRadioName = root.findByProps({ "aria-label": "Every group (default)" }).props.name;
-
-  assert.ok(githubRadioName, "expected the gate radios to be in a named native group");
-  assert.notEqual(githubRadioName, gitlabRadioName);
 });
 
 test("a rename commits on blur and on Enter, never on a keystroke, and Escape reverts it", async (t) => {
@@ -1332,26 +1130,20 @@ test("collapsing mid-rename keeps the committed name, prefixes and all, on the w
   assert.deepEqual(sent.repositories[0].gateGroups, ["checks"]);
 });
 
-test("an open group card follows its group when a save comes back with the keys reordered", async (t) => {
-  const { root } = renderScreen(t, (body) => {
-    const config = (body as { config: PrePrCheckConfig }).config;
-    const [web, legacy] = config.repositories;
-    // The stored order is whatever the response carries: jsonb does not hand
-    // back the order that went up, and a restore can bypass the server's
-    // canonical ordering entirely.
-    const reordered = { lint: web.groups!.lint, checks: web.groups!.checks };
-    return Response.json({
-      version: versionOf(
-        { ...config, repositories: [{ ...web, groups: reordered }, legacy] },
-        2,
-      ),
-    });
-  });
+test("an open group card follows its group when a save comes back with the keys reordered", (t) => {
+  const web = repoOf(CONFIG, "acme/web");
+  const harness = renderEntry(t, web);
+  const root = harness.root;
   expandRepo(root, "acme/web");
   expandGroup(root, "lint");
 
-  await act(async () => {
-    saveButton(root).props.onClick();
+  // What a save coming back does: the entry is replaced with the stored one,
+  // whose key order is whatever the response carries. jsonb does not hand back
+  // the order that went up, and a restore can bypass the canonical ordering
+  // entirely.
+  harness.set({
+    ...web,
+    groups: { lint: web.groups!.lint, checks: web.groups!.checks },
   });
 
   // Keyed by index, the open card would now be whichever group landed first.
@@ -1360,56 +1152,6 @@ test("an open group card follows its group when a save comes back with the keys 
     "the card that was open is still the one that is open",
   );
   assert.equal(root.findByProps({ name: "checks" }).findAll((n) => n.type === "input").length, 0);
-});
-
-test("reopening a repository brings back the cards and sections that were open", (t) => {
-  const { root } = renderScreen(t);
-  expandRepo(root, "acme/web");
-  expandGroup(root, "lint");
-  expandSection(root, "Setup (1 command)");
-
-  expandRepo(root, "acme/web");
-  expandRepo(root, "acme/web");
-
-  assert.ok(
-    root.findByProps({ name: "lint" }).findAll((n) => n.type === "input")[0],
-    "the open group card comes back",
-  );
-  assert.ok(
-    root.findAll((n) => n.type === "input" && n.props.value === "make bootstrap")[0],
-    "the open secondary section comes back",
-  );
-});
-
-test("removing a repository leaves the one that is open open", (t) => {
-  const root = renderConfig(t, {
-    repositories: [
-      { provider: "github", repoPath: "acme/one", groups: { checks: { commands: ["a"] } } },
-      { provider: "github", repoPath: "acme/two", groups: { checks: { commands: ["b"] } } },
-      { provider: "github", repoPath: "acme/three", groups: { checks: { commands: ["c"] } } },
-    ],
-  });
-  expandRepo(root, "acme/two");
-
-  const removeThird = () =>
-    repoCard(root, "acme/three").findAll(
-      (n) => n.type === "button" && nodeText(n).trim() === "Remove",
-    )[0];
-  act(() => {
-    removeThird().props.onClick();
-  });
-  act(() => {
-    repoCard(root, "acme/three")
-      .findAll((n) => n.type === "button" && nodeText(n).trim() === "Confirm remove")[0]
-      .props.onClick();
-  });
-
-  assert.equal(repoCards(root).length, 2, "the confirmed removal took the repository out");
-  assert.equal(
-    repoCard(root, "acme/two").findAll((n) => n.props["aria-expanded"] === true).length > 0,
-    true,
-    "removing a different repository must not collapse the one being worked in",
-  );
 });
 
 test("two auto-added groups are both listed and undoable, and the note survives a collapse", (t) => {
@@ -1511,7 +1253,7 @@ test("the gate plan previews the selection, not every group the repository has",
 });
 
 test("a legacy repository previews the way the engine normalizes it, as one group", (t) => {
-  const { root } = renderScreen(t);
+  const { root } = renderScreen(t, undefined, CONFIG, { repoPath: "acme/legacy" });
   expandRepo(root, "acme/legacy");
   expandSection(root, "Preview gate plan");
 
@@ -1532,8 +1274,7 @@ const ENV_CONFIG: PrePrCheckConfig = {
 };
 
 test("the env section offers what the deployment forwards and flags a saved name it does not", async (t) => {
-  const { root, calls } = renderScreen(t, undefined, {
-    ...initialOf(ENV_CONFIG),
+  const { root, calls } = renderScreen(t, undefined, initialOf(ENV_CONFIG), {
     allowedEnv: ["NPM_TOKEN"],
   });
 
@@ -1570,91 +1311,22 @@ test("a worker that did not report an allowlist gets no chips and no accusations
   assert.doesNotMatch(nodeText(root), /Not forwarded by this deployment/);
 });
 
-// ── Sticky save bar ─────────────────────────────────────────────────────────
+// ── A repository with no scripts yet ────────────────────────────────────────
 
-function batchTimeoutField(root: ReactTestInstance, value: number): ReactTestInstance {
-  const field = root.findAll(
-    (node) => node.type === "input" && node.props.type === "number" && node.props.value === value,
-  )[0];
-  assert.ok(field, `expected the batch timeout field holding ${value}`);
-  return field;
-}
-
-test("the save bar appears with unsaved changes and discards them in two steps", (t) => {
-  const { root } = renderScreen(t);
-  assert.doesNotMatch(nodeText(root), /Unsaved changes/);
+test("a repository with no scripts yet is born empty, with a hint instead of an error", (t) => {
+  // No entry at all is a legitimate profile, the way a repository absent from
+  // the old global configuration was: adding one is a click, not a repository
+  // picker, because the repository is already the page.
+  const harness = renderEntry(t, null);
+  const { root } = harness;
+  assert.match(nodeText(root), /No script groups\./);
+  assert.equal(harness.blocker(), null, "a repository nobody configured is not a mistake");
 
   act(() => {
-    batchTimeoutField(root, 45).props.onChange({ target: { value: "60" } });
-  });
-  assert.match(nodeText(root), /Unsaved changes/);
-  assert.match(
-    nodeText(root),
-    /Applies to every run that reaches the gate after saving, including runs already in progress\. Recorded gate results are keyed to this configuration and will be re-run\./,
-  );
-
-  // One click arms, the second reverts: same shape as Confirm restore.
-  act(() => {
-    button(root, "Discard").props.onClick();
-  });
-  assert.match(nodeText(root), /Unsaved changes/, "arming must not have discarded anything yet");
-  act(() => {
-    button(root, "Confirm discard").props.onClick();
+    button(root, "Add script groups").props.onClick();
   });
 
-  assert.doesNotMatch(nodeText(root), /Unsaved changes/);
-  assert.ok(batchTimeoutField(root, 45), "the last loaded value is back");
-});
-
-test("the save bar's blocker opens the repository it names", (t) => {
-  const { root } = renderScreen(t);
-  expandRepo(root, "acme/web");
-  expandGroup(root, "checks");
-  act(() => {
-    buttons(root, "Add command")[0].props.onClick();
-  });
-  // Work moves on to another repository, and the offending one collapses.
-  expandRepo(root, "acme/legacy");
-  assert.equal(
-    repoCard(root, "acme/web").findAll((n) => n.props["aria-expanded"] === true).length,
-    0,
-  );
-
-  act(() => {
-    buttons(root, "Show me")[0].props.onClick();
-  });
-  assert.ok(
-    repoCard(root, "acme/web").findAll((n) => n.props["aria-expanded"] === true).length > 0,
-    "the blocker is a way back to the problem, not only a description of it",
-  );
-});
-
-// ── A new repository entry ──────────────────────────────────────────────────
-
-/** Opens the picker (whose catalog fetch fails under the default stub, which is
- *  exactly the manual-entry path) and adds one repository by hand. */
-function addRepositoryByHand(root: ReactTestInstance, repoPath: string): void {
-  act(() => {
-    button(root, "+ Add repository").props.onClick();
-  });
-  const manual = root.findAll(
-    (node) => node.type === "input" && node.props.placeholder === "owner/repo",
-  )[0];
-  act(() => {
-    manual.props.onChange({ target: { value: repoPath } });
-  });
-  const add = root.findAll((node) => node.type === "button").find((n) => nodeText(n).trim() === "Add");
-  assert.ok(add, "expected the manual-entry Add button");
-  act(() => {
-    add.props.onClick();
-  });
-}
-
-test("a repository added by hand is born empty, with a hint instead of an error", (t) => {
-  const { root } = renderScreen(t);
-  addRepositoryByHand(root, "acme/new");
-
-  const card = () => repoCard(root, "acme/new");
+  const card = () => repoCard(root, "acme/web");
   assert.match(nodeText(card()), /No commands yet\./);
   assert.match(nodeText(card()), /Add at least one command to save\./);
   assert.doesNotMatch(nodeText(card()), /Empty command\./);
@@ -1743,7 +1415,7 @@ test("a command can be moved inside its group, because the order is the run orde
 // ── Removal confirmations ───────────────────────────────────────────────────
 
 test("removing a group asks first and says what the removal costs", (t) => {
-  const { root } = renderScreen(t);
+  const { root, calls } = renderScreen(t);
   expandRepo(root, "acme/web");
   expandGroup(root, "lint");
 
@@ -1760,140 +1432,28 @@ test("removing a group asks first and says what the removal costs", (t) => {
     lint().findAll((n) => n.type === "button" && nodeText(n).trim() === "Cancel")[0].props.onClick();
   });
   assert.ok(root.findByProps({ name: "lint" }), "cancelling keeps the group");
-  assert.equal(saveButton(root).props.disabled, true, "cancelling changed nothing to save");
-});
-
-test("removing a repository asks first and names what goes with it", (t) => {
-  const { root } = renderScreen(t);
-  const web = () => repoCard(root, "acme/web");
-
-  act(() => {
-    web().findAll((n) => n.type === "button" && nodeText(n).trim() === "Remove")[0].props.onClick();
-  });
-  assert.match(
-    nodeText(web()),
-    /Removes this repository along with all its groups, setup commands and env settings\./,
+  // Save's own disabled state now belongs to the entry page, which arms it on a
+  // dirty draft; what this editor owes is an entry the cancel left alone.
+  assert.deepEqual(
+    submittedConfig(calls).repositories[0],
+    repoOf(CONFIG),
+    "cancelling changed nothing to save",
   );
-
-  act(() => {
-    web().findAll((n) => n.type === "button" && nodeText(n).trim() === "Cancel")[0].props.onClick();
-  });
-  assert.equal(repoCards(root).length, 2, "cancelling keeps the repository");
 });
 
 // ── Manual entry and the repository catalog ─────────────────────────────────
 
-test("a pasted repository URL is reduced to a path, and a shape nothing can match is refused", (t) => {
-  const { root } = renderScreen(t);
-  act(() => {
-    button(root, "+ Add repository").props.onClick();
-  });
-  const manual = () =>
-    root.findAll((node) => node.type === "input" && node.props.placeholder === "owner/repo")[0];
-
-  act(() => {
-    manual().props.onChange({ target: { value: "https://github.com/acme/web/tree/main/apps" } });
-  });
-  assert.equal(manual().props.value, "acme/web");
-
-  act(() => {
-    manual().props.onChange({ target: { value: "acme" } });
-  });
-  assert.match(nodeText(root), /Enter owner\/repo, or paste the repository URL\./);
-  const add = root.findAll((node) => node.type === "button").find((n) => nodeText(n).trim() === "Add");
-  assert.equal(add?.props.disabled, true);
-});
-
-test("a configured path the catalog does not list is called out on its own card", async (t) => {
-  const urls: string[] = [];
-  (globalThis as { fetch: unknown }).fetch = async (url: string) => {
-    urls.push(String(url));
-    assert.equal(String(url), "/api/repositories");
-    return Response.json({
-      repositories: [
-        {
-          provider: "github",
-          repoPath: "acme/other",
-          name: "other",
-          owner: "acme",
-          defaultBranch: "main",
-          private: false,
-          archived: false,
-        },
-      ],
-      providers: [
-        { provider: "github", status: "ready" },
-        // Listed but unusable, so nothing under it may be called missing.
-        { provider: "gitlab", status: "error", error: "401 Unauthorized" },
-      ],
-    });
-  };
-  let renderer!: ReactTestRenderer;
-  act(() => {
-    renderer = create(<RepositoryScriptsScreen initial={INITIAL} canEdit />);
-  });
-  t.after(() => act(() => renderer.unmount()));
-  const root = renderer.root;
-
-  // No picker, no click: a settled fleet never opens Add repository, and that
-  // is exactly the fleet with a repository nobody has renamed the config for.
-  await act(async () => {});
-
-  assert.match(
-    nodeText(repoCard(root, "acme/web")),
-    /Not found in the github catalog\. Scripts for this path will never run\./,
-  );
-  assert.doesNotMatch(
-    nodeText(repoCard(root, "acme/legacy")),
-    /Not found in the/,
-    "a provider that could not be listed proves nothing about its repositories",
-  );
-
-  // Once per mount, and the picker reuses it rather than asking again.
-  await act(async () => {
-    button(root, "+ Add repository").props.onClick();
-  });
-  await act(async () => {});
-  assert.deepEqual(urls, ["/api/repositories"]);
-});
-
 // ── History ─────────────────────────────────────────────────────────────────
-
-test("history marks the newest version and loads an older one as an unsaved edit", (t) => {
-  const older = versionOf({ repositories: [] }, 1);
-  const newest = versionOf(CONFIG, 2);
-  const { root, calls } = renderScreen(t, undefined, {
-    current: newest,
-    versions: [newest, older],
-  });
-
-  const historyRow = (version: number) =>
-    root
-      .findAll((n) => n.type === "div" && typeof n.props.className === "string")
-      .find((n) => nodeText(n).startsWith(`v${version}`))!;
-  assert.match(nodeText(historyRow(2)), /current/);
-  assert.doesNotMatch(nodeText(historyRow(1)), /current/);
-  assert.equal(buttons(root, "Restore").length, 1, "the newest version has nothing to restore to");
-
-  act(() => {
-    button(root, "Preview").props.onClick();
-  });
-
-  assert.match(nodeText(root), /No repository scripts configured\. The gate is disabled\./);
-  assert.match(nodeText(root), /Unsaved changes/);
-  assert.match(nodeText(root), /loaded from v1/);
-  assert.equal(writes(calls).length, 0, "a preview writes nothing on its own");
-});
 
 // ── Legacy entries and the per-command timeout ──────────────────────────────
 
 test("a legacy card says which group it runs as and stays honest about converting", (t) => {
-  const { root } = renderScreen(t);
+  const { root } = renderScreen(t, undefined, CONFIG, { repoPath: "acme/legacy" });
   const legacy = () => repoCard(root, "acme/legacy");
 
-  // Visible while collapsed too: the group name is what a workflow block has
-  // to spell to reach these commands.
-  assert.match(nodeText(legacy()), /runs as group "checks"/);
+  // The group name is what a workflow block has to spell to reach these
+  // commands, so the card says it rather than leaving it to be guessed.
+  assert.match(nodeText(legacy()), /the engine runs it as the single group "checks"\./);
 
   expandRepo(root, "acme/legacy");
   assert.match(
@@ -1947,19 +1507,12 @@ test("a group named after a secondary section does not share that section's open
 // ── Off-allowlist env names ─────────────────────────────────────────────────
 
 test("an off-allowlist env name blocks Save only when the saved config does not already carry it", (t) => {
-  const { root } = renderScreen(t, undefined, {
-    ...initialOf(ENV_CONFIG),
+  const { root } = renderScreen(t, undefined, initialOf(ENV_CONFIG), {
     allowedEnv: ["NPM_TOKEN"],
   });
 
   // OLD_TOKEN is stored and off the list: blocking Save on it would trap an
   // operator in an editor that cannot even save the edit removing it.
-  const emptyBatchField = root.findAll(
-    (n) => n.type === "input" && n.props.type === "number" && n.props.value === "",
-  )[0];
-  act(() => {
-    emptyBatchField.props.onChange({ target: { value: "60" } });
-  });
   assert.equal(saveButton(root).props.disabled, false);
 
   expandSection(root, "Env vars (1)");
@@ -1977,8 +1530,8 @@ test("an off-allowlist env name blocks Save only when the saved config does not 
   // the button has to stop before the round trip does.
   assert.equal(saveButton(root).props.disabled, true);
   assert.match(
-    nodeText(root),
-    /Save is disabled: acme\/web: env var OTHER_TOKEN is not allowlisted on this worker; the save will be rejected\./,
+    saveBarText(),
+    /Save is disabled: env var OTHER_TOKEN is not allowlisted on this worker; the save will be rejected\./,
   );
   assert.match(
     nodeText(root),
@@ -1992,267 +1545,6 @@ test("an off-allowlist env name blocks Save only when the saved config does not 
 });
 
 // ── Concurrent saves ────────────────────────────────────────────────────────
-
-test("a save refused as stale reports the newer version and keeps the edit", async (t) => {
-  const { root, calls } = renderScreen(t, (body) =>
-    body === undefined
-      ? Response.json({ repositories: [], providers: [] })
-      : Response.json({ error: "version_conflict", latestVersion: 7 }, { status: 409 }),
-  );
-  act(() => {
-    batchTimeoutField(root, 45).props.onChange({ target: { value: "60" } });
-  });
-  await act(async () => {
-    saveButton(root).props.onClick();
-  });
-
-  const put = writes(calls)[0];
-  assert.equal(
-    (JSON.parse(String(put.init?.body)) as { baseVersion?: number }).baseVersion,
-    1,
-    "the version this edit started from has to travel with it, or nothing can detect the race",
-  );
-  assert.match(
-    nodeText(root),
-    /Version 7 was saved by someone else while you were editing\. Your changes here stay until you load it, and loading it discards them\./,
-  );
-  // History could not be refreshed with version 7 here (the GET stub knows no
-  // versions), so the only way to it is the page.
-  assert.equal(buttons(root, "Load the newer version (reloads the page)").length, 1);
-  // The point of not clearing: the edit is still worth something, and the
-  // person is the only one who can decide what to do with it.
-  assert.ok(batchTimeoutField(root, 60), "the refused save must not revert the editor");
-  assert.match(nodeText(root), /Unsaved changes/);
-});
-
-test("History adopts a newer version arriving from the server", (t) => {
-  const first = versionOf(CONFIG, 1);
-  let renderer!: ReactTestRenderer;
-  (globalThis as { fetch: unknown }).fetch = async () =>
-    Response.json({ repositories: [], providers: [] });
-  act(() => {
-    renderer = create(
-      <RepositoryScriptsScreen initial={{ current: first, versions: [first] }} canEdit />,
-    );
-  });
-  t.after(() => act(() => renderer.unmount()));
-
-  const second = versionOf({ repositories: [] }, 2);
-  act(() => {
-    renderer.update(
-      <RepositoryScriptsScreen
-        initial={{ current: second, versions: [second, first] }}
-        canEdit
-      />,
-    );
-  });
-
-  // Without this the list is frozen at whatever it was when the tab opened, so
-  // History quietly stops being history.
-  assert.match(nodeText(renderer.root), /v2/);
-  assert.match(nodeText(renderer.root), /current/);
-  // Nothing was being edited, so the editor follows too. Comparing the old
-  // content with the new saved one would otherwise invent "unsaved changes"
-  // nobody made, and arm every exit guard on the screen.
-  assert.doesNotMatch(nodeText(renderer.root), /Unsaved changes/);
-  assert.match(nodeText(renderer.root), /No repository scripts configured/);
-});
-
-test("a live refresh while editing keeps the token, raises the banner and offers the newer version", async (t) => {
-  const first = versionOf(CONFIG, 1);
-  const calls: FetchCall[] = [];
-  (globalThis as { fetch: unknown }).fetch = async (url: string, init?: RequestInit) => {
-    calls.push({ url: String(url), init });
-    return init?.body
-      ? Response.json({ error: "version_conflict", latestVersion: 2 }, { status: 409 })
-      : Response.json({ repositories: [], providers: [] });
-  };
-  let renderer!: ReactTestRenderer;
-  act(() => {
-    renderer = create(
-      <RepositoryScriptsScreen initial={{ current: first, versions: [first] }} canEdit />,
-    );
-  });
-  t.after(() => act(() => renderer.unmount()));
-  const root = renderer.root;
-  act(() => {
-    batchTimeoutField(root, 45).props.onChange({ target: { value: "60" } });
-  });
-
-  // The cockpit's live poll re-renders the server component with a colleague's
-  // save while the edit is still open.
-  const second = versionOf({ repositories: [] }, 2);
-  act(() => {
-    renderer.update(
-      <RepositoryScriptsScreen
-        initial={{ current: second, versions: [second, first] }}
-        canEdit
-      />,
-    );
-  });
-  assert.match(nodeText(root), /Version 2 was saved by someone else while you were editing\./);
-  assert.ok(batchTimeoutField(root, 60), "the refresh must not touch the draft");
-  assert.match(nodeText(root), /Unsaved changes/);
-
-  // The token still names the version the draft was built on, so the worker
-  // refuses, and the banner does not clear itself.
-  await act(async () => {
-    saveButton(root).props.onClick();
-  });
-  const put = writes(calls)[0];
-  assert.equal(
-    (JSON.parse(String(put.init?.body)) as { baseVersion?: number }).baseVersion,
-    1,
-    "a token that followed the poll would let this save overwrite version 2",
-  );
-  assert.match(nodeText(root), /Version 2 was saved by someone else/);
-
-  // Loading the newer version is two steps, and lands on it without a reload.
-  act(() => {
-    button(root, "Load version 2").props.onClick();
-  });
-  assert.match(nodeText(root), /Discard your changes and load version 2\?/);
-  act(() => {
-    button(root, "Yes, discard and load").props.onClick();
-  });
-  assert.doesNotMatch(nodeText(root), /saved by someone else/);
-  assert.doesNotMatch(nodeText(root), /Unsaved changes/);
-  assert.match(nodeText(root), /No repository scripts configured/);
-});
-
-test("the sticky bar's Discard lands on a version a live refresh brought in, without the conflict banner", async (t) => {
-  const first = versionOf(CONFIG, 1);
-  const calls: FetchCall[] = [];
-  (globalThis as { fetch: unknown }).fetch = async (url: string, init?: RequestInit) => {
-    calls.push({ url: String(url), init });
-    if (init?.body) {
-      const config = (JSON.parse(String(init.body)) as { config: PrePrCheckConfig }).config;
-      return Response.json({ version: versionOf(config, 3) });
-    }
-    return Response.json({ repositories: [], providers: [] });
-  };
-  let renderer!: ReactTestRenderer;
-  act(() => {
-    renderer = create(
-      <RepositoryScriptsScreen initial={{ current: first, versions: [first] }} canEdit />,
-    );
-  });
-  t.after(() => act(() => renderer.unmount()));
-  const root = renderer.root;
-  act(() => {
-    batchTimeoutField(root, 45).props.onChange({ target: { value: "60" } });
-  });
-
-  // A live refresh lands while the edit is open, the same as the conflict-banner
-  // case above, but this time the person reaches for the plain sticky-bar
-  // Discard instead of the banner's own "Load version 2".
-  const second = versionOf({ repositories: [] }, 2);
-  act(() => {
-    renderer.update(
-      <RepositoryScriptsScreen
-        initial={{ current: second, versions: [second, first] }}
-        canEdit
-      />,
-    );
-  });
-  assert.match(nodeText(root), /Version 2 was saved by someone else while you were editing\./);
-
-  act(() => {
-    button(root, "Discard").props.onClick();
-  });
-  act(() => {
-    button(root, "Confirm discard").props.onClick();
-  });
-
-  assert.match(nodeText(root), /No repository scripts configured/, "lands on version 2's content");
-  assert.doesNotMatch(nodeText(root), /Unsaved changes/);
-  assert.doesNotMatch(nodeText(root), /saved by someone else/);
-
-  // The token the discard left behind is version 2's, not the one the editor
-  // started from.
-  act(() => {
-    root
-      .findAll((node) => node.type === "input" && node.props.type === "number")[0]
-      .props.onChange({ target: { value: "30" } });
-  });
-  await act(async () => {
-    saveButton(root).props.onClick();
-  });
-  const put = writes(calls)[0];
-  assert.equal(
-    (JSON.parse(String(put.init?.body)) as { baseVersion?: number }).baseVersion,
-    2,
-    "a token still naming version 1 would mean the sticky-bar Discard never adopted the refresh",
-  );
-});
-
-// ── Browser Back ────────────────────────────────────────────────────────────
-
-/** A window just complete enough for the two guards: the listener registry,
- *  confirm, and the history calls the sentinel makes. */
-function stubWindow(t: TestContext) {
-  const listeners = new Map<string, Set<() => void>>();
-  const calls: string[] = [];
-  const state = { answer: true };
-  const win = {
-    addEventListener: (type: string, cb: () => void) => {
-      const set = listeners.get(type) ?? new Set<() => void>();
-      set.add(cb);
-      listeners.set(type, set);
-    },
-    removeEventListener: (type: string, cb: () => void) => listeners.get(type)?.delete(cb),
-    confirm: (message: string) => {
-      calls.push(`confirm(${message})`);
-      return state.answer;
-    },
-    history: {
-      pushState: () => calls.push("pushState"),
-      go: (n: number) => calls.push(`go(${n})`),
-    },
-  };
-  (globalThis as { window?: unknown }).window = win;
-  t.after(() => {
-    delete (globalThis as { window?: unknown }).window;
-  });
-  return {
-    calls,
-    state,
-    fire: (type: string) =>
-      act(() => {
-        const callbacks = [...(listeners.get(type) ?? [])];
-        for (const cb of callbacks) cb();
-      }),
-  };
-}
-
-test("browser Back is caught while there are unsaved changes", (t) => {
-  // Back fires no unload and no router.push, so neither of the other two
-  // guards ever sees it: this is the exit that used to be silent.
-  const win = stubWindow(t);
-  const { root } = renderScreen(t);
-  act(() => {
-    batchTimeoutField(root, 45).props.onChange({ target: { value: "60" } });
-  });
-  assert.deepEqual(win.calls, ["pushState"], "a sentinel entry goes on the stack with the edit");
-
-  win.state.answer = false;
-  win.fire("popstate");
-  assert.deepEqual(
-    win.calls,
-    ["pushState", "confirm(Discard unsaved changes?)", "pushState"],
-    "declining stays put and re-arms the sentinel for the next Back",
-  );
-
-  win.state.answer = true;
-  win.fire("popstate");
-  assert.deepEqual(win.calls, [
-    "pushState",
-    "confirm(Discard unsaved changes?)",
-    "pushState",
-    "confirm(Discard unsaved changes?)",
-    "go(-1)",
-  ]);
-});
 
 // ── Reordering by keyboard ──────────────────────────────────────────────────
 
@@ -2296,22 +1588,11 @@ test("the moved row's own button keeps the focus", (t) => {
   // Without it the keyboard lands on whatever row took that position, so the
   // second press moves someone else's command.
   const focused: string[] = [];
-  (globalThis as { fetch: unknown }).fetch = async () =>
-    Response.json({ repositories: [], providers: [] });
-  let renderer!: ReactTestRenderer;
-  act(() => {
-    renderer = create(
-      <RepositoryScriptsScreen initial={initialOf(TWO_COMMAND_CONFIG)} canEdit />,
-      {
-        createNodeMock: (element) => ({
-          focus: () =>
-            focused.push(String((element.props as Record<string, unknown>)["aria-label"])),
-        }),
-      },
-    );
+  const { root } = renderEntry(t, repoOf(TWO_COMMAND_CONFIG), {
+    createNodeMock: (element) => ({
+      focus: () => focused.push(String(element.props["aria-label"])),
+    }),
   });
-  t.after(() => act(() => renderer.unmount()));
-  const root = renderer.root;
   expandGroup(root, "checks");
 
   act(() => {
@@ -2322,125 +1603,6 @@ test("the moved row's own button keeps the focus", (t) => {
 
 // ── The Save blocker as a way back ──────────────────────────────────────────
 
-test("the blocker opens the collapsed section that produced the issue", (t) => {
-  const { root } = renderScreen(t);
-  expandRepo(root, "acme/web");
-  expandSection(root, "Setup (1 command)");
-  const setupInput = root.findAll(
-    (node) => node.type === "input" && node.props.value === "make bootstrap",
-  )[0];
-  act(() => {
-    setupInput.props.onChange({ target: { value: "" } });
-  });
-  // Both the section and the repository are closed again: the error is only a
-  // sentence above Save now.
-  expandSection(root, "Setup (1 command)");
-  expandRepo(root, "acme/web");
-
-  act(() => {
-    buttons(root, "Show me")[0].props.onClick();
-  });
-
-  const web = repoCard(root, "acme/web");
-  assert.ok(
-    web.findAll((n) => n.type === "input" && n.props.value === "").length > 0,
-    "the offending setup field has to be on screen, not behind two closed headers",
-  );
-});
-
 // ── Preview feedback ────────────────────────────────────────────────────────
 
-test("previewing a version identical to the editor says so instead of doing nothing", (t) => {
-  const older = versionOf(CONFIG, 1);
-  const newest = versionOf(CONFIG, 2);
-  const { root } = renderScreen(t, undefined, { current: newest, versions: [newest, older] });
-
-  act(() => {
-    button(root, "Preview").props.onClick();
-  });
-
-  assert.match(nodeText(root), /v1 is identical to the current version/);
-  assert.doesNotMatch(nodeText(root), /Unsaved changes/, "nothing changed, so nothing is unsaved");
-});
-
 // ── Discard ─────────────────────────────────────────────────────────────────
-
-test("discarding clears the rename draft and the failed-save banner with it", async (t) => {
-  const { root } = renderScreen(t, (body) =>
-    body === undefined
-      ? Response.json({ repositories: [], providers: [] })
-      : Response.json({ error: "nope" }, { status: 400 }),
-  );
-  expandRepo(root, "acme/web");
-  expandGroup(root, "checks");
-
-  // A real edit to save, a failed save, and a rename typed but never committed.
-  act(() => {
-    batchTimeoutField(root, 45).props.onChange({ target: { value: "60" } });
-  });
-  await act(async () => {
-    saveButton(root).props.onClick();
-  });
-  assert.match(nodeText(root), /nope/);
-  act(() => {
-    groupNameInputs(root)[0].props.onChange({ target: { value: "checks-2" } });
-  });
-  assert.match(nodeText(root), /is not applied yet/);
-
-  act(() => {
-    button(root, "Discard").props.onClick();
-  });
-  act(() => {
-    button(root, "Confirm discard").props.onClick();
-  });
-
-  assert.doesNotMatch(nodeText(root), /nope/, "the discarded edit took its error with it");
-  assert.doesNotMatch(
-    nodeText(root),
-    /is not applied yet/,
-    "a rename nobody committed cannot outlive the edit it belonged to",
-  );
-  assert.doesNotMatch(nodeText(root), /Unsaved changes/);
-});
-
-test("an empty store still sends a base version, so the first save is guarded too", async (t) => {
-  // Nothing has ever been stored: there is no version to name, and leaving the
-  // field out means "do not check" to the worker (that is how a dashboard
-  // deployed before the token saves). Two people both writing a first
-  // configuration is exactly the race, so the empty store gets its own token.
-  const { root, calls } = renderScreen(t, (body) =>
-    body === undefined
-      ? Response.json({ repositories: [], providers: [] })
-      : Response.json({ error: "version_conflict", latestVersion: 1 }, { status: 409 }),
-    { current: null, versions: [] },
-  );
-
-  assert.match(nodeText(root), /No repository scripts configured\. The gate is disabled\./);
-  const batchField = root.findAll(
-    (n) => n.type === "input" && n.props.type === "number" && n.props.value === "",
-  )[0];
-  act(() => {
-    batchField.props.onChange({ target: { value: "60" } });
-  });
-
-  await act(async () => {
-    saveButton(root).props.onClick();
-  });
-
-  const put = writes(calls)[0];
-  assert.equal(
-    (JSON.parse(String(put.init?.body)) as { baseVersion?: number }).baseVersion,
-    0,
-    "an absent token is not the same as zero: absent skips the check entirely",
-  );
-  // Someone else got their first configuration in while this one was being
-  // typed, and v1 is theirs.
-  assert.match(
-    nodeText(root),
-    /Version 1 was saved by someone else while you were editing\. Your changes here stay until you load it, and loading it discards them\./,
-  );
-  assert.ok(
-    root.findAll((n) => n.type === "input" && n.props.type === "number" && n.props.value === 60)[0],
-    "the refused first save must not revert the editor",
-  );
-});
