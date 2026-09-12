@@ -96,7 +96,14 @@ export function sourceHint(source: SettingsSource): string {
  *  settings snapshot per request, cron tick and MCP call, so a stored value is
  *  read from the next entry onward either way; what differs per key is whether
  *  a run already under way picks it up. */
-export function appliesToNote(rule: SettingsInFlightRule): string {
+export function appliesToNote(rule: SettingsInFlightRule, requiresRedeploy = false): string {
+  // A key the running code still reads from its own environment is the one case
+  // the cadence above cannot describe, and it is not a cadence at all: the
+  // store does not decide this key, so there is nothing here to apply. The
+  // field is read-only and this says where the value is changed instead.
+  if (requiresRedeploy) {
+    return "Read from the deployment environment; change the variable there and redeploy";
+  }
   return rule === "immediate"
     ? "Applies immediately"
     : "Applies to the next run; a run already under way keeps the settings it started with";
@@ -122,7 +129,12 @@ export function formatSettingTimestamp(value: string): string {
  *  so the label says which one it is rather than passing an opaque string off
  *  as a person's name. */
 export function formatSettingActor(actor: string): string {
-  return actor === "migration" ? "by the seed migration" : `by user ${actor}`;
+  if (actor === "migration") return "by the seed migration";
+  // Not a person either: the worker writing a value it found in its own
+  // environment so the variable can be retired. "by user environment import"
+  // would read as somebody's account name.
+  if (actor === "environment import") return "by the environment import";
+  return `by user ${actor}`;
 }
 
 /**

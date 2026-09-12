@@ -48,7 +48,34 @@ const NON_MCP_WRITABLE_KEYS: ReadonlySet<string> = new Set(["MCP_ENABLED"]);
  *  that does not exist. */
 export function isSettingEditableThroughApi(key: string): boolean {
   const definition = findSettingDefinition(key);
-  return definition === undefined || definition.group !== NON_PATCHABLE_GROUP;
+  if (definition === undefined) return true;
+  if (definition.group === NON_PATCHABLE_GROUP) return false;
+  // And the second refusal, for the opposite reason to the first: not a
+  // decision that needs a better screen, but a key this store cannot decide at
+  // all. The running code reads its variable, at module load or inside a step,
+  // so the resolution ignores a stored row for it. Accepting the write would
+  // record a value, show it on the page, and change nothing.
+  return definition.requiresRedeploy !== true;
+}
+
+/** Whether the environment, rather than the store, is this key's only answer. */
+function isEnvironmentOwned(key: string): boolean {
+  return findSettingDefinition(key)?.requiresRedeploy === true;
+}
+
+/**
+ * Why a write was refused, as the sentence both surfaces say.
+ *
+ * One per reason, and each one names where the decision is made instead:
+ * refusing without saying where to go is how a caller ends up retrying the
+ * same patch.
+ */
+export function settingApiEditRefusal(key: string): string | null {
+  if (isSettingEditableThroughApi(key)) return null;
+  if (isEnvironmentOwned(key)) {
+    return `Not editable here: ${key}. It is read from the deployment environment; change the variable there and redeploy.`;
+  }
+  return `Not editable here: ${key}. Activate the repository catalog from the Repositories page, which posts to /api/v1/repository-catalog/activate.`;
 }
 
 /** Every key of this patch the rule above refuses, named rather than counted,
@@ -91,6 +118,9 @@ export function isSettingEditableThroughMcp(key: string): boolean {
  */
 export function settingMcpEditRefusal(key: string): string | null {
   if (isSettingEditableThroughMcp(key)) return null;
+  if (isEnvironmentOwned(key)) {
+    return `Not editable here: ${key}. It is read from the deployment environment; change the variable there and redeploy.`;
+  }
   if (!isSettingEditableThroughApi(key)) {
     return `Not editable here: ${key}. Activating the repository catalog is repositories.activate, which refuses until you have read repositories.activate_preview and can see what stops passing.`;
   }

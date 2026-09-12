@@ -80,8 +80,59 @@ function RepositoriesSummary({
   );
 }
 
+/**
+ * The variables this deployment has yet to delete, and whether deleting them is
+ * safe yet.
+ *
+ * Named, not counted: the operator's next action is to open the hosting
+ * dashboard and remove exactly these, and "4 variables" cannot be acted on.
+ * Values never appear here; the worker publishes names alone.
+ *
+ * Two states, because "still set" and "safe to remove" are two facts and the
+ * first one alone is how somebody deletes a value nothing else holds. A
+ * variable stays on the second list until a row answers for its key, so a
+ * failed import is visible here rather than only in a log line nobody is
+ * watching.
+ */
+function MigratedVariablesNotice({
+  variables,
+  unstored,
+}: {
+  variables: readonly string[];
+  unstored: readonly string[];
+}) {
+  const stored = unstored.length === 0;
+  return (
+    <div
+      role="note"
+      className="flex flex-col rounded-[3px] border border-orange-300 bg-orange-100 px-3 py-2 font-body text-[12px] leading-4 text-[#A23E18]"
+    >
+      <p className="m-0">
+        {variables.length === 1
+          ? "1 environment variable is still set on this deployment: "
+          : `${variables.length} environment variables are still set on this deployment: `}
+        <span className="font-mono text-[11px]">{variables.join(", ")}</span>
+        {stored
+          ? ". Every value is stored, so removing them changes nothing. Remove them from the deployment, redeploy (or wait for the next deploy), then check this list again."
+          : "."}
+      </p>
+      {!stored && (
+        <p className="m-0 pt-1 text-fail-fg">
+          {unstored.length === 1
+            ? "1 of them is not stored yet: "
+            : `${unstored.length} of them are not stored yet: `}
+          <span className="font-mono text-[11px]">{unstored.join(", ")}</span>
+          {". Do not remove these until this notice clears: nothing but the variable holds the value, because the worker could not store it. Check the worker logs for settings_environment_import_failed."}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function SettingsScreen({
   settings,
+  migratedVariablesSet,
+  migratedVariablesUnstored,
   scan,
   scanReadable,
   catalogState,
@@ -89,6 +140,11 @@ export function SettingsScreen({
   available,
 }: {
   settings: readonly SettingsEntryView[];
+  /** The migrated environment variables the worker still sees set, by name. */
+  migratedVariablesSet: readonly string[];
+  /** Those of them the worker has no stored row for: removing one of these
+   *  would lose the value the deployment runs on. */
+  migratedVariablesUnstored: readonly string[];
   scan: SystemHealthResponse | null;
   /** False for a role whose session may not read the system health scan. */
   scanReadable: boolean;
@@ -127,6 +183,13 @@ export function SettingsScreen({
       )}
 
       {available && <SettingsCadenceNotice />}
+
+      {available && migratedVariablesSet.length > 0 && (
+        <MigratedVariablesNotice
+          variables={migratedVariablesSet}
+          unstored={migratedVariablesUnstored}
+        />
+      )}
 
       {available && catalogState !== null && !catalogState.activated && (
         <div className="rounded-[3px] border border-orange-300 bg-orange-100 px-3 py-2 font-body text-[12px] text-[#A23E18]">

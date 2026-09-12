@@ -16,7 +16,6 @@ import {
   type VcsProviderConfig,
   type VcsProviderKind,
 } from "../../infra/vcs-config.js";
-import { settingsSnapshotFromEnvironment } from "./snapshot.js";
 
 /** Provider ids that carry a signed webhook, as system health observes them. */
 export type WebhookProviderId = "github" | "gitlab" | "jira" | "slack" | "email";
@@ -46,23 +45,19 @@ interface TriggerRateLimitDefaults {
 }
 
 /** The issue-tracker columns and project the ticket triggers are scoped to.
- *  The project key and the transition id are tracker wiring, not settings. */
-export function ticketBoardSettings(settings: SettingsSnapshot): TicketBoardSettings;
-/** @deprecated Pass the snapshot. The last zero-argument accessor: three
- *  trigger entry points (`triggers/polling/poll-pass.ts`,
- *  `triggers/jira/handle-jira-webhook.ts`, `slack/handle-slash-command.ts`)
- *  still resolve their board on the spot; it goes away with the environment
- *  parsing in the cleanup stage (stage H). */
-export function ticketBoardSettings(): TicketBoardSettings;
-export function ticketBoardSettings(
-  settings?: SettingsSnapshot,
-): TicketBoardSettings {
-  const resolved = settings ?? settingsSnapshotFromEnvironment();
+ *  The project key and the transition id are tracker wiring, not settings.
+ *
+ *  The snapshot is required. It used to be optional, and the three trigger
+ *  entry points that left it out resolved their columns from the environment
+ *  on the spot: a deployment whose operator had renamed a column on the
+ *  Settings page kept dispatching against the old name from the poller while
+ *  the dashboard showed the new one. */
+export function ticketBoardSettings(settings: SettingsSnapshot): TicketBoardSettings {
   return {
     projectKey: env.JIRA_PROJECT_KEY,
-    aiColumn: resolved.COLUMN_AI,
-    aiReviewColumn: resolved.COLUMN_AI_REVIEW,
-    backlogColumn: resolved.COLUMN_BACKLOG,
+    aiColumn: settings.COLUMN_AI,
+    aiReviewColumn: settings.COLUMN_AI_REVIEW,
+    backlogColumn: settings.COLUMN_BACKLOG,
     backlogTransitionId: env.JIRA_BACKLOG_TRANSITION_ID,
   };
 }

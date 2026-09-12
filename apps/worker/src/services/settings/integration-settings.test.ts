@@ -42,12 +42,13 @@ describe("integration settings", () => {
     expect(slackAllowedUserIds()).toEqual(["U1", "U2"]);
   });
 
-  it("carries the backlog transition only where one is configured", () => {
-    state.env.COLUMN_BACKLOG = "Backlog";
-    expect(ticketBoardSettings().backlogTransitionId).toBeUndefined();
+  it("carries the backlog transition only where one is configured", async () => {
+    const { testSettingsSnapshot } = await import("../../test-support/settings.js");
+    const snapshot = testSettingsSnapshot({ COLUMN_BACKLOG: "Backlog" });
+    expect(ticketBoardSettings(snapshot).backlogTransitionId).toBeUndefined();
 
     state.env.JIRA_BACKLOG_TRANSITION_ID = "31";
-    expect(ticketBoardSettings().backlogTransitionId).toBe("31");
+    expect(ticketBoardSettings(snapshot).backlogTransitionId).toBe("31");
   });
 
   it("answers with the secret belonging to the provider asked about", () => {

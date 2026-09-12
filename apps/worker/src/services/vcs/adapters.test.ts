@@ -41,11 +41,24 @@ vi.mock("../../engine/support/vcs-runtime.js", () => ({
 import { createAdapters } from "./adapters.js";
 
 describe("createAdapters", () => {
-  it("memoizes the legacy VCS adapter per adapters instance", () => {
+  it("refuses a VCS adapter when no repository was named", () => {
     const adapters = createAdapters();
 
-    expect(adapters.vcs).toBe(adapters.vcs);
-    expect(mocks.createVCS).toHaveBeenCalledTimes(1);
+    // The legacy single-repository adapter is gone with stage H1: its
+    // repository came from the deployment's variables and its base branch from
+    // a default in a tier that cannot read the settings registry. Every caller
+    // that reads this getter holds a pull request or a repository already, so
+    // the ones that never touch it (the issue tracker, messaging and the run
+    // registry) keep working and a caller that does gets told what to pass.
+    // Reading it is safe, so destructuring and enumeration do not explode;
+    // every method refuses with the same sentence.
+    expect(() => adapters.vcs.findPR("feature/x")).toThrow(
+      "adapters.vcs needs a repository",
+    );
+    expect(() => adapters.vcs.getBranchSha("main")).toThrow(
+      "adapters.vcs needs a repository",
+    );
+    expect(mocks.createVCS).not.toHaveBeenCalled();
   });
 
   it("memoizes the selected repository VCS adapter per adapters instance", () => {

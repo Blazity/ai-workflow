@@ -20,7 +20,7 @@ import { listConnectedTriggerRejectionCounters } from "../../db/repositories/tri
 import { listConnectedWebhookTriggerRejections } from "../../db/repositories/webhook-trigger-deliveries.js";
 import type { WorkflowDefinition } from "@shared/contracts";
 import type { WorkflowValueAnalysis } from "@shared/workflow-graph";
-import { currentBlockContracts } from "./block-contracts.js";
+import { connectedBlockContracts } from "./block-contracts.js";
 
 export function validateConnectedDefinitionPromptAuthoring(
   definition: WorkflowDefinition,
@@ -29,8 +29,8 @@ export function validateConnectedDefinitionPromptAuthoring(
   return validateConnectedWorkflowPromptAuthoringIssues(definition, analysis);
 }
 
-export function validateConnectedDefinitionCandidate(candidate: unknown) {
-  const contracts = currentBlockContracts();
+export async function validateConnectedDefinitionCandidate(candidate: unknown) {
+  const contracts = await connectedBlockContracts();
   return validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring(
     candidate,
     contracts.resolveContract,

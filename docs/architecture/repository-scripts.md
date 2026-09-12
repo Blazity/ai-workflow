@@ -103,11 +103,18 @@ Field reference:
 
   The allowlist is read from the worker's own environment, which means a
   change to `PRE_PR_CHECKS_ALLOWED_ENV` reaches nothing until the worker is
-  **redeployed**. Adding a name in the hosting dashboard and immediately
-  retrying the save reproduces the same rejection, with the same message,
-  because the running deployment still holds the old list. Redeploy first,
-  then save. The same applies in the other direction: a name removed from the
-  allowlist keeps working until the redeploy lands.
+  **redeployed**. It stays that way on purpose: the settings migration marks
+  the key `requiresRedeploy` in the registry, so the environment is its only
+  answer. The settings surfaces show it read-only and refuse to store it, the
+  environment import leaves it alone, and the cleanup release neither deletes
+  its parsing nor asks an operator to remove the variable. Whoever may edit
+  settings in the dashboard must not be able to widen, from that page and with
+  immediate effect, which of the worker's secrets a tenant's command may be
+  handed. Adding a name in the hosting dashboard and immediately retrying the
+  save reproduces the same rejection, with the same message, because the
+  running deployment still holds the old list. Redeploy first, then save. The
+  same applies in the other direction: a name removed from the allowlist keeps
+  working until the redeploy lands.
 
   `env` belongs to the named-groups shape. The legacy flat `commands` entry
   predates it and does not accept the key.
@@ -331,6 +338,20 @@ Two consequences worth stating plainly:
 A ticket-driven run still chooses WHICH repositories it works on inside the run,
 from discovery and the expansion protocol; what changed is that it chooses from
 the catalog's enabled rows rather than from an environment variable.
+
+**The environment variables the catalog replaced.** The cleanup row of the
+plan (`docs/plans/2026-09-11-repository-catalog-and-settings.md`, row H) is
+split in two. H1 shipped: the deployment stores a row for every migrated
+variable it still sets (actor `environment import`, never overwriting a stored
+decision), `/health` publishes `settings.migratedVariablesSet` and the Settings
+page turns it into a banner, every remaining consumer reads the settings
+snapshot instead of `process.env`, and the catalog seed refuses to run once the
+catalog is activated while warning that `AGENT_ALLOWED_REPOS` is deprecated. H2
+is pending an operator action, not a code change: once a deployment's list is
+empty, H2 deletes the environment parsing for those keys, fails validation on a
+set variable with a message naming the page that replaced it, and deletes the
+seed script. The removal procedure is
+[SETUP.md section 14](../../SETUP.md#14-removing-migrated-environment-variables).
 
 **What still reads the blob.** The `pre_pr_check_config_versions` table is read
 by the legacy Scripts screen alone: its history list and its restore, plus two

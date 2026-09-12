@@ -25,7 +25,7 @@ import {
 import * as raw from "../../db/repositories/definitions.js";
 import { createDefinitionsRepository } from "../../db/repositories/definitions.js";
 import { validateWorkflowPromptAuthoringIssues } from "./prompt-authoring.js";
-import { currentBlockContracts } from "./block-contracts.js";
+import { blockContractsOn, connectedBlockContracts, type RequestBlockContracts } from "./block-contracts.js";
 import {
   dispatchManualWorkflow,
   preflightManualDispatch,
@@ -87,9 +87,15 @@ function structural(definition: WorkflowDefinition): WorkflowDefinition {
   return parsed.data;
 }
 
-function validStored(definition: WorkflowDefinition): WorkflowDefinition {
+// The contracts come from the caller rather than from inside, because this one
+// helper serves both halves of every pair below: the db-bound half has to
+// resolve the settings on the connection it was handed, and the connected half
+// on the deployment's own.
+function validStored(
+  contracts: RequestBlockContracts,
+  definition: WorkflowDefinition,
+): WorkflowDefinition {
   const parsed = structural(definition);
-  const contracts = currentBlockContracts();
   const issues = validateWorkflowDefinitionIssuesForDeployment(
     parsed,
     contracts.resolveContract,
@@ -154,7 +160,7 @@ const TRIGGER_TAKEN_MESSAGE = "Its trigger is already handled by another enabled
 
 async function deployable(db: Db, definition: WorkflowDefinition): Promise<WorkflowDefinition> {
   const parsed = structural(definition);
-  const contracts = currentBlockContracts();
+  const contracts = await blockContractsOn(db);
   const analysis = contracts.analyzeValues(parsed);
   const issues = validateWorkflowDefinitionIssuesForDeployment(
     parsed,
@@ -251,7 +257,7 @@ function unavailableDefinitionError(
 
 export async function createWorkflowDefinition(db: Db, input: { name: string; seed: WorkflowDefinition | null; actor: WorkflowDefinitionActor; seedValidation?: "deployment" | "structural" }) {
   requireEditor(input.actor.role);
-  const seed = input.seed === null ? null : input.seedValidation === "structural" ? structural(input.seed) : validStored(input.seed);
+  const seed = input.seed === null ? null : input.seedValidation === "structural" ? structural(input.seed) : validStored(await blockContractsOn(db), input.seed);
   let inserted;
   try {
     inserted = await raw.insertWorkflowDefinition(db, {
@@ -337,7 +343,7 @@ export async function saveWorkflowDefinitionVersion(db: Db, input: { definitionI
   requireEditor(input.actor.role);
   return appendWorkflowDefinitionVersionWithPolicy(db, {
     ...input,
-    definition: validStored(input.definition),
+    definition: validStored(await blockContractsOn(db), input.definition),
   });
 }
 
@@ -347,7 +353,7 @@ export async function restoreWorkflowDefinitionVersion(db: Db, input: { definiti
   if (!source) throw new raw.WorkflowDefinitionStoreError(404, "Unknown version");
   return appendWorkflowDefinitionVersionWithPolicy(db, {
     definitionId: input.definitionId,
-    definition: validStored(requireRunnableVersion(source)),
+    definition: validStored(await blockContractsOn(db), requireRunnableVersion(source)),
     restoredFromVersion: source.version,
     actor: input.actor,
   });
@@ -583,7 +589,7 @@ async function createWorkflowDefinitionConnected(
     ? null
     : input.seedValidation === "structural"
       ? structural(input.seed)
-      : validStored(input.seed);
+      : validStored(await connectedBlockContracts(), input.seed);
   let inserted;
   try {
     inserted = await insertConnectedWorkflowDefinition({
@@ -815,7 +821,7 @@ async function updateWorkflowDefinitionConnected(input: Parameters<typeof update
 
 async function deployableConnected(definition: WorkflowDefinition): Promise<WorkflowDefinition> {
   const parsed = structural(definition);
-  const contracts = currentBlockContracts();
+  const contracts = await connectedBlockContracts();
   const analysis = contracts.analyzeValues(parsed);
   const issues = validateWorkflowDefinitionIssuesForDeployment(
     parsed,

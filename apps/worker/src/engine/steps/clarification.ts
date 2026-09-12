@@ -240,16 +240,26 @@ async function resolveHarnessRuntimesStep(
   definition: WorkflowDefinition,
   defaultProvider: AgentKind,
   providerOverride: AgentKind | null,
+  /**
+   * The organization the run's harness runtimes are scoped to, from the
+   * settings the run froze at its start.
+   *
+   * Trailing and required, with no environment fallback. A step's identity is
+   * its module path plus its function name, and the Workflow DevKit answers a
+   * COMPLETED step from its logged result while re-running the workflow body,
+   * which recomputes these arguments from the run's own frozen settings. No
+   * suspended run can therefore arrive here without it, and a fallback would
+   * only cover a caller somebody forgot to update.
+   */
+  organizationSlug: string,
 ): Promise<Record<string, ResolvedHarnessRuntime>> {
   "use step";
-  const { loadEnvironmentPort } = await import("../internal/ports.js");
-  const { env } = await loadEnvironmentPort();
   const {
     resolveConnectedHarnessRuntimesForDefinition,
   } = await import("../definition/harness-profile-runtime.js");
   return resolveConnectedHarnessRuntimesForDefinition({
     definition,
-    organizationSlug: env.DASHBOARD_ORG_SLUG,
+    organizationSlug,
     defaultProvider,
     providerOverride,
   });

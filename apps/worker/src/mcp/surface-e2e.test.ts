@@ -41,7 +41,7 @@ const state = vi.hoisted(() => ({
     // just the bearer/GitHub regexes.
     JIRA_API_TOKEN: "jira-e2e-4d9f1b7c3a8e2510-secret",
     MAX_CONCURRENT_AGENTS: 4,
-    // Read by blocks.list/blocks.get through workflowBlockRegistryContextFromEnv,
+    // Read by blocks.list/blocks.get through workflowBlockRegistryContext,
     // whose defaultAgent.model feeds resolveLlmProvider (lib/llm-provider.ts),
     // which crashes on an undefined model rather than defaulting.
     AGENT_KIND: "claude",

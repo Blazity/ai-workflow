@@ -83,7 +83,11 @@ async function handleVerifiedJiraWebhook(
   loadSettings: () => Promise<SettingsSnapshot>,
 ) {
   const body = parseJiraWebhookBody(rawBody);
-  const board = ticketBoardSettings();
+  // The board decides which column names this delivery is compared against, so
+  // it is resolved from the request's own snapshot rather than from the
+  // environment. The thunk is memoised per request, so the phases below share
+  // this read.
+  const board = ticketBoardSettings(await loadSettings());
 
   const ticketKey = extractTicketKey(body);
   if (!ticketKey) {

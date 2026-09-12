@@ -223,13 +223,15 @@ describe("env", () => {
     (gitlabEnv as any).GITLAB_WEBHOOK_SECRET = "gitlab-webhook-secret";
     Object.assign(process.env, gitlabEnv);
 
-    const { env, getVcsConfig } = await importEnvModule();
+    const { env, getVcsProviderConfig } = await importEnvModule();
     expect(env.GITLAB_WEBHOOK_SECRET).toBe("gitlab-webhook-secret");
-    const vcs = getVcsConfig();
+    // No base branch here any more: it is a setting the caller carries from
+    // the snapshot, and `GITLAB_BASE_BRANCH` is read by nothing in this tier.
+    const vcs = getVcsProviderConfig("gitlab");
     expect(vcs.kind).toBe("gitlab");
+    if (vcs.kind !== "gitlab") throw new Error("expected gitlab");
     expect(vcs.token).toBe("glpat-test");
-    expect(vcs.repoPath).toBe("group/repo");
-    expect(vcs.baseBranch).toBe("develop");
+    expect(vcs.legacyRepoPath).toBe("group/repo");
     expect(vcs.host).toBe("https://gitlab.com");
   });
 
@@ -254,12 +256,15 @@ describe("env", () => {
     delete process.env.GITLAB_PROJECT_ID;
     delete process.env.GITLAB_BASE_BRANCH;
 
-    const { getConfiguredVcsProviders, getVcsProviderConfig, getVcsConfig } = await importEnvModule();
+    const { getConfiguredVcsProviders, getVcsProviderConfig } = await importEnvModule();
 
     expect(getConfiguredVcsProviders().map((provider) => provider.kind)).toEqual(["github", "gitlab"]);
     expect(getVcsProviderConfig("github").host).toBe("https://github.com");
     expect(getVcsProviderConfig("gitlab").host).toBe("https://gitlab.example.com");
-    expect(() => getVcsConfig()).toThrow("legacy VCS config requires exactly one selected provider");
+    // Neither carries a repository: a deployment with two providers names the
+    // repository per call, which is what the catalog made true everywhere.
+    expect(getVcsProviderConfig("github").legacyRepoPath).toBeUndefined();
+    expect(getVcsProviderConfig("gitlab").legacyRepoPath).toBeUndefined();
   });
 
   it("leaves bot identity unset when no review bot login is configured", async () => {
@@ -336,8 +341,8 @@ describe("env", () => {
     (gitlabEnv as any).GITLAB_WEBHOOK_SECRET = "gitlab-webhook-secret";
     Object.assign(process.env, gitlabEnv);
 
-    const { getVcsConfig } = await importEnvModule();
-    expect(getVcsConfig().host).toBe("https://gitlab.example.com");
+    const { getVcsProviderConfig } = await importEnvModule();
+    expect(getVcsProviderConfig("gitlab").host).toBe("https://gitlab.example.com");
   });
 
   it("throws at startup when no VCS provider credentials are configured", async () => {
@@ -409,10 +414,10 @@ describe("env", () => {
     }).rejects.toThrow("GitLab provider requires GITLAB_WEBHOOK_SECRET");
   });
 
-  it("getVcsConfig returns GitHub App config", async () => {
+  it("getVcsProviderConfig returns GitHub App config", async () => {
     Object.assign(process.env, VALID_ENV);
-    const { getVcsConfig } = await importEnvModule();
-    const vcs = getVcsConfig();
+    const { getVcsProviderConfig } = await importEnvModule();
+    const vcs = getVcsProviderConfig("github");
     expect(vcs.kind).toBe("github");
     if (vcs.kind !== "github") throw new Error("expected github");
     expect(vcs.auth.appId).toBe(123456);
@@ -420,8 +425,7 @@ describe("env", () => {
     expect(vcs.auth.privateKeyBase64).toBe(
       "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCkZBS0UKLS0tLS1FTkQgUFJJVkFURSBLRVktLS0tLQo=",
     );
-    expect(vcs.repoPath).toBe("test-org/test-repo");
-    expect(vcs.baseBranch).toBe("main");
+    expect(vcs.legacyRepoPath).toBe("test-org/test-repo");
     expect(vcs.host).toBe("https://github.com");
   });
 });

@@ -19,18 +19,16 @@ export type VcsProviderConfig =
       auth: GitHubAppAuth;
       host: string;
       legacyRepoPath?: string;
-      legacyBaseBranch: string;
     }
   | {
       kind: "gitlab";
       token: string;
       host: string;
       legacyRepoPath?: string;
-      legacyBaseBranch: string;
     };
 
 type LegacyVcsConfig<T extends VcsProviderConfig> = T extends unknown
-  ? Omit<T, "legacyRepoPath" | "legacyBaseBranch"> & {
+  ? Omit<T, "legacyRepoPath"> & {
       repoPath: string;
       baseBranch: string;
     }
@@ -59,7 +57,6 @@ export function getConfiguredVcsProviders(): VcsProviderConfig[] {
       ...(env.GITHUB_OWNER && env.GITHUB_REPO
         ? { legacyRepoPath: `${env.GITHUB_OWNER}/${env.GITHUB_REPO}` }
         : {}),
-      legacyBaseBranch: env.GITHUB_BASE_BRANCH ?? "main",
     });
   }
 
@@ -69,7 +66,6 @@ export function getConfiguredVcsProviders(): VcsProviderConfig[] {
       token: env.GITLAB_TOKEN,
       host: env.GITLAB_HOST,
       ...(env.GITLAB_PROJECT_ID ? { legacyRepoPath: env.GITLAB_PROJECT_ID } : {}),
-      legacyBaseBranch: env.GITLAB_BASE_BRANCH ?? "main",
     });
   }
 
@@ -95,38 +91,4 @@ export function getVcsProviderConfig(kind: VcsProviderKind): VcsProviderConfig {
     throw new Error(`VCS provider is not configured: ${kind}`);
   }
   return provider;
-}
-
-/** Resolve legacy single-repo VCS config. New multi-repo code should use provider configs. */
-export function getVcsConfig(): VcsConfig {
-  const providers = getConfiguredVcsProviders();
-  const selectedProvider = env.VCS_KIND
-    ? providers.find((provider) => provider.kind === env.VCS_KIND)
-    : providers.length === 1
-      ? providers[0]
-      : undefined;
-
-  if (!selectedProvider) {
-    throw new Error("legacy VCS config requires exactly one selected provider");
-  }
-  if (!selectedProvider.legacyRepoPath) {
-    throw new Error("legacy VCS config requires a repository");
-  }
-
-  if (selectedProvider.kind === "gitlab") {
-    return {
-      kind: "gitlab",
-      token: selectedProvider.token,
-      repoPath: selectedProvider.legacyRepoPath,
-      baseBranch: selectedProvider.legacyBaseBranch,
-      host: selectedProvider.host,
-    };
-  }
-  return {
-    kind: "github",
-    auth: selectedProvider.auth,
-    repoPath: selectedProvider.legacyRepoPath,
-    baseBranch: selectedProvider.legacyBaseBranch,
-    host: selectedProvider.host,
-  };
 }

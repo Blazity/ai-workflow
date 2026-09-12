@@ -26,6 +26,7 @@ import {
   writeManyConnectedSettings,
   type SettingsVersionRow,
 } from "../../db/repositories/settings.js";
+import { migratedVariablesSet, migratedVariablesUnstored } from "./environment-import.js";
 import { loadSettingsResolution, type SettingsResolution } from "./snapshot.js";
 
 /** How many past changes of one key the history answers with. */
@@ -77,17 +78,26 @@ function entryViews(
     group: definition.group,
     description: definition.description,
     appliesToRunsInFlight: definition.appliesToRunsInFlight,
+    // Through the lookup rather than off `definition`: the registry is `as
+    // const`, so a key without this optional flag does not carry the property
+    // in its literal type at all.
+    requiresRedeploy: findSettingDefinition(definition.key)?.requiresRedeploy,
     lastVersion: lastByKey.get(definition.key) ?? null,
   }));
 }
 
-/** Every setting, resolved, with the change that last touched it. */
+/** Every setting, resolved, with the change that last touched it, and the
+ *  migrated variables this deployment has yet to remove. */
 export async function readSettings(): Promise<SettingsReadResponse> {
   const [resolution, latest] = await Promise.all([
     loadSettingsResolution(),
     latestConnectedSettingsVersions(),
   ]);
-  return { settings: entryViews(resolution, latest) };
+  return {
+    settings: entryViews(resolution, latest),
+    migratedVariablesSet: migratedVariablesSet(),
+    migratedVariablesUnstored: migratedVariablesUnstored(resolution),
+  };
 }
 
 /** One key's recorded changes, newest first. A key that is not a setting is

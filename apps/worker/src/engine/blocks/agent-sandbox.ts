@@ -151,9 +151,32 @@ export async function prepareHarnessAgentInvocationStep(
   agentKind: AgentKind,
   model: string,
   arthurTaskId: string | null,
-  runtime?: ResolvedHarnessRuntime,
+  /**
+   * What this invocation is run against, named rather than counted off in
+   * order, which is also where new inputs go: a trailing bag leaves the
+   * positions of everything already here alone.
+   *
+   * `organizationSlug` has no fallback on purpose. A step's identity is its
+   * module path plus its function name, and the Workflow DevKit replays a
+   * COMPLETED step from its logged result: it re-runs the workflow body, which
+   * recomputes the arguments from the run's own frozen settings, and only a
+   * step that already finished is answered from the log. So no suspended run
+   * can reach this signature without the field, and a fallback here would only
+   * ever fire on a caller somebody forgot to update, silently verifying the
+   * profile against the wrong organization.
+   */
+  options: {
+    /** The dashboard organization the pinned profile is verified against, from
+     *  the settings the run froze at its start rather than from this process's
+     *  environment: a run that outlives an operator's change must verify its
+     *  profile against the organization it started under. */
+    organizationSlug: string;
+    /** The pinned harness runtime, absent when this block runs unpinned. */
+    runtime?: ResolvedHarnessRuntime;
+  },
 ): Promise<AgentProtocolResult<void>> {
   "use step";
+  const { organizationSlug, runtime } = options;
   if (!runtime) return { ok: true, value: undefined };
 
   const { env } = await import("../../infra/vcs-config.js");
@@ -179,11 +202,11 @@ export async function prepareHarnessAgentInvocationStep(
     });
     await resetHarnessRuntimeHomes(sandbox);
     const organization = await createConnectedAuthRepository().findOrganizationBySlug(
-      env.DASHBOARD_ORG_SLUG,
+      organizationSlug,
     );
     if (!organization) {
       throw new Error(
-        `Dashboard organization "${env.DASHBOARD_ORG_SLUG}" is unavailable.`,
+        `Dashboard organization "${organizationSlug}" is unavailable.`,
       );
     }
     const resolved = await resolveConnectedVerifiedHarnessProfileVersion({

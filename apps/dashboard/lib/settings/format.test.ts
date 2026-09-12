@@ -96,6 +96,18 @@ test("appliesToNote states the cadence, without the retired \"once the worker re
   assert.doesNotMatch(appliesToNote("immediate"), /Once the worker reads/);
 });
 
+test("appliesToNote sends a key the worker reads from its environment to the deployment", () => {
+  // DASHBOARD_ORG_SLUG is filed "next run" in the registry and marked
+  // requiresRedeploy, because the auth instance composes its value at module
+  // load. The store does not decide it at all, so promising a run would pick a
+  // stored value up is the one wrong answer here.
+  const note = appliesToNote("next run", true);
+
+  assert.match(note, /deployment environment/);
+  assert.match(note, /redeploy/);
+  assert.doesNotMatch(note, /next run/);
+});
+
 test("the standing notice states the read cadence instead of claiming the worker ignores the store", () => {
   assert.match(SETTINGS_CADENCE_NOTICE, /stored and read/);
   assert.match(SETTINGS_CADENCE_NOTICE, /per request, cron tick and MCP call/);

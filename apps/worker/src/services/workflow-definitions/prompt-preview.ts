@@ -144,9 +144,10 @@ export async function previewWorkflowPromptCandidate(
 export async function previewConnectedWorkflowPromptCandidate(
   input: { candidate: unknown; blockId: string; organizationId?: string },
 ): Promise<WorkflowPromptPreviewResult> {
+  const { loadSettingsSnapshot } = await import("../settings/index.js");
   const registryContext = (
     await import("../../engine/definition/block-contract-environment.js")
-  ).workflowBlockRegistryContextFromEnv();
+  ).workflowBlockRegistryContext(await loadSettingsSnapshot());
   const resolveContract = createWorkflowBlockContractResolver(registryContext);
   const validated = validateWorkflowDefinitionCandidate(
     input.candidate,

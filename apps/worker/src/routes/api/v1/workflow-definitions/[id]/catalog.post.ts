@@ -20,6 +20,7 @@ import {
 import {
   activeWorkflowDefinitionExists,
 } from "../../../../../services/workflow-definitions/definition-reads.js";
+import { getRequestSettingsSnapshot } from "../../../../../services/settings/index.js";
 import { parseDefinitionId } from "../../workflow-definitions.get.js";
 
 export default defineEventHandler(
@@ -51,7 +52,10 @@ export default defineEventHandler(
           statusMessage: "Invalid v2 definition",
         });
       }
-      return analyzeWorkflowDefinitionCatalog(candidate.definition);
+      return analyzeWorkflowDefinitionCatalog(
+        await getRequestSettingsSnapshot(event),
+        candidate.definition,
+      );
     } catch (error) {
       if (error instanceof Error && "statusCode" in error) throw error;
       toHttpError(error);

@@ -84,7 +84,7 @@ export async function loadWorkflowDefinitionFor(
     await import("../definition/deployment-validation.js");
   const { createWorkflowBlockContractResolver } =
     await import("../definition/block-contract-resolver.js");
-  const { workflowBlockRegistryContextForRun } =
+  const { workflowBlockRegistryContext } =
     await import("../definition/block-contract-environment.js");
   const { BLOCK_PARAMS_SCHEMAS } = await import("../definition/block-params-schemas.js");
   const { defaultWorkflowDefinitionV2 } = await import("../definition/default.js");
@@ -213,7 +213,7 @@ export async function loadWorkflowDefinitionFor(
     throw new Error(RETIRED_SCHEMA_MESSAGE);
   }
   const parsed = parse(row.definition);
-  const registryContext = workflowBlockRegistryContextForRun(settings);
+  const registryContext = workflowBlockRegistryContext(settings);
   const graphIssues = parsed.definition
     ? validateWorkflowDefinitionForRunLoad(
         parsed.definition,
