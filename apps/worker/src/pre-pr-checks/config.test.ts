@@ -10,7 +10,7 @@ import {
   repoScriptsConfigSchema,
   resolveGateGroups,
   type RepoScriptsRepositoryConfig,
-} from "./config.js";
+} from "../engine/pre-pr-checks/config.js";
 
 describe("prePrCheckConfigSchema", () => {
   it("accepts per-repo check commands", () => {

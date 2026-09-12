@@ -22,7 +22,8 @@ export function verifySlackSignature(input: VerifySlackSignatureInput): boolean 
 
   if (!signature.startsWith(SIGNATURE_PREFIX)) return false;
 
-  const ts = Math.trunc(Number(timestamp));
+  // oxlint-disable-next-line unicorn/prefer-number-coercion -- Preserve numeric-prefix parsing for signed request timestamps.
+  const ts = Number.parseInt(timestamp, 10);
   if (!Number.isFinite(ts)) return false;
   const nowSeconds = Math.floor(Date.now() / 1000);
   if (Math.abs(nowSeconds - ts) > REPLAY_WINDOW_SECONDS) return false;

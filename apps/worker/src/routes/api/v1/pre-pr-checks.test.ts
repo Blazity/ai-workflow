@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../../../db/client.js";
 import { member, organization, user } from "../../../db/schema.js";
 import { createTestDb } from "../../../db/test-db.js";
-import { savePrePrCheckConfig } from "../../../pre-pr-checks/store.js";
+import { savePrePrCheckConfig } from "../../../engine/pre-pr-checks/store.js";
 
 const state = vi.hoisted(() => ({
   db: undefined as unknown,

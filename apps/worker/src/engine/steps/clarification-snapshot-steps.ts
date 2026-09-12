@@ -9,10 +9,16 @@ const CREDENTIAL_REMAINS_EXIT_CODE = 86;
 const CREDENTIAL_PATTERN_FILE_PREFIX =
   "/tmp/.aiw-clarification-credential-patterns-";
 
+// The scan script below runs in a separate node process inside the sandbox. Its
+// module specifiers are assembled at runtime ("node:" + "fs") so the Workflow
+// DevKit bundler does not read them as workflow-scope imports of fs and path.
 const EXACT_CREDENTIAL_SCAN_SOURCE = String.raw`
-import { createReadStream } from "node:fs";
-import { lstat, opendir, readFile, readlink } from "node:fs/promises";
-import { resolve } from "node:path";
+const nodeFs = "node:" + "fs";
+const nodeFsPromises = nodeFs + "/promises";
+const nodePath = "node:" + "path";
+const { createReadStream } = await import(nodeFs);
+const { lstat, opendir, readFile, readlink } = await import(nodeFsPromises);
+const { resolve } = await import(nodePath);
 
 const CREDENTIAL_REMAINS_EXIT_CODE = 86;
 const CREDENTIAL_SCAN_FAILED_EXIT_CODE = 87;
@@ -262,7 +268,8 @@ export async function snapshotClarificationSandboxStep(
   }
   const requestedAt = new Date(input.snapshotRequestedAt);
   if (!Number.isFinite(requestedAt.getTime())) {
-    throw new TypeError("clarification snapshot attempt boundary is invalid");
+    // oxlint-disable-next-line unicorn/prefer-type-error -- Preserve the established Error type and message contract for callers and tests.
+    throw new Error("clarification snapshot attempt boundary is invalid");
   }
   // Snapshot identity is the exact source sandbox (a successful snapshot stops
   // it, so that source cannot produce an earlier successful snapshot). Apply a

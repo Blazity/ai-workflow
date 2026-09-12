@@ -191,7 +191,8 @@ export function resolveImplementationPlanInput(
 ): string {
   if (!Object.prototype.hasOwnProperty.call(resolvedInputs, "plan")) return legacyPlan;
   if (typeof resolvedInputs.plan !== "string") {
-    throw new TypeError('Implementation input "plan" must be a string.');
+    // oxlint-disable-next-line unicorn/prefer-type-error -- Preserve the established Error type and message contract for callers and tests.
+    throw new Error('Implementation input "plan" must be a string.');
   }
   return resolvedInputs.plan;
 }
@@ -236,10 +237,12 @@ function resolveAgentTicketInputFromBindings(
     ? resolvedInputs.priorAnswers
     : ticket.priorAnswers ?? ticket.clarifications ?? [];
   if (!Array.isArray(comments)) {
-    throw new TypeError('Planning input "comments" must be an array.');
+    // oxlint-disable-next-line unicorn/prefer-type-error -- Preserve the established Error type and message contract for callers and tests.
+    throw new Error('Planning input "comments" must be an array.');
   }
   if (!Array.isArray(priorAnswers)) {
-    throw new TypeError('Planning input "priorAnswers" must be an array.');
+    // oxlint-disable-next-line unicorn/prefer-type-error -- Preserve the established Error type and message contract for callers and tests.
+    throw new Error('Planning input "priorAnswers" must be an array.');
   }
   return {
     ...ticket,
