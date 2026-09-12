@@ -9,26 +9,15 @@
  * workflow body may not read a database at all. So the shape of this file is
  * the shape that file can accept: snapshot in, boolean out, no I/O.
  *
- * The wiring itself is NOT this stage. Stage D1 loads one snapshot per
- * invocation in the services tier (dispatch, manual dispatch, the two webhook
- * handlers, MCP authoring) and feeds it to the allowlist module, which is then
- * expected to read as:
- *
- *     // engine/support/repo-allowlist.ts, after stage D1
- *     export function isRepoAllowed(
- *       repository: { provider: VcsProviderKind; repoPath: string },
- *       catalog: RepositoryCatalogSnapshot,
- *     ): boolean {
- *       return isRepositoryEnabled(
- *         catalog,
- *         repositoryCatalogKey({ provider: repository.provider, path: repository.repoPath }),
- *       );
- *     }
- *
- * Nothing is rewired here, and the allowlist module keeps deciding access on
- * its own until that stage lands: a catalog that started filtering dispatch the
- * moment its tables existed would change what an unactivated deployment selects
- * with nobody having asked for it.
+ * The wiring landed in the catalog consumers stage, one file up the tier rather
+ * than in the engine as this comment once predicted:
+ * `services/dispatch/repo-allowlist.ts` exports
+ * `isRepositoryDispatchable(snapshot, { provider, path })` over this function,
+ * and each entry point that dispatches (the two webhook handlers, manual
+ * dispatch, the poll's dispatch phases, MCP) loads one snapshot per invocation
+ * and hands it in. `engine/support/repo-allowlist.ts` is untouched and still
+ * guards discovery, branch and pull request creation inside a run from the
+ * environment, until the engine wave gives a run its own enabled list.
  */
 import type { RepositoryCatalogSnapshot } from "./store.js";
 

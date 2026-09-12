@@ -17,7 +17,8 @@ import {
   validateWorkflowDefinitionCandidate,
   workflowBlockRegistryContextFromEnv,
 } from "../../services/mcp/app-dependencies.js";
-import { isRepoAllowed } from "../../services/dispatch/repo-allowlist.js";
+import { isRepositoryDispatchable } from "../../services/dispatch/repo-allowlist.js";
+import type { RepositoryCatalogSnapshot } from "../../services/repository-catalog/index.js";
 import {
   runnableDefinitionOf,
   WorkflowDefinitionStoreError,
@@ -63,10 +64,11 @@ import {
  *
  * The role gate answers "who", not "on whose behalf": an admin token whose agent
  * has just read a ticket marked external_untrusted is the actor this cannot tell
- * apart from any other. So both writes report what a graph pins beyond the
- * operator's AGENT_ALLOWED_REPOS, and a publish is announced to the operators'
- * channel, on the principle that the answer to a legitimate client doing something
- * consequential is to make it visible rather than to forbid it.
+ * apart from any other. So both writes report which of a graph's pinned
+ * repositories the repository catalog does not enable, and a publish is announced
+ * to the operators' channel, on the principle that the answer to a legitimate
+ * client doing something consequential is to make it visible rather than to
+ * forbid it.
  */
 
 type CreateData = {
@@ -86,10 +88,10 @@ type SaveDraftData = {
   // the request would disagree with the digest workflows.publish reports for the
   // very same version and neither agent nor operator could tell which one moved.
   graphHash: string;
-  // See repositoriesOutsideAllowlist below. Reported on a draft too, because the
+  // See pinnedRepositoriesNotEnabled below. Reported on a draft too, because the
   // draft is where the pin is chosen and the publish is where it starts being
   // acted on, and an operator reading the audit trail backwards wants both.
-  repositoriesOutsideAllowlist: string[];
+  pinnedRepositoriesNotEnabled: string[];
 };
 
 type PublishData = {
@@ -125,20 +127,21 @@ type PublishData = {
   // rather than optimistically, every trigger node when the check itself could not
   // be run.
   dormantTriggerNodeIds: string[];
-  // "provider:owner/repo" for every repository the published graph PINS that
-  // AGENT_ALLOWED_REPOS does not itself permit. A pinned repository extends that
-  // allowlist by design (lib/repo-allowlist.ts:89-103) and the deployment gate
-  // checks a graph's shape rather than this permission, so a publish that widens
-  // what the platform will clone and open pull requests on says so here. Empty
-  // whenever no allowlist is configured, because then nothing is outside one: that
-  // fail-open default is the multi-repo product default, and repo-allowlist.ts
-  // warns about it where it is read.
+  // "provider:owner/repo" for every repository the published graph PINS that the
+  // repository catalog does not enable. Since the catalog consumers stage a pin
+  // no longer extends DISPATCH: an event from a repository nobody enabled is
+  // refused whatever the graph pins, and the deployment gate checks a graph's
+  // shape rather than this. It is not yet the whole story: until the engine
+  // stage lands, `engine/support/repo-allowlist.ts` still reads the pin inside a
+  // run, so a run that started some other way does reach a pinned repository.
+  // Empty on a deployment whose catalog is not activated yet, because there every
+  // accessible repository still counts as enabled.
   //
   // Worth knowing where these strings then live: this whole value is stored as the
   // idempotency key's response for the key's lifetime (idempotency-store.ts), so a
   // repository path outlives the call in that row. It is not in the audit row,
   // which carries the count alone.
-  repositoriesOutsideAllowlist: string[];
+  pinnedRepositoriesNotEnabled: string[];
 };
 
 type LegacyGraphData = {
@@ -181,33 +184,51 @@ type SetEnabledData = {
 };
 
 /**
- * The pinned repositories the global allowlist does not already permit, read off a
- * graph. isRepoAllowed is the platform's own predicate and is deliberately not
- * reimplemented here: it owns the empty-means-unrestricted default and the
- * case-insensitive comparison, and a second copy of either would eventually
- * disagree with the adapters that enforce it.
+ * The pinned repositories the repository catalog does not enable, read off a
+ * graph. isRepositoryDispatchable is the platform's own predicate and is
+ * deliberately not reimplemented here: it owns the bridge (an unactivated
+ * catalog enables everything) and the case-insensitive key, and a second copy of
+ * either would eventually disagree with the dispatch that enforces it.
  *
  * Takes `unknown` because one caller holds a graph nobody has parsed yet: on the
  * draft path the schema has not run when the reply is composed, so a pin whose
  * provider is not even a string still has to produce a label rather than a crash.
+ * On an activated catalog a pin without a usable provider is reported rather than
+ * silently passed: the catalog is keyed by provider and path together, so there is
+ * no enabled row such a pin could be matched against. While the catalog is not
+ * activated nothing is reported at all, because the bridge enables every
+ * repository and a field named "not enabled in the catalog" must not accuse a
+ * catalog that is refusing nobody.
  */
-function pinsOutsideAllowlist(definition: unknown): string[] {
+function pinsNotEnabledInCatalog(
+  definition: unknown,
+  repositoryCatalog: RepositoryCatalogSnapshot,
+): string[] {
+  if (!repositoryCatalog.activated) return [];
   const scope = (definition as { repositoryScope?: unknown } | null | undefined)
     ?.repositoryScope;
   const pinned = (scope as { repositories?: unknown } | null | undefined)?.repositories;
   if (!Array.isArray(pinned)) return [];
-  const outside: string[] = [];
+  const notEnabled: string[] = [];
   for (const entry of pinned) {
     const repository = entry as { provider?: unknown; repoPath?: unknown };
     if (typeof repository.repoPath !== "string") continue;
-    if (isRepoAllowed(repository.repoPath)) continue;
-    outside.push(
+    if (
+      (repository.provider === "github" || repository.provider === "gitlab") &&
+      isRepositoryDispatchable(repositoryCatalog, {
+        provider: repository.provider,
+        path: repository.repoPath,
+      })
+    ) {
+      continue;
+    }
+    notEnabled.push(
       typeof repository.provider === "string"
         ? `${repository.provider}:${repository.repoPath}`
         : repository.repoPath,
     );
   }
-  return outside;
+  return notEnabled;
 }
 
 /**
@@ -216,10 +237,10 @@ function pinsOutsideAllowlist(definition: unknown): string[] {
  * (audit-store.ts:58), so the repository paths stay in the reply and the channel,
  * where a person reads them once, rather than in a table kept for a year. Always
  * appended, including as ":0", so a row proves the check ran instead of leaving an
- * operator unable to tell "nothing outside the allowlist" from "nobody looked".
+ * operator unable to tell "every pin is enabled" from "nobody looked".
  */
-function allowlistRef(outside: readonly string[]): string {
-  return `repos_outside_allowlist:${outside.length}`;
+function catalogRef(notEnabled: readonly string[]): string {
+  return `pinned_repos_not_enabled:${notEnabled.length}`;
 }
 
 /** Both stored graph shapes carry an id and a type on every node, which is all the
@@ -307,7 +328,7 @@ function publishAnnouncement(publish: {
   triggerTypes: string[];
   dormant: string[];
   liveOnRealEvents: boolean;
-  outsideAllowlist: string[];
+  notEnabled: string[];
 }): string {
   const name = announcementLabel(publish.name);
   const target = `workflow "${name}" (definition ${publish.definitionId})`;
@@ -338,9 +359,13 @@ function publishAnnouncement(publish: {
       `The definition is enabled, but no trigger of this graph was verified able to fire.${dormantTail}`,
     );
   }
-  if (publish.outsideAllowlist.length > 0) {
+  if (publish.notEnabled.length > 0) {
     sentences.push(
-      `It pins ${publish.outsideAllowlist.length === 1 ? "a repository" : `${publish.outsideAllowlist.length} repositories`} outside AGENT_ALLOWED_REPOS: ${publish.outsideAllowlist
+      // Exactly what is true in the window between the catalog consumers stage
+      // and the engine stage: dispatch refuses the events, and a pin still
+      // reaches the repository from inside a run that started some other way.
+      // Claiming the workflow cannot touch it at all would be a false promise.
+      `It pins ${publish.notEnabled.length === 1 ? "a repository" : `${publish.notEnabled.length} repositories`} the repository catalog does not enable, so dispatch refuses events from ${publish.notEnabled.length === 1 ? "it" : "them"} and, until the engine stage lands, a run that starts anyway still reaches ${publish.notEnabled.length === 1 ? "it" : "them"} through this pin: ${publish.notEnabled
         .map((repository) => announcementLabel(repository))
         .join(", ")}.`,
     );
@@ -462,7 +487,10 @@ export function registerWorkflowAuthoringTools(
       // refs can be settled before the wrapper writes its "attempted" row. Like
       // every other ref it describes the ATTEMPT, and a row whose outcome is
       // VALIDATION_FAILED already says the graph it counted was never stored.
-      const outsideAllowlist = pinsOutsideAllowlist(input.definition);
+      const notEnabled = pinsNotEnabledInCatalog(
+        input.definition,
+        await deps.loadRepositoryCatalog(),
+      );
       const envelope = await executeMcpMutation({
         deps,
         toolName: "workflows.save_draft",
@@ -472,7 +500,7 @@ export function registerWorkflowAuthoringTools(
         targetRefs: [
           String(input.definitionId),
           String(input.expectedDraftRevision),
-          allowlistRef(outsideAllowlist),
+          catalogRef(notEnabled),
         ],
         idempotencyKey: input.idempotencyKey,
         payloadHash: `sha256:${hashCanonicalJson({
@@ -552,7 +580,7 @@ export function registerWorkflowAuthoringTools(
             definitionId: saved.definition.id,
             draftRevision: saved.draftRevision,
             graphHash: graphDigest(stored.definition),
-            repositoriesOutsideAllowlist: outsideAllowlist,
+            pinnedRepositoriesNotEnabled: notEnabled,
           };
         },
       });
@@ -589,10 +617,10 @@ export function registerWorkflowAuthoringTools(
           expectedDraftRevision: input.expectedDraftRevision,
           expectedDeployedVersion: input.expectedDeployedVersion,
         })}`,
-        // How many repositories the DEPLOYED graph pins past the allowlist, on the
-        // row that records the deployment. A refused publish deployed nothing, so
-        // it has nothing to count.
-        outcomeTargetRefs: (data) => [allowlistRef(data.repositoriesOutsideAllowlist)],
+        // How many repositories the DEPLOYED graph pins that the catalog does not
+        // enable, on the row that records the deployment. A refused publish
+        // deployed nothing, so it has nothing to count.
+        outcomeTargetRefs: (data) => [catalogRef(data.pinnedRepositoriesNotEnabled)],
         operation: async (): Promise<PublishData> => {
           const actor = storeActor(deps.actor);
           let deployed: Awaited<ReturnType<typeof deps.services.deployWorkflowDefinition>>;
@@ -618,7 +646,10 @@ export function registerWorkflowAuthoringTools(
           // read of the version row, so the digest, the pins and the trigger nodes
           // all describe one snapshot rather than three reads of a moving target.
           const graph = deployed.version.definition;
-          const outsideAllowlist = pinsOutsideAllowlist(graph);
+          const notEnabled = pinsNotEnabledInCatalog(
+            graph,
+            await deps.loadRepositoryCatalog(),
+          );
           const triggerNodeCount = triggerNodesOf(graph).length;
           let dormant: string[];
           try {
@@ -665,7 +696,7 @@ export function registerWorkflowAuthoringTools(
               triggerTypes: deployed.definition.triggerTypes,
               dormant,
               liveOnRealEvents,
-              outsideAllowlist,
+              notEnabled,
             }),
           );
           return {
@@ -677,7 +708,7 @@ export function registerWorkflowAuthoringTools(
             triggerTypes: deployed.definition.triggerTypes,
             liveOnRealEvents,
             dormantTriggerNodeIds: dormant,
-            repositoriesOutsideAllowlist: outsideAllowlist,
+            pinnedRepositoriesNotEnabled: notEnabled,
           };
         },
       });

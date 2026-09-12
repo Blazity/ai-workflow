@@ -44,7 +44,8 @@ import {
   type PrAutofixCapKey,
 } from "./pr-autofix-cap.js";
 import { announcePrAutofixExhaustion } from "./pr-autofix-exhaustion.js";
-import { isRepoAllowedForScope } from "../../engine/support/repo-allowlist.js";
+import { isRepositoryDispatchable } from "./repo-allowlist.js";
+import type { RepositoryCatalogSnapshot } from "../repository-catalog/index.js";
 import { prSubjectKey } from "../../engine/support/subject-key.js";
 import { cancelSubjectRun } from "../run-lifecycle/index.js";
 import {
@@ -87,6 +88,7 @@ export type DispatchTriggerResult =
   | { result: "no_definition" }
   | { result: "ignored_not_workflow_owned" }
   | { result: "ignored_provider" }
+  | { result: "ignored_repository_not_enabled" }
   | { result: "ignored_producer" }
   | { result: "ignored_stale_head" }
   | { result: "ignored_untrusted_event" }
@@ -100,6 +102,10 @@ export interface DispatchTriggerDeps {
   db?: Db;
   runRegistry: RunRegistryAdapter;
   maxConcurrentAgents: number;
+  /** The repository catalog as the entry point read it: one load per HTTP
+   *  request or cron tick, so every candidate event of a delivery is judged
+   *  against the same enabled list. */
+  repositoryCatalog: RepositoryCatalogSnapshot;
   issueTracker?: IssueTrackerAdapter;
   getCurrentHead?: (pr: PrTriggerPayload) => Promise<string>;
   getCurrentPullRequest?: (pr: PrTriggerPayload) => Promise<PullRequestHead>;
@@ -264,13 +270,18 @@ export async function dispatchTriggerEvent(
     const pinnedScope = deployedGraph?.repositoryScope;
     if (
       scope === "any" &&
-      !isRepoAllowedForScope(event.pr, pinnedScope)
+      !isRepositoryDispatchable(deps.repositoryCatalog, {
+        provider: event.pr.provider,
+        path: event.pr.repoPath,
+      })
     ) {
+      // The pin is deliberately not consulted here any more: a pin selects
+      // inside the catalog, it does not grant past it.
       logger.info(
         { provider: event.pr.provider, repoPath: event.pr.repoPath },
-        "trigger_repo_not_allowed",
+        "trigger_repo_not_enabled_in_catalog",
       );
-      return { result: "ignored_provider" };
+      return { result: "ignored_repository_not_enabled" };
     }
     // Definition-level repository pin, a different concept from the
     // provider-configured repositoryScope read further down. It runs before
@@ -948,6 +959,32 @@ export async function drainOldestPendingTrigger(
       await completeDelivery(deps.db, pending, { result: "ignored_stale_head" });
       continue;
     }
+    // The catalog is re-asked here, not trusted from acceptance time: this event
+    // was queued because the deployment was at capacity or the subject was busy,
+    // and a repository disabled in the meantime must not be dispatched by the
+    // tick that finally has room. Same gate as the live path, same scope
+    // condition, and the pin is deliberately not consulted.
+    if (
+      currentPending.scope === "any" &&
+      !isRepositoryDispatchable(deps.repositoryCatalog, {
+        provider: currentPending.pr.provider,
+        path: currentPending.pr.repoPath,
+      })
+    ) {
+      logger.info(
+        {
+          provider: currentPending.pr.provider,
+          repoPath: currentPending.pr.repoPath,
+          subjectKey,
+        },
+        "trigger_repo_not_enabled_in_catalog",
+      );
+      await deleteDurablePendingTrigger(deps.db, pending);
+      await completeDelivery(deps.db, pending, {
+        result: "ignored_repository_not_enabled",
+      });
+      continue;
+    }
     const result = await dispatchAcceptedTrigger(
       currentPending,
       deps,
@@ -1175,6 +1212,9 @@ function storedResultToDispatch(result: StoredTriggerResult | null): DispatchTri
     return { result: "ignored_not_workflow_owned" };
   }
   if (result.result === "ignored_provider") return { result: "ignored_provider" };
+  if (result.result === "ignored_repository_not_enabled") {
+    return { result: "ignored_repository_not_enabled" };
+  }
   if (result.result === "at_capacity") return { result: "at_capacity" };
   if (result.result === "error") {
     return { result: "error", diagnosticId: result.diagnosticId };

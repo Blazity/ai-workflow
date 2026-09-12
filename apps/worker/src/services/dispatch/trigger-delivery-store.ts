@@ -40,6 +40,12 @@ export type StoredTriggerResult =
         | "coalesced"
         | "at_capacity"
         | "ignored_provider"
+        // Distinct from ignored_provider on purpose: an operator reading the
+        // inbox has to be able to tell "no definition wanted this provider"
+        // from "the repository catalog does not enable this repository", which
+        // is a switch they can flip. The column is jsonb with no check
+        // constraint, so widening the union needs no migration.
+        | "ignored_repository_not_enabled"
         | "ignored_stale_head"
         | "ignored_not_workflow_owned";
     };

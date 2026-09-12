@@ -3,6 +3,7 @@ import { createError, defineEventHandler, getHeader, readRawBody } from "h3";
 // pass and the other providers' handlers, and this route needs neither.
 import { handleGitLabWebhook } from "../../services/triggers/gitlab/handle-gitlab-webhook.js";
 import { getRequestSettingsSnapshot } from "../../services/settings/index.js";
+import { getRequestRepositoryCatalogSnapshot } from "../../services/repository-catalog/index.js";
 import { TriggerHttpError } from "../../services/triggers/trigger-http-error.js";
 
 /**
@@ -27,6 +28,9 @@ export default defineEventHandler(async (event) => {
       // Not awaited here: the service checks the token first and only the
       // verified path pays for the load.
       loadSettings: () => getRequestSettingsSnapshot(event),
+      // Same thunk, same reason: the catalog is read only once the
+      // token has been checked.
+      loadRepositoryCatalog: () => getRequestRepositoryCatalogSnapshot(event),
     });
   } catch (error) {
     if (error instanceof TriggerHttpError) {

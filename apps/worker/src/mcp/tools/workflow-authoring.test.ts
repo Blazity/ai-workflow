@@ -63,6 +63,10 @@ import {
 } from "../../db/schema.js";
 import type { McpActorContext, McpScope } from "../contracts.js";
 import { actorFor, depsFor } from "../../test-support/mcp.js";
+import {
+  activatedRepositoryCatalog,
+  unactivatedRepositoryCatalog,
+} from "../../test-support/repository-catalog.js";
 import { WORKFLOW_MAX_EDGES, WORKFLOW_MAX_NODES } from "../tool-catalog.js";
 import {
   registerWorkflowAuthoringTools,
@@ -98,12 +102,12 @@ const TRIGGER_NODE_ID = "ticket";
 // version says, so a publish there is not authoring, it is a change to production.
 const PLATFORM_DEFINITION_NAME = "Ticket workflow";
 
-// Read directly by lib/repo-allowlist.ts (not through the mocked env module), which
-// is why these tests set the variable itself. Unset means "no allowlist", where by
-// the platform's own fail-open default nothing is outside one.
-const ORIGINAL_ALLOWED_REPOS = process.env.AGENT_ALLOWED_REPOS;
-const ALLOWED_REPO = "acme/allowed-service";
-const OUTSIDE_REPO = "acme/private-infrastructure";
+// Which repositories the catalog enables is handed to the tools on
+// McpToolDependencies, so these tests build the snapshot rather than setting an
+// environment variable. The default below is the bridge, where the catalog is not
+// activated and therefore enables everything.
+const ENABLED_REPO = "acme/allowed-service";
+const NOT_ENABLED_REPO = "acme/private-infrastructure";
 
 // Substituted for the real Slack adapter. Typed off the adapter's own interface, so
 // a signature change here is a compile error rather than a test that keeps asserting
@@ -189,14 +193,11 @@ beforeEach(async () => {
   notifyForTicket.mockReset();
   notifyForTicket.mockResolvedValue(undefined);
   probe.scheduleReadFails = false;
-  delete process.env.AGENT_ALLOWED_REPOS;
 });
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   await Promise.allSettled(cleanups.splice(0).map((cleanup) => cleanup()));
-  if (ORIGINAL_ALLOWED_REPOS === undefined) delete process.env.AGENT_ALLOWED_REPOS;
-  else process.env.AGENT_ALLOWED_REPOS = ORIGINAL_ALLOWED_REPOS;
 });
 
 /** A definition row with no version, which is what a fresh create leaves behind.
@@ -220,11 +221,19 @@ async function seedDraft(id: number, version: number, definition: unknown): Prom
   });
 }
 
-async function connectedClient(actor: Partial<McpActorContext> = { scopes: WRITE_ONLY }) {
+async function connectedClient(
+  actor: Partial<McpActorContext> = { scopes: WRITE_ONLY },
+  repositoryCatalog = unactivatedRepositoryCatalog(),
+  // Separately overridable because WHEN the catalog is read is itself under
+  // test: the tools that dispatch or publish ask for it, the reads never do.
+  loadRepositoryCatalog: () => Promise<ReturnType<typeof unactivatedRepositoryCatalog>> =
+    async () => repositoryCatalog,
+) {
   const server = new McpServer({ name: "workflow-authoring-test", version: "0.1.0" });
   const toolDeps = depsFor(db, () => now, {
     actor: actorFor(actor),
     adapters: { messaging: { notifyForTicket } } as unknown as Adapters,
+    loadRepositoryCatalog,
   });
   registerWorkflowAuthoringTools(server, toolDeps);
   registerWorkflowGraphTools(server, toolDeps);
@@ -315,9 +324,10 @@ async function platformDefinition(): Promise<{ id: number; enabled: boolean }> {
   return row;
 }
 
-/** The same minimal graph, pinning one repository to the definition. A pin is the
- *  one thing a workflow can carry that WIDENS what the platform may clone and open
- *  pull requests on (lib/repo-allowlist.ts:89-103). */
+/** The same minimal graph, pinning one repository to the definition. A pin
+ *  SELECTS inside the repository catalog; it no longer extends dispatch, so
+ *  pinning a repository the catalog does not enable is reported rather than
+ *  obeyed. */
 function pinnedGraph(repoPath: string) {
   return graph({
     repositoryScope: { repositories: [{ provider: "github", repoPath }] },
@@ -484,8 +494,8 @@ describe("workflows.save_draft", () => {
       definitionId,
       draftRevision: 1,
       graphHash: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
-      // This graph pins nothing, and no allowlist is configured either.
-      repositoriesOutsideAllowlist: [],
+      // This graph pins nothing, and the catalog is not activated either.
+      pinnedRepositoriesNotEnabled: [],
     });
     // A draft is inert, so nobody is told about one: the channel hears about the
     // publish that makes a graph the platform's instruction, not about the writing.
@@ -517,9 +527,9 @@ describe("workflows.save_draft", () => {
     expect(JSON.stringify(rows)).not.toContain(MARKER);
     for (const row of rows) {
       // Which definition, which revision the save replaced, and how many pinned
-      // repositories reach past the allowlist. The graph survives only as a digest,
-      // in the hashes beside it.
-      expect(row.targetRefs).toEqual([String(definitionId), "0", "repos_outside_allowlist:0"]);
+      // repositories the catalog does not enable. The graph survives only as a
+      // digest, in the hashes beside it.
+      expect(row.targetRefs).toEqual([String(definitionId), "0", "pinned_repos_not_enabled:0"]);
       expect(row.inputHash).toMatch(/^sha256:[0-9a-f]{64}$/);
       expect(row.mutationClass).toBe("direct");
     }
@@ -675,7 +685,7 @@ describe("workflows.publish", () => {
       // Disabled, so the trigger cannot fire, and the node is named rather than
       // left to be inferred from `enabled`.
       dormantTriggerNodeIds: [TRIGGER_NODE_ID],
-      repositoriesOutsideAllowlist: [],
+      pinnedRepositoriesNotEnabled: [],
     });
     // Announced even here: an operator finds out that the definition now carries a
     // graph nobody in the dashboard wrote, and the copy says what it does and does
@@ -777,11 +787,12 @@ describe("workflows.publish", () => {
     // anything has been read, so those three arrive from the arguments alone.
     const argumentRefs = [String(definitionId), "1", "none"];
     expect(rows.find((row) => row.outcome === "attempted")?.targetRefs).toEqual(argumentRefs);
-    // And the count of pinned repositories past the allowlist rides the row that
-    // records the deployment, because it is read off the graph that went live.
+    // And the count of pinned repositories the catalog does not enable rides the
+    // row that records the deployment, because it is read off the graph that went
+    // live.
     expect(rows.find((row) => row.outcome === "success")?.targetRefs).toEqual([
       ...argumentRefs,
-      "repos_outside_allowlist:0",
+      "pinned_repos_not_enabled:0",
     ]);
     for (const row of rows) expect(row.mutationClass).toBe("direct");
   });
@@ -817,7 +828,7 @@ describe("workflows.publish", () => {
       // the deploy that succeeded is what claimed it for an enabled definition.
       liveOnRealEvents: true,
       dormantTriggerNodeIds: [],
-      repositoriesOutsideAllowlist: [],
+      pinnedRepositoriesNotEnabled: [],
     });
     // The store's own bookkeeping: the enabled definition's live head moved, so the
     // next real ticket resolves this graph (store.ts:605-612).
@@ -835,19 +846,20 @@ describe("workflows.publish", () => {
   });
 
   // Nothing is taken away: the pin publishes. What it must not do is publish
-  // silently, because a pinned repository is the one way a graph can widen the
-  // operator's own allowlist, and the deployment gate checks a graph's shape rather
-  // than this permission.
-  it("publishes a graph pinning a repository outside the allowlist and signals it in the reply, the audit row and the channel", async () => {
-    process.env.AGENT_ALLOWED_REPOS = ALLOWED_REPO;
-    const client = await connectedClient();
+  // silently, because the pin no longer grants access, so a graph pinning a
+  // repository the catalog does not enable will quietly act on nothing.
+  it("publishes a graph pinning a repository the catalog does not enable and signals it in the reply, the audit row and the channel", async () => {
+    const client = await connectedClient(
+      { scopes: WRITE_ONLY },
+      activatedRepositoryCatalog([`github:${ENABLED_REPO}`]),
+    );
 
-    const saved = await saveDraft(client, { definition: pinnedGraph(OUTSIDE_REPO) });
+    const saved = await saveDraft(client, { definition: pinnedGraph(NOT_ENABLED_REPO) });
 
     expect(saved.isError).not.toBe(true);
     expect(dataOf(saved)).toMatchObject({
       draftRevision: 1,
-      repositoriesOutsideAllowlist: [`github:${OUTSIDE_REPO}`],
+      pinnedRepositoriesNotEnabled: [`github:${NOT_ENABLED_REPO}`],
     });
 
     const published = await publish(client, { idempotencyKey: KEY_TWO });
@@ -855,34 +867,87 @@ describe("workflows.publish", () => {
     expect(published.isError).not.toBe(true);
     expect(dataOf(published)).toMatchObject({
       deployedVersion: 1,
-      repositoriesOutsideAllowlist: [`github:${OUTSIDE_REPO}`],
+      pinnedRepositoriesNotEnabled: [`github:${NOT_ENABLED_REPO}`],
     });
     // A flag and a count in the audit row, never the paths: those are answered once,
     // in the reply, and these rows are kept for a year.
     const refs = (await auditRows()).map((row) => row.targetRefs);
-    expect(refs).toContainEqual([String(definitionId), "0", "repos_outside_allowlist:1"]);
-    expect(refs).toContainEqual([String(definitionId), "1", "none", "repos_outside_allowlist:1"]);
-    expect(JSON.stringify(await auditRows())).not.toContain(OUTSIDE_REPO);
+    expect(refs).toContainEqual([String(definitionId), "0", "pinned_repos_not_enabled:1"]);
+    expect(refs).toContainEqual([
+      String(definitionId),
+      "1",
+      "none",
+      "pinned_repos_not_enabled:1",
+    ]);
+    expect(JSON.stringify(await auditRows())).not.toContain(NOT_ENABLED_REPO);
     // The channel is where a person reads it, so the channel gets the PATH: a count
     // tells an operator to go looking, a path tells them what to look at.
     expect(announcement()).toContain(
-      `It pins a repository outside AGENT_ALLOWED_REPOS: github:${OUTSIDE_REPO}.`,
+      "It pins a repository the repository catalog does not enable, so dispatch " +
+        "refuses events from it and, until the engine stage lands, a run that " +
+        `starts anyway still reaches it through this pin: github:${NOT_ENABLED_REPO}.`,
     );
   });
 
-  it("reports nothing outside the allowlist for a pin the operator did allow", async () => {
-    process.env.AGENT_ALLOWED_REPOS = `${ALLOWED_REPO},${OUTSIDE_REPO}`;
-    const client = await connectedClient();
+  it("reports nothing for a pin the catalog does enable", async () => {
+    const client = await connectedClient(
+      { scopes: WRITE_ONLY },
+      activatedRepositoryCatalog([`github:${ENABLED_REPO}`, `github:${NOT_ENABLED_REPO}`]),
+    );
 
-    const saved = await saveDraft(client, { definition: pinnedGraph(OUTSIDE_REPO) });
+    const saved = await saveDraft(client, { definition: pinnedGraph(NOT_ENABLED_REPO) });
 
-    // Same graph as the test above, and now the pin grants nothing the allowlist did
-    // not already grant, so the warning has to be absent rather than constant.
-    expect(dataOf(saved)).toMatchObject({ repositoriesOutsideAllowlist: [] });
+    // Same graph as the test above, and now the catalog enables what it pins, so the
+    // warning has to be absent rather than constant.
+    expect(dataOf(saved)).toMatchObject({ pinnedRepositoriesNotEnabled: [] });
     expect((await auditRows()).map((row) => row.targetRefs)).toContainEqual([
       String(definitionId),
       "0",
-      "repos_outside_allowlist:0",
+      "pinned_repos_not_enabled:0",
+    ]);
+  });
+
+  it("reports nothing while the catalog is not activated, because the bridge enables everything", async () => {
+    const client = await connectedClient();
+
+    const saved = await saveDraft(client, { definition: pinnedGraph(NOT_ENABLED_REPO) });
+
+    expect(dataOf(saved)).toMatchObject({ pinnedRepositoriesNotEnabled: [] });
+  });
+
+  // A pin the catalog could never hold a row for, because it is keyed by provider
+  // and path together. On an activated deployment that is exactly the pin an
+  // operator has to hear about; on the bridge it is not, because a catalog that
+  // enables everything is refusing nobody and a field named "not enabled in the
+  // catalog" must not accuse it. Read off the audit ref rather than the reply: the
+  // schema rejects this graph, and the count is settled on the ATTEMPT, before
+  // validation runs.
+  it("reports an unusable pin provider only once the catalog is activated", async () => {
+    const unusable = graph({
+      repositoryScope: {
+        repositories: [{ provider: "bitbucket", repoPath: NOT_ENABLED_REPO }],
+      },
+    });
+
+    const bridged = await connectedClient();
+    await saveDraft(bridged, { definition: unusable });
+
+    expect((await auditRows()).map((row) => row.targetRefs)).toContainEqual([
+      String(definitionId),
+      "0",
+      "pinned_repos_not_enabled:0",
+    ]);
+
+    const activated = await connectedClient(
+      { scopes: WRITE_ONLY },
+      activatedRepositoryCatalog([`github:${ENABLED_REPO}`]),
+    );
+    await saveDraft(activated, { definition: unusable, idempotencyKey: KEY_TWO });
+
+    expect((await auditRows()).map((row) => row.targetRefs)).toContainEqual([
+      String(definitionId),
+      "0",
+      "pinned_repos_not_enabled:1",
     ]);
   });
 
@@ -1196,6 +1261,27 @@ async function setEnabled(
 }
 
 describe("workflows.get_graph", () => {
+  // The catalog is on the dependencies as a thunk precisely so this holds: a
+  // read has no dispatch decision to make, and a catalog the database cannot
+  // answer for must not take the read half of the surface down with it.
+  it("answers when the repository catalog cannot be read", async () => {
+    const client = await connectedClient(
+      { scopes: WRITE_ONLY },
+      unactivatedRepositoryCatalog(),
+      async () => {
+        throw new Error("neon: connection reset");
+      },
+    );
+    await seedDraft(definitionId, 1, graph());
+
+    const result = await getGraph(client);
+
+    expect(result.isError).not.toBe(true);
+    expect(dataOf(result)).toMatchObject({ definitionId });
+    // The write half does ask, so the rejection reaches the caller there.
+    expect((await saveDraft(client, { expectedDraftRevision: 1 })).isError).toBe(true);
+  });
+
   it("returns the current draft as a whole graph, with the save and publish tokens", async () => {
     const client = await connectedClient();
     // Saved through the tool so the reference hash is the one save_draft reports for

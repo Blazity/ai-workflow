@@ -76,7 +76,11 @@ names, harness defaults) are rows in the `settings` table, described once in
   the opposite and take a `loadSettings` thunk, so a bad signature is refused
   without touching the database. Engine files are the exception and still call
   the deprecated zero-argument form until the engine wave (stage X) gives a run
-  its own snapshot at run start.
+  its own snapshot at run start. The repository catalog snapshot obeys the same
+  rule in the same places: `getRequestRepositoryCatalogSnapshot(event)` memoised
+  on the event, a `loadRepositoryCatalog` thunk beside `loadSettings` on both
+  signed webhook ingresses, one load per cron tick handed into the poll pass,
+  and `deps.repositoryCatalog` on `McpToolDependencies`.
 - **The transition rule.** Every accessor that reads a migrated key has two
   forms: `accessor(snapshot)`, which is the one to use, and a deprecated
   zero-argument form that resolves from the environment through
@@ -143,8 +147,22 @@ names, harness defaults) are rows in the `settings` table, described once in
   synchronous predicate from it (`policy.ts`). While `repository_catalog_state`
   says not activated the catalog is a **bridge**: it answers "enabled" for every
   repository and reports that it is doing so, which is exactly how the
-  deployment behaves today. Nothing is rewired onto it yet;
-  `engine/support/repo-allowlist.ts` still decides access. The build-time seed
+  deployment behaves today. **The services tier decides dispatch from it now, on
+  four paths:** a pull request or merge request event on either webhook, the
+  legacy post-PR gate they fall back to, a manual pull request dispatch, and an
+  MCP dispatch (with save and publish reporting the same answer for a graph's
+  pins). Each asks `isRepositoryDispatchable`
+  (`services/dispatch/repo-allowlist.ts`, snapshot in, boolean out) with the
+  snapshot its entry point loaded. A definition's repository pin is a **selection
+  inside the catalog** and no longer extends dispatch, which is why the stage C
+  seed imported every pinned repository as an enabled row. Two things the catalog
+  does NOT decide yet: a ticket-driven run (`dispatchTicket`, from the Jira
+  webhook and the poll) still chooses its repositories inside the run, from
+  discovery and the expansion protocol; and inside any run
+  `engine/support/repo-allowlist.ts` still guards discovery, branch and PR
+  creation from the environment, so a repository enabled here but missing from
+  `AGENT_ALLOWED_REPOS` is dispatched and then fails late. Both move to the run's
+  own enabled list in the engine wave (stage X). The build-time seed
   `scripts/db-seed-repository-catalog.ts` (wired after `db:migrate` in `build`,
   never in `build:ci`) imports the allowlist variable and every pinned
   repository, activates only a deployment whose allowlist was already

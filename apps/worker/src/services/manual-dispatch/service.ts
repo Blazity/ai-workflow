@@ -9,6 +9,7 @@ import type {
 import { env } from "../../infra/vcs-config.js";
 import type { Adapters } from "../../engine/support/adapters.js";
 import { reserveSubjectWithinCapacity } from "../dispatch/index.js";
+import type { RepositoryCatalogSnapshot } from "../repository-catalog/index.js";
 import { aiColumnMoveTarget, moveTicketForRun } from "../tickets/index.js";
 import type { Db } from "../../db/types.js";
 import type { AgentWorkflowInput, PrTriggerPayload } from "../../engine/index.js";
@@ -94,6 +95,7 @@ export async function preflightManualDispatch(input: {
   triggerNodeId: string;
   dispatchInput: ManualDispatchInput;
   maxConcurrentAgents: number;
+  repositoryCatalog: RepositoryCatalogSnapshot;
 }): Promise<ManualDispatchPreflightResponse> {
   const resolved = await resolveManualDispatch({
     db: input.db,
@@ -101,6 +103,7 @@ export async function preflightManualDispatch(input: {
     definitionId: input.definitionId,
     triggerNodeId: input.triggerNodeId,
     dispatchInput: input.dispatchInput,
+    repositoryCatalog: input.repositoryCatalog,
   });
   const active = await input.adapters.runRegistry.get(resolved.subjectKey);
   const atCapacity =
@@ -152,6 +155,7 @@ export async function preflightConnectedManualDispatch(
     definitionId: input.definitionId,
     triggerNodeId: input.triggerNodeId,
     dispatchInput: input.dispatchInput,
+    repositoryCatalog: input.repositoryCatalog,
   });
   const active = await input.adapters.runRegistry.get(resolved.subjectKey);
   const atCapacity = !active && (await capacityCount(input.adapters)) >= input.maxConcurrentAgents;
@@ -182,6 +186,7 @@ export async function dispatchManualWorkflow(input: {
   request: ManualDispatchRequest;
   actor: ManualDispatchActor;
   maxConcurrentAgents: number;
+  repositoryCatalog: RepositoryCatalogSnapshot;
 }): Promise<ManualDispatchResponse> {
   const resolved = await resolveManualDispatch({
     db: input.db,
@@ -189,6 +194,7 @@ export async function dispatchManualWorkflow(input: {
     definitionId: input.definitionId,
     triggerNodeId: input.triggerNodeId,
     dispatchInput: input.request.input,
+    repositoryCatalog: input.repositoryCatalog,
   });
   if (resolved.definitionVersion !== input.request.expectedDeployedVersion) {
     throw new ManualDispatchError(
@@ -232,6 +238,7 @@ export async function dispatchManualWorkflow(input: {
     row: persisted.row,
     requireCurrentDeployment: true,
     maxConcurrentAgents: input.maxConcurrentAgents,
+    repositoryCatalog: input.repositoryCatalog,
   });
 }
 
@@ -243,6 +250,7 @@ export async function dispatchConnectedManualWorkflow(
     definitionId: input.definitionId,
     triggerNodeId: input.triggerNodeId,
     dispatchInput: input.request.input,
+    repositoryCatalog: input.repositoryCatalog,
   });
   if (resolved.definitionVersion !== input.request.expectedDeployedVersion) {
     throw new ManualDispatchError(409, "deployment_changed", "The deployed workflow changed. Run the preflight again.");
@@ -259,7 +267,7 @@ export async function dispatchConnectedManualWorkflow(
     throw new ManualDispatchError(409, "invalid_input", "That request ID was already used for different dispatch input.");
   }
   if (!persisted.inserted) return storedResponse(persisted.row);
-  return processManualDispatch({ store: connectedExecutionStore, adapters: input.adapters, row: persisted.row, requireCurrentDeployment: true, maxConcurrentAgents: input.maxConcurrentAgents });
+  return processManualDispatch({ store: connectedExecutionStore, adapters: input.adapters, row: persisted.row, requireCurrentDeployment: true, maxConcurrentAgents: input.maxConcurrentAgents, repositoryCatalog: input.repositoryCatalog });
 }
 
 function storedResponse(row: ManualDispatchRow): ManualDispatchResponse {
@@ -277,6 +285,7 @@ export async function recoverManualDispatches(input: {
   db?: Db;
   adapters: Adapters;
   maxConcurrentAgents: number;
+  repositoryCatalog: RepositoryCatalogSnapshot;
 }): Promise<{ scanned: number; started: number; recovering: number; failed: number }> {
   const store = input.db ? explicitExecutionStore(input.db) : connectedExecutionStore;
   const rows = input.db
@@ -336,6 +345,7 @@ export async function recoverManualDispatches(input: {
         triggerNodeId: row.triggerNodeId,
         dispatchInput,
         definitionVersion: row.definitionVersion,
+        repositoryCatalog: input.repositoryCatalog,
       };
       const resolved = input.db
         ? await resolveManualDispatch({ ...resolveInput, db: input.db })
@@ -380,6 +390,7 @@ async function processManualDispatch(input: {
   row: ManualDispatchRow;
   requireCurrentDeployment: boolean;
   maxConcurrentAgents: number;
+  repositoryCatalog: RepositoryCatalogSnapshot;
 }): Promise<ManualDispatchResponse> {
   if (input.row.status === "started" && input.row.runId) {
     return { requestId: input.row.requestId, status: "started", runId: input.row.runId };
@@ -458,6 +469,7 @@ async function processManualDispatch(input: {
       triggerNodeId: input.row.triggerNodeId,
       dispatchInput: storedInput(input.row),
       definitionVersion: input.row.definitionVersion,
+      repositoryCatalog: input.repositoryCatalog,
     });
   } catch (error) {
     if (error instanceof ManualDispatchError && error.statusCode < 500) {

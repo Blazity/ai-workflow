@@ -210,6 +210,9 @@ export interface McpToolServices extends McpGateServices {
       "db" | "maxConcurrentAgents"
     >,
   ): ReturnType<typeof preflightManualDispatch>;
+  // `repositoryCatalog` stays in the caller's hands rather than being bound
+  // here: the transport reads it once per call and every tool answers from that
+  // one snapshot, which a factory built before the request could not provide.
   dispatchManualWorkflow(
     input: Omit<Parameters<typeof dispatchManualWorkflow>[0], "db" | "maxConcurrentAgents">,
   ): ReturnType<typeof dispatchManualWorkflow>;

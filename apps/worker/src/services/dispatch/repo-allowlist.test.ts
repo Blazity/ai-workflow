@@ -1,129 +1,112 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Db } from "../../db/client.js";
+import { createTestDb } from "../../db/test-db.js";
 
-const mocks = vi.hoisted(() => ({
-  warn: vi.fn(),
-  error: vi.fn(),
+// The predicate is pure, but what it is asked about is not: these cases load a
+// real snapshot out of a pglite catalog, because the thing worth proving is that
+// the store and the predicate agree about what "enabled" means.
+const state = vi.hoisted(() => ({ db: undefined as unknown }));
+vi.mock("../../db/client.js", () => ({ getDb: () => state.db }));
+// The catalog's cluster index reaches the dashboard actor lookup, which reaches
+// the validated environment on import; nothing here needs either.
+vi.mock("../../infra/vcs-config.js", () => ({
+  env: {},
+  getConfiguredVcsProviders: () => [],
 }));
 
-vi.mock("../../infra/logger.js", () => ({
-  logger: { warn: mocks.warn, error: mocks.error, info: vi.fn(), debug: vi.fn() },
-}));
+const { activateRepositoryCatalog, setRepositoryEnabled, upsertRepositoryProfile } =
+  await import("../../db/repositories/repository-catalog.js");
+const { loadRepositoryCatalogSnapshot } = await import(
+  "../repository-catalog/index.js"
+);
+const { isRepositoryDispatchable, REPOSITORY_NOT_IN_CATALOG_REASON } = await import(
+  "./repo-allowlist.js"
+);
 
-import {
-  filterAllowedRepositories,
-  filterRepositoriesForScope,
-  isRepoAllowed,
-  isRepoAllowedForScope,
-} from "./repo-allowlist.js";
+let db: Db;
 
-const ORIGINAL = process.env.AGENT_ALLOWED_REPOS;
+beforeEach(async () => {
+  db = await createTestDb();
+  state.db = db;
+});
 
-function setAllowlist(value: string | undefined): void {
-  if (value === undefined) delete process.env.AGENT_ALLOWED_REPOS;
-  else process.env.AGENT_ALLOWED_REPOS = value;
+async function addRepository(
+  provider: "github" | "gitlab",
+  path: string,
+  enabled: boolean,
+): Promise<void> {
+  const saved = await upsertRepositoryProfile(db, {
+    provider,
+    path,
+    description: "",
+    rules: "",
+    relationships: [],
+    scriptGroups: { provider, repoPath: path, groups: {} },
+    gateGroups: null,
+    actorId: "user-1",
+    actorLabel: "Ada",
+    reason: "",
+    enabled,
+  });
+  if (!enabled) await setRepositoryEnabled(db, { id: saved.id, enabled: false });
 }
 
-afterEach(() => {
-  setAllowlist(ORIGINAL);
-  vi.clearAllMocks();
-});
+describe("isRepositoryDispatchable", () => {
+  it("passes every repository while the catalog is not activated", async () => {
+    await addRepository("github", "acme/api", true);
+    await addRepository("github", "acme/web", false);
 
-describe("repo-allowlist validation and fail-open warnings", () => {
-  it("warns once at error level and ignores a malformed entry, keeping valid ones", () => {
-    setAllowlist("acme/api, not-a-repo");
+    const snapshot = await loadRepositoryCatalogSnapshot();
 
-    // Valid entries still gate as before.
-    expect(isRepoAllowed("acme/api")).toBe(true);
-    expect(isRepoAllowed("acme/web")).toBe(false);
-    // Second call must not re-log the same bad entries (one-time-per-entry dedupe).
-    expect(isRepoAllowed("acme/api")).toBe(true);
-
-    expect(mocks.error).toHaveBeenCalledTimes(1);
-    const loggedEntries = mocks.error.mock.calls.map((call) => call[0].entry);
-    expect(loggedEntries).toContain("not-a-repo");
-    // A partially-valid allowlist is still a restriction, not fail-open.
-    expect(mocks.warn).not.toHaveBeenCalled();
+    expect(snapshot.activated).toBe(false);
+    expect(
+      isRepositoryDispatchable(snapshot, { provider: "github", path: "acme/web" }),
+    ).toBe(true);
+    expect(
+      isRepositoryDispatchable(snapshot, { provider: "gitlab", path: "never/heard-of-it" }),
+    ).toBe(true);
   });
 
-  it("accepts nested GitLab-style namespaces as exact allowlist entries", () => {
-    setAllowlist("group/team/repo,acme/app");
+  it("lets only the enabled rows through once the catalog is activated", async () => {
+    await addRepository("github", "Acme/Api", true);
+    await addRepository("github", "acme/web", false);
+    await addRepository("gitlab", "group/team/tool", true);
+    await activateRepositoryCatalog(db, { actorId: "user-1" });
 
-    expect(isRepoAllowed("group/team/repo")).toBe(true);
-    expect(isRepoAllowed("group/team/other")).toBe(false);
-    expect(isRepoAllowed("acme/app")).toBe(true);
-    expect(mocks.error).not.toHaveBeenCalled();
-  });
-
-  it("warns once when the allowlist is empty (fail-open state is visible)", () => {
-    setAllowlist("");
-    expect(isRepoAllowed("acme/anything")).toBe(true);
-    // Repeated checks do not re-warn.
-    expect(isRepoAllowed("other/repo")).toBe(true);
-
-    expect(mocks.warn).toHaveBeenCalledTimes(1);
-    expect(mocks.warn.mock.calls[0][1]).toMatch(/AGENT_ALLOWED_REPOS is empty/);
-    expect(mocks.error).not.toHaveBeenCalled();
-  });
-
-  it("filters valid entries without warning and drops off-list repos", () => {
-    setAllowlist("acme/api,acme/web");
-    const result = filterAllowedRepositories([
-      { repoPath: "Acme/API" },
-      { repoPath: "acme/other" },
-      { repoPath: "acme/web" },
-    ]);
-    expect(result).toEqual([{ repoPath: "Acme/API" }, { repoPath: "acme/web" }]);
-    expect(mocks.error).not.toHaveBeenCalled();
-    expect(mocks.warn).not.toHaveBeenCalled();
-  });
-});
-
-describe("workflow repository access", () => {
-  it("admits the union of globally allowed repositories and exact workflow pins", () => {
-    setAllowlist("acme/api");
-
-    const repositories = [
-      { provider: "github" as const, repoPath: "Acme/API" },
-      { provider: "gitlab" as const, repoPath: "group/tool" },
-      { provider: "github" as const, repoPath: "acme/other" },
-    ];
-    const scope = {
-      repositories: [
-        { provider: "gitlab" as const, repoPath: "GROUP/TOOL" },
-      ],
-    };
-
-    expect(filterRepositoriesForScope(repositories, scope)).toEqual([
-      repositories[0],
-      repositories[1],
-    ]);
-    expect(isRepoAllowedForScope(repositories[0]!, undefined)).toBe(true);
-    expect(isRepoAllowedForScope(repositories[1]!, scope)).toBe(true);
-  });
-
-  it("does not treat provider-only scope as a repository exception", () => {
-    setAllowlist("acme/api");
+    const snapshot = await loadRepositoryCatalogSnapshot();
 
     expect(
-      isRepoAllowedForScope(
-        { provider: "gitlab", repoPath: "group/tool" },
-        { providers: ["gitlab"] },
-      ),
+      isRepositoryDispatchable(snapshot, { provider: "github", path: "acme/API" }),
+    ).toBe(true);
+    expect(
+      isRepositoryDispatchable(snapshot, { provider: "github", path: "acme/web" }),
+    ).toBe(false);
+    expect(
+      isRepositoryDispatchable(snapshot, { provider: "gitlab", path: "group/team/tool" }),
+    ).toBe(true);
+    expect(
+      isRepositoryDispatchable(snapshot, { provider: "github", path: "never/heard-of-it" }),
     ).toBe(false);
   });
 
-  it("does not let a pin authorize the same path on another provider", () => {
-    setAllowlist("acme/api");
+  it("does not let an enabled row on one provider authorize the same path on another", async () => {
+    await addRepository("gitlab", "group/tool", true);
+    await activateRepositoryCatalog(db, { actorId: "user-1" });
+
+    const snapshot = await loadRepositoryCatalogSnapshot();
 
     expect(
-      isRepoAllowedForScope(
-        { provider: "github", repoPath: "group/tool" },
-        {
-          repositories: [
-            { provider: "gitlab", repoPath: "group/tool" },
-          ],
-        },
-      ),
+      isRepositoryDispatchable(snapshot, { provider: "gitlab", path: "group/tool" }),
+    ).toBe(true);
+    expect(
+      isRepositoryDispatchable(snapshot, { provider: "github", path: "group/tool" }),
     ).toBe(false);
+  });
+
+  // What a refused caller reads. It names the thing an operator can act on: the
+  // catalog and the page that edits it, never an environment variable.
+  it("names the catalog in the refusal", () => {
+    expect(REPOSITORY_NOT_IN_CATALOG_REASON).toContain("repository catalog");
+    expect(REPOSITORY_NOT_IN_CATALOG_REASON).not.toMatch(/[A-Z]{3,}_[A-Z_]+/);
   });
 });

@@ -119,6 +119,29 @@ export function listRepositoryCatalogRows(
   return filtered.orderBy(asc(repositories.provider), asc(repositories.path));
 }
 
+/**
+ * The three columns a dispatch decision needs, and nothing else.
+ *
+ * Every HTTP request, cron tick and MCP call loads this, while the rules blob,
+ * the relationships and the descriptions on the full row are read by the two
+ * screens that render them. Selecting them on the dispatch path would move the
+ * whole catalog across the wire on every webhook delivery for no answer it can
+ * give.
+ *
+ * Not exported: its only caller is the connected wrapper below, and the
+ * unused-code gate is right that a second entry point nobody has asked for is
+ * not worth the export.
+ */
+function listRepositoryCatalogKeys(db: Db) {
+  return db
+    .select({
+      provider: repositories.provider,
+      path: repositories.path,
+      enabled: repositories.enabled,
+    })
+    .from(repositories);
+}
+
 export async function getRepositoryCatalogRow(db: Db, id: number) {
   const [row] = await db.select().from(repositories).where(eq(repositories.id, id)).limit(1);
   return row ?? null;
@@ -618,6 +641,10 @@ export function listConnectedRepositoryCatalogRows(
   options: { enabledOnly?: boolean } = {},
 ) {
   return listRepositoryCatalogRows(getDb(), options);
+}
+
+export function listConnectedRepositoryCatalogKeys() {
+  return listRepositoryCatalogKeys(getDb());
 }
 
 export function getConnectedRepositoryCatalogRow(id: number) {

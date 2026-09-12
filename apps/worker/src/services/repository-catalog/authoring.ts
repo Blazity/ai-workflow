@@ -27,7 +27,7 @@ import {
   upsertConnectedRepositoryProfile,
 } from "../../db/repositories/repository-catalog.js";
 import { getConnectedDashboardUserLabel, type DashboardRole } from "../auth/index.js";
-import { loadRepositoryCatalogSnapshot, serializeRepositoryCatalogEntry } from "./store.js";
+import { loadRepositoryCatalogEntries, serializeRepositoryCatalogEntry } from "./store.js";
 import { serializeRepositoryProfileVersion } from "./versions.js";
 
 /** Who is acting, as the profile version records them. */
@@ -51,8 +51,11 @@ async function requireRow(id: number) {
 /** Reads are open to every role: knowing which repositories exist is not a
  *  privilege, and a member who cannot see the list cannot read a run either. */
 export async function readRepositoryCatalog(): Promise<RepositoryCatalogListResponse> {
-  const snapshot = await loadRepositoryCatalogSnapshot();
-  return { state: snapshot.state, repositories: [...snapshot.entries] };
+  // The full rows, not the dispatch snapshot: this is the screen that renders
+  // descriptions, rules and relationships, and it is the only caller that needs
+  // them.
+  const { state, entries } = await loadRepositoryCatalogEntries();
+  return { state, repositories: entries };
 }
 
 export async function readRepositoryCatalogEntry(

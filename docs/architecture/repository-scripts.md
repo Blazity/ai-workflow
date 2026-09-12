@@ -282,6 +282,46 @@ unless the allowlist or a definition pin already granted the repository: the
 checks configuration says what to run if the agent may touch a repository, never
 that it may. The copy is idempotent, so a redeploy creates nothing new.
 
+**Who may be dispatched.** The catalog decides this on exactly four paths
+today: a pull request or merge request event arriving on the GitHub or GitLab
+webhook, the legacy post-PR gate those two fall back to, a manual dispatch of a
+pull request, and an MCP dispatch (with save and publish reporting the same
+answer for a graph's pins). Each of those entry points reads one catalog
+snapshot per HTTP request, cron tick or MCP call and asks
+`isRepositoryDispatchable` (`apps/worker/src/services/dispatch/repo-allowlist.ts`),
+which answers from the enabled set alone. While the catalog is **not activated**
+it answers yes for everything, which is how a deployment that has never opened
+the Repositories page keeps behaving; once activated, only enabled rows pass, a
+refusal says the repository is not enabled in the catalog, and the delivery is
+recorded as `ignored_repository_not_enabled` rather than as a provider mismatch.
+A pending event that was queued while the deployment was busy is asked again on
+the tick that drains it, so a repository disabled in the meantime is dropped
+rather than dispatched late. A workflow definition's repository pin is a
+**selection inside** the catalog and no longer extends dispatch, so events from a
+repository nobody enabled are refused whatever the graph pins; MCP authoring
+reports exactly that list as `pinnedRepositoriesNotEnabled` on a save and a
+publish.
+
+**What the catalog does not decide yet.** A ticket-driven run is the gap:
+`dispatchTicket`, the path the Jira webhook and the poll take, does not consult
+the catalog at all, because such a run chooses its repositories INSIDE the run,
+from discovery and the expansion protocol. The engine stage moves that choice
+onto the run's own enabled list; until it does, a ticket run selects repositories
+exactly as it does today.
+
+**Until the engine stage, enabling a row is not enough.** Inside a run
+`AGENT_ALLOWED_REPOS` is still the guard
+(`apps/worker/src/engine/support/repo-allowlist.ts`): repository discovery drops
+an off-list repository silently through `filterRepositoriesForScope`, and a
+direct action on one fails the run with
+`Refusing to ... : not in AGENT_ALLOWED_REPOS`. So a repository enabled in the
+catalog but absent from the variable is dispatched and then fails late, at
+promotion or at pull request creation, after an agent invocation has already been
+spent. The enable route says so in a `warnings` field at the moment the switch is
+flipped. Keep the variable in step with the catalog until the engine stage moves
+that guard onto the run's own enabled list, which is the same instruction
+SETUP.md gives next to the variable.
+
 **What still reads the blob.** The `pre_pr_check_config_versions` table is read
 by the legacy Scripts screen alone: its history list and its restore, plus two
 fields the composed configuration still takes from the newest row, the global

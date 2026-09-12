@@ -11,7 +11,16 @@ const mocks = vi.hoisted(() => ({
     GITHUB_BOT_LOGIN: undefined as string | undefined,
   },
   getVcsBotLogin: vi.fn(),
-  isRepoAllowed: vi.fn(),
+  isRepositoryDispatchable: vi.fn(),
+  // The catalog is loaded exactly like the settings table, and like it, when it
+  // is loaded (and whether it is loaded at all) is itself under test below.
+  listConnectedRepositoryCatalogKeys: vi.fn(async () => [] as unknown[]),
+  getConnectedRepositoryCatalogStateRow: vi.fn(async () => ({
+    activated: false,
+    activatedAt: null,
+    activatedById: null,
+    activatedByLabel: null,
+  })),
   findWorkflowOwnedPullRequestIdentity: vi.fn(),
   observeProviderWebhook: vi.fn(),
   verifyGitHubWebhookSignature: vi.fn(),
@@ -33,8 +42,14 @@ vi.mock("../../services/vcs/index.js", () => ({
 vi.mock("../../infra/github-webhook-sig.js", () => ({
   verifyGitHubWebhookSignature: (...args: any[]) => mocks.verifyGitHubWebhookSignature(...args),
 }));
-vi.mock("../../engine/support/repo-allowlist.js", () => ({
-  isRepoAllowed: (...args: any[]) => mocks.isRepoAllowed(...args),
+vi.mock("../../services/dispatch/repo-allowlist.js", () => ({
+  isRepositoryDispatchable: (...args: any[]) => mocks.isRepositoryDispatchable(...args),
+  REPOSITORY_NOT_IN_CATALOG_REASON: "This repository is not enabled in the repository catalog.",
+}));
+vi.mock("../../db/repositories/repository-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../db/repositories/repository-catalog.js")>()),
+  listConnectedRepositoryCatalogKeys: () => mocks.listConnectedRepositoryCatalogKeys(),
+  getConnectedRepositoryCatalogStateRow: () => mocks.getConnectedRepositoryCatalogStateRow(),
 }));
 
 vi.mock("../../post-pr-gate/config.js", () => ({
@@ -115,7 +130,7 @@ describe("POST /webhooks/github", () => {
     mocks.env.VCS_BOT_LOGIN = undefined;
     mocks.env.GITHUB_BOT_LOGIN = undefined;
     mocks.getVcsBotLogin.mockReturnValue("github-app[bot]");
-    mocks.isRepoAllowed.mockReturnValue(true);
+    mocks.isRepositoryDispatchable.mockReturnValue(true);
     mocks.findWorkflowOwnedPullRequestIdentity.mockResolvedValue(undefined);
     mockDispatchPostPrGateWebhook.mockResolvedValue({ status: "dispatched", runId: "gate_run" });
     mockDispatchTriggerEvent.mockResolvedValue({ result: "no_definition" });
@@ -152,7 +167,7 @@ describe("POST /webhooks/github", () => {
       status: "dispatched",
       runId: "run_pinned",
     });
-    expect(mocks.isRepoAllowed).not.toHaveBeenCalled();
+    expect(mocks.isRepositoryDispatchable).not.toHaveBeenCalled();
     expect(mockDispatchTriggerEvent).toHaveBeenCalled();
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
     expect(mocks.observeProviderWebhook).toHaveBeenCalledWith(
@@ -266,6 +281,10 @@ describe("POST /webhooks/github", () => {
 
     expect(response.status).toBe(401);
     expect(mocks.readAllConnectedSettings).not.toHaveBeenCalled();
+    // Same bargain for the repository catalog: it is behind the same thunk, so
+    // an unauthenticated flood cannot make the ingress query it either.
+    expect(mocks.getConnectedRepositoryCatalogStateRow).not.toHaveBeenCalled();
+    expect(mocks.listConnectedRepositoryCatalogKeys).not.toHaveBeenCalled();
   });
 
   it("reads the settings table once the signature checks out", async () => {
@@ -275,6 +294,7 @@ describe("POST /webhooks/github", () => {
 
     expect(response.status).toBe(200);
     expect(mocks.readAllConnectedSettings).toHaveBeenCalled();
+    expect(mocks.getConnectedRepositoryCatalogStateRow).toHaveBeenCalled();
   });
 
   it("starts a definition run and supersedes the gate for a bot PR", async () => {

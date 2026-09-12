@@ -42,6 +42,11 @@ export interface RepositoryCatalogMutationResponse {
    *  version: a run in flight must not see its checks configuration move
    *  because somebody toggled a switch. */
   version?: number;
+  /** What an operator has to do elsewhere for this write to mean what it says.
+   *  Absent when there is nothing to say. Today it carries one transitional
+   *  warning: a repository enabled here but missing from the engine's allowlist
+   *  variable is dispatched and then fails inside the run. */
+  warnings?: string[];
 }
 
 /**

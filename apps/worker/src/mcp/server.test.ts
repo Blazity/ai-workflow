@@ -6,6 +6,7 @@ import { McpPublicError, type McpToolDependencies, type McpToolName } from "./co
 import { policyFor } from "./policy.js";
 import { createMcpServer } from "./server.js";
 import { settingsSnapshotFromEnvironment } from "../services/settings/snapshot.js";
+import { unactivatedRepositoryCatalog } from "../test-support/repository-catalog.js";
 
 const state = vi.hoisted(() => ({
   executeMcpRead: vi.fn(),
@@ -67,6 +68,7 @@ const deps = {
   services: {} as McpToolDependencies["services"],
   adapters: {} as McpToolDependencies["adapters"],
   settings: settingsSnapshotFromEnvironment(),
+  loadRepositoryCatalog: async () => unactivatedRepositoryCatalog(),
   actor: {
     kind: "user",
     subject: "user_1",
