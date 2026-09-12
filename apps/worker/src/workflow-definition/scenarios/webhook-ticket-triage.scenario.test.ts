@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { BlockOutput, JsonValue, WorkflowDefinitionV2 } from "@shared/contracts";
 import type { AgentWorkflowInput } from "../../engine/agent-input.js";
 import type { WorkflowBlockRegistryContext } from "../../engine/definition/block-contract-resolver.js";
-import { testBlockData } from "../../test-support/block-contracts.js";
-import { validateWorkflowDefinitionIssuesForDeployment } from "../schema.js";
+import {
+  testBlockData,
+  testDeploymentIssues,
+} from "../../test-support/block-contracts.js";
 import { workflowDefinitionTemplate } from "../templates.js";
 import {
   executorRunsOf,
@@ -166,7 +168,7 @@ describe("webhook ticket triage: the shipped definition", () => {
     const template = workflowDefinitionTemplate(TEMPLATE.id, TEMPLATE.options);
     const definition = template?.definition as WorkflowDefinitionV2;
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(definition, ...BLOCK_DATA, {
+      testDeploymentIssues(definition, ...BLOCK_DATA, {
         checkEnvironmentAvailability: false,
       }),
     ).toEqual([]);

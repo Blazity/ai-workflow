@@ -17,7 +17,7 @@ import { validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring } from 
 import {
   describeWorkflowDefinitionIssues,
   workflowDefinitionV2Schema,
-} from "../../workflow-definition/schema.js";
+} from "@shared/workflow-graph";
 import { declaresRetiredSchema } from "../../workflow-definition/validation.js";
 
 export type WorkflowDefinitionCandidateParse =
@@ -57,5 +57,5 @@ export async function validateWorkflowDefinitionDraftCandidate(candidate: unknow
 export function analyzeWorkflowDefinitionCatalog(
   definition: WorkflowDefinitionV2,
 ): WorkflowDefinitionCatalogResponse {
-  return analyzeWorkflowV2Catalog(definition, currentBlockContracts().resolveContract);
+  return analyzeWorkflowV2Catalog(currentBlockContracts().analyzeValues(definition));
 }

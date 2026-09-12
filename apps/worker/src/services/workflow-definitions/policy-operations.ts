@@ -33,9 +33,9 @@ import {
 import { getTriggerRejectionsToday } from "../dispatch/index.js";
 import {
   describeWorkflowDefinitionIssues,
-  validateWorkflowDefinitionIssuesForDeployment,
   workflowDefinitionV2Schema,
-} from "../../workflow-definition/schema.js";
+} from "@shared/workflow-graph";
+import { validateWorkflowDefinitionIssuesForDeployment } from "../../workflow-definition/deployment-validation.js";
 import {
   syncConnectedLiveDefinitionTriggers,
   syncLiveDefinitionTriggers,
@@ -95,6 +95,7 @@ function validStored(definition: WorkflowDefinition): WorkflowDefinition {
     contracts.resolveContract,
     contracts.blockParamsSchemas,
     contracts.configuredVcsProviders,
+    contracts.analyzeValues(parsed),
   );
   if (issues.length > 0) {
     throw new raw.WorkflowDefinitionStoreError(400, `Invalid workflow: ${issues.map(({ message }) => message).join("; ")}`);
@@ -154,17 +155,19 @@ const TRIGGER_TAKEN_MESSAGE = "Its trigger is already handled by another enabled
 async function deployable(db: Db, definition: WorkflowDefinition): Promise<WorkflowDefinition> {
   const parsed = structural(definition);
   const contracts = currentBlockContracts();
+  const analysis = contracts.analyzeValues(parsed);
   const issues = validateWorkflowDefinitionIssuesForDeployment(
     parsed,
     contracts.resolveContract,
     contracts.blockParamsSchemas,
     contracts.configuredVcsProviders,
+    analysis,
   );
   if (issues.length > 0) throw new raw.WorkflowDefinitionValidationError(issues);
   const promptIssues = await validateWorkflowPromptAuthoringIssues(
     db,
     parsed,
-    contracts.resolveContract,
+    analysis,
   );
   if (promptIssues.length > 0) throw new raw.WorkflowDefinitionValidationError(promptIssues);
   return parsed;
@@ -813,16 +816,18 @@ async function updateWorkflowDefinitionConnected(input: Parameters<typeof update
 async function deployableConnected(definition: WorkflowDefinition): Promise<WorkflowDefinition> {
   const parsed = structural(definition);
   const contracts = currentBlockContracts();
+  const analysis = contracts.analyzeValues(parsed);
   const issues = validateWorkflowDefinitionIssuesForDeployment(
     parsed,
     contracts.resolveContract,
     contracts.blockParamsSchemas,
     contracts.configuredVcsProviders,
+    analysis,
   );
   if (issues.length > 0) throw new raw.WorkflowDefinitionValidationError(issues);
   const promptIssues = await validateConnectedDefinitionPromptAuthoring(
     parsed,
-    contracts.resolveContract,
+    analysis,
   );
   if (promptIssues.length > 0) throw new raw.WorkflowDefinitionValidationError(promptIssues);
   return parsed;

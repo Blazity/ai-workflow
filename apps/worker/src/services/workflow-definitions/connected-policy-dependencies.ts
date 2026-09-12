@@ -18,17 +18,15 @@ import {
 } from "../manual-dispatch/index.js";
 import { listConnectedTriggerRejectionCounters } from "../../db/repositories/trigger-rate-limits.js";
 import { listConnectedWebhookTriggerRejections } from "../../db/repositories/webhook-trigger-deliveries.js";
-import type {
-  WorkflowBlockContractResolver,
-  WorkflowDefinition,
-} from "@shared/contracts";
+import type { WorkflowDefinition } from "@shared/contracts";
+import type { WorkflowValueAnalysis } from "../../workflow-definition/available-values.js";
 import { currentBlockContracts } from "./block-contracts.js";
 
 export function validateConnectedDefinitionPromptAuthoring(
   definition: WorkflowDefinition,
-  resolveContract: WorkflowBlockContractResolver,
+  analysis: WorkflowValueAnalysis,
 ) {
-  return validateConnectedWorkflowPromptAuthoringIssues(definition, resolveContract);
+  return validateConnectedWorkflowPromptAuthoringIssues(definition, analysis);
 }
 
 export function validateConnectedDefinitionCandidate(candidate: unknown) {
@@ -38,6 +36,7 @@ export function validateConnectedDefinitionCandidate(candidate: unknown) {
     contracts.resolveContract,
     contracts.blockParamsSchemas,
     contracts.configuredVcsProviders,
+    contracts.analyzeValues,
   );
 }
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type {
+  WorkflowBlockContractResolver,
   WorkflowBlockType,
   WorkflowAvailableValue,
   WorkflowDataReferenceV2,
@@ -9,7 +10,8 @@ import type {
 } from "@shared/contracts";
 import {
   analyzeWorkflowV2Catalog,
-  analyzeWorkflowV2Bindings,
+  analyzeWorkflowValues,
+  type WorkflowV2BindingAnalysis,
 } from "./available-values.js";
 import type { WorkflowBlockRegistryContext } from "../engine/definition/block-contract-resolver.js";
 import { testBlockContractResolver } from "../test-support/block-contracts.js";
@@ -26,6 +28,22 @@ const registryContext: WorkflowBlockRegistryContext = {
 };
 
 const resolveContract = testBlockContractResolver(registryContext);
+
+/**
+ * These cases are about what the readers report, so each one runs the analysis
+ * pass and reads it in a single step. Where a request keeps that pass lives in
+ * `services/workflow-definitions/block-contracts.ts`, and the call-count case
+ * in `value-analysis-pass.test.ts` is what proves a request runs it once.
+ */
+const bindingsOf = (
+  definition: WorkflowDefinitionV2,
+  resolve: WorkflowBlockContractResolver,
+) => analyzeWorkflowValues(definition, resolve);
+
+const catalogOf = (
+  definition: WorkflowDefinitionV2,
+  resolve: WorkflowBlockContractResolver,
+) => analyzeWorkflowV2Catalog(analyzeWorkflowValues(definition, resolve));
 
 function node(
   id: string,
@@ -56,14 +74,14 @@ function definition(
 }
 
 function references(
-  result: ReturnType<typeof analyzeWorkflowV2Bindings>,
+  result: WorkflowV2BindingAnalysis,
   consumerId: string,
 ): string[] {
   return result.availableValuesByNode[consumerId]?.map((value) => value.reference) ?? [];
 }
 
 function catalogValue(
-  result: ReturnType<typeof analyzeWorkflowV2Bindings>,
+  result: WorkflowV2BindingAnalysis,
   consumerId: string,
   reference: string,
 ): WorkflowAvailableValue {
@@ -76,7 +94,7 @@ function catalogValue(
 
 describe("v2 available values", () => {
   it("includes every unconditional fan-out producer at a fan-in join", () => {
-    const result = analyzeWorkflowV2Bindings(
+    const result = bindingsOf(
       definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -113,7 +131,7 @@ describe("v2 available values", () => {
   });
 
   it("excludes values produced on only one conditional branch", () => {
-    const result = analyzeWorkflowV2Bindings(
+    const result = bindingsOf(
       definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -142,7 +160,7 @@ describe("v2 available values", () => {
   });
 
   it("intersects active trigger contracts behind the virtual entry source", () => {
-    const result = analyzeWorkflowV2Bindings(
+    const result = bindingsOf(
       definition(
         [
           node("ticket-trigger", "trigger_ticket_ai"),
@@ -173,7 +191,7 @@ describe("v2 available values", () => {
   });
 
   it("requires a causal path even when producer and consumer activation match", () => {
-    const result = analyzeWorkflowV2Bindings(
+    const result = bindingsOf(
       definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -194,7 +212,7 @@ describe("v2 available values", () => {
   });
 
   it("conservatively excludes outputs produced inside a loop SCC", () => {
-    const result = analyzeWorkflowV2Bindings(
+    const result = bindingsOf(
       definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -246,7 +264,7 @@ describe("v2 available values", () => {
         reference: "steps.retry.output.values.reviewBody",
       },
     });
-    const result = analyzeWorkflowV2Bindings(
+    const result = bindingsOf(
       definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -290,7 +308,7 @@ describe("v2 available values", () => {
       operation: "text_to_number",
       source: "steps.plan.output.plan",
     };
-    const result = analyzeWorkflowV2Bindings(
+    const result = bindingsOf(
       definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -326,7 +344,7 @@ describe("v2 available values", () => {
 
 describe("v2 authoring catalog", () => {
   it("includes whole outputs and marks conditional producers unavailable", () => {
-    const result = analyzeWorkflowV2Catalog(
+    const result = catalogOf(
       definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -362,7 +380,7 @@ describe("v2 authoring catalog", () => {
   });
 
   it("describes common and trigger-specific values for multiple triggers", () => {
-    const result = analyzeWorkflowV2Catalog(
+    const result = catalogOf(
       definition(
         [
           node("ticket", "trigger_ticket_ai"),
@@ -399,7 +417,7 @@ describe("v2 authoring catalog", () => {
   });
 
   it("publishes friendly typed run trigger enums", () => {
-    const result = analyzeWorkflowV2Catalog(
+    const result = catalogOf(
       definition(
         [
           node("ticket", "trigger_ticket_ai"),
@@ -436,7 +454,7 @@ describe("v2 authoring catalog", () => {
         value: "approval",
       }],
     };
-    const result = analyzeWorkflowV2Catalog(
+    const result = catalogOf(
       definition(
         [
           node("ticket", "trigger_ticket_ai"),
@@ -480,7 +498,7 @@ describe("v2 authoring catalog", () => {
         },
       ],
     };
-    const result = analyzeWorkflowV2Catalog(
+    const result = catalogOf(
       definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -509,7 +527,7 @@ describe("v2 authoring catalog", () => {
   });
 
   it("exposes required Open PR fields and distinguishes whole and nested output labels", () => {
-    const result = analyzeWorkflowV2Catalog(
+    const result = catalogOf(
       definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -549,7 +567,7 @@ describe("v2 authoring catalog", () => {
 
 describe("v2 binding validation", () => {
   it("accepts a guaranteed compatible reference and rejects a conditional one", () => {
-    const valid = analyzeWorkflowV2Bindings(
+    const valid = bindingsOf(
       definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -570,7 +588,7 @@ describe("v2 binding validation", () => {
     );
     expect(valid.issues).toEqual([]);
 
-    const unavailable = analyzeWorkflowV2Bindings(
+    const unavailable = bindingsOf(
       definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -612,7 +630,7 @@ describe("v2 binding validation", () => {
         binding: { kind: "literal", value: "wrong" },
       },
     ];
-    const result = analyzeWorkflowV2Bindings(
+    const result = bindingsOf(
       definition(
         [node("trigger", "trigger_ticket_ai"), consumer],
         [{ id: "edge", from: "trigger", to: "consumer" }],
@@ -652,7 +670,7 @@ describe("v2 binding validation", () => {
       ],
     );
     expect(
-      analyzeWorkflowV2Bindings(exact, resolveContract).issues.filter(
+      bindingsOf(exact, resolveContract).issues.filter(
         (issue) => issue.code === "binding.open_pr_finalize",
       ),
     ).toEqual([]);
@@ -674,7 +692,7 @@ describe("v2 binding validation", () => {
       },
     };
     expect(
-      analyzeWorkflowV2Bindings(literal, resolveContract).issues,
+      bindingsOf(literal, resolveContract).issues,
     ).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ code: "binding.open_pr_finalize" }),
@@ -689,7 +707,7 @@ describe("v2 binding validation", () => {
       },
     };
     expect(
-      analyzeWorkflowV2Bindings(wrongField, resolveContract).issues,
+      bindingsOf(wrongField, resolveContract).issues,
     ).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ code: "binding.open_pr_finalize" }),
@@ -709,7 +727,7 @@ describe("v2 binding validation", () => {
         },
       },
     ];
-    const result = analyzeWorkflowV2Bindings(
+    const result = bindingsOf(
       definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -748,7 +766,7 @@ describe("v2 binding validation", () => {
         },
       },
     ];
-    const result = analyzeWorkflowV2Bindings(
+    const result = bindingsOf(
       definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -785,7 +803,7 @@ describe("v2 binding validation", () => {
         },
       },
     ];
-    const valid = analyzeWorkflowV2Bindings(
+    const valid = bindingsOf(
       definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -802,7 +820,7 @@ describe("v2 binding validation", () => {
       resolveContract,
     );
     expect(valid.issues).toEqual([]);
-    const catalog = analyzeWorkflowV2Catalog(
+    const catalog = catalogOf(
       definition(
         [
           node("trigger", "trigger_ticket_ai"),
@@ -854,9 +872,9 @@ describe("v2 binding validation", () => {
       ],
     );
     expect(
-      analyzeWorkflowV2Bindings(nullableDefinition, resolveContract).issues,
+      bindingsOf(nullableDefinition, resolveContract).issues,
     ).toEqual([]);
-    const nullableCatalog = analyzeWorkflowV2Catalog(
+    const nullableCatalog = catalogOf(
       nullableDefinition,
       resolveContract,
     );
@@ -873,7 +891,7 @@ describe("v2 binding validation", () => {
       },
     });
     expect(
-      analyzeWorkflowV2Bindings(
+      bindingsOf(
         definition(
           [
             node("trigger", "trigger_ticket_ai"),
@@ -935,7 +953,7 @@ describe("custom output schemas through the resolver", () => {
     );
 
   it("offers a declared field and accepts a binding to it", () => {
-    const result = analyzeWorkflowV2Bindings(
+    const result = bindingsOf(
       withConsumer("steps.classify.output.verdict"),
       resolveContract,
     );
@@ -949,7 +967,7 @@ describe("custom output schemas through the resolver", () => {
   });
 
   it("refuses a binding to a field the declared schema does not carry", () => {
-    const result = analyzeWorkflowV2Bindings(
+    const result = bindingsOf(
       withConsumer("steps.classify.output.missing"),
       resolveContract,
     );
@@ -967,7 +985,7 @@ describe("custom output schemas through the resolver", () => {
   });
 
   it("carries the declared field into the editor's catalog", () => {
-    const catalog = analyzeWorkflowV2Catalog(
+    const catalog = catalogOf(
       withConsumer("steps.classify.output.verdict"),
       resolveContract,
     );
