@@ -166,7 +166,7 @@ export async function runPollPass(
   settings: SettingsSnapshot,
   loadRepositoryCatalog: () => Promise<RepositoryCatalogSnapshot>,
 ) {
-  const board = ticketBoardSettings();
+  const board = ticketBoardSettings(settings);
   const adapters = createAdapters();
   const clarificationExpiry = await expireConnectedHookClarifications();
 

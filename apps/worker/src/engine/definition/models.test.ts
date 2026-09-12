@@ -136,18 +136,19 @@ async function editorOptions(
   const { buildWorkflowEditorOptions } = await import("./models.js");
   const { buildWorkflowBlockRegistry } =
     await import("./block-contract-resolver.js");
-  const { workflowBlockRegistryContextFromEnv } =
+  const { workflowBlockRegistryContext } =
     await import("./block-contract-environment.js");
   const { testSettingsSnapshot } = await import("../../test-support/settings.js");
+  const settings = testSettingsSnapshot({
+    AGENT_KIND: state.env.AGENT_KIND,
+    CLAUDE_MODEL: state.env.CLAUDE_MODEL,
+    CODEX_MODEL: state.env.CODEX_MODEL,
+  });
   return buildWorkflowEditorOptions(
-    testSettingsSnapshot({
-      AGENT_KIND: state.env.AGENT_KIND,
-      CLAUDE_MODEL: state.env.CLAUDE_MODEL,
-      CODEX_MODEL: state.env.CODEX_MODEL,
-    }),
+    settings,
     models,
     ticketStatuses,
-    buildWorkflowBlockRegistry(workflowBlockRegistryContextFromEnv()),
+    buildWorkflowBlockRegistry(workflowBlockRegistryContext(settings)),
   );
 }
 

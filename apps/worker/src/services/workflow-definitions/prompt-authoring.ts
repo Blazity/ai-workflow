@@ -100,10 +100,36 @@ export async function validateWorkflowPromptAuthoringIssues(
         definition,
         organizationId: await dashboardOrganizationId(
           db,
-          (await import("../../infra/vcs-config.js")).env.DASHBOARD_ORG_SLUG,
+          await dashboardOrganizationSlugOn(db),
         ),
       });
   return dedupeWorkflowDefinitionIssues([...promptIssues, ...profileIssues]);
+}
+
+/**
+ * The dashboard organization slug, from the deployment's stored settings.
+ *
+ * A shim, and a listed one: both validators below are reached from an HTTP
+ * route, from an MCP call and from another service, so threading a snapshot
+ * into them is a change to the definition API this stage does not own. The
+ * read is a real one against the stored rows, never the environment, so it
+ * gives the same answer the entry point above would have resolved.
+ */
+async function connectedDashboardOrganizationSlug(): Promise<string> {
+  const { dashboardOrganizationSettings, loadSettingsSnapshot } = await import(
+    "../settings/index.js"
+  );
+  return dashboardOrganizationSettings(await loadSettingsSnapshot()).slug;
+}
+
+/** The same, on the connection the db-bound half was handed: it reads its
+ *  organization row from that database, so it has to read the slug naming it
+ *  from the same one. */
+async function dashboardOrganizationSlugOn(db: Db): Promise<string> {
+  const { dashboardOrganizationSettings, loadSettingsSnapshotOn } = await import(
+    "../settings/index.js"
+  );
+  return dashboardOrganizationSettings(await loadSettingsSnapshotOn(db)).slug;
 }
 
 /** Production binding composed from named repository reads. It intentionally
@@ -118,9 +144,9 @@ export async function validateConnectedWorkflowPromptAuthoringIssues(
     createConnectedPromptReferenceLoader(),
   );
   if (!definition.nodes.some((node) => isPromptAuthoringBlock(node))) return promptIssues;
-  const { env } = await import("../../infra/vcs-config.js");
-  const organization = await createConnectedAuthRepository().findOrganizationBySlug(env.DASHBOARD_ORG_SLUG);
-  if (!organization) throw new Error(`Dashboard organization "${env.DASHBOARD_ORG_SLUG}" is unavailable.`);
+  const organizationSlug = await connectedDashboardOrganizationSlug();
+  const organization = await createConnectedAuthRepository().findOrganizationBySlug(organizationSlug);
+  if (!organization) throw new Error(`Dashboard organization "${organizationSlug}" is unavailable.`);
   const profileIssues = await validateHarnessProfileReferencesWithLoader(
     definition,
     ({ profileId, version }) => resolveConnectedVerifiedHarnessProfileVersion({

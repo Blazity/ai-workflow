@@ -57,16 +57,24 @@ export interface SettingDefinition {
   /** The variable a missing row still falls back to, until the cleanup stage. */
   readonly environmentVariable: string | null;
   /**
-   * The running code still reads this key from `process.env`, not from the
-   * store.
+   * Whether this deployment still reads the variable itself, so a stored row
+   * cannot decide the value alone.
    *
-   * So a write records the decision and changes nothing until the worker is
-   * redeployed, in both directions: the old value keeps being used and the new
-   * one is not, however the Settings page renders it. `appliesToRunsInFlight`
-   * cannot say that -- "next run" is a promise this key does not keep -- so a
-   * surface that shows a key to somebody about to change it has to say it
-   * separately. Absent means the ordinary case: the value in the store is the
-   * value that is read.
+   * Two kinds of key are marked: deployment identity that is read once at
+   * module load, before any request exists to resolve a snapshot (the Better
+   * Auth instance's organization slug and its public-registration switch), and
+   * a key a run reads straight off `process.env` inside a step. Both mean the
+   * same thing operationally: the variable has to stay set and a change to it
+   * needs a redeploy, so the cleanup stage neither imports it into the store
+   * nor asks the operator to remove it.
+   *
+   * For a write this means the store records the decision and changes nothing
+   * until the worker is redeployed, in both directions: the old value keeps
+   * being used and the new one is not, however the Settings page renders it.
+   * `appliesToRunsInFlight` cannot say that ("next run" is a promise this key
+   * does not keep), so a surface that shows a key to somebody about to change
+   * it has to say it separately. Absent means the ordinary case: the value in
+   * the store is the value that is read.
    */
   readonly requiresRedeploy?: boolean;
   /** For a string setting whose value is one of a fixed set. */
@@ -96,6 +104,7 @@ export const SETTINGS_REGISTRY = [
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: false,
     environmentVariable: "DASHBOARD_ORG_SLUG",
+    requiresRedeploy: true,
   },
   {
     key: "GITHUB_BASE_BRANCH",
@@ -290,6 +299,7 @@ export const SETTINGS_REGISTRY = [
     appliesToRunsInFlight: "immediate",
     overridablePerTrigger: false,
     environmentVariable: "MCP_ALLOW_PUBLIC_DCR",
+    requiresRedeploy: true,
   },
   {
     key: "MCP_AUDIT_RETENTION_DAYS",

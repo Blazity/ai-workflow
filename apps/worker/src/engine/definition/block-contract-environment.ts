@@ -18,12 +18,16 @@ import {
   type WorkflowBlockRegistryContext,
 } from "./block-contract-resolver.js";
 
-/** The deployment as the environment describes it right now. */
-export function workflowBlockRegistryContextFromEnv(): WorkflowBlockRegistryContext {
-  const configuredModels = resolveModelDefaults({
-    claude: env.CLAUDE_MODEL,
-    codex: env.CODEX_MODEL,
-  });
+/**
+ * The deployment as its credentials describe it: which agents, LLMs, VCS
+ * providers and integrations this process can actually reach.
+ *
+ * Credentials only. The agent defaults that used to be read here beside them
+ * (`AGENT_KIND`, `CLAUDE_MODEL`, `CODEX_MODEL`) are operator-editable settings
+ * and come from a snapshot, so the two halves are separated: one asks what the
+ * deployment is wired to, the other asks what the operator decided.
+ */
+function deploymentCapabilities(): Omit<WorkflowBlockRegistryContext, "defaultAgent"> {
   const vcsProviders: WorkflowBlockRegistryContext["vcsProviders"] = [];
   if (env.GITHUB_APP_ID && env.GITHUB_APP_PRIVATE_KEY && env.GITHUB_INSTALLATION_ID) {
     vcsProviders.push("github");
@@ -39,10 +43,6 @@ export function workflowBlockRegistryContextFromEnv(): WorkflowBlockRegistryCont
         env.ANTHROPIC_API_KEY && !env.ANTHROPIC_API_KEY.startsWith("sk-ant-oat"),
       ),
       codex: Boolean(env.CODEX_API_KEY),
-    },
-    defaultAgent: {
-      provider: env.AGENT_KIND,
-      model: configuredModels[env.AGENT_KIND],
     },
     vcsProviders,
     vcsBotIdentities: vcsProviders.filter((provider) =>
@@ -84,22 +84,24 @@ export function runModelDefaults(
 }
 
 /**
- * The deployment as a RUN sees it: the same wiring, with the operator-editable
- * agent defaults taken from the snapshot the run started with rather than from
- * the environment, so a run that spans an operator saving the Settings page
- * resolves every block contract against one answer.
+ * The deployment as one caller sees it: the credentials it is wired to, plus
+ * the agent defaults the given settings decided.
  *
- * The zero-argument form above stays for the callers that are not a run: the
- * editor's block table and the block contract MCP tools reach it through
- * `services/workflow-definitions/block-contracts.ts`, which is in the app and
- * service tiers this stage does not own.
+ * One function for every caller, a run and an editor request alike. There used
+ * to be two, a zero-argument form that read the defaults from the environment
+ * and a run form that took the snapshot, and they answered differently on a
+ * deployment whose operator had changed the default agent: the editor's block
+ * table showed the variable's value and the run used the stored one. A run
+ * passes the snapshot its run-start step froze, so it still resolves every
+ * block contract against one answer for its whole life; an entry point passes
+ * the snapshot it loaded.
  */
-export function workflowBlockRegistryContextForRun(
+export function workflowBlockRegistryContext(
   settings: SettingsSnapshot,
 ): WorkflowBlockRegistryContext {
   const configuredModels = runModelDefaults(settings);
   return {
-    ...workflowBlockRegistryContextFromEnv(),
+    ...deploymentCapabilities(),
     defaultAgent: {
       provider: settings.AGENT_KIND,
       model: configuredModels[settings.AGENT_KIND],
@@ -107,7 +109,9 @@ export function workflowBlockRegistryContextForRun(
   };
 }
 
-/** The resolver for the deployment as it is configured right now. */
-export function workflowBlockContractResolverFromEnv(): WorkflowBlockContractResolver {
-  return createWorkflowBlockContractResolver(workflowBlockRegistryContextFromEnv());
+/** The resolver for the deployment as the given settings describe it. */
+export function workflowBlockContractResolver(
+  settings: SettingsSnapshot,
+): WorkflowBlockContractResolver {
+  return createWorkflowBlockContractResolver(workflowBlockRegistryContext(settings));
 }

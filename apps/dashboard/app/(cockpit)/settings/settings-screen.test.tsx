@@ -81,6 +81,8 @@ function render(
       <AppRouterContext.Provider value={router as never}>
         <SettingsScreen
           settings={SETTINGS}
+          migratedVariablesSet={[]}
+          migratedVariablesUnstored={[]}
           scan={null}
           scanReadable
           catalogState={catalogState(false)}
@@ -114,6 +116,39 @@ test("the standing caveat states the read cadence, not a worker that ignores the
   assert.match(text(root), /Values saved here are stored and read/);
   assert.match(text(root), /per request, cron tick and MCP call/);
   assert.doesNotMatch(text(root), /still reads most settings from its environment/);
+});
+
+test("the variables still set on the deployment are named, not counted", (t) => {
+  const root = render(t, {
+    migratedVariablesSet: ["MAX_CONCURRENT_AGENTS", "COLUMN_AI"],
+  });
+  assert.match(text(root), /2 environment variables are still set on this deployment/);
+  assert.match(text(root), /MAX_CONCURRENT_AGENTS, COLUMN_AI/);
+  // Safe to act on, and the sentence says the part an operator forgets: the
+  // variable is still read until the deployment restarts.
+  assert.match(text(root), /Every value is stored, so removing them changes nothing/);
+  assert.match(text(root), /redeploy \(or wait for the next deploy\), then check this list again/);
+});
+
+test("a value the worker could not store is named as unsafe to remove", (t) => {
+  const root = render(t, {
+    migratedVariablesSet: ["MAX_CONCURRENT_AGENTS", "COLUMN_AI"],
+    migratedVariablesUnstored: ["COLUMN_AI"],
+  });
+
+  // The whole list is still named, because it is still the to-do list. What
+  // changes is that the banner no longer claims every value is durable.
+  assert.match(text(root), /2 environment variables are still set on this deployment/);
+  assert.doesNotMatch(text(root), /Every value is stored/);
+  assert.match(text(root), /1 of them are not stored yet|1 of them is not stored yet/);
+  assert.match(text(root), /Do not remove these until this notice clears/);
+  // And the failure is named where somebody can act on it, not left in a log.
+  assert.match(text(root), /settings_environment_import_failed/);
+});
+
+test("a deployment with none of them set shows no such banner", (t) => {
+  const root = render(t, { migratedVariablesSet: [] });
+  assert.doesNotMatch(text(root), /still set on this deployment/);
 });
 
 test("a catalog that is not activated says so above the forms", (t) => {

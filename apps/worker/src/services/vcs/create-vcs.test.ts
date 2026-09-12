@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("../../infra/vcs-config.js", () => ({
-  getVcsConfig: vi.fn(),
-}));
-
 vi.mock("../../adapters/vcs/github.js", () => ({
   GitHubAdapter: vi.fn().mockImplementation((config) => ({ kind: "github-test", config })),
 }));

@@ -47,9 +47,23 @@ if (!url) {
 
 /** The allowlist, parsed exactly as the runtime predicate parses it: comma
  *  separated, trimmed, and an entry with no slash ignored rather than widening
- *  the list to "everything". */
+ *  the list to "everything".
+ *
+ *  Deprecated. `AGENT_ALLOWED_REPOS` is replaced by the Repositories page, and
+ *  the cleanup release (stage H2) deletes this script and refuses to boot with
+ *  the variable set; a deployment that still sets it is told so on every
+ *  build. */
 function allowlistPaths(): string[] {
   const raw = process.env.AGENT_ALLOWED_REPOS ?? "";
+  if (raw.trim() !== "") {
+    console.warn(
+      "[seed-repository-catalog] AGENT_ALLOWED_REPOS is deprecated: the " +
+        "Repositories page decides repository access now, and this seed is " +
+        "removed in the cleanup release (stage H2), which refuses to boot " +
+        "while the variable is set. Curate the catalog on the Repositories " +
+        "page, then remove AGENT_ALLOWED_REPOS from this deployment.",
+    );
+  }
   return [
     ...new Set(
       raw
@@ -177,10 +191,31 @@ const db = drizzle({ client: sql, schema }) as unknown as Db;
 
 const allowlist = allowlistPaths();
 const activated = allowlist.length > 0;
+
+/**
+ * An activated catalog is a curated one: somebody opened the Repositories page,
+ * read the dialog naming every repository that holds an active run claim, and
+ * decided. What the variable says is no longer the deployment's answer, so the
+ * two things built from it stand down here: the allowlist-derived rows, which
+ * would re-add repositories an admin left out and re-enable ones an admin
+ * disabled, and the activation write, which is that admin's decision to make.
+ *
+ * Only those two. The rest of this script is not about the allowlist at all:
+ * the definition pins keep a repository a deployed workflow targets in the
+ * catalog, the default-branch backfill repairs rows created before the branch
+ * was recorded, and the script-groups migration is a one-off every build still
+ * owes. Skipping those with an early exit is how a curated deployment quietly
+ * stops getting fixes it has nothing to do with the variable to receive.
+ */
+const priorState = await readRepositoryCatalogStateRow(db);
+const curated = priorState?.activated === true;
+/** The allowlist as this build may act on it: nothing, once curated. */
+const seedableAllowlist = curated ? [] : allowlist;
+
 const configured = await configuredProviderKinds();
 const known = await knownProviders(db);
 
-const unresolved = allowlist.filter(
+const unresolved = seedableAllowlist.filter(
   (path) => providersFor(path, known, configured).length === 0,
 );
 if (unresolved.length > 0) {
@@ -201,7 +236,6 @@ if (unresolved.length > 0) {
 // writing; it fails and says which two facts disagree. Checked here, next to
 // the unresolved-provider gate above, so a refused build leaves nothing
 // half-seeded behind it.
-const priorState = await readRepositoryCatalogStateRow(db);
 const activationConflict = seedActivationConflict({
   allowlistSize: allowlist.length,
   storedActivated: priorState ? priorState.activated : null,
@@ -236,7 +270,7 @@ const branchOf = new Map(
   ]),
 );
 const granted = dedupe([
-  ...allowlist.flatMap((path) =>
+  ...seedableAllowlist.flatMap((path) =>
     providersFor(path, known, configured).map((provider) => ({ provider, path })),
   ),
   ...(await listPinnedRepositoriesFromDefinitions(db)),
@@ -257,13 +291,29 @@ const seeded = await seedRepositoryCatalogEntries(db, {
 // this seed created on an earlier build, and rows an import created before the
 // branch was recorded. Only empty values are filled.
 const branchesFilled = await backfillRepositoryDefaultBranches(db, directory);
-const state = await seedRepositoryCatalogState(db, { activated });
+// Written only while the variable is still the answer. A curated catalog
+// already has its state row, and re-deciding it on every build is what this
+// stands down from.
+const state = curated
+  ? { activated: true }
+  : await seedRepositoryCatalogState(db, { activated });
 const migrated = await migrateScriptGroupsIntoProfiles(db);
 const rows = await listRepositoryCatalogRows(db);
 const enabled = rows.filter((row) => row.enabled).length;
 
+if (curated) {
+  console.log(
+    "[seed-repository-catalog] the catalog is activated, so it is curated on " +
+      "the Repositories page: this build seeded no rows from " +
+      "AGENT_ALLOWED_REPOS and left the activation state alone. Repository " +
+      "pins, default branches and script groups were still reconciled below. " +
+      "Remove AGENT_ALLOWED_REPOS from this deployment; the cleanup release " +
+      "(stage H2) deletes this script.",
+  );
+}
+
 console.log(
-  `[seed-repository-catalog] allowlist entries: ${allowlist.length}; ` +
+  `[seed-repository-catalog] allowlist entries: ${seedableAllowlist.length}; ` +
     `granted rows created: ${seeded}; ` +
     `default branches filled: ${branchesFilled}; ` +
     `script groups rows created: ${migrated.repositoriesCreated}; ` +

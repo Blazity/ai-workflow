@@ -275,15 +275,40 @@ async function resolveClarificationDecisionObservation(input: {
   }
 }
 
+/**
+ * The organization slug a capture recorded before stage H1 replays under.
+ *
+ * `DASHBOARD_ORG_SLUG` straight off the deployment's environment, which is the
+ * read the payload field replaced: a payload written by the old code carried no
+ * slug because the step looked the variable up itself, so this returns the
+ * value it was captured under. The registry default would be a different
+ * organization on every deployment that sets the variable, which is every
+ * deployment this can reach.
+ *
+ * Replay compatibility, and nothing else. Stage H2 deletes it after a drain,
+ * once no suspended run can still carry a payload from before the field
+ * existed. The consumers guard pins the read with that sentence so it is not
+ * mistaken for a live environment consumer.
+ */
+async function replayOrganizationSlug(): Promise<string> {
+  const { loadEnvironmentPort } = await import("../internal/ports.js");
+  return (await loadEnvironmentPort()).env.DASHBOARD_ORG_SLUG;
+}
+
 async function captureV2RunObservationStartStep(payload: {
   runId: string;
   definitionId: number | null;
   definitionVersion: number | null;
   graph: WorkflowReplayGraphSnapshot;
   runtimeManifest: ReplaySanitizedEnvelope;
+  /** The organization a replay capture is written under, from the settings the
+   *  run froze at its start. Optional because a payload recorded before the
+   *  field existed replays as it was written; absent falls back to the
+   *  environment read this field replaced, which is the value such a payload
+   *  was captured under. */
+  organizationSlug?: string;
 }): Promise<{ organizationId: string } | null> {
   "use step";
-  const { loadEnvironmentPort } = await import("../internal/ports.js");
   if (
     payload.definitionId === null ||
     payload.definitionVersion === null
@@ -295,7 +320,6 @@ async function captureV2RunObservationStartStep(payload: {
   try {
     const capture = await replayCaptureWithinTimeout(
       (async () => {
-        const { env } = await loadEnvironmentPort();
         const { createConnectedAuthRepository } = await import(
           "../../db/repositories/auth.js"
         );
@@ -308,11 +332,13 @@ async function captureV2RunObservationStartStep(payload: {
         const { sanitizeV2ReplaySnapshotForCapture } = await import(
           "../../run-observability/runtime-hooks.js"
         );
+        const organizationSlug =
+          payload.organizationSlug ?? (await replayOrganizationSlug());
         const organization = await createConnectedAuthRepository().findOrganizationBySlug(
-          env.DASHBOARD_ORG_SLUG,
+          organizationSlug,
         );
         if (!organization) {
-          throw new Error(`Dashboard organization "${env.DASHBOARD_ORG_SLUG}" is unavailable.`);
+          throw new Error(`Dashboard organization "${organizationSlug}" is unavailable.`);
         }
         organizationId = organization.id;
         if (captureAbandoned) {

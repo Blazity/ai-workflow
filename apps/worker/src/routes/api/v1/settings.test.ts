@@ -188,6 +188,26 @@ describe("PATCH /api/v1/settings", () => {
     await expect(db.select().from(settings)).resolves.toHaveLength(0);
   });
 
+  it("refuses a key the running code reads from the environment, naming that key", async () => {
+    // `PRE_PR_CHECKS_ALLOWED_ENV` is the operator-side gate on which of the
+    // worker's secrets a tenant's command may be handed, and the checks runner
+    // reads the variable inside the step. A row here would be recorded, shown
+    // on the page, and ignored by the resolution, so the patch is refused and
+    // says where the decision lives instead.
+    const res = await patch({
+      settings: { PRE_PR_CHECKS_ALLOWED_ENV: ["NPM_TOKEN"], "catalog.activated": true },
+      reason: "widening the allowlist",
+    });
+
+    expect(res.status).toBe(400);
+    // Both refusals, each with its own reason: one patch can carry both.
+    expect(res.statusText).toContain("PRE_PR_CHECKS_ALLOWED_ENV");
+    expect(res.statusText).toContain("read from the deployment environment");
+    expect(res.statusText).toContain("catalog.activated");
+    expect(res.statusText).toContain("/api/v1/repository-catalog/activate");
+    await expect(db.select().from(settings)).resolves.toHaveLength(0);
+  });
+
   it("lets an owner write", async () => {
     state.sessionUserId = "user_owner";
     const res = await patch({

@@ -250,7 +250,7 @@ describe("ensureAgentSandbox", () => {
         "claude",
         runtime.manifest.model.id,
         null,
-        runtime,
+        { organizationSlug: "ai-workflow", runtime },
       ),
     ).resolves.toEqual({ ok: true, value: undefined });
 

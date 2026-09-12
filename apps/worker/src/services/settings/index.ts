@@ -39,15 +39,25 @@ export type {
   WebhookProviderId,
 } from "./integration-settings.js";
 export {
+  ensureEnvironmentSettingsImported,
+  migratedVariablesSet,
+  migratedVariablesUnstored,
+  storeEnvironmentValues,
+} from "./environment-import.js";
+export {
   getRequestSettingsSnapshot,
 } from "./request-snapshot.js";
 export {
   loadSettingsResolution,
   loadSettingsSnapshot,
+  loadSettingsSnapshotOn,
+  migratedVariablesStatus,
+  migratedVariablesStatusReadOnly,
   settingsSeedRows,
   settingsSnapshotFromEnvironment,
 } from "./snapshot.js";
 export type {
+  MigratedVariablesStatus,
   SettingsResolution,
   SettingsSeedRow,
 } from "./snapshot.js";
@@ -61,6 +71,7 @@ export {
   SETTINGS_EDIT_ROLE,
   isSettingEditableThroughApi,
   isSettingEditableThroughMcp,
+  settingApiEditRefusal,
   settingEditRole,
   settingMcpEditRefusal,
   settingsNotEditableThroughApi,

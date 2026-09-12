@@ -1,18 +1,10 @@
-import { getVcsConfig, type VcsConfig, type VcsProviderConfig } from "../../infra/vcs-config.js";
+import type { VcsConfig, VcsProviderConfig } from "../../infra/vcs-config.js";
 import { GitHubAdapter } from "./github.js";
 import { createGitHubProfileSource } from "./github/profile-source.js";
 import { GitLabAdapter } from "./gitlab.js";
 import { createGitLabProfileSource } from "./gitlab/profile-source.js";
 import type { RepositoryProfileSource } from "./repository-profile-source.js";
 import type { VCSAdapter } from "./types.js";
-
-export function createVCS(): VCSAdapter {
-  const vcs = getVcsConfig();
-  return createVCSForRepository(vcs, {
-    repoPath: vcs.repoPath,
-    baseBranch: vcs.baseBranch,
-  });
-}
 
 export interface RepoTarget {
   repoPath: string;

@@ -7,11 +7,12 @@
  * is never told a graph is fine and then refused on save.
  */
 import type {
+  SettingsSnapshot,
   WorkflowDefinitionCatalogResponse,
   WorkflowDefinitionV2,
 } from "@shared/contracts";
 import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
-import { currentBlockContracts } from "./block-contracts.js";
+import { blockContractsFor } from "./block-contracts.js";
 import { validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring } from "./policy-operations.js";
 import {
   analyzeWorkflowV2Catalog,
@@ -53,9 +54,12 @@ export async function validateWorkflowDefinitionDraftCandidate(candidate: unknow
 }
 
 /** Which values every block in this candidate may read, and where each comes
- *  from. Pure apart from the registry, which is a deployment fact. */
+ *  from. Pure apart from the registry, which is a deployment fact: the caller
+ *  hands in the snapshot its request loaded, so the block contracts resolve
+ *  against the operator's stored defaults rather than the process environment. */
 export function analyzeWorkflowDefinitionCatalog(
+  settings: SettingsSnapshot,
   definition: WorkflowDefinitionV2,
 ): WorkflowDefinitionCatalogResponse {
-  return analyzeWorkflowV2Catalog(currentBlockContracts().analyzeValues(definition));
+  return analyzeWorkflowV2Catalog(blockContractsFor(settings).analyzeValues(definition));
 }

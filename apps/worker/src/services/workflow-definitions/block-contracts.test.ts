@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../engine/definition/block-contract-environment.js", () => ({
-  workflowBlockRegistryContextFromEnv: mocks.contextFromEnv,
+  workflowBlockRegistryContext: mocks.contextFromEnv,
 }));
 
 vi.mock("../../infra/vcs-config.js", () => ({
@@ -31,7 +31,7 @@ vi.mock("../../infra/vcs-config.js", () => ({
 import { analyzeWorkflowV2Catalog } from "@shared/workflow-graph";
 import { buildWorkflowEditorOptions } from "../../engine/definition/models.js";
 import { validateWorkflowDefinitionCandidate } from "../../engine/definition/validation.js";
-import { currentBlockContracts } from "./block-contracts.js";
+import { blockContractsFor } from "./block-contracts.js";
 import { testSettingsSnapshot } from "../../test-support/settings.js";
 
 const definition: WorkflowDefinitionV2 = {
@@ -52,7 +52,7 @@ describe("block contracts per request", () => {
   it("builds the resolver once when validation, available values and models are all consulted", () => {
     mocks.contextFromEnv.mockClear();
 
-    const contracts = currentBlockContracts();
+    const contracts = blockContractsFor(testSettingsSnapshot());
     validateWorkflowDefinitionCandidate(
       definition,
       contracts.resolveContract,
@@ -74,14 +74,14 @@ describe("block contracts per request", () => {
 
   it("reads the environment again for the next request", () => {
     mocks.contextFromEnv.mockClear();
-    currentBlockContracts().blockRegistry();
-    currentBlockContracts().blockRegistry();
+    blockContractsFor(testSettingsSnapshot()).blockRegistry();
+    blockContractsFor(testSettingsSnapshot()).blockRegistry();
     expect(mocks.contextFromEnv).toHaveBeenCalledTimes(2);
   });
 
   it("resolves the editor's block table only when a request reads it", () => {
     mocks.contextFromEnv.mockClear();
-    const contracts = currentBlockContracts();
+    const contracts = blockContractsFor(testSettingsSnapshot());
     expect(contracts.blockRegistry()).toBe(contracts.blockRegistry());
     expect(mocks.contextFromEnv).toHaveBeenCalledTimes(1);
   });
