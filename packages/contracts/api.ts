@@ -387,6 +387,21 @@ export interface WorkflowDefinitionLayoutResponse {
 export interface WorkflowDefinitionDeploymentResponse {
   meta: WorkflowDefinitionMeta;
   deployed: WorkflowDefinitionVersion;
+  /**
+   * `provider:owner/repo` for every repository the version just deployed PINS
+   * that the repository catalog does not enable.
+   *
+   * The same finding `workflows.publish` reports under the same name, from the
+   * same service function, so an operator who deploys from the editor and an
+   * agent that publishes over MCP are told the same thing. Empty on a
+   * deployment whose catalog is not activated: there every accessible
+   * repository still counts as enabled, and a field named "not enabled" must
+   * not accuse a catalog that is refusing nobody.
+   *
+   * Optional because a worker deployed before this field existed answers
+   * without it, which is not the same as an empty list.
+   */
+  pinnedRepositoriesNotEnabled?: string[];
 }
 
 export interface WorkflowDefinitionDeploymentValidationResponse {

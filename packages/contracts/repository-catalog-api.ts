@@ -19,10 +19,17 @@ import {
   type RepositoryProfileVersion,
   type RepositorySuggestionDroppedGroup,
   type RepositorySuggestionProposal,
+  type RepositorySuggestionRecord,
   type RepositorySuggestionUsage,
 } from "./repository-catalog";
 
 export const REPOSITORY_CATALOG_REASON_MAX_LENGTH = 500;
+
+/** The longest whole-run checks ceiling a repository profile may ask for, in
+ *  minutes. Below the engine's own 180 minute bound on the same value, because
+ *  a repository is one of several sharing the run's ceiling and this is a
+ *  screen's field rather than a deployment's last resort. */
+export const REPOSITORY_BATCH_TIMEOUT_MAX_MINUTES = 120;
 
 /** Everything the Repositories list screen loads in one call. */
 export interface RepositoryCatalogListResponse {
@@ -47,7 +54,42 @@ export interface RepositoryCatalogMutationResponse {
    *  version: a run in flight must not see its checks configuration move
    *  because somebody toggled a switch. */
   version?: number;
+  /**
+   * True when the request asked for nothing the stored profile does not
+   * already say, so no version was minted and `version` is the one that was
+   * already current.
+   *
+   * Said out loud rather than left for the caller to infer from a version
+   * number that did not move. The history is what an operator reads to find
+   * out what changed and when, and a row per save that changed nothing turns
+   * it into a log of clicks; a caller that retries a save it is unsure landed
+   * has to be able to tell "already done" from "done again".
+   */
+  unchanged?: boolean;
+  /**
+   * Which profile fields this write actually moved, in `REPOSITORY_PROFILE_FIELDS`
+   * order.
+   *
+   * Empty whenever `unchanged` is true, and ALSO empty in one case where it is
+   * false: a request that created a repository whose first profile sets none of
+   * these fields still mints version 1, because the repository is new, but it
+   * moved no field. So "empty" means "no field to name", never "nothing
+   * happened"; `unchanged` is the field that answers that.
+   */
+  changedFields?: RepositoryProfileField[];
 }
+
+/** A profile field an upsert can move. The names are the request's own, so a
+ *  caller reading `changedFields` back can map each one to the field it sent. */
+export const REPOSITORY_PROFILE_FIELDS = [
+  "description",
+  "rules",
+  "relationships",
+  "scriptGroups",
+  "gateGroups",
+  "batchTimeoutMinutes",
+] as const;
+export type RepositoryProfileField = (typeof REPOSITORY_PROFILE_FIELDS)[number];
 
 /**
  * Saving a repository profile.
@@ -55,6 +97,14 @@ export interface RepositoryCatalogMutationResponse {
  * `provider` and `path` are on the body rather than only in the route, because
  * this same shape creates a row that does not exist yet. A route id of 0 is
  * how the dashboard says "new"; the pair decides identity either way.
+ *
+ * **Every profile field is optional and omitted means UNCHANGED.** No field
+ * carries a schema default any more, because a default made "omitted" and
+ * "set it to empty" the same request: a screen saving the Rules tab had to
+ * resend the script groups it was not looking at, and any caller that forgot
+ * one erased it. Absent is `undefined` all the way to the statement, which
+ * carries the stored value forward; an explicit `null` on a nullable field is
+ * how a caller says "clear this".
  */
 export const repositoryCatalogUpsertRequestSchema = z
   .object({
@@ -62,12 +112,22 @@ export const repositoryCatalogUpsertRequestSchema = z
     path: repositoryCatalogPathSchema,
     displayName: z.string().max(200).optional(),
     defaultBranch: z.string().max(200).optional(),
-    description: z.string().max(20_000).default(""),
-    rules: z.string().max(20_000).default(""),
-    relationships: z.array(repositoryRelationshipSchema).default([]),
-    /** The repository scripts entry for this repository, stored verbatim. */
-    scriptGroups: repositoryProfileScriptGroupsSchema.default(null),
-    gateGroups: z.array(z.string()).nullable().default(null),
+    description: z.string().max(20_000).optional(),
+    rules: z.string().max(20_000).optional(),
+    relationships: z.array(repositoryRelationshipSchema).optional(),
+    /** The repository scripts entry for this repository, stored verbatim.
+     *  Explicit null clears it ("no checks apply"); omitted leaves it alone. */
+    scriptGroups: repositoryProfileScriptGroupsSchema.optional(),
+    gateGroups: z.array(z.string()).nullable().optional(),
+    /** The whole-run checks ceiling this repository asks for. Null clears it
+     *  back to the operator ceiling; omitted leaves it alone. */
+    batchTimeoutMinutes: z
+      .number()
+      .int()
+      .min(1)
+      .max(REPOSITORY_BATCH_TIMEOUT_MAX_MINUTES)
+      .nullable()
+      .optional(),
     /**
      * Whether a repository this call CREATES may be touched by the agent.
      *
@@ -78,11 +138,33 @@ export const repositoryCatalogUpsertRequestSchema = z
      */
     enabled: z.boolean().optional(),
     reason: z.string().max(REPOSITORY_CATALOG_REASON_MAX_LENGTH).default(""),
+    /**
+     * The profile version the caller loaded, as a concurrency token.
+     *
+     * When it is present and is not the version the repository currently
+     * resolves to, the save is refused with 409 and
+     * `RepositoryCatalogProfileConflict`, exactly as `PrePrCheckSaveRequest`'s
+     * `baseVersion` is refused (api.ts). It replaces the pre-flight GET a
+     * screen used to make: a read followed by a write leaves a window open
+     * between them, and a predicate the write itself carries does not.
+     *
+     * Optional, and absent means the save proceeds unconditionally, which is
+     * what a client written before this field existed sends. 0 is the token for
+     * "this repository had no profile when I loaded it".
+     */
+    expectedProfileVersion: z.number().int().nonnegative().optional(),
   })
   .strict();
 export type RepositoryCatalogUpsertRequest = z.infer<
   typeof repositoryCatalogUpsertRequestSchema
 >;
+
+/** The 409 body a stale `expectedProfileVersion` is refused with.
+ *  `currentVersion` is what the caller has to reload before saving again. */
+export interface RepositoryCatalogProfileConflict {
+  error: "repository_profile_conflict";
+  currentVersion: number;
+}
 
 export const repositoryCatalogEnabledRequestSchema = z
   .object({ enabled: z.boolean({ message: "enabled must be a boolean" }) })
@@ -104,6 +186,20 @@ export type RepositoryCatalogEnabledRequest = z.infer<
 export const repositoryCatalogActivateRequestSchema = z
   .object({
     acknowledgedRepositoryKeys: z.array(z.string()).default([]),
+    /**
+     * Why the bridge is ending, recorded on the state row.
+     *
+     * Required, not optional. Activation is irreversible from any screen and
+     * stops dispatch selecting repositories somebody may be working in, so the
+     * pause is the point; a reason that is collected and dropped teaches an
+     * operator that the box is decoration, which is what the dialog did before
+     * this field existed.
+     */
+    reason: z
+      .string()
+      .trim()
+      .min(1, "a reason is required")
+      .max(REPOSITORY_CATALOG_REASON_MAX_LENGTH),
   })
   .strict();
 export type RepositoryCatalogActivateRequest = z.infer<
@@ -281,4 +377,29 @@ export interface RepositoryCatalogSuggestResponse {
 export interface RepositoryCatalogSuggestRateLimited {
   error: "suggestion_rate_limited";
   retryAfterSeconds: number;
+}
+
+/** How many suggestion rows one page of the history carries. The history sits
+ *  under a repository's profile versions on one tab, so the page is the size of
+ *  a screen rather than of a table. */
+export const REPOSITORY_SUGGESTION_PAGE_SIZE = 50;
+
+/**
+ * A repository's suggestion calls, newest first.
+ *
+ * Open to every role, like the rest of the catalog's reads: what a deployment
+ * spent asking a model about its own repositories is not a privilege, and an
+ * admin is not the only person who has to be able to tell a repository the
+ * model keeps failing on from one nobody has asked about.
+ *
+ * Paginated by cursor rather than by offset, because rows are only ever
+ * appended: an offset page would shift under a call made while somebody reads
+ * the history, and the one thing a cost history must not do is show a row twice
+ * or skip one.
+ */
+export interface RepositoryCatalogSuggestionsResponse {
+  suggestions: RepositorySuggestionRecord[];
+  /** Opaque; hand it back as `cursor` for the next page. Null on the last
+   *  page. */
+  nextCursor: string | null;
 }

@@ -114,7 +114,10 @@ export function ActivateDialog({
     setError(null);
     setStale(false);
     try {
-      const result = await apiClient.repositoryCatalog.activate(acknowledgedKeys(impact));
+      const result = await apiClient.repositoryCatalog.activate(
+        acknowledgedKeys(impact),
+        reason.trim(),
+      );
       if (result.ok && result.status === 409) {
         // Either the first click (nothing acknowledged yet) or a list that
         // moved while the dialog was open. Both render the same way: this is

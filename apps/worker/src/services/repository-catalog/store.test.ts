@@ -17,9 +17,12 @@ vi.mock("../../db/repositories/repository-catalog.js", async (importOriginal) =>
       queries.keys();
       return actual.listConnectedRepositoryCatalogKeys();
     },
-    listConnectedRepositoryCatalogRows: () => {
+    // The screen path reads the rows AND their script group counts, in one
+    // query. Spying the count loader rather than the plain row loader is what
+    // keeps this assertion about the query the list actually issues.
+    listConnectedRepositoryCatalogRowsWithGroupCounts: () => {
       queries.rows();
-      return actual.listConnectedRepositoryCatalogRows();
+      return actual.listConnectedRepositoryCatalogRowsWithGroupCounts();
     },
   };
 });
@@ -80,7 +83,7 @@ describe("loadRepositoryCatalogSnapshot", () => {
   it("lets the enabled list decide once the catalog is activated", async () => {
     await addRepository("Acme/Api", true);
     await addRepository("acme/web", false);
-    await activateRepositoryCatalog(db, { actorId: "user-1" });
+    await activateRepositoryCatalog(db, { actorId: "user-1", reason: "the bridge is over" });
 
     const snapshot = await loadRepositoryCatalogSnapshot();
     expect(snapshot.activated).toBe(true);

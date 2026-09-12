@@ -56,6 +56,7 @@ function catalogState(activated: boolean): RepositoryCatalogState {
     activatedAt: activated ? "2026-09-11T08:30:00.000Z" : null,
     activatedById: activated ? "user-7" : null,
     activatedByLabel: activated ? "Seed" : null,
+    activationReason: activated ? "the bridge is over" : null,
   };
 }
 

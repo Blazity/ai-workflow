@@ -12,6 +12,7 @@ import { CircleIcon } from "@phosphor-icons/react/dist/csr/Circle";
 import {
   isManuallyDispatchableTrigger,
   isTriggerBlockType,
+  pinnedRepositoriesNotEnabledSentence,
   RETIRED_SCHEMA_MESSAGE,
   type RunBlockStatusesResponse,
   type WorkflowDefinition,
@@ -262,6 +263,11 @@ export function WorkflowEditorScreen({
   const [selectedId, setSelectedId] = useState(initialDetail.meta.id);
   const [versions, setVersions] = useState<WorkflowDefinitionVersion[]>(initialDetail.versions);
   const [deployed, setDeployed] = useState<WorkflowDefinitionVersion | null>(initialDetail.deployed);
+  // What the deploy route said about this version's pins, in the worker's own
+  // words. Held rather than derived: the badge beside Deploy is computed from
+  // the catalog snapshot the browser holds, and this is what the deploy
+  // actually found, which is the answer an operator needs after the click.
+  const [deployNotice, setDeployNotice] = useState<string | null>(null);
   const [baselineDraft, setBaselineDraft] = useState<WorkflowDefinition | null>(initialDetail.draft);
   const [editorHistory, dispatchEditorHistory] = useReducer(
     (
@@ -800,6 +806,7 @@ export function WorkflowEditorScreen({
     const candidateKey = validationTargetKey;
     setBusy("deploy");
     setError(null);
+    setDeployNotice(null);
     try {
       let immediateValidation: WorkflowDefinitionValidationResponse;
       try {
@@ -877,6 +884,15 @@ export function WorkflowEditorScreen({
         return;
       }
       const body = res.data;
+      // Absent means the deploy route did not compute it (an older worker, or a
+      // catalog read that failed), which is not the same as "no pins are
+      // affected": an empty array says that, and only an empty array does.
+      const notEnabled = body.pinnedRepositoriesNotEnabled;
+      setDeployNotice(
+        notEnabled === undefined || notEnabled.length === 0
+          ? null
+          : pinnedRepositoriesNotEnabledSentence(notEnabled),
+      );
       setDeployed(body.deployed);
       setVersions((prev) => [body.deployed, ...prev.filter((item) => item.version !== body.deployed.version)]);
       setMetas((prev) => prev.map((meta) => (meta.id === body.meta.id ? body.meta : meta)));
@@ -974,6 +990,10 @@ export function WorkflowEditorScreen({
       savedSemanticKey: initialEditorSavedSemanticKey(detail, definition),
     });
     setConfirmRestore(null);
+    // The notice names pins in the definition that was just deployed. Loading
+    // another definition's detail replaces everything it was said about, so
+    // carrying it over would attach one workflow's pins to another's screen.
+    setDeployNotice(null);
     setExpandedLegacyVersions(new Set());
     setFitSignal((signal) => signal + 1);
     if (forceRemount) setEditorGeneration((generation) => generation + 1);
@@ -1123,6 +1143,20 @@ export function WorkflowEditorScreen({
           No deployed version selected. Save a draft, then deploy it when it is ready.
         </div>
       ) : null}
+      {deployNotice !== null && (
+        <div
+          role="status"
+          className="flex items-start gap-3 px-6 py-2 border-b border-neutral-200 bg-amber-50 font-body text-[12px] text-amber-900"
+        >
+          <span>Deployed. {deployNotice}</span>
+          <button
+            onClick={() => setDeployNotice(null)}
+            className="ml-auto appearance-none border-none bg-transparent font-body text-[12px] text-amber-900 cursor-pointer"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
       {switchState.kind === "confirming" && (
         <div className="flex items-center gap-3 px-6 py-2 border-b border-neutral-200 bg-app-bg font-body text-[12px] text-neutral-700">
           <span>Discard unsaved changes and switch?</span>

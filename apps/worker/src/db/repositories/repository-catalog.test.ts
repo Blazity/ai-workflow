@@ -1,3 +1,4 @@
+import { eq } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import { createTestDb } from "../test-db.js";
 import {
@@ -9,6 +10,7 @@ import {
 } from "../schema.js";
 import {
   activateRepositoryCatalog,
+  backfillRepositoryDefaultBranches,
   getCurrentCheckConfiguration,
   getRepositoryCatalogRow,
   getRepositoryCatalogRowByPath,
@@ -18,6 +20,8 @@ import {
   listClaimedRepositoriesNotEnabled,
   listRepositoriesWithProfiles,
   listRepositoryCatalogRows,
+  listRepositoryCatalogRowsWithGroupCounts,
+  listRepositoryRules,
   listRepositoryProfileVersionRows,
   seedRepositoryCatalogEntries,
   setRepositoryEnabled,
@@ -25,9 +29,12 @@ import {
   type UpsertRepositoryProfileInput,
 } from "./repository-catalog.js";
 
+// `expectedProfileVersion?: undefined` keeps every call on the overload that
+// cannot answer a conflict: these tests write without a token, so narrowing a
+// union at 30 call sites would be noise.
 function profile(
-  overrides: Partial<UpsertRepositoryProfileInput> = {},
-): UpsertRepositoryProfileInput {
+  overrides: Partial<Omit<UpsertRepositoryProfileInput, "expectedProfileVersion">> = {},
+): UpsertRepositoryProfileInput & { expectedProfileVersion?: undefined } {
   return {
     provider: "github",
     path: "acme/api",
@@ -57,7 +64,13 @@ describe("repository catalog repository", () => {
     const second = await upsertRepositoryProfile(db, profile({ rules: "no force push, ever" }));
     // The profile moved, the checks did not: the script groups are the same
     // bytes, and no run in flight ran anything different because of this save.
-    expect(second).toEqual({ id: first.id, version: 2, checksVersion: 1 });
+    expect(second).toEqual({
+      id: first.id,
+      version: 2,
+      checksVersion: 1,
+      minted: true,
+      changedFields: ["rules"],
+    });
 
     const row = await getRepositoryCatalogRow(db, first.id);
     expect(row).toMatchObject({
@@ -92,7 +105,12 @@ describe("repository catalog repository", () => {
   it("matches an existing repository whatever the casing of the path", async () => {
     const db = await createTestDb();
     const created = await upsertRepositoryProfile(db, profile({ path: "Acme/Api" }));
-    const again = await upsertRepositoryProfile(db, profile({ path: "acme/api" }));
+    // The second save also MOVES something, because a save that changes nothing
+    // mints nothing now and would prove the match by accident.
+    const again = await upsertRepositoryProfile(
+      db,
+      profile({ path: "acme/api", rules: "no force push" }),
+    );
 
     expect(again.id).toBe(created.id);
     expect(again.version).toBe(2);
@@ -138,7 +156,12 @@ describe("repository catalog repository", () => {
   it("lists a repository's versions newest first", async () => {
     const db = await createTestDb();
     const created = await upsertRepositoryProfile(db, profile({ reason: "first" }));
-    await upsertRepositoryProfile(db, profile({ reason: "second" }));
+    // A reason is not a profile field, so the second save has to move one:
+    // otherwise it mints nothing and there is no second version to list.
+    await upsertRepositoryProfile(
+      db,
+      profile({ reason: "second", rules: "no force push" }),
+    );
 
     const versions = await listRepositoryProfileVersionRows(db, created.id);
     expect(versions.map((row) => row.version)).toEqual([2, 1]);
@@ -202,12 +225,14 @@ describe("repository catalog repository", () => {
       activatedAt: null,
       activatedById: null,
       activatedByLabel: null,
+      activationReason: null,
     });
 
     const at = new Date("2026-09-12T09:00:00.000Z");
     const state = await activateRepositoryCatalog(db, {
       actorId: "user-1",
       actorLabel: "Ada",
+      reason: "the bridge is over",
       now: at,
     });
     expect(state).toEqual({
@@ -215,9 +240,10 @@ describe("repository catalog repository", () => {
       activatedAt: at,
       activatedById: "user-1",
       activatedByLabel: "Ada",
+      activationReason: "the bridge is over",
     });
 
-    await activateRepositoryCatalog(db, { actorId: "user-2" });
+    await activateRepositoryCatalog(db, { actorId: "user-2", reason: "the bridge is over" });
     await expect(getRepositoryCatalogStateRow(db)).resolves.toMatchObject({
       activated: true,
       activatedById: "user-2",
@@ -495,5 +521,465 @@ describe("getCurrentCheckConfiguration", () => {
     const current = await getCurrentCheckConfiguration(db);
     expect(current.version).toBe(1);
     expect(current.config.batchTimeoutMinutes).toBe(45);
+  });
+
+  describe("the checks ceiling is scoped to the run", () => {
+    /** Two repositories with very different claims, which is the shape that
+     *  made the deployment-wide MAX wrong: a run that never opens the slow one
+     *  must not inherit its ceiling. */
+    const twoClaims = async () => {
+      const db = await createTestDb();
+      await upsertRepositoryProfile(
+        db,
+        profile({ path: "acme/api", batchTimeoutMinutes: 5 }),
+      );
+      await upsertRepositoryProfile(
+        db,
+        profile({ path: "acme/slow", batchTimeoutMinutes: 120 }),
+      );
+      return db;
+    };
+
+    it("takes the highest claim among the run's repositories only", async () => {
+      const db = await twoClaims();
+      const current = await getCurrentCheckConfiguration(db, {
+        repositoryKeys: ["github:acme/api"],
+      });
+      expect(current.config.batchTimeoutMinutes).toBe(5);
+    });
+
+    it("takes the highest of several when the run touches several", async () => {
+      const db = await twoClaims();
+      const current = await getCurrentCheckConfiguration(db, {
+        repositoryKeys: ["github:acme/api", "github:acme/slow"],
+      });
+      expect(current.config.batchTimeoutMinutes).toBe(120);
+    });
+
+    it("leaves the ceiling unset when no repository the run touches claims one", async () => {
+      // Unset is how checksCeilingMsOf is told to use the operator ceiling, so
+      // this is the assertion that the operator fallback is reachable again.
+      const db = await twoClaims();
+      await upsertRepositoryProfile(db, profile({ path: "acme/quiet" }));
+      const current = await getCurrentCheckConfiguration(db, {
+        repositoryKeys: ["github:acme/quiet"],
+      });
+      expect(current.config.batchTimeoutMinutes).toBeUndefined();
+    });
+
+    it("does not let the legacy global blob answer for a scoped run", async () => {
+      // The blob is one number for the deployment and cannot say anything about
+      // which repositories a run entered, so a scoped call never consults it.
+      const db = await twoClaims();
+      await db.insert(prePrCheckConfigVersions).values({
+        config: { repositories: [], batchTimeoutMinutes: 45 } as unknown as {
+          repositories: [];
+        },
+        createdById: "user-1",
+        createdByLabel: "Ada",
+        restoredFromVersion: null,
+      });
+      await upsertRepositoryProfile(db, profile({ path: "acme/quiet" }));
+      const current = await getCurrentCheckConfiguration(db, {
+        repositoryKeys: ["github:acme/quiet"],
+      });
+      expect(current.config.batchTimeoutMinutes).toBeUndefined();
+      // Unscoped, the deployment-wide answer is unchanged.
+      await expect(
+        getCurrentCheckConfiguration(db).then(
+          (all) => all.config.batchTimeoutMinutes,
+        ),
+      ).resolves.toBe(120);
+    });
+
+    it("still composes every repository's commands, scoped or not", async () => {
+      // Only the ceiling is scoped. What to run in a repository is decided by
+      // the repository, and a run that enters one must still get its commands.
+      const db = await twoClaims();
+      const current = await getCurrentCheckConfiguration(db, {
+        repositoryKeys: ["github:acme/api"],
+      });
+      expect(current.config.repositories.map((entry) => entry.repoPath)).toEqual([
+        "acme/api",
+        "acme/slow",
+      ]);
+    });
+  });
+});
+
+describe("identity a profile save must not move", () => {
+  it("leaves a backfilled default branch alone when the save omits it", async () => {
+    // The screen's bug shape: a tab opened before the backfill holds the old
+    // empty branch, the operator edits the rules minutes later, and the save
+    // must not carry the stale identity back. buildProfileUpsert stopped
+    // sending these two fields; this is the write proving that omitting them
+    // really does mean unchanged.
+    const db = await createTestDb();
+    await upsertRepositoryProfile(
+      db,
+      profile({ displayName: "acme/api", defaultBranch: "" }),
+    );
+    await db
+      .update(repositories)
+      .set({ defaultBranch: "main", displayName: "Acme API" })
+      .where(eq(repositories.path, "acme/api"));
+
+    await upsertRepositoryProfile(db, profile({ rules: "Run the tests." }));
+
+    const [row] = await db
+      .select()
+      .from(repositories)
+      .where(eq(repositories.path, "acme/api"));
+    expect(row?.defaultBranch).toBe("main");
+    expect(row?.displayName).toBe("Acme API");
+    expect(row?.rules).toBe("Run the tests.");
+  });
+
+  it("still writes them when the request actually carries them", async () => {
+    // Alongside a profile change, because identity is not a profile field: a
+    // save that moves nothing but a display name mints no version and so takes
+    // neither write arm. Nothing sends that shape, and the import and the
+    // backfill write identity on their own statements.
+    const db = await createTestDb();
+    await upsertRepositoryProfile(db, profile({ defaultBranch: "" }));
+    await upsertRepositoryProfile(
+      db,
+      profile({
+        displayName: "Acme API",
+        defaultBranch: "trunk",
+        description: "the api",
+      }),
+    );
+
+    const [row] = await db
+      .select()
+      .from(repositories)
+      .where(eq(repositories.path, "acme/api"));
+    expect(row?.defaultBranch).toBe("trunk");
+    expect(row?.displayName).toBe("Acme API");
+  });
+
+  it("refuses the write when the profile version moved under the token", async () => {
+    // The concurrency token is a qual on the UPDATE now, not only a flag
+    // computed from the read above it.
+    const db = await createTestDb();
+    await upsertRepositoryProfile(db, profile());
+    await upsertRepositoryProfile(db, profile({ description: "v2" }));
+
+    await expect(
+      upsertRepositoryProfile(db, {
+        ...profile({ description: "v3" }),
+        expectedProfileVersion: 1,
+      }),
+    ).resolves.toEqual({ conflict: true, currentVersion: 2 });
+
+    const [row] = await db
+      .select()
+      .from(repositories)
+      .where(eq(repositories.path, "acme/api"));
+    expect(row?.currentProfileVersion).toBe(2);
+    expect(row?.description).toBe("v2");
+  });
+});
+
+describe("listRepositoryRules", () => {
+  it("returns only the named repositories, matched case insensitively", async () => {
+    const db = await createTestDb();
+    await upsertRepositoryProfile(
+      db,
+      profile({ path: "Acme/Api", rules: "Run the tests." }),
+    );
+    await upsertRepositoryProfile(
+      db,
+      profile({ path: "acme/web", rules: "Never touch the web app." }),
+    );
+
+    await expect(listRepositoryRules(db, ["github:acme/api"])).resolves.toEqual([
+      { key: "github:acme/api", version: 1, rules: "Run the tests." },
+    ]);
+  });
+
+  it("skips a repository with no rules and one whose rules are blank", async () => {
+    const db = await createTestDb();
+    await upsertRepositoryProfile(db, profile({ path: "acme/api" }));
+    await upsertRepositoryProfile(
+      db,
+      profile({ path: "acme/web", rules: "   \n  " }),
+    );
+
+    await expect(
+      listRepositoryRules(db, ["github:acme/api", "github:acme/web"]),
+    ).resolves.toEqual([]);
+  });
+
+  it("reads the CURRENT version's rules, not an older one", async () => {
+    const db = await createTestDb();
+    await upsertRepositoryProfile(db, profile({ rules: "First." }));
+    await upsertRepositoryProfile(db, profile({ rules: "Second." }));
+
+    await expect(listRepositoryRules(db, ["github:acme/api"])).resolves.toEqual([
+      { key: "github:acme/api", version: 2, rules: "Second." },
+    ]);
+  });
+
+  it("asks nothing of the database for an empty key set", async () => {
+    const db = await createTestDb();
+    await upsertRepositoryProfile(db, profile({ rules: "Run the tests." }));
+    await expect(listRepositoryRules(db, [])).resolves.toEqual([]);
+  });
+});
+
+describe("upsert as a patch", () => {
+  it("leaves the script groups untouched when only the rules are sent", async () => {
+    // The bug this closes: the screen used to send the whole merged profile, so
+    // a Rules save rewrote the script groups from a baseline that could be
+    // minutes old. An omitted field now means unchanged and the statement
+    // carries the stored value forward.
+    const db = await createTestDb();
+    const created = await upsertRepositoryProfile(
+      db,
+      profile({
+        scriptGroups: {
+          provider: "github",
+          repoPath: "acme/api",
+          groups: { test: { commands: ["pnpm test"] } },
+        },
+        gateGroups: ["test"],
+      }),
+    );
+
+    const saved = await upsertRepositoryProfile(db, {
+      provider: "github",
+      path: "acme/api",
+      rules: "no force push",
+      actorId: "user-2",
+      actorLabel: "Bo",
+      reason: "tighter wording",
+    });
+
+    expect(saved.changedFields).toEqual(["rules"]);
+    expect(saved.minted).toBe(true);
+    expect(saved.version).toBe(2);
+    // The checks did not move, so no run in flight sees a different command.
+    expect(saved.checksVersion).toBe(created.checksVersion);
+
+    const version = await getRepositoryProfileVersionRow(db, created.id, 2);
+    expect(version).toMatchObject({
+      rules: "no force push",
+      scriptGroups: {
+        provider: "github",
+        repoPath: "acme/api",
+        groups: { test: { commands: ["pnpm test"] } },
+      },
+      gateGroups: ["test"],
+    });
+  });
+
+  it("writes no version at all when the request changes nothing", async () => {
+    const db = await createTestDb();
+    const created = await upsertRepositoryProfile(db, profile({ rules: "no force push" }));
+
+    const again = await upsertRepositoryProfile(db, {
+      provider: "github",
+      path: "acme/api",
+      rules: "no force push",
+      actorId: "user-2",
+      actorLabel: "Bo",
+      reason: "clicked twice",
+    });
+
+    expect(again).toMatchObject({
+      id: created.id,
+      version: 1,
+      minted: false,
+      changedFields: [],
+    });
+    await expect(db.select().from(repositoryProfileVersions)).resolves.toHaveLength(1);
+  });
+
+  it("clears a field when the request sends null, which absent never does", async () => {
+    const db = await createTestDb();
+    const created = await upsertRepositoryProfile(db, profile());
+    const cleared = await upsertRepositoryProfile(db, {
+      provider: "github",
+      path: "acme/api",
+      scriptGroups: null,
+      gateGroups: null,
+      actorId: "user-1",
+      actorLabel: "Ada",
+      reason: "no checks here any more",
+    });
+
+    expect(cleared.changedFields).toEqual(["scriptGroups"]);
+    await expect(
+      getRepositoryProfileVersionRow(db, created.id, 2),
+    ).resolves.toMatchObject({ scriptGroups: null });
+  });
+
+  it("refuses the write when the profile moved under the caller", async () => {
+    const db = await createTestDb();
+    const created = await upsertRepositoryProfile(db, profile({ rules: "first" }));
+    await upsertRepositoryProfile(db, {
+      provider: "github",
+      path: "acme/api",
+      rules: "second",
+      actorId: "user-2",
+      actorLabel: "Bo",
+      reason: "somebody else",
+    });
+
+    const refused = await upsertRepositoryProfile(db, {
+      provider: "github",
+      path: "acme/api",
+      rules: "third",
+      expectedProfileVersion: 1,
+      actorId: "user-1",
+      actorLabel: "Ada",
+      reason: "built on a stale baseline",
+    });
+
+    expect(refused).toEqual({ conflict: true, currentVersion: 2 });
+    // Refused by the statement, so nothing was written: no third version, and
+    // the second person's rules are still what is stored.
+    await expect(db.select().from(repositoryProfileVersions)).resolves.toHaveLength(2);
+    await expect(getRepositoryCatalogRow(db, created.id)).resolves.toMatchObject({
+      rules: "second",
+      currentProfileVersion: 2,
+    });
+  });
+
+  it("takes the token when it still matches", async () => {
+    const db = await createTestDb();
+    await upsertRepositoryProfile(db, profile({ rules: "first" }));
+    const saved = await upsertRepositoryProfile(db, {
+      provider: "github",
+      path: "acme/api",
+      rules: "second",
+      expectedProfileVersion: 1,
+      actorId: "user-1",
+      actorLabel: "Ada",
+      reason: "still current",
+    });
+    expect(saved).toMatchObject({ version: 2, minted: true });
+  });
+
+  it("carries the checks ceiling forward like any other profile field", async () => {
+    const db = await createTestDb();
+    const created = await upsertRepositoryProfile(
+      db,
+      profile({ batchTimeoutMinutes: 45 }),
+    );
+    // The create moves everything it carries, in the order the profile declares
+    // its fields.
+    expect(created.changedFields).toEqual(["scriptGroups", "batchTimeoutMinutes"]);
+
+    const untouched = await upsertRepositoryProfile(db, {
+      provider: "github",
+      path: "acme/api",
+      rules: "no force push",
+      actorId: "user-1",
+      actorLabel: "Ada",
+      reason: "rules only",
+    });
+    await expect(
+      getRepositoryProfileVersionRow(db, created.id, untouched.version),
+    ).resolves.toMatchObject({ batchTimeoutMinutes: 45 });
+
+    // The engine reads the composed ceiling off the profiles, not off the
+    // legacy blob, once a repository claims one.
+    const current = await getCurrentCheckConfiguration(db);
+    expect(current.config.batchTimeoutMinutes).toBe(45);
+  });
+});
+
+describe("script group counts", () => {
+  it("counts the groups of each repository's current version in one query", async () => {
+    const db = await createTestDb();
+    await upsertRepositoryProfile(
+      db,
+      profile({
+        path: "acme/api",
+        scriptGroups: {
+          provider: "github",
+          repoPath: "acme/api",
+          groups: { test: { commands: ["pnpm test"] }, lint: { commands: ["pnpm lint"] } },
+        },
+      }),
+    );
+    await upsertRepositoryProfile(db, profile({ path: "acme/web", scriptGroups: null }));
+    await seedRepositoryCatalogEntries(db, {
+      repositories: [{ provider: "github", path: "acme/docs" }],
+      source: "seeded",
+      enabled: true,
+    });
+
+    const rows = await listRepositoryCatalogRowsWithGroupCounts(db);
+    expect(
+      rows.map((row) => [row.path, row.scriptGroupCount] as const),
+    ).toEqual([
+      ["acme/api", 2],
+      ["acme/docs", 0],
+      ["acme/web", 0],
+    ]);
+  });
+
+  it("counts the legacy flat entry as the one group the engine normalizes it into", async () => {
+    const db = await createTestDb();
+    await upsertRepositoryProfile(
+      db,
+      profile({
+        scriptGroups: {
+          provider: "github",
+          repoPath: "acme/api",
+          commands: ["pnpm test"],
+        } as unknown as Record<string, unknown>,
+      }),
+    );
+    const rows = await listRepositoryCatalogRowsWithGroupCounts(db);
+    expect(rows[0]?.scriptGroupCount).toBe(1);
+  });
+});
+
+describe("default branches", () => {
+  it("records the branch the seed was given", async () => {
+    const db = await createTestDb();
+    await seedRepositoryCatalogEntries(db, {
+      repositories: [
+        { provider: "github", path: "acme/api", defaultBranch: "trunk" },
+        { provider: "github", path: "acme/web" },
+      ],
+      source: "seeded",
+      enabled: true,
+    });
+    const rows = await listRepositoryCatalogRows(db);
+    expect(rows.map((row) => [row.path, row.defaultBranch] as const)).toEqual([
+      ["acme/api", "trunk"],
+      ["acme/web", ""],
+    ]);
+  });
+
+  it("backfills only the rows that carry no branch, and never overwrites one", async () => {
+    const db = await createTestDb();
+    await seedRepositoryCatalogEntries(db, {
+      repositories: [
+        { provider: "github", path: "acme/api", defaultBranch: "trunk" },
+        { provider: "github", path: "acme/web" },
+      ],
+      source: "seeded",
+      enabled: true,
+    });
+
+    const filled = await backfillRepositoryDefaultBranches(db, [
+      { provider: "github", path: "ACME/API", defaultBranch: "main" },
+      { provider: "github", path: "acme/web", defaultBranch: "main" },
+      { provider: "github", path: "acme/unknown", defaultBranch: "main" },
+    ]);
+
+    expect(filled).toBe(1);
+    const rows = await listRepositoryCatalogRows(db);
+    expect(rows.map((row) => [row.path, row.defaultBranch] as const)).toEqual([
+      ["acme/api", "trunk"],
+      ["acme/web", "main"],
+    ]);
   });
 });

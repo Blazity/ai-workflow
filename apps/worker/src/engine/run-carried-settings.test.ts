@@ -116,7 +116,7 @@ describe("a run finishes under the rules it started with", () => {
       source: "seeded",
       enabled: true,
     });
-    await activateRepositoryCatalog(db, { actorId: "user_admin", actorLabel: "Ada" });
+    await activateRepositoryCatalog(db, { actorId: "user_admin", actorLabel: "Ada", reason: "the bridge is over" });
 
     // 14:00. The run starts and freezes the list it may touch.
     const runStart = await loadRunStartSettingsStep();
@@ -145,7 +145,7 @@ describe("a run finishes under the rules it started with", () => {
   it("refuses, for the same in-flight run, a repository its start list never carried", async () => {
     // The mirror image, so the case above cannot pass by refusing nothing: a
     // repository enabled AFTER the run started is not reachable either.
-    await activateRepositoryCatalog(db, { actorId: "user_admin" });
+    await activateRepositoryCatalog(db, { actorId: "user_admin", reason: "the bridge is over" });
 
     const runStart = await loadRunStartSettingsStep();
     const carried = runStartRepositoryAccess(runStart);

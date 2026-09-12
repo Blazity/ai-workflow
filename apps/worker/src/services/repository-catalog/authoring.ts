@@ -10,13 +10,17 @@ import {
   DashboardAuthError,
   invalidRepositoryScriptGroupNames,
   REPOSITORY_SCRIPT_GROUP_NAME_MESSAGE,
+  REPOSITORY_SUGGESTION_PAGE_SIZE,
   type RepositoryCatalogActivateResponse,
   type RepositoryCatalogClaimedRepository,
   type RepositoryCatalogEntryResponse,
   type RepositoryCatalogListResponse,
   type RepositoryCatalogMutationResponse,
+  type RepositoryCatalogSuggestionsResponse,
   type RepositoryCatalogUpsertRequest,
   type RepositoryCatalogVersionsResponse,
+  type RepositorySuggestionOutcome,
+  type RepositorySuggestionRecord,
 } from "@shared/contracts";
 import {
   activateConnectedRepositoryCatalog,
@@ -28,6 +32,10 @@ import {
   setConnectedRepositoryEnabled,
   upsertConnectedRepositoryProfile,
 } from "../../db/repositories/repository-catalog.js";
+import {
+  decodeRepositorySuggestionCursor,
+  listConnectedRepositorySuggestionsPage,
+} from "../../db/repositories/repository-suggestions.js";
 import { getConnectedDashboardUserLabel, type DashboardRole } from "../auth/index.js";
 import { loadRepositoryCatalogEntries, serializeRepositoryCatalogEntry } from "./store.js";
 import { serializeRepositoryProfileVersion } from "./versions.js";
@@ -126,7 +134,12 @@ export async function saveRepositoryProfile(input: {
       throw new DashboardAuthError(409, "repository_mismatch");
     }
   }
-  const saved = await upsertConnectedRepositoryProfile({
+  // Every optional field is forwarded ONLY when the request carried it. The
+  // schema applies no defaults any more, so an absent field stays absent and
+  // the statement carries the stored value forward; spreading the field in
+  // unconditionally would put an explicit `undefined` where the repository tier
+  // reads "absent" and "null" apart.
+  const write = {
     provider: input.request.provider,
     path: input.request.path,
     ...(input.request.displayName === undefined
@@ -135,11 +148,22 @@ export async function saveRepositoryProfile(input: {
     ...(input.request.defaultBranch === undefined
       ? {}
       : { defaultBranch: input.request.defaultBranch }),
-    description: input.request.description,
-    rules: input.request.rules,
-    relationships: input.request.relationships,
-    scriptGroups: input.request.scriptGroups,
-    gateGroups: input.request.gateGroups,
+    ...(input.request.description === undefined
+      ? {}
+      : { description: input.request.description }),
+    ...(input.request.rules === undefined ? {} : { rules: input.request.rules }),
+    ...(input.request.relationships === undefined
+      ? {}
+      : { relationships: input.request.relationships }),
+    ...(input.request.scriptGroups === undefined
+      ? {}
+      : { scriptGroups: input.request.scriptGroups }),
+    ...(input.request.gateGroups === undefined
+      ? {}
+      : { gateGroups: input.request.gateGroups }),
+    ...(input.request.batchTimeoutMinutes === undefined
+      ? {}
+      : { batchTimeoutMinutes: input.request.batchTimeoutMinutes }),
     actorId: input.actor.id,
     actorLabel: await getConnectedDashboardUserLabel(input.actor.id),
     reason: input.request.reason,
@@ -147,9 +171,90 @@ export async function saveRepositoryProfile(input: {
     // switched off unless this request said otherwise, and says nothing at all
     // about a repository that already exists.
     enabled: input.request.enabled ?? false,
-  });
+  };
+  // Two calls rather than one, because a request WITHOUT the token cannot come
+  // back a conflict and the repository tier says so in its overloads. The
+  // branch is what keeps that honest at the call site.
+  const saved =
+    input.request.expectedProfileVersion === undefined
+      ? await upsertConnectedRepositoryProfile(write)
+      : await upsertConnectedRepositoryProfile({
+          ...write,
+          expectedProfileVersion: input.request.expectedProfileVersion,
+        });
+  if ("conflict" in saved) {
+    throw new RepositoryProfileConflictError(saved.currentVersion);
+  }
   const row = await requireRow(saved.id);
-  return { repository: serializeRepositoryCatalogEntry(row), version: saved.version };
+  return {
+    repository: serializeRepositoryCatalogEntry(row),
+    version: saved.version,
+    // Both fields, and what they mean together, are declared on
+    // RepositoryCatalogMutationResponse in @shared/contracts. This maps the
+    // repository tier's spelling onto the wire's and says nothing of its own.
+    unchanged: !saved.minted,
+    changedFields: saved.changedFields,
+  };
+}
+
+/**
+ * The save was refused because the profile moved under the caller.
+ *
+ * Its own error rather than a `DashboardAuthError`, because the route answers
+ * it with a BODY (the version to reload), the way a stale pre-PR checks save is
+ * answered. A bare status would leave the screen having to guess whether to
+ * reload or to retry.
+ */
+export class RepositoryProfileConflictError extends Error {
+  constructor(readonly currentVersion: number) {
+    super("repository_profile_conflict");
+    this.name = "RepositoryProfileConflictError";
+  }
+}
+
+/**
+ * One page of a repository's suggestion calls, newest first.
+ *
+ * A read, so every role may make it: what this deployment spent asking a model
+ * about its own repositories is not a privilege, and a member who cannot see it
+ * cannot tell a repository the model keeps failing on from one nobody has asked
+ * about.
+ */
+export async function readRepositorySuggestions(input: {
+  id: number;
+  cursor?: string | null;
+}): Promise<RepositoryCatalogSuggestionsResponse> {
+  await requireRow(input.id);
+  const cursor =
+    input.cursor === undefined || input.cursor === null || input.cursor.length === 0
+      ? null
+      : decodeRepositorySuggestionCursor(input.cursor);
+  if (input.cursor && cursor === null) {
+    throw new DashboardAuthError(400, "invalid_cursor");
+  }
+  const page = await listConnectedRepositorySuggestionsPage({
+    repositoryId: input.id,
+    limit: REPOSITORY_SUGGESTION_PAGE_SIZE,
+    cursor,
+  });
+  return {
+    suggestions: page.rows.map(
+      (row): RepositorySuggestionRecord => ({
+        id: row.id,
+        createdAt: row.createdAt.toISOString(),
+        outcome: row.outcome as RepositorySuggestionOutcome,
+        model: row.model,
+        actorLabel: row.actorLabel,
+        tokensInput: row.tokensInput,
+        tokensOutput: row.tokensOutput,
+        durationMs: row.durationMs,
+        // Unpriced, never zero: the provider reported nothing, which is what a
+        // timeout and a repository missing at the provider both look like.
+        priced: row.tokensInput !== null || row.tokensOutput !== null,
+      }),
+    ),
+    nextCursor: page.nextCursor,
+  };
 }
 
 export async function setRepositoryCatalogEnabled(input: {
@@ -181,6 +286,9 @@ export type RepositoryCatalogActivateOutcome =
 export async function activateRepositoryCatalog(input: {
   actor: RepositoryCatalogActor;
   acknowledgedRepositoryKeys: string[];
+  /** Why the bridge is ending, recorded on the state row. The route refuses an
+   *  empty one, so this is never blank on the path an operator takes. */
+  reason: string;
 }): Promise<RepositoryCatalogActivateOutcome> {
   requireCatalogManager(input.actor);
   const claimed = await listConnectedClaimedRepositoriesNotEnabled();
@@ -194,6 +302,7 @@ export async function activateRepositoryCatalog(input: {
   const state = await activateConnectedRepositoryCatalog({
     actorId: input.actor.id,
     actorLabel: await getConnectedDashboardUserLabel(input.actor.id),
+    reason: input.reason,
   });
   return {
     kind: "activated",
@@ -204,6 +313,7 @@ export async function activateRepositoryCatalog(input: {
         activatedAt: state.activatedAt?.toISOString() ?? null,
         activatedById: state.activatedById,
         activatedByLabel: state.activatedByLabel,
+        activationReason: state.activationReason,
       },
     },
   };

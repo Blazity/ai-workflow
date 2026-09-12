@@ -2,37 +2,45 @@
 //
 // Turning a tab's edit into one upsert body.
 //
-// The route is a PUT that mints a whole new profile version, and every field it
-// does not receive is written at its schema default: omitting `description`
-// stores an empty description, it does not leave the stored one alone
-// (`repositoryCatalogUpsertRequestSchema` in packages/contracts, and
-// `saveRepositoryProfile` which passes every parsed field straight through).
+// The route takes a PATCH-shaped body now: every profile field is optional and
+// an OMITTED field means unchanged, carried forward inside the statement that
+// mints the version (`repositoryCatalogUpsertRequestSchema` in
+// packages/contracts, and the upsert CTE in the worker's repository tier). So
+// the body carries the dirty fields and nothing else: saving Rules sends the
+// rules, and the Scripts tab's groups are never on the wire at all.
 //
-// So "save only what changed" is a promise about the RESULT, not about the
-// wire: the body is built from the profile as it currently stands, with the
-// editing tab's fields laid over it. Saving Rules then leaves the Scripts tab's
-// groups exactly as they were, which is what the promise means, and there is no
-// shape of this call that silently erases the tab an operator was not looking
-// at.
+// That is not only tidier. Sending the whole merged profile meant a save built
+// on a baseline the screen read minutes ago REPLACED whatever had landed since,
+// and it meant a stored value the operator was not editing (a script group name
+// the engine refuses, say) failed a save whose only edit was a line of prose.
+// `expectedProfileVersion` closes the first: the write itself carries the
+// version this screen loaded, and a moved profile is refused by the statement
+// rather than by a read in front of it.
 import type {
   RepositoryCatalogEntry,
   RepositoryCatalogUpsertRequest,
+  RepositoryProfileField,
   RepositoryProfileVersion,
-  RepositoryRelationship,
 } from "@shared/contracts";
-import { isRepositoryScriptGroupName } from "@shared/contracts";
+import {
+  isRepositoryScriptGroupName,
+  REPOSITORY_PROFILE_FIELDS,
+} from "@shared/contracts";
 
-/** Every field one profile version carries that a tab can edit. */
-export interface RepositoryProfileDraft {
-  description: string;
-  rules: string;
-  relationships: RepositoryRelationship[];
-  /** The repository scripts entry, verbatim, or null for "no checks apply". */
-  scriptGroups: Record<string, unknown> | null;
-  gateGroups: string[] | null;
-}
+/**
+ * Every field one profile version carries that a tab can edit.
+ *
+ * Derived from the contract twice over: the KEYS are the contract's own list of
+ * editable profile fields, and each value type is the one the wire declares. So
+ * a field added to `REPOSITORY_PROFILE_FIELDS` stops this file compiling until
+ * the screen can edit it, instead of being silently absent from every draft,
+ * every dirty check and every save body.
+ */
+export type RepositoryProfileDraft = {
+  [Field in RepositoryProfileField]: RepositoryProfileVersion[Field];
+};
 
-export type RepositoryProfileField = keyof RepositoryProfileDraft;
+export type { RepositoryProfileField };
 
 /**
  * The draft a freshly opened entry starts from.
@@ -51,6 +59,7 @@ export function draftFromProfile(
     relationships: structuredClone(profile?.relationships ?? []),
     scriptGroups: structuredClone(profile?.scriptGroups ?? null),
     gateGroups: structuredClone(profile?.gateGroups ?? null),
+    batchTimeoutMinutes: profile?.batchTimeoutMinutes ?? null,
   };
 }
 
@@ -65,14 +74,11 @@ export function changedProfileFields(
   saved: RepositoryProfileDraft,
   draft: RepositoryProfileDraft,
 ): RepositoryProfileField[] {
-  const fields: RepositoryProfileField[] = [
-    "description",
-    "rules",
-    "relationships",
-    "scriptGroups",
-    "gateGroups",
-  ];
-  return fields.filter((field) => !sameValue(saved[field], draft[field]));
+  // The contract's list, in the contract's order, so what this reports back
+  // matches what the worker reports in `changedFields` element for element.
+  return REPOSITORY_PROFILE_FIELDS.filter(
+    (field) => !sameValue(saved[field], draft[field]),
+  );
 }
 
 export function isProfileDirty(
@@ -83,110 +89,109 @@ export function isProfileDirty(
 }
 
 /**
- * The upsert body.
+ * The upsert body: the dirty fields, and nothing else.
  *
  * `provider` and `path` come off the stored row, never off the draft: identity
  * is what the route checks the id against, and a screen that could edit it
  * would be a way to write one repository's profile onto another.
+ *
+ * `displayName` and `defaultBranch` are not sent AT ALL. This screen does not
+ * edit them, it only displays them, and they move underneath it: a provider
+ * import or the default-branch backfill can fill a branch while a tab sits open
+ * on a draft that read it as empty. Sending them back would let a Rules save
+ * from a stale screen quietly undo that. Omitted means unchanged on the route,
+ * so leaving them out is the whole fix.
+ *
+ * Every profile field is sent only when it CHANGED. An omitted field means
+ * unchanged on the route, so a Rules save never carries the script groups, and
+ * a stored value nobody edited is never revalidated, never resent, and never
+ * able to refuse a save it has nothing to do with.
  *
  * `enabled` is deliberately absent. Writing a profile says what to run in a
  * repository; it never says the agent may enter one. That is the enabled route,
  * which is its own click and its own audit line.
  */
 export function buildProfileUpsert(input: {
-  repository: Pick<RepositoryCatalogEntry, "provider" | "path" | "displayName" | "defaultBranch">;
+  repository: Pick<RepositoryCatalogEntry, "provider" | "path">;
   saved: RepositoryProfileDraft;
   draft: RepositoryProfileDraft;
   reason: string;
+  /** The profile version this screen loaded. Sent as the concurrency token, so
+   *  a profile that moved since refuses the write instead of being replaced by
+   *  it. */
+  expectedProfileVersion: number;
 }): RepositoryCatalogUpsertRequest {
-  const merged = { ...input.saved, ...pick(input.draft, changedProfileFields(input.saved, input.draft)) };
+  const changed = new Set(changedProfileFields(input.saved, input.draft));
   return {
     provider: input.repository.provider,
     path: input.repository.path,
-    displayName: input.repository.displayName,
-    defaultBranch: input.repository.defaultBranch,
-    description: merged.description,
-    rules: merged.rules,
-    relationships: merged.relationships,
-    scriptGroups: merged.scriptGroups,
-    gateGroups: merged.gateGroups,
+    ...(changed.has("description") ? { description: input.draft.description } : {}),
+    ...(changed.has("rules") ? { rules: input.draft.rules } : {}),
+    ...(changed.has("relationships")
+      ? { relationships: input.draft.relationships }
+      : {}),
+    ...(changed.has("scriptGroups") ? { scriptGroups: input.draft.scriptGroups } : {}),
+    ...(changed.has("gateGroups") ? { gateGroups: input.draft.gateGroups } : {}),
+    ...(changed.has("batchTimeoutMinutes")
+      ? { batchTimeoutMinutes: input.draft.batchTimeoutMinutes }
+      : {}),
     reason: input.reason,
+    expectedProfileVersion: input.expectedProfileVersion,
   };
-}
-
-function pick(
-  draft: RepositoryProfileDraft,
-  fields: readonly RepositoryProfileField[],
-): Partial<RepositoryProfileDraft> {
-  const picked: Partial<RepositoryProfileDraft> = {};
-  for (const field of fields) {
-    // Each branch assigns one known key, which is what keeps this typed without
-    // a cast: a Partial indexed by a union would widen every value to the
-    // union of the five field types.
-    if (field === "description") picked.description = draft.description;
-    if (field === "rules") picked.rules = draft.rules;
-    if (field === "relationships") picked.relationships = draft.relationships;
-    if (field === "scriptGroups") picked.scriptGroups = draft.scriptGroups;
-    if (field === "gateGroups") picked.gateGroups = draft.gateGroups;
-  }
-  return picked;
 }
 
 /**
  * The refusal when the stored profile moved while this screen held a draft.
  *
- * The upsert sends the whole merged profile (see the header), so a save built
- * on a stale baseline does not merge with the other edit, it replaces it. There
- * is no version token on the route, so the screen re-reads the row immediately
- * before the PUT and refuses rather than overwriting: a lost edit nobody is
- * told about is worse than a save an operator has to make twice.
+ * The worker refuses it now: the PUT carries `expectedProfileVersion` and the
+ * write itself selects no candidate row when the version has moved, which is
+ * what closes the window a read-then-write left open. The wording is the same
+ * one the screen used to produce from its own pre-flight, because the
+ * operator's next move has not changed.
  */
 export function staleProfileNotice(version: number): string {
   return `This repository moved to v${version} while you were editing. Reload to see the change before saving.`;
 }
 
-/**
- * The refusal when the pre-flight read itself failed.
- *
- * Not "unmoved": the whole point of the read is that the PUT overwrites, so a
- * read nobody got an answer to has to stop the write rather than wave it
- * through. Nothing is sent, so trying again costs nothing.
- */
-export const UNREADABLE_VERSION_NOTICE =
-  "The current version could not be read, so this save was not sent. Try again.";
+/** What the screen says when the worker answers that the save changed nothing.
+ *  Not an error: the stored profile already says what was asked for. */
+export const NOTHING_TO_SAVE_NOTICE =
+  "Nothing was saved: the stored profile already matches this. No version was minted.";
 
 /** Group names the engine's own rule refuses, read off the entry the save is
  *  about to send. */
-function invalidGroupNames(scriptGroups: Record<string, unknown> | null): string[] {
-  const groups = (scriptGroups as { groups?: unknown } | null)?.groups;
-  if (groups === null || typeof groups !== "object") return [];
+function invalidGroupNames(
+  scriptGroups: Record<string, unknown> | null | undefined,
+): string[] {
+  const groups = (scriptGroups as { groups?: unknown } | null | undefined)?.groups;
+  if (groups === null || groups === undefined || typeof groups !== "object") return [];
   return Object.keys(groups).filter((name) => !isRepositoryScriptGroupName(name));
 }
 
 /**
  * The save error, with the tab that actually holds the offending value.
  *
- * The PUT carries every field, so a group name the Scripts tab stored long ago
- * refuses a save whose only edit was the Rules text. The worker's unqualified
- * `invalid_script_group_name` would send the operator to look at what they just
- * typed, so the names are read back off the body that was sent and the tab that
- * holds them is stated.
+ * Only a save that actually CARRIES the script groups can be refused for them
+ * now, so a refusal names something the operator just edited. The names are
+ * still read back off the body that was sent rather than trusted from the
+ * worker's unqualified `invalid_script_group_name`, which on its own says
+ * nothing about which group.
  */
 export function profileSaveErrorNotice(
   message: string,
-  scriptGroups: Record<string, unknown> | null,
+  scriptGroups: Record<string, unknown> | null | undefined,
 ): string {
   if (!message.includes("invalid_script_group_name")) return message;
   const bad = invalidGroupNames(scriptGroups);
   const subject =
     bad.length === 0
-      ? "A stored script group name is not valid"
-      : `${bad.length === 1 ? "The stored script group" : "The stored script groups"} ${bad
+      ? "A script group name is not valid"
+      : `${bad.length === 1 ? "The script group" : "The script groups"} ${bad
           .map((name) => `"${name}"`)
           .join(", ")} ${bad.length === 1 ? "is" : "are"} not valid`;
   return `${subject}, so this save was refused. The Scripts tab holds ${
     bad.length === 1 ? "it" : "them"
-  }: every save sends the whole profile, so a stored value is checked even when it is not the one you edited.`;
+  }.`;
 }
 
 /** Said above every reason box. Saving mints a version and moves what the next

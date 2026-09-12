@@ -3,12 +3,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useEditor, EditorContent, type Editor } from "@tiptap/react";
-import StarterKit from "@tiptap/starter-kit";
-import { Markdown } from "@tiptap/markdown";
 import type { WorkflowDataCatalogEntry } from "@shared/contracts";
-import { VariableHighlight } from "./variable-highlight";
+import { promptEditorExtensions } from "./prompt-editor-extensions";
+import {
+  RAW_MARKDOWN_FALLBACK_NOTE,
+  restoreVariableTokens,
+  visualEditorKeepsMarkdown,
+} from "./markdown-round-trip";
 import { VariablePickerPopover } from "@/components/cockpit/prompt-library/variable-picker-popover";
-import { AVAILABLE_VARIABLES } from "@shared/prompts";
+import { AVAILABLE_VARIABLES, type PromptVariableSpec } from "@shared/prompts";
 import { useEnterExit } from "@/lib/use-enter-exit";
 import {
   PromptTokenNode,
@@ -44,6 +47,14 @@ export interface PromptEditorProps {
   compact?: boolean;
   /** Prevent line breaks for single-line fields such as a pull request title. */
   singleLine?: boolean;
+  /**
+   * The v1 variables this field can actually resolve. Defaults to the whole
+   * catalog. A field whose renderer is handed fewer values passes its own list,
+   * so the menu, the picker and the highlight all agree with what the run will
+   * substitute instead of offering a name that survives into the prompt as
+   * literal braces.
+   */
+  variables?: readonly PromptVariableSpec[];
 }
 
 const toolBtn =
@@ -316,8 +327,23 @@ export function PromptEditor({
   slots = [],
   compact = false,
   singleLine = false,
+  variables = AVAILABLE_VARIABLES,
 }: PromptEditorProps) {
-  const [raw, setRaw] = useState(false);
+  const variableNames = useMemo(
+    () => variables.map((variable) => variable.name),
+    [variables],
+  );
+  const canonical = authoringMode === "v2";
+  const extensions = useMemo(
+    () => promptEditorExtensions({ canonical, variableNames }),
+    [canonical, variableNames],
+  );
+  // Decided once, from the value this field mounted with: a document the visual
+  // editor would not give back opens raw, so the author sees their own text and
+  // the first edit cannot quietly drop the part that has no node in this schema.
+  // What they type afterwards is theirs, so this never re-decides.
+  const [forcedRaw] = useState(() => !visualEditorKeepsMarkdown(value, extensions));
+  const [raw, setRaw] = useState(forcedRaw);
   const [varOpen, setVarOpen] = useState(false);
   const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
   const varAnchorRef = useRef<HTMLButtonElement>(null);
@@ -331,7 +357,6 @@ export function PromptEditor({
   const surfaceMinH = fill
     ? "min-h-full"
     : (minHeightClass ?? (compact ? "min-h-[42px]" : "min-h-[220px]"));
-  const canonical = authoringMode === "v2";
   const canonicalInsertLabel =
     slots.length > 0 ? "workflow value or prompt slot" : "workflow value";
   const insertOptions = useMemo<PromptInsertOption[]>(
@@ -354,22 +379,13 @@ export function PromptEditor({
               description: slot.description ?? null,
             })),
           ]
-        : AVAILABLE_VARIABLES.map((variable) => ({
+        : variables.map((variable) => ({
             token: `{{${variable.name}}}`,
             label: variable.name,
             description: variable.description,
           })),
-    [availableValues, canonical, slots],
+    [availableValues, canonical, slots, variables],
   );
-  const extensions = useMemo(
-    () => [
-      StarterKit.configure({ heading: { levels: [1, 2, 3] } }),
-      Markdown,
-      ...(canonical ? [PromptTokenNode] : [VariableHighlight]),
-    ],
-    [canonical],
-  );
-
   const editor = useEditor({
     editable: !disabled,
     immediatelyRender: false,
@@ -384,7 +400,11 @@ export function PromptEditor({
     },
     onUpdate: ({ editor: updatedEditor }) => {
       if (settingRef.current) return;
-      const markdown = updatedEditor.getMarkdown();
+      // The one point a document leaves this editor, and so the one place the
+      // serializer's escaping is undone inside {{...}}. Without it every edit
+      // saves {{repo\_path}}, which the runtime's {{name}} pattern no longer
+      // matches, and the token reaches the model as literal braces.
+      const markdown = restoreVariableTokens(updatedEditor.getMarkdown());
       onChange(
         singleLine ? markdown.replace(/\s*\n+\s*/g, " ") : markdown,
       );
@@ -400,9 +420,13 @@ export function PromptEditor({
   // Keep the editor in sync when `value` changes from the outside (library insert,
   // provider switch, raw-mode edits). Guarded so it never fights user typing:
   // after a user edit, value already equals getMarkdown(), so this is a no-op.
+  // The guard compares what onUpdate produced, escaping undone and all: compare
+  // the raw serialization instead and a document holding one {{variable}} would
+  // differ from itself on every keystroke, and setContent would reset the caret
+  // under the author's hands.
   useEffect(() => {
     if (!editor || raw) return;
-    if (value === editor.getMarkdown()) return;
+    if (value === restoreVariableTokens(editor.getMarkdown())) return;
     settingRef.current = true;
     editor.commands.setContent(value, { contentType: "markdown", emitUpdate: false });
     settingRef.current = false;
@@ -495,6 +519,15 @@ export function PromptEditor({
         </button>
       </div>
 
+      {forcedRaw && (
+        <p
+          role="status"
+          className="m-0 border-b border-neutral-200 bg-off-white px-3 py-1.5 font-body text-[11px] text-neutral-700"
+        >
+          {RAW_MARKDOWN_FALLBACK_NOTE}
+        </p>
+      )}
+
       {/* Surface (scrolls internally when fill) */}
       {raw ? (
         <textarea
@@ -561,6 +594,7 @@ export function PromptEditor({
         <VariablePickerPopover
           open={varOpen}
           anchorRef={varAnchorRef}
+          variables={variables}
           onPick={(token) => {
             insertVariable(token);
             setVarOpen(false);

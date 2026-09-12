@@ -111,8 +111,16 @@ with the enabled switch, the not-activated banner and the activation and import
 dialogs. `[id]/` is one repository, with five tabs (Overview, Rules, Scripts,
 Memory, History) over one Save bar: a tab reports its blocker upward, the page
 holds the draft and the reason, and one `PUT /api/v1/repository-catalog/:id`
-sends the whole merged profile, because the upsert defaults omitted fields
-rather than leaving them alone.
+sends ONLY the fields that changed plus `expectedProfileVersion`. An omitted
+field means unchanged on the route, so a Rules save never carries the script
+groups; a save that changes nothing answers `unchanged: true` and mints no
+version; a profile that moved since the screen loaded answers 409
+`repository_profile_conflict` with the version it sits at, which is why the
+screen no longer reads the row before writing it. Rules and Description use
+`components/cockpit/prompt-editor/prompt-editor.tsx` and still store markdown.
+The History tab lists the profile versions and, under them, the suggestion calls
+from `app/api/repository-catalog/[id]/suggestions/`, cursor paginated, where a
+call the provider reported no usage for reads `unpriced`.
 
 **`/scripts` and `/checks` both forward here.** The Repository scripts screen is
 gone: its editor lives at `components/cockpit/screens/repositories/script-groups.tsx`

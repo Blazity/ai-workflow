@@ -110,7 +110,7 @@ describe("loadRunStartSettingsStep", () => {
       source: "seeded",
       enabled: true,
     });
-    await activateRepositoryCatalog(db, { actorId: "user_admin", actorLabel: "Ada" });
+    await activateRepositoryCatalog(db, { actorId: "user_admin", actorLabel: "Ada", reason: "the bridge is over" });
     const rows = await db.select().from(repositories);
     const web = rows.find((row) => row.path === "acme/web");
     await setRepositoryEnabled(db, { id: web!.id, enabled: false });
@@ -125,7 +125,7 @@ describe("loadRunStartSettingsStep", () => {
   });
 
   it("gives the same answer twice, and writes nothing, so a retry is safe", async () => {
-    await activateRepositoryCatalog(db, { actorId: "user_admin" });
+    await activateRepositoryCatalog(db, { actorId: "user_admin", reason: "the bridge is over" });
     await seedRepositoryCatalogEntries(db, {
       repositories: [{ provider: "github", path: "acme/api" }],
       source: "seeded",

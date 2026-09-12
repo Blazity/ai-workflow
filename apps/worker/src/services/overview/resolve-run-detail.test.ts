@@ -121,6 +121,28 @@ describe("resolveRunDetail", () => {
     expect(res?.steps[0].name).toBe("world");
   });
 
+  it("carries the frozen repository access onto a live world run", async () => {
+    // The list is written at run start, so the durable row has it long before
+    // the run finishes. The world never sees it.
+    const access = { activated: true, enabledKeys: ["github:acme/web"] };
+    const res = await resolveRunDetail({
+      dbDetail: { ...parts(false), run: { ...parts(false).run, repositoryAccess: access } },
+      loadWorld: runningWorld,
+    });
+    expect(res?.run.repositoryAccess).toEqual(access);
+    expect(res?.run.id).toBe("world");
+  });
+
+  it("does not invent an access list for a run that never recorded one", async () => {
+    // Null is "not recorded", which the header renders as nothing at all. An
+    // empty list would claim the run could reach no repository.
+    const res = await resolveRunDetail({
+      dbDetail: parts(false),
+      loadWorld: runningWorld,
+    });
+    expect(res?.run.repositoryAccess).toBeNull();
+  });
+
   it("returns null when the world throws and there is no db detail", async () => {
     const res = await resolveRunDetail({
       dbDetail: null,

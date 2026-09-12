@@ -6,6 +6,7 @@ import type {
   WorkflowParamValue,
   WorkflowValueSchema,
 } from "./block-catalog-types";
+import type { RunRepositoryAccess } from "./repository-catalog";
 
 export type { WorkflowBlockType } from "./block-catalog.generated";
 export type {
@@ -227,6 +228,17 @@ export interface RunDetail {
   error: RunError | null;
   /** Durable reason for a blocked/failed run (who cancelled it / why it failed). */
   statusReason?: string | null;
+  /**
+   * Which repositories this run could touch, frozen when it started.
+   *
+   * Recorded on the row rather than only logged, because the question is asked
+   * after the fact: "could this run have reached that repository?" is answered
+   * by the list the run began with, not by the catalog as it stands today.
+   * Absent for a run that started before it was recorded, which is not the same
+   * as an empty list; `activated: false` is the bridge, where the enabled keys
+   * are meaningless and everything the installation exposes was reachable.
+   */
+  repositoryAccess?: RunRepositoryAccess | null;
   deploymentId: string | null;
 }
 

@@ -472,7 +472,11 @@ describe("run_checks execute", () => {
     // the exhausted ceiling cost and the knob that buys more.
     expect(failures[0]!.output).toContain("github:acme/api, github:acme/web");
     expect(failures[0]!.output).toContain("60 minute checks budget");
-    expect(failures[0]!.output).toContain("batchTimeoutMinutes");
+    // The knob is named by where an operator changes it, not by its field name:
+    // it is per repository on the Repositories page now.
+    expect(failures[0]!.output).toContain(
+      "Raise the checks ceiling on the Repositories page",
+    );
     // Nothing was launched, which is the point.
     expect(mocks.startRepoCheckBatchStep).not.toHaveBeenCalled();
   });
@@ -847,7 +851,8 @@ describe("run_checks execute", () => {
     mocks.loadPrePrCheckConfigStep.mockResolvedValue({ version: null, config: { repositories: [] } });
     const replayed = new Error(
       "The repository checks did not finish within the 7 minute checks ceiling. " +
-      "Raise batchTimeoutMinutes for this definition or split the run. " +
+      "Raise the checks ceiling on the Repositories page (open the repository, " +
+      "Scripts tab, checks ceiling), or split the run. " +
       "(checks_ceiling_exceeded: Checks batch for github:acme/web reached the 7 minute checks ceiling)",
     );
     replayed.name = "ChecksCeilingExceededError";
@@ -864,7 +869,8 @@ describe("run_checks execute", () => {
       error: {
         message:
           "The repository checks did not finish within the 7 minute checks ceiling. " +
-          "Raise batchTimeoutMinutes for this definition or split the run. " +
+          "Raise the checks ceiling on the Repositories page (open the repository, " +
+      "Scripts tab, checks ceiling), or split the run. " +
           "(checks_ceiling_exceeded: Checks batch for github:acme/web reached the 7 minute checks ceiling)",
         detail:
           "checks_ceiling_exceeded: Checks batch for github:acme/web reached the 7 minute checks ceiling",

@@ -91,6 +91,7 @@ function mapRunDetailRow(
       ? { message: row.statusReason }
       : null,
     statusReason: row.statusReason,
+    repositoryAccess: row.repositoryAccess ?? null,
     deploymentId: null,
   };
   const persisted = Array.isArray(row.steps) ? (row.steps as RunStep[]) : null;

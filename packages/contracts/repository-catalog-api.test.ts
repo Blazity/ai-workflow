@@ -11,7 +11,12 @@ import {
 } from "@shared/contracts";
 
 describe("repositoryCatalogUpsertRequestSchema", () => {
-  it("fills every optional field so a minimal body still describes a profile", () => {
+  it("leaves an omitted profile field out, because omitted means unchanged", () => {
+    // The route reads an absent field as "carry the stored value forward". A
+    // default here would turn a Rules-only save into a body that also clears
+    // the description and the script groups, which is the exact bug this
+    // schema change exists to close. Only `reason` still defaults, because it
+    // describes the write rather than the profile.
     expect(
       parseRequestBody(repositoryCatalogUpsertRequestSchema, {
         provider: "github",
@@ -19,17 +24,64 @@ describe("repositoryCatalogUpsertRequestSchema", () => {
       }),
     ).toEqual({
       ok: true,
-      value: {
+      value: { provider: "github", path: "acme/api", reason: "" },
+    });
+  });
+
+  it("keeps null apart from absent, because one clears and the other does not", () => {
+    const parsed = parseRequestBody(repositoryCatalogUpsertRequestSchema, {
+      provider: "github",
+      path: "acme/api",
+      scriptGroups: null,
+    });
+    expect(parsed.ok).toEqual(true);
+    expect(parsed.ok && "scriptGroups" in parsed.value).toEqual(true);
+    expect(parsed.ok && parsed.value.scriptGroups).toEqual(null);
+  });
+
+  it("takes the concurrency token and the checks ceiling, and bounds the ceiling", () => {
+    expect(
+      parseRequestBody(repositoryCatalogUpsertRequestSchema, {
         provider: "github",
         path: "acme/api",
-        description: "",
-        rules: "",
-        relationships: [],
-        scriptGroups: null,
-        gateGroups: null,
-        reason: "",
-      },
+        expectedProfileVersion: 4,
+        batchTimeoutMinutes: 90,
+      }),
+    ).toMatchObject({
+      ok: true,
+      value: { expectedProfileVersion: 4, batchTimeoutMinutes: 90 },
     });
+    // A version of 0 is "this screen loaded a repository with no profile", so
+    // it is a legal token, not a missing one.
+    expect(
+      parseRequestBody(repositoryCatalogUpsertRequestSchema, {
+        provider: "github",
+        path: "acme/api",
+        expectedProfileVersion: 0,
+      }).ok,
+    ).toEqual(true);
+    expect(
+      parseRequestBody(repositoryCatalogUpsertRequestSchema, {
+        provider: "github",
+        path: "acme/api",
+        batchTimeoutMinutes: 0,
+      }).ok,
+    ).toEqual(false);
+    expect(
+      parseRequestBody(repositoryCatalogUpsertRequestSchema, {
+        provider: "github",
+        path: "acme/api",
+        batchTimeoutMinutes: 121,
+      }).ok,
+    ).toEqual(false);
+    // Null is the operator ceiling, which is a value and not an absence.
+    expect(
+      parseRequestBody(repositoryCatalogUpsertRequestSchema, {
+        provider: "github",
+        path: "acme/api",
+        batchTimeoutMinutes: null,
+      }).ok,
+    ).toEqual(true);
   });
 
   it("keeps the submitted script groups entry verbatim", () => {
@@ -111,19 +163,37 @@ describe("repositoryCatalogEnabledRequestSchema", () => {
 });
 
 describe("repositoryCatalogActivateRequestSchema", () => {
-  it("defaults the acknowledged list to empty", () => {
-    expect(parseRequestBody(repositoryCatalogActivateRequestSchema, {})).toEqual({
+  it("defaults the acknowledged list to empty, but never the reason", () => {
+    expect(
+      parseRequestBody(repositoryCatalogActivateRequestSchema, {
+        reason: "the bridge is over",
+      }),
+    ).toEqual({
       ok: true,
-      value: { acknowledgedRepositoryKeys: [] },
+      value: { acknowledgedRepositoryKeys: [], reason: "the bridge is over" },
     });
+  });
+
+  it("refuses an activation with no reason, so the stored audit line is never blank", () => {
+    expect(parseRequestBody(repositoryCatalogActivateRequestSchema, {}).ok).toEqual(false);
+    expect(
+      parseRequestBody(repositoryCatalogActivateRequestSchema, { reason: "   " }),
+    ).toEqual({ ok: false, message: "a reason is required" });
   });
 
   it("carries the keys the dialog showed", () => {
     expect(
       parseRequestBody(repositoryCatalogActivateRequestSchema, {
         acknowledgedRepositoryKeys: ["github:acme/api"],
+        reason: "the bridge is over",
       }),
-    ).toEqual({ ok: true, value: { acknowledgedRepositoryKeys: ["github:acme/api"] } });
+    ).toEqual({
+      ok: true,
+      value: {
+        acknowledgedRepositoryKeys: ["github:acme/api"],
+        reason: "the bridge is over",
+      },
+    });
   });
 });
 

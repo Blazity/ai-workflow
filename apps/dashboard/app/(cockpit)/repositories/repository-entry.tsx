@@ -8,17 +8,23 @@ import type {
   PrePrCheckRepositoryConfig,
   RepositoryCatalogEntry,
   RepositoryProfileVersion,
+  RepositorySuggestionRecord,
 } from "@shared/contracts";
+import { REPOSITORY_BATCH_TIMEOUT_MAX_MINUTES } from "@shared/contracts";
+import { REPOSITORY_RULES_VARIABLES } from "@shared/prompts";
 
 import { apiClient } from "@/lib/api/client";
 import {
   asScriptsEntry,
+  durationLabel,
   formatDateTime,
   lastChangeLabel,
   repositoryLabel,
   sourceLabel,
+  suggestionUsageLabel,
 } from "@/lib/repository-catalog/format";
 import {
+  NOTHING_TO_SAVE_NOTICE,
   REASON_REQUIRED_NOTE,
   buildProfileUpsert,
   changedProfileFields,
@@ -26,14 +32,26 @@ import {
   profileSaveBlocker,
   profileSaveErrorNotice,
   staleProfileNotice,
-  UNREADABLE_VERSION_NOTICE,
   type RepositoryProfileDraft,
   type RepositoryProfileField,
 } from "@/lib/repository-catalog/profile";
 import { DISCARD_UNSAVED_PROMPT, trackUnsavedSettings } from "@/lib/settings/unsaved";
 import { RepositoryScriptGroupsEditor } from "@/components/cockpit/screens/repositories/script-groups";
+import { PromptEditor } from "@/components/cockpit/prompt-editor/prompt-editor";
 
 import { SuggestionPanel } from "./suggestion-panel";
+
+/**
+ * Where the rules land, said on the screen that writes them.
+ *
+ * Not decoration: the heading above already promises the agent gets them, and
+ * the one thing an operator cannot see from here is WHICH prompts. It is the
+ * harness profile's "include repository instructions" that decides, the same
+ * switch that decides whether a committed AGENTS.md is read, so a profile with
+ * it off gets no rules either and this sentence is the only warning of that.
+ */
+const RULES_DESTINATION_NOTE =
+  "Appended to every agent prompt that includes repository instructions, in a section headed \"Repository rules for\" this repository, on runs that may touch it. A harness profile with repository instructions switched off gets none. Only the variables in the menu render here, and they name the run and nothing else: ticket, plan and review text never reaches rules, because a rules heading is an instruction and anybody who can file a ticket could write one. A name outside that list is left standing as you typed it.";
 
 const TABS = ["overview", "rules", "scripts", "memory", "history"] as const;
 type Tab = (typeof TABS)[number];
@@ -52,6 +70,7 @@ const FIELD_LABELS: Record<RepositoryProfileField, string> = {
   relationships: "relationships",
   scriptGroups: "script groups",
   gateGroups: "gate selection",
+  batchTimeoutMinutes: "checks ceiling",
 };
 
 export interface RepositoryMemorySlot {
@@ -87,6 +106,7 @@ function whatChanged(
       relationships: previous.relationships,
       scriptGroups: previous.scriptGroups,
       gateGroups: previous.gateGroups,
+      batchTimeoutMinutes: previous.batchTimeoutMinutes,
     },
     {
       description: version.description,
@@ -94,6 +114,7 @@ function whatChanged(
       relationships: version.relationships,
       scriptGroups: version.scriptGroups,
       gateGroups: version.gateGroups,
+      batchTimeoutMinutes: version.batchTimeoutMinutes,
     },
   );
   return changed.length === 0
@@ -134,8 +155,10 @@ export function RepositoryEntryScreen({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [scriptsBlocker, setScriptsBlocker] = useState<string | null>(null);
-  // The version this screen's baseline was read from. The upsert has no version
-  // token, so this is what the pre-flight compares the stored row against.
+  const [ceilingBlocker, setCeilingBlocker] = useState<string | null>(null);
+  // The version this screen's baseline was read from, and the token every save
+  // carries. The write itself is conditional on it, so there is no read in
+  // front of the write and no window between the two.
   const [baseVersion, setBaseVersion] = useState(repository.profileVersion);
 
   const changed = useMemo(() => changedProfileFields(saved, draft), [saved, draft]);
@@ -163,71 +186,66 @@ export function RepositoryEntryScreen({
   }, [dirty]);
 
   const blocker =
-    scriptsBlocker !== null
-      ? scriptsBlocker
-      : profileSaveBlocker({ changed, reason, canEdit: canManage });
+    scriptsBlocker ??
+    ceilingBlocker ??
+    profileSaveBlocker({ changed, reason, canEdit: canManage });
 
   /**
-   * The one thing standing between two admins and a silently lost edit.
+   * Saving: the dirty fields, the version this screen loaded, and nothing else.
    *
-   * The upsert sends the whole merged profile and the route takes no version
-   * token, so a save built on a stale baseline replaces the other edit rather
-   * than merging with it. There is no way to make the write conditional from
-   * here, so the row is re-read immediately before the PUT and a moved version
-   * refuses the save. The window between the read and the write stays open;
-   * closing it needs an `if-match` on the worker.
+   * There is no read in front of the write any more. The PUT carries
+   * `expectedProfileVersion`, and the statement that mints the version selects
+   * no row when the stored profile has moved, so the refusal comes from the
+   * write itself rather than from a read that could go stale between the two.
+   * The 409 carries the version it actually sits at, which is what the notice
+   * names.
    *
-   * A read that FAILS is its own answer, never "unmoved": treating it as a pass
-   * would mean a flaky GET silently turns the guard off and lets the overwrite
-   * through, which is the one outcome this function exists to prevent.
+   * `baseVersion` is deliberately NOT advanced on a conflict. The draft is
+   * still built on the version this screen loaded, so accepting the new number
+   * would arm the next click to overwrite the edit that was just refused.
    */
-  async function movedUnderUs(): Promise<
-    { kind: "same" } | { kind: "moved"; version: number } | { kind: "unreadable" }
-  > {
-    const latest = await apiClient.repositoryCatalog.entry(repository.id, {
-      cache: "no-store",
-    });
-    if (!latest.ok) return { kind: "unreadable" };
-    const version = latest.data.repository.profileVersion;
-    return version === baseVersion ? { kind: "same" } : { kind: "moved", version };
-  }
-
   async function put(next: RepositoryProfileDraft, why: string) {
     setBusy(true);
     setError(null);
     setNotice(null);
     try {
-      const moved = await movedUnderUs();
-      if (moved.kind === "unreadable") {
-        setError(UNREADABLE_VERSION_NOTICE);
-        return;
-      }
-      if (moved.kind === "moved") {
-        setError(staleProfileNotice(moved.version));
-        return;
-      }
       const body = buildProfileUpsert({
         repository,
         saved,
         draft: next,
         reason: why,
+        expectedProfileVersion: baseVersion,
       });
       const result = await apiClient.repositoryCatalog.save(repository.id, body);
       if (!result.ok) {
         setError(profileSaveErrorNotice(result.errorMessage, body.scriptGroups));
         return;
       }
+      if ("error" in result.data) {
+        setError(staleProfileNotice(result.data.currentVersion));
+        return;
+      }
+      const mutation = result.data;
       // The response carries the row and the version it minted, not the profile
       // itself, so the draft becomes the new baseline: it is exactly what was
       // sent, merged over what was stored.
       setSaved(structuredClone(next));
       setDraft(structuredClone(next));
       setReason("");
-      if (result.data.version !== undefined) setBaseVersion(result.data.version);
+      if (mutation.version !== undefined) setBaseVersion(mutation.version);
+      if (mutation.unchanged === true) {
+        setNotice(NOTHING_TO_SAVE_NOTICE);
+        return;
+      }
+      const moved = mutation.changedFields;
+      const what =
+        moved === undefined || moved.length === 0
+          ? ""
+          : `: ${moved.map((field) => FIELD_LABELS[field]).join(", ")}`;
       setNotice(
-        result.data.version === undefined
+        mutation.version === undefined
           ? "Saved."
-          : `Saved as version ${result.data.version}.`,
+          : `Saved as version ${mutation.version}${what}.`,
       );
       router.refresh();
     } catch {
@@ -334,16 +352,21 @@ export function RepositoryEntryScreen({
           <p className="m-0 mt-1 font-body text-[12px] text-neutral-600">
             Markdown. Handed to the agent as standing instructions for this
             repository, so write what it must and must not do, not what the code
-            already says.
+            already says. Same editor as the prompt library: what is stored is
+            still the markdown, and a {"{{variable}}"} is shown as one.
           </p>
-          <textarea
-            value={draft.rules}
-            disabled={!canManage}
-            aria-label="Rules"
-            rows={16}
-            onChange={(event) => setDraft({ ...draft, rules: event.target.value })}
-            className="mt-2 w-full rounded-[3px] border border-neutral-200 bg-white px-2 py-[6px] font-mono text-[12px]"
-          />
+          <div className="mt-2" aria-label="Rules">
+            <PromptEditor
+              value={draft.rules}
+              disabled={!canManage}
+              minHeightClass="min-h-[320px]"
+              variables={REPOSITORY_RULES_VARIABLES}
+              onChange={(rules) => setDraft({ ...draft, rules })}
+            />
+          </div>
+          <p className="m-0 mt-1 font-body text-[11px] text-neutral-500">
+            {RULES_DESTINATION_NOTE}
+          </p>
         </section>
       )}
 
@@ -369,17 +392,28 @@ export function RepositoryEntryScreen({
               }
             />
           </div>
+          <ChecksCeilingField
+            value={draft.batchTimeoutMinutes}
+            disabled={!canManage}
+            onBlockerChange={setCeilingBlocker}
+            onChange={(batchTimeoutMinutes) =>
+              setDraft({ ...draft, batchTimeoutMinutes })
+            }
+          />
         </section>
       )}
 
       {tab === "memory" && <MemoryTab memory={memory} canDelete={canManage} />}
 
       {tab === "history" && (
-        <HistoryTab
-          versions={versions}
-          currentVersion={repository.profileVersion}
-          onRestore={canManage && !busy ? restore : null}
-        />
+        <>
+          <HistoryTab
+            versions={versions}
+            currentVersion={repository.profileVersion}
+            onRestore={canManage && !busy ? restore : null}
+          />
+          <SuggestionHistory repositoryId={repository.id} />
+        </>
       )}
 
       {canManage && (tab === "overview" || tab === "rules" || tab === "scripts") && (
@@ -499,19 +533,21 @@ function OverviewTab({
         edited here.
       </p>
 
-      <label className="mt-3 block font-body text-[12px] font-semibold text-neutral-800">
+      <div className="mt-3 font-body text-[12px] font-semibold text-neutral-800">
         Description
-        <textarea
+      </div>
+      <div className="mt-1" aria-label="Description">
+        <PromptEditor
           value={draft.description}
           disabled={disabled}
-          aria-label="Description"
-          rows={8}
-          onChange={(event) => onChange({ ...draft, description: event.target.value })}
-          className="mt-1 w-full rounded-[3px] border border-neutral-200 bg-white px-2 py-[6px] font-mono text-[12px]"
+          minHeightClass="min-h-[180px]"
+          onChange={(description) => onChange({ ...draft, description })}
         />
-      </label>
+      </div>
       <p className="m-0 mt-1 font-body text-[10px] text-neutral-500">
-        Markdown. The first line is what the Repositories list shows.
+        Markdown. The first line is what the Repositories list shows. Read by
+        people, not by the agent: unlike Rules, a description reaches no prompt,
+        so a {"{{variable}}"} in one is never rendered.
       </p>
 
       <div className="mt-3 font-body text-[12px] font-semibold text-neutral-800">
@@ -798,6 +834,244 @@ function HistoryTab({
           </li>
         ))}
       </ul>
+    </section>
+  );
+}
+
+/**
+ * One rule, two places it has to read correctly: under the field, where it
+ * tells the reader what to type, and after "Save is disabled: " at the Save
+ * bar. Both are built from the one bound the contract enforces, so widening
+ * `REPOSITORY_BATCH_TIMEOUT_MAX_MINUTES` cannot leave either sentence behind.
+ */
+const CHECKS_CEILING_FIELD_ERROR =
+  `Enter a whole number of minutes between 1 and ` +
+  `${REPOSITORY_BATCH_TIMEOUT_MAX_MINUTES}, or leave it empty.`;
+
+const CHECKS_CEILING_BLOCKER =
+  `the checks ceiling must be a whole number of minutes between 1 and ` +
+  `${REPOSITORY_BATCH_TIMEOUT_MAX_MINUTES}, or empty`;
+
+/**
+ * The ceiling this repository asks for, beside the groups it bounds.
+ *
+ * Empty means "no claim": the run keeps whatever ceiling the operator
+ * configuration sets, which is what every repository did before this field
+ * existed. That is why blank is a value here and not a validation error.
+ *
+ * The typed text is held locally so a half-typed number ("1" on the way to
+ * "12", or a "0" the range refuses) is not pushed into the draft. Only a value
+ * the contract would accept reaches `onChange`, so the Save button is never
+ * armed by something the route will refuse.
+ */
+function ChecksCeilingField({
+  value,
+  disabled,
+  onBlockerChange,
+  onChange,
+}: {
+  value: number | null;
+  disabled: boolean;
+  onBlockerChange?: (blocker: string | null) => void;
+  onChange: (next: number | null) => void;
+}) {
+  const [text, setText] = useState(value === null ? "" : String(value));
+  useEffect(() => {
+    setText(value === null ? "" : String(value));
+  }, [value]);
+  const trimmed = text.trim();
+  const parsed = Number(trimmed);
+  const invalid =
+    trimmed.length > 0 &&
+    !(
+      Number.isInteger(parsed) &&
+      parsed >= 1 &&
+      parsed <= REPOSITORY_BATCH_TIMEOUT_MAX_MINUTES
+    );
+
+  // Reported up rather than only drawn here, exactly as the groups editor
+  // reports its own issue: a value the contract refuses never reaches the
+  // draft, so without this the Save button stayed armed and saved the old
+  // number while the screen showed the new one.
+  const report = onBlockerChange;
+  useEffect(() => {
+    report?.(invalid ? CHECKS_CEILING_BLOCKER : null);
+    // Leaving the tab unmounts this field and the typed text goes with it, so
+    // the input returns showing the draft's value, which is always one the
+    // contract accepts. The blocker has to leave with it or Save stays wedged
+    // behind a message nothing renders any more.
+    return () => report?.(null);
+  }, [invalid, report]);
+
+  return (
+    <div className="mt-4 border-t border-neutral-200 pt-3">
+      <label className="block font-body text-[12px] font-semibold text-neutral-800">
+        Checks ceiling (minutes)
+        <input
+          value={text}
+          disabled={disabled}
+          aria-label="Checks ceiling"
+          inputMode="numeric"
+          placeholder="operator ceiling"
+          onChange={(event) => {
+            const next = event.target.value;
+            setText(next);
+            const candidate = Number(next.trim());
+            if (next.trim().length === 0) {
+              onChange(null);
+              return;
+            }
+            if (
+              Number.isInteger(candidate) &&
+              candidate >= 1 &&
+              candidate <= REPOSITORY_BATCH_TIMEOUT_MAX_MINUTES
+            ) {
+              onChange(candidate);
+            }
+          }}
+          className="mt-1 block w-[160px] rounded-[3px] border border-neutral-200 bg-white px-2 py-[6px] font-mono text-[12px]"
+        />
+      </label>
+      <p className="m-0 mt-1 font-body text-[11px] text-neutral-500">
+        How long the whole batch of checks may run for this repository. Leave it
+        empty to keep the operator ceiling. A run that touches several
+        repositories takes the highest claim among them, because the ceiling
+        bounds the run and not one repository&apos;s share of it.
+      </p>
+      {invalid && (
+        <p role="status" className="m-0 mt-1 font-body text-[11px] text-red-600">
+          {CHECKS_CEILING_FIELD_ERROR}
+        </p>
+      )}
+    </div>
+  );
+}
+
+const OUTCOME_LABELS: Record<RepositorySuggestionRecord["outcome"], string> = {
+  proposed: "proposed",
+  timeout: "timed out",
+  malformed: "malformed answer",
+  failed: "failed",
+  missing: "repository missing at the provider",
+};
+
+/**
+ * Every suggestion call this repository has spent, newest first.
+ *
+ * Under the profile versions rather than beside them, because they answer the
+ * same question from two sides: the versions say what changed, this says what
+ * was paid to propose changes. A call that reported no tokens is **unpriced**
+ * and says so; printing a zero there would say a timed-out call was free.
+ *
+ * Cursor paginated. The rows are append-only, so an offset page would shift
+ * under a reader the moment somebody asks for another suggestion.
+ */
+function SuggestionHistory({ repositoryId }: { repositoryId: number }) {
+  const [rows, setRows] = useState<RepositorySuggestionRecord[] | null>(null);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    setRows(null);
+    setCursor(null);
+    setError(null);
+    void apiClient.repositoryCatalog
+      .suggestions(repositoryId)
+      .then((result) => {
+        if (!live) return;
+        if (!result.ok) {
+          setError(result.errorMessage);
+          return;
+        }
+        setRows(result.data.suggestions);
+        setCursor(result.data.nextCursor);
+      })
+      .catch(() => {
+        if (live) setError("Could not reach the server.");
+      });
+    return () => {
+      live = false;
+    };
+  }, [repositoryId]);
+
+  async function more() {
+    if (cursor === null) return;
+    setBusy(true);
+    try {
+      const result = await apiClient.repositoryCatalog.suggestions(repositoryId, cursor);
+      if (!result.ok) {
+        setError(result.errorMessage);
+        return;
+      }
+      setRows((prev) => [...(prev ?? []), ...result.data.suggestions]);
+      setCursor(result.data.nextCursor);
+    } catch {
+      setError("Could not reach the server.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3">
+      <h3 className="m-0 font-display text-[15px] font-medium text-coal">
+        Suggestion calls
+      </h3>
+      <p className="m-0 mt-1 font-body text-[11px] text-neutral-500">
+        Every call to the model for this repository, whether or not it proposed
+        anything. A call the provider never reported usage for is unpriced, not
+        free.
+      </p>
+      {error && (
+        <p className="m-0 mt-2 font-body text-[12px] text-red-600">{error}</p>
+      )}
+      {rows === null && error === null && (
+        <p className="m-0 mt-2 font-body text-[12px] text-neutral-500">Loading…</p>
+      )}
+      {rows !== null && rows.length === 0 && (
+        <p className="m-0 mt-2 font-body text-[12px] text-neutral-500">
+          No suggestion has been asked for on this repository.
+        </p>
+      )}
+      {rows !== null && rows.length > 0 && (
+        <ul className="list-none m-0 mt-2 p-0">
+          {rows.map((row) => (
+            <li
+              key={row.id}
+              className="border-b border-neutral-100 py-2 last:border-b-0"
+            >
+              <div className="flex flex-wrap items-baseline gap-2">
+                <span className="font-body text-[12px] text-neutral-900">
+                  {OUTCOME_LABELS[row.outcome] ?? row.outcome}
+                </span>
+                <span className="font-body text-[12px] text-neutral-400">
+                  {formatDateTime(row.createdAt)}
+                </span>
+                <span className="font-body text-[12px] text-neutral-700">
+                  {row.actorLabel}
+                </span>
+                <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">
+                  {row.model}
+                </span>
+              </div>
+              <div className="font-body text-[12px] text-neutral-600">
+                {suggestionUsageLabel(row)} · {durationLabel(row.durationMs)}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {cursor !== null && (
+        <button
+          onClick={more}
+          disabled={busy}
+          className="mt-2 appearance-none rounded-[3px] border border-neutral-300 bg-white px-2 py-[5px] font-body text-[12px] cursor-pointer disabled:opacity-40 disabled:cursor-default"
+        >
+          {busy ? "Loading…" : "Show older calls"}
+        </button>
+      )}
     </section>
   );
 }

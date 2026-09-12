@@ -6,7 +6,7 @@
  * happened, it cost what it cost, and a later edit to the profile it proposed
  * does not change that.
  */
-import { and, asc, desc, eq, gte } from "drizzle-orm";
+import { and, asc, desc, eq, gte, lt, or, sql } from "drizzle-orm";
 import type {
   RepositorySuggestionOutcome,
   RepositorySuggestionUsage,
@@ -32,6 +32,8 @@ export interface InsertRepositorySuggestionInput {
   /** Null from the suggestion path: tokens are recorded, the price is not
    *  resolved per call. */
   costUsd?: number | null;
+  /** How long the call took, as the caller measured it. */
+  durationMs?: number | null;
   error?: string;
 }
 
@@ -51,6 +53,7 @@ export async function insertRepositorySuggestion(
       tokensCached: input.usage?.cachedTokens ?? null,
       tokensOutput: input.usage?.outputTokens ?? null,
       costUsd: input.costUsd ?? null,
+      durationMs: input.durationMs ?? null,
       error: input.error ?? "",
     })
     .returning();
@@ -69,6 +72,88 @@ export function listRepositorySuggestions(
     .where(eq(repositorySuggestions.repositoryId, repositoryId))
     .orderBy(desc(repositorySuggestions.createdAt), desc(repositorySuggestions.id))
     .limit(limit);
+}
+
+/**
+ * How a page of the history says where it stopped.
+ *
+ * The created timestamp AND the id, because two calls can land in the same
+ * millisecond and the list orders by both. Opaque to the caller, which is what
+ * lets the shape change without a contract change.
+ */
+export interface RepositorySuggestionCursor {
+  createdAt: Date;
+  id: number;
+}
+
+function encodeRepositorySuggestionCursor(
+  cursor: RepositorySuggestionCursor,
+): string {
+  return `${cursor.createdAt.toISOString()}|${cursor.id}`;
+}
+
+/** Null for anything this function did not write. A cursor a client invented is
+ *  a bad request, not a page of somebody else's rows. */
+export function decodeRepositorySuggestionCursor(
+  raw: string,
+): RepositorySuggestionCursor | null {
+  const separator = raw.lastIndexOf("|");
+  if (separator <= 0) return null;
+  const createdAt = new Date(raw.slice(0, separator));
+  const id = Number(raw.slice(separator + 1));
+  if (Number.isNaN(createdAt.getTime())) return null;
+  if (!Number.isSafeInteger(id) || id <= 0) return null;
+  return { createdAt, id };
+}
+
+/**
+ * One page of a repository's suggestion calls, newest first.
+ *
+ * Keyset, not offset. Rows are only ever appended, so an offset page shifts
+ * under a reader the moment somebody asks for a suggestion, and the two things
+ * a cost history must never do are show a row twice and skip one. The keyset
+ * predicate is the same pair the ordering uses, so the two cannot disagree.
+ *
+ * One row past the page is fetched and dropped, which is how "is there another
+ * page" is answered without a second count query.
+ */
+async function listRepositorySuggestionsPage(
+  db: Db,
+  input: {
+    repositoryId: number;
+    limit?: number;
+    cursor?: RepositorySuggestionCursor | null;
+  },
+): Promise<{ rows: RepositorySuggestionRow[]; nextCursor: string | null }> {
+  const limit = input.limit ?? DEFAULT_SUGGESTION_LIST_LIMIT;
+  const keyset = input.cursor
+    ? or(
+        lt(repositorySuggestions.createdAt, input.cursor.createdAt),
+        and(
+          sql`${repositorySuggestions.createdAt} = ${input.cursor.createdAt}`,
+          lt(repositorySuggestions.id, input.cursor.id),
+        ),
+      )
+    : undefined;
+  const rows = await db
+    .select()
+    .from(repositorySuggestions)
+    .where(
+      keyset
+        ? and(eq(repositorySuggestions.repositoryId, input.repositoryId), keyset)
+        : eq(repositorySuggestions.repositoryId, input.repositoryId),
+    )
+    .orderBy(desc(repositorySuggestions.createdAt), desc(repositorySuggestions.id))
+    .limit(limit + 1);
+  const page = rows.slice(0, limit);
+  const last = page.at(-1);
+  return {
+    rows: page,
+    nextCursor:
+      rows.length > limit && last
+        ? encodeRepositorySuggestionCursor({ createdAt: last.createdAt, id: last.id })
+        : null,
+  };
 }
 
 /**
@@ -114,4 +199,12 @@ export function insertConnectedRepositorySuggestion(
   input: InsertRepositorySuggestionInput,
 ) {
   return insertRepositorySuggestion(getDb(), input);
+}
+
+export function listConnectedRepositorySuggestionsPage(input: {
+  repositoryId: number;
+  limit?: number;
+  cursor?: RepositorySuggestionCursor | null;
+}) {
+  return listRepositorySuggestionsPage(getDb(), input);
 }

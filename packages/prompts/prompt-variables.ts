@@ -26,6 +26,48 @@ export const PROMPT_VARIABLES = [
 
 export type PromptVariableName = (typeof PROMPT_VARIABLES)[number]["name"];
 
+/**
+ * The only variables a repository rules document may render.
+ *
+ * Rules are compiled into an agent prompt as a section the model reads as
+ * standing instructions, and everything left out of this list is text somebody
+ * outside the deployment wrote: a ticket description, acceptance criteria,
+ * labels, a plan, a PR title, human review comments. Rendering any of those
+ * inside a "rules" heading would let a reporter file a ticket whose description
+ * becomes an instruction the agent believes an operator wrote. What remains is
+ * run IDENTITY: which ticket, which branch, which run, which pull request,
+ * which repository. All of it is a key or a URL this platform minted or read
+ * off its own provider, and none of it is prose.
+ *
+ * A name outside this list stays literal in the rendered rules, braces and all,
+ * and is reported as unresolved. The editor's palette offers this list and not
+ * the full catalogue, so the restriction is visible before it is typed.
+ */
+export const REPOSITORY_RULES_VARIABLE_NAMES = [
+  "ticket_key",
+  "ticket_url",
+  "branch_name",
+  "run_id",
+  "pr_number",
+  "pr_url",
+  "repo_path",
+] as const satisfies readonly PromptVariableName[];
+
+export type RepositoryRulesVariableName =
+  (typeof REPOSITORY_RULES_VARIABLE_NAMES)[number];
+
+/** The same list as specs, for a palette. Filtered out of PROMPT_VARIABLES
+ *  rather than retyped, so one description never drifts from the other. */
+export const REPOSITORY_RULES_VARIABLES: readonly PromptVariableSpec[] =
+  PROMPT_VARIABLES.filter((variable) =>
+    (REPOSITORY_RULES_VARIABLE_NAMES as readonly string[]).includes(variable.name),
+  );
+
+/** Whether a rules document may render this name. */
+export function isRepositoryRulesVariable(name: string): boolean {
+  return (REPOSITORY_RULES_VARIABLE_NAMES as readonly string[]).includes(name);
+}
+
 /** Default {{variable}} templates for the open_pr block's title and body. New
  *  blocks are seeded with these (block registry defaults); a deployed definition
  *  authored before these fields existed falls back to them at run time. Editable

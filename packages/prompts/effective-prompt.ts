@@ -57,15 +57,35 @@ export interface EffectivePromptProfileSource {
   hash?: string;
 }
 
+/**
+ * The synthetic path of the catalog's repository rules.
+ *
+ * Rules are not a file in the checkout: they are the `rules` field of the
+ * repository's CURRENT profile version in the repository catalog, authored on
+ * the Repositories page. They ride the repository-source channel because they
+ * are the same kind of thing (standing instructions scoped to one repository),
+ * and the colon keeps the value outside the set of paths a repository could
+ * ever contain, so no committed file can impersonate them.
+ */
+export const REPOSITORY_RULES_SOURCE_PATH = "catalog:rules";
+
 export interface EffectivePromptRepositorySource {
   repository: string;
   /** The two trusted instruction files, plus the opportunistic documents a
-   * repository may carry under .ai/memory. The template member is deliberately
-   * loose: the loader is what constrains the file name, and a type that tried to
-   * enumerate them would have to be widened again by every caller. */
-  path: "AGENTS.md" | "CLAUDE.md" | `.ai/memory/${string}`;
+   * repository may carry under .ai/memory, plus the catalog's own rules. The
+   * template member is deliberately loose: the loader is what constrains the
+   * file name, and a type that tried to enumerate them would have to be widened
+   * again by every caller. */
+  path:
+    | "AGENTS.md"
+    | "CLAUDE.md"
+    | `.ai/memory/${string}`
+    | typeof REPOSITORY_RULES_SOURCE_PATH;
   content: string;
   hash?: string;
+  /** The version the content came from, where the source is versioned. Only the
+   *  catalog rules are: a file in a checkout has a commit, not a version. */
+  version?: number;
 }
 
 export interface EffectivePromptMemorySource {
@@ -243,14 +263,21 @@ export async function compileEffectivePrompt(
 
   for (const source of input.repositorySources ?? []) {
     const contentHash = source.hash ?? await hashText(source.content);
+    // Rules get their own title rather than the file-path one: they are not a
+    // path, and "acme/api/catalog:rules" would read to the model as a file it
+    // could open. The provenance id keeps the qualified form, because that is
+    // an identifier and not a sentence.
+    const isRules = source.path === REPOSITORY_RULES_SOURCE_PATH;
     sections.push(await section(
       "repository",
-      `${source.repository}/${source.path}`,
+      isRules
+        ? `Repository rules for ${source.repository}`
+        : `${source.repository}/${source.path}`,
       source.content,
       [{
         kind: "repository",
         id: `${source.repository}/${source.path}`,
-        version: null,
+        version: source.version ?? null,
         hash: contentHash,
       }],
     ));
