@@ -7,6 +7,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 // Zod 3 dialect used by the committed contract artifact.
 import {
   MAX_CLARIFICATION_ANSWER_LENGTH,
+  REPOSITORY_BATCH_TIMEOUT_MAX_MINUTES,
   REPOSITORY_CATALOG_LABEL_MAX_LENGTH,
   REPOSITORY_CATALOG_MARKDOWN_MAX_LENGTH,
   REPOSITORY_CATALOG_REASON_MAX_LENGTH,
@@ -298,7 +299,7 @@ export const MCP_TOOL_CATALOG = {
   },
   "runs.get": {
     description:
-      "Get a run's current status. Returns `terminal` and `pollAfterMs` so a caller knows whether to poll again and how soon. A terminal run with `completionPending: true` has not persisted its completion fields yet, so its pull request data may still be incomplete.",
+      "Get a run's current status. Returns `terminal` and `pollAfterMs` so a caller knows whether to poll again and how soon. A terminal run with `completionPending: true` has not persisted its completion fields yet, so its pull request data may still be incomplete. `repositoryAccess` is the repository list this run was frozen with at start: `activated: false` is the bridge, where `enabledKeys` is meaningless and everything the installation exposes was reachable, and null means the run started before the list was recorded, which is not the same as an empty one.",
     inputSchema: runIdInputSchema.strict(),
     annotations: policyFor("runs.get").annotations,
   },
@@ -318,7 +319,7 @@ export const MCP_TOOL_CATALOG = {
   },
   "runs.diagnose": {
     description:
-      "Deterministically classify why a run stands where it does (category, confidence, evidence refs, next actions), including a low-confidence `completion_fields_pending` lead when a successful run has no completion timestamp. Never runs a model over log content. `confidence` is \"high\" only for structural signals, the run status and a step status; it is \"low\" for tentative leads and whenever the category came from the wording of a recorded reason, so confirm it rather than treating it as an established cause.",
+      "Deterministically classify why a run stands where it does (category, confidence, evidence refs, next actions), including a low-confidence `completion_fields_pending` lead when a successful run has no completion timestamp. Never runs a model over log content. `confidence` is \"high\" only for structural signals, the run status and a step status; it is \"low\" for tentative leads and whenever the category came from the wording of a recorded reason, so confirm it rather than treating it as an established cause. `repositoryAccess` is the repository list this run was frozen with at start: `activated: false` is the bridge, where `enabledKeys` is meaningless and everything the installation exposes was reachable, and null means the run started before the list was recorded, which is not the same as an empty one. It is carried beside the diagnosis, never as evidence for it: the classifier reads the run status, the error and the steps and nothing else.",
     inputSchema: runIdInputSchema.strict(),
     annotations: policyFor("runs.diagnose").annotations,
   },
@@ -607,7 +608,7 @@ export const MCP_TOOL_CATALOG = {
   },
   "repositories.upsert": {
     description:
-      "Save a repository's profile, minting its next version. The write the Repositories entry screen's Save bar performs. Identity is `provider` plus `path`; `repositoryId` is the row you believe you are editing, and 0 means a repository the catalog has never seen, which this call creates. A non-zero id that does not match the provider and path is refused with CONFLICT rather than reconciled. Fields you omit are left EXACTLY as the stored profile has them: this tool reads the current profile and lays your fields over it, because the underlying route defaults an omitted field to empty rather than leaving it alone. Pass `expectedProfileVersion` (the `profileVersion` repositories.get reported, 0 for a repository with no profile) to make a concurrent edit a CONFLICT instead of a silent overwrite, since the merge is done against the profile as THIS call read it; the refusal is the service's own, raised by the statement that writes, so a save that lands between your read and your write is caught rather than raced. `scriptGroups` is the FULL SET that should remain, not a patch: a group you leave out of the object is deleted, exactly as the dashboard's Scripts tab saves it, and its shape is the repository-scripts entry verbatim (`docs/architecture/repository-scripts.md` is the contract). A script group name the engine cannot resolve is refused with VALIDATION_FAILED naming it, rather than saved into a repository whose checks would then never run. `enabled` applies only to a repository this call CREATES and is ignored for one that already exists: writing a profile says what to run in a repository, never that the agent may enter one, which is repositories.set_enabled. `reason` is stored on the version and shown in the History tab. Idempotent per idempotencyKey.",
+      "Save a repository's profile, minting its next version. The write the Repositories entry screen's Save bar performs. Identity is `provider` plus `path`; `repositoryId` is the row you believe you are editing, and 0 means a repository the catalog has never seen, which this call creates. A non-zero id that does not match the provider and path is refused with CONFLICT rather than reconciled, and so is a 0 for a provider and path the catalog already holds, because that write would land on the profile somebody configured. Fields you omit are left EXACTLY as the stored profile has them: absent stays absent all the way to the statement that writes, which carries the stored value forward. Clearing is explicit: send null for `scriptGroups`, `gateGroups` or `batchTimeoutMinutes`. Pass `expectedProfileVersion` (the `profileVersion` repositories.get reported, 0 for a repository with no profile) to make a concurrent edit a CONFLICT instead of a silent overwrite; the refusal is carried by the statement that writes, so a save that lands between your read and your write is caught rather than raced, and the refusal names the version to reload. `scriptGroups` is the FULL SET that should remain, not a patch: a group you leave out of the object is deleted, exactly as the dashboard's Scripts tab saves it, and its shape is the repository-scripts entry verbatim (`docs/architecture/repository-scripts.md` is the contract). A script group name the engine cannot resolve is refused with VALIDATION_FAILED naming it, rather than saved into a repository whose checks would then never run. `batchTimeoutMinutes` is how long this repository claims its checks need; a run spends one ceiling across every repository it composes and takes the largest claim among them, and null means the operator ceiling. `enabled` applies only to a repository this call CREATES and is ignored for one that already exists: writing a profile says what to run in a repository, never that the agent may enter one, which is repositories.set_enabled. `reason` is stored on the version and shown in the History tab. The reply says what the write actually did: `unchanged` is true when the profile already said everything you asked for, in which case no version was minted and `version` is the one that was already current, and `changedFields` names the fields that moved. `changedFields` is empty whenever `unchanged` is true and ALSO for a create whose first profile sets none of those fields, so read `unchanged` for whether anything happened. Idempotent per idempotencyKey.",
     inputSchema: z
       .object({
         repositoryId: z.number().int().min(0).max(REPOSITORY_ID_MAX),
@@ -629,6 +630,13 @@ export const MCP_TOOL_CATALOG = {
           .optional(),
         scriptGroups: repositoryScriptGroupsSchema.optional(),
         gateGroups: z.array(z.string().max(REPOSITORY_LABEL_MAX_LENGTH)).nullable().optional(),
+        batchTimeoutMinutes: z
+          .number()
+          .int()
+          .min(1)
+          .max(REPOSITORY_BATCH_TIMEOUT_MAX_MINUTES)
+          .nullable()
+          .optional(),
         enabled: z.boolean().optional(),
         expectedProfileVersion: z.number().int().min(0).optional(),
         reason: z.string().trim().min(1).max(REPOSITORY_REASON_MAX_LENGTH),

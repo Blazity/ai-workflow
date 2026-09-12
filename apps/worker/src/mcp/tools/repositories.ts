@@ -19,12 +19,11 @@
  * Two places where this surface is deliberately NOT a mirror of the HTTP routes,
  * both narrower:
  *
- * - `repositories.upsert` merges. The route defaults every field a request
- *   omits, and the dashboard compensates by sending the whole merged profile
- *   from a screen that has just read it. An agent has no screen, so this tool
- *   reads the stored profile and lays the caller's fields over it. That makes
- *   "omitted means unchanged" true here, and it is why `expectedProfileVersion`
- *   exists: the merge is against the profile THIS call read.
+ * - `repositories.upsert` refuses a `repositoryId` of 0 for a provider and path
+ *   the catalog already holds. The route reconciles it into an edit, which is
+ *   safe from a screen that has just been told the repository is new and is not
+ *   safe from an agent working off a stale list: the write would mint a version
+ *   on somebody's configured repository under a reason written for a new one.
  * - `repositories.activate` is owner only and binds to a digest of the
  *   population the caller read, because there is no dialog to render it in.
  */
@@ -32,11 +31,13 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import {
   DashboardAuthError,
+  REPOSITORY_PROFILE_FIELDS,
   repositoryCatalogKey,
   repositoryCatalogUpsertRequestSchema,
   type RepositoryCatalogClaimedRepository,
   type RepositoryCatalogEntry,
   type RepositoryCatalogState,
+  type RepositoryProfileField,
   type RepositoryProfileVersion,
 } from "@shared/contracts";
 import {
@@ -47,6 +48,7 @@ import {
   previewRepositoryImport,
   readRepositoryCatalog,
   readRepositoryCatalogEntry,
+  RepositoryProfileConflictError,
   saveRepositoryProfile,
   setRepositoryCatalogEnabled,
   suggestRepositoryProfile,
@@ -88,9 +90,9 @@ const SUGGEST_TIMEOUT_MS = REPOSITORY_PROFILE_DEADLINE_MS + REPOSITORY_SUGGESTIO
  *
  * The messages are the ones the dashboard already shows to people, so they are
  * safe to forward and they are the only actionable thing that survives: the
- * SDK's tool-error path sends the message and drops the code. Anything that is
- * not a `DashboardAuthError` is rethrown untouched, so the execute wrapper
- * turns it into INTERNAL_ERROR rather than leaking a host or a query.
+ * SDK's tool-error path sends the message and drops the code. Anything the
+ * cluster does not raise by name below is rethrown untouched, so the execute
+ * wrapper turns it into INTERNAL_ERROR rather than leaking a host or a query.
  *
  * `effectNotApplied` is true on every arm, and that is a claim about this
  * cluster rather than a convenience: each of these is raised by a role check, a
@@ -104,6 +106,22 @@ function throwPublicCatalogError(error: unknown): never {
       `This repository has had too many suggestions in the last hour. Try again in ${error.retryAfterSeconds} seconds.`,
       true,
       error.retryAfterSeconds * 1_000,
+      true,
+    );
+  }
+  if (error instanceof RepositoryProfileConflictError) {
+    // The route answers this one with a BODY rather than a bare 409, because
+    // the version to reload is the whole point of the refusal. MCP has no
+    // payload channel on an error -- the SDK forwards the message and drops the
+    // code -- so `currentVersion` is stated in the sentence instead of being
+    // left for the caller to go and look up.
+    throw new McpPublicError(
+      "CONFLICT",
+      `This repository is at profile version ${error.currentVersion}, not the expectedProfileVersion you sent. Somebody saved since you read it. Nothing was written. Read repositories.get again and send ${error.currentVersion} if you still want this save.`,
+      false,
+      undefined,
+      // Refused by the predicate the writing statement carries, so the write
+      // never happened and the idempotency key is free to reuse.
       true,
     );
   }
@@ -169,22 +187,14 @@ type EntryData = {
 /** Which fields one profile version moved compared with the version it
  *  replaced. The History tab computes exactly this in the dashboard; an agent
  *  reading a version list has the same question and no way to diff two blobs of
- *  markdown usefully on its own. */
-const PROFILE_FIELDS = [
-  "description",
-  "rules",
-  "relationships",
-  "scriptGroups",
-  "gateGroups",
-] as const;
-
-type ProfileField = (typeof PROFILE_FIELDS)[number];
-
+ *  markdown usefully on its own. The field list is the contract's own, the same
+ *  one an upsert reports back in `changedFields`, so a field added to a profile
+ *  cannot be added to the write path and silently stay out of the history. */
 function changedProfileFields(
   previous: RepositoryProfileVersion | undefined,
   version: RepositoryProfileVersion,
-): ProfileField[] {
-  return PROFILE_FIELDS.filter((field) => {
+): RepositoryProfileField[] {
+  return REPOSITORY_PROFILE_FIELDS.filter((field) => {
     const before = previous === undefined ? undefined : previous[field];
     return JSON.stringify(before ?? null) !== JSON.stringify(version[field] ?? null);
   });
@@ -195,7 +205,7 @@ type VersionsData = {
   versions: (RepositoryProfileVersion & {
     /** Null when the version this one replaced is not on the page: the diff
      *  would be against a version the caller was never given. */
-    changedFields: ProfileField[] | null;
+    changedFields: RepositoryProfileField[] | null;
   })[];
   /** Whether versions older than the last one listed exist. */
   hasMore: boolean;
@@ -369,13 +379,15 @@ export function registerRepositoryCatalogTools(
         // A create that would silently become an edit. The route accepts it and
         // the dashboard never sends it, because a screen that sends 0 has just
         // been told this repository is new. An agent working from a stale list
-        // has not, and the merge below would then be built on an EMPTY baseline
-        // and clear the description, the rules and the script groups of a
-        // repository somebody configured. Refused with the id to use instead.
+        // has not: identity is the provider and path, so the write would land
+        // on the configured repository that already holds them and mint a
+        // version on it under a reason written for a new one. Refused with the
+        // id to use instead, rather than reconciled, exactly as a mismatched
+        // non-zero id is.
         if (input.repositoryId === 0 && existing) {
           throw new McpPublicError(
             "CONFLICT",
-            `${key} is already in the catalog as repositoryId ${existing.id}. Read it with repositories.get and send that id, so the fields you omit are merged from its profile instead of cleared.`,
+            `${key} is already in the catalog as repositoryId ${existing.id}. Read it with repositories.get and send that id, so you are editing the profile you meant to edit.`,
             false,
             undefined,
             true,
@@ -404,45 +416,36 @@ export function registerRepositoryCatalogTools(
             true,
           );
         }
-        // The pre-check, not the lock. `saveRepositoryProfile` refuses a stale
-        // expectation from inside the statement that writes, which is what
-        // makes it atomic; this only turns the common case into a refusal that
-        // names the version the caller is behind, before a merge is assembled
-        // against a profile that has already moved.
-        if (
-          input.expectedProfileVersion !== undefined &&
-          input.expectedProfileVersion !== (row?.profileVersion ?? 0)
-        ) {
-          throw new McpPublicError(
-            "CONFLICT",
-            `This repository is at profile version ${row?.profileVersion ?? 0}, not ${input.expectedProfileVersion}. Somebody saved since you read it, and the fields you omitted would be merged from a profile that no longer exists. Read repositories.get again.`,
-            false,
-            undefined,
-            true,
-          );
-        }
-
-        const current =
-          row === null || row === undefined
-            ? null
-            : (await readRepositoryCatalogEntry(row.id)).currentProfile;
-        // Omitted means unchanged. The stored profile is the baseline and the
-        // caller's fields are laid over it, which is what the dashboard does
-        // from a screen that has just read the same profile.
+        // Absent stays absent, all the way to the statement that writes.
+        // `saveRepositoryProfile` forwards only the fields the request carried
+        // and the upsert carries every other stored value forward, so there is
+        // no baseline to read here and no window between reading it and
+        // writing: an explicit `null` on a nullable field is how a caller
+        // clears one, and an omitted field is never a clear.
         const parsed = repositoryCatalogUpsertRequestSchema.safeParse({
           provider: input.provider,
           path: input.path,
-          displayName: input.displayName ?? row?.displayName,
-          defaultBranch: input.defaultBranch ?? row?.defaultBranch,
-          description: input.description ?? current?.description ?? "",
-          rules: input.rules ?? current?.rules ?? "",
-          relationships: input.relationships ?? current?.relationships ?? [],
-          scriptGroups:
-            input.scriptGroups === undefined
-              ? (current?.scriptGroups ?? null)
-              : input.scriptGroups,
-          gateGroups:
-            input.gateGroups === undefined ? (current?.gateGroups ?? null) : input.gateGroups,
+          ...(input.displayName === undefined ? {} : { displayName: input.displayName }),
+          ...(input.defaultBranch === undefined
+            ? {}
+            : { defaultBranch: input.defaultBranch }),
+          ...(input.description === undefined ? {} : { description: input.description }),
+          ...(input.rules === undefined ? {} : { rules: input.rules }),
+          ...(input.relationships === undefined
+            ? {}
+            : { relationships: input.relationships }),
+          ...(input.scriptGroups === undefined ? {} : { scriptGroups: input.scriptGroups }),
+          ...(input.gateGroups === undefined ? {} : { gateGroups: input.gateGroups }),
+          ...(input.batchTimeoutMinutes === undefined
+            ? {}
+            : { batchTimeoutMinutes: input.batchTimeoutMinutes }),
+          // The concurrency token, carried by the statement itself rather than
+          // checked here first: the service refuses a stale expectation from
+          // inside the write, so a save that lands between this call's read of
+          // the catalog and its write is caught instead of raced.
+          ...(input.expectedProfileVersion === undefined
+            ? {}
+            : { expectedProfileVersion: input.expectedProfileVersion }),
           // Ignored by the service for a repository that already exists, and
           // this passes it only for one it is creating, so the field can never
           // read as a second, quieter way to grant access.
@@ -470,6 +473,15 @@ export function registerRepositoryCatalogTools(
           return {
             repository: saved.repository,
             version: saved.version ?? saved.repository.profileVersion,
+            // Both straight from the service, because the write can now decide
+            // it has nothing to do: a save that asks for what the profile
+            // already says mints no version, and a caller retrying a save it is
+            // unsure landed has to be able to tell "already done" from "done
+            // again". `changedFields` is empty whenever `unchanged` is true and
+            // also for a create whose first profile sets none of these fields,
+            // so it never answers that question on its own.
+            unchanged: saved.unchanged ?? false,
+            changedFields: saved.changedFields ?? [],
           };
         } catch (error) {
           throwPublicCatalogError(error);
@@ -565,17 +577,16 @@ export function registerRepositoryCatalogTools(
         try {
           const outcome = await activateRepositoryCatalog({
             actor: catalogActor(deps),
-            // `reason` is required by this tool and belongs on the activation
-            // state beside who ended the bridge and when. The service takes it
-            // as of the catalog stage that adds the column; until this tree
-            // carries that signature there is nowhere to pass it, and the MCP
-            // audit row is the only record of it.
             // The digest already proves the caller read exactly this
             // population, which is what the route's acknowledged list proves
             // for a dialog. Echoing the keys the same read produced keeps the
             // service's own check as the last word: a repository that takes a
             // claim between the two reads is still refused below.
             acknowledgedRepositoryKeys: preview.claimed.map((entry) => entry.key),
+            // Persisted as the state row's activation_reason, the same column
+            // the route writes, so the record of why the bridge ended survives
+            // outside the MCP audit row.
+            reason: input.reason,
           });
           if (outcome.kind === "unacknowledged") {
             throw new McpPublicError(

@@ -7,6 +7,7 @@ import type {
   ReplayAttemptOutcome,
   ReplaySanitizedEnvelope,
   RunDetail,
+  RunRepositoryAccess,
   RunStep,
   SettingsSnapshot,
   WorkflowReplayAttemptDetail,
@@ -64,6 +65,26 @@ async function loadSanitizedRun(
   const loaded = await services.fetchRunDetail(runId, issueTrackerBaseUrl());
   if (!loaded) throw new McpPublicError("NOT_FOUND", "Run not found", false);
   return sanitizeRunDetailForResponse({ run: loaded.run, steps: loaded.steps });
+}
+
+/**
+ * Which repositories this run could touch, exactly as the row recorded it.
+ *
+ * Frozen when the run started, so it answers "could this run have reached that
+ * repository?" with the list the run began with rather than with the catalog as
+ * it stands now. Null for a run that started before the column existed, which
+ * is NOT the same as an empty list; `activated: false` is the bridge, where the
+ * enabled keys are meaningless and everything the installation exposes was
+ * reachable. Passed through untouched rather than flattened, because a summary
+ * of it would have to take a position on the bridge that the contract
+ * deliberately leaves to the reader.
+ *
+ * Not on McpRunSummary: tickets.list_runs builds its summaries from a list page
+ * that carries no such column, and a field that is null there for a reason
+ * different from the reason it is null here would be worse than absent.
+ */
+function runRepositoryAccess(run: RunDetail): RunRepositoryAccess | null {
+  return run.repositoryAccess ?? null;
 }
 
 function toRunSummary(run: RunDetail): McpRunSummary {
@@ -397,7 +418,11 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
         operation: async () => {
           const { run } = await loadSanitizedRun(deps.services, input.runId);
           const summary = toRunSummary(run);
-          return { ...summary, pollAfterMs: pollAfterMs(summary.terminal) };
+          return {
+            ...summary,
+            repositoryAccess: runRepositoryAccess(run),
+            pollAfterMs: pollAfterMs(summary.terminal),
+          };
         },
       });
       return {
@@ -551,7 +576,16 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
               error: step.error ? { code: step.error.code, message: step.error.message } : null,
             })),
           };
-          return diagnoseRun(diagnoseInput);
+          // Beside the diagnosis, not inside it: diagnoseRun is a pure
+          // classifier over status, error and steps, and a run's repository
+          // access is a fact about the run rather than evidence for a category.
+          // It is here because "could this run have reached that repository?"
+          // is the question asked while reading a failure, and the alternative
+          // is a second call to runs.get for a field runs.get already has.
+          return {
+            ...diagnoseRun(diagnoseInput),
+            repositoryAccess: runRepositoryAccess(run),
+          };
         },
       });
       return {

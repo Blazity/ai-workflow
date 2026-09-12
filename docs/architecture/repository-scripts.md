@@ -582,7 +582,11 @@ the next run. A repository the run never opened contributes nothing either way.
 The run header states the frozen list (`repositoryAccess` on `RunDetail`,
 rendered by `apps/dashboard/lib/run-repository-access.ts`), because the question
 asked afterwards is what the run could reach and not what the catalog says
-today. And the rules have to be non-empty: a repository nobody has configured
+today. `runs.get` and `runs.diagnose` carry the same field verbatim, so an agent
+reading a failure has the same answer without a second call: `activated: false`
+is the bridge, where the keys mean nothing and everything the installation
+exposes was reachable, and `null` means the run started before the list was
+recorded, which is not an empty list. And the rules have to be non-empty: a repository nobody has configured
 yet produces no heading rather than an empty one. The read is `listRepositoryRules` in
 `apps/worker/src/db/repositories/repository-catalog.ts`, one query over the same
 current-profile-version relation `getCurrentCheckConfiguration` composes the
@@ -687,17 +691,22 @@ answer.
 
 Seven things differ from the HTTP routes the dashboard calls, each on purpose:
 
-- **Omitted fields keep their stored value.** The dashboard sends the whole
-  merged profile because `PUT /api/v1/repository-catalog/:id` defaults what a
-  request omits. `repositories.upsert` reads the stored profile and merges, so a
-  caller that sends only `rules` does not silently clear the description. It also
-  takes an optional `expectedProfileVersion` and refuses with `CONFLICT` when the
-  profile moved since the caller read it; the atomic refusal is the service's
-  own, raised by the statement that writes, and the tool's check only turns the
-  common case into a message that names the version you are behind.
-  `scriptGroups` is the exception to "omitted means unchanged" and matches the
-  route: send the full set that should remain, because a group left out of that
-  field is deleted.
+- **A create is never quietly an edit.** Omitted means unchanged on both
+  surfaces: a request carries only the fields it sets and the statement that
+  writes carries every other stored value forward, so a caller that sends only
+  `rules` clears nothing. Clearing is explicit, with a `null` on `scriptGroups`,
+  `gateGroups` or `batchTimeoutMinutes`; `scriptGroups` is otherwise the full set
+  that should remain, so a group left out of that object is deleted. Where the
+  two surfaces differ is `repositoryId: 0`. The route reconciles it into an edit
+  of the row that already holds that provider and path, which is safe from a
+  screen that has just been told the repository is new and is not safe from an
+  agent working off a stale list, so `repositories.upsert` refuses it with
+  `CONFLICT` naming the id to send instead. Both take `expectedProfileVersion`
+  and answer a stale one with the version to reload; that refusal is carried by
+  the statement that writes, so it cannot be raced. The reply says what the write
+  did: `unchanged` is true when the profile already said everything the call
+  asked for, in which case no version was minted, and `changedFields` names what
+  moved.
 - **Activation is confirmed against what the caller was shown.**
   `repositories.activate_preview` returns a `previewDigest` over the two
   populations and the run claims; `repositories.activate` takes that digest back

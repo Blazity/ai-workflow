@@ -385,6 +385,8 @@ describe("repositories.upsert", () => {
 
     expect(result.isError).not.toBe(true);
     expect(data.version).toBe(2);
+    // Named by the write itself, not inferred from the version moving.
+    expect(data).toMatchObject({ unchanged: false, changedFields: ["rules"] });
     // Read back through a token that may read: a write-only token gets this far
     // and no further, which is the point of splitting the two scopes.
     const reader = await connectedClient();
@@ -394,12 +396,102 @@ describe("repositories.upsert", () => {
     expect(after.currentProfile).toMatchObject({
       // Given, so it moved.
       rules: "Ask before renaming a table",
-      // Omitted, so it did NOT: the underlying route defaults an omitted field
-      // to empty, and this tool merges against the stored profile instead.
+      // Omitted, so it did NOT: an absent field never reaches the statement,
+      // which carries the stored value forward.
       description: "The public API",
       scriptGroups: { provider: "github", repoPath: "acme/api", groups: {} },
       reason: "the old rule was about a migration tool we dropped",
     });
+  });
+
+  it("says so when the save asked for nothing the profile does not already say", async () => {
+    const id = await seedRepository({
+      path: "acme/api",
+      enabled: true,
+      description: "The public API",
+    });
+    const client = await connectedClient();
+
+    const data = dataOf(
+      await client.callTool({
+        name: "repositories.upsert",
+        arguments: {
+          repositoryId: id,
+          provider: "github",
+          path: "acme/api",
+          description: "The public API",
+          reason: "retrying a save I am not sure landed",
+          idempotencyKey: KEY_ONE,
+        },
+      }),
+    );
+
+    // A row per save that changed nothing would turn the History tab into a log
+    // of clicks, so no version is minted and the reply says which of the two
+    // happened rather than leaving it to be read off a number that did not move.
+    expect(data).toMatchObject({ unchanged: true, version: 1, changedFields: [] });
+    const after = dataOf(
+      await client.callTool({ name: "repositories.get", arguments: { repositoryId: id } }),
+    );
+    expect(after.versionsCount).toBe(1);
+  });
+
+  it("clears a nullable field only when the call says null", async () => {
+    const id = await seedRepository({
+      path: "acme/api",
+      enabled: true,
+      scriptGroups: {
+        provider: "github",
+        repoPath: "acme/api",
+        groups: { "unit-tests": { commands: ["pnpm test"] } },
+      },
+    });
+    const client = await connectedClient();
+
+    const data = dataOf(
+      await client.callTool({
+        name: "repositories.upsert",
+        arguments: {
+          repositoryId: id,
+          provider: "github",
+          path: "acme/api",
+          scriptGroups: null,
+          reason: "no checks apply to this repository any more",
+          idempotencyKey: KEY_ONE,
+        },
+      }),
+    );
+
+    expect(data).toMatchObject({ unchanged: false, changedFields: ["scriptGroups"] });
+    const after = dataOf(
+      await client.callTool({ name: "repositories.get", arguments: { repositoryId: id } }),
+    );
+    expect(after.currentProfile).toMatchObject({ scriptGroups: null, version: 2 });
+  });
+
+  it("carries the whole-run checks ceiling this repository asks for", async () => {
+    const id = await seedRepository({ path: "acme/api", enabled: true });
+    const client = await connectedClient();
+
+    const data = dataOf(
+      await client.callTool({
+        name: "repositories.upsert",
+        arguments: {
+          repositoryId: id,
+          provider: "github",
+          path: "acme/api",
+          batchTimeoutMinutes: 45,
+          reason: "the integration suite needs longer than the default",
+          idempotencyKey: KEY_ONE,
+        },
+      }),
+    );
+
+    expect(data).toMatchObject({ changedFields: ["batchTimeoutMinutes"] });
+    const after = dataOf(
+      await client.callTool({ name: "repositories.get", arguments: { repositoryId: id } }),
+    );
+    expect(after.currentProfile).toMatchObject({ batchTimeoutMinutes: 45 });
   });
 
   it("creates a repository the catalog has never seen, switched off", async () => {
@@ -429,7 +521,7 @@ describe("repositories.upsert", () => {
     });
   });
 
-  it("refuses a create for a path the catalog already holds instead of clearing it", async () => {
+  it("refuses a create for a path the catalog already holds rather than editing it", async () => {
     const id = await seedRepository({
       path: "acme/api",
       enabled: true,
@@ -449,6 +541,10 @@ describe("repositories.upsert", () => {
       },
     });
 
+    // The route reconciles this into an edit. Here it is refused with the id to
+    // use, because an agent that sends 0 believes it is creating and the write
+    // would otherwise mint a version on somebody's configured repository under
+    // a reason written for a new one.
     expect(errorOf(result)).toMatchObject({
       code: "CONFLICT",
       message: expect.stringContaining(`repositoryId ${id}`),
@@ -476,10 +572,18 @@ describe("repositories.upsert", () => {
       },
     });
 
+    // The service's own refusal, raised by the predicate the writing statement
+    // carries rather than by a read this tool made first, so the version it
+    // names is the one the write saw and nothing landed.
     expect(errorOf(result)).toMatchObject({
       code: "CONFLICT",
       message: expect.stringContaining("profile version 1"),
     });
+    expect(errorOf(result).message).toContain("Nothing was written");
+    const after = dataOf(
+      await client.callTool({ name: "repositories.get", arguments: { repositoryId: id } }),
+    );
+    expect(after.repository).toMatchObject({ profileVersion: 1 });
   });
 
   it("refuses a script group name the engine could never resolve", async () => {
@@ -848,7 +952,10 @@ describe("repositories.activate", () => {
 
   it("reports an already activated catalog rather than pretending it was off", async () => {
     await seedRepository({ path: "acme/api", enabled: true });
-    await activateRepositoryCatalog(db, { actorId: "user-execute" });
+    await activateRepositoryCatalog(db, {
+      actorId: "user-execute",
+      reason: "seeded activated",
+    });
     const client = await connectedClient();
 
     const data = dataOf(
