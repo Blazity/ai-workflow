@@ -394,7 +394,7 @@ export async function resolveChecksProvisioningStep(): Promise<{
     const { getConnectedCurrentPrePrCheckConfigRow } = await import(
       "../../db/repositories/pre-pr-checks.js"
     );
-    const { repoScriptsConfigSchema } = await import("../../pre-pr-checks/config.js");
+    const { repoScriptsConfigSchema } = await import("../pre-pr-checks/config.js");
     const current = await getConnectedCurrentPrePrCheckConfigRow();
     if (!current) return { ceilingMs: fallback, config: null };
     const parsed = repoScriptsConfigSchema.safeParse(current.config);
@@ -444,7 +444,7 @@ export async function loadPrePrCheckConfigStep(): Promise<{
   const { getConnectedCurrentPrePrCheckConfigRow } = await import(
     "../../db/repositories/pre-pr-checks.js"
   );
-  const { emptyPrePrCheckConfig } = await import("../../pre-pr-checks/config.js");
+  const { emptyPrePrCheckConfig } = await import("../pre-pr-checks/config.js");
   const { logger } = await import("../../infra/logger.js");
   const current = await getConnectedCurrentPrePrCheckConfigRow();
   logger.info(
