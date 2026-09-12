@@ -33,9 +33,9 @@ import {
 import { getTriggerRejectionsToday } from "../dispatch/index.js";
 import {
   describeWorkflowDefinitionIssues,
-  validateWorkflowDefinitionIssuesForDeployment,
   workflowDefinitionV2Schema,
-} from "../../workflow-definition/schema.js";
+} from "@shared/workflow-graph";
+import { validateWorkflowDefinitionIssuesForDeployment } from "../../workflow-definition/deployment-validation.js";
 import {
   syncConnectedLiveDefinitionTriggers,
   syncLiveDefinitionTriggers,

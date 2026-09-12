@@ -85,11 +85,19 @@ per public module, not one per file.
 
 2026-09-12: `packages/workflow-graph` now exists on disk, created by stage 0 of
 [docs/plans/2026-09-11-workflow-graph-package.md](../plans/2026-09-11-workflow-graph-package.md)
-with the v2 binding and branch modules as its first content. It declares only
-the dependencies it imports, so the `conditions` edge this ADR allows and the
-zod dependency the plan foresees are added by the stage that first needs them.
-Its second consumer is the dashboard, which the later stages of that plan
-connect; until then the worker is the only importer.
+with the v2 binding and branch modules as its first content. Stage 4 added the
+definition schema and its stored-shape upgrade (`schema.ts`), the structural
+graph rules (`graph-issues.ts`) and the two size caps (`limits.ts`), and with
+them the zod dependency this ADR foresaw; the `conditions` edge is still unused
+and arrives with the stage that needs it. The deployment half of the old
+`workflow-definition/schema.ts` stayed in the worker, in
+`apps/worker/src/workflow-definition/deployment-validation.ts`: it reads the
+environment, the block registry and a clock, and three engine-tier callers
+(the candidate validator, the scenario harness and the run loader's step) call
+it directly, which `engine -> services` forbids until stage 5 inverts those
+call sites into package policies. Its second consumer is the dashboard, which
+the later stages of that plan connect; until then the worker is the only
+importer.
 
 The engine, the adapters, the services and the DB layer have one consumer (the
 worker) and stay directories inside `apps/worker/src`, fenced by dependency
@@ -132,7 +140,7 @@ The 28 directories:
 | `system-health/` | services | mixed, split by file as above |
 | `test-support/` | testing | |
 | `webhook-trigger/` | services | mixed, split by file as above |
-| `workflow-definition/` | engine (`engine/definition/`) | `store.ts` to `db/repositories/definitions` in stage 7; pure schema, validation, bindings, scheduler, interpreter to `packages/workflow-graph` in stage 12 |
+| `workflow-definition/` | engine (`engine/definition/`) | `store.ts` to `db/repositories/definitions` in stage 7; pure schema, validation, bindings, scheduler, interpreter to `packages/workflow-graph` in stage 12 (schema and graph rules moved; `deployment-validation.ts` waits for stage 5's policies before it can sit in `services/`) |
 | `workflows/` | engine | |
 
 The 8 root files:

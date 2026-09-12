@@ -11,7 +11,7 @@
  */
 import type { StoredWorkflowDefinition } from "@shared/contracts";
 import { workflowDefinitionSchemaVersionOf } from "@shared/contracts";
-import { upgradeStoredWorkflowDefinition } from "./schema.js";
+import { upgradeStoredWorkflowDefinition } from "@shared/workflow-graph";
 
 /** The discriminator is the only fact this reader needs to classify a legacy
  *  row. Historical content is deliberately not parsed, normalized or trimmed. */

@@ -7,9 +7,7 @@ import {
   testBlockData,
   testDeploymentIssues,
 } from "../../test-support/block-contracts.js";
-import {
-  workflowDefinitionV2Schema,
-} from "../schema.js";
+import { workflowDefinitionV2Schema } from "@shared/workflow-graph";
 import {
   executorRunsOf,
   expectNeverInvoked,

@@ -1,0 +1,1011 @@
+[
+  {
+    "fixture": "snapshot/arthur-post-pr-review-v1.json",
+    "issues": []
+  },
+  {
+    "fixture": "snapshot/investigate-triage-v1.json",
+    "issues": []
+  },
+  {
+    "fixture": "snapshot/loop-branch-early-exit-v1.json",
+    "issues": []
+  },
+  {
+    "fixture": "snapshot/loop-region-side-output-v1.json",
+    "issues": []
+  },
+  {
+    "fixture": "snapshot/loop-two-region-exits-v1.json",
+    "issues": []
+  },
+  {
+    "fixture": "snapshot/post-pr-autofix-v1.json",
+    "issues": []
+  },
+  {
+    "fixture": "snapshot/post-pr-review-v1.json",
+    "issues": []
+  },
+  {
+    "fixture": "snapshot/schedule-open-pr-v1.json",
+    "issues": []
+  },
+  {
+    "fixture": "template/review/ticket-workflow",
+    "issues": []
+  },
+  {
+    "fixture": "template/review/human-approved-plan",
+    "issues": []
+  },
+  {
+    "fixture": "template/review/review-fix-after-pr",
+    "issues": []
+  },
+  {
+    "fixture": "template/review/reviewed-ticket-workflow",
+    "issues": []
+  },
+  {
+    "fixture": "template/review/post-pr-review",
+    "issues": []
+  },
+  {
+    "fixture": "template/review/post-pr-autofix",
+    "issues": []
+  },
+  {
+    "fixture": "template/review/fully-modular",
+    "issues": []
+  },
+  {
+    "fixture": "template/review/webhook-ticket-triage",
+    "issues": []
+  },
+  {
+    "fixture": "template/review/support-investigation",
+    "issues": []
+  },
+  {
+    "fixture": "template/no-review/ticket-workflow",
+    "issues": []
+  },
+  {
+    "fixture": "template/no-review/human-approved-plan",
+    "issues": []
+  },
+  {
+    "fixture": "template/no-review/review-fix-after-pr",
+    "issues": []
+  },
+  {
+    "fixture": "template/no-review/reviewed-ticket-workflow",
+    "issues": []
+  },
+  {
+    "fixture": "template/no-review/post-pr-review",
+    "issues": []
+  },
+  {
+    "fixture": "template/no-review/post-pr-autofix",
+    "issues": []
+  },
+  {
+    "fixture": "template/no-review/fully-modular",
+    "issues": []
+  },
+  {
+    "fixture": "template/no-review/webhook-ticket-triage",
+    "issues": []
+  },
+  {
+    "fixture": "template/no-review/support-investigation",
+    "issues": []
+  },
+  {
+    "fixture": "template/leak-review/ticket-workflow",
+    "issues": []
+  },
+  {
+    "fixture": "template/leak-review/human-approved-plan",
+    "issues": []
+  },
+  {
+    "fixture": "template/leak-review/review-fix-after-pr",
+    "issues": []
+  },
+  {
+    "fixture": "template/leak-review/reviewed-ticket-workflow",
+    "issues": []
+  },
+  {
+    "fixture": "template/leak-review/post-pr-review",
+    "issues": []
+  },
+  {
+    "fixture": "template/leak-review/post-pr-autofix",
+    "issues": []
+  },
+  {
+    "fixture": "template/leak-review/fully-modular",
+    "issues": []
+  },
+  {
+    "fixture": "template/leak-review/webhook-ticket-triage",
+    "issues": []
+  },
+  {
+    "fixture": "template/leak-review/support-investigation",
+    "issues": []
+  },
+  {
+    "fixture": "template/codex/ticket-workflow",
+    "issues": []
+  },
+  {
+    "fixture": "template/codex/human-approved-plan",
+    "issues": []
+  },
+  {
+    "fixture": "template/codex/review-fix-after-pr",
+    "issues": []
+  },
+  {
+    "fixture": "template/codex/reviewed-ticket-workflow",
+    "issues": []
+  },
+  {
+    "fixture": "template/codex/post-pr-review",
+    "issues": []
+  },
+  {
+    "fixture": "template/codex/post-pr-autofix",
+    "issues": []
+  },
+  {
+    "fixture": "template/codex/fully-modular",
+    "issues": []
+  },
+  {
+    "fixture": "template/codex/webhook-ticket-triage",
+    "issues": []
+  },
+  {
+    "fixture": "template/codex/support-investigation",
+    "issues": []
+  },
+  {
+    "fixture": "run-load/ticket-workflow (no environment check)",
+    "issues": []
+  },
+  {
+    "fixture": "run-load/ticket-workflow (environment checked)",
+    "issues": [
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "prepare",
+        "path": "/nodes/1/configuration",
+        "message": "Block \"prepare\" (prepare_workspace) is unavailable: No version-control provider is configured."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "planning",
+        "path": "/nodes/2/configuration",
+        "message": "Block \"planning\" (planning_agent) is unavailable: Claude credentials are not configured."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "implementation",
+        "path": "/nodes/3/configuration",
+        "message": "Block \"implementation\" (implementation_agent) is unavailable: Claude credentials are not configured."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "review",
+        "path": "/nodes/4/configuration",
+        "message": "Block \"review\" (review_agent) is unavailable: Claude credentials are not configured."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "checks",
+        "path": "/nodes/5/configuration",
+        "message": "Block \"checks\" (run_pre_pr_checks) is unavailable: No version-control provider is configured."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "finalize",
+        "path": "/nodes/6/configuration",
+        "message": "Block \"finalize\" (finalize_workspace) is unavailable: No version-control provider is configured."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "open-pr",
+        "path": "/nodes/7/configuration",
+        "message": "Block \"open-pr\" (open_pr) is unavailable: No version-control provider is configured."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "slack",
+        "path": "/nodes/8/configuration",
+        "message": "Block \"slack\" (send_slack_message) is unavailable: Slack messaging is not configured."
+      }
+    ]
+  },
+  {
+    "fixture": "graph/reserved-and-unaddressable-ids",
+    "issues": [
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "entry",
+        "path": "/nodes/0/id",
+        "message": "Block id \"entry\" is reserved for the active trigger input."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "1bad",
+        "path": "/nodes/1/id",
+        "message": "Block id \"1bad\" is not addressable; use a letter or underscore followed by letters, numbers, underscores, or hyphens."
+      }
+    ]
+  },
+  {
+    "fixture": "graph/duplicate-node-id",
+    "issues": [
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "twin",
+        "path": "/nodes/2/id",
+        "message": "Block id \"twin\" is used more than once."
+      }
+    ]
+  },
+  {
+    "fixture": "graph/no-trigger",
+    "issues": [
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": null,
+        "path": "/nodes",
+        "message": "Workflow must contain at least one trigger block."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "done",
+        "message": "Block \"done\" is not reachable from a trigger."
+      }
+    ]
+  },
+  {
+    "fixture": "graph/edge-endpoints",
+    "issues": [
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": null,
+        "path": "/edges/1/id",
+        "message": "Connection id \"same\" is used more than once."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "ticket",
+        "path": "/edges/1",
+        "message": "Duplicate connection from \"ticket\" to \"done\"."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": null,
+        "path": "/edges/2/from",
+        "message": "Connection references an unknown source block \"ghost\"."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": null,
+        "path": "/edges/3/to",
+        "message": "Connection references an unknown target block \"phantom\"."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "done",
+        "path": "/edges/4",
+        "message": "Block \"done\" cannot connect to itself."
+      }
+    ]
+  },
+  {
+    "fixture": "graph/ports",
+    "issues": [
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "decide",
+        "path": "/edges/1/fromPort",
+        "message": "Connection from \"decide\" cannot use an execution-failure port in a v2 workflow."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "decide",
+        "path": "/edges/2/fromPort",
+        "message": "Connection from \"decide\" uses unknown port \"maybe\" of block type branch."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "decide",
+        "path": "/edges/3/fromPort",
+        "message": "Connection from \"decide\" must specify a port (true/false)."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "done",
+        "path": "/edges/4",
+        "message": "Terminal block \"done\" (terminate) cannot have outgoing connections."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "decide",
+        "message": "Branch \"decide\" must have its \"false\" port connected."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": null,
+        "message": "Blocks \"decide\" -> \"done\" -> \"decide\" form a cycle that does not pass through a Loop block."
+      },
+      {
+        "code": "invalid_configuration",
+        "severity": "error",
+        "nodeId": "decide",
+        "path": "/nodes/1/configuration/conditions",
+        "message": "Block \"decide\" (branch) has invalid configuration: at least one condition is required."
+      }
+    ]
+  },
+  {
+    "fixture": "graph/branch-ports-unconnected",
+    "issues": [
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "decide",
+        "message": "Branch \"decide\" must have its \"true\" port connected."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "decide",
+        "message": "Branch \"decide\" must have its \"false\" port connected."
+      },
+      {
+        "code": "invalid_configuration",
+        "severity": "error",
+        "nodeId": "decide",
+        "path": "/nodes/1/configuration/conditions/0/reference",
+        "message": "Block \"decide\" (branch) has invalid configuration: reference \"steps.entry.output.ticket.key\" is not available when this Branch runs."
+      }
+    ]
+  },
+  {
+    "fixture": "graph/loop-ports-and-back-edge",
+    "issues": [
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "retry",
+        "message": "Loop \"retry\" with onExhaust \"continue\" must have its \"exhausted\" port connected."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "retry",
+        "message": "Loop \"retry\"'s continue port must lead back to it."
+      }
+    ]
+  },
+  {
+    "fixture": "graph/cycle-without-loop",
+    "issues": [
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": null,
+        "message": "Blocks \"first\" -> \"second\" -> \"first\" form a cycle that does not pass through a Loop block."
+      }
+    ]
+  },
+  {
+    "fixture": "graph/two-loops-and-finalize-in-cycle",
+    "issues": [
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "finalize",
+        "message": "Finalize Workspace block \"finalize\" cannot execute inside a Loop cycle."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": null,
+        "message": "Blocks [\"finalize\", \"inner\", \"outer\"] form a cycle region with 2 Loop blocks; each cycle region must contain exactly one."
+      }
+    ]
+  },
+  {
+    "fixture": "graph/unreachable-block",
+    "issues": [
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "orphan",
+        "message": "Block \"orphan\" is not reachable from a trigger."
+      }
+    ]
+  },
+  {
+    "fixture": "graph/binding-targets",
+    "issues": [
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "comment",
+        "path": "/nodes/1/additionalInputs/1/name",
+        "message": "Block \"comment\" defines additional input \"self\" more than once."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "comment",
+        "path": "/nodes/1/additionalInputs/2/name",
+        "message": "Block \"comment\" uses \"body\" as both a fixed and additional input."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "comment",
+        "path": "/nodes/1/inputs/body/reference",
+        "message": "Block \"comment\" references unknown block \"nowhere\"."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "comment",
+        "path": "/nodes/1/additionalInputs/0/binding/reference",
+        "message": "Block \"comment\" cannot bind an input to its own output."
+      },
+      {
+        "code": "binding.input_name",
+        "severity": "error",
+        "nodeId": "comment",
+        "path": "/nodes/1/additionalInputs/1/name",
+        "message": "Block \"comment\" has invalid or duplicate additional input \"self\"."
+      },
+      {
+        "code": "binding.input_name",
+        "severity": "error",
+        "nodeId": "comment",
+        "path": "/nodes/1/additionalInputs/2/name",
+        "message": "Block \"comment\" has invalid or duplicate additional input \"body\"."
+      },
+      {
+        "code": "binding.unavailable_reference",
+        "severity": "error",
+        "nodeId": "comment",
+        "path": "/nodes/1/inputs/body/reference",
+        "message": "Block \"comment\" input \"body\" references \"steps.nowhere.output.text\", which is not guaranteed when the block runs."
+      },
+      {
+        "code": "binding.unavailable_reference",
+        "severity": "error",
+        "nodeId": "comment",
+        "path": "/nodes/1/additionalInputs/0/binding/reference",
+        "message": "Block \"comment\" input \"self\" references \"steps.comment.output.text\", which is not guaranteed when the block runs."
+      }
+    ]
+  },
+  {
+    "fixture": "graph/control-blocks-reject-inputs",
+    "issues": [
+      {
+        "code": "unknown_input",
+        "severity": "error",
+        "nodeId": "shape",
+        "path": "/nodes/1/inputs/source",
+        "message": "Transform block \"shape\" does not accept generic input mappings."
+      },
+      {
+        "code": "unknown_input",
+        "severity": "error",
+        "nodeId": "shape",
+        "path": "/nodes/1/additionalInputs/0",
+        "message": "Transform block \"shape\" does not accept additional typed inputs."
+      },
+      {
+        "code": "unknown_input",
+        "severity": "error",
+        "nodeId": "decide",
+        "path": "/nodes/2/inputs/source",
+        "message": "Branch block \"decide\" does not accept generic input mappings."
+      },
+      {
+        "code": "binding.unknown_input",
+        "severity": "error",
+        "nodeId": "shape",
+        "path": "/nodes/1/inputs/source",
+        "message": "Block \"shape\" has unknown fixed input \"source\"."
+      },
+      {
+        "code": "binding.unknown_input",
+        "severity": "error",
+        "nodeId": "decide",
+        "path": "/nodes/2/inputs/source",
+        "message": "Block \"decide\" has unknown fixed input \"source\"."
+      },
+      {
+        "code": "invalid_configuration",
+        "severity": "error",
+        "nodeId": "decide",
+        "path": "/nodes/2/configuration/conditions/0/reference",
+        "message": "Block \"decide\" (branch) has invalid configuration: reference \"steps.entry.output.ticket.key\" is not available when this Branch runs."
+      }
+    ]
+  },
+  {
+    "fixture": "configuration/unsupported-and-invalid-params",
+    "issues": [
+      {
+        "code": "invalid_configuration",
+        "severity": "error",
+        "nodeId": "checks",
+        "path": "/nodes/1/configuration/mystery",
+        "message": "Block \"checks\" (run_checks) has invalid configuration: property \"mystery\" is not supported."
+      },
+      {
+        "code": "invalid_configuration",
+        "severity": "error",
+        "nodeId": "checks",
+        "path": "/nodes/1/configuration/commands",
+        "message": "Block \"checks\" (run_checks) has invalid configuration: Expected array, received string"
+      }
+    ]
+  },
+  {
+    "fixture": "configuration/profile-overridden-by-provider-and-model",
+    "issues": [
+      {
+        "code": "invalid_configuration",
+        "severity": "error",
+        "nodeId": "plan",
+        "path": "/nodes/1/configuration/harnessProfile",
+        "message": "Block \"plan\" (planning_agent) has invalid configuration: provider and model cannot override a pinned Harness Profile."
+      }
+    ]
+  },
+  {
+    "fixture": "schedule/missing-cron-title-description",
+    "issues": [
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "tick",
+        "path": "/nodes/0/configuration/cron",
+        "message": "Block \"tick\" (trigger_schedule) must configure a cron schedule before deployment."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "tick",
+        "path": "/nodes/0/configuration/taskTitle",
+        "message": "Block \"tick\" (trigger_schedule) must configure a task title before deployment."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "tick",
+        "path": "/nodes/0/configuration/taskDescription",
+        "message": "Block \"tick\" (trigger_schedule) must configure a task description before deployment."
+      }
+    ]
+  },
+  {
+    "fixture": "schedule/invalid-cron",
+    "issues": [
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "tick",
+        "path": "/nodes/0/configuration/cron",
+        "message": "Block \"tick\" (trigger_schedule) must configure a valid cron expression before deployment: CronPattern: invalid configuration format ('not a cron'), exactly five or six space separated parts are required."
+      }
+    ]
+  },
+  {
+    "fixture": "schedule/invalid-timezone",
+    "issues": [
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "tick",
+        "path": "/nodes/0/configuration/timezone",
+        "message": "Block \"tick\" (trigger_schedule) must configure a known IANA timezone before deployment: Unknown IANA timezone \"Middle/Earth\"."
+      }
+    ]
+  },
+  {
+    "fixture": "schedule/below-minimum-period",
+    "issues": [
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "tick",
+        "path": "/nodes/0/configuration/cron",
+        "message": "Block \"tick\" (trigger_schedule) must leave at least 15 minutes between runs before deployment: Expression \"* * * * *\" fires every 1 minute at its closest, the minimum is 15 minutes. Agent runs occupy a small shared pool, so a schedule firing faster than that can starve the rest of the queue."
+      }
+    ]
+  },
+  {
+    "fixture": "schedule/never-occurs",
+    "issues": [
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "tick",
+        "path": "/nodes/0/configuration/cron",
+        "message": "Block \"tick\" (trigger_schedule) must configure a cron expression with upcoming occurrences before deployment: Expression \"0 0 30 2 *\" has no occurrences after <instant>."
+      }
+    ]
+  },
+  {
+    "fixture": "schedule/reaches-human-wait",
+    "issues": [
+      {
+        "code": "invalid_configuration",
+        "severity": "error",
+        "nodeId": "ask",
+        "path": "/nodes/1/configuration/question",
+        "message": "Block \"ask\" (human_question) has invalid configuration: property \"question\" is not supported."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "ask",
+        "path": "/nodes/1",
+        "message": "Block \"ask\" (human_question) waits for a person, and it is reachable from the schedule trigger. A recurring trigger runs unattended: a run parked on a decision holds the schedule's turn indefinitely, and nothing can release it. Remove it from the scheduled path."
+      }
+    ]
+  },
+  {
+    "fixture": "schedule/prepares-workspace-with-no-pin",
+    "issues": [
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": null,
+        "path": "/repositoryScope",
+        "message": "Block \"prepare\" (prepare_workspace) is reachable from schedule trigger \"tick\", and this workflow pins no repository. A scheduled run carries no ticket, no routing labels, and a fresh branch every occurrence, so nothing in it names a repository and the choice falls to the discovery agent. Every occurrence hands that agent identical input, so an uncertain answer fails the run the same way every time, and with no ticket there is nowhere to report the failure. Pin the repositories this schedule works in."
+      }
+    ]
+  },
+  {
+    "fixture": "availability/nothing-configured",
+    "issues": [
+      {
+        "code": "invalid_configuration",
+        "severity": "error",
+        "nodeId": "slack",
+        "path": "/nodes/3/configuration/channel",
+        "message": "Block \"slack\" (send_slack_message) has invalid configuration: property \"channel\" is not supported."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "prepare",
+        "path": "/nodes/1/configuration",
+        "message": "Block \"prepare\" (prepare_workspace) is unavailable: No version-control provider is configured."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "ask-llm",
+        "path": "/nodes/2/configuration",
+        "message": "Block \"ask-llm\" (call_llm) is unavailable: Claude API credentials are not configured for Call LLM."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "slack",
+        "path": "/nodes/3/configuration",
+        "message": "Block \"slack\" (send_slack_message) is unavailable: Slack messaging is not configured."
+      }
+    ]
+  },
+  {
+    "fixture": "branch/condition-rules",
+    "issues": [
+      {
+        "code": "invalid_configuration",
+        "severity": "error",
+        "nodeId": "decide",
+        "path": "/nodes/1/configuration/conditions/0/reference",
+        "message": "Block \"decide\" (branch) has invalid configuration: reference \"steps.nowhere.output.value\" is not available when this Branch runs."
+      },
+      {
+        "code": "invalid_configuration",
+        "severity": "error",
+        "nodeId": "decide",
+        "path": "/nodes/1/configuration/conditions/1/reference",
+        "message": "Block \"decide\" (branch) has invalid configuration: reference \"steps.entry.output.ticket.key\" is not available when this Branch runs."
+      },
+      {
+        "code": "invalid_configuration",
+        "severity": "error",
+        "nodeId": "decide",
+        "path": "/nodes/1/configuration/conditions/2/reference",
+        "message": "Block \"decide\" (branch) has invalid configuration: reference \"steps.entry.output.ticket.key\" is not available when this Branch runs."
+      },
+      {
+        "code": "invalid_configuration",
+        "severity": "error",
+        "nodeId": "decide",
+        "path": "/nodes/1/configuration/conditions/3/reference",
+        "message": "Block \"decide\" (branch) has invalid configuration: reference \"steps.entry.output.ticket.key\" is not available when this Branch runs."
+      },
+      {
+        "code": "invalid_configuration",
+        "severity": "error",
+        "nodeId": "decide",
+        "path": "/nodes/1/configuration/conditions/4/reference",
+        "message": "Block \"decide\" (branch) has invalid configuration: reference \"steps.entry.output.ticket.key\" is not available when this Branch runs."
+      }
+    ]
+  },
+  {
+    "fixture": "branch/no-conditions",
+    "issues": [
+      {
+        "code": "invalid_configuration",
+        "severity": "error",
+        "nodeId": "decide",
+        "path": "/nodes/1/configuration/conditions",
+        "message": "Block \"decide\" (branch) has invalid configuration: at least one condition is required."
+      }
+    ]
+  },
+  {
+    "fixture": "transform/reference-rules",
+    "issues": [
+      {
+        "code": "invalid_configuration",
+        "severity": "error",
+        "nodeId": "trim",
+        "path": "/nodes/1/configuration/source",
+        "message": "Block \"trim\" (transform) has invalid configuration: reference \"steps.nowhere.output.text\" is not available when this Transform runs."
+      },
+      {
+        "code": "invalid_configuration",
+        "severity": "error",
+        "nodeId": "count",
+        "path": "/nodes/2/configuration/source",
+        "message": "Block \"count\" (transform) has invalid configuration: reference \"steps.entry.output.ticket.key\" is not available when this Transform runs."
+      },
+      {
+        "code": "invalid_configuration",
+        "severity": "error",
+        "nodeId": "compose",
+        "path": "/nodes/3/configuration/fields/0/value/reference",
+        "message": "Block \"compose\" (transform) has invalid configuration: reference \"steps.entry.output.ticket.key\" is not available when this Transform runs."
+      },
+      {
+        "code": "invalid_configuration",
+        "severity": "error",
+        "nodeId": "compose",
+        "path": "/nodes/3/configuration/fields/1/value/reference",
+        "message": "Block \"compose\" (transform) has invalid configuration: reference \"steps.nowhere.output.value\" is not available when this Transform runs."
+      }
+    ]
+  },
+  {
+    "fixture": "transform/empty-replacement-pattern",
+    "issues": [
+      {
+        "code": "invalid_configuration",
+        "severity": "error",
+        "nodeId": "replace",
+        "path": "/nodes/1/configuration/pattern",
+        "message": "Transform block \"replace\": replacement pattern cannot be empty."
+      },
+      {
+        "code": "invalid_configuration",
+        "severity": "error",
+        "nodeId": "replace",
+        "path": "/nodes/1/configuration/source",
+        "message": "Block \"replace\" (transform) has invalid configuration: reference \"steps.entry.output.ticket.key\" is not available when this Transform runs."
+      }
+    ]
+  },
+  {
+    "fixture": "workspace/checks-without-prepared-workspace",
+    "issues": [
+      {
+        "code": "binding.required",
+        "severity": "error",
+        "nodeId": "open",
+        "path": "/nodes/2/inputs/repositories",
+        "message": "Block \"open\" is missing required input \"repositories\"."
+      }
+    ]
+  },
+  {
+    "fixture": "workspace/concurrent-writers",
+    "issues": [
+      {
+        "code": "workspace.concurrent_access",
+        "severity": "error",
+        "nodeId": "right",
+        "path": "/nodes/3",
+        "message": "Blocks \"left\" (exclusive writer) and \"right\" (exclusive writer) can run concurrently. Order them explicitly or place them on mutually exclusive Branch paths."
+      }
+    ]
+  },
+  {
+    "fixture": "repository-scope/provider-excludes-pinned-repository",
+    "issues": [
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": null,
+        "path": "/repositoryScope",
+        "message": "Pinned repositories use providers excluded by the pinned provider list: gitlab:group/project."
+      }
+    ]
+  },
+  {
+    "fixture": "repository-scope/provider-not-configured",
+    "issues": [
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": null,
+        "path": "/repositoryScope",
+        "message": "Pinned VCS providers are not configured: gitlab."
+      }
+    ]
+  },
+  {
+    "fixture": "every-family-at-once",
+    "issues": [
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "entry",
+        "path": "/nodes/0/id",
+        "message": "Block id \"entry\" is reserved for the active trigger input."
+      },
+      {
+        "code": "unknown_input",
+        "severity": "error",
+        "nodeId": "decide",
+        "path": "/nodes/3/inputs/source",
+        "message": "Branch block \"decide\" does not accept generic input mappings."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "decide",
+        "message": "Branch \"decide\" must have its \"false\" port connected."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "orphan",
+        "message": "Block \"orphan\" is not reachable from a trigger."
+      },
+      {
+        "code": "invalid_configuration",
+        "severity": "error",
+        "nodeId": "entry",
+        "path": "/nodes/0/configuration/mystery",
+        "message": "Block \"entry\" (trigger_schedule) has invalid configuration: property \"mystery\" is not supported."
+      },
+      {
+        "code": "invalid_configuration",
+        "severity": "error",
+        "nodeId": "ask",
+        "path": "/nodes/2/configuration/question",
+        "message": "Block \"ask\" (human_question) has invalid configuration: property \"question\" is not supported."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "entry",
+        "path": "/nodes/0/configuration/cron",
+        "message": "Block \"entry\" (trigger_schedule) must leave at least 15 minutes between runs before deployment: Expression \"* * * * *\" fires every 1 minute at its closest, the minimum is 15 minutes. Agent runs occupy a small shared pool, so a schedule firing faster than that can starve the rest of the queue."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "ask",
+        "path": "/nodes/2",
+        "message": "Block \"ask\" (human_question) waits for a person, and it is reachable from the schedule trigger. A recurring trigger runs unattended: a run parked on a decision holds the schedule's turn indefinitely, and nothing can release it. Remove it from the scheduled path."
+      },
+      {
+        "code": "binding.unknown_input",
+        "severity": "error",
+        "nodeId": "decide",
+        "path": "/nodes/3/inputs/source",
+        "message": "Block \"decide\" has unknown fixed input \"source\"."
+      },
+      {
+        "code": "invalid_configuration",
+        "severity": "error",
+        "nodeId": "decide",
+        "path": "/nodes/3/configuration/conditions/0/reference",
+        "message": "Block \"decide\" (branch) has invalid configuration: reference \"steps.nowhere.output.value\" is not available when this Branch runs."
+      },
+      {
+        "code": "invalid_configuration",
+        "severity": "error",
+        "nodeId": "shape",
+        "path": "/nodes/4/configuration/source",
+        "message": "Block \"shape\" (transform) has invalid configuration: reference \"steps.nowhere.output.text\" is not available when this Transform runs."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": null,
+        "path": "/repositoryScope",
+        "message": "Pinned repositories use providers excluded by the pinned provider list: gitlab:group/project."
+      }
+    ]
+  },
+  {
+    "fixture": "outputSchema/malformed-hides-availability",
+    "issues": [
+      {
+        "code": "invalid_schema",
+        "severity": "error",
+        "nodeId": "agent",
+        "path": "/nodes/1/configuration/outputSchema/type",
+        "message": "Block \"agent\" (generic_agent) is unavailable: outputSchema must declare an object for Generic Agent."
+      },
+      {
+        "code": "deployment",
+        "severity": "error",
+        "nodeId": "healthy",
+        "path": "/nodes/2/configuration",
+        "message": "Block \"healthy\" (generic_agent) is unavailable: Claude credentials are not configured."
+      }
+    ]
+  },
+  {
+    "fixture": "graph/loop-region-inside-a-branch-arm",
+    "issues": [
+      {
+        "code": "invalid_configuration",
+        "severity": "error",
+        "nodeId": "decide",
+        "path": "/nodes/1/configuration/conditions/0/reference",
+        "message": "Block \"decide\" (branch) has invalid configuration: reference \"steps.entry.output.ticket.summary\" is not available when this Branch runs."
+      }
+    ]
+  }
+]

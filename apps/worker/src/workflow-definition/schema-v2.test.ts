@@ -14,9 +14,9 @@ import {
 import {
   isWorkflowDataReferenceV2,
   upgradeStoredWorkflowDefinition,
-  validateWorkflowDefinitionForDeployment,
   workflowDefinitionV2Schema,
-} from "./schema.js";
+} from "@shared/workflow-graph";
+import { validateWorkflowDefinitionForDeployment } from "./deployment-validation.js";
 import { parseStoredWorkflowDefinition } from "./stored-definition.js";
 import { validateWorkflowDefinitionCandidate } from "./validation.js";
 
