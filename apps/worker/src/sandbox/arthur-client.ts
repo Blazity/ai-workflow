@@ -177,7 +177,8 @@ export class ArthurClient {
     );
     const raw = response?.rule_results;
     if (!Array.isArray(raw)) {
-      throw new TypeError("unexpected validate_prompt response shape");
+      // oxlint-disable-next-line unicorn/prefer-type-error -- Preserve the established Error type and message contract for callers and tests.
+      throw new Error("unexpected validate_prompt response shape");
     }
     const findings: PromptValidationFinding[] = raw.map((entry) => {
       const e = (entry ?? {}) as Record<string, unknown>;

@@ -262,7 +262,8 @@ export async function snapshotClarificationSandboxStep(
   }
   const requestedAt = new Date(input.snapshotRequestedAt);
   if (!Number.isFinite(requestedAt.getTime())) {
-    throw new TypeError("clarification snapshot attempt boundary is invalid");
+    // oxlint-disable-next-line unicorn/prefer-type-error -- Preserve the established Error type and message contract for callers and tests.
+    throw new Error("clarification snapshot attempt boundary is invalid");
   }
   // Snapshot identity is the exact source sandbox (a successful snapshot stops
   // it, so that source cannot produce an earlier successful snapshot). Apply a
