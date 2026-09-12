@@ -63,7 +63,7 @@ vi.mock("../../../../services/auth/request-context.js", () => ({
 vi.mock("../../../../engine/support/adapters.js", () => ({
   createAdapters: () => ({ runRegistry: {} }),
 }));
-vi.mock("../../../../pre-pr-checks/store.js", () => ({
+vi.mock("../../../../engine/pre-pr-checks/store.js", () => ({
   dashboardUserLabel: vi.fn(async () => "Operator"),
 }));
 vi.mock("../../../../db/repositories/auth.js", () => ({

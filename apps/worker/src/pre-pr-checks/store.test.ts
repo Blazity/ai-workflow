@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "../db/client.js";
 import { createTestDb } from "../db/test-db.js";
-import type { PrePrCheckConfig } from "./config.js";
+import type { PrePrCheckConfig } from "../engine/pre-pr-checks/config.js";
 import {
   getCurrentPrePrCheckConfig,
   listPrePrCheckConfigVersions,
   restorePrePrCheckConfig,
   savePrePrCheckConfig,
-} from "./store.js";
+} from "../engine/pre-pr-checks/store.js";
 
 const CONFIG_A: PrePrCheckConfig = {
   repositories: [{ provider: "github", repoPath: "acme/web", commands: ["pnpm test"] }],

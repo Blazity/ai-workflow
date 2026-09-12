@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PrePrCheckConfig } from "../../pre-pr-checks/config.js";
+import type { PrePrCheckConfig } from "../pre-pr-checks/config.js";
 import type { RunBudgetObservation } from "../helpers/run-budget.js";
 
 const mocks = vi.hoisted(() => ({
