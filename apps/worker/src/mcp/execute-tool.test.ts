@@ -34,7 +34,12 @@ import {
   organization,
 } from "../db/schema.js";
 import { McpPublicError, type McpToolDependencies } from "./contracts.js";
-import { executeMcpMutation, executeMcpRead } from "./execute-tool.js";
+import {
+  MCP_MAX_TOOL_TIMEOUT_MS,
+  executeMcpMutation,
+  executeMcpRead,
+  mcpToolTimeoutMs,
+} from "./execute-tool.js";
 import { beginMcpMutation, failMcpMutation } from "../services/mcp/idempotency-store.js";
 import { createMcpToolServices } from "../services/mcp/tool-services.js";
 import { actorFor as actor, depsFor } from "../test-support/mcp.js";
@@ -48,6 +53,32 @@ const settings = settingsSnapshotFromEnvironment();
 function deps(overrides: Partial<McpToolDependencies> = {}): McpToolDependencies {
   return depsFor(db, () => clock, overrides);
 }
+
+describe("the deadline one call may take", () => {
+  const withTimeout = (ms: number) => ({ ...deps().settings, MCP_TOOL_TIMEOUT_MS: ms });
+
+  it("uses the deployment's setting when nothing asks for longer", () => {
+    expect(mcpToolTimeoutMs(withTimeout(30_000), undefined)).toBe(30_000);
+  });
+
+  it("lets a mutation raise its own floor and never lower it", () => {
+    // repositories.suggest is the one that needs the room: 60 s for the
+    // repository bundle plus 90 s for the model call.
+    expect(mcpToolTimeoutMs(withTimeout(30_000), 150_000)).toBe(150_000);
+    expect(mcpToolTimeoutMs(withTimeout(200_000), 150_000)).toBe(200_000);
+  });
+
+  // The platform kills an invocation at 300 s and at exactly the limit the kill
+  // races the abort, so a caller would see an opaque platform error instead of
+  // the clean TIMEOUT this bound exists to produce. Both doors are clamped: an
+  // operator who configures ten minutes gets four, and so does a tool that asks
+  // for them.
+  it("clamps the operator's setting and a tool's request alike", () => {
+    expect(MCP_MAX_TOOL_TIMEOUT_MS).toBe(240_000);
+    expect(mcpToolTimeoutMs(withTimeout(600_000), undefined)).toBe(MCP_MAX_TOOL_TIMEOUT_MS);
+    expect(mcpToolTimeoutMs(withTimeout(30_000), 600_000)).toBe(MCP_MAX_TOOL_TIMEOUT_MS);
+  });
+});
 
 beforeEach(async () => {
   db = await createTestDb();

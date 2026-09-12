@@ -27,6 +27,10 @@ import { describe, expect, it } from "vitest";
  *   `services/pre-pr-checks/check-configuration.ts` reads from the step module
  *   `engine/steps/pre-pr-checks-runner.ts`.
  *
+ * A module written after that base joins the list when it is engine free on the
+ * day it lands: `mcp/tools/repositories.ts` and `mcp/tools/settings.ts` reach
+ * the repository catalog and settings clusters and stop there.
+ *
  * `import type` and dynamic `import()` are ignored: neither survives into the
  * runtime graph. Package specifiers are ignored too, since no workspace package
  * declares a step.
@@ -52,8 +56,10 @@ const ENTRIES = [
   "mcp/tools/authoring-support.ts",
   "mcp/tools/blocks.ts",
   "mcp/tools/prompt-authoring.ts",
+  "mcp/tools/repositories.ts",
   "mcp/tools/run-control.ts",
   "mcp/tools/run-stats.ts",
+  "mcp/tools/settings.ts",
   "mcp/tools/ticket-write.ts",
   "mcp/tools/tickets.ts",
   "middleware/api-auth.ts",

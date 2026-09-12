@@ -15,6 +15,10 @@ describe("MCP public contracts", () => {
       "prompts:write",
       "workflows:write",
       "tickets:write",
+      // Appended, never interleaved: this order is what the protected-resource
+      // and issuer metadata publish.
+      "repositories:write",
+      "settings:write",
     ]);
     expect(MCP_SCOPES.every((scope) => scope === scope.toLowerCase())).toBe(true);
   });
@@ -59,6 +63,20 @@ describe("MCP public contracts", () => {
       "workflows.get_graph",
       "workflows.set_enabled",
       "runs.logs",
+      "repositories.list",
+      "repositories.get",
+      "repositories.list_versions",
+      "repositories.upsert",
+      "repositories.set_enabled",
+      "repositories.activate_preview",
+      "repositories.activate",
+      "repositories.import_preview",
+      "repositories.import",
+      "repositories.suggest",
+      "settings.list",
+      "settings.get",
+      "settings.set",
+      "settings.reset",
     ]);
     expect(new Set(FIRST_SLICE_TOOLS).size).toBe(FIRST_SLICE_TOOLS.length);
   });

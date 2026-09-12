@@ -61,6 +61,8 @@ describe("MCP OAuth discovery", () => {
         "prompts:write",
         "workflows:write",
         "tickets:write",
+        "repositories:write",
+        "settings:write",
       ],
     });
   });
@@ -80,6 +82,8 @@ describe("MCP OAuth discovery", () => {
         "prompts:write",
         "workflows:write",
         "tickets:write",
+        "repositories:write",
+        "settings:write",
         "offline_access",
       ],
       code_challenge_methods_supported: ["S256"],

@@ -1,10 +1,6 @@
 import { createError, defineEventHandler, readBody } from "h3";
 import type { SettingsPatchResponse } from "@shared/contracts";
-import {
-  findSettingDefinition,
-  parseRequestBody,
-  settingsPatchRequestSchema,
-} from "@shared/contracts";
+import { parseRequestBody, settingsPatchRequestSchema } from "@shared/contracts";
 import {
   requireDashboardActor,
   toHttpError,
@@ -12,26 +8,9 @@ import {
 import { canEditSettings } from "../../../services/auth/roles.js";
 import {
   SettingsValidationError,
+  settingsNotEditableThroughApi,
   updateSettings,
 } from "../../../services/settings/index.js";
-
-/**
- * Which keys this route refuses even though the store can write them.
- *
- * Activating the repository catalog decides what the agent may touch at all,
- * and the dialog that does it names every repository holding an active run
- * claim that is not enabled, so the admin sees what the next dispatch stops
- * selecting. A generic patch would flip the same flag with none of that shown,
- * which is why the group is refused here rather than in the store: the
- * activation route of the catalog stage writes it through the same repository.
- */
-const NON_PATCHABLE_GROUP = "repositories";
-
-function refusedKeys(patch: Readonly<Record<string, unknown>>): string[] {
-  return Object.keys(patch).filter(
-    (key) => findSettingDefinition(key)?.group === NON_PATCHABLE_GROUP,
-  );
-}
 
 /** Changing a switch changes it for every run and every user of this
  *  deployment, so it follows the owner/admin rule, and the reason travels with
@@ -51,7 +30,10 @@ export default defineEventHandler(
       if (!parsed.ok) {
         throw createError({ statusCode: 400, statusMessage: parsed.message });
       }
-      const refused = refusedKeys(parsed.value.settings);
+      // The rule itself lives in services/settings/api-editability.ts, because
+      // the MCP settings.set tool has to refuse the same keys and two copies of
+      // it would be two answers.
+      const refused = settingsNotEditableThroughApi(parsed.value.settings);
       if (refused.length > 0) {
         throw createError({
           statusCode: 400,

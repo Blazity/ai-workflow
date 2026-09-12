@@ -159,6 +159,20 @@ const PUBLISHED = [
   "workflows.get_graph",
   "workflows.set_enabled",
   "runs.logs",
+  "repositories.list",
+  "repositories.get",
+  "repositories.list_versions",
+  "repositories.upsert",
+  "repositories.set_enabled",
+  "repositories.activate_preview",
+  "repositories.activate",
+  "repositories.import_preview",
+  "repositories.import",
+  "repositories.suggest",
+  "settings.list",
+  "settings.get",
+  "settings.set",
+  "settings.reset",
 ];
 
 const READ_ANNOTATIONS = {
@@ -228,6 +242,17 @@ const TICKET_TRANSITION_ANNOTATIONS = {
   ...TICKET_WRITE_ANNOTATIONS,
   destructiveHint: true,
 };
+// Configuring the deployment itself: the repository catalog and the settings
+// registry. Destructive by default, because each of these replaces what the
+// platform does next -- the profile every future run resolves, whether the agent
+// may enter a repository at all, a limit in force for everybody -- and closed
+// world, because nothing outside this deployment's own tables is touched.
+const DEPLOYMENT_CONFIG_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+  openWorldHint: false,
+};
 const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
   "system.capabilities": READ_ANNOTATIONS,
   "tickets.get": READ_ANNOTATIONS,
@@ -272,9 +297,49 @@ const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
   // Exposes more of a run than the other reads (verbatim error, raw attempt logs)
   // but starts, replaces and removes nothing, so it advertises the plain read hints.
   "runs.logs": READ_ANNOTATIONS,
+  // Reading the catalog and the settings registry changes nothing, and the two
+  // previews change nothing either even though both are gated behind the write
+  // scope, exactly as workflows.get_graph is.
+  "repositories.list": READ_ANNOTATIONS,
+  "repositories.get": READ_ANNOTATIONS,
+  "repositories.list_versions": READ_ANNOTATIONS,
+  "repositories.activate_preview": READ_ANNOTATIONS,
+  "repositories.import_preview": READ_ANNOTATIONS,
+  "settings.list": READ_ANNOTATIONS,
+  "settings.get": READ_ANNOTATIONS,
+  // Configuring the deployment: what is replaced is what the platform will do
+  // next, and it never leaves this deployment's own tables.
+  "repositories.upsert": DEPLOYMENT_CONFIG_ANNOTATIONS,
+  "repositories.set_enabled": DEPLOYMENT_CONFIG_ANNOTATIONS,
+  "repositories.activate": DEPLOYMENT_CONFIG_ANNOTATIONS,
+  "settings.set": DEPLOYMENT_CONFIG_ANNOTATIONS,
+  "settings.reset": DEPLOYMENT_CONFIG_ANNOTATIONS,
+  // An import creates rows and takes nothing away: the insert does nothing on
+  // conflict, so it can neither overwrite a profile nor re-enable a repository
+  // somebody switched off.
+  "repositories.import": {
+    ...DEPLOYMENT_CONFIG_ANNOTATIONS,
+    destructiveHint: false,
+  },
+  // A suggestion writes no profile, so it is not destructive; it does reach a
+  // model provider and spend real money, which is what openWorldHint marks.
+  "repositories.suggest": {
+    ...DEPLOYMENT_CONFIG_ANNOTATIONS,
+    destructiveHint: false,
+    openWorldHint: true,
+  },
 };
 
-const DOMAINS = ["system", "tickets", "runs", "workflows", "prompts", "blocks"];
+const DOMAINS = [
+  "system",
+  "tickets",
+  "runs",
+  "workflows",
+  "prompts",
+  "blocks",
+  "repositories",
+  "settings",
+];
 
 // The committed artifact, read as a file. This is the independent source for the
 // contract hash: MCP_CONTRACT_HASH is computed at runtime from the same catalog

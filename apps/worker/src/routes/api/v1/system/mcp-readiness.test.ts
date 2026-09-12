@@ -5,6 +5,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { member, organization, user } from "../../../../db/schema.js";
 import { createTestDb } from "../../../../db/test-db.js";
 import { FIRST_SLICE_TOOLS } from "../../../../mcp/contracts.js";
+import { MCP_ENABLED_DOMAINS } from "../../../../mcp/tool-catalog.js";
 
 // The secret-shaped values are here so the "no secrets" assertion has something
 // real to fail on: an env this route can reach, holding values that must never
@@ -129,7 +130,10 @@ describe("GET /api/v1/system/mcp-readiness", () => {
       contractHash: committed.contractHash,
       toolCount: FIRST_SLICE_TOOLS.length,
       tools: [...FIRST_SLICE_TOOLS],
-      enabledDomains: ["system", "tickets", "runs", "workflows", "prompts", "blocks"],
+      // The constant, not a literal: a domain added to the surface and not to
+      // this payload is the drift this endpoint exists to make visible, and a
+      // hand-kept copy here would have hidden exactly that.
+      enabledDomains: [...MCP_ENABLED_DOMAINS],
     });
   });
 
