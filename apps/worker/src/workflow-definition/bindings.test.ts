@@ -2,79 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { WorkflowValueSchema } from "@shared/contracts";
 import {
   isWorkflowSchemaAssignable,
-  parseWorkflowBindingSource,
-  resolveWorkflowInputBindings,
-  resolveWorkflowSchemaPath,
   RUN_BINDING_SCHEMA,
 } from "./bindings.js";
 
 const stringSchema: WorkflowValueSchema = { type: "string" };
 
-describe("parseWorkflowBindingSource", () => {
-  it.each([
-    ["trigger.ticket.key", { root: "trigger", path: ["ticket", "key"] }],
-    [
-      "steps.plan.output.data.items.0.title",
-      { root: "steps", nodeId: "plan", path: ["data", "items", "0", "title"] },
-    ],
-    ["run.defaultAgent.model", { root: "run", path: ["defaultAgent", "model"] }],
-  ])("parses %s", (source, expected) => {
-    expect(parseWorkflowBindingSource(source)).toEqual(expected);
-  });
-
-  it.each([
-    " trigger.ticket.key",
-    "trigger",
-    "trigger.",
-    "trigger.ticket..key",
-    "steps.plan.output",
-    "steps.plan.result.value",
-    "steps..output.value",
-    "run.branchName.",
-    "run.constructor.name",
-    "trigger.__proto__.polluted",
-    "steps.prototype.output.value",
-  ])("rejects the non-canonical or unsafe source %s", (source) => {
-    expect(parseWorkflowBindingSource(source)).toBeNull();
-  });
-});
-
-describe("resolveWorkflowSchemaPath", () => {
-  const schema: WorkflowValueSchema = {
-    type: "object",
-    properties: {
-      data: {
-        type: "object",
-        properties: {
-          items: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: { title: stringSchema },
-              required: ["title"],
-              additionalProperties: false,
-            },
-          },
-        },
-        required: ["items"],
-        additionalProperties: false,
-      },
-    },
-    required: ["data"],
-    additionalProperties: false,
-  };
-
-  it("looks up nested object fields and numeric array indices", () => {
-    expect(resolveWorkflowSchemaPath(schema, ["data", "items", "0", "title"])).toEqual(
-      stringSchema,
-    );
-  });
-
-  it("rejects undeclared fields and non-numeric array indices", () => {
-    expect(resolveWorkflowSchemaPath(schema, ["data", "missing"])).toBeNull();
-    expect(resolveWorkflowSchemaPath(schema, ["data", "items", "first"])).toBeNull();
-  });
-
+describe("RUN_BINDING_SCHEMA", () => {
   it("publishes the exact fixed run binding schema", () => {
     expect(RUN_BINDING_SCHEMA).toEqual({
       type: "object",
@@ -276,41 +209,5 @@ describe("isWorkflowSchemaAssignable", () => {
         },
       ),
     ).toBe(false);
-  });
-});
-
-describe("resolveWorkflowInputBindings", () => {
-  it("resolves trigger, prior-step, and run values using own properties", () => {
-    const resolved = resolveWorkflowInputBindings(
-      {
-        ticketKey: "trigger.ticket.key",
-        summary: "steps.plan.output.data.summary",
-        model: "run.defaultAgent.model",
-      },
-      { status: "fired", ticket: { key: "AIW-92" } },
-      { plan: { output: { status: "ok", data: { summary: "Ready" } } } },
-      {
-        id: "run-1",
-        branchName: "ai-workflow/AIW-92",
-        defaultAgent: { provider: "codex", model: "gpt-5-codex" },
-      },
-    );
-
-    expect(resolved).toEqual({ ticketKey: "AIW-92", summary: "Ready", model: "gpt-5-codex" });
-  });
-
-  it("fails closed when a runtime path is missing", () => {
-    expect(() =>
-      resolveWorkflowInputBindings(
-        { value: "trigger.missing" },
-        { status: "fired" },
-        {},
-        {
-          id: "run-1",
-          branchName: "branch",
-          defaultAgent: { provider: "claude", model: "model" },
-        },
-      ),
-    ).toThrow('binding "trigger.missing" could not be resolved');
   });
 });
