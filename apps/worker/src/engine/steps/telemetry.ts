@@ -10,7 +10,6 @@ import { type RunBudgetFailure } from "../helpers/run-budget.js";
 import { redactDiagnosticText } from "../../sandbox/agents/redact.js";
 import { errorMessage } from "../helpers/repository-failure.js";
 import type { BlockRunState, ReplayAttemptOutcome, ReplayObservationKind, ReplaySanitizedEnvelope, ResolvedPromptReference, RunPullRequest, RunRepositoryAccess, WorkflowReplayGraphSnapshot, WorkflowReplaySelectedTransition, HarnessRunManifestRecord } from "@shared/contracts";
-import { defaultSettingsSnapshot } from "@shared/contracts";
 import type {
   PreparedReplayAttemptPersistence,
   ReplayAttemptPersistenceState,
@@ -276,6 +275,26 @@ async function resolveClarificationDecisionObservation(input: {
   }
 }
 
+/**
+ * The organization slug a capture recorded before stage H1 replays under.
+ *
+ * `DASHBOARD_ORG_SLUG` straight off the deployment's environment, which is the
+ * read the payload field replaced: a payload written by the old code carried no
+ * slug because the step looked the variable up itself, so this returns the
+ * value it was captured under. The registry default would be a different
+ * organization on every deployment that sets the variable, which is every
+ * deployment this can reach.
+ *
+ * Replay compatibility, and nothing else. Stage H2 deletes it after a drain,
+ * once no suspended run can still carry a payload from before the field
+ * existed. The consumers guard pins the read with that sentence so it is not
+ * mistaken for a live environment consumer.
+ */
+async function replayOrganizationSlug(): Promise<string> {
+  const { loadEnvironmentPort } = await import("../internal/ports.js");
+  return (await loadEnvironmentPort()).env.DASHBOARD_ORG_SLUG;
+}
+
 async function captureV2RunObservationStartStep(payload: {
   runId: string;
   definitionId: number | null;
@@ -283,9 +302,10 @@ async function captureV2RunObservationStartStep(payload: {
   graph: WorkflowReplayGraphSnapshot;
   runtimeManifest: ReplaySanitizedEnvelope;
   /** The organization a replay capture is written under, from the settings the
-   *  run froze at its start. Optional because a result stored before the field
-   *  existed replays as it was written; absent means the deployment's registry
-   *  default, which is what the environment read it replaced resolved to. */
+   *  run froze at its start. Optional because a payload recorded before the
+   *  field existed replays as it was written; absent falls back to the
+   *  environment read this field replaced, which is the value such a payload
+   *  was captured under. */
   organizationSlug?: string;
 }): Promise<{ organizationId: string } | null> {
   "use step";
@@ -313,7 +333,7 @@ async function captureV2RunObservationStartStep(payload: {
           "../../run-observability/runtime-hooks.js"
         );
         const organizationSlug =
-          payload.organizationSlug ?? defaultSettingsSnapshot().DASHBOARD_ORG_SLUG;
+          payload.organizationSlug ?? (await replayOrganizationSlug());
         const organization = await createConnectedAuthRepository().findOrganizationBySlug(
           organizationSlug,
         );

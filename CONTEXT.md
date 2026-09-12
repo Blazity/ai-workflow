@@ -138,8 +138,11 @@ moved into the settings store, so the Settings page owns it and the deployment
 keeps the variable only as a fallback that the cleanup release removes. A
 deployment publishes the ones it still sets on `/health`
 (`settings.migratedVariablesSet`) and as a banner on the Settings page, by name
-only. A key marked `requiresRedeploy` in the registry is NOT a migrated
-variable: the deployment still reads that variable itself.
+only, beside the ones whose value is not stored yet
+(`settings.migratedVariablesUnstored`), which are the ones it is NOT safe to
+remove. A key marked `requiresRedeploy` in the registry is NOT a migrated
+variable: the deployment still reads that variable itself, the environment is
+its single answer, and the settings surfaces refuse to store it.
 _Avoid_: Legacy env var, deprecated setting
 
 **GitLab Project**:

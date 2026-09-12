@@ -52,6 +52,7 @@ export async function SettingsData() {
     <SettingsScreen
       settings={settings?.settings ?? []}
       migratedVariablesSet={settings?.migratedVariablesSet ?? []}
+      migratedVariablesUnstored={settings?.migratedVariablesUnstored ?? []}
       scan={health.scan}
       scanReadable={scanReadable}
       catalogState={catalog?.state ?? null}

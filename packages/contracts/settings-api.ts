@@ -38,6 +38,14 @@ export interface SettingsEntryView {
   readonly group: SettingsGroup;
   readonly description: string;
   readonly appliesToRunsInFlight: SettingsInFlightRule;
+  /**
+   * Whether the running code still reads this key from the environment, so a
+   * stored value records the decision and changes nothing until the worker is
+   * redeployed. `appliesToRunsInFlight` cannot say that, which is why a surface
+   * showing the key to somebody about to change it reads this as well. Absent
+   * is the ordinary case: what the store holds is what is read.
+   */
+  readonly requiresRedeploy?: boolean;
   /** The newest recorded change to this key, or null when never written. */
   readonly lastVersion: SettingsVersionView | null;
 }
@@ -54,6 +62,16 @@ export interface SettingsReadResponse {
    * them still set. Names only, never values.
    */
   readonly migratedVariablesSet: readonly string[];
+  /**
+   * Those of them no stored row answers for yet, by name.
+   *
+   * The safety half of the pair: removing a variable on this list would lose
+   * the value the deployment is running on, because nothing else holds it. It
+   * empties as the import stores them, and a name that stays on it is a write
+   * that did not happen, which is the state the banner has to show rather than
+   * hide. Names only, never values.
+   */
+  readonly migratedVariablesUnstored: readonly string[];
 }
 
 /** GET /api/v1/settings?key=... */

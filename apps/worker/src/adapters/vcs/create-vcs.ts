@@ -1,21 +1,10 @@
-import { getVcsConfig, type VcsConfig, type VcsProviderConfig } from "../../infra/vcs-config.js";
+import type { VcsConfig, VcsProviderConfig } from "../../infra/vcs-config.js";
 import { GitHubAdapter } from "./github.js";
 import { createGitHubProfileSource } from "./github/profile-source.js";
 import { GitLabAdapter } from "./gitlab.js";
 import { createGitLabProfileSource } from "./gitlab/profile-source.js";
 import type { RepositoryProfileSource } from "./repository-profile-source.js";
 import type { VCSAdapter } from "./types.js";
-
-/** The legacy single-repository adapter. The base branch comes from the
- *  caller's settings snapshot; omitted it falls back to the registry default,
- *  which is what the variable this replaced defaulted to. */
-export function createVCS(baseBranch?: string): VCSAdapter {
-  const vcs = getVcsConfig(baseBranch);
-  return createVCSForRepository(vcs, {
-    repoPath: vcs.repoPath,
-    baseBranch: vcs.baseBranch,
-  });
-}
 
 export interface RepoTarget {
   repoPath: string;

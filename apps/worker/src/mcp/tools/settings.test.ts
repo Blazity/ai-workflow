@@ -21,6 +21,17 @@ vi.mock("../../infra/vcs-config.js", () => ({
   },
 }));
 vi.mock("../../db/client.js", () => ({ getDb: () => state.db }));
+// The environment import is a one-off write the first settings read makes, and
+// it is memoised per process: left alone it would land in whichever test in
+// this file resolves a snapshot first and in none of the others, which would
+// make the resolution a test below asserts depend on file order. Its own
+// behaviour is pinned in services/settings/environment-import.test.ts; here the
+// question is what the tool answers, so only the write is stubbed out and
+// `migratedVariablesSet` stays the real reader of this file's environment.
+vi.mock("../../services/settings/environment-import.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../services/settings/environment-import.js")>()),
+  ensureEnvironmentSettingsImported: async () => [],
+}));
 
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
@@ -158,9 +169,27 @@ describe("settings.list", () => {
       requiresRedeploy: true,
       appliesToRunsInFlight: "after redeploy",
     });
+    expect(allowlist).toMatchObject({ editable: false, role: null });
     expect(
       rows.find((row) => row.key === "MAX_CONCURRENT_AGENTS"),
     ).toMatchObject({ requiresRedeploy: false, appliesToRunsInFlight: "immediate" });
+  });
+
+  it("names the variables an operator still has to delete from the deployment", async () => {
+    const client = await connectedClient({ role: "member", scopes: READ_ONLY });
+
+    const data = dataOf(await client.callTool({ name: "settings.list", arguments: {} }));
+    const migrated = data.migratedVariablesSet as string[];
+
+    // Set in this file's environment, and its value is already stored the
+    // moment a snapshot is resolved, so deleting the variable changes nothing.
+    expect(migrated).toContain("MAX_CONCURRENT_AGENTS");
+    // Never a key the running code still reads from the environment: asking an
+    // operator to delete one of those would break the deployment.
+    expect(migrated).not.toContain("PRE_PR_CHECKS_ALLOWED_ENV");
+    expect(migrated).not.toContain("DASHBOARD_ORG_SLUG");
+    // A variable this deployment does not set is not something to remove.
+    expect(migrated).not.toContain("COLUMN_AI");
   });
 
   // The registry deliberately holds no credential: keys, tokens and URLs stay in
@@ -369,6 +398,30 @@ describe("settings.set", () => {
       expect(await db.select().from(settings)).toEqual([]);
     },
   );
+
+  // The environment is this key's only answer: the checks runner reads the
+  // variable inside a step, so a stored row would be recorded, shown, and then
+  // ignored by the resolution.
+  it("refuses a key the running code reads from the environment, and says where to change it", async () => {
+    const client = await connectedClient();
+
+    const result = await client.callTool({
+      name: "settings.set",
+      arguments: {
+        key: "PRE_PR_CHECKS_ALLOWED_ENV",
+        value: ["NPM_TOKEN"],
+        reason: "widen the allowlist",
+        idempotencyKey: KEY_ONE,
+      },
+    });
+
+    expect(errorOf(result)).toMatchObject({
+      code: "VALIDATION_FAILED",
+      message: expect.stringContaining("read from the deployment environment"),
+    });
+    expect(errorOf(result).message).toContain("redeploy");
+    expect(await db.select().from(settings)).toEqual([]);
+  });
 
   it("refuses MCP_ENABLED, the switch that decides whether it answers at all", async () => {
     const client = await connectedClient();

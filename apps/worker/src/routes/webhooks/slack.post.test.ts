@@ -16,6 +16,20 @@ vi.mock("../../infra/vcs-config.js", () => ({
   },
 }));
 
+// The deferred handler reads the board columns from the settings snapshot, and
+// this route test runs without a database. The resolution itself is not what
+// these cases are about, so the stored half is empty and the mocked
+// environment above answers for every key, which is what a deployment with an
+// empty settings table resolves to anyway.
+vi.mock("../../services/settings/snapshot.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../services/settings/snapshot.js")>();
+  return {
+    ...actual,
+    loadSettingsSnapshot: async () => actual.settingsSnapshotFromEnvironment(),
+  };
+});
+
 // Adapters: only runRegistry matters for these tests.
 const runRegistry = {
   reserve: vi.fn(),

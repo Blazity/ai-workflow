@@ -176,11 +176,18 @@ export async function seedSettings(
  * with the actor naming the import rather than a person.
  *
  * One statement, because production is neon-http and cannot open an
- * interactive transaction: the rows and their version rows travel as one
- * data-modifying CTE, so a crash leaves both or neither. `do nothing` on
- * conflict is what makes it idempotent AND what keeps an operator's stored
- * decision: a key that already has a row is not written and not recorded, even
- * when the environment disagrees with it.
+ * interactive transaction: the rows, their version rows and the rows this
+ * discards travel as one data-modifying CTE, so a crash leaves all of them or
+ * none. `do nothing` on conflict is what makes it idempotent AND what keeps an
+ * operator's stored decision: a key that already has a row is not written and
+ * not recorded, even when the environment disagrees with it.
+ *
+ * `discarded` names the keys whose value the running code reads from the
+ * environment itself, with the value that answers once no row is in the way.
+ * Any stored row for one of them is deleted here and recorded as a change,
+ * because the resolution ignores such a row: leaving it would keep a value on
+ * the Settings page that nothing has ever acted on. The caller passes only the
+ * ones it just saw a row for, so a deployment with none pays nothing.
  *
  * Returns the keys it actually created, in order, so the caller can log them.
  */
@@ -190,19 +197,42 @@ export async function importEnvironmentSettings(
     rows: ReadonlyArray<{ key: string; value: SettingValue }>;
     actor: string;
     reason: string;
+    discarded?: {
+      rows: ReadonlyArray<{ key: string; value: SettingValue }>;
+      reason: string;
+    };
   },
 ): Promise<string[]> {
   const entries = input.rows.map((row) => ({
     key: row.key,
     value: JSON.stringify(row.value ?? null),
   }));
-  if (entries.length === 0) return [];
+  const discarded = (input.discarded?.rows ?? []).map((row) => ({
+    key: row.key,
+    value: JSON.stringify(row.value ?? null),
+  }));
+  if (entries.length === 0 && discarded.length === 0) return [];
 
   const result = (await db.execute(sql`
     with input as (
       select entry.key, entry.value::jsonb as value
       from jsonb_to_recordset(${JSON.stringify(entries)}::jsonb)
         as entry(key text, value text)
+    ), environment_owned as (
+      select entry.key, entry.value::jsonb as value
+      from jsonb_to_recordset(${JSON.stringify(discarded)}::jsonb)
+        as entry(key text, value text)
+    ), removed as (
+      delete from ${settings}
+      where ${settings.key} in (select key from environment_owned)
+      returning key, value
+    ), removals_recorded as (
+      insert into ${settingsVersions} (key, previous_value, new_value, actor, reason)
+      select removed.key, removed.value, environment_owned.value, ${input.actor},
+        ${input.discarded?.reason ?? input.reason}
+      from removed
+      join environment_owned on environment_owned.key = removed.key
+      returning key
     ), written as (
       insert into ${settings} (key, value, updated_at, updated_by)
       select input.key, input.value, now(), ${input.actor} from input

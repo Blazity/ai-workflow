@@ -104,15 +104,17 @@ Field reference:
   The allowlist is read from the worker's own environment, which means a
   change to `PRE_PR_CHECKS_ALLOWED_ENV` reaches nothing until the worker is
   **redeployed**. It stays that way on purpose: the settings migration marks
-  the key `requiresRedeploy` in the registry, so the environment import leaves
-  it alone and the cleanup release neither deletes its parsing nor asks an
-  operator to remove the variable. Whoever may edit settings in the dashboard
-  must not be able to widen, from that page and with immediate effect, which of
-  the worker's secrets a tenant's command may be handed. Adding a name in the hosting dashboard and immediately
-  retrying the save reproduces the same rejection, with the same message,
-  because the running deployment still holds the old list. Redeploy first,
-  then save. The same applies in the other direction: a name removed from the
-  allowlist keeps working until the redeploy lands.
+  the key `requiresRedeploy` in the registry, so the environment is its only
+  answer. The settings surfaces show it read-only and refuse to store it, the
+  environment import leaves it alone, and the cleanup release neither deletes
+  its parsing nor asks an operator to remove the variable. Whoever may edit
+  settings in the dashboard must not be able to widen, from that page and with
+  immediate effect, which of the worker's secrets a tenant's command may be
+  handed. Adding a name in the hosting dashboard and immediately retrying the
+  save reproduces the same rejection, with the same message, because the
+  running deployment still holds the old list. Redeploy first, then save. The
+  same applies in the other direction: a name removed from the allowlist keeps
+  working until the redeploy lands.
 
   `env` belongs to the named-groups shape. The legacy flat `commands` entry
   predates it and does not accept the key.

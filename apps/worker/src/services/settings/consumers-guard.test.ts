@@ -144,16 +144,25 @@ const EXEMPT: Array<{ path: string; because: string }> = [
 /**
  * The `key`/`path` pairs this scan still tolerates in the run tiers.
  *
- * Empty, and that is the point: stage H1 converted the last of them
+ * One, and it is not a live consumer. Stage H1 converted every run-tier read
  * (`DASHBOARD_ORG_SLUG` in `engine/blocks/agent-sandbox.ts`,
  * `engine/steps/clarification.ts`, `engine/steps/telemetry.ts` and
- * `services/workflow-definitions/prompt-authoring.ts`), so a run now takes
- * every migrated value from the settings it froze at its start. A file
- * exemption would hide a reintroduced `env.JOB_TIMEOUT_MS` in the same file,
- * so the pair is what gets pinned here, and an entry added back has to say
- * which key in which file and why.
+ * `services/workflow-definitions/prompt-authoring.ts`), so a run takes every
+ * migrated value from the settings it froze at its start. What is left below is
+ * the replay path: a capture payload written before the field existed carries
+ * no slug, and the value it was captured under is the variable, not the
+ * registry default. A file exemption would hide a reintroduced
+ * `env.JOB_TIMEOUT_MS` in the same file, so the pair is what gets pinned here,
+ * and an entry added back has to say which key in which file and why.
  */
-const RUN_TIER_RESIDUE: Array<{ path: string; key: string; because: string }> = [];
+const RUN_TIER_RESIDUE: Array<{ path: string; key: string; because: string }> = [
+  {
+    path: "engine/steps/telemetry.ts",
+    key: "DASHBOARD_ORG_SLUG",
+    because:
+      "replay compatibility for results recorded before H1, deleted in H2 after a drain",
+  },
+];
 
 /** Drop the findings `RUN_TIER_RESIDUE` names, and nothing else. */
 function withoutKnownResidue(findings: string[]): string[] {

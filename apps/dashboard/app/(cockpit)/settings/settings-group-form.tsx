@@ -93,7 +93,7 @@ function SettingField({
       <p className="m-0 font-body text-[11px] text-neutral-500">
         {RESOLVED_VALUE_LABEL}:{" "}
         <span className="font-mono">{displaySettingValue(entry.value)}</span>.{" "}
-        {sourceHint(entry.source)} {appliesToNote(entry.appliesToRunsInFlight)}.
+        {sourceHint(entry.source)} {appliesToNote(entry.appliesToRunsInFlight, entry.requiresRedeploy)}.
       </p>
       {issue && <p className="m-0 font-body text-[11px] text-fail-fg">{issue}</p>}
       <div>
@@ -278,7 +278,10 @@ export function SettingsGroupForm({
               key={entry.key}
               entry={entry}
               value={draft[entry.key] ?? ""}
-              disabled={!canEdit || saving}
+              // Read-only whoever is looking: the worker reads this key
+              // from its own environment, so a value stored from here would be
+              // recorded and then ignored by the resolution.
+              disabled={!canEdit || saving || entry.requiresRedeploy === true}
               changed={isSettingChanged(entry, draft)}
               issue={issues[entry.key]}
               historyOpen={openHistory === entry.key}

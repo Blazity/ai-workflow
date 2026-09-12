@@ -8,6 +8,7 @@ import {
 import { canEditSettings } from "../../../services/auth/roles.js";
 import {
   SettingsValidationError,
+  settingApiEditRefusal,
   settingsNotEditableThroughApi,
   updateSettings,
 } from "../../../services/settings/index.js";
@@ -35,12 +36,16 @@ export default defineEventHandler(
       // it would be two answers.
       const refused = settingsNotEditableThroughApi(parsed.value.settings);
       if (refused.length > 0) {
+        // One sentence per key rather than one for the patch: the two reasons
+        // this route refuses (a screen of its own, a value the deployment
+        // itself reads) send the caller to different places, and a patch can
+        // carry both.
         throw createError({
           statusCode: 400,
-          statusMessage:
-            `Not editable here: ${refused.join(", ")}. ` +
-            "Activate the repository catalog from the Repositories page, " +
-            "which posts to /api/v1/repository-catalog/activate.",
+          statusMessage: refused
+            .map((key) => settingApiEditRefusal(key))
+            .filter((sentence): sentence is string => sentence !== null)
+            .join(" "),
         });
       }
       return await updateSettings({

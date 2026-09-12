@@ -399,8 +399,7 @@ export const execute: BlockExecuteFn = async (
       kind,
       model,
       ctx.arthur.taskId,
-      ctx.settings.DASHBOARD_ORG_SLUG,
-      runtime,
+      { organizationSlug: ctx.settings.DASHBOARD_ORG_SLUG, runtime },
     );
     if (!preparedRuntime.ok) {
       return agentProtocolExecutionError(preparedRuntime);

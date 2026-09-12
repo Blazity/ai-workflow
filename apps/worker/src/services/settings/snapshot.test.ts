@@ -17,8 +17,9 @@ vi.mock("../../db/client.js", () => ({ getDb: () => state.db }));
 // all of them. Its own behaviour is pinned in environment-import.test.ts,
 // including the fact that it runs at the first snapshot.
 vi.mock("./environment-import.js", () => ({
-  ensureEnvironmentSettingsImported: async () => {},
+  ensureEnvironmentSettingsImported: async () => [],
   migratedVariablesSet: () => [],
+  migratedVariablesUnstored: () => [],
 }));
 
 const {

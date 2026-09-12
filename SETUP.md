@@ -743,21 +743,42 @@ saved yourself: where the variable and the stored value disagree, your stored
 value is the decision and the variable is the leftover. Running it again writes
 nothing.
 
-**How to see what is left.**
+**How to see what is left.** Two lists, and the second one is the one that
+matters:
 
 ```bash
-curl https://<your-vercel-domain>/health | jq '.settings.migratedVariablesSet'
-# → ["MAX_CONCURRENT_AGENTS", "COLUMN_AI"]
+curl https://<your-vercel-domain>/health | jq '.settings'
+# → {
+#     "migratedVariablesSet": ["MAX_CONCURRENT_AGENTS", "COLUMN_AI"],
+#     "migratedVariablesUnstored": []
+#   }
 ```
 
-The Settings page shows the same list as a banner, and the MCP tool
-`settings.list` carries it as `migratedVariablesSet`. Names only, never values.
+`migratedVariablesSet` is the to-do list: variables this deployment still sets.
+`migratedVariablesUnstored` is the subset whose value is NOT stored, read back
+from the settings table on every call rather than assumed from the import
+having run. A name there means the value lives nowhere but the variable, so
+removing it would change what the deployment does: leave it alone, check the
+worker logs for `settings_environment_import_failed`, and look again once the
+database accepts writes.
 
-**What to do.** For each name in that list: check the value on the Settings page
-(it is already stored, with its history), then delete the variable from the
-deployment in the Vercel dashboard. The list is empty when you are done, and
-nothing needs a redeploy for the settings themselves: the worker reads the
-stored rows per request, cron tick and MCP call.
+`"migratedVariablesUnstored": null` means something else again: `/health` could
+not read the settings table at all (it still answers, by design). That is
+"unknown", not "nothing left to worry about". Check the database, then look
+again. The Settings page, which needs a session, is where the same pair comes
+from a read that is allowed to fail loudly.
+
+The Settings page shows both as a banner, and the MCP tool `settings.list`
+carries both as `migratedVariablesSet` and `migratedVariablesUnstored`. Names
+only, never values.
+
+**What to do.** Only while `migratedVariablesUnstored` is empty. For each name
+in `migratedVariablesSet`: check the value on the Settings page (it is already
+stored, with its history), then delete the variable from the deployment in the
+Vercel dashboard, and **redeploy** (or wait for the next deploy). Removing a
+variable in the Vercel dashboard changes nothing for the running deployment: the
+environment it is holding was fixed when it started. After the redeploy, check
+the list again.
 
 **What is NOT on the list, and must stay set.** A handful of keys are marked
 "requires redeploy" because this deployment reads the variable itself rather
@@ -768,14 +789,18 @@ may be handed. They are never imported and never listed; leave them where they
 are.
 
 **`AGENT_ALLOWED_REPOS`.** Replaced by the Repositories page. The build-time
-seed still reads it, warns that it is deprecated, and refuses to run at all once
-the catalog is activated, because an activated catalog is one somebody curated.
+seed still reads it and warns that it is deprecated. Once the catalog is
+activated it seeds no rows from the variable and leaves the activation state
+alone, because an activated catalog is one somebody curated; it still
+reconciles repository pins, default branches and script groups on every build.
 Curate the catalog, then remove the variable.
 
 **Why the hurry.** The cleanup release deletes the environment parsing for every
 migrated key and refuses to boot with one of them set, naming the dashboard page
 that replaced it. A deployment that empties the list first upgrades without
-noticing; one that does not will not start.
+noticing; one that does not will not start. The release is only safe to ship to
+a deployment whose `migratedVariablesUnstored` is empty: that, not the import
+having run, is what says every value survived the variable.
 
 ---
 

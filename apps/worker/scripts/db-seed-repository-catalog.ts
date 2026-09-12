@@ -192,28 +192,30 @@ const db = drizzle({ client: sql, schema }) as unknown as Db;
 const allowlist = allowlistPaths();
 const activated = allowlist.length > 0;
 
-// Before any read the seed would act on: an activated catalog is a curated
-// one. Somebody opened the Repositories page, read the dialog naming every
-// repository that holds an active run claim, and decided. Re-running a seed
-// built from `AGENT_ALLOWED_REPOS` over that would re-add rows an admin left
-// out and re-enable rows an admin disabled, so it refuses and says where the
-// decision lives. First, so a curated deployment is not failed by a stale
-// entry in a variable it no longer uses.
+/**
+ * An activated catalog is a curated one: somebody opened the Repositories page,
+ * read the dialog naming every repository that holds an active run claim, and
+ * decided. What the variable says is no longer the deployment's answer, so the
+ * two things built from it stand down here: the allowlist-derived rows, which
+ * would re-add repositories an admin left out and re-enable ones an admin
+ * disabled, and the activation write, which is that admin's decision to make.
+ *
+ * Only those two. The rest of this script is not about the allowlist at all:
+ * the definition pins keep a repository a deployed workflow targets in the
+ * catalog, the default-branch backfill repairs rows created before the branch
+ * was recorded, and the script-groups migration is a one-off every build still
+ * owes. Skipping those with an early exit is how a curated deployment quietly
+ * stops getting fixes it has nothing to do with the variable to receive.
+ */
 const priorState = await readRepositoryCatalogStateRow(db);
-if (priorState?.activated) {
-  console.log(
-    "[seed-repository-catalog] the catalog is activated, so it is curated on " +
-      "the Repositories page and this seed writes nothing. Remove " +
-      "AGENT_ALLOWED_REPOS from this deployment; the cleanup release (stage " +
-      "H2) deletes this script.",
-  );
-  process.exit(0);
-}
+const curated = priorState?.activated === true;
+/** The allowlist as this build may act on it: nothing, once curated. */
+const seedableAllowlist = curated ? [] : allowlist;
 
 const configured = await configuredProviderKinds();
 const known = await knownProviders(db);
 
-const unresolved = allowlist.filter(
+const unresolved = seedableAllowlist.filter(
   (path) => providersFor(path, known, configured).length === 0,
 );
 if (unresolved.length > 0) {
@@ -268,7 +270,7 @@ const branchOf = new Map(
   ]),
 );
 const granted = dedupe([
-  ...allowlist.flatMap((path) =>
+  ...seedableAllowlist.flatMap((path) =>
     providersFor(path, known, configured).map((provider) => ({ provider, path })),
   ),
   ...(await listPinnedRepositoriesFromDefinitions(db)),
@@ -289,13 +291,29 @@ const seeded = await seedRepositoryCatalogEntries(db, {
 // this seed created on an earlier build, and rows an import created before the
 // branch was recorded. Only empty values are filled.
 const branchesFilled = await backfillRepositoryDefaultBranches(db, directory);
-const state = await seedRepositoryCatalogState(db, { activated });
+// Written only while the variable is still the answer. A curated catalog
+// already has its state row, and re-deciding it on every build is what this
+// stands down from.
+const state = curated
+  ? { activated: true }
+  : await seedRepositoryCatalogState(db, { activated });
 const migrated = await migrateScriptGroupsIntoProfiles(db);
 const rows = await listRepositoryCatalogRows(db);
 const enabled = rows.filter((row) => row.enabled).length;
 
+if (curated) {
+  console.log(
+    "[seed-repository-catalog] the catalog is activated, so it is curated on " +
+      "the Repositories page: this build seeded no rows from " +
+      "AGENT_ALLOWED_REPOS and left the activation state alone. Repository " +
+      "pins, default branches and script groups were still reconciled below. " +
+      "Remove AGENT_ALLOWED_REPOS from this deployment; the cleanup release " +
+      "(stage H2) deletes this script.",
+  );
+}
+
 console.log(
-  `[seed-repository-catalog] allowlist entries: ${allowlist.length}; ` +
+  `[seed-repository-catalog] allowlist entries: ${seedableAllowlist.length}; ` +
     `granted rows created: ${seeded}; ` +
     `default branches filled: ${branchesFilled}; ` +
     `script groups rows created: ${migrated.repositoriesCreated}; ` +

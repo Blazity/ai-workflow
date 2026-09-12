@@ -1534,7 +1534,7 @@ async function agentWorkflowBody(
           ctx.runDefaultKind,
           defaultModel,
           ctx.arthur.taskId,
-          ctx.settings.DASHBOARD_ORG_SLUG,
+          { organizationSlug: ctx.settings.DASHBOARD_ORG_SLUG },
         );
         if (!prepared.ok) return agentProtocolBlockError(prepared);
         const guard = await setCommitGuardStep(
@@ -2013,8 +2013,7 @@ async function agentWorkflowBody(
               kind,
               model,
               ctx.arthur.taskId,
-              ctx.settings.DASHBOARD_ORG_SLUG,
-              runtime,
+              { organizationSlug: ctx.settings.DASHBOARD_ORG_SLUG, runtime },
             );
             if (!researchRuntime.ok) {
               return agentProtocolBlockError(researchRuntime);
@@ -2517,8 +2516,7 @@ async function agentWorkflowBody(
                 kind,
                 model,
                 ctx.arthur.taskId,
-                ctx.settings.DASHBOARD_ORG_SLUG,
-                runtime,
+                { organizationSlug: ctx.settings.DASHBOARD_ORG_SLUG, runtime },
               );
             if (!implementationRuntime.ok) {
               return agentProtocolBlockError(implementationRuntime);
@@ -2780,8 +2778,7 @@ async function agentWorkflowBody(
                 kind,
                 model,
                 ctx.arthur.taskId,
-                ctx.settings.DASHBOARD_ORG_SLUG,
-                runtime,
+                { organizationSlug: ctx.settings.DASHBOARD_ORG_SLUG, runtime },
               );
               if (!reviewRuntime.ok) {
                 return agentProtocolBlockError(reviewRuntime);
