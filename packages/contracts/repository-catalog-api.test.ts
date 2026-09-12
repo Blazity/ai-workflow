@@ -4,6 +4,9 @@ import {
   parseRequestBody,
   repositoryCatalogActivateRequestSchema,
   repositoryCatalogEnabledRequestSchema,
+  repositoryCatalogImportPreviewRequestSchema,
+  repositoryCatalogImportRequestSchema,
+  repositoryCatalogSuggestRequestSchema,
   repositoryCatalogUpsertRequestSchema,
 } from "@shared/contracts";
 
@@ -121,5 +124,48 @@ describe("repositoryCatalogActivateRequestSchema", () => {
         acknowledgedRepositoryKeys: ["github:acme/api"],
       }),
     ).toEqual({ ok: true, value: { acknowledgedRepositoryKeys: ["github:acme/api"] } });
+  });
+});
+
+describe("repositoryCatalogImportRequestSchema", () => {
+  it("defaults the grant to off, so an import that forgot to decide grants nothing", () => {
+    expect(
+      parseRequestBody(repositoryCatalogImportRequestSchema, {
+        repositoryKeys: ["github:acme/api"],
+      }),
+    ).toEqual({
+      ok: true,
+      value: { repositoryKeys: ["github:acme/api"], enabled: false },
+    });
+  });
+
+  it("refuses an empty selection rather than committing nothing", () => {
+    expect(
+      parseRequestBody(repositoryCatalogImportRequestSchema, { repositoryKeys: [] }).ok,
+    ).toBe(false);
+  });
+});
+
+describe("repositoryCatalogImportPreviewRequestSchema", () => {
+  it("accepts an empty body and refuses anything else", () => {
+    expect(parseRequestBody(repositoryCatalogImportPreviewRequestSchema, {})).toEqual({
+      ok: true,
+      value: {},
+    });
+    expect(
+      parseRequestBody(repositoryCatalogImportPreviewRequestSchema, { provider: "github" })
+        .ok,
+    ).toBe(false);
+  });
+});
+
+describe("repositoryCatalogSuggestRequestSchema", () => {
+  it("takes one repository id and refuses a repository that cannot exist", () => {
+    expect(parseRequestBody(repositoryCatalogSuggestRequestSchema, { repositoryId: 7 })).toEqual(
+      { ok: true, value: { repositoryId: 7 } },
+    );
+    expect(
+      parseRequestBody(repositoryCatalogSuggestRequestSchema, { repositoryId: 0 }).ok,
+    ).toBe(false);
   });
 });

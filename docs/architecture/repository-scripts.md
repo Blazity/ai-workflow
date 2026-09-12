@@ -292,6 +292,183 @@ one profile version per repository it names, dropping the script groups of any
 repository it stopped naming; the Repositories page replaces the screen, and the
 cleanup stage drops the table.
 
+## Getting a repository into the catalog: import
+
+Repositories are added by importing them from the connected provider, not by
+typing a path. The screen asks the worker twice.
+
+**Preview** (`POST /api/v1/repository-catalog/import-preview`, open to every
+dashboard role) lists what the installation exposes and marks each entry with
+whether the catalog already holds it. The listing is the repository picker's own
+service, through the one-minute cache that service owns
+(`listCachedRepositoryDirectory` in
+`apps/worker/src/services/repository-discovery/directory.ts`), so the picker,
+the preview and the commit share one listing instead of asking every provider
+three times for one admin's sequence of clicks. The cache is process local: a
+second worker instance asks again, and a repository created at the provider
+appears within a minute. Each candidate carries both its **key**
+(`provider:owner/name`, cased down, the thing the catalog compares on) and its
+**path** (the provider's own casing, the thing a row stores).
+
+**Commit** (`POST /api/v1/repository-catalog/import`, owner or admin) takes the
+keys and one `enabled` flag for the whole selection, and is checked against the
+same listing rather than against the keys it was handed. Every submitted key
+ends in exactly one of three places, and the three mean different things:
+`imported` counts the rows this call created, `alreadyPresent` names the keys
+the catalog already held, and `skipped` names the keys a **successful** listing
+of their provider did not contain, which means the installation does not expose
+that repository any more.
+
+A provider that could not be listed at all is refused rather than reported:
+if any submitted key belongs to a provider whose status is `error`, the whole
+call answers **503 `provider_unavailable`** and writes nothing. "We could not
+ask" is not "it is not there", and reporting the first as the second is how an
+admin reloads the screen, sees most of their repositories gone from the
+selection, and re-imports them later as duplicates. The insert is the seed's
+insert
+(`importConnectedRepositoryCatalogEntries` in
+`apps/worker/src/db/repositories/repository-catalog.ts`), which is one statement
+with a case-insensitive `NOT EXISTS` guard and `ON CONFLICT DO NOTHING`, because
+neon-http has no interactive transactions. Importing twice therefore creates
+nothing and, in particular, does not re-enable a repository somebody switched
+off. Rows are created with `current_profile_version` 0, source `imported`, and
+`enabled` exactly as the admin asked.
+
+**No suggestion runs on an import.** Importing says the catalog knows about a
+repository; describing it is a separate, deliberate click.
+
+## Suggesting a profile
+
+`POST /api/v1/repository-catalog/suggest` (owner or admin) proposes a
+description, rules and script groups for **one** repository, and writes nothing.
+The proposal comes back to the caller and dies there unless the admin saves it
+through the profile route, which is the only path that mints a version.
+
+**What the model reads.** A profile source
+(`apps/worker/src/adapters/vcs/repository-profile-source.ts`, with a GitHub and
+a GitLab implementation beside it) returns the default branch, the provider's
+description, the README, the root manifests it recognises, the NAMES of the
+lockfiles, the CI definitions and the languages. Lockfile content is never read:
+it is megabytes of hashes saying nothing the manifest beside it did not. The
+bundle is cut to about 32 KB of text, README first and CI second, manifests
+last, and every cut is recorded in the bundle **and stated in the prompt**, so a
+model reading half a README writes a shorter description instead of a confident
+one. A repository with no README and no manifests still yields a bundle from the
+provider metadata alone, and still gets a proposal.
+
+Two things the source refuses to paper over. A **404 on the repository's own
+metadata** is the repository being gone from the provider, not a missing README,
+so it is read first and alone and raises `RepositoryMissingAtProviderError`
+rather than being swallowed: every other read would answer 404 too, and a
+deleted repository would otherwise come back as a bundle of empty strings and be
+described confidently from nothing. And the GitLab root listing is **one page of
+100 entries**, so a full page is recorded as a truncation and said out loud in
+the prompt, because a root with more files than that can hold a manifest the
+read never saw.
+
+**The README is prose, not instructions.** The system prompt says so, and says
+that commands come only from the manifests and the CI definitions. That is a
+mitigation, not a boundary: the real defence is that a proposal is never a
+profile. What comes back carries `source: "suggested"` and a `provenance` on
+every group, is a LIST of proposed groups rather than the stored entry the
+profile route accepts, and cannot be posted back as a save without deliberate
+work in the dashboard. Two kinds of group never even reach the admin: one whose
+name the checks engine could not resolve (`invalid_name`, never slugified into
+something the model did not write) and one carrying a command shaped like fetch
+and run (`remote_execution`, `curl ... | sh` and its relatives). Both come back
+in `droppedGroups` with their commands, because a screen that cannot tell "this
+repository declares no tests" from "a proposed group was refused" teaches people
+not to trust the suggestion.
+
+**Which model.** The same one the `call_llm` block uses,
+`CALL_LLM_DEFAULT_MODEL` in `packages/harness/model-catalog.ts`, with the
+provider inferred from the model id. Stated plainly because the plan asked for
+something slightly different: it asked for "the cheapest model of the default
+harness profile", and neither half of that is derivable here. The default
+harness profile manifest names exactly one model (`DEFAULT_MODELS.claude`, the
+dearest of the four), and the repo holds no price table at all: prices are
+fetched at runtime from `CODEX_PRICING_URL`. Resolving "cheapest" would have put
+an HTTP dependency on the suggestion path and made the model non-deterministic.
+The model actually used is recorded on every row, so the cost page reports what
+ran rather than what was configured.
+
+**Bounds: there are two, and what matters is their sum.** The profile read is
+capped at **60 seconds for the whole bundle**
+(`REPOSITORY_PROFILE_DEADLINE_MS`), as one `AbortSignal.timeout` shared by every
+request the source makes rather than a timeout per request: a dozen sequential
+requests each under their own bound would add up to minutes. The model call is
+capped at **90 seconds** (`REPOSITORY_SUGGESTION_TIMEOUT_MS`). The worst case is
+therefore **150 seconds**, and that total is the number to check when either
+bound moves.
+
+The worker declares **no route-level maximum duration**, and there is no
+convention for one: `apps/worker/vercel.json` carries only crons, the Nitro
+config declares no route rules, and the vercel preset bundles the routes into
+one function, so a declaration would move every route's ceiling together. The
+platform default of 300 seconds per invocation already covers the 120 seconds
+the plan asked for, and 150 sits well inside it. A path that could reach the
+platform ceiling would surface as an opaque kill instead of the retryable
+failure these bounds exist to produce.
+
+**A cap per repository.** More than **10 suggestions in 60 minutes** for one
+repository answers **429 `suggestion_rate_limited`** with the seconds to wait,
+in the body and in the `Retry-After` header. The wait is computed from the
+oldest row in the window, so an admin who spent the budget fifty minutes ago
+waits ten minutes and not an hour. The cap is checked after the role check and
+before the provider is touched, and a refusal records nothing: it is not a call,
+it spent nothing, and a history filling with refusals would bury the rows that
+cost money. It is counted from the recorded rows, so unlike the in-flight join
+it holds across restarts and across worker instances.
+
+**A second click joins the first.** A process-local map keyed by repository id
+holds the call in flight, so two clicks are one provider call and one recorded
+row. Process local means **per worker instance**: two instances answering two
+clicks make two calls, which is accepted, because the case this exists for is
+one admin clicking twice on one screen.
+
+**Every call is recorded exactly once**, in `repository_suggestions` (migration
+0061): repository, actor and label, model, outcome (`proposed`, `timeout`,
+`malformed`, `failed`, `missing`), the tokens the provider reported, an error
+message and a timestamp. One insert on every path, written after the work, so a
+failure can never produce two rows for one click. Timeouts and malformed answers
+cost what a proposal costs and are recorded for exactly that reason.
+
+The recorded `error` is the provider's own message, prefixed with the phase it
+came out of (`profile source:` or `provider call:`); the error the **caller**
+gets back is a code and nothing else, because a provider message quotes the
+request it failed on and a dashboard is not where that belongs. Before the
+message is stored it is redacted (`sk-`, `ghp_`, `github_pat_`, `glpat-`,
+`Bearer `, and any run of 32 or more base64 or hex characters become
+`[redacted]`) and then cut to 2000 characters.
+
+`cost_usd` is written null, as the `call_llm` block leaves its own usage: the
+cost page prices a page of rows at once rather than making each call fetch a
+price table. A row whose **tokens are null is unpriced, not free**: the call
+ended before the provider reported anything (a timeout, a repository missing at
+the provider, a bundle that never loaded), and a cost page must render those as
+unpriced rather than as 0.00, because zero would say the call was free and a
+timeout against a provider that had already begun work is not.
+
+**Every error these routes can answer.** The dashboard reads the code, not the
+message.
+
+| Code | HTTP | Retryable | What happened |
+|---|---|---|---|
+| `provider_unavailable` | 503 | yes | An import named a key whose provider could not be listed. Nothing was written. |
+| `invalid_script_group_name` | 400 | no | A profile save carried a group name the checks engine cannot resolve. Refused, never repaired. |
+| `suggestion_rate_limited` | 429 | yes, after `retryAfterSeconds` | This repository has had 10 suggestions in the last hour. Nothing was spent or recorded. |
+| `repository_missing_at_provider` | 404 | no | The provider does not have the repository any more. Recorded as `missing`, no model call, no spend. |
+| `profile_source_timed_out` | 503 | yes | The 60 second profile read deadline fired. Recorded as `timeout`. |
+| `profile_source_failed` | 502 | no | The provider refused the read, or no provider of that kind is configured here. Recorded as `failed`. |
+| `suggestion_timed_out` | 503 | yes | The 90 second model call deadline fired. Recorded as `timeout`. |
+| `suggestion_provider_unavailable` | 503 | yes | The model provider was rate limited or down (`APICallError.isRetryable`, or HTTP 429 or 5xx). Recorded as `failed`. |
+| `suggestion_failed` | 502 | no | The model provider refused (a 401 or 403 is a key, and no retry fixes one). Recorded as `failed`. |
+| `suggestion_malformed` | 502 | no | The answer did not parse against the contract. Recorded as `malformed`, tokens included. |
+
+Every row of that table except the first two and `suggestion_rate_limited`
+writes exactly one `repository_suggestions` row. A 403 (wrong role) and a 404
+(`Unknown repository`) write none: neither reached the provider.
+
 ## Legacy shape (still accepted)
 
 A repository entry stored before repository scripts existed looked like
