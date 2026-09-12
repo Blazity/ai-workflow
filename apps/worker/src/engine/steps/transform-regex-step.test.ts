@@ -9,7 +9,7 @@ import { replaceTextRegexStep } from "./transform-regex-step.js";
 
 /**
  * Every regex replacement fixture the repository asserts on
- * (`workflow-definition/transform.test.ts`), run through the injected
+ * (`workflow-graph-suites/transform.test.ts`), run through the injected
  * evaluator instead of the import `transform.ts` used to reach for.
  *
  * The inversion is only safe if the output is the same string, byte for byte,

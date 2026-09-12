@@ -13,7 +13,7 @@ export type Plan = { scopes: string[]; commands: Cmd[] };
 export const WORKFLOW_TESTS = [
   "src/engine/step-registration-coverage.test.ts",
   "src/engine/tests/block-executors.test.ts",
-  "src/workflow-definition/block-registry.test.ts",
+  "src/engine/definition/block-registry.test.ts",
 ] as const;
 
 /**
@@ -26,21 +26,21 @@ export const WORKFLOW_GRAPH_TESTS = [
   "src/engine/workflow-import-boundary.test.ts",
   "src/routes/import-graph-guard.test.ts",
   "src/mcp/tool-catalog.test.ts",
-  "src/workflow-definition/__golden__/definition-deployment-issues.test.ts",
-  "src/workflow-definition/available-values.test.ts",
-  "src/workflow-definition/bindings.test.ts",
-  "src/workflow-definition/execution-error-invariant.test.ts",
-  "src/workflow-definition/failure-message.test.ts",
-  "src/workflow-definition/invocation-context.test.ts",
-  "src/workflow-definition/json-schema-authoring.test.ts",
-  "src/workflow-definition/scenarios/scheduling-golden.test.ts",
-  "src/workflow-definition/schema-v2.test.ts",
-  "src/workflow-definition/transform.test.ts",
-  "src/workflow-definition/v2-bindings.test.ts",
-  "src/workflow-definition/v2-branch.test.ts",
-  "src/workflow-definition/v2-scheduler.test.ts",
-  "src/workflow-definition/value-analysis-pass.test.ts",
-  "src/workflow-definition/workspace-access.test.ts",
+  "src/engine/definition/__golden__/definition-deployment-issues.test.ts",
+  "src/engine/definition/schema-v2.test.ts",
+  "src/engine/execution-error-invariant.test.ts",
+  "src/workflow-graph-suites/available-values.test.ts",
+  "src/workflow-graph-suites/bindings.test.ts",
+  "src/workflow-graph-suites/failure-message.test.ts",
+  "src/workflow-graph-suites/invocation-context.test.ts",
+  "src/workflow-graph-suites/json-schema-authoring.test.ts",
+  "src/workflow-graph-suites/scenarios/scheduling-golden.test.ts",
+  "src/workflow-graph-suites/transform.test.ts",
+  "src/workflow-graph-suites/v2-bindings.test.ts",
+  "src/workflow-graph-suites/v2-branch.test.ts",
+  "src/workflow-graph-suites/v2-scheduler.test.ts",
+  "src/workflow-graph-suites/value-analysis-pass.test.ts",
+  "src/workflow-graph-suites/workspace-access.test.ts",
 ] as const;
 
 export const WORKTREE_DIFF = ["git", "diff", "--check"] as const satisfies Cmd;
@@ -136,7 +136,8 @@ const isWorkflowGraph = (path: string) =>
   path.startsWith("packages/workflow-graph/");
 const isProduct = (path: string) =>
   path.startsWith("apps/worker/src/engine/") ||
-  path.startsWith("apps/worker/src/workflow-definition/") ||
+  path.startsWith("apps/worker/src/services/workflow-definitions/") ||
+  path.startsWith("apps/worker/src/workflow-graph-suites/") ||
   path.startsWith("apps/worker/src/sandbox/agents/fixtures/") ||
   path.startsWith("apps/worker/workflow-test-fixtures/") ||
   path.startsWith("packages/contracts/") ||

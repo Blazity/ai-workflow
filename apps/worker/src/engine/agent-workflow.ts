@@ -27,7 +27,7 @@ import { executeTransform, type V2BindingResolutionContext } from "@shared/workf
 import { JSON_SCHEMA_SUPPORT } from "./definition/json-schema-support.js";
 import { SCHEDULER_DEPENDENCIES } from "./definition/scheduler-dependencies.js";
 import type { BlockExecutionContext, BlockExecutionResult, BlockExecutor } from "@shared/workflow-graph";
-import { resolveBlockAgent, resolveRunDefaultKind } from "../workflow-definition/resolve-agent.js";
+import { resolveBlockAgent, resolveRunDefaultKind } from "./definition/resolve-agent.js";
 import { resolveTicketMoveTarget } from "./helpers/ticket-move-target.js";
 import { runKindForAgentWorkflowInput, type AgentWorkflowInput } from "./agent-input.js";
 import { moveTicketStep } from "./steps/ticket-transition-step.js";
@@ -188,7 +188,7 @@ export async function loadWorkflowPlanWithRetirementExit<
   }
   if (!plan) return null;
   const { isLegacyStoredWorkflowDefinition } = await import(
-    "../workflow-definition/stored-definition.js"
+    "./definition/stored-definition.js"
   );
   return isLegacyStoredWorkflowDefinition(plan.definition)
     ? input.retire(RETIRED_SCHEMA_MESSAGE)

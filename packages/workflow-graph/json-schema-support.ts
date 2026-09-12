@@ -5,7 +5,7 @@
  * A transform's expected schema, a block's authored output schema and a value
  * measured against one are all JSON Schema 2020-12 questions, and the only
  * answer this repository trusts comes from ajv
- * (`apps/worker/src/workflow-definition/json-schema.ts`). ajv is a runtime
+ * (`apps/worker/src/engine/definition/json-schema.ts`). ajv is a runtime
  * dependency of the worker, so the package takes the three entry points as a
  * parameter the same way `graph-issues.ts` takes the transform shape validator
  * and `policies.ts` takes the deployment issue source: the rules here state

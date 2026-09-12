@@ -8,7 +8,7 @@
  * validation: harness profile existence, prompt references, schedule occurrence
  * evaluation, block availability, repository scope. Those read the environment
  * or stored state and live in the worker, which composes both halves in
- * `apps/worker/src/workflow-definition/deployment-validation.ts`.
+ * `apps/worker/src/engine/definition/deployment-validation.ts`.
  *
  * The split is invisible to an author only if the ORDER survives it, so the
  * functions here are shaped around the sequence the worker splices them in
@@ -53,7 +53,7 @@ import {
  * Declared structurally rather than imported because the implementation
  * (`./transform.ts`) checks a transform's expected schema through the ajv the
  * worker binds, so the graph walk takes the validator already bound to it and
- * never learns what backs it. `apps/worker/src/workflow-definition/deployment-validation.ts`
+ * never learns what backs it. `apps/worker/src/engine/definition/deployment-validation.ts`
  * is where the two meet.
  */
 export interface WorkflowTransformShapeIssue {

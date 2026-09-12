@@ -1,10 +1,10 @@
 import type { JsonValue } from "@shared/contracts";
-import { validateBlockOutputForDefinition } from "../../../workflow-definition/block-registry.js";
+import { validateBlockOutputForDefinition } from "../../definition/block-registry.js";
 import {
   parseJsonSchema202012,
   validateJsonSchemaValue,
   type ParsedJsonSchema,
-} from "../../../workflow-definition/json-schema.js";
+} from "../../definition/json-schema.js";
 import {
   durationBudgetFailure,
   RunBudgetError,

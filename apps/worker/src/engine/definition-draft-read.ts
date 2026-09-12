@@ -5,7 +5,7 @@ import {
   type WorkflowDefinitionDraftStateRow,
 } from "../db/repositories/definitions.js";
 import { getConnectedWorkflowDefinitionDraftState } from "../db/repositories/definitions/connected.js";
-import { applyWorkflowDefinitionLayout } from "../workflow-definition/layout.js";
+import { applyWorkflowDefinitionLayout } from "./definition/layout.js";
 import { parseOptionalWorkflowDefinitionVersionRow } from "./stored-definition-reads.js";
 
 function materializeWorkflowDefinitionDraft(

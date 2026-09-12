@@ -29,7 +29,7 @@ import {
   resolvedBindingOutput,
   resolvedOutput,
   workflowBlockDefinitionIssue,
-} from "../../workflow-definition/block-registry.js";
+} from "./block-registry.js";
 
 export interface WorkflowBlockRegistryContext {
   agentProviders: { claude: boolean; codex: boolean };

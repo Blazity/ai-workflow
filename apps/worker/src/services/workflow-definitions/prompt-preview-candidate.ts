@@ -11,7 +11,7 @@
 import {
   previewConnectedWorkflowPromptCandidate,
 } from "./policy-operations.js";
-import type { WorkflowPromptPreviewResult } from "../../workflow-definition/prompt-preview.js";
+import type { WorkflowPromptPreviewResult } from "./prompt-preview.js";
 
 export function previewWorkflowDefinitionPrompt(input: {
   candidate: unknown;

@@ -59,7 +59,7 @@ vi.mock("../../infra/logger.js", () => ({
 }));
 
 import { loadWorkflowDefinitionFor } from "./definition-step.js";
-import { defaultWorkflowDefinitionV2 } from "../../workflow-definition/default.js";
+import { defaultWorkflowDefinitionV2 } from "../definition/default.js";
 import { testSettingsSnapshot } from "../../test-support/settings.js";
 
 /**

@@ -38,7 +38,7 @@ export interface PrAutofixCapDecision {
  * Returns null for an unconfigured cap, having written NOTHING: uncapped must
  * stay indistinguishable from before the feature existed.
  *
- * max is authored as 1..10 (maxFixAttemptsPerPr in workflow-definition/schema),
+ * max is authored as 1..10 (maxFixAttemptsPerPr in @shared/workflow-graph),
  * so a non-positive max cannot arrive from a deployed graph. It refuses on the
  * spot rather than writing a row first, since spending a budget of zero is a
  * contradiction and the row would still be there for a later, valid max.

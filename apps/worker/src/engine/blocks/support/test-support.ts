@@ -14,7 +14,7 @@ import {
   BUILTIN_HARNESS_PROFILE_IDS,
   BUILTIN_HARNESS_PROFILE_MANIFESTS,
 } from "@shared/harness";
-import { validateBlockOutputAgainstContract } from "../../../workflow-definition/block-registry.js";
+import { validateBlockOutputAgainstContract } from "../../definition/block-registry.js";
 import {
   resolveWorkflowBlockContract,
   type WorkflowBlockRegistryContext,

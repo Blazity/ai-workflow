@@ -43,7 +43,7 @@ import {
   v2BranchConfigurationSchema,
   v2LoopConfiguration,
   vcsProviderSelection,
-} from "../../workflow-definition/schema.js";
+} from "@shared/workflow-graph";
 
 const emptyParams = z.object({}).strict();
 const agentParams = z

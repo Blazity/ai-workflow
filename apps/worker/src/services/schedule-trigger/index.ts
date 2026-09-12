@@ -25,6 +25,10 @@ export type {
   Weekday,
 } from "./occurrence.js";
 export type { OccurrenceRow } from "./occurrence-store.js";
+// Declared for one consumer, `services/workflow-definitions/persistence.test.ts`:
+// the cross-cluster rule above applies to it, and the boundaries gate cannot
+// record the alternative because it excludes test files from the cruise.
+export { resolveLiveScheduleTriggerTarget } from "./live-target.js";
 export {
   cancelWaitingOccurrences,
 } from "./revoked-occurrences.js";

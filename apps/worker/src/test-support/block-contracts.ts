@@ -26,7 +26,7 @@ import {
   type WorkflowValueAnalyzer,
 } from "@shared/workflow-graph";
 import { JSON_SCHEMA_SUPPORT } from "../engine/definition/json-schema-support.js";
-import { validateWorkflowDefinitionIssuesForDeployment } from "../workflow-definition/deployment-validation.js";
+import { validateWorkflowDefinitionIssuesForDeployment } from "../engine/definition/deployment-validation.js";
 
 export function testBlockContractResolver(
   context: WorkflowBlockRegistryContext,

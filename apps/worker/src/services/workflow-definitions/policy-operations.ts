@@ -24,7 +24,7 @@ import {
 } from "../../engine/definition-trigger-routing.js";
 import * as raw from "../../db/repositories/definitions.js";
 import { createDefinitionsRepository } from "../../db/repositories/definitions.js";
-import { validateWorkflowPromptAuthoringIssues } from "../../workflow-definition/prompt-authoring.js";
+import { validateWorkflowPromptAuthoringIssues } from "./prompt-authoring.js";
 import { currentBlockContracts } from "./block-contracts.js";
 import {
   dispatchManualWorkflow,
@@ -35,7 +35,7 @@ import {
   describeWorkflowDefinitionIssues,
   workflowDefinitionV2Schema,
 } from "@shared/workflow-graph";
-import { validateWorkflowDefinitionIssuesForDeployment } from "../../workflow-definition/deployment-validation.js";
+import { validateWorkflowDefinitionIssuesForDeployment } from "../../engine/definition/deployment-validation.js";
 import {
   syncConnectedLiveDefinitionTriggers,
   syncLiveDefinitionTriggers,

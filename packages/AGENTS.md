@@ -100,10 +100,10 @@ rides on the worker's `BlockInvocationContext`: enforcing a Harness Profile
 limit is runtime work, and this package does none. A rule that would
 have to read the environment, the block registry, stored state or a clock is not
 structural: it belongs in
-`apps/worker/src/workflow-definition/deployment-validation.ts`, which composes
+`apps/worker/src/engine/definition/deployment-validation.ts`, which composes
 both halves. The order the halves compose in is behaviour, because an author
 reads one list, and
-`apps/worker/src/workflow-definition/__golden__/definition-deployment-issues.json`
+`apps/worker/src/engine/definition/__golden__/definition-deployment-issues.json`
 pins it byte for byte.
 
 Three more traps. The package may not import worker code, `@shared/harness` or

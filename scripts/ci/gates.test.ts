@@ -296,7 +296,7 @@ test("repository and allowlisted writes pass the consecutive-writes gate", () =>
       "}",
       "",
     ].join("\n"),
-    "apps/worker/src/workflow-definition/template-seed.ts": [
+    "apps/worker/src/services/workflow-definitions/template-seed.ts": [
       "async function seed() {",
       "  await db.insert(values);",
       "  await db.update(values);",
@@ -305,7 +305,7 @@ test("repository and allowlisted writes pass the consecutive-writes gate", () =>
     ].join("\n"),
   });
   const allowlist = join(root, "allowlist.json");
-  writeFileSync(allowlist, '["apps/worker/src/workflow-definition/template-seed.ts"]\n');
+  writeFileSync(allowlist, '["apps/worker/src/services/workflow-definitions/template-seed.ts"]\n');
   const result = gate("consecutive-writes.mjs", ["--root", root, "--allowlist", allowlist]);
   assert.equal(result.status, gateSuccess, result.stderr || result.stdout);
   assert.match(result.stdout, /consecutive-writes PASS/);
@@ -405,7 +405,7 @@ test("the db client fence counts import forms, ignores comments, and is a hard g
 
 test("a reintroduced definition schema branch fails the single schema version gate", async () => {
   const root = await mkdtemp(join(tmpdir(), "single-schema-gate-"));
-  const source = join(root, "apps/worker/src/workflow-definition");
+  const source = join(root, "apps/worker/src/engine/definition");
   const examples = join(root, "docs/example-workflows");
   await mkdir(source, { recursive: true });
   await mkdir(examples, { recursive: true });
@@ -461,7 +461,7 @@ test("a reintroduced definition schema branch fails the single schema version ga
   ]) {
     assert.ok(result.stdout.includes(match), `missing gate match: ${match}`);
   }
-  assert.match(result.stdout, /apps\/worker\/src\/workflow-definition\/planner\.ts/u);
+  assert.match(result.stdout, /apps\/worker\/src\/engine\/definition\/planner\.ts/u);
   assert.match(result.stdout, /docs\/example-workflows\/legacy\.json/u);
   assert.doesNotMatch(result.stdout, /planner\.test\.ts/u);
   assert.doesNotMatch(result.stdout, /stored-definition\.ts/u);
@@ -550,12 +550,12 @@ test("adversarial retired schema spellings each fail the single schema version g
       match: /production imports test module \.\/legacy-runtime\.test/u,
     },
     {
-      file: "apps/worker/src/workflow-definition/stored-definition.ts",
+      file: "apps/worker/src/engine/definition/stored-definition.ts",
       contents: "export type Runtime = WorkflowDefinitionV1;\n",
       match: /WorkflowDefinitionV1/u,
     },
     {
-      file: "apps/worker/src/workflow-definition/stored-definition.ts",
+      file: "apps/worker/src/engine/definition/stored-definition.ts",
       contents: "export const runtime = executeRetiredDefinition;\n",
       match: /executeRetiredDefinition/u,
     },
