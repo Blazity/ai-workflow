@@ -1,0 +1,142 @@
+/**
+ * The recorder behind the scheduling golden fixture.
+ *
+ * A scenario is the only thing in this repository that runs the production
+ * scheduler over a published graph, so the order the fixture pins can only be
+ * observed by running the scenario suite. That is why this renders by spawning
+ * vitest over `workflow-graph-suites/scenarios` with
+ * `WORKFLOW_SCHEDULING_GOLDEN_SINK` naming a directory, and why the harness
+ * (`workflow-graph-suites/scenarios/harness.ts`) is where each executed scenario
+ * drops its own file.
+ *
+ * The files arrive in no particular order, because vitest runs the scenario
+ * files in parallel. Only the order WITHIN one scenario is the scheduler's, so
+ * records are sorted by source and then by their own rendered order, and the
+ * comparison is a byte comparison of that sorted text: a structural diff would
+ * let the order inside a scenario drift, and that order is the whole point.
+ *
+ * Two callers, one recorder: `scripts/capture-scheduling-golden.ts` writes the
+ * fixture, and `workflow-graph-suites/scenarios/scheduling-golden.test.ts`
+ * asserts it. The test skips itself while the sink is set, which is what keeps
+ * the spawned run from spawning another.
+ */
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+
+interface SchedulingRecord {
+  source: string;
+  order: string[];
+}
+
+/** Names the directory each executed scenario drops its emission order into.
+ *  Set, it also tells the golden test it is the spawned run and must not
+ *  recurse. */
+export const SCHEDULING_GOLDEN_SINK_VARIABLE = "WORKFLOW_SCHEDULING_GOLDEN_SINK";
+
+const WORKER_ROOT = resolve(import.meta.dirname, "../..");
+
+export const SCHEDULING_GOLDEN_PATH = resolve(
+  WORKER_ROOT,
+  "src/workflow-graph-suites/scenarios/scheduling.golden.json",
+);
+
+/** Enough of the child's tail to name the failing scenario and its assertion. */
+const CHILD_OUTPUT_TAIL_LINES = 40;
+
+/** How a person re-records the fixture after deciding an order should change. */
+export const SCHEDULING_GOLDEN_RECORD_COMMAND =
+  "pnpm --filter worker run capture:scheduling-golden -- --write";
+
+/** Runs the scenario suite and returns the fixture text it produces. */
+export function renderSchedulingGolden(): string {
+  const sink = mkdtempSync(join(tmpdir(), "scheduling-golden-"));
+  try {
+    runScenarios(sink);
+    return render(readRecords(sink));
+  } finally {
+    rmSync(sink, { recursive: true, force: true });
+  }
+}
+
+export function readSchedulingGolden(): string | null {
+  try {
+    return readFileSync(SCHEDULING_GOLDEN_PATH, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+function runScenarios(sink: string): void {
+  // The vitest binary rather than a package script: this runs from inside a
+  // vitest worker as well as from the capture script, and every VITEST_* value
+  // the outer run exported would address the outer run's pool.
+  const environment: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of Object.keys(environment)) {
+    if (key.startsWith("VITEST")) delete environment[key];
+  }
+  environment[SCHEDULING_GOLDEN_SINK_VARIABLE] = sink;
+  try {
+    execFileSync(
+      resolve(WORKER_ROOT, "node_modules/.bin/vitest"),
+      ["run", "src/workflow-graph-suites/scenarios"],
+      { cwd: WORKER_ROOT, stdio: "pipe", env: environment },
+    );
+  } catch (error) {
+    // `stdio: "pipe"` means a failing scenario would otherwise reach CI as a
+    // bare non-zero exit, so the child's own report is what gets rethrown. The
+    // tails lead the message because the attached cause prints its raw
+    // stdout/stderr buffers byte by byte, after this, and reads as noise.
+    throw new Error(
+      [
+        `The spawned scenario run failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        childOutputTail("stdout", error),
+        childOutputTail("stderr", error),
+      ].join("\n"),
+      { cause: error },
+    );
+  }
+}
+
+/** The last few lines the child wrote on one stream, labelled. */
+function childOutputTail(stream: "stdout" | "stderr", error: unknown): string {
+  const captured = (error as { [key: string]: unknown } | null)?.[stream];
+  const text =
+    typeof captured === "string"
+      ? captured
+      : Buffer.isBuffer(captured)
+        ? captured.toString("utf8")
+        : "";
+  if (text.trim().length === 0) return `--- child ${stream}: empty ---`;
+  const lines = text.split("\n");
+  const tail = lines.slice(-CHILD_OUTPUT_TAIL_LINES);
+  const elided = lines.length - tail.length;
+  return [
+    `--- child ${stream}${elided > 0 ? ` (last ${tail.length} of ${lines.length} lines)` : ""} ---`,
+    ...tail,
+  ].join("\n");
+}
+
+function readRecords(sink: string): SchedulingRecord[] {
+  const files = readdirSync(sink).filter((name) => name.endsWith(".json"));
+  if (files.length === 0) {
+    throw new Error(
+      `No scenario recorded an order. The harness recorder did not run: check ${SCHEDULING_GOLDEN_SINK_VARIABLE}.`,
+    );
+  }
+  return files.map(
+    (name) => JSON.parse(readFileSync(join(sink, name), "utf8")) as SchedulingRecord,
+  );
+}
+
+function render(records: SchedulingRecord[]): string {
+  const sorted = [...records].sort((left, right) =>
+    left.source === right.source
+      ? left.order.join("\0").localeCompare(right.order.join("\0"))
+      : left.source.localeCompare(right.source),
+  );
+  return `${JSON.stringify(sorted, null, 2)}\n`;
+}

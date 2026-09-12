@@ -5,6 +5,7 @@ import type {
 import { blockBudgetObserver, executionError } from "../support/types.js";
 import {
   loadPrePrCheckConfigStep,
+  runChecksScopeKeys,
   recoverChecksCeilingFromSteps,
   runPrePrChecksWithFixes,
 } from "../pre-pr-checks.js";
@@ -35,7 +36,7 @@ function checksBudgetObserver(
   requireRemainingDuration?: boolean,
   observedAtMs?: number,
 ) => Promise<RunBudgetObservation> {
-  const observe = (execution?.observeBudget ??
+  const observe = (execution?.budget.observeBudget ??
     ctx.observeBudget) as BoundaryCapableBudgetObserver;
   return (requireRemainingDuration, observedAtMs) =>
     observe(requireRemainingDuration, "checks", observedAtMs);
@@ -66,7 +67,7 @@ export const execute: BlockExecuteFn = async (
     : [];
   const budget = await ctx.observeBudget();
   if (budget.check.status !== "ok") throw new RunBudgetError(budget.check);
-  const current = await loadPrePrCheckConfigStep();
+  const current = await loadPrePrCheckConfigStep(runChecksScopeKeys(ctx));
   let run: PrePrCheckRunResult;
   try {
     run = await runPrePrChecksWithFixes({

@@ -21,13 +21,16 @@ allowed to know. Structural rules, the ones that need only the graph, live in
 the workspace package `@shared/workflow-graph` (`packages/workflow-graph/`):
 `schema.ts` parses, `graph-issues.ts` reports, `limits.ts` holds the two size
 caps. Deployment rules, the ones that read the environment, the block registry
-or a clock, live in `apps/worker/src/workflow-definition/deployment-validation.ts`,
+or a clock, live in `apps/worker/src/engine/definition/deployment-validation.ts`,
 which composes both halves into the one ordered list an author reads. The block
 parameter schemas and the block contract resolver the structural rules need are
 handed in as parameters, never imported, which is what keeps the package free of
-the worker. `apps/worker/src/workflow-definition/schema.ts` is a re-export left
-for two engine importers and is deleted by stage 7 of
-[the workflow graph plan](../plans/2026-09-11-workflow-graph-package.md).
+the worker. `apps/worker/src/workflow-definition/` no longer exists: stage 7 of
+[the workflow graph plan](../plans/2026-09-11-workflow-graph-package.md) re-homed
+its files by their importers, into `apps/worker/src/engine/definition/` (the
+engine-facing half), `apps/worker/src/services/workflow-definitions/` (authoring,
+seeding, drift gates) and `apps/worker/src/workflow-graph-suites/` (the suites
+and the scenario corpus), and deleted the `schema.ts` re-export.
 
 A definition is an object with `schemaVersion: 2`, `nodes`, `edges`, and two
 optional graph-level fields, validated by `workflowDefinitionV2Schema` in
@@ -154,7 +157,7 @@ into an agent prompt.
 
 Which references an author may pick is computed per node by
 `analyzeWorkflowValues` in
-`apps/worker/src/workflow-definition/available-values.ts`, which also produces
+`packages/workflow-graph/available-values.ts`, which also produces
 the per-node contracts, the available values and (through
 `analyzeWorkflowV2Catalog`) the data catalog the editor shows. A binding to an
 unknown block, or a block binding to its own output, is a validation error in
@@ -197,11 +200,11 @@ Agent blocks (`planning_agent`, `implementation_agent`, `review_agent`,
 
 `normalizeV2AgentProfileConfiguration` in the package's `schema.ts` normalizes the profile
 reference before parsing. Resolution and existence checks live in
-`apps/worker/src/workflow-definition/harness-profile-runtime.ts`
+`apps/worker/src/engine/definition/harness-profile-runtime.ts`
 (`resolveHarnessRuntimesForDefinition`, `validateHarnessProfileReferences`),
 which is what turns a pinned profile into the runtime an agent block executes
 with. Prompt authoring and the prompt reference shape are handled by
-`apps/worker/src/workflow-definition/prompt-authoring.ts`.
+`apps/worker/src/services/workflow-definitions/prompt-authoring.ts`.
 
 ## 8. Loops, regions and carries
 
@@ -210,18 +213,17 @@ configuration (`v2LoopConfiguration` in the package's `schema.ts`) is `maxAttemp
 20), `onExhaust` (`fail`, `human` or `continue`), and an optional `carry` array
 of at most 100 entries, each `{name, schema, binding}`.
 
-At runtime `buildV2RuntimeGraph` in
-`apps/worker/src/workflow-definition/v2-scheduler.ts` derives a `V2LoopRegion`
-per Loop: the member blocks that belong to the cycle, plus whether the region
-has an external entry into its body. Each iteration runs in an activation
-scope (`V2ActivationScopeState`) with its own edge tokens, node states and
-outputs, so a second iteration cannot read the first iteration's values by
-accident.
+At runtime `buildV2RuntimeGraph` in the package's `scheduler.ts` derives a
+`V2LoopRegion` per Loop: the member blocks that belong to the cycle, plus
+whether the region has an external entry into its body. Each iteration runs in
+an activation scope (`V2ActivationScopeState`) with its own edge tokens, node
+states and outputs, so a second iteration cannot read the first iteration's
+values by accident.
 
 Carried values are resolved once per iteration by the scheduler, validated
 against the declared JSON Schema of the carry entry, and rejected when a name
 repeats, when the value is not JSON serializable, or when it does not match its
-schema (`v2-scheduler.ts`). A region also records that control has left it
+schema (`scheduler.ts`). A region also records that control has left it
 (`loopRegionExited`), because an active edge crossing the region boundary is
 not proof that the region was exited: a member may fan out on a port that also
 continues inside the region.
@@ -249,9 +251,9 @@ composed.
 
 | Policy | Question | Who calls it |
 |---|---|---|
-| `parse` | Read this graph into the runnable shape, check nothing else | the repository read path (`workflow-definition/stored-definition.ts`, reached through `engine/stored-definition-reads.ts`), `validation.ts`, `services/workflow-definitions/definition-candidates.ts`, `engine/steps/definition-step.ts`, `workflow-definition/scenarios/harness.ts`. One exception remains: `services/workflow-definitions/policy-operations.ts:82` still parses with `workflowDefinitionV2Schema.safeParse` and throws a flat 400 string, and nine call sites in that file go through it; the stage that owns `policy-operations.ts` repoints them |
-| `deploy` | May it become executable here, environment availability included | `deployment-validation.ts`, and through it `validation.ts` and `services/workflow-definitions/policy-operations.ts` |
-| `runLoad` | The same about a graph that already deployed, availability skipped | `deployment-validation.ts` (`validateWorkflowDefinitionForRunLoad`), called by `engine/steps/definition-step.ts` and the scenario harness |
+| `parse` | Read this graph into the runnable shape, check nothing else | the repository read path (`engine/definition/stored-definition.ts`, reached through `engine/stored-definition-reads.ts`), `engine/definition/validation.ts`, `services/workflow-definitions/definition-candidates.ts`, `engine/steps/definition-step.ts`, `workflow-graph-suites/scenarios/harness.ts`. One exception remains: `services/workflow-definitions/policy-operations.ts:82` still parses with `workflowDefinitionV2Schema.safeParse` and throws a flat 400 string, and nine call sites in that file go through it; the stage that owns `policy-operations.ts` repoints them |
+| `deploy` | May it become executable here, environment availability included | `engine/definition/deployment-validation.ts`, and through it `engine/definition/validation.ts` and `services/workflow-definitions/policy-operations.ts` |
+| `runLoad` | The same about a graph that already deployed, availability skipped | `engine/definition/deployment-validation.ts` (`validateWorkflowDefinitionForRunLoad`), called by `engine/steps/definition-step.ts` and the scenario harness |
 
 **De-duplication is not single-pass, on purpose.** The graph walk dedupes its
 own list inside `graph-issues.ts:1039`, because
@@ -273,24 +275,24 @@ would drop block availability and cron rules, binding analysis, branch and
 transform reference checks, workspace access and the repository pin out of what
 an operator sees at save time, and that decision is open. The entry
 point is `validateWorkflowDefinitionCandidate` in
-`apps/worker/src/workflow-definition/validation.ts`, which refuses a retired
+`apps/worker/src/engine/definition/validation.ts`, which refuses a retired
 `schemaVersion` by name, runs `parse`, and returns machine-readable issues
 carrying `code`, `severity`, `nodeId` and a JSON pointer `path`, with per-node
 contracts and available values attached for the editor. Callers never recover
 structure by parsing messages.
 
 **Deployment.** `validateWorkflowDefinitionIssuesForDeployment` in
-`apps/worker/src/workflow-definition/deployment-validation.ts` is what a
+`apps/worker/src/engine/definition/deployment-validation.ts` is what a
 definition must pass before it can run: it wraps the `deploy` policy (or
 `runLoad` when the caller passes `checkEnvironmentAvailability: false`) and
 hands it the worker-only half as one injected issue source, so the package
 never learns what backs it. For a v2 definition the composed list runs, in one
 pass: the graph rules of section 4 and the per-type configuration schemas (the
 policy's own structural half), then the block deployment rules from
-`apps/worker/src/workflow-definition/block-registry.ts`, the binding analysis
-from `available-values.ts`, the Branch condition and Transform reference
-checks, the workspace access rules from
-`apps/worker/src/workflow-definition/workspace-access.ts`, and the repository
+`apps/worker/src/engine/definition/block-registry.ts`, the binding analysis
+from `packages/workflow-graph/available-values.ts`, the Branch condition and
+Transform reference checks, the workspace access rules from
+`packages/workflow-graph/workspace-access.ts`, and the repository
 scope pin rules. That order is behaviour: an author reads one list, and
 `__golden__/definition-deployment-issues.test.ts` pins it byte for byte.
 
@@ -324,25 +326,28 @@ would need conflicting access to the same workspace.
 
 ## 11. Runtime
 
-`executeV2Graph` in `apps/worker/src/workflow-definition/v2-scheduler.ts` walks
-a deployed graph. It keeps a checkpoint (`V2SchedulerCheckpoint`) holding the
-entry trigger and its output, every activation scope, attempt counts, the ready
-queue, pending clarifications and answers, so a run can pause on a human
-question and resume on the answer. Edges carry a token (`unresolved`, `active`,
-`inactive`), nodes carry a status (`waiting`, `ready`, `running`,
-`waiting_loop`, `waiting_for_clarification`, `completed`, `skipped`,
-`cancelled`, `failed`), and the walk is bounded by
-`V2_PRODUCTION_SCHEDULER_BOUNDS` (maximum concurrency and maximum total block
-executions). Execution errors are shaped by
-`apps/worker/src/workflow-definition/interpreter.ts`, which owns the safe
-message set and the one construction path a failed block reports through, while
-the execution error class, the sentence a user reads and the operator log event
-are engine concerns in `apps/worker/src/engine/helpers/execution-error.ts`. The
-failure a run records is plain data declared in
-`packages/contracts/execution-error.ts`, so the scheduler mints and carries one
-without touching the engine. A Transform block's regex replacement is the one
-transform operation that cannot be pure, so `transform.ts` takes an async regex
-evaluator as a parameter and refuses a regex transform without one, and
+`executeV2Graph` in the package's `scheduler.ts` walks a deployed graph. What it
+cannot judge on its own arrives as `SchedulerDependencies`, a required option
+bound once in `apps/worker/src/engine/definition/scheduler-dependencies.ts`: a
+block output measured against its contract, and a carried loop value measured
+against its declared JSON Schema, both ajv questions that stay in the worker. It
+keeps a checkpoint (`V2SchedulerCheckpoint`) holding the entry trigger and its
+output, every activation scope, attempt counts, the ready queue, pending
+clarifications and answers, so a run can pause on a human question and resume on
+the answer. Edges carry a token (`unresolved`, `active`, `inactive`), nodes
+carry a status (`waiting`, `ready`, `running`, `waiting_loop`,
+`waiting_for_clarification`, `completed`, `skipped`, `cancelled`, `failed`), and
+the walk is bounded by `V2_PRODUCTION_SCHEDULER_BOUNDS` (maximum concurrency and
+maximum total block executions). Execution errors are shaped by the package's
+`interpreter.ts`, which owns the safe message set and the one construction path
+a failed block reports through, while the execution error class, the sentence a
+user reads and the operator log event are engine concerns in
+`apps/worker/src/engine/helpers/execution-error.ts`. The failure a run records
+is plain data declared in `packages/contracts/execution-error.ts`, so the
+scheduler mints and carries one without touching the engine. A Transform block's
+regex replacement is the one transform operation that cannot be pure, so
+`transform.ts` takes an async regex evaluator as a parameter and refuses a regex
+transform without one, and
 `apps/worker/src/engine/steps/transform-regex-step.ts` stays the only loader of
 `re2-wasm` and supplies the evaluator the workflow injects.
 
@@ -385,21 +390,29 @@ Three properties matter to anyone authoring a graph through an agent:
 |---|---|
 | Definition schema, stored-shape upgrade, size limits | `packages/workflow-graph/schema.ts`, `packages/workflow-graph/limits.ts` |
 | Structural graph rules, branch and transform references, any-scope review safety | `packages/workflow-graph/graph-issues.ts` |
-| Deployment validation and the order the two halves compose in | `apps/worker/src/workflow-definition/deployment-validation.ts` |
-| The golden fixture that pins that order | `apps/worker/src/workflow-definition/__golden__/`, recorded by `apps/worker/scripts/capture-definition-issue-golden.ts` |
-| Candidate validation for the API | `apps/worker/src/workflow-definition/validation.ts` |
+| Deployment validation and the order the two halves compose in | `apps/worker/src/engine/definition/deployment-validation.ts` |
+| The golden fixture that pins that order | `apps/worker/src/engine/definition/__golden__/`, recorded by `apps/worker/scripts/capture-definition-issue-golden.ts` |
+| Candidate validation for the API | `apps/worker/src/engine/definition/validation.ts` |
 | Block catalog, ports, param keys | `packages/contracts/workflow-graph.ts` |
-| Block contracts and registry rules | `apps/worker/src/workflow-definition/block-registry.ts` |
+| Block contracts and registry rules | `apps/worker/src/engine/definition/block-registry.ts` |
 | Deployment-aware contracts and the resolver | `apps/worker/src/engine/definition/block-contract-resolver.ts`, `apps/worker/src/engine/definition/block-contract-environment.ts` |
 | Per-type block parameter schemas | `apps/worker/src/engine/definition/block-params-schemas.ts` |
 | Block data bound once per request | `apps/worker/src/services/workflow-definitions/block-contracts.ts` |
 | Binding resolution | `packages/workflow-graph/v2-bindings.ts` |
-| Available values and node contracts | `apps/worker/src/workflow-definition/available-values.ts` |
-| Scheduler, loop regions, checkpoints | `apps/worker/src/workflow-definition/v2-scheduler.ts` |
-| Execution results and error construction | `apps/worker/src/workflow-definition/interpreter.ts` |
+| Available values and node contracts | `packages/workflow-graph/available-values.ts` |
+| Value schema assignability and the run binding schema | `packages/workflow-graph/bindings.ts` |
+| Transform semantics, shape and output schema | `packages/workflow-graph/transform.ts` |
+| Authored JSON Schema inspection | `packages/workflow-graph/json-schema-authoring.ts` |
+| The ajv-backed JSON Schema facility the package takes as a parameter | `apps/worker/src/engine/definition/json-schema.ts`, bound in `apps/worker/src/engine/definition/json-schema-support.ts` |
+| Scheduler, loop regions, checkpoints | `packages/workflow-graph/scheduler.ts` |
+| What the scheduler borrows from the worker | `apps/worker/src/engine/definition/scheduler-dependencies.ts` |
+| Execution results and error construction | `packages/workflow-graph/interpreter.ts` |
+| Failure message derivation | `packages/workflow-graph/failure-message.ts` |
+| Per-invocation cancellation and observation | `packages/workflow-graph/invocation-context.ts` |
+| The budget one invocation is charged against | `apps/worker/src/engine/helpers/run-budget.ts` (`RunBudgetHooks`) |
 | Execution error shape, category and recorded state | `packages/contracts/execution-error.ts` |
 | Execution error class, user sentence, log event | `apps/worker/src/engine/helpers/execution-error.ts` |
-| Harness profile resolution | `apps/worker/src/workflow-definition/harness-profile-runtime.ts` |
-| Workspace access rules | `apps/worker/src/workflow-definition/workspace-access.ts` |
+| Harness profile resolution | `apps/worker/src/engine/definition/harness-profile-runtime.ts` |
+| Workspace access rules | `packages/workflow-graph/workspace-access.ts` |
 | Persistence and versions | `apps/worker/src/db/repositories/definitions.ts`, `apps/worker/src/services/workflow-definitions/policy-operations.ts` |
 | MCP authoring tools | `apps/worker/src/mcp/tools/workflow-authoring.ts` |

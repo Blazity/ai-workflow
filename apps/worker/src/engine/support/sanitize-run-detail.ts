@@ -12,7 +12,7 @@ import { configuredReplaySecrets } from "../../run-observability/configured-secr
 import {
   isDiagnosticId,
   sanitizeFailureMessage,
-} from "../../workflow-definition/failure-message.js";
+} from "@shared/workflow-graph";
 
 /** A quoted diagnostic ID inside a failure message. The character class is the
  * one `isDiagnosticId` validates against, deliberately: a wider class here

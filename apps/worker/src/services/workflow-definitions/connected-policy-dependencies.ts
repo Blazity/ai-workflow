@@ -8,8 +8,8 @@
 import {
   validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring,
   validateConnectedWorkflowPromptAuthoringIssues,
-} from "../../workflow-definition/prompt-authoring.js";
-import { previewConnectedWorkflowPromptCandidate } from "../../workflow-definition/prompt-preview.js";
+} from "./prompt-authoring.js";
+import { previewConnectedWorkflowPromptCandidate } from "./prompt-preview.js";
 import {
   dispatchManualWorkflow,
   dispatchConnectedManualWorkflow,
@@ -19,7 +19,7 @@ import {
 import { listConnectedTriggerRejectionCounters } from "../../db/repositories/trigger-rate-limits.js";
 import { listConnectedWebhookTriggerRejections } from "../../db/repositories/webhook-trigger-deliveries.js";
 import type { WorkflowDefinition } from "@shared/contracts";
-import type { WorkflowValueAnalysis } from "../../workflow-definition/available-values.js";
+import type { WorkflowValueAnalysis } from "@shared/workflow-graph";
 import { currentBlockContracts } from "./block-contracts.js";
 
 export function validateConnectedDefinitionPromptAuthoring(

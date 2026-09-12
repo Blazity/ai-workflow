@@ -358,6 +358,21 @@ describe("recordBlockStatuses", () => {
     expect((await row("wrun_1")).promptManifest).toEqual(promptManifest);
   });
 
+  it("freezes the repositories the run may touch, and later writers preserve them", async () => {
+    // The enabled switch does not reach a run already in flight: the run froze
+    // its list at the start. The row is where "what could this run touch" is
+    // answered afterwards, so a later status write must not clear it.
+    const repositoryAccess = {
+      activated: true,
+      enabledKeys: ["github:acme/api"],
+    };
+    await recordBlockStatuses(db, blockWrite({ repositoryAccess }));
+    expect((await row("wrun_1")).repositoryAccess).toEqual(repositoryAccess);
+
+    await recordBlockStatuses(db, blockWrite({ blockStatuses: { b1: { status: "ok" } } }));
+    expect((await row("wrun_1")).repositoryAccess).toEqual(repositoryAccess);
+  });
+
   it("inserts a row with statuses, version, identity and running status", async () => {
     await recordBlockStatuses(db, blockWrite());
     const r = await row("wrun_1");

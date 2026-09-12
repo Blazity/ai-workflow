@@ -156,6 +156,7 @@ test("an activated catalog reads Activated even though nothing wrote the registr
       activatedAt: "2026-09-11T08:30:00.000Z",
       activatedById: "user-7",
       activatedByLabel: "Seed",
+      activationReason: "the bridge is over",
     },
   });
   const catalogRow = overview.rows.find((r) => r.id === "catalog");
@@ -180,6 +181,7 @@ test("a registry key claiming the catalog is activated does not move the row", (
       activatedAt: null,
       activatedById: null,
       activatedByLabel: null,
+      activationReason: null,
     },
   });
   const catalogRow = overview.rows.find((r) => r.id === "catalog");
@@ -395,6 +397,7 @@ test("the behaviour rows say the value is a stored setting, not what the worker 
       activatedAt: null,
       activatedById: null,
       activatedByLabel: null,
+      activationReason: null,
     },
   });
   const row = (id: string) => overview.rows.find((r) => r.id === id);
@@ -537,4 +540,26 @@ test("the scan derived rows are grouped ahead of the stored setting rows", () =>
     overview.rows.map((row) => row.id),
     ["issue-tracker", "vcs", "secrets", "catalog", "features", "mcp", "memory"],
   );
+});
+
+test("the Settings card names the reason the bridge was ended", () => {
+  // Who and when were already there. The reason is stored now, and an
+  // activation nobody in the room clicked is reviewed by reading it.
+  const overview = buildSetupOverview({
+    settings: [],
+    scan: null,
+    scanReadable: true,
+    catalogState: {
+      activated: true,
+      bridge: false,
+      activatedAt: "2026-09-11T08:30:00.000Z",
+      activatedById: "user-7",
+      activatedByLabel: "Seed",
+      activationReason: "the catalog is complete",
+    },
+  });
+  const catalogRow = overview.rows.find((r) => r.id === "catalog");
+  assert.ok(catalogRow);
+  assert.match(catalogRow.detail, /Activated by Seed on /);
+  assert.match(catalogRow.detail, /reason: the catalog is complete/);
 });

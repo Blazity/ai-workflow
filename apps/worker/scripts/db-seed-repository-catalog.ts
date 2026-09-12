@@ -29,6 +29,7 @@ import { drizzle } from "drizzle-orm/neon-http";
 import type { Db } from "../src/db/client.js";
 import * as schema from "../src/db/schema.js";
 import {
+  backfillRepositoryDefaultBranches,
   listPinnedRepositoriesFromDefinitions,
   listRepositoryCatalogRows,
   migrateScriptGroupsIntoProfiles,
@@ -106,6 +107,54 @@ async function configuredProviderKinds(): Promise<string[]> {
   }
 }
 
+/**
+ * The default branch each repository the installation exposes reports, keyed
+ * the way the catalog keys repositories.
+ *
+ * Best effort, and deliberately so. `AGENT_ALLOWED_REPOS` is a comma-separated
+ * list of paths: it knows no branches, so every row this seed creates carries
+ * an empty default branch and every screen then reports "not recorded" for
+ * ever, because the entry page treats identity as read-only. The provider
+ * directory is the only place that knows, and asking it is a network call
+ * inside a build: a provider that is down, rate limited or not configured must
+ * leave the branch unrecorded rather than fail the deploy.
+ */
+/** One sentence for both ways the listing can come back short, so a partial
+ *  failure reads like the total one it is a slice of. */
+function warnDirectoryUnlisted(detail: string): void {
+  console.warn(
+    `[seed-repository-catalog] could not list the provider directory, so default ` +
+      `branches are left unrecorded: ${detail}`,
+  );
+}
+
+async function providerDefaultBranches(): Promise<
+  Array<{ provider: string; path: string; defaultBranch: string }>
+> {
+  try {
+    const { listCachedRepositoryDirectory } = await import(
+      "../src/services/repository-discovery/index.js"
+    );
+    const directory = await listCachedRepositoryDirectory();
+    // A provider that answered with an error contributes no repositories, and
+    // the call still resolves. Without this the seed would print a clean line
+    // over a directory that is missing a whole provider, and the rows for it
+    // would keep an empty branch with nothing on the build log to say why.
+    for (const provider of directory.providers) {
+      if (provider.status !== "error") continue;
+      warnDirectoryUnlisted(`${provider.provider}: ${provider.error ?? "unknown error"}`);
+    }
+    return directory.repositories.map((repository) => ({
+      provider: repository.provider,
+      path: repository.repoPath,
+      defaultBranch: repository.defaultBranch,
+    }));
+  } catch (error) {
+    warnDirectoryUnlisted(error instanceof Error ? error.message : String(error));
+    return [];
+  }
+}
+
 async function knownProviders(db: Db): Promise<Map<string, string[]>> {
   const known = new Map<string, string[]>();
   const record = (provider: string, path: string): void => {
@@ -179,17 +228,35 @@ function dedupe(
   return unique;
 }
 
+const directory = await providerDefaultBranches();
+const branchOf = new Map(
+  directory.map((entry) => [
+    `${entry.provider}:${entry.path.toLowerCase()}`,
+    entry.defaultBranch,
+  ]),
+);
 const granted = dedupe([
   ...allowlist.flatMap((path) =>
     providersFor(path, known, configured).map((provider) => ({ provider, path })),
   ),
   ...(await listPinnedRepositoriesFromDefinitions(db)),
-]);
+]).map((entry) =>
+  // Recorded when the row is created, from the directory above. Empty when the
+  // directory could not be listed, which the backfill below repairs on the next
+  // build that can.
+  Object.assign(entry, {
+    defaultBranch: branchOf.get(`${entry.provider}:${entry.path.toLowerCase()}`) ?? "",
+  }),
+);
 const seeded = await seedRepositoryCatalogEntries(db, {
   repositories: granted,
   source: "seeded",
   enabled: true,
 });
+// The one-off repair for every row that already exists with no branch: rows
+// this seed created on an earlier build, and rows an import created before the
+// branch was recorded. Only empty values are filled.
+const branchesFilled = await backfillRepositoryDefaultBranches(db, directory);
 const state = await seedRepositoryCatalogState(db, { activated });
 const migrated = await migrateScriptGroupsIntoProfiles(db);
 const rows = await listRepositoryCatalogRows(db);
@@ -198,6 +265,7 @@ const enabled = rows.filter((row) => row.enabled).length;
 console.log(
   `[seed-repository-catalog] allowlist entries: ${allowlist.length}; ` +
     `granted rows created: ${seeded}; ` +
+    `default branches filled: ${branchesFilled}; ` +
     `script groups rows created: ${migrated.repositoriesCreated}; ` +
     `profiles created: ${migrated.profilesCreated}; ` +
     `enabled rows: ${enabled} of ${rows.length}; ` +

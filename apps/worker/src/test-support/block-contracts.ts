@@ -24,8 +24,9 @@ import {
 import {
   createWorkflowValueAnalyzer,
   type WorkflowValueAnalyzer,
-} from "../workflow-definition/available-values.js";
-import { validateWorkflowDefinitionIssuesForDeployment } from "../workflow-definition/deployment-validation.js";
+} from "@shared/workflow-graph";
+import { JSON_SCHEMA_SUPPORT } from "../engine/definition/json-schema-support.js";
+import { validateWorkflowDefinitionIssuesForDeployment } from "../engine/definition/deployment-validation.js";
 
 export function testBlockContractResolver(
   context: WorkflowBlockRegistryContext,
@@ -52,7 +53,7 @@ export function testBlockData(
     resolveContract,
     BLOCK_PARAMS_SCHEMAS,
     context.vcsProviders,
-    createWorkflowValueAnalyzer(resolveContract),
+    createWorkflowValueAnalyzer(resolveContract, JSON_SCHEMA_SUPPORT),
   ];
 }
 

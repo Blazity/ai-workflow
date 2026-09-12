@@ -55,6 +55,7 @@ export { EFFECTIVE_PROMPT_PARITY_INPUT } from "./effective-prompt.parity-fixture
 export {
   compatibilityPromptSourceForV2Node,
   compileEffectivePrompt,
+  REPOSITORY_RULES_SOURCE_PATH,
   type EffectivePromptCompilation,
   type EffectivePromptCompileInput,
   type EffectivePromptMemorySource,
@@ -130,9 +131,13 @@ export {
 export {
   DEFAULT_OPEN_PR_BODY,
   DEFAULT_OPEN_PR_TITLE,
+  isRepositoryRulesVariable,
   PROMPT_VARIABLES,
+  REPOSITORY_RULES_VARIABLE_NAMES,
+  REPOSITORY_RULES_VARIABLES,
   type PromptVariableName,
   type PromptVariableSpec,
+  type RepositoryRulesVariableName,
 } from "./prompt-variables";
 export {
   substituteNodePromptParams,

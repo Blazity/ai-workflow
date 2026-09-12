@@ -104,6 +104,7 @@ import { manifest } from "./manifest.js";
 import {
   makeCtx,
   makeHarnessRuntime,
+  makeInvocation,
   makeNode,
   makePrPayload,
 } from "../support/test-support.js";
@@ -217,14 +218,15 @@ describe("fix_agent execute", () => {
     });
     const runtime = makeHarnessRuntime(block.id, block.type);
 
+    const ctx = makeCtx({
+      harnessRuntimes: { [block.id]: runtime },
+    });
     await execute(
       block,
       {},
-      makeCtx({
-        harnessRuntimes: { [block.id]: runtime },
-      }),
+      ctx,
       {},
-      { compileEffectivePrompt },
+      makeInvocation(ctx, { compileEffectivePrompt }),
     );
 
     expect(mocks.assembleFixContext).toHaveBeenCalledWith(
@@ -373,30 +375,31 @@ describe("fix_agent execute", () => {
     mocks.inspectFixWorkspace.mockResolvedValueOnce(before).mockResolvedValueOnce(after);
 
     const block = makeNode("fix_agent");
+    const ctx = makeCtx({
+      workspaceManifest: {
+        version: 2,
+        repositories: [
+          {
+            provider: "gitlab",
+            repoPath: "acme/contracts",
+            slug: "gitlab__acme__contracts",
+            localPath: "/vercel/sandbox/repos/gitlab__acme__contracts",
+            defaultBranch: "main",
+            branchName: "main",
+            selectedRationale: "sibling PR",
+            access: "read",
+            researchBaseSha: "read-base",
+          },
+        ],
+      },
+      harnessRuntimes: { [block.id]: makeHarnessRuntime(block.id, block.type) },
+    });
     const result = await execute(
       block,
       {},
-      makeCtx({
-        workspaceManifest: {
-          version: 2,
-          repositories: [
-            {
-              provider: "gitlab",
-              repoPath: "acme/contracts",
-              slug: "gitlab__acme__contracts",
-              localPath: "/vercel/sandbox/repos/gitlab__acme__contracts",
-              defaultBranch: "main",
-              branchName: "main",
-              selectedRationale: "sibling PR",
-              access: "read",
-              researchBaseSha: "read-base",
-            },
-          ],
-        },
-        harnessRuntimes: { [block.id]: makeHarnessRuntime(block.id, block.type) },
-      }),
+      ctx,
       {},
-      { observations: { emit } },
+      makeInvocation(ctx, { observations: { emit } }),
     );
 
     expect(result).toEqual({

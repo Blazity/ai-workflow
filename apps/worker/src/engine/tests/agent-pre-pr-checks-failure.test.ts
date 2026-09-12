@@ -48,8 +48,8 @@ import { formatExecutionErrorForUser } from "../helpers/execution-error.js";
 import {
   executionError,
   type StepsRecord,
-} from "../../workflow-definition/interpreter.js";
-import { executeV2Graph } from "../../workflow-definition/v2-scheduler.js";
+} from "@shared/workflow-graph";
+import { executeV2Graph } from "@shared/workflow-graph";
 import {
   isRepositoryScriptsRefusal,
   repositoryScriptsRefusalMessage,
@@ -63,6 +63,7 @@ import {
 import { isRunControlError } from "../helpers/run-control-error.js";
 import { runControlErrorCases } from "../blocks/support/test-support.js";
 import { execute as executeRunScripts } from "../blocks/run-scripts/execute.js";
+import { SCHEDULER_DEPENDENCIES } from "../definition/scheduler-dependencies.js";
 
 const MESSAGE_LEAD = "The repository scripts step failed: ";
 
@@ -1947,6 +1948,7 @@ describe("v2 terminal failure exit", () => {
       let caught: unknown;
       try {
         await executeV2Graph({
+          dependencies: SCHEDULER_DEPENDENCIES,
           definition: currentDefinition,
           entryTriggerId: "trigger",
           triggerOutput: { status: "fired" },
@@ -1981,7 +1983,8 @@ describe("v2 terminal failure exit", () => {
   it("keeps the actionable checks ceiling text in the run reason, telemetry and Jira comment", () => {
     const ceilingReason =
       "The repository checks did not finish within the 15 minute checks ceiling. " +
-      "Raise batchTimeoutMinutes for this definition or split the run. " +
+      "Raise the checks ceiling on the Repositories page (open the repository, " +
+      "Scripts tab, checks ceiling), or split the run. " +
       "(checks_ceiling_exceeded: Checks batch for github:acme/web reached the 15 minute checks ceiling)";
     const failure = executionError(
       "checks_ceiling_exceeded: Checks batch for github:acme/web reached the 15 minute checks ceiling",
@@ -1998,7 +2001,8 @@ describe("v2 terminal failure exit", () => {
     };
     const expected =
       "The repository checks did not finish within the 15 minute checks ceiling. " +
-      "Raise batchTimeoutMinutes for this definition or split the run. " +
+      "Raise the checks ceiling on the Repositories page (open the repository, " +
+      "Scripts tab, checks ceiling), or split the run. " +
       "(checks_ceiling_exceeded: Checks batch for github:acme/web reached the 15 minute checks ceiling) " +
       "Diagnostic ID: AIW-DIAG-wrun-checks-checks-1";
 
@@ -2055,6 +2059,7 @@ describe("v2 terminal failure exit", () => {
 
   async function walkFailingAtFinalize() {
     return executeV2Graph({
+      dependencies: SCHEDULER_DEPENDENCIES,
       definition,
       entryTriggerId: "trigger",
       triggerOutput: { status: "fired" },

@@ -7,14 +7,14 @@
  * seed a new definition would start from, and the detail read, which treats an
  * archived definition as absent.
  */
-import { defaultWorkflowDefinitionV2 } from "../../workflow-definition/default.js";
+import { defaultWorkflowDefinitionV2 } from "../../engine/definition/default.js";
 import { RETIRED_SCHEMA_MESSAGE, type SettingsSnapshot } from "@shared/contracts";
 import {
   buildWorkflowEditorOptions,
   fetchAvailableModels,
   fetchTicketStatuses,
-} from "../../workflow-definition/models.js";
-import { workflowDefinitionTemplates } from "../../workflow-definition/templates.js";
+} from "../../engine/definition/models.js";
+import { workflowDefinitionTemplates } from "../../engine/definition/templates.js";
 import {
   type WorkflowDefinitionRow,
   type WorkflowDefinitionVersionRow,

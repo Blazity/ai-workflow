@@ -30,7 +30,7 @@
   "tiers": {
     "testing": {
       "patterns": [
-        "(?:^|/)(?:test-support|mcp-dogfood)(?:/|$)",
+        "(?:^|/)(?:test-support|mcp-dogfood|workflow-graph-suites)(?:/|$)",
         "\\.(?:test|spec)\\.[cm]?[jt]sx?$"
       ]
     },
@@ -49,7 +49,7 @@
     },
     "engine": {
       "patterns": [
-        "^apps/worker/src/(?:engine|harness-profiles|memory|post-pr-gate|pre-pr-checks|pre-sandbox|prompt-library|run-analysis|run-observability|sandbox|workflow-definition|workflows)(?:/|$)"
+        "^apps/worker/src/(?:engine|harness-profiles|memory|post-pr-gate|pre-pr-checks|pre-sandbox|prompt-library|run-analysis|run-observability|sandbox|workflows)(?:/|$)"
       ]
     },
     "adapters": {

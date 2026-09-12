@@ -6,6 +6,7 @@ import type {
   WorkflowParamValue,
   WorkflowValueSchema,
 } from "./block-catalog-types";
+import type { RunRepositoryAccess } from "./repository-catalog";
 
 export type { WorkflowBlockType } from "./block-catalog.generated";
 export type {
@@ -227,6 +228,17 @@ export interface RunDetail {
   error: RunError | null;
   /** Durable reason for a blocked/failed run (who cancelled it / why it failed). */
   statusReason?: string | null;
+  /**
+   * Which repositories this run could touch, frozen when it started.
+   *
+   * Recorded on the row rather than only logged, because the question is asked
+   * after the fact: "could this run have reached that repository?" is answered
+   * by the list the run began with, not by the catalog as it stands today.
+   * Absent for a run that started before it was recorded, which is not the same
+   * as an empty list; `activated: false` is the bridge, where the enabled keys
+   * are meaningless and everything the installation exposes was reachable.
+   */
+  repositoryAccess?: RunRepositoryAccess | null;
   deploymentId: string | null;
 }
 
@@ -603,7 +615,7 @@ export interface WorkflowRepositoryScope {
 }
 
 /** The one definition schema that runs, deploys and is authored. Older stored
- *  rows still carry an older number; apps/worker/src/workflow-definition/
+ *  rows still carry an older number; apps/worker/src/engine/definition/
  *  stored-definition.ts is the only reader allowed to look at it. */
 export const WORKFLOW_SCHEMA_VERSION = 2;
 

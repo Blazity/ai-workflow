@@ -9,7 +9,7 @@ import { summarizeRunBlockStatuses } from "../run-block-status-summary.js";
 import { type RunBudgetFailure } from "../helpers/run-budget.js";
 import { redactDiagnosticText } from "../../sandbox/agents/redact.js";
 import { errorMessage } from "../helpers/repository-failure.js";
-import type { BlockRunState, ReplayAttemptOutcome, ReplayObservationKind, ReplaySanitizedEnvelope, ResolvedPromptReference, RunPullRequest, WorkflowReplayGraphSnapshot, WorkflowReplaySelectedTransition, HarnessRunManifestRecord } from "@shared/contracts";
+import type { BlockRunState, ReplayAttemptOutcome, ReplayObservationKind, ReplaySanitizedEnvelope, ResolvedPromptReference, RunPullRequest, RunRepositoryAccess, WorkflowReplayGraphSnapshot, WorkflowReplaySelectedTransition, HarnessRunManifestRecord } from "@shared/contracts";
 import type {
   PreparedReplayAttemptPersistence,
   ReplayAttemptPersistenceState,
@@ -187,6 +187,10 @@ async function recordBlockStatusesStep(payload: {
   blockStatuses: Record<string, BlockRunState>;
   promptManifest?: ResolvedPromptReference[];
   harnessManifests?: HarnessRunManifestRecord[];
+  /** The repositories this run may touch, frozen by the run-start step. An
+   *  OPTIONAL parameter, so a run suspended before this field existed replays
+   *  this step's stored result unchanged. */
+  repositoryAccess?: RunRepositoryAccess;
 }) {
   "use step";
   const { loadRunTelemetryPort } = await import("../internal/ports.js");

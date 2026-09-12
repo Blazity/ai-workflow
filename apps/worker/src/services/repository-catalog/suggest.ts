@@ -206,6 +206,11 @@ async function runSuggestion(input: {
   let errorText = "";
   let failure: DashboardAuthError | undefined;
   let phase: SuggestionPhase = "profile source";
+  // Started before the bundle fetch, which is the first thing that can hang, so
+  // the recorded duration covers everything this call actually spent. A timeout
+  // costs no tokens and all of the wall clock, and a history that recorded only
+  // tokens would show it as indistinguishable from an instant refusal.
+  const startedAt = Date.now();
   try {
     const provider = configuredVcsProviders().find(
       (candidate) => candidate.kind === row.provider,
@@ -270,6 +275,7 @@ async function runSuggestion(input: {
     model,
     outcome,
     usage,
+    durationMs: Date.now() - startedAt,
     error: redactSuggestionError(errorText),
   });
   if (failure) throw failure;

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { JsonValue, PromptSlotDefinition } from "@shared/contracts";
-import { inspectJsonSchema202012, validateJsonSchemaValue } from "../../workflow-definition/json-schema.js";
+import { inspectJsonSchema202012, validateJsonSchemaValue } from "../../engine/definition/json-schema.js";
 import { PromptLibraryStoreError } from "./prompt-library-failures.js";
 
 export const PROMPT_BODY_MAX_LENGTH = 50_000;

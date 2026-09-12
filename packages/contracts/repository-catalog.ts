@@ -87,6 +87,17 @@ export const repositoryCatalogEntrySchema = z
      *  description or the rules leaves it alone, and with it every publication
      *  gate recorded by a run still in flight. */
     checksVersion: z.number().int().nonnegative(),
+    /**
+     * How many script groups the current profile version declares.
+     *
+     * Optional, and **absent means "this response did not compute it"**, never
+     * zero: the list route counts them in its own query (one grouped join, not
+     * a read per row) because a list of repositories with no hint of whether
+     * any checks are configured sends an operator into every entry in turn. A
+     * single-entry response carries the whole profile instead, so it has no
+     * need of the count and does not pay for it.
+     */
+    scriptGroupCount: z.number().int().nonnegative().optional(),
     createdAt: z.string(),
     updatedAt: z.string(),
   })
@@ -121,6 +132,19 @@ export const repositoryProfileVersionSchema = z
      *  group this repository declares", which is what omitting it has always
      *  meant; an empty array is refused by the scripts schema, not here. */
     gateGroups: z.array(z.string()).nullable(),
+    /**
+     * The whole-run checks ceiling this repository asks for, in minutes, or
+     * null for "use the operator ceiling".
+     *
+     * A repository-level field for a run-level bound, deliberately. The ceiling
+     * is spent by every repository in one run together, so what a profile
+     * records is a claim about how long THIS repository's checks take; the
+     * composition takes the largest claim among the repositories it composes,
+     * because a run that honoured the smallest would starve the repository that
+     * asked for more. It lived in the global checks blob until the Scripts page
+     * was replaced and no screen could reach it.
+     */
+    batchTimeoutMinutes: z.number().int().nullable(),
     /** The checks version this profile version carries. Equal to the previous
      *  one when the save changed nothing the checks execute. */
     checksVersion: z.number().int().nonnegative(),
@@ -151,9 +175,65 @@ export const repositoryCatalogStateSchema = z
     /** Who activated it, in words. The build-time seed writes its own name here
      *  so a screen can offer a review of an activation nobody clicked. */
     activatedByLabel: z.string().nullable(),
+    /**
+     * Why the bridge was ended, as the admin typed it.
+     *
+     * Recorded rather than merely asked for. Activation is the one action that
+     * can stop dispatch selecting a repository somebody is working in, and a
+     * dialog that collects a reason and drops it on the wire teaches an
+     * operator that the box is decoration. Null on a deployment that activated
+     * before this field existed, which is not the same as an empty reason.
+     */
+    activationReason: z.string().nullable(),
   })
   .strict();
 export type RepositoryCatalogState = z.infer<typeof repositoryCatalogStateSchema>;
+
+/**
+ * Who the build-time seed records when it activates the catalog on a
+ * deployment that `AGENT_ALLOWED_REPOS` was already restricting.
+ *
+ * Shared rather than worker-private because two sides have to agree on it: the
+ * seed writes it, and the Repositories banner reads it to tell an activation
+ * nobody clicked apart from one an operator did. The label reads as a sentence
+ * rather than a name, so a banner that prints "activated by <label>" produces
+ * "activated by seeded from AGENT_ALLOWED_REPOS"; the banner matches on this
+ * constant and re-phrases instead.
+ */
+export const REPOSITORY_CATALOG_SEED_ACTOR_ID = "seed";
+export const REPOSITORY_CATALOG_SEED_ACTOR_LABEL = "seeded from AGENT_ALLOWED_REPOS";
+/** The reason the seed records for the activation it performs, so a state row
+ *  written by a build is as legible on the History surface as one written by a
+ *  person. */
+export const REPOSITORY_CATALOG_SEED_ACTIVATION_REASON =
+  "seeded from AGENT_ALLOWED_REPOS";
+
+/**
+ * The one sentence every surface says about a graph pinning repositories the
+ * catalog does not enable.
+ *
+ * One copy, in the package both tiers import, because two surfaces describing
+ * one fact in two different ways is how an operator ends up believing the
+ * milder one. The worker announces it on a publish, the deploy response carries
+ * the list it is built from, and the editor renders the same words from that
+ * list.
+ *
+ * `label` exists for the announcement path alone, which flattens every
+ * caller-supplied string before it reaches a chat message. The default is
+ * identity, so nothing else has to know that.
+ */
+export function pinnedRepositoriesNotEnabledSentence(
+  repositories: readonly string[],
+  label: (repository: string) => string = (repository) => repository,
+): string {
+  const one = repositories.length === 1;
+  return (
+    `It pins ${one ? "a repository" : `${repositories.length} repositories`} ` +
+    `the repository catalog does not enable, so dispatch refuses events from ` +
+    `${one ? "it" : "them"} and a run that starts some other way cannot reach ` +
+    `${one ? "it" : "them"} either: ${repositories.map(label).join(", ")}.`
+  );
+}
 
 /**
  * The key every consumer matches a repository on: `provider:owner/name`, cased
@@ -418,7 +498,7 @@ export type RepositorySuggestionDroppedGroup = z.infer<
  * **No `$schema` key, and no other dialect marker.** This object is handed to
  * the AI SDK's structured output as-is, and the block path strips exactly that
  * key before sending (`jsonSchemaForProvider` in
- * `apps/worker/src/workflow-definition/json-schema.ts`) because the providers
+ * `apps/worker/src/engine/definition/json-schema.ts`) because the providers
  * refuse or ignore it. Declaring the dialect here would mean either shipping it
  * to the provider or reaching into the engine to remove it again.
  */
@@ -497,4 +577,30 @@ export interface RepositorySuggestionUsage {
   inputTokens: number;
   cachedTokens: number;
   outputTokens: number;
+}
+
+/**
+ * One suggestion call as the history renders it.
+ *
+ * `priced` is a field rather than something a screen derives from the token
+ * counts, for the same reason `usage` may be null: "the provider reported
+ * nothing" and "the provider reported zero" are different facts, and a history
+ * that folded them together would say a timed-out call was free. The tokens
+ * stay null when `priced` is false; no screen has to decide what to do with a
+ * zero it cannot trust.
+ */
+export interface RepositorySuggestionRecord {
+  id: number;
+  createdAt: string;
+  outcome: RepositorySuggestionOutcome;
+  model: string;
+  actorLabel: string;
+  /** Null when the call ended before the provider reported usage. */
+  tokensInput: number | null;
+  tokensOutput: number | null;
+  /** How long the call took, as the caller measured it. Null for a row written
+   *  before the duration was recorded. */
+  durationMs: number | null;
+  /** False when the tokens are null: unpriced, never zero. */
+  priced: boolean;
 }

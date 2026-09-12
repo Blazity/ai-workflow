@@ -22,7 +22,10 @@ import {
   type RepositoryCatalogImportRequest,
   type RepositoryCatalogImportResponse,
 } from "@shared/contracts";
-import { importConnectedRepositoryCatalogEntries } from "../../db/repositories/repository-catalog.js";
+import {
+  backfillConnectedRepositoryDefaultBranches,
+  importConnectedRepositoryCatalogEntries,
+} from "../../db/repositories/repository-catalog.js";
 import { listCachedRepositoryDirectory } from "../repository-discovery/index.js";
 import { requireCatalogManager, type RepositoryCatalogActor } from "./authoring.js";
 import { loadRepositoryCatalogEntries } from "./store.js";
@@ -143,7 +146,7 @@ export async function commitRepositoryImport(input: {
   );
   const known = new Set(before.entries.map((entry) => repositoryCatalogKey(entry)));
 
-  const selected: Array<{ provider: string; path: string }> = [];
+  const selected: Array<{ provider: string; path: string; defaultBranch: string }> = [];
   const skipped: string[] = [];
   const alreadyPresent: string[] = [];
   for (const key of requested) {
@@ -156,7 +159,15 @@ export async function commitRepositoryImport(input: {
       alreadyPresent.push(key);
       continue;
     }
-    selected.push({ provider: repository.provider, path: repository.repoPath });
+    // The default branch is recorded WHEN THE ROW IS CREATED, from the listing
+    // this call already holds. A row created without one shows "not recorded"
+    // on every screen for ever, because nothing on the entry page edits it: it
+    // is identity, not profile.
+    selected.push({
+      provider: repository.provider,
+      path: repository.repoPath,
+      defaultBranch: repository.defaultBranch,
+    });
   }
 
   const imported =
@@ -166,6 +177,20 @@ export async function commitRepositoryImport(input: {
           repositories: selected,
           enabled: input.request.enabled,
         });
+  // The one-off repair for the rows that predate this: the allowlist seed
+  // creates rows from a comma-separated variable that knows a path and nothing
+  // else, so every seeded entry reports "default branch: not recorded". This
+  // fills only the EMPTY ones, from the listing already loaded above, and never
+  // overwrites a branch somebody's catalog already has. It is best effort: an
+  // import that added rows must not be reported as failed because the repair
+  // beside it did not land.
+  await backfillConnectedRepositoryDefaultBranches(
+    directory.repositories.map((repository) => ({
+      provider: repository.provider,
+      path: repository.repoPath,
+      defaultBranch: repository.defaultBranch,
+    })),
+  ).catch(() => 0);
   const after = await loadRepositoryCatalogEntries();
   return { imported, skipped, alreadyPresent, repositories: [...after.entries] };
 }

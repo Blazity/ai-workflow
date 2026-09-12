@@ -25,6 +25,7 @@ import type {
   ResolvedPromptReference,
   RunPullRequest,
   RunAnalysisReport,
+  RunRepositoryAccess,
   WorkflowReplayGraphSnapshot,
   WorkflowReplayLayoutSnapshot,
   WorkflowReplaySelectedTransition,
@@ -99,6 +100,18 @@ export const workflowRuns = pgTable("workflow_runs", {
     .$type<Record<string, BlockRunStateSummary>>(),
   promptManifest: jsonb("prompt_manifest").$type<ResolvedPromptReference[]>(),
   harnessManifests: jsonb("harness_manifests").$type<HarnessRunManifestRecord[]>(),
+  /**
+   * The repository access this run froze at its start: whether the catalog
+   * decides, and the enabled keys it decided from.
+   *
+   * A manifest, written once, exactly like `promptManifest` and
+   * `harnessManifests` beside it. The run-start step already logs these keys,
+   * and a log line answers the question once, for whoever is watching at the
+   * time; the question an operator asks days later ("could this run have
+   * touched that repository?") needs the answer on the row. Null for a run that
+   * started before this column existed, which is not an empty list.
+   */
+  repositoryAccess: jsonb("repository_access").$type<RunRepositoryAccess>(),
   /** Durable markers distinguish a captured replay that expired from a
    * historical run for which replay was never captured. */
   replayOrganizationId: text("replay_organization_id").references(

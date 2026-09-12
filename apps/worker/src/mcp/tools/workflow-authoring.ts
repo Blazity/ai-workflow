@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import {
   isTriggerBlockType,
+  pinnedRepositoriesNotEnabledSentence,
   RETIRED_SCHEMA_MESSAGE,
 } from "@shared/contracts";
 import type {
@@ -16,8 +17,7 @@ import {
   logger,
   validateWorkflowDefinitionCandidate,
 } from "../../services/mcp/app-dependencies.js";
-import { isRepositoryDispatchable } from "../../services/dispatch/repo-allowlist.js";
-import type { RepositoryCatalogSnapshot } from "../../services/repository-catalog/index.js";
+import { pinnedRepositoriesNotEnabled } from "../../services/repository-catalog/index.js";
 import { currentBlockContracts } from "../../services/workflow-definitions/block-contracts.js";
 import {
   runnableDefinitionOf,
@@ -184,51 +184,17 @@ type SetEnabledData = {
 
 /**
  * The pinned repositories the repository catalog does not enable, read off a
- * graph. isRepositoryDispatchable is the platform's own predicate and is
- * deliberately not reimplemented here: it owns the bridge (an unactivated
- * catalog enables everything) and the case-insensitive key, and a second copy of
- * either would eventually disagree with the dispatch that enforces it.
+ * graph.
  *
- * Takes `unknown` because one caller holds a graph nobody has parsed yet: on the
- * draft path the schema has not run when the reply is composed, so a pin whose
- * provider is not even a string still has to produce a label rather than a crash.
- * On an activated catalog a pin without a usable provider is reported rather than
- * silently passed: the catalog is keyed by provider and path together, so there is
- * no enabled row such a pin could be matched against. While the catalog is not
- * activated nothing is reported at all, because the bridge enables every
- * repository and a field named "not enabled in the catalog" must not accuse a
- * catalog that is refusing nobody.
+ * The service tier owns the rule now
+ * (`services/repository-catalog/pins.ts`), because the dashboard's Deploy
+ * button needs exactly this answer and used to compute its own from its own
+ * copy of the catalog. Two surfaces deriving one fact is how they end up
+ * disagreeing about it, so the REST deploy route and the two tools below call
+ * one function. Aliased to the old local name so the call sites read as they
+ * did.
  */
-function pinsNotEnabledInCatalog(
-  definition: unknown,
-  repositoryCatalog: RepositoryCatalogSnapshot,
-): string[] {
-  if (!repositoryCatalog.activated) return [];
-  const scope = (definition as { repositoryScope?: unknown } | null | undefined)
-    ?.repositoryScope;
-  const pinned = (scope as { repositories?: unknown } | null | undefined)?.repositories;
-  if (!Array.isArray(pinned)) return [];
-  const notEnabled: string[] = [];
-  for (const entry of pinned) {
-    const repository = entry as { provider?: unknown; repoPath?: unknown };
-    if (typeof repository.repoPath !== "string") continue;
-    if (
-      (repository.provider === "github" || repository.provider === "gitlab") &&
-      isRepositoryDispatchable(repositoryCatalog, {
-        provider: repository.provider,
-        path: repository.repoPath,
-      })
-    ) {
-      continue;
-    }
-    notEnabled.push(
-      typeof repository.provider === "string"
-        ? `${repository.provider}:${repository.repoPath}`
-        : repository.repoPath,
-    );
-  }
-  return notEnabled;
-}
+const pinsNotEnabledInCatalog = pinnedRepositoriesNotEnabled;
 
 /**
  * The audit row's own signal for the finding above, as one more targetRef. A flag
@@ -359,13 +325,13 @@ function publishAnnouncement(publish: {
     );
   }
   if (publish.notEnabled.length > 0) {
+    // The catalog decides both halves now: it refuses the events, and a run
+    // that starts some other way cannot reach the repository either, because
+    // the run carries the same enabled list. The wording is the contract's, so
+    // the editor's deploy confirmation says it in the same words; only the
+    // labels are flattened here, which is this channel's own rule.
     sentences.push(
-      // The catalog decides both halves now: it refuses the events, and a run
-      // that starts some other way cannot reach the repository either, because
-      // the run carries the same enabled list.
-      `It pins ${publish.notEnabled.length === 1 ? "a repository" : `${publish.notEnabled.length} repositories`} the repository catalog does not enable, so dispatch refuses events from ${publish.notEnabled.length === 1 ? "it" : "them"} and a run that starts some other way cannot reach ${publish.notEnabled.length === 1 ? "it" : "them"} either: ${publish.notEnabled
-        .map((repository) => announcementLabel(repository))
-        .join(", ")}.`,
+      pinnedRepositoriesNotEnabledSentence(publish.notEnabled, announcementLabel),
     );
   }
   const link = `<${workflowDefinitionUrl(dashboardOrigin(), publish.definitionId)}|open in the editor>`;

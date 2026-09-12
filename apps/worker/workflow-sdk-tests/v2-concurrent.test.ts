@@ -41,7 +41,7 @@ const SNAPSHOT = JSON.parse(
   readFileSync(
     fileURLToPath(
       new URL(
-        "../src/workflow-definition/scenarios/snapshots/post-pr-review-v1.json",
+        "../src/workflow-graph-suites/scenarios/snapshots/post-pr-review-v1.json",
         import.meta.url,
       ),
     ),

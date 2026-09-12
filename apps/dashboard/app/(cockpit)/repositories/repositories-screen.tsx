@@ -9,10 +9,14 @@ import type {
 } from "@shared/contracts";
 
 import { apiClient } from "@/lib/api/client";
-import { NOT_ACTIVATED_BANNER } from "@/lib/repository-catalog/activation";
+import {
+  activationBannerLine,
+  NOT_ACTIVATED_BANNER,
+} from "@/lib/repository-catalog/activation";
 import {
   firstLine,
   formatDateTime,
+  scriptGroupCountLabel,
   sortRepositories,
   sourceLabel,
 } from "@/lib/repository-catalog/format";
@@ -23,18 +27,24 @@ import { ImportDialog } from "./import-dialog";
 /**
  * What the list can honestly say about a repository's checks.
  *
- * The list response carries the row, not the profile, so the number of script
- * groups is not on it. `checksVersion` is: it moves only when the script groups
- * or the gate selection change, so 0 is "no checks have ever been configured"
- * and anything else is the version the publication gate records. A count
- * invented from a field that does not carry one would be worse than a version
- * that is true.
+ * The list response now carries the count from the current profile version, so
+ * the row says how many groups there are as well as which version they are at.
+ * The count is OPTIONAL and absent means "this response did not compute it",
+ * never zero: a response without it falls back to the version alone rather than
+ * announcing that a repository's groups are gone.
  */
 function checksLabel(repository: RepositoryCatalogEntry): string {
-  return repository.checksVersion === 0
-    ? "no script groups"
-    : `script groups v${repository.checksVersion}`;
+  const count = scriptGroupCountLabel(repository.scriptGroupCount);
+  if (repository.checksVersion === 0) return count ?? "no script groups";
+  const version = `script groups v${repository.checksVersion}`;
+  return count === null ? version : `${count} · ${version}`;
 }
+
+/** Said beside the switch, because the switch does not reach a run that has
+ *  already started. Quoted from the brief: the sentence is the behaviour, and
+ *  an operator who reads it knows cancelling is the only way to stop one. */
+const ENABLED_SWITCH_NOTE =
+  "Disabling stops the next run. A run already in flight keeps the list it started with; cancel it to stop it.";
 
 function EnabledSwitch({
   repository,
@@ -58,7 +68,10 @@ function EnabledSwitch({
 
   return (
     <span className="flex flex-col items-end gap-[2px]">
-      <label className="flex items-center gap-[6px] font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-600">
+      <label
+        title={ENABLED_SWITCH_NOTE}
+        className="flex items-center gap-[6px] font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-600"
+      >
         <input
           type="checkbox"
           checked={repository.enabled}
@@ -187,10 +200,8 @@ export function RepositoriesScreen({
 
       {available && catalogState?.activated && (
         <div className="rounded-[3px] border border-neutral-200 bg-app-bg px-3 py-2 font-body text-[12px] text-neutral-600">
-          Catalog activated
-          {catalogState.activatedByLabel ? ` by ${catalogState.activatedByLabel}` : ""}
-          {catalogState.activatedAt ? ` on ${formatDateTime(catalogState.activatedAt)}` : ""}
-          . Dispatch selects only the repositories enabled here.
+          {activationBannerLine(catalogState)} Dispatch selects only the
+          repositories enabled here.
         </div>
       )}
 
@@ -235,6 +246,12 @@ export function RepositoriesScreen({
             </button>
           )}
         </div>
+      )}
+
+      {available && rows.length > 0 && canManage && (
+        <p className="m-0 -mb-2 text-right font-body text-[11px] text-neutral-500">
+          {ENABLED_SWITCH_NOTE}
+        </p>
       )}
 
       {available && rows.length > 0 && (

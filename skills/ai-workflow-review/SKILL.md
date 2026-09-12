@@ -67,7 +67,7 @@ catalogs. The generator check and the registry parity test compare the
 generated UI, defaults, inputs and contract data, including the block count and
 exact parameter lists.
 
-`[Medium]` Detect: a change to `apps/worker/src/workflow-definition/block-registry.ts`
+`[Medium]` Detect: a change to `apps/worker/src/engine/definition/block-registry.ts`
 or to `BLOCK_PARAM_KEYS` with no matching change to the mirror. Statuses must
 appear in registry order, not alphabetically.
 

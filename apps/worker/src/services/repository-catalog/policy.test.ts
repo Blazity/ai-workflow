@@ -16,6 +16,7 @@ function snapshot(input: {
       activatedAt: null,
       activatedById: null,
       activatedByLabel: null,
+      activationReason: null,
     },
   };
 }

@@ -91,13 +91,40 @@ graph rules (`graph-issues.ts`) and the two size caps (`limits.ts`), and with
 them the zod dependency this ADR foresaw; the `conditions` edge is still unused
 and arrives with the stage that needs it. The deployment half of the old
 `workflow-definition/schema.ts` stayed in the worker, in
-`apps/worker/src/workflow-definition/deployment-validation.ts`: it reads the
-environment, the block registry and a clock, and three engine-tier callers
-(the candidate validator, the scenario harness and the run loader's step) call
-it directly, which `engine -> services` forbids until stage 5 inverts those
-call sites into package policies. Its second consumer is the dashboard, which
-the later stages of that plan connect; until then the worker is the only
-importer.
+`deployment-validation.ts`. Stages 6c and 6d added the bindings cluster
+(`bindings.ts`, `available-values.ts`, `transform.ts`,
+`json-schema-authoring.ts`) and the workspace access rules. ajv stays in the
+worker as assumption A2 of that plan says, so those rules take it as
+`WorkflowJsonSchemaSupport`, bound once in
+`apps/worker/src/engine/definition/json-schema-support.ts`. `templates.ts` did
+not move: it is built on `default.ts`, whose only impure import is the
+`@shared/harness` default for a builtin profile reference, and this ADR forbids
+that edge.
+
+Stage 7 of the same plan then deleted `apps/worker/src/workflow-definition`
+itself and re-homed what was left by its importers, which is why that directory
+has no row in the table below and is listed in
+`scripts/gates/no-resurrected-paths.json`. Three destinations:
+`apps/worker/src/engine/definition/` took the engine-facing modules (the block
+registry, the ajv-backed `json-schema.ts`, `deployment-validation.ts` and the
+`validation.ts` that composes it, `stored-definition.ts`, `models.ts`,
+`layout.ts`, `resolve-agent.ts`, `harness-profile-runtime.ts`, and
+`default.ts` with `templates.ts`); `apps/worker/src/services/workflow-definitions/`
+took the service-facing ones (`template-seed.ts`, prompt authoring and preview,
+the built-in prompt and carry-schema drift gates, and the definition
+persistence suites); and `apps/worker/src/workflow-graph-suites/` took the
+vitest suites and the scenario corpus that exercise `@shared/workflow-graph`
+through the worker's bindings. `default.ts` went to the engine rather than to
+the services cluster because `engine/steps/definition-step.ts` imports it and
+`engine -> services` is forbidden. `validation.ts` sits in `engine/definition/`
+for the neighbouring reason, though every one of its importers is service-tier:
+routing it through `services/workflow-definitions/index.ts`, which is what the
+cross-cluster rule would otherwise require of `services/mcp/app-dependencies.ts`,
+pulls that index's whole cluster into the MCP transport's import graph, and with
+it `engine/steps/repository-instructions.ts`, a `"use step"` module that
+`apps/worker/src/routes/import-graph-guard.test.ts` forbids the app tier to
+reach. The pure re-export `schema.ts` was deleted, not moved: its six symbols
+come from `@shared/workflow-graph` directly.
 
 The engine, the adapters, the services and the DB layer have one consumer (the
 worker) and stay directories inside `apps/worker/src`, fenced by dependency
@@ -140,7 +167,7 @@ The 28 directories:
 | `system-health/` | services | mixed, split by file as above |
 | `test-support/` | testing | |
 | `webhook-trigger/` | services | mixed, split by file as above |
-| `workflow-definition/` | engine (`engine/definition/`) | `store.ts` to `db/repositories/definitions` in stage 7; pure schema, validation, bindings, scheduler, interpreter to `packages/workflow-graph` in stage 12 (schema and graph rules moved; `deployment-validation.ts` waits for stage 5's policies before it can sit in `services/`) |
+| `workflow-graph-suites/` | testing | the vitest suites and the scenario corpus for `@shared/workflow-graph`, kept in the worker because they run through its bindings; see its `README.md` |
 | `workflows/` | engine | |
 
 The 8 root files:

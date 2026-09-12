@@ -30,7 +30,8 @@ import {
 import {
   createWorkflowValueAnalyzer,
   type WorkflowValueAnalyzer,
-} from "../../workflow-definition/available-values.js";
+} from "@shared/workflow-graph";
+import { JSON_SCHEMA_SUPPORT } from "../../engine/definition/json-schema-support.js";
 
 export interface RequestBlockContracts {
   /** One block's contract, from its type and its own authored params. */
@@ -68,7 +69,7 @@ export function currentBlockContracts(): RequestBlockContracts {
   let registry: Record<WorkflowBlockType, WorkflowBlockContract> | null = null;
   return {
     resolveContract,
-    analyzeValues: createWorkflowValueAnalyzer(resolveContract),
+    analyzeValues: createWorkflowValueAnalyzer(resolveContract, JSON_SCHEMA_SUPPORT),
     blockParamsSchemas: BLOCK_PARAMS_SCHEMAS,
     configuredVcsProviders: context.vcsProviders,
     blockRegistry: () => (registry ??= buildWorkflowBlockRegistry(context)),

@@ -31,7 +31,7 @@ import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
 import type {
   V2InvocationCancellation,
   V2InvocationObservationHooks,
-} from "../../workflow-definition/invocation-context.js";
+} from "@shared/workflow-graph";
 import {
   checksCeilingExceededError,
   RunBudgetError,
@@ -49,7 +49,7 @@ import {
   type PhasePollOutcome,
   type PhasePollTuning,
 } from "./poll-phase.js";
-import type { StepsRecord } from "../../workflow-definition/interpreter.js";
+import type { StepsRecord } from "@shared/workflow-graph";
 
 /**
  * Which of a repository's script groups one run executes.
@@ -372,6 +372,37 @@ export function checksCeilingMsOf(batchTimeoutMinutes?: number): number {
 }
 
 /**
+ * The repository keys this run touches, for scoping the checks ceiling.
+ *
+ * The workspace manifest first, because it is the list the run actually cloned.
+ * `selectedRepositories` is the same set one step earlier, before the manifest
+ * is written back onto the context. `undefined` when neither is known yet,
+ * which asks the catalog for its deployment-wide answer rather than for the
+ * ceiling of an empty set: an empty scope would resolve to the operator ceiling
+ * and could hand a batch a bound smaller than the repository it is about to
+ * clone asked for.
+ */
+export function runChecksScopeKeys(ctx: {
+  workspaceManifest?: { repositories: ReadonlyArray<{ provider: string; repoPath: string }> } | null;
+  selectedRepositories?: ReadonlyArray<{ provider: string; repoPath: string }>;
+}): string[] | undefined {
+  const repositories =
+    ctx.workspaceManifest?.repositories ??
+    (ctx.selectedRepositories && ctx.selectedRepositories.length > 0
+      ? ctx.selectedRepositories
+      : null);
+  if (!repositories || repositories.length === 0) return undefined;
+  return [
+    ...new Set(
+      repositories.map(
+        (repository) =>
+          `${repository.provider}:${repository.repoPath.toLowerCase()}`,
+      ),
+    ),
+  ];
+}
+
+/**
  * What workspace creation needs to know about the checks phase: how long it may
  * run, and which setup commands to provision with.
  *
@@ -388,7 +419,16 @@ export function checksCeilingMsOf(batchTimeoutMinutes?: number): number {
  * and would stop runs whose graph never runs one. The same holds for the store
  * being unreachable: provisioning is not the place to discover it.
  */
-export async function resolveChecksProvisioningStep(): Promise<{
+export async function resolveChecksProvisioningStep(
+  /** `provider:owner/name` for the repositories this run touches, so the
+   *  ceiling is the highest claim among THEM and not among every repository in
+   *  the catalog. Optional, and absent means the deployment-wide answer: on the
+   *  very first prepare of a run the selection has not happened yet, and a
+   *  ceiling that is too generous only oversizes a sandbox, where one that is
+   *  too small kills a batch. Optional also keeps this step replayable by a run
+   *  suspended before the parameter existed. */
+  repositoryKeys?: readonly string[],
+): Promise<{
   ceilingMs: number;
   config: unknown | null;
 }> {
@@ -401,7 +441,9 @@ export async function resolveChecksProvisioningStep(): Promise<{
     const { repoScriptsConfigSchema } = await import("../pre-pr-checks/config.js");
     // Composed out of per-repository profiles, so the setup commands this
     // provisions with are the ones the repositories in this workspace declare.
-    const current = await getConnectedCurrentCheckConfiguration();
+    const current = await getConnectedCurrentCheckConfiguration(
+      repositoryKeys === undefined ? {} : { repositoryKeys },
+    );
     if (current.version === null) return { ceilingMs: fallback, config: null };
     const parsed = repoScriptsConfigSchema.safeParse(current.config);
     return {
@@ -452,7 +494,13 @@ export function recoverChecksCeilingFromSteps(steps: StepsRecord): number | null
  * "use step", and moving it to workflow scope fails the Vercel build alone,
  * never vitest or a local build.
  */
-export async function loadPrePrCheckConfigStep(): Promise<{
+export async function loadPrePrCheckConfigStep(
+  /** The run's repository keys, as above. A checks block always runs after a
+   *  workspace exists, so this caller always knows them, and this is the
+   *  configuration whose `batchTimeoutMinutes` bounds the batch itself when no
+   *  earlier sandbox already fixed a ceiling. */
+  repositoryKeys?: readonly string[],
+): Promise<{
   version: number | null;
   config: PrePrCheckConfig;
   /** Optional so a stored result from before this field existed still parses
@@ -464,7 +512,9 @@ export async function loadPrePrCheckConfigStep(): Promise<{
     "../../db/repositories/repository-catalog.js"
   );
   const { logger } = await import("../../infra/logger.js");
-  const current = await getConnectedCurrentCheckConfiguration();
+  const current = await getConnectedCurrentCheckConfiguration(
+    repositoryKeys === undefined ? {} : { repositoryKeys },
+  );
   logger.info(
     {
       version: current.version,
@@ -749,8 +799,8 @@ export function checksBudgetExhaustedFailure(
       `Nothing ran in ${names.length} ${names.length === 1 ? "repository" : "repositories"} ` +
       `(${names.join(", ")}): this run's ${minutes} minute checks budget was already ` +
       "spent by the repositories before them, so the checks ceiling was reached. " +
-      "Raise batchTimeoutMinutes in the " +
-      "repository scripts configuration, or split the run.",
+      "Raise the checks ceiling on the Repositories page (open the repository, " +
+      "Scripts tab, checks ceiling), or split the run.",
     phase: "budget",
   };
 }

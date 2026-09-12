@@ -14,7 +14,10 @@ import type {
   RepositoryCatalogState,
   RepositoryOption,
 } from "@shared/contracts";
-import { repositoryCatalogKey } from "@shared/contracts";
+import {
+  REPOSITORY_CATALOG_SEED_ACTOR_LABEL,
+  repositoryCatalogKey,
+} from "@shared/contracts";
 
 import { formatDateTime } from "./format";
 
@@ -170,12 +173,10 @@ export function acknowledgedKeys(
 export const NOT_ACTIVATED_BANNER =
   "Catalog not activated: the agent sees everything the installation sees";
 
-/** The reason is NOT sent: `repositoryCatalogActivateRequestSchema` is
- *  `.strict()` and carries only the acknowledged keys, so the field is a
- *  deliberate pause and nothing more. The copy says exactly that rather than
- *  promising an audit entry nobody writes. */
+/** The reason travels with the request and is stored on the catalog state row,
+ *  so the copy promises an audit line that is actually written. */
 export const ACTIVATION_REASON_NOTE =
-  "Your name and the time are recorded. The reason is not: it stays on this screen, as the pause before you end the bridge for everyone.";
+  "Your name, the time and this reason are stored with the catalog and shown wherever activation is reported. Say why the bridge is ending, not that it is.";
 
 export const ACTIVATION_REASON_MISSING = "a reason is required";
 
@@ -205,14 +206,44 @@ export function activationValue(
   return state.activated ? "Activated" : "Not activated";
 }
 
-/** Who activated the catalog and when, or the empty string when the state says
- *  neither (the bridge, or an activation recorded without an actor). */
+/**
+ * Who activated the catalog, when, and why.
+ *
+ * The build-time seed is an actor too, and naming it as one ("activated by
+ * seeded from AGENT_ALLOWED_REPOS") reads like a person. So the seed is stated
+ * as provenance in brackets instead, which is the one case where the actor is
+ * not somebody an operator could go and ask.
+ *
+ * Empty string when the state says none of it (the bridge, or an activation
+ * recorded before any of this was stored).
+ */
 function activatedByLine(state: RepositoryCatalogState | null): string {
   if (state === null || !state.activated) return "";
-  const who = state.activatedByLabel;
+  const seeded = state.activatedByLabel === REPOSITORY_CATALOG_SEED_ACTOR_LABEL;
+  const who = seeded ? null : state.activatedByLabel;
   const when = state.activatedAt === null ? null : formatDateTime(state.activatedAt);
-  if (who === null && when === null) return "";
-  return `Activated${who === null ? "" : ` by ${who}`}${when === null ? "" : ` on ${when}`}.`;
+  if (who === null && when === null && !seeded) return "";
+  const reason =
+    state.activationReason === null || state.activationReason.trim().length === 0
+      ? ""
+      : `, reason: ${state.activationReason.trim()}`;
+  return (
+    `Activated${who === null ? "" : ` by ${who}`}` +
+    `${when === null ? "" : ` on ${when}`}` +
+    `${seeded ? ` (${REPOSITORY_CATALOG_SEED_ACTOR_LABEL})` : ""}${reason}.`
+  );
+}
+
+/**
+ * The banner on the Repositories list once the catalog decides access.
+ *
+ * Same sentence as the Settings card, because they report the same fact and an
+ * operator who read one and then the other must not have to work out whether
+ * they disagree.
+ */
+export function activationBannerLine(state: RepositoryCatalogState): string {
+  const by = activatedByLine(state);
+  return by === "" ? "Catalog activated." : `Catalog ${by[0].toLowerCase()}${by.slice(1)}`;
 }
 
 /** The sentence under the chip: what activation means here, plus who ended the

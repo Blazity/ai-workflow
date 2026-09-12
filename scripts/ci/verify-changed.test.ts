@@ -61,6 +61,7 @@ const GRAPH_PACK =
 const PACKAGES = "pnpm run test:packages";
 const SDK = "pnpm run test:workflow-sdk";
 const GATES = "pnpm run gates";
+const BLOCK_CATALOG = "pnpm run gen:blocks --check";
 const commands = (paths: string[], repo?: Repo) =>
   plan(paths, repo).commands.map(show);
 
@@ -166,8 +167,8 @@ test("a workflow graph package change plans the worker guards and the suites tha
     "src/engine/workflow-import-boundary.test.ts",
     "src/engine/step-registration-coverage.test.ts",
     "src/routes/import-graph-guard.test.ts",
-    "src/workflow-definition/v2-bindings.test.ts",
-    "src/workflow-definition/v2-branch.test.ts",
+    "src/workflow-graph-suites/v2-bindings.test.ts",
+    "src/workflow-graph-suites/v2-branch.test.ts",
   ]) {
     assert.equal(planned?.includes(` ${suite}`), true, suite);
   }
@@ -231,11 +232,16 @@ test("directory discovery includes test variants, direct tests, safety prefixes,
 });
 
 test("fixed tests and overlapping changed tests deduplicate into one process", () => {
-  const path = "apps/worker/src/workflow-definition/block-registry.test.ts";
+  const path = "apps/worker/src/engine/definition/block-registry.test.ts";
   const repo: Repo = { exists: (candidate) => candidate === path, list: () => [] };
   const result = commands([path, path], repo);
   assert.equal(result.filter((value) => value.includes("vitest run")).length, 1);
-  assert.equal(result.at(-2), PACK);
+  // The registry now sits under engine/definition/, which is also a block
+  // catalog source, so the tail gained `gen:blocks --check` between the suite
+  // and the gates. The order is still pinned, one position further back.
+  assert.equal(result.at(-1), GATES);
+  assert.equal(result.at(-2), BLOCK_CATALOG);
+  assert.equal(result.at(-3), PACK);
   assert.equal(new Set(result).size, result.length);
 });
 

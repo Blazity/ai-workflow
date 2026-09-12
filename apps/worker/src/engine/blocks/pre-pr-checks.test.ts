@@ -50,7 +50,7 @@ import {
   createV2InvocationContext,
   V2InvocationCancelledError,
   type V2InvocationObservationHooks,
-} from "../../workflow-definition/invocation-context.js";
+} from "@shared/workflow-graph";
 
 const config: PrePrCheckConfig = {
   repositories: [
@@ -476,7 +476,8 @@ describe("runPrePrChecksWithFixes", () => {
       ...budgetObservers(checksClock),
     }))).rejects.toThrow(
       "The repository checks did not finish within the 1 minute checks ceiling. " +
-      "Raise batchTimeoutMinutes for this definition or split the run. " +
+      "Raise the checks ceiling on the Repositories page (open the repository, " +
+      "Scripts tab, checks ceiling), or split the run. " +
       "(checks_ceiling_exceeded: Checks batch for github:acme/web reached the 1 minute checks ceiling)",
     );
   });
@@ -507,7 +508,8 @@ describe("runPrePrChecksWithFixes", () => {
       ...budgetObservers(checksClock),
     }))).rejects.toThrow(
       "The repository checks did not finish within the 15 minute checks ceiling. " +
-      "Raise batchTimeoutMinutes for this definition or split the run. " +
+      "Raise the checks ceiling on the Repositories page (open the repository, " +
+      "Scripts tab, checks ceiling), or split the run. " +
       "(checks_ceiling_exceeded: Checks batch for github:acme/web reached the 15 minute checks ceiling)",
     );
     expect(mocks.pollPhaseUntilDone).not.toHaveBeenCalled();
@@ -1827,7 +1829,8 @@ describe("runRepositorySetup", () => {
       name: "ChecksCeilingExceededError",
       message:
         "The repository checks did not finish within the 60 minute checks ceiling. " +
-        "Raise batchTimeoutMinutes for this definition or split the run. " +
+        "Raise the checks ceiling on the Repositories page (open the repository, " +
+      "Scripts tab, checks ceiling), or split the run. " +
         "(checks_ceiling_exceeded: Setup batch for gitlab:acme/api reached the 60 minute checks ceiling)",
     });
     // Only the first repository launched. The second is not counted as ran,

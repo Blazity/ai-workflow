@@ -22,7 +22,7 @@ import {
   listConnectedEnabledTriggerBindingCandidates,
   readConnectedTriggerBinding,
 } from "../db/repositories/definitions/connected.js";
-import { parseStoredWorkflowDefinition } from "../workflow-definition/stored-definition.js";
+import { parseStoredWorkflowDefinition } from "./definition/stored-definition.js";
 
 interface DefinitionMatch {
   definition: WorkflowDefinitionRow;

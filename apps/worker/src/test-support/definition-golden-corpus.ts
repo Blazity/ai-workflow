@@ -38,7 +38,7 @@ import type {
 import { builtinHarnessProfileReference } from "@shared/harness";
 import type { WorkflowBlockRegistryContext } from "../engine/definition/block-contract-resolver.js";
 import { workflowDefinitionV2Schema } from "@shared/workflow-graph";
-import { workflowDefinitionTemplates } from "../workflow-definition/templates.js";
+import { workflowDefinitionTemplates } from "../engine/definition/templates.js";
 import { testBlockData, testDeploymentIssues } from "./block-contracts.js";
 
 /** Everything configured, so a fixture reports only what its graph earns. */
@@ -126,7 +126,7 @@ const done = () => node("done", "terminate", { configuration: { terminalStatus: 
 function snapshotDefinitions(): CorpusEntry[] {
   const directory = resolve(
     import.meta.dirname,
-    "../workflow-definition/scenarios/snapshots",
+    "../workflow-graph-suites/scenarios/snapshots",
   );
   return readdirSync(directory)
     .filter((file) => file.endsWith(".json"))
@@ -882,5 +882,5 @@ function withoutInstants(message: string): string {
 
 export const DEFINITION_GOLDEN_PATH = resolve(
   import.meta.dirname,
-  "../workflow-definition/__golden__/definition-deployment-issues.json",
+  "../engine/definition/__golden__/definition-deployment-issues.json",
 );

@@ -11,9 +11,9 @@ import type { AgentKind } from "../sandbox/agents/index.js";
 import type { IssueTrackerMoveTarget } from "../adapters/issue-tracker/types.js";
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
 import { selectWorkItems } from "./helpers/review-ledger.js";
-import { executionError, WORKSPACE_GATE_NOT_RECORDED_PREFIX, type StepsRecord } from "../workflow-definition/interpreter.js";
+import { executionError, WORKSPACE_GATE_NOT_RECORDED_PREFIX, type StepsRecord } from "@shared/workflow-graph";
 import { formatExecutionErrorForUser, WorkflowExecutionError } from "./helpers/execution-error.js";
-import { executeV2Graph, V2_PRODUCTION_SCHEDULER_BOUNDS, type V2BlockExecutor, type V2SchedulerCheckpoint, type V2SchedulerHooks } from "../workflow-definition/v2-scheduler.js";
+import { executeV2Graph, V2_PRODUCTION_SCHEDULER_BOUNDS, type V2BlockExecutor, type V2SchedulerCheckpoint, type V2SchedulerHooks } from "@shared/workflow-graph";
 import { buildV2ReplayGraphSnapshot, createV2RunObservationHooks, type V2RunObservationHooks } from "../run-observability/runtime-hooks.js";
 import { configuredReplaySecrets } from "../run-observability/configured-secrets.js";
 import { emitAgentInvocationObservations, emitRepositoryWorkflowObservation, emitTimedOutAgentInvocationObservations } from "../run-observability/agent-observations.js";
@@ -23,17 +23,18 @@ import { resolveAgentInput } from "./helpers/resolve-agent-input.js";
 import { assembleReviewChangeSetAddition, pullRequestChangeSetTarget } from "./steps/review-change-set.js";
 import { sanitizeReplayAttemptOutcome, sanitizeReplayGraphSnapshot, sanitizeReplayValue } from "../run-observability/sanitizer.js";
 import { safeReplayAgentProtocolMetadata, safeWorkflowExecutionLogEvent } from "../run-observability/safe-execution-log.js";
-import { executeTransform } from "../workflow-definition/transform.js";
-import { type V2BindingResolutionContext } from "@shared/workflow-graph";
-import type { BlockExecutionContext, BlockExecutionResult, BlockExecutor } from "../workflow-definition/interpreter.js";
-import { resolveBlockAgent, resolveRunDefaultKind } from "../workflow-definition/resolve-agent.js";
+import { executeTransform, type V2BindingResolutionContext } from "@shared/workflow-graph";
+import { JSON_SCHEMA_SUPPORT } from "./definition/json-schema-support.js";
+import { SCHEDULER_DEPENDENCIES } from "./definition/scheduler-dependencies.js";
+import type { BlockExecutionContext, BlockExecutionResult, BlockExecutor } from "@shared/workflow-graph";
+import { resolveBlockAgent, resolveRunDefaultKind } from "./definition/resolve-agent.js";
 import { resolveTicketMoveTarget } from "./helpers/ticket-move-target.js";
 import { runKindForAgentWorkflowInput, type AgentWorkflowInput } from "./agent-input.js";
 import { moveTicketStep } from "./steps/ticket-transition-step.js";
-import { agentArtifactPhase, agentProtocolExecutionError as agentProtocolBlockError, blockBudgetObserver, buildV2AgentArtifactKeys, recordBlockPhaseUsage, type EngineCtx } from "./blocks/support/types.js";
+import { agentArtifactPhase, agentProtocolExecutionError as agentProtocolBlockError, blockBudgetObserver, buildV2AgentArtifactKeys, recordBlockPhaseUsage, type BlockInvocationContext, type EngineCtx } from "./blocks/support/types.js";
 import { VARIABLE_PARAM_KEYS } from "@shared/prompts";
 import { compatibilityPromptSourceForV2Node, compileEffectivePrompt, effectivePromptProfileSource } from "./helpers/effective-prompt.js";
-import { loadInvocationRepositoryInstructionSources } from "./steps/repository-instructions.js";
+import { loadInvocationRepositoryInstructionSources, shouldLoadRepositoryInstructionSources } from "./steps/repository-instructions.js";
 import { transformRegexEvaluator } from "./helpers/transform-regex-evaluator.js";
 import { publicationPrsForTelemetry } from "./helpers/publication-prs-for-telemetry.js";
 import { withAnalysisDelivery, withAnalysisPublication } from "./support/run-analysis-report.js";
@@ -49,10 +50,10 @@ import { prepareHarnessAgentInvocationStep } from "./blocks/agent-sandbox.js";
 import { recoverScriptDriftFromSteps } from "./blocks/finalize-workspace/execute.js";
 import { resolveCallLlmTarget } from "./blocks/call-llm/execute.js";
 import { pollPhaseUntilDone } from "./blocks/poll-phase.js";
-import { loadPrePrCheckConfigStep, recoverChecksCeilingFromSteps, runPrePrChecksWithFixes } from "./blocks/pre-pr-checks.js";
+import { loadPrePrCheckConfigStep, recoverChecksCeilingFromSteps, runChecksScopeKeys, runPrePrChecksWithFixes } from "./blocks/pre-pr-checks.js";
 import { type PrePrCheckRunResult } from "./steps/pre-pr-checks-runner.js";
 import { isRepositoryScriptsRefusal, repositoryScriptFailureEntry, repositoryScriptsOutput, repositoryScriptsStatus } from "./blocks/support/repository-scripts-output.js";
-import { RunBudgetError, addElapsed, checksCeilingErrorDetail, createRunBudgetState, isChecksCeilingExceededError, isDurationAbortError, isV2InvocationCancelledError, observeRunBudget, propagateInvocationInterruption, recordBudgetUsage, runBudgetFailureFromError, type RunBudgetAttribution, type RunBudgetLimits, type RunBudgetFailure, type RunBudgetObservation, type RunBudgetState } from "./helpers/run-budget.js";
+import { RunBudgetError, addElapsed, checksCeilingErrorDetail, createRunBudgetState, isChecksCeilingExceededError, isDurationAbortError, isV2InvocationCancelledError, observeRunBudget, propagateInvocationInterruption, recordBudgetUsage, runBudgetFailureFromError, type RunBudgetAttribution, type RunBudgetHooks, type RunBudgetLimits, type RunBudgetFailure, type RunBudgetObservation, type RunBudgetState } from "./helpers/run-budget.js";
 import { isRunControlError } from "./helpers/run-control-error.js";
 import { BLOCK_EXECUTORS } from "./blocks/executors.generated.js";
 import { createWorkflowExecutionErrorState, isTriggerBlockType, RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
@@ -187,7 +188,7 @@ export async function loadWorkflowPlanWithRetirementExit<
   }
   if (!plan) return null;
   const { isLegacyStoredWorkflowDefinition } = await import(
-    "../workflow-definition/stored-definition.js"
+    "./definition/stored-definition.js"
   );
   return isLegacyStoredWorkflowDefinition(plan.definition)
     ? input.retire(RETIRED_SCHEMA_MESSAGE)
@@ -665,6 +666,11 @@ async function agentWorkflowBody(
       blockStatuses: { ...blockStatuses },
       promptManifest: resolvedPrompts.manifest,
       harnessManifests,
+      // The list this run froze at its start, on the row. The run-start step
+      // logs it, which answers "what could this run touch" for whoever is
+      // watching at the time; the same question asked a week later needs the
+      // answer beside the run, not in a log retention window.
+      repositoryAccess: runRepositories,
     }).catch(() => {});
   await writeBlockStatuses();
   let v2RunObservation: V2RunObservationHooks | null = null;
@@ -1061,6 +1067,19 @@ async function agentWorkflowBody(
       markLaunched: (label, attempt) => {
         launchedPhases.add(phaseKey(label, attempt ?? state.attempt));
       },
+    };
+
+    /**
+     * What a phase is charged against when no Harness Profile selected a budget
+     * for it: the workflow-level observer, and nothing to record against a
+     * profile limit. Until stage 12-6b every reader spelled this fallback
+     * itself behind two optional fields of the scheduler's invocation context,
+     * so "no profile budget" and "the caller forgot" looked the same; naming it
+     * once here is the same behaviour, decided where the difference is known.
+     */
+    const workflowOnlyBudgetHooks: RunBudgetHooks = {
+      observeBudget: ctx.observeBudget,
+      recordBudgetUsage: () => {},
     };
 
     try {
@@ -1492,7 +1511,7 @@ async function agentWorkflowBody(
       let repositorySelectionObserved = false;
       const discoverRepositories = async (
         discovery: NonNullable<EngineCtx["repositoryDiscovery"]>,
-        execution?: BlockExecutionContext,
+        execution?: BlockInvocationContext,
       ): Promise<
         | BlockExecutionResult
         | SelectedRepository[]
@@ -1608,7 +1627,7 @@ async function agentWorkflowBody(
       };
       const expandResearchWorkspace = async (
         requests: NonNullable<ResearchResult["repositories"]>,
-        execution?: BlockExecutionContext,
+        execution?: BlockInvocationContext,
       ): Promise<BlockExecutionResult | null> => {
         // Defense-in-depth: a plan_approved run resumes a frozen approved scope,
         // so repository expansion must never widen it regardless of what the model
@@ -1732,7 +1751,7 @@ async function agentWorkflowBody(
         return attached.manifest;
       };
       const ensureCodeWorkspace = async (
-        execution?: BlockExecutionContext,
+        execution?: BlockInvocationContext,
         options: { requireWrite?: boolean } = {},
       ): Promise<
         | { kind: "ready"; sandboxId: string }
@@ -1831,7 +1850,7 @@ async function agentWorkflowBody(
         return { kind: "ready", sandboxId: ctx.sandboxId };
       };
 
-      const executeBlock: BlockExecutor = async (
+      const executeBlock: BlockExecutor<BlockInvocationContext> = async (
         rawNode,
         steps,
         resolvedInputs,
@@ -2926,7 +2945,9 @@ async function agentWorkflowBody(
             // client tenant's real checks outlive the 300s one function
             // invocation gets and used to kill the run with no recoverable
             // cause. See workflows/blocks/pre-pr-checks.ts.
-            const prePrConfig = await loadPrePrCheckConfigStep();
+            const prePrConfig = await loadPrePrCheckConfigStep(
+              runChecksScopeKeys(ctx),
+            );
             let prePrChecks: PrePrCheckRunResult;
             try {
               prePrChecks = await runPrePrChecksWithFixes({
@@ -3316,7 +3337,13 @@ async function agentWorkflowBody(
             ReturnType<typeof loadInvocationRepositoryInstructionSources>
           > = [];
           if (
-            runtime.manifest.context.includeRepositoryInstructions &&
+            shouldLoadRepositoryInstructionSources({
+              includeRepositoryInstructions:
+                runtime.manifest.context.includeRepositoryInstructions,
+              manifest: ctx.workspaceManifest,
+            }) &&
+            // The predicate already requires a manifest; this repeats it only
+            // so the compiler narrows it away from null for the call below.
             ctx.workspaceManifest
           ) {
             try {
@@ -3327,6 +3354,8 @@ async function agentWorkflowBody(
                   sharedCodeSandboxId: ctx.sandboxId,
                   manifest: ctx.workspaceManifest,
                   enableRepoMemory: runSettings.ENABLE_REPO_MEMORY,
+                  repositoryAccess: ctx.repositories,
+                  ruleVariables: buildPromptVariables(ctx),
                 });
             } catch (error) {
               if (isRunControlError(error)) throw error;
@@ -3417,6 +3446,7 @@ async function agentWorkflowBody(
                 output: await executeTransform(
                   configuration as unknown as TransformConfiguration,
                   bindingContext,
+                  JSON_SCHEMA_SUPPORT,
                   transformRegexEvaluator,
                 ),
               },
@@ -3505,12 +3535,12 @@ async function agentWorkflowBody(
             cancellation: invocation.cancellation,
             observations: invocation.observations,
             compileEffectivePrompt: compileInvocationPrompt,
-            ...(invocationBudget
+            budget: invocationBudget
               ? {
                   observeBudget: invocationBudget.observeBudget,
                   recordBudgetUsage: invocationBudget.recordUsage,
                 }
-              : {}),
+              : workflowOnlyBudgetHooks,
             ...(invocation.clarificationAnswer === undefined
               ? {}
               : { clarificationAnswer: invocation.clarificationAnswer }),
@@ -3618,6 +3648,7 @@ async function agentWorkflowBody(
         while (true) {
           const v2Walk = await executeV2Graph({
             runId: workflowRunId,
+            dependencies: SCHEDULER_DEPENDENCIES,
             definition,
             entryTriggerId: entryTrigger.id,
             triggerOutput,
@@ -3820,8 +3851,9 @@ async function agentWorkflowBody(
                 provider,
                 model,
                 // Pin the attempt so the label never inherits the last block's
-                // retry count and reads "Repo memory distill #3".
-                { attempt: 1 },
+                // retry count and reads "Repo memory distill #3". Not a block
+                // invocation, so there is no Harness Profile budget to charge.
+                { attempt: 1, budget: workflowOnlyBudgetHooks },
               );
             }
           }

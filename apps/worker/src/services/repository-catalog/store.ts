@@ -18,7 +18,7 @@ import {
 import {
   getConnectedRepositoryCatalogStateRow,
   listConnectedRepositoryCatalogKeys,
-  listConnectedRepositoryCatalogRows,
+  listConnectedRepositoryCatalogRowsWithGroupCounts,
   type RepositoryCatalogRow,
 } from "../../db/repositories/repository-catalog.js";
 
@@ -34,9 +34,15 @@ export interface RepositoryCatalogSnapshot {
 
 export function serializeRepositoryCatalogEntry(
   row: RepositoryCatalogRow,
+  /** How many script groups the current profile declares, when the caller's
+   *  query computed it. Omitted rather than zero everywhere else: "not counted
+   *  on this response" and "no groups" are different answers and a screen has
+   *  to be able to tell them apart. */
+  scriptGroupCount?: number,
 ): RepositoryCatalogEntry {
   return {
     id: row.id,
+    ...(scriptGroupCount === undefined ? {} : { scriptGroupCount }),
     provider: row.provider === "gitlab" ? "gitlab" : "github",
     path: row.path,
     displayName: row.displayName,
@@ -58,6 +64,7 @@ function stateOf(stateRow: {
   activatedAt: Date | null;
   activatedById: string | null;
   activatedByLabel: string | null;
+  activationReason: string | null;
 }): RepositoryCatalogState {
   return {
     activated: stateRow.activated,
@@ -66,6 +73,7 @@ function stateOf(stateRow: {
     activatedAt: stateRow.activatedAt?.toISOString() ?? null,
     activatedById: stateRow.activatedById,
     activatedByLabel: stateRow.activatedByLabel,
+    activationReason: stateRow.activationReason,
   };
 }
 
@@ -91,14 +99,26 @@ export async function loadRepositoryCatalogSnapshot(): Promise<RepositoryCatalog
   return { activated: stateRow.activated, enabled, state: stateOf(stateRow) };
 }
 
-/** The full rows, for the two screens that render them. */
+/**
+ * The full rows, for the two screens that render them.
+ *
+ * The script group count rides along on the same query. The list is the screen
+ * that renders every repository at once, so the one thing it must not do is ask
+ * a second question per row; the count comes back as a correlated subquery
+ * inside the same statement.
+ */
 export async function loadRepositoryCatalogEntries(): Promise<{
   state: RepositoryCatalogState;
   entries: RepositoryCatalogEntry[];
 }> {
   const [stateRow, rows] = await Promise.all([
     getConnectedRepositoryCatalogStateRow(),
-    listConnectedRepositoryCatalogRows(),
+    listConnectedRepositoryCatalogRowsWithGroupCounts(),
   ]);
-  return { state: stateOf(stateRow), entries: rows.map(serializeRepositoryCatalogEntry) };
+  return {
+    state: stateOf(stateRow),
+    entries: rows.map((row) =>
+      serializeRepositoryCatalogEntry(row, row.scriptGroupCount),
+    ),
+  };
 }

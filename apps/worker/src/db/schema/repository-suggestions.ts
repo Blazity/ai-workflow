@@ -69,6 +69,16 @@ export const repositorySuggestions = pgTable(
      * does not drift the way float would.
      */
     costUsd: numeric("cost_usd", { precision: 19, scale: 4, mode: "number" }),
+    /**
+     * How long the call took, in milliseconds, as the caller measured it.
+     *
+     * Recorded next to the tokens because the two answer different questions on
+     * the same row: a timeout costs no tokens and all of the wall clock, and a
+     * history that showed only "unpriced" for it would leave an admin unable to
+     * tell a provider that hung from one that refused instantly. Nullable for a
+     * row written before this column existed.
+     */
+    durationMs: integer("duration_ms"),
     /** Why it failed, in words, empty for a proposal. Not a code: the useful
      *  half of a provider failure is its own message. */
     error: text("error").notNull().default(""),

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { diagnoseRun } from "../services/mcp/run-diagnosis.js";
-import { WORKSPACE_GATE_NOT_RECORDED_MESSAGE } from "../workflow-definition/interpreter.js";
+import { WORKSPACE_GATE_NOT_RECORDED_MESSAGE } from "@shared/workflow-graph";
 
 describe("diagnoseRun", () => {
   it("classifies the stable watchdog stalled-engine reason instead of unknown", () => {
@@ -186,7 +186,7 @@ describe("diagnoseRun", () => {
   // publication.reason is one of the WorkspaceGateError messages
   // (workflows/workspace-gate.ts:135-137). deriveFailureMessage then composes
   // "The checks could not be started. (<reason>)" (workflow-definition/
-  // failure-message.ts:288-300, interpreter.ts:95 for the generic sentence).
+  // failure-message.ts, interpreter.ts for the generic sentence).
   it("classifies a workspace-gate failure message as workspace_gate, with low confidence", () => {
     const result = diagnoseRun({
       status: "failed",
@@ -431,7 +431,7 @@ describe("diagnoseRun", () => {
     });
   });
 
-  // Real shape: PROVIDER_CAUSES auth entry (workflow-definition/failure-message.ts:
+  // Real shape: PROVIDER_CAUSES auth entry (packages/workflow-graph/failure-message.ts:
   // 100-105), reached via a "provider"-category block (e.g. call_llm, workflows/
   // blocks/call-llm.ts:210-212) whose caught error message is fed through
   // deriveFailureMessage/classifyProviderFailure unmodified.
@@ -478,7 +478,7 @@ describe("diagnoseRun", () => {
   });
 
   // Real shape: PROVIDER_CAUSES rate-limit entry (workflow-definition/
-  // failure-message.ts:96-99), reached the same way as the auth case above.
+  // failure-message.ts), reached the same way as the auth case above.
   it("classifies the curated AI-provider rate-limit message as dependency_unavailable, with low confidence", () => {
     const result = diagnoseRun({
       status: "failed",

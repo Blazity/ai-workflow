@@ -24,7 +24,7 @@ import {
 import {
   createV2InvocationCancellationController,
   V2InvocationCancelledError,
-} from "../../workflow-definition/invocation-context.js";
+} from "@shared/workflow-graph";
 
 const ok = (remainingDurationMs: number) => ({
   check: { status: "ok" as const },

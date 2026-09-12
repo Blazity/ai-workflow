@@ -168,11 +168,19 @@ describe("repository instruction sources", () => {
         sharedCodeSandboxId: "code-workspace",
         manifest,
         enableRepoMemory: false,
+        repositoryAccess: { activated: false, enabledKeys: [] },
+        ruleVariables: {},
       },
       load,
     );
 
-    expect(load).toHaveBeenCalledWith("code-workspace", manifest, false);
+    expect(load).toHaveBeenCalledWith(
+      "code-workspace",
+      manifest,
+      false,
+      ["github:acme/service"],
+      {},
+    );
     expect(sources.map((source) => source.path)).toEqual([
       "AGENTS.md",
       "CLAUDE.md",
@@ -206,6 +214,8 @@ describe("repository instruction sources", () => {
           sharedCodeSandboxId: null,
           manifest,
           enableRepoMemory: false,
+          repositoryAccess: { activated: false, enabledKeys: [] },
+          ruleVariables: {},
         },
         load,
       ),

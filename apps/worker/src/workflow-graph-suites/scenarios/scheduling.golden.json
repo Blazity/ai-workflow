@@ -1,0 +1,1540 @@
+[
+  {
+    "source": "snapshot \"arthur-post-pr-review-v1.json\"",
+    "order": [
+      "1/2 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[arthur-post-pr-review-01-trigger-ready-out-create-check]",
+      "3/4 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "5/6 create-check#1@root create_pr_check dispatched executor completed out[arthur-post-pr-review-03-create-check-out-prepare]",
+      "7/8 prepare#1@root prepare_workspace dispatched executor completed out[arthur-post-pr-review-04-prepare-out-review]",
+      "9/10 review#1@root review_agent dispatched executor completed out[arthur-post-pr-review-05-review-out-post-review]",
+      "11/12 post-review#1@root post_pr_review dispatched executor completed out[arthur-post-pr-review-06-post-review-out-review-approved]",
+      "13/14 review-approved#1@root branch dispatched scheduler completed false[arthur-post-pr-review-08-review-approved-false-complete-failure]",
+      "15/16 complete-success#1@root complete_pr_check skipped scheduler - -",
+      "17/18 complete-failure#1@root complete_pr_check dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "snapshot \"arthur-post-pr-review-v1.json\"",
+    "order": [
+      "1/2 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[arthur-post-pr-review-01-trigger-ready-out-create-check]",
+      "3/4 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "5/6 create-check#1@root create_pr_check dispatched executor completed out[arthur-post-pr-review-03-create-check-out-prepare]",
+      "7/8 prepare#1@root prepare_workspace dispatched executor completed out[arthur-post-pr-review-04-prepare-out-review]",
+      "9/10 review#1@root review_agent dispatched executor completed out[arthur-post-pr-review-05-review-out-post-review]",
+      "11/12 post-review#1@root post_pr_review dispatched executor completed out[arthur-post-pr-review-06-post-review-out-review-approved]",
+      "13/14 review-approved#1@root branch dispatched scheduler completed false[arthur-post-pr-review-08-review-approved-false-complete-failure]",
+      "15/16 complete-success#1@root complete_pr_check skipped scheduler - -",
+      "17/18 complete-failure#1@root complete_pr_check dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "snapshot \"arthur-post-pr-review-v1.json\"",
+    "order": [
+      "1/2 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[arthur-post-pr-review-01-trigger-ready-out-create-check]",
+      "3/4 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "5/6 create-check#1@root create_pr_check dispatched executor completed out[arthur-post-pr-review-03-create-check-out-prepare]",
+      "7/8 prepare#1@root prepare_workspace dispatched executor completed out[arthur-post-pr-review-04-prepare-out-review]",
+      "9/10 review#1@root review_agent dispatched executor completed out[arthur-post-pr-review-05-review-out-post-review]",
+      "11/12 post-review#1@root post_pr_review dispatched executor completed out[arthur-post-pr-review-06-post-review-out-review-approved]",
+      "13/14 review-approved#1@root branch dispatched scheduler completed true[arthur-post-pr-review-07-review-approved-true-complete-success]",
+      "15/16 complete-failure#1@root complete_pr_check skipped scheduler - -",
+      "17/18 complete-success#1@root complete_pr_check dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "snapshot \"arthur-post-pr-review-v1.json\"",
+    "order": [
+      "1/2 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[arthur-post-pr-review-01-trigger-ready-out-create-check]",
+      "3/4 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "5/6 create-check#1@root create_pr_check dispatched executor completed out[arthur-post-pr-review-03-create-check-out-prepare]",
+      "7/8 prepare#1@root prepare_workspace dispatched executor completed out[arthur-post-pr-review-04-prepare-out-review]",
+      "9/10 review#1@root review_agent dispatched executor completed out[arthur-post-pr-review-05-review-out-post-review]",
+      "11/12 post-review#1@root post_pr_review dispatched executor completed out[arthur-post-pr-review-06-post-review-out-review-approved]",
+      "13/14 review-approved#1@root branch dispatched scheduler completed true[arthur-post-pr-review-07-review-approved-true-complete-success]",
+      "15/16 complete-failure#1@root complete_pr_check skipped scheduler - -",
+      "17/18 complete-success#1@root complete_pr_check dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "snapshot \"arthur-post-pr-review-v1.json\"",
+    "order": [
+      "1/2 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[arthur-post-pr-review-01-trigger-ready-out-create-check]",
+      "3/4 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "5/6 create-check#1@root create_pr_check dispatched executor completed out[arthur-post-pr-review-03-create-check-out-prepare]",
+      "7/8 prepare#1@root prepare_workspace dispatched executor completed out[arthur-post-pr-review-04-prepare-out-review]",
+      "9/10 review#1@root review_agent dispatched executor failed -"
+    ]
+  },
+  {
+    "source": "snapshot \"arthur-post-pr-review-v1.json\"",
+    "order": [
+      "1/2 trigger-ready#1@root trigger_pr_ready skipped scheduler - -",
+      "3/4 trigger-updated#1@root trigger_pr_updated dispatched scheduler - out[arthur-post-pr-review-02-trigger-updated-out-create-check]",
+      "5/6 create-check#1@root create_pr_check dispatched executor completed out[arthur-post-pr-review-03-create-check-out-prepare]",
+      "7/8 prepare#1@root prepare_workspace dispatched executor completed out[arthur-post-pr-review-04-prepare-out-review]",
+      "9/10 review#1@root review_agent dispatched executor completed out[arthur-post-pr-review-05-review-out-post-review]",
+      "11/12 post-review#1@root post_pr_review dispatched executor completed out[arthur-post-pr-review-06-post-review-out-review-approved]",
+      "13/14 review-approved#1@root branch dispatched scheduler completed true[arthur-post-pr-review-07-review-approved-true-complete-success]",
+      "15/16 complete-failure#1@root complete_pr_check skipped scheduler - -",
+      "17/18 complete-success#1@root complete_pr_check dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "snapshot \"investigate-triage-v1.json\"",
+    "order": [
+      "1/2 trigger#1@root trigger_ticket_ai dispatched scheduler - out[e01-trigger-investigate]",
+      "3/4 investigate#1@root investigate dispatched executor completed out[e02-investigate-route]",
+      "5/6 route#1@root branch dispatched scheduler completed false[e04-route-false-answer]",
+      "7/8 ask#1@root human_question skipped scheduler - -",
+      "9/10 answer#1@root post_ticket_comment dispatched executor completed out[e05-answer-close]",
+      "11/12 close#1@root update_ticket_status dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "snapshot \"investigate-triage-v1.json\"",
+    "order": [
+      "1/2 trigger#1@root trigger_ticket_ai dispatched scheduler - out[e01-trigger-investigate]",
+      "3/4 investigate#1@root investigate dispatched executor completed out[e02-investigate-route]",
+      "5/6 route#1@root branch dispatched scheduler completed false[e04-route-false-answer]",
+      "7/8 ask#1@root human_question skipped scheduler - -",
+      "9/10 answer#1@root post_ticket_comment dispatched executor completed out[e05-answer-close]",
+      "11/12 close#1@root update_ticket_status dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "snapshot \"investigate-triage-v1.json\"",
+    "order": [
+      "1/2 trigger#1@root trigger_ticket_ai dispatched scheduler - out[e01-trigger-investigate]",
+      "3/4 investigate#1@root investigate dispatched executor completed out[e02-investigate-route]",
+      "5/6 route#1@root branch dispatched scheduler completed false[e04-route-false-answer]",
+      "7/8 ask#1@root human_question skipped scheduler - -",
+      "9/10 answer#1@root post_ticket_comment dispatched executor completed out[e05-answer-close]",
+      "11/12 close#1@root update_ticket_status dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "snapshot \"investigate-triage-v1.json\"",
+    "order": [
+      "1/2 trigger#1@root trigger_ticket_ai dispatched scheduler - out[e01-trigger-investigate]",
+      "3/4 investigate#1@root investigate dispatched executor completed out[e02-investigate-route]",
+      "5/6 route#1@root branch dispatched scheduler completed true[e03-route-true-ask]",
+      "7/8 answer#1@root post_ticket_comment skipped scheduler - -",
+      "9/10 close#1@root update_ticket_status skipped scheduler - -",
+      "11/12 ask#1@root human_question dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "snapshot \"investigate-triage-v1.json\"",
+    "order": [
+      "1/2 trigger#1@root trigger_ticket_ai dispatched scheduler - out[e01-trigger-investigate]",
+      "3/4 investigate#1@root investigate dispatched executor failed -"
+    ]
+  },
+  {
+    "source": "snapshot \"loop-branch-early-exit-v1.json\"",
+    "order": [
+      "1/2 trigger#1@root trigger_ticket_ai dispatched scheduler - out[e01-trigger-seed]",
+      "3/4 seed#1@root generic_agent dispatched executor completed out[e02-seed-loop,e03-seed-work]",
+      "5/6 work#1@root generic_agent dispatched executor completed out[e05-work-gate]",
+      "7/8 gate#1@root branch dispatched scheduler completed false[e06-gate-false-loop]",
+      "9/28 loop#1@root loop dispatched scheduler completed exhausted[e08-loop-exhausted-giveup]",
+      "10/11 work#2@root/loop:loop:1 generic_agent dispatched executor completed out[e05-work-gate]",
+      "12/13 gate#2@root/loop:loop:1 branch dispatched scheduler completed false[e06-gate-false-loop]",
+      "14/15 loop#2@root/loop:loop:1 loop dispatched scheduler completed continue[e04-loop-continue-work]",
+      "16/17 work#3@root/loop:loop:2 generic_agent dispatched executor completed out[e05-work-gate]",
+      "18/19 gate#3@root/loop:loop:2 branch dispatched scheduler completed false[e06-gate-false-loop]",
+      "20/21 loop#3@root/loop:loop:2 loop dispatched scheduler completed continue[e04-loop-continue-work]",
+      "22/23 work#4@root/loop:loop:3 generic_agent dispatched executor completed out[e05-work-gate]",
+      "24/25 gate#4@root/loop:loop:3 branch dispatched scheduler completed false[e06-gate-false-loop]",
+      "26/27 loop#4@root/loop:loop:3 loop dispatched scheduler completed -",
+      "29/30 done#1@root terminate skipped scheduler - -",
+      "31/32 giveup#1@root terminate dispatched executor failed -"
+    ]
+  },
+  {
+    "source": "snapshot \"loop-branch-early-exit-v1.json\"",
+    "order": [
+      "1/2 trigger#1@root trigger_ticket_ai dispatched scheduler - out[e01-trigger-seed]",
+      "3/4 seed#1@root generic_agent dispatched executor completed out[e02-seed-loop,e03-seed-work]",
+      "5/6 work#1@root generic_agent dispatched executor completed out[e05-work-gate]",
+      "7/8 gate#1@root branch dispatched scheduler completed true[e07-gate-true-done]",
+      "9/10 loop#1@root loop skipped scheduler - -",
+      "11/12 giveup#1@root terminate skipped scheduler - -",
+      "13/14 done#1@root terminate dispatched executor completed -"
+    ]
+  },
+  {
+    "source": "snapshot \"loop-branch-early-exit-v1.json\"",
+    "order": [
+      "1/2 trigger#1@root trigger_ticket_ai dispatched scheduler - out[e01-trigger-seed]",
+      "3/4 seed#1@root generic_agent dispatched executor completed out[e02-seed-loop,e03-seed-work]",
+      "5/6 work#1@root generic_agent dispatched executor completed out[e05-work-gate]",
+      "7/8 gate#1@root branch dispatched scheduler completed true[e07-gate-true-done]",
+      "9/10 loop#1@root loop skipped scheduler - -",
+      "11/12 giveup#1@root terminate skipped scheduler - -",
+      "13/14 done#1@root terminate dispatched executor completed -"
+    ]
+  },
+  {
+    "source": "snapshot \"loop-region-side-output-v1.json\"",
+    "order": [
+      "1/2 trigger#1@root trigger_ticket_ai dispatched scheduler - out[e01-trigger-seed]",
+      "3/4 seed#1@root generic_agent dispatched executor completed out[e02-seed-loop,e03-seed-work]",
+      "5/6 work#1@root generic_agent dispatched executor completed out[e05-work-gate,e06-work-notify]",
+      "7/12 notify#1@root generic_agent dispatched executor completed out[]",
+      "8/9 gate#1@root branch dispatched scheduler completed false[e07-gate-false-loop]",
+      "10/20 loop#1@root loop dispatched scheduler completed true[]",
+      "11/13 work#2@root/loop:loop:1 generic_agent dispatched executor completed out[e05-work-gate,e06-work-notify]",
+      "14/15 gate#2@root/loop:loop:1 branch dispatched scheduler completed true[e08-gate-true-done]",
+      "16/17 loop#2@root/loop:loop:1 loop skipped scheduler - -",
+      "18/19 giveup#1@root terminate skipped scheduler - -",
+      "21/22 done#1@root terminate dispatched executor completed -"
+    ]
+  },
+  {
+    "source": "snapshot \"loop-region-side-output-v1.json\"",
+    "order": [
+      "1/2 trigger#1@root trigger_ticket_ai dispatched scheduler - out[e01-trigger-seed]",
+      "3/4 seed#1@root generic_agent dispatched executor completed out[e02-seed-loop,e03-seed-work]",
+      "5/6 work#1@root generic_agent dispatched executor completed out[e05-work-gate,e06-work-notify]",
+      "7/12 notify#1@root generic_agent dispatched executor completed out[]",
+      "8/9 gate#1@root branch dispatched scheduler completed false[e07-gate-false-loop]",
+      "10/30 loop#1@root loop dispatched scheduler completed exhausted[e09-loop-exhausted-giveup]",
+      "11/13 work#2@root/loop:loop:1 generic_agent dispatched executor completed out[e05-work-gate,e06-work-notify]",
+      "14/15 gate#2@root/loop:loop:1 branch dispatched scheduler completed false[e07-gate-false-loop]",
+      "16/17 loop#2@root/loop:loop:1 loop dispatched scheduler completed continue[e04-loop-continue-work]",
+      "18/19 work#3@root/loop:loop:2 generic_agent dispatched executor completed out[e05-work-gate,e06-work-notify]",
+      "20/21 gate#3@root/loop:loop:2 branch dispatched scheduler completed false[e07-gate-false-loop]",
+      "22/23 loop#3@root/loop:loop:2 loop dispatched scheduler completed continue[e04-loop-continue-work]",
+      "24/25 work#4@root/loop:loop:3 generic_agent dispatched executor completed out[e05-work-gate,e06-work-notify]",
+      "26/27 gate#4@root/loop:loop:3 branch dispatched scheduler completed false[e07-gate-false-loop]",
+      "28/29 loop#4@root/loop:loop:3 loop dispatched scheduler completed -",
+      "31/32 done#1@root terminate skipped scheduler - -",
+      "33/34 giveup#1@root terminate dispatched executor failed -"
+    ]
+  },
+  {
+    "source": "snapshot \"loop-region-side-output-v1.json\"",
+    "order": [
+      "1/2 trigger#1@root trigger_ticket_ai dispatched scheduler - out[e01-trigger-seed]",
+      "3/4 seed#1@root generic_agent dispatched executor completed out[e02-seed-loop,e03-seed-work]",
+      "5/6 work#1@root generic_agent dispatched executor completed out[e05-work-gate,e06-work-notify]",
+      "7/12 notify#1@root generic_agent dispatched executor completed out[]",
+      "8/9 gate#1@root branch dispatched scheduler completed false[e07-gate-false-loop]",
+      "10/30 loop#1@root loop dispatched scheduler completed exhausted[e09-loop-exhausted-giveup]",
+      "11/13 work#2@root/loop:loop:1 generic_agent dispatched executor completed out[e05-work-gate,e06-work-notify]",
+      "14/15 gate#2@root/loop:loop:1 branch dispatched scheduler completed false[e07-gate-false-loop]",
+      "16/17 loop#2@root/loop:loop:1 loop dispatched scheduler completed continue[e04-loop-continue-work]",
+      "18/19 work#3@root/loop:loop:2 generic_agent dispatched executor completed out[e05-work-gate,e06-work-notify]",
+      "20/21 gate#3@root/loop:loop:2 branch dispatched scheduler completed false[e07-gate-false-loop]",
+      "22/23 loop#3@root/loop:loop:2 loop dispatched scheduler completed continue[e04-loop-continue-work]",
+      "24/25 work#4@root/loop:loop:3 generic_agent dispatched executor completed out[e05-work-gate,e06-work-notify]",
+      "26/27 gate#4@root/loop:loop:3 branch dispatched scheduler completed false[e07-gate-false-loop]",
+      "28/29 loop#4@root/loop:loop:3 loop dispatched scheduler completed -",
+      "31/32 done#1@root terminate skipped scheduler - -",
+      "33/34 giveup#1@root terminate dispatched executor failed -"
+    ]
+  },
+  {
+    "source": "snapshot \"loop-two-region-exits-v1.json\"",
+    "order": [
+      "1/2 trigger#1@root trigger_ticket_ai dispatched scheduler - out[e01-trigger-seed]",
+      "3/4 seed#1@root generic_agent dispatched executor completed out[e02-seed-workA,e03-seed-workB]",
+      "5/7 workA#1@root generic_agent dispatched executor completed out[e06-workA-gateA]",
+      "6/10 workB#1@root generic_agent dispatched executor completed out[e07-workB-gateB]",
+      "8/9 gateA#1@root branch dispatched scheduler completed false[e08-gateA-false-loop]",
+      "11/12 gateB#1@root branch dispatched scheduler completed false[e09-gateB-false-loop]",
+      "13/21 loop#1@root loop dispatched scheduler completed true[]",
+      "14/16 workA#2@root/loop:loop:1 generic_agent dispatched executor completed out[e06-workA-gateA]",
+      "15/24 workB#2@root/loop:loop:1 generic_agent dispatched executor completed out[e07-workB-gateB]",
+      "17/18 gateA#2@root/loop:loop:1 branch dispatched scheduler completed true[e10-gateA-true-doneA]",
+      "19/20 loop#2@root/loop:loop:1 loop skipped scheduler - -",
+      "22/23 doneA#1@root generic_agent dispatched executor completed out[]",
+      "25/26 gateB#2@root/loop:loop:1 branch dispatched scheduler completed true[e11-gateB-true-doneB]",
+      "27/28 giveup#1@root generic_agent skipped scheduler - -",
+      "29/30 doneB#1@root generic_agent dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "snapshot \"loop-two-region-exits-v1.json\"",
+    "order": [
+      "1/2 trigger#1@root trigger_ticket_ai dispatched scheduler - out[e01-trigger-seed]",
+      "3/4 seed#1@root generic_agent dispatched executor completed out[e02-seed-workA,e03-seed-workB]",
+      "5/7 workA#1@root generic_agent dispatched executor completed out[e06-workA-gateA]",
+      "6/11 workB#1@root generic_agent dispatched executor completed out[e07-workB-gateB]",
+      "8/9 gateA#1@root branch dispatched scheduler completed true[e10-gateA-true-doneA]",
+      "10/19 doneA#1@root generic_agent dispatched executor completed out[]",
+      "12/13 gateB#1@root branch dispatched scheduler completed true[e11-gateB-true-doneB]",
+      "14/15 loop#1@root loop skipped scheduler - -",
+      "16/17 giveup#1@root generic_agent skipped scheduler - -",
+      "18/20 doneB#1@root generic_agent dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "snapshot \"loop-two-region-exits-v1.json\"",
+    "order": [
+      "1/2 trigger#1@root trigger_ticket_ai dispatched scheduler - out[e01-trigger-seed]",
+      "3/4 seed#1@root generic_agent dispatched executor completed out[e02-seed-workA,e03-seed-workB]",
+      "5/7 workA#1@root generic_agent dispatched executor completed out[e06-workA-gateA]",
+      "6/11 workB#1@root generic_agent dispatched executor completed out[e07-workB-gateB]",
+      "8/9 gateA#1@root branch dispatched scheduler completed true[e10-gateA-true-doneA]",
+      "10/19 doneA#1@root generic_agent dispatched executor completed out[]",
+      "12/13 gateB#1@root branch dispatched scheduler completed true[e11-gateB-true-doneB]",
+      "14/15 loop#1@root loop skipped scheduler - -",
+      "16/17 giveup#1@root generic_agent skipped scheduler - -",
+      "18/20 doneB#1@root generic_agent dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "snapshot \"post-pr-autofix-v1.json\"",
+    "order": [
+      "1/2 fix#1@root fix_agent skipped scheduler - -",
+      "3/4 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[builtin-post-pr-autofix-01-trigger-ready-out-create-check]",
+      "5/6 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "7/8 create-check#1@root create_pr_check dispatched executor completed out[builtin-post-pr-autofix-03-create-check-out-prepare]",
+      "9/10 prepare#1@root prepare_workspace dispatched executor completed out[builtin-post-pr-autofix-04-prepare-out-security-review,builtin-post-pr-autofix-05-prepare-out-quality-review,builtin-post-pr-autofix-06-prepare-out-requirements-review]",
+      "11/14 security-review#1@root review_agent dispatched executor completed out[builtin-post-pr-autofix-07-security-review-out-review-approved]",
+      "12/15 quality-review#1@root review_agent dispatched executor completed out[builtin-post-pr-autofix-08-quality-review-out-review-approved]",
+      "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-post-pr-autofix-09-requirements-review-out-review-approved]",
+      "17/18 review-approved#1@root branch dispatched scheduler completed false[builtin-post-pr-autofix-14-review-approved-false-retry]",
+      "19/28 retry#1@root loop dispatched scheduler cancelled -",
+      "20/21 fix#2@root/loop:retry:1 fix_agent dispatched executor completed out[builtin-post-pr-autofix-11-fix-out-security-review,builtin-post-pr-autofix-12-fix-out-quality-review,builtin-post-pr-autofix-13-fix-out-requirements-review]",
+      "22/25 security-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-post-pr-autofix-07-security-review-out-review-approved]",
+      "23/26 quality-review#2@root/loop:retry:1 review_agent dispatched executor failed -",
+      "24/27 requirements-review#2@root/loop:retry:1 review_agent dispatched executor completed -"
+    ]
+  },
+  {
+    "source": "snapshot \"post-pr-autofix-v1.json\"",
+    "order": [
+      "1/2 fix#1@root fix_agent skipped scheduler - -",
+      "3/4 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[builtin-post-pr-autofix-01-trigger-ready-out-create-check]",
+      "5/6 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "7/8 create-check#1@root create_pr_check dispatched executor completed out[builtin-post-pr-autofix-03-create-check-out-prepare]",
+      "9/10 prepare#1@root prepare_workspace dispatched executor completed out[builtin-post-pr-autofix-04-prepare-out-security-review,builtin-post-pr-autofix-05-prepare-out-quality-review,builtin-post-pr-autofix-06-prepare-out-requirements-review]",
+      "11/14 security-review#1@root review_agent dispatched executor completed out[builtin-post-pr-autofix-07-security-review-out-review-approved]",
+      "12/15 quality-review#1@root review_agent dispatched executor completed out[builtin-post-pr-autofix-08-quality-review-out-review-approved]",
+      "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-post-pr-autofix-09-requirements-review-out-review-approved]",
+      "17/18 review-approved#1@root branch dispatched scheduler completed false[builtin-post-pr-autofix-14-review-approved-false-retry]",
+      "19/38 retry#1@root loop dispatched scheduler completed true[]",
+      "20/21 fix#2@root/loop:retry:1 fix_agent dispatched executor completed out[builtin-post-pr-autofix-11-fix-out-security-review,builtin-post-pr-autofix-12-fix-out-quality-review,builtin-post-pr-autofix-13-fix-out-requirements-review]",
+      "22/25 security-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-post-pr-autofix-07-security-review-out-review-approved]",
+      "23/26 quality-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-post-pr-autofix-08-quality-review-out-review-approved]",
+      "24/27 requirements-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-post-pr-autofix-09-requirements-review-out-review-approved]",
+      "28/29 review-approved#2@root/loop:retry:1 branch dispatched scheduler completed true[builtin-post-pr-autofix-10-review-approved-true-post-review-approved]",
+      "30/31 retry#2@root/loop:retry:1 loop skipped scheduler - -",
+      "32/33 post-review-exhausted#1@root post_pr_review skipped scheduler - -",
+      "34/35 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "36/37 complete-failure#1@root complete_pr_check skipped scheduler - -",
+      "39/40 post-review-approved#1@root post_pr_review dispatched executor completed out[builtin-post-pr-autofix-17-post-review-approved-out-complete-success]",
+      "41/42 complete-success#1@root complete_pr_check dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "snapshot \"post-pr-autofix-v1.json\"",
+    "order": [
+      "1/2 fix#1@root fix_agent skipped scheduler - -",
+      "3/4 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[builtin-post-pr-autofix-01-trigger-ready-out-create-check]",
+      "5/6 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "7/8 create-check#1@root create_pr_check dispatched executor completed out[builtin-post-pr-autofix-03-create-check-out-prepare]",
+      "9/10 prepare#1@root prepare_workspace dispatched executor completed out[builtin-post-pr-autofix-04-prepare-out-security-review,builtin-post-pr-autofix-05-prepare-out-quality-review,builtin-post-pr-autofix-06-prepare-out-requirements-review]",
+      "11/14 security-review#1@root review_agent dispatched executor completed out[builtin-post-pr-autofix-07-security-review-out-review-approved]",
+      "12/15 quality-review#1@root review_agent dispatched executor completed out[builtin-post-pr-autofix-08-quality-review-out-review-approved]",
+      "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-post-pr-autofix-09-requirements-review-out-review-approved]",
+      "17/18 review-approved#1@root branch dispatched scheduler completed false[builtin-post-pr-autofix-14-review-approved-false-retry]",
+      "19/44 retry#1@root loop dispatched scheduler completed exhausted[builtin-post-pr-autofix-16-retry-exhausted-post-review-exhausted]",
+      "20/21 fix#2@root/loop:retry:1 fix_agent dispatched executor completed out[builtin-post-pr-autofix-11-fix-out-security-review,builtin-post-pr-autofix-12-fix-out-quality-review,builtin-post-pr-autofix-13-fix-out-requirements-review]",
+      "22/25 security-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-post-pr-autofix-07-security-review-out-review-approved]",
+      "23/26 quality-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-post-pr-autofix-08-quality-review-out-review-approved]",
+      "24/27 requirements-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-post-pr-autofix-09-requirements-review-out-review-approved]",
+      "28/29 review-approved#2@root/loop:retry:1 branch dispatched scheduler completed false[builtin-post-pr-autofix-14-review-approved-false-retry]",
+      "30/31 retry#2@root/loop:retry:1 loop dispatched scheduler completed continue[builtin-post-pr-autofix-15-retry-continue-fix]",
+      "32/33 fix#3@root/loop:retry:2 fix_agent dispatched executor completed out[builtin-post-pr-autofix-11-fix-out-security-review,builtin-post-pr-autofix-12-fix-out-quality-review,builtin-post-pr-autofix-13-fix-out-requirements-review]",
+      "34/37 security-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-post-pr-autofix-07-security-review-out-review-approved]",
+      "35/38 quality-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-post-pr-autofix-08-quality-review-out-review-approved]",
+      "36/39 requirements-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-post-pr-autofix-09-requirements-review-out-review-approved]",
+      "40/41 review-approved#3@root/loop:retry:2 branch dispatched scheduler completed false[builtin-post-pr-autofix-14-review-approved-false-retry]",
+      "42/43 retry#3@root/loop:retry:2 loop dispatched scheduler completed -",
+      "45/46 post-review-approved#1@root post_pr_review skipped scheduler - -",
+      "47/48 complete-success#1@root complete_pr_check skipped scheduler - -",
+      "49/50 post-review-exhausted#1@root post_pr_review dispatched executor completed out[builtin-post-pr-autofix-18-post-review-exhausted-out-exhausted-message]",
+      "51/52 exhausted-message#1@root send_slack_message dispatched executor completed out[builtin-post-pr-autofix-19-exhausted-message-out-complete-failure]",
+      "53/54 complete-failure#1@root complete_pr_check dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "snapshot \"post-pr-review-v1.json\"",
+    "order": [
+      "1/2 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[builtin-post-pr-review-01-trigger-ready-out-create-check]",
+      "3/4 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "5/6 create-check#1@root create_pr_check dispatched executor completed out[builtin-post-pr-review-03-create-check-out-prepare]",
+      "7/8 prepare#1@root prepare_workspace dispatched executor completed out[builtin-post-pr-review-04-prepare-out-security-review,builtin-post-pr-review-05-prepare-out-quality-review,builtin-post-pr-review-06-prepare-out-requirements-review]",
+      "9/12 security-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-07-security-review-out-post-review]",
+      "10/13 quality-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-08-quality-review-out-post-review]",
+      "11/14 requirements-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-09-requirements-review-out-post-review]",
+      "15/16 post-review#1@root post_pr_review dispatched executor completed out[builtin-post-pr-review-10-post-review-out-review-approved]",
+      "17/18 review-approved#1@root branch dispatched scheduler completed true[builtin-post-pr-review-11-review-approved-true-complete-success]",
+      "19/20 complete-failure#1@root complete_pr_check skipped scheduler - -",
+      "21/22 complete-success#1@root complete_pr_check dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "snapshot \"post-pr-review-v1.json\"",
+    "order": [
+      "1/2 trigger-ready#1@root trigger_pr_ready skipped scheduler - -",
+      "3/4 trigger-updated#1@root trigger_pr_updated dispatched scheduler - out[builtin-post-pr-review-02-trigger-updated-out-create-check]",
+      "5/6 create-check#1@root create_pr_check dispatched executor completed out[builtin-post-pr-review-03-create-check-out-prepare]",
+      "7/8 prepare#1@root prepare_workspace dispatched executor completed out[builtin-post-pr-review-04-prepare-out-security-review,builtin-post-pr-review-05-prepare-out-quality-review,builtin-post-pr-review-06-prepare-out-requirements-review]",
+      "9/12 security-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-07-security-review-out-post-review]",
+      "10/13 quality-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-08-quality-review-out-post-review]",
+      "11/14 requirements-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-09-requirements-review-out-post-review]",
+      "15/16 post-review#1@root post_pr_review dispatched executor completed out[builtin-post-pr-review-10-post-review-out-review-approved]",
+      "17/18 review-approved#1@root branch dispatched scheduler completed true[builtin-post-pr-review-11-review-approved-true-complete-success]",
+      "19/20 complete-failure#1@root complete_pr_check skipped scheduler - -",
+      "21/22 complete-success#1@root complete_pr_check dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "snapshot \"schedule-open-pr-v1.json\"",
+    "order": [
+      "1/2 trigger#1@root trigger_schedule dispatched scheduler - out[builtin-schedule-open-pr-01-trigger-out-prepare]",
+      "3/4 prepare#1@root prepare_workspace dispatched executor completed out[builtin-schedule-open-pr-02-prepare-out-agent]",
+      "5/6 agent#1@root generic_agent dispatched executor completed out[builtin-schedule-open-pr-03-agent-out-finalize]",
+      "7/8 finalize#1@root finalize_workspace dispatched executor completed out[builtin-schedule-open-pr-04-finalize-out-open-pr]",
+      "9/10 open-pr#1@root open_pr dispatched executor completed out[builtin-schedule-open-pr-05-open-pr-out-terminate]",
+      "11/12 terminate#1@root terminate dispatched executor completed -"
+    ]
+  },
+  {
+    "source": "snapshot \"schedule-open-pr-v1.json\"",
+    "order": [
+      "1/2 trigger#1@root trigger_schedule dispatched scheduler - out[builtin-schedule-open-pr-01-trigger-out-prepare]",
+      "3/4 prepare#1@root prepare_workspace dispatched executor completed out[builtin-schedule-open-pr-02-prepare-out-agent]",
+      "5/6 agent#1@root generic_agent dispatched executor completed out[builtin-schedule-open-pr-03-agent-out-finalize]",
+      "7/8 finalize#1@root finalize_workspace dispatched executor completed out[builtin-schedule-open-pr-04-finalize-out-open-pr]",
+      "9/10 open-pr#1@root open_pr dispatched executor completed out[builtin-schedule-open-pr-05-open-pr-out-terminate]",
+      "11/12 terminate#1@root terminate dispatched executor completed -"
+    ]
+  },
+  {
+    "source": "template \"fully-modular\"",
+    "order": [
+      "1/2 trigger#1@root trigger_ticket_ai dispatched scheduler - out[builtin-fully-modular-01-trigger-out-prepare]",
+      "3/4 prepare#1@root prepare_workspace dispatched executor completed out[builtin-fully-modular-02-prepare-out-planning]",
+      "5/6 planning#1@root generic_agent dispatched executor completed out[builtin-fully-modular-03-planning-out-implementation]",
+      "7/8 implementation#1@root generic_agent dispatched executor completed out[builtin-fully-modular-04-implementation-out-checks]",
+      "9/10 checks#1@root run_checks dispatched executor completed out[builtin-fully-modular-05-checks-out-checks-passed]",
+      "11/12 checks-passed#1@root branch dispatched scheduler completed false[builtin-fully-modular-07-checks-passed-false-checks-failed]",
+      "13/14 finalize#1@root finalize_workspace skipped scheduler - -",
+      "15/16 open-pr#1@root open_pr skipped scheduler - -",
+      "17/18 checks-failed#1@root terminate dispatched executor failed -"
+    ]
+  },
+  {
+    "source": "template \"fully-modular\"",
+    "order": [
+      "1/2 trigger#1@root trigger_ticket_ai dispatched scheduler - out[builtin-fully-modular-01-trigger-out-prepare]",
+      "3/4 prepare#1@root prepare_workspace dispatched executor completed out[builtin-fully-modular-02-prepare-out-planning]",
+      "5/6 planning#1@root generic_agent dispatched executor completed out[builtin-fully-modular-03-planning-out-implementation]",
+      "7/8 implementation#1@root generic_agent dispatched executor completed out[builtin-fully-modular-04-implementation-out-checks]",
+      "9/10 checks#1@root run_checks dispatched executor completed out[builtin-fully-modular-05-checks-out-checks-passed]",
+      "11/12 checks-passed#1@root branch dispatched scheduler completed true[builtin-fully-modular-06-checks-passed-true-finalize]",
+      "13/14 checks-failed#1@root terminate skipped scheduler - -",
+      "15/16 finalize#1@root finalize_workspace dispatched executor completed out[builtin-fully-modular-08-finalize-out-open-pr]",
+      "17/18 open-pr#1@root open_pr dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"fully-modular\"",
+    "order": [
+      "1/2 trigger#1@root trigger_ticket_ai dispatched scheduler - out[builtin-fully-modular-01-trigger-out-prepare]",
+      "3/4 prepare#1@root prepare_workspace dispatched executor completed out[builtin-fully-modular-02-prepare-out-planning]",
+      "5/6 planning#1@root generic_agent dispatched executor completed out[builtin-fully-modular-03-planning-out-implementation]",
+      "7/8 implementation#1@root generic_agent dispatched executor failed -"
+    ]
+  },
+  {
+    "source": "template \"human-approved-plan\"",
+    "order": [
+      "1/2 prepare-plan#1@root prepare_workspace skipped scheduler - -",
+      "3/4 planning#1@root planning_agent skipped scheduler - -",
+      "5/6 send-approval#1@root send_plan_approval skipped scheduler - -",
+      "7/8 trigger-ticket#1@root trigger_ticket_ai skipped scheduler - -",
+      "9/10 trigger-approved#1@root trigger_plan_approved dispatched scheduler - out[builtin-human-approved-plan-04-trigger-approved-out-prepare-implementation]",
+      "11/12 prepare-implementation#1@root prepare_workspace dispatched executor completed out[builtin-human-approved-plan-05-prepare-implementation-out-implementation]",
+      "13/14 implementation#1@root implementation_agent dispatched executor completed out[builtin-human-approved-plan-06-implementation-out-checks]",
+      "15/16 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-human-approved-plan-07-checks-out-finalize]",
+      "17/18 finalize#1@root finalize_workspace dispatched executor completed out[builtin-human-approved-plan-08-finalize-out-open-pr]",
+      "19/20 open-pr#1@root open_pr dispatched executor completed out[builtin-human-approved-plan-09-open-pr-out-status]",
+      "21/22 status#1@root update_ticket_status dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"human-approved-plan\"",
+    "order": [
+      "1/2 trigger-ticket#1@root trigger_ticket_ai dispatched scheduler - out[builtin-human-approved-plan-01-trigger-ticket-out-prepare-plan]",
+      "3/4 prepare-implementation#1@root prepare_workspace skipped scheduler - -",
+      "5/6 implementation#1@root implementation_agent skipped scheduler - -",
+      "7/8 checks#1@root run_pre_pr_checks skipped scheduler - -",
+      "9/10 finalize#1@root finalize_workspace skipped scheduler - -",
+      "11/12 open-pr#1@root open_pr skipped scheduler - -",
+      "13/14 status#1@root update_ticket_status skipped scheduler - -",
+      "15/16 trigger-approved#1@root trigger_plan_approved skipped scheduler - -",
+      "17/18 prepare-plan#1@root prepare_workspace dispatched executor completed out[builtin-human-approved-plan-02-prepare-plan-out-planning]",
+      "19/20 planning#1@root planning_agent dispatched executor completed -",
+      "21/22 send-approval#1@root send_plan_approval skipped scheduler - -"
+    ]
+  },
+  {
+    "source": "template \"human-approved-plan\"",
+    "order": [
+      "1/2 trigger-ticket#1@root trigger_ticket_ai dispatched scheduler - out[builtin-human-approved-plan-01-trigger-ticket-out-prepare-plan]",
+      "3/4 prepare-implementation#1@root prepare_workspace skipped scheduler - -",
+      "5/6 implementation#1@root implementation_agent skipped scheduler - -",
+      "7/8 checks#1@root run_pre_pr_checks skipped scheduler - -",
+      "9/10 finalize#1@root finalize_workspace skipped scheduler - -",
+      "11/12 open-pr#1@root open_pr skipped scheduler - -",
+      "13/14 status#1@root update_ticket_status skipped scheduler - -",
+      "15/16 trigger-approved#1@root trigger_plan_approved skipped scheduler - -",
+      "17/18 prepare-plan#1@root prepare_workspace dispatched executor completed out[builtin-human-approved-plan-02-prepare-plan-out-planning]",
+      "19/20 planning#1@root planning_agent dispatched executor completed out[builtin-human-approved-plan-03-planning-out-send-approval]",
+      "21/22 send-approval#1@root send_plan_approval dispatched executor completed -"
+    ]
+  },
+  {
+    "source": "template \"human-approved-plan\"",
+    "order": [
+      "1/2 trigger-ticket#1@root trigger_ticket_ai dispatched scheduler - out[builtin-human-approved-plan-01-trigger-ticket-out-prepare-plan]",
+      "3/4 prepare-implementation#1@root prepare_workspace skipped scheduler - -",
+      "5/6 implementation#1@root implementation_agent skipped scheduler - -",
+      "7/8 checks#1@root run_pre_pr_checks skipped scheduler - -",
+      "9/10 finalize#1@root finalize_workspace skipped scheduler - -",
+      "11/12 open-pr#1@root open_pr skipped scheduler - -",
+      "13/14 status#1@root update_ticket_status skipped scheduler - -",
+      "15/16 trigger-approved#1@root trigger_plan_approved skipped scheduler - -",
+      "17/18 prepare-plan#1@root prepare_workspace dispatched executor completed out[builtin-human-approved-plan-02-prepare-plan-out-planning]",
+      "19/20 planning#1@root planning_agent dispatched executor failed -"
+    ]
+  },
+  {
+    "source": "template \"post-pr-autofix\"",
+    "order": [
+      "1/2 fix#1@root fix_agent skipped scheduler - -",
+      "3/4 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[builtin-post-pr-autofix-01-trigger-ready-out-create-check]",
+      "5/6 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "7/8 create-check#1@root create_pr_check dispatched executor completed out[builtin-post-pr-autofix-03-create-check-out-prepare]",
+      "9/10 prepare#1@root prepare_workspace dispatched executor completed out[builtin-post-pr-autofix-04-prepare-out-security-review,builtin-post-pr-autofix-05-prepare-out-quality-review,builtin-post-pr-autofix-06-prepare-out-requirements-review]",
+      "11/14 security-review#1@root review_agent dispatched executor completed out[builtin-post-pr-autofix-07-security-review-out-review-approved]",
+      "12/15 quality-review#1@root review_agent dispatched executor completed out[builtin-post-pr-autofix-08-quality-review-out-review-approved]",
+      "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-post-pr-autofix-09-requirements-review-out-review-approved]",
+      "17/18 review-approved#1@root branch dispatched scheduler completed false[builtin-post-pr-autofix-14-review-approved-false-retry]",
+      "19/28 retry#1@root loop dispatched scheduler cancelled -",
+      "20/21 fix#2@root/loop:retry:1 fix_agent dispatched executor completed out[builtin-post-pr-autofix-11-fix-out-security-review,builtin-post-pr-autofix-12-fix-out-quality-review,builtin-post-pr-autofix-13-fix-out-requirements-review]",
+      "22/25 security-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-post-pr-autofix-07-security-review-out-review-approved]",
+      "23/26 quality-review#2@root/loop:retry:1 review_agent dispatched executor failed -",
+      "24/27 requirements-review#2@root/loop:retry:1 review_agent dispatched executor completed -"
+    ]
+  },
+  {
+    "source": "template \"post-pr-autofix\"",
+    "order": [
+      "1/2 fix#1@root fix_agent skipped scheduler - -",
+      "3/4 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[builtin-post-pr-autofix-01-trigger-ready-out-create-check]",
+      "5/6 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "7/8 create-check#1@root create_pr_check dispatched executor completed out[builtin-post-pr-autofix-03-create-check-out-prepare]",
+      "9/10 prepare#1@root prepare_workspace dispatched executor completed out[builtin-post-pr-autofix-04-prepare-out-security-review,builtin-post-pr-autofix-05-prepare-out-quality-review,builtin-post-pr-autofix-06-prepare-out-requirements-review]",
+      "11/14 security-review#1@root review_agent dispatched executor completed out[builtin-post-pr-autofix-07-security-review-out-review-approved]",
+      "12/15 quality-review#1@root review_agent dispatched executor completed out[builtin-post-pr-autofix-08-quality-review-out-review-approved]",
+      "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-post-pr-autofix-09-requirements-review-out-review-approved]",
+      "17/18 review-approved#1@root branch dispatched scheduler completed false[builtin-post-pr-autofix-14-review-approved-false-retry]",
+      "19/38 retry#1@root loop dispatched scheduler completed true[]",
+      "20/21 fix#2@root/loop:retry:1 fix_agent dispatched executor completed out[builtin-post-pr-autofix-11-fix-out-security-review,builtin-post-pr-autofix-12-fix-out-quality-review,builtin-post-pr-autofix-13-fix-out-requirements-review]",
+      "22/25 security-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-post-pr-autofix-07-security-review-out-review-approved]",
+      "23/26 quality-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-post-pr-autofix-08-quality-review-out-review-approved]",
+      "24/27 requirements-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-post-pr-autofix-09-requirements-review-out-review-approved]",
+      "28/29 review-approved#2@root/loop:retry:1 branch dispatched scheduler completed true[builtin-post-pr-autofix-10-review-approved-true-post-review-approved]",
+      "30/31 retry#2@root/loop:retry:1 loop skipped scheduler - -",
+      "32/33 post-review-exhausted#1@root post_pr_review skipped scheduler - -",
+      "34/35 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "36/37 complete-failure#1@root complete_pr_check skipped scheduler - -",
+      "39/40 post-review-approved#1@root post_pr_review dispatched executor completed out[builtin-post-pr-autofix-17-post-review-approved-out-complete-success]",
+      "41/42 complete-success#1@root complete_pr_check dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"post-pr-autofix\"",
+    "order": [
+      "1/2 fix#1@root fix_agent skipped scheduler - -",
+      "3/4 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[builtin-post-pr-autofix-01-trigger-ready-out-create-check]",
+      "5/6 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "7/8 create-check#1@root create_pr_check dispatched executor completed out[builtin-post-pr-autofix-03-create-check-out-prepare]",
+      "9/10 prepare#1@root prepare_workspace dispatched executor completed out[builtin-post-pr-autofix-04-prepare-out-security-review,builtin-post-pr-autofix-05-prepare-out-quality-review,builtin-post-pr-autofix-06-prepare-out-requirements-review]",
+      "11/14 security-review#1@root review_agent dispatched executor completed out[builtin-post-pr-autofix-07-security-review-out-review-approved]",
+      "12/15 quality-review#1@root review_agent dispatched executor completed out[builtin-post-pr-autofix-08-quality-review-out-review-approved]",
+      "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-post-pr-autofix-09-requirements-review-out-review-approved]",
+      "17/18 review-approved#1@root branch dispatched scheduler completed false[builtin-post-pr-autofix-14-review-approved-false-retry]",
+      "19/44 retry#1@root loop dispatched scheduler completed exhausted[builtin-post-pr-autofix-16-retry-exhausted-post-review-exhausted]",
+      "20/21 fix#2@root/loop:retry:1 fix_agent dispatched executor completed out[builtin-post-pr-autofix-11-fix-out-security-review,builtin-post-pr-autofix-12-fix-out-quality-review,builtin-post-pr-autofix-13-fix-out-requirements-review]",
+      "22/25 security-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-post-pr-autofix-07-security-review-out-review-approved]",
+      "23/26 quality-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-post-pr-autofix-08-quality-review-out-review-approved]",
+      "24/27 requirements-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-post-pr-autofix-09-requirements-review-out-review-approved]",
+      "28/29 review-approved#2@root/loop:retry:1 branch dispatched scheduler completed false[builtin-post-pr-autofix-14-review-approved-false-retry]",
+      "30/31 retry#2@root/loop:retry:1 loop dispatched scheduler completed continue[builtin-post-pr-autofix-15-retry-continue-fix]",
+      "32/33 fix#3@root/loop:retry:2 fix_agent dispatched executor completed out[builtin-post-pr-autofix-11-fix-out-security-review,builtin-post-pr-autofix-12-fix-out-quality-review,builtin-post-pr-autofix-13-fix-out-requirements-review]",
+      "34/37 security-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-post-pr-autofix-07-security-review-out-review-approved]",
+      "35/38 quality-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-post-pr-autofix-08-quality-review-out-review-approved]",
+      "36/39 requirements-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-post-pr-autofix-09-requirements-review-out-review-approved]",
+      "40/41 review-approved#3@root/loop:retry:2 branch dispatched scheduler completed false[builtin-post-pr-autofix-14-review-approved-false-retry]",
+      "42/43 retry#3@root/loop:retry:2 loop dispatched scheduler completed -",
+      "45/46 post-review-approved#1@root post_pr_review skipped scheduler - -",
+      "47/48 complete-success#1@root complete_pr_check skipped scheduler - -",
+      "49/50 post-review-exhausted#1@root post_pr_review dispatched executor completed out[builtin-post-pr-autofix-18-post-review-exhausted-out-exhausted-message]",
+      "51/52 exhausted-message#1@root send_slack_message dispatched executor completed out[builtin-post-pr-autofix-19-exhausted-message-out-complete-failure]",
+      "53/54 complete-failure#1@root complete_pr_check dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"post-pr-review\"",
+    "order": [
+      "1/2 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[builtin-post-pr-review-01-trigger-ready-out-create-check]",
+      "3/4 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "5/- create-check#1@root create_pr_check dispatched executor - -"
+    ]
+  },
+  {
+    "source": "template \"post-pr-review\"",
+    "order": [
+      "1/2 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[builtin-post-pr-review-01-trigger-ready-out-create-check]",
+      "3/4 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "5/6 create-check#1@root create_pr_check dispatched executor completed out[builtin-post-pr-review-03-create-check-out-prepare]",
+      "7/- prepare#1@root prepare_workspace dispatched executor - -"
+    ]
+  },
+  {
+    "source": "template \"post-pr-review\"",
+    "order": [
+      "1/2 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[builtin-post-pr-review-01-trigger-ready-out-create-check]",
+      "3/4 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "5/6 create-check#1@root create_pr_check dispatched executor completed out[builtin-post-pr-review-03-create-check-out-prepare]",
+      "7/- prepare#1@root prepare_workspace dispatched executor - -"
+    ]
+  },
+  {
+    "source": "template \"post-pr-review\"",
+    "order": [
+      "1/2 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[builtin-post-pr-review-01-trigger-ready-out-create-check]",
+      "3/4 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "5/6 create-check#1@root create_pr_check dispatched executor completed out[builtin-post-pr-review-03-create-check-out-prepare]",
+      "7/- prepare#1@root prepare_workspace dispatched executor - -"
+    ]
+  },
+  {
+    "source": "template \"post-pr-review\"",
+    "order": [
+      "1/2 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[builtin-post-pr-review-01-trigger-ready-out-create-check]",
+      "3/4 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "5/6 create-check#1@root create_pr_check dispatched executor completed out[builtin-post-pr-review-03-create-check-out-prepare]",
+      "7/8 prepare#1@root prepare_workspace dispatched executor completed out[builtin-post-pr-review-04-prepare-out-security-review,builtin-post-pr-review-05-prepare-out-quality-review,builtin-post-pr-review-06-prepare-out-requirements-review]",
+      "9/- security-review#1@root review_agent dispatched executor - -",
+      "10/12 quality-review#1@root review_agent dispatched executor cancelled -",
+      "11/13 requirements-review#1@root review_agent dispatched executor cancelled -"
+    ]
+  },
+  {
+    "source": "template \"post-pr-review\"",
+    "order": [
+      "1/2 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[builtin-post-pr-review-01-trigger-ready-out-create-check]",
+      "3/4 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "5/6 create-check#1@root create_pr_check dispatched executor completed out[builtin-post-pr-review-03-create-check-out-prepare]",
+      "7/8 prepare#1@root prepare_workspace dispatched executor completed out[builtin-post-pr-review-04-prepare-out-security-review,builtin-post-pr-review-05-prepare-out-quality-review,builtin-post-pr-review-06-prepare-out-requirements-review]",
+      "9/12 security-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-07-security-review-out-post-review]",
+      "10/13 quality-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-08-quality-review-out-post-review]",
+      "11/14 requirements-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-09-requirements-review-out-post-review]",
+      "15/16 post-review#1@root post_pr_review dispatched executor completed out[builtin-post-pr-review-10-post-review-out-review-approved]",
+      "17/18 review-approved#1@root branch dispatched scheduler completed false[builtin-post-pr-review-12-review-approved-false-complete-failure]",
+      "19/20 complete-success#1@root complete_pr_check skipped scheduler - -",
+      "21/22 complete-failure#1@root complete_pr_check dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"post-pr-review\"",
+    "order": [
+      "1/2 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[builtin-post-pr-review-01-trigger-ready-out-create-check]",
+      "3/4 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "5/6 create-check#1@root create_pr_check dispatched executor completed out[builtin-post-pr-review-03-create-check-out-prepare]",
+      "7/8 prepare#1@root prepare_workspace dispatched executor completed out[builtin-post-pr-review-04-prepare-out-security-review,builtin-post-pr-review-05-prepare-out-quality-review,builtin-post-pr-review-06-prepare-out-requirements-review]",
+      "9/12 security-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-07-security-review-out-post-review]",
+      "10/13 quality-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-08-quality-review-out-post-review]",
+      "11/14 requirements-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-09-requirements-review-out-post-review]",
+      "15/16 post-review#1@root post_pr_review dispatched executor completed out[builtin-post-pr-review-10-post-review-out-review-approved]",
+      "17/18 review-approved#1@root branch dispatched scheduler completed false[builtin-post-pr-review-12-review-approved-false-complete-failure]",
+      "19/20 complete-success#1@root complete_pr_check skipped scheduler - -",
+      "21/22 complete-failure#1@root complete_pr_check dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"post-pr-review\"",
+    "order": [
+      "1/2 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[builtin-post-pr-review-01-trigger-ready-out-create-check]",
+      "3/4 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "5/6 create-check#1@root create_pr_check dispatched executor completed out[builtin-post-pr-review-03-create-check-out-prepare]",
+      "7/8 prepare#1@root prepare_workspace dispatched executor completed out[builtin-post-pr-review-04-prepare-out-security-review,builtin-post-pr-review-05-prepare-out-quality-review,builtin-post-pr-review-06-prepare-out-requirements-review]",
+      "9/12 security-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-07-security-review-out-post-review]",
+      "10/13 quality-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-08-quality-review-out-post-review]",
+      "11/14 requirements-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-09-requirements-review-out-post-review]",
+      "15/16 post-review#1@root post_pr_review dispatched executor completed out[builtin-post-pr-review-10-post-review-out-review-approved]",
+      "17/18 review-approved#1@root branch dispatched scheduler completed false[builtin-post-pr-review-12-review-approved-false-complete-failure]",
+      "19/20 complete-success#1@root complete_pr_check skipped scheduler - -",
+      "21/22 complete-failure#1@root complete_pr_check dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"post-pr-review\"",
+    "order": [
+      "1/2 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[builtin-post-pr-review-01-trigger-ready-out-create-check]",
+      "3/4 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "5/6 create-check#1@root create_pr_check dispatched executor completed out[builtin-post-pr-review-03-create-check-out-prepare]",
+      "7/8 prepare#1@root prepare_workspace dispatched executor completed out[builtin-post-pr-review-04-prepare-out-security-review,builtin-post-pr-review-05-prepare-out-quality-review,builtin-post-pr-review-06-prepare-out-requirements-review]",
+      "9/12 security-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-07-security-review-out-post-review]",
+      "10/13 quality-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-08-quality-review-out-post-review]",
+      "11/14 requirements-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-09-requirements-review-out-post-review]",
+      "15/16 post-review#1@root post_pr_review dispatched executor completed out[builtin-post-pr-review-10-post-review-out-review-approved]",
+      "17/18 review-approved#1@root branch dispatched scheduler completed true[builtin-post-pr-review-11-review-approved-true-complete-success]",
+      "19/20 complete-failure#1@root complete_pr_check skipped scheduler - -",
+      "21/22 complete-success#1@root complete_pr_check dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"post-pr-review\"",
+    "order": [
+      "1/2 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[builtin-post-pr-review-01-trigger-ready-out-create-check]",
+      "3/4 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "5/6 create-check#1@root create_pr_check dispatched executor completed out[builtin-post-pr-review-03-create-check-out-prepare]",
+      "7/8 prepare#1@root prepare_workspace dispatched executor completed out[builtin-post-pr-review-04-prepare-out-security-review,builtin-post-pr-review-05-prepare-out-quality-review,builtin-post-pr-review-06-prepare-out-requirements-review]",
+      "9/12 security-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-07-security-review-out-post-review]",
+      "10/13 quality-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-08-quality-review-out-post-review]",
+      "11/14 requirements-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-09-requirements-review-out-post-review]",
+      "15/16 post-review#1@root post_pr_review dispatched executor completed out[builtin-post-pr-review-10-post-review-out-review-approved]",
+      "17/18 review-approved#1@root branch dispatched scheduler completed true[builtin-post-pr-review-11-review-approved-true-complete-success]",
+      "19/20 complete-failure#1@root complete_pr_check skipped scheduler - -",
+      "21/22 complete-success#1@root complete_pr_check dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"post-pr-review\"",
+    "order": [
+      "1/2 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[builtin-post-pr-review-01-trigger-ready-out-create-check]",
+      "3/4 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "5/6 create-check#1@root create_pr_check dispatched executor completed out[builtin-post-pr-review-03-create-check-out-prepare]",
+      "7/8 prepare#1@root prepare_workspace dispatched executor completed out[builtin-post-pr-review-04-prepare-out-security-review,builtin-post-pr-review-05-prepare-out-quality-review,builtin-post-pr-review-06-prepare-out-requirements-review]",
+      "9/12 security-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-07-security-review-out-post-review]",
+      "10/13 quality-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-08-quality-review-out-post-review]",
+      "11/14 requirements-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-09-requirements-review-out-post-review]",
+      "15/16 post-review#1@root post_pr_review dispatched executor completed out[builtin-post-pr-review-10-post-review-out-review-approved]",
+      "17/18 review-approved#1@root branch dispatched scheduler completed true[builtin-post-pr-review-11-review-approved-true-complete-success]",
+      "19/20 complete-failure#1@root complete_pr_check skipped scheduler - -",
+      "21/22 complete-success#1@root complete_pr_check dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"post-pr-review\"",
+    "order": [
+      "1/2 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[builtin-post-pr-review-01-trigger-ready-out-create-check]",
+      "3/4 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "5/6 create-check#1@root create_pr_check dispatched executor completed out[builtin-post-pr-review-03-create-check-out-prepare]",
+      "7/8 prepare#1@root prepare_workspace dispatched executor completed out[builtin-post-pr-review-04-prepare-out-security-review,builtin-post-pr-review-05-prepare-out-quality-review,builtin-post-pr-review-06-prepare-out-requirements-review]",
+      "9/12 security-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-07-security-review-out-post-review]",
+      "10/13 quality-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-08-quality-review-out-post-review]",
+      "11/14 requirements-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-09-requirements-review-out-post-review]",
+      "15/16 post-review#1@root post_pr_review dispatched executor completed out[builtin-post-pr-review-10-post-review-out-review-approved]",
+      "17/18 review-approved#1@root branch dispatched scheduler completed true[builtin-post-pr-review-11-review-approved-true-complete-success]",
+      "19/20 complete-failure#1@root complete_pr_check skipped scheduler - -",
+      "21/22 complete-success#1@root complete_pr_check dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"post-pr-review\"",
+    "order": [
+      "1/2 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[builtin-post-pr-review-01-trigger-ready-out-create-check]",
+      "3/4 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "5/6 create-check#1@root create_pr_check dispatched executor completed out[builtin-post-pr-review-03-create-check-out-prepare]",
+      "7/8 prepare#1@root prepare_workspace dispatched executor completed out[builtin-post-pr-review-04-prepare-out-security-review,builtin-post-pr-review-05-prepare-out-quality-review,builtin-post-pr-review-06-prepare-out-requirements-review]",
+      "9/12 security-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-07-security-review-out-post-review]",
+      "10/13 quality-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-08-quality-review-out-post-review]",
+      "11/14 requirements-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-09-requirements-review-out-post-review]",
+      "15/16 post-review#1@root post_pr_review dispatched executor completed out[builtin-post-pr-review-10-post-review-out-review-approved]",
+      "17/18 review-approved#1@root branch dispatched scheduler completed true[builtin-post-pr-review-11-review-approved-true-complete-success]",
+      "19/20 complete-failure#1@root complete_pr_check skipped scheduler - -",
+      "21/22 complete-success#1@root complete_pr_check dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"post-pr-review\"",
+    "order": [
+      "1/2 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[builtin-post-pr-review-01-trigger-ready-out-create-check]",
+      "3/4 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "5/6 create-check#1@root create_pr_check dispatched executor completed out[builtin-post-pr-review-03-create-check-out-prepare]",
+      "7/8 prepare#1@root prepare_workspace dispatched executor completed out[builtin-post-pr-review-04-prepare-out-security-review,builtin-post-pr-review-05-prepare-out-quality-review,builtin-post-pr-review-06-prepare-out-requirements-review]",
+      "9/12 security-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-07-security-review-out-post-review]",
+      "10/13 quality-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-08-quality-review-out-post-review]",
+      "11/14 requirements-review#1@root review_agent dispatched executor completed out[builtin-post-pr-review-09-requirements-review-out-post-review]",
+      "15/16 post-review#1@root post_pr_review dispatched executor completed out[builtin-post-pr-review-10-post-review-out-review-approved]",
+      "17/18 review-approved#1@root branch dispatched scheduler completed true[builtin-post-pr-review-11-review-approved-true-complete-success]",
+      "19/20 complete-failure#1@root complete_pr_check skipped scheduler - -",
+      "21/22 complete-success#1@root complete_pr_check dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"post-pr-review\"",
+    "order": [
+      "1/2 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[builtin-post-pr-review-01-trigger-ready-out-create-check]",
+      "3/4 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "5/6 create-check#1@root create_pr_check dispatched executor completed out[builtin-post-pr-review-03-create-check-out-prepare]",
+      "7/8 prepare#1@root prepare_workspace dispatched executor completed out[builtin-post-pr-review-04-prepare-out-security-review,builtin-post-pr-review-05-prepare-out-quality-review,builtin-post-pr-review-06-prepare-out-requirements-review]",
+      "9/12 security-review#1@root review_agent dispatched executor failed -",
+      "10/13 quality-review#1@root review_agent dispatched executor completed -",
+      "11/14 requirements-review#1@root review_agent dispatched executor completed -"
+    ]
+  },
+  {
+    "source": "template \"post-pr-review\"",
+    "order": [
+      "1/2 trigger-ready#1@root trigger_pr_ready dispatched scheduler - out[builtin-post-pr-review-01-trigger-ready-out-create-check]",
+      "3/4 trigger-updated#1@root trigger_pr_updated skipped scheduler - -",
+      "5/6 create-check#1@root create_pr_check dispatched executor completed out[builtin-post-pr-review-03-create-check-out-prepare]",
+      "7/8 prepare#1@root prepare_workspace dispatched executor failed -"
+    ]
+  },
+  {
+    "source": "template \"review-fix-after-pr\"",
+    "order": [
+      "1/2 trigger-checks-failed#1@root trigger_pr_checks_failed dispatched scheduler - out[builtin-review-fix-after-pr-01-trigger-checks-failed-out-prepare]",
+      "3/4 trigger-review#1@root trigger_pr_review skipped scheduler - -",
+      "5/6 prepare#1@root prepare_workspace dispatched executor completed out[builtin-review-fix-after-pr-03-prepare-out-fetch-context]",
+      "7/8 fetch-context#1@root fetch_pr_context dispatched executor completed out[builtin-review-fix-after-pr-04-fetch-context-out-fix]",
+      "9/10 fix#1@root fix_agent dispatched executor completed out[builtin-review-fix-after-pr-05-fix-out-checks]",
+      "11/12 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-review-fix-after-pr-06-checks-out-finalize]",
+      "13/14 finalize#1@root finalize_workspace dispatched executor completed out[builtin-review-fix-after-pr-07-finalize-out-comment]",
+      "15/16 comment#1@root post_pr_comment dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"review-fix-after-pr\"",
+    "order": [
+      "1/2 trigger-checks-failed#1@root trigger_pr_checks_failed dispatched scheduler - out[builtin-review-fix-after-pr-01-trigger-checks-failed-out-prepare]",
+      "3/4 trigger-review#1@root trigger_pr_review skipped scheduler - -",
+      "5/6 prepare#1@root prepare_workspace dispatched executor completed out[builtin-review-fix-after-pr-03-prepare-out-fetch-context]",
+      "7/8 fetch-context#1@root fetch_pr_context dispatched executor completed out[builtin-review-fix-after-pr-04-fetch-context-out-fix]",
+      "9/10 fix#1@root fix_agent dispatched executor failed -"
+    ]
+  },
+  {
+    "source": "template \"review-fix-after-pr\"",
+    "order": [
+      "1/2 trigger-checks-failed#1@root trigger_pr_checks_failed dispatched scheduler - out[builtin-review-fix-after-pr-01-trigger-checks-failed-out-prepare]",
+      "3/4 trigger-review#1@root trigger_pr_review skipped scheduler - -",
+      "5/6 prepare#1@root prepare_workspace dispatched executor completed out[builtin-review-fix-after-pr-03-prepare-out-fetch-context]",
+      "7/8 fetch-context#1@root fetch_pr_context dispatched executor completed out[builtin-review-fix-after-pr-04-fetch-context-out-fix]",
+      "9/10 fix#1@root fix_agent dispatched executor waiting_for_clarification -"
+    ]
+  },
+  {
+    "source": "template \"review-fix-after-pr\"",
+    "order": [
+      "1/2 trigger-checks-failed#1@root trigger_pr_checks_failed skipped scheduler - -",
+      "3/4 trigger-review#1@root trigger_pr_review dispatched scheduler - out[builtin-review-fix-after-pr-02-trigger-review-out-prepare]",
+      "5/6 prepare#1@root prepare_workspace dispatched executor completed out[builtin-review-fix-after-pr-03-prepare-out-fetch-context]",
+      "7/8 fetch-context#1@root fetch_pr_context dispatched executor completed out[builtin-review-fix-after-pr-04-fetch-context-out-fix]",
+      "9/10 fix#1@root fix_agent dispatched executor completed out[builtin-review-fix-after-pr-05-fix-out-checks]",
+      "11/12 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-review-fix-after-pr-06-checks-out-finalize]",
+      "13/14 finalize#1@root finalize_workspace dispatched executor completed out[builtin-review-fix-after-pr-07-finalize-out-comment]",
+      "15/16 comment#1@root post_pr_comment dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"reviewed-ticket-workflow\"",
+    "order": [
+      "1/2 fix#1@root fix_agent skipped scheduler - -",
+      "3/4 trigger#1@root trigger_ticket_ai dispatched scheduler - out[builtin-reviewed-ticket-workflow-01-trigger-out-prepare]",
+      "5/6 prepare#1@root prepare_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-02-prepare-out-planning]",
+      "7/8 planning#1@root planning_agent dispatched executor completed -",
+      "9/10 implementation#1@root implementation_agent skipped scheduler - -",
+      "11/12 security-review#1@root review_agent skipped scheduler - -",
+      "13/14 quality-review#1@root review_agent skipped scheduler - -",
+      "15/16 requirements-review#1@root review_agent skipped scheduler - -",
+      "17/18 reviews-approved#1@root branch skipped scheduler - -",
+      "19/20 retry#1@root loop skipped scheduler - -",
+      "21/22 checks#1@root run_pre_pr_checks skipped scheduler - -",
+      "23/24 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "25/26 finalize#1@root finalize_workspace skipped scheduler - -",
+      "27/28 exhausted-failure#1@root terminate skipped scheduler - -",
+      "29/30 open-pr#1@root open_pr skipped scheduler - -",
+      "31/32 status#1@root update_ticket_status skipped scheduler - -"
+    ]
+  },
+  {
+    "source": "template \"reviewed-ticket-workflow\"",
+    "order": [
+      "1/2 fix#1@root fix_agent skipped scheduler - -",
+      "3/4 trigger#1@root trigger_ticket_ai dispatched scheduler - out[builtin-reviewed-ticket-workflow-01-trigger-out-prepare]",
+      "5/6 prepare#1@root prepare_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-02-prepare-out-planning]",
+      "7/8 planning#1@root planning_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-03-planning-out-implementation]",
+      "9/10 implementation#1@root implementation_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-04-implementation-out-security-review,builtin-reviewed-ticket-workflow-05-implementation-out-quality-review,builtin-reviewed-ticket-workflow-06-implementation-out-requirements-review]",
+      "11/14 security-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "12/15 quality-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "17/18 reviews-approved#1@root branch dispatched scheduler completed false[builtin-reviewed-ticket-workflow-14-reviews-approved-false-retry]",
+      "19/36 retry#1@root loop dispatched scheduler completed true[]",
+      "20/21 fix#2@root/loop:retry:1 fix_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-16-fix-out-security-review,builtin-reviewed-ticket-workflow-17-fix-out-quality-review,builtin-reviewed-ticket-workflow-18-fix-out-requirements-review]",
+      "22/25 security-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "23/26 quality-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "24/27 requirements-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "28/29 reviews-approved#2@root/loop:retry:1 branch dispatched scheduler completed true[builtin-reviewed-ticket-workflow-10-reviews-approved-true-checks]",
+      "30/31 retry#2@root/loop:retry:1 loop skipped scheduler - -",
+      "32/33 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "34/35 exhausted-failure#1@root terminate skipped scheduler - -",
+      "37/38 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-reviewed-ticket-workflow-11-checks-out-finalize]",
+      "39/40 finalize#1@root finalize_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-12-finalize-out-open-pr]",
+      "41/42 open-pr#1@root open_pr dispatched executor completed out[builtin-reviewed-ticket-workflow-13-open-pr-out-status]",
+      "43/44 status#1@root update_ticket_status dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"reviewed-ticket-workflow\"",
+    "order": [
+      "1/2 fix#1@root fix_agent skipped scheduler - -",
+      "3/4 trigger#1@root trigger_ticket_ai dispatched scheduler - out[builtin-reviewed-ticket-workflow-01-trigger-out-prepare]",
+      "5/6 prepare#1@root prepare_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-02-prepare-out-planning]",
+      "7/8 planning#1@root planning_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-03-planning-out-implementation]",
+      "9/10 implementation#1@root implementation_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-04-implementation-out-security-review,builtin-reviewed-ticket-workflow-05-implementation-out-quality-review,builtin-reviewed-ticket-workflow-06-implementation-out-requirements-review]",
+      "11/14 security-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "12/15 quality-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "17/18 reviews-approved#1@root branch dispatched scheduler completed false[builtin-reviewed-ticket-workflow-14-reviews-approved-false-retry]",
+      "19/48 retry#1@root loop dispatched scheduler completed true[]",
+      "20/21 fix#2@root/loop:retry:1 fix_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-16-fix-out-security-review,builtin-reviewed-ticket-workflow-17-fix-out-quality-review,builtin-reviewed-ticket-workflow-18-fix-out-requirements-review]",
+      "22/25 security-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "23/26 quality-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "24/27 requirements-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "28/29 reviews-approved#2@root/loop:retry:1 branch dispatched scheduler completed false[builtin-reviewed-ticket-workflow-14-reviews-approved-false-retry]",
+      "30/31 retry#2@root/loop:retry:1 loop dispatched scheduler completed continue[builtin-reviewed-ticket-workflow-15-retry-continue-fix]",
+      "32/33 fix#3@root/loop:retry:2 fix_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-16-fix-out-security-review,builtin-reviewed-ticket-workflow-17-fix-out-quality-review,builtin-reviewed-ticket-workflow-18-fix-out-requirements-review]",
+      "34/37 security-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "35/38 quality-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "36/39 requirements-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "40/41 reviews-approved#3@root/loop:retry:2 branch dispatched scheduler completed true[builtin-reviewed-ticket-workflow-10-reviews-approved-true-checks]",
+      "42/43 retry#3@root/loop:retry:2 loop skipped scheduler - -",
+      "44/45 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "46/47 exhausted-failure#1@root terminate skipped scheduler - -",
+      "49/50 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-reviewed-ticket-workflow-11-checks-out-finalize]",
+      "51/52 finalize#1@root finalize_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-12-finalize-out-open-pr]",
+      "53/54 open-pr#1@root open_pr dispatched executor completed out[builtin-reviewed-ticket-workflow-13-open-pr-out-status]",
+      "55/56 status#1@root update_ticket_status dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"reviewed-ticket-workflow\"",
+    "order": [
+      "1/2 fix#1@root fix_agent skipped scheduler - -",
+      "3/4 trigger#1@root trigger_ticket_ai dispatched scheduler - out[builtin-reviewed-ticket-workflow-01-trigger-out-prepare]",
+      "5/6 prepare#1@root prepare_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-02-prepare-out-planning]",
+      "7/8 planning#1@root planning_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-03-planning-out-implementation]",
+      "9/10 implementation#1@root implementation_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-04-implementation-out-security-review,builtin-reviewed-ticket-workflow-05-implementation-out-quality-review,builtin-reviewed-ticket-workflow-06-implementation-out-requirements-review]",
+      "11/14 security-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "12/15 quality-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "17/18 reviews-approved#1@root branch dispatched scheduler completed false[builtin-reviewed-ticket-workflow-14-reviews-approved-false-retry]",
+      "19/56 retry#1@root loop dispatched scheduler completed exhausted[builtin-reviewed-ticket-workflow-19-retry-exhausted-exhausted-message]",
+      "20/21 fix#2@root/loop:retry:1 fix_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-16-fix-out-security-review,builtin-reviewed-ticket-workflow-17-fix-out-quality-review,builtin-reviewed-ticket-workflow-18-fix-out-requirements-review]",
+      "22/25 security-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "23/26 quality-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "24/27 requirements-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "28/29 reviews-approved#2@root/loop:retry:1 branch dispatched scheduler completed false[builtin-reviewed-ticket-workflow-14-reviews-approved-false-retry]",
+      "30/31 retry#2@root/loop:retry:1 loop dispatched scheduler completed continue[builtin-reviewed-ticket-workflow-15-retry-continue-fix]",
+      "32/33 fix#3@root/loop:retry:2 fix_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-16-fix-out-security-review,builtin-reviewed-ticket-workflow-17-fix-out-quality-review,builtin-reviewed-ticket-workflow-18-fix-out-requirements-review]",
+      "34/37 security-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "35/38 quality-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "36/39 requirements-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "40/41 reviews-approved#3@root/loop:retry:2 branch dispatched scheduler completed false[builtin-reviewed-ticket-workflow-14-reviews-approved-false-retry]",
+      "42/43 retry#3@root/loop:retry:2 loop dispatched scheduler completed continue[builtin-reviewed-ticket-workflow-15-retry-continue-fix]",
+      "44/45 fix#4@root/loop:retry:3 fix_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-16-fix-out-security-review,builtin-reviewed-ticket-workflow-17-fix-out-quality-review,builtin-reviewed-ticket-workflow-18-fix-out-requirements-review]",
+      "46/49 security-review#4@root/loop:retry:3 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "47/50 quality-review#4@root/loop:retry:3 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "48/51 requirements-review#4@root/loop:retry:3 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "52/53 reviews-approved#4@root/loop:retry:3 branch dispatched scheduler completed false[builtin-reviewed-ticket-workflow-14-reviews-approved-false-retry]",
+      "54/55 retry#4@root/loop:retry:3 loop dispatched scheduler completed -",
+      "57/58 checks#1@root run_pre_pr_checks skipped scheduler - -",
+      "59/60 finalize#1@root finalize_workspace skipped scheduler - -",
+      "61/62 open-pr#1@root open_pr skipped scheduler - -",
+      "63/64 status#1@root update_ticket_status skipped scheduler - -",
+      "65/66 exhausted-message#1@root send_slack_message dispatched executor completed out[builtin-reviewed-ticket-workflow-20-exhausted-message-out-exhausted-failure]",
+      "67/68 exhausted-failure#1@root terminate dispatched executor failed -"
+    ]
+  },
+  {
+    "source": "template \"reviewed-ticket-workflow\"",
+    "order": [
+      "1/2 fix#1@root fix_agent skipped scheduler - -",
+      "3/4 trigger#1@root trigger_ticket_ai dispatched scheduler - out[builtin-reviewed-ticket-workflow-01-trigger-out-prepare]",
+      "5/6 prepare#1@root prepare_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-02-prepare-out-planning]",
+      "7/8 planning#1@root planning_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-03-planning-out-implementation]",
+      "9/10 implementation#1@root implementation_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-04-implementation-out-security-review,builtin-reviewed-ticket-workflow-05-implementation-out-quality-review,builtin-reviewed-ticket-workflow-06-implementation-out-requirements-review]",
+      "11/14 security-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "12/15 quality-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "17/18 reviews-approved#1@root branch dispatched scheduler completed false[builtin-reviewed-ticket-workflow-14-reviews-approved-false-retry]",
+      "19/56 retry#1@root loop dispatched scheduler completed exhausted[builtin-reviewed-ticket-workflow-19-retry-exhausted-exhausted-message]",
+      "20/21 fix#2@root/loop:retry:1 fix_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-16-fix-out-security-review,builtin-reviewed-ticket-workflow-17-fix-out-quality-review,builtin-reviewed-ticket-workflow-18-fix-out-requirements-review]",
+      "22/25 security-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "23/26 quality-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "24/27 requirements-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "28/29 reviews-approved#2@root/loop:retry:1 branch dispatched scheduler completed false[builtin-reviewed-ticket-workflow-14-reviews-approved-false-retry]",
+      "30/31 retry#2@root/loop:retry:1 loop dispatched scheduler completed continue[builtin-reviewed-ticket-workflow-15-retry-continue-fix]",
+      "32/33 fix#3@root/loop:retry:2 fix_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-16-fix-out-security-review,builtin-reviewed-ticket-workflow-17-fix-out-quality-review,builtin-reviewed-ticket-workflow-18-fix-out-requirements-review]",
+      "34/37 security-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "35/38 quality-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "36/39 requirements-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "40/41 reviews-approved#3@root/loop:retry:2 branch dispatched scheduler completed false[builtin-reviewed-ticket-workflow-14-reviews-approved-false-retry]",
+      "42/43 retry#3@root/loop:retry:2 loop dispatched scheduler completed continue[builtin-reviewed-ticket-workflow-15-retry-continue-fix]",
+      "44/45 fix#4@root/loop:retry:3 fix_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-16-fix-out-security-review,builtin-reviewed-ticket-workflow-17-fix-out-quality-review,builtin-reviewed-ticket-workflow-18-fix-out-requirements-review]",
+      "46/49 security-review#4@root/loop:retry:3 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "47/50 quality-review#4@root/loop:retry:3 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "48/51 requirements-review#4@root/loop:retry:3 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "52/53 reviews-approved#4@root/loop:retry:3 branch dispatched scheduler completed false[builtin-reviewed-ticket-workflow-14-reviews-approved-false-retry]",
+      "54/55 retry#4@root/loop:retry:3 loop dispatched scheduler completed -",
+      "57/58 checks#1@root run_pre_pr_checks skipped scheduler - -",
+      "59/60 finalize#1@root finalize_workspace skipped scheduler - -",
+      "61/62 open-pr#1@root open_pr skipped scheduler - -",
+      "63/64 status#1@root update_ticket_status skipped scheduler - -",
+      "65/66 exhausted-message#1@root send_slack_message dispatched executor completed out[builtin-reviewed-ticket-workflow-20-exhausted-message-out-exhausted-failure]",
+      "67/68 exhausted-failure#1@root terminate dispatched executor failed -"
+    ]
+  },
+  {
+    "source": "template \"reviewed-ticket-workflow\"",
+    "order": [
+      "1/2 fix#1@root fix_agent skipped scheduler - -",
+      "3/4 trigger#1@root trigger_ticket_ai dispatched scheduler - out[builtin-reviewed-ticket-workflow-01-trigger-out-prepare]",
+      "5/6 prepare#1@root prepare_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-02-prepare-out-planning]",
+      "7/8 planning#1@root planning_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-03-planning-out-implementation]",
+      "9/10 implementation#1@root implementation_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-04-implementation-out-security-review,builtin-reviewed-ticket-workflow-05-implementation-out-quality-review,builtin-reviewed-ticket-workflow-06-implementation-out-requirements-review]",
+      "11/14 security-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "12/15 quality-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "17/18 reviews-approved#1@root branch dispatched scheduler completed false[builtin-reviewed-ticket-workflow-14-reviews-approved-false-retry]",
+      "19/60 retry#1@root loop dispatched scheduler completed true[]",
+      "20/21 fix#2@root/loop:retry:1 fix_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-16-fix-out-security-review,builtin-reviewed-ticket-workflow-17-fix-out-quality-review,builtin-reviewed-ticket-workflow-18-fix-out-requirements-review]",
+      "22/25 security-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "23/26 quality-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "24/27 requirements-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "28/29 reviews-approved#2@root/loop:retry:1 branch dispatched scheduler completed false[builtin-reviewed-ticket-workflow-14-reviews-approved-false-retry]",
+      "30/31 retry#2@root/loop:retry:1 loop dispatched scheduler completed continue[builtin-reviewed-ticket-workflow-15-retry-continue-fix]",
+      "32/33 fix#3@root/loop:retry:2 fix_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-16-fix-out-security-review,builtin-reviewed-ticket-workflow-17-fix-out-quality-review,builtin-reviewed-ticket-workflow-18-fix-out-requirements-review]",
+      "34/37 security-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "35/38 quality-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "36/39 requirements-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "40/41 reviews-approved#3@root/loop:retry:2 branch dispatched scheduler completed false[builtin-reviewed-ticket-workflow-14-reviews-approved-false-retry]",
+      "42/43 retry#3@root/loop:retry:2 loop dispatched scheduler completed continue[builtin-reviewed-ticket-workflow-15-retry-continue-fix]",
+      "44/45 fix#4@root/loop:retry:3 fix_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-16-fix-out-security-review,builtin-reviewed-ticket-workflow-17-fix-out-quality-review,builtin-reviewed-ticket-workflow-18-fix-out-requirements-review]",
+      "46/49 security-review#4@root/loop:retry:3 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "47/50 quality-review#4@root/loop:retry:3 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "48/51 requirements-review#4@root/loop:retry:3 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "52/53 reviews-approved#4@root/loop:retry:3 branch dispatched scheduler completed true[builtin-reviewed-ticket-workflow-10-reviews-approved-true-checks]",
+      "54/55 retry#4@root/loop:retry:3 loop skipped scheduler - -",
+      "56/57 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "58/59 exhausted-failure#1@root terminate skipped scheduler - -",
+      "61/62 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-reviewed-ticket-workflow-11-checks-out-finalize]",
+      "63/64 finalize#1@root finalize_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-12-finalize-out-open-pr]",
+      "65/66 open-pr#1@root open_pr dispatched executor completed out[builtin-reviewed-ticket-workflow-13-open-pr-out-status]",
+      "67/68 status#1@root update_ticket_status dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"reviewed-ticket-workflow\"",
+    "order": [
+      "1/2 fix#1@root fix_agent skipped scheduler - -",
+      "3/4 trigger#1@root trigger_ticket_ai dispatched scheduler - out[builtin-reviewed-ticket-workflow-01-trigger-out-prepare]",
+      "5/6 prepare#1@root prepare_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-02-prepare-out-planning]",
+      "7/8 planning#1@root planning_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-03-planning-out-implementation]",
+      "9/10 implementation#1@root implementation_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-04-implementation-out-security-review,builtin-reviewed-ticket-workflow-05-implementation-out-quality-review,builtin-reviewed-ticket-workflow-06-implementation-out-requirements-review]",
+      "11/14 security-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "12/15 quality-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "17/18 reviews-approved#1@root branch dispatched scheduler completed false[builtin-reviewed-ticket-workflow-14-reviews-approved-false-retry]",
+      "19/60 retry#1@root loop dispatched scheduler completed true[]",
+      "20/21 fix#2@root/loop:retry:1 fix_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-16-fix-out-security-review,builtin-reviewed-ticket-workflow-17-fix-out-quality-review,builtin-reviewed-ticket-workflow-18-fix-out-requirements-review]",
+      "22/25 security-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "23/26 quality-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "24/27 requirements-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "28/29 reviews-approved#2@root/loop:retry:1 branch dispatched scheduler completed false[builtin-reviewed-ticket-workflow-14-reviews-approved-false-retry]",
+      "30/31 retry#2@root/loop:retry:1 loop dispatched scheduler completed continue[builtin-reviewed-ticket-workflow-15-retry-continue-fix]",
+      "32/33 fix#3@root/loop:retry:2 fix_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-16-fix-out-security-review,builtin-reviewed-ticket-workflow-17-fix-out-quality-review,builtin-reviewed-ticket-workflow-18-fix-out-requirements-review]",
+      "34/37 security-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "35/38 quality-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "36/39 requirements-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "40/41 reviews-approved#3@root/loop:retry:2 branch dispatched scheduler completed false[builtin-reviewed-ticket-workflow-14-reviews-approved-false-retry]",
+      "42/43 retry#3@root/loop:retry:2 loop dispatched scheduler completed continue[builtin-reviewed-ticket-workflow-15-retry-continue-fix]",
+      "44/45 fix#4@root/loop:retry:3 fix_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-16-fix-out-security-review,builtin-reviewed-ticket-workflow-17-fix-out-quality-review,builtin-reviewed-ticket-workflow-18-fix-out-requirements-review]",
+      "46/49 security-review#4@root/loop:retry:3 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "47/50 quality-review#4@root/loop:retry:3 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "48/51 requirements-review#4@root/loop:retry:3 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "52/53 reviews-approved#4@root/loop:retry:3 branch dispatched scheduler completed true[builtin-reviewed-ticket-workflow-10-reviews-approved-true-checks]",
+      "54/55 retry#4@root/loop:retry:3 loop skipped scheduler - -",
+      "56/57 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "58/59 exhausted-failure#1@root terminate skipped scheduler - -",
+      "61/62 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-reviewed-ticket-workflow-11-checks-out-finalize]",
+      "63/64 finalize#1@root finalize_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-12-finalize-out-open-pr]",
+      "65/66 open-pr#1@root open_pr dispatched executor completed out[builtin-reviewed-ticket-workflow-13-open-pr-out-status]",
+      "67/68 status#1@root update_ticket_status dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"reviewed-ticket-workflow\"",
+    "order": [
+      "1/2 fix#1@root fix_agent skipped scheduler - -",
+      "3/4 trigger#1@root trigger_ticket_ai dispatched scheduler - out[builtin-reviewed-ticket-workflow-01-trigger-out-prepare]",
+      "5/6 prepare#1@root prepare_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-02-prepare-out-planning]",
+      "7/8 planning#1@root planning_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-03-planning-out-implementation]",
+      "9/10 implementation#1@root implementation_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-04-implementation-out-security-review,builtin-reviewed-ticket-workflow-05-implementation-out-quality-review,builtin-reviewed-ticket-workflow-06-implementation-out-requirements-review]",
+      "11/14 security-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "12/15 quality-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "17/18 reviews-approved#1@root branch dispatched scheduler completed false[builtin-reviewed-ticket-workflow-14-reviews-approved-false-retry]",
+      "19/60 retry#1@root loop dispatched scheduler completed true[]",
+      "20/21 fix#2@root/loop:retry:1 fix_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-16-fix-out-security-review,builtin-reviewed-ticket-workflow-17-fix-out-quality-review,builtin-reviewed-ticket-workflow-18-fix-out-requirements-review]",
+      "22/25 security-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "23/26 quality-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "24/27 requirements-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "28/29 reviews-approved#2@root/loop:retry:1 branch dispatched scheduler completed false[builtin-reviewed-ticket-workflow-14-reviews-approved-false-retry]",
+      "30/31 retry#2@root/loop:retry:1 loop dispatched scheduler completed continue[builtin-reviewed-ticket-workflow-15-retry-continue-fix]",
+      "32/33 fix#3@root/loop:retry:2 fix_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-16-fix-out-security-review,builtin-reviewed-ticket-workflow-17-fix-out-quality-review,builtin-reviewed-ticket-workflow-18-fix-out-requirements-review]",
+      "34/37 security-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "35/38 quality-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "36/39 requirements-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "40/41 reviews-approved#3@root/loop:retry:2 branch dispatched scheduler completed false[builtin-reviewed-ticket-workflow-14-reviews-approved-false-retry]",
+      "42/43 retry#3@root/loop:retry:2 loop dispatched scheduler completed continue[builtin-reviewed-ticket-workflow-15-retry-continue-fix]",
+      "44/45 fix#4@root/loop:retry:3 fix_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-16-fix-out-security-review,builtin-reviewed-ticket-workflow-17-fix-out-quality-review,builtin-reviewed-ticket-workflow-18-fix-out-requirements-review]",
+      "46/49 security-review#4@root/loop:retry:3 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "47/50 quality-review#4@root/loop:retry:3 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "48/51 requirements-review#4@root/loop:retry:3 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "52/53 reviews-approved#4@root/loop:retry:3 branch dispatched scheduler completed true[builtin-reviewed-ticket-workflow-10-reviews-approved-true-checks]",
+      "54/55 retry#4@root/loop:retry:3 loop skipped scheduler - -",
+      "56/57 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "58/59 exhausted-failure#1@root terminate skipped scheduler - -",
+      "61/62 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-reviewed-ticket-workflow-11-checks-out-finalize]",
+      "63/64 finalize#1@root finalize_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-12-finalize-out-open-pr]",
+      "65/66 open-pr#1@root open_pr dispatched executor completed out[builtin-reviewed-ticket-workflow-13-open-pr-out-status]",
+      "67/68 status#1@root update_ticket_status dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"reviewed-ticket-workflow\"",
+    "order": [
+      "1/2 fix#1@root fix_agent skipped scheduler - -",
+      "3/4 trigger#1@root trigger_ticket_ai dispatched scheduler - out[builtin-reviewed-ticket-workflow-01-trigger-out-prepare]",
+      "5/6 prepare#1@root prepare_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-02-prepare-out-planning]",
+      "7/8 planning#1@root planning_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-03-planning-out-implementation]",
+      "9/10 implementation#1@root implementation_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-04-implementation-out-security-review,builtin-reviewed-ticket-workflow-05-implementation-out-quality-review,builtin-reviewed-ticket-workflow-06-implementation-out-requirements-review]",
+      "11/14 security-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "12/15 quality-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "17/18 reviews-approved#1@root branch dispatched scheduler completed false[builtin-reviewed-ticket-workflow-14-reviews-approved-false-retry]",
+      "19/60 retry#1@root loop dispatched scheduler completed true[]",
+      "20/21 fix#2@root/loop:retry:1 fix_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-16-fix-out-security-review,builtin-reviewed-ticket-workflow-17-fix-out-quality-review,builtin-reviewed-ticket-workflow-18-fix-out-requirements-review]",
+      "22/25 security-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "23/26 quality-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "24/27 requirements-review#2@root/loop:retry:1 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "28/29 reviews-approved#2@root/loop:retry:1 branch dispatched scheduler completed false[builtin-reviewed-ticket-workflow-14-reviews-approved-false-retry]",
+      "30/31 retry#2@root/loop:retry:1 loop dispatched scheduler completed continue[builtin-reviewed-ticket-workflow-15-retry-continue-fix]",
+      "32/33 fix#3@root/loop:retry:2 fix_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-16-fix-out-security-review,builtin-reviewed-ticket-workflow-17-fix-out-quality-review,builtin-reviewed-ticket-workflow-18-fix-out-requirements-review]",
+      "34/37 security-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "35/38 quality-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "36/39 requirements-review#3@root/loop:retry:2 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "40/41 reviews-approved#3@root/loop:retry:2 branch dispatched scheduler completed false[builtin-reviewed-ticket-workflow-14-reviews-approved-false-retry]",
+      "42/43 retry#3@root/loop:retry:2 loop dispatched scheduler completed continue[builtin-reviewed-ticket-workflow-15-retry-continue-fix]",
+      "44/45 fix#4@root/loop:retry:3 fix_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-16-fix-out-security-review,builtin-reviewed-ticket-workflow-17-fix-out-quality-review,builtin-reviewed-ticket-workflow-18-fix-out-requirements-review]",
+      "46/49 security-review#4@root/loop:retry:3 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "47/50 quality-review#4@root/loop:retry:3 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "48/51 requirements-review#4@root/loop:retry:3 review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "52/53 reviews-approved#4@root/loop:retry:3 branch dispatched scheduler completed true[builtin-reviewed-ticket-workflow-10-reviews-approved-true-checks]",
+      "54/55 retry#4@root/loop:retry:3 loop skipped scheduler - -",
+      "56/57 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "58/59 exhausted-failure#1@root terminate skipped scheduler - -",
+      "61/62 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-reviewed-ticket-workflow-11-checks-out-finalize]",
+      "63/64 finalize#1@root finalize_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-12-finalize-out-open-pr]",
+      "65/66 open-pr#1@root open_pr dispatched executor completed out[builtin-reviewed-ticket-workflow-13-open-pr-out-status]",
+      "67/68 status#1@root update_ticket_status dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"reviewed-ticket-workflow\"",
+    "order": [
+      "1/2 fix#1@root fix_agent skipped scheduler - -",
+      "3/4 trigger#1@root trigger_ticket_ai dispatched scheduler - out[builtin-reviewed-ticket-workflow-01-trigger-out-prepare]",
+      "5/6 prepare#1@root prepare_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-02-prepare-out-planning]",
+      "7/8 planning#1@root planning_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-03-planning-out-implementation]",
+      "9/10 implementation#1@root implementation_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-04-implementation-out-security-review,builtin-reviewed-ticket-workflow-05-implementation-out-quality-review,builtin-reviewed-ticket-workflow-06-implementation-out-requirements-review]",
+      "11/14 security-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "12/15 quality-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "17/18 reviews-approved#1@root branch dispatched scheduler completed true[builtin-reviewed-ticket-workflow-10-reviews-approved-true-checks]",
+      "19/20 retry#1@root loop skipped scheduler - -",
+      "21/22 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "23/24 exhausted-failure#1@root terminate skipped scheduler - -",
+      "25/26 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-reviewed-ticket-workflow-11-checks-out-finalize]",
+      "27/28 finalize#1@root finalize_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-12-finalize-out-open-pr]",
+      "29/30 open-pr#1@root open_pr dispatched executor completed out[builtin-reviewed-ticket-workflow-13-open-pr-out-status]",
+      "31/32 status#1@root update_ticket_status dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"reviewed-ticket-workflow\"",
+    "order": [
+      "1/2 fix#1@root fix_agent skipped scheduler - -",
+      "3/4 trigger#1@root trigger_ticket_ai dispatched scheduler - out[builtin-reviewed-ticket-workflow-01-trigger-out-prepare]",
+      "5/6 prepare#1@root prepare_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-02-prepare-out-planning]",
+      "7/8 planning#1@root planning_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-03-planning-out-implementation]",
+      "9/10 implementation#1@root implementation_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-04-implementation-out-security-review,builtin-reviewed-ticket-workflow-05-implementation-out-quality-review,builtin-reviewed-ticket-workflow-06-implementation-out-requirements-review]",
+      "11/14 security-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "12/15 quality-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "17/18 reviews-approved#1@root branch dispatched scheduler completed true[builtin-reviewed-ticket-workflow-10-reviews-approved-true-checks]",
+      "19/20 retry#1@root loop skipped scheduler - -",
+      "21/22 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "23/24 exhausted-failure#1@root terminate skipped scheduler - -",
+      "25/26 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-reviewed-ticket-workflow-11-checks-out-finalize]",
+      "27/28 finalize#1@root finalize_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-12-finalize-out-open-pr]",
+      "29/30 open-pr#1@root open_pr dispatched executor completed out[builtin-reviewed-ticket-workflow-13-open-pr-out-status]",
+      "31/32 status#1@root update_ticket_status dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"reviewed-ticket-workflow\"",
+    "order": [
+      "1/2 fix#1@root fix_agent skipped scheduler - -",
+      "3/4 trigger#1@root trigger_ticket_ai dispatched scheduler - out[builtin-reviewed-ticket-workflow-01-trigger-out-prepare]",
+      "5/6 prepare#1@root prepare_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-02-prepare-out-planning]",
+      "7/8 planning#1@root planning_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-03-planning-out-implementation]",
+      "9/10 implementation#1@root implementation_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-04-implementation-out-security-review,builtin-reviewed-ticket-workflow-05-implementation-out-quality-review,builtin-reviewed-ticket-workflow-06-implementation-out-requirements-review]",
+      "11/14 security-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "12/15 quality-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "17/18 reviews-approved#1@root branch dispatched scheduler completed true[builtin-reviewed-ticket-workflow-10-reviews-approved-true-checks]",
+      "19/20 retry#1@root loop skipped scheduler - -",
+      "21/22 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "23/24 exhausted-failure#1@root terminate skipped scheduler - -",
+      "25/26 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-reviewed-ticket-workflow-11-checks-out-finalize]",
+      "27/28 finalize#1@root finalize_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-12-finalize-out-open-pr]",
+      "29/30 open-pr#1@root open_pr dispatched executor completed out[builtin-reviewed-ticket-workflow-13-open-pr-out-status]",
+      "31/32 status#1@root update_ticket_status dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"reviewed-ticket-workflow\"",
+    "order": [
+      "1/2 fix#1@root fix_agent skipped scheduler - -",
+      "3/4 trigger#1@root trigger_ticket_ai dispatched scheduler - out[builtin-reviewed-ticket-workflow-01-trigger-out-prepare]",
+      "5/6 prepare#1@root prepare_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-02-prepare-out-planning]",
+      "7/8 planning#1@root planning_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-03-planning-out-implementation]",
+      "9/10 implementation#1@root implementation_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-04-implementation-out-security-review,builtin-reviewed-ticket-workflow-05-implementation-out-quality-review,builtin-reviewed-ticket-workflow-06-implementation-out-requirements-review]",
+      "11/14 security-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "12/15 quality-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "17/18 reviews-approved#1@root branch dispatched scheduler completed true[builtin-reviewed-ticket-workflow-10-reviews-approved-true-checks]",
+      "19/20 retry#1@root loop skipped scheduler - -",
+      "21/22 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "23/24 exhausted-failure#1@root terminate skipped scheduler - -",
+      "25/26 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-reviewed-ticket-workflow-11-checks-out-finalize]",
+      "27/28 finalize#1@root finalize_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-12-finalize-out-open-pr]",
+      "29/30 open-pr#1@root open_pr dispatched executor completed out[builtin-reviewed-ticket-workflow-13-open-pr-out-status]",
+      "31/32 status#1@root update_ticket_status dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"reviewed-ticket-workflow\"",
+    "order": [
+      "1/2 fix#1@root fix_agent skipped scheduler - -",
+      "3/4 trigger#1@root trigger_ticket_ai dispatched scheduler - out[builtin-reviewed-ticket-workflow-01-trigger-out-prepare]",
+      "5/6 prepare#1@root prepare_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-02-prepare-out-planning]",
+      "7/8 planning#1@root planning_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-03-planning-out-implementation]",
+      "9/10 implementation#1@root implementation_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-04-implementation-out-security-review,builtin-reviewed-ticket-workflow-05-implementation-out-quality-review,builtin-reviewed-ticket-workflow-06-implementation-out-requirements-review]",
+      "11/14 security-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "12/15 quality-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "17/18 reviews-approved#1@root branch dispatched scheduler completed true[builtin-reviewed-ticket-workflow-10-reviews-approved-true-checks]",
+      "19/20 retry#1@root loop skipped scheduler - -",
+      "21/22 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "23/24 exhausted-failure#1@root terminate skipped scheduler - -",
+      "25/26 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-reviewed-ticket-workflow-11-checks-out-finalize]",
+      "27/28 finalize#1@root finalize_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-12-finalize-out-open-pr]",
+      "29/30 open-pr#1@root open_pr dispatched executor completed out[builtin-reviewed-ticket-workflow-13-open-pr-out-status]",
+      "31/32 status#1@root update_ticket_status dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"reviewed-ticket-workflow\"",
+    "order": [
+      "1/2 fix#1@root fix_agent skipped scheduler - -",
+      "3/4 trigger#1@root trigger_ticket_ai dispatched scheduler - out[builtin-reviewed-ticket-workflow-01-trigger-out-prepare]",
+      "5/6 prepare#1@root prepare_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-02-prepare-out-planning]",
+      "7/8 planning#1@root planning_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-03-planning-out-implementation]",
+      "9/10 implementation#1@root implementation_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-04-implementation-out-security-review,builtin-reviewed-ticket-workflow-05-implementation-out-quality-review,builtin-reviewed-ticket-workflow-06-implementation-out-requirements-review]",
+      "11/14 security-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "12/15 quality-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "17/18 reviews-approved#1@root branch dispatched scheduler completed true[builtin-reviewed-ticket-workflow-10-reviews-approved-true-checks]",
+      "19/20 retry#1@root loop skipped scheduler - -",
+      "21/22 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "23/24 exhausted-failure#1@root terminate skipped scheduler - -",
+      "25/26 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-reviewed-ticket-workflow-11-checks-out-finalize]",
+      "27/28 finalize#1@root finalize_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-12-finalize-out-open-pr]",
+      "29/30 open-pr#1@root open_pr dispatched executor completed out[builtin-reviewed-ticket-workflow-13-open-pr-out-status]",
+      "31/32 status#1@root update_ticket_status dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"reviewed-ticket-workflow\"",
+    "order": [
+      "1/2 fix#1@root fix_agent skipped scheduler - -",
+      "3/4 trigger#1@root trigger_ticket_ai dispatched scheduler - out[builtin-reviewed-ticket-workflow-01-trigger-out-prepare]",
+      "5/6 prepare#1@root prepare_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-02-prepare-out-planning]",
+      "7/8 planning#1@root planning_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-03-planning-out-implementation]",
+      "9/10 implementation#1@root implementation_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-04-implementation-out-security-review,builtin-reviewed-ticket-workflow-05-implementation-out-quality-review,builtin-reviewed-ticket-workflow-06-implementation-out-requirements-review]",
+      "11/14 security-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-07-security-review-out-reviews-approved]",
+      "12/15 quality-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-08-quality-review-out-reviews-approved]",
+      "13/16 requirements-review#1@root review_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-09-requirements-review-out-reviews-approved]",
+      "17/18 reviews-approved#1@root branch dispatched scheduler completed true[builtin-reviewed-ticket-workflow-10-reviews-approved-true-checks]",
+      "19/20 retry#1@root loop skipped scheduler - -",
+      "21/22 exhausted-message#1@root send_slack_message skipped scheduler - -",
+      "23/24 exhausted-failure#1@root terminate skipped scheduler - -",
+      "25/26 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-reviewed-ticket-workflow-11-checks-out-finalize]",
+      "27/28 finalize#1@root finalize_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-12-finalize-out-open-pr]",
+      "29/30 open-pr#1@root open_pr dispatched executor completed out[builtin-reviewed-ticket-workflow-13-open-pr-out-status]",
+      "31/32 status#1@root update_ticket_status dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"reviewed-ticket-workflow\"",
+    "order": [
+      "1/2 fix#1@root fix_agent skipped scheduler - -",
+      "3/4 trigger#1@root trigger_ticket_ai dispatched scheduler - out[builtin-reviewed-ticket-workflow-01-trigger-out-prepare]",
+      "5/6 prepare#1@root prepare_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-02-prepare-out-planning]",
+      "7/8 planning#1@root planning_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-03-planning-out-implementation]",
+      "9/10 implementation#1@root implementation_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-04-implementation-out-security-review,builtin-reviewed-ticket-workflow-05-implementation-out-quality-review,builtin-reviewed-ticket-workflow-06-implementation-out-requirements-review]",
+      "11/14 security-review#1@root review_agent dispatched executor failed -",
+      "12/15 quality-review#1@root review_agent dispatched executor cancelled -",
+      "13/16 requirements-review#1@root review_agent dispatched executor cancelled -"
+    ]
+  },
+  {
+    "source": "template \"reviewed-ticket-workflow\"",
+    "order": [
+      "1/2 fix#1@root fix_agent skipped scheduler - -",
+      "3/4 trigger#1@root trigger_ticket_ai dispatched scheduler - out[builtin-reviewed-ticket-workflow-01-trigger-out-prepare]",
+      "5/6 prepare#1@root prepare_workspace dispatched executor completed out[builtin-reviewed-ticket-workflow-02-prepare-out-planning]",
+      "7/8 planning#1@root planning_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-03-planning-out-implementation]",
+      "9/10 implementation#1@root implementation_agent dispatched executor completed out[builtin-reviewed-ticket-workflow-04-implementation-out-security-review,builtin-reviewed-ticket-workflow-05-implementation-out-quality-review,builtin-reviewed-ticket-workflow-06-implementation-out-requirements-review]",
+      "11/14 security-review#1@root review_agent dispatched executor failed -",
+      "12/15 quality-review#1@root review_agent dispatched executor completed -",
+      "13/16 requirements-review#1@root review_agent dispatched executor completed -"
+    ]
+  },
+  {
+    "source": "template \"support-investigation\"",
+    "order": [
+      "1/2 zendesk#1@root trigger_webhook dispatched scheduler - out[builtin-support-investigation-01-zendesk-out-investigate]",
+      "3/4 sentry#1@root trigger_webhook skipped scheduler - -",
+      "5/6 investigate#1@root investigate dispatched executor completed out[builtin-support-investigation-03-investigate-out-classify]",
+      "7/8 classify#1@root generic_agent dispatched executor completed out[builtin-support-investigation-04-classify-out-code-route]",
+      "9/10 code-route#1@root branch dispatched scheduler completed false[builtin-support-investigation-15-code-route-false-non-code-summary]",
+      "11/12 approval-plan#1@root transform skipped scheduler - -",
+      "13/14 approval#1@root human_question skipped scheduler - -",
+      "15/16 approval-route#1@root branch skipped scheduler - -",
+      "17/18 prepare#1@root prepare_workspace skipped scheduler - -",
+      "19/20 reject#1@root terminate skipped scheduler - -",
+      "21/22 implementation#1@root implementation_agent skipped scheduler - -",
+      "23/24 checks#1@root run_pre_pr_checks skipped scheduler - -",
+      "25/26 finalize#1@root finalize_workspace skipped scheduler - -",
+      "27/28 open-pr#1@root open_pr skipped scheduler - -",
+      "29/30 notify-code#1@root send_slack_message skipped scheduler - -",
+      "31/32 non-code-summary#1@root transform dispatched executor completed out[builtin-support-investigation-16-non-code-summary-out-notify-non-code]",
+      "33/34 notify-non-code#1@root send_slack_message dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"support-investigation\"",
+    "order": [
+      "1/2 zendesk#1@root trigger_webhook dispatched scheduler - out[builtin-support-investigation-01-zendesk-out-investigate]",
+      "3/4 sentry#1@root trigger_webhook skipped scheduler - -",
+      "5/6 investigate#1@root investigate dispatched executor completed out[builtin-support-investigation-03-investigate-out-classify]",
+      "7/8 classify#1@root generic_agent dispatched executor completed out[builtin-support-investigation-04-classify-out-code-route]",
+      "9/10 code-route#1@root branch dispatched scheduler completed false[builtin-support-investigation-15-code-route-false-non-code-summary]",
+      "11/12 approval-plan#1@root transform skipped scheduler - -",
+      "13/14 approval#1@root human_question skipped scheduler - -",
+      "15/16 approval-route#1@root branch skipped scheduler - -",
+      "17/18 prepare#1@root prepare_workspace skipped scheduler - -",
+      "19/20 reject#1@root terminate skipped scheduler - -",
+      "21/22 implementation#1@root implementation_agent skipped scheduler - -",
+      "23/24 checks#1@root run_pre_pr_checks skipped scheduler - -",
+      "25/26 finalize#1@root finalize_workspace skipped scheduler - -",
+      "27/28 open-pr#1@root open_pr skipped scheduler - -",
+      "29/30 notify-code#1@root send_slack_message skipped scheduler - -",
+      "31/32 non-code-summary#1@root transform dispatched executor completed out[builtin-support-investigation-16-non-code-summary-out-notify-non-code]",
+      "33/34 notify-non-code#1@root send_slack_message dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"support-investigation\"",
+    "order": [
+      "1/2 zendesk#1@root trigger_webhook dispatched scheduler - out[builtin-support-investigation-01-zendesk-out-investigate]",
+      "3/4 sentry#1@root trigger_webhook skipped scheduler - -",
+      "5/6 investigate#1@root investigate dispatched executor completed out[builtin-support-investigation-03-investigate-out-classify]",
+      "7/8 classify#1@root generic_agent dispatched executor completed out[builtin-support-investigation-04-classify-out-code-route]",
+      "9/10 code-route#1@root branch dispatched scheduler completed true[builtin-support-investigation-05-code-route-true-approval-plan]",
+      "11/12 non-code-summary#1@root transform skipped scheduler - -",
+      "13/14 notify-non-code#1@root send_slack_message skipped scheduler - -",
+      "15/16 approval-plan#1@root transform dispatched executor completed out[builtin-support-investigation-06-approval-plan-out-approval]",
+      "17/18 approval#1@root human_question dispatched executor completed out[builtin-support-investigation-07-approval-out-approval-route]",
+      "19/20 approval-route#1@root branch dispatched scheduler completed true[builtin-support-investigation-08-approval-route-true-prepare]",
+      "21/22 reject#1@root terminate skipped scheduler - -",
+      "23/24 prepare#1@root prepare_workspace dispatched executor completed out[builtin-support-investigation-09-prepare-out-implementation]",
+      "25/26 implementation#1@root implementation_agent dispatched executor completed out[builtin-support-investigation-10-implementation-out-checks]",
+      "27/28 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-support-investigation-11-checks-out-finalize]",
+      "29/30 finalize#1@root finalize_workspace dispatched executor completed out[builtin-support-investigation-12-finalize-out-open-pr]",
+      "31/32 open-pr#1@root open_pr dispatched executor completed out[builtin-support-investigation-13-open-pr-out-notify-code]",
+      "33/34 notify-code#1@root send_slack_message dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"support-investigation\"",
+    "order": [
+      "1/2 zendesk#1@root trigger_webhook skipped scheduler - -",
+      "3/4 sentry#1@root trigger_webhook dispatched scheduler - out[builtin-support-investigation-02-sentry-out-investigate]",
+      "5/6 investigate#1@root investigate dispatched executor completed out[builtin-support-investigation-03-investigate-out-classify]",
+      "7/8 classify#1@root generic_agent dispatched executor completed out[builtin-support-investigation-04-classify-out-code-route]",
+      "9/10 code-route#1@root branch dispatched scheduler completed false[builtin-support-investigation-15-code-route-false-non-code-summary]",
+      "11/12 approval-plan#1@root transform skipped scheduler - -",
+      "13/14 approval#1@root human_question skipped scheduler - -",
+      "15/16 approval-route#1@root branch skipped scheduler - -",
+      "17/18 prepare#1@root prepare_workspace skipped scheduler - -",
+      "19/20 reject#1@root terminate skipped scheduler - -",
+      "21/22 implementation#1@root implementation_agent skipped scheduler - -",
+      "23/24 checks#1@root run_pre_pr_checks skipped scheduler - -",
+      "25/26 finalize#1@root finalize_workspace skipped scheduler - -",
+      "27/28 open-pr#1@root open_pr skipped scheduler - -",
+      "29/30 notify-code#1@root send_slack_message skipped scheduler - -",
+      "31/32 non-code-summary#1@root transform dispatched executor completed out[builtin-support-investigation-16-non-code-summary-out-notify-non-code]",
+      "33/34 notify-non-code#1@root send_slack_message dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"support-investigation\"",
+    "order": [
+      "1/2 zendesk#1@root trigger_webhook skipped scheduler - -",
+      "3/4 sentry#1@root trigger_webhook dispatched scheduler - out[builtin-support-investigation-02-sentry-out-investigate]",
+      "5/6 investigate#1@root investigate dispatched executor completed out[builtin-support-investigation-03-investigate-out-classify]",
+      "7/8 classify#1@root generic_agent dispatched executor completed out[builtin-support-investigation-04-classify-out-code-route]",
+      "9/10 code-route#1@root branch dispatched scheduler completed true[builtin-support-investigation-05-code-route-true-approval-plan]",
+      "11/12 non-code-summary#1@root transform skipped scheduler - -",
+      "13/14 notify-non-code#1@root send_slack_message skipped scheduler - -",
+      "15/16 approval-plan#1@root transform dispatched executor completed out[builtin-support-investigation-06-approval-plan-out-approval]",
+      "17/18 approval#1@root human_question dispatched executor completed out[builtin-support-investigation-07-approval-out-approval-route]",
+      "19/20 approval-route#1@root branch dispatched scheduler completed false[builtin-support-investigation-14-approval-route-false-reject]",
+      "21/22 prepare#1@root prepare_workspace skipped scheduler - -",
+      "23/24 implementation#1@root implementation_agent skipped scheduler - -",
+      "25/26 checks#1@root run_pre_pr_checks skipped scheduler - -",
+      "27/28 finalize#1@root finalize_workspace skipped scheduler - -",
+      "29/30 open-pr#1@root open_pr skipped scheduler - -",
+      "31/32 notify-code#1@root send_slack_message skipped scheduler - -",
+      "33/34 reject#1@root terminate dispatched executor completed -"
+    ]
+  },
+  {
+    "source": "template \"ticket-workflow\"",
+    "order": [
+      "1/2 trigger#1@root trigger_ticket_ai dispatched scheduler - out[builtin-ticket-workflow-01-trigger-out-prepare]",
+      "3/4 prepare#1@root prepare_workspace dispatched executor completed out[builtin-ticket-workflow-02-prepare-out-planning]",
+      "5/6 planning#1@root planning_agent dispatched executor completed -",
+      "7/8 implementation#1@root implementation_agent skipped scheduler - -",
+      "9/10 checks#1@root run_pre_pr_checks skipped scheduler - -",
+      "11/12 finalize#1@root finalize_workspace skipped scheduler - -",
+      "13/14 open-pr#1@root open_pr skipped scheduler - -",
+      "15/16 slack#1@root send_slack_message skipped scheduler - -",
+      "17/18 status#1@root update_ticket_status skipped scheduler - -"
+    ]
+  },
+  {
+    "source": "template \"ticket-workflow\"",
+    "order": [
+      "1/2 trigger#1@root trigger_ticket_ai dispatched scheduler - out[builtin-ticket-workflow-01-trigger-out-prepare]",
+      "3/4 prepare#1@root prepare_workspace dispatched executor completed out[builtin-ticket-workflow-02-prepare-out-planning]",
+      "5/6 planning#1@root planning_agent dispatched executor completed out[builtin-ticket-workflow-03-planning-out-implementation]",
+      "7/8 implementation#1@root implementation_agent dispatched executor completed out[builtin-ticket-workflow-04-implementation-out-checks]",
+      "9/10 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-ticket-workflow-05-checks-out-finalize]",
+      "11/12 finalize#1@root finalize_workspace dispatched executor completed out[builtin-ticket-workflow-06-finalize-out-open-pr]",
+      "13/14 open-pr#1@root open_pr dispatched executor completed out[builtin-ticket-workflow-07-open-pr-out-slack]",
+      "15/16 slack#1@root send_slack_message dispatched executor completed out[builtin-ticket-workflow-08-slack-out-status]",
+      "17/18 status#1@root update_ticket_status dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"ticket-workflow\"",
+    "order": [
+      "1/2 trigger#1@root trigger_ticket_ai dispatched scheduler - out[builtin-ticket-workflow-01-trigger-out-prepare]",
+      "3/4 prepare#1@root prepare_workspace dispatched executor completed out[builtin-ticket-workflow-02-prepare-out-planning]",
+      "5/6 planning#1@root planning_agent dispatched executor completed out[builtin-ticket-workflow-03-planning-out-implementation]",
+      "7/8 implementation#1@root implementation_agent dispatched executor completed out[builtin-ticket-workflow-04-implementation-out-checks]",
+      "9/10 checks#1@root run_pre_pr_checks dispatched executor completed out[builtin-ticket-workflow-05-checks-out-finalize]",
+      "11/12 finalize#1@root finalize_workspace dispatched executor completed out[builtin-ticket-workflow-06-finalize-out-open-pr]",
+      "13/14 open-pr#1@root open_pr dispatched executor completed out[builtin-ticket-workflow-07-open-pr-out-slack]",
+      "15/16 slack#1@root send_slack_message dispatched executor completed out[builtin-ticket-workflow-08-slack-out-status]",
+      "17/18 status#1@root update_ticket_status dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"ticket-workflow\"",
+    "order": [
+      "1/2 trigger#1@root trigger_ticket_ai dispatched scheduler - out[builtin-ticket-workflow-01-trigger-out-prepare]",
+      "3/4 prepare#1@root prepare_workspace dispatched executor completed out[builtin-ticket-workflow-02-prepare-out-planning]",
+      "5/6 planning#1@root planning_agent dispatched executor failed -"
+    ]
+  },
+  {
+    "source": "template \"ticket-workflow\"",
+    "order": [
+      "1/2 trigger#1@root trigger_ticket_ai dispatched scheduler - out[builtin-ticket-workflow-01-trigger-out-prepare]",
+      "3/4 prepare#1@root prepare_workspace dispatched executor completed out[builtin-ticket-workflow-02-prepare-out-planning]",
+      "5/6 planning#1@root planning_agent dispatched executor waiting_for_clarification -"
+    ]
+  },
+  {
+    "source": "template \"webhook-ticket-triage\"",
+    "order": [
+      "1/2 trigger#1@root trigger_webhook dispatched scheduler - out[builtin-webhook-ticket-triage-01-trigger-out-triage]",
+      "3/4 triage#1@root generic_agent dispatched executor completed out[builtin-webhook-ticket-triage-02-triage-out-assess]",
+      "5/6 assess#1@root generic_agent dispatched executor completed out[builtin-webhook-ticket-triage-03-assess-out-code-issue]",
+      "7/8 code-issue#1@root branch dispatched scheduler completed false[builtin-webhook-ticket-triage-09-code-issue-false-notify-no-code]",
+      "9/10 prepare#1@root prepare_workspace skipped scheduler - -",
+      "11/12 implement#1@root generic_agent skipped scheduler - -",
+      "13/14 finalize#1@root finalize_workspace skipped scheduler - -",
+      "15/16 open-pr#1@root open_pr skipped scheduler - -",
+      "17/18 notify#1@root send_slack_message skipped scheduler - -",
+      "19/20 notify-no-code#1@root send_slack_message dispatched executor completed out[]"
+    ]
+  },
+  {
+    "source": "template \"webhook-ticket-triage\"",
+    "order": [
+      "1/2 trigger#1@root trigger_webhook dispatched scheduler - out[builtin-webhook-ticket-triage-01-trigger-out-triage]",
+      "3/4 triage#1@root generic_agent dispatched executor completed out[builtin-webhook-ticket-triage-02-triage-out-assess]",
+      "5/6 assess#1@root generic_agent dispatched executor completed out[builtin-webhook-ticket-triage-03-assess-out-code-issue]",
+      "7/8 code-issue#1@root branch dispatched scheduler completed true[builtin-webhook-ticket-triage-04-code-issue-true-prepare]",
+      "9/10 notify-no-code#1@root send_slack_message skipped scheduler - -",
+      "11/12 prepare#1@root prepare_workspace dispatched executor completed out[builtin-webhook-ticket-triage-05-prepare-out-implement]",
+      "13/14 implement#1@root generic_agent dispatched executor completed out[builtin-webhook-ticket-triage-06-implement-out-finalize]",
+      "15/16 finalize#1@root finalize_workspace dispatched executor completed out[builtin-webhook-ticket-triage-07-finalize-out-open-pr]",
+      "17/18 open-pr#1@root open_pr dispatched executor completed out[builtin-webhook-ticket-triage-08-open-pr-out-notify]",
+      "19/20 notify#1@root send_slack_message dispatched executor completed out[]"
+    ]
+  }
+]

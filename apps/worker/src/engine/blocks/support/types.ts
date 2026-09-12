@@ -11,9 +11,8 @@ import type {
   BlockExecutionContext,
   BlockExecutionResult,
   StepsRecord,
-} from "../../../workflow-definition/interpreter.js";
-import { executionError } from "../../../workflow-definition/interpreter.js";
-import { failureEvidenceFromDiagnostic } from "../../../workflow-definition/failure-message.js";
+} from "@shared/workflow-graph";
+import { executionError, failureEvidenceFromDiagnostic } from "@shared/workflow-graph";
 import type { AgentKind } from "../../../sandbox/agents/index.js";
 import type { AgentProtocolResult, PhaseUsage } from "../../../sandbox/agents/types.js";
 import type {
@@ -33,6 +32,7 @@ import type { LoadedPrompts } from "../../steps/prompts-step.js";
 import type { AgentWorkflowInput } from "../../agent-input.js";
 import type {
   RunBudgetAttribution,
+  RunBudgetHooks,
   RunBudgetObservation,
 } from "../../helpers/run-budget.js";
 import type { WorkspaceGate } from "../../steps/workspace-gate.js";
@@ -275,11 +275,23 @@ export interface EngineCtx {
   markLaunched(label: string, attempt?: number): void;
 }
 
-export type {
-  BlockExecutionResult,
-  StepsRecord,
-} from "../../../workflow-definition/interpreter.js";
+export type { BlockExecutionResult, StepsRecord } from "@shared/workflow-graph";
 export { executionError };
+
+/**
+ * One block invocation as this worker sees it: everything the scheduler hands
+ * an executor, plus the run budget the invocation is charged against.
+ *
+ * The budget is not optional. `@shared/workflow-graph` carried these two
+ * functions as optional fields until stage 12-6b, and every reader had to fall
+ * back to the workflow-level observer when they were missing, so "this
+ * invocation has no profile budget" and "the caller forgot" looked the same.
+ * The one construction site (`agent-workflow.ts`) now decides which of the two
+ * it means, once.
+ */
+export interface BlockInvocationContext extends BlockExecutionContext {
+  budget: RunBudgetHooks;
+}
 
 /**
  * Turn an agent protocol failure into a block execution error, handing the
@@ -309,7 +321,7 @@ export type BlockExecuteFn = (
   steps: StepsRecord,
   ctx: EngineCtx,
   resolvedInputs?: Record<string, unknown>,
-  execution?: BlockExecutionContext,
+  execution?: BlockInvocationContext,
 ) => Promise<BlockExecutionResult>;
 
 /**
@@ -341,7 +353,7 @@ export function buildV2AgentArtifactKeys(
  */
 export function agentArtifactPhase(
   legacyPhase: string,
-  execution?: BlockExecutionContext,
+  execution?: Pick<BlockInvocationContext, "agentArtifactKey" | "attempt">,
 ): string {
   if (execution?.agentArtifactKey === undefined) return legacyPhase;
   return `${legacyPhase}-v2-${execution.agentArtifactKey}-a${execution.attempt ?? 1}`;
@@ -350,7 +362,7 @@ export function agentArtifactPhase(
 export function markBlockPhaseLaunched(
   ctx: Pick<EngineCtx, "markLaunched">,
   label: string,
-  execution?: BlockExecutionContext,
+  execution?: Pick<BlockInvocationContext, "attempt">,
 ): void {
   if (execution?.attempt === undefined) {
     ctx.markLaunched(label);
@@ -365,7 +377,7 @@ export function recordBlockPhaseUsage(
   usage: PhaseUsage | null,
   provider: CostProviderKind | undefined,
   model: string,
-  execution?: BlockExecutionContext,
+  execution?: Pick<BlockInvocationContext, "attempt" | "budget">,
 ): void {
   const source = { provider, model };
   if (execution?.attempt === undefined) {
@@ -373,15 +385,15 @@ export function recordBlockPhaseUsage(
   } else {
     ctx.recordUsage(label, usage, source, execution.attempt);
   }
-  execution?.recordBudgetUsage?.(usage, model);
+  execution?.budget.recordBudgetUsage(usage, model);
 }
 
 export function blockBudgetObserver(
   ctx: Pick<EngineCtx, "observeBudget">,
-  execution?: BlockExecutionContext,
+  execution?: Pick<BlockInvocationContext, "budget">,
   options: { attribution?: RunBudgetAttribution } = {},
 ): EngineCtx["observeBudget"] {
-  const observe = execution?.observeBudget ?? ctx.observeBudget;
+  const observe = execution?.budget.observeBudget ?? ctx.observeBudget;
   // A wrapper, not a second observer: the elapsed time lives in the budget
   // context's own closure, so attribution has to travel to it as an argument.
   // Wrapping is what lets one block hold two views of the same context, which

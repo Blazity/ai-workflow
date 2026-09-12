@@ -124,6 +124,32 @@ export function handleCatalogVersionsGet(id: string, workerProxy: WorkerProxy) {
   return path === null ? badId() : forward(workerProxy, path, { method: "GET" });
 }
 
+/**
+ * The suggestion attempts spent on one repository, newest first.
+ *
+ * The cursor is the worker's own opaque string and is checked against the
+ * alphabet the worker writes before it is put back on a URL. A cursor the
+ * worker did not write is refused there anyway; refusing it here as well keeps
+ * a hostile value out of the proxied path in the first place.
+ */
+export function handleCatalogSuggestionsGet(
+  id: string,
+  cursor: string | null,
+  workerProxy: WorkerProxy,
+) {
+  if (cursor !== null && !/^[0-9A-Za-z:.|-]{1,64}$/.test(cursor)) {
+    return NextResponse.json(
+      { error: "invalid_cursor" },
+      { status: 400, headers: { "cache-control": "no-store" } },
+    );
+  }
+  const path = repositoryPath(
+    id,
+    `/suggestions${cursor === null ? "" : `?cursor=${encodeURIComponent(cursor)}`}`,
+  );
+  return path === null ? badId() : forward(workerProxy, path, { method: "GET" });
+}
+
 /** Ending the bridge. The 409 naming the repositories the admin has not
  *  acknowledged is the dialog's normal first answer, so it is passed through
  *  like any other status rather than raised. */

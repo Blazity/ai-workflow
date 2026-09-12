@@ -14,6 +14,7 @@ import { answerPanelMode } from "@/lib/answer-panel-mode";
 import { apiClient } from "@/lib/api/client";
 import { runHref } from "@/lib/run-href";
 import { runModelLabel } from "@/lib/run-model";
+import { repositoryAccessLine } from "@/lib/run-repository-access";
 import { runPullRequests } from "@/lib/run-prs";
 import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
 import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
@@ -363,6 +364,10 @@ export function TraceDetail({
   ).length;
   const runPrs = runPullRequests(run);
   const runPrLabels = runPrs.length > 1 ? pullRequestRepoLabels(runPrs) : [];
+  // The list the run froze at start, which is the only answer to "could this
+  // run have reached that repository?" that stays true after somebody edits
+  // the catalog. Absent on runs that started before it was recorded.
+  const accessLine = repositoryAccessLine(run.repositoryAccess);
 
   return (
     <div className="flex min-w-0 max-w-full flex-col gap-4">
@@ -465,6 +470,12 @@ export function TraceDetail({
           sub={hasReplay ? "failed attempts" : "failed steps"}
         />
       </div>
+
+      {accessLine && (
+        <p className="m-0 font-mono text-[11px] leading-[1.5] text-neutral-600">
+          {accessLine}
+        </p>
+      )}
 
       {run.error && (
         <CkCard

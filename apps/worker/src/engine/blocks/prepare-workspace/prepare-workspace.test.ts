@@ -123,6 +123,7 @@ import { teardownSandboxes } from "../../steps/sandbox-poll-agent.js";
 import { checksCeilingExceededError } from "../../helpers/run-budget.js";
 import {
   makeCtx as makeBaseCtx,
+  makeInvocation,
   makeNode,
   makePrPayload,
   makeRunSettings,
@@ -230,7 +231,8 @@ const SETUP_BOUNDARY_ERROR_CASES = [
       name: "ChecksCeilingExceededError",
       message:
         "The repository checks did not finish within the 15 minute checks ceiling. " +
-        "Raise batchTimeoutMinutes for this definition or split the run. " +
+        "Raise the checks ceiling on the Repositories page (open the repository, " +
+      "Scripts tab, checks ceiling), or split the run. " +
         "(checks_ceiling_exceeded: Setup batch for github:acme/api reached the 15 minute checks ceiling)",
     },
   },
@@ -800,12 +802,13 @@ describe("prepare_workspace execute", () => {
     mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
     const observations = { emit: vi.fn() };
 
+    const ctx = makeCtx({ sandboxId: null, definitionNodes: SCRIPT_NODES });
     await execute(
       makeNode("prepare_workspace"),
       {},
-      makeCtx({ sandboxId: null, definitionNodes: SCRIPT_NODES }),
+      ctx,
       {},
-      { observations },
+      makeInvocation(ctx, { observations }),
     );
 
     expect(mocks.runRepositorySetup).toHaveBeenCalledWith(
@@ -1680,12 +1683,13 @@ describe("prepare_workspace execute", () => {
       },
     });
 
+    const ctx = makeCtx({ sandboxId: null });
     const result = await execute(
       makeNode("prepare_workspace"),
       {},
-      makeCtx({ sandboxId: null }),
+      ctx,
       {},
-      { observations: { emit } },
+      makeInvocation(ctx, { observations: { emit } }),
     );
 
     expect(emit).toHaveBeenCalledWith({
