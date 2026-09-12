@@ -17,6 +17,10 @@ import { isRunControlError } from "../helpers/run-control-error.js";
  */
 export async function describePrePrChecksFailureStep(
   error: PrePrChecksFailureInput,
+  /** The legacy global configuration counter, which is what the caller holds at
+   *  the moment a checks step throws. It is a coarse marker in a log line and
+   *  not a decision: the per-repository profile versions the gate compares are
+   *  read when the gate is minted, and a failure never mints one. */
   configurationVersion: number | null,
 ): Promise<string> {
   "use step";

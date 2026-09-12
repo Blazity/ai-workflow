@@ -19,6 +19,8 @@ export * from "./harness-profiles";
 export * from "./run-replay";
 export * from "./workflow-value-compatibility";
 export * from "./review-result";
+export * from "./repository-catalog";
+export * from "./repository-catalog-api";
 export * from "./repository-scripts";
 export * from "./run-analysis";
 export * from "./request-parsing";

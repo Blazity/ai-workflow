@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-09
+Last-verified: 2026-09-12
 
 # Repository scripts: config reference
 
@@ -220,6 +220,77 @@ were. Nothing is lost and nothing is published; the next run picks up the new
 version. The same applies to the ceiling: `batchTimeoutMinutes` is read once,
 at workspace creation, so an edit mid-run changes nothing for the run in
 flight. Make configuration edits between runs, or expect to re-run the ticket.
+
+## Profiles: groups live on the repository now
+
+Script groups no longer live in one global versioned blob. Each repository in
+the repository catalog carries a **profile**, and every change to it appends a
+**profile version** recording the groups, the gate group selection, who changed
+it and why. What a run executes is composed out of those profiles
+(`apps/worker/src/db/repositories/repository-catalog.ts`,
+`getCurrentCheckConfiguration`), one entry per repository whose profile carries
+script groups. The canonical shape above is unchanged: a profile stores exactly
+the repository entry this document describes, verbatim, and the engine
+normalizes it at the same boundary it always did.
+
+**Why it moved.** The global blob had one version counter for every repository,
+and the publication gate compares the version its checks ran under with the
+version now. So saving repository B's groups failed a run in flight on
+repository A at Finalize with `configuration_changed`, having verified nothing
+about A. The gate now also records, per repository, the **checks version** that
+repository's checks were launched under, and Finalize compares those.
+
+The checks version is not the profile version. A profile version is minted by
+every save; the checks version moves only when the script groups or the gate
+group selection actually change. Editing a repository's description, its rules
+or its relationships therefore mints a profile version and fails no run.
+
+The versions are pinned when the checks are **launched**, not when they pass:
+they ride out of the one step that loads the configuration
+(`loadPrePrCheckConfigStep`) and are handed to the gate. An edit that lands
+while the checks are running is caught at Finalize rather than silently adopted,
+and nothing on the gate path performs a second read.
+
+Finalize then compares, per repository:
+
+- a repository the gate did not record is not checked (it has no profile, or it
+  joined the workspace after the gate was minted and records its own version
+  when its own checks pass);
+- a repository whose checks version moved fails the run, naming the repository
+  and both versions;
+- a gate checkpointed before profiles existed carries no per-repository record
+  at all and still recovers and still passes. Both shapes are accepted
+  indefinitely.
+
+**What the legacy screen still does.** On the catalog path the per-repository
+check is precise: editing **this** repository's groups while a run on **this**
+repository is in flight fails that run at Finalize, and editing another
+repository's does not. A save on the legacy Scripts screen still appends a blob
+row and still moves the **global** counter, which every run in flight compares,
+so a save there fails every run in flight until stage G removes the page. What
+that save no longer does is move another repository's checks version: the screen
+submits the whole configuration on every click, and the fan-out is a no-op for a
+repository whose stored script groups and gate group selection are identical to
+the incoming ones, so it writes nothing and mints no version for a repository
+the operator did not actually change.
+
+**The migration.** The build-time seed
+(`apps/worker/scripts/db-seed-repository-catalog.ts`) copies the newest stored
+blob into one repository row per entry (source `migrated`) plus one profile
+version 1 per row, actor `migration`. A row created by that copy is **disabled**
+unless the allowlist or a definition pin already granted the repository: the
+checks configuration says what to run if the agent may touch a repository, never
+that it may. The copy is idempotent, so a redeploy creates nothing new.
+
+**What still reads the blob.** The `pre_pr_check_config_versions` table is read
+by the legacy Scripts screen alone: its history list and its restore, plus two
+fields the composed configuration still takes from the newest row, the global
+version counter the publication gate has recorded on every run ever minted and
+the deployment-wide `batchTimeoutMinutes`. Its `repositories` payload is read by
+nothing. Saving on that screen appends a blob row **and** fans the save out to
+one profile version per repository it names, dropping the script groups of any
+repository it stopped naming; the Repositories page replaces the screen, and the
+cleanup stage drops the table.
 
 ## Legacy shape (still accepted)
 

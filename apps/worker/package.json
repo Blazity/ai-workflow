@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "rm -rf .nitro/workflow && nitro dev",
-    "build": "pnpm validate:pre-sandbox && pnpm validate:local-skills && pnpm db:migrate && pnpm db:seed-settings && pnpm seed:auth-user && pnpm --dir ../.. run gen:blocks -- --check && rm -rf .nitro/workflow && NODE_OPTIONS=--max-old-space-size=8192 nitro build",
+    "build": "pnpm validate:pre-sandbox && pnpm validate:local-skills && pnpm db:migrate && pnpm db:seed-settings && pnpm seed:repository-catalog && pnpm seed:auth-user && pnpm --dir ../.. run gen:blocks -- --check && rm -rf .nitro/workflow && NODE_OPTIONS=--max-old-space-size=8192 nitro build",
     "build:ci": "pnpm validate:pre-sandbox && pnpm validate:local-skills && pnpm mcp:contract:check && pnpm --dir ../.. run gen:blocks -- --check && rm -rf .nitro/workflow && NODE_OPTIONS=--max-old-space-size=8192 nitro build",
     "preview": "nitro preview",
     "test": "vitest run",
@@ -35,7 +35,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx scripts/db-migrate.ts",
     "db:seed-settings": "tsx scripts/db-seed-settings.ts",
-    "seed:auth-user": "tsx scripts/seed-auth-user.ts"
+    "seed:auth-user": "tsx scripts/seed-auth-user.ts",
+    "seed:repository-catalog": "tsx scripts/db-seed-repository-catalog.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.78",

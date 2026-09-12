@@ -32,7 +32,11 @@ import { compatibilityPromptSourceForV2Node, compileEffectivePrompt, effectivePr
 import { loadInvocationRepositoryInstructionSources } from "./steps/repository-instructions.js";
 import { publicationPrsForTelemetry } from "./helpers/publication-prs-for-telemetry.js";
 import { withAnalysisDelivery, withAnalysisPublication } from "./support/run-analysis-report.js";
-import { invalidateWorkspaceGate, recordSuccessfulWorkspaceGate } from "./steps/workspace-gate.js";
+import {
+  invalidateWorkspaceGate,
+  recordSuccessfulWorkspaceGate,
+  serializeWorkspaceGate,
+} from "./steps/workspace-gate.js";
 import { resolveReviewFeedbackInput } from "./helpers/review-feedback.js";
 import { workspaceRepositoryAccess, type WorkspaceManifest, type WorkspaceRepositoryInput } from "../sandbox/repo-workspace.js";
 import { ensureWorkspace, maybePromoteGenericAgentWorkspace, maybePromoteTicketWorkspaceWrites, promoteWorkspaceWrites, requiredAgentsForDefinition, researchDeclaredNoWritesGuard } from "./blocks/prepare-workspace/execute.js";
@@ -2931,6 +2935,13 @@ async function agentWorkflowBody(
                 sandboxId: ctx.sandboxId,
                 workspaceManifest: ctx.workspaceManifest,
                 configurationVersion: prePrConfig.version,
+                // The versions these checks were LAUNCHED under, straight off
+                // the configuration load above. No second read, so an edit that
+                // landed while the checks ran is caught at Finalize instead of
+                // being adopted here.
+                ...(prePrConfig.repositoryVersions
+                  ? { repositoryVersions: prePrConfig.repositoryVersions }
+                  : {}),
               });
             }
             return {
@@ -2945,12 +2956,7 @@ async function agentWorkflowBody(
                 // spread into a plain JSON object for the BlockOutput contract.
                 // recoverPrePrGateFromSteps keys on this outcome+gate pair, so
                 // neither key may move.
-                gate: ctx.prePrGate
-                  ? {
-                      configurationVersion: ctx.prePrGate.configurationVersion,
-                      fingerprint: ctx.prePrGate.fingerprint,
-                    }
-                  : null,
+                gate: serializeWorkspaceGate(ctx.prePrGate),
               },
             };
           }

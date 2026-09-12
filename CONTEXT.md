@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-09
+Last-verified: 2026-09-12
 
 # AI Workflow
 
@@ -19,6 +19,19 @@ _Avoid_: Codebase, repo/project
 A repository visible to the configured VCS provider credentials. One deployment
 has many accessible repositories.
 _Avoid_: Available repo, token-visible project
+
+**Repository Catalog**:
+The admin-managed list of repositories this deployment knows, each with an
+enabled switch and a versioned profile (description, rules, relationships,
+script groups). It is what an operator edits on the Repositories page and, once
+activated, what decides which repositories the agent may touch.
+_Avoid_: Repo list, repo registry, repository directory
+
+**Repository Directory**:
+Provider-side discovery: what the VCS credentials can see, read at runtime by
+`apps/worker/src/engine/repository-discovery/`. It reports what exists; the
+repository catalog decides what is allowed.
+_Avoid_: Repository catalog, repo index
 
 **Selected Repository**:
 An accessible repository chosen for a specific workflow run. One workflow run

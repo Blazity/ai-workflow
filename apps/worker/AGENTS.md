@@ -120,6 +120,37 @@ names, harness defaults) are rows in the `settings` table, described once in
 - **Tests replay migrations from disk.** `src/db/test-db.ts` reads the
   `drizzle/` directory in the working tree, so a freshly generated, uncommitted
   migration is already active in unit tests.
+- **The repository catalog is the coming grant, and is not deciding yet.**
+  `repositories`, `repository_profile_versions` and the one-row
+  `repository_catalog_state` (migration 0060) hold what the deployment knows
+  about each repository and the versioned profile carrying its description,
+  rules, relationships and script groups. Every access goes through
+  `src/db/repositories/repository-catalog.ts`; `src/services/repository-catalog/`
+  loads one immutable snapshot per entry point (`store.ts`) and answers the
+  synchronous predicate from it (`policy.ts`). While `repository_catalog_state`
+  says not activated the catalog is a **bridge**: it answers "enabled" for every
+  repository and reports that it is doing so, which is exactly how the
+  deployment behaves today. Nothing is rewired onto it yet;
+  `engine/support/repo-allowlist.ts` still decides access. The build-time seed
+  `scripts/db-seed-repository-catalog.ts` (wired after `db:migrate` in `build`,
+  never in `build:ci`) imports the allowlist variable and every pinned
+  repository, activates only a deployment whose allowlist was already
+  restricting it, and moves the global script groups blob into profiles; every
+  write in it is guarded on existence, so a redeploy seeds nothing new. It
+  refuses to guess a provider: an allowlist entry nothing else names on a
+  deployment with no configured provider fails the build rather than creating a
+  row that grants the wrong thing. A row is created **disabled** by every path
+  except the seed and the enabled route: writing a profile configures a
+  repository, it never grants one. Each repository carries two counters,
+  `current_profile_version` (every save) and `current_checks_version` (only a
+  change to the script groups or the gate selection); the workspace gate records
+  the CHECKS version, pinned when the checks were launched and carried out of
+  `loadPrePrCheckConfigStep`, in an optional `repositoryVersions` field, and
+  recovery accepts a gate with or without it indefinitely. **Nothing on the gate
+  path may become a step:** one extra step call there shifts every later journal
+  entry of a run already in flight, and the Workflow DevKit resumes by consuming
+  that journal in order.
+
 - **The MCP contract is generated.** After changing a tool, run
   `pnpm run mcp:contract:generate`, and `mcp:contract:check` in CI proves it.
 

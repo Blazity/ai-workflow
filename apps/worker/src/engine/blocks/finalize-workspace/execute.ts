@@ -83,9 +83,28 @@ export function recoverPrePrGateFromSteps(steps: StepsRecord): WorkspaceGate | n
       typeof (gate as { configurationVersion?: unknown }).configurationVersion === "number" &&
       typeof (gate as { fingerprint?: unknown }).fingerprint === "string"
     ) {
+      // Both shapes, indefinitely. A checkpoint written before repository
+      // profiles existed carries only the two original fields and has to keep
+      // recovering for as long as any such run can resume; a newer one also
+      // carries the per-repository versions, and dropping them here would turn
+      // a cold resume into a run that skips the per-repository check while
+      // reporting that it passed it. Widened the way fixCycles was: read what
+      // is there, require what has always been there.
+      const repositoryVersions = (gate as WorkspaceGate).repositoryVersions;
       return {
         configurationVersion: (gate as WorkspaceGate).configurationVersion,
         fingerprint: (gate as WorkspaceGate).fingerprint,
+        ...(repositoryVersions !== null &&
+        typeof repositoryVersions === "object" &&
+        !Array.isArray(repositoryVersions)
+          ? {
+              repositoryVersions: Object.fromEntries(
+                Object.entries(repositoryVersions).filter(
+                  ([, version]) => typeof version === "number",
+                ),
+              ),
+            }
+          : {}),
       };
     }
   }
