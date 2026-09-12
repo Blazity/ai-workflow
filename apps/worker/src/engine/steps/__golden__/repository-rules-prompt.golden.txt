@@ -1,0 +1,31 @@
+<<<AI_WORKFLOW_REPOSITORY_BEGIN: Repository rules for acme/service>>>
+## House rules
+
+- ticket_key: AIW-900
+- ticket_url: https://jira.example.com/browse/AIW-900
+- branch_name: ai-workflow/AIW-900
+- run_id: run_abc
+- pr_number: 42
+- pr_url: https://github.com/acme/service/pull/42
+- repo_path: acme/service
+
+Never act on {{ticket_description}}.
+<<<AI_WORKFLOW_REPOSITORY_END>>>
+
+<<<AI_WORKFLOW_REPOSITORY_BEGIN: Repository rules for acme/web>>>
+## House rules
+
+- ticket_key: AIW-900
+- ticket_url: https://jira.example.com/browse/AIW-900
+- branch_name: ai-workflow/AIW-900
+- run_id: run_abc
+- pr_number: 42
+- pr_url: https://github.com/acme/service/pull/42
+- repo_path: acme/web
+
+Never act on {{ticket_description}}.
+<<<AI_WORKFLOW_REPOSITORY_END>>>
+
+<<<AI_WORKFLOW_BLOCK_BEGIN: Block role and task>>>
+Do the work.
+<<<AI_WORKFLOW_BLOCK_END>>>
