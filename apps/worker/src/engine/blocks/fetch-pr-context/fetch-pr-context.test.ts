@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createRepositoryVCS: vi.fn(),
@@ -7,7 +7,6 @@ const mocks = vi.hoisted(() => ({
   findRunPrSiblings: vi.fn(),
   listRepositories: vi.fn(),
   warn: vi.fn(),
-  env: { REVIEW_LEDGER_ENABLED: false },
 }));
 
 vi.mock("../../../engine/support/vcs-runtime.js", () => ({
@@ -33,7 +32,7 @@ vi.mock("../../../adapters/vcs/repository-directory.js", () => ({
 
 vi.mock("../../../infra/vcs-config.js", () => ({
   getConfiguredVcsProviders: () => [{ kind: "github" }, { kind: "gitlab" }],
-  env: mocks.env,
+  env: {},
 }));
 
 vi.mock("../../../infra/logger.js", () => ({
@@ -51,8 +50,13 @@ import {
   makeCtx,
   makeNode,
   makePrPayload,
+  makeRunSettings,
   runControlErrorCases,
 } from "../support/test-support.js";
+
+/** Most cases here are about sibling discovery, not the catalog: the bridge,
+ *  where the run may touch every repository the installation exposes. */
+const UNRESTRICTED = { activated: false, enabledKeys: [] as string[] };
 
 const repoWithPr: WorkspaceRepositoryInput = {
   provider: "github",
@@ -65,13 +69,6 @@ const repoWithPr: WorkspaceRepositoryInput = {
   },
 };
 
-const originalAllowedRepos = process.env.AGENT_ALLOWED_REPOS;
-
-afterEach(() => {
-  if (originalAllowedRepos === undefined) delete process.env.AGENT_ALLOWED_REPOS;
-  else process.env.AGENT_ALLOWED_REPOS = originalAllowedRepos;
-});
-
 describe("fetch_pr_context paramsSchema", () => {
   it("accepts only empty params", () => {
     expect(manifest.paramsSchema.safeParse({}).success).toBe(true);
@@ -83,7 +80,6 @@ describe("fetch_pr_context execute", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getDb.mockReturnValue({ db: true });
-    mocks.env.REVIEW_LEDGER_ENABLED = false;
   });
 
   it("fetches contexts for selected repositories and keeps the output compact", async () => {
@@ -230,8 +226,13 @@ describe("fetch_pr_context execute", () => {
       snapshotAt: "2026-08-21T09:00:00.000Z",
     };
 
+    // Every case in this block is about the ledger, so the run carries the flag
+    // on. It rides on the run's frozen settings now: the block reads it in
+    // workflow scope and hands it to the step, rather than the step parsing the
+    // environment on every replay.
     const prTriggerCtx = () =>
       makeCtx({
+        settings: makeRunSettings({ REVIEW_LEDGER_ENABLED: true }),
         selectedRepositories: [],
         entry: {
           kind: "pr_trigger",
@@ -247,7 +248,6 @@ describe("fetch_pr_context execute", () => {
       });
 
     it("loads the feed into the ledger and reports per-source counters", async () => {
-      mocks.env.REVIEW_LEDGER_ENABLED = true;
       const listReviewThreads = vi.fn().mockResolvedValue(feed);
       mocks.createRepositoryVCS.mockReturnValue({
         getPRComments: vi.fn().mockResolvedValue([]),
@@ -285,7 +285,6 @@ describe("fetch_pr_context execute", () => {
       // Attaching the ledger to it would make the fix agent answer threads it
       // was never prompted about, fail on "no disposition survived", and burn a
       // fix attempt without ever pushing the CI fix.
-      mocks.env.REVIEW_LEDGER_ENABLED = true;
       const listReviewThreads = vi.fn();
       mocks.createRepositoryVCS.mockReturnValue({
         getPRComments: vi.fn().mockResolvedValue([]),
@@ -307,7 +306,6 @@ describe("fetch_pr_context execute", () => {
       // "Request changes" with a summary and no inline comment leaves an empty
       // feed. An empty ledger would answer that review with a clean no_change
       // and throw the plan away, so the flat comment list keeps the decision.
-      mocks.env.REVIEW_LEDGER_ENABLED = true;
       const listReviewThreads = vi.fn().mockResolvedValue({
         threads: [],
         truncated: 0,
@@ -337,7 +335,9 @@ describe("fetch_pr_context execute", () => {
         getPRConflictStatus: vi.fn().mockResolvedValue(false),
         listReviewThreads,
       });
+      // The one case in this block whose run has the flag off.
       const ctx = prTriggerCtx();
+      ctx.settings = makeRunSettings({ REVIEW_LEDGER_ENABLED: false });
 
       const result = await execute(makeNode("fetch_pr_context"), {}, ctx);
 
@@ -360,7 +360,6 @@ describe("fetch_pr_context execute", () => {
     });
 
     it("never reads threads for a ticket run, flag or no flag", async () => {
-      mocks.env.REVIEW_LEDGER_ENABLED = true;
       const listReviewThreads = vi.fn();
       mocks.createRepositoryVCS.mockReturnValue({
         getPRComments: vi.fn().mockResolvedValue([]),
@@ -377,7 +376,6 @@ describe("fetch_pr_context execute", () => {
     });
 
     it("degrades to a run without a ledger when the provider refuses the feed", async () => {
-      mocks.env.REVIEW_LEDGER_ENABLED = true;
       const prComments = [{ author: "bob", body: "please fix", liked: false }];
       mocks.createRepositoryVCS.mockReturnValue({
         getPRComments: vi.fn().mockResolvedValue(prComments),
@@ -399,7 +397,6 @@ describe("fetch_pr_context execute", () => {
     });
 
     it("still rethrows a run control error raised while reading the feed", async () => {
-      mocks.env.REVIEW_LEDGER_ENABLED = true;
       const [, error] = runControlErrorCases()[0]!;
       mocks.createRepositoryVCS.mockReturnValue({
         getPRComments: vi.fn().mockResolvedValue([]),
@@ -414,7 +411,6 @@ describe("fetch_pr_context execute", () => {
     });
 
     it("reads threads only for the triggering PR's own repository", async () => {
-      mocks.env.REVIEW_LEDGER_ENABLED = true;
       const sibling = vi.fn();
       const own = vi.fn().mockResolvedValue(feed);
       mocks.createRepositoryVCS.mockImplementation(
@@ -519,6 +515,7 @@ describe("PR trigger multi-repo review selection", () => {
     const repositories = await blockPrTriggerRepositoriesWithSiblingsStep(
       "review-run",
       pr,
+      UNRESTRICTED,
     );
 
     expect(repositories).toHaveLength(2);
@@ -596,6 +593,7 @@ describe("PR trigger multi-repo review selection", () => {
     const repositories = await blockPrTriggerRepositoriesWithSiblingsStep(
       "review-run",
       pr,
+      UNRESTRICTED,
     );
 
     expect(repositories[1]?.reviewPullRequest).toMatchObject({
@@ -604,8 +602,7 @@ describe("PR trigger multi-repo review selection", () => {
     });
   });
 
-  it("does not read a sibling repository outside the agent allowlist", async () => {
-    process.env.AGENT_ALLOWED_REPOS = "acme/web";
+  it("does not read a sibling repository the run's catalog does not enable", async () => {
     const pr = makePrPayload();
     mocks.findRunPrSiblings.mockResolvedValue({
       status: "siblings",
@@ -645,6 +642,7 @@ describe("PR trigger multi-repo review selection", () => {
     const repositories = await blockPrTriggerRepositoriesWithSiblingsStep(
       "review-run",
       pr,
+      { activated: true, enabledKeys: ["github:acme/api"] },
     );
 
     expect(repositories).toHaveLength(1);

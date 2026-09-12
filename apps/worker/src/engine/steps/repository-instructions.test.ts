@@ -13,10 +13,12 @@ const mocks = vi.hoisted(() => ({
   readFile: vi.fn(),
   runCommand: vi.fn(),
   warn: vi.fn(),
-  // Mutated per test. Every .ai/memory case below needs the kill switch on,
-  // which is the opposite of the production default.
-  env: { ENABLE_REPO_MEMORY: true },
 }));
+
+/** The run's ENABLE_REPO_MEMORY, as the step now receives it: a parameter, not
+ *  an environment read. Mutated per test, because every .ai/memory case below
+ *  needs the kill switch on, which is the opposite of the registry default. */
+let memoryEnabled = true;
 
 vi.mock("@vercel/sandbox", () => ({
   Sandbox: {
@@ -30,7 +32,6 @@ vi.mock("../../sandbox/credentials.js", () => ({
   getSandboxCredentials: () => ({ teamId: "team" }),
 }));
 vi.mock("../../infra/logger.js", () => ({ logger: { warn: mocks.warn } }));
-vi.mock("../../infra/vcs-config.js", () => ({ env: mocks.env }));
 
 const manifest: WorkspaceManifest = {
   version: 1,
@@ -125,7 +126,7 @@ describe("repository instruction sources", () => {
     mocks.runCommand.mockReset();
     mocks.runCommand.mockResolvedValue({ exitCode: 1, stdout: async () => "" });
     mocks.warn.mockReset();
-    mocks.env.ENABLE_REPO_MEMORY = true;
+    memoryEnabled = true;
   });
 
   it.each([
@@ -166,11 +167,12 @@ describe("repository instruction sources", () => {
         executionSandboxId: "isolated-research",
         sharedCodeSandboxId: "code-workspace",
         manifest,
+        enableRepoMemory: false,
       },
       load,
     );
 
-    expect(load).toHaveBeenCalledWith("code-workspace", manifest);
+    expect(load).toHaveBeenCalledWith("code-workspace", manifest, false);
     expect(sources.map((source) => source.path)).toEqual([
       "AGENTS.md",
       "CLAUDE.md",
@@ -203,6 +205,7 @@ describe("repository instruction sources", () => {
           executionSandboxId: "isolated-research",
           sharedCodeSandboxId: null,
           manifest,
+          enableRepoMemory: false,
         },
         load,
       ),
@@ -212,7 +215,7 @@ describe("repository instruction sources", () => {
 
   it("accepts a discovery-promoted layout where every repository lives under repos/", async () => {
     await expect(
-      loadRepositoryInstructionSources("code-workspace", discoveredManifest),
+      loadRepositoryInstructionSources("code-workspace", discoveredManifest, memoryEnabled),
     ).resolves.toEqual([]);
   });
 
@@ -221,7 +224,7 @@ describe("repository instruction sources", () => {
     unsafe.repositories[0]!.localPath = "/vercel/sandbox/../secrets";
 
     await expect(
-      loadRepositoryInstructionSources("code-workspace", unsafe),
+      loadRepositoryInstructionSources("code-workspace", unsafe, memoryEnabled),
     ).rejects.toThrow("Repository instruction path is invalid");
   });
 
@@ -231,7 +234,7 @@ describe("repository instruction sources", () => {
       "/vercel/sandbox/repos/gitlab__acme__web/nested";
 
     await expect(
-      loadRepositoryInstructionSources("code-workspace", unsafe),
+      loadRepositoryInstructionSources("code-workspace", unsafe, memoryEnabled),
     ).rejects.toThrow("Repository instruction path is invalid");
   });
 
@@ -241,7 +244,7 @@ describe("repository instruction sources", () => {
     unsafe.repositories[1]!.localPath = "/vercel/sandbox";
 
     await expect(
-      loadRepositoryInstructionSources("code-workspace", unsafe),
+      loadRepositoryInstructionSources("code-workspace", unsafe, memoryEnabled),
     ).rejects.toThrow(/duplicated/i);
   });
 
@@ -256,7 +259,7 @@ describe("repository instruction sources", () => {
     });
 
     await expect(
-      loadRepositoryInstructionSources("code-workspace", manifest),
+      loadRepositoryInstructionSources("code-workspace", manifest, memoryEnabled),
     ).resolves.toEqual([
       { repository: "acme/service", path: "AGENTS.md", content: "agent rules" },
       { repository: "acme/service", path: "CLAUDE.md", content: "claude rules" },
@@ -271,7 +274,7 @@ describe("repository instruction sources", () => {
   it("lists only regular markdown files directly in the memory directory", async () => {
     mockWorkspace({});
 
-    await loadRepositoryInstructionSources("code-workspace", manifest);
+    await loadRepositoryInstructionSources("code-workspace", manifest, memoryEnabled);
 
     // "-type f" is what excludes a symlink pointing at a secret outside the
     // repository, so pin the whole argument vector, not just the directory.
@@ -288,7 +291,7 @@ describe("repository instruction sources", () => {
     mockWorkspace({ files: { "/vercel/sandbox/CLAUDE.md": "claude rules" } });
 
     await expect(
-      loadRepositoryInstructionSources("code-workspace", manifest),
+      loadRepositoryInstructionSources("code-workspace", manifest, memoryEnabled),
     ).resolves.toEqual([
       { repository: "acme/service", path: "CLAUDE.md", content: "claude rules" },
     ]);
@@ -310,7 +313,7 @@ describe("repository instruction sources", () => {
     });
 
     await expect(
-      loadRepositoryInstructionSources("code-workspace", manifest),
+      loadRepositoryInstructionSources("code-workspace", manifest, memoryEnabled),
     ).resolves.toEqual([
       { repository: "acme/service", path: "CLAUDE.md", content: "claude rules" },
     ]);
@@ -329,7 +332,7 @@ describe("repository instruction sources", () => {
     mocks.runCommand.mockRejectedValue(new Error("sandbox exec refused"));
 
     await expect(
-      loadRepositoryInstructionSources("code-workspace", manifest),
+      loadRepositoryInstructionSources("code-workspace", manifest, memoryEnabled),
     ).resolves.toEqual([
       { repository: "acme/service", path: "CLAUDE.md", content: "claude rules" },
     ]);
@@ -358,7 +361,7 @@ describe("repository instruction sources", () => {
     });
 
     await expect(
-      loadRepositoryInstructionSources("code-workspace", manifest),
+      loadRepositoryInstructionSources("code-workspace", manifest, memoryEnabled),
     ).resolves.toEqual([
       { repository: "acme/service", path: "CLAUDE.md", content: "claude rules" },
       {
@@ -395,7 +398,7 @@ describe("repository instruction sources", () => {
     });
 
     await expect(
-      loadRepositoryInstructionSources("code-workspace", manifest),
+      loadRepositoryInstructionSources("code-workspace", manifest, memoryEnabled),
     ).resolves.toEqual([
       { repository: "acme/service", path: "CLAUDE.md", content: "claude rules" },
     ]);
@@ -418,7 +421,7 @@ describe("repository instruction sources", () => {
     });
 
     await expect(
-      loadRepositoryInstructionSources("code-workspace", manifest),
+      loadRepositoryInstructionSources("code-workspace", manifest, memoryEnabled),
     ).resolves.toEqual([
       { repository: "acme/service", path: "CLAUDE.md", content: "claude rules" },
     ]);
@@ -443,7 +446,7 @@ describe("repository instruction sources", () => {
     });
 
     await expect(
-      loadRepositoryInstructionSources("code-workspace", manifest),
+      loadRepositoryInstructionSources("code-workspace", manifest, memoryEnabled),
     ).resolves.toEqual([
       {
         repository: "acme/service",
@@ -474,7 +477,7 @@ describe("repository instruction sources", () => {
     });
 
     await expect(
-      loadRepositoryInstructionSources("code-workspace", manifest),
+      loadRepositoryInstructionSources("code-workspace", manifest, memoryEnabled),
     ).rejects.toThrow("sandbox read failed");
   });
 
@@ -502,7 +505,7 @@ describe("repository instruction sources", () => {
     });
 
     await expect(
-      loadRepositoryInstructionSources("code-workspace", manifest),
+      loadRepositoryInstructionSources("code-workspace", manifest, memoryEnabled),
     ).resolves.toEqual([
       {
         repository: "acme/service",
@@ -534,6 +537,7 @@ describe("repository instruction sources", () => {
     const sources = await loadRepositoryInstructionSources(
       "code-workspace",
       manifest,
+      memoryEnabled,
     );
 
     expect(sources.map((source) => source.path)).toEqual(
@@ -562,7 +566,7 @@ describe("repository instruction sources", () => {
     });
 
     await expect(
-      loadRepositoryInstructionSources("code-workspace", manifest),
+      loadRepositoryInstructionSources("code-workspace", manifest, memoryEnabled),
     ).resolves.toEqual([
       {
         repository: "acme/service",
@@ -585,7 +589,7 @@ describe("repository instruction sources", () => {
     });
 
     await expect(
-      loadRepositoryInstructionSources("code-workspace", manifest),
+      loadRepositoryInstructionSources("code-workspace", manifest, memoryEnabled),
     ).rejects.toThrow("acme/service/CLAUDE.md exceeds the repository-instruction size limit");
   });
 
@@ -604,6 +608,7 @@ describe("repository instruction sources", () => {
     const sources = await loadRepositoryInstructionSources(
       "code-workspace",
       manifest,
+      memoryEnabled,
     );
 
     expect(sources.map((source) => source.path)).toEqual(
@@ -629,7 +634,7 @@ describe("repository instruction sources", () => {
     });
 
     await expect(
-      loadRepositoryInstructionSources("code-workspace", manifest),
+      loadRepositoryInstructionSources("code-workspace", manifest, memoryEnabled),
     ).resolves.toEqual([
       {
         repository: "acme/service",
@@ -661,7 +666,7 @@ describe("repository instruction sources", () => {
     });
 
     await expect(
-      loadRepositoryInstructionSources("code-workspace", discoveredManifest),
+      loadRepositoryInstructionSources("code-workspace", discoveredManifest, memoryEnabled),
     ).resolves.toEqual([
       {
         repository: "acme/service",
@@ -695,6 +700,7 @@ describe("repository instruction sources", () => {
     const sources = await loadRepositoryInstructionSources(
       "code-workspace",
       manifest,
+      memoryEnabled,
     );
 
     // c.md is dropped whole rather than cut down to the 768 bytes left.
@@ -735,6 +741,7 @@ describe("repository instruction sources", () => {
     const sources = await loadRepositoryInstructionSources(
       "code-workspace",
       manifest,
+      memoryEnabled,
     );
 
     expect(sources.map((source) => source.path)).toEqual([
@@ -768,6 +775,7 @@ describe("repository instruction sources", () => {
     const sources = await loadRepositoryInstructionSources(
       "code-workspace",
       discoveredManifest,
+      memoryEnabled,
     );
 
     // The first repository spends the budget, so the second contributes its
@@ -813,6 +821,7 @@ describe("repository instruction sources", () => {
     const sources = await loadRepositoryInstructionSources(
       "code-workspace",
       discoveredManifest,
+      memoryEnabled,
     );
 
     expect(sources.map((source) => `${source.repository}/${source.path}`))
@@ -849,6 +858,7 @@ describe("repository instruction sources", () => {
     const sources = await loadRepositoryInstructionSources(
       "code-workspace",
       discoveredManifest,
+      memoryEnabled,
     );
 
     // One committed file must not silence its own repository's siblings, nor
@@ -880,6 +890,7 @@ describe("repository instruction sources", () => {
     const sources = await loadRepositoryInstructionSources(
       "code-workspace",
       manifest,
+      memoryEnabled,
     );
 
     expect(sources.map((source) => source.path)).toEqual([
@@ -910,6 +921,7 @@ describe("repository instruction sources", () => {
       const pending = loadRepositoryInstructionSources(
         "code-workspace",
         discoveredManifest,
+        memoryEnabled,
       );
       await vi.waitFor(() => expect(mocks.runCommand).toHaveBeenCalled());
       await vi.advanceTimersByTimeAsync(5_000);
@@ -935,7 +947,7 @@ describe("repository instruction sources", () => {
   it("reads nothing under .ai/memory when repository memory is off", async () => {
     const serviceRoot = "/vercel/sandbox/repos/github__acme__service";
     const webRoot = "/vercel/sandbox/repos/gitlab__acme__web";
-    mocks.env.ENABLE_REPO_MEMORY = false;
+    memoryEnabled = false;
     mockWorkspace({
       files: {
         [`${serviceRoot}/AGENTS.md`]: "service agent rules",
@@ -957,7 +969,7 @@ describe("repository instruction sources", () => {
     // repository is skipped past, not stopped at, so no later repository loses
     // its instruction files.
     await expect(
-      loadRepositoryInstructionSources("code-workspace", discoveredManifest),
+      loadRepositoryInstructionSources("code-workspace", discoveredManifest, memoryEnabled),
     ).resolves.toEqual([
       {
         repository: "acme/service",

@@ -14,7 +14,11 @@ import { ensureAgentSandbox } from "../blocks/agent-sandbox.js";
 import { recoverChecksCeilingFromSteps } from "../blocks/pre-pr-checks.js";
 import { addElapsed, checksElapsedOf, createRunBudgetState, observeRunBudget, recordBudgetUsage, type RunBudgetAttribution, type RunBudgetLimits, type RunBudgetObservation } from "../helpers/run-budget.js";
 import { isRunControlError } from "../helpers/run-control-error.js";
-import type { VcsProviderKind, WorkflowRepositoryScope } from "@shared/contracts";
+import type {
+  RunRepositoryAccess,
+  VcsProviderKind,
+  WorkflowRepositoryScope,
+} from "@shared/contracts";
 import type { CostProvider, TokenPrice } from "@shared/costs";
 import { combineHarnessRuntimeLimits } from "../../sandbox/harness-runtime-limits.js";
 import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
@@ -172,11 +176,17 @@ export async function applyHumanRepositoryExpansion(
 async function fetchAttachments(
   ticketIdentifier: string,
   attachments: TicketAttachment[],
+  /** The attachment bounds this run started with, so a second fetch later in
+   *  the same run is bounded exactly as the first was. */
+  limits: {
+    maxFileSizeBytes: number;
+    maxTotalSizeBytes: number;
+    maxCount: number;
+    downloadTimeoutMs: number;
+  },
 ) {
   "use step";
-  const { loadAdaptersPort, loadEnvironmentPort } = await import(
-    "../internal/ports.js"
-  );
+  const { loadAdaptersPort } = await import("../internal/ports.js");
   const { logger } = await import("../../infra/logger.js");
   const log = logger.child({ ticket_identifier: ticketIdentifier, step: "fetchAttachments" });
   log.info({ count: attachments.length }, "fetchAttachments: start");
@@ -186,7 +196,6 @@ async function fetchAttachments(
     return [];
   }
 
-  const { env } = await loadEnvironmentPort();
   const { createAdapters } = await loadAdaptersPort();
   const { fetchAttachmentsWithRetry } = await import("../../sandbox/attachments.js");
   const { issueTracker } = createAdapters();
@@ -208,12 +217,7 @@ async function fetchAttachments(
   const result = await fetchAttachmentsWithRetry(
     downloader,
     attachments,
-    {
-      maxFileSizeBytes: env.ATTACHMENT_MAX_FILE_SIZE_MB * 1024 * 1024,
-      maxTotalSizeBytes: env.ATTACHMENT_MAX_TOTAL_SIZE_MB * 1024 * 1024,
-      maxCount: env.ATTACHMENT_MAX_COUNT,
-      downloadTimeoutMs: env.ATTACHMENT_DOWNLOAD_TIMEOUT_MS,
-    },
+    limits,
     log,
   );
   log.info(
@@ -466,6 +470,7 @@ async function parseRepositoryDiscoveryStep(
  * immutable composed repository policy before any model can request an attach.
  */
 async function listFreshRepositoryCatalogStep(
+  access: RunRepositoryAccess,
   repositoryScope?: WorkflowRepositoryScope,
 ) {
   "use step";
@@ -477,18 +482,18 @@ async function listFreshRepositoryCatalogStep(
   const { buildRepositoryCatalog } = await import(
     "../repository-discovery/catalog.js"
   );
-  const { filterRepositoriesForScope } = await import(
-    "../support/repo-allowlist.js"
+  const { filterRunRepositories } = await import(
+    "../support/repository-access.js"
   );
   return buildRepositoryCatalog(
-    filterRepositoriesForScope(
+    filterRunRepositories(
+      access,
       await createRepositoryDirectoryForProviders(
         pinnedProviderConfigs(
           getConfiguredVcsProviders(),
           repositoryScope?.providers,
         ),
       ).listRepositories(),
-      repositoryScope,
     ),
   );
 }
@@ -509,17 +514,18 @@ async function attachResearchRepositoriesStep(
   manifest: Extract<WorkspaceManifest, { version: 2 }>,
   repositories: SelectedRepository[],
   owner: { subjectKey: string; ownerToken: string; runId: string },
-  repositoryScope?: WorkflowRepositoryScope,
+  access: RunRepositoryAccess,
+  /** The run's job timeout, from the settings it started with. */
+  jobTimeoutMs: number,
 ): Promise<{
   manifest: Extract<WorkspaceManifest, { version: 2 }>;
   cloneDurationMs: number;
 }> {
   "use step";
-  const { loadAdaptersPort, loadEnvironmentPort, loadVcsRuntimePort } = await import(
+  const { loadAdaptersPort, loadVcsRuntimePort } = await import(
     "../internal/ports.js"
   );
   const { Sandbox } = await import("@vercel/sandbox");
-  const { env } = await loadEnvironmentPort();
   const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
   const { buildSandboxProviderConfigs } = await loadVcsRuntimePort();
   const {
@@ -528,16 +534,18 @@ async function attachResearchRepositoriesStep(
   } = await import(
     "../../sandbox/research-workspace.js"
   );
-  // AIW-147 minor: re-check the allowlist at the single materialization choke
-  // point every attach path shares, so an allowlist tightened mid-run cuts off
-  // new read attaches before any clone happens (the earlier catalog check may be
-  // stale by the time this step runs).
-  const { isRepoAllowedForScope } = await import("../support/repo-allowlist.js");
+  // AIW-147 minor: re-check access at the single materialization choke point
+  // every attach path shares, so a repository that never belonged to this run
+  // cannot be attached however it reached this list. The list itself is the one
+  // the run started with: the catalog changing mid-run stops the NEXT run, not
+  // this one, so this check cannot disagree with the earlier catalog check the
+  // way the environment-backed allowlist could.
+  const { mayRunTouchRepository, repositoryNotEnabledMessage } = await import(
+    "../support/repository-access.js"
+  );
   for (const repository of repositories) {
-    if (!isRepoAllowedForScope(repository, repositoryScope)) {
-      throw new Error(
-        `Repository ${repository.provider}:${repository.repoPath} is not on the allowlist and cannot be attached`,
-      );
+    if (!mayRunTouchRepository(access, repository)) {
+      throw new Error(repositoryNotEnabledMessage("attach", repository));
     }
   }
   const target = await Sandbox.get({
@@ -548,7 +556,7 @@ async function attachResearchRepositoriesStep(
   const materializer = await Sandbox.create({
     ...getSandboxCredentials(),
     runtime: "node24",
-    timeout: env.JOB_TIMEOUT_MS,
+    timeout: jobTimeoutMs,
   });
   const { createAdapters } = await loadAdaptersPort();
   const { stopSandboxAndConfirm } = await import(
@@ -591,6 +599,7 @@ attachResearchRepositoriesStep.maxRetries = 0;
 async function resolveHumanRepositoryExpansionStep(
   answer: string,
   attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+  access: RunRepositoryAccess,
   repositoryScope?: WorkflowRepositoryScope,
 ): Promise<RepositoryExpansionDecision> {
   "use step";
@@ -605,20 +614,20 @@ async function resolveHumanRepositoryExpansionStep(
   const { buildRepositoryCatalog } = await import(
     "../repository-discovery/catalog.js"
   );
-  const { filterRepositoriesForScope } = await import(
-    "../support/repo-allowlist.js"
+  const { filterRunRepositories } = await import(
+    "../support/repository-access.js"
   );
   const { validateHumanRepositoryExpansion } =
     await loadRepositoryDiscoveryPort();
   const catalog = buildRepositoryCatalog(
-    filterRepositoriesForScope(
+    filterRunRepositories(
+      access,
       await createRepositoryDirectoryForProviders(
         pinnedProviderConfigs(
           getConfiguredVcsProviders(),
           repositoryScope?.providers,
         ),
       ).listRepositories(),
-      repositoryScope,
     ),
   );
   return validateHumanRepositoryExpansion({

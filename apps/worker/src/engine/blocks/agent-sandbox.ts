@@ -22,6 +22,9 @@ async function blockProvisionAgentSandboxStep(
   agentKind: AgentKind,
   model: string,
   arthurTaskId: string | null,
+  /** The run's job timeout, from the settings snapshot it started with, so a
+   *  sandbox created late in a run is sized by the same value as the first. */
+  jobTimeoutMs: number,
   checksCeilingMs: number,
   runtime?: ResolvedHarnessRuntime,
 ): Promise<
@@ -85,7 +88,7 @@ async function blockProvisionAgentSandboxStep(
     // provisioned path would make the bound depend on which route created the
     // workspace, which is exactly the kind of difference nobody would look for
     // when the checks die halfway.
-    timeout: sandboxLifetimeMs(env.JOB_TIMEOUT_MS, checksCeilingMs),
+    timeout: sandboxLifetimeMs(jobTimeoutMs, checksCeilingMs),
   });
 
   try {
@@ -269,6 +272,7 @@ export async function ensureAgentSandbox(
     agentKind,
     model,
     arthurTaskId,
+    ctx.settings.JOB_TIMEOUT_MS,
     checksCeilingMs,
     runtime,
   );

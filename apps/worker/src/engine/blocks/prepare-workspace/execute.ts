@@ -1,5 +1,9 @@
 import { z } from "zod";
-import type { WorkflowDefinitionNode } from "@shared/contracts";
+import type {
+  RunRepositoryAccess,
+  SettingsSnapshot,
+  WorkflowDefinitionNode,
+} from "@shared/contracts";
 import type { AgentKind } from "../../../sandbox/agents/index.js";
 import type {
   AgentProtocolResult,
@@ -12,6 +16,10 @@ import type {
   WorkspaceRepositoryInput,
 } from "../../../sandbox/repo-workspace.js";
 import { isRunControlError } from "../../helpers/run-control-error.js";
+// Pure, contracts-only: a static import pulls in nothing a dynamic one would
+// have kept out, and the classifier is needed in catch blocks that are not
+// inside a step and cannot await an import without swallowing the error.
+import { isRepositoryCatalogRefusal } from "../../support/repository-access.js";
 import {
   isChecksCeilingExceededError,
   propagateInvocationInterruption,
@@ -61,6 +69,8 @@ interface PreSandboxTicketContext {
   };
   run: { branchName: string };
   repositoryScope?: WorkflowRepositoryScope;
+  repositoryAccess: RunRepositoryAccess;
+  settings: SettingsSnapshot;
 }
 
 interface WorkspaceAgentRuntime {
@@ -126,6 +136,7 @@ async function blockApprovedRepositoryScopeStep(
   ticketKey: string,
   scope: ApprovedRepositoryScope,
   pinnedScope: WorkflowRepositoryScope | null,
+  repositories: RunRepositoryAccess,
 ): Promise<SelectedRepository[]> {
   "use step";
   const parsed = approvedRepositoryScopeSchema.safeParse(scope);
@@ -139,17 +150,16 @@ async function blockApprovedRepositoryScopeStep(
   const { createRepositoryDirectoryForProviders, isRepositoryWithinPinnedScope } =
     await import("../../../adapters/vcs/repository-directory.js");
   const { createRepositoryVCS } = await import("../../support/vcs-runtime.js");
-  const { filterRepositoriesForScope } = await import(
-    "../../support/repo-allowlist.js"
-  );
+  const { filterRunRepositories, mayRunTouchRepository, repositoryNotEnabledMessage } =
+    await import("../../support/repository-access.js");
   const { listConnectedWorkflowOwnedBranchesForTicket } = await import(
     "../../../db/repositories/runs.js"
   );
-  const available = filterRepositoriesForScope(
+  const available = filterRunRepositories(
+    repositories,
     await createRepositoryDirectoryForProviders(
       getConfiguredVcsProviders(),
     ).listRepositories(),
-    pinnedScope ?? undefined,
   );
   const byKey = new Map(
     available.map((repository) => [
@@ -166,6 +176,16 @@ async function blockApprovedRepositoryScopeStep(
       throw new Error(`Approved repository scope duplicates ${key}; replan required`);
     }
     seen.add(key);
+    // Refused HERE, by name, before a sandbox exists. A repository the run's
+    // catalog withholds is already absent from `available`, so without this the
+    // run would reach the generic "unavailable or no longer allowed" below,
+    // which reads as a provider change and sends an operator to look at the
+    // wrong thing. The late guards at promotion, publication and pull request
+    // creation stay as backstops; this is the one that fires before an agent
+    // invocation is spent.
+    if (!mayRunTouchRepository(repositories, approved)) {
+      throw new Error(repositoryNotEnabledMessage("prepare", approved));
+    }
     // Here the pin is a control, never a filter. A human already approved this
     // exact scope, so a pin that no longer covers it must force a replan instead
     // of silently narrowing what was reviewed and approved.
@@ -280,6 +300,8 @@ async function blockPrepareWorkspaceProvisionStep(
   arthurTaskId: string | null,
   requiredAgents: WorkspaceAgentRuntime[],
   access: "read" | "write",
+  /** The run's job timeout, from the settings snapshot it started with. */
+  jobTimeoutMs: number,
   checksCeilingMs: number,
 ): Promise<
   | { ok: true; sandboxId: string; workspaceManifest: WorkspaceManifest }
@@ -383,7 +405,7 @@ async function blockPrepareWorkspaceProvisionStep(
     // from JOB_TIMEOUT_MS alone would kill the sandbox under a batch that is
     // still perfectly within its bound, and the batch would be collected as an
     // infrastructure fault instead of as a result.
-    jobTimeoutMs: sandboxLifetimeMs(env.JOB_TIMEOUT_MS, checksCeilingMs),
+    jobTimeoutMs: sandboxLifetimeMs(jobTimeoutMs, checksCeilingMs),
   });
 
   try {
@@ -659,6 +681,7 @@ async function verifyRepositorySetup(
   const setup = await runRepositorySetup({
     sandboxId,
     config,
+    defaultCommandTimeoutMinutes: ctx.settings.PRE_PR_COMMAND_TIMEOUT_MINUTES,
     // The observer can attribute a known durable boundary to the checks clock;
     // setup, launch, polling and collection all share that ceiling.
     observeBudget: blockBudgetObserver(ctx, execution),
@@ -778,6 +801,7 @@ export async function ensureWorkspace(
         ctx.ticket.identifier,
         scope,
         ctx.repositoryScope ?? null,
+        ctx.repositories,
       );
       approvedBaselineByKey = new Map(
         scope.repositories.map((repository) => [
@@ -789,6 +813,7 @@ export async function ensureWorkspace(
       selected = await blockPrTriggerRepositoriesWithSiblingsStep(
         ctx.runId,
         ctx.entry.pr,
+        ctx.repositories,
       );
     } else {
       const preSandbox = await blockPrepareWorkspacePreSandboxStep({
@@ -806,6 +831,8 @@ export async function ensureWorkspace(
           labels: ctx.ticket.labels,
         },
         run: { branchName: ctx.branchName },
+        repositoryAccess: ctx.repositories,
+        settings: ctx.settings,
         ...(ctx.repositoryScope ? { repositoryScope: ctx.repositoryScope } : {}),
         // Structurally an answer to a which-repository question, not merely a
         // reply that happens to be in hand: the interpreter only ever returns a
@@ -845,7 +872,12 @@ export async function ensureWorkspace(
           };
         }
         return executionError(`pre-sandbox: ${preSandbox.message}`, {
-          category: "sandbox",
+          // A repository the catalog withholds is not a sandbox fault, and
+          // saying it is sends an operator to read platform logs instead of the
+          // Repositories page.
+          category: isRepositoryCatalogRefusal(preSandbox.message)
+            ? "configuration"
+            : "sandbox",
           // The reason the step reported, handed over separately so it leads the
           // user-facing message instead of being clamped out of its middle.
           ...(preSandbox.cause ? { evidence: { cause: preSandbox.cause } } : {}),
@@ -904,7 +936,7 @@ export async function ensureWorkspace(
 
     const repositoryContexts = await blockFetchPrContextsStep(
       selected,
-      ctx.repositoryScope,
+      ctx.repositories,
     );
     const workspaceRepositories: WorkspaceRepositoryInput[] = repositoryContexts.map(
       (context) => {
@@ -971,6 +1003,7 @@ export async function ensureWorkspace(
         arthurTaskId,
         requiredAgents,
         "read",
+        ctx.settings.JOB_TIMEOUT_MS,
         checksCeilingMs,
       );
       if (!provisioned.ok) return agentProtocolExecutionError(provisioned.failure);
@@ -1014,8 +1047,7 @@ export async function ensureWorkspace(
     // useful facts before its first successful run distills any. Gated here at
     // the call site rather than inside the step: a "use step" invocation writes
     // a durable step record even when its body returns immediately.
-    const { env } = await import("../../../infra/vcs-config.js");
-    if (env.ENABLE_REPO_MEMORY) {
+    if (ctx.settings.ENABLE_REPO_MEMORY) {
       // The branch fields come from this trusted in-memory manifest rather than
       // from the sandbox's copy of it: they gate a retraction of durable memory
       // in the seed and choose which ref counts as the repository in the capture,
@@ -1088,8 +1120,12 @@ export async function ensureWorkspace(
   } catch (err) {
     if (isRunControlError(err) || isChecksCeilingExceededError(err)) throw err;
     propagateInvocationInterruption(err);
-    return executionError(err instanceof Error ? err.message : String(err), {
-      category: "sandbox",
+    const detail = err instanceof Error ? err.message : String(err);
+    return executionError(detail, {
+      // Same rule as the pre-sandbox halt above: the approved-scope refusal and
+      // the PR-context refusal both reach this catch, and neither is a sandbox
+      // fault.
+      category: isRepositoryCatalogRefusal(detail) ? "configuration" : "sandbox",
     });
   }
 }
@@ -1129,7 +1165,7 @@ export async function promoteWorkspaceWrites(
         ownerToken: ctx.entry.ownerToken,
         runId: ctx.runId,
       },
-      repositoryScope: ctx.repositoryScope,
+      repositoryAccess: ctx.repositories,
     });
     const manifestByKey = new Map(
       ctx.workspaceManifest.repositories.map((repository) => [
@@ -1147,7 +1183,7 @@ export async function promoteWorkspaceWrites(
     });
     ctx.repositoryContexts = await blockFetchPrContextsStep(
       ctx.selectedRepositories,
-      ctx.repositoryScope,
+      ctx.repositories,
     );
     await emitRepositoryWorkflowObservation(execution?.observations, {
       event: "scope",
@@ -1162,8 +1198,11 @@ export async function promoteWorkspaceWrites(
     return null;
   } catch (error) {
     if (isRunControlError(error)) throw error;
-    return executionError(error instanceof Error ? error.message : String(error), {
-      category: "sandbox",
+    const detail = error instanceof Error ? error.message : String(error);
+    return executionError(detail, {
+      // The write-scope promotion rechecks the catalog (repository-promotion.ts),
+      // so its refusal arrives here.
+      category: isRepositoryCatalogRefusal(detail) ? "configuration" : "sandbox",
       phase: "research",
     });
   }

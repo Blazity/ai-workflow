@@ -58,6 +58,8 @@ export async function executePreSandboxPhase(
           context: {
             ticket: selectTicketFields(input.ticket, step),
             run: input.run,
+            repositoryAccess: input.repositoryAccess,
+            settings: input.settings,
             ...(input.repositoryScope ? { repositoryScope: input.repositoryScope } : {}),
             ...(input.clarification ? { clarification: input.clarification } : {}),
           },

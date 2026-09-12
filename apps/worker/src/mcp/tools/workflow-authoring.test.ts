@@ -884,8 +884,8 @@ describe("workflows.publish", () => {
     // tells an operator to go looking, a path tells them what to look at.
     expect(announcement()).toContain(
       "It pins a repository the repository catalog does not enable, so dispatch " +
-        "refuses events from it and, until the engine stage lands, a run that " +
-        `starts anyway still reaches it through this pin: github:${NOT_ENABLED_REPO}.`,
+        "refuses events from it and a run that starts some other way cannot " +
+        `reach it either: github:${NOT_ENABLED_REPO}.`,
     );
   });
 

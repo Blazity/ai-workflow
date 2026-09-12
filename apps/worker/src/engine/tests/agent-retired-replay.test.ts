@@ -59,6 +59,21 @@ vi.mock("../steps/definition-step.js", () => ({
   })),
 }));
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
+// The workflow body's first step reads the deployment's settings and catalog.
+// This suite is about retirement telemetry, so it answers as an untouched
+// deployment does: nothing stored, catalog never activated.
+vi.mock("../../db/repositories/settings.js", () => ({
+  readAllConnectedSettings: async () => [],
+}));
+vi.mock("../../db/repositories/repository-catalog.js", () => ({
+  getConnectedRepositoryCatalogStateRow: async () => ({
+    activated: false,
+    activatedAt: null,
+    activatedById: null,
+    activatedByLabel: null,
+  }),
+  listConnectedRepositoryCatalogKeys: async () => [],
+}));
 vi.mock("../steps/workflow-ticket.js", () => ({
   resolveWorkflowTicketStep: vi.fn(async (input: AgentWorkflowInput) => ({
     id: input.ticketKey ?? input.subjectKey,

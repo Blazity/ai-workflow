@@ -1,10 +1,11 @@
-import type { WorkflowRepositoryScope } from "@shared/contracts";
+import type { RunRepositoryAccess } from "@shared/contracts";
 import type { SelectedRepository } from "../../../adapters/vcs/repository-directory.js";
 import type { ReviewThreadFeed } from "../../../adapters/vcs/types.js";
 import type { SelectedRepositoryPromptContext } from "../../../sandbox/context.js";
 import type { PrTriggerPayload } from "../../agent-input.js";
 import { selectWorkItems } from "../../helpers/review-ledger.js";
 import { isRunControlError } from "../../helpers/run-control-error.js";
+import { isRepositoryCatalogRefusal } from "../../support/repository-access.js";
 import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "../support/types.js";
 
 /**
@@ -35,6 +36,7 @@ export async function blockPrTriggerRepositoriesStep(
 export async function blockPrTriggerRepositoriesWithSiblingsStep(
   runId: string,
   pr: PrTriggerPayload,
+  repositoryAccess: RunRepositoryAccess,
 ): Promise<SelectedRepository[]> {
   "use step";
   const primary = await blockPrTriggerRepositoriesStep(pr.prUrl, pr);
@@ -45,7 +47,9 @@ export async function blockPrTriggerRepositoriesWithSiblingsStep(
   const { getConfiguredVcsProviders } = await import("../../../infra/vcs-config.js");
   const { createRepositoryVCS } = await import("../../../engine/support/vcs-runtime.js");
   const { logger } = await import("../../../infra/logger.js");
-  const { isRepoAllowed } = await import("../../support/repo-allowlist.js");
+  const { mayRunTouchRepository } = await import(
+    "../../support/repository-access.js"
+  );
 
   const lookup = await findConnectedRunPrSiblings({
     provider: pr.provider,
@@ -69,7 +73,7 @@ export async function blockPrTriggerRepositoriesWithSiblingsStep(
 
   const selectedSiblings: SelectedRepository[] = [];
   for (const sibling of lookup.siblings.slice(0, 3)) {
-    if (!isRepoAllowed(sibling.repoPath)) {
+    if (!mayRunTouchRepository(repositoryAccess, sibling)) {
       logger.warn(
         { runId, provider: sibling.provider, repoPath: sibling.repoPath },
         "review_sibling_repository_not_allowed",
@@ -142,6 +146,12 @@ export async function blockPrTriggerRepositoriesWithSiblingsStep(
  * conversation and the run has no commit to cite there. */
 export interface FetchPrContextOptions {
   reviewLedgerFor?: { provider: string; repoPath: string };
+  /** The run's frozen REVIEW_LEDGER_ENABLED. Read in workflow scope by the
+   *  caller and handed down, rather than parsed from the environment inside
+   *  this step: the step is replayed, and a flag an operator flipped mid-flight
+   *  would make one run fetch thread feeds on its first pass and not on its
+   *  second. Absent reads as off, the registry default. */
+  reviewLedgerEnabled?: boolean;
 }
 
 /**
@@ -150,20 +160,21 @@ export interface FetchPrContextOptions {
  */
 export async function blockFetchPrContextsStep(
   repositories: SelectedRepository[],
-  repositoryScope?: WorkflowRepositoryScope,
+  repositoryAccess: RunRepositoryAccess,
   options: FetchPrContextOptions = {},
 ): Promise<SelectedRepositoryPromptContext[]> {
   "use step";
   const { createRepositoryVCS } = await import("../../support/vcs-runtime.js");
-  const { isRepoAllowedForScope } = await import("../../support/repo-allowlist.js");
-  // Read inside the step, not in workflow scope: the flag decides one provider
-  // call, and env parsing has no business running on every replay.
-  const { env } = await import("../../../infra/vcs-config.js");
+  const { mayRunTouchRepository, repositoryNotEnabledMessage } = await import(
+    "../../support/repository-access.js"
+  );
 
   return Promise.all(
     repositories.map(async (repo) => {
-      if (!isRepoAllowedForScope(repo, repositoryScope)) {
-        throw new Error(`Refusing to read PR context for ${repo.repoPath}: not in AGENT_ALLOWED_REPOS`);
+      if (!mayRunTouchRepository(repositoryAccess, repo)) {
+        throw new Error(
+          repositoryNotEnabledMessage("read pull request context for", repo),
+        );
       }
       const pr = repo.workflowOwnedBranch?.pr ?? repo.reviewPullRequest;
       if (!pr) {
@@ -180,7 +191,7 @@ export async function blockFetchPrContextsStep(
         baseBranch: repo.defaultBranch,
       });
       const wantsReviewThreads =
-        env.REVIEW_LEDGER_ENABLED &&
+        options.reviewLedgerEnabled === true &&
         options.reviewLedgerFor?.provider === repo.provider &&
         options.reviewLedgerFor?.repoPath === repo.repoPath;
       const [prComments, checkResults, hasConflicts, reviewThreads] = await Promise.all([
@@ -294,7 +305,7 @@ export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<Bloc
 
     const contexts = await blockFetchPrContextsStep(
       repositories,
-      ctx.repositoryScope,
+      ctx.repositories,
       // Only a run somebody's review comment started. A checks-fix run on the
       // same PR is here to make CI green: giving it the ledger would make the
       // fix agent answer threads it was never prompted about, fail the run on
@@ -302,6 +313,7 @@ export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<Bloc
       // attempts without ever pushing the fix.
       ctx.entry.kind === "pr_trigger" && ctx.entry.triggerType === "trigger_pr_review"
         ? {
+            reviewLedgerEnabled: ctx.settings.REVIEW_LEDGER_ENABLED,
             reviewLedgerFor: {
               provider: ctx.entry.pr.provider,
               repoPath: ctx.entry.pr.repoPath,
@@ -342,8 +354,12 @@ export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<Bloc
     };
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    return executionError(err instanceof Error ? err.message : String(err), {
-      category: "provider",
+    const detail = err instanceof Error ? err.message : String(err);
+    return executionError(detail, {
+      // A repository the catalog withholds refuses before any provider call is
+      // made, so calling it a provider failure sends an operator to a forge
+      // status page over a decision this deployment made itself.
+      category: isRepositoryCatalogRefusal(detail) ? "configuration" : "provider",
     });
   }
 };

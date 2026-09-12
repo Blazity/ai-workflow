@@ -47,9 +47,31 @@ describe("durable publication PR phases", () => {
     mocks.assertActiveRunOwner.mockResolvedValue(undefined);
   });
 
-  it("lets an exact repository pin authorize PR creation outside the global allowlist", async () => {
-    const original = process.env.AGENT_ALLOWED_REPOS;
-    process.env.AGENT_ALLOWED_REPOS = "acme/other";
+  it("refuses PR creation on a repository the run's catalog does not enable", async () => {
+    mocks.createRepositoryVCS.mockReturnValue({
+      findPR: vi.fn().mockResolvedValue(null),
+      createPR: vi.fn(),
+    });
+
+    await expect(
+      createOrFindWorkflowOwnedPullRequest({
+        branchName: "blazebot/aiw-100",
+        repository: {
+          provider: "github",
+          repoPath: "acme/api",
+          defaultBranch: "main",
+          selectedRationale: "publication outside the catalog",
+        },
+        title: "Publication outside the catalog",
+        body: "",
+        owner: durableOwner,
+        repositoryAccess: { activated: true, enabledKeys: ["github:acme/other"] },
+      }),
+    ).rejects.toThrow("not enabled in the repository catalog");
+    expect(mocks.createRepositoryVCS).not.toHaveBeenCalled();
+  });
+
+  it("opens a PR on a repository the run's catalog enables, matching case-insensitively", async () => {
     mocks.createRepositoryVCS.mockReturnValue({
       findPR: vi.fn().mockResolvedValue(null),
       createPR: vi.fn().mockResolvedValue({
@@ -59,55 +81,50 @@ describe("durable publication PR phases", () => {
       }),
     });
 
-    try {
-      await expect(
-        createOrFindWorkflowOwnedPullRequest({
-          branchName: "blazebot/aiw-100",
-          repository: {
-            provider: "github",
-            repoPath: "acme/api",
-            defaultBranch: "main",
-            selectedRationale: "pinned publication",
-          },
-          title: "Pinned publication",
-          body: "",
-          owner: durableOwner,
-          repositoryScope: {
-            repositories: [{ provider: "github", repoPath: "Acme/API" }],
-          },
-        }),
-      ).resolves.toMatchObject({ provider: "github", repoPath: "acme/api" });
-    } finally {
-      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
-      else process.env.AGENT_ALLOWED_REPOS = original;
-    }
+    await expect(
+      createOrFindWorkflowOwnedPullRequest({
+        branchName: "blazebot/aiw-100",
+        repository: {
+          provider: "github",
+          // The operator typed the row one way and the provider lists it
+          // another; the catalog key is cased down so both name one repository.
+          repoPath: "Acme/API",
+          defaultBranch: "main",
+          selectedRationale: "enabled publication",
+        },
+        title: "Enabled publication",
+        body: "",
+        owner: durableOwner,
+        repositoryAccess: { activated: true, enabledKeys: ["github:acme/api"] },
+      }),
+    ).resolves.toMatchObject({ provider: "github", repoPath: "Acme/API" });
   });
 
-  it("does not let provider-only scope authorize PR creation outside the global allowlist", async () => {
-    const original = process.env.AGENT_ALLOWED_REPOS;
-    process.env.AGENT_ALLOWED_REPOS = "acme/other";
+  it("reaches every repository while the catalog is not activated", async () => {
+    mocks.createRepositoryVCS.mockReturnValue({
+      findPR: vi.fn().mockResolvedValue(null),
+      createPR: vi.fn().mockResolvedValue({
+        id: 47,
+        url: "https://github.com/acme/api/pull/47",
+        branch: "blazebot/aiw-100",
+      }),
+    });
 
-    try {
-      await expect(
-        createOrFindWorkflowOwnedPullRequest({
-          branchName: "blazebot/aiw-100",
-          repository: {
-            provider: "github",
-            repoPath: "acme/api",
-            defaultBranch: "main",
-            selectedRationale: "provider-only publication",
-          },
-          title: "Provider-only publication",
-          body: "",
-          owner: durableOwner,
-          repositoryScope: { providers: ["github"] },
-        }),
-      ).rejects.toThrow("not in AGENT_ALLOWED_REPOS");
-      expect(mocks.createRepositoryVCS).not.toHaveBeenCalled();
-    } finally {
-      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
-      else process.env.AGENT_ALLOWED_REPOS = original;
-    }
+    await expect(
+      createOrFindWorkflowOwnedPullRequest({
+        branchName: "blazebot/aiw-100",
+        repository: {
+          provider: "github",
+          repoPath: "acme/api",
+          defaultBranch: "main",
+          selectedRationale: "bridge publication",
+        },
+        title: "Bridge publication",
+        body: "",
+        owner: durableOwner,
+        repositoryAccess: { activated: false, enabledKeys: [] },
+      }),
+    ).resolves.toMatchObject({ provider: "github", repoPath: "acme/api" });
   });
 
   it("reasserts the exact active owner immediately before provider PR creation", async () => {
@@ -140,6 +157,8 @@ describe("durable publication PR phases", () => {
       title: "Safe publication",
       body: "## What changed\nThings.",
       owner: durableOwner,
+    // Not about the catalog: the bridge, where everything is reachable.
+    repositoryAccess: { activated: false, enabledKeys: [] },
     });
 
     expect(order).toEqual(["reconcile", "owner-fence", "create"]);
@@ -178,6 +197,8 @@ describe("durable publication PR phases", () => {
         "## What changed\nAdded the toggle. Updated session memory at " +
         "`blazebot/memory/AIW-100.md`. I did not push or open a PR.",
       owner: durableOwner,
+    // Not about the catalog: the bridge, where everything is reachable.
+    repositoryAccess: { activated: false, enabledKeys: [] },
     });
 
     expect(createPR).toHaveBeenCalledWith(
@@ -211,6 +232,8 @@ describe("durable publication PR phases", () => {
         title: "Safe publication",
         body: "## What changed\nThings.",
         owner: durableOwner,
+      // Not about the catalog: the bridge, where everything is reachable.
+      repositoryAccess: { activated: false, enabledKeys: [] },
       }),
     ).rejects.toBe(ownerLoss);
     expect(findPR).toHaveBeenCalledOnce();
@@ -239,6 +262,8 @@ describe("durable publication PR phases", () => {
       title: "Safe publication",
       body: "## What changed\nThings.",
       owner: durableOwner,
+    // Not about the catalog: the bridge, where everything is reachable.
+    repositoryAccess: { activated: false, enabledKeys: [] },
     });
 
     expect(pr).toEqual(expect.objectContaining({ id: 46, repoPath: "acme/api" }));
@@ -273,6 +298,8 @@ describe("durable publication PR phases", () => {
         title: "Safe publication",
         body: "## What changed\nThings.",
         owner: durableOwner,
+      // Not about the catalog: the bridge, where everything is reachable.
+      repositoryAccess: { activated: false, enabledKeys: [] },
       }),
     ).resolves.toEqual({
       provider: "github",

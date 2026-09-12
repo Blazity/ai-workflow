@@ -85,6 +85,10 @@ export interface PrePrChecksOptions {
   maxFixCycles?: number;
   /** Groups to run. Defaults to the gate's own selection. */
   groupSelection?: RepoScriptsGroupSelection;
+  /** The operator's PRE_PR_COMMAND_TIMEOUT_MINUTES, taken from the run's frozen
+   *  settings by the block that calls this, and handed to the batch steps as an
+   *  input. Used only where the repository names no bound of its own. */
+  defaultCommandTimeoutMinutes?: number;
   /** Run-global budget observer. It replaces the wall-clock deadline this path
    *  used to carry: pollPhaseUntilDone re-reads it on every tick, so the bound
    *  survives a replay instead of being recomputed from Date.now(). */
@@ -544,6 +548,8 @@ export async function runRepositorySetup(options: {
   sandboxId: string;
   config: unknown;
   observeBudget: PrePrChecksOptions["observeBudget"];
+  /** As on PrePrChecksOptions. */
+  defaultCommandTimeoutMinutes?: number;
   /** The checks ceiling shared by setup and repository script batches. */
   checksCeilingMs?: number;
   cancellation?: V2InvocationCancellation;
@@ -600,6 +606,9 @@ export async function runRepositorySetup(options: {
       ...(repo.commandTimeoutMinutes === undefined
         ? {}
         : { commandTimeoutMinutes: repo.commandTimeoutMinutes }),
+      ...(options.defaultCommandTimeoutMinutes === undefined
+        ? {}
+        : { defaultCommandTimeoutMinutes: options.defaultCommandTimeoutMinutes }),
     });
     if (run.budgetExhausted) {
       throw checksCeilingExceededError(
@@ -890,6 +899,8 @@ export async function runRepoCheckBatch(args: {
   envNames?: string[];
   /** The repository's own per-command bound, in minutes, if it set one. */
   commandTimeoutMinutes?: number;
+  /** The operator's bound, from the run's frozen settings. */
+  defaultCommandTimeoutMinutes?: number;
   /** The run's checks ceiling in milliseconds. What is left of it after the
    *  batches already run is this batch's bound. */
   checksCeilingMs?: number;
@@ -958,6 +969,9 @@ export async function runRepoCheckBatch(args: {
       ...(args.commandTimeoutMinutes === undefined
         ? {}
         : { commandTimeoutMinutes: args.commandTimeoutMinutes }),
+      ...(args.defaultCommandTimeoutMinutes === undefined
+        ? {}
+        : { defaultCommandTimeoutMinutes: args.defaultCommandTimeoutMinutes }),
       ...(args.restoreTree === undefined ? {} : { restoreTree: args.restoreTree }),
     },
   );
@@ -1010,6 +1024,9 @@ export async function runRepoCheckBatch(args: {
         ...(args.commandTimeoutMinutes === undefined
           ? {}
           : { commandTimeoutMinutes: args.commandTimeoutMinutes }),
+        ...(args.defaultCommandTimeoutMinutes === undefined
+          ? {}
+          : { defaultCommandTimeoutMinutes: args.defaultCommandTimeoutMinutes }),
       },
     );
     const collectionBoundary = await observeChecksAllowance(
@@ -1512,6 +1529,9 @@ async function runCheckBatches(
       ...(repo.commandTimeoutMinutes === undefined
         ? {}
         : { commandTimeoutMinutes: repo.commandTimeoutMinutes }),
+      ...(options.defaultCommandTimeoutMinutes === undefined
+        ? {}
+        : { defaultCommandTimeoutMinutes: options.defaultCommandTimeoutMinutes }),
     });
     if (run.budgetExhausted) {
       // Stop launching, never stop accounting. Every repository from here on

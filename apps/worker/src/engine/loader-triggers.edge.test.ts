@@ -108,6 +108,11 @@ vi.mock("../services/dispatch/post-pr-gate-dispatch.js", () => ({
 }));
 
 import { loadWorkflowDefinitionFor } from "./steps/definition-step.js";
+import { testSettingsSnapshot } from "../test-support/settings.js";
+
+/** The settings this run started under; these cases are about the loader, not
+ *  about any one key, so they take the registry defaults. */
+const settings = testSettingsSnapshot();
 
 // ---------------------------------------------------------------------------
 // Area 2: loadWorkflowDefinitionFor
@@ -144,7 +149,7 @@ describe("loadWorkflowDefinitionFor edge cases", () => {
     mockGetDeployedVersion.mockResolvedValue(null);
     mockGetDefinition.mockResolvedValue(null);
 
-    const plan = await loadWorkflowDefinitionFor("trigger_pr_created", 999);
+    const plan = await loadWorkflowDefinitionFor(settings, "trigger_pr_created", 999);
 
     expect(plan).toBeNull();
     expect(mockGetEnabled).not.toHaveBeenCalled();
@@ -155,7 +160,7 @@ describe("loadWorkflowDefinitionFor edge cases", () => {
       enabled({ schemaVersion: 2, nodes: [], edges: [] } as unknown as WorkflowDefinition, 9, 5),
     );
 
-    const plan = await loadWorkflowDefinitionFor("trigger_pr_created");
+    const plan = await loadWorkflowDefinitionFor(settings, "trigger_pr_created");
 
     expect(plan).toBeNull();
     expect(loggerError).toHaveBeenCalledTimes(1);
@@ -166,12 +171,12 @@ describe("loadWorkflowDefinitionFor edge cases", () => {
     mockGetEnabled.mockResolvedValue({ definition: { id: 1 }, current: null });
 
     // Ticket trigger falls back to the built-in default...
-    const ticketPlan = await loadWorkflowDefinitionFor("trigger_ticket_ai");
+    const ticketPlan = await loadWorkflowDefinitionFor(settings, "trigger_ticket_ai");
     expect(ticketPlan).not.toBeNull();
     expect(ticketPlan!.definitionId).toBeNull();
 
     // ...but a non-ticket trigger returns null.
-    const otherPlan = await loadWorkflowDefinitionFor("planning_agent");
+    const otherPlan = await loadWorkflowDefinitionFor(settings, "planning_agent");
     expect(otherPlan).toBeNull();
   });
 
@@ -202,7 +207,7 @@ describe("loadWorkflowDefinitionFor edge cases", () => {
     };
     mockGetEnabled.mockResolvedValue(enabled(validNoPrepare, 8, 4));
 
-    const plan = await loadWorkflowDefinitionFor("trigger_ticket_ai");
+    const plan = await loadWorkflowDefinitionFor(settings, "trigger_ticket_ai");
 
     expect(plan).not.toBeNull();
     expect(plan!.version).toBe(8);

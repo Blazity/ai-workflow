@@ -229,9 +229,6 @@ export function RepositoryEntryScreen({
           ? "Saved."
           : `Saved as version ${result.data.version}.`,
       );
-      for (const warning of result.data.warnings ?? []) {
-        setNotice((prev) => `${prev ?? ""} ${warning}`.trim());
-      }
       router.refresh();
     } catch {
       setError("Could not reach the server. Check your connection and try again.");

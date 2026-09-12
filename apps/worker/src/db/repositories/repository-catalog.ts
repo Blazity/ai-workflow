@@ -445,13 +445,20 @@ export async function listRepositoriesWithProfiles(
   return rows.map((row) => ({ repository: row.repository, profile: row.profile ?? null }));
 }
 
-export async function getRepositoryCatalogStateRow(
+/**
+ * The state row as stored, or null when no build has ever written one.
+ *
+ * The two are NOT the same fact, which is why this exists next to the reader
+ * below. "No row yet" means nothing has been decided; "a row saying false"
+ * means some build decided the catalog is off, and because the seed writes with
+ * `onConflictDoNothing`, no later build can change its mind. Only the build
+ * gate needs to tell them apart, and it has to
+ * (`seedActivationConflict` in services/repository-catalog/policy.ts).
+ */
+export async function readRepositoryCatalogStateRow(
   db: Db,
-): Promise<RepositoryCatalogStateRow> {
+): Promise<RepositoryCatalogStateRow | null> {
   const [row] = await db.select().from(repositoryCatalogState).limit(1);
-  // Absent means "never seeded and never activated", which is the bridge. A
-  // deployment whose build has not run the seed yet, and every unit test that
-  // only replays migrations, lands here and behaves exactly as today.
   return row
     ? {
         activated: row.activated,
@@ -459,12 +466,28 @@ export async function getRepositoryCatalogStateRow(
         activatedById: row.activatedById,
         activatedByLabel: row.activatedByLabel,
       }
-    : {
-        activated: false,
-        activatedAt: null,
-        activatedById: null,
-        activatedByLabel: null,
-      };
+    : null;
+}
+
+export async function getRepositoryCatalogStateRow(
+  db: Db,
+): Promise<RepositoryCatalogStateRow> {
+  // Absent means "never seeded and never activated", which is the bridge: a
+  // deployment whose build has not run the seed yet, and every unit test that
+  // only replays migrations. It is NOT a statement that the deployment is
+  // unrestricted on purpose. A deployment that DOES restrict itself through
+  // AGENT_ALLOWED_REPOS and finds a stored row saying false is a build failure,
+  // not a bridge (see `readRepositoryCatalogStateRow` above); this reader
+  // deliberately cannot see the difference, because nothing at runtime should
+  // act on it.
+  return (
+    (await readRepositoryCatalogStateRow(db)) ?? {
+      activated: false,
+      activatedAt: null,
+      activatedById: null,
+      activatedByLabel: null,
+    }
+  );
 }
 
 /** One statement, so a second click cannot create a second state row. */

@@ -98,6 +98,11 @@ const common = {
   subjectKey: "ticket:jira:AIW-100",
   ownerToken: "owner-1",
   ticketKey: "AIW-100",
+  // The bridge: these cases are about publication, not about the catalog, so
+  // every repository is reachable exactly as on a deployment that has never
+  // activated it.
+  repositoryAccess: { activated: false, enabledKeys: [] },
+  jobTimeoutMs: 1_800_000,
 };
 
 describe("workspace publication", () => {

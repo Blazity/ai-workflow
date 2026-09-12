@@ -1,4 +1,4 @@
-import type { WorkflowRepositoryScope } from "@shared/contracts";
+import type { RunRepositoryAccess } from "@shared/contracts";
 import type { VcsProvider } from "../../../adapters/vcs/repository-directory.js";
 import type { PullRequestHead } from "../../../adapters/vcs/types.js";
 import type { ActiveRunOwner } from "../../../db/repositories/active-runs.js";
@@ -9,6 +9,7 @@ import {
 } from "../../../adapters/vcs/vcs-bot-identity.js";
 import type { SettledThread } from "../../steps/review-ledger-settle.js";
 import { isRunControlError } from "../../helpers/run-control-error.js";
+import { isRepositoryCatalogRefusal } from "../../support/repository-access.js";
 import {
   executionError,
   type BlockExecuteFn,
@@ -33,12 +34,14 @@ async function blockPostPrCommentStep(
   targets: PrCommentTarget[],
   body: string,
   owner: ActiveRunOwner,
-  repositoryScope?: WorkflowRepositoryScope,
+  repositoryAccess: RunRepositoryAccess,
 ): Promise<PostPrCommentsResult> {
   "use step";
   const { assertConnectedActiveRunOwner } = await import("../../../db/repositories/active-runs.js");
   const { createRepositoryVCS } = await import("../../../engine/support/vcs-runtime.js");
-  const { isRepoAllowedForScope } = await import("../../../engine/support/repo-allowlist.js");
+  const { mayRunTouchRepository, repositoryNotEnabledMessage } = await import(
+    "../../../engine/support/repository-access.js"
+  );
   const comments: PostPrCommentsResult["comments"] = [];
   const errors: string[] = [];
 
@@ -55,8 +58,8 @@ async function blockPostPrCommentStep(
 
   for (const target of targets) {
     try {
-      if (!isRepoAllowedForScope(target, repositoryScope)) {
-        throw new Error(`Refusing to comment on ${target.repoPath}: not in AGENT_ALLOWED_REPOS`);
+      if (!mayRunTouchRepository(repositoryAccess, target)) {
+        throw new Error(repositoryNotEnabledMessage("comment on", target));
       }
       const vcs = createRepositoryVCS({
         provider: target.provider,
@@ -256,17 +259,22 @@ export const execute: BlockExecuteFn = async (
       subjectKey: ctx.entry.subjectKey,
       ownerToken: ctx.entry.ownerToken,
       runId: ctx.runId,
-    }, ctx.repositoryScope);
+    }, ctx.repositories);
     if (errors.length > 0) {
-      return executionError(errors.join("; ").slice(0, 500), {
-        category: "provider",
+      const detail = errors.join("; ").slice(0, 500);
+      return executionError(detail, {
+        category: isRepositoryCatalogRefusal(detail) ? "configuration" : "provider",
       });
     }
     return { kind: "next", output: { status: "ok", comments } };
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    return executionError(err instanceof Error ? err.message : String(err), {
-      category: "provider",
+    const detail = err instanceof Error ? err.message : String(err);
+    return executionError(detail, {
+      // A repository the catalog withholds refuses before any provider call is
+      // made, so calling it a provider failure sends an operator to a forge
+      // status page over a decision this deployment made itself.
+      category: isRepositoryCatalogRefusal(detail) ? "configuration" : "provider",
     });
   }
 };

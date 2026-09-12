@@ -39,13 +39,16 @@ const AI_MEMORY_LISTING_TIMEOUT_MS = 5_000;
 export async function loadRepositoryInstructionSources(
   sandboxId: string,
   manifest: WorkspaceManifest,
+  /** The run's frozen ENABLE_REPO_MEMORY. Optional so a journal written before
+   *  this parameter existed still replays; absent reads as off, which is the
+   *  registry default and the behaviour before .ai/memory existed. */
+  enableRepoMemory?: boolean,
 ): Promise<EffectivePromptRepositorySource[]> {
   "use step";
   const trustedManifest = validateRepositoryInstructionManifest(manifest);
-  const [{ Sandbox }, { getSandboxCredentials }, { env }] = await Promise.all([
+  const [{ Sandbox }, { getSandboxCredentials }] = await Promise.all([
     import("@vercel/sandbox"),
     import("../../sandbox/credentials.js"),
-    import("../../infra/vcs-config.js"),
   ]);
   const sandbox = await Sandbox.get({
     sandboxId,
@@ -88,7 +91,7 @@ export async function loadRepositoryInstructionSources(
     // Kill switch: with repository memory off this step does exactly what it
     // did before .ai/memory existed, no listing and no reads beyond the two
     // instruction files.
-    if (!env.ENABLE_REPO_MEMORY) continue;
+    if (!enableRepoMemory) continue;
 
     const memoryPrefix = `${repository.localPath}/${AI_MEMORY_DIR}/`;
     let stdout: string;
@@ -305,6 +308,7 @@ export async function readRepositoryInstructionStream(
 type RepositoryInstructionLoader = (
   sandboxId: string,
   manifest: WorkspaceManifest,
+  enableRepoMemory?: boolean,
 ) => Promise<EffectivePromptRepositorySource[]>;
 
 /**
@@ -318,6 +322,8 @@ export async function loadInvocationRepositoryInstructionSources(
     executionSandboxId: string | null;
     sharedCodeSandboxId: string | null;
     manifest: WorkspaceManifest;
+    /** The run's frozen ENABLE_REPO_MEMORY, threaded to the step below. */
+    enableRepoMemory: boolean;
   },
   load: RepositoryInstructionLoader = loadRepositoryInstructionSources,
 ): Promise<EffectivePromptRepositorySource[]> {
@@ -326,7 +332,7 @@ export async function loadInvocationRepositoryInstructionSources(
       ? input.sharedCodeSandboxId
       : input.executionSandboxId;
   if (!sourceSandboxId) return [];
-  return load(sourceSandboxId, input.manifest);
+  return load(sourceSandboxId, input.manifest, input.enableRepoMemory);
 }
 
 function validateRepositoryInstructionManifest(

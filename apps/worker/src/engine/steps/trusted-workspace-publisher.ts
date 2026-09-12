@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { WorkflowRepositoryScope } from "@shared/contracts";
+import type { RunRepositoryAccess } from "@shared/contracts";
 import type { RepositoryVcsRuntime } from "../support/vcs-runtime.js";
 import { buildCloneUrl, buildVcsUrls, gitAuthArgs } from "../../infra/vcs-urls.js";
 import type { ReviewLedgerGuardSummary } from "../helpers/review-ledger.js";
@@ -66,7 +66,10 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
   subjectKey: string;
   ownerToken: string;
   runId: string;
-  repositoryScope?: WorkflowRepositoryScope;
+  /** Which repositories this run may publish to, frozen at its start. */
+  repositoryAccess: RunRepositoryAccess;
+  /** The run's job timeout, from the settings it started with. */
+  jobTimeoutMs: number;
   sourcePullRequest?: import("../helpers/source-pull-request.js").SourcePullRequestIdentity;
   // Narrows the no-commit guard in summarize(): a run can legitimately push
   // nothing when every review thread work item resolved without a code change.
@@ -74,9 +77,10 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
 }): Promise<TrustedWorkspacePushResult> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
-  const { env } = await import("../../infra/vcs-config.js");
   const { createRepositoryVcsRuntime } = await import("../support/vcs-runtime.js");
-  const { isRepoAllowedForScope } = await import("../support/repo-allowlist.js");
+  const { mayRunTouchRepository, repositoryNotEnabledMessage } = await import(
+    "../support/repository-access.js"
+  );
   const { assertOpenSourcePullRequest, isSourcePullRequestRepository } = await import(
     "../helpers/source-pull-request.js"
   );
@@ -179,11 +183,11 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
       });
       continue;
     }
-    if (!isRepoAllowedForScope(repo, input.repositoryScope)) {
+    if (!mayRunTouchRepository(input.repositoryAccess, repo)) {
       fail({
         changed: false,
         failureKind: "preflight_failed",
-        error: `Refusing to publish ${repo.repoPath}: not in AGENT_ALLOWED_REPOS`,
+        error: repositoryNotEnabledMessage("publish", repo),
       });
       continue;
     }
@@ -358,7 +362,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
   const publisher = await Sandbox.create({
     ...getSandboxCredentials(),
     runtime: "node24",
-    timeout: env.JOB_TIMEOUT_MS,
+    timeout: input.jobTimeoutMs,
   });
   try {
     const { createAdapters } = await import("../support/adapters.js");
@@ -466,14 +470,18 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
     }
     if (prepared.some((item) => item.result.failureKind)) return summarize(prepared, input.reviewLedger);
 
-    // The allowlist is an authorization boundary and may change while an
-    // agent or clarification is running. Recheck the entire write set after
-    // all expensive preflight work and immediately before the first push.
+    // A structural backstop, and deliberately no longer described as a recheck.
+    // The list this run holds was frozen at its start and is passed in, so it
+    // CANNOT have changed since the earlier checks: what this catches is a write
+    // set that grew after them, which is a code path reaching a repository the
+    // selection never had. Kept because it is free and sits immediately before
+    // the first push, which is the last point where a wrong repository costs
+    // nothing.
     for (const item of pending) {
-      if (!isRepoAllowedForScope(item.repo, input.repositoryScope)) {
+      if (!mayRunTouchRepository(input.repositoryAccess, item.repo)) {
         failPrepared(
           item,
-          `Refusing to publish ${item.repo.repoPath}: not in AGENT_ALLOWED_REPOS`,
+          repositoryNotEnabledMessage("publish", item.repo),
           "preflight_failed",
         );
       }
@@ -509,10 +517,10 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
         publisher.sandboxId,
         input.runId,
       );
-      if (!isRepoAllowedForScope(item.repo, input.repositoryScope)) {
+      if (!mayRunTouchRepository(input.repositoryAccess, item.repo)) {
         failPrepared(
           item,
-          `Refusing to publish ${item.repo.repoPath}: not in AGENT_ALLOWED_REPOS`,
+          repositoryNotEnabledMessage("publish", item.repo),
           "preflight_failed",
         );
         continue;

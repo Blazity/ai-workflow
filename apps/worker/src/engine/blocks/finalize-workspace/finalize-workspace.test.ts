@@ -251,6 +251,9 @@ describe("finalize_workspace execute", () => {
       scriptsFailure: null,
       clarifications: undefined,
       sourcePullRequest: undefined,
+      // Both frozen at run start and handed down, never re-read here.
+      repositoryAccess: ctx.repositories,
+      jobTimeoutMs: ctx.settings.JOB_TIMEOUT_MS,
     });
     expect(ctx.publication).toEqual(finalized);
     expect(result).toEqual({

@@ -3,11 +3,13 @@ import type {
   BlockOutput,
   HarnessProfileManifestV1,
   HarnessProvider,
+  SettingsSnapshot,
   WorkflowBlockType,
   WorkflowBlockTypeV1,
   WorkflowDefinitionNode,
   WorkflowParamValue,
 } from "@shared/contracts";
+import { resolveSettingsSnapshot } from "@shared/contracts";
 import {
   BUILTIN_HARNESS_PROFILE_IDS,
   BUILTIN_HARNESS_PROFILE_MANIFESTS,
@@ -131,10 +133,31 @@ function namedError(name: string, message: string): Error {
   return error;
 }
 
+/**
+ * The settings an executor test runs under: the registry's own defaults, so a
+ * fixture never encodes a second opinion about what a key means. A test that is
+ * about a setting overrides exactly the key it is about.
+ */
+export function makeRunSettings(
+  overrides: Partial<SettingsSnapshot> = {},
+): SettingsSnapshot {
+  // Nothing stored and no environment resolves every key to its registry
+  // default, through the same function the deployment resolves through.
+  const defaults = resolveSettingsSnapshot(new Map(), {
+    value: () => void 0,
+    isSet: () => false,
+  }).snapshot;
+  return { ...defaults, ...overrides };
+}
+
 /** Build an EngineCtx with vi.fn() callbacks for executor tests. */
 export function makeCtx(overrides: Partial<EngineCtx> = {}): EngineCtx {
   return {
     runId: "run-1",
+    settings: makeRunSettings(),
+    // The bridge: an executor test that is not about the catalog reaches every
+    // repository, which is what a deployment that never opened Repositories does.
+    repositories: { activated: false, enabledKeys: [] },
     definitionId: 1,
     definitionVersion: 1,
     definitionNodes: [],

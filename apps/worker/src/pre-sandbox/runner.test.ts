@@ -8,6 +8,10 @@ import type {
   PreSandboxStepRegistry,
   RunPreSandboxPhaseInput,
 } from "./types.js";
+import {
+  TEST_BRIDGE_REPOSITORY_ACCESS,
+  testSettingsSnapshot,
+} from "../test-support/settings.js";
 
 const input: RunPreSandboxPhaseInput = {
   ticket: {
@@ -21,6 +25,8 @@ const input: RunPreSandboxPhaseInput = {
   run: {
     branchName: "feature/AWT-42",
   },
+  repositoryAccess: TEST_BRIDGE_REPOSITORY_ACCESS,
+  settings: testSettingsSnapshot(),
 };
 
 function config(steps: PreSandboxConfig["preSandbox"]["steps"]): PreSandboxConfig {
@@ -89,6 +95,44 @@ describe("executePreSandboxPhase", () => {
     expect(result.promptAdditions.research).toHaveLength(1);
     expect(result.promptAdditions.implementation).toHaveLength(1);
     expect(result.promptAdditions.review).toHaveLength(1);
+  });
+
+  it("hands every step the run's frozen repository access, unchanged", async () => {
+    // The bug this pins: the phase input declared the access and the runner's
+    // context literal forwarded `ticket`, `run`, `repositoryScope` and
+    // `clarification` and quietly dropped it, so repo selection fell back to a
+    // fail-open default and offered repositories nobody had enabled. The field
+    // is required on both types now, and this asserts the forwarding itself.
+    const access = {
+      activated: true,
+      enabledKeys: ["github:acme/api", "gitlab:group/tool"],
+    };
+    const seen: PreSandboxStepContext[] = [];
+    const handler: PreSandboxStepHandler = vi.fn(async ({ context }) => {
+      seen.push(context);
+      return { status: "continue" as const };
+    });
+
+    const result = await executePreSandboxPhase(
+      { ...input, repositoryAccess: access },
+      config([
+        // Two steps, and the second narrows its ticket fields: the access must
+        // reach a step whose context was projected, not only the first one.
+        { uses: "only", onFailure: "fail" },
+        {
+          uses: "only",
+          onFailure: "fail",
+          with: { input: { ticket: ["identifier"] } },
+        },
+      ]),
+      { only: handler },
+    );
+
+    expect(result.status).toBe("continue");
+    expect(seen).toHaveLength(2);
+    for (const context of seen) {
+      expect(context.repositoryAccess).toEqual(access);
+    }
   });
 
   it("carries selected repositories from step output", async () => {

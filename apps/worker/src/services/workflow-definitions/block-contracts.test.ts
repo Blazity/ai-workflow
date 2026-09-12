@@ -32,6 +32,7 @@ import { analyzeWorkflowV2Catalog } from "../../workflow-definition/available-va
 import { buildWorkflowEditorOptions } from "../../workflow-definition/models.js";
 import { validateWorkflowDefinitionCandidate } from "../../workflow-definition/validation.js";
 import { currentBlockContracts } from "./block-contracts.js";
+import { testSettingsSnapshot } from "../../test-support/settings.js";
 
 const definition: WorkflowDefinitionV2 = {
   schemaVersion: 2,
@@ -61,6 +62,7 @@ describe("block contracts per request", () => {
     );
     analyzeWorkflowV2Catalog(contracts.analyzeValues(definition));
     const options = buildWorkflowEditorOptions(
+      testSettingsSnapshot(),
       { claude: [], codex: [] },
       [],
       contracts.blockRegistry(),

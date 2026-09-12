@@ -253,6 +253,9 @@ async function runConfiguredChecks(
   cancellation: PrePrChecksOptions["cancellation"],
   groups: string[],
   checksCeilingMs: number | null,
+  /** The operator's PRE_PR_COMMAND_TIMEOUT_MINUTES, from the run's frozen
+   *  settings. */
+  defaultCommandTimeoutMinutes: number,
 ): Promise<
   Omit<RunChecksStepResult, "outcome"> & {
     outcome: Exclude<CheckOutcome, "skipped">;
@@ -271,6 +274,7 @@ async function runConfiguredChecks(
     config: current.config,
     agentKind,
     model,
+    defaultCommandTimeoutMinutes,
     observeBudget,
     observeChecksBudget,
     cancellation,
@@ -387,6 +391,7 @@ export const execute: BlockExecuteFn = async (
             execution?.cancellation,
             groups,
             checksCeilingMs,
+            ctx.settings.PRE_PR_COMMAND_TIMEOUT_MINUTES,
           );
     if (
       "configurationVersion" in result &&

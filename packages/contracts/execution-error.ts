@@ -15,6 +15,16 @@ export type ExecutionErrorCategory =
   | "parsing"
   | "schema"
   | "checks"
+  /**
+   * The deployment is configured in a way that forbids what the run was asked
+   * to do, and no retry and no provider can change that: a repository the
+   * catalog does not enable, a catalog that enables nothing this run can
+   * reach. Distinct from every other member because the fix is an operator
+   * editing a setting, not an engineer reading a log, and because classifying
+   * it as `engine`, `provider` or `sandbox` sends that operator to blame a
+   * platform that did exactly what it was told.
+   */
+  | "configuration"
   | "unknown";
 
 /**

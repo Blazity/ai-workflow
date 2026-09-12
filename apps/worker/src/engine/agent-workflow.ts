@@ -2,6 +2,9 @@
 import { createHook, getWorkflowMetadata } from "workflow";
 import { branchForTicket } from "./support/workflow-naming.js";
 import { ticketRunUrl, hasDashboardLinkComment } from "./support/dashboard-links.js";
+// Pure and contracts-only, like the two support modules above it, so the
+// workflow isolate stays free of Node builtins.
+import { isRepositoryCatalogRefusal } from "./support/repository-access.js";
 import { computeUsageTotals } from "../sandbox/usage.js";
 import type { AgentOutput, PhaseUsage, ResearchResult, ReviewOutput } from "../sandbox/agents/types.js";
 import type { AgentKind } from "../sandbox/agents/index.js";
@@ -359,6 +362,26 @@ async function agentWorkflowBody(
   | { kind: "execution_error"; error: WorkflowExecutionErrorState }
   | undefined
 > {
+  // FIRST, before any other step: what this run decided before it did
+  // anything. Everything below reads settings and repository access off these
+  // two values, never off the environment or a store, so an operator who saves
+  // the Settings page or disables a repository while this run is in flight
+  // moves the NEXT run and leaves this one's journal consistent on replay.
+  const { loadRunStartSettingsStep, runStartRepositoryAccess, runStartSettings } =
+    await import("./steps/run-start-settings.js");
+  const runStart = await loadRunStartSettingsStep();
+  // Through the accessors, never off the stored result: a run suspended across
+  // a deploy that adds a registry key replays a snapshot written without it,
+  // and these two fill the gap with what the deployment would have defaulted to
+  // rather than handing the run `undefined`.
+  const runSettings = runStartSettings(runStart);
+  const runRepositories = runStartRepositoryAccess(runStart);
+
+  // After the settings read, deliberately. The budget clock starts when the run
+  // starts doing work, and the step above is the run reading its own
+  // configuration; a database blip there burns its retry window inside the
+  // budget otherwise, so a run could exhaust part of its wall clock before the
+  // first block existed. Do not reorder these two.
   const budgetStartedAtMs = await readRunBudgetClockStep();
 
   const { env } = await import("./harness-profiles/model-env.js");
@@ -373,14 +396,23 @@ async function agentWorkflowBody(
   const { openPullRequestsForPublication } = await import("./steps/workspace-publication.js");
   const { formatUsageReport } = await import("../sandbox/usage.js");
   const { AGENT_SCHEMA, RESEARCH_SCHEMA, REVIEW_SCHEMA } = await import("../sandbox/agents/types.js");
+  // The column names come from the run's snapshot; the two transition ids stay
+  // on `env` because they are not registry keys (a Jira transition id is a
+  // board's internal identifier, not an operator setting).
   const backlogMoveTarget = (): IssueTrackerMoveTarget =>
     env.JIRA_BACKLOG_TRANSITION_ID
-      ? { name: env.COLUMN_BACKLOG, transitionId: env.JIRA_BACKLOG_TRANSITION_ID }
-      : env.COLUMN_BACKLOG;
+      ? {
+          name: runSettings.COLUMN_BACKLOG,
+          transitionId: env.JIRA_BACKLOG_TRANSITION_ID,
+        }
+      : runSettings.COLUMN_BACKLOG;
   const aiReviewMoveTarget = (): IssueTrackerMoveTarget =>
     env.JIRA_AI_REVIEW_TRANSITION_ID
-      ? { name: env.COLUMN_AI_REVIEW, transitionId: env.JIRA_AI_REVIEW_TRANSITION_ID }
-      : env.COLUMN_AI_REVIEW;
+      ? {
+          name: runSettings.COLUMN_AI_REVIEW,
+          transitionId: env.JIRA_AI_REVIEW_TRANSITION_ID,
+        }
+      : runSettings.COLUMN_AI_REVIEW;
 
   const ticketId = entry.ticketKey ?? entry.subjectKey;
   const transitionOwner = {
@@ -390,7 +422,7 @@ async function agentWorkflowBody(
   };
 
   const { resolveWorkflowTicketStep } = await import("./steps/workflow-ticket.js");
-  const ticket = await resolveWorkflowTicketStep(entry, env.COLUMN_AI);
+  const ticket = await resolveWorkflowTicketStep(entry, runSettings.COLUMN_AI);
   if (!ticket) return;
 
   let clarificationsReconciled = false;
@@ -502,7 +534,12 @@ async function agentWorkflowBody(
   const pinnedVersion = "definitionVersion" in entry ? entry.definitionVersion : undefined;
   const loadedPlan = await loadWorkflowPlanWithRetirementExit({
     load: () =>
-      loadWorkflowDefinitionFor(entryTriggerType, entry.definitionId, pinnedVersion),
+      loadWorkflowDefinitionFor(
+        runSettings,
+        entryTriggerType,
+        entry.definitionId,
+        pinnedVersion,
+      ),
     retire: failRetiredDefinition,
   });
   if (loadedPlan === "failed") return loadedPlan;
@@ -523,12 +560,12 @@ async function agentWorkflowBody(
   const agentKindOverride = await resolveAgentKindOverride(ticket.labels);
   const runDefaultKind: AgentKind = resolveRunDefaultKind(
     agentKindOverride,
-    env.AGENT_KIND,
+    runSettings.AGENT_KIND,
   );
-  const modelDefaults = {
-    claude: env.CLAUDE_MODEL,
-    codex: env.CODEX_MODEL,
-  };
+  // One definition of "the model this deployment defaults to", shared with the
+  // block contract context so the two cannot drift.
+  const { runModelDefaults } = await import("./definition/block-contract-environment.js");
+  const modelDefaults = runModelDefaults(runSettings);
   const defaultModel = modelDefaults[runDefaultKind];
   const harnessRuntimes = await resolveHarnessRuntimesStep(
     plan.definition,
@@ -541,7 +578,7 @@ async function agentWorkflowBody(
     .map((runtime) => structuredClone(runtime.safeManifest))
     .sort((left, right) => left.nodeId.localeCompare(right.nodeId));
   const budgetLimits: RunBudgetLimits = {
-    maxDurationMs: plan.budgets?.maxDurationMs ?? env.JOB_TIMEOUT_MS,
+    maxDurationMs: plan.budgets?.maxDurationMs ?? runSettings.JOB_TIMEOUT_MS,
     maxDurationSource:
       plan.budgets?.maxDurationMs === undefined ? "env" : "definition",
     ...(plan.budgets?.maxTokens !== undefined
@@ -834,7 +871,16 @@ async function agentWorkflowBody(
       entry.kind === "pr_trigger" && !entry.ticketKey
         ? entry.pr.headRef
         : branchForTicket(ticket.identifier);
-    const downloadedAttachments = await fetchAttachments(ticket.identifier, ticket.attachments);
+    const downloadedAttachments = await fetchAttachments(
+      ticket.identifier,
+      ticket.attachments,
+      {
+        maxFileSizeBytes: runSettings.ATTACHMENT_MAX_FILE_SIZE_MB * 1024 * 1024,
+        maxTotalSizeBytes: runSettings.ATTACHMENT_MAX_TOTAL_SIZE_MB * 1024 * 1024,
+        maxCount: runSettings.ATTACHMENT_MAX_COUNT,
+        downloadTimeoutMs: runSettings.ATTACHMENT_DOWNLOAD_TIMEOUT_MS,
+      },
+    );
 
     // Ticket-backed history is reloaded from the DB. Same-run clarification
     // answers are appended to this local context when their hook resumes.
@@ -905,7 +951,7 @@ async function agentWorkflowBody(
         node.type === "open_pr"
       )
     ) {
-      pricedModels.add(env.CODEX_MODEL);
+      pricedModels.add(modelDefaults.codex);
     }
     for (const [phase, usage] of Object.entries(phaseUsages)) {
       const model = phaseModels[phase];
@@ -917,7 +963,7 @@ async function agentWorkflowBody(
     priceLookup = await resolveRunPriceLookup({
       requiredModels: pricedModels,
       optionalModels: optionalPricedModelsForRun({
-        enableRepoMemory: env.ENABLE_REPO_MEMORY,
+        enableRepoMemory: runSettings.ENABLE_REPO_MEMORY,
         runDefaultKind,
         defaults: modelDefaults,
       }),
@@ -946,6 +992,8 @@ async function agentWorkflowBody(
     }
     const ctx: EngineCtx = {
       runId: workflowRunId,
+      settings: runSettings,
+      repositories: runRepositories,
       definitionId: plan.definitionId,
       definitionVersion: plan.version,
       definitionNodes: plan.nodes,
@@ -985,7 +1033,7 @@ async function agentWorkflowBody(
       publication: null,
       prePrGate: null,
       runDefaultKind,
-      defaults: { claude: env.CLAUDE_MODEL, codex: env.CODEX_MODEL },
+      defaults: modelDefaults,
       prompts,
       moveTargets: { backlog: backlogMoveTarget(), aiReview: aiReviewMoveTarget() },
       arthur: {
@@ -1145,6 +1193,7 @@ async function agentWorkflowBody(
                 suggestedAnswers: suggestedAnswers ?? null,
                 dashboardUrl: ticketRunUrl(env.DASHBOARD_ORIGIN, ticket.identifier, workflowRunId),
                 expiresAtIso: clarification.expiresAt,
+                aiColumnName: runSettings.COLUMN_AI,
               },
               transitionOwner,
             );
@@ -1244,7 +1293,7 @@ async function agentWorkflowBody(
               const { blockFetchPrContextsStep } = await import("./blocks/fetch-pr-context/execute.js");
               ctx.repositoryContexts = await blockFetchPrContextsStep(
                 ctx.selectedRepositories,
-                ctx.repositoryScope,
+                ctx.repositories,
               );
             }
           }
@@ -1581,7 +1630,10 @@ async function agentWorkflowBody(
         );
         const decision = validateRepositoryExpansionRequests({
           requests,
-          catalog: await listFreshRepositoryCatalogStep(ctx.repositoryScope),
+          catalog: await listFreshRepositoryCatalogStep(
+            ctx.repositories,
+            ctx.repositoryScope,
+          ),
           attached: ctx.selectedRepositories,
           completedRounds: ctx.repositoryExpansion.rounds,
         });
@@ -1629,7 +1681,8 @@ async function agentWorkflowBody(
             ownerToken: ctx.entry.ownerToken,
             runId: workflowRunId,
           },
-          ctx.repositoryScope,
+          ctx.repositories,
+          ctx.settings.JOB_TIMEOUT_MS,
         );
         const repositories = [
           ...ctx.selectedRepositories,
@@ -1642,7 +1695,7 @@ async function agentWorkflowBody(
         ctx.selectedRepositories = repositories;
         ctx.repositoryContexts = await blockFetchPrContextsStep(
           repositories,
-          ctx.repositoryScope,
+          ctx.repositories,
         );
         ctx.repositoryExpansion = {
           rounds: ctx.repositoryExpansion.rounds + 1,
@@ -1673,7 +1726,8 @@ async function agentWorkflowBody(
             ownerToken: ctx.entry.ownerToken,
             runId: workflowRunId,
           },
-          ctx.repositoryScope,
+          ctx.repositories,
+          ctx.settings.JOB_TIMEOUT_MS,
         );
         return attached.manifest;
       };
@@ -1866,6 +1920,7 @@ async function agentWorkflowBody(
                 resolveHumanRepositoryExpansionStep(
                   answer,
                   attached,
+                  ctx.repositories,
                   ctx.repositoryScope,
                 ),
               attach: (repositories) => {
@@ -1883,14 +1938,15 @@ async function agentWorkflowBody(
                     ownerToken: ctx.entry.ownerToken,
                     runId: workflowRunId,
                   },
-                  ctx.repositoryScope,
+                  ctx.repositories,
+                  ctx.settings.JOB_TIMEOUT_MS,
                 );
               },
               fetchContexts: async (repositories) => {
                 const { blockFetchPrContextsStep } = await import(
                   "./blocks/fetch-pr-context/execute.js"
                 );
-                return blockFetchPrContextsStep(repositories, ctx.repositoryScope);
+                return blockFetchPrContextsStep(repositories, ctx.repositories);
               },
             });
             if (humanExpansion.kind === "clarification") {
@@ -1960,7 +2016,7 @@ async function agentWorkflowBody(
               if (ownedRepos.length > 0) {
                 ctx.repositoryContexts = await blockFetchPrContextsStep(
                   ownedRepos,
-                  ctx.repositoryScope,
+                  ctx.repositories,
                 );
               }
             }
@@ -2650,6 +2706,7 @@ async function agentWorkflowBody(
               agentKind: kind,
               model,
               arthurTaskId: ctx.arthur.taskId,
+              jobTimeoutMs: ctx.settings.JOB_TIMEOUT_MS,
               runtime,
               // The session memory document lives outside the repository now, so
               // the bundles this review workspace is built from cannot carry it.
@@ -2877,6 +2934,8 @@ async function agentWorkflowBody(
                 config: prePrConfig.config,
                 agentKind: repairKind,
                 model: repairModel,
+                defaultCommandTimeoutMinutes:
+                  runSettings.PRE_PR_COMMAND_TIMEOUT_MINUTES,
                 observeBudget: blockBudgetObserver(ctx, execution),
                 observeChecksBudget: checksBudgetObserver(ctx, execution),
                 ...checksCeilingOption(steps),
@@ -2985,7 +3044,7 @@ async function agentWorkflowBody(
               ticketKey: ticket.identifier,
               title: prTitle,
               body: prBody,
-              repositoryScope: ctx.repositoryScope,
+              repositoryAccess: ctx.repositories,
               sourcePullRequest:
                 ctx.entry.kind === "pr_trigger"
                   ? {
@@ -3013,7 +3072,12 @@ async function agentWorkflowBody(
                 );
               }
               return executionError(publication.reason, {
-                category: "provider",
+                // A repository the catalog withholds refuses inside the PR step
+                // and surfaces as a publication failure; blaming the provider
+                // for it is what sent operators to a forge status page.
+                category: isRepositoryCatalogRefusal(publication.reason)
+                  ? "configuration"
+                  : "provider",
                 phase: "open-pr",
               });
             }
@@ -3262,6 +3326,7 @@ async function agentWorkflowBody(
                   executionSandboxId: sandboxId,
                   sharedCodeSandboxId: ctx.sandboxId,
                   manifest: ctx.workspaceManifest,
+                  enableRepoMemory: runSettings.ENABLE_REPO_MEMORY,
                 });
             } catch (error) {
               if (isRunControlError(error)) throw error;
@@ -3289,7 +3354,7 @@ async function agentWorkflowBody(
           let memorySources: Awaited<
             ReturnType<typeof loadRepoMemorySourcesStep>
           > = [];
-          if (env.ENABLE_REPO_MEMORY && ctx.workspaceManifest) {
+          if (runSettings.ENABLE_REPO_MEMORY && ctx.workspaceManifest) {
             try {
               memorySources = await loadRepoMemorySourcesStep({
                 repositories: ctx.workspaceManifest.repositories.map(
@@ -3563,7 +3628,7 @@ async function agentWorkflowBody(
             // V2_MAX_BLOCK_CONCURRENCY in infra/runtime-env.ts for what it is for and what
             // concurrent dispatch here depends on staying true.
             maxConcurrency: Math.min(
-              env.V2_MAX_BLOCK_CONCURRENCY ??
+              runSettings.V2_MAX_BLOCK_CONCURRENCY ??
                 V2_PRODUCTION_SCHEDULER_BOUNDS.maxConcurrency,
               V2_PRODUCTION_SCHEDULER_BOUNDS.maxConcurrency,
             ),
@@ -3673,7 +3738,7 @@ async function agentWorkflowBody(
         // invocation writes a durable step record even when its body returns
         // immediately, and the budget read below is itself a step.
         if (
-          env.ENABLE_REPO_MEMORY &&
+          runSettings.ENABLE_REPO_MEMORY &&
           manifest &&
           runOutcome === "success" &&
           (ctx.publication?.status === "published" ||
@@ -3690,6 +3755,7 @@ async function agentWorkflowBody(
             const startedAt = Date.now();
             const distilled = await distillRepoMemoryStep({
               runId: ctx.runId,
+              promoteOrgMemory: runSettings.ENABLE_ORG_MEMORY_PROMOTION,
               subjectKey: ctx.entry.subjectKey,
               taskId: ctx.ticket.identifier,
               repositories: manifest.repositories

@@ -7,9 +7,11 @@ import {
   workflowDefinitions,
   workflowDefinitionVersions,
 } from "../schema.js";
+import { seedActivationConflict } from "../../services/repository-catalog/policy.js";
 import {
   getCurrentCheckConfiguration,
   getRepositoryCatalogStateRow,
+  readRepositoryCatalogStateRow,
   listPinnedRepositoriesFromDefinitions,
   listRepositoriesWithProfiles,
   migrateScriptGroupsIntoProfiles,
@@ -165,6 +167,58 @@ describe("catalog seed", () => {
     await expect(
       seedRepositoryCatalogState(db, { activated: false }),
     ).resolves.toMatchObject({ activated: false, activatedAt: null });
+  });
+
+  it("refuses the build when a stored bridge would make a restricted deployment unrestricted", async () => {
+    // The exact sequence, end to end: a preview built against this database
+    // with AGENT_ALLOWED_REPOS unset writes the state row as not activated,
+    // and the next production build, whose allowlist is not empty, cannot
+    // change it (onConflictDoNothing) and would deploy a worker that reaches
+    // every repository the installation exposes, with nothing on any screen
+    // saying so.
+    const db = await createTestDb();
+    await seedRepositoryCatalogState(db, { activated: false });
+
+    // The stored row exists and says false, which is NOT the same fact as "no
+    // build has written one yet". The build gate is the only reader that needs
+    // to tell those apart.
+    const stored = await readRepositoryCatalogStateRow(db);
+    expect(stored).toMatchObject({ activated: false });
+
+    const refusal = seedActivationConflict({
+      allowlistSize: 3,
+      storedActivated: stored ? stored.activated : null,
+    });
+    expect(refusal).toContain("AGENT_ALLOWED_REPOS names 3 repositories");
+    expect(refusal).toContain("NOT activated");
+    expect(refusal).toContain("Repositories page");
+
+    // And the seed really cannot fix it by writing, which is why the build has
+    // to stop rather than warn.
+    await expect(
+      seedRepositoryCatalogState(db, { activated: true }),
+    ).resolves.toMatchObject({ activated: false });
+  });
+
+  it("says nothing on the three shapes that are not that conflict", async () => {
+    const db = await createTestDb();
+
+    // No row yet: this build is the one about to write `activated: true`.
+    expect(await readRepositoryCatalogStateRow(db)).toBeNull();
+    expect(
+      seedActivationConflict({ allowlistSize: 2, storedActivated: null }),
+    ).toBeNull();
+
+    // An unrestricted deployment on a stored bridge is the documented bridge,
+    // not a conflict.
+    expect(
+      seedActivationConflict({ allowlistSize: 0, storedActivated: false }),
+    ).toBeNull();
+
+    // Already activated: the allowlist and the catalog agree.
+    expect(
+      seedActivationConflict({ allowlistSize: 2, storedActivated: true }),
+    ).toBeNull();
   });
 });
 

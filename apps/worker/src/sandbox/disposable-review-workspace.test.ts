@@ -173,6 +173,7 @@ describe("disposable review workspace", () => {
       agentKind: "codex",
       model: "gpt-5",
       arthurTaskId: null,
+      jobTimeoutMs: 120_000,
     });
 
     expect(result).toEqual({
@@ -255,6 +256,7 @@ describe("disposable review workspace", () => {
       agentKind: "codex",
       model: "gpt-5",
       arthurTaskId: null,
+      jobTimeoutMs: 120_000,
     });
 
     const excludeWrite = mocks.reviewWriteFiles.mock.calls
@@ -287,6 +289,7 @@ describe("disposable review workspace", () => {
         agentKind: "codex",
         model: "gpt-5",
         arthurTaskId: null,
+        jobTimeoutMs: 120_000,
       }),
     ).rejects.toThrow(/not clean after setup/i);
 
@@ -324,6 +327,7 @@ describe("disposable review workspace", () => {
       agentKind: "codex",
       model: "gpt-5",
       arthurTaskId: null,
+      jobTimeoutMs: 120_000,
       memoryTaskId: "AIW-120",
     });
 
@@ -386,6 +390,7 @@ describe("disposable review workspace", () => {
       agentKind: "codex",
       model: "gpt-5",
       arthurTaskId: null,
+      jobTimeoutMs: 120_000,
       memoryTaskId: "AIW-120",
     });
 
@@ -416,6 +421,7 @@ describe("disposable review workspace", () => {
       agentKind: "codex",
       model: "gpt-5",
       arthurTaskId: null,
+      jobTimeoutMs: 120_000,
       memoryTaskId: "AIW-120",
     });
 
@@ -438,6 +444,7 @@ describe("disposable review workspace", () => {
       agentKind: "codex",
       model: "gpt-5",
       arthurTaskId: null,
+      jobTimeoutMs: 120_000,
       memoryTaskId: "../../etc/AIW-120",
     });
 
@@ -471,6 +478,7 @@ describe("disposable review workspace", () => {
       agentKind: "codex",
       model: "gpt-5",
       arthurTaskId: null,
+      jobTimeoutMs: 120_000,
       memoryTaskId: "AIW-120",
     });
 
@@ -491,6 +499,7 @@ describe("disposable review workspace", () => {
       agentKind: "codex",
       model: "gpt-5",
       arthurTaskId: null,
+      jobTimeoutMs: 120_000,
       memoryTaskId: "AIW-120",
     });
 
@@ -510,6 +519,7 @@ describe("disposable review workspace", () => {
       agentKind: "codex",
       model: "gpt-5",
       arthurTaskId: null,
+      jobTimeoutMs: 120_000,
     });
 
     expect(mocks.sourceReadStream).not.toHaveBeenCalled();
@@ -535,6 +545,7 @@ describe("disposable review workspace", () => {
         agentKind: "codex",
         model: "gpt-5",
         arthurTaskId: null,
+        jobTimeoutMs: 120_000,
       }),
     ).rejects.toThrow(
       "review source github:acme/api has uncommitted changes: M src/index.ts",
@@ -556,6 +567,7 @@ describe("disposable review workspace", () => {
         agentKind: "claude",
         model: "claude",
         arthurTaskId: null,
+        jobTimeoutMs: 120_000,
       }),
     ).rejects.toThrow("install failed");
 
@@ -640,6 +652,7 @@ describe("disposable review workspace", () => {
       agentKind: "codex",
       model: "gpt-5",
       arthurTaskId: null,
+      jobTimeoutMs: 120_000,
     });
 
     expect(result).toMatchObject({ ok: true, sandboxId: "review-1" });
@@ -672,6 +685,7 @@ describe("disposable review workspace", () => {
         agentKind: "codex",
         model: "gpt-5",
         arthurTaskId: null,
+        jobTimeoutMs: 120_000,
       }),
     ).rejects.toThrow(/path is invalid/i);
     expect(mocks.sandboxGet).not.toHaveBeenCalled();
@@ -691,6 +705,7 @@ describe("disposable review workspace", () => {
         agentKind: "codex",
         model: "gpt-5",
         arthurTaskId: null,
+        jobTimeoutMs: 120_000,
       }),
     ).rejects.toThrow(/path is invalid/i);
     expect(mocks.sandboxGet).not.toHaveBeenCalled();
@@ -710,6 +725,7 @@ describe("disposable review workspace", () => {
         agentKind: "codex",
         model: "gpt-5",
         arthurTaskId: null,
+        jobTimeoutMs: 120_000,
       }),
     ).rejects.toThrow(/path is duplicated/i);
     expect(mocks.sandboxGet).not.toHaveBeenCalled();
