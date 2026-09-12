@@ -507,7 +507,7 @@ message.
 | `provider_unavailable` | 503 | yes | An import named a key whose provider could not be listed. Nothing was written. |
 | `invalid_script_group_name` | 400 | no | A profile save carried a group name the checks engine cannot resolve. Refused, never repaired. |
 | `suggestion_rate_limited` | 429 | yes, after `retryAfterSeconds` | This repository has had 10 suggestions in the last hour. Nothing was spent or recorded. |
-| `repository_missing_at_provider` | 404 | no | The provider does not have the repository any more. Recorded as `missing`, no model call, no spend. |
+| `repository_missing_at_provider` | 404 | no | The provider does not answer for the repository any more. Recorded as `missing`, no model call, no spend. |
 | `profile_source_timed_out` | 503 | yes | The 60 second profile read deadline fired. Recorded as `timeout`. |
 | `profile_source_failed` | 502 | no | The provider refused the read, or no provider of that kind is configured here. Recorded as `failed`. |
 | `suggestion_timed_out` | 503 | yes | The 90 second model call deadline fired. Recorded as `timeout`. |
@@ -516,6 +516,14 @@ message.
 | `suggestion_malformed` | 502 | no | The answer did not parse against the contract. Recorded as `malformed`, tokens included. |
 | `repository_profile_conflict` | 409 | no, reload first | The save carried `expectedProfileVersion` and the stored profile has moved since. Nothing was written; the body carries `currentVersion`. |
 | `invalid_cursor` | 400 | no | A suggestion history request carried a cursor this deployment did not issue. |
+
+`repository_missing_at_provider` also covers a repository the deployment's
+token has lost access to, and the code cannot tell the two apart: GitHub and
+GitLab both answer 404 for a project the caller may not see, so a revoked scope,
+a rotated token and a deleted repository arrive as the same status
+(`RepositoryMissingAtProviderError`, thrown from
+`adapters/vcs/github/profile-source.ts` and `adapters/vcs/gitlab/profile-source.ts`).
+Check the token before removing the row the code suggests removing.
 
 Every row of that table except the first two and `suggestion_rate_limited`
 writes exactly one `repository_suggestions` row. A 403 (wrong role) and a 404

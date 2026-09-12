@@ -19,7 +19,8 @@ pre-push only; the unit suites (worker sharded into four, dashboard,
 workflow-sdk) run in CI on every pull request behind an aggregate job named
 `ci`; the validators run through `build:ci`; `verify-deployment-identity` and
 the e2e suites run nightly, off the PR path. The worker has no linter, the
-dashboard's `next lint` is defined and never run, and there is no import
+dashboard's `next lint` script is defined and never run (deleted in the
+2026-09 sweep once `gate:lint` covered the dashboard), and there is no import
 boundary or unused-code tool at all.
 
 None of it blocks a merge. `main` has no branch protection and no ruleset, by

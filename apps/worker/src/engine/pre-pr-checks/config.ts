@@ -1,8 +1,6 @@
 import {
-  REPOSITORY_SCRIPT_GROUP_NAME_MAX_LENGTH,
-  REPOSITORY_SCRIPT_GROUP_NAME_MESSAGE,
-  REPOSITORY_SCRIPT_GROUP_NAME_PATTERN,
   findExtendsCycle,
+  repositoryScriptGroupNameSchema,
   sortedGroupNames,
 } from "@shared/contracts";
 import { z } from "zod";
@@ -96,21 +94,6 @@ export const emptyRepoScriptsConfig: RepoScriptsConfig = { repositories: [] };
 
 const repoScriptsCommandSchema = z.string().trim().min(1);
 
-// Group names are user-facing identifiers (referenced from extends, gateGroups,
-// and eventually a block's group picker), so they get the same shape as any
-// other short slug: lowercase, digits, hyphens, capped so it stays readable
-// in a dropdown. Built from the shared constants rather than from literals of
-// its own: the dashboard blocks a Save against the same three values, and a
-// name accepted on one side and refused on the other could never match
-// anything at run time.
-const repoScriptsGroupNameSchema = z
-  .string()
-  .max(
-    REPOSITORY_SCRIPT_GROUP_NAME_MAX_LENGTH,
-    `group name must be at most ${REPOSITORY_SCRIPT_GROUP_NAME_MAX_LENGTH} characters`,
-  )
-  .regex(REPOSITORY_SCRIPT_GROUP_NAME_PATTERN, REPOSITORY_SCRIPT_GROUP_NAME_MESSAGE);
-
 // Env entries are NAMES, never values: the actual secret lives in the worker's
 // own environment and is looked up by name at execution time, so it never
 // gets stored in this config or persisted anywhere near a run record.
@@ -123,7 +106,7 @@ const repoScriptsEnvNameSchema = z
 const repoScriptsGroupConfigSchema = z
   .object({
     commands: z.array(repoScriptsCommandSchema).default([]),
-    extends: z.array(repoScriptsGroupNameSchema).optional(),
+    extends: z.array(repositoryScriptGroupNameSchema).optional(),
     // Defaulted rather than optional, so a parsed group always answers the
     // question and no consumer has to remember which way the absent case goes.
     restoreTree: z.boolean().default(true),
@@ -141,7 +124,7 @@ const repoScriptsGroupConfigSchema = z
   });
 
 const repoScriptsGroupsSchema = z
-  .record(repoScriptsGroupNameSchema, repoScriptsGroupConfigSchema)
+  .record(repositoryScriptGroupNameSchema, repoScriptsGroupConfigSchema)
   .refine((groups) => Object.keys(groups).length > 0, {
     message: "groups must contain at least one entry",
   });
@@ -209,7 +192,7 @@ const repoScriptsNewRepositoryRawSchema = z
     // would return it unchanged and the publication gate would run zero groups
     // and pass every run forever, with ok true and nothing verified. Omit the
     // field to mean "every group"; an empty array is a validation error.
-    gateGroups: z.array(repoScriptsGroupNameSchema).min(1).optional(),
+    gateGroups: z.array(repositoryScriptGroupNameSchema).min(1).optional(),
     commandTimeoutMinutes: repoScriptsTimeoutMinutesSchema.optional(),
   })
   .strict();

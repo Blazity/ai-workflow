@@ -6,7 +6,7 @@
  * happened, it cost what it cost, and a later edit to the profile it proposed
  * does not change that.
  */
-import { and, asc, desc, eq, gte, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, lt, or, sql } from "drizzle-orm";
 import type {
   RepositorySuggestionOutcome,
   RepositorySuggestionUsage,
@@ -169,6 +169,10 @@ async function listRepositorySuggestionsPage(
  * Rows, not tokens: the cap exists to stop a stuck screen from making calls in
  * a loop, and a loop is visible in the row count long before it is visible in
  * a bill.
+ *
+ * Aggregated in SQL rather than by reading the window: the window is bounded by
+ * the rate limit, not by anything that stops it growing, so selecting every row
+ * to take its length would scale with how hard a caller hammered the endpoint.
  */
 export async function countRepositorySuggestionsSince(
   db: Db,
@@ -176,16 +180,22 @@ export async function countRepositorySuggestionsSince(
   since: Date,
 ): Promise<{ count: number; oldestAt: Date | null }> {
   const rows = await db
-    .select({ createdAt: repositorySuggestions.createdAt })
+    .select({
+      total: sql<number>`count(*)::int`,
+      // `mapWith` because a raw aggregate skips the column's own driver
+      // mapping, and the driver hands a timestamptz back as a string.
+      oldestAt: sql<Date | null>`min(${repositorySuggestions.createdAt})`.mapWith(
+        repositorySuggestions.createdAt,
+      ),
+    })
     .from(repositorySuggestions)
     .where(
       and(
         eq(repositorySuggestions.repositoryId, repositoryId),
         gte(repositorySuggestions.createdAt, since),
       ),
-    )
-    .orderBy(asc(repositorySuggestions.createdAt));
-  return { count: rows.length, oldestAt: rows[0]?.createdAt ?? null };
+    );
+  return { count: rows[0]?.total ?? 0, oldestAt: rows[0]?.oldestAt ?? null };
 }
 
 export function countConnectedRepositorySuggestionsSince(

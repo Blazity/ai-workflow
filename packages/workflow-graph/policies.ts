@@ -24,13 +24,11 @@
  * to think about. Both use the one `dedupeWorkflowDefinitionIssues`.
  */
 import type { z } from "zod";
-import type {
-  WorkflowDefinition,
-  WorkflowDefinitionValidationIssue,
-} from "@shared/contracts";
 import {
   WORKFLOW_SCHEMA_VERSION,
   workflowDefinitionSchemaVersionOf,
+  type WorkflowDefinition,
+  type WorkflowDefinitionValidationIssue,
 } from "@shared/contracts";
 import {
   dedupeWorkflowDefinitionIssues,

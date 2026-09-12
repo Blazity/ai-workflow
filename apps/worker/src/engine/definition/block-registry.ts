@@ -18,7 +18,6 @@ import {
   type ParsedJsonSchema,
 } from "./json-schema.js";
 
-
 export interface ContractDefinition {
   output: WorkflowValueSchema;
   /** Top-level fields guaranteed whenever the block advances through a normal

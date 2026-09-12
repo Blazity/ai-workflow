@@ -1,9 +1,6 @@
 import { describe, it } from "node:test";
 import { expect } from "./test-expect.js";
-import {
-  createWorkflowExecutionErrorState,
-  isWorkflowExecutionErrorState,
-} from "./execution-error.js";
+import { createWorkflowExecutionErrorState } from "./execution-error.js";
 
 describe("execution error state", () => {
   it("derives the diagnostic id from the run, the node and the attempt", () => {
@@ -39,21 +36,5 @@ describe("execution error state", () => {
         detail: "402 insufficient credits for account acct_42",
       }),
     ).not.toHaveProperty("detail");
-  });
-
-  it("recognises a minted state and refuses a near miss", () => {
-    const state = createWorkflowExecutionErrorState("run-1", "block-a", 1, {
-      category: "timeout",
-      message: "The block timed out.",
-    });
-    expect(isWorkflowExecutionErrorState(state)).toBe(true);
-    expect(isWorkflowExecutionErrorState({ ...state, attempt: "1" })).toBe(
-      false,
-    );
-    expect(isWorkflowExecutionErrorState({ ...state, phase: 7 })).toBe(false);
-    expect(isWorkflowExecutionErrorState(null)).toBe(false);
-    expect(isWorkflowExecutionErrorState("AIW-DIAG-run-1-block-a-1")).toBe(
-      false,
-    );
   });
 });

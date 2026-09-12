@@ -43,7 +43,8 @@ beforeEach(async () => {
   // tests start from an empty one: asserting around a seed instead would make
   // them fail the next time somebody adds a built-in prompt, which says nothing
   // about either tool. Same clearing the definition store's own tests do
-  // (workflow-definition/store.test.ts:1070).
+  // (services/workflow-definitions/persistence.test.ts, "back-compat wrappers
+  // on a single-definition db").
   await db.delete(workflowDefinitionTriggers);
   await db.delete(workflowDefinitionVersions);
   await db.delete(workflowDefinitions);
