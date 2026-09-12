@@ -51,6 +51,16 @@ under `src/routes` and `src/mcp`, and configuration helpers are under
 `src/config` and `src/infra`. Use those documents when a change crosses a
 boundary instead of copying their ownership tables here.
 
+`src/workflow-definition` is gone (stage 7 of
+[the workflow-graph plan](../../docs/plans/2026-09-11-workflow-graph-package.md),
+and listed in `scripts/gates/no-resurrected-paths.json`). What a definition is
+and whether it is valid now lives in `@shared/workflow-graph`; the worker keeps
+the block registry, the ajv-backed JSON Schema helpers, deployment validation,
+stored-definition reads, models, layout, agent resolution and harness-profile
+runtime in `src/engine/definition/`, the authoring and drift-gate half in
+`src/services/workflow-definitions/`, and the suites plus the scenario corpus in
+`src/workflow-graph-suites/` (see its `README.md`).
+
 ## Settings
 
 Product-behaviour switches (limits, feature flags, MCP bounds, board column
@@ -104,7 +114,7 @@ names, harness defaults) are rows in the `settings` table, described once in
   `ticketBoardSettings()`, which three trigger entry points still call; it goes
   when the cleanup stage removes the environment parsing.
   `services/settings/consumers-guard.test.ts` scans `routes`, `services`, `mcp`,
-  `infra`, `engine`, `pre-sandbox` and `workflow-definition` and fails on a
+  `infra`, `engine`, `pre-sandbox` and `workflow-graph-suites` and fails on a
   reintroduced `env.<migrated key>`, on a zero-argument accessor, on an import
   of a deleted allowlist module and on a read of `AGENT_ALLOWED_REPOS` inside a
   run. Its exemptions are written down with reasons; add one only with a reason

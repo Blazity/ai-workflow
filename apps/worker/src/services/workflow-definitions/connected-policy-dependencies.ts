@@ -8,8 +8,8 @@
 import {
   validateConnectedWorkflowDefinitionCandidateWithPromptAuthoring,
   validateConnectedWorkflowPromptAuthoringIssues,
-} from "../../workflow-definition/prompt-authoring.js";
-import { previewConnectedWorkflowPromptCandidate } from "../../workflow-definition/prompt-preview.js";
+} from "./prompt-authoring.js";
+import { previewConnectedWorkflowPromptCandidate } from "./prompt-preview.js";
 import {
   dispatchManualWorkflow,
   dispatchConnectedManualWorkflow,

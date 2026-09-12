@@ -15,7 +15,7 @@ import {
   inspectJsonSchema202012,
   parseJsonSchema202012,
   validateJsonSchemaValue,
-} from "../../workflow-definition/json-schema.js";
+} from "./json-schema.js";
 
 export const JSON_SCHEMA_SUPPORT: WorkflowJsonSchemaSupport = {
   inspect: inspectJsonSchema202012,

@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 // deployment env. Only FALLBACK_MODELS is read here and it is a plain const.
 vi.mock("../../infra/vcs-config.js", () => ({ env: {} }));
 
-import { FALLBACK_MODELS } from "../../workflow-definition/models.js";
+import { FALLBACK_MODELS } from "../definition/models.js";
 import { computeUsageTotals, type PhaseUsage } from "../../sandbox/usage.js";
 import { REPO_MEMORY_DISTILL_CODEX_MODEL, optionalPricedModelsForRun, repoMemoryDistillTarget, resolveRunPriceLookup } from "../helpers/prompt-output.js";
 

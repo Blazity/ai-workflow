@@ -81,13 +81,13 @@ export async function loadWorkflowDefinitionFor(
   const { getConnectedEnabledWorkflowDefinitionForTrigger } =
     await import("../definition-trigger-routing.js");
   const { validateWorkflowDefinitionForRunLoad } =
-    await import("../../workflow-definition/deployment-validation.js");
+    await import("../definition/deployment-validation.js");
   const { createWorkflowBlockContractResolver } =
     await import("../definition/block-contract-resolver.js");
   const { workflowBlockRegistryContextForRun } =
     await import("../definition/block-contract-environment.js");
   const { BLOCK_PARAMS_SCHEMAS } = await import("../definition/block-params-schemas.js");
-  const { defaultWorkflowDefinitionV2 } = await import("../../workflow-definition/default.js");
+  const { defaultWorkflowDefinitionV2 } = await import("../definition/default.js");
   const { logger } = await import("../../infra/logger.js");
 
   const toRuntimeShape = (

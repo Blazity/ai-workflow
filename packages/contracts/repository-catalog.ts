@@ -418,7 +418,7 @@ export type RepositorySuggestionDroppedGroup = z.infer<
  * **No `$schema` key, and no other dialect marker.** This object is handed to
  * the AI SDK's structured output as-is, and the block path strips exactly that
  * key before sending (`jsonSchemaForProvider` in
- * `apps/worker/src/workflow-definition/json-schema.ts`) because the providers
+ * `apps/worker/src/engine/definition/json-schema.ts`) because the providers
  * refuse or ignore it. Declaring the dialect here would mean either shipping it
  * to the provider or reaching into the engine to remove it again.
  */

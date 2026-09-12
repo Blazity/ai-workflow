@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildImplementationAgentSuccessOutput, buildOpenPrSuccessOutput, buildReviewAgentSuccessOutput, reviewAgentExecutionResult } from "../helpers/prompt-output.js";
 import { resolveImplementationPlanInput } from "../helpers/trigger-input.js";
-import { validateBlockOutputForDefinition } from "../../workflow-definition/block-registry.js";
+import { validateBlockOutputForDefinition } from "../definition/block-registry.js";
 import { normalizeReviewResultsInput } from "../helpers/review-results.js";
 
 describe("specialized workflow block outputs", () => {

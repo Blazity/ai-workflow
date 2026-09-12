@@ -37,7 +37,7 @@ const SCANNED_ROOTS = [
   "infra",
   "engine",
   "pre-sandbox",
-  "workflow-definition",
+  "workflow-graph-suites",
 ];
 
 /** The groups this wave converted. */
@@ -171,7 +171,8 @@ const EXEMPT: Array<{ path: string; because: string }> = [
  * not in the engine wave's key list, converting it means a parameter on three
  * step signatures (the directive is left unspelled here on purpose: the step
  * set diff a stage pastes greps for it), and one of the four files
- * (`workflow-definition/prompt-authoring.ts`) belongs to another lane's stage.
+ * (`services/workflow-definitions/prompt-authoring.ts`) belongs to another lane's
+ * stage.
  * The cleanup stage (H) deletes the environment parsing and takes it with it.
  */
 const RUN_TIER_RESIDUE: Array<{ path: string; key: string; because: string }> = [
@@ -191,7 +192,7 @@ const RUN_TIER_RESIDUE: Array<{ path: string; key: string; because: string }> = 
     because: "the organization row a replay capture is written under",
   },
   {
-    path: "workflow-definition/prompt-authoring.ts",
+    path: "services/workflow-definitions/prompt-authoring.ts",
     key: "DASHBOARD_ORG_SLUG",
     because: "another lane's stage owns this file",
   },
@@ -245,7 +246,7 @@ function sourceFiles(): string[] {
 /** The tiers a run executes in. Everything here reaches its values through the
  *  run context, so a read of the allowlist variable is a defect here even where
  *  it would be merely legacy elsewhere. */
-const RUN_ROOTS = ["engine/", "pre-sandbox/", "workflow-definition/"];
+const RUN_ROOTS = ["engine/", "pre-sandbox/"];
 
 function findingsFor(pattern: RegExp, roots?: string[]): string[] {
   const findings: string[] = [];

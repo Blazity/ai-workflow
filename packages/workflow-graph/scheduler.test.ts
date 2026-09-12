@@ -3,7 +3,7 @@
  * it cannot judge through `SchedulerDependencies`.
  *
  * Everything else the scheduler does is covered, unchanged, by
- * `apps/worker/src/workflow-definition/v2-scheduler.test.ts` and the scenario
+ * `apps/worker/src/workflow-graph-suites/v2-scheduler.test.ts` and the scenario
  * suites, which run it against the worker's real ajv-backed validators. What
  * they cannot show is that the verdict comes from the injected object rather
  * than from something this package reached for, which is what these three

@@ -2,7 +2,7 @@
  * The engine's typing of an execution error: the class a caught failure is
  * recognised by, and the sentence a user reads.
  *
- * It sits next to `run-budget.ts` rather than in `workflow-definition/` because
+ * It sits next to `run-budget.ts` rather than in `engine/definition/` because
  * both are worker-only. The data these helpers carry is the contracts shape
  * (`WorkflowExecutionErrorState`), so the scheduler mints and records a failure
  * without any of it.

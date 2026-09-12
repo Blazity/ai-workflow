@@ -11,15 +11,15 @@ import { isAgentRuntimeError } from "../../../sandbox/agents/runtime-error.js";
 import {
   validateBlockOutputForDefinition,
   workflowBlockDefinitionIssue,
-} from "../../../workflow-definition/block-registry.js";
+} from "../../definition/block-registry.js";
 import {
   jsonSchemaForProvider,
   normalizeJsonSchemaProviderOutput,
   parseJsonSchema202012,
   validateJsonSchemaValue,
   type ParsedJsonSchema,
-} from "../../../workflow-definition/json-schema.js";
-import { resolveBlockAgent } from "../../../workflow-definition/resolve-agent.js";
+} from "../../definition/json-schema.js";
+import { resolveBlockAgent } from "../../definition/resolve-agent.js";
 import type { ResolvedHarnessRuntime } from "../../../sandbox/harness-runtime.js";
 import {
   ensureAgentSandbox,

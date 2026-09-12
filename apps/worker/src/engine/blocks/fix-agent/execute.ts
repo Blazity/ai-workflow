@@ -13,7 +13,7 @@ import type {
 import type { CheckRunResult, PRComment } from "../../../adapters/vcs/types.js";
 import type { WorkspaceManifestV2 } from "../../../sandbox/repo-workspace.js";
 import type { PrTriggerPayload } from "../../agent-input.js";
-import { resolveBlockAgent } from "../../../workflow-definition/resolve-agent.js";
+import { resolveBlockAgent } from "../../definition/resolve-agent.js";
 import {
   buildReviewLedgerDurableState,
   buildReviewLedgerGuardSummary,

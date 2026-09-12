@@ -26,7 +26,7 @@ const SKIPPED_DIRECTORIES = new Set([
 ]);
 const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
 const STORED_DEFINITION_SOURCE =
-  "apps/worker/src/workflow-definition/stored-definition.ts";
+  "apps/worker/src/engine/definition/stored-definition.ts";
 const HARNESS_PROFILE_MANIFESTS = new Set([
   "apps/dashboard/components/cockpit/flow-editor/agent-harness-profile.tsx",
   "apps/dashboard/components/cockpit/harness-profiles/profile-editor.tsx",

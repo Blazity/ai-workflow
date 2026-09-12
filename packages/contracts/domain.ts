@@ -603,7 +603,7 @@ export interface WorkflowRepositoryScope {
 }
 
 /** The one definition schema that runs, deploys and is authored. Older stored
- *  rows still carry an older number; apps/worker/src/workflow-definition/
+ *  rows still carry an older number; apps/worker/src/engine/definition/
  *  stored-definition.ts is the only reader allowed to look at it. */
 export const WORKFLOW_SCHEMA_VERSION = 2;
 

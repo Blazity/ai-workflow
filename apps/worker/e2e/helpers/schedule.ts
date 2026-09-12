@@ -12,11 +12,11 @@ const sql = neon(e2eEnv.DATABASE_URL);
 
 /**
  * The graph seeded here is the committed snapshot from
- * apps/worker/src/workflow-definition/scenarios/snapshots/schedule-open-pr-v1.json,
+ * apps/worker/src/workflow-graph-suites/scenarios/snapshots/schedule-open-pr-v1.json,
  * read as-is, never authored inline in this file. That snapshot is parsed
  * through the live workflowDefinitionSchema and the deployment validator on
  * every run of the scenario suite (loadSnapshotGraph in
- * workflow-definition/scenarios/harness.ts:309-347, exercised by
+ * workflow-graph-suites/scenarios/harness.ts:309-347, exercised by
  * schedule-open-pr.scenario.test.ts), a test that runs on every commit. If
  * the graph ever stops being a valid, deployable v2 definition, that failure
  * shows up there, loudly, on its own PR, rather than silently corrupting a
@@ -38,7 +38,7 @@ const sql = neon(e2eEnv.DATABASE_URL);
  * actually minting a workflow_schedules row gets proven end-to-end.
  */
 const SNAPSHOT_PATH = new URL(
-  "../../src/workflow-definition/scenarios/snapshots/schedule-open-pr-v1.json",
+  "../../src/workflow-graph-suites/scenarios/snapshots/schedule-open-pr-v1.json",
   import.meta.url,
 );
 

@@ -2,7 +2,7 @@ import {
   jsonSchemaForProvider,
   normalizeJsonSchemaProviderOutput,
   parseJsonSchema202012,
-} from "../workflow-definition/json-schema.js";
+} from "./definition/json-schema.js";
 import {
   generateProviderText,
   type GenerateProviderTextInput,

@@ -5,13 +5,13 @@ import { drizzle } from "drizzle-orm/pglite";
 import { describe, expect, it } from "vitest";
 import type { Db } from "../db/client.js";
 import * as schema from "../db/schema.js";
-import { defaultWorkflowDefinitionV2 } from "../workflow-definition/default.js";
+import { defaultWorkflowDefinitionV2 } from "../engine/definition/default.js";
 import {
   assertNoBuiltInPromptDrift,
   BuiltInPromptDriftError,
-} from "../workflow-definition/builtin-prompt-drift-gate.js";
+} from "../services/workflow-definitions/builtin-prompt-drift-gate.js";
 import { evaluateBuiltInPromptDriftGate } from "@shared/prompts";
-import { findBuiltInPromptDrift } from "../workflow-definition/builtin-prompt-drift.js";
+import { findBuiltInPromptDrift } from "../services/workflow-definitions/builtin-prompt-drift.js";
 
 const migrationsDir = fileURLToPath(new URL("../../drizzle/", import.meta.url));
 const migrationFiles = readdirSync(migrationsDir)
