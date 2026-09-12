@@ -27,10 +27,24 @@ import {
   BLOCK_PARAMS_SCHEMAS,
   type BlockParamsSchemas,
 } from "../../engine/definition/block-params-schemas.js";
+import {
+  createWorkflowValueAnalyzer,
+  type WorkflowValueAnalyzer,
+} from "../../workflow-definition/available-values.js";
 
 export interface RequestBlockContracts {
   /** One block's contract, from its type and its own authored params. */
   resolveContract: WorkflowBlockContractResolver;
+  /**
+   * The available-values analysis of one definition: the graph walk, the
+   * per-node contracts and the offered value catalog.
+   *
+   * It memoizes nothing. A request stays at one pass by keeping the
+   * `WorkflowValueAnalysis` it got and handing it to the next reader (draft
+   * validation, the data catalog, prompt authoring), which is also why a graph
+   * edited mid request is never answered from an earlier pass.
+   */
+  analyzeValues: WorkflowValueAnalyzer;
   /** Every block type's parameter schema, composed in `engine/definition`. */
   blockParamsSchemas: BlockParamsSchemas;
   /**
@@ -50,9 +64,11 @@ export interface RequestBlockContracts {
 
 export function currentBlockContracts(): RequestBlockContracts {
   const context = workflowBlockRegistryContextFromEnv();
+  const resolveContract = createWorkflowBlockContractResolver(context);
   let registry: Record<WorkflowBlockType, WorkflowBlockContract> | null = null;
   return {
-    resolveContract: createWorkflowBlockContractResolver(context),
+    resolveContract,
+    analyzeValues: createWorkflowValueAnalyzer(resolveContract),
     blockParamsSchemas: BLOCK_PARAMS_SCHEMAS,
     configuredVcsProviders: context.vcsProviders,
     blockRegistry: () => (registry ??= buildWorkflowBlockRegistry(context)),

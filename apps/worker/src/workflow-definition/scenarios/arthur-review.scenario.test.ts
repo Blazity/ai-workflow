@@ -23,11 +23,13 @@ import {
   reviewPublicationDecision,
 } from "../../engine/runtime/pr-external-resources.js";
 import type { WorkflowBlockRegistryContext } from "../../engine/definition/block-contract-resolver.js";
-import { testBlockData } from "../../test-support/block-contracts.js";
+import {
+  testBlockData,
+  testDeploymentIssues,
+} from "../../test-support/block-contracts.js";
 import { clampBothEnds } from "../failure-message.js";
 import { validateHarnessProfileReferencesWithLoader } from "../harness-profile-runtime.js";
 import { executionError } from "../interpreter.js";
-import { validateWorkflowDefinitionIssuesForDeployment } from "../schema.js";
 import {
   executorRunsOf,
   expectNeverInvoked,
@@ -718,7 +720,7 @@ describe("Arthur post-PR review: the committed definition", () => {
         committedSnapshotText(reviewShape.snapshot.path),
       ) as WorkflowDefinitionV2;
       expect(
-        validateWorkflowDefinitionIssuesForDeployment(
+        testDeploymentIssues(
           committed,
           ...BLOCK_DATA,
           { checkEnvironmentAvailability: false },
@@ -1177,7 +1179,7 @@ describe("Arthur post-PR review: one review agent per repository", () => {
     // EVERY path into the consumer, and a branch-selected reviewer runs on one
     // of three.
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(
+      testDeploymentIssues(
         perRepository,
         ...BLOCK_DATA,
         { checkEnvironmentAvailability: false },

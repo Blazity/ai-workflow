@@ -16,6 +16,7 @@ import {
   type WorkflowBlockRegistryContext,
 } from "../engine/definition/block-contract-resolver.js";
 import { BLOCK_PARAMS_SCHEMAS } from "../engine/definition/block-params-schemas.js";
+import { createWorkflowValueAnalyzer } from "./available-values.js";
 import {
   isPromptAuthoringBlock,
   resolveNodePromptAuthoring,
@@ -50,11 +51,13 @@ export async function previewWorkflowPromptCandidate(
   registryContext: WorkflowBlockRegistryContext,
   options: { organizationId?: string } = {},
 ): Promise<WorkflowPromptPreviewResult> {
+  const resolveContract = createWorkflowBlockContractResolver(registryContext);
   const validated = validateWorkflowDefinitionCandidate(
     candidate,
-    createWorkflowBlockContractResolver(registryContext),
+    resolveContract,
     BLOCK_PARAMS_SCHEMAS,
     registryContext.vcsProviders,
+    createWorkflowValueAnalyzer(resolveContract),
   );
   if (!validated.parsed) {
     return {
@@ -140,11 +143,13 @@ export async function previewConnectedWorkflowPromptCandidate(
   const registryContext = (
     await import("../engine/definition/block-contract-environment.js")
   ).workflowBlockRegistryContextFromEnv();
+  const resolveContract = createWorkflowBlockContractResolver(registryContext);
   const validated = validateWorkflowDefinitionCandidate(
     input.candidate,
-    createWorkflowBlockContractResolver(registryContext),
+    resolveContract,
     BLOCK_PARAMS_SCHEMAS,
     registryContext.vcsProviders,
+    createWorkflowValueAnalyzer(resolveContract),
   );
   if (!validated.parsed) return { ok: false, statusCode: 422, message: "Prompt preview requires a structurally valid v2 definition.", issues: validated.response.issues };
   const nodeIndex = validated.parsed.nodes.findIndex((node) => node.id === input.blockId);

@@ -42,6 +42,56 @@ export interface WorkflowV2BindingAnalysis {
   issues: WorkflowDefinitionValidationIssue[];
 }
 
+/**
+ * One walk of one definition, shared by every reader below.
+ *
+ * Deciding which values a block may read means walking the graph, resolving a
+ * contract per node and building the offered catalog; the bindings reader and
+ * the data-catalog reader used to do all of that separately, so a request that
+ * validated a draft, asked for its available values and then checked prompt
+ * authoring walked the same graph five times. The walk happens here once and
+ * every reader takes the result as a parameter.
+ */
+export interface WorkflowValueAnalysis extends WorkflowV2BindingAnalysis {
+  /** The exact definition instance this pass walked. */
+  definition: WorkflowDefinitionV2;
+  /** The editor's data catalog, built on first read: a validation request
+   *  never asks for it. */
+  catalog(): WorkflowDefinitionCatalogResponse;
+}
+
+/** Analyses one definition against the block data one request works from. */
+export type WorkflowValueAnalyzer = (
+  definition: WorkflowDefinitionV2,
+) => WorkflowValueAnalysis;
+
+/**
+ * What the walk found, kept private to this file: the catalog reader below is
+ * its only consumer, and publishing it would put this module's internal maps
+ * into the interface stage 4 moves into the package.
+ */
+interface WorkflowValueWalk {
+  definition: WorkflowDefinitionV2;
+  /** Every node of the definition, by id. */
+  nodeById: ReadonlyMap<string, WorkflowDefinitionV2Node>;
+  /** Control edges arriving at a node; more than one means a join. */
+  incoming: ReadonlyMap<string, readonly WorkflowDefinitionV2ControlEdge[]>;
+  /** Which nodes each node reaches along control edges. */
+  reachability: ReadonlyMap<string, ReadonlySet<string>>;
+  /** Nodes inside a cycle, whose output is never guaranteed downstream. */
+  cyclicNodeIds: ReadonlySet<string>;
+  /** The Loop region a node belongs to, when it belongs to one. */
+  loopRegionsByNodeId: ReadonlyMap<string, AuthoringLoopRegion>;
+  /** When each node runs, as a formula over branch outcomes. */
+  formulas: ReadonlyMap<string, ActivationFormula>;
+  /** The contract resolved for each node, from its type and its own params. */
+  contracts: ReadonlyMap<string, WorkflowBlockContract>;
+  /** The inputs each node offers a binding for. */
+  targetsByNode: ReadonlyMap<string, readonly InputTarget[]>;
+  /** Triggers that can start a run reaching each node. */
+  activeTriggerIdsByNode: ReadonlyMap<string, readonly string[]>;
+}
+
 interface InputTarget {
   name: string;
   schema: WorkflowValueSchema;
@@ -1332,10 +1382,16 @@ function validateBindings(
   }
 }
 
-export function analyzeWorkflowV2Bindings(
+/**
+ * Walks one definition once: the graph, a contract per node, and the values
+ * every node may read. Readers take the result: its own fields for the
+ * bindings, `analyzeWorkflowV2Catalog` for the editor's data catalog. Nothing
+ * below walks the graph a second time.
+ */
+export function analyzeWorkflowValues(
   definition: WorkflowDefinitionV2,
   resolveContract: WorkflowBlockContractResolver,
-): WorkflowV2BindingAnalysis {
+): WorkflowValueAnalysis {
   const issues: WorkflowDefinitionValidationIssue[] = [];
   const nodeById = new Map(definition.nodes.map((node) => [node.id, node]));
   const forward = new Map(definition.nodes.map((node) => [node.id, [] as string[]]));
@@ -1363,21 +1419,26 @@ export function analyzeWorkflowV2Bindings(
     );
   }
 
+  const activeTriggerIdsByNode = new Map<string, readonly string[]>(
+    definition.nodes.map((consumer) => [
+      consumer.id,
+      reachingTriggerIds(consumer.id, triggers, reachability).filter(
+        (triggerId) => {
+          const trigger = nodeById.get(triggerId);
+          return (
+            trigger !== undefined &&
+            triggerCanReachConsumer(trigger, consumer.id, definition, nodeById)
+          );
+        },
+      ),
+    ]),
+  );
+
   const availableValuesByNode: WorkflowAvailableValuesByNode = {};
   for (const consumer of definition.nodes) {
     const targets = targetsByNode.get(consumer.id) ?? [];
     const values: WorkflowAvailableValue[] = [];
-    const activeTriggerIds = reachingTriggerIds(
-      consumer.id,
-      triggers,
-      reachability,
-    ).filter((triggerId) => {
-      const trigger = nodeById.get(triggerId);
-      return (
-        trigger !== undefined &&
-        triggerCanReachConsumer(trigger, consumer.id, definition, nodeById)
-      );
-    });
+    const activeTriggerIds = activeTriggerIdsByNode.get(consumer.id) ?? [];
 
     if (activeTriggerIds.length > 0) {
       const triggerSchemas = activeTriggerIds
@@ -1398,7 +1459,7 @@ export function analyzeWorkflowV2Bindings(
             source: { kind: "entry", nodeId: null, blockType: null },
             guarantee: {
               kind: "active_entry",
-              triggerNodeIds: activeTriggerIds,
+              triggerNodeIds: [...activeTriggerIds],
               viaEdgeIds: [],
             },
             compatibleInputNames: targetCompatibility(commonOutput, targets),
@@ -1420,7 +1481,7 @@ export function analyzeWorkflowV2Bindings(
             source: { kind: "entry", nodeId: null, blockType: null },
             guarantee: {
               kind: "active_entry",
-              triggerNodeIds: activeTriggerIds,
+              triggerNodeIds: [...activeTriggerIds],
               viaEdgeIds: [],
             },
             compatibleInputNames: targetCompatibility(common, targets),
@@ -1529,7 +1590,7 @@ export function analyzeWorkflowV2Bindings(
         source: { kind: "run", nodeId: null, blockType: null },
         guarantee: {
           kind: "unconditional_activation",
-          triggerNodeIds: activeTriggerIds,
+          triggerNodeIds: [...activeTriggerIds],
           viaEdgeIds: [],
         },
         compatibleInputNames: targetCompatibility(candidate.schema, targets),
@@ -1539,10 +1600,26 @@ export function analyzeWorkflowV2Bindings(
   }
 
   validateBindings(definition, targetsByNode, availableValuesByNode, issues);
+  const nodeContracts = Object.fromEntries(contracts);
+  const walk: WorkflowValueWalk = {
+    definition,
+    nodeById,
+    incoming,
+    reachability,
+    cyclicNodeIds,
+    loopRegionsByNodeId,
+    formulas,
+    contracts,
+    targetsByNode,
+    activeTriggerIdsByNode,
+  };
+  let catalog: WorkflowDefinitionCatalogResponse | null = null;
   return {
+    definition,
     availableValuesByNode,
-    nodeContracts: Object.fromEntries(contracts),
+    nodeContracts,
     issues,
+    catalog: () => (catalog ??= { nodeContracts, catalogByNode: catalogByNode(walk) }),
   };
 }
 
@@ -1614,69 +1691,32 @@ function catalogEntry(
 }
 
 /**
- * Builds the editor's structural data catalog without running prompt/profile
- * authoring checks. Incomplete drafts are expected: unavailable values remain
- * visible with an explanation instead of becoming request failures.
+ * The editor's structural data catalog, read off the analysis pass without
+ * running prompt/profile authoring checks. Incomplete drafts are expected:
+ * unavailable values remain visible with an explanation instead of becoming
+ * request failures.
  */
-export function analyzeWorkflowV2Catalog(
-  definition: WorkflowDefinitionV2,
-  resolveContract: WorkflowBlockContractResolver,
-): WorkflowDefinitionCatalogResponse {
-  const bindingAnalysis = analyzeWorkflowV2Bindings(
+function catalogByNode(
+  walk: WorkflowValueWalk,
+): Record<string, WorkflowDataCatalogEntry[]> {
+  const {
     definition,
-    resolveContract,
-  );
-  const nodeById = new Map(definition.nodes.map((node) => [node.id, node]));
-  const forward = new Map(
-    definition.nodes.map((node) => [node.id, [] as string[]]),
-  );
-  const incoming = new Map(
-    definition.nodes.map((node) => [
-      node.id,
-      [] as WorkflowDefinitionV2ControlEdge[],
-    ]),
-  );
-  for (const edge of definition.edges) {
-    if (!nodeById.has(edge.from) || !nodeById.has(edge.to)) continue;
-    forward.get(edge.from)?.push(edge.to);
-    incoming.get(edge.to)?.push(edge);
-  }
-  const reachability = new Map(
-    definition.nodes.map((node) => [
-      node.id,
-      reachableFrom(node.id, forward),
-    ]),
-  );
-  const cyclicNodeIds = stronglyConnectedNodeIds(definition);
-  const loopRegionsByNodeId = authoringLoopRegions(definition, nodeById);
-  const formulas = activationFormulas(definition, nodeById, cyclicNodeIds);
-  const triggers = definition.nodes.filter((node) =>
-    isTriggerBlockType(node.type),
-  );
-  const contracts = contractsForDefinition(definition, resolveContract);
-  const targetsByNode = new Map<string, InputTarget[]>();
-  for (const [nodeIndex, node] of definition.nodes.entries()) {
-    targetsByNode.set(
-      node.id,
-      inputTargets(node, nodeIndex, contracts.get(node.id)!, []),
-    );
-  }
+    nodeById,
+    incoming,
+    reachability,
+    cyclicNodeIds,
+    loopRegionsByNodeId,
+    formulas,
+    contracts,
+    targetsByNode,
+    activeTriggerIdsByNode,
+  } = walk;
 
-  const catalogByNode: Record<string, WorkflowDataCatalogEntry[]> = {};
+  const byNode: Record<string, WorkflowDataCatalogEntry[]> = {};
   for (const consumer of definition.nodes) {
     const targets = targetsByNode.get(consumer.id) ?? [];
     const entries: WorkflowDataCatalogEntry[] = [];
-    const activeTriggerIds = reachingTriggerIds(
-      consumer.id,
-      triggers,
-      reachability,
-    ).filter((triggerId) => {
-      const trigger = nodeById.get(triggerId);
-      return (
-        trigger !== undefined &&
-        triggerCanReachConsumer(trigger, consumer.id, definition, nodeById)
-      );
-    });
+    const activeTriggerIds = activeTriggerIdsByNode.get(consumer.id) ?? [];
     const triggerSchemas = activeTriggerIds
       .map((id) => contracts.get(id)?.output.bindingSchema)
       .filter((schema): schema is WorkflowValueSchema => schema !== undefined);
@@ -1949,11 +1989,29 @@ export function analyzeWorkflowV2Catalog(
         }),
       );
     }
-    catalogByNode[consumer.id] = entries;
+    byNode[consumer.id] = entries;
   }
 
-  return {
-    nodeContracts: bindingAnalysis.nodeContracts,
-    catalogByNode,
-  };
+  return byNode;
+}
+
+/** The editor's data catalog half of the analysis. */
+export function analyzeWorkflowV2Catalog(
+  analysis: WorkflowValueAnalysis,
+): WorkflowDefinitionCatalogResponse {
+  return analysis.catalog();
+}
+
+/**
+ * The analyser one request works from, bound to the block contract resolver of
+ * the same environment read (`services/workflow-definitions/block-contracts.ts`).
+ *
+ * It does not cache by definition instance: a request keeps to one pass by
+ * handing the analysis it computed to the readers that need it, so a graph
+ * edited between two validations is never answered from the earlier pass.
+ */
+export function createWorkflowValueAnalyzer(
+  resolveContract: WorkflowBlockContractResolver,
+): WorkflowValueAnalyzer {
+  return (definition) => analyzeWorkflowValues(definition, resolveContract);
 }

@@ -137,9 +137,10 @@ again at invocation time so a stale checkpoint cannot leak a raw placeholder
 into an agent prompt.
 
 Which references an author may pick is computed per node by
-`analyzeWorkflowV2Bindings` and `analyzeWorkflowV2Catalog` in
-`apps/worker/src/workflow-definition/available-values.ts`, which also produce
-the per-node contracts and available values the editor shows. A binding to an
+`analyzeWorkflowValues` in
+`apps/worker/src/workflow-definition/available-values.ts`, which also produces
+the per-node contracts, the available values and (through
+`analyzeWorkflowV2Catalog`) the data catalog the editor shows. A binding to an
 unknown block, or a block binding to its own output, is a validation error in
 `schema.ts`.
 
@@ -258,7 +259,12 @@ once per request: validation, available values and the editor's block table then
 answer about one deployment rather than three separate reads of it. The
 definition-level repository pin belongs to no block, so it cannot be checked
 through the resolver; the same per-request object carries the configured VCS
-provider list that check takes.
+provider list that check takes. That object also carries the analyser
+(`analyzeValues`) behind the single available-values pass
+(`analyzeWorkflowValues` in `available-values.ts`): one request walks the graph,
+resolves its contracts and builds its offered catalog once, and hands that
+`WorkflowValueAnalysis` to draft validation, the data catalog and prompt
+authoring instead of each walking it again.
 
 Workspace access deserves a note: `workflowWorkspaceAccessOf` in
 `workspace-access.ts` classifies each block as `none`, `shared_read`,

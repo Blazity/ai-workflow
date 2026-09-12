@@ -26,8 +26,9 @@ import type {
   WorkflowBlockContractResolver,
 } from "@shared/contracts";
 import {
-  analyzeWorkflowV2Bindings,
   analyzeWorkflowV2Catalog,
+  type WorkflowValueAnalysis,
+  type WorkflowValueAnalyzer,
 } from "./available-values.js";
 import { isWorkflowSchemaAssignable } from "./bindings.js";
 import { inspectJsonSchema202012 } from "./json-schema.js";
@@ -77,13 +78,13 @@ export function resolveNodePromptAuthoring(
 export async function validateWorkflowPromptAuthoringIssues(
   db: Db,
   definition: WorkflowDefinition,
-  resolveContract: WorkflowBlockContractResolver,
+  analysis: WorkflowValueAnalysis,
   profileLoader?: HarnessProfileVersionLoader,
 ): Promise<WorkflowDefinitionValidationIssue[]> {
   const promptIssues =
     await validateWorkflowPromptAuthoringIssuesWithLoader(
       definition,
-      resolveContract,
+      analysis,
       createPromptReferenceLoader(db),
     );
   if (!definition.nodes.some((node) => isPromptAuthoringBlock(node))) {
@@ -108,11 +109,11 @@ export async function validateWorkflowPromptAuthoringIssues(
  * keeps prompt and profile validation here, above persistence. */
 export async function validateConnectedWorkflowPromptAuthoringIssues(
   definition: WorkflowDefinition,
-  resolveContract: WorkflowBlockContractResolver,
+  analysis: WorkflowValueAnalysis,
 ): Promise<WorkflowDefinitionValidationIssue[]> {
   const promptIssues = await validateWorkflowPromptAuthoringIssuesWithLoader(
     definition,
-    resolveContract,
+    analysis,
     createConnectedPromptReferenceLoader(),
   );
   if (!definition.nodes.some((node) => isPromptAuthoringBlock(node))) return promptIssues;
@@ -132,14 +133,13 @@ export async function validateConnectedWorkflowPromptAuthoringIssues(
 
 export async function validateWorkflowPromptAuthoringIssuesWithLoader(
   definition: WorkflowDefinitionV2,
-  resolveContract: WorkflowBlockContractResolver,
+  valueAnalysis: WorkflowValueAnalysis,
   loadPromptReference: PromptReferenceLoader,
 ): Promise<WorkflowDefinitionValidationIssue[]> {
-  const analysis = analyzeWorkflowV2Bindings(definition, resolveContract);
-  const catalog = analyzeWorkflowV2Catalog(definition, resolveContract);
+  const catalog = analyzeWorkflowV2Catalog(valueAnalysis);
   const issues: WorkflowDefinitionValidationIssue[] = [];
   for (const [nodeIndex, node] of definition.nodes.entries()) {
-    const availableValues = analysis.availableValuesByNode[node.id] ?? [];
+    const availableValues = valueAnalysis.availableValuesByNode[node.id] ?? [];
     if (isPromptAuthoringBlock(node)) {
       const result = await resolveNodePromptAuthoring({
         node,
@@ -278,20 +278,26 @@ export async function validateConnectedWorkflowDefinitionCandidateWithPromptAuth
   resolveContract: WorkflowBlockContractResolver,
   blockParamsSchemas: WorkflowBlockParamsSchemas,
   configuredVcsProviders: readonly VcsProviderKind[],
+  analyzeValues: WorkflowValueAnalyzer,
 ): Promise<WorkflowDefinitionCandidateValidation> {
   const base = validateWorkflowDefinitionCandidate(
     candidate,
     resolveContract,
     blockParamsSchemas,
     configuredVcsProviders,
+    analyzeValues,
   );
   if (!base.parsed) return base;
   const promptIssues = await validateConnectedWorkflowPromptAuthoringIssues(
     base.parsed,
-    resolveContract,
+    base.analysis,
   );
   const issues = dedupeIssues([...base.response.issues, ...promptIssues]);
-  return { parsed: base.parsed, response: { ...base.response, valid: issues.length === 0, issues } };
+  return {
+    parsed: base.parsed,
+    analysis: base.analysis,
+    response: { ...base.response, valid: issues.length === 0, issues },
+  };
 }
 
 function nodeIssue(

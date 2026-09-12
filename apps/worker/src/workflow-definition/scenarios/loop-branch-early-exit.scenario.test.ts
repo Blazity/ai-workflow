@@ -3,9 +3,11 @@ import { readFileSync } from "node:fs";
 import type { WorkflowDefinitionV2 } from "@shared/contracts";
 import type { AgentWorkflowInput } from "../../engine/agent-input.js";
 import type { WorkflowBlockRegistryContext } from "../../engine/definition/block-contract-resolver.js";
-import { testBlockData } from "../../test-support/block-contracts.js";
 import {
-  validateWorkflowDefinitionIssuesForDeployment,
+  testBlockData,
+  testDeploymentIssues,
+} from "../../test-support/block-contracts.js";
+import {
   workflowDefinitionV2Schema,
 } from "../schema.js";
 import {
@@ -105,7 +107,7 @@ function snapshotDefinition(path: string = SNAPSHOT.path): WorkflowDefinitionV2 
 }
 
 function noValidationIssues(path: string): unknown[] {
-  return validateWorkflowDefinitionIssuesForDeployment(
+  return testDeploymentIssues(
     snapshotDefinition(path),
     ...BLOCK_DATA,
     { checkEnvironmentAvailability: false },
@@ -136,7 +138,7 @@ describe("customer-authored loop with a contested boundary", () => {
     // customer can draw this graph and ship it. If validation refused it, the
     // engine behaviour would be unreachable and this file would assert nothing.
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(
+      testDeploymentIssues(
         snapshotDefinition(),
         ...BLOCK_DATA,
         { checkEnvironmentAvailability: false },

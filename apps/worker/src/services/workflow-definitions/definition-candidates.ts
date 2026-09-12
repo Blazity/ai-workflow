@@ -57,5 +57,5 @@ export async function validateWorkflowDefinitionDraftCandidate(candidate: unknow
 export function analyzeWorkflowDefinitionCatalog(
   definition: WorkflowDefinitionV2,
 ): WorkflowDefinitionCatalogResponse {
-  return analyzeWorkflowV2Catalog(definition, currentBlockContracts().resolveContract);
+  return analyzeWorkflowV2Catalog(currentBlockContracts().analyzeValues(definition));
 }
