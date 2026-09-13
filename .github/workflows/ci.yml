@@ -51,6 +51,7 @@ jobs:
       - run: pnpm run gen:blocks --check
       - name: Check diff whitespace
         run: |
+          set -euo pipefail
           base="${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || '' }}"
           if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
             echo "::notice::No usable diff base, skipping git diff --check."
@@ -125,8 +126,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run test:workflow-sdk
 
+  # Fork pull requests must never reach the secret-bearing `e2e` environment.
   engine-canary:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 75
     environment: e2e
@@ -354,6 +356,7 @@ jobs:
     steps:
       - name: Require every source job to have succeeded
         run: |
+          set -euo pipefail
           failed=""
           for entry in \
             "source-checks:${{ needs.source-checks.result }}" \
@@ -364,7 +367,8 @@ jobs:
             name="${entry%%:*}"
             result="${entry#*:}"
             echo "$name: $result"
-            if [ "$name" = "engine-canary" ] && [ "${{ github.event_name }}" != "pull_request" ] && [ "$result" = "skipped" ]; then
+            # Fork pull requests must never reach the secret-bearing `e2e` environment.
+            if [ "$name" = "engine-canary" ] && [ "$result" = "skipped" ] && { [ "${{ github.event_name }}" != "pull_request" ] || [ "${{ github.event.pull_request.head.repo.fork }}" = "true" ]; }; then
               continue
             fi
             if [ "$result" != "success" ]; then

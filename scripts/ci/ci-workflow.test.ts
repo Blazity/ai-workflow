@@ -59,6 +59,7 @@ const SOURCE_JOBS = ["source-checks", "unit-worker", "unit-dashboard", "workflow
 const REQUIRED_JOBS = [...SOURCE_JOBS, "engine-canary"] as const;
 
 const DIFF_CHECK_COMMAND = [
+  "set -euo pipefail",
   'base="${{ github.event_name == \'pull_request\' && github.event.pull_request.base.sha || github.event_name == \'push\' && github.event.before || \'\' }}"',
   'if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then',
   '  echo "::notice::No usable diff base, skipping git diff --check."',
@@ -69,7 +70,6 @@ const DIFF_CHECK_COMMAND = [
 
 /** Every command the source gate must still run, wherever it now lives. */
 const SOURCE_COMMANDS = [
-  DIFF_CHECK_COMMAND,
   "pnpm --filter @shared/workflow-graph run test:zod4",
   "pnpm --filter ai-workflow-dashboard run test",
   "pnpm --filter worker exec vitest run --shard=${{ matrix.shard }}/4",
@@ -84,6 +84,7 @@ const SOURCE_COMMANDS = [
   "pnpm run test:release-notes",
   "pnpm run test:workflow-sdk",
   "pnpm run typecheck",
+  DIFF_CHECK_COMMAND,
 ];
 
 interface CiJob {
@@ -189,8 +190,8 @@ test("the required check fails when any pull request dependency does not succeed
   assert.match(script, /!=\s*"success"/, "the check must reject any non-success result");
   assert.match(
     script,
-    /"engine-canary".*github\.event_name.*!= "pull_request".*"skipped"/u,
-    "only a non-pull-request engine canary skip may satisfy the aggregate",
+    /"engine-canary".*"skipped".*github\.event_name.*!= "pull_request".*github\.event\.pull_request\.head\.repo\.fork.*= "true"/su,
+    "only a non-pull-request or fork-pull-request engine canary skip may satisfy the aggregate",
   );
   assert.match(script, /exit 1/, "the check must fail the job on a non-success result");
 });
@@ -199,7 +200,10 @@ test("the engine canary is a fail-closed pull request dependency", async () => {
   const jobs = await ciJobs();
   const canary = jobs["engine-canary"] as CiJob;
 
-  assert.equal(canary.if, "github.event_name == 'pull_request'");
+  assert.equal(
+    canary.if,
+    "github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository",
+  );
   assert.equal(canary.environment, "e2e");
   assert.equal(canary["timeout-minutes"], 75);
   assert.deepEqual(canary.concurrency, {
@@ -227,6 +231,29 @@ test("the engine canary is a fail-closed pull request dependency", async () => {
       `${step.name ?? step.run} must require an armed target`,
     );
   }
+});
+
+test("CI never uses pull_request_target", async () => {
+  const source = await readFile(".github/workflows/ci.yml", "utf8");
+  assert.doesNotMatch(source, /\bpull_request_target\b/u);
+});
+
+test("every multiline CI run block starts in strict mode", async () => {
+  const jobs = await ciJobs();
+  let multilineRuns = 0;
+
+  for (const [jobName, job] of Object.entries(jobs)) {
+    for (const step of job.steps ?? []) {
+      if (!step.run?.includes("\n")) continue;
+      multilineRuns += 1;
+      assert.ok(
+        step.run.startsWith("set -euo pipefail\n"),
+        `${jobName}: ${step.name ?? "unnamed run"} must start with set -euo pipefail`,
+      );
+    }
+  }
+
+  assert.ok(multilineRuns > 0, "ci.yml must contain multiline run blocks");
 });
 
 test("the source build covers worker and dashboard without deployment side effects", async () => {

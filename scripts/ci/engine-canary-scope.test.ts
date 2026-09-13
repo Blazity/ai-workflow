@@ -12,6 +12,20 @@ test("a worker engine step body is in scope", () => {
   );
 });
 
+test("a worker database file is in scope", () => {
+  assert.deepEqual(engineCanaryScope(["apps/worker/src/db/repositories/runs.ts"]), {
+    run: true,
+    matched: ["apps/worker/src/db/repositories/runs.ts"],
+  });
+});
+
+test("a worker database lookalike directory is out of scope", () => {
+  assert.deepEqual(engineCanaryScope(["apps/worker/src/database/client.ts"]), {
+    run: false,
+    matched: [],
+  });
+});
+
 test("a docs-only change is out of scope", () => {
   assert.deepEqual(engineCanaryScope(["docs/architecture/gates.md"]), {
     run: false,
