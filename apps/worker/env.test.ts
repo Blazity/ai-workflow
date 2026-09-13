@@ -113,7 +113,7 @@ describe("env", () => {
       `Retired settings variables are still set: ${RETIRED_ENVIRONMENT_VARIABLES.join(", ")}`,
     );
     await expect(importEnvModule()).rejects.toThrow(
-      /Settings page or with MCP settings\.set/,
+      /Remove these variables and follow the replacement documented in SETUP\.md/,
     );
     await expect(importEnvModule()).rejects.toThrow(
       /SETUP\.md, section "Removing migrated environment variables"/,
@@ -201,7 +201,6 @@ describe("env", () => {
     delete (gitlabEnv as any).GITHUB_INSTALLATION_ID;
     delete (gitlabEnv as any).GITHUB_OWNER;
     delete (gitlabEnv as any).GITHUB_REPO;
-    delete (gitlabEnv as any).GITHUB_BASE_BRANCH;
     delete (gitlabEnv as any).GITHUB_WEBHOOK_SECRET;
     (gitlabEnv as any).GITLAB_TOKEN = "glpat-test";
     (gitlabEnv as any).GITLAB_PROJECT_ID = "group/repo";
@@ -210,8 +209,6 @@ describe("env", () => {
 
     const { env, getVcsProviderConfig } = await importEnvModule();
     expect(env.GITLAB_WEBHOOK_SECRET).toBe("gitlab-webhook-secret");
-    // No base branch here any more: it is a setting the caller carries from
-    // the snapshot, and `GITLAB_BASE_BRANCH` is read by nothing in this tier.
     const vcs = getVcsProviderConfig("gitlab");
     expect(vcs.kind).toBe("gitlab");
     if (vcs.kind !== "gitlab") throw new Error("expected gitlab");
@@ -230,16 +227,12 @@ describe("env", () => {
     delete (mixedEnv as any).VCS_KIND;
     delete (mixedEnv as any).GITHUB_OWNER;
     delete (mixedEnv as any).GITHUB_REPO;
-    delete (mixedEnv as any).GITHUB_BASE_BRANCH;
     delete (mixedEnv as any).GITLAB_PROJECT_ID;
-    delete (mixedEnv as any).GITLAB_BASE_BRANCH;
     Object.assign(process.env, mixedEnv);
     delete process.env.VCS_KIND;
     delete process.env.GITHUB_OWNER;
     delete process.env.GITHUB_REPO;
-    delete process.env.GITHUB_BASE_BRANCH;
     delete process.env.GITLAB_PROJECT_ID;
-    delete process.env.GITLAB_BASE_BRANCH;
 
     const { getConfiguredVcsProviders, getVcsProviderConfig } = await importEnvModule();
 
@@ -319,7 +312,6 @@ describe("env", () => {
     delete (gitlabEnv as any).GITHUB_INSTALLATION_ID;
     delete (gitlabEnv as any).GITHUB_OWNER;
     delete (gitlabEnv as any).GITHUB_REPO;
-    delete (gitlabEnv as any).GITHUB_BASE_BRANCH;
     (gitlabEnv as any).GITLAB_TOKEN = "glpat-test";
     (gitlabEnv as any).GITLAB_PROJECT_ID = "group/repo";
     (gitlabEnv as any).GITLAB_HOST = "https://gitlab.example.com";
@@ -338,7 +330,6 @@ describe("env", () => {
     delete (noProviderEnv as any).GITHUB_INSTALLATION_ID;
     delete (noProviderEnv as any).GITHUB_OWNER;
     delete (noProviderEnv as any).GITHUB_REPO;
-    delete (noProviderEnv as any).GITHUB_BASE_BRANCH;
     delete (noProviderEnv as any).GITHUB_WEBHOOK_SECRET;
     Object.assign(process.env, noProviderEnv);
     delete process.env.VCS_KIND;
@@ -347,7 +338,6 @@ describe("env", () => {
     delete process.env.GITHUB_INSTALLATION_ID;
     delete process.env.GITHUB_OWNER;
     delete process.env.GITHUB_REPO;
-    delete process.env.GITHUB_BASE_BRANCH;
     delete process.env.GITHUB_WEBHOOK_SECRET;
 
     await expect(async () => {
@@ -385,7 +375,6 @@ describe("env", () => {
     delete (gitlabEnv as any).GITHUB_INSTALLATION_ID;
     delete (gitlabEnv as any).GITHUB_OWNER;
     delete (gitlabEnv as any).GITHUB_REPO;
-    delete (gitlabEnv as any).GITHUB_BASE_BRANCH;
     delete (gitlabEnv as any).GITHUB_WEBHOOK_SECRET;
     (gitlabEnv as any).GITLAB_TOKEN = "glpat-test";
     (gitlabEnv as any).GITLAB_PROJECT_ID = "group/repo";

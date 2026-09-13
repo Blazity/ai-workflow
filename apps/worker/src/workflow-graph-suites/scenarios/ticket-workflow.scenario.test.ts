@@ -9,7 +9,7 @@ import { createScenario, type Scenario } from "./harness.js";
  * specification: ticket entry through planning, implementation, checks,
  * finalize, PR, Slack and status update. Every scenario drives the production
  * v2 scheduler with review and leak review both off, the shape a fresh
- * install ships (`ENABLE_REVIEW_PHASE` / `ENABLE_LEAK_REVIEW` default false).
+ * install ships with its review and leak-review blocks disabled.
  *
  * Provider is fixed to "claude" throughout: it only threads into each agent
  * block's `harnessProfile.profileId`/`version`, which the harness never reads

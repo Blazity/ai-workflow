@@ -30,8 +30,6 @@ const testEnv = vi.hoisted(() => ({
   GITLAB_PROJECT_ID: undefined as string | undefined,
   GITHUB_BOT_LOGIN: "github-app[bot]" as string | undefined,
   GITLAB_BOT_LOGIN: "gitlab-bot" as string | undefined,
-  TRIGGER_RATE_LIMIT_MAX: undefined as number | undefined,
-  TRIGGER_RATE_LIMIT_WINDOW: undefined as "minute" | "hour" | "day" | "month" | undefined,
 }));
 vi.mock("../../infra/vcs-config.js", () => ({
   env: testEnv,
@@ -118,8 +116,6 @@ beforeEach(async () => {
   announceMock.mockReset().mockResolvedValue(undefined);
   testEnv.GITHUB_BOT_LOGIN = "github-app[bot]";
   testEnv.GITLAB_BOT_LOGIN = "gitlab-bot";
-  testEnv.TRIGGER_RATE_LIMIT_MAX = undefined;
-  testEnv.TRIGGER_RATE_LIMIT_WINDOW = undefined;
 });
 
 function enabled(
@@ -201,10 +197,6 @@ function deps(overrides: Record<string, unknown> = {}) {
     db,
     runRegistry: registry,
     maxConcurrentAgents: 3,
-    settings: {
-      TRIGGER_RATE_LIMIT_MAX: testEnv.TRIGGER_RATE_LIMIT_MAX ?? null,
-      TRIGGER_RATE_LIMIT_WINDOW: testEnv.TRIGGER_RATE_LIMIT_WINDOW ?? null,
-    },
     repositoryCatalog,
     getCurrentHead: vi.fn().mockResolvedValue("abc123"),
     getLatestCheckRuns: vi.fn().mockResolvedValue([]),
@@ -884,33 +876,7 @@ describe("PR trigger rate limit", () => {
     expect(await db.select().from(triggerRejectionCounters)).toEqual([]);
   });
 
-  it("applies the stored default when the node has no params of its own", async () => {
-    testEnv.TRIGGER_RATE_LIMIT_MAX = 1;
-    testEnv.TRIGGER_RATE_LIMIT_WINDOW = "day";
-    mockGetEnabled.mockResolvedValue(enabled());
-    mockGetVersion.mockResolvedValue(pinnedWithTriggerParams({}));
-    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
-
-    await dispatchTriggerEvent(event(), deps());
-    await expect(dispatchTriggerEvent(secondEvent(), deps())).resolves.toEqual({
-      result: "coalesced",
-    });
-
-    // A limit that is purely the settings default is keyed under the definition's
-    // first trigger node of this type.
-    expect(await db.select().from(triggerRejectionCounters)).toEqual([
-      expect.objectContaining({
-        definitionId: "5",
-        nodeId: "trigger",
-        reason: "rate_limited",
-        count: 1,
-      }),
-    ]);
-  });
-
-  it("prefers the node's own params over the settings default", async () => {
-    testEnv.TRIGGER_RATE_LIMIT_MAX = 5;
-    testEnv.TRIGGER_RATE_LIMIT_WINDOW = "day";
+  it("uses the node's own rate-limit params", async () => {
     mockGetEnabled.mockResolvedValue(enabled());
     mockGetVersion.mockResolvedValue(
       pinnedWithTriggerParams({ rateLimitMax: 1, rateLimitWindow: "day" }),

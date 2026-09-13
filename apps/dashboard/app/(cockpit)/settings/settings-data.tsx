@@ -38,10 +38,8 @@ export async function SettingsData() {
     return authAwareFallback(error, () => ({ scan: null }));
   });
 
-  // Activation is the catalog state row, not a settings key: `catalog.activated`
-  // is in the registry but nothing writes it, so reading it told an activated
-  // deployment its catalog was off. This is the same read the Repositories page
-  // makes, and reading the catalog is open to every role.
+  // Activation comes from the catalog state row. This is the same read the
+  // Repositories page makes, and reading the catalog is open to every role.
   const catalog = await getJSON<RepositoryCatalogListResponse>(
     "/api/v1/repository-catalog",
   ).catch((error) =>

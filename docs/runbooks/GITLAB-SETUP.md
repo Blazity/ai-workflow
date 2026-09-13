@@ -18,7 +18,6 @@ Optional legacy single-repo defaults:
 
 ```bash
 GITLAB_PROJECT_ID=<namespace/project path>
-GITLAB_BASE_BRANCH=main
 VCS_KIND=gitlab
 ```
 
@@ -31,6 +30,10 @@ GITLAB_BOT_LOGIN=<token account username>
 `GITLAB_BOT_LOGIN` prevents review notes authored by the automation account from recursively triggering `trigger_pr_review`. The legacy `VCS_BOT_LOGIN` value is accepted only when GitLab is the sole configured VCS provider. A mixed GitHub/GitLab deployment requires `GITHUB_BOT_LOGIN` and `GITLAB_BOT_LOGIN` for the providers selected by a commented-review trigger.
 
 `GITLAB_PROJECT_ID` is no longer required for multi-repo runs. When it is omitted, ai-workflow lists all projects visible to `GITLAB_TOKEN` and accepts GitLab merge request webhooks after token verification. When it is set, the webhook route keeps the old single-project filter.
+
+The Repositories import records GitLab's default branch in the repository
+profile. Leave it unset to use the provider default, or edit the profile to
+override it.
 
 You can configure GitHub and GitLab in the same deployment. Provider credentials are additive.
 

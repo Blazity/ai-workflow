@@ -16,8 +16,6 @@ describe("createVCSForRepository", () => {
       {
         kind: "github",
         auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
-        repoPath: "default/repo",
-        baseBranch: "main",
         host: "https://github.com",
       },
       { repoPath: "org/api", baseBranch: "develop" },
@@ -35,8 +33,6 @@ describe("createVCSForRepository", () => {
       {
         kind: "gitlab",
         token: "glpat",
-        repoPath: "default/repo",
-        baseBranch: "main",
         host: "https://gitlab.example.com",
       },
       { repoPath: "group/service", baseBranch: "trunk" },
@@ -56,8 +52,6 @@ describe("createVCSForRepository", () => {
         {
           kind: "github",
           auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
-          repoPath: "default/repo",
-          baseBranch: "main",
           host: "https://github.com",
         },
         { repoPath: "missing-owner", baseBranch: "main" },

@@ -7,75 +7,53 @@ import type {
   SettingsEntryView,
   SystemHealthResponse,
 } from "@shared/contracts";
+import { findSettingDefinition } from "@shared/contracts";
 
-import {
-  activationDetail,
-  activationValue,
-} from "@/lib/repository-catalog/activation";
-import { displaySettingValue, settingLabel, sourceLabel } from "@/lib/settings/format";
-import { groupSettings, type SettingsGroupView } from "@/lib/settings/groups";
+import { displaySettingValue, settingLabel } from "@/lib/settings/format";
+import { groupSettings } from "@/lib/settings/groups";
 
 import { SettingsGroupForm } from "./settings-group-form";
 import { SetupOverview } from "./setup-overview";
 import { SettingsCadenceNotice } from "./settings-cadence-notice";
 
-/** Activation is one explicit action with its own dialog, which lives on the
- *  Repositories page. Said here, linked there. */
-const REPOSITORIES_NOTE =
-  "Not editable here. Activating the catalog decides what the agent may touch at all, so it happens on the Repositories page, where the dialog names every repository that holds an active run claim and is not enabled.";
-
 /**
- * The repositories group, as a summary rather than a form.
- *
- * Rendering it as a form with every control disabled invites the click that
- * does nothing; one line that states the value and says where the action lives
- * does not.
+ * Deployment-owned settings are values to inspect here, never form controls.
+ * Their consumers read the environment directly, so storing a dashboard edit
+ * would record a decision the running worker ignores.
  */
-function RepositoriesSummary({
-  group,
-  catalogState,
+function DeploymentVariables({
+  entries,
 }: {
-  group: SettingsGroupView;
-  catalogState: RepositoryCatalogState | null;
+  entries: readonly SettingsEntryView[];
 }) {
+  if (entries.length === 0) return null;
   return (
     <section className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="m-0 font-display text-[15px] font-medium text-coal">
-          {group.label}
-        </h3>
-        <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">
-          {group.storedCount} of {group.entries.length} stored
-        </span>
-      </div>
-      {/* Activation first, and from the catalog state row rather than from any
-          settings key below it: the key nothing writes used to contradict the
-          worker on a deployment whose catalog was activated by the seed. */}
-      <p className="m-0 mt-2 font-body text-[12px] text-neutral-800">
-        <span className="font-semibold">Activation:</span>{" "}
-        {activationValue(catalogState)}{" "}
-        <span className="text-neutral-600">{activationDetail(catalogState)}</span>
+      <h3 className="m-0 font-display text-[15px] font-medium text-coal">
+        Deployment variables
+      </h3>
+      <p className="m-0 mt-1 font-body text-[11px] text-neutral-600">
+        Set in the deployment environment. Changes need a redeploy; see{" "}
+        <code>SETUP.md</code>.
       </p>
-      <ul className="list-none m-0 mt-2 p-0 flex flex-col gap-1">
-        {group.entries.map((entry) => (
-          <li key={entry.key} className="font-body text-[11px] text-neutral-700">
-            {settingLabel(entry.key)}:{" "}
-            <span className="font-mono text-neutral-800">
-              {displaySettingValue(entry.value)}
-            </span>{" "}
-            <span className="text-neutral-500">
-              ({sourceLabel(entry.source).toLowerCase()})
+      <ul className="list-none m-0 mt-3 p-0 flex flex-col gap-3">
+        {entries.map((entry) => (
+          <li key={entry.key} className="flex flex-col gap-1">
+            <span className="font-body text-[12px] font-semibold text-neutral-800">
+              {settingLabel(entry.key)}{" "}
+              <span className="font-mono text-[10px] font-normal text-neutral-500">
+                {entry.key}
+              </span>
+            </span>
+            <span className="font-body text-[11px] text-neutral-600">
+              Value in force:{" "}
+              <span className="font-mono text-neutral-800">
+                {displaySettingValue(entry.value)}
+              </span>
             </span>
           </li>
         ))}
       </ul>
-      <p className="m-0 mt-2 font-body text-[11px] text-neutral-600">
-        {REPOSITORIES_NOTE}{" "}
-        <Link href="/repositories" className="text-mariner underline">
-          Open the Repositories page
-        </Link>
-        .
-      </p>
     </section>
   );
 }
@@ -100,7 +78,13 @@ export function SettingsScreen({
   /** False when the worker did not answer the settings read. */
   available: boolean;
 }) {
-  const groups = groupSettings(settings);
+  const deploymentVariables = settings.filter(
+    (entry) => findSettingDefinition(entry.key)?.requiresRedeploy === true,
+  );
+  const editableSettings = settings.filter(
+    (entry) => findSettingDefinition(entry.key)?.requiresRedeploy !== true,
+  );
+  const groups = groupSettings(editableSettings);
 
   return (
     <div className="flex flex-col gap-4 px-4 lg:px-6 pt-5 pb-8">
@@ -154,21 +138,14 @@ export function SettingsScreen({
             scanReadable={scanReadable}
             catalogState={catalogState}
           />
-          {groups.map((group) =>
-            group.id === "repositories" ? (
-              <RepositoriesSummary
-                key={group.id}
-                group={group}
-                catalogState={catalogState}
-              />
-            ) : (
-              <SettingsGroupForm
-                key={group.id}
-                group={group}
-                canEdit={canEdit}
-              />
-            ),
-          )}
+          {groups.map((group) => (
+            <SettingsGroupForm
+              key={group.id}
+              group={group}
+              canEdit={canEdit}
+            />
+          ))}
+          <DeploymentVariables entries={deploymentVariables} />
         </>
       )}
     </div>

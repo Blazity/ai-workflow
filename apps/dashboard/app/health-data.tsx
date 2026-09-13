@@ -22,8 +22,7 @@ export async function HealthData() {
     getJSON<SettingsReadResponse>("/api/v1/settings").catch(
       (): SettingsReadResponse | null => null,
     ),
-    // Activation is the catalog state row, not the `catalog.activated` settings
-    // key that nothing writes.
+    // Activation comes from the catalog state row.
     getJSON<RepositoryCatalogListResponse>("/api/v1/repository-catalog").catch(
       (): RepositoryCatalogListResponse | null => null,
     ),

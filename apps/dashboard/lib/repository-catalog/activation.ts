@@ -195,11 +195,8 @@ export function staleActivationNotice(
 
 // ── Activation as a status line ─────────────────────────────────────────────
 //
-// Read from the catalog state row the worker returns, never from the
-// `catalog.activated` settings key. Nothing writes that key: a deployment whose
-// seed activated the catalog still resolved it to the default and told every
-// reader the catalog was off, which is the worst direction for this particular
-// lie to point.
+// Read from the catalog state row the worker returns. It is the only owner of
+// activation and reflects what repository selection actually enforces.
 
 /** Whether the catalog decides access, as a chip reads it. Null state is a
  *  worker that did not answer, which is not the same as "off". */

@@ -141,11 +141,7 @@ test("github live and gitlab not-configured reports github state", () => {
   assert.ok(vcsRow.detail.includes("Also seen:"));
 });
 
-test("an activated catalog reads Activated even though nothing wrote the registry key", () => {
-  // The production bug this covers: the seed activated the catalog, the
-  // `catalog.activated` key was never written by anything, and this card read
-  // the key and told an operator with six enabled repositories that the agent
-  // could see everything.
+test("an activated catalog reads Activated from the catalog state row", () => {
   const overview = buildSetupOverview({
     settings: [],
     scan: null,
@@ -168,29 +164,6 @@ test("an activated catalog reads Activated even though nothing wrote the registr
   assert.match(catalogRow.detail, /Activated by Seed on /);
 });
 
-test("a registry key claiming the catalog is activated does not move the row", () => {
-  // The key is still in the registry (its removal is a worker change), and this
-  // asserts the dashboard stopped reading it: the state row is the only input.
-  const overview = buildSetupOverview({
-    settings: [entry("catalog.activated", true)],
-    scan: null,
-    scanReadable: true,
-    catalogState: {
-      activated: false,
-      bridge: true,
-      activatedAt: null,
-      activatedById: null,
-      activatedByLabel: null,
-      activationReason: null,
-    },
-  });
-  const catalogRow = overview.rows.find((r) => r.id === "catalog");
-  assert.ok(catalogRow);
-  assert.equal(catalogRow.value, "Not activated");
-  assert.equal(catalogRow.tone, "warn");
-  assert.match(catalogRow.detail, /Activate the catalog on the Repositories page\./);
-});
-
 test("a catalog read the worker did not answer is Unknown, not Not activated", () => {
   const overview = buildSetupOverview({
     settings: [],
@@ -206,9 +179,8 @@ test("a catalog read the worker did not answer is Unknown, not Not activated", (
 
 test("features row counts on switches", () => {
   const settings = [
-    entry("ENABLE_REVIEW_PHASE", true),
-    entry("ENABLE_LEAK_REVIEW", false),
     entry("ENABLE_REPO_MEMORY", true),
+    entry("REVIEW_LEDGER_ENABLED", false),
     entry("MCP_ENABLED", false),
   ];
   const overview = buildSetupOverview({
@@ -219,14 +191,13 @@ test("features row counts on switches", () => {
   });
   const featuresRow = overview.rows.find((r) => r.id === "features");
   assert.ok(featuresRow);
-  assert.ok(featuresRow.value.includes("2 of 4 on"));
+  assert.ok(featuresRow.value.includes("1 of 3 on"));
 });
 
 test("features row names enabled features", () => {
   const settings = [
-    entry("ENABLE_REVIEW_PHASE", true),
-    entry("ENABLE_LEAK_REVIEW", false),
     entry("ENABLE_REPO_MEMORY", true),
+    entry("REVIEW_LEDGER_ENABLED", false),
     entry("MCP_ENABLED", false),
   ];
   const overview = buildSetupOverview({
@@ -237,7 +208,6 @@ test("features row names enabled features", () => {
   });
   const featuresRow = overview.rows.find((r) => r.id === "features");
   assert.ok(featuresRow);
-  assert.ok(featuresRow.detail.includes("Enable review phase"));
   assert.ok(featuresRow.detail.includes("Enable repo memory"));
 });
 

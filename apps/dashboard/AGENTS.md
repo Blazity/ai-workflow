@@ -70,13 +70,13 @@ a form cannot show by itself is when a change reaches work already running:
 and the badge still says where a value came from. The wording that claimed the
 worker ignored the store was false from stage B1 onward; do not bring it back.
 
-**Activation is never read from a settings key.** `catalog.activated` is in the
-registry and nothing writes it, so a deployment whose seed activated the catalog
-resolved it to the default and the Settings page called an activated catalog
-"Not activated". Both the setup overview row and the Repositories summary card
-take `catalogState` (the `state` the catalog list route returns, the same read
-the Repositories page makes) and say who activated it and when. Its removal from
-the registry is a worker and contracts change.
+**Activation is catalog state, not a setting.** The setup overview takes
+`catalogState` (the `state` the catalog list route returns, the same read the
+Repositories page makes) and says who activated it and when. The registry does
+not contain an activation key.
+
+The three entries marked `requiresRedeploy` are excluded from forms and render
+in the read-only Deployment variables block at the bottom of the Settings page.
 
 Both reads and the write go through `app/api/settings/` (`route.ts` plus
 `handler.ts`), which forwards `GET /api/v1/settings`, the `?key=` history read

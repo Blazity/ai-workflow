@@ -102,11 +102,11 @@ export async function createWorkflowDefinitionFromSource(input: {
   settings: SettingsSnapshot;
 }): Promise<CreateWorkflowDefinitionResult> {
   requireWorkflowDefinitionEditor(input.actor.role);
-  const { agentKind, includeReview, includeLeakReview } = agentRuntimeSettings(input.settings);
+  const { agentKind } = agentRuntimeSettings(input.settings);
   const profileReference = await currentSystemHarnessProfileReference(agentKind);
   const seedOptions = {
-    includeReview,
-    includeLeakReview,
+    includeReview: false,
+    includeLeakReview: false,
     provider: agentKind,
     profileReference,
   };

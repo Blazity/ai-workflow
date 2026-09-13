@@ -263,7 +263,6 @@ export async function runPollPass(
         const result = await drainOldestPendingTrigger(subjectKey, {
           runRegistry: adapters.runRegistry,
           maxConcurrentAgents: maxConcurrentAgents(settings),
-          settings,
           repositoryCatalog: drainCatalog,
         });
         if (result?.result === "started") releasedTriggerRecovery.started++;
@@ -493,7 +492,6 @@ async function evaluateScheduleTriggers(
     createConnectedScheduleDispatchDeps(
       adapters.runRegistry,
       maxConcurrentAgents(settings),
-      settings,
     ),
   ).catch((error) => {
     logger.warn(
@@ -579,7 +577,6 @@ async function recoverPendingTriggers(
       const result = await drainOldestPendingTrigger(trigger.subjectKey, {
         runRegistry: adapters.runRegistry,
         maxConcurrentAgents: maxConcurrentAgents(settings),
-        settings,
         repositoryCatalog,
       });
       if (result?.result === "error") metrics.errors++;

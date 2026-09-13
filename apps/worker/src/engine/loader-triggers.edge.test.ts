@@ -8,7 +8,6 @@ import type { WorkflowDefinition } from "@shared/contracts";
 // provider configuration through the config module.
 const H = vi.hoisted(() => ({
   env: {
-    ENABLE_REVIEW_PHASE: false as boolean,
     JIRA_PROJECT_KEY: "PROJ",
     COLUMN_AI: "AI",
     GITHUB_WEBHOOK_SECRET: "secret" as string | undefined,
@@ -142,7 +141,6 @@ describe("loadWorkflowDefinitionFor edge cases", () => {
     mockGetEnabled.mockReset();
     loggerError.mockReset();
     loggerInfo.mockReset();
-    H.env.ENABLE_REVIEW_PHASE = false;
   });
 
   it("returns null for a non-ticket trigger when the pinned definition row is missing", async () => {

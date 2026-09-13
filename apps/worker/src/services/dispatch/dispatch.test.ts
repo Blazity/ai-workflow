@@ -18,17 +18,11 @@ import type { Adapters } from "../vcs/adapters.js";
 const testEnv = vi.hoisted(() => ({
   JIRA_PROJECT_KEY: "PROJ",
   COLUMN_AI: "AI",
-  TRIGGER_RATE_LIMIT_MAX: undefined as number | undefined,
-  TRIGGER_RATE_LIMIT_WINDOW: undefined as "minute" | "hour" | "day" | "month" | undefined,
 }));
 vi.mock("../../infra/vcs-config.js", () => ({ env: testEnv }));
 
 function testSettings() {
-  return {
-    ...defaultSettingsSnapshot(),
-    TRIGGER_RATE_LIMIT_MAX: testEnv.TRIGGER_RATE_LIMIT_MAX ?? null,
-    TRIGGER_RATE_LIMIT_WINDOW: testEnv.TRIGGER_RATE_LIMIT_WINDOW ?? null,
-  };
+  return defaultSettingsSnapshot();
 }
 const mockStart = vi.fn();
 vi.mock("workflow/api", () => ({ start: (...args: any[]) => mockStart(...args) }));
@@ -495,8 +489,6 @@ describe("dispatchTicket trigger rate limit", () => {
     mockStart.mockReset().mockResolvedValue({ runId: "run-started" });
     mockGetEnabled.mockReset();
     mockHasBlockingApproval.mockReset().mockResolvedValue(false);
-    testEnv.TRIGGER_RATE_LIMIT_MAX = undefined;
-    testEnv.TRIGGER_RATE_LIMIT_WINDOW = undefined;
   });
 
   function enabledWithTriggerParams(params: Record<string, unknown>) {
@@ -600,36 +592,7 @@ describe("dispatchTicket trigger rate limit", () => {
     expect(await dbRef.current.select().from(triggerRejectionCounters)).toEqual([]);
   });
 
-  it("applies the stored default when the node has no params of its own", async () => {
-    testEnv.TRIGGER_RATE_LIMIT_MAX = 1;
-    testEnv.TRIGGER_RATE_LIMIT_WINDOW = "day";
-    mockGetEnabled.mockResolvedValue(enabledWithTriggerParams({}));
-
-    await dispatchTicket("PROJ-42", adapters(), 3, testSettings());
-    await expect(
-      dispatchTicket(
-        "PROJ-43",
-        adapters(registry(), ticket({ identifier: "PROJ-43" })),
-        3,
-        testSettings(),
-      ),
-    ).resolves.toEqual({ started: false, reason: "rate_limited" });
-
-    // A limit that is purely the settings default is keyed under the definition's
-    // first trigger node.
-    expect(await dbRef.current.select().from(triggerRejectionCounters)).toEqual([
-      expect.objectContaining({
-        definitionId: "7",
-        nodeId: "ticket-trigger",
-        reason: "rate_limited",
-        count: 1,
-      }),
-    ]);
-  });
-
-  it("prefers the node's own params over the settings default", async () => {
-    testEnv.TRIGGER_RATE_LIMIT_MAX = 5;
-    testEnv.TRIGGER_RATE_LIMIT_WINDOW = "day";
+  it("uses the node's own rate-limit params", async () => {
     mockGetEnabled.mockResolvedValue(
       enabledWithTriggerParams({ rateLimitMax: 1, rateLimitWindow: "day" }),
     );

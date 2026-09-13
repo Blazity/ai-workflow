@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { BUILTIN_FALLBACK_DEFINITION_VERSION } from "./agent-input.js";
 import type { Db } from "../db/client.js";
 import { createTestDb } from "../db/test-db.js";
 import { writeManySettings } from "../db/repositories/settings.js";
@@ -55,7 +54,6 @@ const { loadRunStartSettingsStep, runStartRepositoryAccess } = await import(
 const { createOrFindWorkflowOwnedPullRequest } = await import(
   "./steps/repository-prs.js"
 );
-const { loadWorkflowDefinitionFor } = await import("./steps/definition-step.js");
 
 let db: Db;
 
@@ -96,8 +94,6 @@ beforeEach(async () => {
       JOB_TIMEOUT_MS: 1_800_000,
       MAX_CONCURRENT_AGENTS: 7,
       AGENT_KIND: "claude",
-      ENABLE_REVIEW_PHASE: true,
-      ENABLE_LEAK_REVIEW: false,
     },
     actor: "test",
     reason: "seed run-carried settings fixture",
@@ -172,47 +168,20 @@ describe("a run finishes under the rules it started with", () => {
     // 14:00. The run starts and freezes its snapshot.
     const runStart = await loadRunStartSettingsStep();
     const carried = runStart.settings;
-    expect(carried.ENABLE_REVIEW_PHASE).toBe(true);
     expect(carried.JOB_TIMEOUT_MS).toBe(1_800_000);
 
-    // The plan this run loads carries a review phase, because its snapshot does.
-    const plan = await loadWorkflowDefinitionFor(
-      carried,
-      "trigger_ticket_ai",
-      1,
-      BUILTIN_FALLBACK_DEFINITION_VERSION,
-    );
-    expect(plan?.reviewEnabled).toBe(true);
-
-    // 14:03. An operator turns the review phase off and shortens the budget.
+    // 14:03. An operator shortens the budget.
     await writeManySettings(db, {
-      patch: { ENABLE_REVIEW_PHASE: false, JOB_TIMEOUT_MS: 60_000 },
+      patch: { JOB_TIMEOUT_MS: 60_000 },
       actor: "user_admin",
       reason: "tuning",
     });
 
     // The positive control: a run starting now gets the new values.
     const nextRun = await loadRunStartSettingsStep();
-    expect(nextRun.settings.ENABLE_REVIEW_PHASE).toBe(false);
     expect(nextRun.settings.JOB_TIMEOUT_MS).toBe(60_000);
-    const nextPlan = await loadWorkflowDefinitionFor(
-      nextRun.settings,
-      "trigger_ticket_ai",
-      1,
-      BUILTIN_FALLBACK_DEFINITION_VERSION,
-    );
-    expect(nextPlan?.reviewEnabled).toBe(false);
 
-    // The run already in flight reloads its plan (a replay does exactly this)
-    // from the snapshot it carries, and gets the same plan it started with.
-    const replayed = await loadWorkflowDefinitionFor(
-      carried,
-      "trigger_ticket_ai",
-      1,
-      BUILTIN_FALLBACK_DEFINITION_VERSION,
-    );
-    expect(replayed?.reviewEnabled).toBe(true);
-    expect(replayed?.nodes).toEqual(plan?.nodes);
+    // The run already in flight keeps the value in its carried snapshot.
     expect(carried.JOB_TIMEOUT_MS).toBe(1_800_000);
   });
 });

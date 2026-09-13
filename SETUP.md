@@ -124,8 +124,8 @@ ai-workflow authenticates to GitHub via a **GitHub App**. The App scopes the bot
    - **Generate a private key** → download the `.pem`. Base64-encode the file contents (`base64 -i app.pem | tr -d '\n'`) → `GITHUB_APP_PRIVATE_KEY`.
    - From the **Installations** list, the numeric installation ID → `GITHUB_INSTALLATION_ID`.
 7. Note the target repo's `owner` and `name` → `GITHUB_OWNER`, `GITHUB_REPO`.
-8. Note the base branch (usually `main`) and set **GitHub base branch** on the
-   Settings page after the first deployment.
+8. Import the repository on the Repositories page. The catalog records the
+   provider's default branch; an explicit profile value overrides it.
 
 > The legacy `GITHUB_TOKEN` PAT path was removed — `VCS_KIND=github` now requires the App vars above. `env.ts` enforces this at boot, including `GITHUB_WEBHOOK_SECRET`.
 
@@ -137,8 +137,8 @@ For GitLab.com single-project setup, see [`docs/GITLAB-SETUP.md`](./docs/runbook
 2. Give the token identity enough project access to create branches, open MRs, push commits, and create commit statuses. Maintainer is simplest. Prefer leaving `ai-workflow/*` unprotected; if protected, the token identity must be allowed to push and force-push that pattern.
 3. Set the namespace/project path, for example `my-group/my-repo` → `GITLAB_PROJECT_ID`. Numeric project IDs are not supported because sandbox clone/push needs a path.
 4. Generate a random webhook secret → `GITLAB_WEBHOOK_SECRET`.
-5. Note the base branch (usually `main`) and set **GitLab base branch** on the
-   Settings page after the first deployment.
+5. Import the repository on the Repositories page. The catalog records the
+   provider's default branch; an explicit profile value overrides it.
 6. On a self-hosted instance, set the instance URL → `GITLAB_HOST`. It defaults to `https://gitlab.com` (`apps/worker/src/infra/runtime-env.ts`), so leave it unset for GitLab.com. The sandbox clone URL is built as `<host>/<project path>.git` (`apps/worker/src/infra/vcs-urls.ts`), which is also why step 3 requires a path and not a numeric id.
 
 ### 2.3 Slack
@@ -712,15 +712,22 @@ trigger_ticket_ai -> planning_agent -> branch(gate)
 
 ## 14. Removing migrated environment variables
 
-H2 completed the environment exit. Ordinary product behavior is read from a
-stored settings row and then the registry default; the worker no longer parses
-or imports an environment fallback. Change a value on the dashboard
-**Settings** page or with MCP `settings.set` (with the required reason). A run
-keeps the settings snapshot it started with, so a `next run` change applies to
-the next dispatch.
+H2 completed the environment exit. Ordinary registered product behavior is
+read from a stored settings row and then the registry default; the worker no
+longer parses or imports an environment fallback. Change a registered value on
+the dashboard **Settings** page or with MCP `settings.set` (with the required
+reason). A run keeps the settings snapshot it started with, so a `next run`
+change applies to the next dispatch.
 
 Startup, `pnpm build`, and `pnpm build:ci` now refuse any retired settings
 variable. One error names every offender and points back to this section.
+
+Some names stay on the retired-variable refusal even though S1 deleted their
+registry keys: old deployments must remove them rather than silently revive
+dead configuration. Poll cadence is owned by `apps/worker/vercel.json`; default
+branches by each repository catalog profile (or the provider default); trigger
+limits by trigger-node parameters; the built-in review and leak-review shape by
+code constants; and catalog activation by the repository catalog state row.
 
 For this release, production still carries `COLUMN_AI`, `COLUMN_AI_REVIEW`,
 `COLUMN_BACKLOG`, and `AGENT_KIND` from the rollback. The operator must remove

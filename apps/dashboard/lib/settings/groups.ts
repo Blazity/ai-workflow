@@ -28,12 +28,10 @@ const GROUP_LABELS: Record<SettingsGroup, string> = {
   checks: "Checks",
   harness: "Harness defaults",
   "issue-tracker": "Issue tracker",
-  triggers: "Triggers",
-  repositories: "Repositories",
 };
 
 const GROUP_DESCRIPTIONS: Record<SettingsGroup, string> = {
-  general: "Names this deployment goes by, and the branch new work is cut from.",
+  general: "The name this deployment goes by.",
   capacity: "How much work runs at once, and how long one phase may take.",
   attachments: "What the agent is willing to download from a ticket.",
   features:
@@ -45,9 +43,6 @@ const GROUP_DESCRIPTIONS: Record<SettingsGroup, string> = {
     "The agent and the models a run uses when no harness profile pins one.",
   "issue-tracker":
     "The board columns the tracker integration watches and moves tickets between.",
-  triggers: "The start budget a trigger node falls back to when it declares none.",
-  repositories:
-    "What the agent may touch at all. Activation happens on the Repositories page.",
 };
 
 /** One panel of the Settings page: a registry group and its resolved keys. */

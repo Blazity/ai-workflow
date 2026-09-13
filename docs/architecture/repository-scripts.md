@@ -824,21 +824,19 @@ Seven things differ from the HTTP routes the dashboard calls, each on purpose:
   suggestion cost is on the suggestion, which `repositories.suggest` returns as
   `usage` (null there means unpriced, not free).
 
-`settings.set` and `settings.reset` refuse two groups. The `repositories` group
-is the same refusal `PATCH /api/v1/settings` gives: `catalog.activated` moves
-through `repositories.activate` and its preview, never through a settings write.
-The `mcp` group and `MCP_ENABLED` are refused on the MCP surface only, and the
+`settings.set` and `settings.reset` refuse the `mcp` group and `MCP_ENABLED` on
+the MCP surface only, while the
 HTTP patch still writes them: those keys are the transport itself, so a client
 that could write them could raise the ceilings it is held to, or switch off the
 surface it is talking through and leave nobody able to switch it back from
-there. Both point at the dashboard Settings page.
+there. The refusal points at the dashboard Settings page.
 
 `settings.list` also carries `requiresRedeploy`, and reports
-`appliesToRunsInFlight: "after redeploy"` for those keys. Today that is
-`PRE_PR_CHECKS_ALLOWED_ENV`, which the checks runner still reads straight from
-`process.env`: storing it records the decision and changes nothing until the
-worker is redeployed, and saying "next run" would be a promise the key does not
-keep.
+`appliesToRunsInFlight: "after redeploy"` for those keys. They are
+`DASHBOARD_ORG_SLUG`, `MCP_ALLOW_PUBLIC_DCR`, and
+`PRE_PR_CHECKS_ALLOWED_ENV`. The dashboard lists them in a read-only Deployment
+variables block; their consumers read the deployment environment, and a change
+takes effect only after the worker is redeployed.
 
 ## Legacy shape (still accepted)
 

@@ -5,7 +5,11 @@ import {
   type VcsProviderConfig,
   type VcsProviderKind,
 } from "../../infra/vcs-config.js";
-import type { VCSAdapter } from "../../adapters/vcs/types.js";
+import {
+  hasManualDispatchPrCapability,
+  type ManualDispatchPrCapableVCS,
+  type VCSAdapter,
+} from "../../adapters/vcs/types.js";
 import type { SandboxProviderConfig } from "../../sandbox/manager.js";
 import { createVCSForRepository } from "../../adapters/vcs/create-vcs.js";
 import { getBotIdentity, getVcsToken } from "../../adapters/vcs/github-auth.js";
@@ -46,6 +50,27 @@ export function createRepositoryVcsRuntime(target: RepositoryVcsTarget): Reposit
 
 export function createRepositoryVCS(target: RepositoryVcsTarget): VCSAdapter {
   return createRepositoryVcsRuntime(target).vcs;
+}
+
+/**
+ * Read one existing pull request without inventing a target branch. Both
+ * provider implementations resolve its base from the provider response; the
+ * adapter constructor's branch is used only by branch/PR creation methods that
+ * this deliberately narrowed return type cannot expose.
+ */
+export function createManualDispatchPrReader(target: {
+  provider: VcsProviderKind;
+  repoPath: string;
+}): ManualDispatchPrCapableVCS {
+  const config = getVcsProviderConfig(target.provider);
+  const vcs = createVCSForRepository(config, {
+    repoPath: target.repoPath,
+    baseBranch: "",
+  });
+  if (!hasManualDispatchPrCapability(vcs)) {
+    throw new Error(`VCS provider ${target.provider} cannot read pull requests`);
+  }
+  return vcs;
 }
 
 export async function buildSandboxProviderConfigs(

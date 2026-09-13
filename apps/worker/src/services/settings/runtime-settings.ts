@@ -23,7 +23,7 @@ import { env } from "../../infra/vcs-config.js";
  * get a different answer than the request it belongs to.
  */
 
-/** The run-slot ceiling every dispatch path shares. */
+/** The run-slot ceiling automatic dispatch paths share. */
 export function maxConcurrentAgents(settings: SettingsSnapshot): number {
   return settings.MAX_CONCURRENT_AGENTS;
 }
@@ -136,25 +136,17 @@ export function configuredSecretValues(): string[] {
   ].filter((secret): secret is string => typeof secret === "string" && secret.length > 0);
 }
 
-/**
- * Which coding agent runs, and which optional phases the default workflow
- * carries. Read together because every caller that shapes a default definition
- * needs all three at once.
- */
+/** Which coding agent a default workflow uses. */
 export function agentRuntimeSettings(
   settings: SettingsSnapshot,
 ): AgentRuntimeSettings {
   return {
     agentKind: settings.AGENT_KIND,
-    includeReview: settings.ENABLE_REVIEW_PHASE,
-    includeLeakReview: settings.ENABLE_LEAK_REVIEW,
   };
 }
 
 interface AgentRuntimeSettings {
   agentKind: SettingsSnapshot["AGENT_KIND"];
-  includeReview: boolean;
-  includeLeakReview: boolean;
 }
 
 /**

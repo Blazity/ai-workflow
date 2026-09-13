@@ -8,7 +8,7 @@
  * one snapshot and passes it down; nothing below awaits a setting.
  *
  * The resolution order itself (an ordinary stored row, then the registry
- * default; environment then default for a redeploy-owned key) lives in
+ * default; environment then default only for a redeploy-owned key) lives in
  * `@shared/contracts`, not here. A run resolves its own snapshot at run start
  * from inside the engine, which ADR-001 forbids from importing a service, so
  * the rule has to sit in the package both tiers may import or it would exist

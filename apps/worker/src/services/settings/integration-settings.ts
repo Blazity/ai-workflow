@@ -20,30 +20,6 @@ import {
 /** Provider ids that carry a signed webhook, as system health observes them. */
 export type WebhookProviderId = "github" | "gitlab" | "jira" | "slack" | "email";
 
-/**
- * The per-node trigger budget default a node's own params may override.
- *
- * Like every accessor that reads a migrated key, the form that takes the
- * snapshot is the one to use; the zero-argument form resolves from the
- * environment and goes away with the environment parsing in the cleanup stage
- * (stage H of the repository catalog and settings plan). An unset default
- * stays `undefined` here rather than becoming null, because that is what its
- * callers already treat as "no default".
- */
-export function triggerRateLimitDefaults(
-  settings: SettingsSnapshot,
-): TriggerRateLimitDefaults {
-  return {
-    TRIGGER_RATE_LIMIT_MAX: settings.TRIGGER_RATE_LIMIT_MAX ?? undefined,
-    TRIGGER_RATE_LIMIT_WINDOW: settings.TRIGGER_RATE_LIMIT_WINDOW ?? undefined,
-  };
-}
-
-interface TriggerRateLimitDefaults {
-  TRIGGER_RATE_LIMIT_MAX?: number;
-  TRIGGER_RATE_LIMIT_WINDOW?: "minute" | "hour" | "day" | "month";
-}
-
 /** The issue-tracker columns and project the ticket triggers are scoped to.
  *  The project key and the transition id are tracker wiring, not settings.
  *

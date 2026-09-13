@@ -22,9 +22,7 @@ const {
   maxConcurrentAgents,
   mcpSettings,
 } = await import("./runtime-settings.js");
-const { ticketBoardSettings, triggerRateLimitDefaults } = await import(
-  "./integration-settings.js"
-);
+const { ticketBoardSettings } = await import("./integration-settings.js");
 
 let db: Db;
 
@@ -34,17 +32,12 @@ function environmentAsDeployed(): Record<string, unknown> {
     DASHBOARD_ORG_NAME: "Acme",
     DASHBOARD_ORG_SLUG: "acme",
     DASHBOARD_ORIGIN: "https://dash.acme.test",
-    GITHUB_BASE_BRANCH: "main",
-    GITLAB_BASE_BRANCH: "trunk",
     MAX_CONCURRENT_AGENTS: 7,
     JOB_TIMEOUT_MS: 1_800_000,
-    POLL_INTERVAL_MS: 300_000,
     ATTACHMENT_MAX_FILE_SIZE_MB: 25,
     ATTACHMENT_MAX_TOTAL_SIZE_MB: 100,
     ATTACHMENT_MAX_COUNT: 20,
     ATTACHMENT_DOWNLOAD_TIMEOUT_MS: 30_000,
-    ENABLE_REVIEW_PHASE: true,
-    ENABLE_LEAK_REVIEW: false,
     ENABLE_REPO_MEMORY: true,
     ENABLE_ORG_MEMORY_PROMOTION: false,
     ENABLE_REPO_ROUTING_MEMORY: false,
@@ -66,8 +59,6 @@ function environmentAsDeployed(): Record<string, unknown> {
     COLUMN_BACKLOG: "Backlog",
     JIRA_PROJECT_KEY: "AIW",
     JIRA_BASE_URL: "https://acme.atlassian.net",
-    TRIGGER_RATE_LIMIT_MAX: 12,
-    TRIGGER_RATE_LIMIT_WINDOW: "hour",
   };
 }
 
@@ -85,13 +76,10 @@ describe("settings snapshot", () => {
 
     expect(snapshot).toEqual(settingsSnapshotFromEnvironment());
     expect(snapshot.MAX_CONCURRENT_AGENTS).toBe(3);
-    expect(snapshot.GITLAB_BASE_BRANCH).toBe("main");
     expect(snapshot.AGENT_KIND).toBe("claude");
     expect(snapshot.ENABLE_REPO_MEMORY).toBe(false);
-    expect(snapshot.TRIGGER_RATE_LIMIT_WINDOW).toBeNull();
     expect(snapshot.CLAUDE_MODEL).toBeNull();
     expect(snapshot.V2_MAX_BLOCK_CONCURRENCY).toBeNull();
-    expect(snapshot["catalog.activated"]).toBe(false);
     expect(snapshot.PRE_PR_COMMAND_TIMEOUT_MINUTES).toBe(10);
     expect(snapshot.PRE_PR_CHECKS_ALLOWED_ENV).toEqual([]);
   });
@@ -147,7 +135,6 @@ describe("settings snapshot", () => {
     const { sources } = await loadSettingsResolution();
     expect(sources.get("MAX_CONCURRENT_AGENTS")).toBe("stored");
     expect(sources.get("COLUMN_AI")).toBe("default");
-    expect(sources.get("catalog.activated")).toBe("default");
     expect(sources.get("CLAUDE_MODEL")).toBe("default");
   });
 
@@ -166,8 +153,6 @@ describe("settings accessors", () => {
     });
     expect(agentRuntimeSettings(snapshot)).toEqual({
       agentKind: "claude",
-      includeReview: false,
-      includeLeakReview: false,
     });
     expect(mcpSettings(snapshot)).toMatchObject({
       enabled: false,
@@ -179,10 +164,6 @@ describe("settings accessors", () => {
       aiColumn: "AI",
       aiReviewColumn: "AI Review",
       backlogColumn: "Backlog",
-    });
-    expect(triggerRateLimitDefaults(snapshot)).toEqual({
-      TRIGGER_RATE_LIMIT_MAX: undefined,
-      TRIGGER_RATE_LIMIT_WINDOW: undefined,
     });
   });
 
@@ -198,10 +179,9 @@ describe("settings accessors", () => {
       mcpSettings(snapshot),
       agentRuntimeSettings(snapshot),
       ticketBoardSettings(snapshot),
-      triggerRateLimitDefaults(snapshot),
     ];
 
-    expect(results).toHaveLength(6);
+    expect(results).toHaveLength(5);
     for (const result of results) {
       expect(result).not.toBeInstanceOf(Promise);
       expect(typeof (result as { then?: unknown })?.then === "function").toBe(false);

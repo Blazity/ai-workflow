@@ -117,13 +117,7 @@ describe("settings.list", () => {
       role: "owner_or_admin",
       appliesToRunsInFlight: "immediate",
     });
-    // The repositories group has a screen of its own: repositories.activate
-    // states what stops passing before anything is flipped, and a generic
-    // write must not be a second, quieter way to flip it.
-    const catalog = rows.filter((row) => row.group === "repositories");
-    expect(catalog.length).toBeGreaterThan(0);
-    expect(catalog.every((row) => row.editable === false && row.role === null)).toBe(true);
-    // And this transport's own group, for a different reason: a client must not
+    // This transport's own group is read-only here: a client must not
     // be able to raise the ceilings it is being held to, or switch off the
     // surface it is talking through.
     const transport = rows.filter((row) => row.group === "mcp");
@@ -309,27 +303,6 @@ describe("settings.set", () => {
     expect(errorOf(result)).toMatchObject({
       code: "VALIDATION_FAILED",
       message: expect.stringContaining("below_minimum"),
-    });
-    expect(await db.select().from(settings)).toEqual([]);
-  });
-
-  it("refuses the catalog switch and points at the tool that states the impact", async () => {
-    const client = await connectedClient();
-
-    const result = await client.callTool({
-      name: "settings.set",
-      arguments: {
-        key: "catalog.activated",
-        value: true,
-        reason: "skip the dialog",
-        idempotencyKey: KEY_ONE,
-      },
-    });
-
-    expect(result.isError).toBe(true);
-    expect(errorOf(result)).toMatchObject({
-      code: "VALIDATION_FAILED",
-      message: expect.stringContaining("repositories.activate"),
     });
     expect(await db.select().from(settings)).toEqual([]);
   });
@@ -584,26 +557,6 @@ describe("settings.reset", () => {
       });
     },
   );
-
-  it("refuses the catalog switch here too, with the same pointer set gives", async () => {
-    const owner = await connectedClient();
-
-    const result = await owner.callTool({
-      name: "settings.reset",
-      arguments: {
-        key: "catalog.activated",
-        reason: "put the bridge back",
-        idempotencyKey: KEY_ONE,
-      },
-    });
-
-    // Clearing the row would turn activation off by the back door, with none of
-    // the population the activation dialog makes an owner read first.
-    expect(errorOf(result)).toMatchObject({
-      code: "VALIDATION_FAILED",
-      message: expect.stringContaining("repositories.activate"),
-    });
-  });
 
   // The lock that does not depend on somebody remembering to keep a role list
   // closed: a token with no `sub` never holds workflows:write in the first

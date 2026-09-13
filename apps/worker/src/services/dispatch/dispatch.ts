@@ -20,10 +20,8 @@ import {
   enforceConnectedTriggerRateLimit,
   resolveTriggerRateLimitForType,
   triggerRateLimitLogFields,
-  type TriggerRateLimitConfig,
   type TriggerRateLimitNode,
   type TriggerRateLimitNodeParams,
-  type TriggerRateLimitWindow,
 } from "./trigger-rate-limit.js";
 import type { AgentWorkflowInput } from "../../engine/index.js";
 import { BUILTIN_FALLBACK_DEFINITION_VERSION } from "../../engine/agent-input.js";
@@ -142,7 +140,7 @@ export async function dispatchTicket(
         // starts: a candidate refused by any guard above (approval pending,
         // wrong column, wrong project, no definition) must not spend the
         // trigger's start budget nor tally a rejection.
-        if (await ticketTriggerRateLimited(enabled, ticketKey, settings)) {
+        if (await ticketTriggerRateLimited(enabled, ticketKey)) {
           return { started: false, reason: "rate_limited" };
         }
         return null;
@@ -170,20 +168,6 @@ export async function dispatchTicket(
   return result.started
     ? { started: true, runId: result.runId }
     : result;
-}
-
-/**
- * The optional global rate-limit default from env. Both halves must be set: a
- * lone max without a window (or vice versa) is a misconfiguration, treated as
- * no default at all so it never silently changes existing workflows.
- */
-export function envTriggerRateLimitDefault(source: {
-  TRIGGER_RATE_LIMIT_MAX?: number;
-  TRIGGER_RATE_LIMIT_WINDOW?: TriggerRateLimitWindow;
-}): TriggerRateLimitConfig | null {
-  const max = source.TRIGGER_RATE_LIMIT_MAX;
-  const windowKind = source.TRIGGER_RATE_LIMIT_WINDOW;
-  return max !== undefined && windowKind !== undefined ? { max, windowKind } : null;
 }
 
 /** The rate-limit params authored on one graph node. Unknown or mistyped
@@ -243,14 +227,9 @@ export function triggerRateLimitNodes(
 async function ticketTriggerRateLimited(
   enabled: NonNullable<Awaited<ReturnType<typeof getConnectedEnabledWorkflowDefinitionForTrigger>>>,
   ticketKey: string,
-  settings: SettingsSnapshot,
 ): Promise<boolean> {
   const limit = resolveTriggerRateLimitForType(
     triggerRateLimitNodes(runnableDefinitionOf(enabled.current), "trigger_ticket_ai"),
-    envTriggerRateLimitDefault({
-      TRIGGER_RATE_LIMIT_MAX: settings.TRIGGER_RATE_LIMIT_MAX ?? undefined,
-      TRIGGER_RATE_LIMIT_WINDOW: settings.TRIGGER_RATE_LIMIT_WINDOW ?? undefined,
-    }),
   );
   if (!limit) return false;
   const key = { definitionId: String(enabled.definition.id), nodeId: limit.nodeId };

@@ -133,8 +133,8 @@ export async function loadWorkflowDefinitionFor(
   const buildDefault = (selectedDefinitionId: number | null = null): LoadedWorkflowPlan =>
     toPlan(
       defaultWorkflowDefinitionV2({
-        includeReview: settings.ENABLE_REVIEW_PHASE,
-        includeLeakReview: settings.ENABLE_LEAK_REVIEW,
+        includeReview: false,
+        includeLeakReview: false,
         provider: settings.AGENT_KIND,
       }),
       null,
@@ -150,7 +150,7 @@ export async function loadWorkflowDefinitionFor(
       return null;
     }
     logger.info(
-      { definitionId, version, reviewEnabled: settings.ENABLE_REVIEW_PHASE },
+      { definitionId, version, reviewEnabled: false },
       "workflow_definition_default",
     );
     return buildDefault(definitionId);
@@ -173,7 +173,7 @@ export async function loadWorkflowDefinitionFor(
           definition.triggerTypes.includes("trigger_ticket_ai")
         ) {
           logger.info(
-            { definitionId, version, reviewEnabled: settings.ENABLE_REVIEW_PHASE },
+            { definitionId, version, reviewEnabled: false },
             "workflow_definition_default",
           );
           return buildDefault();
@@ -185,7 +185,7 @@ export async function loadWorkflowDefinitionFor(
       const match = await getConnectedEnabledWorkflowDefinitionForTrigger(triggerType);
       if (!match || !match.current) {
         if (isTicket && match) {
-          logger.info({ reviewEnabled: settings.ENABLE_REVIEW_PHASE }, "workflow_definition_default");
+          logger.info({ reviewEnabled: false }, "workflow_definition_default");
           return buildDefault();
         }
         logger.info({ triggerType }, "workflow_definition_none");

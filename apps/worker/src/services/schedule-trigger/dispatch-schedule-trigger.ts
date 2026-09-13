@@ -1,5 +1,4 @@
 import { start } from "workflow/api";
-import type { SettingsSnapshot } from "@shared/contracts";
 import type { Db } from "../../db/types.js";
 import type {
   RunRegistryAdapter,
@@ -11,7 +10,6 @@ import {
   claimSubjectRun,
   enforceTriggerRateLimit,
   enforceConnectedTriggerRateLimit,
-  envTriggerRateLimitDefault,
   resolveTriggerRateLimit,
   triggerRateLimitLogFields,
   type TriggerRateLimitConfig,
@@ -135,8 +133,8 @@ interface LiveScheduleTarget {
   definitionVersion: number;
   taskTitle: string;
   taskDescription: string;
-  /** Start budget authored on the node. Absent keys mean the env default
-   *  decides, and no default means unlimited. */
+  /** Start budget authored solely on the node. Absent or incomplete parameters
+   *  mean unlimited. */
   rateLimit?: TriggerRateLimitNodeParams;
 }
 
@@ -162,7 +160,6 @@ interface ScheduleTargetQuery {
 export interface ScheduleDispatchDeps {
   runRegistry: RunRegistryAdapter;
   maxConcurrentAgents: number;
-  settings?: SettingsSnapshot;
   occurrences: ScheduleOccurrenceLedgerPort;
   schedules: ScheduleRowPort;
   /**
@@ -550,7 +547,8 @@ const RATE_LIMITED_SKIP_REASON = "rate_limited";
 /**
  * Count this occurrence against the node's trigger rate limit. The schedule
  * dispatcher knows its own node, so the counter key is exact, and the node's own
- * params beat the env default.
+ * authored parameters are the sole source; absent or incomplete parameters
+ * mean unlimited.
  */
 async function consumeScheduleRateLimit(
   occurrence: ScheduleOccurrenceDispatch,
@@ -558,12 +556,6 @@ async function consumeScheduleRateLimit(
 ): Promise<TriggerRateLimitDecision | null> {
   const config = resolveTriggerRateLimit(
     occurrence.rateLimit,
-    envTriggerRateLimitDefault({
-      TRIGGER_RATE_LIMIT_MAX:
-        deps.settings?.TRIGGER_RATE_LIMIT_MAX ?? undefined,
-      TRIGGER_RATE_LIMIT_WINDOW:
-        deps.settings?.TRIGGER_RATE_LIMIT_WINDOW ?? undefined,
-    }),
   );
   if (config === null) return null;
   return deps.consumeTriggerRateLimit(
@@ -1178,12 +1170,10 @@ export function createScheduleDispatchDeps(
   db: Db,
   runRegistry: RunRegistryAdapter,
   maxConcurrentAgents: number,
-  settings?: SettingsSnapshot,
 ): ScheduleDispatchDeps {
   return {
     runRegistry,
     maxConcurrentAgents,
-    settings,
     occurrences: {
       accept: (admitted) => acceptOccurrence(db, admitted),
       supersedeThenAccept: (admitted) => supersedePendingThenAccept(db, admitted),
@@ -1236,12 +1226,10 @@ export function createScheduleDispatchDeps(
 export function createConnectedScheduleDispatchDeps(
   runRegistry: RunRegistryAdapter,
   maxConcurrentAgents: number,
-  settings?: SettingsSnapshot,
 ): ScheduleDispatchDeps {
   return {
     runRegistry,
     maxConcurrentAgents,
-    settings,
     occurrences: {
       accept: acceptConnectedOccurrence,
       supersedeThenAccept: supersedeConnectedPendingThenAccept,

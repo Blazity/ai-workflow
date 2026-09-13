@@ -207,11 +207,9 @@ function memoryRow(settings: readonly SettingsEntryView[]): SetupOverviewRow {
 /**
  * Whether the catalog decides what the agent may touch.
  *
- * Read from the catalog state row, never from the `catalog.activated` settings
- * key: nothing writes that key, so a deployment whose seed activated the
- * catalog resolved it to the default and this card called an activated catalog
- * "Not activated". The label says "Repository catalog", not "Stored setting",
- * because this row is not a stored setting and never was.
+ * Read from the catalog state row, the sole owner of activation. The label says
+ * "Repository catalog", not "Stored setting", because this row is not a stored
+ * setting.
  */
 function catalogRow(state: RepositoryCatalogState | null): SetupOverviewRow {
   const value = activationValue(state);

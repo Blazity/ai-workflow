@@ -27,14 +27,6 @@ export type VcsProviderConfig =
       legacyRepoPath?: string;
     };
 
-type LegacyVcsConfig<T extends VcsProviderConfig> = T extends unknown
-  ? Omit<T, "legacyRepoPath"> & {
-      repoPath: string;
-      baseBranch: string;
-    }
-  : never;
-
-export type VcsConfig = LegacyVcsConfig<VcsProviderConfig>;
 export type VcsProviderKind = VcsProviderConfig["kind"];
 
 function isGithubProviderConfigured(): boolean {

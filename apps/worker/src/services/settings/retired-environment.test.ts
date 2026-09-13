@@ -12,7 +12,7 @@ describe("retired settings environment guard", () => {
       `Retired settings variables are still set: ${RETIRED_ENVIRONMENT_VARIABLES.join(", ")}`,
     );
     expect(() => assertNoRetiredEnvironmentVariables(environment)).toThrow(
-      /Settings page or with MCP settings\.set/,
+      /Remove these variables and follow the replacement documented in SETUP\.md/,
     );
     expect(() => assertNoRetiredEnvironmentVariables(environment)).toThrow(
       /SETUP\.md, section "Removing migrated environment variables"/,

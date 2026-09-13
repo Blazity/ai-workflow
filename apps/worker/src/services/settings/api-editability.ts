@@ -1,6 +1,5 @@
 /**
- * Which settings a generic write may touch, and which have a screen of their
- * own.
+ * Which settings a generic write may touch.
  *
  * Lifted out of `routes/api/v1/settings.patch.ts`, which had it inline, because
  * a second surface now asks the same question: the MCP `settings.set` tool. The
@@ -8,12 +7,7 @@
  * between a one-line patch and a decision that has a dialog for a reason, and
  * two copies of it would be two answers.
  *
- * Today the group is `repositories`, which holds the catalog activation flag.
- * Activating decides what the agent may touch at all, and the surface that does
- * it names every repository that stops passing and every one holding a run
- * claim first. A generic patch would flip the same flag with none of that shown.
- *
- * The MCP surface refuses one group MORE than the HTTP one, and the difference
+ * The MCP surface refuses one group more than the HTTP one, and the difference
  * is not squeamishness: the `mcp` group IS that surface. A tool that could
  * write `MCP_ENABLED` could switch the transport off mid-session and leave
  * nobody able to switch it back except through the dashboard; one that could
@@ -24,7 +18,6 @@
  */
 import { findSettingDefinition } from "@shared/contracts";
 
-const NON_PATCHABLE_GROUP = "repositories";
 /** The group no tool on the MCP surface may write: this transport's own
  *  configuration. Editable through the dashboard, and through the HTTP patch
  *  the dashboard calls; not by an agent talking to the thing it configures. */
@@ -49,10 +42,7 @@ const NON_MCP_WRITABLE_KEYS: ReadonlySet<string> = new Set(["MCP_ENABLED"]);
 export function isSettingEditableThroughApi(key: string): boolean {
   const definition = findSettingDefinition(key);
   if (definition === undefined) return true;
-  if (definition.group === NON_PATCHABLE_GROUP) return false;
-  // And the second refusal, for the opposite reason to the first: not a
-  // decision that needs a better screen, but a key this store cannot decide at
-  // all. The running code reads its variable, at module load or inside a step,
+  // The running code reads these variables at module load or inside a step,
   // so the resolution ignores a stored row for it. Accepting the write would
   // record a value, show it on the page, and change nothing.
   return definition.requiresRedeploy !== true;
@@ -75,7 +65,7 @@ export function settingApiEditRefusal(key: string): string | null {
   if (isEnvironmentOwned(key)) {
     return `Not editable here: ${key}. It is read from the deployment environment; change the variable there and redeploy.`;
   }
-  return `Not editable here: ${key}. Activate the repository catalog from the Repositories page, which posts to /api/v1/repository-catalog/activate.`;
+  return null;
 }
 
 /** Every key of this patch the rule above refuses, named rather than counted,
@@ -111,18 +101,13 @@ export function isSettingEditableThroughMcp(key: string): boolean {
  * Why this key cannot be written from MCP, and where it is written instead, or
  * null when it can be.
  *
- * One message per reason rather than one refusal for both, because the two
- * point at different places: the catalog switch has a tool of its own on this
- * very surface, and the transport's own settings have a screen a person has to
- * be sitting in front of.
+ * One message per reason: deployment variables are changed in the environment,
+ * while the transport's own settings require a person on the dashboard.
  */
 export function settingMcpEditRefusal(key: string): string | null {
   if (isSettingEditableThroughMcp(key)) return null;
   if (isEnvironmentOwned(key)) {
     return `Not editable here: ${key}. It is read from the deployment environment; change the variable there and redeploy.`;
-  }
-  if (!isSettingEditableThroughApi(key)) {
-    return `Not editable here: ${key}. Activating the repository catalog is repositories.activate, which refuses until you have read repositories.activate_preview and can see what stops passing.`;
   }
   return `Not editable here: ${key}. It configures this transport itself -- whether it answers at all, its timeouts and its rate limits -- so it is changed on the dashboard Settings page and not by a client talking through it.`;
 }

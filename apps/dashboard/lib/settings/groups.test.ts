@@ -99,7 +99,7 @@ test("selectGroupKeys with undefined returns every entry", () => {
     description: "Test",
     entries: [
       entry("DASHBOARD_ORG_NAME", "Test"),
-      entry("GITHUB_BASE_BRANCH", "main"),
+      entry("DASHBOARD_ORG_SLUG", "test"),
     ],
     storedCount: 0,
   };
@@ -114,14 +114,13 @@ test("selectGroupKeys with key list keeps only those keys", () => {
     description: "Test",
     entries: [
       entry("DASHBOARD_ORG_NAME", "Test"),
-      entry("GITHUB_BASE_BRANCH", "main"),
       entry("DASHBOARD_ORG_SLUG", "test"),
     ],
     storedCount: 0,
   };
-  const result = selectGroupKeys(group, ["GITHUB_BASE_BRANCH"]);
+  const result = selectGroupKeys(group, ["DASHBOARD_ORG_SLUG"]);
   assert.equal(result.length, 1);
-  assert.equal(result[0].key, "GITHUB_BASE_BRANCH");
+  assert.equal(result[0].key, "DASHBOARD_ORG_SLUG");
 });
 
 test("selectGroupKeys maintains registry order even when keys passed in reverse", () => {
@@ -131,16 +130,15 @@ test("selectGroupKeys maintains registry order even when keys passed in reverse"
     description: "Test",
     entries: [
       entry("DASHBOARD_ORG_NAME", "Test"),
-      entry("GITHUB_BASE_BRANCH", "main"),
       entry("DASHBOARD_ORG_SLUG", "test"),
     ],
     storedCount: 0,
   };
   const result = selectGroupKeys(group, [
     "DASHBOARD_ORG_SLUG",
-    "GITHUB_BASE_BRANCH",
+    "DASHBOARD_ORG_NAME",
   ]);
-  assert.equal(result[0].key, "GITHUB_BASE_BRANCH");
+  assert.equal(result[0].key, "DASHBOARD_ORG_NAME");
   assert.equal(result[1].key, "DASHBOARD_ORG_SLUG");
 });
 
@@ -151,7 +149,7 @@ test("selectGroupKeys with unknown key yields nothing extra", () => {
     description: "Test",
     entries: [
       entry("DASHBOARD_ORG_NAME", "Test"),
-      entry("GITHUB_BASE_BRANCH", "main"),
+      entry("DASHBOARD_ORG_SLUG", "test"),
     ],
     storedCount: 0,
   };

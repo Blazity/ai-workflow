@@ -42,10 +42,9 @@ function entry(
 const SETTINGS = [
   entry("MAX_CONCURRENT_AGENTS", 3),
   entry("ENABLE_REPO_MEMORY", false),
-  // Still in the registry, still never written by anything, and deliberately
-  // set to the value that used to drive this page so a test would catch the
-  // page reading it again.
-  entry("catalog.activated", false),
+  entry("DASHBOARD_ORG_SLUG", "ai-workflow", { source: "environment" }),
+  entry("MCP_ALLOW_PUBLIC_DCR", false, { source: "environment" }),
+  entry("PRE_PR_CHECKS_ALLOWED_ENV", ["NPM_TOKEN"], { source: "environment" }),
 ];
 
 /** The catalog state row the worker returns, which is where activation lives. */
@@ -125,9 +124,7 @@ test("a catalog that is not activated says so above the forms", (t) => {
 });
 
 test("an activated catalog drops the banner and names who activated it", (t) => {
-  // The state row is the input, not the registry key: this render leaves the
-  // key at false, which is exactly the production shape (seed activated the
-  // catalog, nothing ever wrote the key) that made the page say "Not activated".
+  // The catalog state row is the only activation input.
   const root = render(t, { catalogState: catalogState(true) });
   const rendered = text(root);
   assert.doesNotMatch(rendered, /Repository catalog not activated/);
@@ -159,16 +156,26 @@ test("a member sees every value and no way to change one", (t) => {
   assert.match(rendered, /MAX_CONCURRENT_AGENTS/);
 });
 
-test("the repositories group is a summary, not a form with dead controls", (t) => {
+test("deployment variables render read-only below the editable forms", (t) => {
   const root = render(t);
-  assert.match(text(root), /Activating the catalog decides what the agent may touch/);
-  assert.equal(
-    root.findAll(
-      (node) => node.props?.["aria-label"] === "Value of catalog.activated",
-    ).length,
-    0,
-    "the catalog switch was rendered as a control that cannot do anything",
-  );
+  const rendered = text(root);
+  assert.match(rendered, /Deployment variables/);
+  assert.match(rendered, /Set in the deployment environment/);
+  assert.match(rendered, /Changes need a redeploy/);
+  assert.match(rendered, /DASHBOARD_ORG_SLUG/);
+  assert.match(rendered, /MCP_ALLOW_PUBLIC_DCR/);
+  assert.match(rendered, /PRE_PR_CHECKS_ALLOWED_ENV/);
+  for (const key of [
+    "DASHBOARD_ORG_SLUG",
+    "MCP_ALLOW_PUBLIC_DCR",
+    "PRE_PR_CHECKS_ALLOWED_ENV",
+  ]) {
+    assert.equal(
+      root.findAll((node) => node.props?.["aria-label"] === `Value of ${key}`).length,
+      0,
+      `${key} was rendered as an editable control`,
+    );
+  }
 });
 
 test("a worker that did not answer tells a member who to ask, not where to click", (t) => {

@@ -386,8 +386,6 @@ beforeEach(() => {
   orphanStartedRun = vi.fn(async () => undefined);
   // Default: every start is within budget, so the existing suite is unaffected.
   consumeTriggerRateLimit = vi.fn(async () => null);
-  delete testEnv.TRIGGER_RATE_LIMIT_MAX;
-  delete testEnv.TRIGGER_RATE_LIMIT_WINDOW;
   loggerMock.warn.mockClear();
   loggerMock.info.mockClear();
   hostedStart.mockReset();
@@ -415,10 +413,6 @@ function deps(overrides: Partial<DispatchDeps> = {}): DispatchDeps {
   return {
     runRegistry: registry as unknown as RunRegistryAdapter,
     maxConcurrentAgents: 3,
-    settings: {
-      TRIGGER_RATE_LIMIT_MAX: testEnv.TRIGGER_RATE_LIMIT_MAX ?? null,
-      TRIGGER_RATE_LIMIT_WINDOW: testEnv.TRIGGER_RATE_LIMIT_WINDOW ?? null,
-    } as DispatchDeps["settings"],
     occurrences: ledger,
     schedules: {
       listEvaluable: async () => [],
@@ -1334,23 +1328,7 @@ describe("schedule trigger rate limit", () => {
     expect(consumeTriggerRateLimit).not.toHaveBeenCalled();
   });
 
-  it("applies the stored default to a node with no params of its own", async () => {
-    testEnv.TRIGGER_RATE_LIMIT_MAX = 5;
-    testEnv.TRIGGER_RATE_LIMIT_WINDOW = "day";
-    consumeTriggerRateLimit.mockResolvedValue({ ...SPENT, allowed: true, count: 1 });
-
-    await dispatchScheduleOccurrence(params(), deps());
-
-    expect(consumeTriggerRateLimit).toHaveBeenCalledWith(
-      { definitionId: "9", nodeId: "entry" },
-      { max: 5, windowKind: "day" },
-      expect.any(Date),
-    );
-  });
-
-  it("prefers the node's own params over the settings default", async () => {
-    testEnv.TRIGGER_RATE_LIMIT_MAX = 5;
-    testEnv.TRIGGER_RATE_LIMIT_WINDOW = "day";
+  it("uses the node's own rate-limit params", async () => {
     consumeTriggerRateLimit.mockResolvedValue({ ...SPENT, allowed: true, count: 1 });
 
     await dispatchScheduleOccurrence(
