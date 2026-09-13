@@ -26,6 +26,7 @@ import {
   type RepositorySuggestionOutcome,
   type RepositorySuggestionRecord,
 } from "@shared/contracts";
+import { repositoryRulesVariablesError } from "@shared/prompts";
 import {
   activateConnectedRepositoryCatalog,
   getConnectedRepositoryCatalogRow,
@@ -106,6 +107,13 @@ export async function saveRepositoryProfile(input: {
   expectedId?: number;
 }): Promise<RepositoryCatalogMutationResponse> {
   requireCatalogManager(input.actor);
+  const rulesError =
+    input.request.rules === undefined
+      ? null
+      : repositoryRulesVariablesError(input.request.rules);
+  if (rulesError) {
+    throw new DashboardAuthError(400, rulesError);
+  }
   // The one thing checked about the scripts entry before it is stored raw.
   // The engine's schema normalizes as it parses and this deliberately does not
   // repeat it, but a group name the engine cannot resolve is not a difference

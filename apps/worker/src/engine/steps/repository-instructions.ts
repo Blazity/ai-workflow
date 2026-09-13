@@ -48,10 +48,10 @@ const AI_MEMORY_LISTING_TIMEOUT_MS = 5_000;
  * Per repository, on the rules the catalog holds, measured on the text AFTER
  * the run's variables are rendered into it. Measuring before would be a cap on
  * the stored draft rather than on what the prompt actually pays for, and a
- * single {{ticket_description}}-sized token can be the larger half of a short
- * rules document. Modest next to the 256 KiB instruction-file cap because rules
- * are typed into a box by a person, and deliberately a truncation rather than a
- * failure: rules must never be able to fail a run.
+ * long rendered URL can be the larger half of a short rules document. Modest
+ * next to the 256 KiB instruction-file cap because rules are typed into a box
+ * by a person, and deliberately a truncation rather than a failure: rules must
+ * never be able to fail a run.
  */
 const MAX_REPOSITORY_RULES_BYTES = 32 * 1024;
 /**
@@ -76,8 +76,8 @@ const MAX_REPOSITORY_RULES_TOTAL_BYTES = 128 * 1024;
  * the opposite failure rule: absence is the normal case, so anything wrong with
  * them skips content and lets the invocation continue.
  *
- * The catalog's own rules ride here too, for `catalogRuleKeys` only. They are a
- * database read rather than a sandbox read, and they are loaded inside THIS
+ * The catalog's prompt content rides here too, for `catalogRuleKeys` only. It is
+ * a database read rather than a sandbox read, and it is loaded inside THIS
  * step rather than a new one on purpose: a new "use step" call inserted into
  * the invocation path adds a journal entry that a run already suspended in this
  * workflow has no record of, and this step already runs exactly where the
@@ -103,6 +103,9 @@ export async function loadRepositoryInstructionSources(
    *  journal stores the text that actually reached the model, and so the cap
    *  below and its log can sit where pino is allowed to run. */
   ruleVariables?: PromptVariableValues,
+  /** Per-repository values built at the call site. Optional so journals and
+   *  direct callers from before repository-scoped variables still replay. */
+  repositoryRuleVariables?: readonly RepositoryRuleVariableSet[],
 ): Promise<EffectivePromptRepositorySource[]> {
   "use step";
   const trustedManifest = validateRepositoryInstructionManifest(manifest);
@@ -167,27 +170,43 @@ export async function loadRepositoryInstructionSources(
     });
     const rules = rulesByKey.get(repositoryKey);
     if (rules) {
+      const variables =
+        repositoryRuleVariables?.find((entry) => entry.key === repositoryKey)
+          ?.values ?? ruleVariables;
       const related = renderRelatedRepositories(
         repositoryKey,
         rules.relationships ?? [],
         catalogRuleKeys ?? [],
       );
       const baseRules = rules.rules.trim();
-      const renderedRules =
-        baseRules.length === 0
-          ? related
-          : related.length === 0
-            ? baseRules
-            : `${baseRules}\n\n${related}`;
+      for (const variable of usedVariables(baseRules)) {
+        if (!isRepositoryRulesVariable(variable.name)) {
+          ruleBudget.unresolved.add(variable.name);
+        }
+      }
+      const defaultBranch =
+        (rules.defaultBranch ?? "").trim() || repository.defaultBranch.trim();
+      if (!defaultBranch && baseRules.includes("{{repo_default_branch}}")) {
+        ruleBudget.unresolved.add("repo_default_branch");
+      }
+      const renderedRules = substitutePromptVariables(baseRules, {
+        ...allowedRepositoryRuleVariables(variables),
+        // Both values name THIS repository. The catalog row is authoritative;
+        // the manifest's provider branch is only the fallback for a legacy or
+        // otherwise incomplete catalog row.
+        repo_path: rules.path.trim() || repository.repoPath,
+        repo_default_branch: defaultBranch,
+      });
+      const rendered = [
+        repositoryDescriptionSummary(rules.description ?? ""),
+        renderedRules,
+        related,
+      ]
+        .filter((part) => part.length > 0)
+        .join("\n\n");
       const content = takeRepositoryRules({
         key: repositoryKey,
-        // `repo_path` names THIS repository, not the run's headline one. A
-        // rules document is per repository, so a token that resolved to some
-        // other repository's path inside it would be worse than not resolving.
-        rendered: substitutePromptVariables(renderedRules, {
-          ...repositoryRuleVariables(ruleVariables),
-          repo_path: repository.repoPath,
-        }),
+        rendered,
         budget: ruleBudget,
       });
       if (content !== null) {
@@ -368,9 +387,17 @@ export async function loadRepositoryInstructionSources(
 loadRepositoryInstructionSources.maxRetries = 0;
 
 interface RepositoryCatalogRules {
+  path: string;
+  defaultBranch: string;
   version: number;
+  description: string;
   rules: string;
   relationships: RepositoryCatalogRelationship[];
+}
+
+export interface RepositoryRuleVariableSet {
+  key: string;
+  values: PromptVariableValues;
 }
 
 /** What one compiled prompt has already spent on rules, and what went wrong. */
@@ -413,10 +440,20 @@ async function loadRepositoryCatalogRules(
     );
     for (const row of await listConnectedRepositoryRules(keys)) {
       if (!allowed.has(row.key)) continue;
-      const rules = row.rules.trim();
+      const description = String(row.description ?? "").trim();
+      const rules = String(row.rules ?? "").trim();
       const relationships = row.relationships ?? [];
-      if (rules.length === 0 && relationships.length === 0) continue;
-      found.set(row.key, { version: row.version, rules, relationships });
+      if (description.length === 0 && rules.length === 0 && relationships.length === 0) {
+        continue;
+      }
+      found.set(row.key, {
+        path: String(row.path ?? ""),
+        defaultBranch: String(row.defaultBranch ?? ""),
+        version: row.version,
+        description,
+        rules,
+        relationships,
+      });
     }
   } catch (error) {
     await warnWithoutFailing("repository_rules_unreadable", {
@@ -425,6 +462,34 @@ async function loadRepositoryCatalogRules(
     return new Map();
   }
   return found;
+}
+
+/** The first markdown paragraph as one plain-text line, bounded for prompts. */
+export function repositoryDescriptionSummary(markdown: string): string {
+  const paragraph = markdown.trim().split(/\r?\n[\t ]*\r?\n/, 1)[0] ?? "";
+  const variables: string[] = [];
+  const protectedParagraph = paragraph.replace(
+    /\{\{\s*[a-z][a-z0-9_]*\s*\}\}/g,
+    (token) => {
+      variables.push(token);
+      return `\uE000${variables.length - 1}\uE001`;
+    },
+  );
+  const plain = protectedParagraph
+    .replace(/^ {0,3}#{1,6}[\t ]+/gm, "")
+    .replace(/^ {0,3}>[\t ]?/gm, "")
+    .replace(/^ {0,3}(?:[-+*]|\d+[.)])[\t ]+/gm, "")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/<((?:https?|mailto):[^>]+)>/g, "$1")
+    .replace(/<[^>]+>/g, "")
+    .replace(/(`+)(.*?)\1/g, "$2")
+    .replace(/[*_~]/g, "")
+    .replace(/\\([\\`*_[\]{}()#+.!-])/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\uE000(\d+)\uE001/g, (_match, index: string) => variables[Number(index)] ?? "");
+  return Array.from(plain).slice(0, 500).join("");
 }
 
 function renderRelatedRepositories(
@@ -452,7 +517,7 @@ function renderRelatedRepositories(
  * by a reporter stays the literal string `{{ticket_description}}` inside a
  * section the model reads as operator-authored rules, instead of becoming one.
  */
-function repositoryRuleVariables(
+function allowedRepositoryRuleVariables(
   variables: PromptVariableValues | undefined,
 ): PromptVariableValues {
   const allowed: PromptVariableValues = {};
@@ -483,14 +548,6 @@ function takeRepositoryRules(input: {
   rendered: string;
   budget: RepositoryRulesBudget;
 }): string | null {
-  for (const variable of usedVariables(input.rendered)) {
-    // Both an unknown name and a real prompt variable this section may not
-    // render land here: from inside a rules document they are the same fact,
-    // that the token the operator typed is still standing in the text.
-    if (!isRepositoryRulesVariable(variable.name)) {
-      input.budget.unresolved.add(variable.name);
-    }
-  }
   if (input.budget.remaining <= 0) {
     input.budget.dropped.push(input.key);
     return null;
@@ -638,6 +695,7 @@ type RepositoryInstructionLoader = (
   enableRepoMemory?: boolean,
   catalogRuleKeys?: readonly string[],
   ruleVariables?: PromptVariableValues,
+  repositoryRuleVariables?: readonly RepositoryRuleVariableSet[],
 ) => Promise<EffectivePromptRepositorySource[]>;
 
 /**
@@ -693,6 +751,17 @@ export async function loadInvocationRepositoryInstructionSources(
     input.enableRepoMemory,
     injectableRepositoryRuleKeys(input.manifest, input.repositoryAccess),
     input.ruleVariables,
+    input.manifest.repositories.map((repository) => ({
+      key: repositoryCatalogKey({
+        provider: repository.provider,
+        path: repository.repoPath,
+      }),
+      values: {
+        ...input.ruleVariables,
+        repo_path: repository.repoPath,
+        repo_default_branch: repository.defaultBranch,
+      },
+    })),
   );
 }
 

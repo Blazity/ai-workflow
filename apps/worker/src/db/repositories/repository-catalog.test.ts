@@ -695,7 +695,15 @@ describe("listRepositoryRules", () => {
     );
 
     await expect(listRepositoryRules(db, ["github:acme/api"])).resolves.toEqual([
-      { key: "github:acme/api", version: 1, rules: "Run the tests.", relationships: [] },
+      {
+        key: "github:acme/api",
+        path: "Acme/Api",
+        defaultBranch: "",
+        version: 1,
+        description: "",
+        rules: "Run the tests.",
+        relationships: [],
+      },
     ]);
   });
 
@@ -718,7 +726,39 @@ describe("listRepositoryRules", () => {
     await upsertRepositoryProfile(db, profile({ rules: "Second." }));
 
     await expect(listRepositoryRules(db, ["github:acme/api"])).resolves.toEqual([
-      { key: "github:acme/api", version: 2, rules: "Second.", relationships: [] },
+      {
+        key: "github:acme/api",
+        path: "acme/api",
+        defaultBranch: "",
+        version: 2,
+        description: "",
+        rules: "Second.",
+        relationships: [],
+      },
+    ]);
+  });
+
+  it("returns a description-only profile with its catalog metadata", async () => {
+    const db = await createTestDb();
+    await upsertRepositoryProfile(
+      db,
+      profile({
+        path: "Acme/Api",
+        defaultBranch: "trunk",
+        description: "The API service.",
+      }),
+    );
+
+    await expect(listRepositoryRules(db, ["github:acme/api"])).resolves.toEqual([
+      {
+        key: "github:acme/api",
+        path: "Acme/Api",
+        defaultBranch: "trunk",
+        version: 1,
+        description: "The API service.",
+        rules: "",
+        relationships: [],
+      },
     ]);
   });
 
@@ -739,7 +779,10 @@ describe("listRepositoryRules", () => {
     await expect(listRepositoryRules(db, ["github:acme/api"])).resolves.toEqual([
       {
         key: "github:acme/api",
+        path: "acme/api",
+        defaultBranch: "",
         version: 1,
+        description: "",
         rules: "Target rules.",
         relationships: [
           {

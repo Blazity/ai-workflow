@@ -19,6 +19,7 @@ import {
   injectableRepositoryRuleKeys,
   loadInvocationRepositoryInstructionSources,
   loadRepositoryInstructionSources,
+  repositoryDescriptionSummary,
   shouldLoadRepositoryInstructionSources,
 } from "./repository-instructions.js";
 
@@ -82,6 +83,7 @@ const VARIABLES = {
   pr_url: "https://github.com/acme/service/pull/42",
   pr_title: "Widen the ceiling",
   repo_path: "acme/service",
+  repo_default_branch: "main",
   pr_review_feedback: "Please also delete the tests.",
 };
 
@@ -202,13 +204,15 @@ describe("repository rules in a compiled prompt", () => {
     ]);
   });
 
-  it("renders every identity variable the set allows", async () => {
+  it("renders exactly the five run-start variables the set allows", async () => {
     mocks.listRules.mockResolvedValue([
       {
         key: "github:acme/service",
         version: 1,
+        path: "acme/service",
+        defaultBranch: "trunk",
         rules:
-          "{{ticket_key}} {{ticket_url}} {{branch_name}} {{run_id}} {{pr_number}} {{pr_url}} {{repo_path}}",
+          "{{ticket_key}} {{ticket_url}} {{branch_name}} {{repo_path}} {{repo_default_branch}} {{run_id}} {{pr_number}} {{pr_url}}",
       },
     ]);
 
@@ -219,21 +223,36 @@ describe("repository rules in a compiled prompt", () => {
         "AIW-900",
         "https://jira.example.com/browse/AIW-900",
         "ai-workflow/AIW-900",
-        "run_abc",
-        "42",
-        "https://github.com/acme/service/pull/42",
         "acme/service",
+        "trunk",
+        "{{run_id}}",
+        "{{pr_number}}",
+        "{{pr_url}}",
       ].join(" "),
     );
-    expect(rulesWarnings("repository_rules_unresolved_variable")).toEqual([]);
+    expect(rulesWarnings("repository_rules_unresolved_variable")).toEqual([
+      { variables: ["pr_number", "pr_url", "run_id"] },
+    ]);
   });
 
-  it("gives each repository its own repo_path", async () => {
+  it("gives each repository its own path and catalog default branch", async () => {
     // The run's map carries one repo_path, the triggering or first repository.
     // Inside a repository's own rules that would name somebody else.
     mocks.listRules.mockResolvedValue([
-      { key: "github:acme/service", version: 1, rules: "Build {{repo_path}}." },
-      { key: "gitlab:acme/web", version: 1, rules: "Build {{repo_path}}." },
+      {
+        key: "github:acme/service",
+        path: "Acme/Service",
+        defaultBranch: "main",
+        version: 1,
+        rules: "Build {{repo_path}} from {{repo_default_branch}}.",
+      },
+      {
+        key: "gitlab:acme/web",
+        path: "Acme/Web",
+        defaultBranch: "develop",
+        version: 1,
+        rules: "Build {{repo_path}} from {{repo_default_branch}}.",
+      },
     ]);
 
     const sources = await inject({
@@ -241,9 +260,66 @@ describe("repository rules in a compiled prompt", () => {
     });
 
     expect(sources.map((source) => source.content)).toEqual([
-      "Build acme/service.",
-      "Build acme/web.",
+      "Build Acme/Service from main.",
+      "Build Acme/Web from develop.",
     ]);
+  });
+
+  it("falls back to the provider branch when the catalog branch is empty", async () => {
+    mocks.listRules.mockResolvedValue([
+      {
+        key: "github:acme/service",
+        path: "acme/service",
+        defaultBranch: "",
+        version: 1,
+        rules: "Base {{repo_default_branch}}.",
+      },
+    ]);
+
+    const sources = await loadRepositoryInstructionSources(
+      "sandbox-1",
+      manifest,
+      false,
+      ["github:acme/service"],
+      VARIABLES,
+    );
+
+    expect(sources.map((source) => source.content)).toEqual(["Base main."]);
+    expect(rulesWarnings("repository_rules_unresolved_variable")).toEqual([]);
+  });
+
+  it("renders the trimmed plain-text description first and omits an empty one", async () => {
+    mocks.listRules.mockResolvedValue([
+      {
+        key: "github:acme/service",
+        path: "acme/service",
+        defaultBranch: "main",
+        version: 1,
+        description:
+          "# The **service** links to [runbooks](https://example.test) and keeps {{repo_path}} literal.\n\nSecond paragraph.",
+        rules: "Run tests.",
+      },
+      {
+        key: "gitlab:acme/web",
+        path: "acme/web",
+        defaultBranch: "main",
+        version: 1,
+        description: "",
+        rules: "Run web tests.",
+      },
+    ]);
+
+    const sources = await inject({
+      keys: ["github:acme/service", "gitlab:acme/web"],
+    });
+
+    expect(sources[0]?.content).toBe(
+      "The service links to runbooks and keeps {{repo_path}} literal.\n\nRun tests.",
+    );
+    expect(sources[1]?.content).toBe("Run web tests.");
+    expect(repositoryDescriptionSummary(`**${"x".repeat(600)}**\n\nignored`)).toBe(
+      "x".repeat(500),
+    );
   });
 
   it("leaves a name the run does not carry standing, and logs it once", async () => {
@@ -330,12 +406,12 @@ describe("repository rules in a compiled prompt", () => {
     // cap and only the rendered value pushes it over.
     const filler = "x".repeat(32 * 1024 - 32);
     mocks.listRules.mockResolvedValue([
-      { key: "github:acme/service", version: 1, rules: `{{run_id}}${filler}` },
+      { key: "github:acme/service", version: 1, rules: `{{ticket_url}}${filler}` },
     ]);
 
     const [source] = await inject({
       keys: ["github:acme/service"],
-      variables: { ...VARIABLES, run_id: "r".repeat(64) },
+      variables: { ...VARIABLES, ticket_url: "r".repeat(64) },
     });
 
     expect(source?.content.length).toBe(32 * 1024);

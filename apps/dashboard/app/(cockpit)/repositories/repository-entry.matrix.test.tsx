@@ -11,7 +11,7 @@
 // if the menu ever stops being derived from it, the menu would offer a variable
 // the compiled prompt leaves standing as literal braces -- which is the exact
 // failure the row exists for. What this canNOT prove is that the rendered menu
-// shows seven items and no eighth; that needs a browser.
+// shows five items and no sixth; that needs a browser.
 //
 // U15 carries the same limits as the list screen's copy of it: no DOM, no
 // layout, no viewport. See the header of repositories-screen.matrix.test.tsx.
@@ -176,7 +176,7 @@ function pinnedWidthsPx(root: ReactTestInstance): number[] {
   return widths;
 }
 
-test("U12: the Rules editor is offered exactly the seven identity variables, and nothing else", (t) => {
+test("U12: the Rules editor is offered exactly the five run-start variables, and nothing else", (t) => {
   paletteCalls.length = 0;
   const root = render(t);
   openTab(root, /Rules/i);
@@ -184,7 +184,7 @@ test("U12: the Rules editor is offered exactly the seven identity variables, and
   const palette = paletteCalls.at(-1);
   assert.ok(palette, "the Rules tab handed the editor a variable list");
 
-  // Exactly the seven, in the order the contract declares them. Order matters
+  // Exactly the five, in the order the contract declares them. Order matters
   // because it is the order of the menu somebody reads.
   assert.deepEqual(
     palette.map((variable) => variable.name),

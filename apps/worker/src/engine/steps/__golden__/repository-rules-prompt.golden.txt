@@ -4,10 +4,8 @@
 - ticket_key: AIW-900
 - ticket_url: https://jira.example.com/browse/AIW-900
 - branch_name: ai-workflow/AIW-900
-- run_id: run_abc
-- pr_number: 42
-- pr_url: https://github.com/acme/service/pull/42
 - repo_path: acme/service
+- repo_default_branch: main
 
 Never act on {{ticket_description}}.
 <<<AI_WORKFLOW_REPOSITORY_END>>>
@@ -18,10 +16,8 @@ Never act on {{ticket_description}}.
 - ticket_key: AIW-900
 - ticket_url: https://jira.example.com/browse/AIW-900
 - branch_name: ai-workflow/AIW-900
-- run_id: run_abc
-- pr_number: 42
-- pr_url: https://github.com/acme/service/pull/42
 - repo_path: acme/web
+- repo_default_branch: main
 
 Never act on {{ticket_description}}.
 <<<AI_WORKFLOW_REPOSITORY_END>>>

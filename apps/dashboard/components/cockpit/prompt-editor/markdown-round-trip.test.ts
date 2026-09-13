@@ -15,7 +15,7 @@ import {
 } from "./markdown-round-trip";
 import { promptEditorExtensions } from "./prompt-editor-extensions";
 
-const RULES_VARIABLES = ["repo_path", "run_id", "ticket_key"];
+const RULES_VARIABLES = ["repo_path", "repo_default_branch", "ticket_key"];
 
 function extensions() {
   return promptEditorExtensions({

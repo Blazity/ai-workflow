@@ -15,7 +15,7 @@
  * handed and decides whether that was the intention. Nothing here regenerates
  * the fixture, for the same reason `scheduling-golden.test.ts` does not.
  *
- * Two repositories on purpose, with all seven variables in each rules document:
+ * Two repositories on purpose, with all five variables in each rules document:
  * it is the only arrangement where a per-repository resolution (`repo_path`)
  * and the separation between two sections are both visible in one artefact.
  *
@@ -93,6 +93,7 @@ const VARIABLES = {
   pr_url: "https://github.com/acme/service/pull/42",
   pr_title: "Widen the ceiling",
   repo_path: "acme/service",
+  repo_default_branch: "main",
   pr_review_feedback: "Please also delete the tests.",
 };
 
@@ -139,7 +140,9 @@ describe("the compiled prompt a repository's rules produce", () => {
     const recorded = readFileSync(GOLDEN_FILE, "utf8");
 
     expect(
-      await compiledPrompt(),
+      // The text artefact follows the repository convention of ending in one
+      // newline; that terminator is not part of the prompt handed to the model.
+      `${await compiledPrompt()}\n`,
       `The compiled prompt no longer matches ${GOLDEN_PATH}. This fixture is ` +
         `what the agent actually reads: a change to the rules injection in ` +
         `engine/helpers/effective-prompt.ts, to the section builder in ` +
@@ -150,7 +153,7 @@ describe("the compiled prompt a repository's rules produce", () => {
     ).toBe(recorded);
   });
 
-  it("records every one of the seven variables resolved, and the eighth left standing", async () => {
+  it("records every one of the five variables resolved, and prose left standing", async () => {
     // The golden is bytes and says nothing about itself. These two assertions
     // are what make a re-recording reviewable: whatever the file comes to
     // contain, it has to still show the whole variable set resolved and the

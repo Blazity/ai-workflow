@@ -738,9 +738,13 @@ export async function listRepositoriesWithProfiles(
 export interface RepositoryRulesRow {
   /** `provider:owner/name`, cased down: the key a run carries. */
   key: string;
+  /** Catalog identity and provider metadata for per-repository rendering. */
+  path: string;
+  defaultBranch: string;
   /** The profile version the rules came from, so a compiled prompt can record
    *  which edit it was built on. */
   version: number;
+  description: string;
   rules: string;
   relationships: RepositoryRulesRelationship[];
 }
@@ -769,9 +773,10 @@ interface RepositoryRulesRelationship {
  * scope binds it to; qualifying it is what keeps this predicate about
  * `repositories` no matter what the join adds later.
  *
- * A repository whose rules are blank and whose relationships are empty
- * contributes nothing rather than an empty section. A relationship is retained
- * even when the rules are blank because it becomes the section's only content.
+ * A repository whose description and rules are blank and whose relationships
+ * are empty contributes nothing rather than an empty section. A description or
+ * relationship is retained when the rules are blank because either can become
+ * the section's only content.
  *
  * The engine reaches it through the connected wrapper below, which is the only
  * caller a step can have; the db-taking form is exported for the test that
@@ -788,7 +793,8 @@ export async function listRepositoryRules(
   // dangling ids before any prompt reader can render them.
   const result = await db.execute(sql`
     WITH requested AS (
-      SELECT r.id, r.provider, r.path, r.rules, r.relationships,
+      SELECT r.id, r.provider, r.path, r.default_branch, r.description,
+        r.rules, r.relationships,
         r.current_profile_version AS version
       FROM ${repositories} AS r
       WHERE (r.provider || ':' || lower(r.path)) IN (${sql.join(requestedKeys.map((key) => sql`${key}`), sql`, `)})
@@ -809,7 +815,8 @@ export async function listRepositoryRules(
       WHERE (relation->>'repositoryId')::integer = owner.id
     )
     SELECT (requested.provider || ':' || lower(requested.path)) AS key,
-      requested.version, requested.rules, edges.direction, edges.repository_id,
+      requested.path, requested.default_branch, requested.version,
+      requested.description, requested.rules, edges.direction, edges.repository_id,
       edges.provider AS related_provider, edges.path AS related_path,
       edges.enabled AS related_enabled, edges.kind, edges.note
     FROM requested LEFT JOIN edges
@@ -821,7 +828,15 @@ export async function listRepositoryRules(
     const key = String(row.key);
     let entry = grouped.get(key);
     if (!entry) {
-      entry = { key, version: Number(row.version), rules: String(row.rules), relationships: [] };
+      entry = {
+        key,
+        path: String(row.path),
+        defaultBranch: String(row.default_branch ?? ""),
+        version: Number(row.version),
+        description: String(row.description ?? ""),
+        rules: String(row.rules),
+        relationships: [],
+      };
       grouped.set(key, entry);
     }
     if (row.repository_id === null || row.repository_id === undefined) continue;
@@ -834,7 +849,10 @@ export async function listRepositoryRules(
     });
   }
   return [...grouped.values()].filter(
-    (entry) => entry.rules.trim().length > 0 || entry.relationships.length > 0,
+    (entry) =>
+      entry.description.trim().length > 0 ||
+      entry.rules.trim().length > 0 ||
+      entry.relationships.length > 0,
   );
 }
 

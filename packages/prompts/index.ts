@@ -135,6 +135,8 @@ export {
   PROMPT_VARIABLES,
   REPOSITORY_RULES_VARIABLE_NAMES,
   REPOSITORY_RULES_VARIABLES,
+  repositoryRulesVariablesError,
+  unknownRepositoryRulesVariables,
   type PromptVariableName,
   type PromptVariableSpec,
   type RepositoryRulesVariableName,

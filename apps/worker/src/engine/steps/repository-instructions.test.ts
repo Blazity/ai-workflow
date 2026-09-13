@@ -180,6 +180,15 @@ describe("repository instruction sources", () => {
       false,
       ["github:acme/service"],
       {},
+      [
+        {
+          key: "github:acme/service",
+          values: {
+            repo_path: "acme/service",
+            repo_default_branch: "main",
+          },
+        },
+      ],
     );
     expect(sources.map((source) => source.path)).toEqual([
       "AGENTS.md",
