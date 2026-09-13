@@ -7,6 +7,7 @@ import type {
   WorkflowDefinitionV2Node,
 } from "@shared/contracts";
 import type { WorkflowBlockRegistryContext } from "./block-contract-resolver.js";
+import { BUILTIN_HARNESS_PROFILE_MANIFESTS } from "@shared/harness";
 import {
   testBlockData,
   testDeploymentIssues,
@@ -16,7 +17,10 @@ import {
   parse,
   workflowDefinitionV2Schema,
 } from "@shared/workflow-graph";
-import { validateWorkflowDefinitionForDeployment } from "./deployment-validation.js";
+import {
+  validateWorkflowDefinitionForDeployment,
+  validateWorkflowDefinitionIssuesForDeployment,
+} from "./deployment-validation.js";
 import { parseStoredWorkflowDefinition } from "./stored-definition.js";
 import { validateWorkflowDefinitionCandidate } from "./validation.js";
 
@@ -57,6 +61,55 @@ function v2Definition(): WorkflowDefinitionV2 {
     ],
     edges: [],
   };
+}
+
+function genericAgentDefinition(
+  harnessProfile?: { profileId: string; version: number },
+): WorkflowDefinitionV2 {
+  const definition = v2Definition();
+  definition.nodes.push({
+    id: "agent",
+    type: "generic_agent",
+    x: 100,
+    y: 20,
+    configuration: {
+      prompt: "Return a result",
+      workspaceMode: "none",
+      ...(harnessProfile ? { harnessProfile } : {}),
+    },
+    inputs: {},
+    additionalInputs: [],
+  });
+  definition.edges.push({
+    id: "ticket-agent",
+    from: "ticket",
+    to: "agent",
+  });
+  return definition;
+}
+
+function deploymentIssuesWithProfiles(
+  definition: WorkflowDefinitionV2,
+  context: WorkflowBlockRegistryContext,
+  resolvedHarnessProfiles: ReadonlyMap<
+    string,
+    typeof BUILTIN_HARNESS_PROFILE_MANIFESTS[keyof typeof BUILTIN_HARNESS_PROFILE_MANIFESTS] | null
+  >,
+) {
+  const [
+    resolveContract,
+    blockParamsSchemas,
+    configuredVcsProviders,
+    analyzeValues,
+  ] = testBlockData(context);
+  return validateWorkflowDefinitionIssuesForDeployment(
+    definition,
+    resolveContract,
+    blockParamsSchemas,
+    configuredVcsProviders,
+    analyzeValues(definition),
+    { resolvedHarnessProfiles },
+  );
 }
 
 function branchingDefinition(condition: JsonValue): WorkflowDefinitionV2 {
@@ -428,6 +481,145 @@ describe("Workflow Definition v2 schema", () => {
         code: "deployment",
         nodeId: "ticket",
         path: "/nodes/0/configuration",
+      }),
+    ]);
+  });
+
+  it("validates a custom Claude profile with Claude credentials", () => {
+    const definition = genericAgentDefinition({
+      profileId: "custom-claude",
+      version: 3,
+    });
+    expect(
+      deploymentIssuesWithProfiles(
+        definition,
+        {
+          ...registryContext,
+          agentProviders: { claude: true, codex: false },
+          llmProviders: { claude: true, codex: false },
+          defaultAgent: { provider: "codex", model: "gpt-5.3-codex" },
+        },
+        new Map([
+          [
+            "agent",
+            BUILTIN_HARNESS_PROFILE_MANIFESTS["builtin-claude"],
+          ],
+        ]),
+      ),
+    ).toEqual([]);
+  });
+
+  it("reports missing Claude credentials for a custom Claude profile", () => {
+    const definition = genericAgentDefinition({
+      profileId: "custom-claude",
+      version: 3,
+    });
+    expect(
+      deploymentIssuesWithProfiles(
+        definition,
+        {
+          ...registryContext,
+          agentProviders: { claude: false, codex: true },
+          llmProviders: { claude: false, codex: true },
+          defaultAgent: { provider: "codex", model: "gpt-5.3-codex" },
+        },
+        new Map([
+          [
+            "agent",
+            BUILTIN_HARNESS_PROFILE_MANIFESTS["builtin-claude"],
+          ],
+        ]),
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        nodeId: "agent",
+        message:
+          'Block "agent" (generic_agent) is unavailable: Claude credentials are not configured.',
+      }),
+    ]);
+  });
+
+  it("validates a custom Codex profile with Codex credentials", () => {
+    const definition = genericAgentDefinition({
+      profileId: "custom-codex",
+      version: 4,
+    });
+    expect(
+      deploymentIssuesWithProfiles(
+        definition,
+        {
+          ...registryContext,
+          agentProviders: { claude: false, codex: true },
+          llmProviders: { claude: false, codex: true },
+          defaultAgent: { provider: "claude", model: "claude-opus-4-1" },
+        },
+        new Map([
+          ["agent", BUILTIN_HARNESS_PROFILE_MANIFESTS["builtin-codex"]],
+        ]),
+      ),
+    ).toEqual([]);
+  });
+
+  it("reports missing Codex credentials for a custom Codex profile", () => {
+    const definition = genericAgentDefinition({
+      profileId: "custom-codex",
+      version: 4,
+    });
+    expect(
+      deploymentIssuesWithProfiles(
+        definition,
+        {
+          ...registryContext,
+          agentProviders: { claude: true, codex: false },
+          llmProviders: { claude: true, codex: false },
+          defaultAgent: { provider: "claude", model: "claude-opus-4-1" },
+        },
+        new Map([
+          ["agent", BUILTIN_HARNESS_PROFILE_MANIFESTS["builtin-codex"]],
+        ]),
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        nodeId: "agent",
+        message:
+          'Block "agent" (generic_agent) is unavailable: Codex credentials are not configured.',
+      }),
+    ]);
+  });
+
+  it("uses the built in default for a node without a profile", () => {
+    expect(
+      deploymentIssuesWithProfiles(
+        genericAgentDefinition(),
+        {
+          ...registryContext,
+          agentProviders: { claude: false, codex: true },
+          llmProviders: { claude: false, codex: true },
+          defaultAgent: { provider: "codex", model: "gpt-5.3-codex" },
+        },
+        new Map(),
+      ),
+    ).toEqual([]);
+  });
+
+  it("reports a dangling custom profile reference on its node", () => {
+    const definition = genericAgentDefinition({
+      profileId: "deleted-profile",
+      version: 7,
+    });
+    expect(
+      deploymentIssuesWithProfiles(
+        definition,
+        registryContext,
+        new Map([["agent", null]]),
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        code: "harness_profile_unavailable",
+        nodeId: "agent",
+        path: "/nodes/1/configuration/harnessProfile",
+        message:
+          'Harness Profile "deleted-profile" version 7 is unavailable.',
       }),
     ]);
   });

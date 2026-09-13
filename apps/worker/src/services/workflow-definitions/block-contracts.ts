@@ -14,13 +14,25 @@
  */
 import type {
   HarnessProfileManifest,
+  HarnessProfileReference,
   VcsProviderKind,
   WorkflowBlockContract,
   WorkflowBlockContractResolver,
   WorkflowBlockType,
+  WorkflowDefinition,
 } from "@shared/contracts";
+import { isHarnessProfileReference } from "@shared/contracts";
+import { resolveBuiltinHarnessProfile } from "@shared/harness";
 import { workflowBlockRegistryContext } from "../../engine/definition/block-contract-environment.js";
 import type { Db } from "../../db/types.js";
+import {
+  dashboardOrganizationId,
+} from "../../engine/definition/harness-profile-runtime.js";
+import type {
+  ResolvedHarnessProfileForDeployment,
+  ResolvedHarnessProfilesForDeployment,
+} from "../../engine/definition/deployment-validation.js";
+import { resolveVerifiedHarnessProfileVersion } from "../../harness-profiles/resolved-version.js";
 import {
   buildWorkflowBlockRegistry,
   createWorkflowBlockContractResolver,
@@ -57,6 +69,10 @@ export interface RequestBlockContracts {
    * worker's own deployment validation.
    */
   configuredVcsProviders: readonly VcsProviderKind[];
+  /** Exact profile parameters for the nodes a database-bound validation reads. */
+  resolveHarnessProfiles?(
+    definition: WorkflowDefinition,
+  ): Promise<ResolvedHarnessProfilesForDeployment>;
   /**
    * The per-type table the editor renders, resolved from the same environment
    * read. Built on first read only: a validation request never needs it, and
@@ -93,9 +109,71 @@ export async function connectedBlockContracts(): Promise<RequestBlockContracts> 
   return blockContractsFor();
 }
 
-/** The same API shape for the db-bound half of the definition services. The
- *  connection is retained for interface symmetry, but profile defaults are
- *  code-owned and require no database read. */
-export async function blockContractsOn(_db: Db): Promise<RequestBlockContracts> {
-  return blockContractsFor();
+/** The database-bound half also resolves each exact custom profile pin. A node
+ *  without a pin is deliberately absent from the returned map, so its contract
+ *  keeps the code-owned built-in default selected by the model catalog. */
+export async function blockContractsOn(db: Db): Promise<RequestBlockContracts> {
+  let organizationId: Promise<string> | null = null;
+  const contracts = blockContractsFor();
+  return {
+    ...contracts,
+    resolveHarnessProfiles: (definition) =>
+      resolveHarnessProfilesForDefinition(
+        definition,
+        async ({ profileId, version }) => {
+          organizationId ??= dashboardOrganizationIdOn(db);
+          return (
+            await resolveVerifiedHarnessProfileVersion(db, {
+              organizationId: await organizationId,
+              profileId,
+              version,
+            })
+          )?.manifest ?? null;
+        },
+      ),
+  };
+}
+
+async function dashboardOrganizationIdOn(db: Db): Promise<string> {
+  const {
+    dashboardOrganizationSettings,
+    loadSettingsSnapshotOn,
+  } = await import("../settings/index.js");
+  const organization = dashboardOrganizationSettings(
+    await loadSettingsSnapshotOn(db),
+  );
+  return dashboardOrganizationId(db, organization.slug);
+}
+
+export async function resolveHarnessProfilesForDefinition(
+  definition: WorkflowDefinition,
+  loadCustomProfile: (
+    reference: HarnessProfileReference,
+  ) => Promise<ResolvedHarnessProfileForDeployment | null>,
+): Promise<ResolvedHarnessProfilesForDeployment> {
+  const resolved = new Map<
+    string,
+    ResolvedHarnessProfileForDeployment | null
+  >();
+  const customProfiles = new Map<
+    string,
+    Promise<ResolvedHarnessProfileForDeployment | null>
+  >();
+  for (const node of definition.nodes) {
+    const reference = node.configuration.harnessProfile;
+    if (!isHarnessProfileReference(reference)) continue;
+    const builtin = resolveBuiltinHarnessProfile(reference);
+    if (builtin !== null) {
+      resolved.set(node.id, builtin);
+      continue;
+    }
+    const key = `${reference.profileId}:${reference.version}`;
+    let pending = customProfiles.get(key);
+    if (!pending) {
+      pending = loadCustomProfile(reference);
+      customProfiles.set(key, pending);
+    }
+    resolved.set(node.id, await pending);
+  }
+  return resolved;
 }
