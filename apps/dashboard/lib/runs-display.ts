@@ -42,14 +42,6 @@ export function runStatusHref({
   return query ? `/runs?${query}` : "/runs";
 }
 
-export function formatRunAge(minutes: number): string {
-  const wholeMinutes = Math.max(0, Math.floor(minutes));
-  if (wholeMinutes < 60) return `${wholeMinutes}m ago`;
-  const hours = Math.floor(wholeMinutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
-}
-
 export function runIdentity(run: Pick<Run, "id" | "ticket" | "ticketTitle">): {
   primary: string;
   showTicketLink: boolean;

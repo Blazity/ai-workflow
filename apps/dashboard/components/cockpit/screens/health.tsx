@@ -95,6 +95,7 @@ const STATUS: Record<
 };
 
 const SCAN_TIMEOUT_MS = 15_000;
+const STALE_SCAN_AFTER_HOURS = 24;
 
 /**
  * Nothing is fetched on mount and nothing polls: the only request this screen
@@ -121,7 +122,7 @@ export function HealthScreen({
   const [scanError, setScanError] = useState<string | null>(null);
   const scanInFlight = useRef(false);
   const scanIsStale =
-    hydrated && data !== null && isOlderThanHours(data.generatedAt, 24);
+    hydrated && data !== null && isOlderThanHours(data.generatedAt, STALE_SCAN_AFTER_HOURS);
 
   const scan = async () => {
     if (scanInFlight.current) return;

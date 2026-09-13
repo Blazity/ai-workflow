@@ -9,6 +9,7 @@ import {
   type SettingsInFlightRule,
   type SettingsSource,
 } from "@shared/contracts";
+import { formatDateTime } from "../date-time";
 
 /**
  * Words that are not sentence case.
@@ -116,12 +117,7 @@ export function appliesToNote(rule: SettingsInFlightRule, requiresRedeploy = fal
  * way they would on a server rendered date.
  */
 export function formatSettingTimestamp(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("en", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(date);
+  return formatDateTime(value);
 }
 
 /** Who made a recorded change. The store keeps the user id, not a display name,

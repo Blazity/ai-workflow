@@ -74,12 +74,17 @@ type FetchCall = { url: string; init: RequestInit | undefined };
 
 /** Minimal app router: the screen only calls refresh, and WindowSelector
  *  needs the context to exist at all (its useRouter() call throws otherwise). */
-function stubRouter(refreshes: string[], replacements: string[]) {
+function stubRouter(
+  refreshes: string[],
+  pushes: string[],
+  replacements: string[],
+  backs: string[],
+) {
   return {
     refresh: () => refreshes.push("refresh"),
-    push: () => {},
+    push: (href: string) => pushes.push(href),
     replace: (href: string) => replacements.push(href),
-    back: () => {},
+    back: () => backs.push("back"),
     forward: () => {},
     prefetch: () => {},
   };
@@ -95,54 +100,104 @@ function renderDesktop(
   t: TestContext,
   props: DesktopProps,
   respond: () => Response = CANCELLED_RESPONSE,
-): { root: ReactTestInstance; calls: FetchCall[]; refreshes: string[]; replacements: string[] } {
+): {
+  root: ReactTestInstance;
+  calls: FetchCall[];
+  refreshes: string[];
+  pushes: string[];
+  replacements: string[];
+  backs: string[];
+  rerender: (next: DesktopProps) => void;
+  goBack: (next: DesktopProps) => void;
+} {
   const calls: FetchCall[] = [];
   const refreshes: string[] = [];
+  const pushes: string[] = [];
   const replacements: string[] = [];
+  const backs: string[] = [];
   (globalThis as { fetch: unknown }).fetch = async (url: string, init?: RequestInit) => {
     calls.push({ url: String(url), init });
     return respond();
   };
 
+  const router = stubRouter(refreshes, pushes, replacements, backs);
+  const tree = (next: DesktopProps) => (
+    <AppRouterContext.Provider value={router as never}>
+      <RunsScreen data={makeData([])} window="24h" q="" {...props} {...next} />
+    </AppRouterContext.Provider>
+  );
   let renderer!: ReactTestRenderer;
   act(() => {
-    renderer = create(
-      <AppRouterContext.Provider value={stubRouter(refreshes, replacements) as never}>
-        <RunsScreen data={makeData([])} window="24h" q="" {...props} />
-      </AppRouterContext.Provider>,
-    );
+    renderer = create(tree({}));
   });
   t.after(() => {
     act(() => renderer.unmount());
   });
-  return { root: renderer.root, calls, refreshes, replacements };
+  return {
+    root: renderer.root,
+    calls,
+    refreshes,
+    pushes,
+    replacements,
+    backs,
+    rerender: (next) => act(() => renderer.update(tree(next))),
+    goBack: (next) => act(() => {
+      router.back();
+      renderer.update(tree(next));
+    }),
+  };
 }
 
 function renderMobile(
   t: TestContext,
   props: MobileProps,
   respond: () => Response = CANCELLED_RESPONSE,
-): { root: ReactTestInstance; calls: FetchCall[]; refreshes: string[]; replacements: string[] } {
+): {
+  root: ReactTestInstance;
+  calls: FetchCall[];
+  refreshes: string[];
+  pushes: string[];
+  replacements: string[];
+  backs: string[];
+  rerender: (next: MobileProps) => void;
+  goBack: (next: MobileProps) => void;
+} {
   const calls: FetchCall[] = [];
   const refreshes: string[] = [];
+  const pushes: string[] = [];
   const replacements: string[] = [];
+  const backs: string[] = [];
   (globalThis as { fetch: unknown }).fetch = async (url: string, init?: RequestInit) => {
     calls.push({ url: String(url), init });
     return respond();
   };
 
+  const router = stubRouter(refreshes, pushes, replacements, backs);
+  const tree = (next: MobileProps) => (
+    <AppRouterContext.Provider value={router as never}>
+      <RunsMobileScreen data={makeData([])} window="24h" q="" {...props} {...next} />
+    </AppRouterContext.Provider>
+  );
   let renderer!: ReactTestRenderer;
   act(() => {
-    renderer = create(
-      <AppRouterContext.Provider value={stubRouter(refreshes, replacements) as never}>
-        <RunsMobileScreen data={makeData([])} window="24h" q="" {...props} />
-      </AppRouterContext.Provider>,
-    );
+    renderer = create(tree({}));
   });
   t.after(() => {
     act(() => renderer.unmount());
   });
-  return { root: renderer.root, calls, refreshes, replacements };
+  return {
+    root: renderer.root,
+    calls,
+    refreshes,
+    pushes,
+    replacements,
+    backs,
+    rerender: (next) => act(() => renderer.update(tree(next))),
+    goBack: (next) => act(() => {
+      router.back();
+      renderer.update(tree(next));
+    }),
+  };
 }
 
 // ── Desktop (RunsScreen) ────────────────────────────────────────────────────
@@ -162,7 +217,7 @@ test("the model column names the attributed model and uses a neutral dash when t
 });
 
 test("the status URL drives the filtered count, rows, and pager", (t) => {
-  const { root, replacements } = renderDesktop(t, {
+  const { root, pushes, replacements } = renderDesktop(t, {
     data: makeData([
       makeRun({ id: "run_ok", status: "success", ticketTitle: "Passed" }),
       makeRun({ id: "run_bad", status: "failed", ticketTitle: "Failed" }),
@@ -177,7 +232,43 @@ test("the status URL drives the filtered count, rows, and pager", (t) => {
   assert.doesNotMatch(rendered, /Passed/);
 
   act(() => button(root, "SUCCESS").props.onClick());
-  assert.deepEqual(replacements, ["/runs?status=success"]);
+  assert.deepEqual(pushes, ["/runs?status=success"]);
+  assert.deepEqual(replacements, []);
+});
+
+test("desktop: Back restores the prior status after a URL rerender", (t) => {
+  const data = makeData([
+    makeRun({ id: "run_ok", status: "success" }),
+    makeRun({ id: "run_bad", status: "failed" }),
+  ]);
+  const { root, pushes, backs, rerender, goBack } = renderDesktop(t, {
+    data,
+    status: "failed",
+  });
+
+  act(() => button(root, "SUCCESS").props.onClick());
+  assert.deepEqual(pushes, ["/runs?status=success"]);
+  rerender({ data, status: "success" });
+  assert.equal(button(root, "SUCCESS").props["aria-pressed"], true);
+
+  goBack({ data, status: "failed" });
+  assert.deepEqual(backs, ["back"]);
+  assert.equal(button(root, "FAILED").props["aria-pressed"], true);
+  assert.equal(button(root, "SUCCESS").props["aria-pressed"], false);
+});
+
+test("desktop: the heading uses complete response counts when rows are capped", (t) => {
+  const data = makeData([
+    makeRun({ id: "run_ok", status: "success" }),
+    makeRun({ id: "run_bad", status: "failed" }),
+  ]);
+  data.total = 700;
+  data.counts.failed = 640;
+  const { root, rerender } = renderDesktop(t, { data });
+
+  assert.match(screenText(root), /700 runs · last 24h/);
+  rerender({ data, status: "failed" });
+  assert.match(screenText(root), /640 runs · last 24h/);
 });
 
 test("the actions column is absent when no row can be cancelled", (t) => {
@@ -392,6 +483,39 @@ test("mobile: the status filter count and pager use the same row set", (t) => {
 
   assert.match(screenText(root), /26 runs · last 24h/);
   assert.match(screenText(root), /1 to 25 of 26/);
+});
+
+test("mobile: Back restores the prior status after a URL rerender", (t) => {
+  const data = makeData([
+    makeRun({ id: "run_ok", status: "success" }),
+    makeRun({ id: "run_bad", status: "failed" }),
+  ]);
+  const { root, pushes, replacements, backs, rerender, goBack } = renderMobile(t, {
+    data,
+    status: "failed",
+  });
+
+  act(() => button(root, "SUCCESS").props.onClick());
+  assert.deepEqual(pushes, ["/runs?status=success"]);
+  assert.deepEqual(replacements, []);
+  rerender({ data, status: "success" });
+  assert.equal(button(root, "SUCCESS").props["aria-pressed"], true);
+
+  goBack({ data, status: "failed" });
+  assert.deepEqual(backs, ["back"]);
+  assert.equal(button(root, "FAILED").props["aria-pressed"], true);
+  assert.equal(button(root, "SUCCESS").props["aria-pressed"], false);
+});
+
+test("mobile: the heading uses complete response counts when rows are capped", (t) => {
+  const data = makeData([makeRun({ id: "run_bad", status: "failed" })]);
+  data.total = 700;
+  data.counts.failed = 640;
+  const { root, rerender } = renderMobile(t, { data });
+
+  assert.match(screenText(root), /700 runs · last 24h/);
+  rerender({ data, status: "failed" });
+  assert.match(screenText(root), /640 runs · last 24h/);
 });
 
 test("mobile: Cancel is absent from a running row without the dispatch role", (t) => {

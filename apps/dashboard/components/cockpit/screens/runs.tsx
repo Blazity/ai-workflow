@@ -13,8 +13,8 @@ import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
 import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
 import type { RunsResponse } from "@shared/contracts";
 import { Button } from "@/components/ui/button";
+import { formatAgeMinutes } from "@/lib/date-time";
 import {
-  formatRunAge,
   RUN_STATUS_FILTERS,
   runIdentity,
   runStatusHref,
@@ -76,6 +76,7 @@ export function RunsScreen({
     setPage(0);
   }, [status]);
   const filtered = filter === "all" ? shownData.rows : shownData.rows.filter((r) => r.status === filter);
+  const headingCount = filter === "all" ? shownData.total : shownData.counts[filter];
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const start = page * PAGE_SIZE;
   const paged = filtered.slice(start, start + PAGE_SIZE);
@@ -84,7 +85,7 @@ export function RunsScreen({
   function changeFilter(next: RunStatusFilter) {
     setFilter(next);
     setPage(0);
-    router.replace(runStatusHref({ status: next, window, q }), { scroll: false });
+    router.push(runStatusHref({ status: next, window, q }), { scroll: false });
   }
 
   async function handleCancel(runId: string) {
@@ -141,7 +142,7 @@ export function RunsScreen({
       <div className="flex flex-col gap-1">
         <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">Workflow runs</div>
         <h2 className="font-display text-2xl font-medium leading-[1.2] text-neutral-900 m-0">
-          {filtered.length} runs · {windowPhrase(window)}
+          {headingCount} runs · {windowPhrase(window)}
           {q && <span className="text-neutral-500"> · matching “{q}”</span>}
         </h2>
       </div>
@@ -223,7 +224,7 @@ export function RunsScreen({
                   <CkChip>{r.workflowName}</CkChip>
                 </td>
                 <td className="px-3 py-2.5 font-mono text-[11px] text-neutral-700">{r.model ? runModelLabel(r.model) : EM_DASH}</td>
-                <td className="px-3 py-2.5 text-right font-mono text-[11px] text-neutral-500">{formatRunAge(r.startedAtMin)}</td>
+                <td className="px-3 py-2.5 text-right font-mono text-[11px] text-neutral-500">{formatAgeMinutes(r.startedAtMin)}</td>
                 <td className="px-3 py-2.5 text-right font-mono font-medium">{r.duration === null ? EM_DASH : `${r.duration}s`}</td>
                 <td className="px-3 py-2.5 text-right font-mono text-neutral-700">{r.tokens === null ? EM_DASH : `${(r.tokens / 1000).toFixed(1)}k`}</td>
                 <td className="px-3 py-2.5 text-right font-mono font-medium">{r.cost === null ? EM_DASH : `$${r.cost.toFixed(2)}`}</td>

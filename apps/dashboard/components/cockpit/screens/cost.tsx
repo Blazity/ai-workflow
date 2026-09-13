@@ -28,14 +28,6 @@ function SpendChart({
   height?: number;
 }) {
   const scale = niceScale(values);
-  // AreaChart derives its domain from the series. Add the nice top tick just
-  // beyond the clipped viewport so the visible points use that real domain
-  // without drawing a synthetic point in the chart.
-  const chartPadding = 40;
-  const innerWidth = width - chartPadding;
-  const chartWidth =
-    chartPadding +
-    (innerWidth * values.length) / Math.max(1, values.length - 1);
 
   return (
     <div
@@ -44,12 +36,14 @@ function SpendChart({
       style={{ width, height, overflow: "hidden" }}
     >
       <AreaChart
-        data={[...values, scale.max]}
-        w={chartWidth}
+        data={values}
+        w={width}
         h={height}
         stroke="var(--color-burnt-orange)"
         fill="var(--color-burnt-orange)"
-        labels={[...labels, ""]}
+        labels={labels}
+        yDomain={[0, scale.max]}
+        yTicks={scale.ticks}
         valueFmt={(value) => formatCurrencyTick(Number(value), scale.step)}
       />
     </div>

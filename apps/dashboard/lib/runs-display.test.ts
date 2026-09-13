@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  formatRunAge,
   parseRunStatusFilter,
   runIdentity,
   runStatusHref,
@@ -25,13 +24,6 @@ test("run status filters parse strictly and remain shareable in the URL", () => 
     "/runs?window=7d",
   );
   assert.equal(runStatusHref({ status: "all", window: "24h", q: "" }), "/runs");
-});
-
-test("run ages move from minutes to hours and days", () => {
-  assert.equal(formatRunAge(59), "59m ago");
-  assert.equal(formatRunAge(60), "1h ago");
-  assert.equal(formatRunAge(1383), "23h ago");
-  assert.equal(formatRunAge(2880), "2d ago");
 });
 
 test("run identity never repeats a fallback ticket and uses the run id without a ticket", () => {

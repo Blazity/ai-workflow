@@ -10,6 +10,7 @@ import { WindowSelector } from "@/components/cockpit/controls";
 import { windowPhrase, windowShort, type TimeWindow } from "@/lib/window";
 import type { OverviewScreenData } from "@/components/cockpit/screens/overview";
 import { Button } from "@/components/ui/button";
+import { formatAgeMinutes } from "@/lib/date-time";
 
 const EM_DASH = "\u2014";
 
@@ -132,7 +133,7 @@ export function OverviewMobileScreen({
                       </span>
                     )}
                     {typeof r.askedAtMin === "number" && (
-                      <span className="ml-auto font-mono text-[10px] text-neutral-500">{r.askedAtMin}m ago</span>
+                      <span className="ml-auto font-mono text-[10px] text-neutral-500">{formatAgeMinutes(r.askedAtMin)}</span>
                     )}
                   </div>
                   {isApproval ? (

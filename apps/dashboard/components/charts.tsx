@@ -41,6 +41,8 @@ export function AreaChart({
   fill = "#3C43E7",
   labels,
   grid = true,
+  yDomain,
+  yTicks,
   valueFmt = (v: number) => v,
 }: {
   data: number[];
@@ -50,6 +52,8 @@ export function AreaChart({
   fill?: string;
   labels?: string[];
   grid?: boolean;
+  yDomain?: readonly [number, number];
+  yTicks?: readonly number[];
   valueFmt?: (v: number) => string | number;
 }) {
   if (!data || data.length === 0) return null;
@@ -59,19 +63,19 @@ export function AreaChart({
     padB = 22;
   const iw = w - padL - padR,
     ih = h - padT - padB;
-  const max = Math.max(...data),
-    min = Math.min(0, Math.min(...data));
+  const max = yDomain?.[1] ?? Math.max(...data),
+    min = yDomain?.[0] ?? Math.min(0, Math.min(...data));
   const range = max - min || 1;
   const dx = iw / Math.max(1, data.length - 1);
   const yOf = (v: number) => padT + ih - ((v - min) / range) * ih;
   const xOf = (i: number) => padL + i * dx;
   const path = data.map((v, i) => `${i === 0 ? "M" : "L"}${xOf(i)},${yOf(v)}`).join(" ");
   const area = `${path} L${xOf(data.length - 1)},${padT + ih} L${padL},${padT + ih} Z`;
-  const yTicks = [min, min + range / 2, max];
+  const ticks = yTicks ?? [min, min + range / 2, max];
   return (
     <svg width={w} height={h} className="block overflow-visible">
       {grid &&
-        yTicks.map((v, i) => (
+        ticks.map((v, i) => (
           <g key={i}>
             <line x1={padL} x2={padL + iw} y1={yOf(v)} y2={yOf(v)} stroke="rgba(0,0,0,0.06)" strokeDasharray="2 3" />
             <text x={padL - 6} y={yOf(v) + 3} textAnchor="end" fontSize="9" fontFamily='"JetBrains Mono", monospace' fill="rgba(0,0,0,0.4)">

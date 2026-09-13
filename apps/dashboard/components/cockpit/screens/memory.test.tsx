@@ -5,6 +5,7 @@ import { act, create, type ReactTestInstance, type ReactTestRenderer } from "rea
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
 
 import type { MemoryDocumentDto, MemoryDocumentSummaryDto } from "@shared/contracts";
+import { formatDateTime } from "@/lib/date-time";
 import { MemoryScreen, memoryDeleteUrl } from "./memory";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
@@ -172,6 +173,12 @@ test("a member never sees the delete action", (t) => {
 test("delete is omitted by default when the caller passes no capability", (t) => {
   const { root } = renderScreen(t, {});
   assert.equal(buttons(root, "Delete").length, 0);
+});
+
+test("memory timestamps use the shared dashboard date-time format", (t) => {
+  const { root } = renderScreen(t, {});
+
+  assert.match(screenText(root), new RegExp(formatDateTime(DOCUMENTS[0].updatedAt)));
 });
 
 test("delete is offered only on an open document", (t) => {

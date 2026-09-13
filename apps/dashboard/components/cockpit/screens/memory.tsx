@@ -10,6 +10,7 @@ import { useRouter } from "next/navigation";
 
 import { Button, CkCard, CkChip } from "@/components/ui";
 import { apiClient } from "@/lib/api/client";
+import { formatDateTime } from "@/lib/date-time";
 import { SettingsGroupForm } from "@/app/(cockpit)/settings/settings-group-form";
 import { groupSettings, selectGroupKeys } from "@/lib/settings/groups";
 import type {
@@ -293,15 +294,4 @@ function InlineError({ children }: { children: React.ReactNode }) {
 
 function formatBytes(bytes: number): string {
   return bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} kB`;
-}
-
-function formatDateTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }

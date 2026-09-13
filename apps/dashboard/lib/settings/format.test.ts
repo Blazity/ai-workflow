@@ -12,6 +12,7 @@ import {
   sourceHint,
   sourceLabel,
 } from "./format";
+import { formatDateTime } from "../date-time";
 
 test("settingLabel converts MAX_CONCURRENT_AGENTS to Max concurrent agents", () => {
   assert.equal(settingLabel("MAX_CONCURRENT_AGENTS"), "Max concurrent agents");
@@ -124,9 +125,7 @@ test("formatSettingTimestamp leaves an unparseable value alone", () => {
 test("formatSettingTimestamp rewrites a valid ISO timestamp", () => {
   const iso = "2026-09-12T08:30:00.000Z";
   const formatted = formatSettingTimestamp(iso);
-  assert.notEqual(formatted, iso);
-  assert.ok(formatted.length > 0);
-  assert.match(formatted, /2026/);
+  assert.equal(formatted, formatDateTime(iso));
 });
 
 test("formatSettingActor names the seed migration and otherwise says which user", () => {

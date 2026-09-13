@@ -6,7 +6,13 @@ import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared
 
 import type { Run } from "@/lib/types";
 import type { DispatchCapacityResponse } from "@shared/contracts";
-import { AwaitingInputPanel, NowRunningPanel } from "./overview";
+import {
+  AwaitingInputPanel,
+  NowRunningPanel,
+  OverviewScreen,
+  type OverviewScreenData,
+} from "./overview";
+import { OverviewMobileScreen } from "../mobile/screens/overview-mobile";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -101,6 +107,31 @@ function renderNowRunning(
   return renderer.root;
 }
 
+function overviewData(liveRows: Run[], recentRows: Run[]): OverviewScreenData {
+  const counts = { success: 0, running: 0, awaiting: 0, failed: 0, blocked: 0 };
+  for (const run of recentRows) counts[run.status]++;
+  return {
+    kpis: {
+      generatedAt: "2026-08-10T00:00:00.000Z",
+      runs24h: null,
+      p95: null,
+      errors24h: null,
+      cost24h: null,
+    },
+    evalHealth: { available: false, reason: "Unavailable" },
+    liveRuns: { generatedAt: "2026-08-10T00:00:00.000Z", rows: liveRows },
+    capacity: capacity(),
+    recentRuns: {
+      generatedAt: "2026-08-10T00:00:00.000Z",
+      available: true,
+      rows: recentRows,
+      total: recentRows.length,
+      counts,
+    },
+    workflows: { generatedAt: "2026-08-10T00:00:00.000Z", rows: [], total: 0 },
+  };
+}
+
 test("a full pool with zero executing runs shows it is full and lists the waiting tickets", (t) => {
   // The bug AIW-277 fixes: parked claims fill every slot, nothing is "running",
   // and the panel used to read as idle. It must now show the occupied count and
@@ -177,6 +208,43 @@ test("a clarification row keeps its Answer CTA to the run trace, unchanged", (t)
   });
   assert.deepEqual(opened, [row]);
   assert.match(nodeText(root), /Which environment\?/);
+});
+
+test("desktop overview formats 60-plus-minute clarification and run ages", (t) => {
+  const awaiting: Run = { ...BASE_RUN, askedAtMin: 125 };
+  const recent: Run = { ...BASE_RUN, id: "run_recent", status: "success", startedAtMin: 125 };
+  let renderer!: ReactTestRenderer;
+  act(() => {
+    renderer = create(
+      <AppRouterContext.Provider value={stubRouter() as never}>
+        <OverviewScreen data={overviewData([awaiting], [recent])} window="24h" />
+      </AppRouterContext.Provider>,
+    );
+  });
+  t.after(() => act(() => renderer.unmount()));
+
+  const text = nodeText(renderer.root);
+  assert.equal(text.match(/2h ago/g)?.length, 2);
+  assert.doesNotMatch(text, /125m ago/);
+});
+
+test("mobile overview formats a 60-plus-minute clarification age", (t) => {
+  const awaiting: Run = { ...BASE_RUN, askedAtMin: 125 };
+  let renderer!: ReactTestRenderer;
+  act(() => {
+    renderer = create(
+      <AppRouterContext.Provider value={stubRouter() as never}>
+        <OverviewMobileScreen
+          window="24h"
+          data={overviewData([awaiting], [])}
+        />
+      </AppRouterContext.Provider>,
+    );
+  });
+  t.after(() => act(() => renderer.unmount()));
+
+  assert.match(nodeText(renderer.root), /2h ago/);
+  assert.doesNotMatch(nodeText(renderer.root), /125m ago/);
 });
 
 test("an approval-parked row gets a Review plan link to /approvals, not the Answer dead end", (t) => {
