@@ -1,10 +1,11 @@
 Status: current
-Last-verified: 2026-09-11
+Last-verified: 2026-09-13
 
 # Delivery gates
 
-`pnpm run gates` runs the gates below in this order. A gate exits non-zero and
-stops the ladder when its check fails.
+`pnpm run gates` runs the static gates below in table order. The
+`engine-canary` row is a path-scoped CI gate outside that local ladder. A gate
+exits non-zero when its check fails.
 
 | Gate | Checks | Script | Fails when |
 |---|---|---|---|
@@ -20,6 +21,7 @@ stops the ladder when its check fails.
 | Model catalog drift | Model literals outside the catalog's declared exclusions | `scripts/gates/model-catalog-drift.mjs` | A model identifier is duplicated outside an approved owner or exclusion |
 | Dependency consistency | Shared dependency versions against the pnpm catalog | `scripts/gates/check-deps-consistency.mjs` | A shared dependency is not cataloged, is split across specifiers, or is missing from the catalog |
 | Documentation status | Headers, freshness, status targets, and reachability for current documents | `scripts/gates/docs-status.mjs` | A document header is invalid, a current document is stale or unreachable, or a superseded target is missing |
+| engine-canary | Pull request changes under `apps/worker/src/engine/**`, `apps/worker/src/db/**`, or `packages/**`; idle with a green warning when no target is declared; exact deployment commit and isolated non-production database identity when armed | `.github/workflows/ci.yml`, `scripts/ci/engine-canary-scope.ts`, `scripts/ci/engine-canary-preflight.ts` | An armed target is incomplete, deployment identity is unproven, the database is production or mismatched, or either live canary fails |
 
 ## Lint policy
 

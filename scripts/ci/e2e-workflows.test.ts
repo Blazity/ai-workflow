@@ -21,6 +21,7 @@ type Job = {
     queue?: string;
   };
   env?: Record<string, string>;
+  environment?: unknown;
   steps?: Step[];
   "timeout-minutes"?: number;
 };
@@ -148,17 +149,29 @@ test("manual workflow exposes no operator-provided campaign identity", async () 
   );
 });
 
-test("the source gate carries no secret, no environment and no e2e job", async () => {
+test("only the guarded engine canary carries secrets or an environment in CI", async () => {
   const source = await readFile(CI, "utf8");
   const workflow = parse(source) as Workflow;
 
-  // The strong form, and the reason the duplicated copies could go: a source
-  // gate proves the checkout compiles and nothing else. One `secrets.` in this
-  // file is a job that can reach a live tenant on an untrusted pull request.
-  assert.doesNotMatch(source, /secrets\./, `${CI} must not reference any secret`);
-  assert.doesNotMatch(source, /^\s*environment:/m, `${CI} must not name an environment`);
-  for (const jobName of Object.keys(workflow.jobs ?? {})) {
+  // Stage 5b deliberately joins one behavioural canary to the required CI
+  // aggregate. It is the only exception: its same-repository guard prevents
+  // fork pull requests from ever reaching the secret-bearing e2e environment.
+  for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
     assert.doesNotMatch(jobName, /e2e/, `${CI} must not define ${jobName}`);
+    if (jobName === "engine-canary") {
+      assert.equal(job.environment, "e2e");
+      assert.equal(
+        job.if,
+        "github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository",
+      );
+      continue;
+    }
+    assert.equal(job.environment, undefined, `${jobName} must not name an environment`);
+    assert.doesNotMatch(
+      JSON.stringify(job),
+      /secrets\./u,
+      `${jobName} must not reference any secret`,
+    );
   }
 });
 

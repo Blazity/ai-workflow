@@ -1,0 +1,146 @@
+import { pathToFileURL } from "node:url";
+import { databaseFingerprintFromUrl } from "../../apps/worker/src/db/database-fingerprint.ts";
+import {
+  checkDeploymentIdentity,
+  parseArgs,
+  type HealthPayload,
+} from "./verify-deployment-identity.ts";
+
+const FINGERPRINT_PATTERN = /^[0-9a-f]{12}$/;
+
+export interface EngineCanaryExpectations {
+  commit: string;
+  databaseEnv: string;
+  databaseFingerprint: string;
+  runnerDatabaseFingerprint: string | null;
+}
+
+export type PreflightResult =
+  | { ok: true }
+  | { ok: false; reason: string };
+
+export function evaluatePreflight(
+  health: HealthPayload,
+  expectations: EngineCanaryExpectations,
+): PreflightResult {
+  if (health.databaseEnv === "production") {
+    return {
+      ok: false,
+      reason: "database environment 'production' is forbidden for engine-canary",
+    };
+  }
+  if (expectations.databaseEnv === "production") {
+    return {
+      ok: false,
+      reason: "declared database environment 'production' is forbidden for engine-canary",
+    };
+  }
+  if (typeof health.databaseEnv !== "string") {
+    return {
+      ok: false,
+      reason: "database environment is missing from /health",
+    };
+  }
+  if (health.databaseEnv !== expectations.databaseEnv) {
+    return {
+      ok: false,
+      reason: `database environment '${health.databaseEnv}' does not match declared '${expectations.databaseEnv}'`,
+    };
+  }
+  if (!FINGERPRINT_PATTERN.test(expectations.databaseFingerprint)) {
+    return {
+      ok: false,
+      reason: "declared database fingerprint is not 12 lowercase hex characters",
+    };
+  }
+  if (
+    expectations.runnerDatabaseFingerprint === null ||
+    !FINGERPRINT_PATTERN.test(expectations.runnerDatabaseFingerprint)
+  ) {
+    return {
+      ok: false,
+      reason: "runner DATABASE_URL does not produce a valid database fingerprint",
+    };
+  }
+  if (
+    expectations.runnerDatabaseFingerprint !== expectations.databaseFingerprint
+  ) {
+    return {
+      ok: false,
+      reason: "runner DATABASE_URL fingerprint does not match the declared database fingerprint",
+    };
+  }
+
+  const identityProblems = checkDeploymentIdentity(health, {
+    commit: expectations.commit,
+    databaseFingerprint: expectations.databaseFingerprint,
+  });
+  if (identityProblems.length > 0) {
+    return { ok: false, reason: identityProblems[0]! };
+  }
+  return { ok: true };
+}
+
+async function main(): Promise<void> {
+  const args = parseArgs(process.argv.slice(2));
+  const url = args.url;
+  const commit = args.commit;
+  const databaseEnv = args["database-env"];
+  const databaseFingerprint = args["database-fingerprint"];
+  const databaseUrl = args["database-url"];
+  if (!url || !commit || !databaseEnv || !databaseFingerprint) {
+    console.error(
+      "FAIL usage: engine-canary-preflight --url <base-url> --commit <40-hex>" +
+        " --database-env <name> --database-fingerprint <12-hex>" +
+        " [--database-url <connection-string>]",
+    );
+    process.exitCode = 2;
+    return;
+  }
+
+  let health: HealthPayload;
+  try {
+    const healthUrl = new URL("/health", url).toString();
+    const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+    const response = await fetch(healthUrl, {
+      headers: {
+        accept: "application/json",
+        ...(bypass ? { "x-vercel-protection-bypass": bypass } : {}),
+      },
+    });
+    if (!response.ok) {
+      console.error(
+        `FAIL deployment health answered ${response.status} ${response.statusText}`,
+      );
+      process.exitCode = 1;
+      return;
+    }
+    health = (await response.json()) as HealthPayload;
+  } catch (error) {
+    console.error(`FAIL could not read deployment health: ${(error as Error).message}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const result = evaluatePreflight(health, {
+    commit,
+    databaseEnv,
+    databaseFingerprint,
+    runnerDatabaseFingerprint: databaseUrl
+      ? databaseFingerprintFromUrl(databaseUrl)
+      : null,
+  });
+  if (!result.ok) {
+    console.error(`FAIL ${result.reason}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log("OK engine-canary deployment and database identity verified");
+}
+
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  await main();
+}

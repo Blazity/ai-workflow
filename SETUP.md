@@ -502,6 +502,44 @@ vars exposed as GitHub Actions secrets in the `e2e` environment (Repo Settings
 `E2E_GITHUB_INSTALLATION_ID`, `E2E_GITHUB_OWNER`, `E2E_GITHUB_REPO`, and
 `VERCEL_AUTOMATION_BYPASS_SECRET`.
 
+### Behavioural PR gate (engine-canary)
+
+The `engine-canary` job is considered for pull requests that change
+`apps/worker/src/engine/**`, `apps/worker/src/db/**`, or `packages/**`. With no
+`ENGINE_CANARY_TARGET`, it exits green and emits a warning that the behavioural
+gate is wired but idle. Once a target is declared, missing configuration fails
+before deployment and a failed identity check stops the job before any canary
+write.
+
+Repository variables that arm and configure the job are
+`ENGINE_CANARY_TARGET`, `ENGINE_CANARY_DB_ENV`,
+`ENGINE_CANARY_DB_FINGERPRINT`, `HARNESS_CANARY_RESTORE_WORKFLOW_ID`,
+`HARNESS_CANARY_CLAUDE_WORKFLOW_ID`, `HARNESS_CANARY_CODEX_WORKFLOW_ID`,
+`HARNESS_CANARY_CUSTOM_WORKFLOW_ID`, `HARNESS_CANARY_CUSTOM_PROFILE_ID`,
+`HARNESS_CANARY_CUSTOM_PROFILE_VERSION`,
+`HARNESS_CANARY_CUSTOM_SKILL_ARTIFACT_HASH`,
+`HARNESS_CANARY_CUSTOM_SKILL_NAME`,
+`HARNESS_CANARY_CUSTOM_SKILL_SOURCE_OWNER`,
+`HARNESS_CANARY_CUSTOM_SKILL_SOURCE_REPOSITORY`,
+`HARNESS_CANARY_CUSTOM_SKILL_SOURCE_PATH`,
+`HARNESS_CANARY_CUSTOM_SKILL_SOURCE_COMMIT_SHA`, `JIRA_BASE_URL`,
+`JIRA_PROJECT_KEY`, `COLUMN_AI`, `COLUMN_BACKLOG`,
+`NEXT_PUBLIC_HARNESS_PROFILE_AUTHORING_ENABLED`, `HARNESS_CANARY_TIMEOUT_MS`,
+`REPLAY_CANARY_DASHBOARD_BASE_URL`,
+`REPLAY_CANARY_DASHBOARD_EXPECTED_HOST`, `REPLAY_CANARY_LOG_EXPORT_PATH`,
+`REPLAY_CANARY_LOG_WAIT_MS`, `REPLAY_CANARY_LOG_SETTLE_MS`, and
+`REPLAY_CANARY_LOG_MAX_BYTES`.
+
+Secrets read from the `e2e` environment are `VERCEL_TOKEN`, `VERCEL_ORG_ID`,
+`VERCEL_PROJECT_ID`, `HARNESS_CANARY_SESSION_TOKEN`, `JIRA_API_TOKEN`,
+`CRON_SECRET`, `DATABASE_URL`, `VERCEL_AUTOMATION_BYPASS_SECRET`, and
+`REPLAY_CANARY_DASHBOARD_AUTOMATION_BYPASS_SECRET`.
+
+The Vercel target must be a dedicated non-production environment with its own
+database. Its `/health` response must prove the exact candidate commit, the
+declared non-production `databaseEnv`, the declared 12-hex database
+fingerprint, and the same fingerprint derived from the runner's `DATABASE_URL`.
+
 Release-note preparation uses a separate `artur-release-preparation`
 environment restricted to protected `main`. Put the release GitHub App
 credentials, optional `ANTHROPIC_API_KEY`, and one-time
