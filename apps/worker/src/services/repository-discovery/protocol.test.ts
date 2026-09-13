@@ -11,6 +11,7 @@ const catalog: RepositoryCatalogEntry[] = [
     defaultBranch: "main",
     description: "Web application",
     topics: ["frontend"],
+    relationships: [],
     usable: true,
   },
   {
@@ -20,6 +21,7 @@ const catalog: RepositoryCatalogEntry[] = [
     defaultBranch: "main",
     description: "Shared components",
     topics: [],
+    relationships: [],
     usable: true,
   },
 ];
@@ -108,6 +110,7 @@ describe("validateRepositoryDiscoveryResult", () => {
         defaultBranch: "",
         description: "No default branch yet",
         topics: [],
+        relationships: [],
         usable: false,
         unusableReason: "missing_default_branch",
       },

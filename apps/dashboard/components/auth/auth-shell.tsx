@@ -1,6 +1,9 @@
 "use client";
 
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
+import { useId, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from "react";
+import { Button } from "@/components/ui/button";
+import { Field } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 
 type BannerTone = "error" | "success" | "info";
 
@@ -42,68 +45,58 @@ export function AuthFormShell({
 export function AuthField({
   label,
   hint,
+  className,
   ...props
-}: InputHTMLAttributes<HTMLInputElement> & {
+}: Omit<InputHTMLAttributes<HTMLInputElement>, "size"> & {
   label: string;
   hint?: string;
 }) {
+  const hintId = useId();
+  if (!label) {
+    if (!hint) return <Input {...props} className={className} />;
+    const describedBy = [props["aria-describedby"], hintId].filter(Boolean).join(" ");
+    return (
+      <div className="flex flex-col gap-1.5">
+        <Input {...props} aria-describedby={describedBy} className={className} />
+        <p id={hintId} className="m-0 font-body text-[11px] leading-relaxed text-neutral-500">{hint}</p>
+      </div>
+    );
+  }
   return (
-    <label className="flex flex-col gap-1.5">
-      {label ? (
-        <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-700">
-          {label}
-        </span>
-      ) : null}
-      <input
-        {...props}
-        className={[
-          "h-10 rounded-[3px] border border-neutral-200 bg-white px-3 text-[14px] text-neutral-900 outline-none transition",
-          "focus:border-mariner focus:shadow-[0_0_0_3px_rgba(60,67,231,0.18)]",
-          "read-only:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60",
-          props.className ?? "",
-        ].join(" ")}
-      />
-      {hint ? <span className="text-[12px] text-neutral-500">{hint}</span> : null}
-    </label>
+    <Field label={label} hint={hint}>
+      <Input {...props} className={className} />
+    </Field>
   );
 }
 
 export function AuthButton({
   variant = "primary",
   className,
+  children,
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "primary" | "secondary";
 }) {
-  const styles =
-    variant === "secondary"
-      ? "border-neutral-200 bg-white text-neutral-900 hover:bg-app-bg"
-      : "border-neutral-900 bg-neutral-900 text-white hover:bg-neutral-800";
-
   return (
-    <button
+    <Button
       {...props}
-      className={[
-        "inline-flex h-[42px] w-full items-center justify-center gap-2 rounded-[3px] border px-3",
-        "font-mono text-[12px] font-medium uppercase tracking-[0.04em] transition",
-        "disabled:cursor-default disabled:opacity-40",
-        styles,
-        className ?? "",
-      ].join(" ")}
-    />
+      className={["w-full", className].filter(Boolean).join(" ")}
+      variant={variant}
+    >
+      {children}
+    </Button>
   );
 }
 
-export function AuthLinkButton(props: ButtonHTMLAttributes<HTMLButtonElement>) {
+export function AuthLinkButton({ children, className, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
-    <button
+    <Button
       {...props}
-      className={[
-        "border-0 bg-transparent p-0 font-mono text-[11px] font-medium uppercase tracking-[0.04em]",
-        "text-mariner hover:text-mariner-600 disabled:opacity-40",
-        props.className ?? "",
-      ].join(" ")}
-    />
+      className={className}
+      variant="ghost"
+    >
+      {children}
+    </Button>
   );
 }
 
@@ -116,8 +109,8 @@ export function AuthBanner({
 }) {
   const styles = {
     error: {
-      wrap: "border-[#f3cfc7] bg-fail-bg text-[#80261c]",
-      mark: "bg-[#80261c] text-fail-bg",
+      wrap: "border-fail bg-fail-bg text-fail-fg",
+      mark: "bg-fail-fg text-fail-bg",
       icon: "!",
     },
     success: {
@@ -126,8 +119,8 @@ export function AuthBanner({
       icon: "✓",
     },
     info: {
-      wrap: "border-mariner-200 bg-mariner-100 text-[#2a2fa8]",
-      mark: "bg-[#2a2fa8] text-mariner-100",
+      wrap: "border-mariner-200 bg-mariner-100 text-mariner",
+      mark: "bg-mariner text-mariner-100",
       icon: "i",
     },
   }[tone];
@@ -182,8 +175,8 @@ export function PasswordRule({ ok, children }: { ok: boolean; children: ReactNod
 
 export function BlazityLogo({
   size = 28,
-  color = "#FD6027",
-  wordmarkColor = "#181B20",
+  color = "var(--color-burnt-orange)",
+  wordmarkColor = "var(--color-coal)",
   showWord = true,
 }: {
   size?: number;
@@ -232,14 +225,14 @@ function BrandPanel() {
             cy="260"
             r={24 + index * 22}
             fill="none"
-            stroke="#fff"
+            stroke="currentColor"
             strokeWidth="1"
           />
         ))}
       </svg>
 
       <div className="relative z-10 flex items-center gap-2">
-        <BlazityLogo size={24} color="#FD6027" wordmarkColor="#fff" />
+        <BlazityLogo size={24} color="var(--color-burnt-orange)" wordmarkColor="var(--color-panel)" />
         <span className="ml-0.5 mt-1 font-mono text-[10px] uppercase tracking-[0.06em] text-white/55">
           / AI Workflow
         </span>

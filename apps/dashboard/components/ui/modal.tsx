@@ -9,6 +9,9 @@ import {
   type TransitionEvent,
 } from "react";
 import { createPortal } from "react-dom";
+import { IconButton } from "./icon-button";
+
+type ModalVariant = "center" | "drawer" | "sheet" | "command";
 
 export interface ModalProps {
   open?: boolean;
@@ -18,8 +21,13 @@ export interface ModalProps {
   children: ReactNode;
   footer?: ReactNode;
   size?: "sm" | "md" | "lg";
+  variant?: ModalVariant;
+  dismissible?: boolean;
+  showCloseButton?: boolean;
+  closeLabel?: string;
   initialFocusRef?: React.RefObject<HTMLElement | null>;
   className?: string;
+  frameClassName?: string;
 }
 
 const focusableSelector = [
@@ -51,8 +59,13 @@ export function Modal({
   children,
   footer,
   size = "md",
+  variant = "center",
+  dismissible = true,
+  showCloseButton = false,
+  closeLabel = "Close",
   initialFocusRef,
   className,
+  frameClassName,
 }: ModalProps) {
   const titleId = useId();
   const descriptionId = useId();
@@ -95,7 +108,7 @@ export function Modal({
     });
 
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && dismissible) {
         event.preventDefault();
         onCloseRef.current();
         return;
@@ -128,20 +141,48 @@ export function Modal({
       const previous = previousFocusRef.current;
       if (previous && document.contains(previous)) previous.focus();
     };
-  }, [initialFocusRef, open]);
+  }, [dismissible, initialFocusRef, open]);
 
   if (!mounted) return null;
 
+  const placementClassName = {
+    center: "items-center justify-center p-4",
+    drawer: "items-stretch justify-end",
+    sheet: "items-end justify-center",
+    command: "items-start justify-center px-4 pt-[16vh]",
+  }[variant];
+  const panelClassName = {
+    center: sizeClasses[size],
+    drawer:
+      "h-dvh max-h-dvh max-w-[420px] rounded-none border-y-0 border-r-0 data-[state=closed]:translate-x-full",
+    sheet:
+      "max-h-[75vh] max-w-none rounded-b-none rounded-t-[16px] border-x-0 border-b-0 data-[state=closed]:translate-y-full",
+    command: "max-w-[560px]",
+  }[variant];
+  const headerClassName = variant === "command"
+    ? "sr-only"
+    : variant === "sheet"
+      ? "shrink-0 border-b border-neutral-200 px-[18px] pb-2.5 pt-3"
+      : "shrink-0 border-b border-neutral-200 px-5 py-4";
+  const bodyClassName = variant === "center"
+    ? "min-h-0 flex-1 overflow-y-auto px-5 py-4"
+    : "min-h-0 flex-1 overflow-y-auto";
+  const footerClassName = variant === "drawer"
+    ? "shrink-0 border-t border-neutral-200 px-[18px] py-3"
+    : "shrink-0 border-t border-neutral-200 px-5 py-4";
+
   const frame = (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center p-4 pointer-events-none"
+      className={`fixed inset-0 z-[100] flex pointer-events-none ${placementClassName} ${frameClassName ?? ""}`}
       data-state={state}
     >
       <div
         aria-hidden="true"
         className="absolute inset-0 bg-coal/40 opacity-100 pointer-events-auto transition-[opacity] duration-[var(--motion-base)] ease-emphasized data-[state=closed]:opacity-0 data-[state=closed]:ease-exit"
         data-state={state}
-        onClick={onClose}
+        onMouseDown={(event) => {
+          if (dismissible && event.target === event.currentTarget) onClose();
+        }}
       />
       <section
         ref={dialogRef}
@@ -157,18 +198,29 @@ export function Modal({
         className={[
           "relative flex max-h-[calc(100dvh-32px)] w-full flex-col overflow-hidden rounded-md border border-neutral-200 bg-panel opacity-100 shadow-[0_24px_64px_-16px_rgba(24,27,32,0.45)] pointer-events-auto",
           "transition-[opacity,transform] data-[state=open]:duration-[var(--motion-slow)] data-[state=open]:ease-emphasized data-[state=closed]:scale-[0.98] data-[state=closed]:opacity-0 data-[state=closed]:duration-[var(--motion-base)] data-[state=closed]:ease-exit",
-          sizeClasses[size],
+          panelClassName,
           className,
         ]
           .filter(Boolean)
           .join(" ")}
+        data-variant={variant}
       >
-        <header className="shrink-0 border-b border-neutral-200 px-5 py-4">
-          <h2 id={titleId} className="m-0 font-display text-base font-semibold text-coal">{title}</h2>
-          {description ? <p id={descriptionId} className="mt-1 mb-0 font-body text-xs leading-relaxed text-neutral-700">{description}</p> : null}
+        {variant === "sheet" ? (
+          <span className="absolute left-1/2 top-2 h-1 w-9 -translate-x-1/2 rounded-full bg-neutral-300" aria-hidden="true" />
+        ) : null}
+        <header className={headerClassName}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h2 id={titleId} className="m-0 font-display text-base font-semibold text-coal">{title}</h2>
+              {description ? <p id={descriptionId} className="mt-1 mb-0 font-body text-xs leading-relaxed text-neutral-700">{description}</p> : null}
+            </div>
+            {showCloseButton && dismissible ? (
+              <IconButton aria-label={closeLabel} onClick={onClose} size="sm">×</IconButton>
+            ) : null}
+          </div>
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
-        {footer ? <footer className="shrink-0 border-t border-neutral-200 px-5 py-4">{footer}</footer> : null}
+        <div className={bodyClassName}>{children}</div>
+        {footer ? <footer className={footerClassName}>{footer}</footer> : null}
       </section>
     </div>
   );

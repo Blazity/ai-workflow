@@ -1,9 +1,13 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { apiClient } from "@/lib/api/client";
 import { CkChip, CkTabs } from "@/components/ui";
+import { Button } from "@/components/ui/button";
+import { Field } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Modal } from "@/components/ui/modal";
 
 type DashboardRole = "owner" | "admin" | "member";
 type DashboardAuthMethod = "Password" | "SSO" | "Password + SSO" | "Unknown";
@@ -36,7 +40,14 @@ export type DashboardInviteRow = {
   };
 };
 
-const AVATAR_COLORS = ["#3C43E7", "#FD6027", "#181B20", "#5BB04A", "#7A5AE0", "#A2351C"];
+const AVATAR_COLORS = [
+  "var(--color-mariner)",
+  "var(--color-burnt-orange)",
+  "var(--color-coal)",
+  "var(--color-success)",
+  "var(--color-orange-600)",
+  "var(--color-fail-fg)",
+];
 
 export function UsersScreen({
   initialUsers,
@@ -160,7 +171,7 @@ export function UsersScreen({
               { id: "invites", label: `Invites · ${pendingCount}` },
             ]}
           />
-          <DarkButton className="py-[7px]" type="button" onClick={() => setInviteOpen(true)}>
+          <DarkButton type="button" onClick={() => setInviteOpen(true)}>
             + Invite member
           </DarkButton>
         </div>
@@ -229,12 +240,11 @@ export function NotAuthorizedScreen() {
         <p className="m-0 mb-[22px] text-[14px] leading-[1.6] text-neutral-700">
           This area is restricted. Head back to your dashboard to keep working.
         </p>
-        <a
+        <Button
           href="/"
-          className="inline-flex h-10 items-center justify-center rounded-[3px] border border-neutral-900 bg-neutral-900 px-[18px] font-mono text-[11px] font-medium uppercase tracking-[0.04em] text-white transition hover:bg-neutral-800"
         >
           ← Back to dashboard
-        </a>
+        </Button>
       </section>
     </div>
   );
@@ -326,7 +336,7 @@ function MembersTable({
           ))}
         </tbody>
       </table>
-      <div className="border-t border-neutral-200 bg-[#FBFBFC] px-4 py-[11px] font-mono text-[11px] tracking-[0.02em] text-neutral-700">
+      <div className="border-t border-neutral-200 bg-neutral-100 px-4 py-[11px] font-mono text-[11px] tracking-[0.02em] text-neutral-700">
         {users.length} members · {elevatedCount} with elevated access
       </div>
     </div>
@@ -390,14 +400,14 @@ function InvitesTable({
                 <tr
                   className={[
                     "transition-colors",
-                    state === "failed" ? "bg-[#FFFCFA]" : "hover:bg-neutral-100",
+                    state === "failed" ? "bg-orange-100" : "hover:bg-neutral-100",
                     index < invites.length - 1 ? "border-b border-neutral-200" : "",
                   ].join(" ")}
                   key={invite.id}
                 >
                   <td className="px-4 py-[13px]">
                     <div className="flex items-center gap-2.5">
-                      <span className="inline-flex h-[30px] w-[30px] flex-none items-center justify-center rounded-full border border-dashed border-[#C7CBD0] font-mono text-[12px] text-neutral-500">
+                      <span className="inline-flex h-[30px] w-[30px] flex-none items-center justify-center rounded-full border border-dashed border-neutral-300 font-mono text-[12px] text-neutral-500">
                         ✉
                       </span>
                       <span className="font-mono text-[13px] font-medium text-neutral-900">
@@ -449,7 +459,7 @@ function InvitesTable({
           )}
         </tbody>
       </table>
-      <div className="flex gap-4 border-t border-neutral-200 bg-[#FBFBFC] px-4 py-[11px] font-mono text-[11px] tracking-[0.02em] text-neutral-700">
+      <div className="flex gap-4 border-t border-neutral-200 bg-neutral-100 px-4 py-[11px] font-mono text-[11px] tracking-[0.02em] text-neutral-700">
         <span>{pendingCount} pending</span>
         {failedCount > 0 ? <span className="text-fail-fg">{failedCount} delivery failed</span> : null}
         {expiredCount > 0 ? <span>{expiredCount} expired</span> : null}
@@ -467,7 +477,6 @@ function InviteModal({
   onCreated: (invite: DashboardInviteRow) => void;
   workspaceName: string;
 }) {
-  const titleId = useId();
   const [email, setEmail] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -489,39 +498,37 @@ function InviteModal({
   }
 
   return (
-    <ModalFrame labelledBy={titleId} onClose={onClose}>
-      <form onSubmit={onSubmit}>
-        <div className="px-[22px] pt-5">
-          <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-700">
-            {workspaceName} · invite
-          </div>
-          <h3
-            className="m-0 mt-1.5 font-display text-xl font-medium leading-[1.3] text-neutral-900"
-            id={titleId}
-          >
-            Invite a member
-          </h3>
-          <p className="m-0 mt-1 text-[13px] leading-[1.5] text-neutral-700">
-            They'll get an email to set a password and join {workspaceName}.
-          </p>
+    <Modal
+      open
+      onClose={onClose}
+      title="Invite a member"
+      description={`They'll get an email to set a password and join ${workspaceName}.`}
+      size="sm"
+      footer={
+        <div className="flex justify-end gap-2">
+          <GhostButton onClick={onClose} type="button">Cancel</GhostButton>
+          <DarkButton disabled={!valid || pending} form="invite-member-form" type="submit">
+            Send invite →
+          </DarkButton>
         </div>
-
-        <div className="flex flex-col gap-3.5 px-[22px] pt-[18px]">
+      }
+    >
+      <form id="invite-member-form" onSubmit={onSubmit}>
+        <div className="mb-3 font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-700">
+          {workspaceName} · invite
+        </div>
+        <div className="flex flex-col gap-3.5">
           {error ? <InlineError>{error}</InlineError> : null}
-          <label className="flex flex-col gap-1.5">
-            <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-700">
-              Email address
-            </span>
-            <input
+          <Field label="Email address">
+            <Input
               autoFocus
-              className="h-[38px] rounded-[3px] border border-neutral-200 bg-white px-3 font-body text-sm text-neutral-900 outline-none focus:shadow-[0_0_0_3px_rgba(60,67,231,0.18)]"
               onChange={(event) => setEmail(event.target.value)}
               placeholder="name@company.com"
               required
               type="email"
               value={email}
             />
-          </label>
+          </Field>
           <label className="flex flex-col gap-1.5">
             <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-700">
               Role
@@ -537,17 +544,8 @@ function InviteModal({
             </span>
           </label>
         </div>
-
-        <div className="mt-2 flex justify-end gap-2 px-[22px] pb-[22px] pt-5">
-          <GhostButton onClick={onClose} type="button">
-            Cancel
-          </GhostButton>
-          <DarkButton disabled={!valid || pending} type="submit">
-            Send invite →
-          </DarkButton>
-        </div>
       </form>
-    </ModalFrame>
+    </Modal>
   );
 }
 
@@ -564,24 +562,24 @@ function RoleChangeModal({
   onConfirm: () => void;
   workspaceName: string;
 }) {
-  const titleId = useId();
   const promoting = target.nextRole === "admin";
   const confirmLabel = promoting ? "Promote to admin" : "Demote to member";
 
   return (
-    <ModalFrame labelledBy={titleId} onClose={onClose}>
-      <div className="px-[22px] pt-5">
-        <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-700">
-          {workspaceName} · role change
+    <Modal
+      open
+      onClose={onClose}
+      title={promoting ? "Promote to admin?" : "Demote to member?"}
+      description={`${workspaceName} · role change`}
+      size="sm"
+      footer={
+        <div className="flex justify-end gap-2">
+          <GhostButton onClick={onClose} type="button">Cancel</GhostButton>
+          <DarkButton disabled={pending} onClick={onConfirm} type="button">{confirmLabel}</DarkButton>
         </div>
-        <h3
-          className="m-0 mt-1.5 font-display text-xl font-medium leading-[1.3] text-neutral-900"
-          id={titleId}
-        >
-          {promoting ? "Promote to admin?" : "Demote to member?"}
-        </h3>
-      </div>
-      <div className="px-[22px] pt-3.5">
+      }
+    >
+      <div>
         <div className="flex items-center gap-2.5 rounded-[3px] border border-neutral-200 bg-neutral-100 px-3.5 py-3">
           <Avatar user={target.user} />
           <div className="flex min-w-0 flex-col gap-0.5">
@@ -602,114 +600,8 @@ function RoleChangeModal({
             : "They'll lose access to user management and the Users page. They'll keep their account and sign-in method."}
         </p>
       </div>
-      <div className="mt-2 flex justify-end gap-2 px-[22px] pb-[22px] pt-5">
-        <GhostButton onClick={onClose} type="button">
-          Cancel
-        </GhostButton>
-        <DarkButton disabled={pending} onClick={onConfirm} type="button">
-          {confirmLabel}
-        </DarkButton>
-      </div>
-    </ModalFrame>
+    </Modal>
   );
-}
-
-function ModalFrame({
-  children,
-  labelledBy,
-  onClose,
-}: {
-  children: React.ReactNode;
-  labelledBy: string;
-  onClose: () => void;
-}) {
-  const dialogRef = useRef<HTMLElement | null>(null);
-  const onCloseRef = useRef(onClose);
-  const previousFocusRef = useRef<HTMLElement | null>(null);
-
-  useEffect(() => {
-    onCloseRef.current = onClose;
-  }, [onClose]);
-
-  useEffect(() => {
-    previousFocusRef.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const dialog = dialogRef.current;
-    const firstFocusable = getFocusableElements(dialog)[0];
-    (firstFocusable ?? dialog)?.focus();
-
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        onCloseRef.current();
-        return;
-      }
-
-      if (event.key !== "Tab") return;
-
-      const focusable = getFocusableElements(dialogRef.current);
-      if (focusable.length === 0) {
-        event.preventDefault();
-        dialogRef.current?.focus();
-        return;
-      }
-
-      const first = focusable[0];
-      const last = focusable.at(-1);
-      if (!last) return;
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    }
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      const previous = previousFocusRef.current;
-      if (previous && document.contains(previous)) {
-        previous.focus();
-      }
-    };
-  }, []);
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-      <div
-        aria-hidden="true"
-        className="absolute inset-0 bg-[rgba(24,27,32,0.32)]"
-        onClick={onClose}
-      />
-      <section
-        aria-labelledby={labelledBy}
-        aria-modal="true"
-        className="relative w-[440px] max-w-[92vw] overflow-hidden rounded-md border border-neutral-200 bg-panel shadow-[0_24px_56px_rgba(24,27,32,0.16)]"
-        ref={dialogRef}
-        role="dialog"
-        tabIndex={-1}
-      >
-        {children}
-      </section>
-    </div>
-  );
-}
-
-function getFocusableElements(root: HTMLElement | null): HTMLElement[] {
-  if (!root) return [];
-  return Array.from(
-    root.querySelectorAll<HTMLElement>(
-      [
-        "a[href]",
-        "button:not([disabled])",
-        "input:not([disabled])",
-        "select:not([disabled])",
-        "textarea:not([disabled])",
-        '[tabindex]:not([tabindex="-1"])',
-      ].join(","),
-    ),
-  ).filter((element) => element.getAttribute("aria-hidden") !== "true");
 }
 
 function Avatar({ user }: { user: DashboardUserRow }) {
@@ -727,47 +619,33 @@ function Avatar({ user }: { user: DashboardUserRow }) {
 }
 
 function RoleChip({ role }: { role: DashboardRole }) {
-  const styles: Record<DashboardRole, { bg: string; fg: string; border: string; label: string }> = {
-    owner: { bg: "#181B20", fg: "#FFFFFF", border: "#181B20", label: "Owner" },
-    admin: { bg: "#ECECFD", fg: "#3C43E7", border: "#ECECFD", label: "Admin" },
-    member: { bg: "#F2F4F6", fg: "#5F666F", border: "#E6E8EB", label: "Member" },
+  const styles: Record<DashboardRole, { tone: "coal" | "running" | "neutral"; label: string }> = {
+    owner: { tone: "coal", label: "Owner" },
+    admin: { tone: "running", label: "Admin" },
+    member: { tone: "neutral", label: "Member" },
   };
   const roleStyle = styles[role];
-
-  return (
-    <span
-      className="inline-flex items-center gap-1.5 rounded-[2px] border px-[9px] py-[3px] font-mono text-[10px] font-medium uppercase tracking-[0.04em]"
-      style={{
-        backgroundColor: roleStyle.bg,
-        borderColor: roleStyle.border,
-        color: roleStyle.fg,
-      }}
-    >
-      {roleStyle.label}
-    </span>
-  );
+  return <CkChip tone={roleStyle.tone}>{roleStyle.label}</CkChip>;
 }
 
 function AuthMethod({ method }: { method: DashboardAuthMethod }) {
   const map: Record<DashboardAuthMethod, { label: string; dots: string[]; fg: string }> = {
-    Password: { label: "Password", dots: ["#9EA3AA"], fg: "#5F666F" },
-    SSO: { label: "SSO", dots: ["#3C43E7"], fg: "#3C43E7" },
-    "Password + SSO": { label: "Password + SSO", dots: ["#9EA3AA", "#3C43E7"], fg: "#3E444C" },
-    Unknown: { label: "Unknown", dots: ["#9EA3AA"], fg: "#5F666F" },
+    Password: { label: "Password", dots: ["bg-neutral-500"], fg: "text-neutral-700" },
+    SSO: { label: "SSO", dots: ["bg-mariner"], fg: "text-mariner" },
+    "Password + SSO": { label: "Password + SSO", dots: ["bg-neutral-500", "bg-mariner"], fg: "text-neutral-800" },
+    Unknown: { label: "Unknown", dots: ["bg-neutral-500"], fg: "text-neutral-700" },
   };
   const auth = map[method] ?? map.Unknown;
 
   return (
     <span
-      className="inline-flex items-center gap-[7px] font-mono text-[11px]"
-      style={{ color: auth.fg }}
+      className={`inline-flex items-center gap-[7px] font-mono text-[11px] ${auth.fg}`}
     >
       <span className="inline-flex gap-[3px]">
         {auth.dots.map((dot, index) => (
           <span
-            className="inline-block h-1.5 w-1.5 rounded-full"
+            className={`inline-block h-1.5 w-1.5 rounded-full ${dot}`}
             key={`${dot}-${index}`}
-            style={{ backgroundColor: dot }}
           />
         ))}
       </span>
@@ -842,18 +720,13 @@ function GhostButton({
   ...props
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & { danger?: boolean }) {
   return (
-    <button
+    <Button
       {...props}
-      className={[
-        "inline-flex items-center justify-center whitespace-nowrap rounded-[3px] border bg-white px-2.5 py-[5px] font-mono text-[10px] font-medium uppercase tracking-[0.04em] transition disabled:cursor-default disabled:opacity-40",
-        danger
-          ? "border-[#F3CFC7] text-fail-fg hover:bg-fail-bg"
-          : "border-neutral-200 text-neutral-900 hover:bg-app-bg",
-        className ?? "",
-      ].join(" ")}
+      className={className}
+      variant={danger ? "danger" : "secondary"}
     >
       {children}
-    </button>
+    </Button>
   );
 }
 
@@ -863,20 +736,17 @@ function DarkButton({
   ...props
 }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
-    <button
+    <Button
       {...props}
-      className={[
-        "inline-flex items-center justify-center whitespace-nowrap rounded-[3px] border border-neutral-900 bg-neutral-900 px-3.5 py-[5px] font-mono text-[11px] font-medium uppercase tracking-[0.04em] text-white transition hover:bg-neutral-800 disabled:cursor-default disabled:opacity-40",
-        className ?? "",
-      ].join(" ")}
+      className={className}
     >
       {children}
-    </button>
+    </Button>
   );
 }
 
 function NoAction() {
-  return <span className="font-mono text-[11px] text-neutral-300">—</span>;
+  return <span className="font-mono text-[11px] text-neutral-300">{"\u2014"}</span>;
 }
 
 function InlineError({ children }: { children: React.ReactNode }) {

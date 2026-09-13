@@ -1,9 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { CkStatusPill } from "@/components/ui";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Modal } from "@/components/ui/modal";
 import type { RunStatus } from "@shared/contracts";
 import { apiClient } from "@/lib/api/client";
 
@@ -42,31 +44,32 @@ function Kbd({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * Header affordance that opens Spotlight. It is a button, not an input — the
+ * Header affordance that opens Spotlight. It is a button, not an input, the
  * search itself lives in the overlay so it can be summoned from any screen with
  * ⌘K, not just the one showing this button. Reads as a search field at rest.
  */
 export function SpotlightTrigger() {
   return (
-    <button
+    <Button
       type="button"
       onClick={openSpotlight}
       aria-label="Search tickets (Command-K)"
       aria-keyshortcuts="Meta+K Control+K"
-      className="group flex items-center gap-2 h-[38px] w-full max-w-[320px] pl-3 pr-2 bg-panel border border-neutral-200 rounded-sm text-left cursor-pointer transition-colors hover:border-neutral-300 focus:outline-none focus-visible:border-mariner focus-visible:ring-2 focus-visible:ring-mariner/20"
+      variant="secondary"
+      className="group w-full max-w-[320px] justify-start"
     >
       <SearchGlyph />
       <span className="flex-1 min-w-0 font-body text-[13px] text-neutral-500 group-hover:text-neutral-700 transition-colors">
         Search tickets
       </span>
       <Kbd>⌘K</Kbd>
-    </button>
+    </Button>
   );
 }
 
 /**
  * Spotlight-style ticket search. A centered overlay summoned by ⌘K (⌃K) from
- * anywhere — mount once in the shell. Type a ticket key or title; matches across
+ * anywhere, mount once in the shell. Type a ticket key or title; matches across
  * all history stream in (debounced, via the same-origin /api/runs/search proxy),
  * and ↑/↓ + ↩ opens that run's trace. Esc or a backdrop click dismisses it.
  */
@@ -82,7 +85,6 @@ export function SpotlightSearch({
 } = {}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [mounted, setMounted] = useState(false);
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<Hit[]>([]);
   const [loading, setLoading] = useState(false);
@@ -93,10 +95,7 @@ export function SpotlightSearch({
   // eslint-disable-next-line unicorn/no-useless-undefined -- Preserve the timer ref type.
   const debounce = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const reqId = useRef(0);
-  const restoreFocus = useRef<HTMLElement | null>(null);
   const listId = useId();
-
-  useEffect(() => setMounted(true), []);
 
   const close = useCallback(() => {
     setOpen(false);
@@ -122,30 +121,6 @@ export function SpotlightSearch({
       window.removeEventListener(OPEN_EVENT, onOpen);
     };
   }, []);
-
-  // While open: lock body scroll, focus the input, restore focus on close, and
-  // dismiss on Escape from anywhere — a modal's exit can't depend on which
-  // element currently holds focus (the input may not have been focused yet).
-  useEffect(() => {
-    if (!open) return;
-    restoreFocus.current = document.activeElement as HTMLElement | null;
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const raf = requestAnimationFrame(() => inputRef.current?.focus());
-    const onEsc = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        close();
-      }
-    };
-    window.addEventListener("keydown", onEsc);
-    return () => {
-      cancelAnimationFrame(raf);
-      window.removeEventListener("keydown", onEsc);
-      document.body.style.overflow = prevOverflow;
-      restoreFocus.current?.focus?.();
-    };
-  }, [open, close]);
 
   useEffect(() => () => clearTimeout(debounce.current), []);
 
@@ -216,25 +191,18 @@ export function SpotlightSearch({
       ?.scrollIntoView({ block: "nearest" });
   }, [active, listId]);
 
-  if (!mounted || !open) return null;
-
   const term = q.trim();
   const hasQuery = term.length >= 2;
 
-  return createPortal(
-    <div
-      role="presentation"
-      onMouseDown={close}
-      className="fixed inset-0 z-[100] flex items-start justify-center px-4 pt-[16vh] bg-coal/50 backdrop-blur-[2px]"
+  return (
+    <Modal
+      open={open}
+      onClose={close}
+      title="Search tickets"
+      variant="command"
+      initialFocusRef={inputRef}
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="Search tickets"
-        onMouseDown={(e) => e.stopPropagation()}
-        className="w-full max-w-[560px] bg-panel border border-neutral-200 rounded-md shadow-[0_24px_64px_-16px_rgba(24,27,32,0.45)] overflow-hidden animate-ck-pop motion-reduce:animate-none"
-      >
-        {/* Query row — the input is the one large element on the surface. */}
+        {/* Query row, the input is the one large element on the surface. */}
         <div className="flex items-center gap-3 px-4 h-[60px] border-b border-neutral-200">
           {loading ? (
             <span
@@ -244,7 +212,7 @@ export function SpotlightSearch({
           ) : (
             <SearchGlyph />
           )}
-          <input
+          <Input
             ref={inputRef}
             type="text"
             role="combobox"
@@ -257,7 +225,7 @@ export function SpotlightSearch({
             onKeyDown={onKeyDown}
             placeholder="Search by ticket key or title"
             aria-label="Search by ticket key or title"
-            className="flex-1 min-w-0 bg-transparent border-none outline-none font-body text-[18px] text-neutral-900 placeholder:text-neutral-400"
+            className="h-auto min-w-0 flex-1 border-0 bg-transparent px-0 text-lg focus-visible:ring-0 focus-visible:ring-offset-0"
           />
           <Kbd>esc</Kbd>
         </div>
@@ -293,7 +261,7 @@ export function SpotlightSearch({
                 </span>
               </div>
               {hits.map((h, i) => (
-                <button
+                <Button
                   key={h.id}
                   id={`${listId}-opt-${i}`}
                   role="option"
@@ -301,10 +269,12 @@ export function SpotlightSearch({
                   type="button"
                   onMouseEnter={() => setActive(i)}
                   onClick={() => go(h)}
-                  className={`relative w-full appearance-none border-none cursor-pointer text-left flex items-center gap-3 pl-4 pr-3 py-2.5 ${
+                  variant="ghost"
+                  className={`relative h-auto w-full justify-start rounded-none px-0 py-0 normal-case tracking-normal ${
                     i === active ? "bg-mariner-100" : "bg-panel"
                   }`}
                 >
+                  <span className="flex w-full items-center gap-3 py-2.5 pl-4 pr-3 text-left">
                   {/* Signature: the mariner rail marks the active row. */}
                   {i === active && (
                     <span className="absolute left-0 top-1 bottom-1 w-[2px] rounded-full bg-mariner" aria-hidden="true" />
@@ -330,13 +300,14 @@ export function SpotlightSearch({
                   >
                     ↩
                   </span>
-                </button>
+                  </span>
+                </Button>
               ))}
             </>
           )}
         </div>
 
-        {/* Footer legend — the cockpit's mono console voice. */}
+        {/* Footer legend, the cockpit's mono console voice. */}
         <div className="flex items-center gap-4 px-4 h-9 border-t border-neutral-200 bg-off-white font-mono text-[10px] text-neutral-500">
           <span className="inline-flex items-center gap-1.5">
             <Kbd>↑↓</Kbd> navigate
@@ -349,8 +320,6 @@ export function SpotlightSearch({
           </span>
           <span className="ml-auto">{hasQuery && hits.length > 0 ? `${hits.length} shown` : "Up to 8 results"}</span>
         </div>
-      </div>
-    </div>,
-    document.body,
+    </Modal>
   );
 }

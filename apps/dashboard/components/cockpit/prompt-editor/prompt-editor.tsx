@@ -13,6 +13,8 @@ import {
 import { VariablePickerPopover } from "@/components/cockpit/prompt-library/variable-picker-popover";
 import { AVAILABLE_VARIABLES, type PromptVariableSpec } from "@shared/prompts";
 import { useEnterExit } from "@/lib/use-enter-exit";
+import { Button, Textarea } from "@/components/ui";
+import { MOTION_BASE_MS } from "@/components/ui/index";
 import {
   PromptTokenNode,
   promptTokenNodeAttributes,
@@ -57,9 +59,6 @@ export interface PromptEditorProps {
   variables?: readonly PromptVariableSpec[];
 }
 
-const toolBtn =
-  "appearance-none cursor-pointer inline-flex items-center justify-center h-7 min-w-7 px-1.5 rounded-[3px] border border-transparent font-mono text-[11px] text-neutral-600 transition-[background-color,color,transform] duration-150 ease-standard hover:bg-off-white active:scale-[0.96] disabled:opacity-40 disabled:cursor-default";
-const toolBtnActive = "bg-mariner-100 text-mariner border-mariner-200";
 const toolSep = "mx-0.5 h-4 w-px self-center bg-neutral-200";
 
 type Action = { key: string; label: string; title: string; run: () => void; active: boolean };
@@ -81,7 +80,7 @@ function useEditorActions(editor: Editor | null): Action[] {
 /**
  * Right-click context menu, opened at the pointer. Two pages: the block actions
  * plus an "Insert variable" entry that swaps in a scrollable variable list at the
- * SAME position — so variables land where you right-clicked instead of at a
+ * SAME position, so variables land where you right-clicked instead of at a
  * (possibly scrolled-away) toolbar anchor. Portalled, animates in/out.
  */
 function ContextMenu({
@@ -99,7 +98,7 @@ function ContextMenu({
   onInsert: (token: string) => void;
   onClose: () => void;
 }) {
-  const { mounted, state } = useEnterExit(at !== null, 150);
+  const { mounted, state } = useEnterExit(at !== null, MOTION_BASE_MS);
   const ref = useRef<HTMLDivElement>(null);
   const posRef = useRef(at);
   if (at) posRef.current = at;
@@ -135,23 +134,22 @@ function ContextMenu({
   const left = Math.min(p.x, window.innerWidth - 248);
   const top = Math.min(p.y, window.innerHeight - 340);
 
-  const itemCls =
-    "block w-full appearance-none cursor-pointer border-none bg-transparent px-3 py-1.5 text-left font-body text-[12px] text-neutral-700 transition-colors duration-150 hover:bg-off-white hover:text-neutral-900";
-
   return createPortal(
     <div
       ref={ref}
       role="menu"
       data-state={state}
       style={{ left, top }}
-      className={`fixed z-[120] min-w-[224px] overflow-hidden rounded-md border border-neutral-200 bg-panel py-1 shadow-[0_16px_40px_-12px_rgba(24,27,32,0.35)] origin-top-left transition-[opacity,transform] duration-150 ease-standard motion-reduce:transition-none motion-reduce:transform-none ${
+      className={`fixed z-[120] min-w-[224px] origin-top-left overflow-hidden rounded-sm border border-neutral-200 bg-panel py-1 shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] transition-[opacity,transform] duration-[var(--motion-base)] ease-standard motion-reduce:transition-none motion-reduce:transform-none ${
         state === "open" ? "opacity-100 scale-100" : "opacity-0 scale-[0.97]"
       }`}
     >
       {page === "actions" ? (
         <>
           {actions.map((a) => (
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               key={a.key}
               type="button"
               role="menuitem"
@@ -160,36 +158,42 @@ function ContextMenu({
                 a.run();
                 onClose();
               }}
-              className={itemCls}
+              className="h-auto w-full justify-start rounded-none px-3 py-1.5 text-left normal-case"
             >
               {a.title}
-            </button>
+            </Button>
           ))}
           <div className="my-1 h-px bg-neutral-200" aria-hidden="true" />
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             type="button"
             role="menuitem"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => setPage("vars")}
-            className={`${itemCls} flex items-center justify-between`}
+            className="h-auto w-full justify-between rounded-none px-3 py-1.5 text-left normal-case"
           >
             {insertLabel} <span className="text-neutral-400">›</span>
-          </button>
+          </Button>
         </>
       ) : (
         <>
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             type="button"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => setPage("actions")}
-            className={`${itemCls} text-mariner`}
+            className="h-auto w-full justify-start rounded-none px-3 py-1.5 text-left normal-case"
           >
             ‹ Back
-          </button>
+          </Button>
           <div className="my-1 h-px bg-neutral-200" aria-hidden="true" />
           <div className="max-h-[240px] overflow-y-auto">
             {insertOptions.map((option) => (
-              <button
+              <Button
+                variant="ghost"
+                size="sm"
                 key={option.token}
                 type="button"
                 role="menuitem"
@@ -198,7 +202,7 @@ function ContextMenu({
                   onInsert(option.token);
                   onClose();
                 }}
-                className="block w-full appearance-none cursor-pointer border-none bg-transparent px-3 py-1.5 text-left transition-colors duration-150 hover:bg-off-white"
+                className="h-auto w-full justify-start rounded-none px-3 py-1.5 text-left normal-case"
               >
                 <div className="font-mono text-[11px] text-neutral-900">{option.label}</div>
                 {option.description && (
@@ -206,7 +210,7 @@ function ContextMenu({
                     {option.description}
                   </div>
                 )}
-              </button>
+              </Button>
             ))}
           </div>
         </>
@@ -231,7 +235,7 @@ function CanonicalTokenPicker({
   onClose,
 }: {
   open: boolean;
-  anchorRef: React.RefObject<HTMLButtonElement | null>;
+  anchorRef: React.RefObject<HTMLElement | null>;
   options: readonly PromptInsertOption[];
   ariaLabel: string;
   onPick: (token: string) => void;
@@ -270,7 +274,7 @@ function CanonicalTokenPicker({
         left: Math.min(rect.left, window.innerWidth - 328),
         top: Math.min(rect.bottom + 6, window.innerHeight - 320),
       }}
-      className="fixed z-[120] max-h-[300px] w-[320px] overflow-y-auto rounded-md border border-neutral-200 bg-panel py-1 shadow-[0_16px_40px_-12px_rgba(24,27,32,0.35)]"
+      className="fixed z-[120] max-h-[300px] w-[320px] overflow-y-auto rounded-sm border border-neutral-200 bg-panel py-1 shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] animate-ck-pop motion-reduce:animate-none"
     >
       {options.length === 0 ? (
         <div className="px-3 py-4 font-body text-[11px] text-neutral-500">
@@ -278,7 +282,9 @@ function CanonicalTokenPicker({
         </div>
       ) : (
         options.map((option) => (
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             key={option.token}
             type="button"
             role="option"
@@ -288,7 +294,7 @@ function CanonicalTokenPicker({
               onPick(option.token);
               onClose();
             }}
-            className="block w-full border-none bg-transparent px-3 py-2 text-left hover:bg-off-white"
+            className="h-auto w-full justify-start rounded-none px-3 py-2 text-left normal-case"
           >
             <span className="block truncate font-mono text-[11px] text-neutral-900">
               {option.label}
@@ -298,7 +304,7 @@ function CanonicalTokenPicker({
                 {option.description}
               </span>
             )}
-          </button>
+          </Button>
         ))
       )}
     </div>,
@@ -346,7 +352,7 @@ export function PromptEditor({
   const [raw, setRaw] = useState(forcedRaw);
   const [varOpen, setVarOpen] = useState(false);
   const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
-  const varAnchorRef = useRef<HTMLButtonElement>(null);
+  const varAnchorRef = useRef<HTMLSpanElement>(null);
   const editorScrollRef = useRef<HTMLDivElement>(null);
   const rawScrollRef = useRef<HTMLTextAreaElement>(null);
   const handledSyncRequest = useRef<number | null>(null);
@@ -480,43 +486,49 @@ export function PromptEditor({
           actions.map((a) => (
             <span key={a.key} className="flex items-center">
               {(a.key === "bold" || a.key === "bullet") && <span className={toolSep} aria-hidden="true" />}
-              <button
+              <Button
+                variant={a.active ? "primary" : "ghost"}
+                size="sm"
                 type="button"
                 title={a.title}
                 aria-pressed={a.active}
                 disabled={disabled}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={a.run}
-                className={`${toolBtn} ${a.active ? toolBtnActive : ""} ${a.key === "bold" ? "font-bold" : ""}`}
+                className={a.key === "bold" ? "font-bold" : undefined}
               >
                 {a.label}
-              </button>
+              </Button>
             </span>
           ))}
         {!raw && (
-          <button
-            ref={varAnchorRef}
-            type="button"
-            title={
-              canonical ? `Insert ${canonicalInsertLabel}` : "Insert variable"
-            }
-            disabled={disabled}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => setVarOpen((o) => !o)}
-            className={`${toolBtn} ml-0.5 gap-1 px-2 text-mariner`}
-          >
-            <span className="text-[13px] leading-none">+</span>{" "}
-            {canonical ? "Value" : "Variable"}
-          </button>
+          <span ref={varAnchorRef} className="ml-0.5 inline-flex">
+            <Button
+              variant="ghost"
+              size="sm"
+              type="button"
+              title={
+                canonical ? `Insert ${canonicalInsertLabel}` : "Insert variable"
+              }
+              disabled={disabled}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => setVarOpen((o) => !o)}
+            >
+              <span className="text-[13px] leading-none">+</span>{" "}
+              {canonical ? "Value" : "Variable"}
+            </Button>
+          </span>
         )}
-        <button
+        <Button
+          variant={raw ? "primary" : "ghost"}
+          size="sm"
           type="button"
           onClick={() => setRaw((r) => !r)}
-          className={`${toolBtn} ml-auto uppercase tracking-[0.04em] ${raw ? toolBtnActive : ""}`}
+          className="ml-auto"
           title="Toggle raw markdown"
         >
           Raw
-        </button>
+        </Button>
       </div>
 
       {forcedRaw && (
@@ -530,10 +542,11 @@ export function PromptEditor({
 
       {/* Surface (scrolls internally when fill) */}
       {raw ? (
-        <textarea
+        <Textarea
           ref={rawScrollRef}
           value={value}
           disabled={disabled}
+          resize="none"
           rows={singleLine ? 1 : undefined}
           onChange={(e) =>
             onChange(
@@ -542,12 +555,13 @@ export function PromptEditor({
                 : e.target.value,
             )
           }
-          className={`w-full min-w-0 border-none bg-panel px-3 py-2 font-mono text-[12px] leading-[1.6] text-coal outline-none ${
+          monospace
+          className={`w-full min-w-0 ${
             fill
-              ? "min-h-0 flex-1 resize-none"
+              ? "min-h-0 flex-1"
               : singleLine
-                ? "resize-none"
-                : `resize-y ${minHeightClass ?? "min-h-[220px]"}`
+                ? "min-h-0"
+                : minHeightClass ?? "min-h-[220px]"
           }`}
         />
       ) : (

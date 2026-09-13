@@ -90,6 +90,7 @@ const catalog: RepositoryCatalogEntry[] = [
     defaultBranch: "main",
     description: "User-facing service",
     topics: ["typescript"],
+    relationships: [],
     usable: true,
   },
   {
@@ -99,6 +100,7 @@ const catalog: RepositoryCatalogEntry[] = [
     defaultBranch: "main",
     description: "Shared contracts",
     topics: ["schema"],
+    relationships: [],
     usable: true,
   },
   {
@@ -108,6 +110,7 @@ const catalog: RepositoryCatalogEntry[] = [
     defaultBranch: "trunk",
     description: "Distinct provider-scoped repository",
     topics: [],
+    relationships: [],
     usable: true,
   },
 ];

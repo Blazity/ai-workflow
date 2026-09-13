@@ -316,7 +316,7 @@ describe("what a profile save may and may not overwrite", () => {
       profile({
         description: "The public API",
         rules: "never force push",
-        relationships: [{ repositoryId: 7, label: "consumes" }],
+        relationships: [{ repositoryId: 7, kind: "depends_on" }],
       }),
     );
 
@@ -336,7 +336,7 @@ describe("what a profile save may and may not overwrite", () => {
     expect(row).toMatchObject({
       description: "The public API",
       rules: "never force push",
-      relationships: [{ repositoryId: 7, label: "consumes" }],
+      relationships: [{ repositoryId: 7, kind: "depends_on" }],
     });
     const versions = await listRepositoryProfileVersionRows(db, created.id);
     expect(versions[0]).toMatchObject({
@@ -695,7 +695,7 @@ describe("listRepositoryRules", () => {
     );
 
     await expect(listRepositoryRules(db, ["github:acme/api"])).resolves.toEqual([
-      { key: "github:acme/api", version: 1, rules: "Run the tests." },
+      { key: "github:acme/api", version: 1, rules: "Run the tests.", relationships: [] },
     ]);
   });
 
@@ -718,8 +718,55 @@ describe("listRepositoryRules", () => {
     await upsertRepositoryProfile(db, profile({ rules: "Second." }));
 
     await expect(listRepositoryRules(db, ["github:acme/api"])).resolves.toEqual([
-      { key: "github:acme/api", version: 2, rules: "Second." },
+      { key: "github:acme/api", version: 2, rules: "Second.", relationships: [] },
     ]);
+  });
+
+  it("returns incoming relationships for a requested target in the same query", async () => {
+    const db = await createTestDb();
+    const target = await upsertRepositoryProfile(
+      db,
+      profile({ path: "acme/api", rules: "Target rules." }),
+    );
+    await upsertRepositoryProfile(
+      db,
+      profile({
+        path: "acme/web",
+        relationships: [{ repositoryId: target.id, kind: "calls", note: "edge note" }],
+      }),
+    );
+
+    await expect(listRepositoryRules(db, ["github:acme/api"])).resolves.toEqual([
+      {
+        key: "github:acme/api",
+        version: 1,
+        rules: "Target rules.",
+        relationships: [
+          {
+            direction: "incoming",
+            repositoryId: expect.any(Number),
+            provider: "github",
+            path: "acme/web",
+            enabled: false,
+            kind: "calls",
+            note: "edge note",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("does not return a dangling relationship whose target row is absent", async () => {
+    const db = await createTestDb();
+    await upsertRepositoryProfile(
+      db,
+      profile({
+        path: "acme/api",
+        relationships: [{ repositoryId: 4242, kind: "related_to" }],
+      }),
+    );
+
+    await expect(listRepositoryRules(db, ["github:acme/api"])).resolves.toEqual([]);
   });
 
   it("asks nothing of the database for an empty key set", async () => {

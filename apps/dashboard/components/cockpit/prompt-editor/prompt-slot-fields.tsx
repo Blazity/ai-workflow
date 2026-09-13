@@ -13,11 +13,7 @@ import {
 import { isPromptSlotBinding } from "@shared/prompts";
 import { JsonSchemaEditor } from "@/components/cockpit/flow-editor/json-schema-editor";
 import type { JsonSchemaEditorValidationState } from "@/components/cockpit/flow-editor/json-schema-editor";
-
-const inputClass =
-  "min-w-0 rounded-xs border border-neutral-200 bg-off-white px-2 py-1 font-mono text-[10px] text-coal outline-none focus:border-mariner disabled:opacity-60";
-const quietButton =
-  "appearance-none rounded-xs border border-neutral-200 bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-600 hover:bg-off-white disabled:opacity-40";
+import { Button, Input, Select, Textarea } from "@/components/ui";
 
 function stableJson(value: unknown): string {
   return JSON.stringify(value, null, 2);
@@ -157,14 +153,16 @@ function JsonValueField({
   };
   return (
     <>
-      <textarea
+      <Textarea
+        size="sm"
+        monospace
+        invalid={Boolean(error)}
         aria-label={label}
         value={draft}
         disabled={disabled}
         rows={2}
         onChange={(event) => setDraft(event.target.value)}
         onBlur={commit}
-        className={`${inputClass} w-full resize-y leading-[1.45]`}
       />
       {error && (
         <p className="m-0 mt-1 font-body text-[10px] text-red-700">{error}</p>
@@ -258,13 +256,15 @@ function SlotNameField({
   };
   return (
     <div className="min-w-0 flex-1">
-      <input
+      <Input
+        size="sm"
+        monospace
+        invalid={Boolean(error)}
         aria-label={`Slot name ${value}`}
         value={draft}
         disabled={disabled}
         onChange={(event) => setDraft(event.target.value)}
         onBlur={commit}
-        className={`${inputClass} w-full`}
       />
       {error && (
         <p className="m-0 mt-1 font-body text-[9px] text-red-700">{error}</p>
@@ -338,7 +338,9 @@ export function PromptSlotDefinitionsEditor({
             Values a workflow must provide when it uses this prompt.
           </p>
         </div>
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
           type="button"
           disabled={disabled}
           onClick={() =>
@@ -352,10 +354,10 @@ export function PromptSlotDefinitionsEditor({
               },
             ])
           }
-          className={`${quietButton} ml-auto text-mariner`}
+          className="ml-auto"
         >
           + Add slot
-        </button>
+        </Button>
       </div>
       {slots.length === 0 ? (
         <div className="px-3 py-3 font-body text-[11px] text-neutral-500">
@@ -383,7 +385,9 @@ export function PromptSlotDefinitionsEditor({
                       onRename?.(slot.name, name);
                     }}
                   />
-                  <button
+                  <Button
+                    variant="danger"
+                    size="sm"
                     type="button"
                     disabled={disabled}
                     onClick={() =>
@@ -391,12 +395,12 @@ export function PromptSlotDefinitionsEditor({
                         slots.filter((_, candidate) => candidate !== index),
                       )
                     }
-                    className={`${quietButton} text-red-700`}
                   >
                     Remove
-                  </button>
+                  </Button>
                 </div>
-                <input
+                <Input
+                  size="sm"
                   aria-label={`${slot.name} description`}
                   value={slot.description}
                   disabled={disabled}
@@ -407,32 +411,27 @@ export function PromptSlotDefinitionsEditor({
                       description: event.target.value,
                     }))
                   }
-                  className={`${inputClass} w-full font-body`}
                 />
                 <div className="flex flex-wrap items-center gap-3">
-                  <select
+                  <Select
+                    size="compact"
                     aria-label={`${slot.name} type`}
                     value={type}
                     disabled={disabled}
-                    onChange={(event) =>
+                    onChange={(value) =>
                       update(index, (current) => ({
                         ...current,
                         schema: schemaForType(
-                          event.target.value,
+                          value,
                           schemaNullable(current.schema),
                         ),
                       }))
                     }
-                    className={`${inputClass} min-w-[120px]`}
-                  >
-                    {["string", "number", "boolean", "object", "array", "null"].map(
-                      (candidate) => (
-                        <option key={candidate} value={candidate}>
-                          {candidate}
-                        </option>
-                      ),
+                    className="min-w-[120px]"
+                    options={["string", "number", "boolean", "object", "array", "null"].map(
+                      (candidate) => ({ value: candidate, label: candidate }),
                     )}
-                  </select>
+                  />
                   <label className="flex items-center gap-1.5 font-body text-[10px] text-neutral-700">
                     <input
                       type="checkbox"
@@ -622,16 +621,17 @@ export function PromptSlotBindingsEditor({
                 {definition.description}
               </p>
             )}
-            <select
+            <Select
+              size="compact"
               aria-label={`${definition.name} slot binding type`}
               value={binding?.kind ?? ""}
               disabled={disabled}
-              onChange={(event) => {
-                if (event.target.value === "") {
+              onChange={(value) => {
+                if (value === "") {
                   // Undefined removes the optional slot binding.
                   // eslint-disable-next-line unicorn/no-useless-undefined -- Clear the slot binding.
                   update(definition.name, undefined);
-                } else if (event.target.value === "reference") {
+                } else if (value === "reference") {
                   const first = selectableValues[0];
                   update(
                     definition.name,
@@ -649,45 +649,41 @@ export function PromptSlotBindingsEditor({
                   });
                 }
               }}
-              className={`${inputClass} w-full`}
-            >
-              <option value="">
-                {Object.hasOwn(definition, "defaultValue")
-                  ? "Use prompt default"
-                  : definition.required
-                    ? "Choose a value…"
-                    : "Leave unfilled"}
-              </option>
-              <option value="reference" disabled={selectableValues.length === 0}>
-                Workflow value
-              </option>
-              <option value="literal">Literal value</option>
-            </select>
+              options={[
+                {
+                  value: "",
+                  label: Object.hasOwn(definition, "defaultValue")
+                    ? "Use prompt default"
+                    : definition.required
+                      ? "Choose a value…"
+                      : "Leave unfilled",
+                },
+                { value: "reference", label: "Workflow value", disabled: selectableValues.length === 0 },
+                { value: "literal", label: "Literal value" },
+              ]}
+            />
             {binding?.kind === "reference" && (
-              <select
+              <Select
+                size="compact"
                 aria-label={`${definition.name} workflow value`}
                 value={binding.reference}
                 disabled={disabled}
-                onChange={(event) =>
+                onChange={(value) =>
                   update(definition.name, {
                     kind: "reference",
-                    reference: event.target
-                      .value as WorkflowDataReferenceV2,
+                    reference: value as WorkflowDataReferenceV2,
                   })
                 }
-                className={`${inputClass} w-full`}
-              >
-                {!currentReference && (
-                  <option value={binding.reference}>
-                    Unavailable: {binding.reference}
-                  </option>
-                )}
-                {selectableValues.map((value) => (
-                  <option key={value.reference} value={value.reference}>
-                    {value.label}
-                  </option>
-                ))}
-              </select>
+                options={[
+                  ...(!currentReference
+                    ? [{ value: binding.reference, label: `Unavailable: ${binding.reference}` }]
+                    : []),
+                  ...selectableValues.map((value) => ({
+                    value: value.reference,
+                    label: value.label,
+                  })),
+                ]}
+              />
             )}
             {binding?.kind === "literal" && (
               <JsonValueField

@@ -19,6 +19,10 @@ import {
   type WorkspaceManifest,
 } from "../../sandbox/repo-workspace.js";
 import type { EffectivePromptRepositorySource } from "../helpers/effective-prompt.js";
+import {
+  renderRepositoryRelationshipLines,
+  type RepositoryCatalogRelationship,
+} from "../repository-discovery/catalog.js";
 
 const INSTRUCTION_PATHS = ["AGENTS.md", "CLAUDE.md"] as const;
 const MAX_REPOSITORY_INSTRUCTION_BYTES = 256 * 1024;
@@ -163,12 +167,24 @@ export async function loadRepositoryInstructionSources(
     });
     const rules = rulesByKey.get(repositoryKey);
     if (rules) {
+      const related = renderRelatedRepositories(
+        repositoryKey,
+        rules.relationships ?? [],
+        catalogRuleKeys ?? [],
+      );
+      const baseRules = rules.rules.trim();
+      const renderedRules =
+        baseRules.length === 0
+          ? related
+          : related.length === 0
+            ? baseRules
+            : `${baseRules}\n\n${related}`;
       const content = takeRepositoryRules({
         key: repositoryKey,
         // `repo_path` names THIS repository, not the run's headline one. A
         // rules document is per repository, so a token that resolved to some
         // other repository's path inside it would be worse than not resolving.
-        rendered: substitutePromptVariables(rules.rules, {
+        rendered: substitutePromptVariables(renderedRules, {
           ...repositoryRuleVariables(ruleVariables),
           repo_path: repository.repoPath,
         }),
@@ -354,6 +370,7 @@ loadRepositoryInstructionSources.maxRetries = 0;
 interface RepositoryCatalogRules {
   version: number;
   rules: string;
+  relationships: RepositoryCatalogRelationship[];
 }
 
 /** What one compiled prompt has already spent on rules, and what went wrong. */
@@ -397,8 +414,9 @@ async function loadRepositoryCatalogRules(
     for (const row of await listConnectedRepositoryRules(keys)) {
       if (!allowed.has(row.key)) continue;
       const rules = row.rules.trim();
-      if (rules.length === 0) continue;
-      found.set(row.key, { version: row.version, rules });
+      const relationships = row.relationships ?? [];
+      if (rules.length === 0 && relationships.length === 0) continue;
+      found.set(row.key, { version: row.version, rules, relationships });
     }
   } catch (error) {
     await warnWithoutFailing("repository_rules_unreadable", {
@@ -407,6 +425,22 @@ async function loadRepositoryCatalogRules(
     return new Map();
   }
   return found;
+}
+
+function renderRelatedRepositories(
+  ownerKey: string,
+  relationships: RepositoryCatalogRules["relationships"],
+  attachedKeys: readonly string[],
+): string {
+  if (relationships.length === 0) return "";
+  return [
+    "Related repositories:",
+    ...renderRepositoryRelationshipLines({
+      ownerKey,
+      relationships,
+      attachedKeys,
+    }),
+  ].join("\n");
 }
 
 /**
@@ -460,6 +494,57 @@ function takeRepositoryRules(input: {
   if (input.budget.remaining <= 0) {
     input.budget.dropped.push(input.key);
     return null;
+  }
+  const relationshipMarker = "Related repositories:\n";
+  const relationshipStart = input.rendered.indexOf(relationshipMarker);
+  if (relationshipStart >= 0) {
+    const rules = input.rendered
+      .slice(0, relationshipStart)
+      .replace(/\n\n$/, "");
+    const relationshipLines = input.rendered
+      .slice(relationshipStart + relationshipMarker.length)
+      .split("\n");
+    let capOmitted = 0;
+    const last = relationshipLines.at(-1);
+    if (last?.endsWith(" related repositories omitted.")) {
+      capOmitted = Math.trunc(Number(last.split(" ", 1)[0]));
+      relationshipLines.pop();
+    }
+    const cap = Math.min(MAX_REPOSITORY_RULES_BYTES, input.budget.remaining);
+    // Reserve a summary before consuming rule bytes. Rules remain the higher
+    // priority content, but no relationship line may be cut in half and an
+    // omitted edge must always be stated as a complete final line.
+    const summaryFor = (count: number) => `${count} related repositories omitted.`;
+    const reserved = utf8Bytes(relationshipMarker) + utf8Bytes(summaryFor(relationshipLines.length + capOmitted));
+    if (reserved > cap) {
+      input.budget.dropped.push(input.key);
+      return null;
+    }
+    const rulesPrefix = sliceUtf8Head(rules, Math.max(cap - reserved - 2, 0));
+    const separator = rulesPrefix.length > 0 ? "\n\n" : "";
+    let used = utf8Bytes(rulesPrefix + separator + relationshipMarker);
+    const kept: string[] = [];
+    for (const line of relationshipLines) {
+      const candidate = `${line}\n`;
+      // Keep room for the final summary, even when this is the first omitted edge.
+      if (used + utf8Bytes(candidate) + utf8Bytes(summaryFor(1)) > cap) break;
+      kept.push(line);
+      used += utf8Bytes(candidate);
+    }
+    const omitted = capOmitted + relationshipLines.length - kept.length;
+    const content =
+      rulesPrefix +
+      separator +
+      relationshipMarker +
+      [...kept, ...(omitted > 0 ? [summaryFor(omitted)] : [])].join("\n");
+    const bytes = utf8Bytes(content);
+    if (bytes > cap) {
+      input.budget.dropped.push(input.key);
+      return null;
+    }
+    input.budget.remaining -= bytes;
+    if (content.length < input.rendered.length) input.budget.trimmed.set(input.key, bytes);
+    return content;
   }
   const capped = sliceUtf8Head(
     input.rendered,

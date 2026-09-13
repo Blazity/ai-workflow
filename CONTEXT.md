@@ -146,6 +146,12 @@ A GitLab collaboration container that owns settings and features around one
 primary source repository.
 _Avoid_: Treating GitLab project as synonymous with every Git-backed object under it
 
+**Repository Relationship**:
+A typed connection from one repository catalog profile to another. Its fixed
+kind explains how the repositories relate in prompts and discovery; an optional
+note adds operator context without becoming an instruction line.
+_Avoid_: Free-form relationship label
+
 **Wiki Repository**:
 An auxiliary Git repository attached to a provider object for documentation.
 Wiki repositories are not repositories for AI Workflow unless the product

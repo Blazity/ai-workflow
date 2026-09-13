@@ -908,3 +908,15 @@ A `commands` entry that looks like an install step (`uv sync`, `pip install
 ...`, `yarn install`, `npm ci`) belongs in `setup`, not `commands`: `setup`
 runs once per workspace and its result doesn't count as a check outcome,
 while `commands` runs on every batch and its exit code does.
+
+## Repository relationships
+
+Repository profiles may name up to 50 typed relationships. The shared catalog
+contract owns the ten allowed kinds and their prompt sentences. Relationships
+are context for repository instructions and discovery; they do not grant
+repository access. Only an enabled catalog repository may become a candidate.
+Discovery reads relationships from the catalog when each discovery attempt
+runs, keyed by the repository list frozen at run start. An edit made during a
+run therefore reaches its next discovery attempt. Repository access itself does
+not change: the enabled list remains frozen at run start, and a related
+repository outside it is context marked `(not enabled)`, never a fetch target.

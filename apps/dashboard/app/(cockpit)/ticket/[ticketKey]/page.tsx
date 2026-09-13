@@ -1,4 +1,4 @@
-// apps/dashboard/app/(cockpit)/ticket/[ticketKey]/page.tsx — Ticket runs ("/ticket/<key>")
+// apps/dashboard/app/(cockpit)/ticket/[ticketKey]/page.tsx: Ticket runs ("/ticket/<key>")
 import { Suspense } from "react";
 
 import {
@@ -33,7 +33,7 @@ export default async function TicketPage({
   // the key, so React streams a fresh skeleton here instead of blocking the
   // whole page. The rail/header (shell) is a separate boundary keyed on the
   // ticket, so picking a run never refetches or blocks it. Reused (CSS-toggled)
-  // by the desktop split view and the mobile inline view — getRunDetail()
+  // by the desktop split view and the mobile inline view, getRunDetail()
   // dedupes the fetch.
   const detail = (
     <Suspense key={`detail:${run ?? "default"}`} fallback={<TraceDetailSkeleton />}>
@@ -59,7 +59,7 @@ export default async function TicketPage({
         <DetailArea>{detail}</DetailArea>
       </div>
 
-      {/* Mobile: one view at a time — a run's trace (with a way back) or the list. */}
+      {/* Mobile: one view at a time, a run's trace (with a way back) or the list. */}
       <div className="lg:hidden">
         {run ? (
           <div className="flex flex-col gap-3 px-4 pt-4 pb-6">

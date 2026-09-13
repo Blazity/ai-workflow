@@ -1,4 +1,4 @@
-// apps/dashboard/app/(cockpit)/runs/page.tsx — Workflow runs ("/runs")
+// apps/dashboard/app/(cockpit)/runs/page.tsx: Workflow runs ("/runs")
 import { Suspense } from "react";
 
 import { RunsData } from "@/app/runs-data";
