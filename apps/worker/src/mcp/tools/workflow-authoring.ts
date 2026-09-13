@@ -481,7 +481,7 @@ export function registerWorkflowAuthoringTools(
           // authority on a legal graph is applied, and the store then parses the
           // same schema again before it stores anything.
           //
-          const contracts = blockContractsFor(deps.settings);
+          const contracts = blockContractsFor();
           const candidate = validateWorkflowDefinitionCandidate(
             input.definition,
             contracts.resolveContract,

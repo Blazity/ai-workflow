@@ -87,7 +87,7 @@ Other hard rules:
 - Source repo variable: `ARTUR_INITIAL_BASE_SHA` (only relevant before the first tag existed).
 - Arthur repo variables: `ARTUR_WORKER_URL`, `ARTUR_DASHBOARD_URL`.
 - Vercel: preview builds disabled on both arthur projects (`commandForIgnoringBuildStep: test "$VERCEL_ENV" != "production"`); worker build runs DB migrations against production Neon.
-- New feature env flags default off; enabling one (e.g. `ENABLE_REPO_MEMORY=true`) takes effect on the next deploy.
+- New feature switches default off. Change them on the Settings page; run-scoped changes take effect on the next run.
 
 ## Division of responsibility
 

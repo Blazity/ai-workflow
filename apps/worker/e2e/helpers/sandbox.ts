@@ -1,3 +1,5 @@
+import { defaultBuiltinHarnessProfile } from "@shared/harness";
+
 /**
  * Best-effort cleanup: find and stop any running sandboxes whose checked-out
  * branch matches `ai-workflow/{ticketKey}`.
@@ -88,10 +90,12 @@ export async function killClaudeForTicket(
   );
   const labels = await getTicketLabels(ticketKey).catch(() => [] as string[]);
   const labelKind = parseAgentKindOverride(labels);
-  // Fall back to the same default the deployed app uses when no agent:* label
-  // is present (env.AGENT_KIND, default "claude").
-  const envFallback =
-    process.env.E2E_AGENT_KIND?.toLowerCase() === "codex" ? "codex" : "claude";
+  // Fall back to the same built-in Harness Profile the deployed app uses when
+  // no agent:* label is present.
+  const configuredFallback = process.env.E2E_HARNESS_PROVIDER?.toLowerCase();
+  const envFallback = configuredFallback === "claude" || configuredFallback === "codex"
+    ? configuredFallback
+    : defaultBuiltinHarnessProfile().harness.provider;
   const agentKind = labelKind ?? envFallback;
   // Pattern targets a flag that appears only in the agent's wrapper-script
   // invocation, never in the Arthur tracer's argv. See claude.ts/codex.ts

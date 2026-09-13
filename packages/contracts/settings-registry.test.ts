@@ -92,9 +92,6 @@ test("a key the workflow body reads may only apply to the next run", () => {
     "COLUMN_AI",
     "COLUMN_AI_REVIEW",
     "COLUMN_BACKLOG",
-    "AGENT_KIND",
-    "CLAUDE_MODEL",
-    "CODEX_MODEL",
     "PRE_PR_COMMAND_TIMEOUT_MINUTES",
     "PRE_PR_CHECKS_ALLOWED_ENV",
   ]);
@@ -135,10 +132,7 @@ test("a wrong type is refused per key and every refusal is reported", () => {
   ]);
 });
 
-test("a value outside the declared set or below the declared minimum is refused", () => {
-  assert.deepEqual(validateSettingsPatch({ AGENT_KIND: "gemini" }), [
-    { key: "AGENT_KIND", reason: "not_allowed_value" },
-  ]);
+test("a value below a declared minimum is refused", () => {
   assert.deepEqual(validateSettingsPatch({ MAX_CONCURRENT_AGENTS: 0 }), [
     { key: "MAX_CONCURRENT_AGENTS", reason: "below_minimum" },
   ]);
@@ -148,7 +142,7 @@ test("a value outside the declared set or below the declared minimum is refused"
 });
 
 test("null clears a key that has no default and is refused for one that has", () => {
-  assert.deepEqual(validateSettingsPatch({ CLAUDE_MODEL: null }), []);
+  assert.deepEqual(validateSettingsPatch({ V2_MAX_BLOCK_CONCURRENCY: null }), []);
   assert.deepEqual(validateSettingsPatch({ MAX_CONCURRENT_AGENTS: null }), [
     { key: "MAX_CONCURRENT_AGENTS", reason: "null_not_allowed" },
   ]);

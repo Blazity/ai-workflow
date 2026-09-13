@@ -254,7 +254,7 @@ function healthDefinitions(config: SystemHealthConfig): IntegrationDefinition[] 
       checked("webhook-delivery", "Project webhook test delivery", ["GITLAB_WEBHOOK_SECRET"], dependentOptionalMode(gitlabApiMode, config.gitlabWebhookSecret), true, "provider-delivery"),
     ]),
     integration("agent", config.agentKind === "claude" ? "Claude agent" : "Codex agent", "core", true, [
-      checked("model", "Credentials and configured model", config.agentKind === "claude" ? ["AGENT_KIND", "ANTHROPIC_API_KEY", "CLAUDE_MODEL"] : ["AGENT_KIND", "CODEX_API_KEY", "CODEX_CHATGPT_OAUTH_TOKEN", "CODEX_MODEL"], agentMode, true),
+      checked("model", "Credentials and built-in profile model", config.agentKind === "claude" ? ["ANTHROPIC_API_KEY"] : ["CODEX_API_KEY", "CODEX_CHATGPT_OAUTH_TOKEN"], agentMode, true),
     ]),
     integration("dashboard-auth", "Dashboard authentication", "auth-email", true, [
       configured("configuration", "URL, origin and session secret", ["BETTER_AUTH_SECRET", "BETTER_AUTH_URL", "DASHBOARD_ORIGIN"], authMode === "configured", authMode),

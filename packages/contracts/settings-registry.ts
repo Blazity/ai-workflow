@@ -20,7 +20,6 @@ export type SettingsGroup =
   | "features"
   | "mcp"
   | "checks"
-  | "harness"
   | "issue-tracker";
 
 /** The shapes a stored value may take. */
@@ -362,35 +361,6 @@ export const SETTINGS_REGISTRY = [
     // the worker may hand a value to a tenant's command. The settings surfaces
     // expose this key read-only; change its variable and redeploy.
     requiresRedeploy: true,
-  },
-  {
-    key: "AGENT_KIND",
-    group: "harness",
-    type: "string",
-    enumValues: ["claude", "codex"],
-    default: "claude",
-    description:
-      "Which coding agent a deployment defaults to. A harness profile still decides the agent of a given run.",
-    appliesToRunsInFlight: "next run",
-    overridablePerTrigger: false,
-  },
-  {
-    key: "CLAUDE_MODEL",
-    group: "harness",
-    type: "string",
-    default: null,
-    description: "Default Claude model when no harness profile pins one.",
-    appliesToRunsInFlight: "next run",
-    overridablePerTrigger: false,
-  },
-  {
-    key: "CODEX_MODEL",
-    group: "harness",
-    type: "string",
-    default: null,
-    description: "Default Codex model when no harness profile pins one.",
-    appliesToRunsInFlight: "next run",
-    overridablePerTrigger: false,
   },
   {
     key: "COLUMN_AI",

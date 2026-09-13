@@ -2,11 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   env: {
-    AGENT_KIND: "claude",
     ANTHROPIC_API_KEY: "anthropic-key",
     CODEX_API_KEY: "codex-key",
-    CLAUDE_MODEL: "claude-model",
-    CODEX_MODEL: "codex-model",
     JOB_TIMEOUT_MS: 1000,
   } as Record<string, unknown>,
   runPreSandboxPhase: vi.fn(),

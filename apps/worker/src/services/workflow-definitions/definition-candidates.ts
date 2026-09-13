@@ -54,12 +54,11 @@ export async function validateWorkflowDefinitionDraftCandidate(candidate: unknow
 }
 
 /** Which values every block in this candidate may read, and where each comes
- *  from. Pure apart from the registry, which is a deployment fact: the caller
- *  hands in the snapshot its request loaded, so the block contracts resolve
- *  against the operator's stored defaults rather than the process environment. */
+ *  from. The API retains its snapshot-shaped input, while block contracts use
+ *  the code-owned built-in Harness Profile when no node profile is in force. */
 export function analyzeWorkflowDefinitionCatalog(
-  settings: SettingsSnapshot,
+  _settings: SettingsSnapshot,
   definition: WorkflowDefinitionV2,
 ): WorkflowDefinitionCatalogResponse {
-  return analyzeWorkflowV2Catalog(blockContractsFor(settings).analyzeValues(definition));
+  return analyzeWorkflowV2Catalog(blockContractsFor().analyzeValues(definition));
 }

@@ -64,7 +64,7 @@ export async function createTestTicket(
   // Per-ticket agent override label, set by the e2e workflow input. The
   // deployed app's agent.ts reads `agent:<kind>` labels via
   // parseAgentKindOverride to decide which adapter to spin up.
-  const envAgent = process.env.E2E_AGENT_KIND?.toLowerCase();
+  const envAgent = process.env.E2E_HARNESS_PROVIDER?.toLowerCase();
   const autoLabels =
     envAgent === "codex" || envAgent === "claude" ? [`agent:${envAgent}`] : [];
   // Strip any caller-supplied agent:* labels so the env-driven autoLabel wins

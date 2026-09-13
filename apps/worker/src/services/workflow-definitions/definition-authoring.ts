@@ -30,8 +30,8 @@ import {
   getConnectedWorkflowDefinition,
 } from "../../db/repositories/definitions/connected.js";
 import { workflowDefinitionTemplate } from "../../engine/definition/templates.js";
-import { agentRuntimeSettings } from "../settings/index.js";
 import { currentSystemHarnessProfileReference } from "../harness/index.js";
+import { defaultBuiltinHarnessProfile } from "@shared/harness";
 import {
   archiveConnectedWorkflowDefinition,
   createConnectedWorkflowDefinitionDraft,
@@ -102,8 +102,8 @@ export async function createWorkflowDefinitionFromSource(input: {
   settings: SettingsSnapshot;
 }): Promise<CreateWorkflowDefinitionResult> {
   requireWorkflowDefinitionEditor(input.actor.role);
-  const { agentKind } = agentRuntimeSettings(input.settings);
-  const profileReference = await currentSystemHarnessProfileReference(agentKind);
+  const agentKind = defaultBuiltinHarnessProfile().harness.provider;
+  const profileReference = await currentSystemHarnessProfileReference();
   const seedOptions = {
     includeReview: false,
     includeLeakReview: false,

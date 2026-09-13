@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-09
+Last-verified: 2026-09-13
 
 # AI Workflow Service Specification
 
@@ -52,8 +52,8 @@ Important boundary:
 - Spin up one isolated Vercel Sandbox per run; sandboxes never survive between runs.
 - Support multi-repository tickets — a pre-sandbox selection step chooses which repositories a run
   may edit, and the run pushes and opens PRs/MRs per changed repository.
-- Support two coding agents behind one interface — Claude Code (default) and OpenAI Codex CLI —
-  selectable globally (`AGENT_KIND`) and per ticket (`agent:codex` / `agent:claude` labels).
+- Support two coding agents behind one interface: Claude Code and OpenAI Codex CLI,
+  selected by harness profiles with per ticket `agent:codex` and `agent:claude` label overrides.
 - Support GitHub (App auth) and GitLab, including both configured simultaneously with
   mixed-provider repository selection.
 - Run the agent in phases (research/plan → implementation → optional review) with structured JSON
@@ -225,14 +225,15 @@ The v2 `[OVERRIDE]` ticket-comment convention was never implemented and is liste
 
 ## 6. Configuration
 
-All runtime config lives in environment variables validated at startup with zod via
-`@t3-oss/env-core` (`apps/worker/src/infra/runtime-env.ts`), including cross-field rules (VCS provider completeness,
-commit author+email set together, agent-kind key requirements, SSO all-or-none, Resend
-dependencies). Missing or invalid required config fails startup with a clear error. The full
-per-variable reference lives in `SETUP.md`; the groups are:
+Deployment credentials and infrastructure config live in environment variables validated at
+startup with zod via `@t3-oss/env-core` (`apps/worker/src/infra/runtime-env.ts`). Product behavior
+is stored in Settings, while provider and model are owned by harness profiles. Environment
+validation includes cross-field rules for VCS provider completeness, commit author and email,
+provider credentials, SSO, and Resend dependencies. Missing or invalid required config fails
+startup with a clear error. The full reference lives in `SETUP.md`; the groups are:
 
 - **Issue tracker:** `ISSUE_TRACKER_KIND` (`jira`), `JIRA_BASE_URL`, `JIRA_API_TOKEN`,
-  `JIRA_PROJECT_KEY`, `COLUMN_AI` / `COLUMN_AI_REVIEW` / `COLUMN_BACKLOG`, optional
+  `JIRA_PROJECT_KEY`, the three board column settings, optional
   `JIRA_BACKLOG_TRANSITION_ID` / `JIRA_AI_REVIEW_TRANSITION_ID`, `JIRA_WEBHOOK_SECRET`.
 - **VCS:** `VCS_KIND` (`github` | `gitlab`), GitHub App vars (`GITHUB_APP_ID`,
   `GITHUB_APP_PRIVATE_KEY`, `GITHUB_INSTALLATION_ID`), GitLab vars
@@ -241,22 +242,21 @@ per-variable reference lives in `SETUP.md`; the groups are:
   is still honored as a fallback.
 - **Messaging:** `CHAT_SDK_SLACK_TOKEN`, `CHAT_SDK_CHANNEL_ID`, `CHAT_SDK_BOT_NAME` (default
   `ai-workflow`), `SLACK_SIGNING_SECRET`, `SLACK_ALLOWED_USER_IDS`. (There is no `CHAT_SDK_API_KEY`.)
-- **Agent:** `AGENT_KIND` (`claude` default | `codex`), `ANTHROPIC_API_KEY`, `CLAUDE_MODEL`
-  (default `claude-opus-4-8`), `CODEX_API_KEY` / `CODEX_CHATGPT_OAUTH_TOKEN`, `CODEX_MODEL`
-  (default `gpt-5-codex`), Codex pricing feed (`CODEX_PRICING_URL`, `CODEX_PRICING_TTL_MS`),
+- **Agent:** Harness profiles own provider and model. The credentials required are those of the
+  providers your harness profiles use: `ANTHROPIC_API_KEY` for Claude profiles and
+  `CODEX_API_KEY` or `CODEX_CHATGPT_OAUTH_TOKEN` for Codex profiles. The Codex pricing feed
+  uses `CODEX_PRICING_URL` and `CODEX_PRICING_TTL_MS`, with
   `COMMIT_AUTHOR` / `COMMIT_EMAIL` (optional, no default — when unset the identity is derived from
   the GitHub App, or falls back to `ai-workflow-blazity` on GitLab).
-- **Sandbox / limits:** stored `MAX_CONCURRENT_AGENTS` (default 3), `JOB_TIMEOUT_MS` (default 30 min),
-  `ATTACHMENT_MAX_FILE_SIZE_MB` / `ATTACHMENT_MAX_TOTAL_SIZE_MB` / `ATTACHMENT_MAX_COUNT` /
-  `ATTACHMENT_DOWNLOAD_TIMEOUT_MS`. The built-in workflow keeps review and leak-review
-  blocks off; deployed definitions own their shape. Pre-PR check commands are dashboard-managed (Section 9.3),
-  not env config.
+- **Sandbox / limits:** stored capacity, job timeout, and attachment limit settings. The built-in
+  workflow keeps review and leak-review blocks off; deployed definitions own their shape. Pre-PR
+  check commands are dashboard-managed (Section 9.3), not env config.
 - **Arthur (optional):** `GENAI_ENGINE_API_KEY`, `GENAI_ENGINE_TRACE_ENDPOINT`.
 - **Database:** `DATABASE_URL` (required; Neon via Vercel Marketplace).
 - **Vercel / cron:** `VERCEL_TOKEN` / `VERCEL_TEAM_ID` / `VERCEL_PROJECT_ID` (local dev only —
   OIDC on Vercel), `CRON_SECRET`.
 - **Dashboard auth / email:** `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `DASHBOARD_ORIGIN`,
-  `DASHBOARD_AUTH_EMAIL` / `DASHBOARD_AUTH_PASSWORD` (required), `DASHBOARD_ORG_NAME` /
+  `DASHBOARD_AUTH_EMAIL` / `DASHBOARD_AUTH_PASSWORD` (required), the dashboard organization name setting /
   `DASHBOARD_ORG_SLUG`, optional SSO group (`SSO_ISSUER`, `SSO_ALLOWED_DOMAIN`, `SSO_CLIENT_ID`,
   `SSO_CLIENT_SECRET` — all or none), optional Resend group (`RESEND_API_KEY`,
   `RESEND_FROM_EMAIL`, `RESEND_WEBHOOK_SECRET`).
@@ -316,7 +316,7 @@ changes are ignored.
 
 ### 8.3 Dispatch Logic (`dispatchTicket`)
 
-1. Capacity precheck against `MAX_CONCURRENT_AGENTS`.
+1. Capacity precheck against the configured maximum concurrent agents setting.
 2. Atomic claim in the run registry — `INSERT … ON CONFLICT DO NOTHING` with a
    `claiming:{timestamp}` sentinel. Losing racers bail with `already_claimed`.
 3. Post-claim fairness re-check (the precheck isn't atomic with the claim): concurrent claimers are
@@ -678,7 +678,7 @@ and Users (invites, roles).
 - Per-user notifications (requires Jira→Slack user mapping; Slack posts to one channel today).
 - Arbitrary per-ticket model routing (only agent-kind routing via labels exists).
 - Per-ticket token/cost budget kill.
-- Complexity-aware timeouts (single `JOB_TIMEOUT_MS` today).
+- Complexity-aware timeouts (a single job timeout setting today).
 - Evaluator loop beyond the optional review phase (chunked generator/evaluator).
 - Subtickets (ticket → subtask decomposition into smaller runs).
 - Self-improvement feedback loop (shared endpoint capturing review corrections across runs).

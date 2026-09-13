@@ -38,4 +38,4 @@ The agent will see the whole description; the AC list just gets a slot at the to
 
 ## Attachments
 
-Images, text files, and binaries are downloaded into the sandbox up to the env-configured limits (`ATTACHMENT_MAX_FILE_SIZE_MB`, `ATTACHMENT_MAX_TOTAL_SIZE_MB`, `ATTACHMENT_MAX_COUNT`, `ATTACHMENT_DOWNLOAD_TIMEOUT_MS`). Defaults: per-file 25 MB, total 100 MB, max 20 files, 30s timeout. Useful for handing the agent design mocks, error screenshots, or sample CSVs.
+Images, text files, and binaries are downloaded into the sandbox up to the attachment limits configured on the Settings page. Defaults are 25 MB per file, 100 MB total, 20 files, and a 30 second timeout. Useful for handing the agent design mocks, error screenshots, or sample CSVs.

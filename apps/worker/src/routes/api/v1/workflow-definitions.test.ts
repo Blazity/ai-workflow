@@ -19,7 +19,6 @@ import {
   deployWorkflowDefinition,
   saveWorkflowDefinitionDraft,
 } from "../../../services/workflow-definitions/policy-operations.js";
-import { writeManySettings } from "../../../db/repositories/settings.js";
 
 const state = vi.hoisted(() => ({
   db: undefined as unknown,
@@ -27,9 +26,6 @@ const state = vi.hoisted(() => ({
   failValidation: false,
   env: {
     DASHBOARD_ORG_SLUG: "ai-workflow",
-    AGENT_KIND: "claude",
-    CLAUDE_MODEL: "claude-test-default",
-    CODEX_MODEL: "gpt-5-codex",
     COLUMN_AI_REVIEW: "AI Review",
     COLUMN_BACKLOG: "Backlog",
     ANTHROPIC_API_KEY: "sk-ant-test",
@@ -225,17 +221,6 @@ beforeEach(async () => {
     { id: "member_admin", organizationId: "org_aiw", userId: "user_admin", role: "admin" },
     { id: "member_member", organizationId: "org_aiw", userId: "user_member", role: "member" },
   ]);
-  await writeManySettings(db, {
-    patch: {
-      AGENT_KIND: "claude",
-      CLAUDE_MODEL: "claude-test-default",
-      CODEX_MODEL: "gpt-5-codex",
-      COLUMN_AI_REVIEW: "AI Review",
-      COLUMN_BACKLOG: "Backlog",
-    },
-    actor: "test",
-    reason: "seed workflow-definition fixture",
-  });
 });
 
 // The 0013 migration seeds one enabled definition ("Ticket workflow", id 1,
@@ -261,7 +246,7 @@ describe("GET /api/v1/workflow-definitions", () => {
         (node: { id: string }) => node.id === "planning",
       ).configuration.harnessProfile,
     ).toEqual({
-      profileId: BUILTIN_HARNESS_PROFILE_IDS.claude,
+      profileId: BUILTIN_HARNESS_PROFILE_IDS.codex,
       version: 2,
     });
     expect(body.templates.map((template: { name: string }) => template.name)).toEqual([
@@ -281,8 +266,8 @@ describe("GET /api/v1/workflow-definitions", () => {
           template.definition.schemaVersion === 2,
       ),
     ).toBe(true);
-    expect(body.options.agentKind).toBe("claude");
-    expect(body.options.defaultModel).toBe("claude-test-default");
+    expect(body.options.agentKind).toBe("codex");
+    expect(body.options.defaultModel).toBe("gpt-5.4");
     expect(body.options.blockRegistry.trigger_ticket_ai.type).toBe("trigger_ticket_ai");
     expect(body.options.blockRegistry.arthur_injection_check.availability.unavailableReason).toBeTruthy();
     expect(body.options.runBindingSchema.properties.defaultAgent.type).toBe("object");
@@ -328,12 +313,7 @@ describe("GET /api/v1/workflow-definitions", () => {
     });
   });
 
-  it("pins the installation's configured built-in profile in new authoring choices", async () => {
-    await writeManySettings(db, {
-      patch: { AGENT_KIND: "codex" },
-      actor: "test",
-      reason: "exercise configured Codex profile",
-    });
+  it("pins the code-owned default profile in new authoring choices", async () => {
     const res = await handlerFor(definitionsGet)(
       new Request("http://worker.test/"),
     );
@@ -427,7 +407,7 @@ describe("POST /api/v1/workflow-definitions", () => {
         (node: { id: string }) => node.id === "planning",
       ).configuration.harnessProfile,
     ).toEqual({
-      profileId: BUILTIN_HARNESS_PROFILE_IDS.claude,
+      profileId: BUILTIN_HARNESS_PROFILE_IDS.codex,
       version: 2,
     });
     expect(body.draft.nodes.some((n: { type: string }) => n.type === "review_agent")).toBe(

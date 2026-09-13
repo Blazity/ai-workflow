@@ -23,16 +23,18 @@ import {
 import { listConnectedHarnessProfileUsage } from "../../db/harness-profile-usage-store.js";
 import type { Db } from "../../db/types.js";
 import { ensureConnectedSystemHarnessProfiles } from "../../harness-profiles/system-seed.js";
+import { defaultBuiltinHarnessProfile } from "@shared/harness";
 
 /** The actor fields every profile operation needs, as the route knows them. */
 export type { HarnessProfileActor };
 
 /** The current built-in profile, ensuring its immutable system rows exist first. */
 export async function currentSystemHarnessProfileReference(
-  provider: Parameters<typeof getConnectedCurrentSystemHarnessProfileReference>[0],
 ) {
   await ensureConnectedSystemHarnessProfiles();
-  return getConnectedCurrentSystemHarnessProfileReference(provider);
+  return getConnectedCurrentSystemHarnessProfileReference(
+    defaultBuiltinHarnessProfile().harness.provider,
+  );
 }
 
 /** The organization's profiles, archived ones only when asked for. */

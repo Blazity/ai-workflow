@@ -22,9 +22,6 @@ vi.mock("workflow", async (importOriginal) => ({
 }));
 vi.mock("../../infra/vcs-config.js", () => ({
   env: {
-    AGENT_KIND: "codex",
-    CLAUDE_MODEL: "claude-test",
-    CODEX_MODEL: "codex-test",
     COLUMN_AI: "AI",
     COLUMN_AI_REVIEW: "AI Review",
     COLUMN_BACKLOG: "Backlog",

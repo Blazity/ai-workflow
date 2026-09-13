@@ -18,7 +18,7 @@ export function createAgentAdapter(
     case "codex":  return new CodexAgentAdapter(hydrated);
     default: {
       const _exhaustive: never = kind;
-      throw new Error(`Unknown AGENT_KIND: ${_exhaustive}`);
+      throw new Error(`Unknown agent kind: ${_exhaustive}`);
     }
   }
 }
@@ -29,7 +29,7 @@ const AGENT_LABEL_PREFIX = "agent:";
  * Parse a per-ticket agent override from issue-tracker labels. Returns the
  * AgentKind named by the first `agent:<kind>` label, or `null` if none/invalid.
  * Conflicting labels (e.g. both `agent:claude` and `agent:codex`) collapse to
- * `null` — caller falls back to the env default.
+ * `null`; the caller keeps the provider from the run's Harness Profile.
  */
 export function parseAgentKindOverride(labels: readonly string[]): AgentKind | null {
   const matches = new Set<string>();

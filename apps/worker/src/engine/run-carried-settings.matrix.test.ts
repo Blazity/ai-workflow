@@ -101,7 +101,6 @@ beforeEach(async () => {
   Object.assign(state.env, {
     JOB_TIMEOUT_MS: 1_800_000,
     MAX_CONCURRENT_AGENTS: 7,
-    AGENT_KIND: "claude",
   });
   mocks.assertActiveRunOwner.mockResolvedValue(undefined);
   mocks.findPR.mockResolvedValue(null);

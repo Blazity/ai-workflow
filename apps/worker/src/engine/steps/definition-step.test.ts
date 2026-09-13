@@ -4,9 +4,6 @@ import type { WorkflowDefinitionV2 } from "@shared/contracts";
 
 vi.mock("../../infra/vcs-config.js", () => ({
   env: {
-    AGENT_KIND: "claude",
-    CLAUDE_MODEL: "claude-test",
-    CODEX_MODEL: "codex-test",
     ANTHROPIC_API_KEY: "sk-ant-test",
     CODEX_API_KEY: "sk-codex-test",
     GITHUB_APP_ID: 1,
@@ -62,31 +59,18 @@ import { defaultWorkflowDefinitionV2 } from "../definition/default.js";
 import { testSettingsSnapshot } from "../../test-support/settings.js";
 
 /**
- * The settings this run started under. These cases move the agent defaults and
- * leave the env mock to credentials and provider wiring.
+ * The settings this run started under. Provider and model come from Harness
+ * Profiles, while the environment mock holds credentials and provider wiring.
  */
-let settings = testSettingsSnapshot();
+const settings = testSettingsSnapshot();
 
 async function setEnv(partial: Record<string, unknown>) {
   const mod = (await import("../../infra/vcs-config.js")) as unknown as { env: Record<string, unknown> };
   mod.env = { ...mod.env, ...partial };
-  const settingKeys = [
-    "AGENT_KIND",
-    "CLAUDE_MODEL",
-    "CODEX_MODEL",
-  ] as const;
-  const moved = Object.fromEntries(
-    settingKeys.filter((key) => key in partial).map((key) => [key, partial[key]]),
-  );
-  settings = testSettingsSnapshot({ ...settings, ...moved });
 }
 
 async function resetEnv() {
-  settings = testSettingsSnapshot();
   await setEnv({
-    AGENT_KIND: "claude",
-    CLAUDE_MODEL: "claude-test",
-    CODEX_MODEL: "codex-test",
     ANTHROPIC_API_KEY: "sk-ant-test",
     CODEX_API_KEY: "sk-codex-test",
     GITHUB_APP_ID: 1,
@@ -188,8 +172,7 @@ describe("loadWorkflowDefinitionFor", () => {
     expect(plan).toMatchObject({ version: null, definitionId: null, reviewEnabled: false });
   });
 
-  it("uses the configured Codex provider for the built-in fallback", async () => {
-    await setEnv({ AGENT_KIND: "codex" });
+  it("uses the code-owned default Harness Profile for the built-in fallback", async () => {
     mockGetEnabled.mockResolvedValue({ definition: { id: 1 }, current: null });
 
     const plan = await loadWorkflowDefinitionFor(settings, "trigger_ticket_ai");

@@ -11,9 +11,6 @@ vi.mock("../../infra/vcs-config.js", () => ({
     MCP_READ_RATE_LIMIT_PER_MINUTE: 120,
     MCP_MUTATION_RATE_LIMIT_PER_MINUTE: 20,
     MCP_AUDIT_RETENTION_DAYS: 365,
-    AGENT_KIND: "claude",
-    CLAUDE_MODEL: "claude-opus-4-8",
-    CODEX_MODEL: "gpt-5.4",
   },
 }));
 

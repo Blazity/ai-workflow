@@ -1,11 +1,11 @@
 ---
 name: init-agent
-description: Configure or rotate the agent runtime (Claude or Codex) for the AI Workflow workflow. Branches on runtime choice and emits a single paste-template for the chosen kind. Use for "set up claude", "set up codex", "rotate anthropic key", "switch agent to codex", "configure agent runtime".
+description: Configure or rotate provider credentials used by AI Workflow harness profiles. Emits a paste-template for the providers those profiles use. Use for "set up claude", "set up codex", "rotate anthropic key", or "configure agent credentials".
 ---
 
-# Initialize Agent Runtime
+# Initialize Agent Credentials
 
-Branch-on-choice skill. Asks **Claude or Codex**, then emits a single paste-template for the chosen runtime. Cross-field rule in `env.ts` (`AGENT_KIND=claude` requires `ANTHROPIC_API_KEY`; `AGENT_KIND=codex` requires `CODEX_API_KEY` or `CODEX_CHATGPT_OAUTH_TOKEN`) is enforced by construction.
+Harness Profiles own the provider and model. This skill asks which providers the deployment's harness profiles use, then emits credentials only. The credentials required are those of the providers your harness profiles use: an Anthropic key for Claude profiles, and a Codex API key or OAuth token for Codex profiles.
 
 > **Canonical reference:** [SETUP.md section 2.4](../../../SETUP.md#24-agent-runtime) holds the facts and constraints for the agent runtime. This skill is the procedure; when the two disagree, SETUP.md wins and this skill gets updated.
 >
@@ -22,13 +22,13 @@ for the full first-time setup.
 
 Halt.
 
-## Step 1 — Pick runtime
+## Step 1: Identify profile providers
 
-Ask: *"Claude or Codex?"*
+Ask: *"Do your harness profiles use Claude, Codex, or both?"*
 
-If switching from a previously-configured runtime, the user should also remove the old runtime's keys from Vercel. Print a one-line warning.
+Provider and model changes belong on the Harness Profiles page. If no profile uses a previously configured provider, the user should remove that provider's credentials from Vercel. Print a one-line warning.
 
-## Step 2 — Emit paste-template
+## Step 2: Emit paste-template
 
 ### Claude branch
 
@@ -36,18 +36,11 @@ Walk the user through https://console.anthropic.com/settings/keys to create an A
 
 Collect:
 - `ANTHROPIC_API_KEY` (starts with `sk-ant-`)
-- `CLAUDE_MODEL` (default `claude-opus-4-8`; only override if requested)
 
 Emit:
 
 ```
-AGENT_KIND=claude
 ANTHROPIC_API_KEY=<value>
-```
-
-If the user asked for a non-default model, also append:
-```
-CLAUDE_MODEL=<value>
 ```
 
 ### Codex branch (default API key, OAuth alternative)
@@ -56,26 +49,21 @@ Walk the user through https://platform.openai.com/api-keys to create an API key.
 
 Collect:
 - `CODEX_API_KEY`
-- `CODEX_MODEL` (default `gpt-5-codex`; only override if requested)
 
 Emit:
 
 ```
-AGENT_KIND=codex
 CODEX_API_KEY=<value>
 ```
 
-If non-default model:
-```
-CODEX_MODEL=<value>
-```
+For deployments whose profiles use both providers, emit both credential lines. The user can choose the OAuth alternative instead of the Codex API key.
 
-## Step 3 — Done
+## Step 3: Done
 
-Tell the user to paste into Vercel → Project Settings → Environment Variables (all three environments), save, and reply when done. No verification — `init-env`'s end-of-flow validator catches missing/malformed values.
+Tell the user to paste into Vercel Project Settings, Environment Variables for all three environments, save, and reply when done. No verification. The `init-env` end-of-flow validator catches missing or malformed values.
 
 ## Don'ts
 
 - **Don't emit both API key and OAuth token.** Pick one. The runbook explains the swap if the user wants OAuth.
 - **Don't print the key after collecting it.** Reference by name only.
-- **Don't change `CLAUDE_MODEL` / `CODEX_MODEL` defaults without being asked.** They're set in `env.ts`; only emit them when the user requests an override.
+- **Don't emit provider or model settings.** Harness Profiles own both.

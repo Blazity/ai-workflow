@@ -1,0 +1,6 @@
+DELETE FROM "settings"
+WHERE "key" IN (
+  'AGENT_KIND',
+  'CLAUDE_MODEL',
+  'CODEX_MODEL'
+);

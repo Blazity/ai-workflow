@@ -4,7 +4,7 @@
 
 ## Why "Issue updated" only
 
-The handler dispatches when the ticket lands in `COLUMN_AI` and cancels in-flight runs when it leaves. Both cases are detected on `jira:issue_updated`. Subscribing to `created`, `deleted`, etc. just adds noise that gets filtered away — the handler ignores anything without a project-key match or without an issue key.
+The handler dispatches when the ticket lands in the configured AI status and cancels in-flight runs when it leaves. Both cases are detected on `jira:issue_updated`. Subscribing to `created`, `deleted`, and other events just adds noise that gets filtered away. The handler ignores anything without a project-key match or without an issue key.
 
 ### Optional: instant create / comment dispatch
 
@@ -40,7 +40,7 @@ Save.
 
 ## Local testing without exposing your laptop
 
-Use `vercel dev` + a tunnel like `cloudflared tunnel --url http://localhost:3000` or `ngrok http 3000`, then point the Jira webhook URL at the public tunnel. Or skip webhooks locally — the cron poller picks tickets up within ~1 minute (`POLL_INTERVAL_MS`).
+Use `vercel dev` plus a tunnel like `cloudflared tunnel --url http://localhost:3000` or `ngrok http 3000`, then point the Jira webhook URL at the public tunnel. Or skip webhooks locally. The cron poller cadence is configured in `apps/worker/vercel.json`.
 
 ## Verify
 

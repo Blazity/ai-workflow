@@ -61,7 +61,6 @@ const WAVE_ACCESSORS = [
   "maxConcurrentAgents",
   "dashboardOrganizationSettings",
   "mcpSettings",
-  "agentRuntimeSettings",
 ];
 
 function sourceFiles(): string[] {

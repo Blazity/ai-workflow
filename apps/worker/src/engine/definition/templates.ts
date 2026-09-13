@@ -13,6 +13,7 @@ import {
   defaultWorkflowDefinitionV2,
   type V2BlockSpec,
 } from "./default.js";
+import { defaultBuiltinHarnessProfile } from "@shared/harness";
 
 const DEFAULT_WORKFLOW_TEMPLATE_ID = "ticket-workflow";
 
@@ -1493,7 +1494,7 @@ function postPrAutofixDefinition(
 export function workflowDefinitionTemplates({
   includeReview,
   includeLeakReview = false,
-  provider = "claude",
+  provider = defaultBuiltinHarnessProfile().harness.provider,
   profileReference,
 }: TemplateOptions): WorkflowDefinitionTemplate[] {
   return [

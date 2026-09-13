@@ -108,6 +108,8 @@ describe("settings.list", () => {
     const rows = settingsOf(result);
 
     expect(result.isError).not.toBe(true);
+    expect(rows).toHaveLength(26);
+    expect(rows.some((row) => row.group === "harness")).toBe(false);
     const concurrency = rows.find((row) => row.key === "MAX_CONCURRENT_AGENTS");
     expect(concurrency).toMatchObject({
       value: 3,

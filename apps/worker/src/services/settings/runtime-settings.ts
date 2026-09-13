@@ -136,19 +136,6 @@ export function configuredSecretValues(): string[] {
   ].filter((secret): secret is string => typeof secret === "string" && secret.length > 0);
 }
 
-/** Which coding agent a default workflow uses. */
-export function agentRuntimeSettings(
-  settings: SettingsSnapshot,
-): AgentRuntimeSettings {
-  return {
-    agentKind: settings.AGENT_KIND,
-  };
-}
-
-interface AgentRuntimeSettings {
-  agentKind: SettingsSnapshot["AGENT_KIND"];
-}
-
 /**
  * The evaluation trace backend. Both halves are optional and a caller that has
  * only one of them cannot call anything, so they travel together.

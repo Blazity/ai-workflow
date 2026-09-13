@@ -20,11 +20,8 @@ vi.mock("../../engine/definition/block-contract-environment.js", () => ({
 
 vi.mock("../../infra/vcs-config.js", () => ({
   env: {
-    AGENT_KIND: "claude",
-    CLAUDE_MODEL: "claude-opus-4-8",
-    CODEX_MODEL: "gpt-5.4",
-    COLUMN_AI_REVIEW: "AI Review",
-    COLUMN_BACKLOG: "Backlog",
+    ANTHROPIC_API_KEY: "sk-ant-test",
+    CODEX_API_KEY: "sk-codex-test",
   },
 }));
 
@@ -52,7 +49,7 @@ describe("block contracts per request", () => {
   it("builds the resolver once when validation, available values and models are all consulted", () => {
     mocks.contextFromEnv.mockClear();
 
-    const contracts = blockContractsFor(testSettingsSnapshot());
+    const contracts = blockContractsFor();
     validateWorkflowDefinitionCandidate(
       definition,
       contracts.resolveContract,
@@ -74,14 +71,14 @@ describe("block contracts per request", () => {
 
   it("reads the environment again for the next request", () => {
     mocks.contextFromEnv.mockClear();
-    blockContractsFor(testSettingsSnapshot()).blockRegistry();
-    blockContractsFor(testSettingsSnapshot()).blockRegistry();
+    blockContractsFor().blockRegistry();
+    blockContractsFor().blockRegistry();
     expect(mocks.contextFromEnv).toHaveBeenCalledTimes(2);
   });
 
   it("resolves the editor's block table only when a request reads it", () => {
     mocks.contextFromEnv.mockClear();
-    const contracts = blockContractsFor(testSettingsSnapshot());
+    const contracts = blockContractsFor();
     expect(contracts.blockRegistry()).toBe(contracts.blockRegistry());
     expect(mocks.contextFromEnv).toHaveBeenCalledTimes(1);
   });

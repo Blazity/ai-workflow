@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { HarnessProfileManifest } from "@shared/contracts";
+import { BUILTIN_HARNESS_PROFILE_MANIFESTS } from "@shared/harness";
 
 const state = vi.hoisted(() => ({
   env: {
@@ -13,9 +15,6 @@ const state = vi.hoisted(() => ({
     CHAT_SDK_CHANNEL_ID: undefined as string | undefined,
     GENAI_ENGINE_API_KEY: undefined as string | undefined,
     GENAI_ENGINE_TRACE_ENDPOINT: undefined as string | undefined,
-    AGENT_KIND: "claude" as "claude" | "codex",
-    CLAUDE_MODEL: "claude-opus-4-8",
-    CODEX_MODEL: "gpt-5.4",
     COLUMN_AI_REVIEW: "AI Review",
     COLUMN_BACKLOG: "Backlog",
   },
@@ -37,9 +36,6 @@ beforeEach(() => {
   state.env.CHAT_SDK_CHANNEL_ID = undefined;
   state.env.GENAI_ENGINE_API_KEY = undefined;
   state.env.GENAI_ENGINE_TRACE_ENDPOINT = undefined;
-  state.env.AGENT_KIND = "claude";
-  state.env.CLAUDE_MODEL = "claude-opus-4-8";
-  state.env.CODEX_MODEL = "gpt-5.4";
 });
 
 describe("fetchAvailableModels", () => {
@@ -132,6 +128,8 @@ describe("fetchTicketStatuses", () => {
 async function editorOptions(
   models: { claude: string[]; codex: string[] },
   ticketStatuses: Array<{ id: string; name: string }> = [],
+  profile: Pick<HarnessProfileManifest, "harness" | "model"> =
+    BUILTIN_HARNESS_PROFILE_MANIFESTS["builtin-codex"],
 ) {
   const { buildWorkflowEditorOptions } = await import("./models.js");
   const { buildWorkflowBlockRegistry } =
@@ -139,29 +137,23 @@ async function editorOptions(
   const { workflowBlockRegistryContext } =
     await import("./block-contract-environment.js");
   const { testSettingsSnapshot } = await import("../../test-support/settings.js");
-  const settings = testSettingsSnapshot({
-    AGENT_KIND: state.env.AGENT_KIND,
-    CLAUDE_MODEL: state.env.CLAUDE_MODEL,
-    CODEX_MODEL: state.env.CODEX_MODEL,
-  });
+  const settings = testSettingsSnapshot();
   return buildWorkflowEditorOptions(
     settings,
     models,
     ticketStatuses,
-    buildWorkflowBlockRegistry(workflowBlockRegistryContext(settings)),
+    buildWorkflowBlockRegistry(workflowBlockRegistryContext(profile)),
   );
 }
 
 describe("buildWorkflowEditorOptions", () => {
   it("dedupes the default model already present in the active kind list", async () => {
-    state.env.AGENT_KIND = "claude";
-    state.env.CLAUDE_MODEL = "claude-opus-4-8";
     const options = await editorOptions({
       claude: ["claude-opus-4-8", "claude-sonnet-5"],
       codex: ["gpt-5"],
     });
-    expect(options.agentKind).toBe("claude");
-    expect(options.defaultModel).toBe("claude-opus-4-8");
+    expect(options.agentKind).toBe("codex");
+    expect(options.defaultModel).toBe("gpt-5.4");
     expect(options.models.claude).toEqual(["claude-opus-4-8", "claude-sonnet-5"]);
     expect(options.models.codex).toEqual(["gpt-5.4", "gpt-5"]);
     expect(options.ticketStatusTargets).toEqual([
@@ -186,22 +178,7 @@ describe("buildWorkflowEditorOptions", () => {
     ]);
   });
 
-  it("keeps a configured execution default without exposing it outside policy", async () => {
-    state.env.AGENT_KIND = "codex";
-    state.env.CODEX_MODEL = "gpt-5-codex-high";
-    const options = await editorOptions({
-      claude: [],
-      codex: ["gpt-5-codex", "gpt-5"],
-    });
-    expect(options.agentKind).toBe("codex");
-    expect(options.defaultModel).toBe("gpt-5-codex-high");
-    expect(options.models.codex).toEqual(["gpt-5"]);
-  });
-
   it("exposes per-provider default models and prepends each to its own list without duplicates", async () => {
-    state.env.AGENT_KIND = "claude";
-    state.env.CLAUDE_MODEL = "claude-opus-4-8";
-    state.env.CODEX_MODEL = "gpt-5.4";
     const options = await editorOptions({
       claude: ["claude-opus-4-8", "claude-sonnet-5"],
       codex: ["gpt-5.4", "gpt-5"],
@@ -232,7 +209,7 @@ describe("buildWorkflowEditorOptions", () => {
   });
 
   it("exposes the complete environment-aware block registry and fixed run schema", async () => {
-    state.env.ANTHROPIC_API_KEY = "sk-ant";
+    state.env.CODEX_API_KEY = "sk-openai";
     state.env.GITHUB_APP_ID = 1;
     state.env.GITHUB_APP_PRIVATE_KEY = "key";
     state.env.GITHUB_INSTALLATION_ID = 2;
@@ -262,7 +239,6 @@ describe("buildWorkflowEditorOptions", () => {
   });
 
   it("keeps OAuth-only Codex agents available but disables in-process Call LLM", async () => {
-    state.env.AGENT_KIND = "codex";
     state.env.CODEX_CHATGPT_OAUTH_TOKEN = "oauth-token";
 
     const options = await editorOptions({ claude: [], codex: [] });
@@ -282,10 +258,13 @@ describe("buildWorkflowEditorOptions", () => {
   });
 
   it("keeps Claude Code OAuth agents available but disables in-process Call LLM", async () => {
-    state.env.AGENT_KIND = "claude";
     state.env.ANTHROPIC_API_KEY = "sk-ant-oat-test";
 
-    const options = await editorOptions({ claude: [], codex: [] });
+    const options = await editorOptions(
+      { claude: [], codex: [] },
+      [],
+      BUILTIN_HARNESS_PROFILE_MANIFESTS["builtin-claude"],
+    );
 
     expect(options.blockRegistry.planning_agent.availability).toEqual({
       available: true,

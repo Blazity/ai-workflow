@@ -194,21 +194,21 @@
         "severity": "error",
         "nodeId": "planning",
         "path": "/nodes/2/configuration",
-        "message": "Block \"planning\" (planning_agent) is unavailable: Claude credentials are not configured."
+        "message": "Block \"planning\" (planning_agent) is unavailable: Codex credentials are not configured."
       },
       {
         "code": "deployment",
         "severity": "error",
         "nodeId": "implementation",
         "path": "/nodes/3/configuration",
-        "message": "Block \"implementation\" (implementation_agent) is unavailable: Claude credentials are not configured."
+        "message": "Block \"implementation\" (implementation_agent) is unavailable: Codex credentials are not configured."
       },
       {
         "code": "deployment",
         "severity": "error",
         "nodeId": "review",
         "path": "/nodes/4/configuration",
-        "message": "Block \"review\" (review_agent) is unavailable: Claude credentials are not configured."
+        "message": "Block \"review\" (review_agent) is unavailable: Codex credentials are not configured."
       },
       {
         "code": "deployment",

@@ -23,8 +23,8 @@ import {
   getConnectedWorkflowDefinition,
   listConnectedWorkflowDefinitions,
 } from "../../db/repositories/definitions/connected.js";
-import { agentRuntimeSettings } from "../settings/index.js";
 import { currentSystemHarnessProfileReference } from "../harness/index.js";
+import { defaultBuiltinHarnessProfile } from "@shared/harness";
 import {
   readConnectedDeployedWorkflowDefinitionVersion,
   readConnectedWorkflowDefinitionVersionRows,
@@ -56,12 +56,12 @@ export interface WorkflowDefinitionDetail {
 export async function readWorkflowDefinitionsOverview(
   settings: SettingsSnapshot,
 ): Promise<WorkflowDefinitionsOverview> {
-  const { agentKind } = agentRuntimeSettings(settings);
+  const agentKind = defaultBuiltinHarnessProfile().harness.provider;
   const storedDefinitions = await listConnectedWorkflowDefinitions();
   const [models, ticketStatuses, profileReference, deployments] = await Promise.all([
     fetchAvailableModels(),
     fetchTicketStatuses(),
-    currentSystemHarnessProfileReference(agentKind),
+    currentSystemHarnessProfileReference(),
     Promise.all(storedDefinitions.map((row) =>
       row.deployedVersion === null
         ? null
@@ -89,7 +89,7 @@ export async function readWorkflowDefinitionsOverview(
       settings,
       models,
       ticketStatuses,
-      blockContractsFor(settings).blockRegistry(),
+      blockContractsFor().blockRegistry(),
     ),
   };
 }

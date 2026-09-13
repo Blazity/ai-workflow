@@ -7,10 +7,10 @@
  * a declared one.
  */
 import type {
-  SettingsSnapshot,
+  HarnessProfileManifest,
   WorkflowBlockContractResolver,
 } from "@shared/contracts";
-import { resolveModelDefaults } from "@shared/harness";
+import { defaultBuiltinHarnessProfile } from "@shared/harness";
 import { resolveVcsBotLogin } from "../../adapters/vcs/vcs-bot-identity.js";
 import { env } from "../../infra/vcs-config.js";
 import {
@@ -22,10 +22,8 @@ import {
  * The deployment as its credentials describe it: which agents, LLMs, VCS
  * providers and integrations this process can actually reach.
  *
- * Credentials only. The agent defaults that used to be read here beside them
- * (`AGENT_KIND`, `CLAUDE_MODEL`, `CODEX_MODEL`) are operator-editable settings
- * and come from a snapshot, so the two halves are separated: one asks what the
- * deployment is wired to, the other asks what the operator decided.
+ * Credentials only. Provider and model belong to a Harness Profile and are
+ * added by `workflowBlockRegistryContext` below.
  */
 function deploymentCapabilities(): Omit<WorkflowBlockRegistryContext, "defaultAgent"> {
   const vcsProviders: WorkflowBlockRegistryContext["vcsProviders"] = [];
@@ -61,57 +59,29 @@ function deploymentCapabilities(): Omit<WorkflowBlockRegistryContext, "defaultAg
 }
 
 /**
- * The default model per agent kind, for a run holding a settings snapshot.
+ * The deployment as one caller sees it: configured credentials plus the
+ * provider and model of the Harness Profile in force.
  *
- * The registry stores both model keys as "unset means the catalog's default",
- * exactly as the environment schema left them optional, so the same resolver
- * the environment read went through still runs here: an empty string or a null
- * must reach `resolveModelDefaults` as an ABSENT key, not as a falsy value it
- * would then treat as a model name.
- *
- * One function rather than the spread written out twice. The two sites that
- * needed it (the workflow body's own defaults and the block contract context)
- * are the run's two answers to "which model does this deployment default to",
- * and two copies of the spread is exactly how those two answers drift apart.
- */
-export function runModelDefaults(
-  settings: SettingsSnapshot,
-): ReturnType<typeof resolveModelDefaults> {
-  return resolveModelDefaults({
-    ...(settings.CLAUDE_MODEL ? { claude: settings.CLAUDE_MODEL } : {}),
-    ...(settings.CODEX_MODEL ? { codex: settings.CODEX_MODEL } : {}),
-  });
-}
-
-/**
- * The deployment as one caller sees it: the credentials it is wired to, plus
- * the agent defaults the given settings decided.
- *
- * One function for every caller, a run and an editor request alike. There used
- * to be two, a zero-argument form that read the defaults from the environment
- * and a run form that took the snapshot, and they answered differently on a
- * deployment whose operator had changed the default agent: the editor's block
- * table showed the variable's value and the run used the stored one. A run
- * passes the snapshot its run-start step froze, so it still resolves every
- * block contract against one answer for its whole life; an entry point passes
- * the snapshot it loaded.
+ * A caller resolving a specific node passes its resolved profile. Definition
+ * authoring and other callers without a node use the one code-owned built-in
+ * default profile selected by `@shared/harness`.
  */
 export function workflowBlockRegistryContext(
-  settings: SettingsSnapshot,
+  profile: Pick<HarnessProfileManifest, "harness" | "model"> =
+    defaultBuiltinHarnessProfile(),
 ): WorkflowBlockRegistryContext {
-  const configuredModels = runModelDefaults(settings);
   return {
     ...deploymentCapabilities(),
     defaultAgent: {
-      provider: settings.AGENT_KIND,
-      model: configuredModels[settings.AGENT_KIND],
+      provider: profile.harness.provider,
+      model: profile.model.id,
     },
   };
 }
 
-/** The resolver for the deployment as the given settings describe it. */
+/** The resolver for the deployment and optional profile described above. */
 export function workflowBlockContractResolver(
-  settings: SettingsSnapshot,
+  profile?: Pick<HarnessProfileManifest, "harness" | "model">,
 ): WorkflowBlockContractResolver {
-  return createWorkflowBlockContractResolver(workflowBlockRegistryContext(settings));
+  return createWorkflowBlockContractResolver(workflowBlockRegistryContext(profile));
 }

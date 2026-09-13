@@ -16,10 +16,10 @@ type BlocksListData = {
 // editor read binds on every load -- so it is read fresh per call rather than
 // cached. A provider that comes online mid-process (a rotated token, a newly
 // configured Slack channel) is then visible on the very next call instead of
-// waiting for a restart. The agent defaults come from the snapshot the
-// transport loaded for this call, not from the process environment.
-function buildRegistry(deps: McpToolDependencies): Record<string, WorkflowBlockContract> {
-  return blockContractsFor(deps.settings).blockRegistry();
+// waiting for a restart. The agent default comes from the built-in Harness
+// Profile because this catalog call has no run-specific profile.
+function buildRegistry(_deps: McpToolDependencies): Record<string, WorkflowBlockContract> {
+  return blockContractsFor().blockRegistry();
 }
 
 export function registerBlockTools(server: McpServer, deps: McpToolDependencies): void {

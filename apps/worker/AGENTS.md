@@ -64,7 +64,7 @@ runtime in `src/engine/definition/`, the authoring and drift-gate half in
 ## Settings
 
 Product-behaviour switches (limits, feature flags, MCP bounds, board column
-names, harness defaults) are rows in the `settings` table, described once in
+names) are rows in the `settings` table, described once in
 `packages/contracts/settings-registry.ts` and changed through
 `PATCH /api/v1/settings` by an owner or admin, with every change recorded in
 `settings_versions` with the actor and a reason.

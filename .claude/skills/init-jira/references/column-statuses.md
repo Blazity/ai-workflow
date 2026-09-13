@@ -3,20 +3,20 @@
 AI Workflow polls Jira with this JQL every minute:
 
 ```jql
-project = "$JIRA_PROJECT_KEY" AND status = "$COLUMN_AI"
+project = "$JIRA_PROJECT_KEY" AND status = "<configured AI status>"
 ```
 
-That means **`COLUMN_AI`, `COLUMN_AI_REVIEW`, and `COLUMN_BACKLOG` must be Jira *status* names, exact case-insensitive match — not just board column labels.** A board column whose underlying status differs will silently never match.
+That means **the AI, AI Review, and Backlog values on the Settings page must be Jira status names, with an exact case-insensitive match, not just board column labels.** A board column whose underlying status differs will silently never match.
 
 ## Defaults
 
-| Env var | Status name | Purpose |
+| Setting | Status name | Purpose |
 |---|---|---|
-| `COLUMN_AI` | `AI` | Tickets in this status get picked up by the agent |
-| `COLUMN_AI_REVIEW` | `AI Review` | Tickets the agent has finished and pushed a PR for |
-| `COLUMN_BACKLOG` | `Backlog` | Where the agent parks tickets needing clarification |
+| AI column setting | `AI` | Tickets in this status get picked up by the agent |
+| AI Review column setting | `AI Review` | Tickets the agent has finished and pushed a PR for |
+| Backlog column setting | `Backlog` | Where the agent parks tickets needing clarification |
 
-You can rename these — just keep Vercel env in sync.
+You can rename these. Keep the Settings page in sync with Jira.
 
 ## Create or rename the three statuses
 
@@ -45,4 +45,4 @@ curl -H "Authorization: Bearer $JIRA_API_TOKEN" \
   jq '.[].statuses[].name'
 ```
 
-Output must include the exact strings used in `COLUMN_AI` / `COLUMN_AI_REVIEW` / `COLUMN_BACKLOG` (case-insensitive). Trailing spaces in either side will silently break JQL — strip them.
+Output must include the exact strings saved in the three board column settings, ignoring case. Trailing spaces in either side will silently break JQL, so strip them.

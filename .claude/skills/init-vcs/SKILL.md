@@ -37,7 +37,7 @@ GitHub auth uses a GitHub App (the legacy `GITHUB_TOKEN` PAT flow was removed; s
 - `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` (base64), `GITHUB_INSTALLATION_ID`
 - `GITHUB_OWNER` (org or user)
 - `GITHUB_REPO` (just the repo name)
-- `GITHUB_BASE_BRANCH` (default `main`)
+- The default branch, saved in the repository profile
 - `GITHUB_WEBHOOK_SECRET` (`openssl rand -hex 32`)
 
 Emit (paste into Vercel → Project Settings → Environment Variables, all three environments):
@@ -49,7 +49,6 @@ GITHUB_APP_PRIVATE_KEY=<base64 PEM>
 GITHUB_INSTALLATION_ID=<value>
 GITHUB_OWNER=<value>
 GITHUB_REPO=<value>
-GITHUB_BASE_BRANCH=main
 GITHUB_WEBHOOK_SECRET=<value>
 ```
 
@@ -61,7 +60,7 @@ Walk the user through `references/gitlab-pat.md` to mint a token. Then collect:
 
 - `GITLAB_TOKEN` (`glpat-...`)
 - `GITLAB_PROJECT_ID`, the namespace and project path, for example `your-group/your-repo`. A numeric project id does not work: the sandbox clone URL is built from the path (`apps/worker/src/infra/vcs-urls.ts`). See [SETUP.md section 2.2](../../../SETUP.md#22-github-or-gitlab).
-- `GITLAB_BASE_BRANCH` (default `main`)
+- The default branch, saved in the repository profile
 - `GITLAB_HOST`, only for a self-hosted instance. It defaults to `https://gitlab.com` (`apps/worker/src/infra/runtime-env.ts`).
 
 Emit:
@@ -70,7 +69,6 @@ Emit:
 VCS_KIND=gitlab
 GITLAB_TOKEN=<value>
 GITLAB_PROJECT_ID=<value>
-GITLAB_BASE_BRANCH=main
 ```
 
 If self-hosted, append:
