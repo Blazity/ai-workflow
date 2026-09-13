@@ -16,7 +16,7 @@ test("the read forwards only the key parameter, and only when it is a key", asyn
   );
   await handleSettingsGet(
     new Request(
-      "https://dashboard.test/api/settings?key=catalog.activated&unsafe=1",
+      "https://dashboard.test/api/settings?key=MAX_CONCURRENT_AGENTS&unsafe=1",
     ),
     proxy,
   );
@@ -27,7 +27,7 @@ test("the read forwards only the key parameter, and only when it is a key", asyn
 
   assert.deepEqual(paths, [
     "/api/v1/settings",
-    "/api/v1/settings?key=catalog.activated",
+    "/api/v1/settings?key=MAX_CONCURRENT_AGENTS",
     "/api/v1/settings",
   ]);
 });

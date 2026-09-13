@@ -488,11 +488,7 @@ describe("cron clarification recovery ordering", () => {
     const response = await request();
 
     expect(response.status).toBe(200);
-    expect(mocks.createScheduleDispatchDeps).toHaveBeenCalledWith(
-      {},
-      1,
-      expect.objectContaining({ MAX_CONCURRENT_AGENTS: 1 }),
-    );
+    expect(mocks.createScheduleDispatchDeps).toHaveBeenCalledWith({}, 1);
     expect(mocks.runScheduleTriggerPass).toHaveBeenCalledWith({
       kind: "schedule-deps",
     });

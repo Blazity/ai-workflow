@@ -32,10 +32,6 @@ test("settingLabel converts JOB_TIMEOUT_MS to Job timeout ms", () => {
   assert.equal(settingLabel("JOB_TIMEOUT_MS"), "Job timeout ms");
 });
 
-test("settingLabel converts catalog.activated to Catalog activated", () => {
-  assert.equal(settingLabel("catalog.activated"), "Catalog activated");
-});
-
 test("settingLabel converts V2_MAX_BLOCK_CONCURRENCY to V2 max block concurrency", () => {
   assert.equal(
     settingLabel("V2_MAX_BLOCK_CONCURRENCY"),
@@ -43,8 +39,8 @@ test("settingLabel converts V2_MAX_BLOCK_CONCURRENCY to V2 max block concurrency
   );
 });
 
-test("settingLabel converts GITHUB_BASE_BRANCH to GitHub base branch", () => {
-  assert.equal(settingLabel("GITHUB_BASE_BRANCH"), "GitHub base branch");
+test("settingLabel converts GITHUB_BOT_LOGIN to GitHub bot login", () => {
+  assert.equal(settingLabel("GITHUB_BOT_LOGIN"), "GitHub bot login");
 });
 
 test("settingLabel converts COLUMN_AI to Column AI", () => {

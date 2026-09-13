@@ -8,6 +8,11 @@ These probes ran against production commit
 `ai-workflow-p5pt0i5qf`. A verdict records only the evidence observed for that
 probe. Delivery state does not determine a verdict.
 
+Settings stage S1 uses the observations below as deletion evidence. The saved
+definition and activation probes showed that their registry keys did not own
+the behavior, so S1 removes those keys and migration 0063 removes their stored
+rows. The rows below remain the production record observed before that change.
+
 ## Matrix
 
 | Probe | Key | Value set and restored, UTC | Observation | Verdict | Finding when not PASS |
@@ -37,6 +42,6 @@ window.
 On the DCR token used for these probes, MCP `settings.set` and
 `settings.reset` both returned `INSUFFICIENT_SCOPE`. Settings were therefore
 written through the dashboard `PATCH /api/settings` route. That route has no
-reset operation, so `ENABLE_REVIEW_PHASE`, `MCP_MAX_RESULT_BYTES`, and
-`MCP_READ_RATE_LIMIT_PER_MINUTE` retain stored rows whose values equal their
-registry defaults.
+reset operation, so at the time of the probe those three keys retained stored
+rows whose values equaled their registry defaults. S1 migration 0063 removes
+the obsolete saved-definition-shape row; the two surviving MCP rows remain.

@@ -56,7 +56,7 @@ export interface WorkflowDefinitionDetail {
 export async function readWorkflowDefinitionsOverview(
   settings: SettingsSnapshot,
 ): Promise<WorkflowDefinitionsOverview> {
-  const { agentKind, includeReview, includeLeakReview } = agentRuntimeSettings(settings);
+  const { agentKind } = agentRuntimeSettings(settings);
   const storedDefinitions = await listConnectedWorkflowDefinitions();
   const [models, ticketStatuses, profileReference, deployments] = await Promise.all([
     fetchAvailableModels(),
@@ -76,8 +76,8 @@ export async function readWorkflowDefinitionsOverview(
         })
       : row);
   const seedOptions = {
-    includeReview,
-    includeLeakReview,
+    includeReview: false,
+    includeLeakReview: false,
     provider: agentKind,
     profileReference,
   };

@@ -1,6 +1,5 @@
 import { start } from "workflow/api";
 import type {
-  SettingsSnapshot,
   VcsProviderKind,
   WorkflowBlockType,
   WorkflowDefinition,
@@ -34,7 +33,7 @@ import {
   getEnabledWorkflowDefinitionForTrigger,
 } from "../../engine/definition-trigger-routing.js";
 import { createAdapters } from "../../engine/support/adapters.js";
-import { claimSubjectRun, envTriggerRateLimitDefault, triggerRateLimitNodes } from "./dispatch.js";
+import { claimSubjectRun, triggerRateLimitNodes } from "./dispatch.js";
 import { recordIngestionFailure } from "./ingestion-diagnostic.js";
 import { logger } from "../../infra/logger.js";
 import {
@@ -103,7 +102,6 @@ export interface DispatchTriggerDeps {
   db?: Db;
   runRegistry: RunRegistryAdapter;
   maxConcurrentAgents: number;
-  settings?: SettingsSnapshot;
   /** The repository catalog as the entry point read it: one load per HTTP
    *  request or cron tick, so every candidate event of a delivery is judged
    *  against the same enabled list. */
@@ -550,12 +548,6 @@ async function prTriggerRateLimited(
   );
   const limit = resolveTriggerRateLimitForType(
     triggerRateLimitNodes(runnableDefinitionOf(pinned), accepted.triggerType),
-    envTriggerRateLimitDefault({
-      TRIGGER_RATE_LIMIT_MAX:
-        deps.settings?.TRIGGER_RATE_LIMIT_MAX ?? undefined,
-      TRIGGER_RATE_LIMIT_WINDOW:
-        deps.settings?.TRIGGER_RATE_LIMIT_WINDOW ?? undefined,
-    }),
   );
   if (!limit) return false;
   const key = { definitionId: String(accepted.definitionId), nodeId: limit.nodeId };

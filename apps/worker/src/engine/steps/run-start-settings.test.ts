@@ -44,8 +44,6 @@ function storedSettingsForDeployment() {
     JOB_TIMEOUT_MS: 1_800_000,
     AGENT_KIND: "codex",
     CODEX_MODEL: "gpt-5.6-codex",
-    ENABLE_REVIEW_PHASE: true,
-    ENABLE_LEAK_REVIEW: false,
     ATTACHMENT_MAX_COUNT: 20,
     COLUMN_AI: "AI",
   };

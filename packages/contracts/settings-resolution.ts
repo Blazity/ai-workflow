@@ -6,7 +6,8 @@
  * an HTTP request resolves a snapshot through `services/settings`, and a run
  * resolves its own at run start from inside the engine, which ADR-001 forbids
  * from importing a service. A second implementation of "stored row, then
- * environment, then registry default" is the one outcome that would matter:
+ * registry default, except for redeploy-owned environment values" is the one
+ * outcome that would matter:
  * a run and the Settings page would disagree about the value the operator is
  * looking at, silently. Ordinary keys resolve from a stored row and then their
  * default; the three `requiresRedeploy` keys remain environment owned because

@@ -31,7 +31,6 @@ export {
   slackAllowedUserIds,
   slackSigningSecret,
   ticketBoardSettings,
-  triggerRateLimitDefaults,
   vcsProviderConfig,
   webhookTriggerEncryptionKey,
 } from "./integration-settings.js";

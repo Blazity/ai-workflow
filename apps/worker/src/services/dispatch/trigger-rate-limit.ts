@@ -86,17 +86,14 @@ export async function checkAndIncrementTriggerRate(
 }
 
 /**
- * Merge a node's own rate-limit parameters with the env default, field by
- * field: the env value is a default, never a ceiling, so a node value always
- * wins. Returns null when no complete configuration results — unlimited, in
- * which case the caller must not write to trigger_rate_limits at all.
+ * Resolve a node's own rate-limit parameters. A node without both fields is
+ * unlimited, in which case the caller must not write to trigger_rate_limits.
  */
 export function resolveTriggerRateLimit(
   nodeParams: TriggerRateLimitNodeParams | undefined,
-  envDefault: TriggerRateLimitConfig | null | undefined,
 ): TriggerRateLimitConfig | null {
-  const max = nodeParams?.rateLimitMax ?? envDefault?.max;
-  const windowKind = nodeParams?.rateLimitWindow ?? envDefault?.windowKind;
+  const max = nodeParams?.rateLimitMax;
+  const windowKind = nodeParams?.rateLimitWindow;
   if (max === undefined || windowKind === undefined) return null;
   return { max, windowKind };
 }
@@ -109,10 +106,8 @@ export interface TriggerRateLimitNode {
 }
 
 export interface RestrictiveTriggerRateLimit extends TriggerRateLimitConfig {
-  /** The node the winning configuration came from, so the dispatcher knows
-   * which node_id to count under. Null when no node contributed any field and
-   * the config is purely the env default. */
-  nodeId: string | null;
+  /** The node the winning configuration came from. */
+  nodeId: string;
 }
 
 /**
@@ -124,19 +119,16 @@ export interface RestrictiveTriggerRateLimit extends TriggerRateLimitConfig {
  */
 export function resolveRestrictiveTriggerRateLimit(
   nodes: readonly TriggerRateLimitNode[],
-  envDefault: TriggerRateLimitConfig | null | undefined,
 ): RestrictiveTriggerRateLimit | null {
   let best: RestrictiveTriggerRateLimit | null = null;
   for (const node of nodes) {
-    const resolved = resolveTriggerRateLimit(node.params, envDefault);
+    const resolved = resolveTriggerRateLimit(node.params);
     if (resolved === null) continue;
-    const configured =
-      node.params?.rateLimitMax !== undefined || node.params?.rateLimitWindow !== undefined;
     const normalizedRate = resolved.max * WINDOWS_PER_30_DAYS[resolved.windowKind];
     const bestNormalizedRate =
       best === null ? null : best.max * WINDOWS_PER_30_DAYS[best.windowKind];
     if (bestNormalizedRate === null || normalizedRate < bestNormalizedRate) {
-      best = { ...resolved, nodeId: configured ? node.nodeId : null };
+      best = { ...resolved, nodeId: node.nodeId };
     }
   }
   return best;
@@ -254,21 +246,17 @@ export function triggerRateLimitLogFields(
  * restrictive configured limit among the sibling nodes wins, and the counter is
  * keyed under the node that configured it.
  *
- * A limit that comes purely from the env default names no node, so it is keyed
- * under the first node of that type: the counter must belong to something stable
- * in the graph, and in practice a definition has exactly one node per trigger
- * type. Returns null when nothing is configured, or when the definition has no
- * node of this type to key a counter under.
+ * Returns null when no node has a complete configuration.
  */
 export function resolveTriggerRateLimitForType(
   nodes: readonly TriggerRateLimitNode[],
-  envDefault: TriggerRateLimitConfig | null | undefined,
 ): { config: TriggerRateLimitConfig; nodeId: string } | null {
-  const limit = resolveRestrictiveTriggerRateLimit(nodes, envDefault);
+  const limit = resolveRestrictiveTriggerRateLimit(nodes);
   if (!limit) return null;
-  const nodeId = limit.nodeId ?? nodes[0]?.nodeId;
-  if (nodeId === undefined) return null;
-  return { config: { max: limit.max, windowKind: limit.windowKind }, nodeId };
+  return {
+    config: { max: limit.max, windowKind: limit.windowKind },
+    nodeId: limit.nodeId,
+  };
 }
 
 function rejectionDay(now: Date): string {

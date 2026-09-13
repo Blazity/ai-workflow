@@ -4,7 +4,6 @@ import type { WorkflowDefinitionV2 } from "@shared/contracts";
 
 vi.mock("../../infra/vcs-config.js", () => ({
   env: {
-    ENABLE_REVIEW_PHASE: false,
     AGENT_KIND: "claude",
     CLAUDE_MODEL: "claude-test",
     CODEX_MODEL: "codex-test",
@@ -63,10 +62,8 @@ import { defaultWorkflowDefinitionV2 } from "../definition/default.js";
 import { testSettingsSnapshot } from "../../test-support/settings.js";
 
 /**
- * The settings this run started under. The step reads its agent defaults and
- * its optional phases from here rather than from the environment, so these
- * cases move this and leave the env mock to the credentials and provider
- * wiring the block registry still reads from it.
+ * The settings this run started under. These cases move the agent defaults and
+ * leave the env mock to credentials and provider wiring.
  */
 let settings = testSettingsSnapshot();
 
@@ -74,8 +71,6 @@ async function setEnv(partial: Record<string, unknown>) {
   const mod = (await import("../../infra/vcs-config.js")) as unknown as { env: Record<string, unknown> };
   mod.env = { ...mod.env, ...partial };
   const settingKeys = [
-    "ENABLE_REVIEW_PHASE",
-    "ENABLE_LEAK_REVIEW",
     "AGENT_KIND",
     "CLAUDE_MODEL",
     "CODEX_MODEL",
@@ -86,10 +81,9 @@ async function setEnv(partial: Record<string, unknown>) {
   settings = testSettingsSnapshot({ ...settings, ...moved });
 }
 
-async function resetEnv(enableReviewPhase: boolean) {
+async function resetEnv() {
   settings = testSettingsSnapshot();
   await setEnv({
-    ENABLE_REVIEW_PHASE: enableReviewPhase,
     AGENT_KIND: "claude",
     CLAUDE_MODEL: "claude-test",
     CODEX_MODEL: "codex-test",
@@ -145,7 +139,7 @@ describe("loadWorkflowDefinitionFor", () => {
     mockGetEnabled.mockReset();
     loggerError.mockReset();
     loggerInfo.mockReset();
-    await resetEnv(true);
+    await resetEnv();
   });
 
   it("loads a pinned definition by id", async () => {
@@ -191,7 +185,7 @@ describe("loadWorkflowDefinitionFor", () => {
   it("uses the built-in graph only for the explicit fallback row", async () => {
     mockGetEnabled.mockResolvedValue({ definition: { id: 1 }, current: null });
     const plan = await loadWorkflowDefinitionFor(settings, "trigger_ticket_ai");
-    expect(plan).toMatchObject({ version: null, definitionId: null, reviewEnabled: true });
+    expect(plan).toMatchObject({ version: null, definitionId: null, reviewEnabled: false });
   });
 
   it("uses the configured Codex provider for the built-in fallback", async () => {
@@ -220,7 +214,7 @@ describe("loadWorkflowDefinitionFor", () => {
   });
 
   it("keeps an explicitly pinned fallback immutable when the row is deployed later", async () => {
-    await resetEnv(false);
+    await resetEnv();
     mockGetDeployedVersion.mockResolvedValue(
       row(defaultWorkflowDefinitionV2({ includeReview: true }), 9, 1),
     );
@@ -248,17 +242,10 @@ describe("loadWorkflowDefinitionFor, ticket trigger", () => {
     mockGetEnabled.mockReset();
     loggerError.mockReset();
     loggerInfo.mockReset();
-    await resetEnv(false);
+    await resetEnv();
   });
 
   it("fails closed when there is no enabled definition", async () => {
-    mockGetEnabled.mockResolvedValue(null);
-    const plan = await loadWorkflowDefinitionFor(settings, "trigger_ticket_ai");
-    expect(plan).toBeNull();
-  });
-
-  it("does not synthesize a default solely because the review flag is on", async () => {
-    await setEnv({ ENABLE_REVIEW_PHASE: true });
     mockGetEnabled.mockResolvedValue(null);
     const plan = await loadWorkflowDefinitionFor(settings, "trigger_ticket_ai");
     expect(plan).toBeNull();

@@ -80,8 +80,8 @@ if (process.exitCode !== 1) {
     await getCurrentSystemHarnessProfileReference(db, provider);
   console.log("[db-migrate] System harness profiles are ready.");
   await seedWorkflowDefinitionTemplates(db, {
-    includeReview: settings.ENABLE_REVIEW_PHASE,
-    includeLeakReview: settings.ENABLE_LEAK_REVIEW,
+    includeReview: false,
+    includeLeakReview: false,
     provider,
     profileReference,
   });

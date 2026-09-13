@@ -15,10 +15,7 @@ import {
   type IssueTrackerAdapter,
 } from "../../adapters/issue-tracker/types.js";
 import { isRepositoryWithinPinnedScope } from "../../adapters/vcs/repository-directory.js";
-import {
-  hasManualDispatchPrCapability,
-  type ManualDispatchPullRequestSnapshot,
-} from "../../adapters/vcs/types.js";
+import type { ManualDispatchPullRequestSnapshot } from "../../adapters/vcs/types.js";
 import type { Db } from "../../db/types.js";
 import { findWorkflowOwnedPullRequest } from "../../db/repositories/runs.js";
 import { findConnectedWorkflowOwnedPullRequest } from "../../db/repositories/runs.js";
@@ -33,7 +30,7 @@ import {
 } from "../dispatch/index.js";
 import type { RepositoryCatalogSnapshot } from "../repository-catalog/index.js";
 import { prSubjectKey, ticketSubjectKey } from "../../engine/support/subject-key.js";
-import { createRepositoryVCS } from "../../engine/support/vcs-runtime.js";
+import { createManualDispatchPrReader } from "../../engine/support/vcs-runtime.js";
 import { loadPostPrGateConfig } from "../../post-pr-gate/config.js";
 import { loadSettingsSnapshot, loadSettingsSnapshotOn } from "../settings/index.js";
 import {
@@ -342,26 +339,10 @@ async function resolvePullRequestDispatch(
       `${parsed.provider === "github" ? "GitHub" : "GitLab"} is not configured.`,
     );
   }
-  const vcs = createRepositoryVCS({
+  const vcs = createManualDispatchPrReader({
     provider: parsed.provider,
     repoPath: parsed.repoPath,
-    // The deployment's default target branch, from the stored settings rather
-    // than from a variable the cleanup release deletes. A shim: threading a
-    // snapshot through `resolveManualDispatch` would reshape the manual
-    // dispatch API, which this stage does not own, and a manual dispatch is a
-    // human action that already costs several reads.
-    baseBranch:
-      parsed.provider === "github"
-        ? input.settings.GITHUB_BASE_BRANCH
-        : input.settings.GITLAB_BASE_BRANCH,
   });
-  if (!hasManualDispatchPrCapability(vcs)) {
-    throw new ManualDispatchError(
-      422,
-      "not_eligible",
-      "The configured provider cannot resolve manual dispatch input.",
-    );
-  }
   let snapshot: ManualDispatchPullRequestSnapshot;
   try {
     snapshot = await vcs.getManualDispatchPullRequest(parsed.prNumber);

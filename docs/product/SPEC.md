@@ -83,8 +83,8 @@ Important boundary:
 All paths below are relative to `apps/worker/src/` unless stated otherwise.
 
 1. **Poller** (Vercel Cron — `routes/cron/poll.get.ts`)
-   - Fired every minute by the Vercel cron in `apps/worker/vercel.json` (`* * * * *`), authenticated
-     with `CRON_SECRET`. (`POLL_INTERVAL_MS` still exists in config but does not drive scheduling.)
+   - Fired every 15 minutes by the Vercel cron in `apps/worker/vercel.json` (`*/15 * * * *`),
+     authenticated with `CRON_SECRET`.
    - Queries the issue tracker for tickets in the AI column and dispatches each via the shared
      `dispatchTicket` path.
    - Runs the reconciler (Section 8.5) and snapshots run telemetry on every cycle.
@@ -235,9 +235,10 @@ per-variable reference lives in `SETUP.md`; the groups are:
   `JIRA_PROJECT_KEY`, `COLUMN_AI` / `COLUMN_AI_REVIEW` / `COLUMN_BACKLOG`, optional
   `JIRA_BACKLOG_TRANSITION_ID` / `JIRA_AI_REVIEW_TRANSITION_ID`, `JIRA_WEBHOOK_SECRET`.
 - **VCS:** `VCS_KIND` (`github` | `gitlab`), GitHub App vars (`GITHUB_APP_ID`,
-  `GITHUB_APP_PRIVATE_KEY`, `GITHUB_INSTALLATION_ID`, `GITHUB_BASE_BRANCH`), GitLab vars
-  (`GITLAB_TOKEN`, `GITLAB_HOST`, `GITLAB_BASE_BRANCH`), per-provider webhook secrets. Legacy
-  single-repo `GITHUB_OWNER`/`GITHUB_REPO` is still honored as a fallback.
+  `GITHUB_APP_PRIVATE_KEY`, `GITHUB_INSTALLATION_ID`), GitLab vars
+  (`GITLAB_TOKEN`, `GITLAB_HOST`), and per-provider webhook secrets. Repository
+  profiles own the default branch. Legacy single-repo `GITHUB_OWNER`/`GITHUB_REPO`
+  is still honored as a fallback.
 - **Messaging:** `CHAT_SDK_SLACK_TOKEN`, `CHAT_SDK_CHANNEL_ID`, `CHAT_SDK_BOT_NAME` (default
   `ai-workflow`), `SLACK_SIGNING_SECRET`, `SLACK_ALLOWED_USER_IDS`. (There is no `CHAT_SDK_API_KEY`.)
 - **Agent:** `AGENT_KIND` (`claude` default | `codex`), `ANTHROPIC_API_KEY`, `CLAUDE_MODEL`
@@ -245,11 +246,10 @@ per-variable reference lives in `SETUP.md`; the groups are:
   (default `gpt-5-codex`), Codex pricing feed (`CODEX_PRICING_URL`, `CODEX_PRICING_TTL_MS`),
   `COMMIT_AUTHOR` / `COMMIT_EMAIL` (optional, no default — when unset the identity is derived from
   the GitHub App, or falls back to `ai-workflow-blazity` on GitLab).
-- **Sandbox / limits:** `MAX_CONCURRENT_AGENTS` (default 3), `JOB_TIMEOUT_MS` (default 30 min),
+- **Sandbox / limits:** stored `MAX_CONCURRENT_AGENTS` (default 3), `JOB_TIMEOUT_MS` (default 30 min),
   `ATTACHMENT_MAX_FILE_SIZE_MB` / `ATTACHMENT_MAX_TOTAL_SIZE_MB` / `ATTACHMENT_MAX_COUNT` /
-  `ATTACHMENT_DOWNLOAD_TIMEOUT_MS`, `ENABLE_REVIEW_PHASE` (default `false`; shapes only the
-  built-in default workflow definition, the review phase itself is gated by the `review_agent`
-  block in the active definition). Pre-PR check commands are dashboard-managed (Section 9.3),
+  `ATTACHMENT_DOWNLOAD_TIMEOUT_MS`. The built-in workflow keeps review and leak-review
+  blocks off; deployed definitions own their shape. Pre-PR check commands are dashboard-managed (Section 9.3),
   not env config.
 - **Arthur (optional):** `GENAI_ENGINE_API_KEY`, `GENAI_ENGINE_TRACE_ENDPOINT`.
 - **Database:** `DATABASE_URL` (required; Neon via Vercel Marketplace).

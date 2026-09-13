@@ -3,7 +3,6 @@ import { test } from "node:test";
 import {
   RETIRED_ENVIRONMENT_VARIABLES,
   SETTINGS_REGISTRY,
-  findSettingDefinition,
   type SettingDefinition,
   validateSettingsPatch,
 } from "./settings-registry";
@@ -70,6 +69,8 @@ test("the retired environment names are a frozen, literal one-way list", () => {
     "TRIGGER_RATE_LIMIT_MAX",
     "TRIGGER_RATE_LIMIT_WINDOW",
   ]);
+  assert.equal(RETIRED_ENVIRONMENT_VARIABLES.length, 33);
+  assert.equal(new Set(RETIRED_ENVIRONMENT_VARIABLES).size, 33);
   assert.ok(!RETIRED_ENVIRONMENT_VARIABLES.includes("AGENT_ALLOWED_REPOS" as never));
 });
 
@@ -84,8 +85,6 @@ test("a key the workflow body reads may only apply to the next run", () => {
     "ATTACHMENT_MAX_TOTAL_SIZE_MB",
     "ATTACHMENT_MAX_COUNT",
     "ATTACHMENT_DOWNLOAD_TIMEOUT_MS",
-    "ENABLE_REVIEW_PHASE",
-    "ENABLE_LEAK_REVIEW",
     "ENABLE_REPO_MEMORY",
     "ENABLE_ORG_MEMORY_PROMOTION",
     "ENABLE_REPO_ROUTING_MEMORY",
@@ -98,8 +97,6 @@ test("a key the workflow body reads may only apply to the next run", () => {
     "CODEX_MODEL",
     "PRE_PR_COMMAND_TIMEOUT_MINUTES",
     "PRE_PR_CHECKS_ALLOWED_ENV",
-    "GITHUB_BASE_BRANCH",
-    "GITLAB_BASE_BRANCH",
   ]);
   for (const definition of SETTINGS_REGISTRY) {
     if (workflowBodyKeys.has(definition.key)) {
@@ -155,13 +152,6 @@ test("null clears a key that has no default and is refused for one that has", ()
   assert.deepEqual(validateSettingsPatch({ MAX_CONCURRENT_AGENTS: null }), [
     { key: "MAX_CONCURRENT_AGENTS", reason: "null_not_allowed" },
   ]);
-});
-
-test("the catalog switch is a setting with no environment variable", () => {
-  const definition = findSettingDefinition("catalog.activated");
-  assert.ok(definition);
-  assert.equal(definition.environmentVariable, undefined);
-  assert.equal(definition.default, false);
 });
 
 /** A deployment that sets exactly these variables. */

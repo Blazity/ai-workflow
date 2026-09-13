@@ -25,8 +25,6 @@ import {
   member,
   organization,
   repositoryCatalogState,
-  settings,
-  settingsVersions,
   user,
 } from "../../../db/schema.js";
 import { createTestDb } from "../../../db/test-db.js";
@@ -62,7 +60,6 @@ const entryGet = (await import("./repository-catalog/[id].get.js")).default;
 const entryPut = (await import("./repository-catalog/[id].put.js")).default;
 const versionsGet = (await import("./repository-catalog/[id]/versions.get.js")).default;
 const activatePost = (await import("./repository-catalog/activate.post.js")).default;
-const settingsPatch = (await import("./settings.patch.js")).default;
 const { getCurrentCheckConfiguration, setRepositoryEnabled } = await import(
   "../../../db/repositories/repository-catalog.js"
 );
@@ -117,8 +114,6 @@ const versions = (id: number | string) =>
   );
 const activate = (body: unknown) =>
   handlerFor(activatePost)(jsonRequest("http://worker.test/", "POST", body));
-const patchSettings = (body: unknown) =>
-  handlerFor(settingsPatch)(jsonRequest("http://worker.test/", "PATCH", body));
 const catalog = () => handlerFor(catalogGet)(new Request("http://worker.test/"));
 
 const PROFILE = {
@@ -300,45 +295,5 @@ describe("PUT /api/v1/repository-catalog/:id, gateGroups", () => {
     expect(JSON.stringify(parsed.error?.issues)).toContain(
       'unknown group referenced in gateGroups: \\"verify\\"',
     );
-  });
-});
-
-describe("PATCH /api/v1/settings against the catalog", () => {
-  it("T01: the repositories group is refused on the settings patch and the catalog state row is untouched", async () => {
-    // The settings suite already pins the 400 and that no settings row is
-    // written (routes/api/v1/settings.test.ts, "refuses the repository catalog
-    // switch"). What it cannot see from there is the other side of the seam:
-    // `catalog.activated` is a registry KEY, and activation is a row in a
-    // different table entirely. This asserts the refusal leaves that table
-    // alone, so a future implementation that wired the key through to the
-    // catalog would fail here rather than pass the settings suite.
-    const res = await patchSettings({
-      settings: { "catalog.activated": true },
-      reason: "skipping the dialog",
-    });
-
-    expect(res.status).toBe(400);
-    expect(res.statusText).toContain("catalog.activated");
-    expect(res.statusText).toContain("/api/v1/repository-catalog/activate");
-    await expect(db.select().from(settings)).resolves.toHaveLength(0);
-    await expect(db.select().from(settingsVersions)).resolves.toHaveLength(0);
-    await expect(db.select().from(repositoryCatalogState)).resolves.toHaveLength(0);
-    expect((await (await catalog()).json()).state).toMatchObject({
-      activated: false,
-      bridge: true,
-    });
-
-    // And the route that IS allowed to move it still does, so the refusal is
-    // about the surface rather than about the value. Enabling one repository
-    // first, because D1 / row L18 refuses an activation that would leave
-    // dispatch with nothing to select; that refusal is 409 and belongs to the
-    // activate route, which would otherwise hide the 200 this row is about.
-    const seeded = await (await put(0, PROFILE)).json();
-    await setRepositoryEnabled(db, { id: seeded.repository.id, enabled: true });
-    expect(
-      (await activate({ acknowledgedRepositoryKeys: [], reason: "through the dialog" }))
-        .status,
-    ).toBe(200);
-    expect((await (await catalog()).json()).state.bridge).toBe(false);
   });
 });

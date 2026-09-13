@@ -2,12 +2,11 @@ import type { SettingsSnapshot } from "@shared/contracts";
 import type { RunRegistryAdapter } from "../../../adapters/run-registry/types.js";
 import type { Db } from "../../../db/types.js";
 import {
-  envTriggerRateLimitDefault,
   resolveTriggerRateLimit,
   triggerNodeRateLimitParams,
   type TriggerRateLimitConfig,
 } from "../../dispatch/index.js";
-import { maxConcurrentAgents, triggerRateLimitDefaults } from "../../settings/index.js";
+import { maxConcurrentAgents } from "../../settings/index.js";
 import type {
   WebhookDispatchDeps,
   WebhookDispatchGuardRejection,
@@ -48,8 +47,7 @@ export function createWebhookDispatchDeps(
     runRegistry,
     maxConcurrentAgents: maxConcurrentAgents(settings),
     ensureStillDispatchable: (target) => ensureStillDispatchable(db, target),
-    resolveTriggerRateLimit: (target) =>
-      resolveWebhookTriggerRateLimit(db, target, settings),
+    resolveTriggerRateLimit: (target) => resolveWebhookTriggerRateLimit(db, target),
   };
 }
 
@@ -61,14 +59,12 @@ export function createConnectedWebhookDispatchDeps(
     runRegistry,
     maxConcurrentAgents: maxConcurrentAgents(settings),
     ensureStillDispatchable: ensureConnectedStillDispatchable,
-    resolveTriggerRateLimit: (target) =>
-      resolveConnectedWebhookTriggerRateLimit(target, settings),
+    resolveTriggerRateLimit: resolveConnectedWebhookTriggerRateLimit,
   };
 }
 
 async function resolveConnectedWebhookTriggerRateLimit(
   target: WebhookDispatchTarget,
-  settings: SettingsSnapshot,
 ): Promise<TriggerRateLimitConfig | null> {
   const pinned = await readConnectedWorkflowDefinitionVersion(
     target.definitionId,
@@ -76,7 +72,6 @@ async function resolveConnectedWebhookTriggerRateLimit(
   );
   return resolveTriggerRateLimit(
     triggerNodeRateLimitParams(runnableDefinitionOf(pinned), target.nodeId),
-    envTriggerRateLimitDefault(triggerRateLimitDefaults(settings)),
   );
 }
 
@@ -105,9 +100,8 @@ async function ensureConnectedStillDispatchable(
 
 /**
  * The webhook node's start budget, read from the version the delivery is pinned
- * to so the limit is the one authored in the graph this run would execute. The
- * node's own params beat the env default, and no configuration at all means
- * unlimited.
+ * to so the limit is the one authored in the graph this run would execute. No
+ * complete node configuration means unlimited.
  *
  * The endpoint's own limits (ingress and inbox) are unrelated and still apply:
  * this is an additional, per-node cap, so the effective ceiling is the smallest
@@ -116,7 +110,6 @@ async function ensureConnectedStillDispatchable(
 async function resolveWebhookTriggerRateLimit(
   db: Db,
   target: WebhookDispatchTarget,
-  settings: SettingsSnapshot,
 ): Promise<TriggerRateLimitConfig | null> {
   const pinned = await readWorkflowDefinitionVersion(
     db,
@@ -125,7 +118,6 @@ async function resolveWebhookTriggerRateLimit(
   );
   return resolveTriggerRateLimit(
     triggerNodeRateLimitParams(runnableDefinitionOf(pinned), target.nodeId),
-    envTriggerRateLimitDefault(triggerRateLimitDefaults(settings)),
   );
 }
 

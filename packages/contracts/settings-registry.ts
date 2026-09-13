@@ -21,9 +21,7 @@ export type SettingsGroup =
   | "mcp"
   | "checks"
   | "harness"
-  | "issue-tracker"
-  | "triggers"
-  | "repositories";
+  | "issue-tracker";
 
 /** The shapes a stored value may take. */
 export type SettingType = "boolean" | "integer" | "string" | "string-list";
@@ -79,14 +77,15 @@ export interface SettingDefinition {
 }
 
 /**
- * Environment names whose values moved permanently into the settings store.
+ * Environment names the worker permanently stopped accepting.
  *
  * This is intentionally a frozen literal rather than derived from the
  * registry. Once retired, a later registry edit must not silently make one of
- * these names legal again. A deployment that still sets any name here is
- * refused at boot with instructions for changing the value through Settings.
+ * these names legal again. Some values moved into Settings and some deleted
+ * keys now have another owner; SETUP.md records the replacement for each.
  */
 export const RETIRED_ENVIRONMENT_VARIABLES = Object.freeze([
+  // Deleted registry keys stay retired so an old deployment cannot revive them through env.
   "DASHBOARD_ORG_NAME",
   "GITHUB_BASE_BRANCH",
   "GITLAB_BASE_BRANCH",
@@ -145,30 +144,13 @@ export const SETTINGS_REGISTRY = [
     requiresRedeploy: true,
   },
   {
-    key: "GITHUB_BASE_BRANCH",
-    group: "general",
-    type: "string",
-    default: "main",
-    description: "Branch new GitHub work branches are cut from when a repository names none.",
-    appliesToRunsInFlight: "next run",
-    overridablePerTrigger: false,
-  },
-  {
-    key: "GITLAB_BASE_BRANCH",
-    group: "general",
-    type: "string",
-    default: "main",
-    description: "Branch new GitLab work branches are cut from when a repository names none.",
-    appliesToRunsInFlight: "next run",
-    overridablePerTrigger: false,
-  },
-  {
     key: "MAX_CONCURRENT_AGENTS",
     group: "capacity",
     type: "integer",
     default: 3,
     minimum: 1,
-    description: "How many runs may hold an agent slot at once. Every dispatch path shares it.",
+    description:
+      "How many automatic runs may hold an agent slot at once. Manual dispatch (workflows.dispatch and the dashboard) does not check it yet (T40).",
     appliesToRunsInFlight: "immediate",
     overridablePerTrigger: false,
   },
@@ -191,16 +173,6 @@ export const SETTINGS_REGISTRY = [
     description:
       "Operational ceiling on blocks of one run dispatched at once. Unset means the code-owned bound; this only ever lowers it.",
     appliesToRunsInFlight: "next run",
-    overridablePerTrigger: false,
-  },
-  {
-    key: "POLL_INTERVAL_MS",
-    group: "capacity",
-    type: "integer",
-    default: 300_000,
-    minimum: 1,
-    description: "Cadence the scheduled tick polls the issue tracker at.",
-    appliesToRunsInFlight: "immediate",
     overridablePerTrigger: false,
   },
   {
@@ -244,32 +216,12 @@ export const SETTINGS_REGISTRY = [
     overridablePerTrigger: false,
   },
   {
-    key: "ENABLE_REVIEW_PHASE",
-    group: "features",
-    type: "boolean",
-    default: false,
-    description:
-      "Shapes the built-in workflow templates with a review phase. A saved definition's blocks decide the rest.",
-    appliesToRunsInFlight: "next run",
-    overridablePerTrigger: false,
-  },
-  {
-    key: "ENABLE_LEAK_REVIEW",
-    group: "features",
-    type: "boolean",
-    default: false,
-    description:
-      "Shapes the built-in workflow templates with a leak review before the branch is pushed.",
-    appliesToRunsInFlight: "next run",
-    overridablePerTrigger: false,
-  },
-  {
     key: "ENABLE_REPO_MEMORY",
     group: "features",
     type: "boolean",
     default: false,
     description:
-      "The kill switch for per-repository agent memory: gates every read and every write, and leaves stored documents untouched when off.",
+      "Gates repository-memory prompt seeds, distillation, organization promotion and routing memory. The per-ticket workspace memory file is always hydrated and persisted.",
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: false,
   },
@@ -358,7 +310,8 @@ export const SETTINGS_REGISTRY = [
     type: "integer",
     default: 30_000,
     minimum: 1_000,
-    description: "Wall clock one MCP tool call may take.",
+    description:
+      "Configured wall clock for one MCP tool call. Values above the 240000 ms code ceiling in mcp/execute-tool.ts are clamped.",
     appliesToRunsInFlight: "immediate",
     overridablePerTrigger: false,
   },
@@ -368,7 +321,7 @@ export const SETTINGS_REGISTRY = [
     type: "integer",
     default: 120,
     minimum: 1,
-    description: "Read calls one MCP client may make per minute.",
+    description: "Read calls allowed per tool per client per minute.",
     appliesToRunsInFlight: "immediate",
     overridablePerTrigger: false,
   },
@@ -378,7 +331,7 @@ export const SETTINGS_REGISTRY = [
     type: "integer",
     default: 20,
     minimum: 1,
-    description: "Mutating calls one MCP client may make per minute.",
+    description: "Mutating calls allowed per tool per client per minute.",
     appliesToRunsInFlight: "immediate",
     overridablePerTrigger: false,
   },
@@ -465,37 +418,6 @@ export const SETTINGS_REGISTRY = [
     description: "Board column a ticket is bounced back to when the agent needs clarification.",
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: true,
-  },
-  {
-    key: "TRIGGER_RATE_LIMIT_MAX",
-    group: "triggers",
-    type: "integer",
-    default: null,
-    minimum: 1,
-    description:
-      "Default start budget for a trigger node that declares none. Unset means unlimited.",
-    appliesToRunsInFlight: "immediate",
-    overridablePerTrigger: true,
-  },
-  {
-    key: "TRIGGER_RATE_LIMIT_WINDOW",
-    group: "triggers",
-    type: "string",
-    enumValues: ["minute", "hour", "day", "month"],
-    default: null,
-    description: "The window the default trigger start budget is counted over.",
-    appliesToRunsInFlight: "immediate",
-    overridablePerTrigger: true,
-  },
-  {
-    key: "catalog.activated",
-    group: "repositories",
-    type: "boolean",
-    default: false,
-    description:
-      "Whether the repository catalog decides access. While off the agent sees everything the installation sees. Set only from the Repositories page.",
-    appliesToRunsInFlight: "immediate",
-    overridablePerTrigger: false,
   },
 ] as const satisfies readonly SettingDefinition[];
 

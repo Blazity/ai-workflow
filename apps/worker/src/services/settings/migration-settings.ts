@@ -8,7 +8,7 @@ import type { Db } from "../../db/types.js";
 
 export type MigrationSettings = Pick<
   SettingsSnapshot,
-  "AGENT_KIND" | "ENABLE_REVIEW_PHASE" | "ENABLE_LEAK_REVIEW"
+  "AGENT_KIND"
 >;
 
 const NO_ENVIRONMENT: SettingsEnvironmentReader = {
@@ -17,7 +17,7 @@ const NO_ENVIRONMENT: SettingsEnvironmentReader = {
 };
 
 /**
- * The settings that shape build-time workflow templates. One repository read
+ * The settings used while seeding build-time workflow templates. One repository read
  * preserves each stored decision and lets the registry default answer only a
  * key whose row does not exist.
  */
@@ -29,7 +29,5 @@ export async function loadMigrationSettings(db: Db): Promise<MigrationSettings> 
   ).snapshot;
   return {
     AGENT_KIND: settings.AGENT_KIND,
-    ENABLE_REVIEW_PHASE: settings.ENABLE_REVIEW_PHASE,
-    ENABLE_LEAK_REVIEW: settings.ENABLE_LEAK_REVIEW,
   };
 }

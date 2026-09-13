@@ -103,7 +103,7 @@ describe("GET /api/v1/settings", () => {
     const res = await get();
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.settings.length).toBeGreaterThan(30);
+    expect(body.settings).toHaveLength(29);
     expect(entry(body.settings, "MAX_CONCURRENT_AGENTS")).toMatchObject({
       value: 3,
       default: 3,
@@ -111,10 +111,6 @@ describe("GET /api/v1/settings", () => {
       group: "capacity",
       appliesToRunsInFlight: "immediate",
       lastVersion: null,
-    });
-    expect(entry(body.settings, "catalog.activated")).toMatchObject({
-      value: false,
-      group: "repositories",
     });
   });
 
@@ -173,21 +169,6 @@ describe("PATCH /api/v1/settings", () => {
     ]);
   });
 
-  it("refuses the repository catalog switch with 400 and writes nothing", async () => {
-    // Activation names the repositories that hold an active claim and are not
-    // enabled; a generic patch would flip the flag without showing any of it.
-    const res = await patch({
-      settings: { MAX_CONCURRENT_AGENTS: 5, "catalog.activated": true },
-      reason: "skipping the dialog",
-    });
-
-    expect(res.status).toBe(400);
-    expect(res.statusText).toContain("catalog.activated");
-    expect(res.statusText).toContain("/api/v1/repository-catalog/activate");
-    await expect(db.select().from(settingsVersions)).resolves.toHaveLength(0);
-    await expect(db.select().from(settings)).resolves.toHaveLength(0);
-  });
-
   it("refuses a key the running code reads from the environment, naming that key", async () => {
     // `PRE_PR_CHECKS_ALLOWED_ENV` is the operator-side gate on which of the
     // worker's secrets a tenant's command may be handed, and the checks runner
@@ -195,16 +176,13 @@ describe("PATCH /api/v1/settings", () => {
     // on the page, and ignored by the resolution, so the patch is refused and
     // says where the decision lives instead.
     const res = await patch({
-      settings: { PRE_PR_CHECKS_ALLOWED_ENV: ["NPM_TOKEN"], "catalog.activated": true },
+      settings: { PRE_PR_CHECKS_ALLOWED_ENV: ["NPM_TOKEN"] },
       reason: "widening the allowlist",
     });
 
     expect(res.status).toBe(400);
-    // Both refusals, each with its own reason: one patch can carry both.
     expect(res.statusText).toContain("PRE_PR_CHECKS_ALLOWED_ENV");
     expect(res.statusText).toContain("read from the deployment environment");
-    expect(res.statusText).toContain("catalog.activated");
-    expect(res.statusText).toContain("/api/v1/repository-catalog/activate");
     await expect(db.select().from(settings)).resolves.toHaveLength(0);
   });
 

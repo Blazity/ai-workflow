@@ -62,7 +62,6 @@ const WAVE_ACCESSORS = [
   "dashboardOrganizationSettings",
   "mcpSettings",
   "agentRuntimeSettings",
-  "triggerRateLimitDefaults",
 ];
 
 function sourceFiles(): string[] {

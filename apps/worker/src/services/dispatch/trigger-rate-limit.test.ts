@@ -191,28 +191,19 @@ describe("checkAndIncrementTriggerRate", () => {
 
 describe("resolveTriggerRateLimit", () => {
   it("returns null when nothing is configured, meaning unlimited", () => {
-    expect(resolveTriggerRateLimit({}, null)).toBeNull();
-    expect(resolveTriggerRateLimit(undefined, undefined)).toBeNull();
+    expect(resolveTriggerRateLimit({})).toBeNull();
+    expect(resolveTriggerRateLimit(undefined)).toBeNull();
   });
 
-  it("falls back to the env default only for fields the node does not set", () => {
-    const env = { max: 10, windowKind: "hour" as const };
-    expect(resolveTriggerRateLimit({}, env)).toEqual(env);
-    expect(resolveTriggerRateLimit({ rateLimitMax: 3 }, env)).toEqual({
-      max: 3,
-      windowKind: "hour",
-    });
+  it("returns a complete node configuration", () => {
     expect(
-      resolveTriggerRateLimit({ rateLimitMax: 3, rateLimitWindow: "day" }, env),
+      resolveTriggerRateLimit({ rateLimitMax: 3, rateLimitWindow: "day" }),
     ).toEqual({ max: 3, windowKind: "day" });
   });
 
-  it("treats a partial configuration with no counterpart as unlimited", () => {
-    expect(resolveTriggerRateLimit({ rateLimitMax: 3 }, null)).toBeNull();
-    expect(resolveTriggerRateLimit({ rateLimitWindow: "day" }, null)).toBeNull();
-    expect(
-      resolveTriggerRateLimit({ rateLimitWindow: "day" }, { max: 10, windowKind: "hour" }),
-    ).toEqual({ max: 10, windowKind: "day" });
+  it("treats a partial node configuration as unlimited", () => {
+    expect(resolveTriggerRateLimit({ rateLimitMax: 3 })).toBeNull();
+    expect(resolveTriggerRateLimit({ rateLimitWindow: "day" })).toBeNull();
   });
 });
 
@@ -226,7 +217,6 @@ describe("resolveRestrictiveTriggerRateLimit", () => {
           { nodeId: "node_c", params: { rateLimitMax: 1_000, rateLimitWindow: "day" } },
           { nodeId: "node_d", params: { rateLimitMax: 25_000, rateLimitWindow: "month" } },
         ],
-        null,
       ),
     ).toEqual({ max: 25_000, windowKind: "month", nodeId: "node_d" });
   });
@@ -240,43 +230,20 @@ describe("resolveRestrictiveTriggerRateLimit", () => {
           { nodeId: "node_c", params: { rateLimitMax: 1_440, rateLimitWindow: "day" } },
           { nodeId: "node_d", params: { rateLimitMax: 43_200, rateLimitWindow: "month" } },
         ],
-        null,
       ),
     ).toEqual({ max: 1, windowKind: "minute", nodeId: "node_a" });
   });
 
-  it("returns null when no node configures a limit and there is no env default", () => {
+  it("returns null when no node configures a limit", () => {
     expect(
       resolveRestrictiveTriggerRateLimit(
         [
           { nodeId: "node_a", params: {} },
           { nodeId: "node_b", params: {} },
         ],
-        null,
       ),
     ).toBeNull();
-    expect(resolveRestrictiveTriggerRateLimit([], null)).toBeNull();
-  });
-
-  it("reports nodeId null when the winning config comes only from the env default", () => {
-    expect(
-      resolveRestrictiveTriggerRateLimit(
-        [
-          { nodeId: "node_a", params: { rateLimitMax: 300, rateLimitWindow: "day" } },
-          { nodeId: "node_b", params: {} },
-        ],
-        { max: 10, windowKind: "hour" },
-      ),
-    ).toEqual({ max: 10, windowKind: "hour", nodeId: null });
-  });
-
-  it("keeps the source nodeId when the node contributes any field of the winning config", () => {
-    expect(
-      resolveRestrictiveTriggerRateLimit(
-        [{ nodeId: "node_a", params: { rateLimitMax: 3 } }],
-        { max: 10, windowKind: "hour" },
-      ),
-    ).toEqual({ max: 3, windowKind: "hour", nodeId: "node_a" });
+    expect(resolveRestrictiveTriggerRateLimit([])).toBeNull();
   });
 });
 
@@ -445,8 +412,6 @@ describe("enforceTriggerRateLimit", () => {
 });
 
 describe("resolveTriggerRateLimitForType", () => {
-  const envDefault = { max: 9, windowKind: "day" as const };
-
   it("keys the winning limit under the node that configured it", () => {
     expect(
       resolveTriggerRateLimitForType(
@@ -454,30 +419,15 @@ describe("resolveTriggerRateLimitForType", () => {
           { nodeId: "t1", params: { rateLimitMax: 8, rateLimitWindow: "hour" } },
           { nodeId: "t2", params: { rateLimitMax: 3, rateLimitWindow: "hour" } },
         ],
-        null,
       ),
     ).toEqual({ config: { max: 3, windowKind: "hour" }, nodeId: "t2" });
   });
 
-  it("keys an env-only limit under the first node of the type", () => {
-    expect(
-      resolveTriggerRateLimitForType(
-        [
-          { nodeId: "t1", params: undefined },
-          { nodeId: "t2", params: undefined },
-        ],
-        envDefault,
-      ),
-    ).toEqual({ config: envDefault, nodeId: "t1" });
-  });
-
   it("is unlimited when nothing is configured", () => {
-    expect(resolveTriggerRateLimitForType([{ nodeId: "t1", params: {} }], null)).toBeNull();
+    expect(resolveTriggerRateLimitForType([{ nodeId: "t1", params: {} }])).toBeNull();
   });
 
   it("is unlimited when the graph has no node of this type to count under", () => {
-    // The built-in fallback definition has no graph, so an env default would
-    // otherwise have nowhere to key its counter.
-    expect(resolveTriggerRateLimitForType([], envDefault)).toBeNull();
+    expect(resolveTriggerRateLimitForType([])).toBeNull();
   });
 });

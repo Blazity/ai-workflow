@@ -50,7 +50,7 @@ vi.mock("../../db/repositories/definitions.js", async (importOriginal) => ({
   getWorkflowDefinitionVersion: vi.fn(),
 }));
 vi.mock("../../engine/support/vcs-runtime.js", () => ({
-  createRepositoryVCS: () => ({
+  createManualDispatchPrReader: () => ({
     getManualDispatchPullRequest: mocks.getManualDispatchPullRequest,
   }),
 }));

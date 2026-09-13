@@ -27,7 +27,6 @@ const state = vi.hoisted(() => ({
   failValidation: false,
   env: {
     DASHBOARD_ORG_SLUG: "ai-workflow",
-    ENABLE_REVIEW_PHASE: true,
     AGENT_KIND: "claude",
     CLAUDE_MODEL: "claude-test-default",
     CODEX_MODEL: "gpt-5-codex",
@@ -228,7 +227,6 @@ beforeEach(async () => {
   ]);
   await writeManySettings(db, {
     patch: {
-      ENABLE_REVIEW_PHASE: true,
       AGENT_KIND: "claude",
       CLAUDE_MODEL: "claude-test-default",
       CODEX_MODEL: "gpt-5-codex",
@@ -433,7 +431,7 @@ describe("POST /api/v1/workflow-definitions", () => {
       version: 2,
     });
     expect(body.draft.nodes.some((n: { type: string }) => n.type === "review_agent")).toBe(
-      true,
+      false,
     );
   });
 

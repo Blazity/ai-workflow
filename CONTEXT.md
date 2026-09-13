@@ -133,11 +133,11 @@ workflow-level Validation Issue applies to the definition as a whole.
 _Avoid_: Warning, runtime Execution Failure
 
 **Retired Variable**:
-An environment variable whose product behavior moved permanently into the
-settings store. The worker neither parses nor imports it and refuses to boot if
-it is present, naming every offender and the SETUP.md removal section. Change
-the value on the Settings page or with MCP `settings.set`, then remove the
-variable and redeploy. A key marked `requiresRedeploy` is not retired: its
+An environment variable the worker no longer accepts. Its behavior either
+moved into the settings store or to another explicit owner. The worker neither
+parses nor imports it and refuses to boot if it is present, naming every
+offender and the SETUP.md removal section. Follow that section's replacement,
+remove the variable, and redeploy. A key marked `requiresRedeploy` is not retired: its
 environment value remains the deployment's answer and a stored row is ignored.
 _Avoid_: Migrated variable, legacy fallback, deprecated setting
 

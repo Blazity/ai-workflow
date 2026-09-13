@@ -23,7 +23,6 @@ export {
   claimSubjectRun,
   claimTicketRun,
   dispatchTicket,
-  envTriggerRateLimitDefault,
   reserveSubjectWithinCapacity,
   triggerNodeRateLimitParams,
 } from "./dispatch.js";

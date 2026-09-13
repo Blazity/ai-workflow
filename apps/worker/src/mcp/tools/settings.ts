@@ -2,8 +2,8 @@
  * The Settings page, as tools.
  *
  * Four tools for the four things the page does: read every switch, read one
- * with its history, store one, and clear one so the environment or the registry
- * default answers for it again.
+ * with its history, store one, and clear one so the registry default answers
+ * for it again.
  *
  * The registry is the authority on what a key accepts and the store is the
  * authority on what a write records, exactly as on the HTTP side: nothing here
