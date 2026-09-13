@@ -749,6 +749,13 @@ export async function markRunFailedByWatchdog(
   );
 }
 
+export function markConnectedRunFailedByWatchdog(
+  runId: string,
+  reason: string,
+): Promise<boolean> {
+  return markRunFailedByWatchdog(getDb(), runId, reason);
+}
+
 /**
  * Cron backstop for the live park marker. "awaiting" is frozen against the
  * cron's own snapshot, and every writer that clears it is best-effort, so a

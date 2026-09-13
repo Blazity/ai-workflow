@@ -3,6 +3,7 @@ import type { ClarificationRequest, ClarificationStatus } from "@shared/contract
 import { getDb, type Db } from "../client.js";
 import { activeRuns, clarificationRequests } from "../schema.js";
 import { ActiveRunOwnerError } from "./active-run-owner-error.js";
+import { markConnectedRunBlockedOnCancel } from "./runs/telemetry.js";
 
 interface ActiveRunOwner {
   subjectKey: string;
@@ -87,6 +88,18 @@ export function supersedeConnectedPendingClarificationsForTicket(ticketKey: stri
 
 export function supersedeConnectedClarification(id: string) {
   return supersedeClarification(getDb(), id);
+}
+
+export async function retireConnectedClarificationForGoneTicket(row: {
+  id: string;
+  ticketKey: string | null;
+  runId: string;
+}): Promise<void> {
+  if (row.ticketKey) {
+    await supersedeConnectedPendingClarificationsForTicket(row.ticketKey).catch(() => {});
+  }
+  await supersedeConnectedClarification(row.id).catch(() => {});
+  await markConnectedRunBlockedOnCancel(row.runId).catch(() => {});
 }
 
 async function listAnsweredForTicket(

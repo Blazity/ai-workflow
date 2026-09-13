@@ -195,17 +195,22 @@ export function findConnectedLiveRunClaimByRunId(runId: string) {
 /**
  * Terminal-side half of the cancel-by-id reverse lookup: once a run has left
  * `active_runs` its durable outcome lives in `workflow_runs`, keyed by run id
- * (PK). Returns the recorded status (null when the row exists but a status-less
- * writer created it), or null when no row exists at all, which the caller reads
- * as an unknown run id. This is the fallback consulted only after the live
- * lookup misses, so it never sees a run that is still cancellable.
+ * (PK). Returns the recorded status and completion time (either may be null
+ * when an incomplete writer created the row), or null when no row exists at
+ * all, which the caller reads as an unknown run id. This is the fallback
+ * consulted only after the live lookup misses, so it normally never sees a run
+ * that is still cancellable. Reconciliation also uses the completion time when
+ * Workflow status is unreachable and a live claim has outlived its run.
  */
 export async function findRunOutcomeByRunId(
   db: Db,
   runId: string,
-): Promise<{ status: string | null } | null> {
+): Promise<{ status: string | null; completedAt: Date | null } | null> {
   const [row] = await db
-    .select({ status: workflowRuns.status })
+    .select({
+      status: workflowRuns.status,
+      completedAt: workflowRuns.completedAt,
+    })
     .from(workflowRuns)
     .where(eq(workflowRuns.runId, runId))
     .limit(1);
