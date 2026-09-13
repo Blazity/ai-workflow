@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { mock } from "node:test";
 import React, { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import type { Root } from "react-dom/client";
 import {
   PathnameContext,
   SearchParamsContext,
@@ -12,9 +12,16 @@ import type {
   PromptLibraryListRowDto,
 } from "@shared/contracts";
 import { installTestDom } from "@/components/ui/test-dom";
-import { PromptLibraryScreen } from "./prompt-library";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
+
+async function loadPromptLibraryScreen() {
+  const [{ createRoot }, { PromptLibraryScreen }] = await Promise.all([
+    import("react-dom/client"),
+    import("./prompt-library"),
+  ]);
+  return { createRoot, PromptLibraryScreen };
+}
 
 const row: PromptLibraryListRowDto = {
   id: 7,
@@ -84,6 +91,7 @@ function openDialog() {
 
 test("prompt library editor owns focus, traps Tab, dismisses, and restores the Edit opener", async () => {
   const dom = installTestDom();
+  const { createRoot, PromptLibraryScreen } = await loadPromptLibraryScreen();
   const cockpitMain = document.createElement("main");
   cockpitMain.dataset.cockpitMain = "";
   const container = document.createElement("div");
@@ -202,6 +210,7 @@ test("prompt library editor owns focus, traps Tab, dismisses, and restores the E
 
 test("prompt library edit stays clean after Markdown normalization and guards a one-character edit", async () => {
   const dom = installTestDom();
+  const { createRoot, PromptLibraryScreen } = await loadPromptLibraryScreen();
   const cockpitMain = document.createElement("main");
   cockpitMain.dataset.cockpitMain = "";
   const container = document.createElement("div");
@@ -268,6 +277,27 @@ test("prompt library edit stays clean after Markdown normalization and guards a 
       await new Promise((resolve) => setTimeout(resolve, 20));
     });
     dialog = openDialog();
+    const cleanBackdrop = document.querySelector<HTMLElement>("[data-modal-overlay]");
+    assert.ok(cleanBackdrop, "expected the production modal backdrop");
+    act(() => {
+      cleanBackdrop.dispatchEvent(new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+      }));
+    });
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.equal(
+      Array.from(document.querySelectorAll<HTMLButtonElement>("button")).some(
+        (candidate) => candidate.textContent?.trim() === "Discard",
+      ),
+      false,
+    );
+
+    await act(async () => {
+      edit.click();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    dialog = openDialog();
     const rawToggle = Array.from(dialog.querySelectorAll<HTMLButtonElement>("button")).find(
       (candidate) => candidate.textContent?.trim() === "Raw",
     );
@@ -275,17 +305,18 @@ test("prompt library edit stays clean after Markdown normalization and guards a 
     act(() => rawToggle.click());
     const rawEditor = dialog.querySelector<HTMLTextAreaElement>("textarea");
     assert.ok(rawEditor, "expected the raw prompt editor");
-    const reactPropsKey = Object.keys(rawEditor).find((key) => key.startsWith("__reactProps$"));
-    assert.ok(reactPropsKey, "expected React props on the raw prompt editor");
-    const reactProps = (rawEditor as unknown as Record<string, unknown>)[reactPropsKey] as {
-      onChange: (event: { target: { value: string } }) => void;
-    };
-    act(() => reactProps.onChange({ target: { value: `${rawEditor.value}x` } }));
+    const valueSetter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    assert.ok(valueSetter, "expected the native textarea value setter");
+    act(() => {
+      valueSetter.call(rawEditor, `${rawEditor.value}x`);
+      rawEditor.dispatchEvent(new Event("input", { bubbles: true }));
+    });
     assert.equal(button("Save as v2").disabled, false);
 
-    const backdrop = Array.from(document.querySelectorAll<HTMLElement>("div")).find(
-      (element) => element.className.includes("absolute inset-0 bg-coal/40"),
-    );
+    const backdrop = document.querySelector<HTMLElement>("[data-modal-overlay]");
     assert.ok(backdrop, "expected the production modal backdrop");
     act(() => {
       backdrop.dispatchEvent(new MouseEvent("mousedown", {
