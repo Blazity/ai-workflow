@@ -54,7 +54,7 @@ export const workflowDefinitionCreateSourceSchema = z.custom<WorkflowDefinitionC
 export const workflowDefinitionCreateRequestSchema = objectOrEmpty(
   z.object({
     name: z
-      .string({ required_error: "Invalid name", invalid_type_error: "Invalid name" })
+      .string({ message: "Invalid name" })
       .trim()
       .min(1, "Invalid name"),
     source: workflowDefinitionCreateSourceSchema,
@@ -70,11 +70,11 @@ export type WorkflowDefinitionCreateRequest = z.infer<
 export const workflowDefinitionMetaPatchRequestSchema = objectOrEmpty(
   z.object({
     name: z
-      .string({ invalid_type_error: "Invalid name" })
+      .string({ message: "Invalid name" })
       .trim()
       .min(1, "Invalid name")
       .optional(),
-    enabled: z.boolean({ invalid_type_error: "Invalid enabled" }).optional(),
+    enabled: z.boolean({ message: "Invalid enabled" }).optional(),
   }),
 );
 export type WorkflowDefinitionMetaPatchRequest = z.infer<
@@ -160,10 +160,7 @@ export type WorkflowDefinitionCandidateRequest = z.infer<
 export const workflowDefinitionPromptPreviewRequestSchema = objectOrEmpty(
   z.object({
     blockId: z
-      .string({
-        required_error: "Invalid block id",
-        invalid_type_error: "Invalid block id",
-      })
+      .string({ message: "Invalid block id" })
       .min(1, "Invalid block id")
       .refine((value) => value.trim() === value, { message: "Invalid block id" }),
     definition: z.unknown(),

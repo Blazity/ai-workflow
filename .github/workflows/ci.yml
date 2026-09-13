@@ -67,6 +67,7 @@ jobs:
       # actually loads, so an API that exists in only one of them fails here
       # rather than on the first request after a deploy.
       - run: pnpm run test:packages:zod4
+      - run: pnpm --filter @shared/workflow-graph run test:zod4
       - run: pnpm --filter worker run test:zod4
       - run: pnpm run gates
       - run: pnpm run build:ci

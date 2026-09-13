@@ -16,7 +16,7 @@ import { z } from "zod";
  */
 export function integerField(message: string, minimum: number) {
   return z
-    .number({ required_error: message, invalid_type_error: message })
+    .number({ message })
     .int(message)
     .min(minimum, message);
 }

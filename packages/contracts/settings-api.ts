@@ -70,15 +70,14 @@ export interface SettingsVersionsResponse {
 export const settingsPatchRequestSchema = z.object(
   {
     settings: z.record(z.string(), z.unknown(), {
-      required_error: "Invalid settings",
-      invalid_type_error: "Invalid settings",
+      message: "Invalid settings",
     }),
     reason: z
-      .string({ required_error: "Invalid reason", invalid_type_error: "Invalid reason" })
+      .string({ message: "Invalid reason" })
       .trim()
       .min(1, { message: "Invalid reason" }),
   },
-  { required_error: "Invalid settings", invalid_type_error: "Invalid settings" },
+  { message: "Invalid settings" },
 );
 export type SettingsPatchRequest = z.infer<typeof settingsPatchRequestSchema>;
 

@@ -47,7 +47,7 @@ export function parseRequestBody<T>(
  *
  * Wrap only the schemas whose handler behaved this way. A handler that checked
  * the body was an object itself keeps its own refusal, spelled as the object
- * level `required_error` and `invalid_type_error`.
+ * level `message`.
  */
 export function objectOrEmpty<T>(
   schema: ZodType<T, ZodTypeDef, unknown>,
