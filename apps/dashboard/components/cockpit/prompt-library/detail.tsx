@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CkCard, CkChip, CkTabs } from "@/components/ui";
-import { Block } from "@/app/skeleton-block";
+import { Button, CkCard, CkChip, CkTabs, Skeleton } from "@/components/ui";
 import { DiffView } from "@/components/cockpit/prompt-diff";
 import { PromptBodyBlocks } from "@/components/cockpit/prompt-library/prompt-body-blocks";
 import { promptLibraryHref } from "@shared/prompts";
@@ -12,9 +11,6 @@ import type {
   PromptLibraryUsageResponse,
   PromptLibraryUsageRow,
 } from "@shared/contracts";
-
-const headerButtonClass =
-  "appearance-none cursor-pointer border border-neutral-200 bg-panel text-coal py-1.5 px-3 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase hover:bg-app-bg";
 
 function UsageStateChip({
   state,
@@ -76,12 +72,12 @@ export function PromptDetail({
       <div className="flex flex-col gap-3 lg:h-full min-w-0">
         <CkCard eyebrow={`LIBRARY · v${row.currentVersion}`} title={row.name}>
           <div className="flex flex-col gap-2">
-            <Block className="h-4 w-3/4" />
-            <Block className="h-4 w-1/2" />
+            <Skeleton variant="line" className="w-3/4" />
+            <Skeleton variant="line" className="w-1/2" />
           </div>
         </CkCard>
         <CkCard eyebrow="PROMPT BODY">
-          <Block className="h-[220px] w-full" />
+          <Skeleton height={220} />
         </CkCard>
       </div>
     );
@@ -127,12 +123,12 @@ export function PromptDetail({
         action={
           canEdit && !archived ? (
             <div className="flex items-center gap-2">
-              <button onClick={onEdit} className={headerButtonClass}>
+              <Button variant="secondary" onClick={onEdit}>
                 Edit
-              </button>
-              <button onClick={() => setConfirmArchive(true)} className={headerButtonClass}>
+              </Button>
+              <Button variant="secondary" onClick={() => setConfirmArchive(true)}>
                 Archive
-              </button>
+              </Button>
             </div>
           ) : undefined
         }
@@ -145,19 +141,21 @@ export function PromptDetail({
                 ? `${usageTotal} ${usageTotal === 1 ? "place references" : "places reference"} it; live references will stop resolving on latest. Copied text keeps working.`
                 : "Nothing references it."}
             </span>
-            <button
+            <Button
+              variant="danger"
+              size="sm"
               onClick={onArchive}
               disabled={busy !== null}
-              className="appearance-none border-none bg-transparent font-body text-[12px] font-semibold text-red-600 cursor-pointer disabled:opacity-40"
             >
               {busy === "archive" ? "Archiving…" : "Archive"}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => setConfirmArchive(false)}
-              className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer"
             >
               Cancel
-            </button>
+            </Button>
           </div>
         )}
         {meta.description ? (
@@ -182,30 +180,32 @@ export function PromptDetail({
             const notLast = i < versions.length - 1;
             const dropRight = notLast && !on;
             return (
-              <button
+              <Button
+                variant={on ? "primary" : "secondary"}
+                size="md"
                 key={v.version}
                 onClick={() => setSelectedVersion(v.version)}
-                className={`shrink-0 w-[176px] appearance-none cursor-pointer text-left px-4 py-[14px] relative border ${
-                  on ? "border-mariner bg-mariner-100" : "border-neutral-200 bg-panel"
-                } ${dropRight ? "border-r-0" : ""}`}
+                className={`h-auto w-44 shrink-0 justify-start py-3.5 text-left ${dropRight ? "border-r-0" : ""}`}
               >
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="font-mono text-sm font-semibold text-neutral-900">
-                    v{v.version}
-                  </span>
-                  {v.restoredFromVersion !== null && (
-                    <span className="rounded-[3px] bg-app-bg px-[6px] py-[2px] font-mono text-[9px] text-neutral-600">
-                      from v{v.restoredFromVersion}
+                <span className="flex w-full min-w-0 flex-col">
+                  <span className="mb-1.5 flex items-center justify-between">
+                    <span className="font-mono text-sm font-semibold text-neutral-900">
+                      v{v.version}
                     </span>
-                  )}
-                </div>
-                <div className="font-mono text-[10px] text-neutral-500 mb-1">
-                  {new Date(v.createdAt).toLocaleDateString()}
-                </div>
-                <div className="font-mono text-[10px] text-neutral-700 truncate">
-                  {v.createdByLabel}
-                </div>
-              </button>
+                    {v.restoredFromVersion !== null && (
+                      <span className="rounded-[3px] bg-app-bg px-[6px] py-[2px] font-mono text-[9px] text-neutral-600">
+                        from v{v.restoredFromVersion}
+                      </span>
+                    )}
+                  </span>
+                  <span className="mb-1 font-mono text-[10px] text-neutral-500">
+                    {new Date(v.createdAt).toLocaleDateString()}
+                  </span>
+                  <span className="truncate font-mono text-[10px] text-neutral-700">
+                    {v.createdByLabel}
+                  </span>
+                </span>
+              </Button>
             );
           })}
         </div>
@@ -240,34 +240,38 @@ export function PromptDetail({
             {canRestore &&
               (confirmRestore === shownVersion ? (
                 <span className="flex items-center gap-2">
-                  <button
+                  <Button
+                    variant="danger"
+                    size="sm"
                     onClick={() => onRestore(shownVersion)}
                     disabled={busy !== null}
-                    className="appearance-none border-none bg-transparent font-body text-[12px] font-semibold text-red-600 cursor-pointer disabled:opacity-40"
                   >
                     {busy === `restore-${shownVersion}` ? "Restoring…" : "Confirm restore"}
-                  </button>
-                  <button
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={() => setConfirmRestore(null)}
-                    className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer"
                   >
                     Cancel
-                  </button>
+                  </Button>
                 </span>
               ) : (
-                <button
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => setConfirmRestore(shownVersion)}
-                  className="appearance-none border-none bg-transparent font-body text-[12px] text-mariner cursor-pointer"
                 >
                   Restore
-                </button>
+                </Button>
               ))}
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={copyBody}
-              className="appearance-none border-none bg-transparent font-mono text-[11px] tracking-[0.04em] uppercase text-neutral-700 cursor-pointer hover:text-coal"
             >
               {copied ? "Copied" : "Copy body"}
-            </button>
+            </Button>
           </div>
         </div>
         <div className="border border-neutral-200 rounded-xs overflow-hidden bg-off-white/50">
@@ -288,8 +292,8 @@ export function PromptDetail({
       <CkCard eyebrow="Used in" title="Workflows and prompts">
         {usage === undefined ? (
           <div className="flex flex-col gap-2">
-            <Block className="h-8 w-full" />
-            <Block className="h-8 w-full" />
+            <Skeleton height={32} />
+            <Skeleton height={32} />
           </div>
         ) : usage.rows.length === 0 && usage.prompts.length === 0 ? (
           <div className="font-body text-[12px] text-neutral-500">

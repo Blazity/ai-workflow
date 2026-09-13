@@ -22,6 +22,7 @@ export interface ModalProps {
   footer?: ReactNode;
   size?: "sm" | "md" | "lg";
   variant?: ModalVariant;
+  dismissible?: boolean;
   showCloseButton?: boolean;
   closeLabel?: string;
   initialFocusRef?: React.RefObject<HTMLElement | null>;
@@ -59,6 +60,7 @@ export function Modal({
   footer,
   size = "md",
   variant = "center",
+  dismissible = true,
   showCloseButton = false,
   closeLabel = "Close",
   initialFocusRef,
@@ -106,7 +108,7 @@ export function Modal({
     });
 
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && dismissible) {
         event.preventDefault();
         onCloseRef.current();
         return;
@@ -139,7 +141,7 @@ export function Modal({
       const previous = previousFocusRef.current;
       if (previous && document.contains(previous)) previous.focus();
     };
-  }, [initialFocusRef, open]);
+  }, [dismissible, initialFocusRef, open]);
 
   if (!mounted) return null;
 
@@ -179,7 +181,7 @@ export function Modal({
         className="absolute inset-0 bg-coal/40 opacity-100 pointer-events-auto transition-[opacity] duration-[var(--motion-base)] ease-emphasized data-[state=closed]:opacity-0 data-[state=closed]:ease-exit"
         data-state={state}
         onMouseDown={(event) => {
-          if (event.target === event.currentTarget) onClose();
+          if (dismissible && event.target === event.currentTarget) onClose();
         }}
       />
       <section
@@ -212,7 +214,7 @@ export function Modal({
               <h2 id={titleId} className="m-0 font-display text-base font-semibold text-coal">{title}</h2>
               {description ? <p id={descriptionId} className="mt-1 mb-0 font-body text-xs leading-relaxed text-neutral-700">{description}</p> : null}
             </div>
-            {showCloseButton ? (
+            {showCloseButton && dismissible ? (
               <IconButton aria-label={closeLabel} onClick={onClose} size="sm">×</IconButton>
             ) : null}
           </div>

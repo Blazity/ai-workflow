@@ -8,10 +8,11 @@ import { Textarea } from "./textarea";
 
 test("Textarea renders both sizes and the monospace option", () => {
   const compact = renderToStaticMarkup(<Textarea size="sm" />);
-  const standard = renderToStaticMarkup(<Textarea size="md" monospace />);
+  const standard = renderToStaticMarkup(<Textarea size="md" monospace resize="none" />);
   assert.match(compact, /min-h-\[72px\]/);
   assert.match(standard, /min-h-\[88px\]/);
   assert.match(standard, /font-mono/);
+  assert.match(standard, /resize-none/);
 });
 
 test("Textarea exposes invalid state", () => {

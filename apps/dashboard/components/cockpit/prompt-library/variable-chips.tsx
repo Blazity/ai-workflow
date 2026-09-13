@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { usedVariables } from "@shared/prompts";
 import { VariablePickerPopover } from "./variable-picker-popover";
+import { Button } from "@/components/ui";
 
 /** Compact variable summary for a prompt body: a row of chips for the
  *  variables actually used, plus an optional inline trigger that opens the
@@ -17,7 +18,7 @@ export function VariableChips({
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const btnRef = useRef<HTMLButtonElement>(null);
+  const btnRef = useRef<HTMLSpanElement>(null);
   const used = usedVariables(body);
   const canInsert = onInsertToken != null && !disabled;
 
@@ -45,16 +46,18 @@ export function VariableChips({
 
       {canInsert && (
         <>
-          <button
-            ref={btnRef}
-            type="button"
-            onClick={() => setOpen((o) => !o)}
-            aria-haspopup="listbox"
-            aria-expanded={open}
-            className="self-start appearance-none cursor-pointer rounded-xs px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.04em] text-mariner transition-[background-color,transform] duration-150 ease-standard hover:bg-mariner-100 active:scale-[0.96]"
-          >
-            + variable
-          </button>
+          <span ref={btnRef} className="self-start">
+            <Button
+              variant="ghost"
+              size="sm"
+              type="button"
+              onClick={() => setOpen((o) => !o)}
+              aria-haspopup="listbox"
+              aria-expanded={open}
+            >
+              + variable
+            </Button>
+          </span>
           <VariablePickerPopover
             open={open}
             anchorRef={btnRef}

@@ -8,7 +8,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
-import { CkCard, CkChip } from "@/components/ui";
+import { Button, CkCard, CkChip } from "@/components/ui";
 import { apiClient } from "@/lib/api/client";
 import { SettingsAreaPanel } from "@/app/(cockpit)/settings/settings-area-panel";
 import type {
@@ -138,31 +138,36 @@ export function MemoryScreen({
                     <span className="font-mono text-[11px] text-neutral-700">
                       Delete from the store?
                     </span>
-                    <DarkButton
+                    <Button
+                      variant="primary"
+                      size="sm"
                       disabled={pending.phase === "deleting"}
                       onClick={() => remove(selection)}
                       type="button"
                     >
                       {pending.phase === "deleting" ? "Deleting…" : "Confirm delete"}
-                    </DarkButton>
-                    <GhostButton
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
                       disabled={pending.phase === "deleting"}
                       onClick={() => setDeleteState(null)}
                       type="button"
                     >
                       Cancel
-                    </GhostButton>
+                    </Button>
                   </>
                 ) : (
-                  <GhostButton
-                    danger
+                  <Button
+                    variant="danger"
+                    size="sm"
                     onClick={() =>
                       setDeleteState({ doc: selection, phase: "confirming", error: null })
                     }
                     type="button"
                   >
                     Delete
-                  </GhostButton>
+                  </Button>
                 )
               ) : null}
               <Link
@@ -231,7 +236,7 @@ export function MemoryScreen({
                 <Link
                   key={`${doc.subjectKey}:${doc.docPath}`}
                   href={`/memory?subject=${encodeURIComponent(doc.subjectKey)}&doc=${encodeURIComponent(doc.docPath)}`}
-                  className={`${ROW_GRID} px-4 py-3 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-mariner focus-visible:outline-offset-[-2px] ${
+                  className={`${ROW_GRID} px-4 py-3 transition-colors duration-[var(--motion-fast)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-mariner focus-visible:outline-offset-[-2px] ${
                     active ? "bg-[#ECECFD]" : "hover:bg-neutral-100"
                   } ${index < visible.length - 1 ? "border-b border-neutral-200" : ""}`}
                 >
@@ -274,37 +279,6 @@ function InlineError({ children }: { children: React.ReactNode }) {
     <div className="rounded-[3px] border border-fail-bg bg-fail-bg px-3 py-2 text-[13px] text-fail-fg">
       {children}
     </div>
-  );
-}
-
-function GhostButton({
-  children,
-  danger = false,
-  ...props
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & { danger?: boolean }) {
-  return (
-    <button
-      {...props}
-      className={[
-        "inline-flex items-center justify-center whitespace-nowrap rounded-[3px] border bg-white px-2.5 py-[5px] font-mono text-[10px] font-medium uppercase tracking-[0.04em] transition disabled:cursor-default disabled:opacity-40",
-        danger
-          ? "border-[#F3CFC7] text-fail-fg hover:bg-fail-bg"
-          : "border-neutral-200 text-neutral-900 hover:bg-app-bg",
-      ].join(" ")}
-    >
-      {children}
-    </button>
-  );
-}
-
-function DarkButton({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
-  return (
-    <button
-      {...props}
-      className="inline-flex items-center justify-center whitespace-nowrap rounded-[3px] border border-neutral-900 bg-neutral-900 px-3.5 py-[5px] font-mono text-[11px] font-medium uppercase tracking-[0.04em] text-white transition hover:bg-neutral-800 disabled:cursor-default disabled:opacity-40"
-    >
-      {children}
-    </button>
   );
 }
 

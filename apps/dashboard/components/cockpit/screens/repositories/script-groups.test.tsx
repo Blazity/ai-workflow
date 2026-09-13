@@ -1590,7 +1590,7 @@ test("the moved row's own button keeps the focus", (t) => {
   const focused: string[] = [];
   const { root } = renderEntry(t, repoOf(TWO_COMMAND_CONFIG), {
     createNodeMock: (element) => ({
-      focus: () => focused.push(String(element.props["aria-label"])),
+      focus: () => focused.push(String(element.props["aria-label"] ?? element.props["data-focus-label"])),
     }),
   });
   expandGroup(root, "checks");

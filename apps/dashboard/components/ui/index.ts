@@ -16,6 +16,7 @@ export { Skeleton } from "./skeleton";
 export type { SkeletonProps, SkeletonVariant } from "./skeleton";
 export { CkChip, CkDot } from "../ui";
 export type { ChipTone } from "../ui";
+export { MOTION_BASE_MS, MOTION_FAST_MS, MOTION_SLOW_MS } from "./motion";
 export { Switch } from "./switch";
 export type { SwitchProps } from "./switch";
 export { Checkbox } from "./checkbox";

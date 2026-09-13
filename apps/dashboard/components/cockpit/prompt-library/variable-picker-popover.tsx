@@ -4,14 +4,16 @@ import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "re
 import { createPortal } from "react-dom";
 import { AVAILABLE_VARIABLES, type PromptVariableSpec } from "@shared/prompts";
 import { useEnterExit } from "@/lib/use-enter-exit";
+import { Button } from "@/components/ui";
+import { MOTION_BASE_MS } from "@/components/ui/index";
 
 interface Placement {
   left: number;
   width: number;
   maxHeight: number;
-  /** Distance from viewport top (drop-down) — set when opening below the anchor. */
+  /** Distance from viewport top (drop-down), set when opening below the anchor. */
   top?: number;
-  /** Distance from viewport bottom (drop-up) — set when opening above the anchor. */
+  /** Distance from viewport bottom (drop-up), set when opening above the anchor. */
   bottom?: number;
   up: boolean;
 }
@@ -38,7 +40,7 @@ export function VariablePickerPopover<T extends HTMLElement>({
    *  values passes its own list rather than offering names it leaves literal. */
   variables?: readonly PromptVariableSpec[];
 }) {
-  const { mounted, state } = useEnterExit(open, 160);
+  const { mounted, state } = useEnterExit(open, MOTION_BASE_MS);
   const popRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<Placement | null>(null);
 
@@ -105,7 +107,7 @@ export function VariablePickerPopover<T extends HTMLElement>({
       aria-label="Insert variable"
       data-state={state}
       style={{ left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.width, maxHeight: pos.maxHeight }}
-      className={`fixed z-[110] flex flex-col overflow-y-auto rounded-md border border-neutral-200 bg-panel shadow-[0_16px_40px_-12px_rgba(24,27,32,0.35)] transition-[opacity,transform] duration-150 ease-standard motion-reduce:transition-none motion-reduce:transform-none ${
+      className={`fixed z-[110] flex flex-col overflow-y-auto rounded-sm border border-neutral-200 bg-panel shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] transition-[opacity,transform] duration-[var(--motion-base)] ease-standard motion-reduce:transition-none motion-reduce:transform-none ${
         pos.up ? "origin-bottom" : "origin-top"
       } ${
         state === "open"
@@ -114,7 +116,9 @@ export function VariablePickerPopover<T extends HTMLElement>({
       }`}
     >
       {variables.map((spec) => (
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
           key={spec.name}
           type="button"
           role="option"
@@ -122,11 +126,13 @@ export function VariablePickerPopover<T extends HTMLElement>({
           // Keep focus in the editor/textarea so inserting doesn't blur the caret.
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => onPick(`{{${spec.name}}}`)}
-          className="block w-full appearance-none cursor-pointer border-b border-neutral-200 bg-panel px-2.5 py-2 text-left transition-colors duration-150 last:border-b-0 hover:bg-off-white"
+          className="h-auto min-h-10 w-full justify-start rounded-none border-b border-neutral-200 px-2.5 py-2 text-left normal-case last:border-b-0"
         >
-          <div className="font-mono text-[11px] text-neutral-900">{spec.name}</div>
-          <div className="text-[10px] leading-[1.4] text-neutral-500">{spec.description}</div>
-        </button>
+          <span className="flex w-full min-w-0 flex-col">
+            <span className="font-mono text-[11px] text-neutral-900">{spec.name}</span>
+            <span className="text-[10px] leading-[1.4] text-neutral-500">{spec.description}</span>
+          </span>
+        </Button>
       ))}
     </div>,
     document.body,

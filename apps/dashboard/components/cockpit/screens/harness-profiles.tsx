@@ -4,7 +4,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ProfileEditor, type ProfileAction } from "@/components/cockpit/harness-profiles/profile-editor";
-import { Listbox } from "@/components/cockpit/listbox";
+import { Button, Input, Select, Skeleton } from "@/components/ui";
 import { apiClient, type ApiResult } from "@/lib/api/client";
 import {
   isProfileSlug,
@@ -24,11 +24,6 @@ import type {
   HarnessProfilesResponse,
   HarnessSkillRefreshResponse,
 } from "@shared/contracts";
-
-const primaryButtonClass =
-  "appearance-none rounded-[3px] border border-mariner bg-mariner px-3.5 py-2 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-white cursor-pointer disabled:cursor-default disabled:opacity-40";
-const secondaryButtonClass =
-  "appearance-none rounded-[3px] border border-neutral-300 bg-panel px-3.5 py-2 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-coal cursor-pointer disabled:cursor-default disabled:opacity-40";
 
 async function fetchProfileDetail(
   profileId: string,
@@ -90,16 +85,16 @@ function NewProfilePanel({
           <span className="font-mono text-[9px] uppercase tracking-[0.06em] text-neutral-700">
             Slug
           </span>
-          <input
+          <Input
+            monospace
             value={slug}
             maxLength={64}
             onChange={(event) => setSlug(event.target.value)}
             placeholder="custom-review"
-            className="h-[30px] rounded-[3px] border border-neutral-200 bg-white px-2 font-mono text-[11px] outline-none"
           />
           {slug !== "" && !isProfileSlug(slug.trim()) && (
             <span className="font-body text-[10px] text-red-600">
-              Use 1–64 lowercase letters, numbers, or hyphens.
+              Use 1 to 64 lowercase letters, numbers, or hyphens.
             </span>
           )}
         </label>
@@ -107,19 +102,19 @@ function NewProfilePanel({
           <span className="font-mono text-[9px] uppercase tracking-[0.06em] text-neutral-700">
             Display name
           </span>
-          <input
+          <Input
+            monospace
             value={displayName}
             maxLength={120}
             onChange={(event) => setDisplayName(event.target.value)}
             placeholder="Custom review"
-            className="h-[30px] rounded-[3px] border border-neutral-200 bg-white px-2 font-mono text-[11px] outline-none"
           />
         </label>
         <div className="flex flex-col gap-1">
           <span className="font-mono text-[9px] uppercase tracking-[0.06em] text-neutral-700">
             Start from
           </span>
-          <Listbox
+          <Select
             options={[
               { value: "", label: "Provider baseline" },
               ...sources.map((profile) => ({
@@ -129,7 +124,7 @@ function NewProfilePanel({
             ]}
             value={sourceId}
             disabled={busy}
-            ariaLabel="Profile starting point"
+            aria-label="Profile starting point"
             onChange={setSourceId}
           />
         </div>
@@ -138,14 +133,14 @@ function NewProfilePanel({
             <span className="font-mono text-[9px] uppercase tracking-[0.06em] text-neutral-700">
               Provider
             </span>
-            <Listbox
+            <Select
               options={[
                 { value: "codex", label: "Codex" },
                 { value: "claude", label: "Claude" },
               ]}
               value={provider}
               disabled={busy}
-              ariaLabel="New profile provider"
+              aria-label="New profile provider"
               onChange={(value) =>
                 setProvider(value === "claude" ? "claude" : "codex")
               }
@@ -154,7 +149,7 @@ function NewProfilePanel({
         )}
       </div>
       <div className="mt-3 flex gap-2">
-        <button
+        <Button
           type="button"
           onClick={() => void onCreate(slug.trim(), buildDraft())}
           disabled={
@@ -163,18 +158,17 @@ function NewProfilePanel({
             displayName.trim() === "" ||
             !isProfileSlug(slug.trim())
           }
-          className={primaryButtonClass}
         >
           {busy ? "Creating…" : "Create draft"}
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="secondary"
           type="button"
           onClick={onCancel}
           disabled={busy}
-          className={secondaryButtonClass}
         >
           Cancel
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -530,7 +524,7 @@ export function HarnessProfilesScreen({
     <div className="px-4 pb-8 pt-5 lg:px-6">
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="m-0 font-display text-[26px] font-semibold text-coal">
+          <h1 className="m-0 font-display text-2xl font-semibold text-coal">
             Harness profiles
           </h1>
           <p className="mt-1 mb-0 max-w-[740px] font-body text-[12px] leading-[1.5] text-neutral-600">
@@ -540,14 +534,13 @@ export function HarnessProfilesScreen({
           </p>
         </div>
         {initial.canManageProfiles && (
-          <button
+          <Button
             type="button"
             onClick={() => setShowCreate(true)}
             disabled={busy !== null || showCreate}
-            className={primaryButtonClass}
           >
             New profile
-          </button>
+          </Button>
         )}
       </div>
 
@@ -569,7 +562,7 @@ export function HarnessProfilesScreen({
 
       <div className="mb-5 flex flex-col gap-3 border-y border-neutral-200 bg-panel px-3 py-3 md:flex-row md:items-center">
         <div className="min-w-[260px] md:max-w-[360px] md:flex-1">
-          <Listbox
+          <Select
             options={visibleProfiles.map((profile) => ({
               value: profile.id,
               label: `${profile.draft.displayName} · ${
@@ -586,16 +579,16 @@ export function HarnessProfilesScreen({
                 : ""
             }
             disabled={busy !== null || visibleProfiles.length === 0}
-            ariaLabel="Selected harness profile"
+            aria-label="Selected harness profile"
             onChange={(value) => selectProfile(value)}
           />
         </div>
-        <input
+        <Input
           aria-label="Search harness profiles"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
           placeholder="Search profiles…"
-          className="h-[32px] min-w-[220px] rounded-[3px] border border-neutral-200 bg-white px-3 font-body text-[11px] text-coal outline-none focus:border-mariner md:ml-auto"
+          className="min-w-[220px] md:ml-auto"
         />
         <label className="flex items-center gap-2 whitespace-nowrap font-body text-[11px] text-neutral-600">
           <input
@@ -623,8 +616,8 @@ export function HarnessProfilesScreen({
 
       <main className="min-w-0">
           {detailLoading && !detail ? (
-            <div className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-12 text-center font-body text-[12px] text-neutral-500">
-              Loading profile…
+            <div className="rounded-sm border border-neutral-200 bg-panel p-4">
+              <Skeleton height={88} />
             </div>
           ) : detail ? (
             <ProfileEditor
