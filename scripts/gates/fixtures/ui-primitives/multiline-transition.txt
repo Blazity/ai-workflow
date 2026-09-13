@@ -1,0 +1,11 @@
+export function MultilineTransition() {
+  return (
+    <div
+      style={{
+        transition: `opacity
+          240ms
+          ease-out`,
+      }}
+    />
+  );
+}

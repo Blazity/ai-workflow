@@ -1,0 +1,3 @@
+export function InlineTransitionDuration() {
+  return <div style={{ transitionDuration: "120ms" }} />;
+}
