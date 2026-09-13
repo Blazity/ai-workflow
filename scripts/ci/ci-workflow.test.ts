@@ -56,6 +56,7 @@ test("CI preserves every authoritative source trigger", async () => {
  * tests hold exactly those lines, together, rather than pinning one job's steps.
  */
 const SOURCE_JOBS = ["source-checks", "unit-worker", "unit-dashboard", "workflow-sdk"] as const;
+const REQUIRED_JOBS = [...SOURCE_JOBS, "engine-canary"] as const;
 
 const DIFF_CHECK_COMMAND = [
   'base="${{ github.event_name == \'pull_request\' && github.event.pull_request.base.sha || github.event_name == \'push\' && github.event.before || \'\' }}"',
@@ -86,6 +87,7 @@ const SOURCE_COMMANDS = [
 ];
 
 interface CiJob {
+  concurrency?: { group?: string; "cancel-in-progress"?: boolean };
   "continue-on-error"?: boolean;
   env?: Record<string, string>;
   environment?: unknown;
@@ -166,13 +168,13 @@ test("no source job can be skipped or reach a live environment", async () => {
   }
 });
 
-test("the required check fails when any source job does not succeed", async () => {
+test("the required check fails when any pull request dependency does not succeed", async () => {
   const jobs = await ciJobs();
   const aggregate = jobs.ci as CiJob;
 
   assert.deepEqual(
     [...(aggregate.needs ?? [])].sort(),
-    [...SOURCE_JOBS].sort(),
+    [...REQUIRED_JOBS].sort(),
     "the required check must depend on every source job",
   );
   // Without always() a failed dependency leaves this job skipped, and GitHub
@@ -185,7 +187,46 @@ test("the required check fails when any source job does not succeed", async () =
   const script = (aggregate.steps ?? []).map((step) => step.run ?? "").join("\n");
   assert.match(script, /needs\.\*\.result/, "the check must read every dependency result");
   assert.match(script, /!=\s*"success"/, "the check must reject any non-success result");
+  assert.match(
+    script,
+    /"engine-canary".*github\.event_name.*!= "pull_request".*"skipped"/u,
+    "only a non-pull-request engine canary skip may satisfy the aggregate",
+  );
   assert.match(script, /exit 1/, "the check must fail the job on a non-success result");
+});
+
+test("the engine canary is a fail-closed pull request dependency", async () => {
+  const jobs = await ciJobs();
+  const canary = jobs["engine-canary"] as CiJob;
+
+  assert.equal(canary.if, "github.event_name == 'pull_request'");
+  assert.equal(canary.environment, "e2e");
+  assert.equal(canary["timeout-minutes"], 75);
+  assert.deepEqual(canary.concurrency, {
+    group: "engine-canary",
+    "cancel-in-progress": false,
+  });
+
+  const steps = canary.steps ?? [];
+  const checkout = steps.find((step) => step.uses === "actions/checkout@v4");
+  assert.equal(checkout?.with?.["fetch-depth"], 0);
+  const scope = steps.find((step) => step.name === "Select engine canary scope");
+  assert.match(scope?.run ?? "", /engine-canary-scope\.ts/u);
+  const target = steps.find(
+    (step) => step.name === "Validate isolated target configuration",
+  );
+  assert.match(target?.run ?? "", /engine-canary idle/u);
+  assert.match(target?.run ?? "", /armed=false/u);
+  assert.match(target?.run ?? "", /missing required names/u);
+
+  for (const step of steps.slice(5)) {
+    if (step === target) continue;
+    assert.match(
+      step.if ?? "",
+      /steps\.target\.outputs\.armed == 'true'/u,
+      `${step.name ?? step.run} must require an armed target`,
+    );
+  }
 });
 
 test("the source build covers worker and dashboard without deployment side effects", async () => {
@@ -285,13 +326,14 @@ test("all setup-node workflow jobs use Node 24", async () => {
     }
   }
 
-  // Four source jobs in ci.yml (the `ci` aggregate installs nothing) and three
+  // Four source jobs and one canary in ci.yml (the `ci` aggregate installs
+  // nothing) plus three
   // e2e tiers in e2e.yml. The count is pinned so a new job cannot quietly join
   // on an older Node; it dropped from ten when the three e2e tiers duplicated
   // into ci.yml behind an unreachable `merge_group` were removed.
   assert.equal(
     setupNodeJobs,
-    7,
-    `expected 7 setup-node jobs across CI workflows, found ${setupNodeJobs}`,
+    8,
+    `expected 8 setup-node jobs across CI workflows, found ${setupNodeJobs}`,
   );
 });
