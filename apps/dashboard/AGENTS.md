@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-12
+Last-verified: 2026-09-13
 
 # apps/dashboard
 
@@ -47,12 +47,15 @@ package.
 | `components/cockpit/screens/repositories/` | the script group editor, now bound to one repository's profile instead of a fleet in one blob |
 | `components/cockpit/flow-editor/` | the definition editor: block palette, config fields, binding fields, branch and loop editors, harness profile picker |
 | `components/cockpit/prompt-editor/`, `prompt-library/`, `harness-profiles/` | the authoring surfaces for prompts and profiles |
+| `components/ui/` | canonical Button, IconButton, Input, Textarea, Field, Select, Modal, and Skeleton primitives |
 | `components/ui.tsx`, `charts.tsx`, `flame-graph.tsx` | shared primitives |
 | `lib/api/` | the worker client, the proxy, error shaping, fallbacks |
 | `lib/data/` | the mock dataset a screen falls back to when a source is not configured |
 | `lib/repository-catalog/` | the catalog's pure helpers with colocated tests: row formatting, the profile draft and its patch, the activation copy, the import summary, the suggestion diff |
 | `lib/auth/`, `middleware.ts` | session handling and route protection |
 | `lib/*.ts` | pure helpers with colocated tests (run model, run hrefs, live polling, ticket shaping) |
+
+New screens use the canonical primitives exported from `components/ui/`.
 
 ## Settings
 

@@ -59,20 +59,35 @@ calm, and inspectable. Information density is a feature. Visual noise is not.
 
 ### Motion inventory
 
-`--ease-standard` is `cubic-bezier(0.2, 0, 0, 1)` and `--ease-emphasized` is
-`cubic-bezier(0.3, 0, 0, 1)`. Current tokens are `--animate-ck-pulse` at 1.4
-seconds ease in and out, `--animate-ck-slide` at 320 ms standard,
-`--animate-ck-slide-up` at 280 ms standard, `--animate-ck-shimmer` at 1.6
-seconds ease in and out, `--animate-ck-march` at 600 ms linear,
-`--animate-ck-pop` at 140 ms standard, `--animate-ck-glow` at 1.7 seconds ease
-in and out, `--animate-ck-fade-up` at 260 ms standard with fill both, and
-`--animate-ck-chip-in` at 200 ms standard with fill both.
+The duration tokens are `--motion-fast` at 120 ms, `--motion-base` at 180 ms,
+and `--motion-slow` at 240 ms. `--ease-standard` is
+`cubic-bezier(0.2, 0, 0, 1)`, `--ease-emphasized` is
+`cubic-bezier(0.3, 0, 0, 1)`, and `--ease-exit` is
+`cubic-bezier(0.4, 0, 1, 1)`. Current animation tokens use these duration and
+easing tokens for slides, pop, fade up, and chip entry. The pulse remains at
+1.4 seconds and the shimmer remains at 1.6 seconds. March and glow are off.
 
 Keyframe endpoints are current too: pulse scales 0.8 to 2.2 at opacity 1 to 0;
 slides travel 100 percent to 0; pop moves from `translateY(-4px) scale(0.98)`;
 shimmer travels negative 100 percent to 100 percent; march offsets stroke by
-negative 16; `--ck-dash` supplies the drain endpoint; fade up starts at 6 px
-with 3 px blur; chip in scales 0.9 to 1.
+negative 16; `--ck-dash` supplies the drain endpoint; fade up starts at 6 px;
+chip in scales 0.9 to 1.
+
+### Motion doctrine
+
+- Animate only opacity and transform. Never animate layout properties. Colour
+  may transition at `--motion-fast`.
+- Hover and press feedback on interactive primitives uses `--motion-fast`.
+  Press scales to 0.98.
+- Menus and inserted chips enter with the existing pop keyframes at
+  `--motion-base`.
+- A modal overlay fades at `--motion-base`. Its panel fades and scales from
+  0.98 at `--motion-slow`. Exit uses `--motion-base` and `--ease-exit`.
+- Skeleton shimmer and the LIVE pulse are the only continuous animations.
+- Under `prefers-reduced-motion: reduce`, every motion duration token becomes
+  0 ms and both continuous animations stop.
+- Nothing animates on initial page load except the existing fade up, at most
+  once per mount.
 
 ## 2. Colour palette and roles
 
@@ -341,45 +356,47 @@ Resolution order:
 4. A domain wrapper may add copy or data mapping, but not a new skin.
 5. A raw native control is allowed only inside the shared primitive.
 
-The existing `ui.tsx` is a starting point, not a complete library. Its current
-exports cover chips, dots, cards, KPIs, tabs, status, pagination, and links.
-Button, Input, Select, Modal, Table, Toast, and Skeleton still need canonical
-exports `(proposed)`.
+The existing `ui.tsx` exports chips, dots, cards, KPIs, tabs, status,
+pagination, and links. The `components/ui/` directory exports Button,
+IconButton, Input, Textarea, Field, Select, Modal, and Skeleton. It also
+reexports `CkChip` and `CkDot`. Table and Toast still need canonical exports
+`(proposed)`.
 
 ### Buttons
 
-Canonical variants `(proposed)`:
+Canonical variants:
 
 | Variant | Job | Current visual source |
 | --- | --- | --- |
 | Primary | Confirm a main action | Mariner fill in repository and editor actions |
-| Neutral | Strong non authoring action | Coal fill in Runs, Trace, Approvals, Users |
 | Secondary | Alternative or cancel | White panel, neutral 300 border |
-| Quiet | Low emphasis action in a dense row | Transparent background, no border |
-| Destructive | Delete, revoke, cancel irreversible state | Red intent, never mariner |
-| Icon | One glyph with accessible label | 28 px or 30 px square controls |
+| Ghost | Low emphasis action in a dense row | Transparent background, no border |
+| Danger | Delete, revoke, cancel irreversible state | Red intent, never mariner |
+| Icon | One glyph with accessible label | 26 px or 30 px square controls |
 
-Sizes `(proposed)`:
+Sizes:
 
 | Size | Height | Horizontal padding | Text |
 | --- | --- | --- | --- |
 | Compact | 26 px | 8 px | 9 px or 10 px mono |
 | Default | 30 px | 12 px | 10 px or 11 px mono |
-| Comfortable | 40 px | 16 px | 11 px mono |
-| Icon | 30 px | 0 | Icon only |
+| Icon compact | 26 px | 0 | Icon only |
+| Icon default | 30 px | 0 | Icon only |
 
-States `(proposed)`: default supplies fill, edge, foreground, and 3 px radius;
+States: default supplies fill, edge, foreground, and 3 px radius;
 hover changes colour or border; focus uses a visible 2 px mariner ring;
-disabled keeps readable copy at 40 percent opacity; loading preserves width;
-error copy sits beside or below the unchanged button.
+disabled keeps readable copy at 40 percent opacity; loading preserves width.
+
+Implemented by `components/ui/button.tsx` and
+`components/ui/icon-button.tsx`.
 
 Consumers: every screen, especially Repositories, Settings, Runs, Workflow
 editor, Prompt library, Harness profiles, Health, Users, and modal footers.
 
 ### Select and combobox
 
-The canonical Select is the current `Listbox` behavior with two densities
-`(proposed)`. Use native `select` only inside the primitive or when a platform
+The canonical Select is the current `Listbox` behavior with two densities.
+Use native `select` only inside the primitive or when a platform
 constraint is documented.
 
 | Size | Height | Use |
@@ -391,40 +408,52 @@ Options use a 34 px row estimate today. The menu caps at 360 px and opens 6 px
 from its trigger. Its current panel is white, 4 px radius, neutral 200 edge,
 and elevation level 3.
 
-States `(proposed)`: default uses a white or off white surface, neutral 200
+Arrow keys move through enabled options. Home and End move to the first and
+last enabled options. Escape closes the menu. Disabled options remain visible
+and cannot be selected. Type ahead is not part of the current Listbox behavior.
+
+States: default uses a white or off white surface, neutral 200
 edge, and coal value; hover uses neutral 300; focus adds mariner edge and ring;
-disabled uses 60 percent opacity; loading preserves trigger size; error adds a
-fail edge and linked message without recolouring the value.
+disabled uses 60 percent opacity; error adds a fail edge and linked message
+without recolouring the value.
+
+Implemented by `components/ui/select.tsx`.
 
 Consumers: Settings, Repository detail, Workflow editor block fields, prompt
 slots, schedule fields, and harness profile selection.
 
 ### Form controls
 
-One canonical default control height is 30 px `(proposed)`. This matches the
-explicit profile input and the common 12 px text with 6 px vertical padding.
+Canonical single line control heights are 26 px compact and 30 px default.
+The default matches the explicit profile input and the common 12 px text with
+6 px vertical padding.
 Checkboxes, radios, multiline textareas, search, and code editors are shape
 exceptions, not alternate text input heights.
 
-Canonical variants `(proposed)`:
+Canonical variants:
 
 | Variant | Use |
 | --- | --- |
 | Input | One line text, number, URL, or identifier |
 | Textarea | Prose or multiline configuration |
-| Search | Input with search affordance and clear action |
-| Checkbox | Independent boolean |
-| Radio | One choice in a visible set |
-| Switch | Immediate enabled state only |
+
+Search, Checkbox, Radio, and Switch remain proposed variants `(proposed)`.
+
+Field owns the visible label, optional hint, persistent error, required marker,
+and the IDs that connect that copy to its control through `aria-describedby`.
 
 Default input recipe: 30 px height, 3 px radius, white panel, neutral 200
 border, 8 px horizontal padding, 11 px or 12 px text. Every listed value is in
 current profile, setting, repository, or editor controls.
 
-States `(proposed)`: default uses neutral 200 edge, coal value, and neutral 400
+States: default uses neutral 200 edge, coal value, and neutral 400
 placeholder; hover uses neutral 300; focus adds mariner edge and 2 px ring;
-disabled uses app background and 60 percent opacity; loading preserves geometry;
-error adds a fail edge and persistent linked text.
+disabled uses app background and 60 percent opacity; error adds a fail edge and
+persistent linked text. Textarea is a height exception with compact and default
+minimum heights of 72 px and 88 px.
+
+Implemented by `components/ui/input.tsx`, `components/ui/textarea.tsx`, and
+`components/ui/field.tsx`.
 
 Consumers: Settings, Repository catalog, Repository detail, Workflow editor,
 Prompt library, Harness profiles, Trace clarification, Users, and dispatch.
@@ -453,24 +482,25 @@ editor panels, Prompt library filters, and Harness profiles.
 
 ### Modal and drawer
 
-Canonical variants `(proposed)`:
+Canonical desktop modal sizes:
 
 | Variant | Width or placement | Current source |
 | --- | --- | --- |
 | Small modal | 476 px max | Manual dispatch and webhook test |
-| Medium modal | 560 px to 680 px max | Data picker and repository scope |
+| Medium modal | 680 px max | Data picker and repository scope |
 | Large modal | 1240 px max | Prompt editor |
-| Side drawer | Right edge | Activity and skill import |
-| Mobile sheet | Bottom edge, 16 px top corners | `MobileSheet` |
+
+Side drawer and Mobile sheet remain proposed variants `(proposed)`.
 
 Desktop modal panels use a 6 px radius and level 4 shadow. Mobile sheets use a
 16 px top radius and the existing upward drawer shadow. Every dialog caps its
 height against the viewport and scrolls its body, not its title or footer.
 
-States `(proposed)`: default moves focus inside and makes the background inert;
-hover belongs to contained controls; focus is trapped and visible; disabled is
-a trigger state; loading preserves panel size; error stays inside the body or
-above the footer.
+States: default moves focus inside and prevents background interaction; hover
+belongs to contained controls; focus is trapped and visible; Escape and overlay
+click close the modal; error stays inside the body or above the footer.
+
+Implemented by `components/ui/modal.tsx`.
 
 Consumers: manual dispatch, repository activation and import, repository
 scope, workflow data picker, prompt editor, skill import, user management,
@@ -565,22 +595,22 @@ prompt save, profile save or import, workflow deploy, and user invitations.
 
 ### Skeletons
 
-The canonical visual recipe is current: neutral 200 at 60 percent, 4 px radius,
-and pulse animation. Shapes match the final layout. The shared `Block` helper
-in `app/skeleton-block.tsx` is the source to consolidate around `(proposed)`.
+The canonical visual recipe is neutral 200 at 60 percent, 4 px radius, and the
+existing shimmer animation. Shapes match the final layout.
 
-Canonical variants `(proposed)`:
+Canonical variants:
 
 | Variant | Job |
 | --- | --- |
+| Line | One text line shape |
 | Block | Generic shape matched placeholder |
-| Text | One or more text line shapes |
-| Table row | Repeated cells aligned to final columns |
-| Card | Header and body structure matching a card |
+| Circle | Avatar or round control placeholder |
 
-States `(proposed)`: default is a neutral pulse; hover and disabled do not
+States: default is a neutral shimmer; hover and disabled do not
 apply; focus is impossible; loading respects reduced motion and final geometry;
 error replaces the skeleton with error or retry UI.
+
+Implemented by `components/ui/skeleton.tsx`.
 
 Consumers: Overview, Runs, ticket, Trace, Approvals, Cost, Evals, Memory,
 Prompts, Harness profiles, Health, Users, Repositories, and Settings.

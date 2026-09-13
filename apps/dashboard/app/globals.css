@@ -101,19 +101,24 @@
   --radius-pill: 999px;
 
   /* ── EASING + DURATION ────────────────────────────────────────────── */
+  --motion-fast: 120ms;
+  --motion-base: 180ms;
+  --motion-slow: 240ms;
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-emphasized: cubic-bezier(0.3, 0, 0, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
 
   /* ── ANIMATIONS (utility class generated as e.g. animate-ck-pulse) ── */
   --animate-ck-pulse: ck-pulse 1.4s ease-in-out infinite;
-  --animate-ck-slide: ck-slide 320ms cubic-bezier(0.2, 0, 0, 1);
-  --animate-ck-slide-up: ck-slide-up 280ms cubic-bezier(0.2, 0, 0, 1);
+  --animate-ck-slide: ck-slide var(--motion-slow) var(--ease-standard);
+  --animate-ck-slide-up: ck-slide-up var(--motion-slow) var(--ease-standard);
   --animate-ck-shimmer: ck-shimmer 1.6s ease-in-out infinite;
-  --animate-ck-march: ck-march-dash 600ms linear infinite;
-  --animate-ck-pop: ck-pop 140ms cubic-bezier(0.2, 0, 0, 1);
-  --animate-ck-glow: ck-glow 1.7s ease-in-out infinite;
-  --animate-ck-fade-up: ck-fade-up 260ms cubic-bezier(0.2, 0, 0, 1) both;
-  --animate-ck-chip-in: ck-chip-in 200ms cubic-bezier(0.2, 0, 0, 1) both;
+  --animate-ck-march: none;
+  --animate-ck-pop: ck-pop var(--motion-base) var(--ease-standard);
+  --animate-ck-glow: none;
+  --animate-ck-fade-up: ck-fade-up var(--motion-slow) var(--ease-standard) both;
+  --animate-ck-chip-in: ck-chip-in var(--motion-base) var(--ease-standard) both;
+  --animate-ck-spinner: ck-spinner var(--motion-slow) linear both;
 }
 
 /* ==========================================================================
@@ -226,12 +231,10 @@ body {
   from {
     opacity: 0;
     transform: translateY(6px);
-    filter: blur(3px);
   }
   to {
     opacity: 1;
     transform: translateY(0);
-    filter: blur(0);
   }
 }
 /* A freshly inserted variable chip pops in: a small scale-up from 0.9 with a
@@ -247,8 +250,25 @@ body {
   }
 }
 
+@keyframes ck-spinner {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0ms;
+    --motion-base: 0ms;
+    --motion-slow: 0ms;
+  }
+
+  .animate-ck-pulse,
+  .animate-ck-shimmer {
+    animation: none;
+  }
+}
+
 /* ==========================================================================
-   Prompt WYSIWYG editor (Tiptap) — prose + {{variable}} chips
+   Prompt WYSIWYG editor (Tiptap): prose + {{variable}} chips
    ========================================================================== */
 .ck-prose {
   font-family: var(--font-body);
