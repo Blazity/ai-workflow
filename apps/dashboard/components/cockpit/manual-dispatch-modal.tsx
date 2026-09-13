@@ -1,11 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { ShieldCheckIcon } from "@phosphor-icons/react/dist/csr/ShieldCheck";
 import { UserIcon } from "@phosphor-icons/react/dist/csr/User";
-import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import type {
   ManualDispatchInput,
   ManualDispatchPreflightResponse,
@@ -15,6 +14,10 @@ import type { FlowNodeDef } from "@/lib/flows";
 import { apiClient } from "@/lib/api/client";
 import { blockPresentation } from "./flow-editor/block-palette";
 import type { WorkflowEditorOptions } from "@shared/contracts";
+import { Button } from "@/components/ui/button";
+import { Field } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Modal } from "@/components/ui/modal";
 
 export function ManualDispatchModal({
   definitionId,
@@ -45,15 +48,6 @@ export function ManualDispatchModal({
   const [result, setResult] = useState<ManualDispatchResponse | null>(null);
   const [busy, setBusy] = useState<"preflight" | "dispatch" | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    inputRef.current?.focus();
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
 
   const dispatchInput = (): ManualDispatchInput =>
     isTicket
@@ -114,80 +108,67 @@ export function ManualDispatchModal({
   const primaryLabel = movesTicket ? "Move to AI & Run" : "Run workflow";
 
   return (
-    <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-coal/30 px-4 py-6 backdrop-blur-[1px]"
-      role="presentation"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
-      <section
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="manual-dispatch-title"
-        className="w-full max-w-[476px] overflow-hidden rounded-[6px] border border-neutral-200 bg-panel shadow-[0_18px_60px_rgba(24,27,32,0.22)]"
-      >
-        <div className="px-7 pb-6 pt-7">
-          <div className="flex items-start gap-4">
-            <div className="min-w-0 flex-1">
-              <h2
-                id="manual-dispatch-title"
-                className="font-display text-[20px] font-semibold leading-tight text-coal"
-              >
-                Run from {triggerLabel}
-              </h2>
-              <p className="mt-1 font-body text-[13px] text-neutral-600">
-                {workflowName} · deployed v{deployedVersion}
-              </p>
-            </div>
-            <button
+    <Modal
+      open
+      onClose={onClose}
+      title={`Run from ${triggerLabel}`}
+      description={`${workflowName} · deployed v${deployedVersion}`}
+      size="sm"
+      showCloseButton
+      closeLabel="Close manual dispatch"
+      initialFocusRef={inputRef}
+      footer={
+        <div className="flex items-center justify-end gap-3">
+          <Button type="button" onClick={onClose} variant="ghost">
+            {result ? "Close" : "Cancel"}
+          </Button>
+          {!result && preflight ? (
+            <Button
               type="button"
-              onClick={onClose}
-              aria-label="Close manual dispatch"
-              className="inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full border-none bg-transparent text-neutral-600 hover:bg-app-bg hover:text-coal"
+              onClick={() => void startDispatch()}
+              disabled={!preflight.runnable || busy !== null}
             >
-              <XIcon size={19} weight="bold" aria-hidden />
-            </button>
-          </div>
-
+              {busy === "dispatch" ? "Starting…" : primaryLabel}
+            </Button>
+          ) : null}
+        </div>
+      }
+    >
+      <div>
           <div className="mt-4 border-l-2 border-mariner bg-app-bg px-3 py-2 font-body text-[12px] leading-relaxed text-neutral-700">
             This runs deployed v{deployedVersion}.{" "}
             {dirty ? "Unsaved draft changes" : "Draft changes"} are excluded.
           </div>
 
           <form onSubmit={runPreflight} className="mt-6">
-            <label
-              htmlFor="manual-dispatch-input"
-              className="font-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-neutral-600"
-            >
-              {isTicket ? "Ticket key" : "Pull or merge request URL"}
-            </label>
-            <div className="mt-2 flex gap-2">
-              <input
-                ref={inputRef}
-                id="manual-dispatch-input"
-                value={rawInput}
-                onChange={(event) => {
-                  setRawInput(event.target.value);
-                  setPreflight(null);
-                  setResult(null);
-                  setError(null);
-                }}
-                placeholder={
-                  isTicket
-                    ? "AIW-173"
-                    : "https://github.com/org/repo/pull/123"
-                }
-                autoComplete="off"
-                className="h-10 min-w-0 flex-1 rounded-[3px] border border-neutral-300 bg-panel px-3 font-mono text-[13px] text-coal outline-none focus:border-mariner focus:ring-2 focus:ring-mariner/15"
-              />
-              <button
+            <div className="flex items-end gap-2">
+              <Field className="min-w-0 flex-1" label={isTicket ? "Ticket key" : "Pull or merge request URL"}>
+                <Input
+                  ref={inputRef}
+                  id="manual-dispatch-input"
+                  value={rawInput}
+                  onChange={(event) => {
+                    setRawInput(event.target.value);
+                    setPreflight(null);
+                    setResult(null);
+                    setError(null);
+                  }}
+                  placeholder={
+                    isTicket
+                      ? "AIW-173"
+                      : "https://github.com/org/repo/pull/123"
+                  }
+                  autoComplete="off"
+                  monospace
+                />
+              </Field>
+              <Button
                 type="submit"
                 disabled={!rawInput.trim() || busy !== null}
-                className="h-10 cursor-pointer rounded-[3px] border border-neutral-300 bg-app-bg px-3.5 font-mono text-[10px] font-semibold uppercase tracking-[0.05em] text-coal hover:border-mariner disabled:cursor-default disabled:opacity-40"
+                variant="secondary"
               >
                 {busy === "preflight" ? "Checking…" : "Check"}
-              </button>
+              </Button>
             </div>
           </form>
 
@@ -228,7 +209,7 @@ export function ManualDispatchModal({
           {preflight?.blocker && (
             <div
               role="alert"
-              className="mt-5 rounded-[3px] border border-red-300 bg-red-50 px-3 py-2 font-body text-[12px] text-red-700"
+              className="mt-5 rounded-[3px] border border-fail bg-fail-bg px-3 py-2 font-body text-[12px] text-fail-fg"
             >
               {preflight.blocker.message}
             </div>
@@ -236,7 +217,7 @@ export function ManualDispatchModal({
           {error && (
             <div
               role="alert"
-              className="mt-5 rounded-[3px] border border-red-300 bg-red-50 px-3 py-2 font-body text-[12px] text-red-700"
+              className="mt-5 rounded-[3px] border border-fail bg-fail-bg px-3 py-2 font-body text-[12px] text-fail-fg"
             >
               {error}
             </div>
@@ -245,7 +226,7 @@ export function ManualDispatchModal({
           {result && (
             <div
               role="status"
-              className="mt-5 rounded-[3px] border border-green-300 bg-green-50 px-4 py-3 font-body text-[13px] text-green-800"
+              className="mt-5 rounded-[3px] border border-success bg-success-bg px-4 py-3 font-body text-[13px] text-success-fg"
             >
               {result.status === "started" ? (
                 <div className="flex items-center justify-between gap-3">
@@ -255,7 +236,7 @@ export function ManualDispatchModal({
                   </span>
                   <Link
                     href={`/trace/${encodeURIComponent(result.runId)}`}
-                    className="inline-flex shrink-0 items-center gap-1 font-semibold text-green-900 underline decoration-green-500 underline-offset-2"
+                    className="inline-flex shrink-0 items-center gap-1 font-semibold text-success-fg underline decoration-success underline-offset-2"
                   >
                     Open run
                     <ArrowSquareOutIcon size={15} aria-hidden />
@@ -282,28 +263,7 @@ export function ManualDispatchModal({
               </span>
             </div>
           </div>
-        </div>
-
-        <div className="flex items-center justify-end gap-3 border-t border-neutral-200 bg-app-bg px-7 py-4">
-          <button
-            type="button"
-            onClick={onClose}
-            className="cursor-pointer border-none bg-transparent px-2 py-2 font-mono text-[11px] font-semibold uppercase tracking-[0.05em] text-neutral-700"
-          >
-            {result ? "Close" : "Cancel"}
-          </button>
-          {!result && preflight && (
-            <button
-              type="button"
-              onClick={() => void startDispatch()}
-              disabled={!preflight.runnable || busy !== null}
-              className="cursor-pointer rounded-[3px] border border-mariner bg-mariner px-4 py-2.5 font-mono text-[11px] font-semibold uppercase tracking-[0.05em] text-white shadow-[0_2px_4px_rgba(60,67,231,0.2)] hover:bg-[#3037d8] disabled:cursor-default disabled:opacity-40"
-            >
-              {busy === "dispatch" ? "Starting…" : primaryLabel}
-            </button>
-          )}
-        </div>
-      </section>
-    </div>
+      </div>
+    </Modal>
   );
 }

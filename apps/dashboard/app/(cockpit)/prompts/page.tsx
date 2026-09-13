@@ -1,4 +1,4 @@
-// apps/dashboard/app/(cockpit)/prompts/page.tsx — Prompt library ("/prompts")
+// apps/dashboard/app/(cockpit)/prompts/page.tsx: Prompt library ("/prompts")
 import { Suspense } from "react";
 
 import { PromptLibraryData } from "@/app/prompt-library-data";

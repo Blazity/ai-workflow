@@ -9,6 +9,9 @@ import { useCockpit } from "@/components/cockpit/context";
 import { WindowSelector } from "@/components/cockpit/controls";
 import { windowPhrase, windowShort, type TimeWindow } from "@/lib/window";
 import type { OverviewScreenData } from "@/components/cockpit/screens/overview";
+import { Button } from "@/components/ui/button";
+
+const EM_DASH = "\u2014";
 
 export function OverviewMobileScreen({
   data,
@@ -46,10 +49,10 @@ export function OverviewMobileScreen({
       </div>
 
       <div className="grid grid-cols-2 gap-2.5">
-        <CkKPI label={`Runs ${wShort}`} value={k.runs24h ? k.runs24h.value.toLocaleString("en-US") : "—"} />
-        <CkKPI label="p95" value={k.p95 ? `${k.p95.valueSec}s` : "—"} />
-        <CkKPI label={`Errors ${wShort}`} value={k.errors24h ? k.errors24h.value.toString() : "—"} />
-        <CkKPI label={`Cost ${wShort}`} value={k.cost24h ? `$${k.cost24h.value.toFixed(0)}` : "—"} />
+        <CkKPI label={`Runs ${wShort}`} value={k.runs24h ? k.runs24h.value.toLocaleString("en-US") : EM_DASH} />
+        <CkKPI label="p95" value={k.p95 ? `${k.p95.valueSec}s` : EM_DASH} />
+        <CkKPI label={`Errors ${wShort}`} value={k.errors24h ? k.errors24h.value.toString() : EM_DASH} />
+        <CkKPI label={`Cost ${wShort}`} value={k.cost24h ? `$${k.cost24h.value.toFixed(0)}` : EM_DASH} />
       </div>
 
       {running.length > 0 && (
@@ -57,11 +60,13 @@ export function OverviewMobileScreen({
           <div className="font-mono text-[10px] tracking-[0.06em] uppercase text-mariner mb-2">Now running · {running.length}</div>
           <div className="flex flex-col gap-2">
             {running.map((r) => (
-              <button
+              <Button
                 key={r.id}
                 onClick={() => openRun(r)}
-                className="appearance-none text-left cursor-pointer bg-panel border border-neutral-200 rounded-sm px-3 py-2.5 active:bg-neutral-100"
+                variant="secondary"
+                className="h-auto w-full justify-start px-0 py-0 normal-case tracking-normal"
               >
+                <span className="flex w-full flex-col px-3 py-2.5 text-left">
                 <div className="flex items-center gap-2">
                   <CkStatusPill status="running" />
                   <span className="font-semibold text-[13px] text-neutral-900 overflow-hidden text-ellipsis whitespace-nowrap flex-1">{r.workflowName}</span>
@@ -74,11 +79,12 @@ export function OverviewMobileScreen({
                     </div>
                     <div className="mt-1.5 flex items-center gap-1.5 font-mono text-[11px]">
                       <span className="text-neutral-900 font-medium overflow-hidden text-ellipsis whitespace-nowrap flex-1">{r.currentSpan}</span>
-                      <span className="text-neutral-500">{r.spanIndex ?? "—"}/{r.spansTotal ?? "—"}</span>
+                      <span className="text-neutral-500">{r.spanIndex ?? EM_DASH}/{r.spansTotal ?? EM_DASH}</span>
                     </div>
                   </>
                 )}
-              </button>
+                </span>
+              </Button>
             ))}
           </div>
         </div>
@@ -86,7 +92,7 @@ export function OverviewMobileScreen({
 
       {awaiting.length > 0 && (
         <div>
-          <div className="font-mono text-[10px] tracking-[0.06em] uppercase text-[#A2351C] mb-2">Input needed · {awaiting.length}</div>
+          <div className="font-mono text-[10px] tracking-[0.06em] uppercase text-fail-fg mb-2">Input needed · {awaiting.length}</div>
           <div className="flex flex-col gap-2">
             {awaiting.map((r) => {
               // A plan parked for human approval has no clarification: send
@@ -98,7 +104,7 @@ export function OverviewMobileScreen({
                 // the relative wrapper keeps the link on top and clickable.
                 <div
                   key={r.id}
-                  className="relative bg-[#FFFCFA] border border-[#FFE4D6] rounded-sm px-3 py-2.5 active:bg-[#FFF4EC]"
+                  className="relative rounded-sm border border-orange-200 bg-orange-100 px-3 py-2.5 active:bg-orange-200"
                 >
                   {isApproval ? (
                     <Link
@@ -107,12 +113,15 @@ export function OverviewMobileScreen({
                       className="appearance-none absolute inset-0 cursor-pointer rounded-sm"
                     />
                   ) : (
-                    <button
+                    <Button
                       type="button"
                       onClick={() => openRun(r)}
                       aria-label={`Open run: ${r.workflowName}`}
-                      className="appearance-none absolute inset-0 cursor-pointer rounded-sm"
-                    />
+                      variant="ghost"
+                      className="absolute inset-0 h-auto w-full"
+                    >
+                      <span className="sr-only">{r.workflowName}</span>
+                    </Button>
                   )}
                   <div className="flex items-center gap-2 flex-wrap">
                     <CkStatusPill status="awaiting" />
@@ -146,15 +155,16 @@ export function OverviewMobileScreen({
         <div className="font-mono text-[10px] tracking-[0.06em] uppercase text-neutral-500 mb-2">Recent runs</div>
         <div className="flex flex-col gap-2">
           {recent.map((r) => (
-            <button
+            <Button
               key={r.id}
               onClick={() => openRun(r)}
-              className="appearance-none text-left cursor-pointer bg-panel border border-neutral-200 rounded-sm px-3 py-2.5 flex items-center gap-2.5 active:bg-neutral-100"
+              variant="secondary"
+              className="h-auto w-full justify-start px-3 py-2.5 normal-case tracking-normal"
             >
               <CkStatusPill status={r.status} />
               <span className="font-semibold text-[13px] text-neutral-900 overflow-hidden text-ellipsis whitespace-nowrap flex-1">{r.ticketTitle}</span>
               <TicketLink ticket={r.ticket} url={r.ticketUrl} />
-            </button>
+            </Button>
           ))}
         </div>
         {allRecent.length > PAGE_SIZE && (
@@ -183,10 +193,10 @@ export function OverviewMobileScreen({
                   <span className="font-mono text-[10px] text-neutral-500">· {w.gateway}</span>
                 </div>
                 <div className="grid grid-cols-4 gap-2 mt-2.5 pt-2 border-t border-neutral-200">
-                  <Stat label="Runs" value={w.runs24h === null ? "—" : w.runs24h.toLocaleString("en-US")} />
-                  <Stat label="p95" value={w.p95 === null ? "—" : `${w.p95}s`} />
-                  <Stat label="Err" value={w.errRate === null ? "—" : `${(w.errRate * 100).toFixed(1)}%`} />
-                  <Stat label="Cost" value={w.costToday === null ? "—" : `$${w.costToday.toFixed(0)}`} />
+                  <Stat label="Runs" value={w.runs24h === null ? EM_DASH : w.runs24h.toLocaleString("en-US")} />
+                  <Stat label="p95" value={w.p95 === null ? EM_DASH : `${w.p95}s`} />
+                  <Stat label="Err" value={w.errRate === null ? EM_DASH : `${(w.errRate * 100).toFixed(1)}%`} />
+                  <Stat label="Cost" value={w.costToday === null ? EM_DASH : `$${w.costToday.toFixed(0)}`} />
                 </div>
               </div>
             ))}

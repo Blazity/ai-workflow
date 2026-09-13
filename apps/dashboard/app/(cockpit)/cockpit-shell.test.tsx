@@ -634,7 +634,9 @@ test("signing out asks before the session is gone, and a declined answer keeps i
 
   const signOut = root
     .findAll((node) => node.type === "button")
-    .find((node) => node.children.includes("Sign out"));
+    .find((node) =>
+      node.findAll((child) => child.type === "span" && child.children.includes("Sign out")).length > 0,
+    );
   assert.ok(signOut, "expected the Sign out button in the shell");
 
   confirmAnswer = false;

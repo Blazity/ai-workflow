@@ -11,6 +11,7 @@ import { cancelRun } from "@/lib/api/client";
 import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
 import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
 import type { RunsResponse } from "@shared/contracts";
+import { Button } from "@/components/ui/button";
 
 const FILTERS = [
   { id: "all", label: "All" },
@@ -21,12 +22,14 @@ const FILTERS = [
   { id: "blocked", label: "Blocked" },
 ];
 
+const EM_DASH = "\u2014";
+
 type CancelFeedback = { tone: "success" | "info" | "warn" | "error"; message: string };
 
 const FEEDBACK_TONE_CLASS: Record<CancelFeedback["tone"], string> = {
   success: "text-success-fg",
   info: "text-neutral-700",
-  warn: "text-[#7A5A00]",
+  warn: "text-neutral-800",
   error: "text-fail-fg",
 };
 
@@ -53,7 +56,7 @@ export function RunsMobileScreen({
   }, [data]);
   const stale = !data.available && lastGoodData !== null;
   const shownData = stale ? lastGoodData : data;
-  // Never "off" — see the desktop list: new runs have to be able to show up.
+  // Never "off", see the desktop list: new runs have to be able to show up.
   const { isRefreshing, refresh } = useRunRefresh({
     key: "runs-mobile",
     cadence: shownData.rows.some((run) => hasActiveRun(run.status))
@@ -128,13 +131,12 @@ export function RunsMobileScreen({
       {/* Horizontally scrollable filter chips */}
       <div className="flex gap-1.5 overflow-x-auto -mx-4 px-4 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {FILTERS.map((f) => (
-          <button
+          <Button
             key={f.id}
             onClick={() => setFilter(f.id)}
-            className={`flex-none appearance-none cursor-pointer px-3 py-1.5 rounded-[3px] border font-mono text-[11px] uppercase tracking-[0.04em] ${
-              filter === f.id ? "bg-neutral-900 text-white border-neutral-900" : "bg-panel text-neutral-700 border-neutral-200"
-            }`}
-          >{f.label}</button>
+            className="flex-none"
+            variant={filter === f.id ? "primary" : "secondary"}
+          >{f.label}</Button>
         ))}
       </div>
 
@@ -150,8 +152,8 @@ export function RunsMobileScreen({
           const showCancel = canCancel && r.status === "running";
           const rowFeedback = feedback[r.id];
           return (
-          // A real <button> (Cancel, below) cannot nest inside another
-          // <button>, so the row itself is a div playing the button role,
+          // A real button (Cancel, below) cannot nest inside another button,
+          // so the row itself is a div playing the button role,
           // matching the desktop table's <tr role="button"> for the same reason.
           <div
             key={r.id}
@@ -173,8 +175,8 @@ export function RunsMobileScreen({
             <div className="flex items-center gap-2">
               <CkStatusPill status={r.status} />
               {showCancel && confirmId !== r.id ? (
-                <GhostButton
-                  danger
+                <Button
+                  variant="danger"
                   onClick={(e) => {
                     e.stopPropagation();
                     setConfirmId(r.id);
@@ -182,7 +184,7 @@ export function RunsMobileScreen({
                   type="button"
                 >
                   Cancel
-                </GhostButton>
+                </Button>
               ) : null}
               <span className="ml-auto font-mono text-[10px] text-neutral-500">{r.startedAtMin}m ago</span>
             </div>
@@ -192,12 +194,12 @@ export function RunsMobileScreen({
                 onClick={(e) => e.stopPropagation()}
               >
                 <span className="font-mono text-[10px] text-neutral-700">Cancel run?</span>
-                <DarkButton disabled={busyId === r.id} onClick={() => handleCancel(r.id)} type="button">
+                <Button disabled={busyId === r.id} onClick={() => handleCancel(r.id)} type="button">
                   {busyId === r.id ? "Cancelling…" : "Confirm"}
-                </DarkButton>
-                <GhostButton disabled={busyId === r.id} onClick={() => setConfirmId(null)} type="button">
+                </Button>
+                <Button variant="secondary" disabled={busyId === r.id} onClick={() => setConfirmId(null)} type="button">
                   Keep running
-                </GhostButton>
+                </Button>
               </div>
             ) : null}
             {rowFeedback ? (
@@ -212,8 +214,8 @@ export function RunsMobileScreen({
               <CkChip>{r.workflowName}</CkChip>
             </div>
             <div className="grid grid-cols-2 gap-2 mt-3 pt-2.5 border-t border-neutral-200 font-mono">
-              <Metric label="Dur" value={r.duration === null ? "—" : `${r.duration}s`} />
-              <Metric label="Cost" value={r.cost === null ? "—" : `$${r.cost.toFixed(2)}`} />
+              <Metric label="Dur" value={r.duration === null ? EM_DASH : `${r.duration}s`} />
+              <Metric label="Cost" value={r.cost === null ? EM_DASH : `$${r.cost.toFixed(2)}`} />
             </div>
           </div>
           );
@@ -224,42 +226,11 @@ export function RunsMobileScreen({
 }
 
 function Metric({ label, value, tone }: { label: string; value: string; tone?: "ok" | "warn" | "fail" }) {
-  const color = tone === "ok" ? "text-success-fg" : tone === "warn" ? "text-[#7A5A00]" : tone === "fail" ? "text-fail-fg" : "text-neutral-900";
+  const color = tone === "ok" ? "text-success-fg" : tone === "warn" ? "text-neutral-800" : tone === "fail" ? "text-fail-fg" : "text-neutral-900";
   return (
     <div>
       <div className="text-[9px] text-neutral-500 tracking-[0.04em] uppercase">{label}</div>
       <div className={`text-[13px] font-semibold ${color}`}>{value}</div>
     </div>
-  );
-}
-
-function GhostButton({
-  children,
-  danger = false,
-  ...props
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & { danger?: boolean }) {
-  return (
-    <button
-      {...props}
-      className={[
-        "inline-flex items-center justify-center whitespace-nowrap rounded-[3px] border bg-white px-2.5 py-[5px] font-mono text-[10px] font-medium uppercase tracking-[0.04em] transition disabled:cursor-default disabled:opacity-40",
-        danger
-          ? "border-[#F3CFC7] text-fail-fg hover:bg-fail-bg"
-          : "border-neutral-200 text-neutral-900 hover:bg-app-bg",
-      ].join(" ")}
-    >
-      {children}
-    </button>
-  );
-}
-
-function DarkButton({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
-  return (
-    <button
-      {...props}
-      className="inline-flex items-center justify-center whitespace-nowrap rounded-[3px] border border-neutral-900 bg-neutral-900 px-3.5 py-[5px] font-mono text-[11px] font-medium uppercase tracking-[0.04em] text-white transition hover:bg-neutral-800 disabled:cursor-default disabled:opacity-40"
-    >
-      {children}
-    </button>
   );
 }

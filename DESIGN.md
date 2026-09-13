@@ -490,7 +490,7 @@ Canonical desktop modal sizes:
 | Medium modal | 680 px max | Data picker and repository scope |
 | Large modal | 1240 px max | Prompt editor |
 
-Side drawer and Mobile sheet remain proposed variants `(proposed)`.
+Side drawer and Mobile sheet are implemented variants.
 
 Desktop modal panels use a 6 px radius and level 4 shadow. Mobile sheets use a
 16 px top radius and the existing upward drawer shadow. Every dialog caps its
@@ -863,27 +863,27 @@ Input height patterns found on native input tags:
 
 | Screen | Control | File and line | What it does today | Violates |
 | --- | --- | --- | --- | --- |
-| Shared shell | Navigation icons | `components/cockpit/chrome.tsx:6` | Uses Unicode glyphs | 4, Icons |
-| Shared shell | Active navigation | `components/cockpit/chrome.tsx:117` | Hardcodes mariner 100 value | 2, colour rule zero |
-| Shared shell | Sidebar buttons | `components/cockpit/chrome.tsx:108` | Own button skin | 4, Buttons |
-| Shared shell | Live control | `components/cockpit/controls.tsx:137` | Own button and status skin | 4, Buttons and Status |
-| Shared shell | Window tabs | `components/cockpit/controls.tsx:45` | Duplicates `CkTabs` shell | 4, Tabs |
-| Shared shell | Activity drawer | `components/cockpit/activity-drawer.tsx:65` | Own drawer shell and shadow | 4, Modal and drawer |
-| Shared shell | Spotlight | `components/cockpit/spotlight-search.tsx:235` | Own modal radius and shadow | 4 and 6, Modal |
-| Overview | Page gutter | `components/cockpit/screens/overview.tsx:420` | Uses 24 px at all widths | 5, gutter |
-| Overview | Recent runs header | `components/cockpit/screens/overview.tsx:552` | Uses off white instead of neutral 100 | 4, Data tables |
+| Shared shell | Navigation icons | `components/cockpit/chrome.tsx:6` | closed in D3-C | 4, Icons |
+| Shared shell | Active navigation | `components/cockpit/chrome.tsx:117` | closed in D3-C | 2, colour rule zero |
+| Shared shell | Sidebar buttons | `components/cockpit/chrome.tsx:108` | closed in D3-C | 4, Buttons |
+| Shared shell | Live control | `components/cockpit/controls.tsx:137` | closed in D3-C | 4, Buttons and Status |
+| Shared shell | Window tabs | `components/cockpit/controls.tsx:45` | closed in D3-C | 4, Tabs |
+| Shared shell | Activity drawer | `components/cockpit/activity-drawer.tsx:65` | closed in D3-C | 4, Modal and drawer |
+| Shared shell | Spotlight | `components/cockpit/spotlight-search.tsx:235` | closed in D3-C | 4 and 6, Modal |
+| Overview | Page gutter | `components/cockpit/screens/overview.tsx:420` | closed in D3-C | 5, gutter |
+| Overview | Recent runs header | `components/cockpit/screens/overview.tsx:552` | closed in D3-C | 4, Data tables |
 | Overview | Workflow table | `components/cockpit/screens/overview.tsx:659` | Repeats table skin | 4, Data tables |
-| Overview | Workflow chip | `components/cockpit/screens/overview.tsx:599` | Passes raw colours through style | 2, colour rule zero |
-| Runs | Page gutter | `components/cockpit/screens/runs.tsx:111` | Uses 24 px at phone width | 5, gutter |
+| Overview | Workflow chip | `components/cockpit/screens/overview.tsx:599` | closed in D3-C | 2, colour rule zero |
+| Runs | Page gutter | `components/cockpit/screens/runs.tsx:111` | closed in D3-C | 5, gutter |
 | Runs | Status filter | `components/cockpit/screens/runs.tsx:127` | Uses local state, not URL state | 4, Filters and toolbars |
 | Runs | Runs table | `components/cockpit/screens/runs.tsx:143` | Hand built table | 4, Data tables |
 | Runs | Cancel feedback | `components/cockpit/screens/runs.tsx:82` | Local row feedback duplicated on mobile | 4, Toasts |
-| Ticket and Trace | Run selection | `components/cockpit/screens/ticket.tsx:125` | Hand built selection row button | 4, Data tables and lists |
+| Ticket and Trace | Run selection | `components/cockpit/screens/ticket.tsx:125` | closed in D3-C | 4, Data tables and lists |
 | Ticket and Trace | Trace actions | `components/cockpit/screens/trace.tsx:410` | Local outline button skin | 4, Buttons |
 | Ticket and Trace | Clarification textarea | `components/cockpit/screens/trace.tsx:828` | Own focus recipe and padding | 4, Form controls |
 | Ticket and Trace | Awaiting panel | `components/cockpit/screens/trace.tsx:740` | Hardcodes background and edge | 2, colour rule zero |
-| Approvals | Approval row | `components/cockpit/screens/approvals.tsx:128` | Hand built actionable list row | 4, Data tables and lists |
-| Approvals | Action buttons | `components/cockpit/screens/approvals.tsx:270` | Private secondary button helper | 4, Buttons |
+| Approvals | Approval row | `components/cockpit/screens/approvals.tsx:128` | closed in D3-C | 4, Data tables and lists |
+| Approvals | Action buttons | `components/cockpit/screens/approvals.tsx:270` | closed in D3-C | 4, Buttons |
 | Cost | Cost table | `components/cockpit/screens/cost.tsx:85` | Uses 16 px cell padding | 4, Data tables |
 | Evals | Empty card | `components/cockpit/screens/evals.tsx:27` | Rebuilds a card instead of `CkCard` | 4, Cards |
 | Prompt library | Primary action | `components/cockpit/screens/prompt-library.tsx:38` | Private mariner button constant | 4, Buttons |
@@ -913,14 +913,14 @@ Input height patterns found on native input tags:
 | Settings | Boolean control | `app/(cockpit)/settings/setting-control.tsx:41` | Transparent native button switch | 4, Form controls |
 | Settings | Select | `app/(cockpit)/settings/setting-control.tsx:96` | Native select with private field class | 4, Select |
 | Settings | Save buttons | `app/(cockpit)/settings/settings-group-form.tsx:331` | Private primary and secondary skins | 4, Buttons |
-| Health | Scan button | `components/cockpit/screens/health.tsx:186` | Local button skin and framework colours | 2 and 4, colour and Buttons |
-| Health | Status badges | `components/cockpit/screens/health.tsx:329` | Private pill status system | 4, Status chips |
+| Health | Scan button | `components/cockpit/screens/health.tsx:186` | closed in D3-C | 2 and 4, colour and Buttons |
+| Health | Status badges | `components/cockpit/screens/health.tsx:329` | closed in D3-C | 4, Status chips |
 | Health | Timeline cards | `components/cockpit/screens/health.tsx:232` | Repeats panel recipe | 4, Cards |
 | Users | Tables | `components/cockpit/screens/users.tsx:256` | Two private wide table skins | 4, Data tables |
-| Users | Input | `components/cockpit/screens/users.tsx:515` | Uses 38 px height and local focus shadow | 4, Form controls |
-| Users | Modal | `components/cockpit/screens/users.tsx:688` | Own 6 px modal and shadow | 4 and 6, Modal |
-| Mobile cockpit | Bottom tabs | `components/cockpit/mobile/bottom-tab-bar.tsx:21` | Private tab button style | 4, Tabs |
-| Mobile cockpit | More sheet | `components/cockpit/mobile/mobile-sheet.tsx:45` | Canonical shape exists but is app local | 4, Modal and drawer |
+| Users | Input | `components/cockpit/screens/users.tsx:515` | closed in D3-C | 4, Form controls |
+| Users | Modal | `components/cockpit/screens/users.tsx:688` | closed in D3-C | 4 and 6, Modal |
+| Mobile cockpit | Bottom tabs | `components/cockpit/mobile/bottom-tab-bar.tsx:21` | closed in D3-C | 4, Tabs |
+| Mobile cockpit | More sheet | `components/cockpit/mobile/mobile-sheet.tsx:45` | closed in D3-C | 4, Modal and drawer |
 | Mobile cockpit | Overview cards | `components/cockpit/mobile/screens/overview-mobile.tsx:107` | Invisible overlay button covers card | 4, Buttons |
 | Loading routes | Skeleton Block | `app/overview-skeleton.tsx:2` | Duplicates shared Block helper | 4, Skeletons |
 | Loading routes | Skeleton motion | `app/skeleton-block.tsx:3` | Pulse has no reduced motion rule | 4, Skeletons |

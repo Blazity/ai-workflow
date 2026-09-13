@@ -1,4 +1,4 @@
-// apps/dashboard/app/(cockpit)/page.tsx — Overview ("/")
+// apps/dashboard/app/(cockpit)/page.tsx: Overview ("/")
 import { Suspense } from "react";
 
 import { OverviewData } from "@/app/overview-data";

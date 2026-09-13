@@ -29,6 +29,20 @@ test("Modal renders all canonical panel widths", () => {
   }
 });
 
+test("Modal renders the drawer, sheet, and command presentation variants", () => {
+  for (const [variant, marker] of [
+    ["drawer", "translate-x-full"],
+    ["sheet", "translate-y-full"],
+    ["command", "max-w-[560px]"],
+  ] as const) {
+    const html = renderToStaticMarkup(
+      <Modal open variant={variant} onClose={() => undefined} title="Dialog">Body</Modal>,
+    );
+    assert.match(html, new RegExp(`data-variant="${variant}"`));
+    assert.ok(html.includes(marker));
+  }
+});
+
 test("Modal moves focus inside, traps Tab in both directions, and restores prior focus", () => {
   const dom = installTestDom();
   const opener = document.createElement("button");
@@ -110,7 +124,7 @@ test("Modal focuses its first control when no initial focus ref is supplied", ()
   }
 });
 
-test("Modal closes on Escape and overlay clicks but not panel clicks", () => {
+test("Modal closes on Escape and overlay mouse down but not panel or drag release", () => {
   const dom = installTestDom();
   const container = document.createElement("div");
   document.body.append(container);
@@ -127,9 +141,15 @@ test("Modal closes on Escape and overlay clicks but not panel clicks", () => {
     assert.ok(dialog);
     assert.ok(overlay);
 
-    act(() => dialog.click());
+    act(() => dialog.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
     assert.equal(closes, 0);
-    act(() => overlay.click());
+    act(() => overlay.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
+    assert.equal(closes, 1);
+    act(() => {
+      dialog.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      overlay.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+      overlay.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
     assert.equal(closes, 1);
     act(() => {
       dom.window.dispatchEvent(new dom.window.KeyboardEvent("keydown", {

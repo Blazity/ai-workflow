@@ -198,20 +198,25 @@ export function CkTabs({
   tabs,
   active,
   onChange,
+  size = "md",
 }: {
   tabs: { id: string; label: string }[];
   active: string;
   onChange: (id: string) => void;
+  size?: "sm" | "md";
 }) {
+  const sizeClassName = size === "sm" ? "py-1 px-2" : "py-1.5 px-3";
   return (
-    <div className="inline-flex gap-0.5 p-[3px] bg-app-bg rounded-sm border border-neutral-200">
+    <div className="inline-flex gap-0.5 p-[3px] bg-app-bg rounded-sm border border-neutral-200" data-size={size}>
       {tabs.map((t) => {
         const isActive = active === t.id;
         return (
           <button
             key={t.id}
+            type="button"
+            aria-pressed={isActive}
             onClick={() => onChange(t.id)}
-            className={`appearance-none border-none cursor-pointer py-1.5 px-3 rounded-[3px] font-mono font-medium text-[11px] uppercase tracking-[-0.01em] transition-all duration-[180ms] ease-[cubic-bezier(.2,0,0,1)] ${
+            className={`appearance-none border-none cursor-pointer ${sizeClassName} rounded-[3px] font-mono font-medium text-[11px] uppercase tracking-[-0.01em] transition-all duration-[180ms] ease-[cubic-bezier(.2,0,0,1)] ${
               isActive ? "bg-panel shadow-[0_1px_2px_rgba(24,27,32,0.06)] text-coal" : "bg-transparent text-neutral-700"
             }`}
           >
