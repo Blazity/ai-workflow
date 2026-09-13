@@ -3,8 +3,8 @@
 import { findSettingDefinition } from "@shared/contracts";
 import type { SettingsEntryView } from "@shared/contracts";
 
-const FIELD_CLASS =
-  "w-full rounded-[3px] border border-neutral-200 bg-white px-2 py-[6px] font-mono text-[12px] text-neutral-800 disabled:bg-app-bg disabled:text-neutral-500";
+import { Input, Select, Textarea } from "@/components/ui";
+import { Switch } from "@/components/ui/switch";
 
 /**
  * One editable field, chosen by the registry type.
@@ -33,37 +33,24 @@ export function SettingControl({
 }) {
   const definition = findSettingDefinition(entry.key);
   const label = `Value of ${entry.key}`;
-  const border = invalid ? " border-red-300" : "";
 
   if (definition?.type === "boolean") {
     const on = value === true;
     return (
-      <button
-        type="button"
-        role="switch"
-        aria-checked={on}
+      <Switch
+        checked={on}
         aria-label={label}
         disabled={disabled}
-        onClick={() => onChange(!on)}
-        className="inline-flex items-center gap-2 appearance-none border-none bg-transparent cursor-pointer disabled:cursor-default disabled:opacity-60 p-0"
+        onCheckedChange={onChange}
       >
-        <span
-          className={`w-8 h-[18px] rounded-full flex items-center px-[2px] transition-colors duration-[120ms] ${
-            on ? "bg-mariner justify-end" : "bg-neutral-300 justify-start"
-          }`}
-        >
-          <span className="w-[14px] h-[14px] rounded-full bg-white" />
-        </span>
-        <span className="font-mono text-[11px] text-neutral-700">
-          {on ? "on" : "off"}
-        </span>
-      </button>
+        {on ? "on" : "off"}
+      </Switch>
     );
   }
 
   if (definition?.type === "integer") {
     return (
-      <input
+      <Input
         type="number"
         step={1}
         min={definition.minimum}
@@ -72,53 +59,55 @@ export function SettingControl({
         disabled={disabled}
         placeholder={definition.default === null ? "not set" : "required"}
         onChange={(event) => onChange(event.target.value)}
-        className={`${FIELD_CLASS}${border} max-w-[220px]`}
+        monospace
+        invalid={invalid}
+        className="max-w-[220px]"
       />
     );
   }
 
   if (definition?.type === "string-list") {
     return (
-      <textarea
+      <Textarea
         rows={3}
         aria-label={label}
         value={typeof value === "string" ? value : ""}
         disabled={disabled}
         placeholder="One name per line"
         onChange={(event) => onChange(event.target.value)}
-        className={`${FIELD_CLASS}${border} resize-y`}
+        monospace
+        invalid={invalid}
       />
     );
   }
 
   if (definition?.enumValues) {
     return (
-      <select
+      <Select
         aria-label={label}
         value={typeof value === "string" ? value : ""}
         disabled={disabled}
-        onChange={(event) => onChange(event.target.value)}
-        className={`${FIELD_CLASS}${border} max-w-[220px]`}
-      >
-        {definition.default === null && <option value="">not set</option>}
-        {definition.enumValues.map((allowed) => (
-          <option key={allowed} value={allowed}>
-            {allowed}
-          </option>
-        ))}
-      </select>
+        invalid={invalid}
+        onChange={onChange}
+        className="max-w-[220px]"
+        options={[
+          ...(definition.default === null ? [{ value: "", label: "not set" }] : []),
+          ...definition.enumValues.map((allowed) => ({ value: allowed, label: allowed })),
+        ]}
+      />
     );
   }
 
   return (
-    <input
+    <Input
       type="text"
       aria-label={label}
       value={typeof value === "string" ? value : ""}
       disabled={disabled}
       placeholder={definition?.default === null ? "not set" : "required"}
       onChange={(event) => onChange(event.target.value)}
-      className={`${FIELD_CLASS}${border}`}
+      monospace
+      invalid={invalid}
     />
   );
 }

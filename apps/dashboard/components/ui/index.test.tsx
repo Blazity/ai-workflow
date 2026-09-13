@@ -6,28 +6,35 @@ import {
   Button,
   CkChip,
   CkDot,
+  Checkbox,
   Field,
   IconButton,
   Input,
   Modal,
+  RouteTabs,
   Select,
   Skeleton,
+  Switch,
   Textarea,
 } from "./index";
 import type {
   ButtonProps,
   ButtonSize,
   ButtonVariant,
+  CheckboxProps,
   ChipTone,
   FieldProps,
   IconButtonProps,
   InputProps,
   InputSize,
   ModalProps,
+  RouteTab,
+  RouteTabsProps,
   SelectOption,
   SelectProps,
   SkeletonProps,
   SkeletonVariant,
+  SwitchProps,
   TextareaProps,
 } from "./index";
 
@@ -45,7 +52,17 @@ test("primitive index reexports the canonical chip and status dot", () => {
 });
 
 test("primitive index exposes every runtime component", () => {
-  for (const component of [Button, IconButton, Field, Select, Modal, Skeleton]) {
+  for (const component of [
+    Button,
+    Checkbox,
+    IconButton,
+    Field,
+    RouteTabs,
+    Select,
+    Modal,
+    Skeleton,
+    Switch,
+  ]) {
     assert.equal(typeof component, "function");
   }
   assert.equal(typeof Input, "object");
@@ -57,16 +74,20 @@ test("primitive index exposes every public prop type", () => {
     ButtonProps,
     ButtonSize,
     ButtonVariant,
+    CheckboxProps,
     ChipTone,
     FieldProps,
     IconButtonProps,
     InputProps,
     InputSize,
     ModalProps,
+    RouteTab,
+    RouteTabsProps,
     SelectOption,
     SelectProps,
     SkeletonProps,
     SkeletonVariant,
+    SwitchProps,
     TextareaProps,
   ];
   const compileTimeContract: PublicTypes | null = null;

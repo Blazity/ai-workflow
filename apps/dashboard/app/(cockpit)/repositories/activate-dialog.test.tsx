@@ -15,6 +15,11 @@ import { ActivateDialog } from "./activate-dialog";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+(globalThis as { requestAnimationFrame?: (callback: FrameRequestCallback) => number }).requestAnimationFrame = (callback) => {
+  callback(0);
+  return 0;
+};
+(globalThis as { cancelAnimationFrame?: (handle: number) => void }).cancelAnimationFrame = () => {};
 
 function entry(path: string, enabled: boolean): RepositoryCatalogEntry {
   return {
