@@ -30,11 +30,15 @@ export const dashboardInviteCreateRequestSchema = objectOrEmpty(
       // as a type.
       (value) => (value ? value : undefined),
       z
-        .string({
-          required_error: "Missing email",
-          invalid_type_error: "Invalid email",
+        .unknown()
+        .superRefine((value, ctx) => {
+          if (value === undefined) {
+            ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Missing email" });
+          } else if (typeof value !== "string") {
+            ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid email" });
+          }
         })
-        .min(1, "Missing email"),
+        .transform((value) => value as string),
     ),
     role: z.unknown().refine((role) => !role || role === "member", {
       message: "Invites can only create members",
@@ -49,6 +53,7 @@ export type DashboardInviteCreateRequest = z.infer<
 export const dashboardUserRoleUpdateRequestSchema = objectOrEmpty(
   z.object({
     role: z.union([z.literal("admin"), z.literal("member")], {
+      message: "Invalid role",
       errorMap: () => ({ message: "Invalid role" }),
     }),
   }),

@@ -60,6 +60,7 @@ const GRAPH_PACK =
   "pnpm --dir apps/worker exec vitest run " +
   [...WORKFLOW_TESTS, ...WORKFLOW_GRAPH_TESTS].join(" ");
 const PACKAGES = ["pnpm run test:packages", "pnpm run test:packages:zod4"];
+const GRAPH_ZOD4 = "pnpm --filter @shared/workflow-graph run test:zod4";
 const SDK = "pnpm run test:workflow-sdk";
 const GATES = "pnpm run gates";
 const BLOCK_CATALOG = "pnpm run gen:blocks --check";
@@ -140,7 +141,7 @@ test("scope table selects only exact narrow commands", () => {
     [["packages/conditions/index.ts"], ["pnpm run typecheck", ...PACKAGES, GATES]],
     [["packages/costs/index.ts"], ["pnpm run typecheck", ...PACKAGES, GATES]],
     [["packages/contracts/workflow-graph.ts"], ["pnpm run typecheck", ...WB.slice(1), PACK, ...PACKAGES, GATES]],
-    [["packages/workflow-graph/v2-branch.ts"], ["pnpm run typecheck", ...WB.slice(1), GRAPH_PACK, SDK, ...PACKAGES, GATES]],
+    [["packages/workflow-graph/v2-branch.ts"], ["pnpm run typecheck", ...WB.slice(1), GRAPH_PACK, SDK, ...PACKAGES, GRAPH_ZOD4, GATES]],
     [["apps/worker/vitest.config.ts"], [...WB, PACK, GATES]],
     [["apps/worker/nitro.config.ts"], [...WB, GATES]],
     [["apps/worker/vitest.run-control-workflow.config.ts", "apps/worker/vitest.workflow-divergence.config.ts", "apps/worker/e2e/vitest.e2e.config.ts"], [...WB, GATES]],

@@ -134,10 +134,7 @@ export const schedulePreviewRequestSchema = z
  */
 function dispatchIdentifier() {
   return z
-    .string({
-      required_error: "Invalid dispatch input",
-      invalid_type_error: "Invalid dispatch input",
-    })
+    .string({ message: "Invalid dispatch input" })
     .trim()
     .min(1, "Invalid dispatch input");
 }
@@ -157,7 +154,10 @@ export const manualDispatchInputSchema = z.union(
     z.object({ kind: z.literal("ticket"), ticketKey: dispatchIdentifier() }),
     z.object({ kind: z.literal("pull_request"), url: dispatchIdentifier() }),
   ],
-  { errorMap: () => ({ message: "Invalid dispatch input" }) },
+  {
+    message: "Invalid dispatch input",
+    errorMap: () => ({ message: "Invalid dispatch input" }),
+  },
 );
 export type ManualDispatchInputBody = z.infer<typeof manualDispatchInputSchema>;
 
@@ -172,10 +172,7 @@ export type ManualDispatchInputBody = z.infer<typeof manualDispatchInputSchema>;
 export const manualDispatchRequestSchema = z.object(
   {
     requestId: z
-      .string({
-        required_error: "Invalid dispatch request",
-        invalid_type_error: "Invalid dispatch request",
-      })
+      .string({ message: "Invalid dispatch request" })
       .regex(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu,
         "Invalid dispatch request",
@@ -183,9 +180,6 @@ export const manualDispatchRequestSchema = z.object(
     expectedDeployedVersion: integerField("Invalid dispatch request", 1),
     input: manualDispatchInputSchema,
   },
-  {
-    required_error: "Invalid dispatch request",
-    invalid_type_error: "Invalid dispatch request",
-  },
+  { message: "Invalid dispatch request" },
 );
 export type ManualDispatchRequestBody = z.infer<typeof manualDispatchRequestSchema>;
