@@ -88,7 +88,7 @@ export interface SettingsVersionsResponse {
  */
 export const settingsPatchRequestSchema = z.object(
   {
-    settings: z.record(z.unknown(), {
+    settings: z.record(z.string(), z.unknown(), {
       required_error: "Invalid settings",
       invalid_type_error: "Invalid settings",
     }),

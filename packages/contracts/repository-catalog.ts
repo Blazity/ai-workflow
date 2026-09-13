@@ -116,7 +116,7 @@ export type RepositoryCatalogEntry = z.infer<typeof repositoryCatalogEntrySchema
  * would either duplicate the engine's refusal messages or quietly change what
  * gets persisted.
  */
-export const repositoryProfileScriptGroupsSchema = z.record(z.unknown()).nullable();
+export const repositoryProfileScriptGroupsSchema = z.record(z.string(), z.unknown()).nullable();
 
 export const repositoryProfileVersionSchema = z
   .object({

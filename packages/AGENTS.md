@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-12
+Last-verified: 2026-09-13
 
 # packages/AGENTS.md
 
@@ -131,7 +131,9 @@ here must change where a body is refused and not what a client sees.
 
 Two consequences. The package carries a runtime dependency on zod, not a
 type-only one, so it is listed in `dependencies` and stays on the root catalog
-version. And the tests for these schemas live in the worker, under
-`apps/worker/src/routes/request-schemas/`, next to the routes whose behaviour
-they pin and inside the only project that runs vitest; the packages here test
-with `node:test`, and stage 11 revisits where they belong.
+version, which is zod 3.25 while the worker bundle resolves the zod traced from
+`@workflow/core` (4.x today), so only the API common to both versions is safe
+here and `pnpm run test:packages:zod4` re-runs this suite against zod 4 to prove
+it. And the schema tests live in this package as `*.test.ts` files run with
+`node:test` (the packages here do not run vitest), while the routes that consume
+the schemas pin their own behaviour in the worker's route tests.

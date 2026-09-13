@@ -52,13 +52,14 @@ const WB = [
   "pnpm --dir apps/worker run validate:pre-sandbox",
   "pnpm --dir apps/worker run validate:local-skills",
   "pnpm --dir apps/worker run mcp:contract:check",
+  "pnpm --dir apps/worker run test:zod4",
 ];
 const PACK =
   "pnpm --dir apps/worker exec vitest run " + WORKFLOW_TESTS.join(" ");
 const GRAPH_PACK =
   "pnpm --dir apps/worker exec vitest run " +
   [...WORKFLOW_TESTS, ...WORKFLOW_GRAPH_TESTS].join(" ");
-const PACKAGES = "pnpm run test:packages";
+const PACKAGES = ["pnpm run test:packages", "pnpm run test:packages:zod4"];
 const SDK = "pnpm run test:workflow-sdk";
 const GATES = "pnpm run gates";
 const BLOCK_CATALOG = "pnpm run gen:blocks --check";
@@ -136,10 +137,10 @@ test("scope table selects only exact narrow commands", () => {
     [["apps/worker/workflow-sdk-tests/run-control-workflow-sdk.test.ts"], [...WB, SDK, GATES]],
     [["apps/worker/workflow-sdk-tests/divergence/wdk-wait-divergence.test.ts"], [...WB, GATES]],
     [["apps/dashboard/lib/value.ts"], ["pnpm --filter ai-workflow-dashboard run typecheck", GATES]],
-    [["packages/conditions/index.ts"], ["pnpm run typecheck", PACKAGES, GATES]],
-    [["packages/costs/index.ts"], ["pnpm run typecheck", PACKAGES, GATES]],
-    [["packages/contracts/workflow-graph.ts"], ["pnpm run typecheck", ...WB.slice(1), PACK, PACKAGES, GATES]],
-    [["packages/workflow-graph/v2-branch.ts"], ["pnpm run typecheck", ...WB.slice(1), GRAPH_PACK, SDK, PACKAGES, GATES]],
+    [["packages/conditions/index.ts"], ["pnpm run typecheck", ...PACKAGES, GATES]],
+    [["packages/costs/index.ts"], ["pnpm run typecheck", ...PACKAGES, GATES]],
+    [["packages/contracts/workflow-graph.ts"], ["pnpm run typecheck", ...WB.slice(1), PACK, ...PACKAGES, GATES]],
+    [["packages/workflow-graph/v2-branch.ts"], ["pnpm run typecheck", ...WB.slice(1), GRAPH_PACK, SDK, ...PACKAGES, GATES]],
     [["apps/worker/vitest.config.ts"], [...WB, PACK, GATES]],
     [["apps/worker/nitro.config.ts"], [...WB, GATES]],
     [["apps/worker/vitest.run-control-workflow.config.ts", "apps/worker/vitest.workflow-divergence.config.ts", "apps/worker/e2e/vitest.e2e.config.ts"], [...WB, GATES]],

@@ -8,7 +8,7 @@
     "apps/worker/src/sandbox/agents/fixtures/**",
     "apps/worker/workflow-test-fixtures/**"
   ],
-  "ignoreDependencies": ["dependency-cruiser", "oxlint"],
+  "ignoreDependencies": ["dependency-cruiser", "oxlint", "zod4"],
   "workspaces": {
     ".": {
       "entry": [

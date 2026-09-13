@@ -17,6 +17,10 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node --import tsx --test \"*.test.ts\""
+    "test": "node --import tsx --test \"*.test.ts\"",
+    "test:zod4": "node --import tsx --import ./zod4-alias.mjs --test \"*.test.ts\""
+  },
+  "devDependencies": {
+    "zod4": "catalog:"
   }
 }

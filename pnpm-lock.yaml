@@ -24,6 +24,9 @@ catalogs:
     zod:
       specifier: ^3.25.76
       version: 3.25.76
+    zod4:
+      specifier: npm:zod@4.3.6
+      version: 4.3.6
 
 overrides:
   '@workflow/core@4.8>nanoid': 5.1.16
@@ -274,6 +277,9 @@ importers:
       vitest:
         specifier: ^3.2.6
         version: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0)
+      zod4:
+        specifier: 'catalog:'
+        version: zod@4.3.6
 
   packages/conditions:
     dependencies:
@@ -286,6 +292,10 @@ importers:
       zod:
         specifier: 'catalog:'
         version: 3.25.76
+    devDependencies:
+      zod4:
+        specifier: 'catalog:'
+        version: zod@4.3.6
 
   packages/costs:
     devDependencies:
