@@ -33,11 +33,22 @@ import {
   promptSlotSchemaDraftMarksDirty,
   type PromptSlotSchemaDraftState,
 } from "@/components/cockpit/prompt-editor/prompt-slot-fields";
+import { canonicalMarkdownForEditor } from "@/components/cockpit/prompt-editor/markdown-round-trip";
+import { promptEditorExtensions } from "@/components/cockpit/prompt-editor/prompt-editor-extensions";
 
 const validSlotSchemaDraftState: PromptSlotSchemaDraftState = {
   state: "valid",
   hasUncommittedInvalidSource: false,
 };
+
+const promptLibraryEditorExtensions = promptEditorExtensions({
+  canonical: true,
+  variableNames: [],
+});
+
+function canonicalPromptBody(body: string): string {
+  return canonicalMarkdownForEditor(body, promptLibraryEditorExtensions);
+}
 
 function sameTags(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((t) => b.includes(t));
@@ -64,6 +75,7 @@ interface PromptDraft {
 interface EditorState {
   mode: "edit" | "create";
   promptId: number | null;
+  savedBody: string;
   draft: PromptDraft;
 }
 
@@ -225,6 +237,7 @@ export function PromptLibraryScreen({
     setEditor({
       mode: "create",
       promptId: null,
+      savedBody: "",
       draft: {
         name: "",
         description: "",
@@ -251,6 +264,7 @@ export function PromptLibraryScreen({
     setEditor({
       mode: "edit",
       promptId: activeId,
+      savedBody: canonicalPromptBody(detail.current.body),
       draft: {
         name: detail.meta.name,
         description: detail.meta.description ?? "",
@@ -287,11 +301,11 @@ export function PromptLibraryScreen({
     }
   }
 
-  async function saveEdit(promptId: number, draft: PromptDraft) {
+  async function saveEdit(promptId: number, savedBody: string, draft: PromptDraft) {
     const detail = detailCache.get(promptId);
     if (!detail) return;
     const versionChanged =
-      draft.body !== detail.current.body ||
+      canonicalPromptBody(draft.body) !== savedBody ||
       !samePromptSlots(draft.slots, detail.current.slots);
     const descNext = draft.description.trim() ? draft.description : null;
     const metaChanged =
@@ -401,7 +415,7 @@ export function PromptLibraryScreen({
         editor.draft.name !== editorDetail.meta.name ||
         editor.draft.description.trim() !== (editorDetail.meta.description ?? "").trim() ||
         !sameTags(editor.draft.tags, editorDetail.meta.tags) ||
-        editor.draft.body !== editorDetail.current.body ||
+        canonicalPromptBody(editor.draft.body) !== editor.savedBody ||
         !samePromptSlots(editor.draft.slots, editorDetail.current.slots) ||
         promptSlotSchemaDraftMarksDirty(slotSchemaDraftState));
   const editorSubmitDisabled =
@@ -583,7 +597,9 @@ export function PromptLibraryScreen({
             primaryLabel:
               editor.mode === "create"
                 ? "Create prompt"
-                : `Save as v${(editorDetail?.meta.currentVersion ?? 0) + 1}`,
+                : editorDirty
+                  ? `Save as v${(editorDetail?.meta.currentVersion ?? 0) + 1}`
+                  : "Nothing to save",
             primaryDisabled: editorSubmitDisabled,
             primaryBusy: editorBusy,
             onPrimary: () => {
@@ -593,7 +609,9 @@ export function PromptLibraryScreen({
                 name: editor.draft.name.trim(),
               };
               if (editor.mode === "create") void createPrompt(draft);
-              else if (editor.promptId !== null) void saveEdit(editor.promptId, draft);
+              else if (editor.promptId !== null) {
+                void saveEdit(editor.promptId, editor.savedBody, draft);
+              }
             },
             dirty: editorDirty,
             error:

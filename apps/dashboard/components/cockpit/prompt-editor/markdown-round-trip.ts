@@ -58,6 +58,27 @@ function contentSignature(markdown: string): string {
 }
 
 /**
+ * The Markdown spelling the visual editor will emit for a representable
+ * document. Lossy or invalid input stays byte-for-byte unchanged because that
+ * input opens in raw mode and the raw editor does not normalize it.
+ */
+export function canonicalMarkdownForEditor(
+  markdown: string,
+  extensions: AnyExtension[],
+): string {
+  if (markdown.trim().length === 0) return "";
+  try {
+    const manager = new MarkdownManager({ extensions });
+    const serialized = manager.serialize(manager.parse(markdown));
+    return contentSignature(serialized) === contentSignature(markdown)
+      ? restoreVariableTokens(serialized).trimEnd()
+      : markdown;
+  } catch {
+    return markdown;
+  }
+}
+
+/**
  * Would the visual editor give this markdown back?
  *
  * Asked before mounting, against the editor's own parser and serializer rather

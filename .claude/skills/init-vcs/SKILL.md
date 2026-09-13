@@ -5,7 +5,7 @@ description: Configure or rotate the VCS provider (GitHub or GitLab) for the AI 
 
 # Initialize VCS provider
 
-Branch-on-choice skill. Asks **GitHub, GitLab, or both**, then emits a paste-template per chosen provider. Provider credentials are additive in `env.ts`: a deployment may configure GitHub (GitHub App vars), GitLab (`GITLAB_TOKEN` + `GITLAB_PROJECT_ID`), or both at once. `VCS_KIND` is optional and only pins the legacy single-repo helpers; leave it unset in a dual-provider deployment. The cross-field rule (`VCS_KIND=github` requires the GitHub App vars; `VCS_KIND=gitlab` requires `GITLAB_TOKEN`) is enforced by construction.
+Branch-on-choice skill. Asks **GitHub, GitLab, or both**, then emits a paste-template per chosen provider. Provider credentials are additive in `apps/worker/src/infra/runtime-env.ts`: a deployment may configure GitHub (GitHub App vars), GitLab (`GITLAB_TOKEN` + `GITLAB_PROJECT_ID`), or both at once. `VCS_KIND` is optional and only pins the legacy single-repo helpers; leave it unset in a dual-provider deployment. The cross-field rule (`VCS_KIND=github` requires the GitHub App vars; `VCS_KIND=gitlab` requires `GITLAB_TOKEN`) is enforced by construction.
 
 > **Canonical reference:** [SETUP.md section 2.2](../../../SETUP.md#22-github-or-gitlab) holds the facts and constraints for both providers. This skill is the procedure; when the two disagree, SETUP.md wins and this skill gets updated.
 >

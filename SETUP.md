@@ -127,7 +127,7 @@ ai-workflow authenticates to GitHub via a **GitHub App**. The App scopes the bot
 8. Import the repository on the Repositories page. The catalog records the
    provider's default branch; an explicit profile value overrides it.
 
-> The legacy `GITHUB_TOKEN` PAT path was removed — `VCS_KIND=github` now requires the App vars above. `env.ts` enforces this at boot, including `GITHUB_WEBHOOK_SECRET`.
+> The legacy `GITHUB_TOKEN` PAT path was removed: `VCS_KIND=github` now requires the App vars above. `apps/worker/src/infra/runtime-env.ts` enforces this at boot, including `GITHUB_WEBHOOK_SECRET`.
 
 **GitLab:**
 
@@ -309,7 +309,7 @@ This is enough for password-only dashboard login. SSO and Resend are optional wo
 | `GITHUB_BOT_LOGIN`, `GITLAB_BOT_LOGIN`        | unset (commented-review triggers for that provider are unavailable)                                                                                         | Provider-specific login of the bot's own VCS account. Required for every selected, configured provider when `trigger_pr_review.on` includes `commented`, so the bot cannot recursively trigger a run from its own review. For a GitHub App this is usually `<app-slug>[bot]`. |
 | `VCS_BOT_LOGIN`                               | unset                                                                                                                                                        | Legacy fallback for a commented-review bot identity, accepted only when exactly one VCS provider is configured. Mixed GitHub/GitLab deployments require provider-specific logins. |
 
-`env.ts` cross-validates at startup — missing required vars or wrong combinations (e.g. `VCS_KIND=github` without `GITHUB_OWNER`) crash the process with a precise error.
+`apps/worker/src/infra/runtime-env.ts` cross-validates at startup: missing required vars or wrong combinations (e.g. `VCS_KIND=github` without `GITHUB_OWNER`) crash the process with a precise error.
 
 #### Repository access and the retired `AGENT_ALLOWED_REPOS`
 
@@ -689,7 +689,7 @@ trigger_ticket_ai -> planning_agent -> branch(gate)
 
 | Symptom                                               | Likely cause                                                                                                                            | Fix                                                                                                                                                                     |
 | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Startup crash: `Invalid environment variables`        | Missing required var or wrong cross-field combination                                                                                   | Read the error — `env.ts` lists exactly what's missing.                                                                                                                 |
+| Startup crash: `Invalid environment variables`        | Missing required var or wrong cross-field combination                                                                                   | Read the error: `apps/worker/src/infra/runtime-env.ts` lists exactly what's missing.                                                                                     |
 | `/cron/poll` returns 401 from Vercel Cron             | `CRON_SECRET` mismatch                                                                                                                  | Ensure the var is set in Production environment. Redeploy after changing.                                                                                               |
 | Tickets in AI column never get picked up              | Cron disabled / webhook misregistered                                                                                                   | Check **Vercel → Project → Cron Jobs** is enabled. Curl `/cron/poll` with the secret to test manually.                                                                  |
 | Workflow starts but sandbox fails to provision        | Missing Vercel OIDC / Sandbox quota                                                                                                     | On Vercel, OIDC is automatic. Check the project has Sandbox enabled (Pro plan). For local dev, set `VERCEL_TOKEN`/`VERCEL_TEAM_ID`/`VERCEL_PROJECT_ID`.                 |

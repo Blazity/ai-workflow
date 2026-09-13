@@ -16,6 +16,27 @@ const options = [
   { value: "api", label: "API" },
 ];
 
+function renderedHeightTokens(element: React.ReactElement): string[] {
+  const html = renderToStaticMarkup(element);
+  const className = html.match(/<button[^>]*class="([^"]*)"/)?.[1];
+  assert.ok(className, "expected the select trigger class list");
+  return className.match(/\bh-\[[^\]\s]+\]/g) ?? [];
+}
+
+test("Select resolves exactly one height token per density", () => {
+  for (const [size, expected] of [
+    ["compact", "h-[26px]"],
+    ["default", "h-[30px]"],
+  ] as const) {
+    assert.deepEqual(
+      renderedHeightTokens(
+        <Select value="dashboard" onChange={() => undefined} options={options} size={size} />,
+      ),
+      [expected],
+    );
+  }
+});
+
 test("Select composes Listbox without masking a visible Field label", () => {
   const element = Select({ value: "dashboard", onChange: () => undefined, options });
   assert.equal(element.type, Listbox);
