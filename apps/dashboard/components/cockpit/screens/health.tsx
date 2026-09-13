@@ -13,6 +13,8 @@ import type {
 import { apiClient } from "@/lib/api/client";
 import { SetupOverview } from "@/app/(cockpit)/settings/setup-overview";
 import { SettingsCadenceNotice } from "@/app/(cockpit)/settings/settings-cadence-notice";
+import { CkChip, type ChipTone } from "@/components/ui";
+import { Button } from "@/components/ui/button";
 
 const GROUPS: Array<{
   id: SystemHealthGroup;
@@ -53,42 +55,42 @@ const DESCRIPTIONS: Record<string, string> = {
 
 const STATUS: Record<
   SystemHealthMode,
-  { label: string; dot: string; badge: string }
+  { label: string; dot: string; tone: ChipTone }
 > = {
   live: {
     label: "Live",
     dot: "bg-success",
-    badge: "border-[#B8DDAA] bg-success-bg text-success-fg",
+    tone: "success",
   },
   down: {
     label: "Down",
     dot: "bg-fail",
-    badge: "border-[#F0B8AE] bg-fail-bg text-fail-fg",
+    tone: "failed",
   },
   degraded: {
     label: "Degraded",
     dot: "bg-burnt-orange",
-    badge: "border-orange-300 bg-orange-100 text-[#A23E18]",
+    tone: "orange",
   },
   configured: {
     label: "Configured",
     dot: "bg-mariner",
-    badge: "border-mariner-300 bg-mariner-100 text-mariner",
+    tone: "running",
   },
   "not-configured": {
     label: "Not configured",
     dot: "bg-neutral-400",
-    badge: "border-neutral-200 bg-app-bg text-neutral-600",
+    tone: "neutral",
   },
   misconfigured: {
     label: "Needs configuration",
     dot: "bg-burnt-orange",
-    badge: "border-orange-300 bg-orange-100 text-[#A23E18]",
+    tone: "awaiting",
   },
   mock: {
     label: "Mock mode",
     dot: "bg-neutral-500",
-    badge: "border-neutral-300 bg-neutral-100 text-neutral-700",
+    tone: "blocked",
   },
 };
 
@@ -183,19 +185,19 @@ export function HealthScreen({
               <div>{summaryLine(data)}</div>
             </div>
           )}
-          <button
+          <Button
             type="button"
             disabled={scanning}
             onClick={scan}
-            className="appearance-none rounded-[3px] border border-neutral-300 bg-panel px-3 py-2 font-body text-[12px] font-semibold text-neutral-800 transition-colors duration-[120ms] hover:border-neutral-400 hover:bg-app-bg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-mariner disabled:cursor-wait disabled:opacity-60"
+            variant="secondary"
           >
             {scanning ? "Scanning…" : data ? "Scan again" : "Scan"}
-          </button>
+          </Button>
         </div>
       </header>
 
       {scanError && (
-        <div role="alert" className="mb-5 rounded-[4px] border border-[#F0B8AE] bg-fail-bg px-3 py-3 font-body text-[12px] text-fail-fg">
+        <div role="alert" className="mb-5 rounded-sm border border-fail bg-fail-bg px-3 py-3 font-body text-[12px] text-fail-fg">
           {scanError}
         </div>
       )}
@@ -325,20 +327,17 @@ function HealthRow({
             {showProviderVars && <EnvVarChips names={integration.envVars} />}
           </div>
           <div className="flex items-center gap-2 sm:justify-self-end">
-            <span
-              className={`inline-flex rounded-pill border px-2 py-1 font-mono text-[9px] font-semibold uppercase tracking-[0.05em] ${status.badge}`}
-            >
-              {status.label}
-            </span>
-            <button
+            <CkChip tone={status.tone}>{status.label}</CkChip>
+            <Button
               type="button"
               aria-expanded={expanded}
               aria-controls={`health-checks-${integration.id}`}
               onClick={() => setExpanded((value) => !value)}
-              className="rounded-[3px] border border-neutral-200 bg-panel px-2 py-1 font-mono text-[9px] text-neutral-700 hover:bg-app-bg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-mariner"
+              size="sm"
+              variant="secondary"
             >
               {expanded ? "Hide checks" : `${checks.length} checks`}
-            </button>
+            </Button>
           </div>
         </div>
         {expanded && (
@@ -393,9 +392,7 @@ function HealthCheckRow({
       <div className="flex min-w-0 flex-wrap gap-1.5">
         {showEnvVars && <EnvVarChips names={check.envVars} panel />}
       </div>
-      <span className={`inline-flex w-fit rounded-pill border px-2 py-1 font-mono text-[9px] font-semibold uppercase tracking-[0.05em] ${status.badge}`}>
-        {status.label}
-      </span>
+      <CkChip tone={status.tone}>{status.label}</CkChip>
     </li>
   );
 }

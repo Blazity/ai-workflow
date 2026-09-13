@@ -177,7 +177,7 @@ export function CockpitShell({
       : "off";
   // A surface with work in flight and the global Live toggle both mean the fast
   // cadence. A surface with nothing in flight still watches for new work, just
-  // slowly — that is the AIW-266 criterion "polling stops or slows when no
+  // slowly, that is the AIW-266 criterion "polling stops or slows when no
   // active runs are present", and it is what lets a new run appear in the list.
   // Health probes hit every configured provider. They are intentionally
   // user-triggered so a persisted global Live preference cannot turn one open
@@ -229,7 +229,7 @@ export function CockpitShell({
       }}
     >
       <div className="h-dvh w-screen flex flex-col lg:flex-row overflow-hidden bg-app-bg relative">
-        {/* Desktop sidebar — lg and up only */}
+        {/* Desktop sidebar, lg and up only */}
         <div className="hidden lg:flex">
           <CkSidebar
             active={screen}
@@ -249,7 +249,7 @@ export function CockpitShell({
             />
           </div>
 
-          {/* Desktop top bar — live polling is omitted for expensive health probes */}
+          {/* Desktop top bar, live polling is omitted for expensive health probes */}
           <div className="hidden lg:flex items-center justify-between flex-[0_0_44px] h-11 border-b border-neutral-200 bg-panel px-6">
             <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">
               {TITLE_FOR_SCREEN[screen] ?? "AI Workflow"}
@@ -273,7 +273,7 @@ export function CockpitShell({
           </div>
         </main>
 
-        {/* Activity drawer — desktop only (removed on mobile by decision) */}
+        {/* Activity drawer, desktop only (removed on mobile by decision) */}
         <div className="hidden lg:block">
           <CkActivityDrawer open={activityOpen} onClose={() => setActivityOpen(false)} />
         </div>

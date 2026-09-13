@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 
 import { CkCard, CkChip, type ChipTone } from "@/components/ui";
 import { apiClient } from "@/lib/api/client";
-import { Listbox } from "@/components/cockpit/listbox";
+import { Button } from "@/components/ui/button";
+import { Select } from "@/components/ui/select";
 import type {
   ApprovalRequest,
   ApprovalStatus,
@@ -92,13 +93,13 @@ export function ApprovalsScreen({
           </h2>
         </div>
         <div className="w-[180px]">
-          <Listbox
+          <Select
             options={[
               { value: "pending", label: "Pending" },
               { value: "all", label: "All" },
             ]}
             value={filter}
-            ariaLabel="Approval status filter"
+            aria-label="Approval status filter"
             onChange={(v) => setFilter(v as "pending" | "all")}
           />
         </div>
@@ -108,9 +109,9 @@ export function ApprovalsScreen({
         {error ? (
           <div className="flex flex-col items-center gap-3 px-4 py-10 text-center">
             <span className="font-body text-[13px] text-fail-fg">{error}</span>
-            <GhostButton type="button" onClick={() => router.refresh()}>
+            <Button type="button" variant="secondary" onClick={() => router.refresh()}>
               Retry
-            </GhostButton>
+            </Button>
           </div>
         ) : filtered.length === 0 ? (
           <div className="px-4 py-10 text-center font-body text-[13px] text-neutral-500">
@@ -125,12 +126,14 @@ export function ApprovalsScreen({
                   key={approval.id}
                   className={index < filtered.length - 1 ? "border-b border-neutral-200" : ""}
                 >
-                  <button
+                  <Button
                     type="button"
                     aria-expanded={expanded}
                     onClick={() => setExpandedId(expanded ? null : approval.id)}
-                    className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-neutral-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-mariner focus-visible:outline-offset-[-2px]"
+                    variant="ghost"
+                    className="h-auto w-full justify-start rounded-none px-0 py-0 normal-case tracking-normal"
                   >
+                    <span className="flex w-full items-center gap-3 px-4 py-3 text-left">
                     <span className="font-mono text-[12px] font-semibold text-neutral-900">
                       {approval.ticketKey}
                     </span>
@@ -145,7 +148,8 @@ export function ApprovalsScreen({
                     >
                       ›
                     </span>
-                  </button>
+                    </span>
+                  </Button>
 
                   {expanded ? (
                     <div className="flex flex-col gap-3 px-4 pb-4 pt-1">
@@ -193,38 +197,39 @@ export function ApprovalsScreen({
                               <span className="font-mono text-[11px] text-neutral-700">
                                 Confirm {confirm.action}?
                               </span>
-                              <DarkButton
+                              <Button
                                 disabled={busyId === approval.id}
                                 onClick={() => decide(approval, confirm.action)}
                                 type="button"
                               >
                                 Confirm
-                              </DarkButton>
-                              <GhostButton
+                              </Button>
+                              <Button
                                 disabled={busyId === approval.id}
                                 onClick={() => setConfirm(null)}
                                 type="button"
+                                variant="secondary"
                               >
                                 Cancel
-                              </GhostButton>
+                              </Button>
                             </>
                           ) : (
                             <>
-                              <DarkButton
+                              <Button
                                 disabled={busyId === approval.id}
                                 onClick={() => setConfirm({ id: approval.id, action: "approve" })}
                                 type="button"
                               >
                                 Approve
-                              </DarkButton>
-                              <GhostButton
-                                danger
+                              </Button>
+                              <Button
+                                variant="danger"
                                 disabled={busyId === approval.id}
                                 onClick={() => setConfirm({ id: approval.id, action: "reject" })}
                                 type="button"
                               >
                                 Reject
-                              </GhostButton>
+                              </Button>
                             </>
                           )}
                         </div>
@@ -258,36 +263,6 @@ function InlineError({ children }: { children: React.ReactNode }) {
   );
 }
 
-function GhostButton({
-  children,
-  danger = false,
-  ...props
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & { danger?: boolean }) {
-  return (
-    <button
-      {...props}
-      className={[
-        "inline-flex items-center justify-center whitespace-nowrap rounded-[3px] border bg-white px-2.5 py-[5px] font-mono text-[10px] font-medium uppercase tracking-[0.04em] transition disabled:cursor-default disabled:opacity-40",
-        danger
-          ? "border-[#F3CFC7] text-fail-fg hover:bg-fail-bg"
-          : "border-neutral-200 text-neutral-900 hover:bg-app-bg",
-      ].join(" ")}
-    >
-      {children}
-    </button>
-  );
-}
-
-function DarkButton({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
-  return (
-    <button
-      {...props}
-      className="inline-flex items-center justify-center whitespace-nowrap rounded-[3px] border border-neutral-900 bg-neutral-900 px-3.5 py-[5px] font-mono text-[11px] font-medium uppercase tracking-[0.04em] text-white transition hover:bg-neutral-800 disabled:cursor-default disabled:opacity-40"
-    >
-      {children}
-    </button>
-  );
-}
 
 // Locale is pinned so the string never depends on which machine formatted it.
 // `timeZone` is a test seam: production always wants the viewer's own zone.

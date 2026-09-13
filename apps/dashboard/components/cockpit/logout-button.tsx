@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { apiClient } from "@/lib/api/client";
+import { Button } from "@/components/ui/button";
 
 import {
   DISCARD_UNSAVED_PROMPT,
@@ -19,7 +20,7 @@ export function LogoutButton() {
           {error}
         </span>
       ) : null}
-      <button
+      <Button
         type="button"
         onClick={async () => {
           // Signing out is the widest exit there is: it replaces the route AND
@@ -48,10 +49,11 @@ export function LogoutButton() {
           router.replace("/login");
           router.refresh();
         }}
-        className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500 hover:text-neutral-800"
+        size="sm"
+        variant="ghost"
       >
         Sign out
-      </button>
+      </Button>
     </span>
   );
 }

@@ -3,6 +3,7 @@
 
 import { MobileSheet } from "./mobile-sheet";
 import { cockpitNavItems, isMobileMoreNavItem } from "@/components/cockpit/chrome";
+import { Button } from "@/components/ui/button";
 
 export function MoreSheet({
   open,
@@ -26,17 +27,20 @@ export function MoreSheet({
       <div className="flex flex-col py-1">
         {more.map((m) => {
           const on = active === m.id;
+          const NavIcon = m.icon;
           return (
-            <button
+            <Button
               key={m.id}
               onClick={() => { onNav(m.id); onClose(); }}
-              className={`appearance-none text-left border-none cursor-pointer flex items-center gap-3 px-[18px] py-3.5 font-body text-[15px] ${
-                on ? "bg-[#ECECFD] text-mariner font-semibold" : "bg-transparent text-neutral-900"
+              aria-current={on ? "page" : undefined}
+              variant="ghost"
+              className={`h-auto w-full justify-start rounded-none px-[18px] py-3.5 font-body text-[15px] normal-case tracking-normal ${
+                on ? "bg-mariner-100 text-mariner font-semibold" : "text-neutral-900"
               }`}
             >
-              <span className={`font-mono text-lg leading-none ${on ? "text-mariner" : "text-neutral-700"}`}>{m.glyph}</span>
+              <NavIcon size={16} aria-hidden="true" className={on ? "text-mariner" : "text-neutral-700"} />
               {m.label}
-            </button>
+            </Button>
           );
         })}
       </div>
