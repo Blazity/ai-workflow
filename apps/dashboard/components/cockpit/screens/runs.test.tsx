@@ -74,11 +74,11 @@ type FetchCall = { url: string; init: RequestInit | undefined };
 
 /** Minimal app router: the screen only calls refresh, and WindowSelector
  *  needs the context to exist at all (its useRouter() call throws otherwise). */
-function stubRouter(refreshes: string[]) {
+function stubRouter(refreshes: string[], replacements: string[]) {
   return {
     refresh: () => refreshes.push("refresh"),
     push: () => {},
-    replace: () => {},
+    replace: (href: string) => replacements.push(href),
     back: () => {},
     forward: () => {},
     prefetch: () => {},
@@ -95,9 +95,10 @@ function renderDesktop(
   t: TestContext,
   props: DesktopProps,
   respond: () => Response = CANCELLED_RESPONSE,
-): { root: ReactTestInstance; calls: FetchCall[]; refreshes: string[] } {
+): { root: ReactTestInstance; calls: FetchCall[]; refreshes: string[]; replacements: string[] } {
   const calls: FetchCall[] = [];
   const refreshes: string[] = [];
+  const replacements: string[] = [];
   (globalThis as { fetch: unknown }).fetch = async (url: string, init?: RequestInit) => {
     calls.push({ url: String(url), init });
     return respond();
@@ -106,7 +107,7 @@ function renderDesktop(
   let renderer!: ReactTestRenderer;
   act(() => {
     renderer = create(
-      <AppRouterContext.Provider value={stubRouter(refreshes) as never}>
+      <AppRouterContext.Provider value={stubRouter(refreshes, replacements) as never}>
         <RunsScreen data={makeData([])} window="24h" q="" {...props} />
       </AppRouterContext.Provider>,
     );
@@ -114,16 +115,17 @@ function renderDesktop(
   t.after(() => {
     act(() => renderer.unmount());
   });
-  return { root: renderer.root, calls, refreshes };
+  return { root: renderer.root, calls, refreshes, replacements };
 }
 
 function renderMobile(
   t: TestContext,
   props: MobileProps,
   respond: () => Response = CANCELLED_RESPONSE,
-): { root: ReactTestInstance; calls: FetchCall[]; refreshes: string[] } {
+): { root: ReactTestInstance; calls: FetchCall[]; refreshes: string[]; replacements: string[] } {
   const calls: FetchCall[] = [];
   const refreshes: string[] = [];
+  const replacements: string[] = [];
   (globalThis as { fetch: unknown }).fetch = async (url: string, init?: RequestInit) => {
     calls.push({ url: String(url), init });
     return respond();
@@ -132,7 +134,7 @@ function renderMobile(
   let renderer!: ReactTestRenderer;
   act(() => {
     renderer = create(
-      <AppRouterContext.Provider value={stubRouter(refreshes) as never}>
+      <AppRouterContext.Provider value={stubRouter(refreshes, replacements) as never}>
         <RunsMobileScreen data={makeData([])} window="24h" q="" {...props} />
       </AppRouterContext.Provider>,
     );
@@ -140,12 +142,12 @@ function renderMobile(
   t.after(() => {
     act(() => renderer.unmount());
   });
-  return { root: renderer.root, calls, refreshes };
+  return { root: renderer.root, calls, refreshes, replacements };
 }
 
 // ── Desktop (RunsScreen) ────────────────────────────────────────────────────
 
-test("the model column names the attributed model, and unknown when there is none", (t) => {
+test("the model column names the attributed model and uses a neutral dash when there is none", (t) => {
   // A run the API could not attribute a model to must read as explicitly
   // unknown; it must never be labelled with the organization default (AIW-253).
   const { root } = renderDesktop(t, {
@@ -156,7 +158,49 @@ test("the model column names the attributed model, and unknown when there is non
   });
   const text = screenText(root);
   assert.match(text, /gpt-5\.6-sol/);
-  assert.match(text, /model unknown/);
+  assert.doesNotMatch(text, /model unknown/);
+});
+
+test("the status URL drives the filtered count, rows, and pager", (t) => {
+  const { root, replacements } = renderDesktop(t, {
+    data: makeData([
+      makeRun({ id: "run_ok", status: "success", ticketTitle: "Passed" }),
+      makeRun({ id: "run_bad", status: "failed", ticketTitle: "Failed" }),
+    ]),
+    status: "failed",
+  });
+
+  const rendered = screenText(root);
+  assert.match(rendered, /1 runs · last 24h/);
+  assert.match(rendered, /1 to 1 of 1/);
+  assert.match(rendered, /Failed/);
+  assert.doesNotMatch(rendered, /Passed/);
+
+  act(() => button(root, "SUCCESS").props.onClick());
+  assert.deepEqual(replacements, ["/runs?status=success"]);
+});
+
+test("the actions column is absent when no row can be cancelled", (t) => {
+  const { root } = renderDesktop(t, {
+    data: makeData([makeRun({ id: "run_1", status: "running" })]),
+    canCancel: false,
+  });
+  assert.equal(
+    root.findAll((node) => node.type === "th" && nodeText(node) === "Actions").length,
+    0,
+  );
+});
+
+test("failed usage distinguishes recorded zero from unknown", (t) => {
+  const { root } = renderDesktop(t, {
+    data: makeData([
+      makeRun({ id: "run_zero", status: "failed", tokens: 0, cost: 0 }),
+      makeRun({ id: "run_unknown", status: "failed", tokens: null, cost: null }),
+    ]),
+  });
+  const rendered = screenText(root);
+  assert.match(rendered, /0\.0k/);
+  assert.match(rendered, /\$0\.00/);
 });
 
 test("Cancel is absent for a row that is not running", (t) => {
@@ -338,6 +382,16 @@ test("mobile: Cancel is absent for a row that is not running", (t) => {
     canCancel: true,
   });
   assert.equal(buttons(root, "Cancel").length, 0);
+});
+
+test("mobile: the status filter count and pager use the same row set", (t) => {
+  const failed = Array.from({ length: 26 }, (_, index) =>
+    makeRun({ id: `run_${index}`, status: "failed", ticketTitle: `Failure ${index}` }),
+  );
+  const { root } = renderMobile(t, { data: makeData(failed), status: "failed" });
+
+  assert.match(screenText(root), /26 runs · last 24h/);
+  assert.match(screenText(root), /1 to 25 of 26/);
 });
 
 test("mobile: Cancel is absent from a running row without the dispatch role", (t) => {

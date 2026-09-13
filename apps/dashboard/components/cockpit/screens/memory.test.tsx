@@ -165,6 +165,8 @@ test("the delete endpoint encodes both halves of the document key", () => {
 test("a member never sees the delete action", (t) => {
   const { root } = renderScreen(t, { canDelete: false });
   assert.equal(buttons(root, "Delete").length, 0);
+  assert.match(screenText(root), /Review what the agent remembered/);
+  assert.doesNotMatch(screenText(root), /Values saved here/);
 });
 
 test("delete is omitted by default when the caller passes no capability", (t) => {

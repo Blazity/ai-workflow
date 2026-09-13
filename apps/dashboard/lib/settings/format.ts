@@ -66,10 +66,9 @@ export function settingLabel(key: string): string {
  * sees what the first execution saw.
  */
 export const SETTINGS_CADENCE_NOTICE =
-  "Values saved here are stored and read: the worker loads a settings snapshot " +
-  "per request, cron tick and MCP call. When a change reaches work already " +
-  "running is per setting, and each row says which it is, immediately or on the " +
-  "next run.";
+  "Values saved here are stored and read by the worker per request, cron " +
+  "tick and MCP call. Each setting says whether a change applies immediately " +
+  "or to the next run.";
 
 /** The label above a field's resolved value. Deliberately not "in force": what
  *  a run already under way uses is the snapshot it started with, which the

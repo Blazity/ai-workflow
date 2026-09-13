@@ -7,13 +7,16 @@ import { RunsMobileScreen } from "@/components/cockpit/mobile/screens/runs-mobil
 import type { RunsResponse, LiveRunsResponse } from "@shared/contracts";
 import { recentRunsFallback, liveRunsFallback } from "@/lib/api/fallbacks";
 import { mergeLiveRuns } from "@/lib/merge-live-runs";
+import type { RunStatusFilter } from "@/lib/runs-display";
 
 export async function RunsData({
   window,
   q,
+  status,
 }: {
   window: TimeWindow;
   q: string;
+  status: RunStatusFilter;
 }) {
   const now = new Date().toISOString();
   const [session, runs, live] = await Promise.all([
@@ -40,10 +43,10 @@ export async function RunsData({
   return (
     <>
       <div className="hidden lg:block">
-        <RunsScreen data={data} window={window} q={q} canCancel={session.canDispatchWorkflows} />
+        <RunsScreen data={data} window={window} q={q} status={status} canCancel={session.canDispatchWorkflows} />
       </div>
       <div className="lg:hidden">
-        <RunsMobileScreen data={data} window={window} q={q} canCancel={session.canDispatchWorkflows} />
+        <RunsMobileScreen data={data} window={window} q={q} status={status} canCancel={session.canDispatchWorkflows} />
       </div>
     </>
   );

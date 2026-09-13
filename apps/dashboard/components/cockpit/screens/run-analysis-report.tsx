@@ -57,7 +57,7 @@ function DeliveryStatus({
           href={delivery.commentUrl}
           target="_blank"
           rel="noreferrer"
-          className="text-mariner underline-offset-2 hover:underline"
+          className="inline-flex min-h-6 items-center text-mariner underline-offset-2 hover:underline"
         >
           {deliveryLabel(delivery)} ↗
         </a>
@@ -165,7 +165,7 @@ export function RunAnalysisReportCard({ report, runStatus: _runStatus, currentRu
           <div className="min-w-0 overflow-hidden"><PromptPreview body={report.planMarkdown || "No implementation plan was retained."} /></div>
         </Disclosure>
         <div className="border-t border-neutral-200 pt-3"><h3 className="m-0 mb-2 font-mono text-[10px] uppercase tracking-[0.05em] text-neutral-500">Usage</h3><UsageTable report={report} /></div>
-        {report.publication && <div className="border-t border-neutral-200 pt-3"><h3 className="m-0 mb-2 font-mono text-[10px] uppercase tracking-[0.05em] text-neutral-500">Published</h3><div className="flex flex-col gap-2"><div className="flex flex-wrap gap-2">{report.publication.prs.map((pr) => <a key={`${pr.provider}:${pr.repoPath}:${pr.id}`} href={pr.url} target="_blank" rel="noreferrer" className="max-w-full break-all text-mariner underline-offset-2 hover:underline">{pr.provider}:{pr.repoPath} #{pr.id} ↗</a>)}</div><p className="m-0 whitespace-pre-wrap break-words text-neutral-800">{report.publication.changeSummary}</p></div></div>}
+        {report.publication && <div className="border-t border-neutral-200 pt-3"><h3 className="m-0 mb-2 font-mono text-[10px] uppercase tracking-[0.05em] text-neutral-500">Published</h3><div className="flex flex-col gap-2"><div className="flex flex-wrap gap-2">{report.publication.prs.map((pr) => <a key={`${pr.provider}:${pr.repoPath}:${pr.id}`} href={pr.url} target="_blank" rel="noreferrer" className="inline-flex min-h-6 max-w-full items-center break-all text-mariner underline-offset-2 hover:underline">{pr.provider}:{pr.repoPath} #{pr.id} ↗</a>)}</div><p className="m-0 whitespace-pre-wrap break-words text-neutral-800">{report.publication.changeSummary}</p></div></div>}
         <div className="border-t border-neutral-200 pt-3"><h3 className="m-0 mb-2 font-mono text-[10px] uppercase tracking-[0.05em] text-neutral-500">Jira delivery</h3><div className="grid gap-1 font-mono text-[11px] text-neutral-700 md:grid-cols-2"><DeliveryStatus label="Research" delivery={report.jira.research} /><DeliveryStatus label="PR/MR" delivery={report.jira.pullRequest} /></div>{(report.jira.research.state === "failed" || report.jira.pullRequest.state === "failed") && <p className="m-0 mt-2 text-[12px] text-fail-fg">Automatic retries exhausted; code delivery was not blocked.</p>}</div>
       </div>
     </CkCard>

@@ -63,8 +63,8 @@ The Settings screen is `app/(cockpit)/settings/`: `page.tsx` streams
 `settings-data.tsx` (the server read), which renders `settings-screen.tsx`. The
 pieces under that directory are shared rather than page-local: `setup-overview.tsx`
 and `settings-cadence-notice.tsx` are also mounted by the System health screen, and
-`settings-area-panel.tsx` wraps `settings-group-form.tsx` with a key filter for
-the Memory panel (`ENABLE_REPO_MEMORY`, `ENABLE_ORG_MEMORY_PROMOTION`,
+the Memory screen mounts `settings-group-form.tsx` directly with its own key
+filter (`ENABLE_REPO_MEMORY`, `ENABLE_ORG_MEMORY_PROMOTION`,
 `ENABLE_REPO_ROUTING_MEMORY`).
 
 **A saved value is stored AND read, at a cadence the row states.** The worker

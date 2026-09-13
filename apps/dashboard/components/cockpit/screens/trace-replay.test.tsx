@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
 
 import type {
   RunDetailResponse,
@@ -54,6 +55,15 @@ const detail: RunDetailResponse = {
   ],
   analysisReport: null,
   clarification: null,
+};
+
+const router = {
+  refresh: () => {},
+  push: () => {},
+  replace: () => {},
+  back: () => {},
+  forward: () => {},
+  prefetch: () => {},
 };
 
 test("historical runs fall back to the legacy trace without rendering stacks", () => {
@@ -167,4 +177,45 @@ test("terminal run state also stops stale polling for available replay", () => {
   };
 
   assert.equal(replayForRunLifecycle(replay, false).mayAdvance, false);
+});
+
+test("a completed run renders an answered clarification with inline markdown", () => {
+  const replay: WorkflowRunReplayResponse = {
+    availability: "not_captured",
+    mayAdvance: false,
+    snapshot: null,
+    attempts: [],
+    nextCursor: null,
+  };
+  const answered: RunDetailResponse = {
+    ...detail,
+    run: { ...detail.run!, status: "success", error: null },
+    clarification: {
+      id: "clarification-1",
+      ticketKey: "AIW-134",
+      runId: "wrun_1",
+      blockId: null,
+      definitionId: null,
+      definitionVersion: null,
+      questions: ["Should `facts` be retained?"],
+      suggestedAnswers: null,
+      status: "answered",
+      askedAt: "2026-07-23T10:00:00.000Z",
+      answer: "Keep `facts`.",
+      answeredById: "user-1",
+      answeredByLabel: "Ada",
+      answeredAt: "2026-07-23T10:00:01.000Z",
+      dispatchedRunId: null,
+    },
+  };
+  const html = renderToStaticMarkup(
+    <AppRouterContext.Provider value={router as never}>
+      <TraceDetail runId="wrun_1" data={answered} replay={replay} />
+    </AppRouterContext.Provider>,
+  );
+
+  assert.match(html, />Answered</);
+  assert.doesNotMatch(html, /Input needed/);
+  assert.match(html, /<code[^>]*>facts<\/code>/);
+  assert.doesNotMatch(html, /`facts`/);
 });

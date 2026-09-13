@@ -19,6 +19,7 @@ import { runPullRequests } from "@/lib/run-prs";
 import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
 import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
 import { RunAnalysisReportCard } from "./run-analysis-report";
+import { PromptPreview } from "@/components/cockpit/prompt-library/prompt-preview";
 import { SPAN_KIND_COLOR } from "@/lib/theme";
 import { pullRequestRef, pullRequestRepoLabels } from "@shared/contracts";
 import type { Span, SpanKind, SpanStatus } from "@/lib/types";
@@ -703,6 +704,7 @@ function AnswerPanel({
   const answered = view.status === "answered" || view.status === "resume_failed";
   const retry = mode === "retry";
   const showForm = mode === "form" || retry;
+  const panelAnswered = !showForm;
 
   async function submit() {
     setBusy(true);
@@ -736,13 +738,13 @@ function AnswerPanel({
   return (
     <CkCard
       eyebrow="Human-in-the-loop"
-      title="Input needed"
-      className="!border-orange-200 !bg-orange-100"
+      title={panelAnswered ? "Answered" : "Input needed"}
+      className={panelAnswered ? "!border-success !bg-success-bg" : "!border-orange-200 !bg-orange-100"}
     >
       <div className="flex flex-col gap-4">
         <ol className="m-0 flex list-decimal flex-col gap-1.5 pl-5 font-body text-[13px] leading-[1.55] text-neutral-800">
           {clarification.questions.map((q, i) => (
-            <li key={i}>{q}</li>
+            <li key={i}><PromptPreview body={q} /></li>
           ))}
         </ol>
 
@@ -751,9 +753,9 @@ function AnswerPanel({
             <span className="font-mono text-[9px] uppercase tracking-[0.06em] text-neutral-700">
               Answer
             </span>
-            <p className="m-0 whitespace-pre-wrap break-words rounded-[3px] border border-neutral-200 bg-off-white p-3 font-body text-[13px] leading-[1.5] text-coal">
-              {view.answer}
-            </p>
+            <div className="rounded-[3px] border border-neutral-200 bg-off-white p-3 font-body text-[13px] leading-[1.5] text-coal">
+              <PromptPreview body={view.answer ?? ""} />
+            </div>
             {view.answeredAt && (
               <span className="font-mono text-[11px] text-neutral-500">
                 Answered by{" "}

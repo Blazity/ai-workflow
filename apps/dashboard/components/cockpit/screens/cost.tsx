@@ -5,6 +5,7 @@ import { CkCard, CkKPI } from "@/components/ui";
 import { AreaChart } from "@/components/charts";
 import { WindowSelector } from "@/components/cockpit/controls";
 import { SpotlightTrigger } from "@/components/cockpit/spotlight-search";
+import { formatCurrencyTick, niceScale } from "@/lib/chart-scale";
 import { windowPhrase, windowShort, type TimeWindow } from "@/lib/window";
 import type { CostResponse } from "@shared/contracts";
 
@@ -13,6 +14,46 @@ function shortDate(date: string): string {
   const d = new Date(date);
   if (Number.isNaN(d.getTime())) return date;
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function SpendChart({
+  values,
+  labels,
+  width = 680,
+  height = 200,
+}: {
+  values: number[];
+  labels: string[];
+  width?: number;
+  height?: number;
+}) {
+  const scale = niceScale(values);
+  // AreaChart derives its domain from the series. Add the nice top tick just
+  // beyond the clipped viewport so the visible points use that real domain
+  // without drawing a synthetic point in the chart.
+  const chartPadding = 40;
+  const innerWidth = width - chartPadding;
+  const chartWidth =
+    chartPadding +
+    (innerWidth * values.length) / Math.max(1, values.length - 1);
+
+  return (
+    <div
+      aria-label="Daily spend chart"
+      role="img"
+      style={{ width, height, overflow: "hidden" }}
+    >
+      <AreaChart
+        data={[...values, scale.max]}
+        w={chartWidth}
+        h={height}
+        stroke="var(--color-burnt-orange)"
+        fill="var(--color-burnt-orange)"
+        labels={[...labels, ""]}
+        valueFmt={(value) => formatCurrencyTick(Number(value), scale.step)}
+      />
+    </div>
+  );
 }
 
 export function CostScreen({
@@ -64,14 +105,9 @@ export function CostScreen({
       <CkCard eyebrow="Spend trajectory" title={`Daily spend · ${windowPhrase(window)}`}>
           {daily.length > 0 ? (
             <div className="overflow-x-auto">
-              <AreaChart
-                data={daily.map((d) => d.cost)}
-                w={680}
-                h={200}
-                stroke="#FD6027"
-                fill="#FD6027"
+              <SpendChart
+                values={daily.map((d) => d.cost)}
                 labels={daily.map((d) => shortDate(d.date))}
-                valueFmt={(v) => "$" + Math.round(Number(v))}
               />
             </div>
           ) : (
@@ -86,21 +122,21 @@ export function CostScreen({
             <thead>
               <tr className="bg-neutral-100 text-neutral-700 font-mono text-[10px] uppercase tracking-[0.06em]">
                 {["Workflow", "Runs", "Tokens", "Cost", "$/run"].map((h, i) =>
-                  <th key={i} className={`px-4 py-2.5 font-medium border-b border-neutral-200 ${i >= 1 ? "text-right" : "text-left"}`}>{h}</th>
+                  <th key={i} className={`px-3 py-2.5 font-medium border-b border-neutral-200 ${i >= 1 ? "text-right" : "text-left"}`}>{h}</th>
                 )}
               </tr>
             </thead>
             <tbody>
               {[...byWorkflow].sort((a, b) => b.cost - a.cost).map((w, i, arr) =>
                 <tr key={w.taskId} className={i < arr.length - 1 ? "border-b border-neutral-200" : ""}>
-                  <td className="px-4 py-3">
+                  <td className="px-3 py-2.5">
                     <span className="font-semibold text-neutral-900">{w.name}</span>
                     <div className="text-[11px] text-neutral-500 font-mono mt-0.5">{w.taskId}</div>
                   </td>
-                  <td className="px-4 py-3 text-right font-mono">{w.runs.toLocaleString("en-US")}</td>
-                  <td className="px-4 py-3 text-right font-mono text-neutral-700">{(w.tokens / 1000).toFixed(0)}k</td>
-                  <td className="px-4 py-3 text-right font-mono font-semibold">${w.cost.toFixed(2)}</td>
-                  <td className="px-4 py-3 text-right font-mono text-neutral-700">${w.costPerRun.toFixed(3)}</td>
+                  <td className="px-3 py-2.5 text-right font-mono">{w.runs.toLocaleString("en-US")}</td>
+                  <td className="px-3 py-2.5 text-right font-mono text-neutral-700">{(w.tokens / 1000).toFixed(0)}k</td>
+                  <td className="px-3 py-2.5 text-right font-mono font-semibold">${w.cost.toFixed(2)}</td>
+                  <td className="px-3 py-2.5 text-right font-mono text-neutral-700">${w.costPerRun.toFixed(2)}</td>
                 </tr>
               )}
             </tbody>

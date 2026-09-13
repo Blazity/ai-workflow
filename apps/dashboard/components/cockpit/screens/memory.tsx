@@ -10,7 +10,8 @@ import { useRouter } from "next/navigation";
 
 import { Button, CkCard, CkChip } from "@/components/ui";
 import { apiClient } from "@/lib/api/client";
-import { SettingsAreaPanel } from "@/app/(cockpit)/settings/settings-area-panel";
+import { SettingsGroupForm } from "@/app/(cockpit)/settings/settings-group-form";
+import { groupSettings, selectGroupKeys } from "@/lib/settings/groups";
 import type {
   MemoryDocumentDto,
   MemoryDocumentSummaryDto,
@@ -78,6 +79,10 @@ export function MemoryScreen({
   const visible = removed
     ? documents.filter((doc) => !sameDocument(doc, removed))
     : documents;
+  const features = groupSettings(settings).find((group) => group.id === "features");
+  const memorySettings = features
+    ? selectGroupKeys(features, MEMORY_SETTING_KEYS)
+    : [];
 
   // A fresh server render supersedes the local state, so the optimistic filter
   // and the post-delete message can never sit on top of live data.
@@ -115,16 +120,20 @@ export function MemoryScreen({
         <h2 className="m-0 font-display text-2xl font-medium leading-[1.2] text-neutral-900">
           {visible.length} {visible.length === 1 ? "document" : "documents"}
         </h2>
+        <p className="m-0 font-body text-[13px] text-neutral-600">
+          Review what the agent remembered and trace each document to the run that wrote it.
+        </p>
       </div>
 
-      <SettingsAreaPanel
-        settings={settings}
-        group="features"
-        keys={MEMORY_SETTING_KEYS}
-        heading="Memory switches"
-        description="Whether the agent reads and writes memory at all. A change reaches the next run, never one already in flight, and stored documents are left untouched either way."
-        canEdit={canEditSettings}
-      />
+      {features && memorySettings.length > 0 ? (
+        <SettingsGroupForm
+          group={features}
+          keys={MEMORY_SETTING_KEYS}
+          heading="Memory switches"
+          description="Whether the agent reads and writes memory at all. A change reaches the next run, never one already in flight, and stored documents are left untouched either way."
+          canEdit={canEditSettings}
+        />
+      ) : null}
 
       {selection ? (
         <CkCard

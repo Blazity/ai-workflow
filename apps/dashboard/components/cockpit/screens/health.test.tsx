@@ -120,7 +120,7 @@ test("mounting the screen issues no request; the first scan is the Scan button",
   assert.deepEqual(fetchMock.mock.calls[0]?.arguments[1]?.method, "POST");
   text = textOf(renderer.toJSON());
   assert.match(text, /Scanned/);
-  assert.match(text, /3 live · 1 down/);
+  assert.match(text, /3 live\s+·\s+1 down/);
   assert.match(text, /GitHub/);
   assert.doesNotMatch(text, /Action required|Needs attention|Unverified/);
   act(() => renderer.unmount());
@@ -137,8 +137,17 @@ test("a stored scan renders on load with its time and no request", (t) => {
   assert.equal(fetchMock.mock.callCount(), 0);
   const text = textOf(renderer.toJSON());
   assert.match(text, /Scanned\s+Aug 20, 2026/);
-  assert.match(text, /3 live · 1 down/);
+  assert.match(text, /3 live\s+·\s+1 down/);
+  assert.match(text, /This scan is older than 24 hours/);
   assert.doesNotMatch(text, /No scan has been recorded/);
+  assert.doesNotMatch(text, /Values saved here/);
+  const down = renderer.root.findAll(
+    (node) =>
+      typeof node.props.className === "string" &&
+      node.props.className.includes("text-fail-fg") &&
+      textOf(node).includes("1 down"),
+  );
+  assert.equal(down.length, 1);
   renderer.root.findByProps({ children: "Scan again" });
   act(() => renderer.unmount());
 });

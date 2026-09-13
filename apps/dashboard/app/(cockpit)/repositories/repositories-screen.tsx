@@ -309,7 +309,7 @@ export function RepositoriesScreen({
                       href={`/repositories/${repository.id}`}
                       className="font-display text-base font-medium text-coal no-underline transition-colors duration-[var(--motion-fast)] hover:underline"
                     >
-                      {repository.displayName || repository.path}
+                      {repository.path}
                     </a>
                     <div className="mt-1 flex flex-wrap items-center gap-2">
                       <span className="font-mono text-[11px] text-neutral-700">

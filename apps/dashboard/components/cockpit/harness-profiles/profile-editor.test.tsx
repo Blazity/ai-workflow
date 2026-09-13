@@ -289,6 +289,8 @@ test("a pinned skill names the source it came from", () => {
 
   assert.match(html, /blazity\/ai-workflow @ cccccccccccc/);
   assert.match(html, /This deployment · skills\/review-checklist @ dddddddddddd/);
+  assert.match(html, />aaaaaaaaaaaa<\/code>/);
+  assert.match(html, /aria-label="Copy full artifact digest a{64}"/);
 });
 
 test("refreshing tells a moved pin apart from a deployment carrying the same bytes", () => {

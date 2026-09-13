@@ -276,7 +276,7 @@ function MembersTable({
             ].map(([head, align]) => (
               <th
                 className={[
-                  "border-b border-neutral-200 px-4 py-[11px] font-medium whitespace-nowrap",
+                  "border-b border-neutral-200 px-3 py-2.5 font-medium whitespace-nowrap",
                   align === "right" ? "text-right" : "text-left",
                 ].join(" ")}
                 key={head}
@@ -295,23 +295,23 @@ function MembersTable({
               ].join(" ")}
               key={user.id}
             >
-              <td className="px-4 py-3">
+              <td className="px-3 py-2.5">
                 <div className="flex items-center gap-2.5">
                   <Avatar user={user} />
                   <span className="font-semibold text-neutral-900">{user.name}</span>
                 </div>
               </td>
-              <td className="px-4 py-3 font-mono text-[12px] text-neutral-700">{user.email}</td>
-              <td className="px-4 py-3">
+              <td className="px-3 py-2.5 font-mono text-[12px] text-neutral-700">{user.email}</td>
+              <td className="px-3 py-2.5">
                 <RoleChip role={user.role} />
               </td>
-              <td className="px-4 py-3">
+              <td className="px-3 py-2.5">
                 <AuthMethod method={user.authMethod} />
               </td>
-              <td className="px-4 py-3 font-mono text-[12px] text-neutral-500">
+              <td className="px-3 py-2.5 font-mono text-[12px] text-neutral-500">
                 {formatMonthYear(user.joinedAt)}
               </td>
-              <td className="px-4 py-3 text-right">
+              <td className="px-3 py-2.5 text-right">
                 {user.actions.canPromote ? (
                   <GhostButton
                     disabled={busyId === user.id}
@@ -374,7 +374,7 @@ function InvitesTable({
             ].map(([head, align]) => (
               <th
                 className={[
-                  "border-b border-neutral-200 px-4 py-[11px] font-medium whitespace-nowrap",
+                  "border-b border-neutral-200 px-3 py-2.5 font-medium whitespace-nowrap",
                   align === "right" ? "text-right" : "text-left",
                 ].join(" ")}
                 key={head}
@@ -405,7 +405,7 @@ function InvitesTable({
                   ].join(" ")}
                   key={invite.id}
                 >
-                  <td className="px-4 py-[13px]">
+                  <td className="px-3 py-2.5">
                     <div className="flex items-center gap-2.5">
                       <span className="inline-flex h-[30px] w-[30px] flex-none items-center justify-center rounded-full border border-dashed border-neutral-300 font-mono text-[12px] text-neutral-500">
                         ✉
@@ -415,16 +415,16 @@ function InvitesTable({
                       </span>
                     </div>
                   </td>
-                  <td className="px-4 py-[13px] font-mono text-[12px] text-neutral-700">
+                  <td className="px-3 py-2.5 font-mono text-[12px] text-neutral-700">
                     {invite.invitedBy}
                   </td>
-                  <td className="px-4 py-[13px]">
+                  <td className="px-3 py-2.5">
                     <InviteStatus invite={invite} />
                   </td>
-                  <td className="px-4 py-[13px] font-mono text-[12px] text-neutral-500">
+                  <td className="px-3 py-2.5 font-mono text-[12px] text-neutral-500">
                     {formatRelativeTime(invite.sentAt)}
                   </td>
-                  <td className="px-4 py-[13px] text-right">
+                  <td className="px-3 py-2.5 text-right">
                     <div className="inline-flex items-center gap-1.5">
                       {justResentId === invite.id ? (
                         <span className="font-mono text-[10px] uppercase tracking-[0.04em] text-success-fg">

@@ -107,7 +107,7 @@ test("appliesToNote sends a key the worker reads from its environment to the dep
 test("the standing notice states the read cadence instead of claiming the worker ignores the store", () => {
   assert.match(SETTINGS_CADENCE_NOTICE, /stored and read/);
   assert.match(SETTINGS_CADENCE_NOTICE, /per request, cron tick and MCP call/);
-  assert.match(SETTINGS_CADENCE_NOTICE, /immediately or on the next run/);
+  assert.match(SETTINGS_CADENCE_NOTICE, /applies immediately or to the next run/);
   // The sentence this banner used to carry, contradicted by stage B1.
   assert.doesNotMatch(SETTINGS_CADENCE_NOTICE, /still reads most settings from its environment/);
   assert.doesNotMatch(SETTINGS_CADENCE_NOTICE, /consumers stages/);

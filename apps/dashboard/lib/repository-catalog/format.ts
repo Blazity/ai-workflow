@@ -11,6 +11,9 @@ import type {
   RepositorySuggestionRecord,
   RepositorySuggestionUsage,
 } from "@shared/contracts";
+import { formatDateTime } from "../date-time";
+
+export { formatDateTime } from "../date-time";
 
 /** What the source badge says. Provenance in the operator's words, not the
  *  stored enum: nothing branches on it, it exists so a row nobody remembers
@@ -68,11 +71,6 @@ export function asScriptsEntry(
 export function lastChangeLabel(profile: RepositoryProfileVersion | null): string {
   if (profile === null) return "never configured";
   return `v${profile.version} · ${profile.actorLabel} · ${formatDateTime(profile.createdAt)}`;
-}
-
-export function formatDateTime(iso: string): string {
-  const parsed = new Date(iso);
-  return Number.isNaN(parsed.getTime()) ? iso : parsed.toLocaleString();
 }
 
 /**

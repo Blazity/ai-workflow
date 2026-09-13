@@ -418,7 +418,7 @@ export function OverviewScreen({
     evalData.available === true ? evalData : null;
 
   return (
-    <div className="flex flex-col gap-5 px-4 pb-8 pt-5 lg:px-6">
+    <div className="flex flex-col gap-5 px-4 pb-8 pt-5 lg:px-6 [&_a]:min-h-6">
       {/* Spotlight ticket search (⌘K) + global window control */}
       <div className="flex items-center justify-between gap-4">
         <SpotlightTrigger />

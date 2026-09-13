@@ -81,6 +81,14 @@ test("PromptListRail keeps selected rows tinted without the primary button skin"
     assert.match(activeTag.className, /bg-mariner-100/);
     assert.match(activeTag.className, /text-\[9px\]/);
     assert.match(activeTag.className, /uppercase/);
+    const search = container.querySelector<HTMLInputElement>('[aria-label="Search prompts"]');
+    assert.equal(search?.placeholder, "Search prompts ( / )");
+    const archived = Array.from(container.querySelectorAll("button")).find(
+      (candidate) => candidate.textContent?.trim() === "Archived",
+    );
+    assert.ok(archived);
+    assert.ok(archived.parentElement?.className.includes("items-start"));
+    assert.match(archived.className, /shrink-0/);
   } finally {
     act(() => root?.unmount());
     container.remove();

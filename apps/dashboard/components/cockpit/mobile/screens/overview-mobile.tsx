@@ -39,7 +39,7 @@ export function OverviewMobileScreen({
   const workflows = data.workflows.rows;
 
   return (
-    <div className="flex flex-col gap-4 px-4 pt-4 pb-6">
+    <div className="flex flex-col gap-4 px-4 pt-4 pb-6 [&_a]:min-h-6">
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">{windowPhrase(window)}</div>
