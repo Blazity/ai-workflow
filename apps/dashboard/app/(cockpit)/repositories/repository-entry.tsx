@@ -18,7 +18,10 @@ import {
   REPOSITORY_RELATIONSHIP_NOTE_MAX_LENGTH,
   repositoryProfileRemoteExecutionWarnings,
 } from "@shared/contracts";
-import { REPOSITORY_RULES_VARIABLES } from "@shared/prompts";
+import {
+  REPOSITORY_RULES_VARIABLES,
+  repositoryRulesVariablesError,
+} from "@shared/prompts";
 
 import { apiClient } from "@/lib/api/client";
 import {
@@ -45,7 +48,7 @@ import {
 import { DISCARD_UNSAVED_PROMPT, trackUnsavedSettings } from "@/lib/settings/unsaved";
 import { RepositoryScriptGroupsEditor } from "@/components/cockpit/screens/repositories/script-groups";
 import { PromptEditor } from "@/components/cockpit/prompt-editor/prompt-editor";
-import { Button, Input, Select } from "@/components/ui";
+import { Button, Field, Input, Select } from "@/components/ui";
 import { RouteTabs } from "@/components/ui/route-tabs";
 
 import { SuggestionPanel } from "./suggestion-panel";
@@ -60,7 +63,7 @@ import { SuggestionPanel } from "./suggestion-panel";
  * it off gets no rules either and this sentence is the only warning of that.
  */
 const RULES_DESTINATION_NOTE =
-  "Appended to every agent prompt that includes repository instructions, in a section headed \"Repository rules for\" this repository, on runs that may touch it. A harness profile with repository instructions switched off gets none. Only the variables in the menu render here, and they name the run and nothing else: ticket, plan and review text never reaches rules, because a rules heading is an instruction and anybody who can file a ticket could write one. A name outside that list is left standing as you typed it.";
+  "Appended to every agent prompt that includes repository instructions, in a section headed \"Repository rules for\" this repository, on runs that may touch it. A harness profile with repository instructions switched off gets none. Only the five variables in the menu render here; unknown variables must be removed before saving. Ticket, plan and review prose never reaches rules, because a rules heading is an instruction and anybody who can file a ticket could write one.";
 
 const TABS = ["overview", "rules", "scripts", "memory", "history"] as const;
 type Tab = (typeof TABS)[number];
@@ -113,6 +116,40 @@ function scriptsEntryOf(draft: RepositoryProfileDraft): PrePrCheckRepositoryConf
   const entry = asScriptsEntry(draft.scriptGroups);
   if (entry === null) return null;
   return draft.gateGroups === null ? entry : { ...entry, gateGroups: draft.gateGroups };
+}
+
+/** Field-compatible shell around the compound prompt editor. */
+function RulesEditorControl({
+  id,
+  value,
+  disabled,
+  onChange,
+  "aria-describedby": describedBy,
+  "aria-invalid": invalid,
+}: {
+  id?: string;
+  value: string;
+  disabled: boolean;
+  onChange: (rules: string) => void;
+  "aria-describedby"?: string;
+  "aria-invalid"?: boolean | "true" | "false";
+}) {
+  return (
+    <div
+      id={id}
+      aria-label="Rules"
+      aria-describedby={describedBy}
+      aria-invalid={invalid}
+    >
+      <PromptEditor
+        value={value}
+        disabled={disabled}
+        minHeightClass="min-h-[320px]"
+        variables={REPOSITORY_RULES_VARIABLES}
+        onChange={onChange}
+      />
+    </div>
+  );
 }
 
 function whatChanged(
@@ -242,6 +279,9 @@ export function RepositoryEntryScreen({
 
   const changed = useMemo(() => changedProfileFields(saved, draft), [saved, draft]);
   const dirty = changed.length > 0;
+  const rulesError = changed.includes("rules")
+    ? repositoryRulesVariablesError(draft.rules)
+    : null;
 
   // The shell asks this set before it navigates, and the logout button asks it
   // before it ends the session. Registering per repository means two entries
@@ -267,6 +307,7 @@ export function RepositoryEntryScreen({
   const blocker =
     scriptsBlocker ??
     ceilingBlocker ??
+    rulesError ??
     profileSaveBlocker({ changed, reason, canEdit: canManage });
 
   /**
@@ -439,15 +480,13 @@ export function RepositoryEntryScreen({
             already says. Same editor as the prompt library: what is stored is
             still the markdown, and a {"{{variable}}"} is shown as one.
           </p>
-          <div className="mt-2" aria-label="Rules">
-            <PromptEditor
+          <Field label="Rules document" error={rulesError} className="mt-2">
+            <RulesEditorControl
               value={draft.rules}
               disabled={!canManage}
-              minHeightClass="min-h-[320px]"
-              variables={REPOSITORY_RULES_VARIABLES}
               onChange={(rules) => setDraft({ ...draft, rules })}
             />
-          </div>
+          </Field>
           <p className="m-0 mt-1 font-body text-[11px] text-neutral-500">
             {RULES_DESTINATION_NOTE}
           </p>
@@ -656,9 +695,9 @@ function OverviewTab({
         />
       </div>
       <p className="m-0 mt-1 font-body text-[10px] text-neutral-500">
-        Markdown. The first line is what the Repositories list shows. Read by
-        people, not by the agent: unlike Rules, a description reaches no prompt,
-        so a {"{{variable}}"} in one is never rendered.
+        Markdown. Read by people and by the agent as this repository&apos;s
+        one-line summary. The agent gets the first paragraph as plain text,
+        limited to 500 characters; a {"{{variable}}"} in it is never rendered.
       </p>
 
       <div className="mt-3 font-body text-[12px] font-semibold text-neutral-800">

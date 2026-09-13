@@ -132,6 +132,7 @@ describe("buildPromptVariables", () => {
       pr_url: "https://github.com/acme/api/pull/77",
       pr_title: "Implement dark mode",
       repo_path: "acme/api",
+      repo_default_branch: "main",
       pr_review_feedback: "",
     });
   });
@@ -223,11 +224,38 @@ describe("buildPromptVariables", () => {
       makeSource({ entry: ticketEntry, selectedRepositories: selectedRepos }),
     );
     expect(vars.repo_path).toBe("acme/web");
+    expect(vars.repo_default_branch).toBe("main");
+  });
+
+  it("constructs repository-scoped values separately for a two-repository run", () => {
+    const source = makeSource({
+      entry: ticketEntry,
+      selectedRepositories: [
+        ...selectedRepos,
+        {
+          provider: "gitlab",
+          repoPath: "acme/api",
+          defaultBranch: "trunk",
+          selectedRationale: "backend",
+        },
+      ],
+    });
+
+    expect(
+      source.selectedRepositories.map((repository) => {
+        const vars = buildPromptVariables(source, repository);
+        return [vars.repo_path, vars.repo_default_branch];
+      }),
+    ).toEqual([
+      ["acme/web", "main"],
+      ["acme/api", "trunk"],
+    ]);
   });
 
   it("resolves empty repo_path when neither PR entry nor a selected repo exists", () => {
     const vars = buildPromptVariables(makeSource({ entry: ticketEntry }));
     expect(vars.repo_path).toBe("");
+    expect(vars.repo_default_branch).toBe("");
   });
 });
 

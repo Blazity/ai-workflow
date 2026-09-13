@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import test from "node:test";
-import React from "react";
+import test, { mock } from "node:test";
+import React, { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import {
@@ -22,6 +23,7 @@ import {
 } from "@shared/harness";
 import { isGitHubSkillSource } from "@shared/skills";
 import { selectableHarnessModels } from "@/lib/harness-profiles/editor";
+import { installTestDom } from "@/components/ui/test-dom";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
@@ -145,6 +147,97 @@ test("editable profiles expose the complete manifest and skill authoring", () =>
   assert.match(html, /Save draft/);
   assert.match(html, /Publish/);
   assert.doesNotMatch(html, /preset/i);
+});
+
+test("harness profile screen busy skill import ignores Escape and backdrop mouse down", async () => {
+  const dom = installTestDom();
+  const container = document.createElement("div");
+  document.body.append(container);
+  const profileValue = profile();
+  const detail: HarnessProfileDetailResponse = {
+    profile: profileValue,
+    published: null,
+    versions: [],
+    canManageProfile: true,
+    canDeleteProfile: true,
+    usage: [],
+    skillSources: [],
+  };
+  let root: Root | undefined;
+  let finishRequest: ((response: Response) => void) | undefined;
+  const request = new Promise<Response>((resolve) => {
+    finishRequest = resolve;
+  });
+  mock.method(globalThis, "fetch", async () => request);
+
+  try {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(
+        <ProfileEditor
+          detail={detail}
+          canManageProfiles
+          busy={null}
+          error={null}
+          onSave={async () => undefined}
+          onPublish={async () => undefined}
+          onFork={async () => undefined}
+          onArchive={async () => undefined}
+          onUnarchive={async () => undefined}
+          onDelete={async () => undefined}
+          onRestore={async () => undefined}
+          onRefreshSkill={async () => undefined}
+          onDirtyChange={() => undefined}
+          initialMode="edit"
+        />,
+      );
+    });
+    const addSkills = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (candidate) => candidate.textContent?.trim() === "Add skills",
+    );
+    assert.ok(addSkills);
+    act(() => addSkills.click());
+    const dialog = document.querySelector<HTMLElement>(
+      '[role="dialog"][data-state="open"]',
+    );
+    assert.ok(dialog);
+    const localSource = Array.from(dialog.querySelectorAll<HTMLButtonElement>("button")).find(
+      (candidate) => candidate.textContent?.trim() === "This deployment",
+    );
+    assert.ok(localSource);
+    await act(async () => {
+      localSource.click();
+      await Promise.resolve();
+    });
+    assert.equal(localSource.disabled, true);
+    assert.equal(dialog.querySelector('[aria-label="Close skill import"]'), null);
+
+    act(() => {
+      dom.window.dispatchEvent(new dom.window.KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }));
+    });
+    assert.equal(dialog.dataset.state, "open");
+
+    const backdrop = document.querySelector<HTMLElement>("[data-modal-overlay]");
+    assert.ok(backdrop);
+    act(() => {
+      backdrop.dispatchEvent(new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+      }));
+    });
+    assert.equal(dialog.dataset.state, "open");
+  } finally {
+    act(() => root?.unmount());
+    finishRequest?.(Response.json({ skills: [], artifacts: [] }));
+    await Promise.resolve();
+    container.remove();
+    mock.restoreAll();
+    dom.restore();
+  }
 });
 
 test("the rendered Listbox receives the exact filtered model option sequence", () => {

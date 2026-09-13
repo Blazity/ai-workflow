@@ -57,12 +57,17 @@ export function WindowSelector({
  * intent: a badge reading "Live" over a stopped loop is worse than no badge,
  * because it takes away the user's only cue to reload (AIW-266).
  *
- * On a screen whose refreshing is driven by its own content (a runs list, a run
- * in flight) the badge is a read-only status, because the global toggle does not
- * govern it and a pressable control would imply otherwise. Everywhere else it
- * stays the toggle it always was.
+ * Screens whose refreshing is driven by their own content keep the same Button
+ * skin and vocabulary, but disable it with an explanation because the global
+ * toggle does not govern that cadence. Screens that cannot poll do the same.
  */
-export function LivePollControl({ size = "md" }: { size?: "md" | "sm" }) {
+export function LivePollControl({
+  size = "md",
+  disabledReason,
+}: {
+  size?: "md" | "sm";
+  disabledReason?: string;
+}) {
   const {
     livePolling,
     toggleLive,
@@ -72,22 +77,16 @@ export function LivePollControl({ size = "md" }: { size?: "md" | "sm" }) {
     runRefreshCadence,
   } = useCockpit();
   const auto = runRefreshCadence !== "off";
-  const watching = liveRunning && runRefreshCadence === "idle" && !livePolling;
-  const label = liveRunning
-    ? watching
-      ? "Watching"
-      : "Live"
-    : auto || livePolling
-      ? "Paused"
-      : "Live off";
+  const label = liveRunning ? "Live on" : "Live off";
   const seconds = Math.round(liveCycleMs / 1000);
-  const title = liveRunning
-    ? watching
-      ? `No run in flight \u2014 checking for new runs every ${seconds}s.`
-      : `Refreshing every ${seconds}s.`
-    : auto || livePolling
-      ? "Paused while this tab is in the background. It resumes the moment you come back."
-      : "Live updates off \u2014 click to enable";
+  const controlDisabledReason =
+    disabledReason ??
+    (auto ? "Live updates are managed automatically on run screens." : undefined);
+  const title = controlDisabledReason ?? (liveRunning
+    ? `Live updates are on. Refreshing every ${seconds}s.`
+    : livePolling
+      ? "Live updates are paused while this tab is in the background."
+      : "Live updates are off. Click to enable.");
   const pad = size === "sm" ? "px-2" : "px-2.5";
   const tone = liveRunning ? "text-mariner" : "text-neutral-700";
   const body = (
@@ -104,27 +103,16 @@ export function LivePollControl({ size = "md" }: { size?: "md" | "sm" }) {
     </>
   );
 
-  if (auto) {
-    return (
-      <span
-        role="status"
-        title={title}
-        className={`inline-flex items-center gap-1.5 rounded-sm border ${pad} ${tone}`}
-      >
-        {body}
-      </span>
-    );
-  }
-
   return (
     <Button
       type="button"
       onClick={toggleLive}
-      aria-pressed={livePolling}
+      aria-pressed={liveRunning}
       aria-label="Toggle live updates"
       title={title}
       variant={liveRunning ? "selected" : "secondary"}
       size={size}
+      disabled={controlDisabledReason !== undefined}
       className={`${pad} ${tone} ${
         liveRunning ? "" : "hover:text-neutral-900"
       }`}

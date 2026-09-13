@@ -280,7 +280,7 @@ function liveBadge(root: ReactTestInstance): string {
         typeof node.type === "string" &&
         node.props.className?.includes?.("uppercase") &&
         typeof node.children[0] === "string" &&
-        /^(Live|Live off|Paused|Watching)$/.test(node.children[0]),
+        /^(Live on|Live off)$/.test(node.children[0]),
     )
     .map((node) => node.children[0] as string);
   assert.ok(labels.length > 0, "expected the live-poll control to render a label");
@@ -439,18 +439,26 @@ test("returning to the tab restores the refresh cycle, not a single refresh", (t
 
 // ── The LIVE badge ──────────────────────────────────────────────────────────
 
-test("health never joins global polling, even when Live was persisted", (t) => {
+test("health never polls and explains why the shared live control is disabled", (t) => {
   beginTest(t, { livePolling: true });
   const { refreshes, root } = mountShell(t, "/health", <div>Health</div>);
 
   advance(60_000);
 
   assert.equal(refreshes.length, 0, "health probes ran without a manual scan");
-  assert.equal(
-    root.findAllByProps({ "aria-label": "Toggle live updates" }).length,
-    0,
-    "health showed a Live control that cannot safely apply to this screen",
+  const controls = root.findAll(
+    (node) =>
+      node.type === "button" &&
+      node.props["aria-label"] === "Toggle live updates",
   );
+  assert.equal(controls.length, 2, "desktop and mobile chrome must keep the shared control");
+  assert.ok(controls.every((control) => control.props.disabled === true));
+  assert.ok(
+    controls.every((control) =>
+      control.props.title.includes("health checks contact every configured provider"),
+    ),
+  );
+  assert.equal(liveBadge(root), "Live off");
 });
 
 test("the badge does not claim live data while the tab is hidden and nothing polls", (t) => {
@@ -465,7 +473,7 @@ test("the badge does not claim live data while the tab is hidden and nothing pol
   assert.equal(refreshes.length, whileHidden, "a hidden tab must not poll");
   assert.notEqual(
     liveBadge(root),
-    "Live",
+    "Live on",
     "the badge promised live data while the loop was paused",
   );
 });
@@ -474,7 +482,7 @@ test("the badge reports live data while the loop really is running", (t) => {
   const { refreshes, root } = runsList(t, [makeRun("run_1", "running")]);
   advance(30_000);
   assert.ok(refreshes.length > 0, "expected the loop to be running");
-  assert.equal(liveBadge(root), "Live");
+  assert.equal(liveBadge(root), "Live on");
 });
 
 // ── Navigating away from unsaved edits ──────────────────────────────────────

@@ -183,6 +183,9 @@ export function CockpitShell({
   // user-triggered so a persisted global Live preference cannot turn one open
   // health tab into a continuous fan-out of production requests.
   const globalPollingAllowed = screen !== "health";
+  const liveDisabledReason = globalPollingAllowed
+    ? undefined
+    : "Live updates are unavailable because health checks contact every configured provider.";
   const livePollFast =
     globalPollingAllowed && (runRefreshCadence === "live" || !!t.livePolling);
   const livePollEnabled =
@@ -240,22 +243,22 @@ export function CockpitShell({
           />
         </div>
 
-        <main className="flex-1 flex flex-col min-w-0 min-h-0">
+        <main data-cockpit-main="" className="flex-1 flex flex-col min-w-0 min-h-0">
           {/* Mobile header */}
           <div className="lg:hidden">
             <MobileHeader
               title={TITLE_FOR_SCREEN[screen] ?? "AI Workflow"}
-              showLivePoll={globalPollingAllowed}
+              liveDisabledReason={liveDisabledReason}
             />
           </div>
 
-          {/* Desktop top bar, live polling is omitted for expensive health probes */}
+          {/* Desktop top bar. Health keeps the shared control visible but disabled. */}
           <div className="hidden lg:flex items-center justify-between flex-[0_0_44px] h-11 border-b border-neutral-200 bg-panel px-6">
             <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">
               {TITLE_FOR_SCREEN[screen] ?? "AI Workflow"}
             </span>
             <div className="flex items-center gap-4">
-              {globalPollingAllowed && <LivePollControl />}
+              <LivePollControl disabledReason={liveDisabledReason} />
               <LogoutButton />
             </div>
           </div>

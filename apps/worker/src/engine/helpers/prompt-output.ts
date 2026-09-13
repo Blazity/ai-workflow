@@ -37,8 +37,12 @@ type PromptVariableSource = Pick<
   | "repositoryContexts"
 >;
 
-/** Snapshot prompt variables at the current point of a run. */
-export function buildPromptVariables(ctx: PromptVariableSource): PromptVariableValues {
+/** Snapshot prompt variables at the current point of a run. Supplying a
+ * repository makes the two repository-scoped values name that repository. */
+export function buildPromptVariables(
+  ctx: PromptVariableSource,
+  repository?: { repoPath: string; defaultBranch: string },
+): PromptVariableValues {
   const { entry, ticket, publication, selectedRepositories, repositoryContexts } = ctx;
   const prEntry = entry.kind === "pr_trigger" ? entry.pr : null;
   const prReviewFeedback = repositoryContexts
@@ -63,7 +67,12 @@ export function buildPromptVariables(ctx: PromptVariableSource): PromptVariableV
     pr_number: prEntry ? String(prEntry.prNumber) : openedPr ? String(openedPr.id) : "",
     pr_url: prEntry ? prEntry.prUrl : (openedPr?.url ?? ""),
     pr_title: prEntry ? prEntry.title : "",
-    repo_path: prEntry ? prEntry.repoPath : (selectedRepositories[0]?.repoPath ?? ""),
+    repo_path:
+      repository?.repoPath ??
+      (prEntry ? prEntry.repoPath : (selectedRepositories[0]?.repoPath ?? "")),
+    repo_default_branch:
+      repository?.defaultBranch ??
+      (prEntry ? prEntry.baseRef : (selectedRepositories[0]?.defaultBranch ?? "")),
     pr_review_feedback: prReviewFeedback,
   };
 }

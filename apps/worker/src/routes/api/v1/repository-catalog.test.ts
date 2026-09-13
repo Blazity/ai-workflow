@@ -378,6 +378,18 @@ describe("PUT /api/v1/repository-catalog/:id", () => {
     expect(res.status).toBe(400);
   });
 
+  it("refuses an unknown rules variable with the shared validation message", async () => {
+    const res = await put(0, {
+      ...PROFILE,
+      rules: "Build {{repo_path}} and notify {{reviewer_name}}.",
+    });
+
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain(
+      "Unknown repository rules variable: {{reviewer_name}}. Allowed variables: ticket_key, ticket_url, branch_name, repo_path, repo_default_branch.",
+    );
+  });
+
   it("refuses a group name the checks engine could never resolve", async () => {
     const res = await put(0, {
       ...PROFILE,

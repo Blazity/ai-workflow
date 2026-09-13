@@ -490,9 +490,10 @@ Canonical variants:
 | Route | Change a linkable repository subsection | `RouteTabs` |
 
 Segmented tabs use a 3 px outer inset, 4 px outer radius, 3 px item radius,
-11 px uppercase mono text, and 180 ms standard easing. The active item is a
-white panel with the level 2 shadow. Route tabs use the same text role but a
-mariner bottom edge.
+11 px uppercase mono text, and 180 ms standard easing. The active item uses the
+shared selected tint: mariner 100 background, mariner 200 border, and mariner
+text. Route tabs use mariner text plus a mariner bottom edge for the same
+selected language.
 
 States: default is neutral 700 on transparent; hover uses neutral
 900 or app background; focus uses a 2 px mariner ring; disabled uses 40 percent
@@ -560,6 +561,11 @@ repository history, schedule history, and webhook history.
 Canonical chip variants are neutral, success, running, failed, warning,
 blocked, awaiting, cancelled, mariner, orange, and coal. This extends current
 `CkChip` with cancelled `(proposed)`.
+
+The mariner chip is a tint (`mariner-100` background, `mariner-200` border,
+mariner text). Solid mariner with white text is reserved for the primary Button
+and is not a canonical status-chip skin. A view exposes at most one enabled
+primary action; supporting actions use secondary or ghost.
 
 Chips use 2 px radius, 8 px horizontal padding, 3 px vertical padding, 10 px
 uppercase mono text, medium weight, and `0.02em` tracking. A dot is 6 px by

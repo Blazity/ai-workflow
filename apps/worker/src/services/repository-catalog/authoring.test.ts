@@ -59,6 +59,28 @@ const request = {
 };
 
 describe("saveRepositoryProfile", () => {
+  it("rejects an unknown repository-rules variable before writing", async () => {
+    refusal.calls = 0;
+
+    const failure = await saveRepositoryProfile({
+      actor: { role: "admin", id: "user-1" },
+      request: {
+        ...request,
+        rules: "Build {{repo_path}}, then ask {{reviewer_name}}.",
+      },
+    }).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toMatchObject({
+      statusCode: 400,
+      message:
+        "Unknown repository rules variable: {{reviewer_name}}. Allowed variables: ticket_key, ticket_url, branch_name, repo_path, repo_default_branch.",
+    });
+    expect(refusal.calls).toBe(0);
+  });
+
   it("answers a refused write as a conflict, never as nothing to save", async () => {
     // Exactly what the statement returns when the snapshot allowed the write
     // and the UPDATE matched no row: refused, carrying the version the caller
