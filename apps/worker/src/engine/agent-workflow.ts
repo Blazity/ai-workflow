@@ -3413,7 +3413,8 @@ async function agentWorkflowBody(
                   manifest: ctx.workspaceManifest,
                   enableRepoMemory: runSettings.ENABLE_REPO_MEMORY,
                   repositoryAccess: ctx.repositories,
-                  ruleVariables: buildPromptVariables(ctx),
+                  buildRuleVariables: (repository) =>
+                    buildPromptVariables(ctx, repository),
                 });
             } catch (error) {
               if (isRunControlError(error)) throw error;

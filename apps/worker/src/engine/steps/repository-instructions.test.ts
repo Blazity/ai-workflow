@@ -169,7 +169,10 @@ describe("repository instruction sources", () => {
         manifest,
         enableRepoMemory: false,
         repositoryAccess: { activated: false, enabledKeys: [] },
-        ruleVariables: {},
+        buildRuleVariables: (repository) => ({
+          repo_path: repository.repoPath,
+          repo_default_branch: repository.defaultBranch,
+        }),
       },
       load,
     );
@@ -179,7 +182,7 @@ describe("repository instruction sources", () => {
       manifest,
       false,
       ["github:acme/service"],
-      {},
+      undefined,
       [
         {
           key: "github:acme/service",
@@ -224,7 +227,7 @@ describe("repository instruction sources", () => {
           manifest,
           enableRepoMemory: false,
           repositoryAccess: { activated: false, enabledKeys: [] },
-          ruleVariables: {},
+          buildRuleVariables: () => ({}),
         },
         load,
       ),
