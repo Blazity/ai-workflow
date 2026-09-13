@@ -40,12 +40,14 @@ export function NavItem({
   ...props
 }: NavItemProps) {
   const classes = [
-    "relative flex min-w-0 appearance-none items-center gap-2.5 rounded-[3px] border-0 bg-transparent px-3 py-2 text-left",
-    "font-body text-[13px] font-normal leading-[1.25] no-underline",
+    "relative flex min-w-0 appearance-none items-center gap-[10px] rounded-[3px] border-0 px-3 py-[9px] text-left",
+    "font-body text-[13px] leading-[1.25] no-underline",
     "transition-[color,background-color,transform] duration-[var(--motion-fast)] ease-standard",
-    "hover:bg-app-bg hover:text-coal active:scale-[0.98]",
+    "active:scale-[0.98]",
     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner focus-visible:ring-offset-1",
-    active ? "bg-mariner-100 text-mariner" : "text-neutral-700",
+    active
+      ? "bg-mariner-100 text-mariner font-semibold"
+      : "bg-transparent text-neutral-800 font-medium hover:bg-app-bg",
     collapsed ? "justify-center px-0" : null,
     stacked ? "flex-col gap-0.5 text-center" : null,
     className,
@@ -56,7 +58,10 @@ export function NavItem({
   const content = (
     <>
       {icon ? (
-        <span aria-hidden="true" className="inline-flex shrink-0">
+        <span
+          aria-hidden="true"
+          className={`inline-flex shrink-0 ${active ? "text-mariner" : "text-neutral-700"}`}
+        >
           {icon}
         </span>
       ) : null}

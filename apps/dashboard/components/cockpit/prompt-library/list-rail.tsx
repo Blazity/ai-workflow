@@ -95,15 +95,34 @@ export function PromptListRail({
           aria-label="Search prompts"
         />
         <div className="flex gap-1 flex-wrap">
-          <Button variant={tag === null ? "primary" : "secondary"} size="sm" onClick={() => onTagChange(null)}>
+          <Button
+            variant={tag === null ? "selected" : "secondary"}
+            size="sm"
+            onClick={() => onTagChange(null)}
+            aria-pressed={tag === null}
+            className="text-[9px] font-medium uppercase tracking-[0.04em]"
+          >
             all
           </Button>
           {tags.map((t) => (
-            <Button variant={tag === t ? "primary" : "secondary"} size="sm" key={t} onClick={() => onTagChange(t)}>
+            <Button
+              variant={tag === t ? "selected" : "secondary"}
+              size="sm"
+              key={t}
+              onClick={() => onTagChange(t)}
+              aria-pressed={tag === t}
+              className="text-[9px] font-medium uppercase tracking-[0.04em]"
+            >
               {t}
             </Button>
           ))}
-          <Button variant={showArchived ? "primary" : "secondary"} size="sm" onClick={onToggleArchived} className="ml-auto">
+          <Button
+            variant={showArchived ? "selected" : "secondary"}
+            size="sm"
+            onClick={onToggleArchived}
+            aria-pressed={showArchived}
+            className="ml-auto text-[9px] font-medium uppercase tracking-[0.04em]"
+          >
             Archived
           </Button>
         </div>
@@ -128,41 +147,36 @@ export function PromptListRail({
             const on = activeId === row.id;
             const archived = row.archivedAt !== null;
             return (
-              <Button
-                variant={on ? "primary" : "ghost"}
-                size="md"
+              <button
                 type="button"
                 key={row.id}
                 data-row
+                aria-pressed={on}
                 onClick={() => onSelect(row.id)}
-                className={`h-auto w-full justify-start rounded-none px-4 py-3.5 text-left ${
+                className={`block w-full appearance-none cursor-pointer border-l-[3px] px-4 py-[14px] text-left transition-[color,background-color,border-color,transform] duration-[var(--motion-fast)] ease-standard active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-mariner ${
                   i < filtered.length - 1 ? "border-b border-b-neutral-200" : ""
-                } ${
-                  archived ? "opacity-60" : ""
-                }`}
+                } ${on ? "border-l-mariner bg-off-white" : "border-l-transparent bg-panel hover:bg-off-white"} ${archived ? "opacity-60" : ""}`}
               >
-                <span className="flex w-full min-w-0 flex-col">
-                  <span className="truncate font-mono text-[13px] font-semibold text-neutral-900">
-                    {row.name}
+                <div className="truncate font-mono text-[13px] font-semibold text-neutral-900">
+                  {row.name}
+                </div>
+                {row.description && (
+                  <div className="mt-[3px] truncate text-[11px] text-neutral-500">
+                    {row.description}
+                  </div>
+                )}
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  <span className="font-mono text-[10px] text-neutral-500">
+                    v{row.currentVersion} · {relativeTime(row.updatedAt)}
                   </span>
-                  {row.description && (
-                    <span className="mt-[3px] truncate text-[11px] text-neutral-500">
-                      {row.description}
-                    </span>
-                  )}
-                  <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                    <span className="font-mono text-[10px] text-neutral-500">
-                      v{row.currentVersion} · {relativeTime(row.updatedAt)}
-                    </span>
-                    {archived && <CkChip tone="neutral">archived</CkChip>}
-                    {row.tags.map((t) => (
-                      <CkChip key={t} tone={t === "built-in" ? "mariner" : "neutral"}>
-                        {t}
-                      </CkChip>
-                    ))}
-                  </span>
-                </span>
-              </Button>
+                  {archived && <CkChip tone="neutral">archived</CkChip>}
+                  {row.tags.map((t) => (
+                    <CkChip key={t} tone={t === "built-in" ? "mariner" : "neutral"}>
+                      {t}
+                    </CkChip>
+                  ))}
+                </div>
+              </button>
             );
           })
         )}

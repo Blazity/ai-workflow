@@ -2,7 +2,7 @@
 
 import type React from "react";
 
-export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
+export type ButtonVariant = "primary" | "selected" | "secondary" | "ghost" | "danger";
 export type ButtonSize = "sm" | "md";
 
 interface ButtonSharedProps {
@@ -29,6 +29,8 @@ export type ButtonProps = ButtonAsButtonProps | ButtonAsLinkProps;
 
 const variantClasses: Record<ButtonVariant, string> = {
   primary: "border-mariner bg-mariner text-white hover:opacity-90",
+  selected:
+    "border-mariner-200 bg-mariner-100 text-mariner hover:border-mariner-200 hover:bg-mariner-100 hover:text-mariner",
   secondary:
     "border-neutral-300 bg-panel text-coal hover:border-neutral-400 hover:bg-app-bg",
   ghost:

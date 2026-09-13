@@ -449,7 +449,7 @@ export function SkillImport({
         >
           {SKILL_SOURCE_KINDS.map((kind) => (
             <Button
-              variant={sourceKind === kind ? "primary" : "secondary"}
+              variant={sourceKind === kind ? "selected" : "secondary"}
               size="sm"
               key={kind}
               type="button"
