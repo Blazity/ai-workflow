@@ -45,6 +45,8 @@ import {
 import { DISCARD_UNSAVED_PROMPT, trackUnsavedSettings } from "@/lib/settings/unsaved";
 import { RepositoryScriptGroupsEditor } from "@/components/cockpit/screens/repositories/script-groups";
 import { PromptEditor } from "@/components/cockpit/prompt-editor/prompt-editor";
+import { Button, Input, Select } from "@/components/ui";
+import { RouteTabs } from "@/components/ui/route-tabs";
 
 import { SuggestionPanel } from "./suggestion-panel";
 
@@ -383,7 +385,7 @@ export function RepositoryEntryScreen({
           {repositoryLabel(repository)}
         </h2>
         <div className="flex flex-wrap items-center gap-2 font-body text-[12px] text-neutral-600">
-          <span className="rounded-[3px] bg-app-bg px-[5px] py-[1px] font-mono text-[10px] uppercase tracking-[0.05em] text-neutral-600">
+          <span className="rounded-[3px] bg-app-bg px-1.5 py-px font-mono text-[10px] uppercase tracking-[0.04em] text-neutral-600">
             {sourceLabel(repository.source)}
           </span>
           <span>{repository.enabled ? "enabled" : "not enabled"}</span>
@@ -391,22 +393,12 @@ export function RepositoryEntryScreen({
         </div>
       </div>
 
-      <nav className="flex flex-wrap gap-1 border-b border-neutral-200">
-        {TABS.map((id) => (
-          <button
-            key={id}
-            onClick={() => setTab(id)}
-            aria-current={tab === id ? "page" : undefined}
-            className={`appearance-none border-none bg-transparent px-3 py-2 font-body text-[13px] cursor-pointer ${
-              tab === id
-                ? "text-coal font-semibold border-b-2 border-mariner"
-                : "text-neutral-600"
-            }`}
-          >
-            {TAB_LABELS[id]}
-          </button>
-        ))}
-      </nav>
+      <RouteTabs
+        aria-label="Repository sections"
+        tabs={TABS.map((id) => ({ id, label: TAB_LABELS[id] }))}
+        active={tab}
+        onChange={setTab}
+      />
 
       {notice && (
         <div
@@ -417,7 +409,7 @@ export function RepositoryEntryScreen({
         </div>
       )}
       {error && (
-        <div className="rounded-[3px] border border-red-300 bg-red-50 px-3 py-2 font-body text-[12px] text-red-700">
+        <div className="rounded-[3px] border border-fail bg-fail-bg px-3 py-2 font-body text-xs text-fail-fg">
           {error}
         </div>
       )}
@@ -439,8 +431,8 @@ export function RepositoryEntryScreen({
       )}
 
       {tab === "rules" && (
-        <section className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3">
-          <h3 className="m-0 font-display text-[15px] font-medium text-coal">Rules</h3>
+        <section className="rounded-sm border border-neutral-200 bg-panel px-4 py-3">
+          <h3 className="m-0 font-display text-base font-medium text-coal">Rules</h3>
           <p className="m-0 mt-1 font-body text-[12px] text-neutral-600">
             Markdown. Handed to the agent as standing instructions for this
             repository, so write what it must and must not do, not what the code
@@ -463,8 +455,8 @@ export function RepositoryEntryScreen({
       )}
 
       {tab === "scripts" && (
-        <section className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3">
-          <h3 className="m-0 font-display text-[15px] font-medium text-coal">
+        <section className="rounded-sm border border-neutral-200 bg-panel px-4 py-3">
+          <h3 className="m-0 font-display text-base font-medium text-coal">
             Script groups
           </h3>
           <RemoteExecutionWarnings entry={scriptsEntryOf(draft)} />
@@ -547,37 +539,36 @@ export function RepositoryEntryScreen({
             </span>
             <label className="flex-1 min-w-[220px] font-body text-[12px] text-neutral-800">
               <span className="sr-only">Reason</span>
-              <input
+              <Input
                 value={reason}
                 aria-label="Reason"
                 onChange={(event) => setReason(event.target.value)}
                 placeholder="Why this change"
-                className="w-full rounded-[3px] border border-neutral-200 bg-white px-2 py-[6px] font-body text-[12px]"
               />
             </label>
             <span className="ml-auto flex items-center gap-2">
-              <button
+              <Button
+                variant="secondary"
                 onClick={discard}
                 disabled={busy}
-                className="appearance-none rounded-[3px] border border-neutral-300 bg-white px-3 py-[6px] font-body text-[12px] text-neutral-700 cursor-pointer hover:bg-app-bg disabled:opacity-40 disabled:cursor-default"
               >
                 Discard
-              </button>
-              <button
+              </Button>
+              <Button
                 onClick={save}
                 disabled={blocker !== null || busy}
-                className="appearance-none border-none rounded-[3px] bg-mariner px-4 py-2 font-body text-[13px] font-semibold text-white cursor-pointer disabled:opacity-40 disabled:cursor-default"
+                loading={busy}
               >
                 {busy ? "Saving…" : "Save changes"}
-              </button>
+              </Button>
             </span>
           </div>
           {blocker && (
-            <p role="status" className="m-0 mt-[6px] font-body text-[11px] text-red-600">
+            <p role="status" className="m-0 mt-1.5 font-body text-[11px] text-fail-fg">
               Save is disabled: {blocker}.
             </p>
           )}
-          <p className="m-0 mt-[6px] font-body text-[10px] text-neutral-500">
+          <p className="m-0 mt-1.5 font-body text-[10px] text-neutral-500">
             {REASON_REQUIRED_NOTE}
           </p>
         </div>
@@ -630,8 +621,8 @@ function OverviewTab({
     catalog.find((entry) => entry.id === id)?.path ?? `repository ${id}`;
 
   return (
-    <section className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3">
-      <h3 className="m-0 font-display text-[15px] font-medium text-coal">Overview</h3>
+    <section className="rounded-sm border border-neutral-200 bg-panel px-4 py-3">
+      <h3 className="m-0 font-display text-base font-medium text-coal">Overview</h3>
 
       <dl className="m-0 mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
         <dt className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">
@@ -695,17 +686,18 @@ function OverviewTab({
               {relationship.note ? ` (${relationship.note})` : ""}
             </span>
             {!disabled && (
-              <button
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() =>
                   onChange({
                     ...draft,
                     relationships: draft.relationships.filter((_, i) => i !== index),
                   })
                 }
-                className="appearance-none border-none bg-transparent font-body text-[11px] text-neutral-500 hover:text-red-600 cursor-pointer"
               >
                 Remove
-              </button>
+              </Button>
             )}
           </li>
         ))}
@@ -713,42 +705,45 @@ function OverviewTab({
 
       {!disabled && others.length > 0 && (
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          <select
+          <Select
             value={target}
             aria-label="Related repository"
-            onChange={(event) => setTarget(event.target.value)}
-            className="rounded-[3px] border border-neutral-200 bg-white px-2 py-[5px] font-mono text-[12px]"
-          >
-            <option value="">Choose a repository…</option>
-            {others.map((entry) => (
-              <option key={entry.id} value={String(entry.id)}>
-                {entry.provider}:{entry.path}
-              </option>
-            ))}
-          </select>
-          <select
+            onChange={setTarget}
+            className="sm:w-auto sm:min-w-[220px]"
+            options={[
+              { value: "", label: "Choose a repository…" },
+              ...others.map((entry) => ({
+                value: String(entry.id),
+                label: `${entry.provider}:${entry.path}`,
+              })),
+            ]}
+          />
+          <Select
             value={kind}
             aria-label="Relationship kind"
-            onChange={(event) => setKind(event.target.value)}
-            className="rounded-[3px] border border-neutral-200 bg-white px-2 py-[5px] font-body text-[12px]"
-          >
-            <option value="">Choose a relationship…</option>
-            {REPOSITORY_RELATIONSHIP_KINDS.map((entry) => (
-              <option key={entry.kind} value={entry.kind}>{entry.label}</option>
-            ))}
-          </select>
-          <label className="font-body text-[11px] text-neutral-500">
-            <input
+            onChange={setKind}
+            className="sm:w-auto sm:min-w-[220px]"
+            options={[
+              { value: "", label: "Choose a relationship…" },
+              ...REPOSITORY_RELATIONSHIP_KINDS.map((entry) => ({
+                value: entry.kind,
+                label: entry.label,
+              })),
+            ]}
+          />
+          <label className="w-full font-body text-[11px] text-neutral-500 sm:w-auto">
+            <Input
               value={note}
               aria-label="Relationship note"
               maxLength={REPOSITORY_RELATIONSHIP_NOTE_MAX_LENGTH}
               placeholder="Optional note"
               onChange={(event) => setNote(event.target.value)}
-              className="rounded-[3px] border border-neutral-200 bg-white px-2 py-[5px] font-body text-[12px]"
+              className="sm:w-[220px]"
             />
             {note.length} of {REPOSITORY_RELATIONSHIP_NOTE_MAX_LENGTH}
           </label>
-          <button
+          <Button
+            variant="secondary"
             disabled={target === "" || kind === "" || duplicate || contradictory || full}
             onClick={() => {
               onChange({
@@ -766,12 +761,11 @@ function OverviewTab({
               setKind("");
               setNote("");
             }}
-            className="appearance-none rounded-[3px] border border-neutral-300 bg-white px-2 py-[5px] font-body text-[12px] cursor-pointer disabled:opacity-40 disabled:cursor-default"
           >
             Add
-          </button>
+          </Button>
           {(duplicate || contradictory || full) && (
-            <span role="status" className="font-body text-[11px] text-red-600">
+            <span role="status" className="font-body text-[11px] text-fail-fg">
               {full
                 ? RELATIONSHIP_CAP_NOTE
                 : contradictory
@@ -828,9 +822,9 @@ function RemoteExecutionWarnings({ entry }: { entry: PrePrCheckRepositoryConfig 
       {warnings.map((warning) => (
         <li
           key={`${warning.group}:${warning.command}`}
-          className="rounded-[3px] border border-orange-300 bg-orange-100 px-2 py-[6px] font-body text-[12px] text-[#A23E18]"
+          className="rounded-[3px] border border-orange-300 bg-orange-100 px-2 py-1.5 font-body text-xs text-neutral-800"
         >
-          <code className="font-mono text-[11px] text-[#A23E18]">
+          <code className="font-mono text-[11px] text-neutral-800">
             {warning.group}: {warning.command}
           </code>
           <div>{REMOTE_EXECUTION_WARNING}</div>
@@ -858,15 +852,15 @@ function MemoryTab({
   const [erasing, setErasing] = useState<string | null>(null);
 
   return (
-    <section className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3">
-      <h3 className="m-0 font-display text-[15px] font-medium text-coal">Agent memory</h3>
+    <section className="rounded-sm border border-neutral-200 bg-panel px-4 py-3">
+      <h3 className="m-0 font-display text-base font-medium text-coal">Agent memory</h3>
       <p className="m-0 mt-1 font-body text-[12px] text-neutral-600">
         Two documents per repository, written by runs rather than by hand:
         `facts` is what the agent learned about this repository, `lessons` is
         what it learned from getting it wrong. Erasing one cannot be undone.
       </p>
       {error && (
-        <div className="mt-2 rounded-[3px] border border-red-300 bg-red-50 px-2 py-[6px] font-body text-[12px] text-red-700">
+        <div className="mt-2 rounded-[3px] border border-fail bg-fail-bg px-2 py-1.5 font-body text-xs text-fail-fg">
           {error}
         </div>
       )}
@@ -875,7 +869,7 @@ function MemoryTab({
         return (
           <div
             key={slot.docPath}
-            className="mt-2 rounded-[3px] border border-neutral-200 px-2 py-[6px]"
+            className="mt-2 rounded-[3px] border border-neutral-200 px-2 py-1.5"
           >
             <div className="flex flex-wrap items-baseline justify-between gap-2">
               <span className="font-mono text-[12px] text-neutral-900">{slot.docPath}</span>
@@ -897,15 +891,17 @@ function MemoryTab({
                   {slot.document.content}
                 </pre>
                 {canDelete && armed !== slot.docPath && (
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={() => {
                       setError(null);
                       setArmed(slot.docPath);
                     }}
-                    className="mt-1 appearance-none border-none bg-transparent px-0 font-body text-[12px] text-neutral-500 hover:text-red-600 cursor-pointer"
+                    className="mt-1"
                   >
                     Erase {slot.docPath}
-                  </button>
+                  </Button>
                 )}
                 {canDelete && armed === slot.docPath && (
                   <div className="mt-1 flex flex-wrap items-center gap-2">
@@ -913,7 +909,9 @@ function MemoryTab({
                       Erase {slot.docPath} from the store? This removes the
                       stored text now. A later run can learn it again.
                     </span>
-                    <button
+                    <Button
+                      variant="danger"
+                      size="sm"
                       disabled={erasing === slot.docPath}
                       onClick={async () => {
                         setError(null);
@@ -933,17 +931,18 @@ function MemoryTab({
                           setErasing(null);
                         }
                       }}
-                      className="appearance-none border-none rounded-[3px] bg-red-600 px-2 py-[4px] font-body text-[12px] text-white cursor-pointer disabled:opacity-40 disabled:cursor-default"
+                      loading={erasing === slot.docPath}
                     >
                       {erasing === slot.docPath ? "Erasing…" : "Confirm erase"}
-                    </button>
-                    <button
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       disabled={erasing === slot.docPath}
                       onClick={() => setArmed(null)}
-                      className="appearance-none border-none bg-transparent px-0 font-body text-[12px] text-neutral-500 cursor-pointer disabled:opacity-40 disabled:cursor-default"
                     >
                       Cancel
-                    </button>
+                    </Button>
                   </div>
                 )}
               </>
@@ -1017,8 +1016,8 @@ function HistoryTab({
 
   if (all.length === 0) {
     return (
-      <section className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3">
-        <h3 className="m-0 font-display text-[15px] font-medium text-coal">History</h3>
+      <section className="rounded-sm border border-neutral-200 bg-panel px-4 py-3">
+        <h3 className="m-0 font-display text-base font-medium text-coal">History</h3>
         <p className="m-0 mt-1 font-body text-[12px] text-neutral-500">
           No versions yet. This repository is known to the catalog and has never
           been given a profile.
@@ -1030,8 +1029,8 @@ function HistoryTab({
   // one below it, which is the version it replaced.
   const ordered = [...all].sort((a, b) => b.version - a.version);
   return (
-    <section className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3">
-      <h3 className="m-0 font-display text-[15px] font-medium text-coal">History</h3>
+    <section className="rounded-sm border border-neutral-200 bg-panel px-4 py-3">
+      <h3 className="m-0 font-display text-base font-medium text-coal">History</h3>
       {onRestore !== null && (
         <p className="m-0 mt-1 font-body text-[11px] text-neutral-500">
           Restoring mints a NEW version holding that version&apos;s profile. It
@@ -1073,25 +1072,29 @@ function HistoryTab({
                 : version.reason}
             </div>
             {onRestore !== null && version.version !== currentVersion && (
-              <button
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => onRestore(version)}
-                className="mt-1 appearance-none border-none bg-transparent px-0 font-body text-[12px] text-mariner cursor-pointer"
+                className="mt-1"
               >
                 Restore this version
-              </button>
+              </Button>
             )}
           </li>
         ))}
       </ul>
-      {error && <p className="m-0 mt-2 font-body text-[12px] text-red-600">{error}</p>}
+      {error && <p className="m-0 mt-2 font-body text-xs text-fail-fg">{error}</p>}
       {more && (
-        <button
+        <Button
+          variant="secondary"
           onClick={loadMore}
           disabled={busy}
-          className="mt-2 appearance-none rounded-[3px] border border-neutral-300 bg-white px-2 py-[5px] font-body text-[12px] cursor-pointer disabled:opacity-40 disabled:cursor-default"
+          loading={busy}
+          className="mt-2"
         >
           {busy ? "Loading…" : "Load more"}
-        </button>
+        </Button>
       )}
     </section>
   );
@@ -1166,12 +1169,13 @@ function ChecksCeilingField({
     <div className="mt-4 border-t border-neutral-200 pt-3">
       <label className="block font-body text-[12px] font-semibold text-neutral-800">
         Checks ceiling (minutes)
-        <input
+        <Input
           value={text}
           disabled={disabled}
           aria-label="Checks ceiling"
           inputMode="numeric"
           placeholder="operator ceiling"
+          invalid={invalid}
           onChange={(event) => {
             const next = event.target.value;
             setText(next);
@@ -1188,7 +1192,8 @@ function ChecksCeilingField({
               onChange(candidate);
             }
           }}
-          className="mt-1 block w-[160px] rounded-[3px] border border-neutral-200 bg-white px-2 py-[6px] font-mono text-[12px]"
+          monospace
+          className="mt-1 w-[160px]"
         />
       </label>
       <p className="m-0 mt-1 font-body text-[11px] text-neutral-500">
@@ -1198,7 +1203,7 @@ function ChecksCeilingField({
         bounds the run and not one repository&apos;s share of it.
       </p>
       {invalid && (
-        <p role="status" className="m-0 mt-1 font-body text-[11px] text-red-600">
+        <p role="status" className="m-0 mt-1 font-body text-[11px] text-fail-fg">
           {CHECKS_CEILING_FIELD_ERROR}
         </p>
       )}
@@ -1274,8 +1279,8 @@ function SuggestionHistory({ repositoryId }: { repositoryId: number }) {
   }
 
   return (
-    <section className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3">
-      <h3 className="m-0 font-display text-[15px] font-medium text-coal">
+    <section className="rounded-sm border border-neutral-200 bg-panel px-4 py-3">
+      <h3 className="m-0 font-display text-base font-medium text-coal">
         Suggestion calls
       </h3>
       <p className="m-0 mt-1 font-body text-[11px] text-neutral-500">
@@ -1284,7 +1289,7 @@ function SuggestionHistory({ repositoryId }: { repositoryId: number }) {
         free.
       </p>
       {error && (
-        <p className="m-0 mt-2 font-body text-[12px] text-red-600">{error}</p>
+        <p className="m-0 mt-2 font-body text-xs text-fail-fg">{error}</p>
       )}
       {rows === null && error === null && (
         <p className="m-0 mt-2 font-body text-[12px] text-neutral-500">Loading…</p>
@@ -1323,13 +1328,15 @@ function SuggestionHistory({ repositoryId }: { repositoryId: number }) {
         </ul>
       )}
       {cursor !== null && (
-        <button
+        <Button
+          variant="secondary"
           onClick={more}
           disabled={busy}
-          className="mt-2 appearance-none rounded-[3px] border border-neutral-300 bg-white px-2 py-[5px] font-body text-[12px] cursor-pointer disabled:opacity-40 disabled:cursor-default"
+          loading={busy}
+          className="mt-2"
         >
           {busy ? "Loading…" : "Show older calls"}
-        </button>
+        </Button>
       )}
     </section>
   );

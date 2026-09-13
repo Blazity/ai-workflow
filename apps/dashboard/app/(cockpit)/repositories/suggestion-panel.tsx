@@ -8,6 +8,8 @@ import type {
   RepositoryCatalogSuggestResponse,
 } from "@shared/contracts";
 
+import { Button } from "@/components/ui";
+import { Checkbox } from "@/components/ui/checkbox";
 import { apiClient } from "@/lib/api/client";
 import { usageLabel } from "@/lib/repository-catalog/format";
 import {
@@ -187,15 +189,16 @@ export function SuggestionPanel({
   }
 
   return (
-    <section className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3">
+    <section className="rounded-sm border border-neutral-200 bg-panel px-4 py-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="m-0 font-display text-[15px] font-medium text-coal">
+        <h3 className="m-0 font-display text-base font-medium text-coal">
           Suggest from repository
         </h3>
-        <button
+        <Button
+          variant="secondary"
           onClick={() => void ask()}
           disabled={state.kind === "pending" || cooling}
-          className="appearance-none rounded-[3px] border border-neutral-300 bg-white px-3 py-[6px] font-body text-[12px] text-neutral-800 cursor-pointer hover:bg-app-bg disabled:opacity-40 disabled:cursor-default"
+          loading={state.kind === "pending"}
         >
           {cooling
             ? `Rate limited, ${cooldown}s`
@@ -204,7 +207,7 @@ export function SuggestionPanel({
               : state.kind === "idle"
                 ? "Suggest from repository"
                 : "Ask again"}
-        </button>
+        </Button>
       </div>
 
       {state.kind === "idle" && (
@@ -228,24 +231,25 @@ export function SuggestionPanel({
         <div className="mt-2">
           <div
             role="status"
-            className="rounded-[3px] border border-red-300 bg-red-50 px-2 py-[6px] font-body text-[12px] text-red-700"
+            className="rounded-[3px] border border-fail bg-fail-bg px-2 py-1.5 font-body text-xs text-fail-fg"
           >
             {state.message}
           </div>
           {state.retryable && !cooling && (
-            <button
+            <Button
+              variant="secondary"
               onClick={() => void ask()}
-              className="mt-2 appearance-none rounded-[3px] border border-neutral-300 bg-white px-3 py-[6px] font-body text-[12px] text-neutral-800 cursor-pointer hover:bg-app-bg"
+              className="mt-2"
             >
               Try again
-            </button>
+            </Button>
           )}
         </div>
       )}
 
       {state.kind === "proposed" && (
         <div className="mt-2">
-          <div className="rounded-[3px] border border-orange-300 bg-orange-100 px-2 py-[6px] font-body text-[11px] text-[#A23E18]">
+          <div className="rounded-[3px] border border-orange-300 bg-orange-100 px-2 py-1.5 font-body text-[11px] text-neutral-800">
             {SUGGESTION_REVIEW_NOTICE}
           </div>
           <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">
@@ -277,19 +281,20 @@ export function SuggestionPanel({
           {diffs.map((diff) => (
             <div
               key={diff.name}
-              className="mt-2 rounded-[3px] border border-neutral-200 px-2 py-[6px]"
+              className="mt-2 rounded-[3px] border border-neutral-200 px-2 py-1.5"
             >
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={accepted.has(diff.name)}
-                  onChange={() => toggle(diff.name)}
-                />
-                <span className="font-mono text-[12px] text-neutral-900">{diff.name}</span>
-                <span className="font-body text-[11px] text-neutral-500">
-                  {groupDiffSummary(diff)}
-                </span>
-              </label>
+              <Checkbox
+                checked={accepted.has(diff.name)}
+                onChange={() => toggle(diff.name)}
+                label={
+                  <>
+                    <span className="font-mono text-[12px] text-neutral-900">{diff.name}</span>
+                    <span className="font-body text-[11px] text-neutral-500">
+                      {groupDiffSummary(diff)}
+                    </span>
+                  </>
+                }
+              />
               <div className="mt-1 grid grid-cols-1 gap-2 lg:grid-cols-2">
                 <div>
                   <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">
@@ -315,7 +320,7 @@ export function SuggestionPanel({
               {state.answer.droppedGroups.map((group) => (
                 <div
                   key={group.name}
-                  className="mt-1 rounded-[3px] border border-dashed border-neutral-300 px-2 py-[6px] opacity-70"
+                  className="mt-1 rounded-[3px] border border-dashed border-neutral-300 px-2 py-1.5 opacity-70"
                 >
                   <div className="font-mono text-[12px] text-neutral-600">{group.name}</div>
                   <div className="font-body text-[11px] text-neutral-600">
@@ -329,7 +334,8 @@ export function SuggestionPanel({
 
           {diffs.length > 0 && (
             <div className="mt-3 flex items-center gap-3">
-              <button
+              <Button
+                variant="secondary"
                 onClick={() => {
                   const base: PrePrCheckRepositoryConfig =
                     currentEntry ?? emptyScriptsEntry(repository);
@@ -337,10 +343,9 @@ export function SuggestionPanel({
                   setAccepted(new Set());
                 }}
                 disabled={accepted.size === 0}
-                className="appearance-none rounded-[3px] border border-neutral-300 bg-white px-3 py-[6px] font-body text-[12px] text-neutral-800 cursor-pointer hover:bg-app-bg disabled:opacity-40 disabled:cursor-default"
               >
                 Move {accepted.size} into the Scripts draft
-              </button>
+              </Button>
               <span className="font-body text-[11px] text-neutral-500">
                 Accepted groups land in the Scripts tab as an unsaved draft. You
                 still save them with a reason.
@@ -377,12 +382,13 @@ function SuggestedField({
       <div className="flex items-baseline justify-between gap-2">
         <div className="font-body text-[12px] font-semibold text-neutral-800">{label}</div>
         {proposed.trim().length > 0 && (
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={onUse}
-            className="appearance-none border-none bg-transparent px-0 font-body text-[12px] text-mariner cursor-pointer"
           >
             {USE_THIS_LABEL}
-          </button>
+          </Button>
         )}
       </div>
       <div className="mt-1 grid grid-cols-1 gap-2 lg:grid-cols-2">

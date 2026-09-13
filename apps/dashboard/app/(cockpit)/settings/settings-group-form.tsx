@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { findSettingDefinition } from "@shared/contracts";
 import type { SettingsEntryView } from "@shared/contracts";
 
-import { CkChip, type ChipTone } from "@/components/ui";
+import { Button, CkChip, Input, type ChipTone } from "@/components/ui";
 import { apiClient } from "@/lib/api/client";
 import {
   RESOLVED_VALUE_LABEL,
@@ -67,7 +67,7 @@ function SettingField({
   onChange: (next: string | boolean) => void;
 }) {
   return (
-    <div className="flex flex-col gap-[6px]">
+    <div className="flex flex-col gap-1.5">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-body text-[12px] font-semibold text-neutral-800">
           {settingLabel(entry.key)}
@@ -97,15 +97,15 @@ function SettingField({
       </p>
       {issue && <p className="m-0 font-body text-[11px] text-fail-fg">{issue}</p>}
       <div>
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={onToggleHistory}
           aria-expanded={historyOpen}
-          className="appearance-none border-none bg-transparent p-0 cursor-pointer font-mono text-[10px] uppercase tracking-[0.06em] text-mariner"
         >
           {historyOpen ? "Hide history" : "History"}
           {entry.lastVersion ? " (changed here before)" : " (never changed here)"}
-        </button>
+        </Button>
         {historyOpen && <SettingHistory settingKey={entry.key} />}
       </div>
     </div>
@@ -251,10 +251,10 @@ export function SettingsGroupForm({
   const reasonMissing = reason.trim() === "";
 
   return (
-    <section className="rounded-[4px] border border-neutral-200 bg-panel">
-      <header className="px-4 pt-3 pb-[10px] border-b border-neutral-200">
+    <section className="rounded-sm border border-neutral-200 bg-panel">
+      <header className="border-b border-neutral-200 px-4 py-3">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h3 className="m-0 font-display text-[15px] font-medium text-coal">{title}</h3>
+          <h3 className="m-0 font-display text-base font-medium text-coal">{title}</h3>
           <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">
             {stored} of {saved.length} stored
           </span>
@@ -300,8 +300,8 @@ export function SettingsGroupForm({
         <p
           className={`mx-4 mb-3 mt-0 rounded-[3px] border px-3 py-2 font-body text-[11px] ${
             message.tone === "ok"
-              ? "border-[#B8DDAA] bg-success-bg text-success-fg"
-              : "border-[#F0B8AE] bg-fail-bg text-fail-fg"
+              ? "border-success bg-success-bg text-success-fg"
+              : "border-fail bg-fail-bg text-fail-fg"
           }`}
         >
           {message.text}
@@ -309,15 +309,15 @@ export function SettingsGroupForm({
       )}
 
       {!canEdit && saved.length > 0 && (
-        <footer className="px-4 py-[10px] border-t border-neutral-200 font-body text-[11px] text-neutral-600">
+        <footer className="border-t border-neutral-200 px-4 py-3 font-body text-[11px] text-neutral-600">
           Read-only: ask an owner or admin to change these settings.
         </footer>
       )}
 
       {canEdit && saved.length > 0 && (
-        <footer className="px-4 py-3 border-t border-neutral-200 flex flex-col gap-[6px]">
+        <footer className="px-4 py-3 border-t border-neutral-200 flex flex-col gap-1.5">
           <div className="flex flex-wrap items-center gap-2">
-            <input
+            <Input
               type="text"
               value={reason}
               required
@@ -326,28 +326,26 @@ export function SettingsGroupForm({
               placeholder="Why is this changing? (required)"
               disabled={saving}
               onChange={(event) => setReason(event.target.value)}
-              className="flex-1 min-w-[180px] rounded-[3px] border border-neutral-200 bg-white px-2 py-[6px] font-body text-[12px] text-neutral-800"
+              className="min-w-[180px] flex-1"
             />
-            <button
-              type="button"
+            <Button
+              variant="secondary"
               onClick={discard}
               disabled={!dirty || saving}
-              className="appearance-none rounded-[3px] border border-neutral-200 bg-panel px-3 py-[6px] font-body text-[12px] text-neutral-700 cursor-pointer disabled:opacity-40 disabled:cursor-default"
             >
               Discard
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
               onClick={save}
               disabled={!dirty || saving || reasonMissing}
-              className="appearance-none rounded-[3px] border-none bg-mariner px-3 py-[6px] font-body text-[12px] font-medium text-white cursor-pointer disabled:opacity-40 disabled:cursor-default"
+              loading={saving}
             >
               {saving
                 ? "Saving"
                 : !dirty
                   ? "Nothing to save"
                   : `Store ${changedCount} ${changedCount === 1 ? "change" : "changes"}`}
-            </button>
+            </Button>
           </div>
           {dirty && reasonMissing && (
             <p className="m-0 font-body text-[11px] text-neutral-600">

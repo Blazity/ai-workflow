@@ -140,12 +140,17 @@ function render(t: TestContext): ReactTestInstance {
 }
 
 /** Click the tab whose label matches, the way an operator reaches it. */
+function text(node: ReactTestInstance): string {
+  return node
+    .findAll(() => true)
+    .flatMap((child) => child.children.filter((value) => typeof value === "string"))
+    .join(" ");
+}
+
 function openTab(root: ReactTestInstance, label: RegExp): void {
   const button = root
     .findAll((node) => node.type === "button")
-    .find((node) =>
-      node.children.some((child) => typeof child === "string" && label.test(child)),
-    );
+    .find((node) => label.test(text(node)));
   assert.ok(button, `no tab button matching ${label}`);
   act(() => {
     (button.props as { onClick: () => void }).onClick();
@@ -238,9 +243,7 @@ test("U15: every tab is reachable at phone width, none hidden below a breakpoint
   for (const label of [/Overview/i, /Rules/i, /Scripts/i, /Memory/i, /History/i]) {
     const found = root
       .findAll((node) => node.type === "button")
-      .some((node) =>
-        node.children.some((child) => typeof child === "string" && label.test(child)),
-      );
+      .some((node) => label.test(text(node)));
     assert.ok(found, `no tab button matching ${label} at phone width`);
   }
 

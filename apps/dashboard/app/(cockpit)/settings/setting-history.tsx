@@ -78,7 +78,7 @@ export function SettingHistory({ settingKey }: { settingKey: string }) {
       {state.versions.map((version) => (
         <li
           key={version.id}
-          className="rounded-[3px] border border-neutral-200 bg-app-bg px-2 py-[6px] font-body text-[11px] text-neutral-700"
+          className="rounded-[3px] border border-neutral-200 bg-app-bg px-2 py-1.5 font-body text-[11px] text-neutral-700"
         >
           <span className="font-mono text-[11px] text-neutral-800">
             {displaySettingValue(version.previousValue)} to{" "}

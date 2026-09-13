@@ -8,6 +8,8 @@ import type {
   RepositoryCatalogState,
 } from "@shared/contracts";
 
+import { Button } from "@/components/ui";
+import { Checkbox } from "@/components/ui/checkbox";
 import { apiClient } from "@/lib/api/client";
 import {
   activationBannerLine,
@@ -84,41 +86,37 @@ function EnabledSwitch({
   }
 
   return (
-    <span className="flex flex-col items-end gap-[2px]">
-      <label
+    <span className="flex flex-col items-end gap-1">
+      <Checkbox
         title={ENABLED_SWITCH_NOTE}
-        className="flex items-center gap-[6px] font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-600"
-      >
-        <input
-          type="checkbox"
-          checked={repository.enabled}
-          disabled={busy}
-          aria-label={`Let the agent touch ${repository.path}`}
-          onChange={async (event) => {
-            const next = event.target.checked;
-            setBusy(true);
-            setError(null);
-            try {
-              const result = await apiClient.repositoryCatalog.setEnabled(
-                repository.id,
-                next,
-              );
-              if (!result.ok) {
-                setError(result.errorMessage);
-                return;
-              }
-              onChanged(result.data.repository, result.data.enabledRemaining);
-            } catch {
-              setError("Could not reach the server.");
-            } finally {
-              setBusy(false);
+        className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-600"
+        checked={repository.enabled}
+        disabled={busy}
+        aria-label={`Let the agent touch ${repository.path}`}
+        onChange={async (event) => {
+          const next = event.target.checked;
+          setBusy(true);
+          setError(null);
+          try {
+            const result = await apiClient.repositoryCatalog.setEnabled(
+              repository.id,
+              next,
+            );
+            if (!result.ok) {
+              setError(result.errorMessage);
+              return;
             }
-          }}
-        />
-        {repository.enabled ? "enabled" : "not enabled"}
-      </label>
+            onChanged(result.data.repository, result.data.enabledRemaining);
+          } catch {
+            setError("Could not reach the server.");
+          } finally {
+            setBusy(false);
+          }
+        }}
+        label={repository.enabled ? "enabled" : "not enabled"}
+      />
       {error && (
-        <span role="status" className="font-body text-[10px] text-red-600">
+        <span role="status" className="font-body text-[10px] text-fail-fg">
           {error}
         </span>
       )}
@@ -193,17 +191,17 @@ export function RepositoriesScreen({
           </p>
         </div>
         {canManage && available && (
-          <button
+          <Button
+            variant="secondary"
             onClick={() => setDialog(dialog === "import" ? "none" : "import")}
-            className="appearance-none rounded-[3px] border border-neutral-300 bg-panel px-3 py-2 font-body text-[13px] text-neutral-800 cursor-pointer hover:bg-app-bg"
           >
             Import
-          </button>
+          </Button>
         )}
       </div>
 
       {!available && (
-        <div className="rounded-[3px] border border-[#F0B8AE] bg-fail-bg px-3 py-2 font-body text-[12px] text-fail-fg">
+        <div className="rounded-[3px] border border-fail bg-fail-bg px-3 py-2 font-body text-xs text-fail-fg">
           {canManage
             ? "The worker did not answer, so nothing can be shown or changed here. Check the worker on the System health page and reload."
             : "The worker did not answer, so nothing can be shown here. Ask an owner or admin to check the worker, then reload."}
@@ -211,15 +209,17 @@ export function RepositoriesScreen({
       )}
 
       {available && catalogState !== null && !catalogState.activated && (
-        <div className="rounded-[3px] border border-orange-300 bg-orange-100 px-3 py-2 font-body text-[12px] text-[#A23E18]">
+        <div className="rounded-[3px] border border-orange-300 bg-orange-100 px-3 py-2 font-body text-xs text-neutral-800">
           <span>{NOT_ACTIVATED_BANNER}.</span>{" "}
           {canManage ? (
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => setDialog(dialog === "activate" ? "none" : "activate")}
-              className="appearance-none border-none bg-transparent px-0 font-body text-[12px] font-semibold text-[#A23E18] underline cursor-pointer"
+              className="underline"
             >
               Activate
-            </button>
+            </Button>
           ) : (
             <span>Ask an owner or admin to activate it.</span>
           )}
@@ -266,12 +266,12 @@ export function RepositoriesScreen({
             exposes, then enable the ones the agent may touch.
           </p>
           {canManage && (
-            <button
+            <Button
               onClick={() => setDialog("import")}
-              className="mt-3 appearance-none border-none rounded-[3px] bg-mariner px-4 py-2 font-body text-[13px] font-semibold text-white cursor-pointer"
+              className="mt-3"
             >
               Import repositories
-            </button>
+            </Button>
           )}
         </div>
       )}
@@ -282,7 +282,7 @@ export function RepositoriesScreen({
         catalogState?.activated === true && (
           <div
             role="status"
-            className="rounded-[3px] border border-[#F0B8AE] bg-fail-bg px-3 py-2 font-body text-[12px] text-fail-fg"
+            className="rounded-[3px] border border-fail bg-fail-bg px-3 py-2 font-body text-xs text-fail-fg"
           >
             {NO_ENABLED_REPOSITORY_WARNING}
           </div>
@@ -301,21 +301,21 @@ export function RepositoriesScreen({
             return (
               <li
                 key={repository.id}
-                className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3"
+                className="rounded-sm border border-neutral-200 bg-panel px-4 py-3"
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
                     <a
                       href={`/repositories/${repository.id}`}
-                      className="font-display text-[15px] font-medium text-coal no-underline hover:underline"
+                      className="font-display text-base font-medium text-coal no-underline transition-colors duration-[var(--motion-fast)] hover:underline"
                     >
                       {repository.displayName || repository.path}
                     </a>
-                    <div className="mt-[2px] flex flex-wrap items-center gap-2">
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
                       <span className="font-mono text-[11px] text-neutral-700">
                         {repository.provider}:{repository.path}
                       </span>
-                      <span className="rounded-[3px] bg-app-bg px-[5px] py-[1px] font-mono text-[10px] uppercase tracking-[0.05em] text-neutral-600">
+                      <span className="rounded-[3px] bg-app-bg px-1.5 py-px font-mono text-[10px] uppercase tracking-[0.04em] text-neutral-600">
                         {sourceLabel(repository.source)}
                       </span>
                     </div>

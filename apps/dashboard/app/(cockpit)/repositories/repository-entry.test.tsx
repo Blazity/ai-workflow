@@ -756,12 +756,12 @@ test("repeating a repository and kind pair is refused by the form, not by the sa
   act(() => {
     harness.root
       .findByProps({ "aria-label": "Related repository" })
-      .props.onChange({ target: { value: "8" } });
+      .props.onChange("8");
   });
   act(() => {
     harness.root
       .findByProps({ "aria-label": "Relationship kind" })
-      .props.onChange({ target: { value: "calls" } });
+      .props.onChange("calls");
   });
 
   assert.equal(button(harness.root, "Add").props.disabled, true);
@@ -785,12 +785,12 @@ test("backend and frontend relationships cannot coexist for one target", (t) => 
   act(() => {
     harness.root
       .findByProps({ "aria-label": "Related repository" })
-      .props.onChange({ target: { value: "8" } });
+      .props.onChange("8");
   });
   act(() => {
     harness.root
       .findByProps({ "aria-label": "Relationship kind" })
-      .props.onChange({ target: { value: "frontend_for" } });
+      .props.onChange("frontend_for");
   });
 
   assert.equal(button(harness.root, "Add").props.disabled, true);
@@ -827,12 +827,12 @@ test("the 51st relationship is refused by the form, with the count in view", (t)
   act(() => {
     harness.root
       .findByProps({ "aria-label": "Related repository" })
-      .props.onChange({ target: { value: String(100 + REPOSITORY_RELATIONSHIPS_MAX) } });
+      .props.onChange(String(100 + REPOSITORY_RELATIONSHIPS_MAX));
   });
   act(() => {
     harness.root
       .findByProps({ "aria-label": "Relationship kind" })
-      .props.onChange({ target: { value: "calls" } });
+      .props.onChange("calls");
   });
 
   assert.equal(button(harness.root, "Add").props.disabled, true);
@@ -846,9 +846,9 @@ test("the typed relationship editor enables Add, counts notes, renders, and remo
   const harness = render(t, { catalog: [REPOSITORY, other] });
   const add = () => button(harness.root, "Add");
   assert.equal(add().props.disabled, true);
-  act(() => harness.root.findByProps({ "aria-label": "Related repository" }).props.onChange({ target: { value: "8" } }));
+  act(() => harness.root.findByProps({ "aria-label": "Related repository" }).props.onChange("8"));
   assert.equal(add().props.disabled, true);
-  act(() => harness.root.findByProps({ "aria-label": "Relationship kind" }).props.onChange({ target: { value: "calls" } }));
+  act(() => harness.root.findByProps({ "aria-label": "Relationship kind" }).props.onChange("calls"));
   assert.equal(add().props.disabled, false);
   act(() => harness.root.findByProps({ "aria-label": "Relationship note" }).props.onChange({ target: { value: "runtime" } }));
   assert.match(text(harness.root), /7 of 200/);
