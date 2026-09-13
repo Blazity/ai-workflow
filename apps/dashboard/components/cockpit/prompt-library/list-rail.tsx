@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import { CkCard, CkChip } from "@/components/ui";
+import { Button, CkCard, CkChip, Input } from "@/components/ui";
 import { filterPrompts } from "@shared/prompts";
 import type { PromptLibraryListRowDto } from "@shared/contracts";
 
@@ -18,12 +18,6 @@ function relativeTime(iso: string): string {
   const mo = Math.round(d / 30);
   if (mo < 12) return `${mo}mo ago`;
   return `${Math.round(mo / 12)}y ago`;
-}
-
-function tagChipClass(active: boolean): string {
-  return `appearance-none cursor-pointer px-2 py-1 rounded-xs font-mono text-[9px] font-medium tracking-[0.04em] uppercase border ${
-    active ? "border-coal bg-coal text-white" : "border-neutral-200 bg-panel text-neutral-700"
-  }`;
 }
 
 export function PromptListRail({
@@ -87,7 +81,7 @@ export function PromptListRail({
       style={{ display: "flex", flexDirection: "column" }}
     >
       <div className="px-3.5 py-2 border-b border-neutral-200 flex flex-col gap-2">
-        <input
+        <Input
           ref={searchRef}
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
@@ -99,20 +93,19 @@ export function PromptListRail({
           }}
           placeholder="Search prompts  ( / )"
           aria-label="Search prompts"
-          className="w-full border border-neutral-200 bg-panel rounded-[3px] px-2 py-1.5 font-body text-[12px] text-neutral-900"
         />
         <div className="flex gap-1 flex-wrap">
-          <button onClick={() => onTagChange(null)} className={tagChipClass(tag === null)}>
+          <Button variant={tag === null ? "primary" : "secondary"} size="sm" onClick={() => onTagChange(null)}>
             all
-          </button>
+          </Button>
           {tags.map((t) => (
-            <button key={t} onClick={() => onTagChange(t)} className={tagChipClass(tag === t)}>
+            <Button variant={tag === t ? "primary" : "secondary"} size="sm" key={t} onClick={() => onTagChange(t)}>
               {t}
-            </button>
+            </Button>
           ))}
-          <button onClick={onToggleArchived} className={`${tagChipClass(showArchived)} ml-auto`}>
+          <Button variant={showArchived ? "primary" : "secondary"} size="sm" onClick={onToggleArchived} className="ml-auto">
             Archived
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -121,12 +114,13 @@ export function PromptListRail({
           <div className="px-4 py-8 text-center font-body text-[12px] text-neutral-500">
             {query ? `No prompts match "${query}".` : "No prompts here."}
             <div className="mt-2">
-              <button
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={onClearFilters}
-                className="appearance-none border-none bg-transparent font-body text-[12px] text-mariner cursor-pointer"
               >
                 Clear filters
-              </button>
+              </Button>
             </div>
           </div>
         ) : (
@@ -134,37 +128,41 @@ export function PromptListRail({
             const on = activeId === row.id;
             const archived = row.archivedAt !== null;
             return (
-              <button
+              <Button
+                variant={on ? "primary" : "ghost"}
+                size="md"
                 type="button"
                 key={row.id}
                 data-row
                 onClick={() => onSelect(row.id)}
-                className={`block w-full appearance-none text-left px-4 py-[14px] cursor-pointer transition-all duration-100 border-l-[3px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-mariner focus-visible:outline-offset-[-2px] ${
+                className={`h-auto w-full justify-start rounded-none px-4 py-3.5 text-left ${
                   i < filtered.length - 1 ? "border-b border-b-neutral-200" : ""
-                } ${on ? "border-l-mariner bg-off-white" : "border-l-transparent bg-panel hover:bg-[#FAFBFC]"} ${
+                } ${
                   archived ? "opacity-60" : ""
                 }`}
               >
-                <div className="font-mono text-[13px] font-semibold text-neutral-900 truncate">
-                  {row.name}
-                </div>
-                {row.description && (
-                  <div className="text-[11px] text-neutral-500 mt-[3px] truncate">
-                    {row.description}
-                  </div>
-                )}
-                <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
-                  <span className="font-mono text-[10px] text-neutral-500">
-                    v{row.currentVersion} · {relativeTime(row.updatedAt)}
+                <span className="flex w-full min-w-0 flex-col">
+                  <span className="truncate font-mono text-[13px] font-semibold text-neutral-900">
+                    {row.name}
                   </span>
-                  {archived && <CkChip tone="neutral">archived</CkChip>}
-                  {row.tags.map((t) => (
-                    <CkChip key={t} tone={t === "built-in" ? "mariner" : "neutral"}>
-                      {t}
-                    </CkChip>
-                  ))}
-                </div>
-              </button>
+                  {row.description && (
+                    <span className="mt-[3px] truncate text-[11px] text-neutral-500">
+                      {row.description}
+                    </span>
+                  )}
+                  <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    <span className="font-mono text-[10px] text-neutral-500">
+                      v{row.currentVersion} · {relativeTime(row.updatedAt)}
+                    </span>
+                    {archived && <CkChip tone="neutral">archived</CkChip>}
+                    {row.tags.map((t) => (
+                      <CkChip key={t} tone={t === "built-in" ? "mariner" : "neutral"}>
+                        {t}
+                      </CkChip>
+                    ))}
+                  </span>
+                </span>
+              </Button>
             );
           })
         )}

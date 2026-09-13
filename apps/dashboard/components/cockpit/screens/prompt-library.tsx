@@ -2,7 +2,7 @@
 
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { CkCard } from "@/components/ui";
+import { Button, CkCard } from "@/components/ui";
 import { apiClient } from "@/lib/api/client";
 import { PromptListRail } from "@/components/cockpit/prompt-library/list-rail";
 import { PromptDetail } from "@/components/cockpit/prompt-library/detail";
@@ -34,8 +34,6 @@ import {
   type PromptSlotSchemaDraftState,
 } from "@/components/cockpit/prompt-editor/prompt-slot-fields";
 
-const primaryButtonClass =
-  "appearance-none cursor-pointer border border-mariner bg-mariner text-white py-1.5 px-3.5 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase disabled:opacity-40 disabled:cursor-default";
 const validSlotSchemaDraftState: PromptSlotSchemaDraftState = {
   state: "valid",
   hasUncommittedInvalidSource: false,
@@ -314,7 +312,7 @@ export function PromptLibraryScreen({
           return;
         }
         applySave(promptId, res.data);
-        // The head version changed, so cached usage drift is stale — re-fetch.
+        // The head version changed, so cached usage drift is stale, re-fetch.
         await loadUsage(promptId);
       }
       if (metaChanged) {
@@ -369,7 +367,7 @@ export function PromptLibraryScreen({
       }
       applySave(activeId, res.data);
       // Restore appends a new head version but leaves activeId/mode unchanged, so
-      // the lazy-load effect will not re-fetch — refresh usage drift explicitly.
+      // the lazy-load effect will not re-fetch, refresh usage drift explicitly.
       await loadUsage(activeId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to restore version");
@@ -457,13 +455,14 @@ export function PromptLibraryScreen({
       <CkCard style={{ height: "100%" }}>
         <div className="p-10 text-center font-body text-[13px] text-neutral-600">
           Could not load this prompt.{" "}
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             type="button"
             onClick={retryDetail}
-            className="appearance-none cursor-pointer border-none bg-transparent p-0 font-body text-[13px] font-semibold text-mariner"
           >
             Retry
-          </button>
+          </Button>
         </div>
       </CkCard>
     );
@@ -504,9 +503,9 @@ export function PromptLibraryScreen({
           </p>
         </div>
         {canEdit && available && !showEmptyState && (
-          <button onClick={openCreate} className={primaryButtonClass}>
+          <Button onClick={openCreate}>
             New prompt
-          </button>
+          </Button>
         )}
       </div>
 
@@ -525,9 +524,9 @@ export function PromptLibraryScreen({
             </p>
             {canEdit && (
               <div className="mt-4">
-                <button onClick={openCreate} className={primaryButtonClass}>
+                <Button onClick={openCreate}>
                   New prompt
-                </button>
+                </Button>
               </div>
             )}
           </CkCard>

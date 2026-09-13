@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import React, { useMemo, useRef, useState } from "react";
 import {
   type ParsedPromptReference,
@@ -22,9 +21,7 @@ import {
 import { resolveReferencePreview } from "@shared/prompts";
 import { PromptReferenceActionsMenu } from "./prompt-reference-actions-menu";
 import { apiClient } from "@/lib/api/client";
-
-const quietAction =
-  "relative inline-flex min-h-10 cursor-pointer appearance-none items-center justify-center whitespace-nowrap rounded-[3px] border border-transparent bg-transparent px-2.5 font-mono text-[9px] uppercase tracking-[0.04em] text-mariner transition-[background-color,border-color,transform] duration-150 ease-standard hover:border-mariner-200 hover:bg-panel focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner-200 active:scale-[0.96]";
+import { Button, IconButton } from "@/components/ui";
 
 type PromptReferenceChipsProps = {
   value: string;
@@ -165,14 +162,14 @@ export function PromptReferenceChipsView({
         return (
           <article
             key={key}
-            className={`w-full min-w-0 overflow-hidden rounded-[5px] border bg-panel shadow-[0_2px_8px_rgba(24,27,32,0.05)] ${
+            className={`w-full min-w-0 overflow-hidden rounded-sm border bg-panel ${
               row ? "border-mariner-200" : "border-yellow-300"
             }`}
           >
             <div className={`flex min-w-0 items-center gap-2 px-3 py-2.5 ${row ? "bg-mariner-100/60" : "bg-[#FFF9E6]"}`}>
               <span
                 className={`inline-flex size-7 shrink-0 items-center justify-center rounded-[3px] font-mono text-[12px] ${
-                  row ? "bg-panel text-mariner shadow-[0_1px_3px_rgba(24,27,32,0.08)]" : "bg-[#FFF4CC] text-[#7A5A00]"
+                  row ? "bg-panel text-mariner shadow-[0_1px_2px_rgba(24,27,32,0.06)]" : "bg-[#FFF4CC] text-[#7A5A00]"
                 }`}
                 aria-hidden="true"
               >
@@ -198,48 +195,53 @@ export function PromptReferenceChipsView({
             {row && (
               <div className="flex min-h-10 flex-wrap items-center gap-1 border-t border-mariner-100 bg-off-white/70 px-2 py-1">
                 {capabilities.canExpand && (
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     type="button"
                     aria-expanded={expanded}
                     onClick={() => toggleExpanded(reference, row, key)}
-                    className={quietAction}
+                    className="min-h-10"
                   >
                     <span aria-hidden="true" className="mr-1.5 text-[11px]">{expanded ? "−" : "+"}</span>
                     {expanded ? "Hide content" : "Show content"}
-                  </button>
+                  </Button>
                 )}
                 {capabilities.canOpenLibrary && (
-                  <Link
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     href={promptLibraryHref(row.slug)}
                     target="_blank"
                     rel="noreferrer"
                     aria-label={`Open ${row.name} in prompt library (new tab)`}
-                    className={quietAction}
+                    className="min-h-10"
                   >
                     Open in library ↗
-                  </Link>
+                  </Button>
                 )}
                 {capabilities.canMutate && (
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     type="button"
                     disabled={busyKey === key}
                     onClick={() => void detach(reference, row, key)}
-                    className={`${quietAction} disabled:cursor-default disabled:opacity-50`}
+                    className="min-h-10"
                   >
                     {busyKey === key ? "Detaching…" : "Detach and edit"}
-                  </button>
+                  </Button>
                 )}
                 {capabilities.canMutate && (
-                  <button
-                    ref={(node) => {
-                      if (node) triggerRefs.current.set(key, node);
-                      else triggerRefs.current.delete(key);
-                    }}
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
                     type="button"
                     aria-label={`More actions for ${row.name}`}
                     aria-haspopup="menu"
                     aria-expanded={menuKey === key}
                     onClick={(event) => {
+                      triggerRefs.current.set(key, event.currentTarget);
                       if (menuKey === key) {
                         closeMenu(false);
                         return;
@@ -252,16 +254,16 @@ export function PromptReferenceChipsView({
                       });
                       setMenuKey(key);
                     }}
-                    className={`${quietAction} ml-auto w-9 px-0 text-[13px]`}
+                    className="ml-auto"
                   >
                     ···
-                  </button>
+                  </IconButton>
                 )}
               </div>
             )}
 
             {expanded && row && (
-              <div className="border-t border-mariner-100 bg-[#F7FAFF] px-3 py-3 shadow-[inset_3px_0_0_#8CB4E8]">
+              <div className="border-t border-mariner-100 bg-[#F7FAFF] px-3 py-3 shadow-[inset_0_0_0_1px_#bfd4f2]">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <span className="font-mono text-[9px] uppercase tracking-[0.06em] text-mariner">
                     Referenced content · read-only
@@ -277,13 +279,15 @@ export function PromptReferenceChipsView({
                 ) : detailFailed ? (
                   <div className="flex flex-wrap items-center gap-2 py-3 font-body text-[12px] text-neutral-600">
                     Could not load this version.
-                    <button
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       type="button"
-                      className={quietAction}
+                      className="min-h-10"
                       onClick={() => void loadDetail(row.id).catch(() => {})}
                     >
                       Retry
-                    </button>
+                    </Button>
                   </div>
                 ) : (
                   <div className="py-5 font-body text-[12px] text-[#7A5A00]">

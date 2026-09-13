@@ -30,16 +30,16 @@ test("Modal renders all canonical panel widths", () => {
 });
 
 test("Modal renders the drawer, sheet, and command presentation variants", () => {
-  for (const [variant, marker] of [
-    ["drawer", "translate-x-full"],
-    ["sheet", "translate-y-full"],
-    ["command", "max-w-[560px]"],
+  for (const [variant, markers] of [
+    ["drawer", ["translate-x-full", "justify-end", "max-w-[420px]", "rounded-none"]],
+    ["sheet", ["translate-y-full"]],
+    ["command", ["max-w-[560px]"]],
   ] as const) {
     const html = renderToStaticMarkup(
       <Modal open variant={variant} onClose={() => undefined} title="Dialog">Body</Modal>,
     );
     assert.match(html, new RegExp(`data-variant="${variant}"`));
-    assert.ok(html.includes(marker));
+    for (const marker of markers) assert.ok(html.includes(marker));
   }
 });
 
@@ -159,6 +159,42 @@ test("Modal closes on Escape and overlay mouse down but not panel or drag releas
       }));
     });
     assert.equal(closes, 2);
+  } finally {
+    act(() => root?.unmount());
+    container.remove();
+    dom.restore();
+  }
+});
+
+test("Modal hides its close button and ignores Escape and overlay mouse down when it is not dismissible", () => {
+  const dom = installTestDom();
+  const container = document.createElement("div");
+  document.body.append(container);
+  let root: Root | undefined;
+  let closes = 0;
+
+  try {
+    act(() => {
+      root = createRoot(container);
+      root.render(
+        <Modal open dismissible={false} showCloseButton onClose={() => closes += 1} title="Dialog">
+          Body
+        </Modal>,
+      );
+    });
+    const overlay = document.querySelector<HTMLElement>('[aria-hidden="true"]');
+    assert.ok(overlay);
+    assert.equal(document.querySelector('[aria-label="Close"]'), null);
+
+    act(() => overlay.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
+    act(() => {
+      dom.window.dispatchEvent(new dom.window.KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }));
+    });
+    assert.equal(closes, 0);
   } finally {
     act(() => root?.unmount());
     container.remove();

@@ -504,7 +504,8 @@ Canonical desktop modal sizes:
 | Medium modal | 680 px max | Data picker and repository scope |
 | Large modal | 1240 px max | Prompt editor |
 
-Side drawer and Mobile sheet are implemented variants.
+Side drawer is an implemented variant. Mobile sheet remains proposed
+`(proposed)`.
 
 Desktop modal panels use a 6 px radius and level 4 shadow. Mobile sheets use a
 16 px top radius and the existing upward drawer shadow. Every dialog caps its
@@ -901,11 +902,11 @@ Input height patterns found on native input tags:
 | Approvals | Action buttons | `components/cockpit/screens/approvals.tsx:270` | closed in D3-C | 4, Buttons |
 | Cost | Cost table | `components/cockpit/screens/cost.tsx:85` | Uses 16 px cell padding | 4, Data tables |
 | Evals | Empty card | `components/cockpit/screens/evals.tsx:27` | Rebuilds a card instead of `CkCard` | 4, Cards |
-| Prompt library | Primary action | `components/cockpit/screens/prompt-library.tsx:38` | Private mariner button constant | 4, Buttons |
+| Prompt library | Primary action | `components/cockpit/screens/prompt-library.tsx:38` | closed in D3-B | 4, Buttons |
 | Prompt library | Filter select | `components/cockpit/flow-editor/prompt-library-rail.tsx:325` | Native select | 4, Select |
-| Prompt library | Prompt body card | `components/cockpit/prompt-library/prompt-body-blocks.tsx:39` | Uses local shadow | 6, elevation |
-| Prompt library | Reference card | `components/cockpit/prompt-editor/prompt-reference-chips.tsx:168` | Uses 5 px radius | 5, radius |
-| Memory | Action buttons | `components/cockpit/screens/memory.tsx:289` | Private secondary button helper | 4, Buttons |
+| Prompt library | Prompt body card | `components/cockpit/prompt-library/prompt-body-blocks.tsx:39` | closed in D3-B | 6, elevation |
+| Prompt library | Reference card | `components/cockpit/prompt-editor/prompt-reference-chips.tsx:168` | closed in D3-B | 5, radius |
+| Memory | Action buttons | `components/cockpit/screens/memory.tsx:289` | closed in D3-B | 4, Buttons |
 | Workflow editor | Deploy button | `components/cockpit/screens/workflow-editor.tsx:1261` | Uses emerald instead of canonical primary | 2 and 4, colour and Buttons |
 | Workflow editor | Native selects | `components/cockpit/flow-editor/blocks/transform.tsx:161` | Repeats native select for transform fields | 4, Select |
 | Workflow editor | Node controls | `components/cockpit/flow-editor/flow-editor.tsx:1274` | Own 26 px icon button | 4, Buttons |
@@ -913,10 +914,10 @@ Input height patterns found on native input tags:
 | Workflow editor | Scope modal | `components/cockpit/flow-editor/repository-scope-modal.tsx:300` | Uses `shadow-2xl` and 6 px radius | 6, elevation |
 | Workflow editor | Status palette | `components/cockpit/screens/workflow-replay.tsx:42` | Hardcodes replay status colours | 2, status roles |
 | Workflow editor | Cancelled state | `components/cockpit/screens/workflow-replay.tsx:84` | Uses unowned cancelled literals | 2, status tokens |
-| Harness profiles | Text input | `components/cockpit/harness-profiles/profile-editor.tsx:35` | Establishes 30 px but remains private | 4, Form controls |
-| Harness profiles | Buttons | `components/cockpit/harness-profiles/profile-editor.tsx:39` | Private primary and secondary constants | 4, Buttons |
-| Harness profiles | Profile cards | `components/cockpit/harness-profiles/profile-editor.tsx:740` | Repeats 4 px panel recipe | 4, Cards |
-| Harness profiles | Skill drawer | `components/cockpit/harness-profiles/skill-import.tsx:410` | Uses `shadow-2xl` | 4 and 6, Drawer |
+| Harness profiles | Text input | `components/cockpit/harness-profiles/profile-editor.tsx:35` | closed in D3-B | 4, Form controls |
+| Harness profiles | Buttons | `components/cockpit/harness-profiles/profile-editor.tsx:39` | closed in D3-B | 4, Buttons |
+| Harness profiles | Profile cards | `components/cockpit/harness-profiles/profile-editor.tsx:740` | closed in D3-B | 4, Cards |
+| Harness profiles | Skill drawer | `components/cockpit/harness-profiles/skill-import.tsx:410` | closed in D3-B | 4 and 6, Drawer |
 | Repositories | Header actions | `app/(cockpit)/repositories/repositories-screen.tsx:196` | closed in D3-D | 4, Buttons |
 | Repositories | Empty action | `app/(cockpit)/repositories/repositories-screen.tsx:269` | closed in D3-D | 4, Buttons |
 | Repositories | Activation dialog | `app/(cockpit)/repositories/activate-dialog.tsx:160` | closed in D3-D | 4, Modal |
@@ -924,7 +925,7 @@ Input height patterns found on native input tags:
 | Repositories | Detail tabs | `app/(cockpit)/repositories/repository-entry.tsx:394` | closed in D3-D | 4, Tabs |
 | Repositories | History select | `app/(cockpit)/repositories/repository-entry.tsx:705` | closed in D3-D | 4, Select |
 | Repositories | Suggest action | `app/(cockpit)/repositories/suggestion-panel.tsx:195` | closed in D3-D | 4, Buttons |
-| Repositories | Script inputs | `components/cockpit/screens/repositories/script-groups.tsx:681` | Padding based input height | 4, Form controls |
+| Repositories | Script inputs | `components/cockpit/screens/repositories/script-groups.tsx:681` | closed in D3-B | 4, Form controls |
 | Settings | Boolean control | `app/(cockpit)/settings/setting-control.tsx:41` | closed in D3-D | 4, Form controls |
 | Settings | Select | `app/(cockpit)/settings/setting-control.tsx:96` | closed in D3-D | 4, Select |
 | Settings | Save buttons | `app/(cockpit)/settings/settings-group-form.tsx:331` | closed in D3-D | 4, Buttons |
