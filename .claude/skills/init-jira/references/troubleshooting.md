@@ -2,7 +2,7 @@
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Bot never picks up a ticket | Status name ≠ `COLUMN_AI` env value | Run the `/statuses` curl from `column-statuses.md` and reconcile. |
+| Bot never picks up a ticket | Jira status differs from the AI column setting | Run the `/statuses` curl from `column-statuses.md` and reconcile. |
 | `No transition to "AI Review" found` | Transition name in workflow is e.g. `Move to AI Review` | Rename transition. See `transitions.md`. |
 | `401 Invalid webhook signature` | Secret mismatch | Re-copy `JIRA_WEBHOOK_SECRET` to both Vercel env and Jira webhook config. |
 | Agent produces empty AC | Description has no `Acceptance Criteria:` block | Edit ticket description. See `description-format.md`. |

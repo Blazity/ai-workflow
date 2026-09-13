@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { RETIRED_ENVIRONMENT_VARIABLES } from "@shared/contracts";
 import { assertNoRetiredEnvironmentVariables } from "./retired-environment.js";
@@ -23,5 +24,16 @@ describe("retired settings environment guard", () => {
     expect(() =>
       assertNoRetiredEnvironmentVariables({ DATABASE_URL: "postgres://example" }),
     ).not.toThrow();
+  });
+
+  it("keeps the worker environment example free of retired variables", () => {
+    const example = readFileSync(
+      new URL("../../../.env.example", import.meta.url),
+      "utf8",
+    );
+
+    for (const name of RETIRED_ENVIRONMENT_VARIABLES) {
+      expect(example).not.toMatch(new RegExp(`^#?\\s*${name}\\s*=`, "m"));
+    }
   });
 });

@@ -27,9 +27,9 @@ import { drizzle } from "drizzle-orm/neon-http";
 import type { Db } from "../src/db/client.js";
 import * as schema from "../src/db/schema.js";
 import { getCurrentSystemHarnessProfileReference } from "../src/db/repositories/harness-profiles.js";
-import { loadMigrationSettings } from "../src/services/settings/migration-settings.js";
 import { assertNoRetiredEnvironmentVariables } from "../src/services/settings/retired-environment.js";
 import { seedWorkflowDefinitionTemplates } from "../src/services/workflow-definitions/template-seed.js";
+import { defaultBuiltinHarnessProfile } from "@shared/harness";
 
 assertNoRetiredEnvironmentVariables(process.env);
 
@@ -74,8 +74,7 @@ if (marker.endpoint_host !== host) {
 
 if (process.exitCode !== 1) {
   const db = drizzle({ client: sql, schema }) as unknown as Db;
-  const settings = await loadMigrationSettings(db);
-  const provider = settings.AGENT_KIND;
+  const provider = defaultBuiltinHarnessProfile().harness.provider;
   const profileReference =
     await getCurrentSystemHarnessProfileReference(db, provider);
   console.log("[db-migrate] System harness profiles are ready.");

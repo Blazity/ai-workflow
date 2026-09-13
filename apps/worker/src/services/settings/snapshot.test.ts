@@ -17,7 +17,6 @@ const {
   settingsSnapshotFromEnvironment,
 } = await import("./snapshot.js");
 const {
-  agentRuntimeSettings,
   dashboardOrganizationSettings,
   maxConcurrentAgents,
   mcpSettings,
@@ -51,9 +50,6 @@ function environmentAsDeployed(): Record<string, unknown> {
     MCP_TOOL_TIMEOUT_MS: 30_000,
     MCP_READ_RATE_LIMIT_PER_MINUTE: 120,
     MCP_MUTATION_RATE_LIMIT_PER_MINUTE: 20,
-    AGENT_KIND: "codex",
-    CLAUDE_MODEL: undefined,
-    CODEX_MODEL: "gpt-5.6-codex",
     COLUMN_AI: "AI",
     COLUMN_AI_REVIEW: "AI Review",
     COLUMN_BACKLOG: "Backlog",
@@ -76,9 +72,7 @@ describe("settings snapshot", () => {
 
     expect(snapshot).toEqual(settingsSnapshotFromEnvironment());
     expect(snapshot.MAX_CONCURRENT_AGENTS).toBe(3);
-    expect(snapshot.AGENT_KIND).toBe("claude");
     expect(snapshot.ENABLE_REPO_MEMORY).toBe(false);
-    expect(snapshot.CLAUDE_MODEL).toBeNull();
     expect(snapshot.V2_MAX_BLOCK_CONCURRENCY).toBeNull();
     expect(snapshot.PRE_PR_COMMAND_TIMEOUT_MINUTES).toBe(10);
     expect(snapshot.PRE_PR_CHECKS_ALLOWED_ENV).toEqual([]);
@@ -114,15 +108,14 @@ describe("settings snapshot", () => {
 
   it("resolves ordinary keys from stored rows while ignoring retired environment variables", async () => {
     await writeManySettings(db, {
-      patch: { MAX_CONCURRENT_AGENTS: 1, CLAUDE_MODEL: "claude-opus-5" },
+      patch: { MAX_CONCURRENT_AGENTS: 1, COLUMN_AI: "Agent" },
       actor: "user_admin",
       reason: "throttling",
     });
 
     const snapshot = await loadSettingsSnapshot();
     expect(snapshot.MAX_CONCURRENT_AGENTS).toBe(1);
-    expect(snapshot.CLAUDE_MODEL).toBe("claude-opus-5");
-    expect(snapshot.COLUMN_AI).toBe("AI");
+    expect(snapshot.COLUMN_AI).toBe("Agent");
   });
 
   it("names where each value came from", async () => {
@@ -135,7 +128,6 @@ describe("settings snapshot", () => {
     const { sources } = await loadSettingsResolution();
     expect(sources.get("MAX_CONCURRENT_AGENTS")).toBe("stored");
     expect(sources.get("COLUMN_AI")).toBe("default");
-    expect(sources.get("CLAUDE_MODEL")).toBe("default");
   });
 
 });
@@ -150,9 +142,6 @@ describe("settings accessors", () => {
       slug: "acme",
       name: "AI Workflow",
       origin: "https://dash.acme.test",
-    });
-    expect(agentRuntimeSettings(snapshot)).toEqual({
-      agentKind: "claude",
     });
     expect(mcpSettings(snapshot)).toMatchObject({
       enabled: false,
@@ -177,11 +166,10 @@ describe("settings accessors", () => {
       maxConcurrentAgents(snapshot),
       dashboardOrganizationSettings(snapshot),
       mcpSettings(snapshot),
-      agentRuntimeSettings(snapshot),
       ticketBoardSettings(snapshot),
     ];
 
-    expect(results).toHaveLength(5);
+    expect(results).toHaveLength(4);
     for (const result of results) {
       expect(result).not.toBeInstanceOf(Promise);
       expect(typeof (result as { then?: unknown })?.then === "function").toBe(false);
@@ -190,7 +178,7 @@ describe("settings accessors", () => {
 
   it("follow a stored row once one exists", async () => {
     await writeManySettings(db, {
-      patch: { MAX_CONCURRENT_AGENTS: 2, COLUMN_AI: "Agent", AGENT_KIND: "claude" },
+      patch: { MAX_CONCURRENT_AGENTS: 2, COLUMN_AI: "Agent" },
       actor: "user_admin",
       reason: "tuning",
     });
@@ -198,6 +186,5 @@ describe("settings accessors", () => {
 
     expect(maxConcurrentAgents(snapshot)).toBe(2);
     expect(ticketBoardSettings(snapshot).aiColumn).toBe("Agent");
-    expect(agentRuntimeSettings(snapshot).agentKind).toBe("claude");
   });
 });

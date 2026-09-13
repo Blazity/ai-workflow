@@ -1,7 +1,9 @@
 import type { SettingsSnapshot, WorkflowEditorOptions } from "@shared/contracts";
 import {
+  BUILTIN_HARNESS_PROFILE_IDS,
+  BUILTIN_HARNESS_PROFILE_MANIFESTS,
+  defaultBuiltinHarnessProfile,
   recognised,
-  resolveModelDefaults,
   selectable,
 } from "@shared/harness";
 import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
@@ -100,21 +102,27 @@ function isCodexDiscoveryModelId(modelId: string): boolean {
  *  which blocks a deployment offers is environment state this module must not
  *  read for itself. */
 export function buildWorkflowEditorOptions(
-  /** The deployment's settings, loaded once by the caller's entry point. The
-   *  agent defaults are operator-editable, so reading them here would answer a
-   *  request from the environment while the same request answered everything
-   *  else from the snapshot. */
+  /** The deployment's settings, loaded once by the caller's entry point. They
+   *  supply issue-tracker fallbacks only; provider and model come from Harness
+   *  Profiles. */
   settings: SettingsSnapshot,
   models: AvailableModels,
   discoveredTicketStatuses: Array<{ id: string; name: string }>,
   blockRegistry: WorkflowEditorOptions["blockRegistry"],
 ): WorkflowEditorOptions {
-  const agentKind = settings.AGENT_KIND;
-  const configuredModels = resolveModelDefaults({
-    ...(settings.CLAUDE_MODEL ? { claude: settings.CLAUDE_MODEL } : {}),
-    ...(settings.CODEX_MODEL ? { codex: settings.CODEX_MODEL } : {}),
-  });
-  const defaultModel = configuredModels[agentKind];
+  const defaultProfile = defaultBuiltinHarnessProfile();
+  const agentKind = defaultProfile.harness.provider;
+  const configuredModels = {
+    claude:
+      BUILTIN_HARNESS_PROFILE_MANIFESTS[
+        BUILTIN_HARNESS_PROFILE_IDS.claude
+      ].model.id,
+    codex:
+      BUILTIN_HARNESS_PROFILE_MANIFESTS[
+        BUILTIN_HARNESS_PROFILE_IDS.codex
+      ].model.id,
+  };
+  const defaultModel = defaultProfile.model.id;
   const ticketStatuses = dedupeTicketStatuses(discoveredTicketStatuses);
   return {
     agentKind,

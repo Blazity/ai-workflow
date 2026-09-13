@@ -170,15 +170,15 @@ test("displaySettingValue returns non-empty string as is", () => {
 
 test("settingIssuesFromMessage parses multiple issues with reasons", () => {
   const message =
-    "Invalid settings: MCP_MAX_REQUEST_BYTES (below_minimum), AGENT_KIND (not_allowed_value)";
+    "Invalid settings: MCP_MAX_REQUEST_BYTES (below_minimum), MAX_CONCURRENT_AGENTS (wrong_type)";
   const issues = settingIssuesFromMessage(message);
   assert.ok(issues.MCP_MAX_REQUEST_BYTES);
-  assert.ok(issues.AGENT_KIND);
+  assert.ok(issues.MAX_CONCURRENT_AGENTS);
   assert.ok(
     issues.MCP_MAX_REQUEST_BYTES.includes("at least"),
   );
   assert.ok(
-    issues.AGENT_KIND.includes("Allowed values"),
+    issues.MAX_CONCURRENT_AGENTS.includes("integer"),
   );
 });
 

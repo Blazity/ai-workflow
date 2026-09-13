@@ -7,7 +7,7 @@ description: Set up or modify Jira configuration for the AI Workflow workflow �
 
 State-aware skill for the Jira side of AI Workflow. Two phases triggered by detected state:
 
-- **Phase 1 — Credentials, columns, secret pre-gen.** Runs when `JIRA_BASE_URL` is not yet in Vercel env.
+- **Phase 1: Credentials and secret pre-gen.** Runs when `JIRA_BASE_URL` is not yet in Vercel env.
 - **Phase 2 — Webhook registration.** Runs when phase 1 is done and a production deploy exists.
 
 > **Canonical reference:** [SETUP.md section 2.1](../../../SETUP.md#21-jira) holds the facts and constraints for Jira, and section 7 covers the webhook. This skill is the procedure; when the two disagree, SETUP.md wins and this skill gets updated.
@@ -43,14 +43,14 @@ vercel ls --prod                                           # production deploy?
 
 ---
 
-## Phase 1 — Credentials, columns, secret pre-gen
+## Phase 1: Credentials and secret pre-gen
 
 ### 1a. Has the Jira project been set up for AI Workflow?
 
 Ask: *"Has your Jira board, statuses, and workflow transitions already been configured for AI Workflow?"*
 
 - **No / unsure:** walk the user through these references in order, one per turn:
-  - `references/column-statuses.md` — statuses must exist in Jira and match `COLUMN_AI` / `COLUMN_AI_REVIEW` / `COLUMN_BACKLOG`.
+  - `references/column-statuses.md`: statuses must exist in Jira and match the three board column settings.
   - `references/transitions.md` — workflow transitions must be named exactly the same as the target statuses (the most-missed step).
   - `references/description-format.md` — the "Acceptance Criteria" block in the description.
 - **Yes:** continue.
@@ -71,13 +71,7 @@ Ask in one prompt (single credential bundle):
 - `JIRA_API_TOKEN` — scoped service-account token (Bearer) from https://id.atlassian.com/manage-profile/security/api-tokens
 - `JIRA_PROJECT_KEY` — e.g. `AWT`
 
-Then ask:
-
-- `COLUMN_AI` (default `AI`)
-- `COLUMN_AI_REVIEW` (default `AI Review`)
-- `COLUMN_BACKLOG` (default `Backlog`)
-
-If the user wants the defaults, fine; otherwise they must match Jira status names exactly (case-insensitive).
+Tell the user that the AI, AI Review, and Backlog status names are configured on the Settings page. They must match Jira status names exactly, ignoring case.
 
 ### 1d. Emit paste-template
 
@@ -87,9 +81,6 @@ Print this single block for the user to copy into Vercel → Project Settings �
 JIRA_BASE_URL=<value>
 JIRA_API_TOKEN=<value>
 JIRA_PROJECT_KEY=<value>
-COLUMN_AI=<value>
-COLUMN_AI_REVIEW=<value>
-COLUMN_BACKLOG=<value>
 JIRA_WEBHOOK_SECRET=<generated>
 ```
 

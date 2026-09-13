@@ -42,8 +42,6 @@ function storedSettingsForDeployment() {
   return {
     MAX_CONCURRENT_AGENTS: 7,
     JOB_TIMEOUT_MS: 1_800_000,
-    AGENT_KIND: "codex",
-    CODEX_MODEL: "gpt-5.6-codex",
     ATTACHMENT_MAX_COUNT: 20,
     COLUMN_AI: "AI",
   };
@@ -65,15 +63,12 @@ describe("loadRunStartSettingsStep", () => {
 
     expect(result.version).toBe(1);
     expect(result.settings.MAX_CONCURRENT_AGENTS).toBe(7);
-    expect(result.settings.AGENT_KIND).toBe("codex");
     expect(result.settings.JOB_TIMEOUT_MS).toBe(1_800_000);
-    // Unset in the store, so the registry default stands.
-    expect(result.settings.CLAUDE_MODEL).toBeNull();
   });
 
   it("lets stored updates change those keys alone", async () => {
     await writeManySettings(db, {
-      patch: { MAX_CONCURRENT_AGENTS: 2, AGENT_KIND: "claude" },
+      patch: { MAX_CONCURRENT_AGENTS: 2 },
       actor: "user_admin",
       reason: "tuning",
     });
@@ -81,7 +76,6 @@ describe("loadRunStartSettingsStep", () => {
     const result = await loadRunStartSettingsStep();
 
     expect(result.settings.MAX_CONCURRENT_AGENTS).toBe(2);
-    expect(result.settings.AGENT_KIND).toBe("claude");
     // Untouched stored keys keep their previous value.
     expect(result.settings.JOB_TIMEOUT_MS).toBe(1_800_000);
   });

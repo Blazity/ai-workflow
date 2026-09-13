@@ -41,7 +41,7 @@ const DESCRIPTIONS: Record<string, string> = {
   jira: "Authenticates the account, checks the project, and verifies the webhook registration.",
   github: "Checks App auth, repository access, webhook configuration, and the latest delivery separately.",
   gitlab: "Checks API access, projects, and sends a real test delivery through the project webhook.",
-  agent: "Authenticates the active provider and checks the configured model when possible.",
+  agent: "Authenticates the built-in profile provider and checks its model when possible.",
   "dashboard-auth": "Presence-checks auth settings; this request already proves session enforcement.",
   sso: "Checks OIDC discovery; client credentials are presence-checked.",
   email: "Checks Resend sender readiness and the delivery-status webhook registration.",

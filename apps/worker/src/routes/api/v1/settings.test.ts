@@ -103,7 +103,7 @@ describe("GET /api/v1/settings", () => {
     const res = await get();
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.settings).toHaveLength(29);
+    expect(body.settings).toHaveLength(26);
     expect(entry(body.settings, "MAX_CONCURRENT_AGENTS")).toMatchObject({
       value: 3,
       default: 3,
@@ -238,17 +238,6 @@ describe("PATCH /api/v1/settings", () => {
 
     expect(res.status).toBe(400);
     expect(res.statusText).toContain("MAX_CONCURRENT_AGENTS");
-    await expect(db.select().from(settingsVersions)).resolves.toHaveLength(0);
-  });
-
-  it("refuses a value outside the declared set with 400 and writes nothing", async () => {
-    const res = await patch({
-      settings: { AGENT_KIND: "gemini" },
-      reason: "trying a third agent",
-    });
-
-    expect(res.status).toBe(400);
-    expect(res.statusText).toContain("AGENT_KIND");
     await expect(db.select().from(settingsVersions)).resolves.toHaveLength(0);
   });
 

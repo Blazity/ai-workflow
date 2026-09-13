@@ -93,7 +93,6 @@ beforeEach(async () => {
     patch: {
       JOB_TIMEOUT_MS: 1_800_000,
       MAX_CONCURRENT_AGENTS: 7,
-      AGENT_KIND: "claude",
     },
     actor: "test",
     reason: "seed run-carried settings fixture",

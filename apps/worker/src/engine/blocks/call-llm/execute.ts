@@ -75,9 +75,10 @@ blockCallLlmGenerateStep.maxRetries = 0;
  * call_llm: one in-process LLM call via engine/llm.ts generateStructured (no
  * sandbox involved). The provider is the block's provider param, else inferred
  * from an explicit model id, else the run default kind; the model is the block's
- * model param, else the claude-haiku-4-5 default for claude / CODEX_MODEL for
- * codex. With an outputSchema the parsed object is returned, otherwise plain
- * text. Usage is recorded under the "LLM <blockId>" label.
+ * model param, else the claude-haiku-4-5 default for Claude or the first Codex
+ * Harness Profile model for Codex. With an outputSchema the parsed object is
+ * returned, otherwise plain text. Usage is recorded under the "LLM <blockId>"
+ * label.
  */
 export const execute: BlockExecuteFn = async (
   block,

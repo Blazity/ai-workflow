@@ -9,9 +9,6 @@ import type { Db } from "../../db/client.js";
 
 vi.mock("../../infra/vcs-config.js", () => ({
   env: {
-    AGENT_KIND: "claude",
-    CLAUDE_MODEL: "claude-test",
-    CODEX_MODEL: "codex-test",
     ANTHROPIC_API_KEY: "sk-ant-test",
     CODEX_API_KEY: "sk-codex-test",
     GITHUB_APP_ID: 1,

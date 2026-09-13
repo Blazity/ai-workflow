@@ -5,7 +5,10 @@ import type {
   WorkflowDefinitionV2,
   WorkflowDefinitionV2Node,
 } from "@shared/contracts";
-import { builtinHarnessProfileReference } from "@shared/harness";
+import {
+  builtinHarnessProfileReference,
+  defaultBuiltinHarnessProfile,
+} from "@shared/harness";
 
 export interface V2BlockSpec {
   id: string;
@@ -84,7 +87,7 @@ export function buildBuiltinV2Definition(
 export function defaultWorkflowDefinitionV2({
   includeReview,
   includeLeakReview = false,
-  provider = "claude",
+  provider = defaultBuiltinHarnessProfile().harness.provider,
   profileReference = builtinHarnessProfileReference(provider),
 }: {
   includeReview: boolean;

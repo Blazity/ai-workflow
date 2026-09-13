@@ -13,15 +13,15 @@ describe("settingsPatchRequestSchema", () => {
    */
   it("keeps the submitted settings map verbatim, keys and all", () => {
     expect(
-      parse({ settings: { AGENT_KIND: "codex", MAX_CONCURRENT_AGENTS: 3 }, reason: "raise the cap" }),
+      parse({ settings: { COLUMN_AI: "Agent", MAX_CONCURRENT_AGENTS: 3 }, reason: "raise the cap" }),
     ).toEqual({
       ok: true,
-      value: { settings: { AGENT_KIND: "codex", MAX_CONCURRENT_AGENTS: 3 }, reason: "raise the cap" },
+      value: { settings: { COLUMN_AI: "Agent", MAX_CONCURRENT_AGENTS: 3 }, reason: "raise the cap" },
     });
   });
 
   it("refuses a settings field that is absent or not a map", () => {
-    for (const settings of [undefined, null, 5, "AGENT_KIND"]) {
+    for (const settings of [undefined, null, 5, "COLUMN_AI"]) {
       expect(parse({ settings, reason: "why" })).toEqual({
         ok: false,
         message: "Invalid settings",

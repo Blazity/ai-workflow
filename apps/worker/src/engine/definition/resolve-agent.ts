@@ -1,21 +1,47 @@
 import type { AgentKind } from "../../sandbox/agents/index.js";
+import { isHarnessProfileReference } from "@shared/contracts";
 import {
-  isHarnessProfileReference,
-} from "@shared/contracts";
-import { resolveBuiltinHarnessProfile } from "@shared/harness";
+  BUILTIN_HARNESS_PROFILE_IDS,
+  BUILTIN_HARNESS_PROFILE_MANIFESTS,
+  defaultBuiltinHarnessProfile,
+  resolveBuiltinHarnessProfile,
+} from "@shared/harness";
 
 export interface ResolvedAgent {
   kind: AgentKind;
   model: string;
 }
 
-// Precedence for the run-wide default agent kind: a per-ticket label override
-// wins, otherwise the env-configured default applies.
-export function resolveRunDefaultKind(
-  labelOverride: AgentKind | null,
-  envAgentKind: AgentKind,
-): AgentKind {
-  return labelOverride ?? envAgentKind;
+type AgentProfile = {
+  harness: { provider: AgentKind };
+  model: { id: string };
+};
+
+export function resolveRunHarnessDefaults(
+  nodes: readonly { id: string }[],
+  runtimes: Readonly<Record<string, { manifest: AgentProfile }>>,
+): {
+  defaultKind: AgentKind;
+  defaultModel: string;
+  models: Record<AgentKind, string>;
+} {
+  const profiles = nodes
+    .map((node) => runtimes[node.id]?.manifest)
+    .filter((profile): profile is AgentProfile => profile !== undefined);
+  const defaultProfile = profiles[0] ?? defaultBuiltinHarnessProfile();
+  const firstModelFor = (provider: AgentKind): string =>
+    profiles.find((profile) => profile.harness.provider === provider)?.model.id ??
+    BUILTIN_HARNESS_PROFILE_MANIFESTS[
+      BUILTIN_HARNESS_PROFILE_IDS[provider]
+    ].model.id;
+  return {
+    defaultKind: defaultProfile.harness.provider,
+    defaultModel: defaultProfile.model.id,
+    models: {
+      claude: firstModelFor("claude"),
+      codex: firstModelFor("codex"),
+    },
+  };
 }
 
 function resolveProfile(

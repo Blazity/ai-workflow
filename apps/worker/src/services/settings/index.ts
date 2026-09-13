@@ -6,7 +6,6 @@
  * scripts/gates/cluster-deep-imports.json and that list only shrinks.
  */
 export {
-  agentRuntimeSettings,
   betterAuthBaseUrl,
   betterAuthSecret,
   configuredSecretValues,

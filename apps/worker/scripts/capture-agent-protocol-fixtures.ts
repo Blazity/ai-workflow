@@ -11,9 +11,11 @@ const args = process.argv.slice(2);
 const requestedProvider = option("--provider") ?? "all";
 const envFile = option("--env-file");
 const shouldWrite = args.includes("--write");
+const CLAUDE_MODEL = option("--claude-model") ?? "claude-sonnet-4-6";
+const CODEX_MODEL = option("--codex-model") ?? "gpt-5.3-codex";
 const fixtureModels: Record<AgentKind, string> = {
-  claude: "claude-sonnet-4-6",
-  codex: "gpt-5.3-codex",
+  claude: CLAUDE_MODEL,
+  codex: CODEX_MODEL,
 };
 if (envFile) loadEnv({ path: envFile, quiet: true });
 

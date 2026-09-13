@@ -226,7 +226,7 @@ export interface EngineCtx {
   prePrGate: WorkspaceGate | null;
   /** Run-level default agent kind (ticket label override applied). */
   runDefaultKind: AgentKind;
-  /** Default model per agent kind (env CLAUDE_MODEL / CODEX_MODEL). */
+  /** First resolved Harness Profile model per agent kind. */
   defaults: { claude: string; codex: string };
   prompts: LoadedPrompts;
   moveTargets: { backlog: IssueTrackerMoveTarget; aiReview: IssueTrackerMoveTarget };

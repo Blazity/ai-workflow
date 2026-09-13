@@ -41,12 +41,6 @@ const state = vi.hoisted(() => ({
     // just the bearer/GitHub regexes.
     JIRA_API_TOKEN: "jira-e2e-4d9f1b7c3a8e2510-secret",
     MAX_CONCURRENT_AGENTS: 4,
-    // Read by blocks.list/blocks.get through workflowBlockRegistryContext,
-    // whose defaultAgent.model feeds resolveLlmProvider (lib/llm-provider.ts),
-    // which crashes on an undefined model rather than defaulting.
-    AGENT_KIND: "claude",
-    CLAUDE_MODEL: "claude-opus-4-8",
-    CODEX_MODEL: "gpt-5.4",
   },
   requireMcpActor: vi.fn(),
   createAdapters: vi.fn<() => Record<string, unknown>>(() => ({})),
@@ -583,9 +577,6 @@ beforeEach(async () => {
       MCP_MUTATION_RATE_LIMIT_PER_MINUTE: 20,
       MCP_AUDIT_RETENTION_DAYS: 365,
       MAX_CONCURRENT_AGENTS: 4,
-      AGENT_KIND: "claude",
-      CLAUDE_MODEL: "claude-opus-4-8",
-      CODEX_MODEL: "gpt-5.4",
     },
     actor: "test",
     reason: "reset MCP surface fixture",

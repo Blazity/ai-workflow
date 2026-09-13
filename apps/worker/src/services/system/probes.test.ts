@@ -15,12 +15,9 @@ const environment = vi.hoisted(() => ({
   GITLAB_HOST: "https://gitlab.example",
   GITLAB_WEBHOOK_SECRET: "gitlab-webhook",
   GITLAB_PROJECT_ID: "group/project",
-  AGENT_KIND: "codex" as const,
   ANTHROPIC_API_KEY: "anthropic-key",
-  CLAUDE_MODEL: "claude-test",
   CODEX_API_KEY: "openai-key",
   CODEX_CHATGPT_OAUTH_TOKEN: "codex-oauth",
-  CODEX_MODEL: "gpt-test",
   BETTER_AUTH_SECRET: "auth-secret",
   BETTER_AUTH_URL: "https://worker.example",
   DASHBOARD_ORIGIN: "https://dashboard.example",
@@ -75,9 +72,6 @@ const { settingsSnapshotFromEnvironment } = await import("../settings/snapshot.j
 // below still consult the mocked deployment environment.
 const settings = {
   ...settingsSnapshotFromEnvironment(),
-  AGENT_KIND: environment.AGENT_KIND,
-  CLAUDE_MODEL: environment.CLAUDE_MODEL,
-  CODEX_MODEL: environment.CODEX_MODEL,
   MCP_ENABLED: environment.MCP_ENABLED,
 };
 const fetchMock = vi.fn();
@@ -130,12 +124,12 @@ describe("deployment system-health probes", () => {
       gitlabHost: environment.GITLAB_HOST,
       gitlabWebhookSecret: environment.GITLAB_WEBHOOK_SECRET,
       gitlabProjectId: environment.GITLAB_PROJECT_ID,
-      agentKind: environment.AGENT_KIND,
+      agentKind: "codex",
       anthropicApiKey: environment.ANTHROPIC_API_KEY,
-      anthropicModel: environment.CLAUDE_MODEL,
+      anthropicModel: "claude-opus-4-8",
       codexApiKey: environment.CODEX_API_KEY,
       codexOauthToken: environment.CODEX_CHATGPT_OAUTH_TOKEN,
-      codexModel: environment.CODEX_MODEL,
+      codexModel: "gpt-5.4",
       betterAuthSecret: environment.BETTER_AUTH_SECRET,
       betterAuthUrl: environment.BETTER_AUTH_URL,
       dashboardOrigin: environment.DASHBOARD_ORIGIN,

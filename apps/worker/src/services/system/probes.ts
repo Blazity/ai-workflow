@@ -1,9 +1,13 @@
 import { createAppAuth } from "@octokit/auth-app";
 import type { SettingsSnapshot, SystemHealthResponse } from "@shared/contracts";
 import { FIRST_SLICE_TOOLS } from "@shared/contracts";
-import { resolveModelDefaults } from "@shared/harness";
+import {
+  BUILTIN_HARNESS_PROFILE_IDS,
+  BUILTIN_HARNESS_PROFILE_MANIFESTS,
+  defaultBuiltinHarnessProfile,
+} from "@shared/harness";
 import { env } from "../../infra/vcs-config.js";
-import { agentRuntimeSettings, mcpSettings } from "../settings/index.js";
+import { mcpSettings } from "../settings/index.js";
 import { JiraAdapter } from "../../adapters/issue-tracker/jira.js";
 import {
   checkConnectedDatabaseConnectivity,
@@ -59,10 +63,7 @@ export async function collectDeploymentSystemHealth(
 }
 
 export function configFromEnvironment(settings: SettingsSnapshot): SystemHealthConfig {
-  const models = resolveModelDefaults({
-    claude: settings.CLAUDE_MODEL ?? undefined,
-    codex: settings.CODEX_MODEL ?? undefined,
-  });
+  const defaultProfile = defaultBuiltinHarnessProfile();
   return {
     databaseUrl: env.DATABASE_URL,
     jiraBaseUrl: env.JIRA_BASE_URL,
@@ -77,12 +78,18 @@ export function configFromEnvironment(settings: SettingsSnapshot): SystemHealthC
     gitlabHost: env.GITLAB_HOST,
     gitlabWebhookSecret: env.GITLAB_WEBHOOK_SECRET,
     gitlabProjectId: env.GITLAB_PROJECT_ID,
-    agentKind: agentRuntimeSettings(settings).agentKind,
+    agentKind: defaultProfile.harness.provider,
     anthropicApiKey: env.ANTHROPIC_API_KEY,
-    anthropicModel: models.claude,
+    anthropicModel:
+      BUILTIN_HARNESS_PROFILE_MANIFESTS[
+        BUILTIN_HARNESS_PROFILE_IDS.claude
+      ].model.id,
     codexApiKey: env.CODEX_API_KEY,
     codexOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
-    codexModel: models.codex,
+    codexModel:
+      BUILTIN_HARNESS_PROFILE_MANIFESTS[
+        BUILTIN_HARNESS_PROFILE_IDS.codex
+      ].model.id,
     betterAuthSecret: env.BETTER_AUTH_SECRET,
     betterAuthUrl: env.BETTER_AUTH_URL,
     dashboardOrigin: env.DASHBOARD_ORIGIN,

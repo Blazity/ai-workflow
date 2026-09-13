@@ -25,7 +25,7 @@ export const DEFAULT_MODELS = {
 
 export const CALL_LLM_DEFAULT_MODEL = "claude-haiku-4-5";
 export const CODE_HYGIENE_DEFAULT_MODEL = "claude-haiku-4-5";
-export const REPO_MEMORY_DISTILL_CODEX_MODEL = "gpt-5-mini";
+export const REPO_MEMORY_DISTILL_MODEL_CODEX = "gpt-5-mini";
 
 export function resolveModelDefaults(overrides: {
   claude?: string;
@@ -170,6 +170,14 @@ export const BUILTIN_HARNESS_PROFILE_MANIFESTS = deepFreeze({
   [BUILTIN_HARNESS_PROFILE_IDS.claude]: CLAUDE_COMPATIBILITY_MANIFEST,
   [BUILTIN_HARNESS_PROFILE_IDS.codex]: CODEX_COMPATIBILITY_MANIFEST,
 });
+
+/** The only code-owned fallback when no authored Harness Profile is in force. */
+export const DEFAULT_BUILTIN_HARNESS_PROFILE_ID =
+  BUILTIN_HARNESS_PROFILE_IDS.codex;
+
+export function defaultBuiltinHarnessProfile(): Readonly<HarnessProfileManifestV1> {
+  return BUILTIN_HARNESS_PROFILE_MANIFESTS[DEFAULT_BUILTIN_HARNESS_PROFILE_ID];
+}
 
 export function builtinHarnessProfileReference(
   provider: HarnessProvider,

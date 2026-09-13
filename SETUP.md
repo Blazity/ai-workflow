@@ -84,8 +84,8 @@ ai-workflow authenticates to Jira as an **Atlassian service account** — a mach
    them if they do not exist, then record their display names on the Settings
    page as AI, AI Review, and Backlog column settings.
 4. Optional but recommended: capture stable Jira transition IDs for workflow moves:
-   - `JIRA_BACKLOG_TRANSITION_ID` — transition back to `COLUMN_BACKLOG`
-   - `JIRA_AI_REVIEW_TRANSITION_ID` — transition to `COLUMN_AI_REVIEW`
+   - `JIRA_BACKLOG_TRANSITION_ID` for the transition back to the configured Backlog status
+   - `JIRA_AI_REVIEW_TRANSITION_ID` for the transition to the configured AI Review status
 
    These avoid relying on localized transition display names. You can fetch IDs from `GET /rest/api/3/issue/<KEY>/transitions` while the ticket is in the source status.
 5. Generate a webhook secret to authenticate Jira → Vercel deliveries:
@@ -471,7 +471,7 @@ Four workflows ship in `.github/workflows/`:
 - **`ci.yml`** — runs on pull requests against `main`/`dev`, pushes to `main`, manual dispatches, and `merge_group` events. The `ci` job runs typecheck, unit tests, and a credential-free production build. The merge-queue path additionally runs `e2e-orchestration → e2e-capacity → e2e-agent` against the same `e2e` GitHub environment.
 - **`e2e.yml`** — manual `workflow_dispatch` with two inputs:
   - `tier`: `orchestration` | `capacity` | `agent` | `all` (default `all`).
-  - `agent`: `claude` | `codex` — passed as `E2E_AGENT_KIND`, only consumed by the `agent` tier.
+  - `agent`: `claude` | `codex`, passed as `E2E_HARNESS_PROVIDER` and consumed only by the `agent` tier.
 
   Tiers and timeouts:
   - **orchestration** — dispatch / cron / webhook (60 min).
@@ -729,9 +729,14 @@ branches by each repository catalog profile (or the provider default); trigger
 limits by trigger-node parameters; the built-in review and leak-review shape by
 code constants; and catalog activation by the repository catalog state row.
 
-For this release, production still carries `COLUMN_AI`, `COLUMN_AI_REVIEW`,
-`COLUMN_BACKLOG`, and `AGENT_KIND` from the rollback. The operator must remove
-those four names before this release is merged. The build refusal prevents a
+Agent provider and model are owned by the exact Harness Profile pinned to each
+agent block. When no authored profile is in force, the code-owned
+`builtin-codex` profile is the single fallback. The Settings page and stored
+settings rows do not select either value.
+
+For this release, production still carries the three retired board column
+variables from the rollback. The operator must remove those variables before
+this release is merged. The build refusal prevents a
 candidate with any retired name from being promoted. Remove every named
 variable from each deployment environment, then redeploy:
 

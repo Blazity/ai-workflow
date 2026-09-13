@@ -135,7 +135,6 @@ export async function loadWorkflowDefinitionFor(
       defaultWorkflowDefinitionV2({
         includeReview: false,
         includeLeakReview: false,
-        provider: settings.AGENT_KIND,
       }),
       null,
       selectedDefinitionId,
@@ -213,7 +212,7 @@ export async function loadWorkflowDefinitionFor(
     throw new Error(RETIRED_SCHEMA_MESSAGE);
   }
   const parsed = parse(row.definition);
-  const registryContext = workflowBlockRegistryContext(settings);
+  const registryContext = workflowBlockRegistryContext();
   const graphIssues = parsed.definition
     ? validateWorkflowDefinitionForRunLoad(
         parsed.definition,

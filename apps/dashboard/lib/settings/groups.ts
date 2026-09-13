@@ -26,7 +26,6 @@ const GROUP_LABELS: Record<SettingsGroup, string> = {
   features: "Features",
   mcp: "MCP",
   checks: "Checks",
-  harness: "Harness defaults",
   "issue-tracker": "Issue tracker",
 };
 
@@ -39,8 +38,6 @@ const GROUP_DESCRIPTIONS: Record<SettingsGroup, string> = {
   mcp: "What the remote MCP transport allows one client per minute, per call and per body.",
   checks:
     "What repository checks fall back to when a repository names none of its own.",
-  harness:
-    "The agent and the models a run uses when no harness profile pins one.",
   "issue-tracker":
     "The board columns the tracker integration watches and moves tickets between.",
 };

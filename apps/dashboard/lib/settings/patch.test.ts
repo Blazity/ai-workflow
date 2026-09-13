@@ -42,7 +42,7 @@ test("draftValueFor returns boolean for boolean entry", () => {
 });
 
 test("draftValueFor returns empty string for null value", () => {
-  const e = entry("CLAUDE_MODEL", null);
+  const e = entry("V2_MAX_BLOCK_CONCURRENCY", null);
   const draft = draftValueFor(e);
   assert.equal(draft, "");
 });
@@ -112,11 +112,6 @@ test("toSettingValue trims string list entries", () => {
 test("toSettingValue drops blank entries from string list", () => {
   const value = toSettingValue("PRE_PR_CHECKS_ALLOWED_ENV", "VAR1\n\nVAR2");
   assert.deepEqual(value, ["VAR1", "VAR2"]);
-});
-
-test("toSettingValue converts empty string to null for CLAUDE_MODEL", () => {
-  const value = toSettingValue("CLAUDE_MODEL", "");
-  assert.equal(value, null);
 });
 
 test("toSettingValue keeps empty string for DASHBOARD_ORG_NAME", () => {
@@ -230,7 +225,7 @@ test("a string value is trimmed, because a trailing space is invisible on screen
 });
 
 test("a whitespace only value is null for a key whose default is null", () => {
-  assert.equal(toSettingValue("CLAUDE_MODEL", "   "), null);
+  assert.equal(toSettingValue("V2_MAX_BLOCK_CONCURRENCY", "   "), null);
 });
 
 test("a string list drops repeats and keeps the order they were first typed in", () => {
@@ -287,7 +282,6 @@ test("an emptied text field is refused when the key has no unset state", () => {
     localSettingIssue("DASHBOARD_ORG_NAME", ""),
     "This setting cannot be left empty.",
   );
-  assert.equal(localSettingIssue("CLAUDE_MODEL", ""), undefined);
 });
 
 test("localSettingIssues reports only the offending fields", () => {

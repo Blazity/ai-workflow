@@ -31,7 +31,7 @@ paths:
   no timestamp key. The wrapper appends a synthetic
   `{"type":"phase.duration","duration_ms":N}` line so reports show real
   wall-clock minutes instead of `0m`.
-- Anything that retries a push must dispatch the configured agent's CLI, not a
-  hardcoded `claude`. With `AGENT_KIND=codex` the claude binary is absent and a
+- Anything that retries a push must dispatch the harness profile's CLI, not a
+  hardcoded `claude`. With a Codex profile the claude binary is absent and a
   trailing `|| true` swallows the failure, leaving the same broken HEAD to be
   force-pushed.

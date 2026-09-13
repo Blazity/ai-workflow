@@ -1,17 +1,43 @@
 import { describe, it, expect } from "vitest";
-import { resolveBlockAgent, resolveRunDefaultKind } from "./resolve-agent.js";
+import {
+  resolveBlockAgent,
+  resolveRunHarnessDefaults,
+} from "./resolve-agent.js";
 
 const defaults = { claude: "claude-default", codex: "codex-default" };
 
-describe("resolveRunDefaultKind", () => {
-  it("uses the label override when present", () => {
-    expect(resolveRunDefaultKind("codex", "claude")).toBe("codex");
-    expect(resolveRunDefaultKind("claude", "codex")).toBe("claude");
+describe("resolveRunHarnessDefaults", () => {
+  it("takes the run default from the first harness node in definition order", () => {
+    const runtimes = {
+      second: {
+        manifest: {
+          harness: { provider: "codex" as const },
+          model: { id: "codex-profile" },
+        },
+      },
+      first: {
+        manifest: {
+          harness: { provider: "claude" as const },
+          model: { id: "claude-profile" },
+        },
+      },
+    };
+
+    expect(resolveRunHarnessDefaults(
+      [{ id: "first" }, { id: "second" }],
+      runtimes,
+    )).toEqual({
+      defaultKind: "claude",
+      defaultModel: "claude-profile",
+      models: { claude: "claude-profile", codex: "codex-profile" },
+    });
   });
 
-  it("falls back to the env kind when no label override", () => {
-    expect(resolveRunDefaultKind(null, "codex")).toBe("codex");
-    expect(resolveRunDefaultKind(null, "claude")).toBe("claude");
+  it("uses the single built-in default profile when no harness node exists", () => {
+    expect(resolveRunHarnessDefaults([{ id: "trigger" }], {})).toMatchObject({
+      defaultKind: "codex",
+      defaultModel: "gpt-5.4",
+    });
   });
 });
 

@@ -108,7 +108,7 @@ describe("settings repository", () => {
   it("stores a cleared optional setting as a row rather than dropping it", async () => {
     const db = await createTestDb();
     const versions = await writeManySettings(db, {
-      patch: { CLAUDE_MODEL: null },
+      patch: { V2_MAX_BLOCK_CONCURRENCY: null },
       actor: "user_admin",
       reason: "back to the harness default",
     });
@@ -117,7 +117,7 @@ describe("settings repository", () => {
     expect(versions[0]?.newValue).toBeNull();
     const rows = await readAllSettings(db);
     expect(rows).toEqual([
-      expect.objectContaining({ key: "CLAUDE_MODEL", value: null }),
+      expect.objectContaining({ key: "V2_MAX_BLOCK_CONCURRENCY", value: null }),
     ]);
   });
 

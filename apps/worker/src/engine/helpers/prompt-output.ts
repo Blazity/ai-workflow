@@ -15,8 +15,8 @@ import { RunBudgetError, missingRequiredPriceFailure } from "./run-budget.js";
 import { BLOCK_EXECUTORS, INLINE_EXECUTED_BLOCK_TYPES } from "../blocks/executors.generated.js";
 import { BLOCK_CATALOG, BLOCK_TYPE_SPECS } from "@shared/contracts";
 import { DEFAULT_OPEN_PR_BODY, DEFAULT_OPEN_PR_TITLE } from "@shared/prompts";
-import { REPO_MEMORY_DISTILL_CODEX_MODEL } from "@shared/harness";
-export { REPO_MEMORY_DISTILL_CODEX_MODEL } from "@shared/harness";
+import { REPO_MEMORY_DISTILL_MODEL_CODEX } from "@shared/harness";
+export { REPO_MEMORY_DISTILL_MODEL_CODEX } from "@shared/harness";
 import type { BlockOutput, BlockRunState, WorkflowBlockType, WorkflowDefinitionNode, WorkflowDefinitionV2, WorkflowDefinitionV2Node } from "@shared/contracts";
 import type { TerminalStatus } from "./review-ledger.js";
 import type { HumanDecision } from "../support/human-decisions-memory.js";
@@ -89,7 +89,7 @@ export function appendClarificationRound(
  * Model the repository-memory distill pins on the codex path. The distill is a
  * structured extraction, not agent work: resolveCallLlmTarget already pins the
  * the cheap catalog default on the claude path, but its codex branch returns
- * CODEX_MODEL, the full agent model, at roughly ten times the cost for the same
+ * the run's full Codex model, at roughly ten times the cost for the same
  * job. Not invented here: it is the cheapest codex id the deployment already
  * offers, FALLBACK_MODELS.codex in engine/definition/models.ts. Only the
  * distill reads this; every other resolveCallLlmTarget consumer is unchanged.
@@ -398,7 +398,7 @@ export function repoMemoryDistillTarget(
 ): { provider: "claude" | "codex" | undefined; model: string } {
   return resolveCallLlmTarget(
     runDefaultKind === "codex"
-      ? { provider: "codex", model: REPO_MEMORY_DISTILL_CODEX_MODEL }
+      ? { provider: "codex", model: REPO_MEMORY_DISTILL_MODEL_CODEX }
       : {},
     runDefaultKind,
     defaults,

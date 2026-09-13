@@ -30,7 +30,10 @@ import { executeTransform, type V2BindingResolutionContext } from "@shared/workf
 import { JSON_SCHEMA_SUPPORT } from "./definition/json-schema-support.js";
 import { SCHEDULER_DEPENDENCIES } from "./definition/scheduler-dependencies.js";
 import type { BlockExecutionContext, BlockExecutionResult, BlockExecutor } from "@shared/workflow-graph";
-import { resolveBlockAgent, resolveRunDefaultKind } from "./definition/resolve-agent.js";
+import {
+  resolveBlockAgent,
+  resolveRunHarnessDefaults,
+} from "./definition/resolve-agent.js";
 import { resolveTicketMoveTarget } from "./helpers/ticket-move-target.js";
 import { runKindForAgentWorkflowInput, type AgentWorkflowInput } from "./agent-input.js";
 import { moveTicketStep } from "./steps/ticket-transition-step.js";
@@ -60,6 +63,7 @@ import { RunBudgetError, addElapsed, checksCeilingErrorDetail, createRunBudgetSt
 import { isRunControlError } from "./helpers/run-control-error.js";
 import { BLOCK_EXECUTORS } from "./blocks/executors.generated.js";
 import { createWorkflowExecutionErrorState, isTriggerBlockType, RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
+import { defaultBuiltinHarnessProfile } from "@shared/harness";
 import type { BlockOutput, BlockRunState, RunPullRequest, RunAnalysisReport, TransformConfiguration, WorkflowBlockType, WorkflowDefinitionNode, WorkflowDefinitionV2, WorkflowExecutionErrorState, WorkflowParamValue, HarnessRunManifestRecord } from "@shared/contracts";
 import type { CostProvider, CostProviderKind, TokenPrice } from "@shared/costs";
 import type { ResolvedHarnessRuntime } from "../sandbox/harness-runtime.js";
@@ -615,21 +619,18 @@ async function agentWorkflowBody(
   }
 
   const agentKindOverride = await resolveAgentKindOverride(ticket.labels);
-  const runDefaultKind: AgentKind = resolveRunDefaultKind(
-    agentKindOverride,
-    runSettings.AGENT_KIND,
-  );
-  // One definition of "the model this deployment defaults to", shared with the
-  // block contract context so the two cannot drift.
-  const { runModelDefaults } = await import("./definition/block-contract-environment.js");
-  const modelDefaults = runModelDefaults(runSettings);
-  const defaultModel = modelDefaults[runDefaultKind];
+  const builtinDefaultProfile = defaultBuiltinHarnessProfile();
   const harnessRuntimes = await resolveHarnessRuntimesStep(
     plan.definition,
-    runDefaultKind,
+    builtinDefaultProfile.harness.provider,
     agentKindOverride,
     runSettings.DASHBOARD_ORG_SLUG,
   );
+  const {
+    defaultKind: runDefaultKind,
+    defaultModel,
+    models: modelDefaults,
+  } = resolveRunHarnessDefaults(plan.definition.nodes, harnessRuntimes);
   const harnessManifests: HarnessRunManifestRecord[] = Object.values(
     harnessRuntimes,
   )
@@ -747,10 +748,6 @@ async function agentWorkflowBody(
           graph: replayGraph,
           runtimeManifest: sanitizeReplayValue(
             {
-              defaultAgent: {
-                provider: runDefaultKind,
-                model: defaultModel,
-              },
               harnesses: harnessManifests,
             },
             { secrets: configuredReplaySecrets() },

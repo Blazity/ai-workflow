@@ -8,7 +8,7 @@ vi.mock("../../infra/vcs-config.js", () => ({ env: {} }));
 
 import { FALLBACK_MODELS } from "../definition/models.js";
 import { computeUsageTotals, type PhaseUsage } from "../../sandbox/usage.js";
-import { REPO_MEMORY_DISTILL_CODEX_MODEL, optionalPricedModelsForRun, repoMemoryDistillTarget, resolveRunPriceLookup } from "../helpers/prompt-output.js";
+import { REPO_MEMORY_DISTILL_MODEL_CODEX, optionalPricedModelsForRun, repoMemoryDistillTarget, resolveRunPriceLookup } from "../helpers/prompt-output.js";
 
 /** The full agent models a run would otherwise bill the distill against. */
 const DEFAULTS = { claude: "claude-opus-4-6", codex: "gpt-5.4" };
@@ -27,13 +27,13 @@ describe("repository memory distill model", () => {
   // nothing downstream would surface it. Pin it to the catalog the deployment
   // already offers rather than to a literal nobody re-checks.
   it("is an id the deployment already offers", () => {
-    expect(FALLBACK_MODELS.codex).toContain(REPO_MEMORY_DISTILL_CODEX_MODEL);
+    expect(FALLBACK_MODELS.codex).toContain(REPO_MEMORY_DISTILL_MODEL_CODEX);
   });
 
   it("pins a cheap model on both provider paths, never the full agent model", () => {
     expect(repoMemoryDistillTarget("codex", DEFAULTS)).toEqual({
       provider: "codex",
-      model: REPO_MEMORY_DISTILL_CODEX_MODEL,
+      model: REPO_MEMORY_DISTILL_MODEL_CODEX,
     });
     // The claude path keeps call_llm's own cheap default. Asserted as "not the
     // agent model" so this does not restate call-llm.ts's constant.
@@ -98,7 +98,7 @@ describe("repository memory distill pricing", () => {
     await expect(
       resolveRunPriceLookup({
         requiredModels: new Set([DEFAULTS.codex]),
-        optionalModels: new Set([REPO_MEMORY_DISTILL_CODEX_MODEL]),
+        optionalModels: new Set([REPO_MEMORY_DISTILL_MODEL_CODEX]),
         maxCostUsd: 5,
         fetchPrice: async (model) => (model === DEFAULTS.codex ? null : PRICE),
       }),
@@ -136,12 +136,12 @@ describe("repository memory distill pricing", () => {
   it("prices the distill when it is the only model to price", async () => {
     const lookup = await resolveRunPriceLookup({
       requiredModels: new Set(),
-      optionalModels: new Set([REPO_MEMORY_DISTILL_CODEX_MODEL]),
+      optionalModels: new Set([REPO_MEMORY_DISTILL_MODEL_CODEX]),
       maxCostUsd: 5,
       fetchPrice: async () => PRICE,
     });
 
-    expect(lookup?.(REPO_MEMORY_DISTILL_CODEX_MODEL)).toEqual(PRICE);
+    expect(lookup?.(REPO_MEMORY_DISTILL_MODEL_CODEX)).toEqual(PRICE);
   });
 
   it("prices nothing and sets no lookup when there is nothing to price", async () => {

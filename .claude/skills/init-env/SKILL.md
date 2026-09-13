@@ -123,7 +123,7 @@ The CLI is interactive — let the user complete it. On success, `.vercel/projec
 
 Invoke the `init-jira` subskill via the Skill tool. It detects state and runs phase 1 because `JIRA_BASE_URL` is not yet set in Vercel:
 
-- Asks for `JIRA_BASE_URL` / `JIRA_API_TOKEN` / `JIRA_PROJECT_KEY` / `COLUMN_AI` / `COLUMN_AI_REVIEW` / `COLUMN_BACKLOG`.
+- Asks for `JIRA_BASE_URL`, `JIRA_API_TOKEN`, and `JIRA_PROJECT_KEY`. Board status names are configured on the Settings page.
 - **Pre-generates `JIRA_WEBHOOK_SECRET`** via `openssl rand -hex 32`.
 - Emits a single `.env`-format paste-template.
 - Walks the user through pasting into the Vercel dashboard (Project Settings → Environment Variables).
@@ -143,7 +143,7 @@ Invoke `init-vcs`. It asks **github or gitlab** and emits a single paste-templat
 
 ## Step 4 — Invoke `init-agent`
 
-Invoke `init-agent`. It asks **claude or codex** and emits a single paste-template for the chosen runtime. Defaults to API key; OAuth alternative is a documented swap in the runbook.
+Invoke `init-agent`. It identifies which providers the deployment's harness profiles use and emits only the credentials those providers require. Codex defaults to an API key; OAuth is a documented alternative in the runbook.
 
 → **Stop. Ask:** *"Agent runtime configured. Ready for Step 5: Slack?"*
 
@@ -196,7 +196,7 @@ pnpm tsx --env-file=.env.local env.ts
 The validator (`env.ts` via `@t3-oss/env-core`) catches:
 - Missing required keys.
 - URL/email/UUID format violations.
-- Cross-field violations (`VCS_KIND=github` requires `GITHUB_TOKEN/OWNER/REPO`; `AGENT_KIND=claude` requires `ANTHROPIC_API_KEY`; etc.).
+- Cross-field violations, including incomplete VCS credentials and missing credentials for providers used by harness profiles.
 
 **On failure:** the validator prints `Invalid environment variables:` followed by the specific paths. Identify the responsible subskill from the path prefix (`JIRA_*` → init-jira; `GITHUB_*` / `GITLAB_*` → init-vcs; etc.) and direct the user to fix in the Vercel dashboard, then re-run this step.
 

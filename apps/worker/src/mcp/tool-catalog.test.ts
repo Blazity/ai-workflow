@@ -11,9 +11,6 @@ vi.mock("../infra/vcs-config.js", () => ({
     MCP_AUDIT_RETENTION_DAYS: 365,
     MAX_CONCURRENT_AGENTS: 3,
     JIRA_BASE_URL: "https://blazity.atlassian.net",
-    AGENT_KIND: "claude",
-    CLAUDE_MODEL: "claude-opus-4-8",
-    CODEX_MODEL: "gpt-5.4",
   },
 }));
 
