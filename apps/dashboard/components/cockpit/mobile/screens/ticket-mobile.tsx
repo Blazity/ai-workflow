@@ -7,6 +7,9 @@ import { useCockpit } from "@/components/cockpit/context";
 import type { TicketRunsResponse } from "@shared/contracts";
 import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
 import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
+import { Button } from "@/components/ui/button";
+
+const EM_DASH = "\u2014";
 
 function fmtCost(n: number): string {
   return `$${n.toFixed(2)}`;
@@ -19,13 +22,15 @@ function fmtTokens(n: number): string {
 export function MobileBackToRuns({ ticketKey }: { ticketKey: string }) {
   const router = useRouter();
   return (
-    <button
+    <Button
       type="button"
       onClick={() => router.push(`/ticket/${encodeURIComponent(ticketKey)}`)}
-      className="self-start appearance-none border-0 bg-transparent p-0 font-mono text-[11px] text-mariner cursor-pointer uppercase tracking-[0.04em]"
+      className="self-start"
+      size="sm"
+      variant="ghost"
     >
       ← All runs · {ticketKey}
-    </button>
+    </Button>
   );
 }
 
@@ -79,11 +84,13 @@ export function TicketMobileScreen({
           </div>
         )}
         {runs.map((r) => (
-          <button
+          <Button
             key={r.id}
             onClick={() => openRun(r)}
-            className="appearance-none text-left cursor-pointer bg-panel border border-neutral-200 rounded-sm p-3.5 active:bg-neutral-100"
+            className="h-auto w-full justify-start p-0 normal-case tracking-normal"
+            variant="secondary"
           >
+            <span className="flex w-full flex-col p-3.5 text-left">
             <div className="flex items-center gap-2">
               <CkStatusPill status={r.status} />
               <span className="ml-auto font-mono text-[10px] text-neutral-500">{r.startedAtMin}m ago</span>
@@ -95,14 +102,15 @@ export function TicketMobileScreen({
             <div className="grid grid-cols-2 gap-2 mt-3 pt-2.5 border-t border-neutral-200 font-mono">
               <div>
                 <div className="text-[9px] text-neutral-500 tracking-[0.04em] uppercase">Dur</div>
-                <div className="text-[13px] font-semibold text-neutral-900">{r.duration === null ? "—" : `${r.duration}s`}</div>
+                <div className="text-[13px] font-semibold text-neutral-900">{r.duration === null ? EM_DASH : `${r.duration}s`}</div>
               </div>
               <div>
                 <div className="text-[9px] text-neutral-500 tracking-[0.04em] uppercase">Cost</div>
-                <div className="text-[13px] font-semibold text-neutral-900">{r.cost === null ? "—" : fmtCost(r.cost)}</div>
+                <div className="text-[13px] font-semibold text-neutral-900">{r.cost === null ? EM_DASH : fmtCost(r.cost)}</div>
               </div>
             </div>
-          </button>
+            </span>
+          </Button>
         ))}
       </div>
     </div>

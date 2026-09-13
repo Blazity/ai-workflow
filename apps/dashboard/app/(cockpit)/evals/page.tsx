@@ -1,4 +1,4 @@
-// apps/dashboard/app/(cockpit)/evals/page.tsx — Arthur evals ("/evals")
+// apps/dashboard/app/(cockpit)/evals/page.tsx: Arthur evals ("/evals")
 import { Suspense } from "react";
 
 import { EvalsData } from "@/app/evals-data";

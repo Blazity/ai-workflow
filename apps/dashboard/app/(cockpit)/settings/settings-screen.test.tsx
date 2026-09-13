@@ -147,7 +147,7 @@ test("a member sees every value and no way to change one", (t) => {
   assert.match(rendered, /Read-only: ask an owner or admin/);
   assert.equal(
     root.findAll(
-      (node) => node.type === "button" && String(node.children[0]).includes("Store"),
+      (node) => node.type === "button" && text(node).includes("Store"),
     ).length,
     0,
     "a member was offered a Save control the worker would refuse",
@@ -194,8 +194,8 @@ test("saving is refused until a reason is typed, and edits register with the she
   const saveButton = () =>
     root
       .findAll((node) => node.type === "button")
-      .find((node) => String(node.children[0] ?? "").startsWith("Nothing to save") ||
-        String(node.children.join("")).includes("Store 1 change"));
+      .find((node) => text(node).includes("Nothing to save") ||
+        text(node).includes("Store 1 change"));
 
   assert.equal(hasUnsavedSettings(), false, "a freshly rendered form is not dirty");
 
@@ -252,7 +252,7 @@ test("an emptied number field is refused before a request is made", (t) => {
   };
   const save = root
     .findAll((node) => node.type === "button")
-    .find((node) => String(node.children.join("")).includes("Store 1 change"));
+    .find((node) => text(node).includes("Store 1 change"));
   assert.ok(save, "expected the save control");
   act(() => {
     save.props.onClick();

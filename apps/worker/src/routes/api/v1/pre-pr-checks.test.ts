@@ -356,7 +356,7 @@ describe("what a legacy checks save does to the repository catalog", () => {
       path: "acme/web",
       description: "The web app",
       rules: "never force push",
-      relationships: [{ repositoryId: 1, label: "consumes" }],
+      relationships: [{ repositoryId: 1, kind: "depends_on" }],
       scriptGroups: null,
       gateGroups: null,
       actorId: "user_admin",
@@ -373,7 +373,7 @@ describe("what a legacy checks save does to the repository catalog", () => {
     await expect(catalogRow("acme/web")).resolves.toMatchObject({
       description: "The web app",
       rules: "never force push",
-      relationships: [{ repositoryId: 1, label: "consumes" }],
+      relationships: [{ repositoryId: 1, kind: "depends_on" }],
     });
   });
 

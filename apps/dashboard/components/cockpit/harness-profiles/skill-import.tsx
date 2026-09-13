@@ -13,7 +13,7 @@ import {
   SKILL_SOURCE_KINDS,
   type SkillSourceKind,
 } from "@shared/skills";
-import { Button, IconButton, Input, Modal } from "@/components/ui";
+import { Button, Input, Modal } from "@/components/ui";
 
 /**
  * Says what the deployment source does and, as importantly, what it does not:
@@ -399,6 +399,8 @@ export function SkillImport({
       open={open}
       onClose={onClose}
       dismissible={!busy}
+      showCloseButton
+      closeLabel="Close skill import"
       title="Add skills"
       description={
         sourceKind === "local"
@@ -439,22 +441,12 @@ export function SkillImport({
         </div>
       }
     >
-      <div className="absolute right-4 top-3 z-10">
-          <IconButton
-            type="button"
-            aria-label="Close skill import"
-            onClick={onClose}
-            disabled={busy !== null}
-          >
-            ×
-          </IconButton>
-      </div>
-
-      <div
-        role="radiogroup"
-        aria-label="Skill source"
-        className="flex gap-2 border-b border-neutral-200 py-3"
-      >
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-5">
+        <div
+          role="radiogroup"
+          aria-label="Skill source"
+          className="flex gap-2 border-b border-neutral-200 py-3"
+        >
           {SKILL_SOURCE_KINDS.map((kind) => (
             <Button
               variant={sourceKind === kind ? "primary" : "secondary"}
@@ -469,13 +461,13 @@ export function SkillImport({
               {kind === "github" ? "GitHub repository" : "This deployment"}
             </Button>
           ))}
-      </div>
+        </div>
 
-      <div
-        className={`grid border-b border-neutral-200 py-3 ${
-          sourceKind === "local" ? "grid-cols-2" : "grid-cols-3"
-        }`}
-      >
+        <div
+          className={`grid border-b border-neutral-200 py-3 ${
+            sourceKind === "local" ? "grid-cols-2" : "grid-cols-3"
+          }`}
+        >
           {steps.map(([id, label], index) => {
             const activeIndex = steps.findIndex(
               ([candidate]) => candidate === step,
@@ -493,9 +485,9 @@ export function SkillImport({
               </div>
             );
           })}
-      </div>
+        </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto py-4">
+        <div className="min-h-0 flex-1 overflow-y-auto py-4">
           {sourceKind === "local" ? (
             <div className="rounded-[3px] border border-neutral-200 bg-app-bg px-3 py-2 font-body text-[10px] text-neutral-600">
               {LOCAL_SOURCE_NOTE}
@@ -702,6 +694,7 @@ export function SkillImport({
               />
             </>
           )}
+        </div>
       </div>
     </Modal>
   );

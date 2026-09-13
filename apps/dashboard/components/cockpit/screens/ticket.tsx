@@ -7,6 +7,9 @@ import { runModelLabel } from "@/lib/run-model";
 import type { TicketRunsResponse } from "@shared/contracts";
 import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
 import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
+import { Button } from "@/components/ui/button";
+
+const EM_DASH = "\u2014";
 
 function fmtCost(n: number): string {
   return `$${n.toFixed(2)}`;
@@ -14,7 +17,7 @@ function fmtCost(n: number): string {
 function fmtTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(0)}k` : `${n}`;
 }
-/** "2 success · 1 failed" — only nonzero buckets, in a stable order. */
+/** "2 success · 1 failed", only nonzero buckets, in a stable order. */
 function outcomeSummary(counts: TicketRunsResponse["totals"]["counts"]): string {
   const order: (keyof typeof counts)[] = ["success", "running", "awaiting", "failed", "blocked"];
   return order
@@ -54,7 +57,7 @@ export function TicketScreen({
   const title = ticket?.title || ticketKey;
 
   const { select, pendingRun, urlRun } = useTicketSelection();
-  // Default to the newest run (runs[0]) — mirrors pickSelectedRunId, which the
+  // Default to the newest run (runs[0]), mirrors pickSelectedRunId, which the
   // detail panel uses when `?run=` is absent, so the rail highlight matches what
   // the trace shows.
   const activeId = pendingRun ?? urlRun ?? runs[0]?.id ?? null;
@@ -66,7 +69,7 @@ export function TicketScreen({
 
   return (
     <>
-      {/* Sticky rollup header — spans both columns */}
+      {/* Sticky rollup header, spans both columns */}
       <div
         style={{ gridArea: "header" }}
         className="flex flex-col gap-2 px-6 pt-5 pb-4 border-b border-neutral-200 bg-app-bg"
@@ -122,15 +125,17 @@ export function TicketScreen({
           runs.map((r) => {
             const active = r.id === activeId;
             return (
-              <button
+              <Button
                 key={r.id}
                 type="button"
                 aria-current={active}
                 onClick={() => onSelect(r.id)}
-                className={`relative w-full appearance-none border-0 border-b border-neutral-200 cursor-pointer text-left flex flex-col gap-1.5 px-4 py-3 ${
+                variant="ghost"
+                className={`h-auto w-full justify-start rounded-none border-b border-neutral-200 px-0 py-0 normal-case tracking-normal ${
                   active ? "bg-mariner-100" : "bg-panel hover:bg-neutral-100"
                 }`}
               >
+                <span className="flex w-full flex-col gap-1.5 px-4 py-3 text-left">
                 {active && (
                   <span className="absolute left-0 top-1 bottom-1 w-[2px] rounded-full bg-mariner" aria-hidden="true" />
                 )}
@@ -148,13 +153,14 @@ export function TicketScreen({
                 )}
                 <div className="flex items-center justify-between gap-2 font-mono text-[11px] text-neutral-700">
                   <span className="truncate">{runModelLabel(r.model)}</span>
-                  <span className="shrink-0">{r.cost === null ? "—" : fmtCost(r.cost)}</span>
+                  <span className="shrink-0">{r.cost === null ? EM_DASH : fmtCost(r.cost)}</span>
                 </div>
                 <div className="flex items-center gap-2 font-mono text-[10px] text-neutral-500">
                   <span className="truncate">{r.id}</span>
                   {r.prNumber && <span className="shrink-0">PR #{r.prNumber}</span>}
                 </div>
-              </button>
+                </span>
+              </Button>
             );
           })
         )}

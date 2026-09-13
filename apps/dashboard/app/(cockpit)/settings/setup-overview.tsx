@@ -49,9 +49,9 @@ export function SetupOverview({
   const overview = buildSetupOverview({ settings, scan, scanReadable, catalogState });
 
   return (
-    <section className="rounded-[4px] border border-neutral-200 bg-panel">
-      <header className="px-4 pt-3 pb-[10px] border-b border-neutral-200">
-        <h3 className="m-0 font-display text-[15px] font-medium text-coal">
+    <section className="rounded-sm border border-neutral-200 bg-panel">
+      <header className="border-b border-neutral-200 px-4 py-3">
+        <h3 className="m-0 font-display text-base font-medium text-coal">
           Setup overview
         </h3>
         <p className="m-0 mt-1 font-body text-[11px] text-neutral-600">
@@ -63,7 +63,7 @@ export function SetupOverview({
         {overview.rows.map((row) => (
           <li
             key={row.id}
-            className="flex flex-col gap-[2px] py-2 border-b border-neutral-200 last:border-b-0"
+            className="flex flex-col gap-1 border-b border-neutral-200 py-2 last:border-b-0"
           >
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-body text-[12px] font-semibold text-neutral-800">
@@ -77,7 +77,7 @@ export function SetupOverview({
       </ul>
 
       <div className="px-4 py-3 border-t border-neutral-200">
-        <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500 mb-[6px]">
+        <div className="mb-1.5 font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">
           Stored rows per group
         </div>
         {overview.hasStoredRows ? (

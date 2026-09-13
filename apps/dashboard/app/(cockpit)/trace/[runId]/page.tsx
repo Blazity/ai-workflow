@@ -1,4 +1,4 @@
-// apps/dashboard/app/(cockpit)/trace/[runId]/page.tsx — Run trace ("/trace/<runId>")
+// apps/dashboard/app/(cockpit)/trace/[runId]/page.tsx: Run trace ("/trace/<runId>")
 import { Suspense } from "react";
 
 import { TraceData } from "@/app/trace-data";
