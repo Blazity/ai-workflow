@@ -1206,7 +1206,7 @@ function AttemptInspector({
             {attempts.map((attempt) => (
               <Button
                 key={attempt.id}
-                variant={selectedAttempt?.id === attempt.id ? "primary" : "secondary"}
+                variant={selectedAttempt?.id === attempt.id ? "selected" : "secondary"}
                 size="sm"
                 onClick={() => onSelectAttempt(attempt)}
                 aria-pressed={selectedAttempt?.id === attempt.id}

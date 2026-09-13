@@ -401,7 +401,7 @@ export function PromptLibraryRail({
               </Button>
               <Button
                 type="button"
-                variant={pinReferences ? "primary" : "secondary"}
+                variant={pinReferences ? "selected" : "secondary"}
                 size="sm"
                 onClick={() => insertReference(selectedVersion ?? activeRow.currentVersion)}
                 className="flex-1"
