@@ -10,6 +10,7 @@ import { MarkdownManager } from "@tiptap/markdown";
 import { substitutePromptVariables } from "@shared/prompts";
 
 import {
+  canonicalMarkdownForEditor,
   restoreVariableTokens,
   visualEditorKeepsMarkdown,
 } from "./markdown-round-trip";
@@ -81,6 +82,13 @@ test("a re-spelling is not a loss", () => {
   // editor unreachable, which is the failure mode this comparison avoids.
   assert.equal(visualEditorKeepsMarkdown("* one\n* two\n", extensions()), true);
   assert.equal(visualEditorKeepsMarkdown("Rules\n=====\n\nbody\n", extensions()), true);
+});
+
+test("representable markdown canonicalizes to the editor serialization", () => {
+  const stored = "* one\n* two\n";
+  assert.equal(canonicalMarkdownForEditor(stored, extensions()), "- one\n- two");
+  assert.equal(canonicalMarkdownForEditor("- one\n- two\n\n", extensions()), "- one\n- two");
+  assert.equal(canonicalMarkdownForEditor(RULES_WITH_TABLE, extensions()), RULES_WITH_TABLE);
 });
 
 test("an empty field is not a damaged one", () => {

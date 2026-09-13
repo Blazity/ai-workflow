@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { mock } from "node:test";
 import React, { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import type { Root } from "react-dom/client";
 import {
   PathnameContext,
   SearchParamsContext,
@@ -12,9 +12,16 @@ import type {
   PromptLibraryListRowDto,
 } from "@shared/contracts";
 import { installTestDom } from "@/components/ui/test-dom";
-import { PromptLibraryScreen } from "./prompt-library";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
+
+async function loadPromptLibraryScreen() {
+  const [{ createRoot }, { PromptLibraryScreen }] = await Promise.all([
+    import("react-dom/client"),
+    import("./prompt-library"),
+  ]);
+  return { createRoot, PromptLibraryScreen };
+}
 
 const row: PromptLibraryListRowDto = {
   id: 7,
@@ -84,6 +91,7 @@ function openDialog() {
 
 test("prompt library editor owns focus, traps Tab, dismisses, and restores the Edit opener", async () => {
   const dom = installTestDom();
+  const { createRoot, PromptLibraryScreen } = await loadPromptLibraryScreen();
   const cockpitMain = document.createElement("main");
   cockpitMain.dataset.cockpitMain = "";
   const container = document.createElement("div");
@@ -130,6 +138,8 @@ test("prompt library editor owns focus, traps Tab, dismisses, and restores the E
     let dialog = openDialog();
     assert.ok(dialog.contains(document.activeElement));
     assert.equal(cockpitMain.hasAttribute("inert"), true);
+    const cleanAction = button("Nothing to save");
+    assert.equal(cleanAction.disabled, true);
 
     const tabbable = Array.from(
       dialog.querySelectorAll<HTMLElement>(
@@ -187,6 +197,138 @@ test("prompt library editor owns focus, traps Tab, dismisses, and restores the E
     });
     assert.equal(document.querySelector('[role="dialog"]'), null);
     assert.equal(document.activeElement, edit);
+  } finally {
+    await act(async () => {
+      root?.unmount();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    cockpitMain.remove();
+    mock.restoreAll();
+    dom.restore();
+  }
+});
+
+test("prompt library edit stays clean after Markdown normalization and guards a one-character edit", async () => {
+  const dom = installTestDom();
+  const { createRoot, PromptLibraryScreen } = await loadPromptLibraryScreen();
+  const cockpitMain = document.createElement("main");
+  cockpitMain.dataset.cockpitMain = "";
+  const container = document.createElement("div");
+  cockpitMain.append(container);
+  document.body.append(cockpitMain);
+  let root: Root | undefined;
+  const normalizedRow = {
+    ...row,
+    body: "* Investigate the ticket.\n* Record the findings.\n",
+  };
+  const normalizedDetail = {
+    ...detail,
+    current: { ...detail.current, body: normalizedRow.body },
+    versions: [{ ...detail.versions[0]!, body: normalizedRow.body }],
+  };
+
+  mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url === "/api/prompt-library/7") return Response.json(normalizedDetail);
+    if (url === "/api/prompt-library/7/usage") {
+      return Response.json({ rows: [], prompts: [] });
+    }
+    return Response.json({}, { status: 404 });
+  });
+
+  try {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(
+        <PathnameContext.Provider value="/prompts">
+          <SearchParamsContext.Provider value={new URLSearchParams() as never}>
+            <PromptLibraryScreen
+              data={{ prompts: [normalizedRow], tags: normalizedRow.tags }}
+              canEdit
+              available
+            />
+          </SearchParamsContext.Provider>
+        </PathnameContext.Provider>,
+      );
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    const edit = button("Edit");
+    await act(async () => {
+      edit.click();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    let dialog = openDialog();
+    assert.ok(dialog.querySelector<HTMLElement>('[contenteditable="true"]'));
+    assert.equal(button("Nothing to save").disabled, true);
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }));
+    });
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+
+    await act(async () => {
+      edit.click();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    dialog = openDialog();
+    const cleanBackdrop = document.querySelector<HTMLElement>("[data-modal-overlay]");
+    assert.ok(cleanBackdrop, "expected the production modal backdrop");
+    act(() => {
+      cleanBackdrop.dispatchEvent(new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+      }));
+    });
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.equal(
+      Array.from(document.querySelectorAll<HTMLButtonElement>("button")).some(
+        (candidate) => candidate.textContent?.trim() === "Discard",
+      ),
+      false,
+    );
+
+    await act(async () => {
+      edit.click();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    dialog = openDialog();
+    const rawToggle = Array.from(dialog.querySelectorAll<HTMLButtonElement>("button")).find(
+      (candidate) => candidate.textContent?.trim() === "Raw",
+    );
+    assert.ok(rawToggle, "expected the raw mode toggle");
+    act(() => rawToggle.click());
+    const rawEditor = dialog.querySelector<HTMLTextAreaElement>("textarea");
+    assert.ok(rawEditor, "expected the raw prompt editor");
+    const valueSetter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    assert.ok(valueSetter, "expected the native textarea value setter");
+    act(() => {
+      valueSetter.call(rawEditor, `${rawEditor.value}x`);
+      rawEditor.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    assert.equal(button("Save as v2").disabled, false);
+
+    const backdrop = document.querySelector<HTMLElement>("[data-modal-overlay]");
+    assert.ok(backdrop, "expected the production modal backdrop");
+    act(() => {
+      backdrop.dispatchEvent(new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+      }));
+    });
+    assert.ok(button("Discard"));
+    assert.ok(button("Keep editing"));
+    assert.ok(document.querySelector('[role="dialog"]'));
+    act(() => button("Discard").click());
+    assert.equal(document.querySelector('[role="dialog"]'), null);
   } finally {
     await act(async () => {
       root?.unmount();
