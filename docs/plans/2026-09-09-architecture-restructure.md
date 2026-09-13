@@ -1,9 +1,9 @@
 Status: current
-Last-verified: 2026-09-10
+Last-verified: 2026-09-13
 
 # Architecture restructure: layers, packages, gates, docs
 
-Status: APPROVED by the owner on 2026-09-09, revision 6 (owner decisions of 2026-09-10: stage order, gate policy, DB fallback, package layout, and production-count corrections; skeptic pre-mortem, roadmap and backlog fit, v1 retirement folded in as stage 3b with its own pre-mortem, and the WDK step identity and drain rule added). Owner answered Q1-Q8 and reversed Q4 the same day. Ready for `/opus-orchestration`. Not started. Jira tickets per stage: see `2026-09-09-architecture-restructure-tickets.md` beside this file.
+Status: APPROVED by the owner on 2026-09-09, revision 6 (owner decisions of 2026-09-10: stage order, gate policy, DB fallback, package layout, and production-count corrections; skeptic pre-mortem, roadmap and backlog fit, v1 retirement folded in as stage 3b with its own pre-mortem, and the WDK step identity and drain rule added). Owner answered Q1-Q8 and reversed Q4 the same day. Delivered between 2026-09-09 and 2026-09-13; all stages merged. Stage 5b was delivered by PR #459 as an armed but idle gate. It runs only after an owner declares an isolated non-production target through repository variables `ENGINE_CANARY_TARGET`, `ENGINE_CANARY_DB_ENV`, and `ENGINE_CANARY_DB_FINGERPRINT`, plus the canary secrets in the `e2e` environment, as documented in SETUP.md under "Behavioural PR gate". The demo alias currently reports the production database, so no target qualifies; AIW-316 and AIW-317 remain open. Jira tickets per stage: see `2026-09-09-architecture-restructure-tickets.md` beside this file.
 Start SHA: `687a6bbb040b5a4baa1d8018cfe1a8d9ebb4db43` (main, 2026-09-09).
 Evidence base:
 [../research/2026-09-09-architecture-audit.md](../research/2026-09-09-architecture-audit.md)
@@ -611,3 +611,28 @@ Skeptic (opus, fresh context, plan and code, stage 3b only): REVISE, 5 HIGH,
 | b8 | The A14 harness cannot see the v2 code 3b touches | corrected | D12 and the TDD column name the unit tests and canaries as the net; harness is the v2 floor only |
 | b9 | A v1 history row keeps Restore and the 409 is a generic banner (`workflow-editor.tsx:1080-1103`) | corrected | 3b removes the action, shows the message; dashboard test in TDD |
 | b10 | The MCP change is unobservable; the contract hash need not change | corrected | one description sentence changes the hash; VALIDATION_FAILED carries the message; clipboard covered |
+
+## Delivery record
+
+| Stage | PR(s) |
+|---|---|
+| 0 | #383 |
+| 1 | #382 |
+| 2 | #380 |
+| 3 | #379 |
+| 3b | #390 |
+| 4 | #388 |
+| 5 | #394 |
+| 5b | #459 |
+| 6a | #395 |
+| 6b | #398 |
+| 6c | #401 |
+| 7 | #402 |
+| 8a | #397 |
+| 8b | 5c721cf0 |
+| 8c | #396 |
+| 8d | #392 |
+| 9 | #393 |
+| 10 | #399 |
+| 11 | #403 to #409 |
+| 12 | #411 to #429 |

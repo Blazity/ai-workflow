@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-09
+Last-verified: 2026-09-13
 
 # Documentation index
 
@@ -91,14 +91,14 @@ research file records what was true on its date.
 | [research/2026-08-12-workflow-guardrails.md](./research/2026-08-12-workflow-guardrails.md) | Design study for enforceable guardrails on high-risk actions |
 | [research/2026-07-21-agent-memory-systems.md](./research/2026-07-21-agent-memory-systems.md) | Prior art for the agent memory feature |
 
-## Plans in flight
+## Plans
 
 | Document | What it is for |
 |---|---|
-| [plans/2026-09-09-architecture-restructure.md](./plans/2026-09-09-architecture-restructure.md) | The restructure being executed now: stages, decisions, assumptions, freezes |
+| [plans/2026-09-09-architecture-restructure.md](./plans/2026-09-09-architecture-restructure.md) | Delivered 2026-09-09 to 2026-09-13: architecture restructure stages, decisions, assumptions, freezes, and delivery record |
 | [plans/2026-09-09-architecture-restructure-tickets.md](./plans/2026-09-09-architecture-restructure-tickets.md) | The Jira drafts for those stages |
 | [plans/2026-09-11-workflow-graph-package.md](./plans/2026-09-11-workflow-graph-package.md) | Stage 12 of the restructure: the workflow graph rules extracted into `packages/workflow-graph` |
-| [plans/2026-09-11-repository-catalog-and-settings.md](./plans/2026-09-11-repository-catalog-and-settings.md) | Repository catalog and dashboard settings replacing the product-behaviour environment variables |
+| [plans/2026-09-11-repository-catalog-and-settings.md](./plans/2026-09-11-repository-catalog-and-settings.md) | Delivered 2026-09-11 to 2026-09-13: repository catalog and dashboard settings replacing the product-behaviour environment variables |
 
 Every other file in `plans/` is a historical delivery plan. It stays in place
 for provenance and carries `superseded-by docs/index.md`: read it as a record

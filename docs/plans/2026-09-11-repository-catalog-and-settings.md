@@ -3,7 +3,7 @@ Last-verified: 2026-09-13
 
 # Repository catalog and dashboard settings
 
-Status: APPROVED by the owner on 2026-09-11, revision 3 (owner decisions: everything that sensibly can be edited from the dashboard moves out of the environment; import suggests script groups and an LLM call suggests the description; script groups move into the repository profile now and the Scripts page is replaced by a Repositories page; one settings store with a Settings page and area panels; an empty catalog keeps today's behaviour with a banner; suggestions run on demand. Two independent skeptic pre-mortems of the same day, twenty findings, every one adopted; see Assumptions). Runs in parallel with the workflow graph package plan (stage 12 of the restructure). Jira: epic AIW-338, ticket to be created.
+Status: APPROVED by the owner on 2026-09-11, revision 3 (owner decisions: everything that sensibly can be edited from the dashboard moves out of the environment; import suggests script groups and an LLM call suggests the description; script groups move into the repository profile now and the Scripts page is replaced by a Repositories page; one settings store with a Settings page and area panels; an empty catalog keeps today's behaviour with a banner; suggestions run on demand. Two independent skeptic pre-mortems of the same day, twenty findings, every one adopted; see Assumptions). Runs in parallel with the workflow graph package plan (stage 12 of the restructure). Delivered between 2026-09-11 and 2026-09-13; all stages and follow-ups merged. Jira: epic AIW-338.
 
 ## Problem
 
@@ -115,3 +115,23 @@ Legacy labels migrate idempotently to `related_to`; prompts and discovery render
 the typed sentence while catalog enablement remains the access decision.
 
 Ordering: A and C start together. After A's gate: B1 and F. After C's gate: D1 and E. X starts after A, B1, C and D1 have merged (it owns the engine files both consumer waves would otherwise touch and needs both snapshots). G after C, D1 and E have merged. W after G and X have merged: it changes the catalog's HTTP contract and the dashboard that reads it, and it adds migration 0062. M after G, X and W have merged (the catalog and settings contracts are then final; added 2026-09-12 on the owner's rule that every dashboard feature ships with MCP tools for the same actions), so the tools mirror the patch-shaped upsert, the concurrency token and the stored activation reason rather than the shapes W replaced. H last, after production verification that every settings group has stored rows. Migrations merge in the order A, C, E, W, H (M adds none). Every stage merges to main through its own PR with the CI aggregator green; runtime-changing merges are followed by a production health check on the exact SHA and one real run on a QA ticket.
+
+## Delivery record
+
+| Stage | PR(s) |
+|---|---|
+| A | #413 |
+| B1 | #416 |
+| C | #415 |
+| D1 | #419, #420 |
+| E | #419 |
+| F | #414 |
+| X | #426 |
+| G | #424 |
+| W | 76a6c7f6 |
+| M | #431 |
+| H | #433, #438 |
+| S1 | migration 0063 |
+| S2 | migration 0064 |
+| R1 | migration 0065 |
+| V1 | #455; production proof AWP-174 |
