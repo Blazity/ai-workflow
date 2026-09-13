@@ -195,6 +195,7 @@ function dataOf(result: ToolResult): Record<string, unknown> {
 function errorOf(result: ToolResult): {
   code: string;
   message: string;
+  retryable?: boolean;
   retryAfterMs?: number;
 } {
   const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
@@ -442,6 +443,30 @@ describe("repositories.list_versions, paged", () => {
 });
 
 describe("repositories.upsert", () => {
+  it("rejects an unknown rules variable with the shared validation message", async () => {
+    const id = await seedRepository({ path: "acme/api", enabled: true });
+    const client = await connectedClient();
+
+    const result = await client.callTool({
+      name: "repositories.upsert",
+      arguments: {
+        repositoryId: id,
+        provider: "github",
+        path: "acme/api",
+        rules: "Build {{repo_path}} and notify {{reviewer_name}}.",
+        reason: "document the reviewer handoff",
+        idempotencyKey: KEY_ONE,
+      },
+    });
+
+    expect(errorOf(result)).toEqual({
+      code: "VALIDATION_FAILED",
+      message:
+        "Unknown repository rules variable: {{reviewer_name}}. Allowed variables: ticket_key, ticket_url, branch_name, repo_path, repo_default_branch.",
+      retryable: false,
+    });
+  });
+
   it("round-trips a typed relationship and refuses the legacy label shape", async () => {
     const sourceId = await seedRepository({ path: "acme/api", enabled: true });
     const targetId = await seedRepository({ path: "acme/web", enabled: true });

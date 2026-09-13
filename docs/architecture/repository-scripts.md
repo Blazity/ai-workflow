@@ -638,9 +638,11 @@ Rules and Description are edited in the prompt editor
 component the prompt library uses. Markdown is still what is stored and what the
 contract declares; the editor only changes how it is typed.
 
-**Where rules reach the agent.** The `rules` field of a repository's current
-profile version is appended to a compiled agent prompt as its own section,
-headed `Repository rules for <owner/name>`, next to that repository's committed
+**Where the profile reaches the agent.** The first paragraph of the current
+profile's `description`, stripped to plain text and capped at 500 characters,
+is the first line of the repository's compiled prompt section. The `rules`
+field follows it in that section, headed `Repository rules for <owner/name>`,
+next to that repository's committed
 `AGENTS.md` and `CLAUDE.md` and ahead of anything under `.ai/memory`. Three
 things gate it. The harness profile's `includeRepositoryInstructions` decides
 whether the prompt carries repository instructions at all, and a profile with it
@@ -657,8 +659,9 @@ today. `runs.get` and `runs.diagnose` carry the same field verbatim, so an agent
 reading a failure has the same answer without a second call: `activated: false`
 is the bridge, where the keys mean nothing and everything the installation
 exposes was reachable, and `null` means the run started before the list was
-recorded, which is not an empty list. And the rules have to be non-empty: a repository nobody has configured
-yet produces no heading rather than an empty one. The read is `listRepositoryRules` in
+recorded, which is not an empty list. The description, rules or relationships
+have to contribute content: a repository nobody has configured yet produces no
+heading rather than an empty one. The read is `listRepositoryRules` in
 `apps/worker/src/db/repositories/repository-catalog.ts`, one query over the same
 current-profile-version relation `getCurrentCheckConfiguration` composes the
 script groups from, issued from inside
@@ -670,25 +673,26 @@ Rules are rendered with the prompt template renderer
 (`substitutePromptVariables`) before they are compiled in, using the run's own
 variables at that point in the run. The resolvable set is NOT the whole prompt
 catalog. It is `REPOSITORY_RULES_VARIABLES` in
-`packages/prompts/prompt-variables.ts`, the seven names that identify the run
-itself: `ticket_key`, `ticket_url`, `branch_name`, `run_id`, `pr_number`,
-`pr_url` and `repo_path`. Only run identity renders here; ticket, plan and
-review text never enters rules. Everything left out of the set
+`packages/prompts/prompt-variables.ts`, exactly five names known at run start:
+`ticket_key`, `ticket_url`, `branch_name`, `repo_path` and
+`repo_default_branch`. Only run and repository identity renders here; ticket,
+plan and review text never enters rules. Everything left out of the set
 (`ticket_title`, `ticket_description`, `ticket_acceptance_criteria`,
 `ticket_labels`, `change_summary`, `plan_markdown`, `pr_title` and
 `pr_review_feedback`) is text somebody outside the deployment wrote, and a rules
 section is an instruction heading: rendering a ticket description inside one
 would let anybody who can file a ticket write standing instructions for the
-agent. The Rules editor's variable palette offers exactly these seven, so the
-menu, the inline highlight and the renderer agree. `repo_path` is per
-repository, the path of the repository whose rules are being rendered, so the
-same text compiled for two repositories resolves it differently. The `pr_*`
-names are legitimately empty before a pull request exists, and an empty value
-renders as nothing. A name outside the set is left standing in the text, braces
-and all, so a typo reads as a typo rather than as a blank line, and it is logged
-once per compiled prompt as `repository_rules_unresolved_variable` with the
-names and nothing else. A description is not injected anywhere and its variables
-are never rendered.
+agent. The Rules editor's variable palette offers exactly these five, so the
+menu, inline highlight and renderer agree. `repo_path` and
+`repo_default_branch` are per repository: the path and default branch from the
+catalog row whose rules are being rendered. A missing catalog default branch
+falls back to the provider default branch frozen into the run, then to an empty
+string with the existing unresolved-variable warning. New writes through the
+dashboard, HTTP profile route and `repositories.upsert` refuse an unknown token
+with the same message and the five-name allowlist. Existing stored rules are not
+migrated: an unknown name stays literal at runtime and is logged once per
+compiled prompt as `repository_rules_unresolved_variable`. Variables in the
+description are always literal and are never rendered.
 
 The Scripts tab also carries the repository's **checks ceiling**
 (`batchTimeoutMinutes`, 1 to 120, empty for the operator ceiling). A run that
