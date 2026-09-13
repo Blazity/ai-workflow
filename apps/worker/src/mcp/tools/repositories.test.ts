@@ -442,6 +442,55 @@ describe("repositories.list_versions, paged", () => {
 });
 
 describe("repositories.upsert", () => {
+  it("round-trips a typed relationship and refuses the legacy label shape", async () => {
+    const sourceId = await seedRepository({ path: "acme/api", enabled: true });
+    const targetId = await seedRepository({ path: "acme/web", enabled: true });
+    const client = await connectedClient();
+
+    const saved = await client.callTool({
+      name: "repositories.upsert",
+      arguments: {
+        repositoryId: sourceId,
+        provider: "github",
+        path: "acme/api",
+        relationships: [
+          { repositoryId: targetId, kind: "calls", note: "runtime dependency" },
+        ],
+        reason: "record runtime dependency",
+        idempotencyKey: KEY_ONE,
+      },
+    });
+    expect(saved.isError).not.toBe(true);
+    expect(dataOf(saved)).toMatchObject({ changedFields: ["relationships"] });
+
+    const read = await client.callTool({
+      name: "repositories.get",
+      arguments: { repositoryId: sourceId },
+    });
+    expect(dataOf(read).currentProfile).toMatchObject({
+      relationships: [
+        { repositoryId: targetId, kind: "calls", note: "runtime dependency" },
+      ],
+    });
+
+    const legacy = await client.callTool({
+      name: "repositories.upsert",
+      arguments: {
+        repositoryId: sourceId,
+        provider: "github",
+        path: "acme/api",
+        relationships: [{ repositoryId: targetId, label: "calls" }],
+        reason: "legacy payload",
+        idempotencyKey: KEY_TWO,
+      } as never,
+    });
+    // The MCP SDK validates the advertised strict schema before the tool can
+    // create its structured error envelope. The legacy shape is therefore
+    // refused at the transport seam and never reaches persistence.
+    expect(legacy.isError).toBe(true);
+    expect(JSON.stringify(legacy.content)).toMatch(/label|unrecognized/i);
+  });
+
   it("leaves the fields it was not given exactly as the stored profile has them", async () => {
     const id = await seedRepository({
       path: "acme/api",
@@ -749,7 +798,7 @@ describe("repositories.upsert", () => {
         repositoryId: id,
         provider: "github",
         path: "acme/api",
-        relationships: [{ repositoryId: id, label: "itself" }],
+        relationships: [{ repositoryId: id, kind: "calls" }],
         reason: "a loop",
         idempotencyKey: KEY_ONE,
       },
@@ -763,14 +812,14 @@ describe("repositories.upsert", () => {
         provider: "github",
         path: "acme/api",
         relationships: [
-          { repositoryId: other, label: "the client" },
-          { repositoryId: other, label: "again" },
+          { repositoryId: other, kind: "calls" },
+          { repositoryId: other, kind: "calls" },
         ],
         reason: "a duplicate",
         idempotencyKey: KEY_TWO,
       },
     });
-    expect(errorOf(twice).message).toContain("related twice");
+    expect(errorOf(twice).message).toContain("already has relationship calls");
 
     // An id the catalog does not hold is still accepted: the row it names may
     // be imported later.
@@ -780,7 +829,7 @@ describe("repositories.upsert", () => {
         repositoryId: id,
         provider: "github",
         path: "acme/api",
-        relationships: [{ repositoryId: 4242, label: "imported next week" }],
+        relationships: [{ repositoryId: 4242, kind: "related_to" }],
         reason: "a forward reference",
         idempotencyKey: KEY_THREE,
       },

@@ -14,6 +14,8 @@ import type {
 import {
   REPOSITORY_BATCH_TIMEOUT_MAX_MINUTES,
   REPOSITORY_RELATIONSHIPS_MAX,
+  REPOSITORY_RELATIONSHIP_KINDS,
+  REPOSITORY_RELATIONSHIP_NOTE_MAX_LENGTH,
   repositoryProfileRemoteExecutionWarnings,
 } from "@shared/contracts";
 import { REPOSITORY_RULES_VARIABLES } from "@shared/prompts";
@@ -601,13 +603,23 @@ function OverviewTab({
   // offering one would be a form that arms a refusal.
   const others = catalog.filter((entry) => entry.id !== repository.id);
   const [target, setTarget] = useState("");
-  const [label, setLabel] = useState("");
-  // Already related, so adding it again would be refused: one relationship per
-  // repository, which is the rule the contract's schema applies.
+  const [kind, setKind] = useState("");
+  const [note, setNote] = useState("");
+  // A repeated target and kind pair would be refused by the shared contract.
   const related = new Set(
-    draft.relationships.map((relationship) => relationship.repositoryId),
+    draft.relationships.map((relationship) => `${relationship.repositoryId}:${relationship.kind}`),
   );
-  const duplicate = target !== "" && related.has(Number(target));
+  const duplicate = target !== "" && kind !== "" && related.has(`${target}:${kind}`);
+  const oppositeKind =
+    kind === "backend_for"
+      ? "frontend_for"
+      : kind === "frontend_for"
+        ? "backend_for"
+        : null;
+  const contradictory =
+    target !== "" &&
+    oppositeKind !== null &&
+    related.has(`${target}:${oppositeKind}`);
   // The contract caps the list, and the cap is reached on the form rather than
   // at save: a 51st relationship is refused by the schema for the WHOLE body,
   // so an admin who also retitled the description and rewrote the rules would
@@ -665,10 +677,8 @@ function OverviewTab({
         </span>
       </div>
       <p className="m-0 mt-1 font-body text-[11px] text-neutral-500">
-        How this repository relates to others in the catalog, in your own words
-        (&quot;calls&quot;, &quot;deploys&quot;, &quot;shares the schema
-        with&quot;). It points at catalog entries, so a repository the catalog
-        does not hold cannot be named here.
+        Choose how this repository relates to another catalog entry from the
+        fixed vocabulary. Add an optional note for operator context.
       </p>
       {draft.relationships.length === 0 && (
         <p className="m-0 mt-1 font-body text-[12px] text-neutral-500">None recorded.</p>
@@ -676,13 +686,14 @@ function OverviewTab({
       <ul className="list-none m-0 mt-1 p-0 flex flex-col gap-1">
         {draft.relationships.map((relationship, index) => (
           <li
-            key={`${relationship.repositoryId}:${relationship.label}`}
+            key={`${relationship.repositoryId}:${relationship.kind}`}
             className="flex items-center gap-2 font-body text-[12px] text-neutral-700"
           >
-            <span className="font-mono text-[12px] text-neutral-800">
-              {nameOf(relationship.repositoryId)}
+            <span>
+              {REPOSITORY_RELATIONSHIP_KINDS.find((entry) => entry.kind === relationship.kind)
+                ?.sentence.replace("{target}", nameOf(relationship.repositoryId))}
+              {relationship.note ? ` (${relationship.note})` : ""}
             </span>
-            <span>{relationship.label}</span>
             {!disabled && (
               <button
                 onClick={() =>
@@ -715,33 +726,57 @@ function OverviewTab({
               </option>
             ))}
           </select>
-          <input
-            value={label}
-            aria-label="Relationship label"
-            placeholder="calls"
-            onChange={(event) => setLabel(event.target.value)}
+          <select
+            value={kind}
+            aria-label="Relationship kind"
+            onChange={(event) => setKind(event.target.value)}
             className="rounded-[3px] border border-neutral-200 bg-white px-2 py-[5px] font-body text-[12px]"
-          />
+          >
+            <option value="">Choose a relationship…</option>
+            {REPOSITORY_RELATIONSHIP_KINDS.map((entry) => (
+              <option key={entry.kind} value={entry.kind}>{entry.label}</option>
+            ))}
+          </select>
+          <label className="font-body text-[11px] text-neutral-500">
+            <input
+              value={note}
+              aria-label="Relationship note"
+              maxLength={REPOSITORY_RELATIONSHIP_NOTE_MAX_LENGTH}
+              placeholder="Optional note"
+              onChange={(event) => setNote(event.target.value)}
+              className="rounded-[3px] border border-neutral-200 bg-white px-2 py-[5px] font-body text-[12px]"
+            />
+            {note.length} of {REPOSITORY_RELATIONSHIP_NOTE_MAX_LENGTH}
+          </label>
           <button
-            disabled={target === "" || label.trim().length === 0 || duplicate || full}
+            disabled={target === "" || kind === "" || duplicate || contradictory || full}
             onClick={() => {
               onChange({
                 ...draft,
                 relationships: [
                   ...draft.relationships,
-                  { repositoryId: Number(target), label: label.trim() },
+                  {
+                    repositoryId: Number(target),
+                    kind: kind as (typeof REPOSITORY_RELATIONSHIP_KINDS)[number]["kind"],
+                    ...(note.trim().length > 0 ? { note: note.trim() } : {}),
+                  },
                 ],
               });
               setTarget("");
-              setLabel("");
+              setKind("");
+              setNote("");
             }}
             className="appearance-none rounded-[3px] border border-neutral-300 bg-white px-2 py-[5px] font-body text-[12px] cursor-pointer disabled:opacity-40 disabled:cursor-default"
           >
             Add
           </button>
-          {(duplicate || full) && (
+          {(duplicate || contradictory || full) && (
             <span role="status" className="font-body text-[11px] text-red-600">
-              {full ? RELATIONSHIP_CAP_NOTE : DUPLICATE_RELATIONSHIP_NOTE}
+              {full
+                ? RELATIONSHIP_CAP_NOTE
+                : contradictory
+                  ? CONTRADICTORY_RELATIONSHIP_NOTE
+                  : DUPLICATE_RELATIONSHIP_NOTE}
             </span>
           )}
         </div>
@@ -751,10 +786,12 @@ function OverviewTab({
 }
 
 /** Why Add is disabled for a repository this profile already relates to. The
- *  save would be refused for it: the contract allows one relationship per
- *  repository, so the form says so before the button does. */
+ *  save would be refused for it, so the form says so before the button does. */
 const DUPLICATE_RELATIONSHIP_NOTE =
-  "This repository is already related. Remove the existing relationship to change its label.";
+  "This repository already has this relationship kind. Remove it to change the note.";
+
+const CONTRADICTORY_RELATIONSHIP_NOTE =
+  "A repository cannot be both backend for and frontend for the same target";
 
 /** Why Add is disabled once the list is full. Said in the same place and the
  *  same voice as the duplicate note, and for the same reason: the save would be

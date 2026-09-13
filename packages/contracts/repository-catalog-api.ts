@@ -56,7 +56,7 @@ export const REPOSITORY_RELATIONSHIPS_MAX = 50;
  * The relationships a profile save may carry.
  *
  * Refused rather than repaired, and refused HERE rather than on one surface:
- * a self-reference, the same repository twice and an unbounded list are all
+ * a self-reference, a repeated repository and kind pair and an unbounded list are all
  * shapes the Overview tab cannot render usefully, and the dashboard, the HTTP
  * route and the MCP tool all parse this same schema. An unknown repository id
  * is deliberately still accepted: the row it names may be imported later, and
@@ -69,17 +69,31 @@ export const repositoryProfileRelationshipsSchema = z
     `at most ${REPOSITORY_RELATIONSHIPS_MAX} relationships`,
   )
   .superRefine((relationships, ctx) => {
-    const seen = new Set<number>();
+    const seen = new Set<string>();
+    const directionByTarget = new Map<number, Set<string>>();
     for (const [index, relationship] of relationships.entries()) {
-      if (!seen.has(relationship.repositoryId)) {
-        seen.add(relationship.repositoryId);
-        continue;
+      const key = `${relationship.repositoryId}:${relationship.kind}`;
+      if (seen.has(key)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [index, "kind"],
+          message: `repository ${relationship.repositoryId} already has relationship ${relationship.kind}`,
+        });
       }
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: [index, "repositoryId"],
-        message: `repository ${relationship.repositoryId} is related twice; one relationship per repository`,
-      });
+      seen.add(key);
+      const directions = directionByTarget.get(relationship.repositoryId) ?? new Set();
+      directions.add(relationship.kind);
+      directionByTarget.set(relationship.repositoryId, directions);
+      if (
+        (relationship.kind === "backend_for" && directions.has("frontend_for")) ||
+        (relationship.kind === "frontend_for" && directions.has("backend_for"))
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [index, "kind"],
+          message: `repository ${relationship.repositoryId} cannot be both backend_for and frontend_for`,
+        });
+      }
     }
   });
 

@@ -42,14 +42,49 @@ export type RepositoryCatalogProvider = z.infer<typeof repositoryCatalogProvider
  *  this screen is a place to store a whole document. */
 export const REPOSITORY_CATALOG_MARKDOWN_MAX_LENGTH = 20_000;
 export const REPOSITORY_CATALOG_LABEL_MAX_LENGTH = 200;
+export const REPOSITORY_RELATIONSHIP_NOTE_MAX_LENGTH = 200;
 /** GitHub uses `owner/repo`; GitLab may nest groups, so at least one slash and
  *  no empty segment is the whole rule, exactly as the allowlist reads it. */
 export const REPOSITORY_CATALOG_PATH_PATTERN = /^[^/\s]+(?:\/[^/\s]+)+$/;
 
+/** The closed vocabulary makes a relationship useful to prompts and discovery,
+ * rather than relying on an operator to use a phrase every reader understands.
+ * Keep this as one literal table: its labels belong to the dashboard and its
+ * sentences belong to the worker, so separate lists would drift. */
+export const REPOSITORY_RELATIONSHIP_KINDS = [
+  { kind: "calls", label: "Calls", sentence: "calls {target} at runtime", inverseSentence: "is called at runtime by {source}", symmetric: false },
+  { kind: "depends_on", label: "Depends on", sentence: "depends on a package published from {target}", inverseSentence: "publishes a package used by {source}", symmetric: false },
+  { kind: "backend_for", label: "Backend for", sentence: "is the backend for {target}", inverseSentence: "is a frontend of {source}", symmetric: false },
+  { kind: "frontend_for", label: "Frontend for", sentence: "is a frontend for {target}", inverseSentence: "is the backend of {source}", symmetric: false },
+  { kind: "deploys", label: "Deploys", sentence: "deploys {target}", inverseSentence: "is deployed by {source}", symmetric: false },
+  { kind: "tests", label: "Tests", sentence: "holds tests or fixtures for {target}", inverseSentence: "is tested by {source}", symmetric: false },
+  { kind: "documents", label: "Documents", sentence: "documents {target}", inverseSentence: "is documented by {source}", symmetric: false },
+  { kind: "shares_schema_with", label: "Shares schema with", sentence: "shares a database schema or contracts with {target}", inverseSentence: "shares a database schema or contracts with {target}", symmetric: true },
+  { kind: "mirror_of", label: "Mirror of", sentence: "is a mirror of {target} at another provider", inverseSentence: "is a mirror of {target} at another provider", symmetric: true },
+  { kind: "related_to", label: "Related to", sentence: "is related to {target}", inverseSentence: "is related to {target}", symmetric: true },
+] as const;
+export const repositoryRelationshipKindSchema = z.enum(
+  REPOSITORY_RELATIONSHIP_KINDS.map((entry) => entry.kind) as [
+    (typeof REPOSITORY_RELATIONSHIP_KINDS)[number]["kind"],
+    ...(typeof REPOSITORY_RELATIONSHIP_KINDS)[number]["kind"][],
+  ],
+);
+export type RepositoryRelationshipKind = z.infer<typeof repositoryRelationshipKindSchema>;
+
+function normalizeRepositoryRelationshipNote(note: string): string {
+  return note.replace(/\p{Cc}+/gu, " ").replace(/\s+/g, " ").trim();
+}
+
 export const repositoryRelationshipSchema = z
   .object({
     repositoryId: z.number().int().positive(),
-    label: z.string().max(REPOSITORY_CATALOG_LABEL_MAX_LENGTH),
+    kind: repositoryRelationshipKindSchema,
+    note: z
+      .string()
+      .max(REPOSITORY_RELATIONSHIP_NOTE_MAX_LENGTH)
+      .transform(normalizeRepositoryRelationshipNote)
+      .pipe(z.string().max(REPOSITORY_RELATIONSHIP_NOTE_MAX_LENGTH))
+      .optional(),
   })
   .strict();
 export type RepositoryRelationship = z.infer<typeof repositoryRelationshipSchema>;
