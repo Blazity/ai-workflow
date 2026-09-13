@@ -7,12 +7,13 @@
  * what keeps the client fence at zero and what lets the script groups migration
  * be one file to review rather than a diff spread over three tiers.
  */
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 import type {
   PrePrCheckRepositoryConfig,
   RepositoryCatalogSource,
   RepositoryProfileField,
   RepositoryRelationship,
+  RepositoryRelationshipKind,
 } from "@shared/contracts";
 import { getDb, type Db } from "../client.js";
 import {
@@ -741,12 +742,22 @@ export interface RepositoryRulesRow {
    *  which edit it was built on. */
   version: number;
   rules: string;
+  relationships: RepositoryRulesRelationship[];
+}
+
+interface RepositoryRulesRelationship {
+  direction: "outgoing" | "incoming";
+  repositoryId: number;
+  provider: string;
+  path: string;
+  enabled: boolean;
+  kind: RepositoryRelationshipKind;
+  note: string | null;
 }
 
 /**
- * The rules of the named repositories, read over the SAME current-profile-
- * version join the script groups are composed from at block time
- * (`listRepositoriesWithProfiles` above, `getCurrentCheckConfiguration` below).
+ * The rules and relationships of the named repositories, read from the current
+ * profile fields the repository row denormalizes for block-time consumers.
  *
  * The key set is pushed into the query rather than filtered afterwards: this
  * sits on the critical path before the agent starts, up to three times a run,
@@ -758,13 +769,9 @@ export interface RepositoryRulesRow {
  * scope binds it to; qualifying it is what keeps this predicate about
  * `repositories` no matter what the join adds later.
  *
- * A repository with no profile, or a profile whose rules are blank, contributes
- * nothing rather than an empty section: an empty heading in a prompt reads as
- * "this repository deliberately has no rules", which is not what a repository
- * nobody has configured yet means. The blank check is in SQL for the same
- * reason the key match is, and it is a POSIX class rather than `btrim`, whose
- * one-argument form trims spaces only and would let a rules field of newlines
- * through.
+ * A repository whose rules are blank and whose relationships are empty
+ * contributes nothing rather than an empty section. A relationship is retained
+ * even when the rules are blank because it becomes the section's only content.
  *
  * The engine reaches it through the connected wrapper below, which is the only
  * caller a step can have; the db-taking form is exported for the test that
@@ -775,35 +782,60 @@ export async function listRepositoryRules(
   keys: readonly string[],
 ): Promise<RepositoryRulesRow[]> {
   if (keys.length === 0) return [];
-  const key = sql<string>`(
-    "repositories"."provider" || ':' || lower("repositories"."path")
-  )`;
-  const rows = await db
-    .select({
-      key,
-      version: repositoryProfileVersions.version,
-      rules: repositoryProfileVersions.rules,
-    })
-    .from(repositories)
-    .innerJoin(
-      repositoryProfileVersions,
-      and(
-        eq(repositoryProfileVersions.repositoryId, repositories.id),
-        eq(repositoryProfileVersions.version, repositories.currentProfileVersion),
-      ),
+  const requestedKeys = [...new Set(keys)];
+  // This stays one statement: outgoing edges start at frozen repositories and
+  // incoming edges start at every other catalog row. Target joins discard
+  // dangling ids before any prompt reader can render them.
+  const result = await db.execute(sql`
+    WITH requested AS (
+      SELECT r.id, r.provider, r.path, r.rules, r.relationships,
+        r.current_profile_version AS version
+      FROM ${repositories} AS r
+      WHERE (r.provider || ':' || lower(r.path)) IN (${sql.join(requestedKeys.map((key) => sql`${key}`), sql`, `)})
+    ), edges AS (
+      SELECT (owner.provider || ':' || lower(owner.path)) AS owner_key,
+        'outgoing'::text AS direction, target.id AS repository_id, target.provider,
+        target.path, target.enabled, relation->>'kind' AS kind, relation->>'note' AS note
+      FROM requested AS owner
+      CROSS JOIN LATERAL jsonb_array_elements(owner.relationships) AS relation
+      INNER JOIN ${repositories} AS target ON target.id = (relation->>'repositoryId')::integer
+      UNION ALL
+      SELECT (owner.provider || ':' || lower(owner.path)) AS owner_key,
+        'incoming'::text AS direction, source.id AS repository_id, source.provider,
+        source.path, source.enabled, relation->>'kind' AS kind, relation->>'note' AS note
+      FROM requested AS owner
+      INNER JOIN ${repositories} AS source ON source.id <> owner.id
+      CROSS JOIN LATERAL jsonb_array_elements(source.relationships) AS relation
+      WHERE (relation->>'repositoryId')::integer = owner.id
     )
-    .where(
-      and(
-        inArray(key, [...new Set(keys)]),
-        sql`${repositoryProfileVersions.rules} !~ '^[[:space:]]*$'`,
-      ),
-    )
-    .orderBy(asc(repositories.provider), asc(repositories.path));
-  return rows.map((row) => ({
-    key: row.key,
-    version: row.version,
-    rules: row.rules,
-  }));
+    SELECT (requested.provider || ':' || lower(requested.path)) AS key,
+      requested.version, requested.rules, edges.direction, edges.repository_id,
+      edges.provider AS related_provider, edges.path AS related_path,
+      edges.enabled AS related_enabled, edges.kind, edges.note
+    FROM requested LEFT JOIN edges
+      ON edges.owner_key = (requested.provider || ':' || lower(requested.path))
+    ORDER BY requested.provider, requested.path
+  `);
+  const grouped = new Map<string, RepositoryRulesRow>();
+  for (const row of (result as { rows?: Record<string, unknown>[] }).rows ?? []) {
+    const key = String(row.key);
+    let entry = grouped.get(key);
+    if (!entry) {
+      entry = { key, version: Number(row.version), rules: String(row.rules), relationships: [] };
+      grouped.set(key, entry);
+    }
+    if (row.repository_id === null || row.repository_id === undefined) continue;
+    entry.relationships.push({
+      direction: row.direction === "incoming" ? "incoming" : "outgoing",
+      repositoryId: Number(row.repository_id), provider: String(row.related_provider),
+      path: String(row.related_path), enabled: Boolean(row.related_enabled),
+      kind: row.kind as RepositoryRelationshipKind,
+      note: row.note === null || row.note === undefined ? null : String(row.note),
+    });
+  }
+  return [...grouped.values()].filter(
+    (entry) => entry.rules.trim().length > 0 || entry.relationships.length > 0,
+  );
 }
 
 /**

@@ -37,6 +37,7 @@ function entry(
     defaultBranch: "main",
     description: "",
     topics: [],
+    relationships: [],
     usable: true,
     ...overrides,
   };

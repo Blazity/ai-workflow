@@ -541,6 +541,25 @@ export function registerRepositoryCatalogTools(
           );
         }
 
+        // The shared body schema cannot know the id of the repository this
+        // call addresses. Keep the MCP refusal at this boundary as well as in
+        // the service, so it is a structured validation error instead of a
+        // transport-level failure.
+        if (
+          input.repositoryId > 0 &&
+          parsed.data.relationships?.some(
+            (relationship) => relationship.repositoryId === input.repositoryId,
+          )
+        ) {
+          throw new McpPublicError(
+            "VALIDATION_FAILED",
+            `relationship_self_reference: repository ${input.repositoryId} cannot be related to itself`,
+            false,
+            undefined,
+            true,
+          );
+        }
+
         try {
           const saved = await saveRepositoryProfile({
             actor: catalogActor(deps),

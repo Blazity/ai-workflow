@@ -28,8 +28,8 @@ function DeploymentVariables({
 }) {
   if (entries.length === 0) return null;
   return (
-    <section className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3">
-      <h3 className="m-0 font-display text-[15px] font-medium text-coal">
+    <section className="rounded-sm border border-neutral-200 bg-panel px-4 py-3">
+      <h3 className="m-0 font-display text-base font-medium text-coal">
         Deployment variables
       </h3>
       <p className="m-0 mt-1 font-body text-[11px] text-neutral-600">
@@ -103,7 +103,7 @@ export function SettingsScreen({
       </div>
 
       {!available && (
-        <div className="rounded-[3px] border border-[#F0B8AE] bg-fail-bg px-3 py-2 font-body text-[12px] text-fail-fg">
+        <div className="rounded-[3px] border border-fail bg-fail-bg px-3 py-2 font-body text-xs text-fail-fg">
           {canEdit
             ? "The worker did not answer, so nothing can be shown or changed here. Check the worker on the System health page and reload."
             : "The worker did not answer, so nothing can be shown here. Ask an owner or admin to check the worker, then reload."}
@@ -113,7 +113,7 @@ export function SettingsScreen({
       {available && <SettingsCadenceNotice />}
 
       {available && catalogState !== null && !catalogState.activated && (
-        <div className="rounded-[3px] border border-orange-300 bg-orange-100 px-3 py-2 font-body text-[12px] text-[#A23E18]">
+        <div className="rounded-[3px] border border-orange-300 bg-orange-100 px-3 py-2 font-body text-xs text-neutral-800">
           Repository catalog not activated: the agent sees everything the
           installation sees.{" "}
           <Link href="/repositories" className="underline">

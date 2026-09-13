@@ -9,6 +9,8 @@ import {
   repositoryProfileRemoteExecutionWarnings,
   repositoryCatalogEntrySchema,
   repositoryCatalogKey,
+  repositoryRelationshipSchema,
+  REPOSITORY_RELATIONSHIP_KINDS,
   repositoryCatalogStateSchema,
   REPOSITORY_CATALOG_SEED_ACTIVATION_REASON,
   REPOSITORY_CATALOG_SEED_ACTOR_LABEL,
@@ -21,6 +23,45 @@ import {
   repositorySuggestionProposalSchema,
 } from "@shared/contracts";
 
+describe("repository relationship vocabulary", () => {
+  it("freezes all ten kind sentences", () => {
+    expect(REPOSITORY_RELATIONSHIP_KINDS).toEqual([
+      { kind: "calls", label: "Calls", sentence: "calls {target} at runtime", inverseSentence: "is called at runtime by {source}", symmetric: false },
+      { kind: "depends_on", label: "Depends on", sentence: "depends on a package published from {target}", inverseSentence: "publishes a package used by {source}", symmetric: false },
+      { kind: "backend_for", label: "Backend for", sentence: "is the backend for {target}", inverseSentence: "is a frontend of {source}", symmetric: false },
+      { kind: "frontend_for", label: "Frontend for", sentence: "is a frontend for {target}", inverseSentence: "is the backend of {source}", symmetric: false },
+      { kind: "deploys", label: "Deploys", sentence: "deploys {target}", inverseSentence: "is deployed by {source}", symmetric: false },
+      { kind: "tests", label: "Tests", sentence: "holds tests or fixtures for {target}", inverseSentence: "is tested by {source}", symmetric: false },
+      { kind: "documents", label: "Documents", sentence: "documents {target}", inverseSentence: "is documented by {source}", symmetric: false },
+      { kind: "shares_schema_with", label: "Shares schema with", sentence: "shares a database schema or contracts with {target}", inverseSentence: "shares a database schema or contracts with {target}", symmetric: true },
+      { kind: "mirror_of", label: "Mirror of", sentence: "is a mirror of {target} at another provider", inverseSentence: "is a mirror of {target} at another provider", symmetric: true },
+      { kind: "related_to", label: "Related to", sentence: "is related to {target}", inverseSentence: "is related to {target}", symmetric: true },
+    ]);
+  });
+
+  it("normalizes a note only after enforcing its input length", () => {
+    const withinLimit = "x ".repeat(100);
+    expect(
+      parseRequestBody(repositoryRelationshipSchema, {
+        repositoryId: 8,
+        kind: "calls",
+        note: withinLimit,
+      }),
+    ).toEqual({
+      ok: true,
+      value: { repositoryId: 8, kind: "calls", note: withinLimit.trim() },
+    });
+
+    expect(
+      parseRequestBody(repositoryRelationshipSchema, {
+        repositoryId: 8,
+        kind: "calls",
+        note: `${withinLimit} `,
+      }).ok,
+    ).toBe(false);
+  });
+});
+
 const entry = {
   id: 7,
   provider: "github",
@@ -29,7 +70,7 @@ const entry = {
   defaultBranch: "main",
   description: "# Acme",
   rules: "never force push",
-  relationships: [{ repositoryId: 8, label: "deploys" }],
+  relationships: [{ repositoryId: 8, kind: "deploys" }],
   enabled: true,
   source: "manual",
   profileVersion: 3,

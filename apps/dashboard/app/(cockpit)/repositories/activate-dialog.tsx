@@ -13,6 +13,7 @@ import type {
   RepositoryOption,
 } from "@shared/contracts";
 
+import { Button, Input, Modal } from "@/components/ui";
 import { apiClient } from "@/lib/api/client";
 import {
   ACTIVATION_REASON_MISSING,
@@ -156,28 +157,23 @@ export function ActivateDialog({
       : "Activate anyway";
 
   return (
-    <section
-      role="dialog"
-      aria-label="Activate the repository catalog"
-      className="rounded-[4px] border border-orange-300 bg-panel px-4 py-3"
+    <Modal
+      onClose={onClose}
+      title="Activate the repository catalog"
+      size="md"
+      footer={
+        <div className="flex justify-end">
+          <Button variant="secondary" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      }
     >
-      <div className="flex items-baseline justify-between gap-2">
-        <h3 className="m-0 font-display text-[15px] font-medium text-coal">
-          Activate the repository catalog
-        </h3>
-        <button
-          onClick={onClose}
-          className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer"
-        >
-          Close
-        </button>
-      </div>
-
-      <p className="m-0 mt-2 font-body text-[12px] text-neutral-700">
+      <p className="m-0 font-body text-xs text-neutral-700">
         {activationSummary(impact)}
       </p>
 
-      <p className="m-0 mt-1 font-body text-[12px] text-neutral-700">
+      <p className="m-0 mt-1 font-body text-xs text-neutral-700">
         {directory.kind === "reading"
           ? "Reading the provider directory to find the repositories outside this catalog…"
           : uncataloguedSummary(impact)}
@@ -186,7 +182,7 @@ export function ActivateDialog({
       {refusal !== null && (
         <div
           role="status"
-          className="mt-2 rounded-[3px] border border-red-300 bg-red-50 px-2 py-[6px] font-body text-[12px] text-red-700"
+          className="mt-2 rounded-[3px] border border-fail bg-fail-bg px-2 py-1.5 font-body text-xs text-fail-fg"
         >
           Activation is refused: {refusal}.
         </div>
@@ -197,7 +193,7 @@ export function ActivateDialog({
           <summary className="font-body text-[12px] text-mariner cursor-pointer">
             Repositories that stop passing ({impact.stopping.length})
           </summary>
-          <ul className="list-none m-0 mt-1 p-0 flex flex-col gap-[2px]">
+          <ul className="list-none m-0 mt-1 p-0 flex flex-col gap-1">
             {impact.stopping.map((repository) => (
               <li
                 key={`${repository.provider}:${repository.path}`}
@@ -219,9 +215,9 @@ export function ActivateDialog({
             {impact.claimed.map((entry) => (
               <li
                 key={entry.key}
-                className="rounded-[3px] border border-orange-300 bg-orange-100 px-2 py-[6px]"
+                className="rounded-[3px] border border-orange-300 bg-orange-100 px-2 py-1.5"
               >
-                <div className="font-mono text-[11px] text-[#A23E18]">{entry.key}</div>
+                <div className="font-mono text-[11px] text-neutral-800">{entry.key}</div>
                 <div className="font-body text-[11px] text-neutral-700">
                   {claimedDetail(entry)}
                 </div>
@@ -234,19 +230,19 @@ export function ActivateDialog({
       {stale && (
         <div
           role="status"
-          className="mt-2 rounded-[3px] border border-red-300 bg-red-50 px-2 py-[6px] font-body text-[12px] text-red-700"
+          className="mt-2 rounded-[3px] border border-fail bg-fail-bg px-2 py-1.5 font-body text-xs text-fail-fg"
         >
           {staleActivationNotice(impact.claimed)}
         </div>
       )}
 
-      <label className="mt-3 block font-body text-[12px] text-neutral-800">
+      <label className="mt-3 block font-body text-xs text-neutral-800">
         Reason
-        <input
+        <Input
           value={reason}
           onChange={(event) => setReason(event.target.value)}
           placeholder="Why the bridge is ending"
-          className="mt-1 w-full rounded-[3px] border border-neutral-200 bg-white px-2 py-[6px] font-body text-[12px]"
+          className="mt-1"
         />
       </label>
       <p className="m-0 mt-1 font-body text-[10px] text-neutral-500">
@@ -254,25 +250,25 @@ export function ActivateDialog({
       </p>
 
       {error && (
-        <div className="mt-2 rounded-[3px] border border-red-300 bg-red-50 px-2 py-[6px] font-body text-[12px] text-red-700">
+        <div className="mt-2 rounded-[3px] border border-fail bg-fail-bg px-2 py-1.5 font-body text-xs text-fail-fg">
           {error}
         </div>
       )}
 
       <div className="mt-3 flex items-center gap-3">
-        <button
+        <Button
           onClick={confirm}
           disabled={blocker !== null || busy}
-          className="appearance-none border-none rounded-[3px] bg-mariner px-4 py-2 font-body text-[13px] font-semibold text-white cursor-pointer disabled:opacity-40 disabled:cursor-default"
+          loading={busy}
         >
           {confirmLabel}
-        </button>
+        </Button>
         {blocker !== null && refusal === null && (
-          <span role="status" className="font-body text-[11px] text-red-600">
+          <span role="status" className="font-body text-[11px] text-fail-fg">
             Activate is disabled: {blocker}.
           </span>
         )}
       </div>
-    </section>
+    </Modal>
   );
 }

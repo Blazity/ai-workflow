@@ -9,6 +9,8 @@ import type {
   RepositoryProviderStatus,
 } from "@shared/contracts";
 
+import { Button, Input, Modal } from "@/components/ui";
+import { Checkbox } from "@/components/ui/checkbox";
 import { apiClient } from "@/lib/api/client";
 import {
   ALREADY_IN_CATALOG_NOTE,
@@ -131,25 +133,20 @@ export function ImportDialog({
   const problems = problemProviders(providers);
 
   return (
-    <section
-      role="dialog"
-      aria-label="Import repositories"
-      className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3"
+    <Modal
+      onClose={onClose}
+      title="Import from the provider"
+      size="md"
+      footer={
+        <div className="flex justify-end">
+          <Button variant="secondary" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      }
     >
-      <div className="flex items-baseline justify-between gap-2">
-        <h3 className="m-0 font-display text-[15px] font-medium text-coal">
-          Import from the provider
-        </h3>
-        <button
-          onClick={onClose}
-          className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer"
-        >
-          Close
-        </button>
-      </div>
-
       {phase.kind === "loading" && (
-        <p className="m-0 mt-2 font-body text-[12px] text-neutral-500">
+        <p className="m-0 font-body text-xs text-neutral-500">
           Listing what the installation exposes…
         </p>
       )}
@@ -158,17 +155,18 @@ export function ImportDialog({
         <div className="mt-2">
           <div
             role="status"
-            className="rounded-[3px] border border-red-300 bg-red-50 px-2 py-[6px] font-body text-[12px] text-red-700"
+            className="rounded-[3px] border border-fail bg-fail-bg px-2 py-1.5 font-body text-xs text-fail-fg"
           >
             {PROVIDER_FAILED_NOTE}
           </div>
           <p className="m-0 mt-1 font-mono text-[11px] text-neutral-500">{phase.message}</p>
-          <button
+          <Button
+            variant="secondary"
             onClick={() => void load()}
-            className="mt-2 appearance-none rounded-[3px] border border-neutral-300 bg-white px-3 py-[6px] font-body text-[12px] text-neutral-800 cursor-pointer hover:bg-app-bg"
+            className="mt-2"
           >
             Retry
-          </button>
+          </Button>
         </div>
       )}
 
@@ -189,12 +187,12 @@ export function ImportDialog({
               </ul>
             </div>
           ))}
-          <button
+          <Button
             onClick={onClose}
-            className="mt-3 appearance-none border-none rounded-[3px] bg-mariner px-4 py-2 font-body text-[13px] font-semibold text-white cursor-pointer"
+            className="mt-3"
           >
             Done
-          </button>
+          </Button>
         </div>
       )}
 
@@ -206,7 +204,7 @@ export function ImportDialog({
                 <div
                   key={provider.provider}
                   role="status"
-                  className="rounded-[3px] border border-red-200 bg-red-50 px-2 py-[6px] font-body text-[11px] text-red-700"
+                  className="rounded-[3px] border border-fail bg-fail-bg px-2 py-1.5 font-body text-[11px] text-fail-fg"
                 >
                   {provider.provider}: {providerStatusLabel(provider)}. This list does not
                   include its repositories.
@@ -215,12 +213,13 @@ export function ImportDialog({
             </div>
           )}
 
-          <input
+          <Input
             value={filter}
             onChange={(event) => setFilter(event.target.value)}
             placeholder="Filter…"
             aria-label="Filter repositories"
-            className="mt-2 w-full rounded-[3px] border border-neutral-200 bg-white px-2 py-[6px] font-mono text-[12px]"
+            monospace
+            className="mt-2"
           />
 
           {listed.length === 0 ? (
@@ -234,51 +233,49 @@ export function ImportDialog({
               {listed.map((candidate) => {
                 const held = candidate.inCatalog;
                 const selectable = selectableKeys.has(candidate.key);
+                // A repository the catalog already holds is ticked off and
+                // cannot be imported again: the insert does nothing on
+                // conflict, and offering the click would promise something
+                // the import cannot do.
                 return (
-                  <label
+                  <Checkbox
                     key={candidate.key}
-                    className={`flex items-center gap-2 px-1 py-[6px] ${
+                    className={`flex items-center gap-2 px-1 py-1.5 ${
                       held ? "opacity-60" : ""
                     }`}
-                  >
-                    <input
-                      type="checkbox"
-                      // A repository the catalog already holds is ticked off
-                      // and cannot be untickedly imported again: the insert
-                      // does nothing on conflict, and offering the click would
-                      // promise something the import cannot do.
-                      checked={held || selected.has(candidate.key)}
-                      disabled={!selectable}
-                      onChange={() => toggle(candidate.key)}
-                    />
-                    <span className="font-mono text-[12px] text-neutral-800">
-                      {candidate.path}
-                    </span>
-                    <span className="rounded-[3px] bg-app-bg px-[5px] py-[1px] font-mono text-[10px] uppercase text-neutral-500">
-                      {candidate.provider}
-                    </span>
-                    {candidate.archived && !held && (
-                      <span className="font-body text-[11px] text-neutral-500">archived</span>
-                    )}
-                    {held && (
-                      <span className="font-body text-[11px] text-neutral-500">
-                        {ALREADY_IN_CATALOG_NOTE}
-                      </span>
-                    )}
-                  </label>
+                    checked={held || selected.has(candidate.key)}
+                    disabled={!selectable}
+                    onChange={() => toggle(candidate.key)}
+                    label={
+                      <>
+                        <span className="font-mono text-[12px] text-neutral-800">
+                          {candidate.path}
+                        </span>
+                        <span className="rounded-[3px] bg-app-bg px-[5px] py-[1px] font-mono text-[10px] uppercase text-neutral-500">
+                          {candidate.provider}
+                        </span>
+                        {candidate.archived && !held && (
+                          <span className="font-body text-[11px] text-neutral-500">archived</span>
+                        )}
+                        {held && (
+                          <span className="font-body text-[11px] text-neutral-500">
+                            {ALREADY_IN_CATALOG_NOTE}
+                          </span>
+                        )}
+                      </>
+                    }
+                  />
                 );
               })}
             </div>
           )}
 
-          <label className="mt-3 flex items-center gap-2 font-body text-[12px] text-neutral-800">
-            <input
-              type="checkbox"
-              checked={enabled}
-              onChange={(event) => setEnabled(event.target.checked)}
-            />
-            Let the agent touch these repositories
-          </label>
+          <Checkbox
+            className="mt-3"
+            checked={enabled}
+            onChange={(event) => setEnabled(event.target.checked)}
+            label="Let the agent touch these repositories"
+          />
           <p className="m-0 mt-1 font-body text-[10px] text-neutral-500">
             {IMPORT_ENABLED_NOTE}
           </p>
@@ -286,20 +283,20 @@ export function ImportDialog({
           {error && (
             <div
               role="status"
-              className="mt-2 rounded-[3px] border border-red-300 bg-red-50 px-2 py-[6px] font-body text-[12px] text-red-700"
+              className="mt-2 rounded-[3px] border border-fail bg-fail-bg px-2 py-1.5 font-body text-xs text-fail-fg"
             >
               {error}
             </div>
           )}
 
           <div className="mt-3 flex items-center gap-3">
-            <button
+            <Button
               onClick={commit}
               disabled={selected.size === 0 || busy}
-              className="appearance-none border-none rounded-[3px] bg-mariner px-4 py-2 font-body text-[13px] font-semibold text-white cursor-pointer disabled:opacity-40 disabled:cursor-default"
+              loading={busy}
             >
               {busy ? "Importing…" : `Import ${selected.size}`}
-            </button>
+            </Button>
             {selected.size === 0 && (
               <span className="font-body text-[11px] text-neutral-500">
                 Tick at least one repository.
@@ -308,6 +305,6 @@ export function ImportDialog({
           </div>
         </>
       )}
-    </section>
+    </Modal>
   );
 }

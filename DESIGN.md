@@ -432,12 +432,14 @@ exceptions, not alternate text input heights.
 
 Canonical variants:
 
-| Variant | Use |
-| --- | --- |
-| Input | One line text, number, URL, or identifier |
-| Textarea | Prose or multiline configuration |
+| Variant | Geometry | Use |
+| --- | --- | --- |
+| Input | 26 px or 30 px high | One line text, number, URL, or identifier |
+| Textarea | 72 px or 88 px minimum height | Prose or multiline configuration |
+| Checkbox | 12 px square | One independent or grouped binary choice |
+| Switch | 32 px by 18 px track, 14 px thumb | A setting that takes effect when toggled |
 
-Search, Checkbox, Radio, and Switch remain proposed variants `(proposed)`.
+Search and Radio remain proposed variants `(proposed)`.
 
 Field owns the visible label, optional hint, persistent error, required marker,
 and the IDs that connect that copy to its control through `aria-describedby`.
@@ -452,30 +454,34 @@ disabled uses app background and 60 percent opacity; error adds a fail edge and
 persistent linked text. Textarea is a height exception with compact and default
 minimum heights of 72 px and 88 px.
 
-Implemented by `components/ui/input.tsx`, `components/ui/textarea.tsx`, and
-`components/ui/field.tsx`.
+Implemented by `components/ui/input.tsx`, `components/ui/textarea.tsx`,
+`components/ui/field.tsx`, `components/ui/checkbox.tsx`, and
+`components/ui/switch.tsx`.
 
 Consumers: Settings, Repository catalog, Repository detail, Workflow editor,
 Prompt library, Harness profiles, Trace clarification, Users, and dispatch.
 
 ### Tabs
 
-Canonical variants `(proposed)`:
+Canonical variants:
 
 | Variant | Job | Current source |
 | --- | --- | --- |
 | Segmented | Filter or swap content in one panel | `CkTabs`, `WindowSelector` |
-| Route | Change a linkable repository subsection | Repository detail underline tabs |
+| Route | Change a linkable repository subsection | `RouteTabs` |
 
 Segmented tabs use a 3 px outer inset, 4 px outer radius, 3 px item radius,
 11 px uppercase mono text, and 180 ms standard easing. The active item is a
 white panel with the level 2 shadow. Route tabs use the same text role but a
 mariner bottom edge.
 
-States `(proposed)`: default is neutral 700 on transparent; hover uses neutral
+States: default is neutral 700 on transparent; hover uses neutral
 900 or app background; focus uses a 2 px mariner ring; disabled uses 40 percent
 opacity; loading keeps the active tab stable; error keeps geometry and marks
 the tab while the panel explains the failure.
+
+Route tabs are implemented by `components/ui/route-tabs.tsx`. Segmented tab
+canonicalization remains proposed pending one primitive shared by its consumers.
 
 Consumers: Runs filters, global window selection, Repository detail, Workflow
 editor panels, Prompt library filters, and Harness profiles.
@@ -902,17 +908,17 @@ Input height patterns found on native input tags:
 | Harness profiles | Buttons | `components/cockpit/harness-profiles/profile-editor.tsx:39` | Private primary and secondary constants | 4, Buttons |
 | Harness profiles | Profile cards | `components/cockpit/harness-profiles/profile-editor.tsx:740` | Repeats 4 px panel recipe | 4, Cards |
 | Harness profiles | Skill drawer | `components/cockpit/harness-profiles/skill-import.tsx:410` | Uses `shadow-2xl` | 4 and 6, Drawer |
-| Repositories | Header actions | `app/(cockpit)/repositories/repositories-screen.tsx:196` | Local secondary button | 4, Buttons |
-| Repositories | Empty action | `app/(cockpit)/repositories/repositories-screen.tsx:269` | Local primary button | 4, Buttons |
-| Repositories | Activation dialog | `app/(cockpit)/repositories/activate-dialog.tsx:160` | Dialog role without shared modal shell | 4, Modal |
-| Repositories | Import dialog | `app/(cockpit)/repositories/import-dialog.tsx:135` | Another local dialog shell | 4, Modal |
-| Repositories | Detail tabs | `app/(cockpit)/repositories/repository-entry.tsx:394` | Hand built underline tab buttons | 4, Tabs |
-| Repositories | History select | `app/(cockpit)/repositories/repository-entry.tsx:705` | Native select | 4, Select |
-| Repositories | Suggest action | `app/(cockpit)/repositories/suggestion-panel.tsx:195` | Repeats secondary button skin | 4, Buttons |
+| Repositories | Header actions | `app/(cockpit)/repositories/repositories-screen.tsx:196` | closed in D3-D | 4, Buttons |
+| Repositories | Empty action | `app/(cockpit)/repositories/repositories-screen.tsx:269` | closed in D3-D | 4, Buttons |
+| Repositories | Activation dialog | `app/(cockpit)/repositories/activate-dialog.tsx:160` | closed in D3-D | 4, Modal |
+| Repositories | Import dialog | `app/(cockpit)/repositories/import-dialog.tsx:135` | closed in D3-D | 4, Modal |
+| Repositories | Detail tabs | `app/(cockpit)/repositories/repository-entry.tsx:394` | closed in D3-D | 4, Tabs |
+| Repositories | History select | `app/(cockpit)/repositories/repository-entry.tsx:705` | closed in D3-D | 4, Select |
+| Repositories | Suggest action | `app/(cockpit)/repositories/suggestion-panel.tsx:195` | closed in D3-D | 4, Buttons |
 | Repositories | Script inputs | `components/cockpit/screens/repositories/script-groups.tsx:681` | Padding based input height | 4, Form controls |
-| Settings | Boolean control | `app/(cockpit)/settings/setting-control.tsx:41` | Transparent native button switch | 4, Form controls |
-| Settings | Select | `app/(cockpit)/settings/setting-control.tsx:96` | Native select with private field class | 4, Select |
-| Settings | Save buttons | `app/(cockpit)/settings/settings-group-form.tsx:331` | Private primary and secondary skins | 4, Buttons |
+| Settings | Boolean control | `app/(cockpit)/settings/setting-control.tsx:41` | closed in D3-D | 4, Form controls |
+| Settings | Select | `app/(cockpit)/settings/setting-control.tsx:96` | closed in D3-D | 4, Select |
+| Settings | Save buttons | `app/(cockpit)/settings/settings-group-form.tsx:331` | closed in D3-D | 4, Buttons |
 | Health | Scan button | `components/cockpit/screens/health.tsx:186` | closed in D3-C | 2 and 4, colour and Buttons |
 | Health | Status badges | `components/cockpit/screens/health.tsx:329` | closed in D3-C | 4, Status chips |
 | Health | Timeline cards | `components/cockpit/screens/health.tsx:232` | Repeats panel recipe | 4, Cards |

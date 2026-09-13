@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => {
     getConfiguredVcsProviders: vi.fn(),
     getDb: vi.fn(),
     listWorkflowOwnedBranchesForTicket: vi.fn(),
+    listRepositoryRules: vi.fn().mockResolvedValue([]),
     getMemoryDocument: vi.fn(),
     upsertMemoryDocument: vi.fn(),
     logger: { info: vi.fn(), warn: vi.fn() },
@@ -54,6 +55,10 @@ vi.mock("../../db/repositories/runs.js", () => ({
   listWorkflowOwnedBranchesForTicket: mocks.listWorkflowOwnedBranchesForTicket,
   listConnectedWorkflowOwnedBranchesForTicket: (ticketKey: string) =>
     mocks.listWorkflowOwnedBranchesForTicket(mocks.getDb(), ticketKey),
+}));
+
+vi.mock("../../db/repositories/repository-catalog.js", () => ({
+  listConnectedRepositoryRules: (keys: string[]) => mocks.listRepositoryRules(keys),
 }));
 
 vi.mock("../../db/repositories/memory.js", () => ({
@@ -197,7 +202,7 @@ describe("selectRepositoriesFromMetadata", () => {
   it("resolves a direct clarification answer by short name instead of falling to discovery", () => {
     // The "which repository" fallback question never lists candidates here, but
     // a human still naturally answers with a short name, not a full owner/repo
-    // path — that reply must resolve deterministically, not fall to discovery.
+    // path, that reply must resolve deterministically, not fall to discovery.
     const selected = selectRepositoriesFromMetadata({
       ticketText: "Fix billing webhook retry behavior",
       repositories: repos,
@@ -302,7 +307,7 @@ describe("selectRepositoriesFromMetadata", () => {
     // The whole-answer scan above compares the entire reply to one path or short
     // name, so it cannot see a path sitting inside a sentence. The unavailable-
     // repository fallback is token-based and can, so it used to declare a
-    // repository that exists right here to be unavailable — a confident, wrong
+    // repository that exists right here to be unavailable, a confident, wrong
     // statement to a human, which is worse than the "asks twice" loop the
     // fallback was added to end.
     const selected = selectRepositoriesFromMetadata({
@@ -354,7 +359,7 @@ describe("selectRepositoriesFromMetadata", () => {
   });
 
   it("resolves a transposed-letter typo once the name is long enough to fuzzy-match safely", () => {
-    // "webyb" is "webby" with the last two letters swapped — a one-edit
+    // "webyb" is "webby" with the last two letters swapped, a one-edit
     // transposition once the name clears the 4-char fuzzy-match floor.
     const named: RepositoryMetadata[] = [
       { ...repos[0], repoPath: "acme/webby", name: "webby" },
@@ -431,7 +436,7 @@ describe("selectRepositoriesFromMetadata", () => {
   it("combines an exact ticket mention with a direct-answer match for a different repository", () => {
     // Both are deterministic, high-confidence signals, same as an exact
     // ticket mention combining with a workflow-owned branch elsewhere in this
-    // suite — neither silently overrides the other.
+    // suite, neither silently overrides the other.
     const selected = selectRepositoriesFromMetadata({
       ticketText: "Change the billing callback in acme/api.",
       repositories: repos,
@@ -832,7 +837,7 @@ describe("selectRepositoriesFromMetadata", () => {
 
   it("resolves an incomplete catalog from a direct clarification answer", () => {
     // Naming a repository we did see doesn't claim anything about the repos we
-    // didn't — same justification as the exact-mention case above.
+    // didn't, for the same justification as the exact-mention case above.
     const selected = selectRepositoriesFromMetadata({
       ticketText: "Fix billing webhook retry behavior",
       repositories: repos,
@@ -991,6 +996,7 @@ describe("selectRepositoriesFromMetadata", () => {
 describe("repoSelectionStep", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.listRepositoryRules.mockResolvedValue([]);
     // Pinned off, so no describe order can leak a flag into this block.
     mocks.getDb.mockReturnValue({ db: true });
     mocks.getConfiguredVcsProviders.mockReturnValue([
@@ -1006,6 +1012,70 @@ describe("repoSelectionStep", () => {
         host: "https://gitlab.example.com",
         legacyBaseBranch: "main",
       },
+    ]);
+  });
+
+  it("loads discovery relationships for the frozen enabled list and marks inaccessible context", async () => {
+    mocks.listRepositories.mockResolvedValueOnce(repos);
+    mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValueOnce([]);
+    mocks.listRepositoryRules.mockResolvedValueOnce([
+      {
+        key: "github:acme/web",
+        version: 3,
+        rules: "",
+        relationships: [
+          {
+            direction: "outgoing",
+            repositoryId: 2,
+            provider: "github",
+            path: "acme/api",
+            enabled: true,
+            kind: "calls",
+            note: "runtime edge",
+          },
+          {
+            direction: "incoming",
+            repositoryId: 9,
+            provider: "gitlab",
+            path: "other/private",
+            enabled: true,
+            kind: "documents",
+            note: null,
+          },
+        ],
+      },
+    ]);
+
+    const result = await repoSelectionStep({
+      context: {
+        repositoryAccess: {
+          activated: true,
+          enabledKeys: ["github:acme/web", "github:acme/api"],
+        },
+        settings: testSettingsSnapshot(),
+        ticket: { identifier: "AIW-45", title: "Fix billing behavior" },
+        run: { branchName: "blazebot/aiw-45" },
+      },
+      config: undefined,
+      step: { uses: "repo-selection", onFailure: "fail" },
+    });
+
+    expect(mocks.listRepositoryRules).toHaveBeenCalledWith([
+      "github:acme/web",
+      "github:acme/api",
+    ]);
+    expect(result.repositoryDiscovery?.catalog).toEqual([
+      expect.objectContaining({
+        repoPath: "acme/api",
+        relationships: [],
+      }),
+      expect.objectContaining({
+        repoPath: "acme/web",
+        relationships: [
+          "github:acme/web calls github:acme/api at runtime (enabled in the catalog) (runtime edge)",
+          "github:acme/web is documented by gitlab:other/private (not enabled)",
+        ],
+      }),
     ]);
   });
 
