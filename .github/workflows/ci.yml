@@ -61,6 +61,13 @@ jobs:
       - run: pnpm run test:release-notes
       - run: pnpm run test:ci
       - run: pnpm run test:packages
+      # The bundle resolves one zod for the whole worker function and traces it
+      # from @workflow/core, which is zod 4, while the workspace catalog pins
+      # 3.25. These two re-run the schema suites against the version production
+      # actually loads, so an API that exists in only one of them fails here
+      # rather than on the first request after a deploy.
+      - run: pnpm run test:packages:zod4
+      - run: pnpm --filter worker run test:zod4
       - run: pnpm run gates
       - run: pnpm run build:ci
 

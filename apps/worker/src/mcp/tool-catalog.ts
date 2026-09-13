@@ -214,7 +214,7 @@ const settingValueSchema = z.union([
  * `invalidRepositoryScriptGroupNames`, applied by the catalog service so the tool and
  * the dashboard save are refused identically.
  */
-const repositoryScriptGroupsSchema = z.record(z.unknown()).nullable();
+const repositoryScriptGroupsSchema = z.record(z.string(), z.unknown()).nullable();
 
 const runIdInputSchema = z.object({ runId: z.string().trim().min(1).max(RUN_ID_MAX_LENGTH) });
 

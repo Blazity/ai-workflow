@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-12
+Last-verified: 2026-09-13
 
 # apps/worker
 
@@ -151,6 +151,20 @@ names, harness defaults) are rows in the `settings` table, described once in
   `pnpm run test:workflow-sdk` times out on
   `Cannot find module .../packages/<name>/<file>`. Import worker source from a
   fixture as `../../src/foo`, and let `verify:changed` plan the suite.
+- **The bundle does not run the zod the workspace pins.** Nitro traces one
+  `node_modules/zod` for the whole function and takes it from `@workflow/core`,
+  which is zod 4 today, while `pnpm-workspace.yaml` pins the catalog at 3.25.
+  So typecheck and `vitest run` prove a schema under zod 3 and the deployed
+  function runs it under zod 4. Only the API common to both versions is safe:
+  a one-argument `z.record(valueSchema)` is the zod 3 spelling, is read as
+  `z.record(keySchema, valueSchema)` by zod 4, and throws `Cannot read
+  properties of undefined` on the first body that carries a key, which is how
+  every repository profile save answered 500 on 13.09. The zod 4 runs are the
+  gate: `pnpm run test:packages:zod4` for the contracts schemas and
+  `pnpm --filter worker run test:zod4` for the MCP tool catalog. The rest of
+  this app's suite does not pass under zod 4 and is not meant to; the error
+  wording differs everywhere, and the alias runs assert refusals rather than
+  sentences for that reason.
 - **`engine/agent-workflow.ts` has no top-level adapter or logger imports.** Inside a step,
   `logger` and adapters are deferred `await import(...)` calls. Do not add a
   top-level import to that module, and do not assume one exists.

@@ -67,10 +67,12 @@ const C = {
   preSandbox: ["pnpm", "--dir", "apps/worker", "run", "validate:pre-sandbox"],
   skills: ["pnpm", "--dir", "apps/worker", "run", "validate:local-skills"],
   mcp: ["pnpm", "--dir", "apps/worker", "run", "mcp:contract:check"],
+  mcpZod4: ["pnpm", "--dir", "apps/worker", "run", "test:zod4"],
   blockCatalog: ["pnpm", "run", "gen:blocks", "--check"],
   ci: ["pnpm", "run", "test:ci"],
   workflowSdk: ["pnpm", "run", "test:workflow-sdk"],
   packages: ["pnpm", "run", "test:packages"],
+  packagesZod4: ["pnpm", "run", "test:packages:zod4"],
   releaseType: ["pnpm", "run", "typecheck:release-notes"],
   releaseTest: ["pnpm", "run", "test:release-notes"],
   gates: ["pnpm", "run", "gates"],
@@ -257,6 +259,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
     add(C.preSandbox);
     add(C.skills);
     add(C.mcp);
+    add(C.mcpZod4);
   } else if (skills) add(C.skills);
   if (release) {
     add(C.releaseType);
@@ -286,8 +289,13 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
     ]);
   }
   // Nothing else runs a package's own tests: the worker vitest run and the
-  // dashboard node runner never reach packages/*.
-  if (shared) add(C.packages);
+  // dashboard node runner never reach packages/*. The zod 4 pass runs the same
+  // files again against the zod the worker bundle resolves, which is not the
+  // one the workspace pins.
+  if (shared) {
+    add(C.packages);
+    add(C.packagesZod4);
+  }
   if (gates) add(C.gates);
   return { scopes: scopes.length > 0 ? scopes : ["unclassified"], commands };
 }

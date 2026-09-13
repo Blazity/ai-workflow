@@ -8,6 +8,7 @@
     "build:ci": "pnpm validate:pre-sandbox && pnpm validate:local-skills && pnpm mcp:contract:check && pnpm --dir ../.. run gen:blocks -- --check && rm -rf .nitro/workflow && NODE_OPTIONS=--max-old-space-size=8192 nitro build",
     "preview": "nitro preview",
     "test": "vitest run",
+    "test:zod4": "vitest run --config vitest.zod4.config.ts",
     "test:workflow-sdk": "vitest run --config vitest.run-control-workflow.config.ts",
     "test:workflow-sdk-divergence": "vitest run --config vitest.workflow-divergence.config.ts",
     "test:watch": "vitest",
@@ -86,6 +87,7 @@
     "drizzle-kit": "^0.31.10",
     "tsx": "catalog:",
     "typescript": "catalog:",
-    "vitest": "^3.2.6"
+    "vitest": "^3.2.6",
+    "zod4": "catalog:"
   }
 }

@@ -12,3 +12,8 @@ catalog:
   typescript: ^5.8
   yaml: ^2.9.0
   zod: ^3.25.76
+  # Not a second zod for product code: the worker bundle resolves one zod for
+  # the whole function and traces it from @workflow/core, which is 4.x, so the
+  # schema suites re-run against this alias to prove they hold under the version
+  # production loads as well as the one pinned above.
+  zod4: npm:zod@4.3.6
