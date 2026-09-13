@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import type {
   JsonValue,
@@ -8,6 +8,7 @@ import type {
   WebhookTestDeliveryResponse,
 } from "@shared/contracts";
 import { apiClient } from "@/lib/api/client";
+import { Button, IconButton, Modal, Textarea } from "@/components/ui";
 
 const SAMPLE_PAYLOAD = `{
   "subject": "Card reader is offline",
@@ -101,15 +102,6 @@ export function WebhookTestDeliveryModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    textareaRef.current?.focus();
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
-
   async function send() {
     let parsed: JsonValue;
     try {
@@ -143,42 +135,35 @@ export function WebhookTestDeliveryModal({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-coal/30 px-4 py-6 backdrop-blur-[1px]"
-      role="presentation"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
+    <Modal
+      onClose={onClose}
+      title="Send test delivery"
+      description={triggerLabel}
+      size="sm"
+      initialFocusRef={textareaRef}
+      footer={
+        <div className="flex items-center justify-end gap-3">
+          <Button variant="ghost" onClick={onClose}>
+            {result ? "Close" : "Cancel"}
+          </Button>
+          <Button
+            onClick={() => void send()}
+            disabled={busy || payload.trim() === ""}
+          >
+            {busy ? "Sending…" : "Send test delivery"}
+          </Button>
+        </div>
+      }
     >
-      <section
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="webhook-test-delivery-title"
-        className="w-full max-w-[476px] overflow-hidden rounded-[6px] border border-neutral-200 bg-panel shadow-[0_18px_60px_rgba(24,27,32,0.22)]"
+      <IconButton
+        aria-label="Close test delivery"
+        onClick={onClose}
+        shape="circle"
+        className="absolute right-4 top-3"
       >
-        <div className="px-7 pb-6 pt-7">
-          <div className="flex items-start gap-4">
-            <div className="min-w-0 flex-1">
-              <h2
-                id="webhook-test-delivery-title"
-                className="font-display text-[20px] font-semibold leading-tight text-coal"
-              >
-                Send test delivery
-              </h2>
-              <p className="mt-1 font-body text-[13px] text-neutral-600">
-                {triggerLabel}
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="Close test delivery"
-              className="inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full border-none bg-transparent text-neutral-600 hover:bg-app-bg hover:text-coal"
-            >
-              <XIcon size={19} weight="bold" aria-hidden />
-            </button>
-          </div>
-
+        <XIcon size={19} weight="bold" aria-hidden />
+      </IconButton>
+      <div>
           <div className="mt-4 border-l-2 border-mariner bg-app-bg px-3 py-2 font-body text-[12px] leading-relaxed text-neutral-700">
             This is a dry run. The body is mapped exactly like a real delivery
             and the result is logged as a test, but no workflow starts and no
@@ -191,7 +176,7 @@ export function WebhookTestDeliveryModal({
           >
             JSON body
           </label>
-          <textarea
+          <Textarea
             ref={textareaRef}
             id="webhook-test-delivery-payload"
             value={payload}
@@ -202,7 +187,8 @@ export function WebhookTestDeliveryModal({
               setResult(null);
               setError(null);
             }}
-            className="mt-2 w-full resize-y rounded-[3px] border border-neutral-300 bg-panel px-3 py-2 font-mono text-[12px] leading-[1.5] text-coal outline-none focus:border-mariner focus:ring-2 focus:ring-mariner/15"
+            monospace
+            className="mt-2"
           />
 
           {error && (
@@ -215,26 +201,7 @@ export function WebhookTestDeliveryModal({
           )}
 
           {result && <WebhookTestDeliveryResultView result={result} />}
-        </div>
-
-        <div className="flex items-center justify-end gap-3 border-t border-neutral-200 bg-app-bg px-7 py-4">
-          <button
-            type="button"
-            onClick={onClose}
-            className="cursor-pointer border-none bg-transparent px-2 py-2 font-mono text-[11px] font-semibold uppercase tracking-[0.05em] text-neutral-700"
-          >
-            {result ? "Close" : "Cancel"}
-          </button>
-          <button
-            type="button"
-            onClick={() => void send()}
-            disabled={busy || payload.trim() === ""}
-            className="cursor-pointer rounded-[3px] border border-mariner bg-mariner px-4 py-2.5 font-mono text-[11px] font-semibold uppercase tracking-[0.05em] text-white shadow-[0_2px_4px_rgba(60,67,231,0.2)] hover:bg-[#3037d8] disabled:cursor-default disabled:opacity-40"
-          >
-            {busy ? "Sending…" : "Send test delivery"}
-          </button>
-        </div>
-      </section>
-    </div>
+      </div>
+    </Modal>
   );
 }

@@ -4,6 +4,8 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { PromptInspectorCard } from "./prompt-inspector-card";
 
+(globalThis as typeof globalThis & { React: typeof React }).React = React;
+
 test("renders an interactive structural summary without raw prompt content", () => {
   const html = renderToStaticMarkup(
     <PromptInspectorCard
@@ -20,7 +22,7 @@ test("renders an interactive structural summary without raw prompt content", () 
     />,
   );
   assert.match(html, /Edit prompt/);
-  assert.match(html, /cursor-pointer/);
+  assert.match(html, /data-variant="secondary"/);
   assert.match(html, /aria-hidden="true">→/);
   assert.match(html, /research-plan/);
   assert.match(html, /New section/);
@@ -59,6 +61,6 @@ test("renders a read-only reference card as a dialog trigger", () => {
   assert.match(html, /View prompt/);
   assert.match(html, /^<button/);
   assert.match(html, /aria-haspopup="dialog"/);
-  assert.doesNotMatch(html, /disabled/);
+  assert.doesNotMatch(html, /<button[^>]*\sdisabled(?:=|>)/);
   assert.match(html, /research-plan/);
 });

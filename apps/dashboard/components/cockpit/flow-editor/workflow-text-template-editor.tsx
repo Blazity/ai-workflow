@@ -15,6 +15,7 @@ import {
   textTemplateCompatibility,
   WorkflowDataPicker,
 } from "./workflow-data-picker";
+import { Button } from "@/components/ui";
 
 interface TiptapJsonNode {
   type?: string;
@@ -149,19 +150,20 @@ export function WorkflowTextTemplateEditor({
   return (
     <div className="overflow-hidden rounded-[3px] border border-neutral-200 bg-panel">
       <div className="flex items-center border-b border-neutral-200 px-1.5 py-1">
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           aria-label="Insert workflow value"
           disabled={disabled}
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => setPickerOpen(true)}
-          className="inline-flex h-7 items-center gap-1 rounded-[3px] border border-transparent bg-transparent px-2 font-mono text-[10px] text-mariner hover:bg-off-white disabled:opacity-40"
         >
           <span className="text-[13px]" aria-hidden>
             +
           </span>
           Value
-        </button>
+        </Button>
         {refreshing && (
           <span className="ml-auto pr-2 font-body text-[10px] text-mariner">
             Refreshing values…

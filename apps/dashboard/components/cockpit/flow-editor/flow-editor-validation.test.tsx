@@ -283,7 +283,8 @@ test("a runnable deployed trigger shows the circular play button beside the node
   );
 
   assert.match(html, /aria-label="Run Ticket received"/);
-  assert.match(html, /h-7 w-7/);
+  assert.match(html, /data-shape="circle"/);
+  assert.match(html, /size-\[26px\]/);
   assert.match(html, /-right-\[38px\] -top-\[15px\]/);
   assert.match(html, /title="Run trigger"/);
 });
@@ -325,7 +326,7 @@ test("editor actions and canvas controls expose keyboard labels and names", () =
   );
 });
 
-test("a selected v2 Transform exposes the seven-action editor without generic inputs", () => {
+test("a selected v2 Transform exposes the typed action editor without generic inputs", () => {
   const transformNode: FlowNodeDef = {
     id: "map",
     type: "transform",
@@ -386,9 +387,8 @@ test("a selected v2 Transform exposes the seven-action editor without generic in
 
   assert.doesNotMatch(html, /Input values/);
   assert.doesNotMatch(html, /Add typed input/);
-  assert.match(html, /Format text/);
-  assert.match(html, /Parse JSON/);
   assert.match(html, /Build object/);
+  assert.match(html, /aria-label="Action"/);
   assert.match(html, /displayName/);
   assert.match(html, /Output shape/);
 });
@@ -597,7 +597,7 @@ test("the repository scope bar sits directly under the execution limits bar", ()
   assert.match(html, /Execution limits[\s\S]*Source scope/);
   assert.match(html, /Providers &amp; repositories/);
   assert.match(html, /Repositories:<\/span> 1 pinned/);
-  assert.match(html, /aria-haspopup="dialog"[^>]*>Configure/);
+  assert.match(html, /aria-haspopup="dialog"[^>]*>[\s\S]*?Configure<\/span><\/button>/);
 });
 
 test("an unpinned workflow renders the bar without implying a binding", () => {
@@ -614,6 +614,6 @@ test("a read-only editor disables the repository scope controls", () => {
     false,
   );
 
-  assert.match(html, /aria-haspopup="dialog" disabled=""[^>]*>Configure/);
+  assert.match(html, /aria-haspopup="dialog" disabled=""[^>]*>[\s\S]*?Configure<\/span><\/button>/);
   assert.doesNotMatch(html, /role="dialog"/);
 });

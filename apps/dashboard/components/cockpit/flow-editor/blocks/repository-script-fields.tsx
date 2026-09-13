@@ -8,7 +8,8 @@ import { REPOSITORY_SCRIPT_GROUP_NAME_MESSAGE } from "@shared/contracts";
 import { isRepositoryScriptGroupName } from "@/lib/workflow-editor/params";
 import { repositoryKey } from "@/lib/workflow-editor/repository-scope";
 import { useRepositoryScopeContext } from "../repository-scope-context";
-import { ConfigField, arr, inputCls } from "./shared";
+import { Button, Input } from "@/components/ui";
+import { ConfigField, arr } from "./shared";
 import type { ConfigChange } from "./types";
 import { apiClient } from "@/lib/api/client";
 
@@ -179,9 +180,6 @@ function useScriptGroupCatalog(): {
 
 const catalogLabelCls =
   "font-mono text-[9px] uppercase tracking-[0.06em] text-neutral-500";
-const smallButtonCls =
-  "appearance-none rounded-xs border border-neutral-300 bg-white px-1.5 py-[2px] font-mono text-[10px] text-neutral-700 hover:bg-app-bg disabled:cursor-default disabled:opacity-40";
-
 /** How many repositories the counters are counting, and a way to refetch. Every
  *  state says which of the three it is; none of them is a blank field. */
 function ScriptCatalogStatus({
@@ -205,9 +203,9 @@ function ScriptCatalogStatus({
         <div className="flex items-center gap-1.5">
           <span className={`${catalogLabelCls} text-amber-800`}>Configured:</span>
           <span className="font-mono text-[10px] text-amber-800">unavailable</span>
-          <button type="button" onClick={onReload} className={smallButtonCls}>
+          <Button type="button" variant="secondary" size="sm" onClick={onReload}>
             Retry
-          </button>
+          </Button>
         </div>
         <div className="font-body text-[11px] leading-[1.4] text-neutral-600">
           Group names could not be checked against Repository scripts.
@@ -224,9 +222,9 @@ function ScriptCatalogStatus({
         {pinned ? " " : ""}
         {repositories.length === 1 ? "repo" : "repos"}
       </span>
-      <button type="button" onClick={onReload} className={smallButtonCls}>
+      <Button type="button" variant="secondary" size="sm" onClick={onReload}>
         Refresh
-      </button>
+      </Button>
     </div>
   );
 }
@@ -337,15 +335,17 @@ function ScriptGroupRow({
           )}
         </label>
         {coverageKnown && (
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             aria-expanded={expanded}
             aria-label={`Repository coverage for ${row.name}`}
             onClick={() => setExpanded((v) => !v)}
-            className="appearance-none shrink-0 border-none bg-transparent p-0 font-mono text-[10px] text-neutral-500 hover:text-neutral-700"
+            className="shrink-0"
           >
             {row.repoKeys.length}/{allRepositories.length} {pinned ? "pinned " : ""}repos
-          </button>
+          </Button>
         )}
       </div>
       {expanded && (
@@ -376,7 +376,7 @@ function AddScriptGroupName({ onAdd }: { onAdd: (name: string) => void }) {
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center gap-1.5">
-        <input
+        <Input
           type="text"
           value={draft}
           spellCheck={false}
@@ -388,16 +388,19 @@ function AddScriptGroupName({ onAdd }: { onAdd: (name: string) => void }) {
             e.preventDefault();
             submit();
           }}
-          className={`${inputCls} flex-1 min-w-0`}
+          size="sm"
+          monospace
+          className="min-w-0 flex-1"
         />
-        <button
+        <Button
           type="button"
+          variant="secondary"
+          size="sm"
           disabled={trimmed === "" || invalid}
           onClick={submit}
-          className={smallButtonCls}
         >
           Add
-        </button>
+        </Button>
       </div>
       {invalid && (
         <div className="font-body text-[11px] leading-[1.4] text-red-700">
@@ -722,17 +725,19 @@ export function RunChecksGroupsField({
         )}
       </div>
       {commandsRule && !disabled && (
-        <button
+        <Button
           type="button"
+          variant="secondary"
+          size="sm"
           onClick={() => {
             // Passing undefined deletes the optional commands parameter.
             // eslint-disable-next-line unicorn/no-useless-undefined -- Clear commands to select groups.
             onChange("params.commands", undefined);
           }}
-          className="appearance-none self-start rounded-xs border border-neutral-300 bg-white px-1.5 py-[3px] font-mono text-[10px] text-neutral-700 hover:bg-app-bg"
+          className="self-start"
         >
           Clear commands to select groups
-        </button>
+        </Button>
       )}
     </ConfigField>
   );

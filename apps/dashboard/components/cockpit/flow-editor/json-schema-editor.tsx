@@ -12,6 +12,7 @@ import type {
   JsonValue,
 } from "@shared/contracts";
 import { apiClient } from "@/lib/api/client";
+import { Button, Input, Select, Textarea } from "@/components/ui";
 import {
   DEFAULT_VISUAL_JSON_SCHEMA,
   addVisualSchemaProperty,
@@ -32,8 +33,6 @@ import {
 } from "@/lib/workflow-editor/json-schema-authoring";
 
 const DIALECT = "https://json-schema.org/draft/2020-12/schema";
-const fieldClass =
-  "min-w-0 rounded-xs border border-neutral-200 bg-off-white px-2 py-1 font-mono text-[10px] text-coal outline-none focus:border-mariner disabled:opacity-60";
 const schemaTypes: VisualJsonSchemaType[] = [
   "object",
   "array",
@@ -109,14 +108,16 @@ function EnumField({
       </label>
       {value !== undefined && (
         <>
-          <textarea
+          <Textarea
             aria-label="Enum values"
             value={draft}
             disabled={disabled}
             rows={2}
             onChange={(event) => setDraft(event.target.value)}
             onBlur={commit}
-            className={`${fieldClass} mt-1 w-full resize-y`}
+            size="sm"
+            monospace
+            className="mt-1"
           />
           {error && (
             <p className="m-0 mt-1 font-body text-[10px] text-red-700">
@@ -162,14 +163,15 @@ function PropertyNameField({
   };
   return (
     <div className="min-w-0 flex-1">
-      <input
+      <Input
         aria-label={`Property name ${value}`}
         value={draft}
         disabled={disabled}
         onChange={(event) => setDraft(event.target.value)}
         onBlur={commit}
         onKeyDown={keyDown}
-        className={`${fieldClass} w-full`}
+        size="sm"
+        monospace
       />
       {error && (
         <p className="m-0 mt-1 font-body text-[9px] text-red-700">{error}</p>
@@ -241,26 +243,25 @@ function SchemaNodeEditor({
       }
     >
       <div className="flex items-center gap-1.5">
-        <select
+        <Select
           aria-label={`${pathLabel} type`}
           value={type}
           disabled={disabled}
-          onChange={(event) =>
+          size="compact"
+          options={schemaTypes.map((candidate) => ({
+            value: candidate,
+            label: candidate,
+          }))}
+          onChange={(nextType) =>
             onChange(
               changeVisualSchemaType(
                 schema,
-                event.target.value as VisualJsonSchemaType,
+                nextType as VisualJsonSchemaType,
               ),
             )
           }
-          className={`${fieldClass} flex-1`}
-        >
-          {schemaTypes.map((candidate) => (
-            <option key={candidate} value={candidate}>
-              {candidate}
-            </option>
-          ))}
-        </select>
+          className="flex-1"
+        />
         <label className="flex items-center gap-1 font-body text-[10px] text-neutral-700">
           <input
             type="checkbox"
@@ -274,7 +275,7 @@ function SchemaNodeEditor({
           Nullable
         </label>
       </div>
-      <input
+      <Input
         aria-label={`${pathLabel} description`}
         value={typeof schema.description === "string" ? schema.description : ""}
         disabled={disabled}
@@ -282,7 +283,7 @@ function SchemaNodeEditor({
         onChange={(event) =>
           onChange(setVisualSchemaDescription(schema, event.target.value))
         }
-        className={`${fieldClass} w-full font-body`}
+        size="sm"
       />
 
       <EnumField
@@ -353,17 +354,18 @@ function SchemaNodeEditor({
                     />
                     Required
                   </label>
-                  <button
+                  <Button
                     type="button"
+                    variant="danger"
+                    size="sm"
                     disabled={disabled}
                     aria-label={`Remove ${name} property`}
                     onClick={() =>
                       onChange(removeVisualSchemaProperty(schema, name))
                     }
-                    className="appearance-none border-none bg-transparent px-1 font-mono text-[10px] text-red-700 disabled:opacity-40"
                   >
                     Remove
-                  </button>
+                  </Button>
                 </div>
                 <SchemaNodeEditor
                   schema={child}
@@ -379,7 +381,7 @@ function SchemaNodeEditor({
           })}
           <div className="flex items-start gap-1.5">
             <div className="min-w-0 flex-1">
-              <input
+              <Input
                 aria-label={`${pathLabel} new property name`}
                 value={newProperty}
                 disabled={disabled}
@@ -388,7 +390,8 @@ function SchemaNodeEditor({
                   setNewProperty(event.target.value);
                   setNewPropertyError(null);
                 }}
-                className={`${fieldClass} w-full`}
+                size="sm"
+                monospace
               />
               {newPropertyError && (
                 <p className="m-0 mt-1 font-body text-[9px] text-red-700">
@@ -396,8 +399,9 @@ function SchemaNodeEditor({
                 </p>
               )}
             </div>
-            <button
+            <Button
               type="button"
+              size="sm"
               disabled={disabled || newProperty.length === 0}
               onClick={() => {
                 const next = addVisualSchemaProperty(schema, newProperty);
@@ -411,10 +415,9 @@ function SchemaNodeEditor({
                 setNewProperty("");
                 setNewPropertyError(null);
               }}
-              className="h-[26px] appearance-none rounded-xs border border-mariner bg-panel px-2 font-mono text-[9px] uppercase tracking-[0.04em] text-mariner disabled:opacity-40"
             >
               Add field
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -554,19 +557,16 @@ export function JsonSchemaEditor({
     >
       <div className="flex items-center gap-1 border-b border-neutral-200 bg-app-bg px-2 py-1.5">
         {(["visual", "raw"] as const).map((candidate) => (
-          <button
+          <Button
             key={candidate}
             type="button"
+            variant={mode === candidate ? "secondary" : "ghost"}
+            size="sm"
             onClick={() => setMode(candidate)}
             aria-pressed={mode === candidate}
-            className={`appearance-none rounded-xs border px-2 py-1 font-mono text-[9px] uppercase tracking-[0.05em] ${
-              mode === candidate
-                ? "border-mariner bg-panel text-mariner"
-                : "border-transparent bg-transparent text-neutral-500"
-            }`}
           >
             {candidate}
-          </button>
+          </Button>
         ))}
         <span className="ml-auto font-mono text-[8px] text-neutral-500">
           JSON Schema 2020-12
@@ -575,7 +575,7 @@ export function JsonSchemaEditor({
 
       {mode === "raw" ? (
         <div className="p-2">
-          <textarea
+          <Textarea
             ref={rawRef}
             aria-label={label}
             value={value}
@@ -588,7 +588,9 @@ export function JsonSchemaEditor({
               onDialectChange?.(DIALECT);
               onChange(event.target.value);
             }}
-            className={`${fieldClass} min-h-[180px] w-full resize-y leading-[1.45]`}
+            size="sm"
+            monospace
+            className="min-h-[180px]"
           />
         </div>
       ) : (
@@ -611,16 +613,16 @@ export function JsonSchemaEditor({
               <p className="m-0 mb-2 font-body text-[11px] text-neutral-600">
                 Create a schema visually, or paste one in Raw.
               </p>
-              <button
+              <Button
                 type="button"
+                size="sm"
                 disabled={disabled}
                 onClick={() =>
                   applyVisualChange(structuredClone(DEFAULT_VISUAL_JSON_SCHEMA))
                 }
-                className="appearance-none rounded-xs border border-mariner bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.05em] text-mariner disabled:opacity-40"
               >
                 Create schema
-              </button>
+              </Button>
             </div>
           ) : (
             <p className="m-0 py-3 text-center font-body text-[11px] text-neutral-600">
@@ -647,17 +649,19 @@ export function JsonSchemaEditor({
                 key={`${issue.path}:${issue.code}:${index}`}
                 className="list-none font-body text-[10px] leading-[1.35] text-red-800"
               >
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="sm"
                   onClick={() => showRawIssue(issue.path)}
-                  className="appearance-none border-none bg-transparent p-0 text-left text-inherit"
+                  className="h-auto justify-start whitespace-normal text-left"
                 >
                   <span className="font-mono">
                     {issue.path === "" ? "/" : issue.path}
                   </span>
                   {": "}
                   {issue.message}
-                </button>
+                </Button>
               </li>
             ))}
           </ul>

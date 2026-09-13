@@ -5,7 +5,7 @@ import type { FlowNodeDef } from "@/lib/flows";
 import type { WorkflowParamValue } from "@shared/contracts";
 import { toggleRequiredArrayValue } from "@/lib/workflow-editor/params";
 import { describeRepositoryScope } from "@/lib/workflow-editor/repository-scope";
-import { Listbox } from "@/components/cockpit/listbox";
+import { Button, Select } from "@/components/ui";
 import { RepositoryScopeModal } from "../repository-scope-modal";
 import { useRepositoryScopeContext } from "../repository-scope-context";
 import { CheckboxRow, ConfigField, ConfigNote, arr } from "./shared";
@@ -22,14 +22,15 @@ export function PrScopeField({
   const scope = node.params.scope === "any" ? "any" : "workflow_owned";
   return (
     <ConfigField label="Scope">
-      <Listbox
+      <Select
         options={[
           { value: "workflow_owned", label: "Workflow-owned PRs only" },
           { value: "any", label: "Any PR" },
         ]}
         value={scope}
         disabled={!canEdit}
-        ariaLabel="Pull request scope"
+        aria-label="Pull request scope"
+        size="compact"
         onChange={(value) => onChange("params.scope", value)}
       />
     </ConfigField>
@@ -98,15 +99,16 @@ export function PrRepositoriesField({
       <ConfigField
         label="Repositories"
         action={
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             aria-haspopup="dialog"
             disabled={!canEdit}
             onClick={() => setModalOpen(true)}
-            className="appearance-none border-none bg-transparent cursor-pointer p-0 font-body text-[11px] text-mariner disabled:cursor-default disabled:opacity-40"
           >
             Configure repositories
-          </button>
+          </Button>
         }
       >
         <div className="font-body text-xs text-coal">

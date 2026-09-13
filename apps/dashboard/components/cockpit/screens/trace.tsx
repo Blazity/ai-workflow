@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { FlameGraph } from "@/components/flame-graph";
-import { CkCard, CkKPI, CkChip, CkStatusPill } from "@/components/ui";
+import { Button, CkCard, CkKPI, CkChip, CkStatusPill, Textarea } from "@/components/ui";
 import {
   WorkflowReplay,
   countReplayRetries,
@@ -62,7 +62,7 @@ const PHASE_ORDER: PhaseName[] = [
 ];
 
 const SEQ: PhaseName[] = ["Research", "Implementation", "Review"];
-/** Unique, once-per-phase terminal steps — the reliable phase boundaries. */
+/** Unique, once per phase terminal steps, the reliable phase boundaries. */
 const TERMINAL: Record<string, PhaseName> = {
   parseResearchStep: "Research",
   parseAgentOutputStep: "Implementation",
@@ -71,8 +71,8 @@ const TERMINAL: Record<string, PhaseName> = {
 
 /**
  * Assign each step its workflow phase. The phase-running steps repeat
- * (`planPhaseStep`, `collectPhase`…), so we anchor on `planPhaseStep` — called
- * exactly once per phase, always in Research → Implementation → Review order —
+ * (`planPhaseStep`, `collectPhase`…), so we anchor on `planPhaseStep`, called
+ * exactly once per phase, always in Research → Implementation → Review order,
  * and only fall through to "Finalize" once a phase's unique terminal step has
  * run. Steps started but not yet terminated (running/cancelled mid-phase) stay
  * in their phase rather than leaking into Finalize. Steps are pre-sorted by
@@ -125,13 +125,13 @@ const STEP_SPAN_STATUS: Record<StepStatus, SpanStatus> = {
 };
 
 function fmtMs(ms: number | null): string {
-  if (ms === null) return "—";
+  if (ms === null) return "\u2014";
   if (ms < 1000) return `${Math.round(ms)}ms`;
   return `${(ms / 1000).toFixed(2)}s`;
 }
 
 function fmtClock(iso: string | null): string {
-  if (!iso) return "—";
+  if (!iso) return "\u2014";
   return iso.replace("T", " ").replace(/\.\d+Z$/, "Z");
 }
 
@@ -246,7 +246,7 @@ export function TraceDetail({
     [normalizeReplay],
   );
 
-  // Whether the run is still in flight — drives the "Running" indicator and
+  // Whether the run is still in flight, drives the "Running" indicator and
   // keeps the ticket detail's bounded refresh active.
   const isRunning =
     !run ||
@@ -254,7 +254,7 @@ export function TraceDetail({
       run.status !== "failed" &&
       run.status !== "blocked" &&
       run.status !== "awaiting");
-  // Wall-clock offset of "now" from run start — sizes bars for running steps.
+  // Wall clock offset of "now" from run start, sizes bars for running steps.
   const runStartMs = run ? Date.parse(run.startedAt ?? run.createdAt) : 0;
   const nowOffsetMs = Math.max(0, Date.parse(shownData.generatedAt) - runStartMs);
   const barMs = React.useCallback(
@@ -403,25 +403,25 @@ export function TraceDetail({
               />
             )}
             {run.ticketUrl && (
-              <a
+              <Button
                 href={run.ticketUrl}
+                variant="secondary"
                 target="_blank"
                 rel="noreferrer"
-                className="appearance-none border border-neutral-200 bg-panel px-3.5 py-2 rounded-[3px] font-mono text-[11px] text-neutral-900 uppercase tracking-[0.04em] cursor-pointer no-underline"
               >
                 Open ticket ↗
-              </a>
+              </Button>
             )}
             {/* One button per repository the run published to, so a multi-repo
                 run does not hide every PR/MR but the first. */}
             {runPrs.map((pr, i) => (
-              <a
+              <Button
                 key={`${pr.provider}:${pr.repoPath}:${pr.id}`}
                 href={pr.url}
                 target="_blank"
                 rel="noreferrer"
                 title={pr.repoPath || undefined}
-                className="inline-flex items-center gap-1 max-w-full appearance-none border border-neutral-200 bg-coal px-3.5 py-2 rounded-[3px] font-mono text-[11px] text-white uppercase tracking-[0.04em] cursor-pointer no-underline hover:bg-neutral-800"
+                className="max-w-full"
               >
                 {runPrLabels[i] && (
                   <span className="truncate max-w-[180px]">{runPrLabels[i]}</span>
@@ -429,7 +429,7 @@ export function TraceDetail({
                 <span className="whitespace-nowrap">
                   {pr.provider === "gitlab" ? "MR" : "PR"} {pullRequestRef(pr)} ↗
                 </span>
-              </a>
+              </Button>
             ))}
           </div>
         )}
@@ -438,7 +438,7 @@ export function TraceDetail({
       <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
         <CkKPI
           label="Duration"
-          value={run.durationSec === null ? "—" : `${run.durationSec}s`}
+          value={run.durationSec === null ? "\u2014" : `${run.durationSec}s`}
           sub={run.status === "running" ? "in progress" : "elapsed"}
         />
         <CkKPI
@@ -621,7 +621,7 @@ export function TraceDetail({
 
               <CkCard
                 eyebrow="Phase"
-                title={selectedPhase ?? "—"}
+                title={selectedPhase ?? "\u2014"}
                 action={
                   selectedGroup && (
                     <CkChip
@@ -737,7 +737,7 @@ function AnswerPanel({
     <CkCard
       eyebrow="Human-in-the-loop"
       title="Input needed"
-      style={{ background: "#FFFCFA", borderColor: "#FFE4D6" }}
+      className="!border-orange-200 !bg-orange-100"
     >
       <div className="flex flex-col gap-4">
         <ol className="m-0 flex list-decimal flex-col gap-1.5 pl-5 font-body text-[13px] leading-[1.55] text-neutral-800">
@@ -805,27 +805,26 @@ function AnswerPanel({
                 clarification.suggestedAnswers.length > 0 ? (
                   <div className="flex flex-wrap items-center gap-1.5">
                     {clarification.suggestedAnswers.map((a, j) => (
-                      <button
+                      <Button
                         key={j}
-                        type="button"
+                        variant="secondary"
+                        size="sm"
                         disabled={busy}
                         onClick={() => setAnswer(a)}
-                        className="appearance-none border border-neutral-200 bg-panel px-2.5 py-[5px] rounded-[3px] cursor-pointer font-body text-xs text-neutral-900 transition-all duration-100 hover:bg-coal hover:text-white disabled:cursor-default disabled:opacity-40"
                       >
                         {a}
-                      </button>
+                      </Button>
                     ))}
                   </div>
                 ) : null}
 
-                <textarea
+                <Textarea
                   value={answer}
                   onChange={(e) => setAnswer(e.target.value)}
                   disabled={busy}
                   rows={4}
                   aria-label="Answer"
                   placeholder="Type your answer…"
-                  className="w-full resize-y rounded-[3px] border border-neutral-200 bg-panel p-3 font-body text-[13px] leading-[1.5] text-coal placeholder:text-neutral-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-mariner focus-visible:outline-offset-[-1px] disabled:opacity-60"
                 />
               </>
             )}
@@ -833,8 +832,7 @@ function AnswerPanel({
             {error ? <InlineError>{error}</InlineError> : null}
 
             <div className="flex items-center gap-2">
-              <DarkButton
-                type="button"
+              <Button
                 disabled={busy || (!retry && answer.trim().length === 0)}
                 onClick={submit}
               >
@@ -843,7 +841,7 @@ function AnswerPanel({
                   : retry
                     ? "Retry resume run"
                     : "Submit answer"}
-              </DarkButton>
+              </Button>
             </div>
           </>
         )}
@@ -860,17 +858,6 @@ function InlineError({ children }: { children: React.ReactNode }) {
   );
 }
 
-function DarkButton({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
-  return (
-    <button
-      {...props}
-      className="inline-flex items-center justify-center whitespace-nowrap rounded-[3px] border border-neutral-900 bg-neutral-900 px-3.5 py-[5px] font-mono text-[11px] font-medium uppercase tracking-[0.04em] text-white transition hover:bg-neutral-800 disabled:cursor-default disabled:opacity-40"
-    >
-      {children}
-    </button>
-  );
-}
-
 function Breadcrumb({
   runId,
   ticket,
@@ -884,25 +871,27 @@ function Breadcrumb({
 }) {
   return (
     <div className="flex items-center gap-3 font-body text-[13px] min-w-0">
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="sm"
         onClick={onBack}
         aria-label="Back to runs"
-        className="appearance-none border-0 bg-transparent p-0 font-mono text-[11px] text-mariner cursor-pointer uppercase tracking-[0.04em] shrink-0"
+        className="h-auto p-0"
       >
         ← Runs
-      </button>
+      </Button>
       {ticket && (
         <>
           <span className="text-[#D2D6DA] shrink-0">/</span>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => onTicket(ticket)}
             aria-label={`All runs for ${ticket}`}
-            className="appearance-none border-0 bg-transparent p-0 font-mono text-[11px] text-mariner cursor-pointer tracking-[0.04em] shrink-0"
+            className="h-auto p-0"
           >
             {ticket}
-          </button>
+          </Button>
         </>
       )}
       <span className="text-[#D2D6DA] shrink-0">/</span>

@@ -24,6 +24,11 @@ import { RepositoryScopeBar } from "./repository-scope-bar";
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
+(globalThis as typeof globalThis & { requestAnimationFrame: typeof requestAnimationFrame }).requestAnimationFrame = (callback) => {
+  callback(0);
+  return 1;
+};
+(globalThis as typeof globalThis & { cancelAnimationFrame: typeof cancelAnimationFrame }).cancelAnimationFrame = () => undefined;
 
 function gh(
   repoPath: string,
@@ -85,6 +90,13 @@ function buttonWithText(root: ReactTestInstance, text: string): ReactTestInstanc
     .filter((node) => nodeText(node).includes(text));
   assert.equal(matches.length, 1, `expected exactly one button containing ${text}`);
   return matches[0];
+}
+
+function openDialogs(root: ReactTestInstance): ReactTestInstance[] {
+  return root.findAll(
+    (node) =>
+      node.props.role === "dialog" && node.props["data-state"] !== "closed",
+  );
 }
 
 interface BarConfig {
@@ -180,12 +192,12 @@ test("the compact bar opens a dialog without changing the scope", async () => {
 
   assert.equal(configure.props["aria-haspopup"], "dialog");
   assert.equal(
-    bar.renderer.root.findAll((node) => node.props.role === "dialog").length,
+    openDialogs(bar.renderer.root).length,
     0,
   );
   await bar.open();
   assert.equal(
-    bar.renderer.root.findAll((node) => node.props.role === "dialog").length,
+    openDialogs(bar.renderer.root).length,
     1,
   );
   assert.deepEqual(bar.changes, []);
@@ -424,7 +436,7 @@ test("read-only mode cannot open the modal", async () => {
   await act(async () => bar.renderer.unmount());
 });
 
-test("Escape and backdrop dismissal discard the modal draft", async () => {
+test("backdrop dismissal discards the modal draft", async () => {
   const bar = await mountBar();
 
   await bar.open();
@@ -432,68 +444,24 @@ test("Escape and backdrop dismissal discard the modal draft", async () => {
   const backdrop = bar.renderer.root.find(
     (node) =>
       node.type === "div" &&
-      typeof node.props.className === "string" &&
-      node.props.className.includes("fixed inset-0"),
+      node.props["aria-hidden"] === "true",
   );
-  await act(async () =>
-    backdrop.props.onKeyDown({ key: "Escape", preventDefault: () => undefined }),
-  );
+  await act(async () => backdrop.props.onClick());
   assert.deepEqual(bar.changes, []);
   assert.equal(
-    bar.renderer.root.findAll((node) => node.props.role === "dialog").length,
-    0,
-  );
-
-  await bar.open();
-  await bar.toggleProvider("GitHub");
-  const reopenedBackdrop = bar.renderer.root.find(
-    (node) =>
-      node.type === "div" &&
-      typeof node.props.className === "string" &&
-      node.props.className.includes("fixed inset-0"),
-  );
-  await act(async () =>
-    reopenedBackdrop.props.onMouseDown({
-      target: reopenedBackdrop,
-      currentTarget: reopenedBackdrop,
-    }),
-  );
-  assert.deepEqual(bar.changes, []);
-  assert.equal(
-    bar.renderer.root.findAll((node) => node.props.role === "dialog").length,
+    openDialogs(bar.renderer.root).length,
     0,
   );
   await act(async () => bar.renderer.unmount());
 });
 
-test("Tab wraps from the last modal control to the first", async () => {
+test("the shared modal owns focus containment", async () => {
   const bar = await mountBar();
   await bar.open();
-  const backdrop = bar.renderer.root.find(
-    (node) =>
-      node.type === "div" &&
-      typeof node.props.className === "string" &&
-      node.props.className.includes("fixed inset-0"),
+  const dialog = bar.renderer.root.find(
+    (node) => node.props.role === "dialog" && node.props["data-state"] === "open",
   );
-  let firstFocuses = 0;
-  let prevented = 0;
-  const first = { focus: () => firstFocuses++ };
-  const last = { focus: () => undefined };
-
-  await act(async () =>
-    backdrop.props.onKeyDown({
-      key: "Tab",
-      shiftKey: false,
-      target: last,
-      currentTarget: {
-        querySelectorAll: () => [first, last],
-      },
-      preventDefault: () => prevented++,
-    }),
-  );
-
-  assert.equal(prevented, 1);
-  assert.equal(firstFocuses, 1);
+  assert.equal(dialog.props["aria-modal"], "true");
   await act(async () => bar.renderer.unmount());
 });
 

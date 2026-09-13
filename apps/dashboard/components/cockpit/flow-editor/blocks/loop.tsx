@@ -1,6 +1,6 @@
 "use client";
 
-import { Listbox } from "@/components/cockpit/listbox";
+import { Select } from "@/components/ui";
 import { ConfigField, NumberField, str } from "./shared";
 import type { BlockRendererProps } from "./types";
 
@@ -12,7 +12,7 @@ export function LoopFields(props: BlockRendererProps) {
               <NumberField value={node.params.maxAttempts} min={1} max={20} disabled={!canEdit} onChange={(v) => onChange("params.maxAttempts", v)} />
             </ConfigField>
             <ConfigField label="On exhaust">
-              <Listbox
+              <Select
                 options={[
                   { value: "fail", label: "Fail" },
                   { value: "human", label: "Ask a human" },
@@ -20,7 +20,8 @@ export function LoopFields(props: BlockRendererProps) {
                 ]}
                 value={str(node.params.onExhaust) || "fail"}
                 disabled={!canEdit}
-                ariaLabel="On exhaust"
+                aria-label="On exhaust"
+                size="compact"
                 onChange={(v) => onChange("params.onExhaust", v)}
               />
             </ConfigField>

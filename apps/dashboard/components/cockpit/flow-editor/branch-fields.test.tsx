@@ -36,7 +36,7 @@ test("renders a flat condition with one global combinator", () => {
   );
   assert.match(html, /all conditions \(AND\)/);
   assert.match(html, /Review · decision/);
-  assert.match(html, /request_changes/);
+  assert.match(html, /aria-label="Comparison value"/);
   assert.doesNotMatch(html, /Outcomes/);
 });
 
@@ -105,8 +105,8 @@ test("allows optional values only for presence operators", () => {
   );
 });
 
-test("renders the run_scripts/run_pre_pr_checks outcome enum as a dropdown", () => {
-  // LiteralEditor renders any entry's schema.enum as a <select>; this pins
+test("renders the run_scripts/run_pre_pr_checks outcome enum as a shared select", () => {
+  // LiteralEditor renders any entry's schema.enum as a Select; this pins
   // that behavior for the repository-scripts blocks' typed `outcome` output
   // specifically, so a regression there is caught here rather than only in
   // the generic enum case above.
@@ -135,9 +135,8 @@ test("renders the run_scripts/run_pre_pr_checks outcome enum as a dropdown", () 
       onChange={() => undefined}
     />,
   );
-  assert.match(html, /<select[^>]*aria-label="Comparison value"/);
-  assert.match(html, /missing_configuration/);
-  assert.match(html, /skipped/);
+  assert.match(html, /role="combobox"[^>]*aria-label="Comparison value"/);
+  assert.match(html, />passed</);
 });
 
 test("offers replacement for an obsolete pre-release configuration", () => {

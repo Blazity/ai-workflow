@@ -245,7 +245,7 @@ test("a draft-only trigger points at deploy and can refresh without a remount", 
   const html = endpoint({ config: { state: "await_deploy", endpoint: null } });
 
   assert.match(html, /Deploy the workflow/);
-  assert.match(html, /Refresh<\/button>/);
+  assert.match(html, /Refresh<\/span><\/button>/);
   assert.doesNotMatch(html, /Endpoint URL/);
 });
 
@@ -259,11 +259,11 @@ test("an active endpoint shows the URL, deployed auth, a masked secret and both 
   // deployed never reads as a contradiction.
   assert.match(html, /Deployed authentication/);
   assert.match(html, /Deployed header/);
-  assert.match(html, /Reveal<\/button>/);
-  assert.match(html, /Rotate<\/button>/);
+  assert.match(html, /Reveal<\/span><\/button>/);
+  assert.match(html, /Rotate<\/span><\/button>/);
   // Importing a sender-dictated secret sits next to Rotate.
-  assert.match(html, /Set secret<\/button>/);
-  assert.match(html, /Revoke<\/button>/);
+  assert.match(html, /Set secret<\/span><\/button>/);
+  assert.match(html, /Revoke<\/span><\/button>/);
   // The full URL has to survive the 320px inspector, so it wraps instead of scrolling.
   assert.match(html, /break-all/);
   // Only the URL and the masked secret are editable-looking textareas; the
@@ -280,8 +280,8 @@ test("an inactive endpoint banners that it is not receiving, distinct from revok
   assert.doesNotMatch(html, /This endpoint is revoked/);
   // The endpoint still exists, so its URL and management actions remain.
   assert.match(html, /Endpoint URL/);
-  assert.match(html, /Rotate<\/button>/);
-  assert.match(html, /Reveal<\/button>/);
+  assert.match(html, /Rotate<\/span><\/button>/);
+  assert.match(html, /Reveal<\/span><\/button>/);
 });
 
 test("a shared-token endpoint calls the value a token, not a signing secret", () => {
@@ -317,12 +317,12 @@ test("a revoked endpoint banners the outage and offers only unrevoke", () => {
   const html = endpoint({ config: { ...activeConfig, state: "revoked" as const } });
 
   assert.match(html, /This endpoint is revoked/);
-  assert.match(html, /Unrevoke<\/button>/);
-  assert.doesNotMatch(html, /Rotate<\/button>/);
-  assert.doesNotMatch(html, /Revoke<\/button>/);
-  assert.doesNotMatch(html, /Reveal<\/button>/);
+  assert.match(html, /Unrevoke<\/span><\/button>/);
+  assert.doesNotMatch(html, /Rotate<\/span><\/button>/);
+  assert.doesNotMatch(html, /Revoke<\/span><\/button>/);
+  assert.doesNotMatch(html, /Reveal<\/span><\/button>/);
   // A revoked endpoint is revived (unrevoke), not reconfigured in place.
-  assert.doesNotMatch(html, /Set secret<\/button>/);
+  assert.doesNotMatch(html, /Set secret<\/span><\/button>/);
 });
 
 test("the set-secret panel imports a sender-generated value and never echoes one", () => {
@@ -385,7 +385,7 @@ test("a rotation conflict offers the force option next to its warning", () => {
   });
 
   assert.match(html, /already in flight/);
-  assert.match(html, /Force rotate<\/button>/);
+  assert.match(html, /Force rotate<\/span><\/button>/);
 });
 
 test("a revealed secret replaces the mask only while it is on screen", () => {
@@ -394,7 +394,7 @@ test("a revealed secret replaces the mask only while it is on screen", () => {
 
   assert.doesNotMatch(masked, /whsec_live_2f7ad91b/);
   assert.match(revealed, /whsec_live_2f7ad91b/);
-  assert.match(revealed, /Hide<\/button>/);
+  assert.match(revealed, /Hide<\/span><\/button>/);
   assert.match(revealed, /only another reveal/);
 });
 
@@ -410,7 +410,7 @@ test("a failed load reports the reason and offers a retry", () => {
   const html = endpoint({ config: null, loadError: "Worker request timed out" });
 
   assert.match(html, /Worker request timed out/);
-  assert.match(html, /Retry<\/button>/);
+  assert.match(html, /Retry<\/span><\/button>/);
 });
 
 test("the delivery log renders every outcome with its reason and verification", () => {
@@ -462,8 +462,8 @@ test("the delivery log renders every outcome with its reason and verification", 
   assert.match(html, /verified with previous/);
   assert.match(html, /not authenticated/);
   assert.match(html, /2026-08-05 09:41:07 UTC/);
-  assert.match(html, /Refresh<\/button>/);
-  assert.match(html, /Send test<\/button>/);
+  assert.match(html, /Refresh<\/span><\/button>/);
+  assert.match(html, /Send test<\/span><\/button>/);
 });
 
 test("the rejection summary carries a one-line cause per reason and a pre-dispatch note", () => {

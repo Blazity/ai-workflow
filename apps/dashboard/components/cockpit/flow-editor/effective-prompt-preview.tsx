@@ -9,11 +9,9 @@ import {
   type EffectivePromptPreviewProvenance,
   type EffectivePromptPreviewResponse,
 } from "@/lib/api/client";
+import { Button, IconButton } from "@/components/ui";
 
 export type { EffectivePromptPreviewResponse } from "@/lib/api/client";
-
-const previewButton =
-  "appearance-none rounded-xs border border-mariner bg-panel px-2.5 py-1.5 font-mono text-[9px] uppercase tracking-[0.04em] text-mariner disabled:opacity-40";
 
 function Provenance({
   entries,
@@ -191,23 +189,23 @@ export function EffectivePromptPreview({
             Preview the exact ordered sections for this unsaved workflow.
           </p>
         </div>
-        <button
+        <Button
           type="button"
+          size="sm"
           disabled={loading}
           onClick={() => void load()}
-          className={previewButton}
         >
           {loading ? "Building…" : result ? "Refresh" : "Preview"}
-        </button>
+        </Button>
         {open && (
-          <button
+          <IconButton
             type="button"
+            size="sm"
             onClick={() => setOpen(false)}
             aria-label="Close effective prompt preview"
-            className="appearance-none border-none bg-transparent font-mono text-[12px] text-neutral-500"
           >
             ×
-          </button>
+          </IconButton>
         )}
       </div>
       {open && (

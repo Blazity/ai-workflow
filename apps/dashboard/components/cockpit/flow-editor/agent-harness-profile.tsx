@@ -11,7 +11,7 @@ import type {
   WorkflowValueSchema,
 } from "@shared/contracts";
 import { isHarnessProfileReference } from "@shared/contracts";
-import { Listbox } from "@/components/cockpit/listbox";
+import { Button, IconButton, Modal, Select } from "@/components/ui";
 import { previewHarnessCapabilities } from "@/lib/harness-profiles/capabilities";
 import { usePromptAuthoringContext } from "./prompt-authoring-context";
 import { useHarnessProfileCatalog } from "./harness-profile-context";
@@ -387,7 +387,7 @@ export function AgentHarnessProfile({
       </div>
 
       <ProfileField label="Harness profile & version">
-        <Listbox
+        <Select
           options={profileVersionOptions}
           value={
             reference
@@ -400,7 +400,8 @@ export function AgentHarnessProfile({
             catalog.status !== "ready" ||
             profileVersionOptions.length === 0
           }
-          ariaLabel="Harness profile and exact version"
+          aria-label="Harness profile and exact version"
+          size="compact"
           onChange={(value) => {
             const next = parseProfileVersionValue(value);
             if (!next) return;
@@ -437,13 +438,15 @@ export function AgentHarnessProfile({
 
       {reference && selectedProfile && (
         <div className="border-b border-neutral-200 px-[14px] py-2.5">
-          <button
+          <Button
             type="button"
+            variant="secondary"
+            size="sm"
             aria-haspopup="dialog"
             aria-label={`View ${selectedProfile.draft.displayName} version ${reference.version} details`}
             onClick={() => setDetailsOpen(true)}
             disabled={!selectedVersion}
-            className="group w-full cursor-pointer rounded-[3px] border border-neutral-200 bg-off-white p-2.5 text-left outline-none transition-[border-color,background-color,box-shadow] hover:border-mariner-200 hover:bg-mariner-100 focus-visible:border-mariner focus-visible:ring-2 focus-visible:ring-mariner-200 disabled:cursor-default disabled:opacity-60"
+            className="group h-auto w-full justify-start p-2.5 text-left [&>span]:w-full [&>span]:flex-col [&>span]:items-stretch"
           >
             <span className="flex items-start gap-2">
               <span className="min-w-0 flex-1">
@@ -481,7 +484,7 @@ export function AgentHarnessProfile({
                 </span>
               )}
             </span>
-          </button>
+          </Button>
           {!selectedDetail && !catalog.detailErrors.has(reference.profileId) && (
             <span className="mt-1 block font-body text-[10px] text-neutral-500">
               Loading immutable versions…
@@ -502,49 +505,31 @@ export function AgentHarnessProfile({
         </div>
       )}
 
-      {detailsOpen && reference && selectedVersion && selectedProfile && (
-        <div
-          className="fixed inset-0 z-[140] flex items-center justify-center bg-coal/40 p-4 backdrop-blur-[1px]"
-          onPointerDown={() => setDetailsOpen(false)}
+      {reference && selectedVersion && selectedProfile && (
+        <Modal
+          open={detailsOpen}
+          onClose={() => setDetailsOpen(false)}
+          title={`${selectedProfile.draft.displayName} · v${reference.version}`}
+          description="Exact immutable environment used by this block."
+          size="md"
+          className="relative"
         >
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="harness-profile-details-title"
-            onPointerDown={(event) => event.stopPropagation()}
-            className="flex max-h-[86vh] w-full max-w-[680px] flex-col overflow-hidden rounded-[5px] border border-neutral-200 bg-panel shadow-[0_18px_50px_-12px_rgba(24,27,32,0.4)]"
+          <IconButton
+            type="button"
+            autoFocus
+            size="sm"
+            onClick={() => setDetailsOpen(false)}
+            aria-label="Close harness profile details"
+            className="absolute right-4 top-3 z-10"
           >
-            <header className="flex items-start gap-3 border-b border-neutral-200 px-4 py-3">
-              <div className="min-w-0 flex-1">
-                <h2
-                  id="harness-profile-details-title"
-                  className="m-0 font-display text-[18px] font-semibold text-coal"
-                >
-                  {selectedProfile.draft.displayName} · v{reference.version}
-                </h2>
-                <p className="mt-0.5 mb-0 font-body text-[11px] text-neutral-600">
-                  Exact immutable environment used by this block.
-                </p>
-              </div>
-              <button
-                type="button"
-                autoFocus
-                onClick={() => setDetailsOpen(false)}
-                aria-label="Close harness profile details"
-                className="appearance-none border-none bg-transparent p-1 font-mono text-[16px] text-neutral-500 cursor-pointer hover:text-coal"
-              >
-                ×
-              </button>
-            </header>
-            <div className="overflow-auto p-4">
-              <ManifestDetails
-                node={node}
-                manifest={selectedVersion.manifest}
-                manifestHash={selectedVersion.manifestHash}
-              />
-            </div>
-          </section>
-        </div>
+            ×
+          </IconButton>
+          <ManifestDetails
+            node={node}
+            manifest={selectedVersion.manifest}
+            manifestHash={selectedVersion.manifestHash}
+          />
+        </Modal>
       )}
     </>
   );

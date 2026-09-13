@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import type { ScheduleConfigResponse, ScheduleOccurrenceEntry, ScheduleOccurrenceOutcome } from "@shared/contracts";
 import { apiClient } from "@/lib/api/client";
-import { ConfigField, webhookActionButtonCls } from "./shared";
+import { Button } from "@/components/ui";
+import { ConfigField } from "./shared";
 import { describeRotationWindow, formatWebhookInstant } from "./webhook-endpoint";
 import { SCHEDULE_OUTCOME_MEANING, SCHEDULE_OUTCOME_STYLES, ScheduleNextRunsSection } from "./schedule-preview";
 import type { SchedulePreviewState, ScheduleTrustState } from "./schedule-preview";
@@ -142,14 +143,15 @@ function ScheduleOccurrenceHistorySection({
     <ConfigField
       label="Recent occurrences"
       action={
-        <button
+        <Button
           type="button"
+          variant="secondary"
+          size="sm"
           disabled={loading}
           onClick={onRefresh}
-          className={webhookActionButtonCls}
         >
           {loading ? "Loading…" : "Refresh"}
-        </button>
+        </Button>
       }
     >
       <div

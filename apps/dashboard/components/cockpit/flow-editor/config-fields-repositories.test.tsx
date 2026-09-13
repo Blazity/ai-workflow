@@ -96,7 +96,7 @@ test("every pull request trigger panel summarises the pinned repositories", () =
 
     assert.match(html, />Repositories</, type);
     assert.match(html, /1 repo, GitHub/, type);
-    assert.match(html, /aria-haspopup="dialog"[^>]*>Configure repositories</, type);
+    assert.match(html, /aria-haspopup="dialog"[^>]*>[\s\S]*?Configure repositories<\/span><\/button>/, type);
   }
 });
 
@@ -119,7 +119,7 @@ test("workflow-owned scope explains that ownership, not the list, admits the eve
 test("a read-only inspector cannot open the repository modal", () => {
   const html = render(node("trigger_pr_merged", "any"), {}, false);
 
-  assert.match(html, /aria-haspopup="dialog" disabled=""[^>]*>Configure repositories</);
+  assert.match(html, /aria-haspopup="dialog" disabled=""[^>]*>[\s\S]*?Configure repositories<\/span><\/button>/);
 });
 
 // ConfigFields renders outside the provider in other suites, so the field has to

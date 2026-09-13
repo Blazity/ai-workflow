@@ -4,7 +4,7 @@ import { useEffect, useState, useMemo } from "react";
 import type { FlowNodeDef } from "@/lib/flows";
 import type { WebhookRejectionSummaryEntry, WorkflowDataCatalogEntry, WorkflowEditorOptions, WorkflowParamValue } from "@shared/contracts";
 import { arrayToLines, linesToArray, textMatchesLines } from "@/lib/workflow-editor/params";
-import { Listbox } from "@/components/cockpit/listbox";
+import { Button, Input, Select, Textarea } from "@/components/ui";
 import { investigateProviders } from "../block-palette";
 import { PromptEditor } from "@/components/cockpit/prompt-editor/prompt-editor";
 import { WorkflowTextTemplateEditor } from "../workflow-text-template-editor";
@@ -13,10 +13,6 @@ import { usePromptAuthoringContext } from "../prompt-authoring-context";
 import { AgentHarnessProfile } from "../agent-harness-profile";
 import type { ConfigChange } from "./types";
 import { apiClient } from "@/lib/api/client";
-
-export const inputCls = "h-[26px] px-2 bg-off-white border border-neutral-200 rounded-xs font-mono text-xs text-coal outline-none disabled:opacity-60";
-const textareaCls = "min-h-[64px] px-2 py-1.5 bg-off-white border border-neutral-200 rounded-xs font-body text-xs leading-[1.5] text-coal outline-none resize-y disabled:opacity-60";
-const monoTextareaCls = "min-h-[64px] px-2 py-1.5 bg-off-white border border-neutral-200 rounded-xs font-mono text-xs leading-[1.5] text-coal outline-none resize-y disabled:opacity-60";
 
 export function str(value: WorkflowParamValue | undefined): string {
   return typeof value === "string" ? value : "";
@@ -91,12 +87,13 @@ export function TextInput({
   onChange: (v: string) => void;
 }) {
   return (
-    <input
+    <Input
       value={value}
       disabled={disabled}
       placeholder={placeholder}
       onChange={(e) => onChange(e.target.value)}
-      className={inputCls}
+      size="sm"
+      monospace
     />
   );
 }
@@ -115,13 +112,14 @@ export function TextArea({
   onChange: (v: string) => void;
 }) {
   return (
-    <textarea
+    <Textarea
       value={value}
       disabled={disabled}
       placeholder={placeholder}
       rows={3}
       onChange={(e) => onChange(e.target.value)}
-      className={mono ? monoTextareaCls : textareaCls}
+      size="sm"
+      monospace={mono}
     />
   );
 }
@@ -251,8 +249,10 @@ export function CanonicalQuestionsField({
             />
           </div>
           {visibleQuestions.length > 1 && (
-            <button
+            <Button
               type="button"
+              variant="danger"
+              size="sm"
               disabled={disabled}
               aria-label={`Remove question ${index + 1}`}
               onClick={() => {
@@ -265,21 +265,21 @@ export function CanonicalQuestionsField({
                     : undefined,
                 );
               }}
-              className="appearance-none rounded-xs border border-neutral-200 bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-red-700 disabled:opacity-40"
             >
               Remove
-            </button>
+            </Button>
           )}
         </div>
       ))}
-      <button
+      <Button
         type="button"
+        size="sm"
         disabled={disabled}
         onClick={() => onChange([...visibleQuestions, ""])}
-        className="self-start appearance-none rounded-xs border border-mariner bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-mariner disabled:opacity-40"
+        className="self-start"
       >
         + Add question
-      </button>
+      </Button>
     </div>
   );
 }
@@ -298,7 +298,7 @@ export function NumberField({
   onChange: (v: number | undefined) => void;
 }) {
   return (
-    <input
+    <Input
       type="number"
       min={min}
       max={max}
@@ -315,7 +315,8 @@ export function NumberField({
         if (!Number.isFinite(n)) return;
         onChange(Math.max(min, Math.min(max, n)));
       }}
-      className={inputCls}
+      size="sm"
+      monospace
     />
   );
 }
@@ -343,7 +344,7 @@ export function ArrayTextarea({
     if (!textMatchesLines(text, value)) setText(arrayToLines(value));
   }
   return (
-    <textarea
+    <Textarea
       value={text}
       disabled={disabled}
       placeholder={placeholder}
@@ -356,7 +357,8 @@ export function ArrayTextarea({
         const parsedLines = linesToArray(e.target.value);
         onChange(parsedLines.length > 0 ? parsedLines : undefined);
       }}
-      className={mono ? monoTextareaCls : textareaCls}
+      size="sm"
+      monospace={mono}
     />
   );
 }
@@ -499,11 +501,12 @@ export function TriggerRateLimitFields({
       </ConfigField>
       {max !== undefined && (
         <ConfigField label="Rate limit window">
-          <Listbox
+          <Select
             options={TRIGGER_RATE_LIMIT_WINDOW_OPTIONS}
             value={windowValue || "day"}
             disabled={!canEdit}
-            ariaLabel="Rate limit window"
+            aria-label="Rate limit window"
+            size="compact"
             onChange={(v) => onChange("params.rateLimitWindow", v)}
           />
         </ConfigField>
@@ -654,7 +657,7 @@ function ProviderField({
   onChange: (v: string) => void;
 }) {
   return (
-    <Listbox
+    <Select
       options={[
         { value: "", label: `Default (${options.agentKind})` },
         { value: "claude", label: "Claude Code" },
@@ -662,7 +665,8 @@ function ProviderField({
       ]}
       value={value}
       disabled={disabled}
-      ariaLabel="Provider"
+      aria-label="Provider"
+      size="compact"
       onChange={onChange}
     />
   );
@@ -693,11 +697,12 @@ function ModelField({
 
   return (
     <div className="flex flex-col gap-1.5">
-      <Listbox
+      <Select
         options={[...list.map((m) => ({ value: m, label: m })), { value: CUSTOM_MODEL, label: "Custom…" }]}
         value={custom ? CUSTOM_MODEL : value === "" ? defaultModel : value}
         disabled={disabled}
-        ariaLabel="Model"
+        aria-label="Model"
+        size="compact"
         onChange={(v) => {
           if (v === CUSTOM_MODEL) {
             setCustomPicked(true);
@@ -708,11 +713,12 @@ function ModelField({
         }}
       />
       {custom && (
-        <input
+        <Input
           value={value}
           disabled={disabled}
           onChange={(e) => onChange(e.target.value)}
-          className={inputCls}
+          size="sm"
+          monospace
         />
       )}
     </div>
@@ -736,11 +742,12 @@ export function TicketStatusField({
 
   return (
     <div className="flex flex-col gap-1.5">
-      <Listbox
+      <Select
         options={[...targets, { value: CUSTOM_STATUS, label: "Custom…" }]}
         value={custom ? CUSTOM_STATUS : value}
         disabled={disabled}
-        ariaLabel="Target status"
+        aria-label="Target status"
+        size="compact"
         onChange={(v) => {
           if (v === CUSTOM_STATUS) {
             setCustomPicked(true);
@@ -751,11 +758,12 @@ export function TicketStatusField({
         }}
       />
       {custom && (
-        <input
+        <Input
           value={value}
           disabled={disabled}
           onChange={(e) => onChange(e.target.value)}
-          className={inputCls}
+          size="sm"
+          monospace
         />
       )}
     </div>
@@ -810,15 +818,10 @@ export function AgentProviderModel({
   );
 }
 
-export const readOnlyMonoCls = "w-full resize-none break-all rounded-xs border border-neutral-200 bg-off-white px-2 py-1.5 font-mono text-[11px] leading-[1.5] text-neutral-600 outline-none cursor-default";
 export const readOnlyRowCls = "break-all rounded-xs border border-neutral-200 bg-off-white px-2 py-1.5 font-mono text-[11px] leading-[1.5] text-neutral-600";
-export const webhookActionButtonCls = "appearance-none rounded-xs border border-mariner bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-mariner disabled:opacity-40";
-export const webhookDangerButtonCls = "appearance-none rounded-xs border border-red-300 bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-red-700 disabled:opacity-40";
 export const webhookBannerCls = "py-2.5 px-[14px] border-b border-neutral-200 font-body text-xs leading-[1.5]";
 
 const configFieldCompatibility = {
-  monoTextareaCls,
-  textareaCls,
   triggerRateWindowResetAt,
 };
 

@@ -390,7 +390,7 @@ test("canEdit false disables Pause while evaluating and Resume while paused", ()
   const evaluatingHtml = renderToStaticMarkup(
     <ScheduleNextRunsSection {...nextRunsProps({ canEdit: false })} />,
   );
-  assert.match(evaluatingHtml, /<button[^>]*disabled=""[^>]*>\s*Pause/);
+  assert.match(evaluatingHtml, /<button[^>]*disabled=""[^>]*>[\s\S]*?Pause<\/span><\/button>/);
 
   const pausedHtml = renderToStaticMarkup(
     <ScheduleNextRunsSection
@@ -401,7 +401,7 @@ test("canEdit false disables Pause while evaluating and Resume while paused", ()
       })}
     />,
   );
-  assert.match(pausedHtml, /<button[^>]*disabled=""[^>]*>\s*Resume/);
+  assert.match(pausedHtml, /<button[^>]*disabled=""[^>]*>[\s\S]*?Resume<\/span><\/button>/);
 });
 
 test("a draft configuration that differs from nothing deployed shows the pure preview without a deployed-diff note", () => {

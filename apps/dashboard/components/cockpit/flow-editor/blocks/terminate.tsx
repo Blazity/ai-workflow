@@ -1,6 +1,6 @@
 "use client";
 
-import { Listbox } from "@/components/cockpit/listbox";
+import { Select } from "@/components/ui";
 import { usePromptAuthoringContext } from "../prompt-authoring-context";
 import { ConfigField, RichTextField, str } from "./shared";
 import type { BlockRendererProps } from "./types";
@@ -13,7 +13,7 @@ export function TerminateFields(props: BlockRendererProps) {
   return (
           <>
             <ConfigField label="Terminal status">
-              <Listbox
+              <Select
                 options={[
                   { value: "done", label: "Done" },
                   { value: "failed", label: "Failed" },
@@ -22,7 +22,8 @@ export function TerminateFields(props: BlockRendererProps) {
                 ]}
                 value={str(node.params.terminalStatus) || "done"}
                 disabled={!canEdit}
-                ariaLabel="Terminal status"
+                aria-label="Terminal status"
+                size="compact"
                 onChange={(v) => onChange("params.terminalStatus", v)}
               />
             </ConfigField>

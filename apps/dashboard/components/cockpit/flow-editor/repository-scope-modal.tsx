@@ -4,7 +4,7 @@ import { useEffect, useId, useMemo, useState } from "react";
 
 import type { VcsProviderKind, WorkflowRepositoryScope } from "@shared/contracts";
 import { pinnedRepositoriesNotEnabledSentence } from "@shared/contracts";
-import { Listbox } from "@/components/cockpit/listbox";
+import { Button, IconButton, Input, Modal, Select } from "@/components/ui";
 import {
   addPinnedRepositories,
   contradictingPinnedRepositories,
@@ -84,7 +84,6 @@ export function RepositoryScopeModal({
   onCancel,
 }: RepositoryScopeModalProps) {
   const catalog = useRepositoryCatalog();
-  const titleId = useId();
   const providersId = useId();
   const repositoriesId = useId();
   const [draft, setDraft] = useState<WorkflowRepositoryScope>(() =>
@@ -155,7 +154,6 @@ export function RepositoryScopeModal({
     });
   }, [catalog.status, catalogByKey, open, scope]);
 
-  if (!open) return null;
   const pinned = pinnedRepositories(draft);
   const remaining = MAX_PINNED_REPOSITORIES - pinned.length;
   // One split, shared with the scope bar and the deploy warning.
@@ -263,65 +261,34 @@ export function RepositoryScopeModal({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-coal/30 p-4"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onCancel();
-      }}
-      onKeyDown={(event) => {
-        if (event.key === "Escape") {
-          event.preventDefault();
-          onCancel();
-          return;
-        }
-        if (event.key !== "Tab") return;
-        const focusable = Array.from(
-          event.currentTarget.querySelectorAll<HTMLElement>(
-            'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
-          ),
-        );
-        if (focusable.length === 0) return;
-        const first = focusable[0];
-        const last = focusable.at(-1);
-        if (!last) return;
-        if (!event.shiftKey && event.target === last) {
-          event.preventDefault();
-          first.focus();
-        } else if (event.shiftKey && event.target === first) {
-          event.preventDefault();
-          last.focus();
-        }
-      }}
-    >
-      <section
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        className="flex max-h-[calc(100dvh-32px)] w-full max-w-[680px] flex-col overflow-hidden rounded-[6px] bg-panel shadow-2xl"
-      >
-        <header className="flex items-start justify-between gap-4 border-b border-neutral-200 px-5 py-4">
-          <div>
-            <h2
-              id={titleId}
-              className="font-mono text-[13px] font-semibold uppercase tracking-[0.04em] text-coal"
-            >
-              Configure source scope
-            </h2>
-            <p className="mt-1 font-body text-[11px] text-neutral-500">
-              Choose which providers and repositories every ticket can use.
-            </p>
-          </div>
-          <button
+    <Modal
+      open={open}
+      onClose={onCancel}
+      title="Configure source scope"
+      description="Choose which providers and repositories every ticket can use."
+      size="md"
+      footer={
+        <div className="flex items-center justify-end gap-2">
+          <Button type="button" variant="secondary" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button
             type="button"
-            aria-label="Close source scope"
-            onClick={onCancel}
-            className="inline-flex size-10 items-center justify-center rounded-[4px] border border-transparent bg-transparent font-mono text-[18px] text-neutral-500 hover:bg-app-bg hover:text-coal focus-visible:outline-2 focus-visible:outline-mariner"
+            disabled={!canEdit}
+            onClick={() => onApply(draft)}
           >
-            ×
-          </button>
-        </header>
-
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+            Apply scope
+          </Button>
+        </div>
+      }
+    >
+      <IconButton
+        aria-label="Close source scope"
+        onClick={onCancel}
+        className="absolute right-4 top-3"
+      >
+        ×
+      </IconButton>
           <section aria-labelledby={providersId}>
             <h3
               id={providersId}
@@ -342,9 +309,11 @@ export function RepositoryScopeModal({
                 const active = activeProviderSet.has(provider);
                 const lastActive = active && activeProviders.length === 1;
                 return (
-                  <button
+                  <Button
                     key={provider}
                     type="button"
+                    variant={active ? "secondary" : "ghost"}
+                    size="md"
                     autoFocus={provider === PINNABLE_PROVIDERS[0]}
                     aria-pressed={active}
                     disabled={!canEdit || !connected || lastActive}
@@ -356,11 +325,7 @@ export function RepositoryScopeModal({
                           : undefined
                     }
                     onClick={() => toggleProvider(provider)}
-                    className={`inline-flex h-11 w-[164px] items-center justify-between gap-3 rounded-[4px] border px-3 font-mono text-[11px] font-semibold transition-transform active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-mariner motion-reduce:transform-none disabled:cursor-default disabled:opacity-50 ${
-                      active
-                        ? "border-mariner bg-mariner-100 text-mariner"
-                        : "border-neutral-300 bg-panel text-neutral-600 hover:bg-app-bg"
-                    }`}
+                    className="h-11 w-full justify-between sm:w-[164px] [&>span]:w-full [&>span]:justify-between"
                   >
                     <span>{providerLabel(provider)}</span>
                     <span
@@ -380,7 +345,7 @@ export function RepositoryScopeModal({
                             : "Off"
                         : "Not connected"}
                     </span>
-                  </button>
+                  </Button>
                 );
               })}
             </div>
@@ -399,13 +364,14 @@ export function RepositoryScopeModal({
                   ticket, or leave this empty for automatic selection.
                 </p>
               </div>
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 onClick={catalog.refresh}
-                className="inline-flex h-10 shrink-0 items-center justify-center rounded-[4px] px-2 font-body text-[11px] font-semibold text-mariner focus-visible:outline-2 focus-visible:outline-mariner"
               >
                 Refresh catalog
-              </button>
+              </Button>
             </div>
 
             {pinned.length > 0 && (
@@ -419,8 +385,9 @@ export function RepositoryScopeModal({
                     <span className="ml-2 border-l border-neutral-200 px-2 text-[9px] uppercase text-neutral-500">
                       {providerLabel(repository.provider)}
                     </span>
-                    <button
+                    <IconButton
                       type="button"
+                      size="sm"
                       disabled={!canEdit}
                       aria-label={`Remove ${repository.repoPath}`}
                       onClick={() =>
@@ -428,10 +395,9 @@ export function RepositoryScopeModal({
                           removePinnedRepository(current, repository),
                         )
                       }
-                      className="inline-flex size-10 items-center justify-center rounded-r-[4px] text-[16px] text-neutral-500 hover:bg-white hover:text-coal focus-visible:outline-2 focus-visible:outline-mariner disabled:cursor-default disabled:opacity-40"
                     >
                       ×
-                    </button>
+                    </IconButton>
                   </span>
                 ))}
               </div>
@@ -525,13 +491,14 @@ export function RepositoryScopeModal({
 
             {catalog.status === "ready" && !catalogEmpty && (
               <>
-                <input
+                <Input
                   value={filter}
                   disabled={!canEdit}
                   onChange={(event) => setFilter(event.target.value)}
                   placeholder="Filter repositories…"
                   aria-label="Filter repositories"
-                  className="mt-3 h-10 w-full rounded-[4px] border border-neutral-200 bg-white px-3 font-mono text-[11px] text-coal outline-none focus:border-mariner focus-visible:outline-2 focus-visible:outline-mariner disabled:opacity-60"
+                  className="mt-3"
+                  monospace
                 />
                 <div className="mt-2 max-h-[260px] overflow-y-auto rounded-[4px] border border-neutral-200">
                   {entries.length === 0 ? (
@@ -619,9 +586,9 @@ export function RepositoryScopeModal({
                     owner/repo if the workspace can reach one it does not list.
                   </div>
                 )}
-                <div className="mt-3 flex items-center gap-2">
-                  <div className="w-[120px] shrink-0">
-                    <Listbox
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <div className="w-full sm:w-[120px] sm:shrink-0">
+                    <Select
                       options={manualProviders.map((provider) => ({
                         value: provider,
                         label: providerLabel(provider),
@@ -630,28 +597,30 @@ export function RepositoryScopeModal({
                       }))}
                       value={manualProvider}
                       disabled={!canEdit}
-                      ariaLabel="Provider for the manually entered repository"
+                      aria-label="Provider for the manually entered repository"
+                      size="compact"
                       onChange={(value) =>
                         setManualProvider(value as VcsProviderKind)
                       }
                     />
                   </div>
-                  <input
+                  <Input
                     value={manualPath}
                     disabled={!canEdit}
                     onChange={(event) => setManualPath(event.target.value)}
                     placeholder="owner/repo"
                     aria-label="Repository path"
-                    className="h-10 min-w-0 flex-1 rounded-[4px] border border-neutral-200 bg-white px-3 font-mono text-[11px] text-coal outline-none focus:border-mariner focus-visible:outline-2 focus-visible:outline-mariner disabled:opacity-60"
+                    className="min-w-0 flex-1"
+                    monospace
                   />
-                  <button
+                  <Button
                     type="button"
+                    variant="secondary"
                     onClick={addManualRepository}
                     disabled={!manualAddable}
-                    className="inline-flex h-10 shrink-0 items-center justify-center rounded-[4px] border border-neutral-300 bg-panel px-3 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-coal focus-visible:outline-2 focus-visible:outline-mariner disabled:cursor-default disabled:opacity-40"
                   >
                     Add to selection
-                  </button>
+                  </Button>
                 </div>
                 {manualAlreadyPinned && (
                   <div className="pt-2 font-body text-[10px] text-amber-800">
@@ -668,26 +637,6 @@ export function RepositoryScopeModal({
               </div>
             )}
           </section>
-        </div>
-
-        <footer className="flex items-center justify-end gap-2 border-t border-neutral-200 bg-app-bg px-5 py-3">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="inline-flex h-10 items-center justify-center rounded-[4px] border border-neutral-300 bg-panel px-4 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-coal transition-transform active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-mariner motion-reduce:transform-none"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            disabled={!canEdit}
-            onClick={() => onApply(draft)}
-            className="inline-flex h-10 items-center justify-center rounded-[4px] border border-mariner bg-mariner px-4 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-white transition-transform active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-mariner motion-reduce:transform-none disabled:cursor-default disabled:opacity-40"
-          >
-            Apply scope
-          </button>
-        </footer>
-      </section>
-    </div>
+    </Modal>
   );
 }

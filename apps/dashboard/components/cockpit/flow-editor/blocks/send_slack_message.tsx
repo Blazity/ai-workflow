@@ -1,6 +1,6 @@
 "use client";
 
-import { Listbox } from "@/components/cockpit/listbox";
+import { Select } from "@/components/ui";
 import { usePromptAuthoringContext } from "../prompt-authoring-context";
 import { ConfigField, ConfigNote, RichTextField, str } from "./shared";
 import type { BlockRendererProps } from "./types";
@@ -14,14 +14,15 @@ export function SendSlackMessageFields(props: BlockRendererProps) {
   return (
     <>
       <ConfigField label="When to send">
-        <Listbox
+        <Select
           options={[
             { value: "pr_ready", label: "Only when a PR is ready" },
             { value: "always", label: "Always (standalone message)" },
           ]}
           value={sendOn}
           disabled={!canEdit}
-          ariaLabel="When to send"
+          aria-label="When to send"
+          size="compact"
           onChange={(v) => onChange("params.sendOn", v)}
         />
       </ConfigField>

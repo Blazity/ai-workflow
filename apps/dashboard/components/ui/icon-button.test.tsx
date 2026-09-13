@@ -20,3 +20,11 @@ test("IconButton exposes disabled and loading state", () => {
   assert.match(loading, /aria-busy="true"/);
   assert.match(loading, /animate-ck-spinner/);
 });
+
+test("IconButton exposes the circular shape for round icon actions", () => {
+  const html = renderToStaticMarkup(
+    <IconButton aria-label="Run trigger" shape="circle">x</IconButton>,
+  );
+  assert.match(html, /data-shape="circle"/);
+  assert.match(html, /rounded-full/);
+});

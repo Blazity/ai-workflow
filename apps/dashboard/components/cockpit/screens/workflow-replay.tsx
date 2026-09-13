@@ -2,7 +2,7 @@
 
 import React from "react";
 
-import { CkCard, CkChip, CkTabs } from "@/components/ui";
+import { Button, CkCard, CkChip, CkTabs } from "@/components/ui";
 import { apiClient } from "@/lib/api/client";
 import {
   LIVE_POLL_MS,
@@ -40,57 +40,57 @@ const STATE_STYLE: Record<
   { border: string; background: string; dot: string; label: string }
 > = {
   loading_history: {
-    border: "#D9DDE2",
-    background: "#F8F9FB",
-    dot: "#3C43E7",
+    border: "border-neutral-300",
+    background: "bg-neutral-100",
+    dot: "bg-mariner",
     label: "Loading history",
   },
   pending: {
-    border: "#D9DDE2",
-    background: "#FFFFFF",
-    dot: "#9EA3AA",
+    border: "border-neutral-300",
+    background: "bg-panel",
+    dot: "bg-neutral-500",
     label: "Not reached",
   },
   running: {
-    border: "#3C43E7",
-    background: "#F2F3FF",
-    dot: "#3C43E7",
+    border: "border-mariner",
+    background: "bg-mariner-100",
+    dot: "bg-mariner",
     label: "Running",
   },
   waiting_loop: {
-    border: "#FD6027",
-    background: "#FFF7F3",
-    dot: "#FD6027",
+    border: "border-orange-700",
+    background: "bg-orange-100",
+    dot: "bg-orange-700",
     label: "Waiting for loop",
   },
   waiting_for_clarification: {
-    border: "#FD6027",
-    background: "#FFF7F3",
-    dot: "#FD6027",
+    border: "border-orange-700",
+    background: "bg-orange-100",
+    dot: "bg-orange-700",
     label: "Awaiting input",
   },
   completed: {
-    border: "#5BB04A",
-    background: "#F4FBF2",
-    dot: "#5BB04A",
+    border: "border-success",
+    background: "bg-success-bg",
+    dot: "bg-success",
     label: "Completed",
   },
   failed: {
-    border: "#D14343",
-    background: "#FFF4F4",
-    dot: "#D14343",
+    border: "border-fail",
+    background: "bg-fail-bg",
+    dot: "bg-fail",
     label: "Failed",
   },
   cancelled: {
-    border: "#9EA3AA",
-    background: "#F6F7F8",
-    dot: "#737981",
+    border: "border-neutral-500",
+    background: "bg-neutral-100",
+    dot: "bg-neutral-700",
     label: "Cancelled",
   },
   skipped: {
-    border: "#B7BBC1",
-    background: "#F6F7F8",
-    dot: "#B7BBC1",
+    border: "border-neutral-400",
+    background: "bg-neutral-100",
+    dot: "bg-neutral-400",
     label: "Skipped",
   },
 };
@@ -556,27 +556,27 @@ function ReplayCanvas({
           const style = STATE_STYLE[state];
           const selected = selectedNodeId === node.id;
           return (
-            <button
+            <Button
               key={node.id}
-              type="button"
+              variant="ghost"
+              size="sm"
               onClick={() => onSelectNode(node.id)}
               aria-label={`${node.name ?? labelForType(node.type)}: ${style.label}`}
               aria-pressed={selected}
-              className="absolute appearance-none overflow-hidden rounded-[4px] p-0 text-left shadow-[0_2px_8px_rgba(24,27,32,0.08)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-mariner focus-visible:outline-offset-2"
+              className="absolute h-auto overflow-hidden p-0 text-left [&>span]:h-full [&>span]:w-full"
               style={{
                 left: position.x,
                 top: position.y,
                 width: NODE_WIDTH,
                 height: NODE_HEIGHT,
-                border: `${selected ? 3 : 2}px solid ${style.border}`,
-                background: style.background,
               }}
             >
-              <span className="flex h-full flex-col justify-between px-3 py-2.5">
+              <span
+                className={`flex h-full w-full flex-col justify-between rounded-sm border px-3 py-2.5 shadow-sm ${style.border} ${style.background} ${selected ? "border-[3px]" : "border-2"}`}
+              >
                 <span className="flex items-center gap-2 min-w-0">
                   <span
-                    className="h-2 w-2 shrink-0 rounded-full"
-                    style={{ background: style.dot }}
+                    className={`h-2 w-2 shrink-0 rounded-full ${style.dot}`}
                   />
                   <span className="truncate font-display text-[13px] font-semibold text-coal">
                     {node.name ?? labelForType(node.type)}
@@ -587,7 +587,7 @@ function ReplayCanvas({
                   {latest ? <span>{displayDuration(latest)}</span> : null}
                 </span>
               </span>
-            </button>
+            </Button>
           );
         })}
       </div>
@@ -607,8 +607,9 @@ function CopyButton({
 }) {
   const [copied, setCopied] = React.useState(false);
   return (
-    <button
-      type="button"
+    <Button
+      variant="secondary"
+      size="sm"
       onClick={() => {
         void navigator.clipboard
           .writeText(getText())
@@ -618,10 +619,10 @@ function CopyButton({
           })
           .catch(() => {});
       }}
-      className={`rounded-[3px] border border-neutral-700 bg-[#1A1D24] px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-300 hover:bg-[#242832] ${className ?? ""}`}
+      className={className}
     >
       {copied ? "Copied" : "Copy"}
-    </button>
+    </Button>
   );
 }
 
@@ -1158,13 +1159,13 @@ function AttemptInspector({
               </span>
             ) : null}
             {!followingLatest ? (
-              <button
-                type="button"
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={onFollowLatest}
-                className="rounded-[3px] border border-neutral-200 bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-700 hover:bg-app-bg"
               >
                 Follow latest
-              </button>
+              </Button>
             ) : null}
             <CkChip
               tone={
@@ -1203,22 +1204,19 @@ function AttemptInspector({
         {tab === "attempts" ? (
           <div className="flex max-h-[360px] flex-col gap-1 overflow-auto">
             {attempts.map((attempt) => (
-              <button
+              <Button
                 key={attempt.id}
-                type="button"
+                variant={selectedAttempt?.id === attempt.id ? "primary" : "secondary"}
+                size="sm"
                 onClick={() => onSelectAttempt(attempt)}
                 aria-pressed={selectedAttempt?.id === attempt.id}
-                className={`flex items-center justify-between gap-3 rounded-[3px] border px-3 py-2 text-left font-mono text-[11px] ${
-                  selectedAttempt?.id === attempt.id
-                    ? "border-mariner bg-mariner-100 text-mariner"
-                    : "border-neutral-200 bg-panel text-neutral-800 hover:bg-app-bg"
-                }`}
+                className="h-auto w-full py-2 text-left [&>span]:w-full [&>span]:justify-between"
               >
                 <span className="min-w-0 truncate">
                   {displayAttempt(attempt)}
                 </span>
                 <span className="shrink-0">{displayDuration(attempt)}</span>
-              </button>
+              </Button>
             ))}
           </div>
         ) : loading ? (
@@ -1531,14 +1529,14 @@ export function WorkflowReplay({
         />
         {response.nextCursor ? (
           <div className="mt-3 flex justify-center">
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={loadMore}
               disabled={loadingMore}
-              className="rounded-[3px] border border-neutral-200 bg-panel px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.04em] text-neutral-800 hover:bg-app-bg disabled:opacity-50"
             >
               {loadingMore ? "Loading…" : "Load older attempts"}
-            </button>
+            </Button>
           </div>
         ) : null}
       </CkCard>

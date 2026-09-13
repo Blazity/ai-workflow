@@ -34,7 +34,7 @@ import { PromptLibraryProvider } from "@/components/cockpit/flow-editor/prompt-l
 import { HarnessProfileCatalogProvider } from "@/components/cockpit/flow-editor/harness-profile-context";
 import { RepositoryCatalogProvider } from "@/components/cockpit/flow-editor/repository-catalog-context";
 import { DeployPinWarning } from "@/components/cockpit/flow-editor/deploy-pin-warning";
-import { Listbox } from "@/components/cockpit/listbox";
+import { Button, Input, Select } from "@/components/ui";
 import { ManualDispatchModal } from "@/components/cockpit/manual-dispatch-modal";
 import {
   runnableVersionDefinition,
@@ -227,9 +227,6 @@ function isDeploymentValidationResponse(
     Array.isArray((value as { issues?: unknown }).issues)
   );
 }
-
-const headerButtonClass =
-  "appearance-none cursor-pointer border border-neutral-200 bg-panel text-coal py-1.5 px-3 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase hover:bg-app-bg";
 
 export function WorkflowEditorScreen({
   definitions,
@@ -1149,30 +1146,34 @@ export function WorkflowEditorScreen({
           className="flex items-start gap-3 px-6 py-2 border-b border-neutral-200 bg-amber-50 font-body text-[12px] text-amber-900"
         >
           <span>Deployed. {deployNotice}</span>
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => setDeployNotice(null)}
-            className="ml-auto appearance-none border-none bg-transparent font-body text-[12px] text-amber-900 cursor-pointer"
+            className="ml-auto"
           >
             Dismiss
-          </button>
+          </Button>
         </div>
       )}
       {switchState.kind === "confirming" && (
         <div className="flex items-center gap-3 px-6 py-2 border-b border-neutral-200 bg-app-bg font-body text-[12px] text-neutral-700">
           <span>Discard unsaved changes and switch?</span>
-          <button
+          <Button
+            variant="danger"
+            size="sm"
             onClick={() => void confirmSwitch()}
             disabled={busy !== null}
-            className="appearance-none border-none bg-transparent font-body text-[12px] font-semibold text-red-600 cursor-pointer disabled:opacity-40"
           >
             Discard and switch
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={cancelSwitch}
-            className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer"
           >
             Cancel
-          </button>
+          </Button>
         </div>
       )}
       {statusBar}
@@ -1258,44 +1259,44 @@ export function WorkflowEditorScreen({
           headerExtra={
             <>
               {canEdit && (
-                <button
+                <Button
                   onClick={() => void deploy()}
                   disabled={!canDeploy || busy !== null}
-                  className="appearance-none cursor-pointer border border-emerald-600 bg-emerald-600 text-white py-1.5 px-3 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase disabled:opacity-40 disabled:cursor-default"
                 >
                   {busy === "deploy" ? "Deploying…" : "Deploy"}
-                </button>
+                </Button>
               )}
               {canEdit && deployed !== null && (
-                <button
+                <Button
+                  variant="secondary"
                   onClick={resetToDeployed}
                   disabled={!canResetToDeployed || busy !== null}
                   title="Load the deployed version's nodes and edges into the canvas."
-                  className={headerButtonClass}
                 >
                   Reset to deployed
-                </button>
+                </Button>
               )}
-              <button
+              <Button
+                variant="secondary"
                 onClick={() => {
                   setDefsOpen((o) => !o);
                   setHistoryOpen(false);
                 }}
-                className={`${headerButtonClass} min-w-[190px] max-w-[260px] flex items-center justify-between gap-3 normal-case tracking-normal`}
+                className="min-w-[190px] max-w-[260px] justify-between normal-case tracking-normal [&>span]:w-full [&>span]:justify-between"
                 aria-expanded={defsOpen}
               >
                 <span className="truncate">{selectedMeta?.name ?? "Workflows"}</span>
                 <span className="text-neutral-500 shrink-0">{metas.length} ▾</span>
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="secondary"
                 onClick={() => {
                   setHistoryOpen((o) => !o);
                   setDefsOpen(false);
                 }}
-                className={headerButtonClass}
               >
                 History ({versions.length})
-              </button>
+              </Button>
             </>
           }
           options={options}
@@ -1319,7 +1320,7 @@ export function WorkflowEditorScreen({
           />
         )}
         {defsOpen && (
-          <div className="absolute right-4 top-[56px] z-[60] w-[440px] max-h-[70vh] overflow-y-auto bg-panel border border-neutral-200 rounded-[4px] shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] px-4 py-3">
+          <div className="absolute right-4 top-[56px] z-[60] w-[440px] max-w-[calc(100vw-2rem)] max-h-[70vh] overflow-y-auto bg-panel border border-neutral-200 rounded-[4px] shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] px-4 py-3">
             <div className="flex items-center justify-between mb-1">
               <div>
                 <h2 className="font-body text-[14px] font-semibold text-neutral-900">Workflows</h2>
@@ -1327,12 +1328,13 @@ export function WorkflowEditorScreen({
                   Switch, activate, rename, or create workflows here.
                 </p>
               </div>
-              <button
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => setDefsOpen(false)}
-                className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer"
               >
                 Close
-              </button>
+              </Button>
             </div>
             {metas.map((m) => (
               <div
@@ -1340,13 +1342,15 @@ export function WorkflowEditorScreen({
                 className={`border-b border-neutral-100 py-2.5 ${m.id === selectedId ? "bg-app-bg -mx-2 px-2" : ""}`}
               >
                 <div className="flex items-start gap-3 font-body text-[12px] text-neutral-700">
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={() => {
                       void requestSwitch(m.id);
                       setDefsOpen(false);
                     }}
                     disabled={busy !== null || m.id === selectedId}
-                    className="appearance-none min-w-0 flex-1 border-none bg-transparent p-0 text-left cursor-pointer disabled:cursor-default"
+                    className="h-auto min-w-0 flex-1 justify-start p-0 text-left [&>span]:w-full [&>span]:flex-col [&>span]:items-stretch"
                   >
                     <span className="flex items-center gap-2 text-neutral-900 font-semibold">
                       <span className="truncate">{m.name}</span>
@@ -1377,19 +1381,20 @@ export function WorkflowEditorScreen({
                         ))
                       )}
                     </span>
-                  </button>
+                  </Button>
                   {m.deployedSchema === "legacy-v1" ? (
                     <span className="shrink-0 text-right font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-500">
                       Stored enabled: {m.enabled ? "yes" : "no"}
                     </span>
                   ) : canEdit ? (
-                    <button
+                    <Button
+                      variant={m.enabled ? "secondary" : "ghost"}
+                      size="sm"
                       onClick={() => void patchDefinition(m.id, { enabled: !m.enabled })}
                       disabled={busy !== null}
-                      className={`appearance-none cursor-pointer bg-transparent disabled:opacity-40 ${enabledPillClass(m.enabled)}`}
                     >
                       {m.enabled ? "Enabled" : "Disabled"}
-                    </button>
+                    </Button>
                   ) : (
                     <span className={enabledPillClass(m.enabled)}>
                       {m.enabled ? "Enabled" : "Disabled"}
@@ -1398,7 +1403,7 @@ export function WorkflowEditorScreen({
                 </div>
                 {canEdit && (
                   <div className="mt-2 flex items-center gap-2 pl-0 font-body text-[12px] text-neutral-700">
-                    <input
+                    <Input
                       key={`${m.id}-${m.name}`}
                       defaultValue={m.name}
                       aria-label={`Rename ${m.name}`}
@@ -1413,34 +1418,39 @@ export function WorkflowEditorScreen({
                           e.currentTarget.value = m.name;
                         }
                       }}
-                      className="flex-1 min-w-0 border border-neutral-200 bg-panel rounded-[3px] px-1.5 py-0.5 font-body text-[12px] text-neutral-900"
+                      size="sm"
+                      className="min-w-0 flex-1"
                     />
                     <span className="shrink-0">
                       {confirmDelete === m.id ? (
                         <>
-                          <button
+                          <Button
+                            variant="danger"
+                            size="sm"
                             onClick={() => void deleteDefinition(m.id)}
                             disabled={busy !== null}
-                            className="appearance-none border-none bg-transparent font-body text-[12px] font-semibold text-red-600 cursor-pointer disabled:opacity-40"
                           >
                             {busy === `delete-${m.id}` ? "Deleting…" : "Confirm delete"}
-                          </button>
-                          <button
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
                             onClick={() => setConfirmDelete(null)}
-                            className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer ml-2"
+                            className="ml-2"
                           >
                             Cancel
-                          </button>
+                          </Button>
                         </>
                       ) : (
-                        <button
+                        <Button
+                          variant="danger"
+                          size="sm"
                           onClick={() => setConfirmDelete(m.id)}
                           disabled={m.enabled}
                           title={m.enabled ? "disable first" : undefined}
-                          className="appearance-none border-none bg-transparent font-body text-[12px] text-red-600 cursor-pointer disabled:opacity-40 disabled:cursor-default"
                         >
                           Delete
-                        </button>
+                        </Button>
                       )}
                     </span>
                   </div>
@@ -1455,16 +1465,17 @@ export function WorkflowEditorScreen({
                 <div className="font-body text-[12px] font-semibold text-neutral-900 mb-2">
                   New workflow
                 </div>
-                <div className="flex items-center gap-2">
-                  <input
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <Input
                     value={newName}
                     onChange={(e) => setNewName(e.target.value)}
                     placeholder="Name"
                     aria-label="New workflow name"
-                    className="flex-1 min-w-0 border border-neutral-200 bg-panel rounded-[3px] px-1.5 py-1 font-body text-[12px] text-neutral-900"
+                    size="sm"
+                    className="min-w-0 flex-1"
                   />
-                  <div className="w-[160px]">
-                    <Listbox
+                  <div className="w-full sm:w-[160px]">
+                    <Select
                       options={[
                         ...templates.map((template) => ({
                           value: `template:${template.id}`,
@@ -1479,16 +1490,16 @@ export function WorkflowEditorScreen({
                       value={newSource}
                       onChange={setNewSource}
                       disabled={busy !== null}
-                      ariaLabel="New workflow source"
+                      aria-label="New workflow source"
+                      size="compact"
                     />
                   </div>
-                  <button
+                  <Button
                     onClick={() => void createDefinition()}
                     disabled={busy !== null || newName.trim().length === 0}
-                    className="appearance-none cursor-pointer border border-mariner bg-mariner text-white py-1 px-2.5 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase disabled:opacity-40 disabled:cursor-default"
                   >
                     {busy === "create" ? "Creating…" : "Create"}
-                  </button>
+                  </Button>
                 </div>
                 {createError && (
                   <div className="mt-1 font-body text-[11px] text-red-600">{createError}</div>
@@ -1501,12 +1512,13 @@ export function WorkflowEditorScreen({
           <div className="absolute right-4 top-[56px] z-[60] w-[720px] max-w-[calc(100vw-2rem)] bg-panel border border-neutral-200 rounded-[4px] shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] px-4 py-3">
             <div className="flex items-center justify-between mb-1">
               <h2 className="font-body text-[14px] font-semibold text-neutral-900">History</h2>
-              <button
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => setHistoryOpen(false)}
-                className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer"
               >
                 Close
-              </button>
+              </Button>
             </div>
             {versions.length === 0 && (
               <div className="font-body text-[12px] text-neutral-500">No versions yet.</div>
@@ -1551,7 +1563,7 @@ export function WorkflowEditorScreen({
                     <span
                       id={`history-version-${v.version}-deployed-tooltip`}
                       role="tooltip"
-                      className="pointer-events-none absolute left-1/2 top-full z-10 mt-2 -translate-x-1/2 whitespace-nowrap rounded-[3px] bg-neutral-900 px-2 py-1 font-body text-[10px] text-white opacity-0 shadow-sm transition-opacity group-hover:opacity-100 group-focus:opacity-100"
+                      className="pointer-events-none absolute left-1/2 top-full z-10 mt-2 -translate-x-1/2 whitespace-nowrap rounded-[3px] bg-neutral-900 px-2 py-1 font-body text-[10px] text-white opacity-0 shadow-sm transition-opacity duration-[var(--motion-fast)] group-hover:opacity-100 group-focus:opacity-100"
                     >
                       Currently deployed version
                     </span>
@@ -1568,8 +1580,10 @@ export function WorkflowEditorScreen({
                 )}
                 {v.schema !== "v2" && (
                   <div className="basis-full pl-7">
-                    <button
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="sm"
                       aria-expanded={expandedLegacyVersions.has(
                         legacyVersionDisclosureKey(selectedId, v.version),
                       )}
@@ -1586,14 +1600,13 @@ export function WorkflowEditorScreen({
                           return next;
                         })
                       }
-                      className="appearance-none border-none bg-transparent p-0 font-body text-[12px] text-mariner cursor-pointer"
                     >
                       {legacyVersionToggleLabel(
                         expandedLegacyVersions.has(
                           legacyVersionDisclosureKey(selectedId, v.version),
                         ),
                       )}
-                    </button>
+                    </Button>
                     {expandedLegacyVersions.has(
                       legacyVersionDisclosureKey(selectedId, v.version),
                     ) && (
@@ -1610,27 +1623,31 @@ export function WorkflowEditorScreen({
                   <span className="ml-auto">
                     {confirmRestore === v.version ? (
                       <>
-                        <button
+                        <Button
+                          variant="danger"
+                          size="sm"
                           onClick={() => rollback(v.version)}
                           disabled={busy !== null}
-                          className="appearance-none border-none bg-transparent font-body text-[12px] font-semibold text-red-600 cursor-pointer disabled:opacity-40"
                         >
                           {busy === `rollback-${v.version}` ? "Rolling back…" : "Confirm rollback"}
-                        </button>
-                        <button
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
                           onClick={() => setConfirmRestore(null)}
-                          className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer ml-2"
+                          className="ml-2"
                         >
                           Cancel
-                        </button>
+                        </Button>
                       </>
                     ) : (
-                      <button
+                      <Button
+                        variant="ghost"
+                        size="sm"
                         onClick={() => setConfirmRestore(v.version)}
-                        className="appearance-none border-none bg-transparent font-body text-[12px] text-mariner cursor-pointer"
                       >
                         Roll back
-                      </button>
+                      </Button>
                     )}
                   </span>
                 )}

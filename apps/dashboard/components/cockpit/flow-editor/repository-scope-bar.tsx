@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 
 import type { WorkflowRepositoryScope } from "@shared/contracts";
 import {
@@ -17,6 +17,7 @@ import {
   useRepositoryCatalog,
 } from "./repository-catalog-context";
 import { RepositoryScopeModal } from "./repository-scope-modal";
+import { Button } from "@/components/ui";
 
 const attentionBadgeClass =
   "inline-flex h-6 shrink-0 items-center rounded-[3px] border px-2 font-mono text-[10px]";
@@ -40,8 +41,6 @@ export function RepositoryScopeBar({
 }) {
   const catalog = useRepositoryCatalog();
   const [modalOpen, setModalOpen] = useState(false);
-  const configureRef = useRef<HTMLButtonElement>(null);
-  const wasOpen = useRef(false);
   const pinned = pinnedRepositories(scope);
   const catalogByKey = useMemo(
     () =>
@@ -100,11 +99,6 @@ export function RepositoryScopeBar({
       : null,
   ].filter((entry) => entry !== null);
 
-  useEffect(() => {
-    if (wasOpen.current && !modalOpen) configureRef.current?.focus();
-    wasOpen.current = modalOpen;
-  }, [modalOpen]);
-
   return (
     <>
       <div className="flex min-h-[52px] items-center gap-3 border-b border-neutral-200 bg-app-bg px-6 py-2">
@@ -147,16 +141,15 @@ export function RepositoryScopeBar({
           )}
         </div>
 
-        <button
-          ref={configureRef}
+        <Button
           type="button"
+          variant="secondary"
           aria-haspopup="dialog"
           onClick={() => setModalOpen(true)}
           disabled={!canEdit}
-          className="inline-flex h-10 shrink-0 items-center justify-center rounded-[4px] border border-neutral-300 bg-panel px-3 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-coal transition-transform hover:bg-white active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-mariner motion-reduce:transform-none disabled:cursor-default disabled:opacity-40"
         >
           Configure
-        </button>
+        </Button>
       </div>
 
       <RepositoryScopeModal

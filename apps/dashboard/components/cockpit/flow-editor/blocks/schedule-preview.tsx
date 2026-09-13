@@ -1,7 +1,8 @@
 "use client";
 
 import type { ScheduleEvaluationState, ScheduleOccurrenceOutcome, ScheduleOverlapPolicy, ScheduleStatus, ScheduleWeekday } from "@shared/contracts";
-import { ConfigField, webhookActionButtonCls, webhookBannerCls, webhookDangerButtonCls } from "./shared";
+import { Button } from "@/components/ui";
+import { ConfigField, webhookBannerCls } from "./shared";
 import { describeRotationWindow, formatWebhookInstant } from "./webhook-endpoint";
 
 export const SCHEDULE_PRESET_KIND_OPTIONS = [
@@ -35,8 +36,6 @@ export const SCHEDULE_OVERLAP_POLICY_OPTIONS: { value: ScheduleOverlapPolicy; la
   { value: "queue", label: "Queue (keep newest)" },
   { value: "allow", label: "Allow concurrent" },
 ];
-
-export const scheduleModeToggleCls = "appearance-none rounded-xs border border-neutral-200 bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-600 disabled:opacity-40";
 
 export const SCHEDULE_OUTCOME_STYLES: Record<ScheduleOccurrenceOutcome, string> = {
   started: "border-green-300 bg-green-50 text-green-800",
@@ -83,9 +82,11 @@ export function ScheduleWeekdayToggles({
       {SCHEDULE_WEEKDAYS.map(({ value: day, label }) => {
         const active = value.includes(day);
         return (
-          <button
+          <Button
             key={day}
             type="button"
+            variant={active ? "secondary" : "ghost"}
+            size="sm"
             disabled={disabled}
             aria-pressed={active}
             onClick={() =>
@@ -95,14 +96,9 @@ export function ScheduleWeekdayToggles({
                   : [...value, day].sort((a, b) => a - b),
               )
             }
-            className={`rounded-xs border px-1.5 py-1 font-mono text-[9px] uppercase tracking-[0.04em] disabled:opacity-40 ${
-              active
-                ? "border-mariner bg-mariner-100 text-mariner"
-                : "border-neutral-200 bg-panel text-neutral-600"
-            }`}
           >
             {label}
-          </button>
+          </Button>
         );
       })}
     </div>
@@ -308,25 +304,26 @@ export function ScheduleNextRunsSection({
           </div>
         )}
         <div className="flex flex-wrap items-center gap-1.5 py-2.5 px-[14px] border-b border-neutral-200">
-          <button
+          <Button
             type="button"
+            variant="danger"
+            size="sm"
             disabled={!canEdit || busy}
             onClick={onPause}
-            className={webhookDangerButtonCls}
           >
             Pause
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            size="sm"
             disabled={!canEdit || busy}
             onClick={onResume}
-            className={webhookActionButtonCls}
           >
             Resume
-          </button>
-          <button type="button" onClick={onReload} className={webhookActionButtonCls}>
+          </Button>
+          <Button type="button" size="sm" onClick={onReload}>
             Retry
-          </button>
+          </Button>
         </div>
       </>
     );
@@ -349,14 +346,15 @@ export function ScheduleNextRunsSection({
           </div>
         )}
         <div className="flex items-center gap-1.5 py-2.5 px-[14px] border-b border-neutral-200">
-          <button
+          <Button
             type="button"
+            variant="danger"
+            size="sm"
             disabled={!canEdit || busy}
             onClick={onPause}
-            className={webhookDangerButtonCls}
           >
             Pause
-          </button>
+          </Button>
           <span className="font-body text-[10px] text-neutral-500">{SCHEDULE_PAUSE_CANCELS_NOTE}</span>
         </div>
       </>
@@ -374,9 +372,9 @@ export function ScheduleNextRunsSection({
         </div>
         <SchedulePreviewErrorBanner preview={preview} />
         <div className="flex items-center gap-1.5 py-2.5 px-[14px] border-b border-neutral-200">
-          <button type="button" onClick={onReload} className={webhookActionButtonCls}>
+          <Button type="button" size="sm" onClick={onReload}>
             Refresh
-          </button>
+          </Button>
         </div>
       </>
     );
@@ -399,14 +397,14 @@ export function ScheduleNextRunsSection({
           </div>
         )}
         <div className="flex items-center gap-1.5 py-2.5 px-[14px] border-b border-neutral-200">
-          <button
+          <Button
             type="button"
+            size="sm"
             disabled={!canEdit || busy}
             onClick={onResume}
-            className={webhookActionButtonCls}
           >
             Resume
-          </button>
+          </Button>
         </div>
       </>
     );
@@ -421,9 +419,9 @@ export function ScheduleNextRunsSection({
     <ConfigField
       label="Next occurrences"
       action={
-        <button type="button" onClick={onReload} className={webhookActionButtonCls}>
+        <Button type="button" size="sm" onClick={onReload}>
           Refresh
-        </button>
+        </Button>
       }
     >
       {trustState === "draft" && (
@@ -453,14 +451,15 @@ export function ScheduleNextRunsSection({
       )}
       {trustState === "evaluating" && (
         <div className="mt-1.5 flex items-center gap-1.5">
-          <button
+          <Button
             type="button"
+            variant="danger"
+            size="sm"
             disabled={!canEdit || busy}
             onClick={onPause}
-            className={webhookDangerButtonCls}
           >
             Pause
-          </button>
+          </Button>
           <span className="font-body text-[10px] text-neutral-500">{SCHEDULE_PAUSE_CANCELS_NOTE}</span>
         </div>
       )}
@@ -479,33 +478,37 @@ export function ScheduleNextRunsSection({
                 The schedule keeps running, starting clean at its next occurrence.
               </p>
               <div className="flex items-center gap-1.5">
-                <button
+                <Button
                   type="button"
+                  variant="danger"
+                  size="sm"
                   disabled={busy}
                   onClick={onCancelConfirm}
-                  className={webhookDangerButtonCls}
                 >
                   {busy ? "Working…" : "Cancel this run"}
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="sm"
                   disabled={busy}
                   onClick={onCancelDismiss}
-                  className="appearance-none border-none bg-transparent p-0 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-600 disabled:opacity-40"
                 >
                   Keep it
-                </button>
+                </Button>
               </div>
             </div>
           ) : (
-            <button
+            <Button
               type="button"
+              variant="danger"
+              size="sm"
               disabled={!canEdit || busy}
               onClick={onCancelRequest}
-              className={`${webhookDangerButtonCls} self-start`}
+              className="self-start"
             >
               Cancel current run
-            </button>
+            </Button>
           )}
           {cancelNotice !== null && (
             <div role="status" className="font-body text-[11px] leading-[1.5] text-neutral-700">

@@ -1,6 +1,6 @@
 "use client";
 
-import { Listbox } from "@/components/cockpit/listbox";
+import { Select } from "@/components/ui";
 import { usePromptAuthoringContext } from "../prompt-authoring-context";
 import { ConfigField, ConfigNote, RichTextField, str } from "./shared";
 import type { BlockRendererProps } from "./types";
@@ -13,7 +13,7 @@ export function CompletePrCheckFields(props: BlockRendererProps) {
   return (
           <>
             <ConfigField label="Conclusion">
-              <Listbox
+              <Select
                 options={[
                   { value: "success", label: "Success" },
                   { value: "failure", label: "Failure" },
@@ -21,7 +21,8 @@ export function CompletePrCheckFields(props: BlockRendererProps) {
                 ]}
                 value={str(node.params.conclusion) || "success"}
                 disabled={!canEdit}
-                ariaLabel="PR check conclusion"
+                aria-label="PR check conclusion"
+                size="compact"
                 onChange={(value) => onChange("params.conclusion", value)}
               />
             </ConfigField>

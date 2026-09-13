@@ -30,7 +30,7 @@ test("creates all seven canonical operations", () => {
   assert.equal(defaultTransformConfiguration("parse_json").operation, "parse_json");
 });
 
-test("renders the approved action list and output shape", () => {
+test("renders the selected approved action and output shape", () => {
   const html = renderToStaticMarkup(
     <TransformFields
       configuration={{
@@ -46,9 +46,8 @@ test("renders the approved action list and output shape", () => {
       onChange={() => undefined}
     />,
   );
-  assert.match(html, /Format text/);
-  assert.match(html, /Parse JSON/);
-  assert.match(html, /Build object/);
+  assert.match(html, /Replace text/);
+  assert.match(html, /aria-label="Action"/);
   assert.match(html, /Output shape/);
   assert.match(html, /Ignore capitalization/);
 });

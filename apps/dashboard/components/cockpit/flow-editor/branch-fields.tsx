@@ -10,16 +10,12 @@ import type {
   WorkflowDataReferenceV2,
 } from "@shared/contracts";
 import { evaluateWorkflowValueCompatibility } from "@shared/contracts";
+import { Button, IconButton, Input, Select } from "@/components/ui";
 import {
   compatibilityInvalidReason,
   WorkflowDataPicker,
   WorkflowValueChip,
 } from "./workflow-data-picker";
-
-const inputClass =
-  "h-9 min-w-0 rounded-[3px] border border-neutral-200 bg-off-white px-2.5 font-body text-[12px] text-coal outline-none disabled:opacity-50";
-const buttonClass =
-  "h-8 rounded-[3px] border border-mariner bg-panel px-3 font-mono text-[9px] uppercase tracking-[0.05em] text-mariner disabled:opacity-40";
 
 function schemaTypes(entry: WorkflowDataCatalogEntry): string[] {
   const raw = entry.schema.type;
@@ -150,41 +146,40 @@ function LiteralEditor({
   );
   if (enumValues.length > 0) {
     return (
-      <select
+      <Select
         aria-label="Comparison value"
-        className={inputClass}
+        size="compact"
         disabled={disabled}
         value={JSON.stringify(condition.value)}
-        onChange={(event) => onChange(JSON.parse(event.target.value))}
-      >
-        {enumValues.map((value) => (
-          <option key={JSON.stringify(value)} value={JSON.stringify(value)}>
-            {String(value)}
-          </option>
-        ))}
-      </select>
+        options={enumValues.map((value) => ({
+          value: JSON.stringify(value),
+          label: String(value),
+        }))}
+        onChange={(value) => onChange(JSON.parse(value))}
+      />
     );
   }
   const types = schemaTypes(entry);
   if (types.includes("boolean")) {
     return (
-      <select
+      <Select
         aria-label="Comparison value"
-        className={inputClass}
+        size="compact"
         disabled={disabled}
         value={condition.value === false ? "false" : "true"}
-        onChange={(event) => onChange(event.target.value === "true")}
-      >
-        <option value="true">True</option>
-        <option value="false">False</option>
-      </select>
+        options={[
+          { value: "true", label: "True" },
+          { value: "false", label: "False" },
+        ]}
+        onChange={(value) => onChange(value === "true")}
+      />
     );
   }
   if (types.includes("number") || types.includes("integer")) {
     return (
-      <input
+      <Input
         aria-label="Comparison value"
-        className={inputClass}
+        size="sm"
         disabled={disabled}
         type="number"
         value={typeof condition.value === "number" ? condition.value : ""}
@@ -193,9 +188,9 @@ function LiteralEditor({
     );
   }
   return (
-    <input
+    <Input
       aria-label="Comparison value"
-      className={inputClass}
+      size="sm"
       disabled={disabled}
       value={typeof condition.value === "string" ? condition.value : ""}
       onChange={(event) => onChange(event.target.value)}
@@ -226,9 +221,9 @@ export function BranchFields({
           This pre-release Branch uses an obsolete configuration.
         </p>
         {canEdit && (
-          <button type="button" className={`${buttonClass} mt-2`} onClick={replace}>
+          <Button type="button" size="sm" className="mt-2" onClick={replace}>
             Replace condition
-          </button>
+          </Button>
         )}
       </section>
     );
@@ -246,20 +241,22 @@ export function BranchFields({
       <div className="border-b border-neutral-200 px-[14px] py-3">
         <label className="mb-3 flex items-center gap-2 font-body text-[11px]">
           Match
-          <select
-            className={inputClass}
+          <Select
+            aria-label="Match"
+            size="compact"
             disabled={!canEdit}
             value={parsed.combinator}
-            onChange={(event) =>
+            options={[
+              { value: "all", label: "all conditions (AND)" },
+              { value: "any", label: "any condition (OR)" },
+            ]}
+            onChange={(combinator) =>
               onChange({
                 ...parsed,
-                combinator: event.target.value as "all" | "any",
+                combinator: combinator as "all" | "any",
               })
             }
-          >
-            <option value="all">all conditions (AND)</option>
-            <option value="any">any condition (OR)</option>
-          </select>
+          />
         </label>
         <div className="space-y-3">
           {parsed.conditions.map((condition, index) => {
@@ -294,14 +291,18 @@ export function BranchFields({
                   }}
                 />
                 {entry && (
-                  <div className="grid grid-cols-[1fr_1fr_auto] gap-2">
-                    <select
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_auto]">
+                    <Select
                       aria-label="Operator"
-                      className={inputClass}
+                      size="compact"
                       disabled={!canEdit}
                       value={condition.operator}
-                      onChange={(event) => {
-                        const operator = event.target.value as WorkflowBranchOperatorV2;
+                      options={operators(entry).map((operator) => ({
+                        value: operator,
+                        label: operator.replaceAll("_", " "),
+                      }))}
+                      onChange={(value) => {
+                        const operator = value as WorkflowBranchOperatorV2;
                         const isPresence =
                           operator === "has_value" || operator === "has_no_value";
                         const next: WorkflowBranchConditionV2 = isPresence
@@ -318,13 +319,7 @@ export function BranchFields({
                           ),
                         });
                       }}
-                    >
-                      {operators(entry).map((operator) => (
-                        <option key={operator} value={operator}>
-                          {operator.replaceAll("_", " ")}
-                        </option>
-                      ))}
-                    </select>
+                    />
                     {!presence && (
                       <LiteralEditor
                         condition={condition}
@@ -340,11 +335,11 @@ export function BranchFields({
                         }
                       />
                     )}
-                    <button
+                    <IconButton
                       type="button"
+                      size="sm"
                       aria-label="Delete condition"
                       disabled={!canEdit}
-                      className="h-9 w-9 border-none bg-transparent text-neutral-500"
                       onClick={() =>
                         onChange({
                           ...parsed,
@@ -353,7 +348,7 @@ export function BranchFields({
                       }
                     >
                       ×
-                    </button>
+                    </IconButton>
                   </div>
                 )}
                 {entry && text && !presence && (
@@ -381,9 +376,10 @@ export function BranchFields({
           })}
         </div>
         {canEdit && (
-          <button
+          <Button
             type="button"
-            className={`${buttonClass} mt-3`}
+            size="sm"
+            className="mt-3"
             disabled={!availableValues.some((entry) => entry.availability.state === "available")}
             onClick={() => {
               const entry = availableValues.find(
@@ -404,7 +400,7 @@ export function BranchFields({
             }}
           >
             Add condition
-          </button>
+          </Button>
         )}
       </div>
     </section>

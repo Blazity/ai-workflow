@@ -14,6 +14,7 @@ export interface IconButtonProps
   variant?: ButtonVariant;
   size?: ButtonSize;
   loading?: boolean;
+  shape?: "square" | "circle";
 }
 
 export function IconButton({
@@ -23,6 +24,7 @@ export function IconButton({
   variant = "ghost",
   size = "md",
   loading = false,
+  shape = "square",
   ...props
 }: IconButtonProps) {
   return (
@@ -31,10 +33,18 @@ export function IconButton({
       type={props.type ?? "button"}
       aria-label={ariaLabel}
       aria-busy={loading || undefined}
-      className={getButtonClassName({ variant, size, className, iconOnly: true })}
+      className={getButtonClassName({
+        variant,
+        size,
+        className: [shape === "circle" ? "rounded-full" : undefined, className]
+          .filter(Boolean)
+          .join(" "),
+        iconOnly: true,
+      })}
       disabled={props.disabled || loading}
       data-size={size}
       data-variant={variant}
+      data-shape={shape}
     >
       {loading ? <ButtonSpinner /> : null}
       <span aria-hidden="true" className={loading ? "inline-flex opacity-0" : "inline-flex"}>
