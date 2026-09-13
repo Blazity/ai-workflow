@@ -23,3 +23,4 @@ export { Checkbox } from "./checkbox";
 export type { CheckboxProps } from "./checkbox";
 export { RouteTabs } from "./route-tabs";
 export type { RouteTab, RouteTabsProps } from "./route-tabs";
+export * from "./nav-item";

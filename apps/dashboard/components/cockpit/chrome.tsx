@@ -2,8 +2,7 @@
 
 import React from "react";
 import { BlazityLogo } from "@/components/ui";
-import { Button } from "@/components/ui/button";
-import { IconButton } from "@/components/ui/icon-button";
+import { NavItem } from "@/components/ui/nav-item";
 import { ArticleIcon } from "@phosphor-icons/react/dist/csr/Article";
 import { BrainIcon } from "@phosphor-icons/react/dist/csr/Brain";
 import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
@@ -91,17 +90,16 @@ export function CkSidebar({
         collapsed ? "w-[60px] flex-[0_0_60px]" : "w-[220px] flex-[0_0_220px]"
       }`}
     >
-      <IconButton
+      <button
+        type="button"
         onClick={onToggleCollapse}
         title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
         aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
         aria-expanded={!collapsed}
-        className="absolute top-[22px] right-0 z-10 -translate-y-px translate-x-1/2"
-        size="sm"
-        variant="secondary"
+        className="absolute top-[22px] right-0 translate-x-1/2 z-10 w-5 h-5 flex items-center justify-center rounded-full border border-neutral-200 bg-panel text-neutral-500 hover:bg-app-bg hover:text-neutral-800 cursor-pointer appearance-none transition-colors duration-[120ms]"
       >
         <span className="font-mono text-[11px] leading-none">{collapsed ? "›" : "‹"}</span>
-      </IconButton>
+      </button>
 
       <div
         className={`pb-[18px] flex items-center gap-2 ${
@@ -123,25 +121,16 @@ export function CkSidebar({
               const on = active === n.id;
               const NavIcon = n.icon;
               return (
-                <Button
+                <NavItem
                   key={n.id}
                   onClick={() => onNav(n.id)}
                   title={collapsed ? n.label : undefined}
-                  aria-label={n.label}
-                  aria-current={on ? "page" : undefined}
-                  variant="ghost"
-                  className={`h-auto w-full justify-start py-2 font-body text-[13px] normal-case tracking-normal ${
-                    collapsed ? "px-0 justify-center" : "px-3"
-                  } ${
-                    on
-                      ? "bg-mariner-100 text-mariner font-semibold"
-                      : "text-neutral-800 font-medium"
-                  }`}
-                >
-                  <NavIcon size={16} aria-hidden="true" className={on ? "text-mariner" : "text-neutral-700"} />
-                  {!collapsed && n.label}
-                  {!collapsed && on && <span className="ml-auto w-1 h-4 bg-mariner rounded-full" />}
-                </Button>
+                  label={n.label}
+                  icon={<NavIcon size={16} />}
+                  active={on}
+                  collapsed={collapsed}
+                  className="w-full"
+                />
               );
             })}
           </nav>

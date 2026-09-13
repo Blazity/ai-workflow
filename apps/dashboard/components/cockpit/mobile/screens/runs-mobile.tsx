@@ -134,8 +134,9 @@ export function RunsMobileScreen({
           <Button
             key={f.id}
             onClick={() => setFilter(f.id)}
+            aria-pressed={filter === f.id}
             className="flex-none"
-            variant={filter === f.id ? "primary" : "secondary"}
+            variant={filter === f.id ? "selected" : "secondary"}
           >{f.label}</Button>
         ))}
       </div>

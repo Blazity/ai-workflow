@@ -4,7 +4,7 @@
 import { ArticleIcon } from "@phosphor-icons/react/dist/csr/Article";
 import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
 import { ListBulletsIcon } from "@phosphor-icons/react/dist/csr/ListBullets";
-import { Button } from "@/components/ui/button";
+import { NavItem } from "@/components/ui/nav-item";
 
 const TABS = [
   { id: "overview", label: "Overview", icon: ArticleIcon },
@@ -29,20 +29,25 @@ export function BottomTabBar({
         const on = active === tHere.id;
         const TabIcon = tHere.icon;
         return (
-          <Button key={tHere.id} onClick={() => onNav(tHere.id)} aria-label={tHere.label} aria-current={on ? "page" : undefined} variant="ghost" className={`h-auto flex-1 rounded-none py-2 ${on ? "text-mariner" : "text-neutral-600"}`}>
-            <span className="flex flex-col items-center gap-0.5">
-              <TabIcon size={16} aria-hidden="true" />
-              <span className="font-mono text-[9px] tracking-[0.02em]">{tHere.label}</span>
-            </span>
-          </Button>
+          <NavItem
+            key={tHere.id}
+            onClick={() => onNav(tHere.id)}
+            label={tHere.label}
+            icon={<TabIcon size={16} />}
+            active={on}
+            stacked
+            className="flex-1 rounded-none py-2"
+          />
         );
       })}
-      <Button onClick={onOpenMore} aria-label="More" aria-current={moreActive ? "page" : undefined} variant="ghost" className={`h-auto flex-1 rounded-none py-2 ${moreActive ? "text-mariner" : "text-neutral-600"}`}>
-        <span className="flex flex-col items-center gap-0.5">
-          <span className="font-mono text-lg leading-none">⋯</span>
-          <span className="font-mono text-[9px] tracking-[0.02em]">More</span>
-        </span>
-      </Button>
+      <NavItem
+        onClick={onOpenMore}
+        label="More"
+        icon={<span className="font-mono text-lg leading-none">⋯</span>}
+        active={moreActive}
+        stacked
+        className="flex-1 rounded-none py-2"
+      />
     </nav>
   );
 }

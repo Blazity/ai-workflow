@@ -1,0 +1,89 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import React, { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import type { PromptLibraryListRowDto } from "@shared/contracts";
+import { installTestDom } from "@/components/ui/test-dom";
+import { PromptListRail } from "./list-rail";
+
+(globalThis as typeof globalThis & { React: typeof React }).React = React;
+
+const rows: PromptLibraryListRowDto[] = [
+  {
+    id: 7,
+    slug: "research-plan",
+    name: "Research plan",
+    description: "Selected prompt",
+    tags: ["research"],
+    currentVersion: 3,
+    archivedAt: null,
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-02T00:00:00Z",
+    createdByLabel: "System",
+    body: "# Research",
+    slots: [],
+  },
+  {
+    id: 8,
+    slug: "review-plan",
+    name: "Review plan",
+    description: null,
+    tags: [],
+    currentVersion: 1,
+    archivedAt: null,
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-02T00:00:00Z",
+    createdByLabel: "System",
+    body: "# Review",
+    slots: [],
+  },
+];
+
+test("PromptListRail keeps selected rows tinted without the primary button skin", () => {
+  const dom = installTestDom();
+  const container = document.createElement("div");
+  document.body.append(container);
+  let root: Root | undefined;
+
+  try {
+    act(() => {
+      root = createRoot(container);
+      root.render(
+        <PromptListRail
+          rows={rows}
+          tags={["research"]}
+          activeId={7}
+          query=""
+          onQueryChange={() => undefined}
+          tag={null}
+          onTagChange={() => undefined}
+          showArchived={false}
+          onToggleArchived={() => undefined}
+          onSelect={() => undefined}
+          onClearFilters={() => undefined}
+        />,
+      );
+    });
+
+    const renderedRows = Array.from(container.querySelectorAll<HTMLButtonElement>("button[data-row]"));
+    assert.equal(renderedRows.length, 2);
+    assert.equal(renderedRows[0]?.getAttribute("aria-pressed"), "true");
+    assert.match(renderedRows[0]?.className ?? "", /border-l-mariner/);
+    assert.match(renderedRows[0]?.className ?? "", /bg-off-white/);
+    assert.doesNotMatch(renderedRows[0]?.className ?? "", /bg-mariner(?:\s|$)/);
+    assert.match(renderedRows[1]?.className ?? "", /border-l-transparent/);
+    assert.match(renderedRows[1]?.className ?? "", /bg-panel/);
+    assert.equal(renderedRows[1]?.getAttribute("aria-pressed"), "false");
+
+    const activeTag = container.querySelector<HTMLButtonElement>('[data-variant="selected"]');
+    assert.ok(activeTag);
+    assert.equal(activeTag.textContent?.trim(), "all");
+    assert.match(activeTag.className, /bg-mariner-100/);
+    assert.match(activeTag.className, /text-\[9px\]/);
+    assert.match(activeTag.className, /uppercase/);
+  } finally {
+    act(() => root?.unmount());
+    container.remove();
+    dom.restore();
+  }
+});
