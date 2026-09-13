@@ -13,6 +13,7 @@ import { canDispatchWorkflowRuns } from "../../../../../services/auth/roles.js";
 import {
   cancelRunAsOperator,
 } from "../../../../../services/run-lifecycle/cancel-run-request.js";
+import { getRequestSettingsSnapshot } from "../../../../../services/settings/index.js";
 
 /**
  * Operator cancel-by-id: an authenticated dispatcher stops ANY in-flight run,
@@ -32,7 +33,12 @@ export default defineEventHandler(
         throw createError({ statusCode: 404, statusMessage: "Unknown run" });
       }
 
-      const result = await cancelRunAsOperator(runId, { userId: actor.userId });
+      const settings = await getRequestSettingsSnapshot(event);
+      const result = await cancelRunAsOperator(
+        runId,
+        { userId: actor.userId },
+        settings,
+      );
 
       switch (result.outcome) {
         case "cancelled": {

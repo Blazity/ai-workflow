@@ -21,4 +21,12 @@ describe("resolveSeedAuthEnv", () => {
     expect(resolved.values.DATABASE_URL).toBe("postgres://example");
     expect(resolved.values.DASHBOARD_AUTH_EMAIL).toBe("admin@example.com");
   });
+
+  it("never reads the retired organization name from the environment", () => {
+    const resolved = resolveSeedAuthEnv({
+      DASHBOARD_ORG_NAME: "Retired environment name",
+    });
+
+    expect(resolved.values).not.toHaveProperty("DASHBOARD_ORG_NAME");
+  });
 });

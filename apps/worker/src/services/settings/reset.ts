@@ -6,12 +6,10 @@
  * by a seed on a deployment whose environment already answered for it) stayed
  * stored forever and the environment variable beside it became decoration.
  *
- * Deliberately NOT "set it back to the default". The resolution order is the
- * stored row, then the deployment's environment, then the registry default, so
- * clearing the row hands the key to whichever of the other two answers, and on
- * a deployment that sets the variable that is the environment's value and not
- * the default. The outcome names the value that took over rather than leaving
- * the caller to work it out.
+ * Deliberately NOT "set it back to the default". An ordinary key does fall
+ * back to its registry default, while a `requiresRedeploy` key remains owned by
+ * its deployment variable. The outcome names the value that took over rather
+ * than leaving the caller to work it out.
  */
 import {
   findSettingDefinition,
@@ -23,7 +21,7 @@ import { settingsEnvironment } from "../../infra/settings-environment.js";
 import { SettingsValidationError, readSettings } from "./store.js";
 
 export interface SettingsResetOutcome {
-  /** False when nothing was stored: the environment or the default was already
+  /** False when nothing was stored: the resolved fallback was already
    *  answering, so no row was removed and no version was recorded. */
   removed: boolean;
   /** The key as it stands now, resolved, with the change that last touched it.
@@ -43,7 +41,7 @@ export async function resetSetting(input: {
   }
 
   // What THIS key resolves to once its row is gone, from the resolution rule's
-  // own second and third steps, so the version row records the value that
+  // own fallback, so the version row records the value that
   // actually takes over. One key, not a read of every stored row: no setting's
   // resolved value depends on another's -- the cross-key bound the registry has
   // (the MCP result limit staying under the request limit) is a rule about what

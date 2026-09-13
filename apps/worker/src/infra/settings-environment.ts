@@ -1,9 +1,9 @@
 /**
- * What this deployment's environment still answers for a setting.
+ * What this deployment's environment still answers for a redeploy setting.
  *
  * The other half of the resolution in `@shared/contracts/settings-resolution`:
- * that file owns the rule (stored row, then environment, then registry
- * default) and this one owns the read, because reading a variable is
+ * that file owns the rule and this one owns the remaining environment read,
+ * because reading a variable is
  * per-deployment wiring and the contracts package is shared with the
  * dashboard, which has no environment of this shape at all.
  *
@@ -11,21 +11,15 @@
  * infra tier has no outgoing edges under ADR-001, so it may not import the
  * registry to take one. A name is all the read needs.
  *
- * Both callers of the rule read the environment through this one module: an
- * HTTP request (through `services/settings`) and a run at its start (through
- * the engine's run-start step, which may not import a service). The cleanup
- * stage removes the parsing and this module with it.
+ * Both callers of the rule read the three redeploy-owned variables through
+ * this one module: an HTTP request and a run at its start.
  */
 import { env } from "./vcs-config.js";
 
 /**
- * The two checks variables are not in the parsed environment schema: the
- * checks runner reads them straight off `process.env` and says why in its own
- * comment. Reproducing that read here, rather than adding them to the schema,
- * keeps "empty table plus environment equals today" true for them too.
- * Everything else comes from the parsed `env`, never from `process.env`.
+ * The checks allowlist is read straight off `process.env` by the checks runner.
+ * The other two redeploy-owned values come from the parsed environment.
  */
-const CHECKS_TIMEOUT_VARIABLE = "PRE_PR_COMMAND_TIMEOUT_MINUTES";
 const CHECKS_ALLOWED_ENV_VARIABLE = "PRE_PR_CHECKS_ALLOWED_ENV";
 
 /**
@@ -33,20 +27,13 @@ const CHECKS_ALLOWED_ENV_VARIABLE = "PRE_PR_CHECKS_ALLOWED_ENV";
  *
  * A presence question, not a value one: the parsed environment cannot answer
  * it, because a variable that is unset and one that is set to its schema
- * default both arrive as the same parsed value, and the seed and the "where
- * did this come from" label need to tell those apart. An empty string counts
+ * default both arrive as the same parsed value, and the source label needs to
+ * tell those apart. An empty string counts
  * as unset, which is what the environment module decides for every other key.
  */
 function rawVariable(name: string): string | undefined {
   const raw = process.env[name];
   return raw === undefined || raw === "" ? undefined : raw;
-}
-
-/** Today's read of the per-command checks timeout, minus its default. */
-function checksTimeoutMinutes(): number | undefined {
-  const raw = rawVariable(CHECKS_TIMEOUT_VARIABLE);
-  const parsed = raw === undefined || raw.trim() === "" ? Number.NaN : Number(raw);
-  return Number.isFinite(parsed) && parsed >= 1 ? Math.floor(parsed) : undefined;
 }
 
 /** Today's read of the forwarded-variable allowlist. */
@@ -63,7 +50,6 @@ function checksAllowedEnvNames(): readonly string[] | undefined {
 function settingsEnvironmentValue(
   variable: string,
 ): boolean | number | string | readonly string[] | null | undefined {
-  if (variable === CHECKS_TIMEOUT_VARIABLE) return checksTimeoutMinutes();
   if (variable === CHECKS_ALLOWED_ENV_VARIABLE) return checksAllowedEnvNames();
 
   // Passed through exactly as the environment schema resolved it, bounds

@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-12
+Last-verified: 2026-09-13
 
 # Repository scripts: config reference
 
@@ -106,8 +106,8 @@ Field reference:
   **redeployed**. It stays that way on purpose: the settings migration marks
   the key `requiresRedeploy` in the registry, so the environment is its only
   answer. The settings surfaces show it read-only and refuse to store it, the
-  environment import leaves it alone, and the cleanup release neither deletes
-  its parsing nor asks an operator to remove the variable. Whoever may edit
+  H2 cleanup leaves its parsing in place, and operators must not remove the
+  variable. Whoever may edit
   settings in the dashboard must not be able to widen, from that page and with
   immediate effect, which of the worker's secrets a tenant's command may be
   handed. Adding a name in the hosting dashboard and immediately retrying the
@@ -285,13 +285,13 @@ repository whose stored script groups and gate group selection are identical to
 the incoming ones, so it writes nothing and mints no version for a repository
 the operator did not actually change.
 
-**The migration.** The build-time seed
-(`apps/worker/scripts/db-seed-repository-catalog.ts`) copies the newest stored
-blob into one repository row per entry (source `migrated`) plus one profile
-version 1 per row, actor `migration`. A row created by that copy is **disabled**
-unless the allowlist or a definition pin already granted the repository: the
-checks configuration says what to run if the agent may touch a repository, never
-that it may. The copy is idempotent, so a redeploy creates nothing new.
+**The migration.** H1's build-time seed copied the newest stored blob into one
+repository row per entry (source `migrated`) plus one profile version 1 per row,
+actor `migration`. A row created by that copy was **disabled** unless the old
+allowlist or a definition pin already granted the repository: the checks
+configuration says what to run if the agent may touch a repository, never that
+it may. H2 deleted the completed seed and removed it from `build`; new changes
+go through the Repositories page and its HTTP or MCP APIs.
 
 **Who may be dispatched.** The catalog decides this on exactly four paths
 today: a pull request or merge request event arriving on the GitHub or GitLab
@@ -343,18 +343,14 @@ A ticket-driven run still chooses WHICH repositories it works on inside the run,
 from discovery and the expansion protocol; what changed is that it chooses from
 the catalog's enabled rows rather than from an environment variable.
 
-**The environment variables the catalog replaced.** The cleanup row of the
-plan (`docs/plans/2026-09-11-repository-catalog-and-settings.md`, row H) is
-split in two. H1 shipped: the deployment stores a row for every migrated
-variable it still sets (actor `environment import`, never overwriting a stored
-decision), `/health` publishes `settings.migratedVariablesSet` and the Settings
-page turns it into a banner, every remaining consumer reads the settings
-snapshot instead of `process.env`, and the catalog seed refuses to run once the
-catalog is activated while warning that `AGENT_ALLOWED_REPOS` is deprecated. H2
-is pending an operator action, not a code change: once a deployment's list is
-empty, H2 deletes the environment parsing for those keys, fails validation on a
-set variable with a message naming the page that replaced it, and deletes the
-seed script. The removal procedure is
+**The environment variables the catalog replaced.** H1 made ordinary settings
+durable without overwriting a stored decision. H2 then removed their
+environment parsing and import path, deleted both build-time seeds, and made
+startup reject every frozen retired settings variable name. Ordinary settings
+now resolve from a stored row and then the registry default. The three
+`requiresRedeploy` keys remain environment-owned, and `AGENT_ALLOWED_REPOS` is
+unused but temporarily tolerated so operators can remove it at leisure. The
+end-state procedure is
 [SETUP.md section 14](../../SETUP.md#14-removing-migrated-environment-variables).
 
 **What still reads the blob.** The `pre_pr_check_config_versions` table is read
@@ -399,8 +395,8 @@ if any submitted key belongs to a provider whose status is `error`, the whole
 call answers **503 `provider_unavailable`** and writes nothing. "We could not
 ask" is not "it is not there", and reporting the first as the second is how an
 admin reloads the screen, sees most of their repositories gone from the
-selection, and re-imports them later as duplicates. The insert is the seed's
-insert
+selection, and re-imports them later as duplicates. The insert uses the catalog
+repository's shared import primitive
 (`importConnectedRepositoryCatalogEntries` in
 `apps/worker/src/db/repositories/repository-catalog.ts`), which is one statement
 with a case-insensitive `NOT EXISTS` guard and `ON CONFLICT DO NOTHING`, because
@@ -567,11 +563,9 @@ which of those hold a run claim right now), takes a typed reason, and only then
 confirms. The reason is required by
 `repositoryCatalogActivateRequestSchema` and stored on
 `repository_catalog_state.activation_reason`, so the banner an activated catalog
-shows carries who ended the bridge, when, and why. An activation nobody clicked
-reads as provenance rather than as a person: the build-time seed writes the
-actor label `seeded from AGENT_ALLOWED_REPOS` and the same words as its reason,
-and the banner renders "Catalog activated on \<date\> (seeded from
-AGENT_ALLOWED_REPOS)".
+shows carries who ended the bridge, when, and why. Historical H1 activations
+still carry the actor label and reason `seeded from AGENT_ALLOWED_REPOS`; the
+banner keeps rendering that provenance even though H2 deleted the seed.
 
 **One refusal, two protocols.** Activating a catalog that enables nothing is
 refused by `activateRepositoryCatalog` itself, not by the screen: HTTP answers
@@ -803,7 +797,7 @@ Seven things differ from the HTTP routes the dashboard calls, each on purpose:
 - **Activation and clearing a setting are owner only.** The HTTP routes admit an
   admin. Ending the bridge changes what every future run may enter, and clearing
   a setting hands the key back to a value nobody on the call stated (the
-  environment's, on a deployment that sets the variable), so through MCP both are
+  registry default), so through MCP both are
   the owner's, the same way `runs.answer_clarification` is a person's.
 - **Every mutation is person backed**, by the scope mechanism above.
 - **A reason is asked for exactly where one is recorded.** `repositories.upsert`

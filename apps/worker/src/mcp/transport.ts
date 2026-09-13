@@ -160,7 +160,7 @@ export async function handleMcpPost(event: H3Event): Promise<void> {
   }
 
   const requestId = randomUUID();
-  const services = createConnectedMcpToolServices();
+  const services = createConnectedMcpToolServices(settings);
 
   // Ahead of the server and its adapters: a request this gate refuses never needs
   // either, and a refusal decided here is the only one that costs the caller

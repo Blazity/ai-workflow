@@ -51,8 +51,11 @@ import {
   readConnectedDeployedWorkflowDefinitionVersion,
   readConnectedWorkflowDefinitionVersion,
 } from "../../engine/stored-definition-reads.js";
+import type { SettingsSnapshot } from "@shared/contracts";
 
-export function createConnectedMcpToolServices(): McpToolServices {
+export function createConnectedMcpToolServices(
+  settings: SettingsSnapshot,
+): McpToolServices {
   return {
     ...createConnectedMcpGateServices(),
     async runExists(runId) {
@@ -64,8 +67,14 @@ export function createConnectedMcpToolServices(): McpToolServices {
     },
     getResumableClarificationForRun: getConnectedResumableClarificationForRun,
     getResumeFailedClarificationForRun: getConnectedResumeFailedClarificationForRun,
-    answerClarificationAndResume: answerConnectedClarificationAndResume,
-    cancelRunForOperator: cancelConnectedRunForOperator,
+    answerClarificationAndResume: (input) =>
+      answerConnectedClarificationAndResume({
+        ...input,
+        aiColumn: settings.COLUMN_AI,
+        cancelSettings: settings,
+      }),
+    cancelRunForOperator: (runId, options) =>
+      cancelConnectedRunForOperator(runId, { ...options, settings }),
     listWorkflowDefinitionPage: listConnectedMcpWorkflowDefinitionPage,
     readDeployedDefinitionVersions: readConnectedMcpDeployedDefinitionVersions,
     listPromptPage: listConnectedMcpPromptPage,

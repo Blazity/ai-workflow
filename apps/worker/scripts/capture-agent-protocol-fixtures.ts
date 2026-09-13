@@ -11,6 +11,10 @@ const args = process.argv.slice(2);
 const requestedProvider = option("--provider") ?? "all";
 const envFile = option("--env-file");
 const shouldWrite = args.includes("--write");
+const fixtureModels: Record<AgentKind, string> = {
+  claude: "claude-sonnet-4-6",
+  codex: "gpt-5.3-codex",
+};
 if (envFile) loadEnv({ path: envFile, quiet: true });
 
 const providers: AgentKind[] = requestedProvider === "all"
@@ -55,17 +59,13 @@ async function captureProvider(provider: AgentKind): Promise<void> {
     await adapter.configure(sandbox, {
       anthropicApiKey: provider === "claude" ? apiKey : undefined,
       codexApiKey: provider === "codex" ? apiKey : undefined,
-      model: provider === "claude"
-        ? process.env.CLAUDE_MODEL ?? "claude-sonnet-4-6"
-        : process.env.CODEX_MODEL ?? "gpt-5.3-codex",
+      model: fixtureModels[provider],
     });
 
     const structured = await invoke({
       sandbox,
       provider,
-      model: provider === "claude"
-        ? process.env.CLAUDE_MODEL ?? "claude-sonnet-4-6"
-        : process.env.CODEX_MODEL ?? "gpt-5.3-codex",
+      model: fixtureModels[provider],
       phase: "fixture-structured",
       prompt:
         "Return the requested structured result with result=implemented, summary=sanitized fixture, and every nullable field set to null. Do not inspect the environment.",
@@ -74,9 +74,7 @@ async function captureProvider(provider: AgentKind): Promise<void> {
     const freeform = await invoke({
       sandbox,
       provider,
-      model: provider === "claude"
-        ? process.env.CLAUDE_MODEL ?? "claude-sonnet-4-6"
-        : process.env.CODEX_MODEL ?? "gpt-5.3-codex",
+      model: fixtureModels[provider],
       phase: "fixture-freeform",
       prompt: "Reply with exactly: fixture complete",
     });

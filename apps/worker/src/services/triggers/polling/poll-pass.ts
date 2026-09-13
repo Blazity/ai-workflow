@@ -263,6 +263,7 @@ export async function runPollPass(
         const result = await drainOldestPendingTrigger(subjectKey, {
           runRegistry: adapters.runRegistry,
           maxConcurrentAgents: maxConcurrentAgents(settings),
+          settings,
           repositoryCatalog: drainCatalog,
         });
         if (result?.result === "started") releasedTriggerRecovery.started++;
@@ -276,6 +277,7 @@ export async function runPollPass(
     undefined,
     terminalReconciliationSubjects,
     retireClarificationForGoneTicket,
+    settings,
   );
 
   const polledTriggerRecovery = await recoverPendingTriggers(
@@ -491,6 +493,7 @@ async function evaluateScheduleTriggers(
     createConnectedScheduleDispatchDeps(
       adapters.runRegistry,
       maxConcurrentAgents(settings),
+      settings,
     ),
   ).catch((error) => {
     logger.warn(
@@ -576,6 +579,7 @@ async function recoverPendingTriggers(
       const result = await drainOldestPendingTrigger(trigger.subjectKey, {
         runRegistry: adapters.runRegistry,
         maxConcurrentAgents: maxConcurrentAgents(settings),
+        settings,
         repositoryCatalog,
       });
       if (result?.result === "error") metrics.errors++;
@@ -620,6 +624,7 @@ async function recoverApprovedPlanDispatches(
             label: approval.decidedByLabel ?? "system",
           },
           maxConcurrentAgents: maxConcurrentAgents(settings),
+          settings,
           onClaimed: async () => {
             const fresh = await getConnectedApproval(approval.id);
             if (
@@ -706,6 +711,8 @@ async function dispatchDiscoveredTickets(
           issueTracker: adapters.issueTracker,
           ticketKey: key,
           allowNudge: false,
+          aiColumn: settings.COLUMN_AI,
+          cancelSettings: settings,
         }).catch((err) => {
           logger.warn(
             { ticketKey: key, error: (err as Error).message },
@@ -728,6 +735,7 @@ async function dispatchDiscoveredTickets(
           key,
           adapters,
           maxConcurrentAgents(settings),
+          settings,
         );
         if (!result.started) {
           // Every refusal used to vanish here; log one structured line per

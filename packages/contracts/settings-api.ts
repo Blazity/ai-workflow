@@ -53,25 +53,6 @@ export interface SettingsEntryView {
 /** GET /api/v1/settings */
 export interface SettingsReadResponse {
   readonly settings: SettingsEntryView[];
-  /**
-   * The migrated environment variables this deployment still sets, by name.
-   *
-   * Alongside the entries rather than inside them, because it is a fact about
-   * the deployment and not about any one setting: every value behind these
-   * names is stored by now, and the next release refuses to boot with any of
-   * them still set. Names only, never values.
-   */
-  readonly migratedVariablesSet: readonly string[];
-  /**
-   * Those of them no stored row answers for yet, by name.
-   *
-   * The safety half of the pair: removing a variable on this list would lose
-   * the value the deployment is running on, because nothing else holds it. It
-   * empties as the import stores them, and a name that stays on it is a write
-   * that did not happen, which is the state the banner has to show rather than
-   * hide. Names only, never values.
-   */
-  readonly migratedVariablesUnstored: readonly string[];
 }
 
 /** GET /api/v1/settings?key=... */

@@ -15,7 +15,7 @@ import type { SettingsSnapshot } from "@shared/contracts";
 import { env } from "../../infra/vcs-config.js";
 
 /**
- * Every accessor below that reads a migrated key takes the snapshot: the caller
+ * Every accessor below that reads an ordinary setting takes the snapshot: the caller
  * loaded it once at its entry point, so the value cannot change under it
  * halfway through. The zero-argument forms that resolved a snapshot from the
  * environment on the spot are gone, with the single exception noted in
@@ -152,7 +152,7 @@ export function agentRuntimeSettings(
 }
 
 interface AgentRuntimeSettings {
-  agentKind: typeof env.AGENT_KIND;
+  agentKind: SettingsSnapshot["AGENT_KIND"];
   includeReview: boolean;
   includeLeakReview: boolean;
 }

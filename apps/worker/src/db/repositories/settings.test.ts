@@ -3,11 +3,9 @@ import type { Db } from "../client.js";
 import { settings, settingsVersions } from "../schema.js";
 import { createTestDb } from "../test-db.js";
 import {
-  importEnvironmentSettings,
   latestSettingsVersions,
   listSettingsVersions,
   readAllSettings,
-  seedSettings,
   writeManySettings,
 } from "./settings.js";
 
@@ -164,132 +162,11 @@ describe("settings repository", () => {
     ]);
   });
 
-  it("seeds one row per given key in one statement and never overwrites", async () => {
-    const db = await createTestDb();
-    await writeManySettings(db, {
-      patch: { COLUMN_AI: "Agent" },
-      actor: "user_admin",
-      reason: "operator decided",
-    });
-
-    const writes = countWrites(db);
-    const seeded = await seedSettings(db, {
-      rows: [
-        { key: "COLUMN_AI", value: "AI" },
-        { key: "MAX_CONCURRENT_AGENTS", value: 4 },
-      ],
-      actor: "environment",
-    });
-    expect(writes.execute).toHaveBeenCalledTimes(1);
-    expect(writes.insert).not.toHaveBeenCalled();
-    vi.restoreAllMocks();
-    expect(seeded).toBe(1);
-
-    const again = await seedSettings(db, {
-      rows: [
-        { key: "COLUMN_AI", value: "AI" },
-        { key: "MAX_CONCURRENT_AGENTS", value: 4 },
-      ],
-      actor: "environment",
-    });
-    expect(again).toBe(0);
-
-    const rows = await readAllSettings(db);
-    expect(rows.map((row) => [row.key, row.value]).sort()).toEqual([
-      ["COLUMN_AI", "Agent"],
-      ["MAX_CONCURRENT_AGENTS", 4],
-    ]);
-    // Seeding is not an operator decision, so it records no history.
-    await expect(db.select().from(settingsVersions)).resolves.toHaveLength(1);
-  });
-
-  it("imports every missing value and records one version row each", async () => {
-    const db = await createTestDb();
-    const writes = countWrites(db);
-
-    const written = await importEnvironmentSettings(db, {
-      rows: [
-        { key: "MAX_CONCURRENT_AGENTS", value: 7 },
-        { key: "MCP_ENABLED", value: true },
-        { key: "SLACK_ALLOWED_USER_IDS", value: ["U1", "U2"] },
-        { key: "GENAI_ENGINE_TRACE_ENDPOINT", value: null },
-      ],
-      actor: "environment import",
-      reason: "Stored from the deployment environment so the variable can be removed.",
-    });
-
-    // One statement for the rows and their history: production is neon-http,
-    // which cannot open a transaction, so a crash between the two would leave
-    // stored values nobody can explain.
-    expect(writes.execute).toHaveBeenCalledTimes(1);
-    expect(writes.insert).not.toHaveBeenCalled();
-    expect(written.sort()).toEqual([
-      "GENAI_ENGINE_TRACE_ENDPOINT",
-      "MAX_CONCURRENT_AGENTS",
-      "MCP_ENABLED",
-      "SLACK_ALLOWED_USER_IDS",
-    ]);
-
-    // Every JSON shape the registry holds survives the round trip through
-    // jsonb, including a stored null, which is not the same as a missing row.
-    const stored = new Map((await readAllSettings(db)).map((row) => [row.key, row.value]));
-    expect(stored.get("MAX_CONCURRENT_AGENTS")).toBe(7);
-    expect(stored.get("MCP_ENABLED")).toBe(true);
-    expect(stored.get("SLACK_ALLOWED_USER_IDS")).toEqual(["U1", "U2"]);
-    expect(stored.has("GENAI_ENGINE_TRACE_ENDPOINT")).toBe(true);
-    expect(stored.get("GENAI_ENGINE_TRACE_ENDPOINT")).toBeNull();
-
-    const versions = await latestSettingsVersions(db);
-    expect(versions).toHaveLength(4);
-    expect(versions.every((version) => version.actor === "environment import")).toBe(true);
-    expect(versions.every((version) => version.previousValue === null)).toBe(true);
-  });
-
-  it("imports nothing twice, and never over a value somebody stored", async () => {
-    const db = await createTestDb();
-    await writeManySettings(db, {
-      patch: { MAX_CONCURRENT_AGENTS: 1 },
-      actor: "user_admin",
-      reason: "throttling",
-    });
-
-    const written = await importEnvironmentSettings(db, {
-      rows: [
-        { key: "MAX_CONCURRENT_AGENTS", value: 7 },
-        { key: "MCP_ENABLED", value: true },
-      ],
-      actor: "environment import",
-      reason: "importing",
-    });
-    const again = await importEnvironmentSettings(db, {
-      rows: [
-        { key: "MAX_CONCURRENT_AGENTS", value: 7 },
-        { key: "MCP_ENABLED", value: true },
-      ],
-      actor: "environment import",
-      reason: "importing",
-    });
-
-    // `on conflict do nothing` is what makes this idempotent AND what keeps the
-    // operator's decision: 1 stands, no second version pretends otherwise.
-    expect(written).toEqual(["MCP_ENABLED"]);
-    expect(again).toEqual([]);
-    const stored = new Map((await readAllSettings(db)).map((row) => [row.key, row.value]));
-    expect(stored.get("MAX_CONCURRENT_AGENTS")).toBe(1);
-    const history = await listSettingsVersions(db, "MAX_CONCURRENT_AGENTS", 10);
-    expect(history).toHaveLength(1);
-    expect(history[0]?.actor).toBe("user_admin");
-    expect(await listSettingsVersions(db, "MCP_ENABLED", 10)).toHaveLength(1);
-  });
-
   it("writes nothing when the patch is empty", async () => {
     const db = await createTestDb();
     await expect(
       writeManySettings(db, { patch: {}, actor: "user_admin", reason: "nothing" }),
     ).resolves.toEqual([]);
     await expect(db.select().from(settings)).resolves.toHaveLength(0);
-    await expect(
-      seedSettings(db, { rows: [], actor: "environment" }),
-    ).resolves.toBe(0);
   });
 });

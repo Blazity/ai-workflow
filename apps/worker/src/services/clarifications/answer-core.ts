@@ -1,6 +1,9 @@
 // Static import so route tests can vi.mock("workflow/api"): a dynamic import
 // would bypass the module mock and hit the real Workflow runtime.
-import { MAX_CLARIFICATION_ANSWER_LENGTH } from "@shared/contracts";
+import {
+  MAX_CLARIFICATION_ANSWER_LENGTH,
+  type SettingsSnapshot,
+} from "@shared/contracts";
 import { getHookByToken, resumeHook } from "workflow/api";
 import { env } from "../../infra/vcs-config.js";
 import { HookNotFoundError } from "workflow/errors";
@@ -99,6 +102,7 @@ async function moveTicketToAiColumn(input: {
   issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket">;
   ticketKey: string;
   row: HookClarificationRow;
+  aiColumn: string;
 }): Promise<void> {
   const owner = await input.persistence.findBoundOwner({
     subjectKey: input.row.subjectKey,
@@ -114,7 +118,10 @@ async function moveTicketToAiColumn(input: {
   await input.persistence.transitionTicket({
     issueTracker: input.issueTracker,
     ticketKey: input.ticketKey,
-    target: aiColumnMoveTarget(env),
+    target: aiColumnMoveTarget({
+      COLUMN_AI: input.aiColumn,
+      JIRA_AI_TRANSITION_ID: env.JIRA_AI_TRANSITION_ID,
+    }),
     owner: {
       subjectKey: input.row.subjectKey,
       ownerToken: owner.ownerToken,
@@ -144,6 +151,8 @@ type AnswerClarificationInput = {
   skipTicketFetch?: boolean;
   skipTicketMove?: boolean;
   skipAnswerComment?: boolean;
+  aiColumn?: string;
+  cancelSettings: Pick<SettingsSnapshot, "COLUMN_AI" | "COLUMN_BACKLOG">;
 };
 
 /** Explicit-db path kept for pglite tests and service callers that have an
@@ -158,7 +167,8 @@ export function answerClarificationAndResume(
     transitionTicket: (move) => moveTicketForRun({ db, ...move }),
     answer: (id, answer, actor) => answerHookClarification(db, id, answer, actor),
     reserve: (id, answeredAt) => reserveResumeAttempt(db, id, answeredAt),
-    finishFailed: (failed) => finishFailedResume({ db, ...failed }),
+    finishFailed: (failed) =>
+      finishFailedResume({ db, settings: input.cancelSettings, ...failed }),
     retireGoneTicket: (row) => retireClarificationForGoneTicket(db, row),
     markResumed: (runId) => markRunResumed(db, runId),
   });
@@ -174,7 +184,8 @@ export function answerConnectedClarificationAndResume(
     transitionTicket: moveConnectedTicketForRun,
     answer: answerConnectedHookClarification,
     reserve: reserveConnectedResumeAttempt,
-    finishFailed: finishConnectedFailedResume,
+    finishFailed: (failed) =>
+      finishConnectedFailedResume({ settings: input.cancelSettings, ...failed }),
     retireGoneTicket: retireConnectedClarificationForGoneTicket,
     markResumed: markConnectedRunResumed,
   });
@@ -226,6 +237,7 @@ async function answerClarificationAndResumeWithPersistence(
         issueTracker,
         ticketKey: row.ticketKey,
         row,
+        aiColumn: input.aiColumn ?? "AI",
       });
     } catch (error) {
       return { kind: "ticket_transition_failed", error };

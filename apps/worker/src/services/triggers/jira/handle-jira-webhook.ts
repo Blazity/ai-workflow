@@ -240,6 +240,7 @@ async function handleVerifiedJiraWebhook(
         ticketKey,
         adapters,
         Boolean(statusChange),
+        board,
       );
       if (resumeResult) return resumeResult;
 
@@ -254,7 +255,12 @@ async function handleVerifiedJiraWebhook(
         },
         "webhook_dispatch_started",
       );
-      const result = await dispatchTicket(ticketKey, adapters, maxConcurrentAgents(settings));
+      const result = await dispatchTicket(
+        ticketKey,
+        adapters,
+        maxConcurrentAgents(settings),
+        settings,
+      );
       logger.info(
         {
           ticketKey,
@@ -302,6 +308,7 @@ async function handleVerifiedJiraWebhook(
         ticketKey,
         statusName: liveTicketState.status,
         statusId: liveTicketState.statusId,
+        aiReviewColumn: board.aiReviewColumn,
       })
     ) {
       if (!activeRun?.runId) {
@@ -497,6 +504,7 @@ async function handleVerifiedJiraWebhook(
     ticketKey,
     adapters,
     Boolean(statusChange),
+    board,
   );
   if (resumeResult) return resumeResult;
 
@@ -509,7 +517,12 @@ async function handleVerifiedJiraWebhook(
     },
     "webhook_dispatch_started",
   );
-  const result = await dispatchTicket(ticketKey, adapters, maxConcurrentAgents(settings));
+  const result = await dispatchTicket(
+    ticketKey,
+    adapters,
+    maxConcurrentAgents(settings),
+    settings,
+  );
 
   logger.info(
     { ticketKey, started: result.started, reason: result.reason, runId: result.runId },
@@ -539,11 +552,17 @@ async function tryResumeClarification(
   ticketKey: string,
   adapters: ReturnType<typeof createAdapters>,
   allowNudge: boolean,
+  board: { aiColumn: string; backlogColumn: string },
 ): Promise<{ status: string; reason: string; ticketKey: string } | null> {
   const resume = await resumeConnectedClarificationFromComments({
     issueTracker: adapters.issueTracker,
     ticketKey,
     allowNudge,
+    aiColumn: board.aiColumn,
+    cancelSettings: {
+      COLUMN_AI: board.aiColumn,
+      COLUMN_BACKLOG: board.backlogColumn,
+    },
   }).catch((err) => {
     logger.warn(
       { ticketKey, error: (err as Error).message },

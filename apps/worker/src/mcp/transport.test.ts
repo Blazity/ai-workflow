@@ -96,6 +96,11 @@ beforeEach(async () => {
   await db().delete(mcpAuditEvents);
   await db().delete(mcpRateLimitWindows);
   await db().delete(settings);
+  await writeManySettings(db(), {
+    patch: { MCP_ENABLED: true },
+    actor: "test",
+    reason: "enable MCP transport under test",
+  });
 });
 
 function db(): Db {
@@ -266,6 +271,11 @@ describe("stateless MCP Streamable HTTP", () => {
 
   it("rejects request bodies over the configured byte limit", async () => {
     state.env.MCP_MAX_REQUEST_BYTES = 32;
+    await writeManySettings(db(), {
+      patch: { MCP_MAX_REQUEST_BYTES: 32 },
+      actor: "test",
+      reason: "exercise the request-size limit",
+    });
 
     const response = await post(initializeRequest(4));
 
@@ -278,6 +288,11 @@ describe("stateless MCP Streamable HTTP", () => {
 
   it("rejects a chunked body as soon as streamed bytes exceed the limit", async () => {
     state.env.MCP_MAX_REQUEST_BYTES = 48;
+    await writeManySettings(db(), {
+      patch: { MCP_MAX_REQUEST_BYTES: 48 },
+      actor: "test",
+      reason: "exercise the streamed request-size limit",
+    });
 
     const { response, respondedBeforeRequestEnd } = await postChunked([
       Buffer.alloc(24, "a"),
@@ -401,6 +416,11 @@ describe("stateless MCP Streamable HTTP", () => {
 
   it("returns 404 before authentication when MCP is disabled", async () => {
     state.env.MCP_ENABLED = false;
+    await writeManySettings(db(), {
+      patch: { MCP_ENABLED: false },
+      actor: "test",
+      reason: "disable MCP transport under test",
+    });
 
     const response = await post(initializeRequest(8));
 
@@ -493,6 +513,11 @@ describe("gate before the tool handler", () => {
 
   it("answers 429 once refused probes exhaust the budget", async () => {
     state.env.MCP_READ_RATE_LIMIT_PER_MINUTE = 1;
+    await writeManySettings(db(), {
+      patch: { MCP_READ_RATE_LIMIT_PER_MINUTE: 1 },
+      actor: "test",
+      reason: "exercise the read rate limit",
+    });
 
     const first = await postToolCall(toolCall(25, "tickets.nope"));
     const second = await postToolCall(toolCall(26, "tickets.nope"));
@@ -577,6 +602,11 @@ describe("gate before the tool handler", () => {
 
   it("rate-limits repeated forbidden dispatches before audit rows grow without bound", async () => {
     state.env.MCP_MUTATION_RATE_LIMIT_PER_MINUTE = 1;
+    await writeManySettings(db(), {
+      patch: { MCP_MUTATION_RATE_LIMIT_PER_MINUTE: 1 },
+      actor: "test",
+      reason: "exercise the mutation rate limit",
+    });
     state.requireMcpActor.mockResolvedValue({
       ...ACTOR,
       scopes: new Set(["mcp:read", "runs:dispatch"]),

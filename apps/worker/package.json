@@ -4,8 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "rm -rf .nitro/workflow && nitro dev",
-    "build": "pnpm validate:pre-sandbox && pnpm validate:local-skills && pnpm db:migrate && pnpm db:seed-settings && pnpm seed:repository-catalog && pnpm seed:auth-user && pnpm --dir ../.. run gen:blocks -- --check && rm -rf .nitro/workflow && NODE_OPTIONS=--max-old-space-size=8192 nitro build",
-    "build:ci": "pnpm validate:pre-sandbox && pnpm validate:local-skills && pnpm mcp:contract:check && pnpm --dir ../.. run gen:blocks -- --check && rm -rf .nitro/workflow && NODE_OPTIONS=--max-old-space-size=8192 nitro build",
+    "build": "tsx scripts/check-retired-env.ts && pnpm validate:pre-sandbox && pnpm validate:local-skills && pnpm db:migrate && pnpm seed:auth-user && pnpm --dir ../.. run gen:blocks -- --check && rm -rf .nitro/workflow && NODE_OPTIONS=--max-old-space-size=8192 nitro build",
+    "build:ci": "tsx scripts/check-retired-env.ts && pnpm validate:pre-sandbox && pnpm validate:local-skills && pnpm mcp:contract:check && pnpm --dir ../.. run gen:blocks -- --check && rm -rf .nitro/workflow && NODE_OPTIONS=--max-old-space-size=8192 nitro build",
     "preview": "nitro preview",
     "test": "vitest run",
     "test:zod4": "vitest run --config vitest.zod4.config.ts",
@@ -26,6 +26,7 @@
     "mcp:contract:check": "tsx scripts/generate-mcp-contract.ts --check",
     "check:prompt-drift": "tsx src/services/workflow-definitions/builtin-prompt-drift-gate.ts",
     "check:carry-schema-drift": "tsx src/services/workflow-definitions/carry-schema-drift-gate.ts",
+    "check:retired-env": "tsx scripts/check-retired-env.ts",
     "build:arthur-tracer": "node scripts/build-arthur-tracer.mjs",
     "test:e2e": "pnpm test:e2e:agent && pnpm test:e2e:orchestration && pnpm test:e2e:capacity",
     "test:e2e:agent": "vitest run --config e2e/vitest.e2e.config.ts --project agent",
@@ -37,9 +38,7 @@
     "test:e2e:replay:dry": "vitest run src/preview-harness-canary.test.ts src/preview-replay-canary.test.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx scripts/db-migrate.ts",
-    "db:seed-settings": "tsx scripts/db-seed-settings.ts",
-    "seed:auth-user": "tsx scripts/seed-auth-user.ts",
-    "seed:repository-catalog": "tsx scripts/db-seed-repository-catalog.ts"
+    "seed:auth-user": "tsx scripts/seed-auth-user.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.78",

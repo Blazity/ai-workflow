@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-12
+Last-verified: 2026-09-13
 
 # AI Workflow
 
@@ -132,18 +132,14 @@ from being saved. A block-level Validation Issue identifies its Block; a
 workflow-level Validation Issue applies to the definition as a whole.
 _Avoid_: Warning, runtime Execution Failure
 
-**Migrated Variable**:
-An environment variable whose value the Repository Catalog and Settings work
-moved into the settings store, so the Settings page owns it and the deployment
-keeps the variable only as a fallback that the cleanup release removes. A
-deployment publishes the ones it still sets on `/health`
-(`settings.migratedVariablesSet`) and as a banner on the Settings page, by name
-only, beside the ones whose value is not stored yet
-(`settings.migratedVariablesUnstored`), which are the ones it is NOT safe to
-remove. A key marked `requiresRedeploy` in the registry is NOT a migrated
-variable: the deployment still reads that variable itself, the environment is
-its single answer, and the settings surfaces refuse to store it.
-_Avoid_: Legacy env var, deprecated setting
+**Retired Variable**:
+An environment variable whose product behavior moved permanently into the
+settings store. The worker neither parses nor imports it and refuses to boot if
+it is present, naming every offender and the SETUP.md removal section. Change
+the value on the Settings page or with MCP `settings.set`, then remove the
+variable and redeploy. A key marked `requiresRedeploy` is not retired: its
+environment value remains the deployment's answer and a stored row is ignored.
+_Avoid_: Migrated variable, legacy fallback, deprecated setting
 
 **GitLab Project**:
 A GitLab collaboration container that owns settings and features around one

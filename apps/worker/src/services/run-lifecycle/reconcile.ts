@@ -1,4 +1,5 @@
 import { getRun } from "workflow/api";
+import { defaultSettingsSnapshot, type SettingsSnapshot } from "@shared/contracts";
 import { env } from "../../infra/vcs-config.js";
 import {
   decideAiReviewRun,
@@ -80,6 +81,7 @@ export async function reconcileRuns(
   db?: Db,
   terminalReconciliationSubjects?: ReadonlySet<string>,
   retireClarification?: ClarificationRetirement,
+  settings: SettingsSnapshot = defaultSettingsSnapshot(),
 ): Promise<{ cancelled: number; cleaned: number }> {
   let cancelled = 0;
   if (db) {
@@ -116,6 +118,7 @@ export async function reconcileRuns(
         issueTracker,
         onSubjectReleased,
         db,
+        settings,
       );
       if (result.cancelled) {
         if (result.alreadyTerminal) {
@@ -209,8 +212,11 @@ export async function reconcileRuns(
     // cannot sit in RUNNING with a live claim until someone notices.
     if (db && entry.state === "bound") {
       const backlogTarget: IssueTrackerMoveTarget = env.JIRA_BACKLOG_TRANSITION_ID
-        ? { name: env.COLUMN_BACKLOG, transitionId: env.JIRA_BACKLOG_TRANSITION_ID }
-        : env.COLUMN_BACKLOG;
+        ? {
+            name: settings.COLUMN_BACKLOG,
+            transitionId: env.JIRA_BACKLOG_TRANSITION_ID,
+          }
+        : settings.COLUMN_BACKLOG;
       const stalled = await reconcileStalledRun({
         entry: boundEntry,
         runRegistry,
@@ -221,6 +227,7 @@ export async function reconcileRuns(
         // claim so its live Jira read can distinguish AI from a destination
         // selected after this poll snapshot was taken.
         moveTarget: followsTicketColumn ? backlogTarget : undefined,
+        aiColumn: settings.COLUMN_AI,
         onSubjectReleased,
       }).catch((error) => {
         logger.warn(
@@ -273,6 +280,7 @@ export async function reconcileRuns(
             issueTracker,
             onSubjectReleased,
             db,
+            settings,
           )
         : await cleanStuckTicketRun(
             boundEntry,
@@ -280,6 +288,7 @@ export async function reconcileRuns(
             runRegistry,
             issueTracker,
             onSubjectReleased,
+            settings,
           );
       continue;
     }
@@ -292,7 +301,11 @@ export async function reconcileRuns(
       );
       continue;
     }
-    const departure = await verifyTicketLeftAiColumn(ticketKey, issueTracker);
+    const departure = await verifyTicketLeftAiColumn(
+      ticketKey,
+      issueTracker,
+      settings.COLUMN_AI,
+    );
     if (!departure.left) {
       // The Jira poll is capped, so a manual claim can be absent from its
       // snapshot even though the authoritative read still finds AI. Reuse the
@@ -304,6 +317,7 @@ export async function reconcileRuns(
           issueTracker,
           onSubjectReleased,
           db,
+          settings,
         );
       }
       continue;
@@ -315,6 +329,7 @@ export async function reconcileRuns(
         ticketKey,
         statusName: departure.trackerStatus,
         statusId: departure.trackerStatusId,
+        aiReviewColumn: settings.COLUMN_AI_REVIEW,
       }));
     if (
       reviewDestination &&
@@ -582,6 +597,7 @@ async function retryCancellingClaim(
   issueTracker?: IssueTrackerAdapter,
   onSubjectReleased?: SubjectReleasedCallback,
   db?: Db,
+  settings: SettingsSnapshot = defaultSettingsSnapshot(),
 ): Promise<CancelRunResult> {
   const target = { ownerToken: entry.ownerToken, runId: entry.runId };
   const reason = entry.runId
@@ -604,7 +620,11 @@ async function retryCancellingClaim(
     );
   }
 
-  const inAiColumn = await readLiveTicketInAiColumn(entry.ticketKey, issueTracker);
+  const inAiColumn = await readLiveTicketInAiColumn(
+    entry.ticketKey,
+    issueTracker,
+    settings.COLUMN_AI,
+  );
   if (inAiColumn === null) {
     logger.warn(
       { ticketKey: entry.ticketKey, runId: entry.runId },
@@ -614,8 +634,11 @@ async function retryCancellingClaim(
   }
   const ticketKey = entry.ticketKey;
   const backlogTarget = env.JIRA_BACKLOG_TRANSITION_ID
-    ? { name: env.COLUMN_BACKLOG, transitionId: env.JIRA_BACKLOG_TRANSITION_ID }
-    : env.COLUMN_BACKLOG;
+    ? {
+        name: settings.COLUMN_BACKLOG,
+        transitionId: env.JIRA_BACKLOG_TRANSITION_ID,
+      }
+    : settings.COLUMN_BACKLOG;
   const finalFence = async (owner: {
     subjectKey: string;
     ownerToken: string;
@@ -626,7 +649,7 @@ async function retryCancellingClaim(
         db,
         issueTracker: issueTracker!,
         ticketKey,
-        aiColumn: env.COLUMN_AI,
+        aiColumn: settings.COLUMN_AI,
         target: backlogTarget,
         owner,
         requiredOwnerState: "cancelling",
@@ -639,7 +662,7 @@ async function retryCancellingClaim(
     await withdrawConnectedTicketFromAiForRun({
       issueTracker: issueTracker!,
       ticketKey,
-      aiColumn: env.COLUMN_AI,
+      aiColumn: settings.COLUMN_AI,
       // The first read is only a snapshot. Keep Backlog available to the final
       // owner fence so a ticket that moved Review -> AI before release is
       // withdrawn instead of becoming dispatchable while this run still owns it.
@@ -663,12 +686,13 @@ async function retryCancellingClaim(
 async function readLiveTicketInAiColumn(
   ticketKey: string,
   issueTracker?: IssueTrackerAdapter,
+  aiColumn = "AI",
 ): Promise<boolean | null> {
   if (!issueTracker) return null;
   try {
     const ticket = await issueTracker.fetchTicket(ticketKey);
     return (
-      ticket.trackerStatus.trim().toLowerCase() === env.COLUMN_AI.trim().toLowerCase() &&
+      ticket.trackerStatus.trim().toLowerCase() === aiColumn.trim().toLowerCase() &&
       resolveTicketProjectKey(ticket) === env.JIRA_PROJECT_KEY.trim().toUpperCase()
     );
   } catch (error) {
@@ -768,6 +792,7 @@ async function cleanFinishedManualTicket(
   issueTracker?: IssueTrackerAdapter,
   onSubjectReleased?: SubjectReleasedCallback,
   db?: Db,
+  settings: SettingsSnapshot = defaultSettingsSnapshot(),
 ): Promise<number> {
   try {
     const status = await getRun(entry.runId).status;
@@ -779,10 +804,13 @@ async function cleanFinishedManualTicket(
       db,
       issueTracker,
       ticketKey: entry.ticketKey,
-      aiColumn: env.COLUMN_AI,
+      aiColumn: settings.COLUMN_AI,
       target: env.JIRA_BACKLOG_TRANSITION_ID
-        ? { name: env.COLUMN_BACKLOG, transitionId: env.JIRA_BACKLOG_TRANSITION_ID }
-        : env.COLUMN_BACKLOG,
+        ? {
+            name: settings.COLUMN_BACKLOG,
+            transitionId: env.JIRA_BACKLOG_TRANSITION_ID,
+          }
+        : settings.COLUMN_BACKLOG,
       owner: entry,
       requiredOwnerState: "bound",
     });
@@ -829,6 +857,7 @@ async function cleanStuckTicketRun(
   runRegistry: RunRegistryAdapter,
   issueTracker: IssueTrackerAdapter | undefined,
   onSubjectReleased?: SubjectReleasedCallback,
+  settings: SettingsSnapshot = defaultSettingsSnapshot(),
 ): Promise<number> {
   try {
     const status = await getRun(entry.runId).status;
@@ -848,8 +877,11 @@ async function cleanStuckTicketRun(
   if (!issueTracker) return 0;
 
   const backlogTarget: IssueTrackerMoveTarget = env.JIRA_BACKLOG_TRANSITION_ID
-    ? { name: env.COLUMN_BACKLOG, transitionId: env.JIRA_BACKLOG_TRANSITION_ID }
-    : env.COLUMN_BACKLOG;
+    ? {
+        name: settings.COLUMN_BACKLOG,
+        transitionId: env.JIRA_BACKLOG_TRANSITION_ID,
+      }
+    : settings.COLUMN_BACKLOG;
 
   const result = await cancelRunDetailed(
     ticketKey,
@@ -904,6 +936,7 @@ async function stopOwnedSandboxes(
 async function verifyTicketLeftAiColumn(
   ticketKey: string,
   issueTracker?: IssueTrackerAdapter,
+  aiColumn = "AI",
 ): Promise<{
   left: boolean;
   trackerStatus: string | null;
@@ -914,7 +947,7 @@ async function verifyTicketLeftAiColumn(
   try {
     const ticket = await issueTracker.fetchTicket(ticketKey);
     const ticketStatus = ticket.trackerStatus.trim().toLowerCase();
-    const expectedStatus = env.COLUMN_AI.trim().toLowerCase();
+    const expectedStatus = aiColumn.trim().toLowerCase();
     const ticketProjectKey = resolveTicketProjectKey(ticket);
     const expectedProjectKey = env.JIRA_PROJECT_KEY.trim().toUpperCase();
     const trackerStatusId = ticket.trackerStatusId ?? null;

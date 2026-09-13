@@ -1,4 +1,5 @@
 import { start } from "workflow/api";
+import { defaultSettingsSnapshot, type SettingsSnapshot } from "@shared/contracts";
 import { env } from "../../infra/vcs-config.js";
 import type { Db } from "../../db/types.js";
 import type { RunRegistryAdapter } from "../../adapters/run-registry/types.js";
@@ -47,9 +48,19 @@ export async function dispatchPlanApproved(input: {
   approval: ApprovalRow;
   actor: { id: string; label: string };
   maxConcurrentAgents: number;
+  settings?: SettingsSnapshot;
   onClaimed?: () => Promise<void>;
 }): Promise<DispatchPlanApprovedResult> {
-  const { db, runRegistry, issueTracker, approval, actor, maxConcurrentAgents, onClaimed } = input;
+  const {
+    db,
+    runRegistry,
+    issueTracker,
+    approval,
+    actor,
+    maxConcurrentAgents,
+    onClaimed,
+    settings = defaultSettingsSnapshot(),
+  } = input;
   const ticketKey = approval.ticketKey;
   const subjectKey = ticketSubjectKey("jira", ticketKey);
 
@@ -95,7 +106,10 @@ export async function dispatchPlanApproved(input: {
         const moveInput = {
           issueTracker,
           ticketKey,
-          target: aiColumnMoveTarget(env),
+          target: aiColumnMoveTarget({
+            COLUMN_AI: settings.COLUMN_AI,
+            JIRA_AI_TRANSITION_ID: env.JIRA_AI_TRANSITION_ID,
+          }),
           owner: { subjectKey, ownerToken, runId: null },
         };
         if (db) await moveTicketForRun({ ...moveInput, db });

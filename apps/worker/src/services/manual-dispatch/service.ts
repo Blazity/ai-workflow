@@ -501,7 +501,10 @@ async function processManualDispatch(input: {
       await input.store.transitionTicket({
         issueTracker: input.adapters.issueTracker,
         ticketKey: resolved.ticketKey,
-        target: aiColumnMoveTarget(env),
+        target: aiColumnMoveTarget({
+          COLUMN_AI: resolved.aiColumn,
+          JIRA_AI_TRANSITION_ID: env.JIRA_AI_TRANSITION_ID,
+        }),
         owner: {
           subjectKey: resolved.subjectKey,
           ownerToken,

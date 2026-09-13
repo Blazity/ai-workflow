@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SETTINGS_REGISTRY } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
-import { readAllSettings, seedSettings, writeManySettings } from "../../db/repositories/settings.js";
+import { writeManySettings } from "../../db/repositories/settings.js";
 
 const state = vi.hoisted(() => ({
   db: undefined as unknown,
@@ -11,22 +11,10 @@ const state = vi.hoisted(() => ({
 
 vi.mock("../../infra/vcs-config.js", () => ({ env: state.env }));
 vi.mock("../../db/client.js", () => ({ getDb: () => state.db }));
-// The environment import is a write, and this file is about the READ: with it
-// running, every variable a case stubs would be a stored row by the time the
-// case looked, and "where did this value come from" would answer "stored" for
-// all of them. Its own behaviour is pinned in environment-import.test.ts,
-// including the fact that it runs at the first snapshot.
-vi.mock("./environment-import.js", () => ({
-  ensureEnvironmentSettingsImported: async () => [],
-  migratedVariablesSet: () => [],
-  migratedVariablesUnstored: () => [],
-}));
-
 const {
   loadSettingsResolution,
   loadSettingsSnapshot,
   settingsSnapshotFromEnvironment,
-  settingsSeedRows,
 } = await import("./snapshot.js");
 const {
   agentRuntimeSettings,
@@ -92,19 +80,15 @@ beforeEach(async () => {
 });
 
 describe("settings snapshot", () => {
-  it("resolves every key from the environment when the table is empty", async () => {
+  it("resolves ordinary keys from defaults when the table is empty", async () => {
     const snapshot = await loadSettingsSnapshot();
 
-    // "Empty table plus environment equals today": the value of every key is
-    // what the deployment's parsed environment already held, and the registry
-    // default only where the environment holds nothing.
     expect(snapshot).toEqual(settingsSnapshotFromEnvironment());
-    expect(snapshot.MAX_CONCURRENT_AGENTS).toBe(7);
-    expect(snapshot.GITLAB_BASE_BRANCH).toBe("trunk");
-    expect(snapshot.AGENT_KIND).toBe("codex");
-    expect(snapshot.ENABLE_REPO_MEMORY).toBe(true);
-    expect(snapshot.TRIGGER_RATE_LIMIT_WINDOW).toBe("hour");
-    // Unset in the environment, so the registry default stands.
+    expect(snapshot.MAX_CONCURRENT_AGENTS).toBe(3);
+    expect(snapshot.GITLAB_BASE_BRANCH).toBe("main");
+    expect(snapshot.AGENT_KIND).toBe("claude");
+    expect(snapshot.ENABLE_REPO_MEMORY).toBe(false);
+    expect(snapshot.TRIGGER_RATE_LIMIT_WINDOW).toBeNull();
     expect(snapshot.CLAUDE_MODEL).toBeNull();
     expect(snapshot.V2_MAX_BLOCK_CONCURRENCY).toBeNull();
     expect(snapshot["catalog.activated"]).toBe(false);
@@ -131,19 +115,16 @@ describe("settings snapshot", () => {
     );
   });
 
-  it("reads the checks keys the runner still reads raw", async () => {
+  it("reads only the redeploy-owned checks allowlist from the environment", async () => {
     vi.stubEnv("PRE_PR_COMMAND_TIMEOUT_MINUTES", "25");
     vi.stubEnv("PRE_PR_CHECKS_ALLOWED_ENV", " NPM_TOKEN , ARTHUR_TOKEN,, ");
 
     const snapshot = await loadSettingsSnapshot();
-    expect(snapshot.PRE_PR_COMMAND_TIMEOUT_MINUTES).toBe(25);
+    expect(snapshot.PRE_PR_COMMAND_TIMEOUT_MINUTES).toBe(10);
     expect(snapshot.PRE_PR_CHECKS_ALLOWED_ENV).toEqual(["NPM_TOKEN", "ARTHUR_TOKEN"]);
-
-    vi.stubEnv("PRE_PR_COMMAND_TIMEOUT_MINUTES", "nonsense");
-    expect(settingsSnapshotFromEnvironment().PRE_PR_COMMAND_TIMEOUT_MINUTES).toBe(10);
   });
 
-  it("lets a stored row win over the environment", async () => {
+  it("resolves ordinary keys from stored rows while ignoring retired environment variables", async () => {
     await writeManySettings(db, {
       patch: { MAX_CONCURRENT_AGENTS: 1, CLAUDE_MODEL: "claude-opus-5" },
       actor: "user_admin",
@@ -157,7 +138,6 @@ describe("settings snapshot", () => {
   });
 
   it("names where each value came from", async () => {
-    vi.stubEnv("COLUMN_AI", "AI");
     await writeManySettings(db, {
       patch: { MAX_CONCURRENT_AGENTS: 1 },
       actor: "user_admin",
@@ -166,74 +146,31 @@ describe("settings snapshot", () => {
 
     const { sources } = await loadSettingsResolution();
     expect(sources.get("MAX_CONCURRENT_AGENTS")).toBe("stored");
-    expect(sources.get("COLUMN_AI")).toBe("environment");
+    expect(sources.get("COLUMN_AI")).toBe("default");
     expect(sources.get("catalog.activated")).toBe("default");
     expect(sources.get("CLAUDE_MODEL")).toBe("default");
   });
 
-  it("offers one seed row per variable the deployment actually sets", () => {
-    vi.stubEnv("MAX_CONCURRENT_AGENTS", "7");
-    vi.stubEnv("COLUMN_AI", "AI");
-    vi.stubEnv("PRE_PR_CHECKS_ALLOWED_ENV", "NPM_TOKEN");
-
-    const rows = new Map(settingsSeedRows().map((row) => [row.key, row.value]));
-    expect(rows.get("MAX_CONCURRENT_AGENTS")).toBe(7);
-    expect(rows.get("COLUMN_AI")).toBe("AI");
-    // No variable, so nothing to seed from; and an unset variable makes no row.
-    expect(rows.has("catalog.activated")).toBe(false);
-    expect(rows.has("CLAUDE_MODEL")).toBe(false);
-    // Set, but the checks runner reads the variable itself inside a step, so a
-    // stored row would decide nothing: `requiresRedeploy` keeps it out.
-    expect(rows.has("PRE_PR_CHECKS_ALLOWED_ENV")).toBe(false);
-  });
-
-  it("seeds the same rows however often the build runs", async () => {
-    vi.stubEnv("MAX_CONCURRENT_AGENTS", "7");
-    vi.stubEnv("COLUMN_AI", "AI");
-
-    const first = await seedSettings(db, {
-      rows: settingsSeedRows(),
-      actor: "environment",
-    });
-    const afterFirst = await readAllSettings(db);
-    const second = await seedSettings(db, {
-      rows: settingsSeedRows(),
-      actor: "environment",
-    });
-    const afterSecond = await readAllSettings(db);
-
-    expect(first).toBeGreaterThan(0);
-    expect(second).toBe(0);
-    expect(afterSecond.map((row) => [row.key, row.value])).toEqual(
-      afterFirst.map((row) => [row.key, row.value]),
-    );
-    const seeded = new Map(afterSecond.map((row) => [row.key, row.value]));
-    expect(seeded.get("MAX_CONCURRENT_AGENTS")).toBe(7);
-    expect(seeded.get("COLUMN_AI")).toBe("AI");
-    expect(seeded.has("CLAUDE_MODEL")).toBe(false);
-    // Seeded rows are the values already in force, so nothing changes.
-    expect((await loadSettingsSnapshot()).MAX_CONCURRENT_AGENTS).toBe(7);
-  });
 });
 
 describe("settings accessors", () => {
-  it("answer from the snapshot synchronously, and follow the environment when nothing is stored", async () => {
+  it("answer from the snapshot synchronously", async () => {
     const snapshot = await loadSettingsSnapshot();
 
-    expect(maxConcurrentAgents(snapshot)).toBe(7);
+    expect(maxConcurrentAgents(snapshot)).toBe(3);
     expect(maxConcurrentAgents(snapshot)).not.toBeInstanceOf(Promise);
     expect(dashboardOrganizationSettings(snapshot)).toEqual({
       slug: "acme",
-      name: "Acme",
+      name: "AI Workflow",
       origin: "https://dash.acme.test",
     });
     expect(agentRuntimeSettings(snapshot)).toEqual({
-      agentKind: "codex",
-      includeReview: true,
+      agentKind: "claude",
+      includeReview: false,
       includeLeakReview: false,
     });
     expect(mcpSettings(snapshot)).toMatchObject({
-      enabled: true,
+      enabled: false,
       serverVersion: "0.1.0",
       maxResultBytes: 524_288,
     });
@@ -244,8 +181,8 @@ describe("settings accessors", () => {
       backlogColumn: "Backlog",
     });
     expect(triggerRateLimitDefaults(snapshot)).toEqual({
-      TRIGGER_RATE_LIMIT_MAX: 12,
-      TRIGGER_RATE_LIMIT_WINDOW: "hour",
+      TRIGGER_RATE_LIMIT_MAX: undefined,
+      TRIGGER_RATE_LIMIT_WINDOW: undefined,
     });
   });
 

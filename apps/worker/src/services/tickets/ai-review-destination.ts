@@ -10,20 +10,17 @@ import { logger } from "../../infra/logger.js";
  * provider matches COLUMN_AI_REVIEW against transition names as well as status
  * names, so the configured value legitimately names either one.
  */
-export function aiReviewMoveTarget(): IssueTrackerMoveTarget {
+export function aiReviewMoveTarget(aiReviewColumn: string): IssueTrackerMoveTarget {
   return env.JIRA_AI_REVIEW_TRANSITION_ID
-    ? { name: env.COLUMN_AI_REVIEW, transitionId: env.JIRA_AI_REVIEW_TRANSITION_ID }
-    : env.COLUMN_AI_REVIEW;
+    ? { name: aiReviewColumn, transitionId: env.JIRA_AI_REVIEW_TRANSITION_ID }
+    : aiReviewColumn;
 }
 
-/**
- * Resolved at most once per process: the answer is project workflow
- * configuration, identical for every ticket, so it is not per-run state.
- */
-let resolvedReviewStatusId: string | null = null;
+/** One cached destination per normalized configured column name. */
+const resolvedReviewStatusIds = new Map<string, string>();
 
 export function resetAiReviewDestinationCache(): void {
-  resolvedReviewStatusId = null;
+  resolvedReviewStatusIds.clear();
 }
 
 /**
@@ -49,8 +46,9 @@ export async function isAiReviewDestination(input: {
   ticketKey: string;
   statusName: string | null;
   statusId: string | null;
+  aiReviewColumn: string;
 }): Promise<boolean> {
-  const configured = env.COLUMN_AI_REVIEW.trim().toLowerCase();
+  const configured = input.aiReviewColumn.trim().toLowerCase();
   if (
     input.statusName !== null &&
     input.statusName.trim().toLowerCase() === configured
@@ -62,6 +60,7 @@ export async function isAiReviewDestination(input: {
   const reviewStatusId = await resolveReviewStatusId(
     input.issueTracker,
     input.ticketKey,
+    input.aiReviewColumn,
   );
   return reviewStatusId !== null && reviewStatusId === statusId;
 }
@@ -69,25 +68,28 @@ export async function isAiReviewDestination(input: {
 async function resolveReviewStatusId(
   issueTracker: IssueTrackerAdapter,
   ticketKey: string,
+  aiReviewColumn: string,
 ): Promise<string | null> {
-  if (resolvedReviewStatusId !== null) return resolvedReviewStatusId;
+  const cacheKey = aiReviewColumn.trim().toLowerCase();
+  const cached = resolvedReviewStatusIds.get(cacheKey);
+  if (cached !== undefined) return cached;
   if (!issueTracker.resolveMoveTargetStatus) return null;
   try {
     const destination = await issueTracker.resolveMoveTargetStatus(
       ticketKey,
-      aiReviewMoveTarget(),
+      aiReviewMoveTarget(aiReviewColumn),
     );
     if (!destination) return null;
-    resolvedReviewStatusId = destination.id;
+    resolvedReviewStatusIds.set(cacheKey, destination.id);
     logger.info(
       {
-        configured: env.COLUMN_AI_REVIEW,
+        configured: aiReviewColumn,
         statusId: destination.id,
         statusName: destination.name,
       },
       "ai_review_destination_resolved",
     );
-    return resolvedReviewStatusId;
+    return destination.id;
   } catch (error) {
     // Never fail the caller: an unresolved destination just leaves the name
     // comparison as the answer.

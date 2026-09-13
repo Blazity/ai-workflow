@@ -197,6 +197,7 @@ test("the source build covers worker and dashboard without deployment side effec
     "NEXT_TELEMETRY_DISABLED=1 pnpm --filter ai-workflow-dashboard build",
   ]);
   assert.deepEqual(commands(workerPackage.scripts["build:ci"]), [
+    "tsx scripts/check-retired-env.ts",
     "pnpm validate:pre-sandbox",
     "pnpm validate:local-skills",
     "pnpm mcp:contract:check",
@@ -210,13 +211,6 @@ test("the source build covers worker and dashboard without deployment side effec
   );
   assert.doesNotMatch(workerPackage.scripts["build:ci"], /db:migrate/);
   assert.doesNotMatch(workerPackage.scripts["build:ci"], /seed:auth-user/);
-  // The settings seed writes rows, so it belongs to the build that owns the
-  // database and not to the one CI runs against no database at all.
-  assert.doesNotMatch(workerPackage.scripts["build:ci"], /db:seed-settings/);
-  // The repository catalog seed reads the deployment's environment and writes
-  // to its database, so it belongs to the build that owns both and never to the
-  // credential-free CI variant.
-  assert.doesNotMatch(workerPackage.scripts["build:ci"], /seed:repository-catalog/);
 });
 
 test("the CI gate command reaches both database fences", async () => {
@@ -240,16 +234,11 @@ test("the source build uses the validator entrypoints and preserves deployment s
     workerPackage.scripts["mcp:contract:check"],
     "tsx scripts/generate-mcp-contract.ts --check",
   );
-  assert.equal(
-    workerPackage.scripts["seed:repository-catalog"],
-    "tsx scripts/db-seed-repository-catalog.ts",
-  );
   assert.deepEqual(commands(workerPackage.scripts.build), [
+    "tsx scripts/check-retired-env.ts",
     "pnpm validate:pre-sandbox",
     "pnpm validate:local-skills",
     "pnpm db:migrate",
-    "pnpm db:seed-settings",
-    "pnpm seed:repository-catalog",
     "pnpm seed:auth-user",
     "pnpm --dir ../.. run gen:blocks -- --check",
     "rm -rf .nitro/workflow",

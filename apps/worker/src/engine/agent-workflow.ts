@@ -1099,7 +1099,10 @@ async function agentWorkflowBody(
       runDefaultKind,
       defaults: modelDefaults,
       prompts,
-      moveTargets: { backlog: backlogMoveTarget(), aiReview: aiReviewMoveTarget() },
+      moveTargets: {
+        backlog: backlogMoveTarget(),
+        aiReview: aiReviewMoveTarget(),
+      },
       arthur: {
         taskId: null,
       },
@@ -1432,8 +1435,7 @@ async function agentWorkflowBody(
         }
         // Flag off must reproduce byte-for-byte pre-ledger behavior, and the
         // pre-ledger run never posted a failure note on this path.
-        const { env: modelEnv } = await import("./harness-profiles/model-env.js");
-        if (!modelEnv.REVIEW_LEDGER_ENABLED) {
+        if (!ctx.settings.REVIEW_LEDGER_ENABLED) {
           return;
         }
         const ledger = ctx.reviewLedger;

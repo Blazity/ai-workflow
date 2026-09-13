@@ -17,7 +17,6 @@ const {
   DASHBOARD_ORIGIN,
   DASHBOARD_AUTH_EMAIL,
   DASHBOARD_AUTH_PASSWORD,
-  DASHBOARD_ORG_NAME,
   DASHBOARD_ORG_SLUG,
   SSO_ISSUER,
   SSO_ALLOWED_DOMAIN,
@@ -48,6 +47,9 @@ const { neon } = await import("@neondatabase/serverless");
 const { drizzle } = await import("drizzle-orm/neon-http");
 const schema = await import("../src/db/schema.js");
 const { bootstrapDashboardAuth, createAuth } = await import("../src/auth.js");
+const { loadSeedAuthOrganizationName } = await import(
+  "../src/services/auth/seed-auth-settings.js"
+);
 
 const db = drizzle({ client: neon(DATABASE_URL!), schema }) as unknown as Parameters<
   typeof createAuth
@@ -58,6 +60,7 @@ const auth = createAuth(db, {
   baseURL: BETTER_AUTH_URL!,
   trustedOrigins: DASHBOARD_ORIGIN ? [DASHBOARD_ORIGIN] : [],
 });
+const organizationName = await loadSeedAuthOrganizationName(db);
 
 const r = await bootstrapDashboardAuth(auth, db, {
   owner: {
@@ -65,7 +68,7 @@ const r = await bootstrapDashboardAuth(auth, db, {
     password: DASHBOARD_AUTH_PASSWORD!,
   },
   organization: {
-    name: DASHBOARD_ORG_NAME ?? "AI Workflow",
+    name: organizationName,
     slug: DASHBOARD_ORG_SLUG ?? "ai-workflow",
   },
   sso:

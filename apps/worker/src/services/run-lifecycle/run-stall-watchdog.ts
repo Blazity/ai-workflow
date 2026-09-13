@@ -1,5 +1,4 @@
 import { getRun } from "workflow/api";
-import { env } from "../../infra/vcs-config.js";
 import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
@@ -113,6 +112,7 @@ async function safeTicketMoveTarget(input: {
   ticketKey: string;
   issueTracker?: IssueTrackerAdapter;
   moveTarget?: IssueTrackerMoveTarget;
+  aiColumn: string;
   context: { subjectKey: string; runId: string };
 }): Promise<TicketMoveDecision> {
   if (!input.issueTracker) {
@@ -129,7 +129,8 @@ async function safeTicketMoveTarget(input: {
   try {
     const ticket = await input.issueTracker.fetchTicket(input.ticketKey);
     const inAi =
-      ticket.trackerStatus.trim().toLowerCase() === env.COLUMN_AI.trim().toLowerCase();
+      ticket.trackerStatus.trim().toLowerCase() ===
+      input.aiColumn.trim().toLowerCase();
     if (!inAi) {
       logger.info(
         {
@@ -194,6 +195,7 @@ export async function reconcileStalledRun(input: {
   db: Db;
   issueTracker?: IssueTrackerAdapter;
   moveTarget?: IssueTrackerMoveTarget;
+  aiColumn?: string;
   onSubjectReleased?: (subjectKey: string) => Promise<void> | void;
   now?: number;
 }): Promise<boolean> {
@@ -252,6 +254,7 @@ export async function reconcileStalledRun(input: {
       ticketKey,
       issueTracker: input.issueTracker,
       moveTarget: input.moveTarget,
+      aiColumn: input.aiColumn ?? "AI",
       context,
     });
     if (!decision.safe) return false;
@@ -288,7 +291,7 @@ export async function reconcileStalledRun(input: {
               db,
               issueTracker: input.issueTracker!,
               ticketKey,
-              aiColumn: env.COLUMN_AI,
+              aiColumn: input.aiColumn ?? "AI",
               target: moveTarget,
               owner,
               requiredOwnerState: "cancelling",

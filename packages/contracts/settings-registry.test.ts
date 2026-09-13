@@ -1,25 +1,76 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  RETIRED_ENVIRONMENT_VARIABLES,
   SETTINGS_REGISTRY,
   findSettingDefinition,
+  type SettingDefinition,
   validateSettingsPatch,
 } from "./settings-registry";
 import {
-  migratedVariablesSetIn,
-  migratedVariablesUnstoredIn,
-  redeployOwnedSettingRows,
   resolveSettingsSnapshot,
   type SettingsEnvironmentReader,
 } from "./settings-resolution";
 
-test("every key is declared once and names its environment variable at most once", () => {
+test("every key is declared once and only redeploy keys name environment variables", () => {
   const keys = SETTINGS_REGISTRY.map((definition) => definition.key);
   assert.equal(new Set(keys).size, keys.length);
-  const variables = SETTINGS_REGISTRY.map((d) => d.environmentVariable).filter(
-    (name): name is string => name !== null,
-  );
+  const registry: readonly SettingDefinition[] = SETTINGS_REGISTRY;
+  const variables = registry
+    .map((definition) => definition.environmentVariable)
+    .filter((name): name is string => name !== undefined);
   assert.equal(new Set(variables).size, variables.length);
+  assert.deepEqual(
+    registry.filter((definition) => definition.requiresRedeploy).map((definition) => definition.key),
+    ["DASHBOARD_ORG_SLUG", "MCP_ALLOW_PUBLIC_DCR", "PRE_PR_CHECKS_ALLOWED_ENV"],
+  );
+  for (const definition of registry) {
+    assert.equal(
+      definition.environmentVariable !== undefined,
+      definition.requiresRedeploy === true,
+      definition.key,
+    );
+  }
+});
+
+test("the retired environment names are a frozen, literal one-way list", () => {
+  assert.equal(Object.isFrozen(RETIRED_ENVIRONMENT_VARIABLES), true);
+  assert.deepEqual(RETIRED_ENVIRONMENT_VARIABLES, [
+    "DASHBOARD_ORG_NAME",
+    "GITHUB_BASE_BRANCH",
+    "GITLAB_BASE_BRANCH",
+    "MAX_CONCURRENT_AGENTS",
+    "JOB_TIMEOUT_MS",
+    "V2_MAX_BLOCK_CONCURRENCY",
+    "POLL_INTERVAL_MS",
+    "ATTACHMENT_MAX_FILE_SIZE_MB",
+    "ATTACHMENT_MAX_TOTAL_SIZE_MB",
+    "ATTACHMENT_MAX_COUNT",
+    "ATTACHMENT_DOWNLOAD_TIMEOUT_MS",
+    "ENABLE_REVIEW_PHASE",
+    "ENABLE_LEAK_REVIEW",
+    "ENABLE_REPO_MEMORY",
+    "ENABLE_ORG_MEMORY_PROMOTION",
+    "ENABLE_REPO_ROUTING_MEMORY",
+    "REVIEW_LEDGER_ENABLED",
+    "MCP_ENABLED",
+    "MCP_AUDIT_RETENTION_DAYS",
+    "MCP_MAX_REQUEST_BYTES",
+    "MCP_MAX_RESULT_BYTES",
+    "MCP_TOOL_TIMEOUT_MS",
+    "MCP_READ_RATE_LIMIT_PER_MINUTE",
+    "MCP_MUTATION_RATE_LIMIT_PER_MINUTE",
+    "PRE_PR_COMMAND_TIMEOUT_MINUTES",
+    "AGENT_KIND",
+    "CLAUDE_MODEL",
+    "CODEX_MODEL",
+    "COLUMN_AI",
+    "COLUMN_AI_REVIEW",
+    "COLUMN_BACKLOG",
+    "TRIGGER_RATE_LIMIT_MAX",
+    "TRIGGER_RATE_LIMIT_WINDOW",
+  ]);
+  assert.ok(!RETIRED_ENVIRONMENT_VARIABLES.includes("AGENT_ALLOWED_REPOS" as never));
 });
 
 test("a key the workflow body reads may only apply to the next run", () => {
@@ -109,7 +160,7 @@ test("null clears a key that has no default and is refused for one that has", ()
 test("the catalog switch is a setting with no environment variable", () => {
   const definition = findSettingDefinition("catalog.activated");
   assert.ok(definition);
-  assert.equal(definition.environmentVariable, null);
+  assert.equal(definition.environmentVariable, undefined);
   assert.equal(definition.default, false);
 });
 
@@ -121,7 +172,7 @@ function environmentOf(values: Record<string, string>): SettingsEnvironmentReade
   };
 }
 
-test("a stored row never wins over the environment for a requiresRedeploy key", () => {
+test("stored values stay unchanged while a redeploy key still reads the environment", () => {
   const environment = environmentOf({ DASHBOARD_ORG_SLUG: "acme", COLUMN_AI: "Agent" });
 
   const { snapshot, sources } = resolveSettingsSnapshot(
@@ -143,62 +194,15 @@ test("a stored row never wins over the environment for a requiresRedeploy key", 
   assert.equal(sources.get("COLUMN_AI"), "stored");
 });
 
-test("the unstored list names what is set and not stored, and nothing else", () => {
+test("the environment branch exists only for redeploy keys", () => {
   const environment = environmentOf({
-    COLUMN_AI: "Agent",
-    COLUMN_BACKLOG: "Backlog",
     DASHBOARD_ORG_SLUG: "acme",
+    COLUMN_AI: "Environment Agent",
   });
+  const { snapshot, sources } = resolveSettingsSnapshot(new Map(), environment);
 
-  const resolution = resolveSettingsSnapshot(
-    new Map([["COLUMN_AI", "Agent"]]),
-    environment,
-  );
-
-  const unstored = migratedVariablesUnstoredIn(environment, resolution);
-  // Set and stored: safe to remove, so it is not here.
-  assert.ok(!unstored.includes("COLUMN_AI"));
-  // Set and nothing stored: removing it would lose the value.
-  assert.ok(unstored.includes("COLUMN_BACKLOG"));
-  // Never asked for at all: the deployment reads this one itself.
-  assert.ok(!unstored.includes("DASHBOARD_ORG_SLUG"));
-  // Unset variables are nobody's to-do item.
-  assert.ok(!unstored.includes("JOB_TIMEOUT_MS"));
-});
-
-test("a variable that is set but parses to nothing is on the to-do list, not the unsafe one", () => {
-  // `PRE_PR_COMMAND_TIMEOUT_MINUTES=0`, or whitespace: the variable is there,
-  // the parser gives nothing, and the deployment has been running on the
-  // registry default all along.
-  const environment: SettingsEnvironmentReader = {
-    value: (variable) => (variable === "COLUMN_AI" ? "Agent" : undefined),
-    isSet: (variable) =>
-      variable === "COLUMN_AI" || variable === "PRE_PR_COMMAND_TIMEOUT_MINUTES",
-  };
-
-  const resolution = resolveSettingsSnapshot(new Map(), environment);
-
-  assert.equal(resolution.sources.get("PRE_PR_COMMAND_TIMEOUT_MINUTES"), "default");
-  // Still set, so the cleanup release would still refuse to boot: it stays on
-  // the list of variables to delete.
-  assert.ok(migratedVariablesSetIn(environment).includes("PRE_PR_COMMAND_TIMEOUT_MINUTES"));
-  // But nothing would be lost by deleting it, so it is not on the list that
-  // says "do not touch this yet".
-  const unstored = migratedVariablesUnstoredIn(environment, resolution);
-  assert.ok(!unstored.includes("PRE_PR_COMMAND_TIMEOUT_MINUTES"));
-  assert.ok(unstored.includes("COLUMN_AI"));
-});
-
-test("the environment keeps its own keys, with the value that answers once a row is gone", () => {
-  const environment = environmentOf({ DASHBOARD_ORG_SLUG: "acme" });
-
-  const rows = redeployOwnedSettingRows(environment);
-
-  const slug = rows.find((row) => row.key === "DASHBOARD_ORG_SLUG");
-  assert.deepEqual(slug, { key: "DASHBOARD_ORG_SLUG", value: "acme" });
-  // Every requiresRedeploy key is here, set or not: a leftover row for one of
-  // them is ignored either way, so the import removes it either way.
-  assert.ok(rows.some((row) => row.key === "PRE_PR_CHECKS_ALLOWED_ENV"));
-  // And nothing else is: these rows are deletions, not writes.
-  assert.ok(!rows.some((row) => row.key === "COLUMN_AI"));
+  assert.equal(snapshot.DASHBOARD_ORG_SLUG, "acme");
+  assert.equal(sources.get("DASHBOARD_ORG_SLUG"), "environment");
+  assert.equal(snapshot.COLUMN_AI, "AI");
+  assert.equal(sources.get("COLUMN_AI"), "default");
 });

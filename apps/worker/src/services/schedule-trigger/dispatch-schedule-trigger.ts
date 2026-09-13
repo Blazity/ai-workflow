@@ -1,5 +1,5 @@
 import { start } from "workflow/api";
-import { env } from "../../infra/vcs-config.js";
+import type { SettingsSnapshot } from "@shared/contracts";
 import type { Db } from "../../db/types.js";
 import type {
   RunRegistryAdapter,
@@ -162,6 +162,7 @@ interface ScheduleTargetQuery {
 export interface ScheduleDispatchDeps {
   runRegistry: RunRegistryAdapter;
   maxConcurrentAgents: number;
+  settings?: SettingsSnapshot;
   occurrences: ScheduleOccurrenceLedgerPort;
   schedules: ScheduleRowPort;
   /**
@@ -557,7 +558,12 @@ async function consumeScheduleRateLimit(
 ): Promise<TriggerRateLimitDecision | null> {
   const config = resolveTriggerRateLimit(
     occurrence.rateLimit,
-    envTriggerRateLimitDefault(env),
+    envTriggerRateLimitDefault({
+      TRIGGER_RATE_LIMIT_MAX:
+        deps.settings?.TRIGGER_RATE_LIMIT_MAX ?? undefined,
+      TRIGGER_RATE_LIMIT_WINDOW:
+        deps.settings?.TRIGGER_RATE_LIMIT_WINDOW ?? undefined,
+    }),
   );
   if (config === null) return null;
   return deps.consumeTriggerRateLimit(
@@ -1172,10 +1178,12 @@ export function createScheduleDispatchDeps(
   db: Db,
   runRegistry: RunRegistryAdapter,
   maxConcurrentAgents: number,
+  settings?: SettingsSnapshot,
 ): ScheduleDispatchDeps {
   return {
     runRegistry,
     maxConcurrentAgents,
+    settings,
     occurrences: {
       accept: (admitted) => acceptOccurrence(db, admitted),
       supersedeThenAccept: (admitted) => supersedePendingThenAccept(db, admitted),
@@ -1228,10 +1236,12 @@ export function createScheduleDispatchDeps(
 export function createConnectedScheduleDispatchDeps(
   runRegistry: RunRegistryAdapter,
   maxConcurrentAgents: number,
+  settings?: SettingsSnapshot,
 ): ScheduleDispatchDeps {
   return {
     runRegistry,
     maxConcurrentAgents,
+    settings,
     occurrences: {
       accept: acceptConnectedOccurrence,
       supersedeThenAccept: supersedeConnectedPendingThenAccept,

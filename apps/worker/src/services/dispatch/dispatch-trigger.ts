@@ -1,5 +1,6 @@
 import { start } from "workflow/api";
 import type {
+  SettingsSnapshot,
   VcsProviderKind,
   WorkflowBlockType,
   WorkflowDefinition,
@@ -102,6 +103,7 @@ export interface DispatchTriggerDeps {
   db?: Db;
   runRegistry: RunRegistryAdapter;
   maxConcurrentAgents: number;
+  settings?: SettingsSnapshot;
   /** The repository catalog as the entry point read it: one load per HTTP
    *  request or cron tick, so every candidate event of a delivery is judged
    *  against the same enabled list. */
@@ -538,23 +540,27 @@ function stringArray(value: unknown, fallback: string[] = []): string[] {
  * envelope in hand.
  */
 async function prTriggerRateLimited(
-  db: Db | undefined,
+  deps: DispatchTriggerDeps,
   accepted: AcceptedTriggerDelivery,
 ): Promise<boolean> {
   const pinned = await readDefinitionVersion(
-    db,
+    deps.db,
     accepted.definitionId,
     accepted.definitionVersion,
   );
-  const { env } = await import("../../infra/vcs-config.js");
   const limit = resolveTriggerRateLimitForType(
     triggerRateLimitNodes(runnableDefinitionOf(pinned), accepted.triggerType),
-    envTriggerRateLimitDefault(env),
+    envTriggerRateLimitDefault({
+      TRIGGER_RATE_LIMIT_MAX:
+        deps.settings?.TRIGGER_RATE_LIMIT_MAX ?? undefined,
+      TRIGGER_RATE_LIMIT_WINDOW:
+        deps.settings?.TRIGGER_RATE_LIMIT_WINDOW ?? undefined,
+    }),
   );
   if (!limit) return false;
   const key = { definitionId: String(accepted.definitionId), nodeId: limit.nodeId };
-  const decision = db
-    ? await enforceTriggerRateLimit(db, key, limit.config, new Date())
+  const decision = deps.db
+    ? await enforceTriggerRateLimit(deps.db, key, limit.config, new Date())
     : await enforceConnectedTriggerRateLimit(key, limit.config, new Date());
   if (!decision || decision.allowed) return false;
   logger.info(
@@ -801,7 +807,7 @@ async function dispatchAcceptedTrigger(
           // Under the reservation, right before start: a delivery refused by
           // the duplicate/claim guards above never reaches this check and so
           // never spends the trigger's start budget.
-          if (await prTriggerRateLimited(deps.db, accepted)) {
+          if (await prTriggerRateLimited(deps, accepted)) {
             return { started: false, reason: "rate_limited" as const };
           }
           // Last of all, so a candidate the rate limit refuses does not spend a

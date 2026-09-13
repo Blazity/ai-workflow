@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultSettingsSnapshot } from "@shared/contracts";
 import type { ActiveRunEntry, RunRegistryAdapter } from "../../adapters/run-registry/types.js";
 import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
 import type { Db } from "../../db/client.js";
@@ -69,6 +70,8 @@ import {
   cancelRunDetailed,
   cancelRunForOperator,
 } from "./cancel-run.js";
+
+const cancelSettings = defaultSettingsSnapshot();
 
 function active(overrides: Partial<ActiveRunEntry> = {}): ActiveRunEntry {
   return {
@@ -352,7 +355,11 @@ describe("cancelRunById", () => {
     const db = outerDb;
 
     await expect(
-      cancelRunById(db, "run-1", { actorLabel: "operator kate", runRegistry }),
+      cancelRunById(db, "run-1", {
+        actorLabel: "operator kate",
+        runRegistry,
+        settings: cancelSettings,
+      }),
     ).resolves.toEqual({ outcome: "cancelled", subjectKey: "sched:demo:hourly" });
 
     // Reuses the subject cancel core against the exact owner from active_runs.
@@ -391,6 +398,7 @@ describe("cancelRunById", () => {
         actorLabel: "operator kate",
         runRegistry,
         issueTracker,
+        settings: cancelSettings,
       }),
     ).resolves.toEqual({
       outcome: "cancelled",
@@ -428,6 +436,7 @@ describe("cancelRunById", () => {
       cancelRunById(outerDb, "run-1", {
         actorLabel: "operator kate",
         runRegistry,
+        settings: cancelSettings,
       }),
     ).resolves.toEqual({ outcome: "cancelled", subjectKey: "sched:demo:hourly" });
 
@@ -454,6 +463,7 @@ describe("cancelRunById", () => {
       cancelRunById(outerDb, "run-1", {
         actorLabel: "operator kate",
         runRegistry,
+        settings: cancelSettings,
       }),
     ).resolves.toEqual({ outcome: "cancelled", subjectKey: "sched:demo:hourly" });
 
@@ -481,6 +491,7 @@ describe("cancelRunById", () => {
       cancelRunById(outerDb, "run-1", {
         actorLabel: "operator kate",
         runRegistry,
+        settings: cancelSettings,
       }),
     ).resolves.toEqual({ outcome: "cancelled", subjectKey: "sched:demo:hourly" });
 
@@ -503,6 +514,7 @@ describe("cancelRunById", () => {
       cancelRunById(outerDb, "run-1", {
         actorLabel: "operator kate",
         runRegistry,
+        settings: cancelSettings,
       }),
     ).resolves.toEqual({
       outcome: "already_terminal",
@@ -531,6 +543,7 @@ describe("cancelRunById", () => {
       cancelRunById(outerDb, "run-1", {
         actorLabel: "operator",
         runRegistry,
+        settings: cancelSettings,
       }),
     ).resolves.toEqual({ outcome: "unconfirmed", subjectKey: "sched:demo:hourly" });
 
@@ -552,6 +565,7 @@ describe("cancelRunById", () => {
       cancelRunById(outerDb, "run-1", {
         actorLabel: "operator kate",
         runRegistry,
+        settings: cancelSettings,
       }),
     ).resolves.toEqual({ outcome: "unconfirmed", subjectKey: "sched:demo:hourly" });
 
@@ -568,6 +582,7 @@ describe("cancelRunById", () => {
       cancelRunById(outerDb, "run-done", {
         actorLabel: "operator",
         runRegistry,
+        settings: cancelSettings,
       }),
     ).resolves.toEqual({ outcome: "already_terminal", status: "success" });
 
@@ -585,6 +600,7 @@ describe("cancelRunById", () => {
       cancelRunById(outerDb, "ghost", {
         actorLabel: "operator",
         runRegistry,
+        settings: cancelSettings,
       }),
     ).resolves.toEqual({ outcome: "not_found" });
 
@@ -637,6 +653,7 @@ describe("cancelRunForOperator", () => {
       cancelRunForOperator(operatorDb, "run-1", {
         actorLabel: "operator kate",
         runRegistry,
+        settings: cancelSettings,
       }),
     ).resolves.toEqual({
       outcome: "cancelled",
@@ -658,6 +675,7 @@ describe("cancelRunForOperator", () => {
       cancelRunForOperator(operatorDb, "run-2", {
         actorLabel: "operator",
         runRegistry,
+        settings: cancelSettings,
       }),
     ).resolves.toEqual({
       outcome: "cancelled",
@@ -679,6 +697,7 @@ describe("cancelRunForOperator", () => {
       cancelRunForOperator(operatorDb, "run-3", {
         actorLabel: "operator",
         runRegistry,
+        settings: cancelSettings,
       }),
     ).resolves.toEqual({
       outcome: "cancelled",
@@ -703,6 +722,7 @@ describe("cancelRunForOperator", () => {
       cancelRunForOperator(operatorDb, "run-4", {
         actorLabel: "operator",
         runRegistry,
+        settings: cancelSettings,
       }),
     ).resolves.toEqual({
       outcome: "cancelled",
@@ -721,6 +741,7 @@ describe("cancelRunForOperator", () => {
       cancelRunForOperator(operatorDb, "run-done", {
         actorLabel: "operator",
         runRegistry,
+        settings: cancelSettings,
       }),
     ).resolves.toEqual({
       outcome: "already_terminal",

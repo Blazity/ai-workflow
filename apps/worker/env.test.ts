@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { RETIRED_ENVIRONMENT_VARIABLES } from "@shared/contracts";
 import { DEFAULT_MODELS, resolveModelDefaults } from "@shared/harness";
 
 async function importEnvModule() {
+  const retiredEnvironment = await import(
+    "./src/services/settings/retired-environment.js"
+  );
+  retiredEnvironment.assertNoRetiredEnvironmentVariables(process.env);
   const [config, botIdentity] = await Promise.all([
     import("./src/infra/vcs-config.js"),
     import("./src/services/vcs/vcs-bot-login.js"),
@@ -15,9 +20,6 @@ describe("env", () => {
     JIRA_BASE_URL: "https://test.atlassian.net",
     JIRA_API_TOKEN: "token",
     JIRA_PROJECT_KEY: "PROJ",
-    COLUMN_AI: "AI",
-    COLUMN_AI_REVIEW: "AI Review",
-    COLUMN_BACKLOG: "Backlog",
     VCS_KIND: "github",
     GITHUB_APP_ID: "123456",
     // base64 of: -----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n
@@ -25,15 +27,11 @@ describe("env", () => {
     GITHUB_INSTALLATION_ID: "789012",
     GITHUB_OWNER: "test-org",
     GITHUB_REPO: "test-repo",
-    GITHUB_BASE_BRANCH: "main",
     CHAT_SDK_SLACK_TOKEN: "xoxb-test",
     CHAT_SDK_CHANNEL_ID: "C123",
     CHAT_SDK_BOT_NAME: "blazebot",
     SLACK_SIGNING_SECRET: "fake-signing-secret",
     ANTHROPIC_API_KEY: "sk-ant-test",
-    CLAUDE_MODEL: "claude-opus-4-6",
-    MAX_CONCURRENT_AGENTS: "3",
-    JOB_TIMEOUT_MS: "1800000",
     DATABASE_URL: "postgresql://user:pass@ep-fake.neon.tech/neondb",
     GITHUB_WEBHOOK_SECRET: "github-webhook-secret",
     BETTER_AUTH_SECRET: "x".repeat(32),
@@ -59,8 +57,6 @@ describe("env", () => {
     const { env } = await importEnvModule();
     expect(env.JIRA_BASE_URL).toBe("https://test.atlassian.net");
     expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-test");
-    expect(env.MAX_CONCURRENT_AGENTS).toBe(3);
-    expect(env.JOB_TIMEOUT_MS).toBe(1800000);
   });
 
   it("accepts optional Jira transition ids", async () => {
@@ -76,19 +72,12 @@ describe("env", () => {
   });
 
   it("uses defaults for optional fields", async () => {
-    const partial = { ...VALID_ENV };
-    delete (partial as any).MAX_CONCURRENT_AGENTS;
-    delete (partial as any).CLAUDE_MODEL;
-    delete (partial as any).CODEX_MODEL;
-    Object.assign(process.env, partial);
+    Object.assign(process.env, VALID_ENV);
     const { env } = await importEnvModule();
-    expect(env.MAX_CONCURRENT_AGENTS).toBe(3);
-    expect(env.CLAUDE_MODEL).toBeUndefined();
-    expect(env.CODEX_MODEL).toBeUndefined();
     expect(
       resolveModelDefaults({
-        claude: env.CLAUDE_MODEL,
-        codex: env.CODEX_MODEL,
+        claude: undefined,
+        codex: undefined,
       }),
     ).toEqual(DEFAULT_MODELS);
     // COMMIT_AUTHOR/EMAIL are optional with no defaults — provisionSandbox
@@ -102,35 +91,33 @@ describe("env", () => {
 
     const { env } = await importEnvModule();
 
-    expect(env.MCP_ENABLED).toBe(false);
     expect(env.MCP_SERVER_VERSION).toBe("0.1.0");
     expect(env.MCP_ALLOW_PUBLIC_DCR).toBe(false);
-    expect(env.MCP_AUDIT_RETENTION_DAYS).toBe(365);
-    expect(env.MCP_MAX_REQUEST_BYTES).toBe(1_048_576);
-    expect(env.MCP_MAX_RESULT_BYTES).toBe(524_288);
-    expect(env.MCP_TOOL_TIMEOUT_MS).toBe(30_000);
-    expect(env.MCP_READ_RATE_LIMIT_PER_MINUTE).toBe(120);
-    expect(env.MCP_MUTATION_RATE_LIMIT_PER_MINUTE).toBe(20);
     expect(env.MCP_DOGFOOD_FIXTURE_PREFIX).toBe("mcp-dogfood");
   });
 
-  it.each([
-    ["zero audit retention", { MCP_AUDIT_RETENTION_DAYS: "0" }],
-    ["tool timeout below one second", { MCP_TOOL_TIMEOUT_MS: "999" }],
-    ["zero read rate limit", { MCP_READ_RATE_LIMIT_PER_MINUTE: "0" }],
-    ["negative mutation rate limit", { MCP_MUTATION_RATE_LIMIT_PER_MINUTE: "-1" }],
-    ["non-SemVer server version", { MCP_SERVER_VERSION: "latest" }],
-    [
-      "result size above request size",
-      {
-        MCP_MAX_REQUEST_BYTES: "1024",
-        MCP_MAX_RESULT_BYTES: "1025",
-      },
-    ],
-  ])("rejects MCP configuration with %s", async (_case, overrides) => {
-    Object.assign(process.env, VALID_ENV, overrides);
+  it("rejects an invalid MCP server version", async () => {
+    Object.assign(process.env, VALID_ENV, { MCP_SERVER_VERSION: "latest" });
 
     await expect(importEnvModule()).rejects.toThrow("Invalid environment variables");
+  });
+
+  it("refuses every retired settings variable set at boot and names all offenders", async () => {
+    Object.assign(
+      process.env,
+      VALID_ENV,
+      Object.fromEntries(RETIRED_ENVIRONMENT_VARIABLES.map((name) => [name, "1"])),
+    );
+
+    await expect(importEnvModule()).rejects.toThrow(
+      `Retired settings variables are still set: ${RETIRED_ENVIRONMENT_VARIABLES.join(", ")}`,
+    );
+    await expect(importEnvModule()).rejects.toThrow(
+      /Settings page or with MCP settings\.set/,
+    );
+    await expect(importEnvModule()).rejects.toThrow(
+      /SETUP\.md, section "Removing migrated environment variables"/,
+    );
   });
 
   it("accepts complete SSO env group", async () => {
@@ -184,11 +171,10 @@ describe("env", () => {
     }).rejects.toThrow("RESEND_API_KEY");
   });
 
-  it("uses fixed organization defaults", async () => {
+  it("uses the fixed redeploy-owned organization slug default", async () => {
     Object.assign(process.env, VALID_ENV);
 
     const { env } = await importEnvModule();
-    expect(env.DASHBOARD_ORG_NAME).toBe("AI Workflow");
     expect(env.DASHBOARD_ORG_SLUG).toBe("ai-workflow");
   });
 
@@ -219,7 +205,6 @@ describe("env", () => {
     delete (gitlabEnv as any).GITHUB_WEBHOOK_SECRET;
     (gitlabEnv as any).GITLAB_TOKEN = "glpat-test";
     (gitlabEnv as any).GITLAB_PROJECT_ID = "group/repo";
-    (gitlabEnv as any).GITLAB_BASE_BRANCH = "develop";
     (gitlabEnv as any).GITLAB_WEBHOOK_SECRET = "gitlab-webhook-secret";
     Object.assign(process.env, gitlabEnv);
 
