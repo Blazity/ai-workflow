@@ -21,6 +21,8 @@ export { Switch } from "./switch";
 export type { SwitchProps } from "./switch";
 export { Checkbox } from "./checkbox";
 export type { CheckboxProps } from "./checkbox";
+export { Radio } from "./radio";
+export type { RadioProps } from "./radio";
 export { RouteTabs } from "./route-tabs";
 export type { RouteTab, RouteTabsProps } from "./route-tabs";
 export * from "./nav-item";

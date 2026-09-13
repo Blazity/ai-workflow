@@ -10,7 +10,7 @@ import type {
   WorkflowDataReferenceV2,
 } from "@shared/contracts";
 import { evaluateWorkflowValueCompatibility } from "@shared/contracts";
-import { Button, IconButton, Input, Select } from "@/components/ui";
+import { Button, Checkbox, IconButton, Input, Select } from "@/components/ui";
 import {
   compatibilityInvalidReason,
   WorkflowDataPicker,
@@ -352,24 +352,22 @@ export function BranchFields({
                   </div>
                 )}
                 {entry && text && !presence && (
-                  <label className="flex items-center gap-2 font-body text-[11px] text-neutral-600">
-                    <input
-                      type="checkbox"
-                      checked={condition.ignoreCase === true}
-                      disabled={!canEdit}
-                      onChange={(event) =>
-                        onChange({
-                          ...parsed,
-                          conditions: parsed.conditions.map((item, itemIndex) =>
-                            itemIndex === index
-                              ? { ...condition, ignoreCase: event.target.checked }
-                              : item,
-                          ),
-                        })
-                      }
-                    />
-                    Ignore capitalization
-                  </label>
+                  <Checkbox
+                    checked={condition.ignoreCase === true}
+                    disabled={!canEdit}
+                    onChange={(event) =>
+                      onChange({
+                        ...parsed,
+                        conditions: parsed.conditions.map((item, itemIndex) =>
+                          itemIndex === index
+                            ? { ...condition, ignoreCase: event.target.checked }
+                            : item,
+                        ),
+                      })
+                    }
+                    className="text-[11px] text-neutral-600"
+                    label="Ignore capitalization"
+                  />
                 )}
               </div>
             );

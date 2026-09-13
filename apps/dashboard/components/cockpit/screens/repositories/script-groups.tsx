@@ -17,7 +17,7 @@ import type {
   PrePrCheckRepositoryConfig,
   RepoScriptsExpandedCommand,
 } from "@shared/contracts";
-import { Button, IconButton, Input } from "@/components/ui";
+import { Button, Checkbox, IconButton, Input, Radio } from "@/components/ui";
 
 /** Shared wording between GateGroupsEditor (after the fact) and the group
  *  delete site (before the fact), so a user sees the exact same phrase. */
@@ -1035,53 +1035,46 @@ function GateGroupsEditor({
   const radioName = `gate-mode-${radioGroupId}`;
   return (
     <div>
-      <label className="flex items-center gap-2 mb-1 font-body text-[12px] text-neutral-800">
-        <input
-          type="radio"
-          name={radioName}
-          aria-label="Every group (default)"
-          checked={allSelected}
-          disabled={disabled}
-          onChange={() => {
-            // Undefined selects the default of all groups.
-            // eslint-disable-next-line unicorn/no-useless-undefined -- Clear the selected group list.
-            onChange(undefined);
-          }}
-          className="w-3.5 h-3.5 accent-mariner"
-        />
-        Every group (default)
-      </label>
+      <Radio
+        name={radioName}
+        aria-label="Every group (default)"
+        checked={allSelected}
+        disabled={disabled}
+        onChange={() => {
+          // Undefined selects the default of all groups.
+          // eslint-disable-next-line unicorn/no-useless-undefined -- Clear the selected group list.
+          onChange(undefined);
+        }}
+        className="mb-1"
+        label="Every group (default)"
+      />
       {allSelected && (
         <p className="ml-5 mb-1 font-body text-[10px] text-neutral-500">{GATING_ALL_GROUPS_NOTE}</p>
       )}
-      <label className="flex items-center gap-2 mb-1 font-body text-[12px] text-neutral-800">
-        <input
-          type="radio"
-          name={radioName}
-          aria-label="Only the groups I select"
-          checked={!allSelected}
-          disabled={disabled}
-          // Switching on selects everything, which keeps the gate running
-          // exactly what it ran a moment ago: the user then unticks their way
-          // down instead of watching groups drop out of the gate on a click.
-          onChange={() => onChange(groupNames)}
-          className="w-3.5 h-3.5 accent-mariner"
-        />
-        Only the groups I select
-      </label>
+      <Radio
+        name={radioName}
+        aria-label="Only the groups I select"
+        checked={!allSelected}
+        disabled={disabled}
+        // Switching on selects everything, which keeps the gate running
+        // exactly what it ran a moment ago: the user then unticks their way
+        // down instead of watching groups drop out of the gate on a click.
+        onChange={() => onChange(groupNames)}
+        className="mb-1"
+        label="Only the groups I select"
+      />
       {!allSelected && (
         <>
           <div className="ml-5 flex flex-col gap-1">
             {groupNames.map((name) => {
               const selected = gateGroups.includes(name);
               return (
-                <label key={name} className="flex items-center gap-2 font-mono text-[12px] text-neutral-700">
-                  <input
-                    type="checkbox"
-                    aria-label={`Gate on group ${name}`}
-                    checked={selected}
-                    disabled={disabled}
-                    onChange={(e) => {
+                <Checkbox
+                  key={name}
+                  aria-label={`Gate on group ${name}`}
+                  checked={selected}
+                  disabled={disabled}
+                  onChange={(event) => {
                       // Unticking the last box leaves an empty explicit
                       // selection, which stays explicit: the list stays on
                       // screen and Save blocks on it. Falling back to "every
@@ -1089,15 +1082,14 @@ function GateGroupsEditor({
                       // user clearing the boxes to start over ended up gating
                       // on everything without being told.
                       onChange(
-                        e.target.checked
+                        event.target.checked
                           ? [...gateGroups, name]
                           : gateGroups.filter((g) => g !== name),
                       );
-                    }}
-                    className="w-3.5 h-3.5 accent-mariner"
-                  />
-                  {name}
-                </label>
+                  }}
+                  className="font-mono text-[12px] text-neutral-700"
+                  label={name}
+                />
               );
             })}
           </div>
@@ -1400,17 +1392,15 @@ function GroupCard({
           </p>
           <div className="flex flex-wrap gap-3">
             {otherGroupNames.map((ref) => (
-              <label key={ref} className="flex items-center gap-1 font-mono text-[11px] text-neutral-700">
-                <input
-                  type="checkbox"
-                  aria-label={`Extend ${ref}`}
-                  checked={extendsList.includes(ref)}
-                  disabled={disabled}
-                  onChange={(e) => onToggleExtends(ref, e.target.checked)}
-                  className="w-3.5 h-3.5 accent-mariner"
-                />
-                {ref}
-              </label>
+              <Checkbox
+                key={ref}
+                aria-label={`Extend ${ref}`}
+                checked={extendsList.includes(ref)}
+                disabled={disabled}
+                onChange={(event) => onToggleExtends(ref, event.target.checked)}
+                className="gap-1 font-mono text-[11px] text-neutral-700"
+                label={ref}
+              />
             ))}
           </div>
           {cyclePath && (
@@ -1422,19 +1412,14 @@ function GroupCard({
       )}
 
       <div className="mt-2 flex items-center gap-2">
-        <label
-          className="flex items-center gap-2 font-body text-[11px] text-neutral-700"
-          title={RESTORE_TREE_NOTE}
-        >
-          <input
-            type="checkbox"
-            checked={restoreTree}
-            disabled={disabled}
-            onChange={(e) => onToggleRestoreTree(e.target.checked)}
-            className="w-3.5 h-3.5 accent-mariner"
-          />
-          Restore tree after running
-        </label>
+        <Checkbox
+          labelTitle={RESTORE_TREE_NOTE}
+          checked={restoreTree}
+          disabled={disabled}
+          onChange={(event) => onToggleRestoreTree(event.target.checked)}
+          className="text-[11px] text-neutral-700"
+          label="Restore tree after running"
+        />
         {restoreTree && (
           // A real button, not a title-only glyph: a tooltip is unreachable by
           // keyboard, by touch, and to a screen reader, and this sentence is

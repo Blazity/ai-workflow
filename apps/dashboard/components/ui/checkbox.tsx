@@ -6,11 +6,13 @@ export interface CheckboxProps
   extends Omit<InputHTMLAttributes<HTMLInputElement>, "children" | "type"> {
   indeterminate?: boolean;
   label?: ReactNode;
+  labelTitle?: string;
 }
 
 export function Checkbox({
   indeterminate = false,
   label,
+  labelTitle,
   className,
   ...props
 }: CheckboxProps) {
@@ -22,6 +24,7 @@ export function Checkbox({
 
   return (
     <label
+      title={labelTitle}
       className={[
         "inline-flex items-center gap-2 font-body text-[12px] text-neutral-800",
         props.disabled ? "opacity-60" : "cursor-pointer",

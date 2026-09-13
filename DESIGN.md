@@ -17,7 +17,7 @@ This file governs the AI Workflow dashboard cockpit:
 | Cockpit shell | Desktop rail, desktop top bar, mobile header, mobile tab bar | `apps/dashboard/app/(cockpit)` and `components/cockpit` |
 | Operator screens | Overview, Runs, ticket, trace, approvals, cost, evals, memory, health, users | `apps/dashboard/components/cockpit/screens` |
 | Authoring screens | Workflow editor, prompt library, harness profiles, repository catalog, settings | `apps/dashboard/components/cockpit` and `apps/dashboard/app/(cockpit)` |
-| Existing shared UI | Logo, chip, dot, card, KPI, tabs, status pill, pagination, links | `apps/dashboard/components/ui.tsx` |
+| Existing shared UI | Form controls, actions, navigation, overlays, loading states, logo, status, cards, pagination, and links | `apps/dashboard/components/ui/` and `apps/dashboard/components/ui.tsx` |
 | Loading UI | Route skeletons and their block helper | `apps/dashboard/app/*-skeleton.tsx` and `skeleton-block.tsx` |
 
 This file does not govern:
@@ -31,8 +31,8 @@ This file does not govern:
 The cockpit is the only product surface in scope. Storefront-like sections
 from the owner's shape and depth reference are intentionally omitted.
 
-The existing code remains the runtime fact until the later primitive stage
-migrates it. This document decides which current patterns survive that stage.
+The existing code remains the runtime fact. This document records which
+patterns are shared primitives and which proposed patterns are still unbuilt.
 
 ## 1. Visual theme and atmosphere
 
@@ -358,9 +358,17 @@ Resolution order:
 
 The existing `ui.tsx` exports chips, dots, cards, KPIs, tabs, status,
 pagination, and links. The `components/ui/` directory exports Button,
-IconButton, NavItem, Input, Textarea, Field, Select, Modal, and Skeleton. It also
-reexports `CkChip` and `CkDot`. Table and Toast still need canonical exports
-`(proposed)`.
+IconButton, NavItem, Input, Textarea, Field, Select, Modal, Skeleton, Switch,
+Checkbox, Radio, RouteTabs, and the motion constants. It also reexports
+`CkChip` and `CkDot`. Table and Toast still need canonical exports `(proposed)`.
+
+`pnpm run gate:ui-primitives` enforces this boundary over non-test TSX in
+`apps/dashboard/components` and `apps/dashboard/app`. It forbids native form
+controls outside the primitives, literal motion durations and
+`transition-all`, animation timers with literal delays, and boolean selection
+expressed as a primary button. Documented platform exceptions belong in
+`scripts/gates/ui-primitives.allowlist.json`, with a one-line reason for every
+entry.
 
 ### Navigation items
 
@@ -449,7 +457,8 @@ Canonical variants:
 | Checkbox | 12 px square | One independent or grouped binary choice |
 | Switch | 32 px by 18 px track, 14 px thumb | A setting that takes effect when toggled |
 
-Search and Radio remain proposed variants `(proposed)`.
+Search remains a proposed variant `(proposed)`. Radio is implemented with the
+same labelled native-control shape as Checkbox.
 
 Field owns the visible label, optional hint, persistent error, required marker,
 and the IDs that connect that copy to its control through `aria-describedby`.
@@ -465,8 +474,8 @@ persistent linked text. Textarea is a height exception with compact and default
 minimum heights of 72 px and 88 px.
 
 Implemented by `components/ui/input.tsx`, `components/ui/textarea.tsx`,
-`components/ui/field.tsx`, `components/ui/checkbox.tsx`, and
-`components/ui/switch.tsx`.
+`components/ui/field.tsx`, `components/ui/checkbox.tsx`,
+`components/ui/radio.tsx`, and `components/ui/switch.tsx`.
 
 Consumers: Settings, Repository catalog, Repository detail, Workflow editor,
 Prompt library, Harness profiles, Trace clarification, Users, and dispatch.
@@ -506,8 +515,7 @@ Canonical desktop modal sizes:
 | Medium modal | 680 px max | Data picker and repository scope |
 | Large modal | 1240 px max | Prompt editor |
 
-Side drawer is an implemented variant. Mobile sheet remains proposed
-`(proposed)`.
+Side drawer and mobile sheet are implemented variants.
 
 Desktop modal panels use a 6 px radius and level 4 shadow. Mobile sheets use a
 16 px top radius and the existing upward drawer shadow. Every dialog caps its

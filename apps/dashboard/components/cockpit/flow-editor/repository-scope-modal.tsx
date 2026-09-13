@@ -4,7 +4,7 @@ import { useEffect, useId, useMemo, useState } from "react";
 
 import type { VcsProviderKind, WorkflowRepositoryScope } from "@shared/contracts";
 import { pinnedRepositoriesNotEnabledSentence } from "@shared/contracts";
-import { Button, IconButton, Input, Modal, Select } from "@/components/ui";
+import { Button, Checkbox, IconButton, Input, Modal, Select } from "@/components/ui";
 import {
   addPinnedRepositories,
   contradictingPinnedRepositories,
@@ -509,47 +509,46 @@ export function RepositoryScopeModal({
                     entries.map(({ option, disabledReason, note }) => {
                       const checked = isRepositoryPinned(draft, option);
                       return (
-                        <label
+                        <Checkbox
                           key={repositoryKey(option)}
                           className={`flex min-h-11 items-center gap-3 border-b border-neutral-100 px-3 last:border-b-0 ${
                             disabledReason === null
                               ? "cursor-pointer bg-panel hover:bg-app-bg"
                               : "cursor-default bg-app-bg"
                           }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            disabled={!canEdit || disabledReason !== null}
-                            aria-label={`Pin ${option.repoPath}`}
-                            onChange={(event) =>
-                              toggleRepository(option, event.target.checked)
-                            }
-                            className="size-4 accent-mariner"
-                          />
-                          <span
-                            className={`min-w-0 flex-1 truncate font-mono text-[11px] ${
-                              disabledReason === null
-                                ? "text-coal"
-                                : "text-neutral-500"
-                            }`}
-                          >
-                            {option.repoPath}
-                          </span>
-                          <span className="hidden h-6 items-center rounded-[3px] border border-neutral-200 bg-panel px-2 font-mono text-[9px] uppercase text-neutral-500 sm:inline-flex">
-                            {providerLabel(option.provider)}
-                          </span>
-                          <span className="hidden font-mono text-[9px] text-neutral-500 md:inline">
-                            {option.defaultBranch === ""
-                              ? "no default branch"
-                              : option.defaultBranch}
-                          </span>
-                          {note !== null && (
-                            <span className="font-body text-[10px] text-neutral-500">
-                              {note}
-                            </span>
-                          )}
-                        </label>
+                          checked={checked}
+                          disabled={!canEdit || disabledReason !== null}
+                          aria-label={`Pin ${option.repoPath}`}
+                          onChange={(event) =>
+                            toggleRepository(option, event.target.checked)
+                          }
+                          label={
+                            <>
+                              <span
+                                className={`min-w-0 flex-1 truncate font-mono text-[11px] ${
+                                  disabledReason === null
+                                    ? "text-coal"
+                                    : "text-neutral-500"
+                                }`}
+                              >
+                                {option.repoPath}
+                              </span>
+                              <span className="hidden h-6 items-center rounded-[3px] border border-neutral-200 bg-panel px-2 font-mono text-[9px] uppercase text-neutral-500 sm:inline-flex">
+                                {providerLabel(option.provider)}
+                              </span>
+                              <span className="hidden font-mono text-[9px] text-neutral-500 md:inline">
+                                {option.defaultBranch === ""
+                                  ? "no default branch"
+                                  : option.defaultBranch}
+                              </span>
+                              {note !== null && (
+                                <span className="font-body text-[10px] text-neutral-500">
+                                  {note}
+                                </span>
+                              )}
+                            </>
+                          }
+                        />
                       );
                     })
                   )}

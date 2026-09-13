@@ -25,6 +25,8 @@ import { selectableHarnessModels } from "@/lib/harness-profiles/editor";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
+const disabledAttribute = /\sdisabled=""/;
+
 function modelCapability(
   id: string,
 ): HarnessCapabilitiesResponse["models"][number] {
@@ -176,21 +178,21 @@ test("unsupported runtime declarations stay readable but cannot be edited", () =
       html,
       "Always include repository AGENTS.md / CLAUDE.md instructions",
     ),
-    /disabled/,
+    disabledAttribute,
   );
-  assert.match(inputByLabel(html, "Model options"), /disabled/);
-  assert.match(inputByLabel(html, "Compaction"), /disabled/);
-  assert.match(inputByLabel(html, "Workspace mode"), /disabled/);
+  assert.match(inputByLabel(html, "Model options"), disabledAttribute);
+  assert.match(inputByLabel(html, "Compaction"), disabledAttribute);
+  assert.match(inputByLabel(html, "Workspace mode"), disabledAttribute);
   assert.match(
     inputByLabel(html, "Profile requests subagents"),
-    /disabled/,
+    disabledAttribute,
   );
   assert.match(
     inputByLabel(html, "Declared maximum concurrent subagents"),
-    /disabled/,
+    disabledAttribute,
   );
   for (const tool of ["filesystem", "shell", "git"]) {
-    assert.match(inputByLabel(html, tool), /disabled/);
+    assert.match(inputByLabel(html, tool), disabledAttribute);
   }
   assert.match(html, /Current provider adapters always clip subagent access/);
   assert.match(html, /complete code-owned set/);
@@ -203,7 +205,7 @@ test("workspace reuse remains editable because the runtime enforces it", () => {
       html,
       "Reuse the managed scratch workspace across compatible blocks",
     ),
-    /disabled/,
+    disabledAttribute,
   );
   assert.match(html, /fresh scratch workspace per invocation/);
 });
