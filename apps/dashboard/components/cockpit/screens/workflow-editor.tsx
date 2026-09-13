@@ -1268,7 +1268,7 @@ export function WorkflowEditorScreen({
               )}
               {canEdit && deployed !== null && (
                 <Button
-                  variant="secondary"
+                  variant="ghost"
                   onClick={resetToDeployed}
                   disabled={!canResetToDeployed || busy !== null}
                   title="Load the deployed version's nodes and edges into the canvas."

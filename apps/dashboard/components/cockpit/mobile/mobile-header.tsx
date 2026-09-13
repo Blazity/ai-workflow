@@ -6,20 +6,18 @@ import { LivePollControl } from "@/components/cockpit/controls";
 
 export function MobileHeader({
   title,
-  showLivePoll = true,
+  liveDisabledReason,
 }: {
   title: string;
-  showLivePoll?: boolean;
+  liveDisabledReason?: string;
 }) {
   return (
     <header className="flex-[0_0_auto] h-12 bg-panel border-b border-neutral-200 flex items-center gap-2 px-4">
       <BlazityLogo size={20} color="var(--color-burnt-orange)" wordmarkColor="var(--color-coal)" showWord={false} />
       <span className="font-display font-medium text-[15px] text-coal">{title}</span>
-      {showLivePoll && (
-        <div className="ml-auto">
-          <LivePollControl size="sm" />
-        </div>
-      )}
+      <div className="ml-auto">
+        <LivePollControl size="sm" disabledReason={liveDisabledReason} />
+      </div>
     </header>
   );
 }

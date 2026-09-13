@@ -151,6 +151,76 @@ test("Modal honors the initial focus marker before the first control", () => {
   }
 });
 
+test("Modal keeps body scroll locked until two open modals close in either order", () => {
+  const dom = installTestDom();
+  const container = document.createElement("div");
+  document.body.append(container);
+  document.body.style.overflow = "clip";
+  let root: Root | undefined;
+
+  const render = (lowerOpen: boolean, upperOpen: boolean) => (
+    <>
+      <Modal open={lowerOpen} onClose={() => undefined} title="Lower dialog">
+        Lower
+      </Modal>
+      <Modal open={upperOpen} onClose={() => undefined} title="Upper dialog">
+        Upper
+      </Modal>
+    </>
+  );
+
+  try {
+    act(() => {
+      root = createRoot(container);
+      root.render(render(true, true));
+    });
+    assert.equal(document.body.style.overflow, "hidden");
+
+    act(() => root?.render(render(false, true)));
+    assert.equal(document.body.style.overflow, "hidden");
+
+    act(() => root?.render(render(false, false)));
+    assert.equal(document.body.style.overflow, "clip");
+
+    act(() => root?.render(render(true, true)));
+    act(() => root?.render(render(true, false)));
+    assert.equal(document.body.style.overflow, "hidden");
+    act(() => root?.render(render(false, false)));
+    assert.equal(document.body.style.overflow, "clip");
+  } finally {
+    act(() => root?.unmount());
+    container.remove();
+    dom.restore();
+  }
+});
+
+test("Modal restores body scroll when an open modal unmounts", () => {
+  const dom = installTestDom();
+  const container = document.createElement("div");
+  document.body.append(container);
+  document.body.style.overflow = "scroll";
+  let root: Root | undefined;
+
+  try {
+    act(() => {
+      root = createRoot(container);
+      root.render(
+        <Modal open onClose={() => undefined} title="Dialog">
+          Body
+        </Modal>,
+      );
+    });
+    assert.equal(document.body.style.overflow, "hidden");
+    act(() => root?.unmount());
+    root = undefined;
+    assert.equal(document.body.style.overflow, "scroll");
+  } finally {
+    act(() => root?.unmount());
+    container.remove();
+    dom.restore();
+  }
+});
+
 test("Modal preserves native autoFocus inside the dialog", () => {
   const dom = installTestDom();
   const container = document.createElement("div");

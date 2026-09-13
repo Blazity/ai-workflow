@@ -1,0 +1,9 @@
+export function UnconditionalFocusRing({ active }: { active: boolean }) {
+  return (
+    <button
+      className={`rounded-sm border ${active ? "bg-mariner" : "bg-panel"} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner focus-visible:ring-offset-1`}
+    >
+      Open
+    </button>
+  );
+}
