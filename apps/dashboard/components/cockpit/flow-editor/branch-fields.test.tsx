@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import React from "react";
+import React, { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { WorkflowDataCatalogEntry } from "@shared/contracts";
+import { installTestDom } from "@/components/ui/test-dom";
 import { BranchFields } from "./branch-fields";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
@@ -36,7 +38,7 @@ test("renders a flat condition with one global combinator", () => {
   );
   assert.match(html, /all conditions \(AND\)/);
   assert.match(html, /Review · decision/);
-  assert.match(html, /request_changes/);
+  assert.match(html, /aria-label="Comparison value"/);
   assert.doesNotMatch(html, /Outcomes/);
 });
 
@@ -105,8 +107,8 @@ test("allows optional values only for presence operators", () => {
   );
 });
 
-test("renders the run_scripts/run_pre_pr_checks outcome enum as a dropdown", () => {
-  // LiteralEditor renders any entry's schema.enum as a <select>; this pins
+test("renders every run_scripts/run_pre_pr_checks outcome in the shared select", () => {
+  // LiteralEditor renders any entry's schema.enum as a Select; this pins
   // that behavior for the repository-scripts blocks' typed `outcome` output
   // specifically, so a regression there is caught here rather than only in
   // the generic enum case above.
@@ -120,24 +122,48 @@ test("renders the run_scripts/run_pre_pr_checks outcome enum as a dropdown", () 
     availability: { state: "available", guarantee: "Guaranteed." },
     compatibleInputNames: [],
   }];
-  const html = renderToStaticMarkup(
-    <BranchFields
-      configuration={{
-        combinator: "all",
-        conditions: [{
-          reference: "steps.checks.output.outcome",
-          operator: "equals",
-          value: "passed",
-        }],
-      }}
-      availableValues={outcomeValues}
-      canEdit
-      onChange={() => undefined}
-    />,
-  );
-  assert.match(html, /<select[^>]*aria-label="Comparison value"/);
-  assert.match(html, /missing_configuration/);
-  assert.match(html, /skipped/);
+  const dom = installTestDom();
+  const container = document.createElement("div");
+  document.body.append(container);
+  let root: Root | undefined;
+
+  try {
+    act(() => {
+      root = createRoot(container);
+      root.render(
+        <BranchFields
+          configuration={{
+            combinator: "all",
+            conditions: [{
+              reference: "steps.checks.output.outcome",
+              operator: "equals",
+              value: "passed",
+            }],
+          }}
+          availableValues={outcomeValues}
+          canEdit
+          onChange={() => undefined}
+        />,
+      );
+    });
+    const comparison = container.querySelector<HTMLButtonElement>(
+      '[role="combobox"][aria-label="Comparison value"]',
+    );
+    assert.ok(comparison);
+    act(() => comparison.click());
+    const listbox = document.querySelector<HTMLElement>('[role="listbox"]');
+    assert.ok(listbox);
+    assert.deepEqual(
+      Array.from(listbox.querySelectorAll<HTMLElement>('[role="option"]')).map(
+        (option) => option.textContent?.trim(),
+      ),
+      ["passed", "failed", "skipped", "missing_configuration"],
+    );
+  } finally {
+    act(() => root?.unmount());
+    container.remove();
+    dom.restore();
+  }
 });
 
 test("offers replacement for an obsolete pre-release configuration", () => {

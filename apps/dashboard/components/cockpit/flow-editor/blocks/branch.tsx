@@ -1,7 +1,8 @@
 "use client";
 
 import { parseCondition } from "@shared/conditions";
-import { ConfigField, inputCls, str } from "./shared";
+import { Input } from "@/components/ui";
+import { ConfigField, str } from "./shared";
 import type { BlockRendererProps } from "./types";
 
 export function BranchFields(props: BlockRendererProps) {
@@ -11,12 +12,13 @@ export function BranchFields(props: BlockRendererProps) {
   const error = parsed && !parsed.ok ? parsed.error : null;
   return (
     <ConfigField label="Condition">
-      <input
+      <Input
         value={condition}
         disabled={!canEdit}
         onChange={(e) => onChange("params.condition", e.target.value)}
         placeholder="steps.review.output.ok == true"
-        className={inputCls}
+        size="sm"
+        monospace
       />
       {error && <div className="font-mono text-[11px] leading-[1.4] text-red-600">{error}</div>}
     </ConfigField>

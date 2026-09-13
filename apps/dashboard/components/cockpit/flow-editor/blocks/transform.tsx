@@ -8,6 +8,7 @@ import type {
   WorkflowDataReferenceV2,
 } from "@shared/contracts";
 import { evaluateWorkflowValueCompatibility } from "@shared/contracts";
+import { Button, IconButton, Input, Select } from "@/components/ui";
 import { JsonSchemaEditor } from "../json-schema-editor";
 import {
   compatibilityInvalidReason,
@@ -18,11 +19,6 @@ import { WorkflowTextTemplateEditor } from "../workflow-text-template-editor";
 import type { BlockRendererProps } from "./types";
 
 const DIALECT = "https://json-schema.org/draft/2020-12/schema" as const;
-const inputClass =
-  "h-9 min-w-0 rounded-[3px] border border-neutral-200 bg-off-white px-2.5 font-body text-[12px] text-coal outline-none disabled:opacity-50";
-const buttonClass =
-  "h-8 rounded-[3px] border border-mariner bg-panel px-3 font-mono text-[9px] uppercase tracking-[0.05em] text-mariner disabled:opacity-40";
-
 type Operation = TransformConfiguration["operation"];
 
 const operationLabels: Record<Operation, string> = {
@@ -157,14 +153,19 @@ function ScalarEditor({
 }) {
   const kind = value === null ? "null" : typeof value;
   return (
-    <div className="grid grid-cols-[110px_1fr] gap-2">
-      <select
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-[110px_1fr]">
+      <Select
         aria-label={`${label} type`}
-        className={inputClass}
+        size="compact"
         disabled={disabled}
         value={kind}
-        onChange={(event) => {
-          const next = event.target.value;
+        options={[
+          { value: "string", label: "Text" },
+          { value: "number", label: "Number" },
+          { value: "boolean", label: "Boolean" },
+          { value: "null", label: "Null" },
+        ]}
+        onChange={(next) => {
           onChange(
             next === "null"
               ? null
@@ -175,29 +176,25 @@ function ScalarEditor({
                   : "",
           );
         }}
-      >
-        <option value="string">Text</option>
-        <option value="number">Number</option>
-        <option value="boolean">Boolean</option>
-        <option value="null">Null</option>
-      </select>
+      />
       {kind === "boolean" ? (
-        <select
+        <Select
           aria-label={label}
-          className={inputClass}
+          size="compact"
           disabled={disabled}
           value={value === true ? "true" : "false"}
-          onChange={(event) => onChange(event.target.value === "true")}
-        >
-          <option value="false">False</option>
-          <option value="true">True</option>
-        </select>
+          options={[
+            { value: "false", label: "False" },
+            { value: "true", label: "True" },
+          ]}
+          onChange={(next) => onChange(next === "true")}
+        />
       ) : kind === "null" ? (
-        <input aria-label={label} className={inputClass} disabled value="null" />
+        <Input aria-label={label} size="sm" disabled value="null" />
       ) : (
-        <input
+        <Input
           aria-label={label}
-          className={inputClass}
+          size="sm"
           disabled={disabled}
           type={kind === "number" ? "number" : "text"}
           value={String(value)}
@@ -239,42 +236,43 @@ function BuildObjectRow({
     (selected.presence !== "required" || types(selected).includes("null"));
   return (
     <div className="space-y-2 border-b border-neutral-200 px-[14px] py-3">
-      <div className="grid grid-cols-[1fr_120px_auto] gap-2">
-        <input
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_120px_auto]">
+        <Input
           aria-label="Output field name"
-          className={inputClass}
+          size="sm"
           disabled={disabled}
           placeholder="field_name"
           value={field.name}
           onChange={(event) => onChange({ ...field, name: event.target.value })}
         />
-        <select
+        <Select
           aria-label="Value kind"
-          className={inputClass}
+          size="compact"
           disabled={disabled}
           value={field.value.kind}
-          onChange={(event) =>
+          options={[
+            { value: "reference", label: "Workflow value" },
+            { value: "literal", label: "Literal value" },
+          ]}
+          onChange={(valueKind) =>
             onChange({
               ...field,
               value:
-                event.target.value === "literal"
+                valueKind === "literal"
                   ? { kind: "literal", value: "" }
                   : { kind: "reference", reference: "steps.entry.output" },
             })
           }
-        >
-          <option value="reference">Workflow value</option>
-          <option value="literal">Literal value</option>
-        </select>
-        <button
+        />
+        <IconButton
           type="button"
+          size="sm"
           aria-label="Delete output field"
-          className="h-9 w-9 border-none bg-transparent text-neutral-500"
           disabled={disabled}
           onClick={onDelete}
         >
           ×
-        </button>
+        </IconButton>
       </div>
       {referenceValue ? (
         <SourcePicker
@@ -372,25 +370,24 @@ export function TransformFields({
         <span className="font-mono text-[9px] uppercase tracking-[0.05em] text-neutral-600">
           Action
         </span>
-        <select
-          className={inputClass}
+        <Select
+          aria-label="Action"
+          size="compact"
           value={configuration.operation}
           disabled={!canEdit}
-          onChange={(event) =>
+          options={(Object.keys(operationLabels) as Operation[]).map((operation) => ({
+            value: operation,
+            label: operationLabels[operation],
+          }))}
+          onChange={(operation) =>
             onChange(
               defaultTransformConfiguration(
-                event.target.value as Operation,
+                operation as Operation,
                 firstReference,
               ),
             )
           }
-        >
-          {(Object.keys(operationLabels) as Operation[]).map((operation) => (
-            <option key={operation} value={operation}>
-              {operationLabels[operation]}
-            </option>
-          ))}
-        </select>
+        />
       </label>
 
       {configuration.operation === "format_text" && (
@@ -419,24 +416,25 @@ export function TransformFields({
             />
             {configuration.operation === "replace_text" && (
               <>
-                <select
+                <Select
                   aria-label="Match mode"
-                  className={`${inputClass} w-full`}
+                  size="compact"
                   disabled={!canEdit}
                   value={configuration.mode}
-                  onChange={(event) =>
+                  options={[
+                    { value: "plain", label: "Plain text" },
+                    { value: "regex", label: "Regular expression" },
+                  ]}
+                  onChange={(mode) =>
                     onChange({
                       ...configuration,
-                      mode: event.target.value as "plain" | "regex",
+                      mode: mode as "plain" | "regex",
                     })
                   }
-                >
-                  <option value="plain">Plain text</option>
-                  <option value="regex">Regular expression</option>
-                </select>
-                <input
+                />
+                <Input
                   aria-label="Find"
-                  className={`${inputClass} w-full`}
+                  size="sm"
                   disabled={!canEdit}
                   placeholder={configuration.mode === "regex" ? "RE2 pattern" : "Text to find"}
                   value={configuration.pattern}
@@ -444,9 +442,9 @@ export function TransformFields({
                     onChange({ ...configuration, pattern: event.target.value })
                   }
                 />
-                <input
+                <Input
                   aria-label="Replace with"
-                  className={`${inputClass} w-full`}
+                  size="sm"
                   disabled={!canEdit}
                   placeholder="Replacement text"
                   value={configuration.replacement}
@@ -543,9 +541,9 @@ export function TransformFields({
           ))}
           {canEdit && (
             <div className="border-b border-neutral-200 px-[14px] py-3">
-              <button
+              <Button
                 type="button"
-                className={buttonClass}
+                size="sm"
                 onClick={() =>
                   onChange({
                     ...configuration,
@@ -560,7 +558,7 @@ export function TransformFields({
                 }
               >
                 Add field
-              </button>
+              </Button>
             </div>
           )}
         </>

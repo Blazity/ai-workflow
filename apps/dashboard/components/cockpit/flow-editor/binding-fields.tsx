@@ -13,6 +13,7 @@ import {
   type WorkflowInputBindings,
   type WorkflowValueSchema,
 } from "@shared/contracts";
+import { Button, IconButton, Input, Select, Textarea } from "@/components/ui";
 import { JsonSchemaEditor } from "./json-schema-editor";
 import {
   compatibilityInvalidReason,
@@ -21,9 +22,6 @@ import {
   WorkflowDataPicker,
   WorkflowValueChip,
 } from "./workflow-data-picker";
-
-const inputClass =
-  "h-[28px] min-w-0 px-2 bg-off-white border border-neutral-200 rounded-xs font-mono text-[11px] text-coal outline-none disabled:opacity-60";
 
 export function updateInputBindings(
   inputs: WorkflowInputBindings,
@@ -35,9 +33,6 @@ export function updateInputBindings(
   else next[name] = value as WorkflowInputBindings[string];
   return next;
 }
-
-const jsonFieldClass =
-  "min-h-[64px] w-full resize-y rounded-xs border border-neutral-200 bg-off-white px-2 py-1.5 font-mono text-[10px] leading-[1.4] text-coal outline-none focus:border-mariner disabled:opacity-60";
 
 function initialLiteralForSchema(
   schema: WorkflowValueSchema | JsonSchema202012,
@@ -114,13 +109,14 @@ function JsonValueField({
   };
   return (
     <>
-      <textarea
+      <Textarea
         aria-label={label}
         value={draft}
         disabled={disabled}
         onChange={(event) => setDraft(event.target.value)}
         onBlur={commit}
-        className={jsonFieldClass}
+        size="sm"
+        monospace
       />
       {error && <p className="m-0 mt-1 font-body text-[10px] text-red-700">{error}</p>}
     </>
@@ -233,36 +229,35 @@ function V2BindingEditor({
 
   return (
     <div className="space-y-1.5">
-      <select
+      <Select
         aria-label={`${inputName} binding type`}
         value={binding?.kind ?? ""}
         disabled={!canEdit}
-        onChange={(event) => {
-          if (event.target.value === "") {
+        size="compact"
+        options={[
+          { value: "", label: required ? "Choose a value…" : "Not bound" },
+          { value: "reference", label: "Workflow value" },
+          ...((acceptsReferenceList || binding?.kind === "reference_list")
+            ? [{ value: "reference_list", label: "Workflow value list" }]
+            : []),
+          { value: "literal", label: "Literal value" },
+        ]}
+        onChange={(value) => {
+          if (value === "") {
             // Explicitly clear the binding; the callback's single argument is meaningful.
             // eslint-disable-next-line unicorn/no-useless-undefined -- Clear the binding value.
             onChange(undefined);
           }
-          else if (event.target.value === "reference") {
+          else if (value === "reference") {
             openReferencePicker();
-          } else if (event.target.value === "reference_list") {
+          } else if (value === "reference_list") {
             onChange({ kind: "reference_list", references: [] });
             openListPicker(null);
           } else {
             onChange({ kind: "literal", value: literalDefault });
           }
         }}
-        className={`${inputClass} w-full`}
-      >
-        <option value="">{required ? "Choose a value…" : "Not bound"}</option>
-        <option value="reference">
-          Workflow value
-        </option>
-        {(acceptsReferenceList || binding?.kind === "reference_list") && (
-          <option value="reference_list">Workflow value list</option>
-        )}
-        <option value="literal">Literal value</option>
-      </select>
+      />
       {binding?.kind === "reference" && (
         <WorkflowValueChip
           value={currentReference ?? null}
@@ -310,38 +305,40 @@ function V2BindingEditor({
                   />
                 </div>
                 <div className="flex shrink-0 flex-col">
-                  <button
+                  <IconButton
                     type="button"
+                    size="sm"
                     disabled={!canEdit || index === 0}
                     onClick={() => moveListReference(index, index - 1)}
                     aria-label={`Move ${moveLabel} up`}
-                    className="h-5 w-7 border border-neutral-200 bg-panel font-mono text-[10px] text-neutral-600 disabled:opacity-30"
                   >
                     ↑
-                  </button>
-                  <button
+                  </IconButton>
+                  <IconButton
                     type="button"
+                    size="sm"
                     disabled={
                       !canEdit || index === binding.references.length - 1
                     }
                     onClick={() => moveListReference(index, index + 1)}
                     aria-label={`Move ${moveLabel} down`}
-                    className="h-5 w-7 border border-t-0 border-neutral-200 bg-panel font-mono text-[10px] text-neutral-600 disabled:opacity-30"
                   >
                     ↓
-                  </button>
+                  </IconButton>
                 </div>
               </div>
             );
           })}
-          <button
+          <Button
             type="button"
+            variant="secondary"
+            size="md"
             disabled={!canEdit}
             onClick={() => openListPicker(null)}
-            className="min-h-9 w-full rounded-[3px] border border-dashed border-neutral-300 bg-panel px-3 text-left font-body text-[12px] text-mariner disabled:opacity-50"
+            className="w-full justify-start"
           >
             ＋ Add workflow value
-          </button>
+          </Button>
         </div>
       )}
       <WorkflowDataPicker
@@ -486,8 +483,10 @@ export function V2BindingFields({
               {input.name}
             </span>
             {canEdit && (
-              <button
+              <Button
                 type="button"
+                variant="danger"
+                size="sm"
                 onClick={() =>
                   onChange(
                     node.inputs,
@@ -495,10 +494,9 @@ export function V2BindingFields({
                   )
                 }
                 aria-label={`Remove ${input.name} input`}
-                className="appearance-none border-none bg-transparent font-mono text-[9px] text-red-700"
               >
                 Remove
-              </button>
+              </Button>
             )}
           </div>
           <div className="mb-2">
@@ -535,15 +533,18 @@ export function V2BindingFields({
             Add typed input
           </div>
           <div className="mb-2 flex items-center gap-1.5">
-            <input
+            <Input
               aria-label="Additional input name"
               value={newInputName}
               placeholder="context"
               onChange={(event) => setNewInputName(event.target.value)}
-              className={`${inputClass} flex-1`}
+              size="sm"
+              monospace
+              className="flex-1"
             />
-            <button
+            <Button
               type="button"
+              size="sm"
               disabled={!canAdd}
               onClick={() => {
                 onChange(node.inputs, [
@@ -560,10 +561,9 @@ export function V2BindingFields({
                 setNewInputName("");
                 setNewInputSchema({ type: "string" });
               }}
-              className="h-[28px] appearance-none rounded-xs border border-mariner bg-panel px-2 font-mono text-[10px] uppercase tracking-[0.04em] text-mariner disabled:opacity-40"
             >
               Add
-            </button>
+            </Button>
           </div>
           <JsonSchemaObjectField
             label="New input JSON Schema"

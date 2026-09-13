@@ -8,6 +8,7 @@ import type {
   WorkflowValueCompatibility,
 } from "@shared/contracts";
 import { isSafeWorkflowInputName } from "@shared/contracts";
+import { Button, IconButton, Input } from "@/components/ui";
 import {
   WorkflowDataPicker,
   WorkflowValueChip,
@@ -123,14 +124,16 @@ export function LoopFields({
             Freeze the current results that Fix should receive in the next Loop pass.
           </p>
         </div>
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           disabled={!canEdit || valuesRefreshing}
           onClick={() => setPickerIndex("new")}
-          className="shrink-0 border-none bg-transparent font-mono text-[9px] uppercase tracking-[0.05em] text-mariner disabled:opacity-40"
+          className="shrink-0"
         >
           + Add value
-        </button>
+        </Button>
       </div>
       <div className="mt-3 space-y-3">
         {carry.map((item, index) => {
@@ -163,7 +166,7 @@ export function LoopFields({
             >
               <div className="flex items-center gap-2">
                 <div className="min-w-0 flex-1">
-                  <input
+                  <Input
                     aria-label={`Carried value ${index + 1} name`}
                     value={item.name}
                     disabled={!canEdit}
@@ -172,7 +175,8 @@ export function LoopFields({
                       next[index] = { ...item, name: event.target.value };
                       update(next);
                     }}
-                    className="h-8 w-full rounded-[3px] border border-neutral-200 bg-panel px-2 font-mono text-[11px] outline-none disabled:opacity-50"
+                    size="sm"
+                    monospace
                   />
                   {nameIssue && (
                     <p className="m-0 mt-1 font-body text-[10px] text-red-700">
@@ -180,15 +184,15 @@ export function LoopFields({
                     </p>
                   )}
                 </div>
-                <button
+                <IconButton
                   type="button"
+                  size="sm"
                   disabled={!canEdit}
                   aria-label={`Remove carried value ${item.name}`}
                   onClick={() => update(carry.filter((_, itemIndex) => itemIndex !== index))}
-                  className="size-8 rounded-[3px] border border-neutral-200 bg-panel font-mono text-neutral-500 disabled:opacity-40"
                 >
                   ×
-                </button>
+                </IconButton>
               </div>
               <WorkflowValueChip
                 value={selected}

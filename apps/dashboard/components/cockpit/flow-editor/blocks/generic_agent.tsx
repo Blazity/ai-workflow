@@ -1,6 +1,6 @@
 "use client";
 
-import { Listbox } from "@/components/cockpit/listbox";
+import { Select } from "@/components/ui";
 import { PromptField } from "../prompt-field";
 import { AgentProviderModel, ConfigField, OutputSchemaField, str } from "./shared";
 import type { BlockRendererProps } from "./types";
@@ -11,14 +11,15 @@ export function GenericAgentFields(props: BlockRendererProps) {
           <>
             <AgentProviderModel node={node} options={options} canEdit={canEdit} onChange={onChange} />
             <ConfigField label="Workspace access">
-              <Listbox
+              <Select
                 options={[
                   { value: "none", label: "No code workspace" },
                   { value: "read_write", label: "Attached code workspace (read/write)" },
                 ]}
                 value={str(node.params.workspaceMode) || "none"}
                 disabled={!canEdit}
-                ariaLabel="Workspace access"
+                aria-label="Workspace access"
+                size="compact"
                 onChange={(v) => onChange("params.workspaceMode", v)}
               />
             </ConfigField>

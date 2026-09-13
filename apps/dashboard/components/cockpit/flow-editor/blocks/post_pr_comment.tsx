@@ -1,6 +1,6 @@
 "use client";
 
-import { Listbox } from "@/components/cockpit/listbox";
+import { Select } from "@/components/ui";
 import { usePromptAuthoringContext } from "../prompt-authoring-context";
 import { ConfigField, RichTextField, str } from "./shared";
 import type { BlockRendererProps } from "./types";
@@ -22,14 +22,15 @@ export function PostPrCommentFields(props: BlockRendererProps) {
               />
             </ConfigField>
             <ConfigField label="Target">
-              <Listbox
+              <Select
                 options={[
                   { value: "primary", label: "Primary PR" },
                   { value: "all", label: "All PRs" },
                 ]}
                 value={str(node.params.target) || "primary"}
                 disabled={!canEdit}
-                ariaLabel="Target"
+                aria-label="Target"
+                size="compact"
                 onChange={(v) => onChange("params.target", v)}
               />
             </ConfigField>

@@ -17,7 +17,7 @@ import {
   promptReferenceMatchesRow,
 } from "@shared/prompts";
 import { DiffView } from "@/components/cockpit/prompt-diff";
-import { CkChip } from "@/components/ui";
+import { Button, CkChip } from "@/components/ui";
 import { ConfigField } from "./blocks/shared";
 import type { PromptInsertPayload } from "./prompt-insert-popup";
 import { PromptEditorModal } from "./prompt-editor-modal";
@@ -50,10 +50,6 @@ export interface PromptFieldProps {
   agentPromptAuthoring?: boolean;
   onChange: (path: string, value: WorkflowParamValue | PromptSourceRef | undefined) => void;
 }
-
-const textBtn = "appearance-none border-none bg-transparent cursor-pointer p-0 font-body text-[11px]";
-const confirmPrimary =
-  "appearance-none cursor-pointer border border-mariner bg-mariner text-white py-1 px-2.5 rounded-[3px] font-mono text-[10px] tracking-[0.04em] uppercase";
 
 export function PromptField({
   label,
@@ -255,9 +251,9 @@ export function PromptField({
   }
 
   const detachButton = !disabled ? (
-    <button type="button" onClick={detach} className={`${textBtn} text-neutral-500 hover:text-coal`}>
+    <Button type="button" variant="ghost" size="sm" onClick={detach}>
       Detach
-    </button>
+    </Button>
   ) : null;
 
   let provenance: React.ReactNode = null;
@@ -294,9 +290,9 @@ export function PromptField({
               ❡ {row.name} · v{ref.version} of v{latest}
             </CkChip>
             {!disabled && (
-              <button type="button" onClick={() => setConfirmUpdate(true)} className={`${textBtn} text-mariner`}>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setConfirmUpdate(true)}>
                 Update to v{latest}
-              </button>
+              </Button>
             )}
             {detachButton}
           </div>
@@ -306,16 +302,17 @@ export function PromptField({
                 <DiffView oldText={value} newText={row.body} />
               </div>
               <div className="flex items-center gap-3">
-                <button type="button" onClick={() => applyUpdate(row)} className={confirmPrimary}>
+                <Button type="button" size="sm" onClick={() => applyUpdate(row)}>
                   Replace with v{latest}
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="sm"
                   onClick={() => setConfirmUpdate(false)}
-                  className={`${textBtn} text-neutral-500 hover:text-coal`}
                 >
                   Cancel
-                </button>
+                </Button>
               </div>
             </div>
           )}

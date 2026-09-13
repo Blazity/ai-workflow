@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import {
   type PromptLibraryEntryMeta,
   type PromptSlotDefinition,
@@ -18,27 +17,14 @@ import {
   type PromptSlotSchemaDraftState,
 } from "@/components/cockpit/prompt-editor/prompt-slot-fields";
 import { TagChipsInput } from "@/components/cockpit/prompt-library/tag-chips-input";
-import { useEnterExit } from "@/lib/use-enter-exit";
+import { Button, Input, Modal } from "@/components/ui";
 import { PromptLibraryRail } from "./prompt-library-rail";
 import { PromptSavePopover } from "./prompt-save-popover";
 import type { PromptInsertPayload } from "./prompt-insert-popup";
-import {
-  DIALOG_FOCUSABLE_SELECTOR,
-  initialDialogFocusTarget,
-  promptEditorModalCapabilities,
-  promptEditorSurface,
-  trappedDialogTabTarget,
-} from "@shared/prompts";
+import { promptEditorModalCapabilities, promptEditorSurface } from "@shared/prompts";
 import type { PromptPreviewRequest, PromptPreviewTarget } from "@shared/prompts";
 
-const headBtn =
-  "appearance-none cursor-pointer inline-flex items-center gap-1 border border-neutral-200 bg-panel text-coal py-1 px-2 rounded-[3px] font-mono text-[10px] tracking-[0.04em] uppercase transition-[background-color,color,transform] duration-150 ease-standard hover:bg-app-bg active:scale-[0.96]";
-const headBtnActive = "border-mariner-200 bg-mariner-100 text-mariner";
-const primaryHeadBtn =
-  "appearance-none cursor-pointer inline-flex items-center gap-1 border border-mariner bg-mariner text-white py-1 px-2.5 rounded-[3px] font-mono text-[10px] tracking-[0.04em] uppercase transition-transform duration-150 ease-standard active:scale-[0.96] disabled:opacity-40 disabled:cursor-default";
 const metaLabelCls = "font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500";
-const metaInputCls =
-  "w-full border border-neutral-200 bg-panel rounded-[3px] px-2 py-1.5 font-body text-[13px] text-neutral-900 outline-none focus:border-mariner";
 
 export interface PromptEditorModalMeta {
   name: string;
@@ -106,14 +92,12 @@ export function PromptEditorModal({
   availableValues?: readonly WorkflowDataCatalogEntry[];
   slots?: readonly PromptEditorSlotOption[];
 }) {
-  const { mounted, state } = useEnterExit(open, 180);
   const [libOpen, setLibOpen] = useState(!library);
   const [saveOpen, setSaveOpen] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [syncRequest, setSyncRequest] = useState<{ id: number; mode: "replace" | "append" } | null>(null);
   const [previewRequest, setPreviewRequest] = useState<PromptPreviewRequest | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
-  const restoreFocus = useRef<HTMLElement | null>(null);
   const syncRequestId = useRef(0);
   const previewRequestId = useRef(0);
   const handledInitialPreview = useRef(false);
@@ -172,49 +156,6 @@ export function PromptEditorModal({
     [authoringMode, closeSave, handleLibraryInsert],
   );
 
-  // Modal lifetime owns scroll locking and focus restoration. Keep this separate
-  // from transient rail/popover state so typing never runs the cleanup and sends
-  // focus back to the page behind the dialog.
-  useEffect(() => {
-    if (!open) return;
-    restoreFocus.current = document.activeElement as HTMLElement | null;
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const frame = requestAnimationFrame(() => {
-      const dialog = dialogRef.current;
-      if (!dialog) return;
-      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE_SELECTOR));
-      const preferred = dialog.querySelector<HTMLElement>("[data-dialog-initial-focus]");
-      initialDialogFocusTarget(preferred, focusable, dialog).focus();
-    });
-    return () => {
-      cancelAnimationFrame(frame);
-      document.body.style.overflow = prevOverflow;
-      restoreFocus.current?.focus?.();
-    };
-  }, [open]);
-
-  useEffect(() => {
-    if (!open || saveOpen) return;
-    const onTab = (event: KeyboardEvent) => {
-      if (event.key !== "Tab") return;
-      const dialog = dialogRef.current;
-      if (!dialog) return;
-      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE_SELECTOR));
-      if (focusable.length === 0) {
-        event.preventDefault();
-        dialog.focus();
-        return;
-      }
-      const target = trappedDialogTabTarget(focusable, document.activeElement as HTMLElement | null, event.shiftKey);
-      if (!target) return;
-      event.preventDefault();
-      target.focus();
-    };
-    window.addEventListener("keydown", onTab, { capture: true });
-    return () => window.removeEventListener("keydown", onTab, { capture: true });
-  }, [open, saveOpen]);
-
   useEffect(() => {
     if (!open) {
       setSyncRequest(null);
@@ -243,7 +184,13 @@ export function PromptEditorModal({
   useEffect(() => {
     if (!open) return;
     const onEsc = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || saveOpen) return;
+      if (e.key !== "Escape") return;
+      if (saveOpen) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        setSaveOpen(false);
+        return;
+      }
       // Nested popovers (variable picker, editor context menu, reference
       // actions menu) registered their window capture listeners after this
       // one, so they only see Escape if we yield here while one is open.
@@ -257,82 +204,70 @@ export function PromptEditorModal({
     return () => window.removeEventListener("keydown", onEsc, { capture: true });
   }, [attemptClose, open, libOpen, saveOpen]);
 
-  if (!mounted) return null;
-  return createPortal(
-    <div
-      role="presentation"
-      onMouseDown={attemptClose}
-      data-state={state}
-      className={`fixed inset-0 z-[100] flex items-start justify-center px-[3vw] pt-[5vh] bg-coal/50 backdrop-blur-[2px] transition-opacity duration-200 ease-standard motion-reduce:transition-none ${
-        state === "open" ? "opacity-100" : "opacity-0"
-      }`}
+  return (
+    <Modal
+      open={open}
+      onClose={attemptClose}
+      title={`${disabled ? "View" : "Edit"} ${fieldLabel}`}
+      description={`${blockName} · ${fieldLabel}`}
+      size="lg"
+      className="h-[90vh]"
     >
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label={`${disabled ? "View" : "Edit"} ${fieldLabel}`}
-        tabIndex={-1}
-        data-state={state}
-        onMouseDown={(e) => e.stopPropagation()}
-        className={`flex h-[90vh] max-h-[90vh] w-[94vw] max-w-[1240px] flex-col overflow-hidden rounded-md bg-panel shadow-[0_24px_64px_-16px_rgba(24,27,32,0.45)] origin-top transition-[opacity,transform] duration-200 ease-standard motion-reduce:transition-none motion-reduce:transform-none ${
-          state === "open" ? "opacity-100 translate-y-0 scale-100" : "opacity-0 -translate-y-2 scale-[0.98]"
-        }`}
-      >
-        <div className="flex h-[52px] shrink-0 items-center gap-3 border-b border-neutral-200 px-4">
-          <span className="truncate font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">
-            {blockName} · {fieldLabel}
-          </span>
+      <div ref={dialogRef} className="-mx-5 -my-4 flex h-full min-h-0 flex-col">
+        <div className="flex min-h-[52px] shrink-0 items-center gap-3 border-b border-neutral-200 px-4">
           <div className="ml-auto flex items-center gap-2">
-            <button
+            <Button
               type="button"
+              variant={libOpen ? "secondary" : "ghost"}
+              size="sm"
               aria-pressed={libOpen}
               onClick={() => setLibOpen((o) => !o)}
-              className={`${headBtn} ${libOpen ? headBtnActive : "text-mariner"}`}
             >
               ❡ Library
-            </button>
+            </Button>
             {canSave && (
-              <button type="button" aria-haspopup="dialog" onClick={() => setSaveOpen(true)} className={headBtn}>
+              <Button type="button" variant="secondary" size="sm" aria-haspopup="dialog" onClick={() => setSaveOpen(true)}>
                 ↥ Save
-              </button>
+              </Button>
             )}
             {library && (
-              <button
+              <Button
                 type="button"
+                size="sm"
                 onClick={library.onPrimary}
                 disabled={library.primaryDisabled}
-                className={primaryHeadBtn}
               >
                 {library.primaryBusy ? "Saving…" : library.primaryLabel}
-              </button>
+              </Button>
             )}
-            <button type="button" data-dialog-initial-focus onClick={attemptClose} className={headBtn}>
+            <Button type="button" variant="secondary" size="sm" data-dialog-initial-focus onClick={attemptClose}>
               Close
-            </button>
+            </Button>
           </div>
         </div>
 
         {confirmDiscard && (
-          <div className="flex shrink-0 items-center gap-3 border-b border-yellow-300 bg-[#FFF9E6] px-4 py-2 font-body text-[12px] text-neutral-700">
+          <div className="flex shrink-0 items-center gap-3 border-b border-yellow-300 bg-yellow-100 px-4 py-2 font-body text-[12px] text-neutral-700">
             <span>Discard draft?</span>
-            <button
+            <Button
               type="button"
+              variant="danger"
+              size="sm"
               onClick={() => {
                 setConfirmDiscard(false);
                 onCloseRef.current();
               }}
-              className="appearance-none border-none bg-transparent font-body text-[12px] font-semibold text-red-600 cursor-pointer"
             >
               Discard
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={() => setConfirmDiscard(false)}
-              className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer"
             >
               Keep editing
-            </button>
+            </Button>
           </div>
         )}
 
@@ -343,12 +278,11 @@ export function PromptEditorModal({
                 <label className={metaLabelCls} htmlFor="pl-modal-name">
                   Name
                 </label>
-                <input
+                <Input
                   id="pl-modal-name"
                   value={library.meta.name}
                   disabled={!canEdit}
                   onChange={(e) => library.onMetaChange({ ...library.meta, name: e.target.value })}
-                  className={metaInputCls}
                 />
               </div>
               <div className="flex min-w-[200px] flex-1 flex-col gap-1">
@@ -363,12 +297,11 @@ export function PromptEditorModal({
                 <label className={metaLabelCls} htmlFor="pl-modal-description">
                   Description
                 </label>
-                <input
+                <Input
                   id="pl-modal-description"
                   value={library.meta.description}
                   disabled={!canEdit}
                   onChange={(e) => library.onMetaChange({ ...library.meta, description: e.target.value })}
-                  className={metaInputCls}
                 />
               </div>
             </div>
@@ -385,13 +318,9 @@ export function PromptEditorModal({
           </div>
         )}
 
-        <div className="flex min-h-0 min-w-0 flex-1">
-          {/* Library rail — slides in by animating width, editor stays put. */}
-          <div
-            className={`min-h-0 min-w-0 shrink-0 overflow-hidden transition-[width] duration-200 ease-standard motion-reduce:transition-none ${
-              libOpen ? "w-[40%] border-r border-neutral-200" : "w-0"
-            }`}
-          >
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col md:flex-row">
+          {libOpen && (
+          <div className="min-h-0 min-w-0 shrink-0 overflow-hidden border-b border-neutral-200 max-md:max-h-[40%] md:w-[40%] md:border-r md:border-b-0">
             <div className="h-full w-full min-w-0">
               <PromptLibraryRail
                 disabled={!canInsert}
@@ -404,6 +333,7 @@ export function PromptEditorModal({
               />
             </div>
           </div>
+          )}
 
           <div className="flex min-h-0 min-w-0 flex-1 p-4">
             {editorSurface === "continuous" ? (
@@ -437,7 +367,6 @@ export function PromptEditorModal({
           onSaved={replaceWithSavedReference}
         />
       )}
-    </div>,
-    document.body,
+    </Modal>
   );
 }

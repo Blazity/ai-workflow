@@ -1,6 +1,7 @@
 "use client";
 
 import type { PaletteGroup, PaletteItem } from "./block-palette";
+import { Button } from "@/components/ui";
 
 function GroupHeader({ label, color }: { label: string; color: string }) {
   return (
@@ -25,8 +26,10 @@ export function NodePalette({ groups, onAdd }: { groups: PaletteGroup[]; onAdd: 
             {grp.items.map((it) => {
               const cat = it.presentation;
               return (
-                <button
+                <Button
                   key={it.id}
+                  variant="secondary"
+                  size="sm"
                   draggable={it.available}
                   disabled={!it.available}
                   title={it.unavailableReason ?? cat.description}
@@ -38,9 +41,7 @@ export function NodePalette({ groups, onAdd }: { groups: PaletteGroup[]; onAdd: 
                   onClick={() => {
                     if (it.available) onAdd(it);
                   }}
-                  className="appearance-none text-left mx-2 my-px py-2 px-2 border border-neutral-200 rounded-[3px] flex items-start gap-2 cursor-grab active:cursor-grabbing bg-panel transition-colors duration-[120ms] disabled:cursor-not-allowed disabled:opacity-55"
-                  onMouseEnter={(e) => (e.currentTarget.style.background = cat.softColor)}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "#fff")}
+                  className="mx-2 my-px h-auto cursor-grab items-start justify-start px-2 py-2 text-left active:cursor-grabbing [&>span]:w-full"
                 >
                   <span
                     className="w-[18px] h-[18px] rounded-xs text-white inline-flex items-center justify-center font-mono text-[11px] font-bold flex-[0_0_18px]"
@@ -55,9 +56,9 @@ export function NodePalette({ groups, onAdd }: { groups: PaletteGroup[]; onAdd: 
                     )}
                   </span>
                   <span className="ml-auto font-mono text-[12px] text-neutral-500 leading-none">
-                    {it.available ? "+" : "–"}
+                    {it.available ? "+" : "×"}
                   </span>
-                </button>
+                </Button>
               );
             })}
           </div>
@@ -76,13 +77,15 @@ export function MobilePaletteList({ groups, onAdd }: { groups: PaletteGroup[]; o
           {grp.items.map((it) => {
             const cat = it.presentation;
             return (
-              <button
+              <Button
                 key={it.id}
+                variant="ghost"
+                size="sm"
                 disabled={!it.available}
                 onClick={() => {
                   if (it.available) onAdd(it);
                 }}
-                className="appearance-none text-left border-none cursor-pointer flex items-start gap-3 px-[18px] py-3 bg-transparent active:bg-app-bg disabled:cursor-not-allowed disabled:opacity-55"
+                className="h-auto w-full items-start justify-start gap-3 px-5 py-3 text-left [&>span]:w-full"
               >
                 <span
                   className="w-[22px] h-[22px] rounded-xs text-white inline-flex items-center justify-center font-mono text-[12px] font-bold flex-[0_0_22px]"
@@ -96,7 +99,7 @@ export function MobilePaletteList({ groups, onAdd }: { groups: PaletteGroup[]; o
                     </span>
                   )}
                 </span>
-              </button>
+              </Button>
             );
           })}
         </div>

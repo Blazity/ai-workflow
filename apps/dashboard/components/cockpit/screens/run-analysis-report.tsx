@@ -8,7 +8,7 @@ import type {
   RunAnalysisUsageSnapshot,
   RunStatus,
 } from "@shared/contracts";
-import { CkCard, CkChip } from "@/components/ui";
+import { Button, CkCard, CkChip } from "@/components/ui";
 import { PromptPreview } from "@/components/cockpit/prompt-library/prompt-preview";
 import { runHref } from "@/lib/run-href";
 
@@ -70,15 +70,17 @@ function Disclosure({ title, children, defaultOpen = false }: { title: string; c
   const [open, setOpen] = React.useState(defaultOpen);
   return (
     <div className="border-t border-neutral-200 pt-3">
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="sm"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className="flex w-full items-center justify-between gap-3 border-0 bg-transparent p-0 text-left font-mono text-[11px] uppercase tracking-[0.04em] text-neutral-800"
+        className="h-auto w-full justify-between p-0 text-left [&>span]:w-full [&>span]:justify-between"
       >
         <span>{title}</span>
         <span aria-hidden="true">{open ? "−" : "+"}</span>
-      </button>
+      </Button>
       {open && <div className="mt-3 min-w-0">{children}</div>}
     </div>
   );
@@ -101,8 +103,8 @@ function UsageTable({ report }: { report: RunAnalysisReport }) {
                 <td className="py-2 pr-3 font-medium text-neutral-900">{name}</td>
                 <td className="py-2 pr-3 text-neutral-800">{costLabel(snapshot)}</td>
                 <td className="py-2 pr-3 text-neutral-700">{snapshot?.tokensInput === null || !snapshot ? "Unknown" : `${snapshot.tokensInput} in / ${snapshot.tokensCached ?? 0} cached / ${snapshot.tokensOutput ?? 0} out`}</td>
-                <td className="py-2 pr-3 text-neutral-500">{snapshot ? `Captured ${new Date(snapshot.capturedAt).toLocaleString()}` : "—"}</td>
-                <td className="py-2 text-neutral-500">—</td>
+                <td className="py-2 pr-3 text-neutral-500">{snapshot ? `Captured ${new Date(snapshot.capturedAt).toLocaleString()}` : "\u2014"}</td>
+                <td className="py-2 text-neutral-500">{"\u2014"}</td>
               </tr>
               {snapshot ? Object.entries(snapshot.phases).map(([phaseName, phase]) => (
                 <tr key={`${name}:${phaseName}`} className="border-t border-neutral-100 align-top">
@@ -134,7 +136,7 @@ export function RunAnalysisReportCard({ report, runStatus: _runStatus, currentRu
         </div>
         <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
           <Metric label="Repositories inspected" value={report.repositories.length} />
-          <Metric label="Evidence items" value={report.evidenceStatus === "not_retained" ? "—" : report.evidence.length} />
+          <Metric label="Evidence items" value={report.evidenceStatus === "not_retained" ? "\u2014" : report.evidence.length} />
           <Metric label="Expansion rounds" value={report.expansionRounds} />
           <Metric label="Current cost" value={costLabel(finalOrPublication)} />
         </div>
@@ -188,7 +190,7 @@ function DecisionList({
       <ul className="m-0 mt-1 flex list-disc flex-col gap-1 pl-5">
         {items.map((item) => (
           <li key={`${item.provider}:${item.repoPath}`} className="break-words">
-            <span className="font-mono">{item.provider}:{item.repoPath}</span> — {item.rationale}
+            <span className="font-mono">{item.provider}:{item.repoPath}</span>{" \u2014 "}{item.rationale}
           </li>
         ))}
       </ul>

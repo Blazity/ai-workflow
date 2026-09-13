@@ -5,7 +5,7 @@ import type { FlowNodeDef } from "@/lib/flows";
 import type { WebhookAuthScheme, WebhookDeliveryLogEntry, WebhookEndpointConfigResponse } from "@shared/contracts";
 import { DEFAULT_WEBHOOK_SIGNATURE_HEADER, DEFAULT_WEBHOOK_TIMESTAMP_HEADER, DEFAULT_WEBHOOK_TOKEN_HEADER } from "@shared/contracts";
 import { apiClient } from "@/lib/api/client";
-import { Listbox } from "@/components/cockpit/listbox";
+import { Select } from "@/components/ui";
 import { WebhookTestDeliveryModal } from "../webhook-test-delivery-modal";
 import { CheckboxRow, ConfigField, ConfigNote, TextInput, TriggerRateLimitFields, str } from "./shared";
 import { WEBHOOK_MAPPING_FIELDS, WebhookDeliveriesSection, WebhookEndpointSection, defaultWebhookHeader } from "./webhook-endpoint";
@@ -322,14 +322,15 @@ export function WebhookTriggerFields({
   return (
     <>
       <ConfigField label="Authentication">
-        <Listbox
+        <Select
           options={[
             { value: "hmac_sha256", label: "HMAC SHA-256 signature" },
             { value: "shared_token", label: "Shared token" },
           ]}
           value={authScheme}
           disabled={!canEdit}
-          ariaLabel="Webhook authentication scheme"
+          aria-label="Webhook authentication scheme"
+          size="compact"
           onChange={(value) => onChange("params.authScheme", value)}
         />
       </ConfigField>

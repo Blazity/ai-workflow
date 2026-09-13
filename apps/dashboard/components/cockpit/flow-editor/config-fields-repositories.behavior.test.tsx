@@ -21,6 +21,11 @@ import { RepositoryScopeProvider } from "./repository-scope-context";
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
+(globalThis as typeof globalThis & { requestAnimationFrame: typeof requestAnimationFrame }).requestAnimationFrame = (callback) => {
+  callback(0);
+  return 1;
+};
+(globalThis as typeof globalThis & { cancelAnimationFrame: typeof cancelAnimationFrame }).cancelAnimationFrame = () => undefined;
 
 const options = {
   agentKind: "claude",
@@ -77,7 +82,11 @@ function buttonWithText(root: ReactTestInstance, text: string): ReactTestInstanc
 }
 
 function dialogs(root: ReactTestInstance): ReactTestInstance[] {
-  return root.findAll((instance) => instance.props.role === "dialog");
+  return root.findAll(
+    (instance) =>
+      instance.props.role === "dialog" &&
+      instance.props["data-state"] !== "closed",
+  );
 }
 
 // The panel is a view onto the definition-level pin, so applying here has to

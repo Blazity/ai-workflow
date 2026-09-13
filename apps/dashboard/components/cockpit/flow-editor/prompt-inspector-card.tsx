@@ -1,5 +1,6 @@
 import React from "react";
 import type { PromptInspectorSummary } from "@shared/prompts";
+import { Button } from "@/components/ui";
 
 export function PromptInspectorCard({
   label,
@@ -13,12 +14,14 @@ export function PromptInspectorCard({
   onOpen: () => void;
 }) {
   return (
-    <button
+    <Button
       type="button"
+      variant="secondary"
+      size="sm"
       aria-haspopup="dialog"
       aria-label={`${disabled ? "View" : "Edit"} ${label}`}
       onClick={onOpen}
-      className="group w-full cursor-pointer rounded-[3px] border border-neutral-200 bg-off-white p-2.5 text-left outline-none transition-[border-color,background-color,box-shadow] hover:border-mariner-200 hover:bg-mariner-100 focus-visible:border-mariner focus-visible:ring-2 focus-visible:ring-mariner-200"
+      className="group h-auto w-full justify-start p-2.5 text-left [&>span]:w-full [&>span]:flex-col [&>span]:items-stretch"
     >
       <span className="flex items-start gap-2">
         <span className="min-w-0 flex-1">
@@ -47,6 +50,6 @@ export function PromptInspectorCard({
           )}
         </span>
       )}
-    </button>
+    </Button>
   );
 }

@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import React, { act, createRef } from "react";
+import React, { act, createRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Modal } from "./modal";
+import { Select } from "./select";
 import { installTestDom } from "./test-dom";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
@@ -124,6 +125,124 @@ test("Modal focuses its first control when no initial focus ref is supplied", ()
   }
 });
 
+test("Modal honors the initial focus marker before the first control", () => {
+  const dom = installTestDom();
+  const container = document.createElement("div");
+  document.body.append(container);
+  let root: Root | undefined;
+
+  try {
+    act(() => {
+      root = createRoot(container);
+      root.render(
+        <Modal open onClose={() => undefined} title="Dialog">
+          <button>First</button>
+          <button data-dialog-initial-focus>Marked</button>
+        </Modal>,
+      );
+    });
+    const marked = document.querySelector<HTMLButtonElement>("[data-dialog-initial-focus]");
+    assert.ok(marked);
+    assert.equal(document.activeElement === marked, true);
+  } finally {
+    act(() => root?.unmount());
+    container.remove();
+    dom.restore();
+  }
+});
+
+test("Modal preserves native autoFocus inside the dialog", () => {
+  const dom = installTestDom();
+  const container = document.createElement("div");
+  document.body.append(container);
+  let root: Root | undefined;
+
+  try {
+    act(() => {
+      root = createRoot(container);
+      root.render(
+        <Modal open onClose={() => undefined} title="Dialog">
+          <button>First</button>
+          <button autoFocus>Automatic</button>
+        </Modal>,
+      );
+    });
+    const automatic = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),
+    ).find((button) => button.textContent === "Automatic");
+    assert.ok(automatic);
+    assert.equal(document.activeElement === automatic, true);
+  } finally {
+    act(() => root?.unmount());
+    container.remove();
+    dom.restore();
+  }
+});
+
+test("Escape closes an open Select before it closes the Modal", () => {
+  const dom = installTestDom();
+  const container = document.createElement("div");
+  document.body.append(container);
+  let root: Root | undefined;
+  let closes = 0;
+
+  function Harness() {
+    const [open, setOpen] = useState(true);
+    return (
+      <Modal
+        open={open}
+        onClose={() => {
+          closes += 1;
+          setOpen(false);
+        }}
+        title="Dialog"
+      >
+        <Select
+          aria-label="Repository"
+          value="dashboard"
+          onChange={() => undefined}
+          options={[
+            { value: "dashboard", label: "Dashboard" },
+            { value: "worker", label: "Worker" },
+          ]}
+        />
+      </Modal>
+    );
+  }
+
+  try {
+    act(() => {
+      root = createRoot(container);
+      root.render(<Harness />);
+    });
+    const trigger = document.querySelector<HTMLButtonElement>('[role="combobox"]');
+    assert.ok(trigger);
+    act(() => trigger.click());
+    assert.ok(document.querySelector('[role="listbox"]'));
+
+    const pressEscape = () => act(() => {
+      trigger.dispatchEvent(new dom.window.KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }) as unknown as Event);
+    });
+
+    pressEscape();
+    assert.equal(document.querySelector('[role="listbox"]'), null);
+    assert.equal(closes, 0);
+    assert.equal(document.querySelector<HTMLElement>('[role="dialog"]')?.dataset.state, "open");
+
+    pressEscape();
+    assert.equal(closes, 1);
+    assert.equal(document.querySelector<HTMLElement>('[role="dialog"]')?.dataset.state, "closed");
+  } finally {
+    act(() => root?.unmount());
+    container.remove();
+    dom.restore();
+  }
+});
+
 test("Modal closes on Escape and overlay mouse down but not panel or drag release", () => {
   const dom = installTestDom();
   const container = document.createElement("div");
@@ -150,6 +269,14 @@ test("Modal closes on Escape and overlay mouse down but not panel or drag releas
       overlay.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
       overlay.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
+    assert.equal(closes, 1);
+    const handledEscape = new dom.window.KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    handledEscape.preventDefault();
+    act(() => dom.window.dispatchEvent(handledEscape));
     assert.equal(closes, 1);
     act(() => {
       dom.window.dispatchEvent(new dom.window.KeyboardEvent("keydown", {

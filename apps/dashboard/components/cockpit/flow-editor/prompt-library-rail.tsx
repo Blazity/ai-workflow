@@ -19,10 +19,7 @@ import {
   type PromptPreviewRequest,
 } from "@shared/prompts";
 import { apiClient } from "@/lib/api/client";
-
-const pressable = "transition-transform duration-150 ease-standard active:scale-[0.96]";
-const primaryBtn = `flex-1 appearance-none cursor-pointer inline-flex items-center justify-center border border-mariner bg-mariner text-white py-1.5 px-2 rounded-[3px] font-mono text-[10px] tracking-[0.04em] uppercase ${pressable}`;
-const secondaryBtn = `flex-1 appearance-none cursor-pointer inline-flex items-center justify-center border border-neutral-200 bg-panel text-coal py-1.5 px-2 rounded-[3px] font-mono text-[10px] tracking-[0.04em] uppercase hover:bg-app-bg ${pressable}`;
+import { Button, IconButton, Input, Select } from "@/components/ui";
 
 export function promptReferenceVersionForAuthoring(
   pinReferences: boolean,
@@ -36,21 +33,20 @@ export function promptReferenceVersionForAuthoring(
 
 function TagChip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
   return (
-    <button
+    <Button
       type="button"
+      variant={active ? "secondary" : "ghost"}
+      size="sm"
       onClick={onClick}
       aria-pressed={active}
-      className={`appearance-none cursor-pointer rounded-pill border px-2 py-0.5 font-mono text-[9px] transition-colors duration-150 ${
-        active ? "border-mariner bg-mariner-100 text-mariner" : "border-neutral-200 bg-panel text-neutral-600 hover:border-neutral-300"
-      }`}
     >
       {label}
-    </button>
+    </Button>
   );
 }
 
 /**
- * Inline library browser for the prompt editor modal — search + list + a preview
+ * Inline library browser for the prompt editor modal, search + list + a preview
  * that supports inserting the whole prompt OR individual sections, from a chosen
  * version. Rendered as a panel (not a stacked modal). The list reads the shared
  * library context (already loaded); a prompt's version history is lazy-fetched on
@@ -229,20 +225,20 @@ export function PromptLibraryRail({
     listContent = filtered.map((row) => {
       const isActive = activeRow?.id === row.id;
       return (
-        <button
+        <Button
           key={row.id}
           type="button"
+          variant={isActive ? "secondary" : "ghost"}
+          size="sm"
           onClick={() => {
             setActivePreviewRequest(null);
             setMissingVersion(false);
             setActiveId(row.id);
           }}
-          className={`relative block w-full appearance-none cursor-pointer border-none pl-3 pr-2.5 py-2 text-left transition-colors duration-150 ${
-            isActive ? "bg-off-white" : "bg-panel hover:bg-off-white"
-          }`}
+          className="relative h-auto w-full justify-start px-3 py-2 text-left [&>span]:w-full [&>span]:flex-col [&>span]:items-stretch [&>span]:gap-0"
         >
           <span
-            className={`absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full bg-mariner origin-center transition-[opacity,transform] duration-150 ease-standard ${
+            className={`absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full bg-mariner origin-center transition-[opacity,transform] duration-[var(--motion-fast)] ease-standard ${
               isActive ? "opacity-100 scale-y-100" : "opacity-0 scale-y-50"
             }`}
             aria-hidden="true"
@@ -251,7 +247,7 @@ export function PromptLibraryRail({
           <span className="block truncate font-mono text-[10px] text-neutral-500">
             {`v${row.currentVersion}${row.tags.length > 0 ? ` · ${row.tags.join(", ")}` : ""}`}
           </span>
-        </button>
+        </Button>
       );
     });
   }
@@ -263,13 +259,13 @@ export function PromptLibraryRail({
         Insert from library
       </div>
       <div className="shrink-0 border-b border-neutral-200 px-3 py-2">
-        <input
+        <Input
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search prompts…"
           aria-label="Search prompts"
-          className="w-full rounded-[3px] border border-neutral-200 bg-off-white px-2 py-1.5 font-body text-[12px] text-neutral-900 outline-none focus:border-mariner"
+          size="sm"
         />
         {tags.length > 0 && (
           <div className="mt-2 flex flex-wrap items-center gap-1">
@@ -287,8 +283,9 @@ export function PromptLibraryRail({
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="shrink-0 border-b border-neutral-200 px-3 py-2">
             <div className="flex items-center gap-2">
-              <button
+              <IconButton
                 type="button"
+                size="sm"
                 draggable={!disabled}
                 onDragStart={(event) => writePromptDrag(event, {
                   kind: "library-reference",
@@ -310,35 +307,33 @@ export function PromptLibraryRail({
                     ? `Drag as pinned v${selectedVersion ?? activeRow.currentVersion}`
                     : "Drag as latest reference"
                 }
-                className="inline-flex size-7 shrink-0 cursor-grab items-center justify-center rounded-[3px] border border-transparent bg-transparent font-mono text-[12px] text-neutral-400 hover:border-neutral-200 hover:bg-off-white hover:text-mariner active:cursor-grabbing"
+                className="shrink-0 cursor-grab active:cursor-grabbing"
               >
                 ⠿
-              </button>
+              </IconButton>
               <h3 className="m-0 min-w-0 flex-1 truncate font-display text-[13px] font-semibold text-neutral-900">
                 {activeRow.name}
               </h3>
               {missingVersion ? (
-                <span className="shrink-0 rounded-full border border-yellow-300 bg-[#FFF4CC] px-1.5 py-0.5 font-mono text-[9px] text-neutral-700">
+                <span className="shrink-0 rounded-pill border border-yellow-300 bg-yellow-200 px-1.5 py-0.5 font-mono text-[9px] text-neutral-700">
                   v{selectedVersion} unavailable
                 </span>
               ) : versions.length > 1 ? (
-                <select
-                  value={selectedVersion ?? activeRow.currentVersion}
-                  onChange={(e) => {
+                <Select
+                  value={String(selectedVersion ?? activeRow.currentVersion)}
+                  onChange={(value) => {
                     setActivePreviewRequest(null);
                     setMissingVersion(false);
-                    setSelectedVersion(Number(e.target.value));
+                    setSelectedVersion(Number(value));
                   }}
                   aria-label="Version"
-                  className="shrink-0 cursor-pointer appearance-none rounded-[3px] border border-neutral-200 bg-off-white px-1.5 py-0.5 font-mono text-[10px] text-neutral-700 outline-none focus:border-mariner"
-                >
-                  {versions.map((v) => (
-                    <option key={v.version} value={v.version}>
-                      v{v.version}
-                      {v.version === activeRow.currentVersion ? " · current" : ""}
-                    </option>
-                  ))}
-                </select>
+                  size="compact"
+                  className="shrink-0"
+                  options={versions.map((version) => ({
+                    value: String(version.version),
+                    label: `v${version.version}${version.version === activeRow.currentVersion ? " · current" : ""}`,
+                  }))}
+                />
               ) : (
                 <span className="shrink-0 rounded-full border border-neutral-200 bg-off-white px-1.5 py-0.5 font-mono text-[9px] text-neutral-600">
                   v{activeRow.currentVersion}
@@ -352,7 +347,7 @@ export function PromptLibraryRail({
 
           <div ref={previewPaneRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
             {missingVersion ? (
-              <div className="grid min-h-[160px] place-items-center rounded-[3px] border border-dashed border-yellow-300 bg-[#FFF9E6] px-4 text-center font-body text-[12px] text-neutral-600">
+              <div className="grid min-h-[160px] place-items-center rounded-[3px] border border-dashed border-yellow-300 bg-yellow-100 px-4 text-center font-body text-[12px] text-neutral-600">
                 Version v{selectedVersion} unavailable.
               </div>
             ) : versionLoading ? (
@@ -362,10 +357,11 @@ export function PromptLibraryRail({
               {sections.map((section, si) => (
                 <div
                   key={si}
-                  className="group/section relative -mx-1.5 rounded-[3px] border border-transparent py-1 pl-8 pr-1.5 transition-colors duration-150 hover:border-neutral-200 hover:bg-off-white focus-within:border-mariner-200 focus-within:bg-off-white"
+                  className="group/section relative -mx-1.5 rounded-[3px] border border-transparent py-1 pl-8 pr-1.5 transition-colors duration-[var(--motion-fast)] hover:border-neutral-200 hover:bg-off-white focus-within:border-mariner-200 focus-within:bg-off-white"
                 >
-                  <button
+                  <IconButton
                     type="button"
+                    size="sm"
                     draggable={!disabled}
                     onDragStart={(event) => writePromptDrag(event, {
                       kind: "library-section",
@@ -374,20 +370,22 @@ export function PromptLibraryRail({
                     })}
                     aria-label={`Drag section ${section.title}`}
                     title="Drag section"
-                    className="absolute left-1 top-1 inline-flex size-7 cursor-grab items-center justify-center rounded-[3px] border border-transparent bg-transparent font-mono text-[11px] text-neutral-400 opacity-50 hover:border-neutral-200 hover:bg-panel hover:text-mariner group-hover/section:opacity-100 focus-visible:opacity-100 active:cursor-grabbing"
+                    className="absolute left-1 top-1 cursor-grab opacity-50 group-hover/section:opacity-100 focus-visible:opacity-100 active:cursor-grabbing"
                   >
                     ⠿
-                  </button>
+                  </IconButton>
                   {!disabled && (
-                    <button
+                    <Button
                       type="button"
+                      variant="secondary"
+                      size="sm"
                       onClick={() => insertSection(section.body)}
                       aria-label={`${sectionActionLabel}: ${section.title}`}
                       title={sectionActionLabel}
-                      className="absolute right-1.5 top-1.5 z-10 inline-flex min-h-7 appearance-none items-center rounded-[3px] border border-mariner-200 bg-panel px-2 font-mono text-[9px] uppercase tracking-[0.04em] text-mariner opacity-0 pointer-events-none shadow-[0_2px_8px_rgba(24,27,32,0.08)] transition-[opacity,transform] duration-150 ease-standard before:absolute before:-inset-1.5 group-hover/section:opacity-100 group-hover/section:pointer-events-auto group-focus-within/section:opacity-100 group-focus-within/section:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner-200 active:scale-[0.96]"
+                      className="pointer-events-none absolute right-1.5 top-1.5 z-10 opacity-0 group-hover/section:pointer-events-auto group-hover/section:opacity-100 group-focus-within/section:pointer-events-auto group-focus-within/section:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100"
                     >
                       {sectionActionLabel}
-                    </button>
+                    </Button>
                   )}
                   <PromptPreview body={section.body} />
                 </div>
@@ -398,26 +396,29 @@ export function PromptLibraryRail({
 
           {!disabled && !missingVersion && !versionLoading && (
             <div className="flex shrink-0 items-center gap-2 border-t border-neutral-200 bg-off-white px-3 py-2">
-              <button type="button" onClick={copyWhole} className={secondaryBtn} title="Insert an editable snapshot">
+              <Button type="button" variant="secondary" size="sm" onClick={copyWhole} className="flex-1" title="Insert an editable snapshot">
                 Copy text
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
+                variant={pinReferences ? "selected" : "secondary"}
+                size="sm"
                 onClick={() => insertReference(selectedVersion ?? activeRow.currentVersion)}
-                className={pinReferences ? primaryBtn : secondaryBtn}
+                className="flex-1"
                 title={`Always use version ${selectedVersion ?? activeRow.currentVersion}`}
               >
                 Pin v{selectedVersion ?? activeRow.currentVersion}
-              </button>
+              </Button>
               {!pinReferences && (
-                <button
+                <Button
                   type="button"
+                  size="sm"
                   onClick={() => insertReference("latest")}
-                  className={primaryBtn}
+                  className="flex-1"
                   title="Use the newest version for every new run"
                 >
                   Use latest
-                </button>
+                </Button>
               )}
             </div>
           )}

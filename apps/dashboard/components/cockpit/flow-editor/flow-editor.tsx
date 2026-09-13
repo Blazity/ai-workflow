@@ -28,6 +28,7 @@ import type {
 import { FAILURE_PORT, isTriggerBlockType } from "@shared/contracts";
 import { useIsMobileViewport } from "@/lib/use-media-query";
 import { MobileSheet } from "@/components/cockpit/mobile/mobile-sheet";
+import { Button, IconButton, Input } from "@/components/ui";
 import {
   defaultPort,
   edgeDeleteActionVisible,
@@ -207,7 +208,7 @@ function ExecutionLimitsBar({
           <span className="font-mono text-[9px] tracking-[0.04em] uppercase text-neutral-600">
             {field.label}
           </span>
-          <input
+          <Input
             type="number"
             min={field.step}
             step={field.step}
@@ -219,7 +220,9 @@ function ExecutionLimitsBar({
               if (value !== undefined && !Number.isFinite(value)) return;
               onChange(setExecutionLimit(limits, field.key, value));
             }}
-            className="h-[26px] w-[104px] px-2 bg-panel border border-neutral-200 rounded-xs font-mono text-[10px] text-coal outline-none disabled:opacity-60"
+            size="sm"
+            monospace
+            className="w-[104px]"
           />
         </label>
       ))}
@@ -282,7 +285,7 @@ const FlowNode = React.memo(function FlowNode({
       aria-label={`${cat.label} block controls`}
       data-canvas-node-id={node.id}
       data-data-source-highlight={dataSourceHighlighted || undefined}
-      className={`absolute rounded-[4px] select-none transition-[box-shadow,border-color] duration-[120ms] bg-panel ${
+      className={`absolute rounded-[4px] select-none transition-[box-shadow,border-color] duration-[var(--motion-fast)] bg-panel ${
         canEdit ? "cursor-grab" : "cursor-pointer"
       } ${
         invalid
@@ -300,8 +303,10 @@ const FlowNode = React.memo(function FlowNode({
         width: NODE_W, height: NODE_H,
       }}
     >
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="sm"
         onPointerDown={(event) => {
           if (event.button === 2) {
             event.stopPropagation();
@@ -330,11 +335,16 @@ const FlowNode = React.memo(function FlowNode({
           invalid ? validationDescriptionId(node.id) : undefined
         }
         data-canvas-node-selector={node.id}
-        className="absolute inset-0 z-[1] appearance-none rounded-[3px] bg-transparent text-left outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-mariner focus-visible:outline-offset-2"
-      />
+        className="absolute inset-0 z-[1] h-auto w-auto justify-start p-0 text-left"
+      >
+        <span className="sr-only">Select {node.name || cat.label}</span>
+      </Button>
       {canRun && (
-        <button
+        <IconButton
           type="button"
+          variant="primary"
+          size="sm"
+          shape="circle"
           aria-label={`Run ${node.name || cat.label}`}
           title="Run trigger"
           onPointerDown={(event) => event.stopPropagation()}
@@ -343,10 +353,10 @@ const FlowNode = React.memo(function FlowNode({
             event.stopPropagation();
             onRun(node);
           }}
-          className="absolute -right-[38px] -top-[15px] z-[8] inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-full border border-mariner bg-panel text-mariner shadow-[0_2px_5px_rgba(24,27,32,0.16)] transition-[background,color,transform] duration-[120ms] hover:scale-105 hover:bg-mariner hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner focus-visible:ring-offset-2"
+          className="absolute -right-[38px] -top-[15px] z-[8]"
         >
           <PlayIcon size={13} weight="fill" aria-hidden />
-        </button>
+        </IconButton>
       )}
       {invalid && (
         <span id={validationDescriptionId(node.id)} className="sr-only">
@@ -375,7 +385,7 @@ const FlowNode = React.memo(function FlowNode({
                 ? `last run: ${runStatus} (${runError})`
                 : "last run: " + runStatus
             }
-            className={`h-1.5 w-1.5 shrink-0 rounded-full ${locked ? "" : "ml-auto"} ${runStatus === "running" ? "animate-pulse" : ""}`}
+            className={`h-1.5 w-1.5 shrink-0 rounded-full ${locked ? "" : "ml-auto"} ${runStatus === "running" ? "animate-pulse motion-reduce:animate-none" : ""}`}
             style={{ background: RUN_STATUS_COLORS[runStatus] }}
           />
         )}
@@ -386,8 +396,11 @@ const FlowNode = React.memo(function FlowNode({
       </div>
 
       {!isTriggerBlockType(node.type) && (
-        <button
+        <IconButton
           type="button"
+          variant="ghost"
+          size="sm"
+          shape="circle"
           disabled={!canEdit}
           onPointerDown={(e) => e.stopPropagation()}
           onPointerUp={(e) => onPortUp(e, node.id)}
@@ -404,12 +417,16 @@ const FlowNode = React.memo(function FlowNode({
             event.stopPropagation();
             onPortKeyEnd(node.id);
           }}
-          className={`absolute z-[2] m-0 h-3.5 w-3.5 appearance-none rounded-full border-2 bg-panel p-0 ${canEdit ? "cursor-crosshair hover:scale-125 transition-transform" : "cursor-default"}`}
+          className={canEdit ? "absolute z-[2] cursor-crosshair" : "absolute z-[2]"}
           style={{
-            left: -7, top: NODE_H / 2 - 7,
-            borderColor: cat.color,
+            left: -13, top: NODE_H / 2 - 13,
           }}
-        />
+        >
+          <span
+            className="size-3.5 rounded-full border-2 bg-panel"
+            style={{ borderColor: cat.color }}
+          />
+        </IconButton>
       )}
       {outPorts.map((port, i) => {
         const top = (NODE_H * (i + 1)) / (portCount + 1);
@@ -422,8 +439,11 @@ const FlowNode = React.memo(function FlowNode({
                 style={{ right: 12, top: top - 4, color: cat.color }}
               >{port}</span>
             )}
-            <button
+            <IconButton
               type="button"
+              variant="ghost"
+              size="sm"
+              shape="circle"
               disabled={!canEdit}
               onPointerDown={(e) => onPortDown(e, node.id, port)}
               title={canEdit ? "Drag to another node to connect" : undefined}
@@ -440,12 +460,16 @@ const FlowNode = React.memo(function FlowNode({
                 event.stopPropagation();
                 onPortKeyStart(node.id, port);
               }}
-              className={`absolute z-[2] m-0 h-3.5 w-3.5 appearance-none rounded-full border-2 border-white p-0 ${canEdit ? "cursor-crosshair hover:scale-125 transition-transform" : "cursor-default"} ${connectingPort === port ? "ring-2 ring-mariner ring-offset-1 scale-125" : ""}`}
+              className={canEdit ? "absolute z-[2] cursor-crosshair" : "absolute z-[2]"}
               style={{
-                left: NODE_W - 5, top: top - 7,
-                background: cat.color,
+                left: NODE_W - 13, top: top - 13,
               }}
-            />
+            >
+              <span
+                className={`size-3.5 rounded-full border-2 border-white ${connectingPort === port ? "ring-2 ring-mariner ring-offset-1" : ""}`}
+                style={{ background: cat.color }}
+              />
+            </IconButton>
           </span>
         );
       })}
@@ -547,7 +571,7 @@ function FlowCanvas({
   const pointers = useRef<Map<number, Point>>(new Map());
   const pinch = useRef<{ dist: number; cx: number; cy: number } | null>(null);
   // A node press only becomes a drag once the pointer travels past this many
-  // screen px. Below it, the press stays a tap — so touch jitter neither nudges
+  // screen px. Below it, the press stays a tap, so touch jitter neither nudges
   // the node nor suppresses the synthetic click that selects it.
   const movedRef = useRef(false);
   const selectionHandledOnPointerDownRef = useRef(false);
@@ -573,7 +597,7 @@ function FlowCanvas({
     const left = rect?.left ?? 0;
     const top = rect?.top ?? 0;
     // Read live pan/zoom from the ref so this stays identity-stable across
-    // pan/zoom — lets the port handlers be memoized without breaking on pan.
+    // pan and zoom, lets the port handlers be memoized without breaking on pan.
     const { pan: currentPan, zoom: currentZoom } = viewRef.current;
     return {
       x: (clientX - left - currentPan.x) / currentZoom,
@@ -614,7 +638,7 @@ function FlowCanvas({
     });
   }, []);
 
-  // On mobile a palette-added node spawns to the right of the rightmost node —
+  // On mobile a palette added node spawns to the right of the rightmost node,
   // off the narrow viewport, so it looks like nothing happened. When the node
   // count grows, relocate the canvas to center the freshly spawned step.
   const isMobileCanvas = useIsMobileViewport();
@@ -983,7 +1007,7 @@ function FlowCanvas({
                   strokeDasharray={back ? "6 6" : undefined}
                   fill="none"
                   markerEnd={hovered ? undefined : isActive ? "url(#arrowBlue)" : "url(#arrow)"}
-                  className="transition-[stroke] duration-[120ms] pointer-events-none"
+                  className="pointer-events-none transition-[stroke] duration-[var(--motion-fast)]"
                 />
                 {/* Fat transparent hit area so the thin edge is easy to hover */}
                 <path
@@ -1271,12 +1295,12 @@ function FlowCanvas({
         onPointerDown={(e) => e.stopPropagation()}
         className="absolute right-4 bottom-4 z-10 flex flex-col gap-1 bg-panel border border-neutral-200 rounded-[3px] p-1 shadow-[0_2px_6px_rgba(24,27,32,0.08)]"
       >
-        <button
+        <IconButton
+          size="sm"
           onClick={(e) => { e.stopPropagation(); onToggleFullView(); }}
           title={fullView ? "Exit full view (Esc)" : "Full view"}
           aria-label={fullView ? "Exit full view" : "Full view"}
-          className="appearance-none border-none bg-transparent cursor-pointer w-[26px] h-[26px] rounded-xs font-mono text-sm text-coal hover:bg-app-bg"
-        >{fullView ? "⤡" : "⤢"}</button>
+        >{fullView ? "⤡" : "⤢"}</IconButton>
         <div className="h-px bg-neutral-200 mx-1" />
         {[
           {
@@ -1291,13 +1315,13 @@ function FlowCanvas({
           },
           { label: "⊡", name: "Fit workflow", onClick: () => fit() },
         ].map((b, i) => (
-          <button
+          <IconButton
+            size="sm"
             key={i}
             onClick={(e) => { e.stopPropagation(); b.onClick(); }}
             title={b.name}
             aria-label={b.name}
-            className="appearance-none border-none bg-transparent cursor-pointer w-[26px] h-[26px] rounded-xs font-mono text-sm text-coal hover:bg-app-bg"
-          >{b.label}</button>
+          >{b.label}</IconButton>
         ))}
         <div className="font-mono text-[9px] text-neutral-500 text-center py-0.5 border-t border-neutral-200">
           {Math.round(zoom * 100)}%
@@ -2026,40 +2050,41 @@ export function FlowEditor({
                 disabled: !canEdit,
               },
             ].map((action) => (
-              <button
+              <Button
                 key={action.label}
                 type="button"
+                variant="secondary"
+                size="sm"
                 onClick={action.onClick}
                 disabled={action.disabled}
                 title={`${action.label} (${action.shortcut})`}
                 aria-label={`${action.label} (${action.shortcut})`}
-                className="appearance-none rounded-[3px] border border-neutral-200 bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-700 hover:bg-app-bg disabled:cursor-default disabled:opacity-40"
               >
                 {action.label}
-              </button>
+              </Button>
             ))}
           </div>
         </div>
         <div className="ml-auto flex items-center gap-2">
           {headerExtra}
           {canEdit && saveIssues.length > 0 && (
-            <button
+            <Button
               type="button"
+              variant="danger"
+              size="sm"
               title={saveIssues.map((issue) => issue.message).join(" ")}
               onClick={() => setSelectedId(saveIssues[0]!.nodeId)}
-              className="appearance-none cursor-pointer rounded-full border border-red-400 bg-red-50 px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-red-700"
             >
               {saveIssues.length === 1
                 ? "1 block has an error"
                 : `${saveIssues.length} blocks have an error`}
-            </button>
+            </Button>
           )}
           {canEdit && (
-            <button
+            <Button
               onClick={onSave}
               disabled={!saveEnabled || saving}
-              className="appearance-none cursor-pointer border border-mariner bg-mariner text-white py-1.5 px-3.5 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase disabled:opacity-40 disabled:cursor-default"
-            >{saving ? "Saving…" : saveLabel}</button>
+            >{saving ? "Saving…" : saveLabel}</Button>
           )}
         </div>
       </div>
@@ -2177,11 +2202,14 @@ export function FlowEditor({
           </MobileSheet>
         )}
         {isMobile && canEdit && (
-          <button
+          <IconButton
+            variant="primary"
+            shape="circle"
+            size="md"
             onClick={() => setPaletteOpen(true)}
             aria-label="Add step"
-            className="fixed left-4 bottom-[72px] z-40 w-12 h-12 rounded-full bg-mariner text-white text-2xl leading-none shadow-[0_3px_10px_rgba(24,27,32,0.25)] flex items-center justify-center"
-          >＋</button>
+            className="fixed bottom-[72px] left-4 z-40"
+          >＋</IconButton>
         )}
         {isMobile && canEdit && (
           <MobileSheet open={paletteOpen} onClose={() => setPaletteOpen(false)} title="Add step" heightClass="max-h-[60vh]">
@@ -2215,20 +2243,22 @@ export function FlowEditor({
             }}
             className="fixed z-[70] min-w-[190px] rounded-[4px] border border-neutral-200 bg-panel p-1 shadow-[0_12px_30px_-8px_rgba(24,27,32,0.35)]"
           >
-            <button
+            <Button
               type="button"
+              variant="danger"
+              size="sm"
               role="menuitem"
               autoFocus
               onClick={() => {
                 deleteCanvasSelection(pendingContextDelete.selection);
                 closeContextDelete();
               }}
-              className="w-full rounded-[3px] border-none bg-transparent px-3 py-2 text-left font-body text-[12px] text-red-700 hover:bg-red-50"
+              className="h-auto w-full justify-start px-3 py-2 text-left"
             >
               {pendingContextDelete.selection.nodeIds.length > 1
                 ? `Delete ${pendingContextDelete.selection.nodeIds.length} blocks`
                 : "Delete block"}
-            </button>
+            </Button>
           </div>
         </>
       )}
@@ -2304,18 +2334,19 @@ function NodeConfig({
             style={{ color: cat.color }}
           >{cat.label}</span>
           <span className="ml-auto font-mono text-[10px] text-neutral-500">{node.id}</span>
-          <button
+          <IconButton
+            size="sm"
             onClick={onClose}
             title="Close inspector"
             aria-label="Close inspector"
-            className="appearance-none border-none bg-transparent cursor-pointer w-[22px] h-[22px] -mr-1 rounded-xs inline-flex items-center justify-center font-mono text-sm text-neutral-500 hover:bg-app-bg hover:text-coal"
-          >×</button>
+            className="-mr-1"
+          >×</IconButton>
         </div>
-        <input
+        <Input
           value={node.name ?? ""}
           disabled={!canEdit}
           onChange={(e) => onChange("name", e.target.value)}
-          className="border-none outline-none p-0 bg-transparent font-display font-medium text-[17px] leading-[1.3] text-coal disabled:opacity-100"
+          aria-label="Block name"
         />
       </div>
 
@@ -2438,10 +2469,10 @@ function NodeConfig({
               <span aria-hidden>🔒</span> Anchor step · can&apos;t be removed
             </span>
           ) : (
-            <button
+            <Button
+              variant="danger"
               onClick={onDelete}
-              className="appearance-none cursor-pointer border border-neutral-200 bg-panel py-1.5 px-3 rounded-[3px] font-mono text-[11px] text-[#A2351C] tracking-[0.04em] uppercase"
-            >Delete</button>
+            >Delete</Button>
           )}
         </div>
       )}
@@ -2472,7 +2503,7 @@ function NodeConfig({
         onKeyDown={onResizeKeyDown}
         className="group absolute inset-y-0 left-[-5px] z-20 w-[10px] cursor-col-resize touch-none outline-none"
       >
-        <span className="absolute inset-y-0 left-[4px] w-px bg-transparent transition-colors group-hover:bg-mariner group-focus:bg-mariner" />
+        <span className="absolute inset-y-0 left-[4px] w-px bg-transparent transition-colors duration-[var(--motion-fast)] group-hover:bg-mariner group-focus:bg-mariner" />
       </div>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{inner}</div>
     </aside>

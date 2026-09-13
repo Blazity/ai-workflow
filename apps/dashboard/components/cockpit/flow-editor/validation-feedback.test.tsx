@@ -10,6 +10,8 @@ import {
   ValidationSummary,
 } from "./validation-feedback";
 
+(globalThis as typeof globalThis & { React: typeof React }).React = React;
+
 const issues = [
   {
     code: "deployment",

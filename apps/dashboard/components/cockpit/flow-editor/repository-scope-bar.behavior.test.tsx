@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import React from "react";
 import {
+  createRoot as createDomRoot,
+  type Root as DomRoot,
+} from "react-dom/client";
+import {
   act,
   create,
   type ReactTestInstance,
@@ -14,6 +18,7 @@ import type {
   WorkflowRepositoryScope,
 } from "@shared/contracts";
 import { Listbox } from "@/components/cockpit/listbox";
+import { installTestDom } from "@/components/ui/test-dom";
 import { MAX_PINNED_REPOSITORIES } from "@/lib/workflow-editor/repository-scope";
 import {
   RepositoryCatalogProvider,
@@ -24,6 +29,11 @@ import { RepositoryScopeBar } from "./repository-scope-bar";
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
+(globalThis as typeof globalThis & { requestAnimationFrame: typeof requestAnimationFrame }).requestAnimationFrame = (callback) => {
+  callback(0);
+  return 1;
+};
+(globalThis as typeof globalThis & { cancelAnimationFrame: typeof cancelAnimationFrame }).cancelAnimationFrame = () => undefined;
 
 function gh(
   repoPath: string,
@@ -85,6 +95,13 @@ function buttonWithText(root: ReactTestInstance, text: string): ReactTestInstanc
     .filter((node) => nodeText(node).includes(text));
   assert.equal(matches.length, 1, `expected exactly one button containing ${text}`);
   return matches[0];
+}
+
+function openDialogs(root: ReactTestInstance): ReactTestInstance[] {
+  return root.findAll(
+    (node) =>
+      node.props.role === "dialog" && node.props["data-state"] !== "closed",
+  );
 }
 
 interface BarConfig {
@@ -180,12 +197,12 @@ test("the compact bar opens a dialog without changing the scope", async () => {
 
   assert.equal(configure.props["aria-haspopup"], "dialog");
   assert.equal(
-    bar.renderer.root.findAll((node) => node.props.role === "dialog").length,
+    openDialogs(bar.renderer.root).length,
     0,
   );
   await bar.open();
   assert.equal(
-    bar.renderer.root.findAll((node) => node.props.role === "dialog").length,
+    openDialogs(bar.renderer.root).length,
     1,
   );
   assert.deepEqual(bar.changes, []);
@@ -424,7 +441,7 @@ test("read-only mode cannot open the modal", async () => {
   await act(async () => bar.renderer.unmount());
 });
 
-test("Escape and backdrop dismissal discard the modal draft", async () => {
+test("backdrop dismissal discards the modal draft", async () => {
   const bar = await mountBar();
 
   await bar.open();
@@ -432,69 +449,124 @@ test("Escape and backdrop dismissal discard the modal draft", async () => {
   const backdrop = bar.renderer.root.find(
     (node) =>
       node.type === "div" &&
-      typeof node.props.className === "string" &&
-      node.props.className.includes("fixed inset-0"),
+      node.props["aria-hidden"] === "true",
   );
-  await act(async () =>
-    backdrop.props.onKeyDown({ key: "Escape", preventDefault: () => undefined }),
-  );
+  await act(async () => backdrop.props.onMouseDown({
+    target: backdrop,
+    currentTarget: backdrop,
+  }));
   assert.deepEqual(bar.changes, []);
   assert.equal(
-    bar.renderer.root.findAll((node) => node.props.role === "dialog").length,
-    0,
-  );
-
-  await bar.open();
-  await bar.toggleProvider("GitHub");
-  const reopenedBackdrop = bar.renderer.root.find(
-    (node) =>
-      node.type === "div" &&
-      typeof node.props.className === "string" &&
-      node.props.className.includes("fixed inset-0"),
-  );
-  await act(async () =>
-    reopenedBackdrop.props.onMouseDown({
-      target: reopenedBackdrop,
-      currentTarget: reopenedBackdrop,
-    }),
-  );
-  assert.deepEqual(bar.changes, []);
-  assert.equal(
-    bar.renderer.root.findAll((node) => node.props.role === "dialog").length,
+    openDialogs(bar.renderer.root).length,
     0,
   );
   await act(async () => bar.renderer.unmount());
 });
 
-test("Tab wraps from the last modal control to the first", async () => {
-  const bar = await mountBar();
-  await bar.open();
-  const backdrop = bar.renderer.root.find(
-    (node) =>
-      node.type === "div" &&
-      typeof node.props.className === "string" &&
-      node.props.className.includes("fixed inset-0"),
-  );
-  let firstFocuses = 0;
-  let prevented = 0;
-  const first = { focus: () => firstFocuses++ };
-  const last = { focus: () => undefined };
+test("the shared modal dismisses on Escape and wraps Tab focus", async () => {
+  const dom = installTestDom();
+  const container = document.createElement("div");
+  document.body.append(container);
+  const changes: WorkflowRepositoryScope[] = [];
+  let root: DomRoot | undefined;
 
-  await act(async () =>
-    backdrop.props.onKeyDown({
+  try {
+    await act(async () => {
+      root = createDomRoot(container);
+      root.render(
+        <RepositoryCatalogProvider
+          initial={{
+            status: "ready",
+            repositories: CATALOG,
+            providers: [
+              { provider: "github", status: "ready" },
+              { provider: "gitlab", status: "ready" },
+            ],
+          }}
+        >
+          <RepositoryScopeBar
+            scope={{}}
+            canEdit
+            onChange={(next) => changes.push(next)}
+          />
+        </RepositoryCatalogProvider>,
+      );
+    });
+    const configure = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("Configure"),
+    );
+    assert.ok(configure);
+    await act(async () => configure.click());
+
+    const dialog = document.querySelector<HTMLElement>(
+      '[role="dialog"][data-state="open"]',
+    );
+    assert.ok(dialog);
+    assert.equal(dialog.getAttribute("aria-modal"), "true");
+    const github = Array.from(dialog.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("GitHub"),
+    );
+    assert.ok(github);
+    await act(async () => github.click());
+
+    const focusable = Array.from(dialog.querySelectorAll<HTMLElement>([
+      "a[href]",
+      "button:not([disabled])",
+      "input:not([disabled])",
+      "select:not([disabled])",
+      "textarea:not([disabled])",
+      '[contenteditable="true"]',
+      '[tabindex]:not([tabindex="-1"])',
+    ].join(",")));
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    assert.ok(first);
+    assert.ok(last);
+
+    last.focus();
+    const forwardTab = new dom.window.KeyboardEvent("keydown", {
       key: "Tab",
-      shiftKey: false,
-      target: last,
-      currentTarget: {
-        querySelectorAll: () => [first, last],
-      },
-      preventDefault: () => prevented++,
-    }),
-  );
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(async () => {
+      dom.window.dispatchEvent(forwardTab);
+    });
+    assert.equal(forwardTab.defaultPrevented, true);
+    assert.equal(document.activeElement === first, true);
 
-  assert.equal(prevented, 1);
-  assert.equal(firstFocuses, 1);
-  await act(async () => bar.renderer.unmount());
+    first.focus();
+    const backwardTab = new dom.window.KeyboardEvent("keydown", {
+      key: "Tab",
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(async () => {
+      dom.window.dispatchEvent(backwardTab);
+    });
+    assert.equal(backwardTab.defaultPrevented, true);
+    assert.equal(document.activeElement === last, true);
+
+    const escape = new dom.window.KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(async () => {
+      dom.window.dispatchEvent(escape);
+    });
+    assert.equal(escape.defaultPrevented, true);
+    assert.equal(
+      document.querySelector('[role="dialog"][data-state="open"]'),
+      null,
+    );
+    assert.deepEqual(changes, []);
+  } finally {
+    await act(async () => root?.unmount());
+    container.remove();
+    dom.restore();
+  }
 });
 
 test("catalog refresh drops a newly selected repository that disappears", async () => {

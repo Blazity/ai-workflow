@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import React from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import React, { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import type { WorkflowDataCatalogEntry } from "@shared/contracts";
+import { installTestDom } from "@/components/ui/test-dom";
 import {
   defaultTransformConfiguration,
   TransformFields,
@@ -30,25 +31,55 @@ test("creates all seven canonical operations", () => {
   assert.equal(defaultTransformConfiguration("parse_json").operation, "parse_json");
 });
 
-test("renders the approved action list and output shape", () => {
-  const html = renderToStaticMarkup(
-    <TransformFields
-      configuration={{
-        operation: "replace_text",
-        source: "steps.entry.output.text",
-        mode: "plain",
-        pattern: "a",
-        replacement: "b",
-        ignoreCase: false,
-      }}
-      availableValues={values}
-      canEdit
-      onChange={() => undefined}
-    />,
-  );
-  assert.match(html, /Format text/);
-  assert.match(html, /Parse JSON/);
-  assert.match(html, /Build object/);
-  assert.match(html, /Output shape/);
-  assert.match(html, /Ignore capitalization/);
+test("renders every approved action and the selected output shape", () => {
+  const dom = installTestDom();
+  const container = document.createElement("div");
+  document.body.append(container);
+  let root: Root | undefined;
+
+  try {
+    act(() => {
+      root = createRoot(container);
+      root.render(
+        <TransformFields
+          configuration={{
+            operation: "replace_text",
+            source: "steps.entry.output.text",
+            mode: "plain",
+            pattern: "a",
+            replacement: "b",
+            ignoreCase: false,
+          }}
+          availableValues={values}
+          canEdit
+          onChange={() => undefined}
+        />,
+      );
+    });
+    const action = container.querySelector<HTMLButtonElement>('[role="combobox"][aria-label="Action"]');
+    assert.ok(action);
+    act(() => action.click());
+    const listbox = document.querySelector<HTMLElement>('[role="listbox"]');
+    assert.ok(listbox);
+    assert.deepEqual(
+      Array.from(listbox.querySelectorAll<HTMLElement>('[role="option"]')).map(
+        (option) => option.textContent?.trim(),
+      ),
+      [
+        "Format text",
+        "Trim text",
+        "Replace text",
+        "Text to number",
+        "Number to text",
+        "Parse JSON",
+        "Build object",
+      ],
+    );
+    assert.match(container.textContent ?? "", /Output shape/);
+    assert.match(container.textContent ?? "", /Ignore capitalization/);
+  } finally {
+    act(() => root?.unmount());
+    container.remove();
+    dom.restore();
+  }
 });

@@ -3,6 +3,7 @@
 import React from "react";
 import type { WorkflowDefinitionValidationIssue } from "@shared/contracts";
 import type { WorkflowValidationState } from "@/lib/workflow-editor/validation-controller";
+import { Button } from "@/components/ui";
 
 type StructuredValidationIssue = WorkflowDefinitionValidationIssue & {
   path?: string;
@@ -122,14 +123,16 @@ export function ValidationSummary({
             </div>
           )}
           {Object.entries(grouped.byNode).map(([nodeId, issues]) => (
-            <button
+            <Button
               key={nodeId}
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={(event) => {
                 event.currentTarget.closest("details")?.removeAttribute("open");
                 onSelectNode(nodeId);
               }}
-              className="block w-full cursor-pointer rounded-[3px] border-none bg-transparent px-2 py-2 text-left hover:bg-red-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-red-600 focus-visible:outline-offset-[-2px]"
+              className="h-auto w-full justify-start px-2 py-2 text-left [&>span]:w-full [&>span]:flex-col [&>span]:items-stretch"
               aria-label={`Select block ${nodeNames[nodeId] ?? nodeId}`}
             >
               <span className="mb-1 flex items-center justify-between gap-2 font-mono text-[9px] font-semibold uppercase tracking-[0.05em] text-red-700">
@@ -145,7 +148,7 @@ export function ValidationSummary({
                   </span>
                 ))}
               </span>
-            </button>
+            </Button>
           ))}
         </div>
       </section>

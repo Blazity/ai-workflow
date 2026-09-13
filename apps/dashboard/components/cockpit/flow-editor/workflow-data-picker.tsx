@@ -6,7 +6,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { createPortal } from "react-dom";
 import type {
   JsonSchema202012,
   WorkflowDataCatalogEntry,
@@ -14,6 +13,7 @@ import type {
   WorkflowValueCompatibility,
 } from "@shared/contracts";
 import { evaluateWorkflowValueCompatibility } from "@shared/contracts";
+import { Button, IconButton, Input, Modal } from "@/components/ui";
 
 type PickerTab = "steps" | "run";
 
@@ -122,15 +122,17 @@ export function WorkflowValueChip({
   if (!value) {
     return (
       <div className="space-y-1">
-        <button
+        <Button
           type="button"
+          variant="secondary"
+          size="md"
           disabled={disabled}
           onClick={onOpen}
-          className="flex min-h-9 w-full items-center gap-2 rounded-[3px] border border-dashed border-neutral-300 bg-panel px-3 text-left font-body text-[12px] text-mariner disabled:opacity-50"
+          className="h-auto w-full justify-start text-left"
         >
           <span aria-hidden>＋</span>
           Choose workflow value
-        </button>
+        </Button>
         {reference && (
           <p className="m-0 font-body text-[10px] leading-[1.35] text-red-700">
             The saved value is unavailable in the current workflow.
@@ -141,41 +143,44 @@ export function WorkflowValueChip({
   }
   return (
     <div className="space-y-1">
-    <div className="flex min-h-10 overflow-hidden rounded-[3px] border border-neutral-200 bg-panel">
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={onOpen}
-        aria-label={`Change ${value.label}`}
-        className="flex min-w-0 flex-1 items-center gap-2 border-none bg-transparent px-2.5 py-1.5 text-left disabled:opacity-50"
-      >
-        <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-[3px] bg-mariner-100 font-mono text-[12px] text-mariner">
-          {sourceGlyph(value)}
-        </span>
-        <span className="min-w-0">
-          <small className="block truncate font-mono text-[8px] uppercase tracking-[0.04em] text-neutral-500">
-            {sourceName(value)}
-          </small>
-          <strong className="block truncate font-body text-[12px] font-medium text-coal">
-            {fieldName(value)}
-          </strong>
-        </span>
-        <span className="ml-auto font-mono text-[10px] text-neutral-400" aria-hidden>
-          ▾
-        </span>
-      </button>
-      {onClear && (
-        <button
+      <div className="flex min-h-10 overflow-hidden rounded-[3px] border border-neutral-200 bg-panel">
+        <Button
           type="button"
+          variant="ghost"
+          size="md"
           disabled={disabled}
-          onClick={onClear}
-          aria-label={`Remove ${value.label}`}
-          className="w-9 shrink-0 border-y-0 border-r-0 border-l border-neutral-200 bg-transparent font-mono text-[13px] text-neutral-500 disabled:opacity-50"
+          onClick={onOpen}
+          aria-label={`Change ${value.label}`}
+          className="h-auto min-w-0 flex-1 justify-start px-2.5 py-1.5 text-left [&>span]:w-full"
         >
-          ×
-        </button>
-      )}
-    </div>
+          <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-[3px] bg-mariner-100 font-mono text-[12px] text-mariner">
+            {sourceGlyph(value)}
+          </span>
+          <span className="min-w-0">
+            <small className="block truncate font-mono text-[8px] uppercase tracking-[0.04em] text-neutral-500">
+              {sourceName(value)}
+            </small>
+            <strong className="block truncate font-body text-[12px] font-medium text-coal">
+              {fieldName(value)}
+            </strong>
+          </span>
+          <span className="ml-auto font-mono text-[10px] text-neutral-400" aria-hidden>
+            ▾
+          </span>
+        </Button>
+        {onClear && (
+          <IconButton
+            type="button"
+            size="md"
+            disabled={disabled}
+            onClick={onClear}
+            aria-label={`Remove ${value.label}`}
+            className="shrink-0"
+          >
+            ×
+          </IconButton>
+        )}
+      </div>
       {invalidReason && (
         <p className="m-0 font-body text-[10px] leading-[1.35] text-red-700">
           {invalidReason}
@@ -205,18 +210,13 @@ export function WorkflowDataPicker({
   const [query, setQuery] = useState("");
   const [tab, setTab] = useState<PickerTab>("steps");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-  const dialogRef = useRef<HTMLElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
     requestAnimationFrame(() => searchRef.current?.focus());
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onClose();
-        return;
-      }
       if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
       const buttons = Array.from(
         dialogRef.current?.querySelectorAll<HTMLButtonElement>(
@@ -270,74 +270,57 @@ export function WorkflowDataPicker({
     return groups;
   }, [visibleEntries]);
 
-  if (!open || typeof document === "undefined") return null;
-  return createPortal(
-    <div
-      className="fixed inset-0 z-[130] flex items-center justify-center bg-black/25 p-4"
-      role="presentation"
-      onMouseDown={onClose}
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Choose a value"
+      description="Workflow data"
+      size="md"
+      initialFocusRef={searchRef}
+      className="relative"
     >
-      <section
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Choose workflow value"
-        onMouseDown={(event) => event.stopPropagation()}
-        className="flex max-h-[min(680px,calc(100vh-32px))] w-full max-w-[560px] flex-col overflow-hidden rounded-[6px] border border-neutral-200 bg-panel shadow-[0_24px_70px_-20px_rgba(24,27,32,0.45)]"
-      >
-        <header className="flex items-start justify-between border-b border-neutral-200 px-5 py-4">
-          <div>
-            <span className="font-mono text-[9px] uppercase tracking-[0.08em] text-neutral-500">
-              Workflow data
-            </span>
-            <h2 className="m-0 mt-1 font-display text-xl font-medium text-coal">
-              Choose a value
-            </h2>
-          </div>
-          <button
+        <div ref={dialogRef}>
+          <IconButton
             type="button"
             onClick={onClose}
             aria-label="Close workflow value picker"
-            className="size-8 border-none bg-transparent font-mono text-lg text-neutral-500"
+            size="sm"
+            className="absolute right-4 top-3 z-10"
           >
             ×
-          </button>
-        </header>
-        <div className="p-4 pb-0">
-          <label className="flex h-10 items-center gap-2 rounded-[3px] border border-neutral-200 bg-off-white px-3">
+          </IconButton>
+          <label className="flex items-center gap-2">
             <span aria-hidden className="text-neutral-400">
               ⌕
             </span>
-            <input
+            <Input
               ref={searchRef}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Search steps and fields"
-              className="min-w-0 flex-1 border-none bg-transparent font-body text-[12px] outline-none"
+              aria-label="Search steps and fields"
+              className="min-w-0 flex-1"
             />
           </label>
-        </div>
         <nav
           aria-label="Workflow data sources"
-          className="flex border-b border-neutral-200 px-4 pt-3"
+          className="mt-3 flex border-b border-neutral-200"
         >
           {([
             ["steps", "Previous steps"],
             ["run", "Run info"],
           ] as const).map(([value, label]) => (
-            <button
+            <Button
               key={value}
               type="button"
+              variant={tab === value ? "secondary" : "ghost"}
+              size="sm"
               onClick={() => setTab(value)}
               aria-pressed={tab === value}
-              className={`border-x-0 border-t-0 bg-transparent px-3 py-2 font-body text-[12px] ${
-                tab === value
-                  ? "border-b-2 border-mariner text-mariner"
-                  : "border-b-2 border-transparent text-neutral-600"
-              }`}
             >
               {label}
-            </button>
+            </Button>
           ))}
         </nav>
         {refreshing && (
@@ -351,8 +334,10 @@ export function WorkflowDataPicker({
               expanded.has(key) || normalizedQuery.length > 0;
             return (
               <div key={key} className="border-b border-neutral-100 last:border-b-0">
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="sm"
                   aria-expanded={isExpanded}
                   onClick={() =>
                     setExpanded((current) => {
@@ -362,7 +347,7 @@ export function WorkflowDataPicker({
                       return next;
                     })
                   }
-                  className="flex w-full items-center gap-2 border-none bg-transparent px-2 py-2.5 text-left"
+                  className="h-auto w-full justify-start px-2 py-2.5 text-left [&>span]:w-full"
                 >
                   <span className="inline-flex size-7 items-center justify-center rounded-[3px] bg-mariner-100 font-mono text-[11px] text-mariner">
                     {sourceGlyph(values[0]!)}
@@ -373,47 +358,44 @@ export function WorkflowDataPicker({
                   <span className="ml-auto font-mono text-[10px] text-neutral-400">
                     {isExpanded ? "▴" : "▾"}
                   </span>
-                </button>
+                </Button>
                 {isExpanded && (
                   <div className="pb-2 pl-9">
                     {values.map((entry) => {
                       const reason = availableReason(entry, compatibility);
                       return (
-                      <button
-                        key={entry.reference}
-                        type="button"
-                        data-picker-value
-                        disabled={refreshing}
-                        aria-disabled={reason !== null ? "true" : undefined}
-                        aria-current={
-                          selectedReference === entry.reference
-                            ? "true"
-                            : undefined
-                        }
-                        onClick={() => {
-                          if (reason === null) onSelect(entry);
-                        }}
-                        className={`flex w-full items-start gap-3 rounded-[3px] border-none px-3 py-2 text-left disabled:opacity-50 ${
-                          reason !== null
-                            ? "cursor-not-allowed bg-off-white text-neutral-500"
-                            : selectedReference === entry.reference
-                            ? "bg-mariner-100"
-                            : "bg-transparent hover:bg-off-white"
-                        }`}
-                      >
-                        <span className="min-w-0 flex-1">
-                          <strong className="block font-body text-[12px] font-medium text-coal">
-                            {fieldName(entry)}
-                          </strong>
-                          <small className="block font-body text-[10px] leading-[1.4] text-neutral-500">
-                            {reason ?? entry.description}
-                          </small>
-                        </span>
-                        <span className="rounded-full bg-off-white px-2 py-0.5 font-mono text-[8px] uppercase text-neutral-500">
-                          {schemaType(entry.schema)}
-                        </span>
-                      </button>
-                    )})}
+                        <Button
+                          key={entry.reference}
+                          type="button"
+                          variant={selectedReference === entry.reference ? "secondary" : "ghost"}
+                          size="sm"
+                          data-picker-value
+                          disabled={refreshing}
+                          aria-disabled={reason !== null ? "true" : undefined}
+                          aria-current={
+                            selectedReference === entry.reference
+                              ? "true"
+                              : undefined
+                          }
+                          onClick={() => {
+                            if (reason === null) onSelect(entry);
+                          }}
+                          className="h-auto w-full items-start justify-start px-3 py-2 text-left [&>span]:w-full [&>span]:items-start"
+                        >
+                          <span className="min-w-0 flex-1">
+                            <strong className="block font-body text-[12px] font-medium text-coal">
+                              {fieldName(entry)}
+                            </strong>
+                            <small className="block font-body text-[10px] leading-[1.4] text-neutral-500">
+                              {reason ?? entry.description}
+                            </small>
+                          </span>
+                          <span className="rounded-full bg-off-white px-2 py-0.5 font-mono text-[8px] uppercase text-neutral-500">
+                            {schemaType(entry.schema)}
+                          </span>
+                        </Button>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -425,8 +407,7 @@ export function WorkflowDataPicker({
             </div>
           )}
         </div>
-      </section>
-    </div>,
-    document.body,
+      </div>
+    </Modal>
   );
 }

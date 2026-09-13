@@ -4,9 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import type { FlowNodeDef } from "@/lib/flows";
 import type { ScheduleOverlapPolicy, SchedulePreset, SchedulePreviewRequest, ScheduleWeekday } from "@shared/contracts";
 import { apiClient } from "@/lib/api/client";
-import { Listbox } from "@/components/cockpit/listbox";
-import { ConfigField, ConfigNote, NumberField, TextArea, TextInput, TriggerRateLimitFields, str, webhookActionButtonCls } from "./shared";
-import { SCHEDULE_EVERY_N_HOURS_STEPS, SCHEDULE_EVERY_N_MINUTES_STEPS, SCHEDULE_OVERLAP_POLICY_OPTIONS, SCHEDULE_PRESET_KIND_OPTIONS, ScheduleWeekdayToggles, scheduleModeToggleCls } from "./schedule-preview";
+import { Button, Select } from "@/components/ui";
+import { ConfigField, ConfigNote, NumberField, TextArea, TextInput, TriggerRateLimitFields, str } from "./shared";
+import { SCHEDULE_EVERY_N_HOURS_STEPS, SCHEDULE_EVERY_N_MINUTES_STEPS, SCHEDULE_OVERLAP_POLICY_OPTIONS, SCHEDULE_PRESET_KIND_OPTIONS, ScheduleWeekdayToggles } from "./schedule-preview";
 import { ScheduleStatusPanel } from "./schedule-history";
 import type { ConfigChange } from "./types";
 import type { SchedulePreviewState } from "./schedule-preview";
@@ -224,22 +224,24 @@ function ScheduleCronBuilder({
         label="Schedule"
         action={
           <div className="flex items-center gap-1">
-            <button
+            <Button
               type="button"
+              variant={builderMode === "custom" ? "secondary" : "ghost"}
+              size="sm"
               disabled={!canEdit}
               onClick={() => setBuilderMode("custom")}
-              className={builderMode === "custom" ? webhookActionButtonCls : scheduleModeToggleCls}
             >
               Custom
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              variant={builderMode === "preset" ? "secondary" : "ghost"}
+              size="sm"
               disabled={!canEdit}
               onClick={() => setBuilderMode("preset")}
-              className={builderMode === "preset" ? webhookActionButtonCls : scheduleModeToggleCls}
             >
               Preset
-            </button>
+            </Button>
           </div>
         }
       >
@@ -252,11 +254,12 @@ function ScheduleCronBuilder({
           />
         ) : (
           <div className="flex flex-col gap-2">
-            <Listbox
+            <Select
               options={SCHEDULE_PRESET_KIND_OPTIONS}
               value={presetKind}
               disabled={!canEdit}
-              ariaLabel="Preset kind"
+              aria-label="Preset kind"
+              size="compact"
               onChange={(v) => {
                 const kind = v as SchedulePresetKind;
                 setPresetKind(kind);
@@ -264,26 +267,28 @@ function ScheduleCronBuilder({
               }}
             />
             {presetKind === "every-n-minutes" && (
-              <Listbox
+              <Select
                 options={SCHEDULE_EVERY_N_MINUTES_STEPS.map((m) => ({
                   value: String(m),
                   label: `Every ${m} minutes`,
                 }))}
                 value={String(presetMinutes)}
                 disabled={!canEdit}
-                ariaLabel="Minute step"
+                aria-label="Minute step"
+                size="compact"
                 onChange={(v) => setPresetMinutes(Number(v))}
               />
             )}
             {presetKind === "every-n-hours" && (
-              <Listbox
+              <Select
                 options={SCHEDULE_EVERY_N_HOURS_STEPS.map((h) => ({
                   value: String(h),
                   label: `Every ${h} hour${h === 1 ? "" : "s"}`,
                 }))}
                 value={String(presetHours)}
                 disabled={!canEdit}
-                ariaLabel="Hour step"
+                aria-label="Hour step"
+                size="compact"
                 onChange={(v) => {
                   const hours = Number(v);
                   setPresetHours(hours);
@@ -325,8 +330,9 @@ function ScheduleCronBuilder({
                 timezone field says.
               </div>
             )}
-            <button
+            <Button
               type="button"
+              size="sm"
               disabled={
                 !canEdit ||
                 preview.status !== "ok" ||
@@ -347,10 +353,9 @@ function ScheduleCronBuilder({
                   setBuilderMode("custom");
                 }
               }}
-              className={webhookActionButtonCls}
             >
               Apply preset
-            </button>
+            </Button>
           </div>
         )}
       </ConfigField>
@@ -463,11 +468,12 @@ export function ScheduleTriggerFields({
         onPreviewChange={setSchedulePreview}
       />
       <ConfigField label="If the previous run is still going">
-        <Listbox
+        <Select
           options={SCHEDULE_OVERLAP_POLICY_OPTIONS}
           value={overlapPolicy}
           disabled={!canEdit}
-          ariaLabel="Overlap policy"
+          aria-label="Overlap policy"
+          size="compact"
           onChange={(v) => onChange("params.overlapPolicy", v)}
         />
       </ConfigField>
@@ -498,13 +504,14 @@ export function ScheduleTriggerFields({
           {canEdit &&
             suggestedGraceMinutes !== null &&
             suggestedGraceMinutes !== currentGraceMinutes && (
-              <button
+              <Button
                 type="button"
+                variant="secondary"
+                size="sm"
                 onClick={() => onChange("params.catchUpGraceMinutes", suggestedGraceMinutes)}
-                className={webhookActionButtonCls}
               >
                 Use suggested {suggestedGraceMinutes}
-              </button>
+              </Button>
             )}
         </div>
       </ConfigField>

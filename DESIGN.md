@@ -897,25 +897,25 @@ Input height patterns found on native input tags:
 | Runs | Runs table | `components/cockpit/screens/runs.tsx:143` | Hand built table | 4, Data tables |
 | Runs | Cancel feedback | `components/cockpit/screens/runs.tsx:82` | Local row feedback duplicated on mobile | 4, Toasts |
 | Ticket and Trace | Run selection | `components/cockpit/screens/ticket.tsx:125` | closed in D3-C | 4, Data tables and lists |
-| Ticket and Trace | Trace actions | `components/cockpit/screens/trace.tsx:410` | Local outline button skin | 4, Buttons |
-| Ticket and Trace | Clarification textarea | `components/cockpit/screens/trace.tsx:828` | Own focus recipe and padding | 4, Form controls |
-| Ticket and Trace | Awaiting panel | `components/cockpit/screens/trace.tsx:740` | Hardcodes background and edge | 2, colour rule zero |
+| Ticket and Trace | Trace actions | `components/cockpit/screens/trace.tsx:410` | closed in D3-A | 4, Buttons |
+| Ticket and Trace | Clarification textarea | `components/cockpit/screens/trace.tsx:828` | closed in D3-A | 4, Form controls |
+| Ticket and Trace | Awaiting panel | `components/cockpit/screens/trace.tsx:740` | closed in D3-A | 2, colour rule zero |
 | Approvals | Approval row | `components/cockpit/screens/approvals.tsx:128` | closed in D3-C | 4, Data tables and lists |
 | Approvals | Action buttons | `components/cockpit/screens/approvals.tsx:270` | closed in D3-C | 4, Buttons |
 | Cost | Cost table | `components/cockpit/screens/cost.tsx:85` | Uses 16 px cell padding | 4, Data tables |
 | Evals | Empty card | `components/cockpit/screens/evals.tsx:27` | Rebuilds a card instead of `CkCard` | 4, Cards |
 | Prompt library | Primary action | `components/cockpit/screens/prompt-library.tsx:38` | closed in D3-B | 4, Buttons |
-| Prompt library | Filter select | `components/cockpit/flow-editor/prompt-library-rail.tsx:325` | Native select | 4, Select |
+| Prompt library | Filter select | `components/cockpit/flow-editor/prompt-library-rail.tsx:325` | closed in D3-A | 4, Select |
 | Prompt library | Prompt body card | `components/cockpit/prompt-library/prompt-body-blocks.tsx:39` | closed in D3-B | 6, elevation |
 | Prompt library | Reference card | `components/cockpit/prompt-editor/prompt-reference-chips.tsx:168` | closed in D3-B | 5, radius |
 | Memory | Action buttons | `components/cockpit/screens/memory.tsx:289` | closed in D3-B | 4, Buttons |
-| Workflow editor | Deploy button | `components/cockpit/screens/workflow-editor.tsx:1261` | Uses emerald instead of canonical primary | 2 and 4, colour and Buttons |
-| Workflow editor | Native selects | `components/cockpit/flow-editor/blocks/transform.tsx:161` | Repeats native select for transform fields | 4, Select |
-| Workflow editor | Node controls | `components/cockpit/flow-editor/flow-editor.tsx:1274` | Own 26 px icon button | 4, Buttons |
-| Workflow editor | Prompt modal | `components/cockpit/flow-editor/prompt-editor-modal.tsx:278` | Own large modal shell | 4, Modal |
-| Workflow editor | Scope modal | `components/cockpit/flow-editor/repository-scope-modal.tsx:300` | Uses `shadow-2xl` and 6 px radius | 6, elevation |
-| Workflow editor | Status palette | `components/cockpit/screens/workflow-replay.tsx:42` | Hardcodes replay status colours | 2, status roles |
-| Workflow editor | Cancelled state | `components/cockpit/screens/workflow-replay.tsx:84` | Uses unowned cancelled literals | 2, status tokens |
+| Workflow editor | Deploy button | `components/cockpit/screens/workflow-editor.tsx:1261` | closed in D3-A | 2 and 4, colour and Buttons |
+| Workflow editor | Native selects | `components/cockpit/flow-editor/blocks/transform.tsx:161` | closed in D3-A | 4, Select |
+| Workflow editor | Node controls | `components/cockpit/flow-editor/flow-editor.tsx:1274` | closed in D3-A | 4, Buttons |
+| Workflow editor | Prompt modal | `components/cockpit/flow-editor/prompt-editor-modal.tsx:278` | closed in D3-A | 4, Modal |
+| Workflow editor | Scope modal | `components/cockpit/flow-editor/repository-scope-modal.tsx:300` | closed in D3-A | 6, elevation |
+| Workflow editor | Status palette | `components/cockpit/screens/workflow-replay.tsx:42` | closed in D3-A | 2, status roles |
+| Workflow editor | Cancelled state | `components/cockpit/screens/workflow-replay.tsx:84` | closed in D3-A | 2, status tokens |
 | Harness profiles | Text input | `components/cockpit/harness-profiles/profile-editor.tsx:35` | closed in D3-B | 4, Form controls |
 | Harness profiles | Buttons | `components/cockpit/harness-profiles/profile-editor.tsx:39` | closed in D3-B | 4, Buttons |
 | Harness profiles | Profile cards | `components/cockpit/harness-profiles/profile-editor.tsx:740` | closed in D3-B | 4, Cards |

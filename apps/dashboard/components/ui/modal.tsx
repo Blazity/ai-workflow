@@ -104,11 +104,21 @@ export function Modal({
     document.body.style.overflow = "hidden";
     const frame = requestAnimationFrame(() => {
       const dialog = dialogRef.current;
-      (initialFocusRef?.current ?? focusableElements(dialog)[0] ?? dialog)?.focus();
+      const marked = dialog?.querySelector<HTMLElement>("[data-dialog-initial-focus]");
+      const active = document.activeElement;
+      const focusedInside =
+        active instanceof HTMLElement && dialog?.contains(active) ? active : null;
+      (
+        initialFocusRef?.current ??
+        marked ??
+        focusedInside ??
+        focusableElements(dialog)[0] ??
+        dialog
+      )?.focus();
     });
 
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape" && dismissible) {
+      if (event.key === "Escape" && dismissible && !event.defaultPrevented) {
         event.preventDefault();
         onCloseRef.current();
         return;
