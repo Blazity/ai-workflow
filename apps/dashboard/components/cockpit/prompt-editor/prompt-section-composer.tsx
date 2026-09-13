@@ -170,10 +170,11 @@ export function PromptSectionComposer({
           </Button>
         )}
         <Button
-          variant={raw ? "primary" : "ghost"}
+          variant={raw ? "selected" : "ghost"}
           size="sm"
           type="button"
           onClick={toggleRaw}
+          aria-pressed={raw}
           className={raw ? "ml-auto" : "ml-1"}
         >
           Raw

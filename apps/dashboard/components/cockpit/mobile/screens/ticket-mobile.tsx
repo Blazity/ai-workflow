@@ -8,6 +8,7 @@ import type { TicketRunsResponse } from "@shared/contracts";
 import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
 import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
 import { Button } from "@/components/ui/button";
+import { NavItem } from "@/components/ui/nav-item";
 
 const EM_DASH = "\u2014";
 
@@ -22,15 +23,12 @@ function fmtTokens(n: number): string {
 export function MobileBackToRuns({ ticketKey }: { ticketKey: string }) {
   const router = useRouter();
   return (
-    <Button
+    <NavItem
       type="button"
       onClick={() => router.push(`/ticket/${encodeURIComponent(ticketKey)}`)}
-      className="self-start"
-      size="sm"
-      variant="ghost"
-    >
-      ← All runs · {ticketKey}
-    </Button>
+      label={`← All runs · ${ticketKey}`}
+      className="self-start px-0 text-mariner hover:bg-transparent"
+    />
   );
 }
 

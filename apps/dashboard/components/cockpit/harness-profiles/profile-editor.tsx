@@ -1102,9 +1102,7 @@ export function ProfileEditor({
             ["limits", "Limits & workspace"],
             ["home-files", "Home files"],
           ].map(([id, label]) => (
-            <Button
-              variant={editSection === id ? "primary" : "ghost"}
-              size="sm"
+            <button
               key={id}
               type="button"
               onClick={() =>
@@ -1119,10 +1117,15 @@ export function ProfileEditor({
                     | "home-files",
                 )
               }
-              className="justify-start"
+              aria-current={editSection === id ? "page" : undefined}
+              className={`appearance-none border-none border-l-2 bg-transparent px-3 py-2 text-left font-body text-[11px] transition-[color,border-color,transform] duration-[var(--motion-fast)] ease-standard active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner focus-visible:ring-offset-1 ${
+                editSection === id
+                  ? "border-mariner text-mariner font-semibold"
+                  : "border-transparent text-neutral-600 hover:text-coal"
+              }`}
             >
               {label}
-            </Button>
+            </button>
           ))}
         </nav>
         <div className="min-w-0">

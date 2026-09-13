@@ -123,7 +123,7 @@ export function LivePollControl({ size = "md" }: { size?: "md" | "sm" }) {
       aria-pressed={livePolling}
       aria-label="Toggle live updates"
       title={title}
-      variant={liveRunning ? "primary" : "secondary"}
+      variant={liveRunning ? "selected" : "secondary"}
       size={size}
       className={`${pad} ${tone} ${
         liveRunning ? "" : "hover:text-neutral-900"

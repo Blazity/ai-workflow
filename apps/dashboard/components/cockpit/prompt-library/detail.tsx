@@ -180,32 +180,33 @@ export function PromptDetail({
             const notLast = i < versions.length - 1;
             const dropRight = notLast && !on;
             return (
-              <Button
-                variant={on ? "primary" : "secondary"}
-                size="md"
+              <button
+                type="button"
                 key={v.version}
+                data-version-card={v.version}
+                aria-pressed={on}
                 onClick={() => setSelectedVersion(v.version)}
-                className={`h-auto w-44 shrink-0 justify-start py-3.5 text-left ${dropRight ? "border-r-0" : ""}`}
+                className={`relative w-[176px] shrink-0 appearance-none cursor-pointer border px-4 py-[14px] text-left transition-[color,background-color,border-color,transform] duration-[var(--motion-fast)] ease-standard active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner focus-visible:ring-offset-1 ${
+                  on ? "border-mariner bg-mariner-100" : "border-neutral-200 bg-panel hover:bg-off-white"
+                } ${dropRight ? "border-r-0" : ""}`}
               >
-                <span className="flex w-full min-w-0 flex-col">
-                  <span className="mb-1.5 flex items-center justify-between">
-                    <span className="font-mono text-sm font-semibold text-neutral-900">
-                      v{v.version}
+                <div className="mb-1.5 flex items-center justify-between">
+                  <span className="font-mono text-sm font-semibold text-neutral-900">
+                    v{v.version}
+                  </span>
+                  {v.restoredFromVersion !== null && (
+                    <span className="rounded-[3px] bg-app-bg px-[6px] py-[2px] font-mono text-[9px] text-neutral-600">
+                      from v{v.restoredFromVersion}
                     </span>
-                    {v.restoredFromVersion !== null && (
-                      <span className="rounded-[3px] bg-app-bg px-[6px] py-[2px] font-mono text-[9px] text-neutral-600">
-                        from v{v.restoredFromVersion}
-                      </span>
-                    )}
-                  </span>
-                  <span className="mb-1 font-mono text-[10px] text-neutral-500">
-                    {new Date(v.createdAt).toLocaleDateString()}
-                  </span>
-                  <span className="truncate font-mono text-[10px] text-neutral-700">
-                    {v.createdByLabel}
-                  </span>
-                </span>
-              </Button>
+                  )}
+                </div>
+                <div className="mb-1 font-mono text-[10px] text-neutral-500">
+                  {new Date(v.createdAt).toLocaleDateString()}
+                </div>
+                <div className="truncate font-mono text-[10px] text-neutral-700">
+                  {v.createdByLabel}
+                </div>
+              </button>
             );
           })}
         </div>

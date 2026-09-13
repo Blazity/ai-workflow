@@ -358,9 +358,17 @@ Resolution order:
 
 The existing `ui.tsx` exports chips, dots, cards, KPIs, tabs, status,
 pagination, and links. The `components/ui/` directory exports Button,
-IconButton, Input, Textarea, Field, Select, Modal, and Skeleton. It also
+IconButton, NavItem, Input, Textarea, Field, Select, Modal, and Skeleton. It also
 reexports `CkChip` and `CkDot`. Table and Toast still need canonical exports
 `(proposed)`.
+
+### Navigation items
+
+`NavItem` is the implemented desktop and mobile navigation primitive. It uses
+13 px Inter at medium weight when inactive and semibold when active, accepts an
+icon and label, marks the active destination with a mariner tint, colour, and
+indicator, supports the 60 px collapsed sidebar, renders either a link or a
+text button, and owns token based hover, focus visible, and motion states.
 
 ### Buttons
 
@@ -369,6 +377,7 @@ Canonical variants:
 | Variant | Job | Current visual source |
 | --- | --- | --- |
 | Primary | Confirm a main action | Mariner fill in repository and editor actions |
+| Selected | Selected or pressed toggle | Mariner 100 fill, mariner 200 border, mariner text |
 | Secondary | Alternative or cancel | White panel, neutral 300 border |
 | Ghost | Low emphasis action in a dense row | Transparent background, no border |
 | Danger | Delete, revoke, cancel irreversible state | Red intent, never mariner |
@@ -386,6 +395,7 @@ Sizes:
 States: default supplies fill, edge, foreground, and 3 px radius;
 hover changes colour or border; focus uses a visible 2 px mariner ring;
 disabled keeps readable copy at 40 percent opacity; loading preserves width.
+A selected or pressed control uses `selected`, never `primary`.
 
 Implemented by `components/ui/button.tsx` and
 `components/ui/icon-button.tsx`.
@@ -812,6 +822,7 @@ example. The appendix carries the screen ordered inventory.
 13. Do keep page gutters responsive. Runs pins 24 px on phones at `runs.tsx:111`.
 14. Do use one icon family. Dispatch uses Phosphor at `manual-dispatch-modal.tsx:5`, while navigation uses glyphs at `chrome.tsx:6`.
 15. Do use semantic colour tokens. The active nav repeats `#ececfd` at `chrome.tsx:117`.
+16. Do use NavItem for navigation; navigation never uses the Button skin.
 
 ### Don't
 

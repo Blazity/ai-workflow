@@ -487,7 +487,7 @@ export function PromptEditor({
             <span key={a.key} className="flex items-center">
               {(a.key === "bold" || a.key === "bullet") && <span className={toolSep} aria-hidden="true" />}
               <Button
-                variant={a.active ? "primary" : "ghost"}
+                variant={a.active ? "selected" : "ghost"}
                 size="sm"
                 type="button"
                 title={a.title}
@@ -520,10 +520,11 @@ export function PromptEditor({
           </span>
         )}
         <Button
-          variant={raw ? "primary" : "ghost"}
+          variant={raw ? "selected" : "ghost"}
           size="sm"
           type="button"
           onClick={() => setRaw((r) => !r)}
+          aria-pressed={raw}
           className="ml-auto"
           title="Toggle raw markdown"
         >

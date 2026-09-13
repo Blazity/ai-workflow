@@ -87,7 +87,8 @@ export function CkActivityDrawer({ open, onClose }: { open: boolean; onClose: ()
             <Button
               key={f.id}
               onClick={() => setFilter(f.id)}
-              variant={filter === f.id ? "primary" : "secondary"}
+              aria-pressed={filter === f.id}
+              variant={filter === f.id ? "selected" : "secondary"}
               size="sm"
             >
               {f.label}
