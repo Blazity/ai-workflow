@@ -63,7 +63,7 @@ const entryPut = (await import("./repository-catalog/[id].put.js")).default;
 const versionsGet = (await import("./repository-catalog/[id]/versions.get.js")).default;
 const activatePost = (await import("./repository-catalog/activate.post.js")).default;
 const settingsPatch = (await import("./settings.patch.js")).default;
-const { getCurrentCheckConfiguration } = await import(
+const { getCurrentCheckConfiguration, setRepositoryEnabled } = await import(
   "../../../db/repositories/repository-catalog.js"
 );
 const { repoScriptsConfigSchema } = await import(
@@ -155,6 +155,14 @@ beforeEach(async () => {
 
 describe("POST /api/v1/repository-catalog/activate, a second time", () => {
   it("L19: re-activation keeps the row and replaces everything on it", async () => {
+    // D1 / row L18 refuses an activation on a catalog that enables nothing, so
+    // this row needs one repository switched on before either call. Created the
+    // way every other row here creates one (the PUT route), then enabled at the
+    // repository tier, which is the same seam the sibling suite's `seedEnabled`
+    // uses: the switch is not a profile field, so a profile write cannot set it.
+    const seeded = await (await put(0, PROFILE)).json();
+    await setRepositoryEnabled(db, { id: seeded.repository.id, enabled: true });
+
     const first = await activate({
       acknowledgedRepositoryKeys: [],
       reason: "the bridge is over",
@@ -321,7 +329,12 @@ describe("PATCH /api/v1/settings against the catalog", () => {
     });
 
     // And the route that IS allowed to move it still does, so the refusal is
-    // about the surface rather than about the value.
+    // about the surface rather than about the value. Enabling one repository
+    // first, because D1 / row L18 refuses an activation that would leave
+    // dispatch with nothing to select; that refusal is 409 and belongs to the
+    // activate route, which would otherwise hide the 200 this row is about.
+    const seeded = await (await put(0, PROFILE)).json();
+    await setRepositoryEnabled(db, { id: seeded.repository.id, enabled: true });
     expect(
       (await activate({ acknowledgedRepositoryKeys: [], reason: "through the dialog" }))
         .status,
