@@ -136,6 +136,7 @@ export function Listbox({
     const ev = keyToEvent(e.key, state, options.length, openingIdx);
     if (!ev) return;
     if (e.key !== "Tab") e.preventDefault();
+    if (open && e.key === "Escape") e.stopPropagation();
     if (open && ev.type === "move") {
       let next = activeIdx + ev.delta;
       while (next >= 0 && next < options.length && options[next]?.disabled) {
