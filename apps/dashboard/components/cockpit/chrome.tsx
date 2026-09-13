@@ -2,8 +2,8 @@
 
 import React from "react";
 import { BlazityLogo } from "@/components/ui";
-import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
+import { NavItem } from "@/components/ui/nav-item";
 import { ArticleIcon } from "@phosphor-icons/react/dist/csr/Article";
 import { BrainIcon } from "@phosphor-icons/react/dist/csr/Brain";
 import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
@@ -123,25 +123,16 @@ export function CkSidebar({
               const on = active === n.id;
               const NavIcon = n.icon;
               return (
-                <Button
+                <NavItem
                   key={n.id}
                   onClick={() => onNav(n.id)}
                   title={collapsed ? n.label : undefined}
-                  aria-label={n.label}
-                  aria-current={on ? "page" : undefined}
-                  variant="ghost"
-                  className={`h-auto w-full justify-start py-2 font-body text-[13px] normal-case tracking-normal ${
-                    collapsed ? "px-0 justify-center" : "px-3"
-                  } ${
-                    on
-                      ? "bg-mariner-100 text-mariner font-semibold"
-                      : "text-neutral-800 font-medium"
-                  }`}
-                >
-                  <NavIcon size={16} aria-hidden="true" className={on ? "text-mariner" : "text-neutral-700"} />
-                  {!collapsed && n.label}
-                  {!collapsed && on && <span className="ml-auto w-1 h-4 bg-mariner rounded-full" />}
-                </Button>
+                  label={n.label}
+                  icon={<NavIcon size={16} />}
+                  active={on}
+                  collapsed={collapsed}
+                  className="w-full"
+                />
               );
             })}
           </nav>
