@@ -10,6 +10,7 @@ import { WindowSelector } from "@/components/cockpit/controls";
 import { windowPhrase, windowShort, type TimeWindow } from "@/lib/window";
 import type { OverviewScreenData } from "@/components/cockpit/screens/overview";
 import { Button } from "@/components/ui/button";
+import { formatAgeMinutes } from "@/lib/date-time";
 
 const EM_DASH = "\u2014";
 
@@ -39,7 +40,7 @@ export function OverviewMobileScreen({
   const workflows = data.workflows.rows;
 
   return (
-    <div className="flex flex-col gap-4 px-4 pt-4 pb-6">
+    <div className="flex flex-col gap-4 px-4 pt-4 pb-6 [&_a]:min-h-6">
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">{windowPhrase(window)}</div>
@@ -132,7 +133,7 @@ export function OverviewMobileScreen({
                       </span>
                     )}
                     {typeof r.askedAtMin === "number" && (
-                      <span className="ml-auto font-mono text-[10px] text-neutral-500">{r.askedAtMin}m ago</span>
+                      <span className="ml-auto font-mono text-[10px] text-neutral-500">{formatAgeMinutes(r.askedAtMin)}</span>
                     )}
                   </div>
                   {isApproval ? (

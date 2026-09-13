@@ -91,37 +91,39 @@ export function PromptListRail({
               focusFirstRow();
             }
           }}
-          placeholder="Search prompts  ( / )"
+          placeholder="Search prompts ( / )"
           aria-label="Search prompts"
         />
-        <div className="flex gap-1 flex-wrap">
-          <Button
-            variant={tag === null ? "selected" : "secondary"}
-            size="sm"
-            onClick={() => onTagChange(null)}
-            aria-pressed={tag === null}
-            className="text-[9px] font-medium uppercase tracking-[0.04em]"
-          >
-            all
-          </Button>
-          {tags.map((t) => (
+        <div className="flex items-start gap-2">
+          <div className="flex min-w-0 flex-1 flex-wrap gap-1">
             <Button
-              variant={tag === t ? "selected" : "secondary"}
+              variant={tag === null ? "selected" : "secondary"}
               size="sm"
-              key={t}
-              onClick={() => onTagChange(t)}
-              aria-pressed={tag === t}
+              onClick={() => onTagChange(null)}
+              aria-pressed={tag === null}
               className="text-[9px] font-medium uppercase tracking-[0.04em]"
             >
-              {t}
+              all
             </Button>
-          ))}
+            {tags.map((t) => (
+              <Button
+                variant={tag === t ? "selected" : "secondary"}
+                size="sm"
+                key={t}
+                onClick={() => onTagChange(t)}
+                aria-pressed={tag === t}
+                className="text-[9px] font-medium uppercase tracking-[0.04em]"
+              >
+                {t}
+              </Button>
+            ))}
+          </div>
           <Button
             variant={showArchived ? "selected" : "secondary"}
             size="sm"
             onClick={onToggleArchived}
             aria-pressed={showArchived}
-            className="ml-auto text-[9px] font-medium uppercase tracking-[0.04em]"
+            className="shrink-0 text-[9px] font-medium uppercase tracking-[0.04em]"
           >
             Archived
           </Button>

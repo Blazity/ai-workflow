@@ -14,6 +14,7 @@ import {
   withHarnessProvider,
 } from "@/lib/harness-profiles/editor";
 import { apiClient } from "@/lib/api/client";
+import { formatDateTime } from "@/lib/date-time";
 import type {
   HarnessCapabilitiesResponse,
   HarnessLocalSkillDiscoveryResponse,
@@ -103,6 +104,35 @@ function CheckboxField({
       onChange={(event) => onChange(event.target.checked)}
       label={label}
     />
+  );
+}
+
+function ArtifactDigest({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  return (
+    <div className="flex min-w-0 items-center gap-1.5 font-mono text-[9px] text-neutral-500">
+      <code title={value}>{value.slice(0, 12)}</code>
+      <Button
+        aria-label={`Copy full artifact digest ${value}`}
+        className="min-h-6"
+        onClick={() => void copy()}
+        size="sm"
+        type="button"
+        variant="ghost"
+      >
+        {copied ? "Copied" : "Copy"}
+      </Button>
+    </div>
   );
 }
 
@@ -891,9 +921,7 @@ export function ProfileEditor({
                             discovery={deploymentSkills}
                           />
                         </div>
-                        <div className="truncate font-mono text-[9px] text-neutral-500">
-                          {skill.artifactHash}
-                        </div>
+                        <ArtifactDigest value={skill.artifactHash} />
                       </div>
                     );
                   })
@@ -956,7 +984,7 @@ export function ProfileEditor({
                       )}
                     </div>
                     <div className="mt-1 font-body text-[10px] text-neutral-500">
-                      {new Date(version.createdAt).toLocaleString()}
+                      {formatDateTime(version.createdAt)}
                     </div>
                     <div className="mt-1 truncate font-mono text-[9px] text-neutral-500">
                       {version.manifestHash}
@@ -1782,9 +1810,7 @@ export function ProfileEditor({
                       <div className="font-mono text-[11px] font-semibold text-coal">
                         {skill.name}
                       </div>
-                      <div className="truncate font-mono text-[9px] text-neutral-500">
-                        {skill.artifactHash}
-                      </div>
+                      <ArtifactDigest value={skill.artifactHash} />
                       {source && (
                         <div className="mt-1 font-mono text-[9px] text-neutral-500">
                           {skillSourceLabel(source)}
@@ -1926,7 +1952,7 @@ export function ProfileEditor({
                     {version.manifestHash}
                   </span>
                   <span className="text-neutral-500">
-                    {new Date(version.createdAt).toLocaleString()}
+                    {formatDateTime(version.createdAt)}
                   </span>
                   {version.restoredFromVersion !== null && (
                     <CkChip>restored from v{version.restoredFromVersion}</CkChip>

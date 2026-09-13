@@ -201,6 +201,15 @@ test("a row carries the first line of the description and the checks version, no
   assert.match(rendered, /imported/);
 });
 
+test("a repository row uses the catalog's stored path as its name", (t) => {
+  const root = render(t, {
+    repositories: [entry({ path: "blazity/ai-workflow-demo", displayName: "Blazity/ai-workflow-demo" })],
+  });
+  const link = root.findByProps({ href: "/repositories/1" });
+
+  assert.equal(text(link).trim(), "blazity/ai-workflow-demo");
+});
+
 test("a repository nobody has configured says so instead of showing version zero", (t) => {
   const root = render(t, {
     repositories: [entry({ profileVersion: 0, checksVersion: 0, description: "" })],

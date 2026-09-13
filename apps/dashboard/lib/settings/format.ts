@@ -9,6 +9,7 @@ import {
   type SettingsInFlightRule,
   type SettingsSource,
 } from "@shared/contracts";
+import { formatDateTime } from "../date-time";
 
 /**
  * Words that are not sentence case.
@@ -66,10 +67,9 @@ export function settingLabel(key: string): string {
  * sees what the first execution saw.
  */
 export const SETTINGS_CADENCE_NOTICE =
-  "Values saved here are stored and read: the worker loads a settings snapshot " +
-  "per request, cron tick and MCP call. When a change reaches work already " +
-  "running is per setting, and each row says which it is, immediately or on the " +
-  "next run.";
+  "Values saved here are stored and read by the worker per request, cron " +
+  "tick and MCP call. Each setting says whether a change applies immediately " +
+  "or to the next run.";
 
 /** The label above a field's resolved value. Deliberately not "in force": what
  *  a run already under way uses is the snapshot it started with, which the
@@ -117,12 +117,7 @@ export function appliesToNote(rule: SettingsInFlightRule, requiresRedeploy = fal
  * way they would on a server rendered date.
  */
 export function formatSettingTimestamp(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("en", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(date);
+  return formatDateTime(value);
 }
 
 /** Who made a recorded change. The store keeps the user id, not a display name,

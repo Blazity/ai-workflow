@@ -34,6 +34,7 @@ import type {
   WorkflowsResponse,
 } from "@shared/contracts";
 import { Button } from "@/components/ui/button";
+import { formatAgeMinutes } from "@/lib/date-time";
 
 const EM_DASH = "\u2014";
 
@@ -320,7 +321,7 @@ export function AwaitingInputPanel({
                   {r.questionFor && <CkChip tone="warn">@{r.questionFor}</CkChip>}
                   {typeof r.askedAtMin === "number" && (
                     <span className="ml-auto font-mono text-[11px] text-neutral-500 whitespace-nowrap">
-                      {r.askedAtMin}m ago
+                      {formatAgeMinutes(r.askedAtMin)}
                     </span>
                   )}
                 </div>
@@ -418,7 +419,7 @@ export function OverviewScreen({
     evalData.available === true ? evalData : null;
 
   return (
-    <div className="flex flex-col gap-5 px-4 pb-8 pt-5 lg:px-6">
+    <div className="flex flex-col gap-5 px-4 pb-8 pt-5 lg:px-6 [&_a]:min-h-6">
       {/* Spotlight ticket search (⌘K) + global window control */}
       <div className="flex items-center justify-between gap-4">
         <SpotlightTrigger />
@@ -603,7 +604,7 @@ export function OverviewScreen({
                       {runModelLabel(r.model)}
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-[11px] text-neutral-500">
-                      {r.startedAtMin}m ago
+                      {formatAgeMinutes(r.startedAtMin)}
                     </td>
                     <td className="px-4 py-3 text-right font-mono font-medium">
                       {r.duration === null ? EM_DASH : `${r.duration}s`}

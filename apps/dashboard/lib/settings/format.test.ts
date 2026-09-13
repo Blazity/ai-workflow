@@ -12,6 +12,7 @@ import {
   sourceHint,
   sourceLabel,
 } from "./format";
+import { formatDateTime } from "../date-time";
 
 test("settingLabel converts MAX_CONCURRENT_AGENTS to Max concurrent agents", () => {
   assert.equal(settingLabel("MAX_CONCURRENT_AGENTS"), "Max concurrent agents");
@@ -107,7 +108,7 @@ test("appliesToNote sends a key the worker reads from its environment to the dep
 test("the standing notice states the read cadence instead of claiming the worker ignores the store", () => {
   assert.match(SETTINGS_CADENCE_NOTICE, /stored and read/);
   assert.match(SETTINGS_CADENCE_NOTICE, /per request, cron tick and MCP call/);
-  assert.match(SETTINGS_CADENCE_NOTICE, /immediately or on the next run/);
+  assert.match(SETTINGS_CADENCE_NOTICE, /applies immediately or to the next run/);
   // The sentence this banner used to carry, contradicted by stage B1.
   assert.doesNotMatch(SETTINGS_CADENCE_NOTICE, /still reads most settings from its environment/);
   assert.doesNotMatch(SETTINGS_CADENCE_NOTICE, /consumers stages/);
@@ -124,9 +125,7 @@ test("formatSettingTimestamp leaves an unparseable value alone", () => {
 test("formatSettingTimestamp rewrites a valid ISO timestamp", () => {
   const iso = "2026-09-12T08:30:00.000Z";
   const formatted = formatSettingTimestamp(iso);
-  assert.notEqual(formatted, iso);
-  assert.ok(formatted.length > 0);
-  assert.match(formatted, /2026/);
+  assert.equal(formatted, formatDateTime(iso));
 });
 
 test("formatSettingActor names the seed migration and otherwise says which user", () => {

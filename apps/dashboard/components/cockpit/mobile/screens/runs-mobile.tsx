@@ -3,7 +3,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CkStatusPill, CkChip, TicketLink, PRLinks } from "@/components/ui";
+import { CkStatusPill, CkChip, CkPagination, TicketLink, PRLinks } from "@/components/ui";
 import { useCockpit } from "@/components/cockpit/context";
 import { WindowSelector } from "@/components/cockpit/controls";
 import { windowPhrase, type TimeWindow } from "@/lib/window";
@@ -12,15 +12,15 @@ import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
 import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
 import type { RunsResponse } from "@shared/contracts";
 import { Button } from "@/components/ui/button";
+import { formatAgeMinutes } from "@/lib/date-time";
+import {
+  RUN_STATUS_FILTERS,
+  runIdentity,
+  runStatusHref,
+  type RunStatusFilter,
+} from "@/lib/runs-display";
 
-const FILTERS = [
-  { id: "all", label: "All" },
-  { id: "success", label: "Success" },
-  { id: "running", label: "Running" },
-  { id: "awaiting", label: "Awaiting input" },
-  { id: "failed", label: "Failed" },
-  { id: "blocked", label: "Blocked" },
-];
+const PAGE_SIZE = 25;
 
 const EM_DASH = "\u2014";
 
@@ -37,11 +37,13 @@ export function RunsMobileScreen({
   data,
   window,
   q,
+  status = "all",
   canCancel = false,
 }: {
   data: RunsResponse;
   window: TimeWindow;
   q: string;
+  status?: RunStatusFilter;
   /** Owners and admins only, mirroring the worker's dispatch-role gate on the
    *  cancel endpoint. */
   canCancel?: boolean;
@@ -63,11 +65,26 @@ export function RunsMobileScreen({
       ? "live"
       : "idle",
   });
-  const [filter, setFilter] = useState("all");
+  const [filter, setFilter] = useState<RunStatusFilter>(status);
+  const [page, setPage] = useState(0);
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<Record<string, CancelFeedback>>({});
-  const rows = filter === "all" ? shownData.rows : shownData.rows.filter((r) => r.status === filter);
+  useEffect(() => {
+    setFilter(status);
+    setPage(0);
+  }, [status]);
+  const filtered = filter === "all" ? shownData.rows : shownData.rows.filter((r) => r.status === filter);
+  const headingCount = filter === "all" ? shownData.total : shownData.counts[filter];
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const start = page * PAGE_SIZE;
+  const rows = filtered.slice(start, start + PAGE_SIZE);
+
+  function changeFilter(next: RunStatusFilter) {
+    setFilter(next);
+    setPage(0);
+    router.push(runStatusHref({ status: next, window, q }), { scroll: false });
+  }
 
   async function handleCancel(runId: string) {
     setBusyId(runId);
@@ -116,7 +133,7 @@ export function RunsMobileScreen({
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">Workflow runs</div>
-          <h2 className="font-display text-xl font-medium text-neutral-900 m-0">{shownData.total} runs · {windowPhrase(window)}</h2>
+          <h2 className="font-display text-xl font-medium text-neutral-900 m-0">{headingCount} runs · {windowPhrase(window)}</h2>
         </div>
         <div className="flex flex-col items-end gap-2">
           <WindowSelector value={window} size="sm" />
@@ -130,10 +147,10 @@ export function RunsMobileScreen({
 
       {/* Horizontally scrollable filter chips */}
       <div className="flex gap-1.5 overflow-x-auto -mx-4 px-4 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {FILTERS.map((f) => (
+        {RUN_STATUS_FILTERS.map((f) => (
           <Button
             key={f.id}
-            onClick={() => setFilter(f.id)}
+            onClick={() => changeFilter(f.id)}
             aria-pressed={filter === f.id}
             className="flex-none"
             variant={filter === f.id ? "selected" : "secondary"}
@@ -152,6 +169,7 @@ export function RunsMobileScreen({
         {rows.map((r) => {
           const showCancel = canCancel && r.status === "running";
           const rowFeedback = feedback[r.id];
+          const identity = runIdentity(r);
           return (
           // A real button (Cancel, below) cannot nest inside another button,
           // so the row itself is a div playing the button role,
@@ -160,7 +178,7 @@ export function RunsMobileScreen({
             key={r.id}
             role="button"
             tabIndex={0}
-            aria-label={`Open run ${r.id}: ${r.ticketTitle}`}
+            aria-label={`Open run ${r.id}: ${identity.primary}`}
             onClick={() => openRun(r)}
             onKeyDown={(event) => {
               // Ignore keydowns bubbled up from the nested Cancel control,
@@ -187,7 +205,7 @@ export function RunsMobileScreen({
                   Cancel
                 </Button>
               ) : null}
-              <span className="ml-auto font-mono text-[10px] text-neutral-500">{r.startedAtMin}m ago</span>
+              <span className="ml-auto font-mono text-[10px] text-neutral-500">{formatAgeMinutes(r.startedAtMin)}</span>
             </div>
             {showCancel && confirmId === r.id ? (
               <div
@@ -208,11 +226,12 @@ export function RunsMobileScreen({
                 {rowFeedback.message}
               </div>
             ) : null}
-            <div className="font-semibold text-neutral-900 text-[14px] mt-1.5 overflow-hidden text-ellipsis whitespace-nowrap">{r.ticketTitle}</div>
-            <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-              <TicketLink ticket={r.ticket} url={r.ticketUrl} />
+            <div className="font-semibold text-neutral-900 text-[14px] mt-1.5 overflow-hidden text-ellipsis whitespace-nowrap">{identity.primary}</div>
+            <div className="flex items-center gap-1.5 mt-1.5 flex-wrap [&_a]:min-h-6">
+              {identity.showTicketLink && <TicketLink ticket={r.ticket} url={r.ticketUrl} />}
               <PRLinks run={r} />
               <CkChip>{r.workflowName}</CkChip>
+              {identity.showRunIdMeta && <span className="font-mono text-[10px] text-neutral-500">{r.id}</span>}
             </div>
             <div className="grid grid-cols-2 gap-2 mt-3 pt-2.5 border-t border-neutral-200 font-mono">
               <Metric label="Dur" value={r.duration === null ? EM_DASH : `${r.duration}s`} />
@@ -222,6 +241,14 @@ export function RunsMobileScreen({
           );
         })}
       </div>
+      <CkPagination
+        page={page}
+        totalPages={totalPages}
+        total={filtered.length}
+        start={start}
+        shown={rows.length}
+        onChange={setPage}
+      />
     </div>
   );
 }

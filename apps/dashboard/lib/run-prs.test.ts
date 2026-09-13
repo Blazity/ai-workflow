@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { runPullRequests } from "./run-prs";
+import { primaryPullRequestLabel, runPullRequests } from "./run-prs";
 
 test("a multi-repo run returns every PR/MR in stored order", () => {
   assert.deepEqual(
@@ -84,5 +84,21 @@ test("a run with only half a legacy ref is not rendered as a broken link", () =>
   assert.deepEqual(
     runPullRequests({ prs: null, prUrl: "https://github.com/a/b/pull/4", prNumber: null }),
     [],
+  );
+});
+
+test("the primary reference uses the provider's noun and punctuation", () => {
+  assert.equal(
+    primaryPullRequestLabel({
+      prs: [{
+        provider: "gitlab",
+        repoPath: "acme/app",
+        id: 51,
+        url: "https://gitlab.example/acme/app/-/merge_requests/51",
+      }],
+      prUrl: "https://gitlab.example/acme/app/-/merge_requests/51",
+      prNumber: 51,
+    }),
+    "MR !51",
   );
 });

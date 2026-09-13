@@ -12,9 +12,9 @@ import type {
 } from "@shared/contracts";
 import { apiClient } from "@/lib/api/client";
 import { SetupOverview } from "@/app/(cockpit)/settings/setup-overview";
-import { SettingsCadenceNotice } from "@/app/(cockpit)/settings/settings-cadence-notice";
 import { CkChip, type ChipTone } from "@/components/ui";
 import { Button } from "@/components/ui/button";
+import { formatDateTime, isOlderThanHours } from "@/lib/date-time";
 
 const GROUPS: Array<{
   id: SystemHealthGroup;
@@ -95,6 +95,7 @@ const STATUS: Record<
 };
 
 const SCAN_TIMEOUT_MS = 15_000;
+const STALE_SCAN_AFTER_HOURS = 24;
 
 /**
  * Nothing is fetched on mount and nothing polls: the only request this screen
@@ -120,6 +121,8 @@ export function HealthScreen({
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const scanInFlight = useRef(false);
+  const scanIsStale =
+    hydrated && data !== null && isOlderThanHours(data.generatedAt, STALE_SCAN_AFTER_HOURS);
 
   const scan = async () => {
     if (scanInFlight.current) return;
@@ -173,16 +176,16 @@ export function HealthScreen({
             System health
           </h1>
           <p className="mt-1 max-w-[650px] font-body text-[13px] leading-5 text-neutral-600">
-            Shows the last scan; nothing runs in the background. Press Scan to verify every integration again. Secret values never appear here.
+            Review the last recorded scan, then press Scan to verify every integration again; secret values never appear here.
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-3">
           {data && (
             <div className="text-right font-mono text-[10px] leading-4 text-neutral-500">
               <time dateTime={data.generatedAt}>
-                Scanned {hydrated ? formatScanTime(data.generatedAt) : ""}
+                Scanned {hydrated ? formatDateTime(data.generatedAt) : ""}
               </time>
-              <div>{summaryLine(data)}</div>
+              <HealthSummary data={data} />
             </div>
           )}
           <Button
@@ -202,9 +205,14 @@ export function HealthScreen({
         </div>
       )}
 
+      {scanIsStale && data ? (
+        <div role="note" className="mb-5 rounded-sm border border-orange-300 bg-orange-100 px-3 py-2 font-body text-[12px] text-neutral-800">
+          This scan is older than 24 hours. Run a new scan before treating these results as current.
+        </div>
+      ) : null}
+
       {settings.length > 0 && (
-        <div className="mb-5 flex flex-col gap-2">
-          <SettingsCadenceNotice />
+        <div className="mb-5">
           <SetupOverview
             settings={settings}
             scan={data}
@@ -263,16 +271,22 @@ export function HealthScreen({
   );
 }
 
-function summaryLine(data: SystemHealthResponse): string {
+function HealthSummary({ data }: { data: SystemHealthResponse }) {
   const parts = [
-    [data.summary.checksLive, "live"],
-    [data.summary.checksDown, "down"],
-    [data.summary.checksDegraded, "degraded"],
+    [data.summary.checksLive, "live", ""],
+    [data.summary.checksDown, "down", "text-fail-fg"],
+    [data.summary.checksDegraded, "degraded", ""],
   ] as const;
-  return parts
-    .filter(([count]) => count > 0)
-    .map(([count, label]) => `${count} ${label}`)
-    .join(" · ");
+  const visible = parts.filter(([count]) => count > 0);
+  return (
+    <div>
+      {visible.map(([count, label, className], index) => (
+        <span key={label} className={className || undefined}>
+          {`${index > 0 ? " · " : ""}${count} ${label}`}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 function HealthRow({
@@ -428,28 +442,11 @@ function evidenceLabel(check: SystemHealthCheck): string {
   };
   const timestamp = check.observedAt ?? check.checkedAt;
   return timestamp
-    ? `${source[check.evidenceSource]} · ${formatTime(timestamp)}`
+    ? `${source[check.evidenceSource]} · ${formatDateTime(timestamp)}`
     : source[check.evidenceSource];
-}
-
-function formatTime(value: string): string {
-  return new Intl.DateTimeFormat("en", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(new Date(value));
 }
 
 /** Subscribes to nothing: the store only tells server and client renders apart. */
 function subscribeNever(): () => void {
   return () => {};
-}
-
-/** Local date and time of the scan; formatted only after hydration so the
- * server (UTC) and the browser never disagree on the rendered text. */
-function formatScanTime(value: string): string {
-  return new Intl.DateTimeFormat("en", {
-    dateStyle: "medium",
-    timeStyle: "medium",
-  }).format(new Date(value));
 }

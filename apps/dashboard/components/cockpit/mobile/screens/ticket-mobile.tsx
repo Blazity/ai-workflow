@@ -9,6 +9,7 @@ import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
 import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
 import { Button } from "@/components/ui/button";
 import { NavItem } from "@/components/ui/nav-item";
+import { formatAgeMinutes } from "@/lib/date-time";
 
 const EM_DASH = "\u2014";
 
@@ -91,9 +92,9 @@ export function TicketMobileScreen({
             <span className="flex w-full flex-col p-3.5 text-left">
             <div className="flex items-center gap-2">
               <CkStatusPill status={r.status} />
-              <span className="ml-auto font-mono text-[10px] text-neutral-500">{r.startedAtMin}m ago</span>
+              <span className="ml-auto font-mono text-[10px] text-neutral-500">{formatAgeMinutes(r.startedAtMin)}</span>
             </div>
-            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+            <div className="flex items-center gap-1.5 mt-2 flex-wrap [&_a]:min-h-6">
               <CkChip>{r.workflowName}</CkChip>
               <PRLinks run={r} />
             </div>
