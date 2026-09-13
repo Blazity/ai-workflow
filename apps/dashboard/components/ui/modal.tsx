@@ -46,9 +46,51 @@ const sizeClasses = {
   lg: "max-w-[1240px]",
 } as const;
 
+interface InertMainState {
+  count: number;
+  hadAttribute: boolean;
+}
+
+const inertMainStates = new WeakMap<HTMLElement, InertMainState>();
+
+function makeCockpitMainInert(): () => void {
+  const main = document.querySelector<HTMLElement>("[data-cockpit-main]");
+  if (!main) {
+    return () => {
+      // This modal is outside the cockpit shell, so there is no page region to restore.
+    };
+  }
+  const current = inertMainStates.get(main);
+  if (current) {
+    current.count += 1;
+  } else {
+    inertMainStates.set(main, {
+      count: 1,
+      hadAttribute: main.hasAttribute("inert"),
+    });
+    main.setAttribute("inert", "");
+  }
+  return () => {
+    const state = inertMainStates.get(main);
+    if (!state) return;
+    state.count -= 1;
+    if (state.count > 0) return;
+    inertMainStates.delete(main);
+    if (!state.hadAttribute) main.removeAttribute("inert");
+  };
+}
+
 function focusableElements(dialog: HTMLElement | null) {
   if (!dialog) return [];
   return Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector));
+}
+
+function isTopmostDialog(dialog: HTMLElement | null): dialog is HTMLElement {
+  if (!dialog) return false;
+  const dialogs = Array.from(
+    document.querySelectorAll<HTMLElement>('[role="dialog"][data-state="open"]'),
+  );
+  return dialogs.at(-1) === dialog;
 }
 
 export function Modal({
@@ -102,29 +144,36 @@ export function Modal({
       : null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    const frame = requestAnimationFrame(() => {
+    const restoreCockpitMain = makeCockpitMainInert();
+    const focusInside = (preferLast = false) => {
       const dialog = dialogRef.current;
-      const marked = dialog?.querySelector<HTMLElement>("[data-dialog-initial-focus]");
-      const active = document.activeElement;
-      const focusedInside =
-        active instanceof HTMLElement && dialog?.contains(active) ? active : null;
+      if (!isTopmostDialog(dialog)) return;
+      const marked = dialog.querySelector<HTMLElement>("[data-dialog-initial-focus]");
+      const focusable = focusableElements(dialog);
       (
         initialFocusRef?.current ??
         marked ??
-        focusedInside ??
-        focusableElements(dialog)[0] ??
+        (preferLast ? focusable.at(-1) : focusable[0]) ??
         dialog
       )?.focus();
+    };
+    const frame = requestAnimationFrame(() => {
+      const dialog = dialogRef.current;
+      const active = document.activeElement;
+      const focusedInside =
+        active instanceof HTMLElement && dialog?.contains(active) ? active : null;
+      if (!focusedInside) focusInside();
     });
 
     function onKeyDown(event: KeyboardEvent) {
+      const dialog = dialogRef.current;
+      if (!isTopmostDialog(dialog)) return;
       if (event.key === "Escape" && dismissible && !event.defaultPrevented) {
         event.preventDefault();
         onCloseRef.current();
         return;
       }
       if (event.key !== "Tab") return;
-      const dialog = dialogRef.current;
       const focusable = focusableElements(dialog);
       if (focusable.length === 0) {
         event.preventDefault();
@@ -134,7 +183,10 @@ export function Modal({
       const first = focusable[0];
       const last = focusable.at(-1);
       if (!last) return;
-      if (event.shiftKey && document.activeElement === first) {
+      if (!dialog.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
         last.focus();
       } else if (!event.shiftKey && document.activeElement === last) {
@@ -143,11 +195,26 @@ export function Modal({
       }
     }
 
+    function onFocusIn(event: FocusEvent) {
+      const dialog = dialogRef.current;
+      if (
+        !isTopmostDialog(dialog) ||
+        !(event.target instanceof Node) ||
+        dialog.contains(event.target)
+      ) {
+        return;
+      }
+      focusInside();
+    }
+
     window.addEventListener("keydown", onKeyDown);
+    document.addEventListener("focusin", onFocusIn, true);
     return () => {
       cancelAnimationFrame(frame);
       window.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("focusin", onFocusIn, true);
       document.body.style.overflow = previousOverflow;
+      restoreCockpitMain();
       const previous = previousFocusRef.current;
       if (previous && document.contains(previous)) previous.focus();
     };
@@ -188,10 +255,13 @@ export function Modal({
     >
       <div
         aria-hidden="true"
+        data-modal-overlay=""
         className="absolute inset-0 bg-coal/40 opacity-100 pointer-events-auto transition-[opacity] duration-[var(--motion-base)] ease-emphasized data-[state=closed]:opacity-0 data-[state=closed]:ease-exit"
         data-state={state}
         onMouseDown={(event) => {
-          if (dismissible && event.target === event.currentTarget) onClose();
+          if (dismissible && event.target === event.currentTarget) {
+            onCloseRef.current();
+          }
         }}
       />
       <section

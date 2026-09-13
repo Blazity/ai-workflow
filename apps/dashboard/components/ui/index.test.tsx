@@ -46,11 +46,16 @@ test("primitive index reexports the canonical chip and status dot", () => {
   const html = renderToStaticMarkup(
     <div>
       <CkChip tone="success">Success</CkChip>
+      <CkChip tone="mariner">Built-in</CkChip>
       <CkDot color="var(--color-success)" />
     </div>,
   );
   assert.match(html, /Success/);
   assert.match(html, /background:var\(--color-success\)/);
+  assert.match(html, /border-mariner-200/);
+  assert.match(html, /bg-mariner-100/);
+  assert.match(html, /text-mariner/);
+  assert.doesNotMatch(html, /bg-mariner text-white/);
 });
 
 test("primitive index exposes every runtime component", () => {

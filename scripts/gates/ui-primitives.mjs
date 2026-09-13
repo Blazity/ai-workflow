@@ -15,6 +15,9 @@ const sourceRoots = ["apps/dashboard/components", "apps/dashboard/app"];
 const sourceExtension = /\.tsx?$/u;
 const testFile = /\.test\.tsx$/u;
 const primitiveRoot = "apps/dashboard/components/ui/";
+const primitiveOwnerPaths = new Set([
+  "apps/dashboard/components/ui.tsx",
+]);
 // motion.ts owns the JavaScript mirrors of the CSS duration tokens, and its
 // test pins those values. These are the only paths allowed to hold the numbers.
 const motionTokenOwnerPaths = new Set([
@@ -33,6 +36,11 @@ const inlineMotionProperties = new Set([
   "transitionDuration",
 ]);
 const selfTestFixtures = [
+  {
+    file: "plain-button-without-focus.txt",
+    path: "apps/dashboard/components/cockpit/plain-button-without-focus.tsx",
+    rule: "button-focus",
+  },
   {
     file: "reversed-ternary.txt",
     path: "apps/dashboard/components/cockpit/reversed-ternary.tsx",
@@ -215,6 +223,38 @@ function selectedPrimaryFindings(path, source, sourceFile) {
   return findings;
 }
 
+function buttonFocusFindings(path, source, sourceFile) {
+  if (path.startsWith(primitiveRoot) || primitiveOwnerPaths.has(path)) return [];
+  const findings = [];
+  const visit = (node) => {
+    if (
+      (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) &&
+      node.tagName.getText(sourceFile) === "button"
+    ) {
+      const className = node.attributes.properties.find(
+        (attribute) =>
+          ts.isJsxAttribute(attribute) &&
+          ts.isIdentifier(attribute.name) &&
+          attribute.name.text === "className",
+      );
+      if (!className?.initializer?.getText(sourceFile).includes("focus-visible:")) {
+        findings.push(
+          finding(
+            path,
+            source,
+            node.getStart(sourceFile),
+            "button-focus",
+            "plain <button> must carry the shared focus-visible ring classes",
+          ),
+        );
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return findings;
+}
+
 function findingsForSource(path, source) {
   const sourceFile = ts.createSourceFile(
     path,
@@ -242,6 +282,7 @@ function findingsForSource(path, source) {
     ...literalMotionStyleFindings(path, source, sourceFile),
     ...timeoutFindings(path, source),
     ...selectedPrimaryFindings(path, source, sourceFile),
+    ...buttonFocusFindings(path, source, sourceFile),
   ];
 }
 
@@ -263,13 +304,13 @@ function validateAllowlist(entries) {
       !Number.isInteger(entry.line) ||
       entry.line < 1 ||
       typeof entry.rule !== "string" ||
-      entry.rule !== "native-control" ||
+      !["native-control", "button-focus"].includes(entry.rule) ||
       typeof entry.reason !== "string" ||
       !entry.reason.trim() ||
       entry.reason.includes("\n")
     ) {
       throw new TypeError(
-        'Each UI primitives allowlist entry needs path, line, rule "native-control", and a one-line reason.',
+        'Each UI primitives allowlist entry needs path, line, rule "native-control" or "button-focus", and a one-line reason.',
       );
     }
   }

@@ -6,6 +6,7 @@ import { pullRequestRef, pullRequestRepoLabels } from "@shared/contracts";
 import type { RunPullRequest } from "@shared/contracts";
 import { runPullRequests } from "@/lib/run-prs";
 import type { RunStatus } from "@/lib/types";
+import { Button } from "./ui/button";
 
 export * from "./ui/button";
 export * from "./ui/checkbox";
@@ -87,7 +88,7 @@ export function CkChip({
     warn: "bg-[#FFF4CC] text-[#7A5A00]",
     blocked: "bg-app-bg text-neutral-700",
     awaiting: "bg-[#FFEFE9] text-fail-fg",
-    mariner: "bg-mariner text-white",
+    mariner: "border border-mariner-200 bg-mariner-100 text-mariner",
     orange: "bg-burnt-orange text-white",
     coal: "bg-coal text-white",
   };
@@ -213,23 +214,22 @@ export function CkTabs({
   onChange: (id: string) => void;
   size?: "sm" | "md";
 }) {
-  const sizeClassName = size === "sm" ? "py-1 px-2" : "py-1.5 px-3";
   return (
     <div className="inline-flex gap-0.5 p-[3px] bg-app-bg rounded-sm border border-neutral-200" data-size={size}>
       {tabs.map((t) => {
         const isActive = active === t.id;
         return (
-          <button
+          <Button
             key={t.id}
             type="button"
+            variant={isActive ? "selected" : "ghost"}
+            size={size}
             aria-pressed={isActive}
             onClick={() => onChange(t.id)}
-            className={`appearance-none border-none cursor-pointer ${sizeClassName} rounded-[3px] font-mono font-medium text-[11px] uppercase tracking-[-0.01em] transition-[color,background-color,box-shadow,transform] duration-[var(--motion-base)] ease-standard ${
-              isActive ? "bg-panel shadow-[0_1px_2px_rgba(24,27,32,0.06)] text-coal" : "bg-transparent text-neutral-700"
-            }`}
+            className="uppercase tracking-[0.04em]"
           >
             {t.label}
-          </button>
+          </Button>
         );
       })}
     </div>
@@ -284,7 +284,7 @@ export function CkPagination({
   const labelStart = total === 0 ? 0 : Math.min(start + 1, total);
   const labelEnd = total === 0 ? 0 : Math.min(start + shown, total);
   const btnClass = (disabled: boolean) =>
-    `appearance-none border border-neutral-200 py-[5px] px-2.5 rounded-[3px] font-mono text-[11px] font-medium uppercase tracking-[0.04em] inline-flex items-center gap-1 transition-[color,background-color,border-color,opacity,transform] duration-[var(--motion-fast)] ${
+    `appearance-none border border-neutral-200 py-[5px] px-2.5 rounded-[3px] font-mono text-[11px] font-medium uppercase tracking-[0.04em] inline-flex items-center gap-1 transition-[color,background-color,border-color,opacity,transform] duration-[var(--motion-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner focus-visible:ring-offset-1 ${
       disabled ? "bg-off-white text-[#C7CBD0] cursor-default" : "bg-panel text-coal cursor-pointer"
     }`;
   const pages: (number | "…")[] = [];
@@ -309,7 +309,7 @@ export function CkPagination({
               <button
                 key={p}
                 onClick={() => onChange(p)}
-                className={`appearance-none cursor-pointer min-w-[26px] py-[5px] px-[7px] rounded-[3px] font-mono text-[11px] font-medium transition-[color,background-color,border-color,transform] duration-[var(--motion-fast)] border ${
+                className={`appearance-none cursor-pointer min-w-[26px] py-[5px] px-[7px] rounded-[3px] font-mono text-[11px] font-medium transition-[color,background-color,border-color,transform] duration-[var(--motion-fast)] border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner focus-visible:ring-offset-1 ${
                   p === page ? "border-coal bg-coal text-white" : "border-neutral-200 bg-panel text-neutral-800"
                 }`}
               >
@@ -334,7 +334,7 @@ export function TicketLink({ ticket, url, size = "sm" }: { ticket: string; url: 
       target="_blank"
       rel="noopener"
       onClick={(e) => e.stopPropagation()}
-      className={`inline-flex items-center gap-1 border border-neutral-200 rounded-xs bg-panel text-mariner no-underline font-mono font-medium tracking-[0.02em] whitespace-nowrap transition-[color,background-color,border-color,transform] duration-[var(--motion-fast)] hover:bg-mariner-100 hover:border-mariner ${
+      className={`inline-flex items-center gap-1 border border-neutral-200 rounded-xs bg-panel text-mariner no-underline font-mono font-medium tracking-[0.02em] whitespace-nowrap transition-[color,background-color,border-color,transform] duration-[var(--motion-fast)] hover:bg-mariner-100 hover:border-mariner focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner focus-visible:ring-offset-1 ${
         size === "sm" ? "py-0.5 px-1.5 text-[10px]" : "py-[3px] px-2 text-[11px]"
       }`}
     >
@@ -362,7 +362,7 @@ function PRLink({
       rel="noopener"
       onClick={(e) => e.stopPropagation()}
       title={pr.repoPath || undefined}
-      className={`inline-flex items-center gap-1 border border-neutral-200 rounded-xs bg-coal text-white no-underline font-mono font-medium tracking-[0.02em] whitespace-nowrap transition-[color,background-color,border-color,transform] duration-[var(--motion-fast)] hover:bg-neutral-800 ${
+      className={`inline-flex items-center gap-1 border border-neutral-200 rounded-xs bg-coal text-white no-underline font-mono font-medium tracking-[0.02em] whitespace-nowrap transition-[color,background-color,border-color,transform] duration-[var(--motion-fast)] hover:bg-neutral-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner focus-visible:ring-offset-1 ${
         size === "sm" ? "py-0.5 px-1.5 text-[10px]" : "py-[3px] px-2 text-[11px]"
       }`}
     >

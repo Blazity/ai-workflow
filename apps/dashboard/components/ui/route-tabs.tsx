@@ -49,7 +49,7 @@ export function RouteTabs<T extends string>({
               "hover:bg-app-bg hover:text-neutral-900 active:scale-[0.98]",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner focus-visible:ring-offset-1",
               "disabled:cursor-default disabled:opacity-40 disabled:active:scale-100",
-              selected ? "border-b-mariner text-coal" : "border-b-transparent",
+              selected ? "border-b-mariner text-mariner" : "border-b-transparent",
             ].join(" ")}
           >
             {tab.label}

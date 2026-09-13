@@ -166,6 +166,7 @@ export function SettingsGroupForm({
   const patch = buildSettingsPatch(saved, draft);
   const changedCount = Object.keys(patch).length;
   const dirty = changedCount > 0;
+  const saveVariant = dirty ? "primary" : "secondary";
 
   // The shell asks the module below before every router.push, and the browser
   // asks the listener below before a tab close. Back and forward are left to
@@ -336,6 +337,7 @@ export function SettingsGroupForm({
               Discard
             </Button>
             <Button
+              variant={saveVariant}
               onClick={save}
               disabled={!dirty || saving || reasonMissing}
               loading={saving}

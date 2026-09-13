@@ -303,10 +303,8 @@ const FlowNode = React.memo(function FlowNode({
         width: NODE_W, height: NODE_H,
       }}
     >
-      <Button
+      <button
         type="button"
-        variant="ghost"
-        size="sm"
         onPointerDown={(event) => {
           if (event.button === 2) {
             event.stopPropagation();
@@ -335,10 +333,10 @@ const FlowNode = React.memo(function FlowNode({
           invalid ? validationDescriptionId(node.id) : undefined
         }
         data-canvas-node-selector={node.id}
-        className="absolute inset-0 z-[1] h-auto w-auto justify-start p-0 text-left"
+        className="absolute inset-0 z-[1] appearance-none rounded-[3px] border-0 bg-transparent p-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner focus-visible:ring-offset-1"
       >
         <span className="sr-only">Select {node.name || cat.label}</span>
-      </Button>
+      </button>
       {canRun && (
         <IconButton
           type="button"
@@ -2082,6 +2080,7 @@ export function FlowEditor({
           )}
           {canEdit && (
             <Button
+              variant="secondary"
               onClick={onSave}
               disabled={!saveEnabled || saving}
             >{saving ? "Saving…" : saveLabel}</Button>
