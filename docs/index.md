@@ -73,6 +73,7 @@ each `apps/*/AGENTS.md`, `packages/AGENTS.md`, and `README.md`, `AGENTS.md`,
 | Document | What it is for |
 |---|---|
 | [qa/repository-catalog-matrix.md](./qa/repository-catalog-matrix.md) | The repository catalog's 143 scenarios and the automated test holding each one, with the rows nobody pins yet |
+| [qa/settings-enforcement-matrix.md](./qa/settings-enforcement-matrix.md) | Production evidence for settings resolution, run-start freezing, capacity enforcement, feature flags, and MCP limits |
 
 ## Research
 

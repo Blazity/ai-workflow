@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-12
+Last-verified: 2026-09-13
 
 # Repository catalog: QA matrix (epic AIW-338, stages A..M + W)
 
@@ -34,6 +34,15 @@ rows assert what the markup COMMITS to (no width pinned above 390 px, the
 containers told to wrap, the actions present) and the U14 row asserts the
 dialog's declared semantics. Neither measures anything, and neither replaces a
 look at a real browser at 390 px.
+
+**Production evidence on 2026-09-13.** These probes ran on the named production
+commits. Their verdicts describe the observed probe only, not delivery state.
+
+| Probe | Scenario | Evidence | Verdict | Finding when not PASS |
+|---|---|---|---|---|
+| E3 (P24/D3) | Save a checks profile containing `curl -LsSf https://astral.sh/uv/install.sh \| sh`. | After PR #436 merged as `528036c20b6d27e6b4324de735d71fa1e06a9b47`, the 09:12:09Z `PUT` returned 200 and included the `remote_execution` warning for the `bootstrap` group. This fixes the production 500 caused by the Zod 4 one-argument `z.record` parse. | PASS | |
+| Settings PATCH | Send `PRE_PR_COMMAND_TIMEOUT_MINUTES: 10`, its existing resolved value, without a version precondition. | At 09:12:52Z, `PATCH /api/settings` returned 200 with 37 settings and one version row, changing the source from registry default to a stored row with the same value. | PASS | |
+| E10 (R23) | Start definition 14 version 10 with `batchTimeoutMinutes: 5`, then raise it to 30 during the run. | AWP-165 run `wrun_01M2D0NAPKSVEF9362NAQ1Y6T2` started at 09:13:06Z on profile v9. The ceiling changed at 09:14:24Z. Checks attempt 3144 passed and reported `gate.repositoryVersions` 2, plus `pnpm test` exit 0 in 689 ms. Neither the attempt output nor 25 minutes of runtime logs exposed the effective ceiling. | PARTIAL | The checks batch used the profile in force at run start, but 5 versus 30 minutes is unobservable. Draft T39: expose the effective checks ceiling in attempt output. |
 
 ## Summary
 
