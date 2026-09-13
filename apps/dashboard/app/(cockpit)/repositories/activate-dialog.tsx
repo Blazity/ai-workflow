@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 import type {
   RepositoriesResponse,
+  RepositoryCatalogActivateBlocked,
   RepositoryCatalogActivateConflict,
   RepositoryCatalogActivateResponse,
   RepositoryCatalogClaimedRepository,
@@ -119,6 +120,15 @@ export function ActivateDialog({
         reason.trim(),
       );
       if (result.ok && result.status === 409) {
+        // The service refuses a catalog with nothing enabled, and it can get
+        // there from here: somebody switching the last row off while this
+        // dialog is open moves the button's own blocker underneath it. Its own
+        // arm, because this 409 carries a sentence and not a population.
+        const blocked = result.data as RepositoryCatalogActivateBlocked;
+        if (blocked.error === "no_enabled_repository") {
+          setError(blocked.message);
+          return;
+        }
         // Either the first click (nothing acknowledged yet) or a list that
         // moved while the dialog was open. Both render the same way: this is
         // what the worker is about to act on, confirm against it.

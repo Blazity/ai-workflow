@@ -28,7 +28,10 @@ export default defineEventHandler(
       }
       // Enabling a row is the whole action. Dispatch and in-run access are both
       // decided by the catalog since the engine wave, so there is nothing an
-      // operator has to keep in step elsewhere and nothing to warn about.
+      // operator has to keep in step elsewhere. The one thing the response has
+      // to carry is `enabledRemaining`, the same number the MCP tool answers
+      // with: taking it to zero on an activated catalog halts every next run,
+      // and the row's own flag cannot say that.
       return await setRepositoryCatalogEnabled({
         actor: { role: actor.role, id: actor.userId },
         id,

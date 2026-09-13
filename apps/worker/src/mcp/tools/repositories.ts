@@ -39,15 +39,20 @@ import {
   type RepositoryCatalogState,
   type RepositoryProfileField,
   type RepositoryProfileVersion,
+  type SettingsSnapshot,
 } from "@shared/contracts";
 import {
   REPOSITORY_SUGGESTION_TIMEOUT_MS,
   RepositorySuggestionRateLimitedError,
   activateRepositoryCatalog,
   commitRepositoryImport,
+  countRepositoryProfileVersions,
+  joinRepositorySuggestionInFlight,
   previewRepositoryImport,
   readRepositoryCatalog,
   readRepositoryCatalogEntry,
+  readRepositoryProfileVersionPage,
+  RepositoryCatalogNoEnabledError,
   RepositoryProfileConflictError,
   saveRepositoryProfile,
   setRepositoryCatalogEnabled,
@@ -57,12 +62,8 @@ import {
   readRepositoryCatalogActivationPreview,
   type RepositoryCatalogActivationPreview,
 } from "../../services/repository-catalog/activation-preview.js";
-import {
-  countRepositoryProfileVersions,
-  readRepositoryProfileVersionPage,
-} from "../../services/repository-catalog/version-history.js";
 import { McpPublicError, type McpToolDependencies } from "../contracts.js";
-import { executeMcpMutation, executeMcpRead } from "../execute-tool.js";
+import { executeMcpMutation, executeMcpRead, mcpToolTimeoutMs } from "../execute-tool.js";
 import { hashCanonicalJson } from "../sanitize-result.js";
 import {
   HISTORY_PAGE_DEFAULT,
@@ -86,6 +87,35 @@ export const REPOSITORY_PROFILE_DEADLINE_MS = 60_000;
 const SUGGEST_TIMEOUT_MS = REPOSITORY_PROFILE_DEADLINE_MS + REPOSITORY_SUGGESTION_TIMEOUT_MS;
 
 /**
+ * The deadline a `repositories.suggest` call gets, whichever way it is answered.
+ *
+ * `executeMcpMutation` computes exactly this from `minimumTimeoutMs` for the
+ * call that starts the work. The JOIN cannot go back through that wrapper: the
+ * lease it holds is the very thing that refused the second call, so a second
+ * `executeMcpMutation` under the same key would refuse again rather than wait.
+ * The join therefore runs on the read path and brings this number with it,
+ * because the read path's own signal is NOT the bound here: it carries the
+ * deployment's read timeout (30 s by default), it is advisory (the operation is
+ * awaited, never raced against it), and a suggestion is budgeted five times
+ * that. Waiting on the deployment's read setting would time out a call that is
+ * still being paid for.
+ */
+export function repositorySuggestionDeadlineMs(settings: SettingsSnapshot): number {
+  return mcpToolTimeoutMs(settings, SUGGEST_TIMEOUT_MS);
+}
+
+/**
+ * The join's refusal when the call it is waiting on outlives the deadline that
+ * call was given.
+ *
+ * Retryable, but NOT effect-free: the call this one is waiting on is still
+ * running and may still finish, so nothing here may promise the work stayed
+ * undone.
+ */
+const JOIN_TIMEOUT_MESSAGE =
+  "The suggestion this idempotency key started is still running and has now outlived the deadline it was given; it was never started twice, so wait and retry the same key, or read repositories.get for the profile as it stands";
+
+/**
  * A catalog refusal, as an agent reads it.
  *
  * The messages are the ones the dashboard already shows to people, so they are
@@ -100,6 +130,13 @@ const SUGGEST_TIMEOUT_MS = REPOSITORY_PROFILE_DEADLINE_MS + REPOSITORY_SUGGESTIO
  * statement that writes. A refusal raised AFTER a write would have to say so.
  */
 function throwPublicCatalogError(error: unknown): never {
+  if (error instanceof RepositoryCatalogNoEnabledError) {
+    // The service's own sentence, forwarded rather than restated: this tool
+    // used to carry a second copy of it and refuse before the service was
+    // reached, which is exactly how the dashboard, this surface and the route
+    // ended up with two guards and no shared check.
+    throw new McpPublicError("VALIDATION_FAILED", error.message, false, undefined, true);
+  }
   if (error instanceof RepositorySuggestionRateLimitedError) {
     throw new McpPublicError(
       "RATE_LIMITED",
@@ -164,6 +201,43 @@ function throwPublicCatalogError(error: unknown): never {
     }
   }
   throw error;
+}
+
+/**
+ * Is this the idempotency store saying the first call under this key is still
+ * running?
+ *
+ * Matched on the CODE and on retryability rather than on the sentence, which
+ * belongs to `services/mcp/idempotency-store.ts` and is not this file's to
+ * pin. It is deliberately loose because it is not the guard: the caller only
+ * joins when the suggestion service still holds a promise for exactly this
+ * repository, and rethrows otherwise.
+ */
+function mutationStillInProgress(error: unknown): boolean {
+  return error instanceof McpPublicError && error.code === "CONFLICT" && error.retryable;
+}
+
+/**
+ * Await a promise this call did not start, under a deadline of our own.
+ *
+ * Raced rather than aborted, because the work belongs to the caller that
+ * started it: there is nothing here to cancel, and nothing here to undo. The
+ * loser of the race is left running, which is correct: the original
+ * call is still on the hook for its own answer and its own audit row.
+ */
+async function awaitWithin<T>(work: Promise<T>, deadlineMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new McpPublicError("TIMEOUT", JOIN_TIMEOUT_MESSAGE, true)),
+      deadlineMs,
+    );
+  });
+  try {
+    return await Promise.race([work, expired]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /** The `provider:owner/name` an audit row records a repository as. Lower cased
@@ -446,10 +520,13 @@ export function registerRepositoryCatalogTools(
           ...(input.expectedProfileVersion === undefined
             ? {}
             : { expectedProfileVersion: input.expectedProfileVersion }),
-          // Ignored by the service for a repository that already exists, and
-          // this passes it only for one it is creating, so the field can never
-          // read as a second, quieter way to grant access.
-          ...(row ? {} : { enabled: input.enabled ?? false }),
+          // Forwarded exactly as the caller sent it, and only when they sent
+          // it. The service refuses it for a repository that already exists and
+          // applies it to one it is creating; dropping it here instead would
+          // answer a grant request with a success, which on the wire reads as a
+          // grant that landed. An absent field still creates a row switched
+          // off, which is the service's own default.
+          ...(input.enabled === undefined ? {} : { enabled: input.enabled }),
           reason: input.reason,
         });
         if (!parsed.success) {
@@ -482,6 +559,12 @@ export function registerRepositoryCatalogTools(
             // so it never answers that question on its own.
             unchanged: saved.unchanged ?? false,
             changedFields: saved.changedFields ?? [],
+            // The commands this save stored that the suggestion path would have
+            // dropped. Never a refusal (the documented uv preset is this
+            // shape), and the same array the dashboard shows beside the
+            // command: an agent that pasted a proposal has to be told what a
+            // human reviewer would have been shown.
+            warnings: saved.warnings ?? [],
           };
         } catch (error) {
           throwPublicCatalogError(error);
@@ -507,14 +590,13 @@ export function registerRepositoryCatalogTools(
             id: input.repositoryId,
             enabled: input.enabled,
           });
-          // Read after the write, and the same list the dashboard re-renders:
-          // on an activated catalog the count that matters is not this row's
-          // flag but how many rows are left enabled, because taking it to zero
-          // stops dispatch selecting anything at all.
-          const catalog = await readRepositoryCatalog();
+          // Counted by the service, after the write, and now carried on the
+          // HTTP response too: on an activated catalog the number that matters
+          // is not this row's flag but how many rows are left enabled, because
+          // taking it to zero stops dispatch selecting anything at all.
           return {
             repository: saved.repository,
-            enabledRemaining: catalog.repositories.filter((entry) => entry.enabled).length,
+            enabledRemaining: saved.enabledRemaining ?? 0,
           };
         } catch (error) {
           throwPublicCatalogError(error);
@@ -545,20 +627,10 @@ export function registerRepositoryCatalogTools(
       payloadHash: hashCanonicalJson(input),
       operation: async () => {
         const preview = await readRepositoryCatalogActivationPreview();
-        // Refused before the digest is even compared, and before the service is
-        // reached: a catalog with nothing enabled is the one case where
-        // confirming is never the right answer, so the dashboard dialog will
-        // not offer the button at all. Same sentence it shows, because the
-        // repair is the same one: enable a row first.
-        if (preview.keeping.length === 0) {
-          throw new McpPublicError(
-            "VALIDATION_FAILED",
-            "no repository in this catalog is enabled, so activating would stop dispatch selecting every repository at once; enable at least one first",
-            false,
-            undefined,
-            true,
-          );
-        }
+        // A catalog with nothing enabled is refused by the SERVICE below, which
+        // is where the dashboard's refusal and this one now meet. Nothing is
+        // repeated here, so the sentence an agent reads is the sentence an
+        // operator reads.
         const digest = activationDigest(preview);
         if (input.previewDigest !== digest) {
           throw new McpPublicError(
@@ -655,27 +727,61 @@ export function registerRepositoryCatalogTools(
   });
 
   registerCatalogTool(server, "repositories.suggest", async (input) => {
-    const envelope = await executeMcpMutation({
-      deps,
-      toolName: "repositories.suggest",
-      targetRefs: [String(input.repositoryId)],
-      idempotencyKey: input.idempotencyKey,
-      payloadHash: hashCanonicalJson(input),
-      // The one call on this surface that outlives MCP_TOOL_TIMEOUT_MS by
-      // design. See SUGGEST_TIMEOUT_MS.
-      minimumTimeoutMs: SUGGEST_TIMEOUT_MS,
-      operation: async () => {
-        try {
-          const proposal = await suggestRepositoryProfile({
-            actor: catalogActor(deps),
-            repositoryId: input.repositoryId,
-          });
-          return proposal;
-        } catch (error) {
-          throwPublicCatalogError(error);
-        }
-      },
-    });
+    const targetRefs = [String(input.repositoryId)];
+    let envelope;
+    try {
+      envelope = await executeMcpMutation({
+        deps,
+        toolName: "repositories.suggest",
+        targetRefs,
+        idempotencyKey: input.idempotencyKey,
+        payloadHash: hashCanonicalJson(input),
+        // The one call on this surface that outlives MCP_TOOL_TIMEOUT_MS by
+        // design. See SUGGEST_TIMEOUT_MS.
+        minimumTimeoutMs: SUGGEST_TIMEOUT_MS,
+        operation: async () => {
+          try {
+            const proposal = await suggestRepositoryProfile({
+              actor: catalogActor(deps),
+              repositoryId: input.repositoryId,
+            });
+            return proposal;
+          } catch (error) {
+            throwPublicCatalogError(error);
+          }
+        },
+      });
+    } catch (error) {
+      // The same key while the first call is still running. The browser's
+      // second click AWAITS the answer already being paid for, and refusing an
+      // agent here was the one place this surface was meaner than the screen it
+      // mirrors: the caller retried into the same refusal for as long as the
+      // model took. The join is the service's own in-flight promise, so nothing
+      // starts a second model call; a key whose work is no longer in flight
+      // still gets the ordinary refusal, because by then the answer is either
+      // stored (a replay) or gone.
+      const joined = mutationStillInProgress(error)
+        ? joinRepositorySuggestionInFlight(input.repositoryId)
+        : null;
+      if (!joined) throw error;
+      envelope = await executeMcpRead({
+        deps,
+        toolName: "repositories.suggest",
+        targetRefs,
+        // No new effect: this reads the result of a call that is already
+        // running and already recorded, which is why it is audited as a read
+        // and carries no idempotency key of its own. The deadline is the
+        // SUGGESTION's, not the read path's: see repositorySuggestionDeadlineMs
+        // for why the signal this operation is handed cannot be the bound.
+        operation: async () => {
+          try {
+            return await awaitWithin(joined, repositorySuggestionDeadlineMs(deps.settings));
+          } catch (joinError) {
+            throwPublicCatalogError(joinError);
+          }
+        },
+      });
+    }
     // No trust override, and it matters more here than anywhere else on this
     // surface: the proposal is a model's text about somebody's repository and it
     // contains SHELL COMMANDS a later upsert would store for a sandbox to run.

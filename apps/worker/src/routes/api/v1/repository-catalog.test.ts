@@ -1,5 +1,9 @@
 import { createApp, createRouter, toWebHandler } from "h3";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  REPOSITORY_CATALOG_NO_ENABLED_MESSAGE,
+  REPOSITORY_ENABLED_NOT_A_PROFILE_FIELD,
+} from "@shared/contracts";
 import type { Db } from "../../../db/client.js";
 import {
   activeRuns,
@@ -94,9 +98,11 @@ const get = (id: number) =>
   paramHandler("get", "/api/v1/repository-catalog/:id", entryGet)(
     new Request(`http://worker.test/api/v1/repository-catalog/${id}`),
   );
-const versions = (id: number) =>
+const versions = (id: number, query = "") =>
   paramHandler("get", "/api/v1/repository-catalog/:id/versions", versionsGet)(
-    new Request(`http://worker.test/api/v1/repository-catalog/${id}/versions`),
+    new Request(
+      `http://worker.test/api/v1/repository-catalog/${id}/versions${query}`,
+    ),
   );
 const setEnabled = (id: number, body: unknown) =>
   paramHandler("patch", "/api/v1/repository-catalog/:id/enabled", enabledPatch)(
@@ -219,12 +225,137 @@ describe("PUT /api/v1/repository-catalog/:id", () => {
     expect(again.repository.checksVersion).toBe(1);
   });
 
-  it("never revokes a grant somebody made", async () => {
+  // D11. `enabled` on an existing repository used to be accepted and silently
+  // discarded, which on the wire is indistinguishable from a grant that landed.
+  // The row is unchanged either way; the difference is that the caller is now
+  // told, and told which switch to use instead. Refused only when the value
+  // would MOVE the switch: see the test below this one.
+  it("refuses an enabled that would move the switch, and says which switch to use", async () => {
     const created = await (await put(0, { ...PROFILE, enabled: true })).json();
-    const again = await (
-      await put(created.repository.id, { ...PROFILE, enabled: false })
-    ).json();
-    expect(again.repository.enabled).toBe(true);
+
+    const refused = await put(created.repository.id, { ...PROFILE, enabled: false });
+
+    expect(refused.status).toBe(400);
+    expect(await refused.text()).toContain(REPOSITORY_ENABLED_NOT_A_PROFILE_FIELD);
+    const after = await (await get(created.repository.id)).json();
+    expect(after.repository.enabled).toBe(true);
+  });
+
+  // The other half of D11 as the gate settled it: callers were told for a long
+  // time that this field was ignored here, so a body that repeats where the
+  // switch already stands asks for no change and is not refused for one.
+  it("accepts an enabled that repeats where the switch already stands", async () => {
+    const created = await (await put(0, { ...PROFILE, enabled: true })).json();
+
+    const repeated = await put(created.repository.id, {
+      ...PROFILE,
+      description: "second save",
+      enabled: true,
+    });
+
+    expect(repeated.status).toBe(200);
+    const after = await (await get(created.repository.id)).json();
+    expect(after.repository.enabled).toBe(true);
+    expect(after.currentProfile.description).toBe("second save");
+  });
+
+  // The same rule on the path the dashboard takes for a create: id 0, but a
+  // provider and path the catalog already holds.
+  it("refuses enabled on a create the catalog reconciles into an edit", async () => {
+    await (await put(0, PROFILE)).json();
+
+    const refused = await put(0, { ...PROFILE, enabled: true });
+
+    expect(refused.status).toBe(400);
+    expect(await refused.text()).toContain(REPOSITORY_ENABLED_NOT_A_PROFILE_FIELD);
+
+    // A new row defaults to disabled, so `enabled: false` on that same
+    // reconciled create asks for nothing and lands.
+    expect((await put(0, { ...PROFILE, enabled: false })).status).toBe(200);
+  });
+
+  // D3 / row P24. Permissive save, loud response: the documented uv preset is a
+  // remote-execution command somebody means to run, so the surface warns rather
+  // than refuses, and the warning names the group and the command.
+  it("warns about a command that downloads and runs remote code, and saves it anyway", async () => {
+    const res = await put(0, {
+      ...PROFILE,
+      scriptGroups: {
+        provider: "github",
+        repoPath: "acme/api",
+        setup: ["curl -LsSf https://astral.sh/uv/install.sh | sh"],
+        groups: { test: { commands: ["pnpm test"] } },
+      },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.warnings).toEqual([
+      {
+        group: "setup",
+        command: "curl -LsSf https://astral.sh/uv/install.sh | sh",
+        kind: "remote_execution",
+      },
+    ]);
+    expect(body.repository.path).toBe("acme/api");
+  });
+
+  it("warns about nothing when every command is local", async () => {
+    const body = await (await put(0, PROFILE)).json();
+    expect(body.warnings).toEqual([]);
+  });
+
+  // D4 / row P31. The audit line is the whole point of a profile version, and
+  // HTTP used to default it to the empty string while MCP required it.
+  it("refuses a profile save with no reason, so the version history is never blank", async () => {
+    const { reason: _reason, ...withoutReason } = PROFILE;
+    expect((await put(0, withoutReason)).status).toBe(400);
+    expect((await put(0, { ...PROFILE, reason: "   " })).status).toBe(400);
+    const body = await (await handlerFor(catalogGet)(new Request("http://worker.test/"))).json();
+    expect(body.repositories).toEqual([]);
+  });
+
+  // D12 / rows P29, P30.
+  it("refuses a profile that relates a repository to itself", async () => {
+    const id = await seedProfile("acme/api");
+
+    const refused = await put(id, {
+      ...PROFILE,
+      relationships: [{ repositoryId: id, label: "shares the schema" }],
+    });
+
+    expect(refused.status).toBe(400);
+    expect(await refused.text()).toContain("relationship_self_reference");
+  });
+
+  it("refuses the same repository related twice", async () => {
+    const other = await seedProfile("acme/web");
+
+    const refused = await put(0, {
+      ...PROFILE,
+      relationships: [
+        { repositoryId: other, label: "shares the schema" },
+        { repositoryId: other, label: "and the client" },
+      ],
+    });
+
+    expect(refused.status).toBe(400);
+    expect(await refused.text()).toContain("related twice");
+  });
+
+  // Deliberately still accepted: the row a relationship names may be imported
+  // later, and the Overview tab renders an id it cannot resolve as a plain
+  // `repository <id>` rather than crashing.
+  it("accepts a relationship to a repository the catalog does not hold yet", async () => {
+    const res = await put(0, {
+      ...PROFILE,
+      relationships: [{ repositoryId: 4242, label: "imported next week" }],
+    });
+    expect(res.status).toBe(200);
+    const stored = await (await get((await res.json()).repository.id)).json();
+    expect(stored.currentProfile.relationships).toEqual([
+      { repositoryId: 4242, label: "imported next week" },
+    ]);
   });
 
   it("mints the next version when the same repository is saved again", async () => {
@@ -301,6 +432,33 @@ describe("GET /api/v1/repository-catalog/:id/versions", () => {
     state.sessionUserId = "user_member";
     const body = await (await versions(id)).json();
     expect(body.versions.map((entry: { version: number }) => entry.version)).toEqual([2, 1]);
+    // Nothing older than version 1, and the tab needs to know that to stop
+    // offering "Load more".
+    expect(body.hasMore).toBe(false);
+  });
+
+  // D5 / row P34. The same paging the MCP history tool answers with: a page
+  // size, a `before` cursor that is a version number, and `hasMore`.
+  it("pages the history by version, oldest excluded, and says when more is left", async () => {
+    const id = await seedProfile();
+    await put(id, { ...PROFILE, rules: "two", reason: "two" });
+    await put(id, { ...PROFILE, rules: "three", reason: "three" });
+    await put(id, { ...PROFILE, rules: "four", reason: "four" });
+
+    const first = await (await versions(id, "?limit=2")).json();
+    expect(first.versions.map((entry: { version: number }) => entry.version)).toEqual([4, 3]);
+    expect(first.hasMore).toBe(true);
+
+    const second = await (await versions(id, "?limit=2&before=3")).json();
+    expect(second.versions.map((entry: { version: number }) => entry.version)).toEqual([2, 1]);
+    expect(second.hasMore).toBe(false);
+  });
+
+  it("refuses a page size nobody could mean rather than answering a different one", async () => {
+    const id = await seedProfile();
+    expect((await versions(id, "?limit=0")).status).toBe(400);
+    expect((await versions(id, "?limit=201")).status).toBe(400);
+    expect((await versions(id, "?before=nope")).status).toBe(400);
   });
 });
 
@@ -321,7 +479,7 @@ describe("PATCH /api/v1/repository-catalog/:id/enabled", () => {
   // variable omitted the repository: enabling a row was not enough on its own.
   // The engine now reads the catalog itself, so enabling IS enough and the
   // response carries the row and nothing else.
-  it("answers an enable with the row alone, with no transitional warning", async () => {
+  it("answers an enable with the row and how many are left enabled, with no transitional warning", async () => {
     const id = await seedProfile("acme/api");
     await setEnabled(id, { enabled: false });
 
@@ -331,7 +489,24 @@ describe("PATCH /api/v1/repository-catalog/:id/enabled", () => {
     const body = await res.json();
     expect(body.repository).toMatchObject({ enabled: true });
     expect(body).not.toHaveProperty("warnings");
-    expect(Object.keys(body)).toEqual(["repository"]);
+    expect(Object.keys(body).sort()).toEqual(["enabledRemaining", "repository"]);
+  });
+
+  // D2 / row L25. The number HTTP answers with is the number MCP already
+  // answered with, and it is what the list screen shows its zero-enabled
+  // warning off: the switch that turned the last one off is the only place the
+  // screen learns it was the last one.
+  it("counts what is left enabled, so the list can warn when the last switch goes off", async () => {
+    const first = await seedProfile("acme/api");
+    const second = await seedProfile("acme/web");
+    await setEnabled(first, { enabled: true });
+    await setEnabled(second, { enabled: true });
+
+    const afterOne = await (await setEnabled(second, { enabled: false })).json();
+    expect(afterOne.enabledRemaining).toBe(1);
+
+    const afterBoth = await (await setEnabled(first, { enabled: false })).json();
+    expect(afterBoth.enabledRemaining).toBe(0);
   });
 
   it("refuses a non-boolean", async () => {
@@ -347,7 +522,38 @@ describe("PATCH /api/v1/repository-catalog/:id/enabled", () => {
 });
 
 describe("POST /api/v1/repository-catalog/activate", () => {
+  // Every activation below needs one enabled row, because the service refuses
+  // an activation that would leave dispatch with nothing to select. The
+  // refusal itself is the test right after this helper.
+  async function seedEnabled(path = "acme/enabled"): Promise<number> {
+    const id = await seedProfile(path);
+    await setRepositoryEnabled(db, { id, enabled: true });
+    return id;
+  }
+
+  // D1 / row L18. The sentence used to be typed out in the dashboard dialog and
+  // again in the MCP tool, with the service both go through checking neither,
+  // so an activation that reached this route directly went through and left
+  // dispatch with nothing to select.
+  it("refuses to activate a catalog that enables nothing, with a code the screen can branch on", async () => {
+    await seedProfile("acme/api");
+
+    const refused = await activate({
+      acknowledgedRepositoryKeys: [],
+      reason: "the bridge is over",
+    });
+
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({
+      error: "no_enabled_repository",
+      message: REPOSITORY_CATALOG_NO_ENABLED_MESSAGE,
+    });
+    const body = await (await handlerFor(catalogGet)(new Request("http://worker.test/"))).json();
+    expect(body.state.bridge).toBe(true);
+  });
+
   it("activates when nothing is in flight", async () => {
+    await seedEnabled();
     const res = await activate({ acknowledgedRepositoryKeys: [], reason: "the bridge is over" });
     expect(res.status).toBe(200);
     expect((await res.json()).state).toMatchObject({
@@ -358,11 +564,13 @@ describe("POST /api/v1/repository-catalog/activate", () => {
   });
 
   it("refuses an activation with no reason, so the audit line is never empty", async () => {
+    await seedEnabled();
     const res = await activate({ acknowledgedRepositoryKeys: [], reason: "  " });
     expect(res.status).toBe(400);
   });
 
   it("refuses with the list when a live claim works in a repository that is not enabled", async () => {
+    await seedEnabled();
     const id = await seedProfile("acme/web");
     await setRepositoryEnabled(db, { id, enabled: false });
     await db.insert(activeRuns).values({
@@ -401,6 +609,7 @@ describe("POST /api/v1/repository-catalog/activate", () => {
   });
 
   it("gives a member 403 and leaves the bridge up", async () => {
+    await seedEnabled();
     state.sessionUserId = "user_member";
     expect((await activate({ acknowledgedRepositoryKeys: [], reason: "the bridge is over" })).status).toBe(403);
     const body = await (await handlerFor(catalogGet)(new Request("http://worker.test/"))).json();

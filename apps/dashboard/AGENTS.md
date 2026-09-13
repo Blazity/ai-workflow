@@ -111,7 +111,8 @@ own action on the Repositories page and `settings.patch.ts` refuses that group.
 `repositories-data.tsx` (the catalog read), which renders `repositories-screen.tsx`
 with the enabled switch, the not-activated banner and the activation and import
 dialogs. `[id]/` is one repository, with five tabs (Overview, Rules, Scripts,
-Memory, History) over one Save bar: a tab reports its blocker upward, the page
+Memory, History) over one Save bar; the open tab lives in `?tab=`, so a tab is
+linkable and a reload comes back to it: a tab reports its blocker upward, the page
 holds the draft and the reason, and one `PUT /api/v1/repository-catalog/:id`
 sends ONLY the fields that changed plus `expectedProfileVersion`. An omitted
 field means unchanged on the route, so a Rules save never carries the script
@@ -120,7 +121,8 @@ version; a profile that moved since the screen loaded answers 409
 `repository_profile_conflict` with the version it sits at, which is why the
 screen no longer reads the row before writing it. Rules and Description use
 `components/cockpit/prompt-editor/prompt-editor.tsx` and still store markdown.
-The History tab lists the profile versions and, under them, the suggestion calls
+The History tab pages the profile versions (`?limit=&before=`, `hasMore` on the
+response, "Load more" under the list) and, under them, the suggestion calls
 from `app/api/repository-catalog/[id]/suggestions/`, cursor paginated, where a
 call the provider reported no usage for reads `unpriced`.
 
@@ -150,13 +152,6 @@ reports every provider as `error` carrying "provider directory unavailable,
 connection state unknown", because rows name which providers exist and nothing
 about their health. The exception is the bridge with no directory: the directory
 IS the list then, so that is an error rather than an empty list called ready.
-
-**Saving a profile is a full overwrite, so the screen re-reads first.** The
-upsert takes no version token. `repository-entry.tsx` re-reads the row
-immediately before every PUT (a save and a History restore alike) and refuses on
-a moved `profileVersion` rather than replacing the other edit. The window
-between the read and the write stays open; closing it needs an `if-match` on the
-worker.
 
 ## Traps specific to this app
 

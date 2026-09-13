@@ -27,7 +27,9 @@ import {
   isRepositoryAccessible,
   type RunRepositoryAccess,
   type VcsProviderKind,
+  type WorkflowDefinitionV2Node,
 } from "@shared/contracts";
+import { workflowWorkspaceAccessOf } from "@shared/workflow-graph";
 
 /* There is deliberately no exported "unrestricted" constant here. The bridge is
  * a fail-open value, and a named one in reach of production code is an
@@ -111,4 +113,29 @@ export function isRepositoryCatalogRefusal(text: string): boolean {
     text.includes(REPOSITORY_NOT_ENABLED_MARKER) ||
     text.includes(NO_ENABLED_REPOSITORIES_MESSAGE)
   );
+}
+
+/**
+ * Does this graph need a repository at all?
+ *
+ * Asked once, of the DEPLOYED graph, before a run that could be given no
+ * repository is refused. A triage graph (call an LLM, comment on the ticket,
+ * move it) does useful work without touching a checkout, and refusing it
+ * because the catalog enables nothing would fail work that never needed the
+ * catalog.
+ *
+ * The answer is the workspace-access derivation the scheduler already uses
+ * (`workflowWorkspaceAccessOf`), not a second list of block types: anything
+ * above "none" is a block that reads or writes the shared checkout, which is
+ * exactly the thing a repository is needed for. The VCS blocks that publish
+ * (`open_pr`, `post_pr_comment`, the checks blocks) take their repositories as
+ * an INPUT produced by the workspace path, so a graph that reaches one holds a
+ * workspace node too and is already answered `true` here.
+ *
+ * Pure, so the workflow body may call it on the plan it just loaded.
+ */
+export function workflowNeedsRepositoryAccess(
+  nodes: readonly WorkflowDefinitionV2Node[],
+): boolean {
+  return nodes.some((node) => workflowWorkspaceAccessOf(node) !== "none");
 }

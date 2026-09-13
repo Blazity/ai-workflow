@@ -35,6 +35,7 @@ vi.mock("../auth/index.js", () => ({
 
 const {
   REPOSITORY_SUGGESTION_RATE_LIMIT,
+  joinRepositorySuggestionInFlight,
   resetRepositorySuggestionsInFlightForTests,
   suggestRepositoryProfile,
 } = await import("./suggest.js");
@@ -205,6 +206,42 @@ describe("suggestRepositoryProfile", () => {
     expect(firstResult).toEqual(secondResult);
     expect(mocks.generateProviderText).toHaveBeenCalledTimes(1);
     expect(await listRepositorySuggestions(db, repositoryId)).toHaveLength(1);
+  });
+
+  // D13 / row S17. The accessor exists for the one caller that cannot simply
+  // ask again: MCP refuses a second call under the same idempotency key while
+  // the first holds the lease, and the honest answer to "the suggestion you
+  // asked for is still running" is the answer itself.
+  it("hands the running call to a caller that cannot start its own", async () => {
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mocks.generateProviderText.mockImplementation(async () => {
+      await held;
+      return { object: ANSWER, text: "", usage: null };
+    });
+
+    const running = suggestRepositoryProfile({ actor: ADMIN, repositoryId });
+    const joined = joinRepositorySuggestionInFlight(repositoryId);
+    expect(joined).not.toBeNull();
+    release();
+
+    expect(await joined).toEqual(await running);
+    // Joining never buys a second model call.
+    expect(mocks.generateProviderText).toHaveBeenCalledTimes(1);
+    expect(await listRepositorySuggestions(db, repositoryId)).toHaveLength(1);
+  });
+
+  it("hands back null rather than starting a call nobody asked to pay for", async () => {
+    // Nothing in flight, and a caller that reached here because of a lease must
+    // never buy a model call by accident: by now the answer is either stored (a
+    // replay) or gone.
+    expect(joinRepositorySuggestionInFlight(repositoryId)).toBeNull();
+    mocks.generateProviderText.mockResolvedValue({ object: ANSWER, text: "", usage: null });
+    await suggestRepositoryProfile({ actor: ADMIN, repositoryId });
+    expect(joinRepositorySuggestionInFlight(repositoryId)).toBeNull();
+    expect(mocks.generateProviderText).toHaveBeenCalledTimes(1);
   });
 
   it("releases the join once the call settles, so the next click starts a new one", async () => {

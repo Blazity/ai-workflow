@@ -15,6 +15,7 @@ import type {
   RepositoryOption,
 } from "@shared/contracts";
 import {
+  REPOSITORY_CATALOG_NO_ENABLED_MESSAGE,
   REPOSITORY_CATALOG_SEED_ACTOR_LABEL,
   repositoryCatalogKey,
 } from "@shared/contracts";
@@ -105,12 +106,15 @@ export function uncataloguedSummary(impact: ActivationImpact): string {
  * A catalog with nothing enabled is the one case where confirming is never the
  * right answer: dispatch would stop selecting every repository at once, and the
  * repair (enable a row) is one click away on the same screen.
+ *
+ * The sentence is the SERVICE's, imported rather than typed here. This screen
+ * used to own one copy and the MCP tool another, while the route both go
+ * through checked neither; the check lives in `activateRepositoryCatalog` now,
+ * and hiding the button is this file keeping a refusal off a screen rather than
+ * being the only thing enforcing it.
  */
 export function activationBlocker(impact: ActivationImpact): string | null {
-  if (impact.keeping.length === 0) {
-    return "no repository in this catalog is enabled, so activating would stop dispatch selecting every repository at once; enable at least one first";
-  }
-  return null;
+  return impact.keeping.length === 0 ? REPOSITORY_CATALOG_NO_ENABLED_MESSAGE : null;
 }
 
 /** "1 repository" / "3 repositories", so a dialog about ending a grant never

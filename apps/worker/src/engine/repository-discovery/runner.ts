@@ -7,6 +7,7 @@ import {
   repositoryCatalogKey,
   type RepositoryCatalogEntry,
 } from "./catalog.js";
+import { UNAVAILABLE_REPOSITORY_HINT } from "./protocol.js";
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
 
 export const REPOSITORY_DISCOVERY_SCHEMA = JSON.stringify({
@@ -179,7 +180,7 @@ export function validateRepositoryExpansionRequests(input: {
     const repository = catalog.get(key);
     if (!repository?.usable) {
       return clarification(
-        `Research requested unavailable repository ${request.provider}:${request.repoPath}. Which accessible repository should be used?`,
+        `Research requested unavailable repository ${request.provider}:${request.repoPath}. Which accessible repository should be used? ${UNAVAILABLE_REPOSITORY_HINT}`,
       );
     }
     repositories.push({

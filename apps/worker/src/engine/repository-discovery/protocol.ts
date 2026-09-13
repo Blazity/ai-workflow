@@ -114,7 +114,10 @@ export function validateRepositoryDiscoveryResult(
     discoveredKeys.add(key);
     const repository = catalogByKey.get(key);
     if (!repository || !repository.usable) {
-      return clarification("Repository discovery requested an unavailable repository.");
+      return clarification(
+        "Repository discovery requested an unavailable repository.",
+        UNAVAILABLE_REPOSITORY_HINT,
+      );
     }
     if (!selected.has(key)) {
       selected.set(key, {
@@ -136,16 +139,29 @@ export function validateRepositoryDiscoveryResult(
   };
 }
 
-function clarification(reason: string): RepositoryDiscoveryDecision {
+/**
+ * The one sentence a repository REFUSED BY THE CATALOG adds to the question.
+ *
+ * Only on that arm. "Enable it on the Repositories page" is advice for a
+ * repository the catalog does not enable, and reads as nonsense on a
+ * clarification about duplicates or an unparseable answer, so the other
+ * refusals keep the bare question.
+ */
+export const UNAVAILABLE_REPOSITORY_HINT =
+  "Enable it on the Repositories page, or answer with another repository.";
+
+function clarification(reason: string, hint?: string): RepositoryDiscoveryDecision {
   return {
     kind: "clarification_needed",
-    questions: [whichRepositoryQuestion()],
+    questions: [whichRepositoryQuestion(hint)],
     reason,
   };
 }
 
-function whichRepositoryQuestion(): string {
-  return "Which repository or repositories should this ticket inspect or modify? Reply with full repository paths.";
+function whichRepositoryQuestion(hint?: string): string {
+  const question =
+    "Which repository or repositories should this ticket inspect or modify? Reply with full repository paths.";
+  return hint === undefined ? question : `${question} ${hint}`;
 }
 
 // Ranked list of the repositories the model proposed, each with its

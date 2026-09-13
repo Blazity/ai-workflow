@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { RepositoryCatalogImportCandidate } from "@shared/contracts";
+import {
+  REPOSITORY_IMPORT_SKIPPED_NOTE,
+  type RepositoryCatalogImportCandidate,
+} from "@shared/contracts";
 
 import {
   ALREADY_IN_CATALOG_NOTE,
@@ -52,10 +55,16 @@ test("the summary names all three buckets every time, zeroes included", () => {
     alreadyPresent: [],
     repositories: [],
   });
-  assert.equal(
-    summary,
-    "2 repositories added, 0 already in the catalog, 0 no longer exposed by the provider",
-  );
+  // D10. The skipped bucket used to read "no longer exposed by the provider",
+  // which states a cause the response cannot know: a repository missing from a
+  // successful listing may have been removed, or may simply be invisible to the
+  // token this deployment is configured with, and an admin chasing the second
+  // one was being told to look for the first.
+  // Three words on the summary line, the whole sentence on the detail row: the
+  // full note in the summary turned a one-line result into a paragraph.
+  assert.equal(summary, "2 repositories added, 0 already in the catalog, 0 not in the listing");
+  assert.ok(!summary.includes(REPOSITORY_IMPORT_SKIPPED_NOTE));
+  assert.ok(REPOSITORY_IMPORT_SKIPPED_NOTE.includes("not visible to the configured token"));
   assert.ok(
     importSummary({ imported: 1, skipped: [], alreadyPresent: [], repositories: [] }).startsWith(
       "1 repository added",
@@ -76,6 +85,8 @@ test("the two non-created buckets stay separate, because an admin acts on them d
   assert.ok(details[0].label.includes("nothing was enabled"));
   assert.deepEqual(details[1].keys, ["github:acme/gone"]);
   assert.ok(details[1].label.includes("Reload"));
+  // The cause the summary line no longer spells out lives here, in full.
+  assert.ok(details[1].label.includes(REPOSITORY_IMPORT_SKIPPED_NOTE));
   assert.deepEqual(
     importDetails({ imported: 1, skipped: [], alreadyPresent: [], repositories: [] }),
     [],

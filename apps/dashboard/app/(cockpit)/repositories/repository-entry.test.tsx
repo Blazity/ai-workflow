@@ -9,11 +9,16 @@ import test, { mock, type TestContext } from "node:test";
 import React from "react";
 import { act, create, type ReactTestInstance } from "react-test-renderer";
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
+import {
+  PathnameContext,
+  SearchParamsContext,
+} from "next/dist/shared/lib/hooks-client-context.shared-runtime";
 
 import type {
   RepositoryCatalogEntry,
   RepositoryProfileVersion,
 } from "@shared/contracts";
+import { REPOSITORY_RELATIONSHIPS_MAX } from "@shared/contracts";
 
 // Rules and Description are edited in the prompt editor now. It is Tiptap,
 // which needs a DOM this runner does not have, so it is replaced by the
@@ -91,6 +96,14 @@ interface Call {
 interface Harness {
   root: ReactTestInstance;
   calls: Call[];
+  /** Every `window.history.replaceState` the screen made, in order. This is the
+   *  history write a tab click is allowed to make: native, so `useSearchParams`
+   *  stays in sync and nothing is refetched. */
+  replaced: Array<{ url: string }>;
+  /** Every App Router navigation the screen asked for. A tab click must make
+   *  none: `router.replace` re-runs the route's server component, which throws
+   *  away the history pages the History tab has already loaded. */
+  routed: Array<{ url: string; kind: "push" | "replace"; scroll: unknown }>;
 }
 
 /**
@@ -103,10 +116,16 @@ function render(
   t: TestContext,
   options: {
     versions?: RepositoryProfileVersion[];
+    versionsHasMore?: boolean;
     currentProfile?: RepositoryProfileVersion | null;
     memory?: React.ComponentProps<typeof RepositoryEntryScreen>["memory"];
     onSave?: (body: unknown) => Response;
     onDelete?: () => Response;
+    onVersions?: (url: string) => Response;
+    /** Every repository this catalog holds, for the relationships editor. */
+    catalog?: RepositoryCatalogEntry[];
+    /** The query string the screen was opened on, as a link would carry it. */
+    search?: string;
   } = {},
 ): Harness {
   const calls: Call[] = [];
@@ -117,6 +136,13 @@ function render(
     calls.push({ url: String(url), method, body });
     if (String(url).startsWith("/api/repository-catalog/7/suggestions")) {
       return Promise.resolve(Response.json({ suggestions: [], nextCursor: null }));
+    }
+    if (String(url).startsWith("/api/repository-catalog/7/versions")) {
+      return Promise.resolve(
+        options.onVersions
+          ? options.onVersions(String(url))
+          : Response.json({ versions: [], hasMore: false }),
+      );
     }
     if (String(url) === "/api/repository-catalog/7" && method === "PUT") {
       return Promise.resolve(
@@ -131,35 +157,65 @@ function render(
     throw new Error(`unexpected ${method} ${url}`);
   }) as typeof globalThis.fetch;
 
+  const replaced: Array<{ url: string }> = [];
+  const routed: Array<{ url: string; kind: "push" | "replace"; scroll: unknown }> = [];
   const router = {
     refresh: () => {},
-    push: () => {},
-    replace: () => {},
+    push: (url: string, opts?: { scroll?: boolean }) => {
+      routed.push({ url, kind: "push", scroll: opts?.scroll });
+    },
+    replace: (url: string, opts?: { scroll?: boolean }) => {
+      routed.push({ url, kind: "replace", scroll: opts?.scroll });
+    },
     back: () => {},
     forward: () => {},
     prefetch: () => {},
+  };
+  // The runner has no DOM, and the screen writes the open tab with the
+  // browser's own replaceState rather than the router's. Installed for the
+  // lifetime of one render and removed after it, so nothing else in this file
+  // starts believing it is in a browser.
+  const previousWindow = (globalThis as { window?: unknown }).window;
+  (globalThis as { window?: unknown }).window = {
+    history: {
+      replaceState: (_state: unknown, _unused: string, url: string) => {
+        replaced.push({ url });
+      },
+    },
+    // The unsaved-work guard asks the same object for these. No-ops: what that
+    // guard does is its own test's business, and a `window` missing them would
+    // throw inside an effect that has nothing to do with tabs.
+    addEventListener: () => {},
+    removeEventListener: () => {},
   };
   let renderer!: ReturnType<typeof create>;
   act(() => {
     renderer = create(
       <AppRouterContext.Provider value={router as never}>
-        <RepositoryEntryScreen
-          repository={REPOSITORY}
-          currentProfile={options.currentProfile ?? version(3)}
-          versions={options.versions ?? [version(3), version(2)]}
-          catalog={[REPOSITORY]}
-          allowedEnv={undefined}
-          memory={options.memory ?? []}
-          canManage
-        />
+        <PathnameContext.Provider value="/repositories/7">
+          <SearchParamsContext.Provider value={new URLSearchParams(options.search ?? "")}>
+            <RepositoryEntryScreen
+              repository={REPOSITORY}
+              currentProfile={options.currentProfile ?? version(3)}
+              versions={options.versions ?? [version(3), version(2)]}
+              versionsHasMore={options.versionsHasMore ?? false}
+              catalog={options.catalog ?? [REPOSITORY]}
+              allowedEnv={undefined}
+              memory={options.memory ?? []}
+              canManage
+            />
+          </SearchParamsContext.Provider>
+        </PathnameContext.Provider>
       </AppRouterContext.Provider>,
     );
   });
   t.after(() => {
     act(() => renderer.unmount());
     globalThis.fetch = originalFetch;
+    if (previousWindow === undefined) delete (globalThis as { window?: unknown }).window;
+    else (globalThis as { window?: unknown }).window = previousWindow;
   });
-  return { root: renderer.root, calls };
+  return { root: renderer.root, calls, replaced, routed };
 }
 
 /** Every string the tree renders, flattened. Runs of whitespace collapse: JSX
@@ -508,4 +564,247 @@ test("leaving the tab with a refused ceiling takes the blocker with it", async (
     "20",
     "the field returns showing the value the draft actually holds",
   );
+});
+
+
+// D14 / row U08. The open tab used to be local state, so a reload landed on
+// Overview whatever was open and there was no link to "the Scripts tab of this
+// repository" for a run failure or a Jira comment to point at.
+test("a link that names a tab opens that tab", (t) => {
+  const harness = render(t, { search: "tab=scripts" });
+
+  assert.match(text(harness.root), /Script groups/);
+  // And nothing was replaced on the way in: a load is not a tab switch.
+  assert.deepEqual(harness.replaced, []);
+});
+
+test("no parameter opens the tab it always did", (t) => {
+  const harness = render(t);
+
+  assert.match(text(harness.root), /Overview/);
+  assert.deepEqual(harness.replaced, []);
+});
+
+test("a parameter nobody wrote opens the entry rather than breaking it", (t) => {
+  // A stale link, or a typed one. The screen opens; it does not blank.
+  const harness = render(t, { search: "tab=scriptz" });
+
+  assert.match(text(harness.root), /Overview/);
+});
+
+test("switching tabs replaces the parameter without navigating", (t) => {
+  const harness = render(t, { search: "tab=overview&suggestion=open" });
+
+  openTab(harness.root, "Rules");
+
+  assert.equal(harness.replaced.length, 1);
+  assert.match(harness.replaced[0].url, /^\/repositories\/7\?/);
+  const params = new URLSearchParams(harness.replaced[0].url.split("?")[1]);
+  assert.equal(params.get("tab"), "rules");
+  // Every other parameter on the URL survives the switch.
+  assert.equal(params.get("suggestion"), "open");
+  // The history write is the browser's own, so no navigation was started and
+  // the route's server component was not re-run.
+  assert.deepEqual(harness.routed, []);
+  // And the tab moved without waiting for anything to come back.
+  assert.match(text(harness.root), /Repository rules/);
+});
+
+// D5 / row P34. The versions route is paged, so the server sends the newest
+// page and the tab asks for the rest only when a reader asks for it.
+test("the History tab offers Load more only while older versions exist", (t) => {
+  const withMore = render(t, { versionsHasMore: true, search: "tab=history" });
+  assert.equal(
+    withMore.root.findAll(
+      (node) => node.type === "button" && text(node).includes("Load more"),
+    ).length,
+    1,
+  );
+
+  const complete = render(t, { versionsHasMore: false, search: "tab=history" });
+  assert.equal(
+    complete.root.findAll(
+      (node) => node.type === "button" && text(node).includes("Load more"),
+    ).length,
+    0,
+  );
+});
+
+test("Load more asks for what is older than the oldest row it is showing", async (t) => {
+  const harness = render(t, {
+    versions: [version(3), version(2)],
+    versionsHasMore: true,
+    search: "tab=history",
+    onVersions: () => Response.json({ versions: [version(1)], hasMore: false }),
+  });
+
+  await act(async () => {
+    await button(harness.root, "Load more").props.onClick();
+  });
+
+  const asked = harness.calls.filter((call) => call.url.includes("/versions"));
+  assert.equal(asked.length, 1);
+  // The cursor is the version number of the last row on screen, not an offset:
+  // rows are only ever appended, so a version number cannot shift under a
+  // reader the way an offset would.
+  assert.match(asked[0].url, /before=2/);
+  // The older page is appended rather than replacing what was rendered.
+  const rendered = text(harness.root);
+  assert.match(rendered, /reason for v3/);
+  assert.match(rendered, /reason for v1/);
+  // And the button is gone, because the answer said there is nothing older.
+  assert.equal(
+    harness.root.findAll(
+      (node) => node.type === "button" && text(node).includes("Load more"),
+    ).length,
+    0,
+  );
+});
+
+// F8. The tab param used to be written with `router.replace`, which re-runs
+// this route's server component: the entry is refetched and the paged history
+// is handed back as the first page, so a reader who had loaded three pages and
+// glanced at Rules came back to one.
+test("a tab switch keeps the history pages already loaded", async (t) => {
+  const harness = render(t, {
+    versions: [version(3), version(2)],
+    versionsHasMore: true,
+    search: "tab=history",
+    onVersions: () => Response.json({ versions: [version(1)], hasMore: false }),
+  });
+
+  await act(async () => {
+    await button(harness.root, "Load more").props.onClick();
+  });
+  assert.match(text(harness.root), /reason for v1/);
+
+  openTab(harness.root, "Overview");
+  openTab(harness.root, "History");
+
+  // The older page is still on screen, and nothing went back to the server for
+  // it: one versions call in total, the one Load more made.
+  assert.match(text(harness.root), /reason for v1/);
+  assert.equal(harness.calls.filter((call) => call.url.includes("/versions")).length, 1);
+  assert.deepEqual(harness.routed, []);
+  // Both switches wrote the param, natively.
+  assert.equal(harness.replaced.length, 2);
+});
+
+// D3 / row P24. The save is permissive on purpose (the documented uv preset is
+// exactly this shape), so what the Scripts tab owes the operator is the warning
+// the suggestion path never had to show.
+test("a command that downloads and runs remote code is warned about beside it", (t) => {
+  const harness = render(t, {
+    search: "tab=scripts",
+    currentProfile: version(3, {
+      scriptGroups: {
+        provider: "github",
+        repoPath: "acme/web",
+        setup: ["curl -LsSf https://astral.sh/uv/install.sh | sh"],
+        groups: { test: { commands: ["uv run pytest"] } },
+      },
+    }),
+  });
+
+  const warnings = harness.root.findByProps({ "aria-label": "Remote execution warnings" });
+  const rendered = text(warnings);
+  assert.match(rendered, /curl -LsSf https:\/\/astral\.sh\/uv\/install\.sh \| sh/);
+  assert.match(rendered, /setup/);
+  assert.match(rendered, /Suggestions never propose it; saving it is your decision\./);
+  // Non-blocking by construction: it is a status region, not a refusal, and it
+  // disables nothing. The documented uv setup preset is exactly this shape, so
+  // refusing it here would refuse the preset the repository publishes.
+  assert.equal(warnings.props.role, "status");
+});
+
+test("an ordinary scripts entry raises no warning at all", (t) => {
+  const harness = render(t, {
+    search: "tab=scripts",
+    currentProfile: version(3, {
+      scriptGroups: {
+        provider: "github",
+        repoPath: "acme/web",
+        groups: { test: { commands: ["pnpm test"] } },
+      },
+    }),
+  });
+
+  assert.equal(
+    harness.root.findAll(
+      (node) => node.props["aria-label"] === "Remote execution warnings",
+    ).length,
+    0,
+  );
+});
+
+// D12 / row P30. The contract refuses the same repository twice, so the form
+// says so before the Save bar finds out from a 400.
+test("relating the same repository twice is refused by the form, not by the save", (t) => {
+  const other: RepositoryCatalogEntry = {
+    ...REPOSITORY,
+    id: 8,
+    path: "acme/api",
+    displayName: "API",
+  };
+  const harness = render(t, {
+    catalog: [REPOSITORY, other],
+    currentProfile: version(3, {
+      relationships: [{ repositoryId: 8, label: "the client" }],
+    }),
+  });
+
+  act(() => {
+    harness.root
+      .findByProps({ "aria-label": "Related repository" })
+      .props.onChange({ target: { value: "8" } });
+  });
+  act(() => {
+    harness.root
+      .findByProps({ "aria-label": "Relationship label" })
+      .props.onChange({ target: { value: "again" } });
+  });
+
+  assert.equal(button(harness.root, "Add").props.disabled, true);
+  assert.match(text(harness.root), /This repository is already related\./);
+});
+
+// F7. The contract caps relationships at 50 and refuses the WHOLE body over it,
+// with a zod message about an array length, so a 51st add used to take the
+// description and the rules edited beside it down with the save.
+test("the 51st relationship is refused by the form, with the count in view", (t) => {
+  const catalog: RepositoryCatalogEntry[] = [
+    REPOSITORY,
+    ...Array.from({ length: REPOSITORY_RELATIONSHIPS_MAX + 1 }, (_unused, index) => ({
+      ...REPOSITORY,
+      id: 100 + index,
+      path: `acme/related-${index}`,
+    })),
+  ];
+  const harness = render(t, {
+    catalog,
+    currentProfile: version(3, {
+      relationships: Array.from(
+        { length: REPOSITORY_RELATIONSHIPS_MAX },
+        (_unused, index) => ({ repositoryId: 100 + index, label: "calls" }),
+      ),
+    }),
+  });
+
+  // The one repository in the catalog this profile is NOT already related to,
+  // so the refusal on screen is the cap and not the duplicate rule.
+  act(() => {
+    harness.root
+      .findByProps({ "aria-label": "Related repository" })
+      .props.onChange({ target: { value: String(100 + REPOSITORY_RELATIONSHIPS_MAX) } });
+  });
+  act(() => {
+    harness.root
+      .findByProps({ "aria-label": "Relationship label" })
+      .props.onChange({ target: { value: "one too many" } });
+  });
+
+  assert.equal(button(harness.root, "Add").props.disabled, true);
+  assert.match(text(harness.root), /at most 50 relationships/);
+  // And the count is on screen before the cap is reached, not only at it.
+  assert.match(text(harness.root), /50 of 50/);
 });

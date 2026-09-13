@@ -46,6 +46,23 @@ function checksLabel(repository: RepositoryCatalogEntry): string {
 const ENABLED_SWITCH_NOTE =
   "Disabling stops the next run. A run already in flight keeps the list it started with; cancel it to stop it.";
 
+/**
+ * What an empty enabled set means, said once, under the list header.
+ *
+ * The standing note above says what disabling ONE repository does. It cannot
+ * say this, which is a different fact about the whole catalog: with nothing
+ * enabled every dispatch is refused, and a row that reads "not enabled" says
+ * nothing about the other ninety. The worker answers `enabledRemaining` on the
+ * switch for exactly this line.
+ *
+ * Shown only on an ACTIVATED catalog. On the bridge the enabled flags are
+ * recorded and not yet enforced, so "every dispatch is refused" would be false,
+ * and it would sit directly under the banner saying the agent sees everything
+ * the installation sees.
+ */
+export const NO_ENABLED_REPOSITORY_WARNING =
+  "No repository is enabled. Every dispatch is refused until one is enabled again.";
+
 function EnabledSwitch({
   repository,
   canManage,
@@ -53,7 +70,7 @@ function EnabledSwitch({
 }: {
   repository: RepositoryCatalogEntry;
   canManage: boolean;
-  onChanged: (next: RepositoryCatalogEntry) => void;
+  onChanged: (next: RepositoryCatalogEntry, enabledRemaining?: number) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -90,7 +107,7 @@ function EnabledSwitch({
                 setError(result.errorMessage);
                 return;
               }
-              onChanged(result.data.repository);
+              onChanged(result.data.repository, result.data.enabledRemaining);
             } catch {
               setError("Could not reach the server.");
             } finally {
@@ -131,12 +148,17 @@ export function RepositoriesScreen({
   const [overrides, setOverrides] = useState<Record<number, RepositoryCatalogEntry>>({});
   const [activated, setActivated] = useState<RepositoryCatalogState | null>(null);
   const [dialog, setDialog] = useState<"none" | "activate" | "import">("none");
+  // What the worker said was left enabled after the last flip, which is the
+  // number the warning below reads. Null until a flip: before one, the rendered
+  // rows are the only thing that knows.
+  const [enabledRemaining, setEnabledRemaining] = useState<number | null>(null);
 
   // A fresh server render supersedes every optimistic row: keeping one would
   // shadow the value the refresh was fetched to show.
   useEffect(() => {
     setOverrides({});
     setActivated(null);
+    setEnabledRemaining(null);
   }, [repositories, state]);
 
   const rows = useMemo(
@@ -144,9 +166,15 @@ export function RepositoriesScreen({
     [repositories, overrides],
   );
   const catalogState = activated ?? state;
+  // The worker's count when there is one, the rendered rows otherwise. Both
+  // answer the same question and the first is the one that counted rows this
+  // screen may not be holding.
+  const enabledCount =
+    enabledRemaining ?? rows.filter((repository) => repository.enabled).length;
 
-  function replaceRow(next: RepositoryCatalogEntry) {
+  function replaceRow(next: RepositoryCatalogEntry, remaining?: number) {
     setOverrides((prev) => ({ ...prev, [next.id]: next }));
+    if (remaining !== undefined) setEnabledRemaining(remaining);
   }
 
   return (
@@ -247,6 +275,18 @@ export function RepositoriesScreen({
           )}
         </div>
       )}
+
+      {available &&
+        rows.length > 0 &&
+        enabledCount === 0 &&
+        catalogState?.activated === true && (
+          <div
+            role="status"
+            className="rounded-[3px] border border-[#F0B8AE] bg-fail-bg px-3 py-2 font-body text-[12px] text-fail-fg"
+          >
+            {NO_ENABLED_REPOSITORY_WARNING}
+          </div>
+        )}
 
       {available && rows.length > 0 && canManage && (
         <p className="m-0 -mb-2 text-right font-body text-[11px] text-neutral-500">

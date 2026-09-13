@@ -740,6 +740,65 @@ describe("cron clarification recovery ordering", () => {
     expect(mocks.runScheduleTriggerPass).toHaveBeenCalled();
   });
 
+  // F6. Ticket dispatch was the one dispatch phase that never asked, so a tick
+  // whose catalog read failed still started runs, and each of them died inside
+  // `loadRunStartSettingsStep` with a raw database error posted on the ticket.
+  // Held instead: nothing is claimed, the ticket stays in the AI column, and
+  // the next tick dispatches it.
+  it("holds discovered tickets for a tick the catalog cannot be read on", async () => {
+    mocks.drainOldestPendingTrigger.mockReset().mockResolvedValue(null);
+    mocks.getConnectedRepositoryCatalogStateRow.mockRejectedValue(
+      new Error("neon: connection reset"),
+    );
+    state.discovered = ["AIW-501", "AIW-502"];
+
+    const response = await request();
+
+    expect(mocks.dispatchTicket).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      catalogRead: "failed",
+      discovered: 2,
+      started: 0,
+    });
+  });
+
+  // The other half of the decision. A schedule fires from its own route with
+  // its own read, and a webhook redelivery is the provider retrying an ingress:
+  // both have a caller and a retry of their own, which a ticket sitting in a
+  // column does not, so neither is held by this pass.
+  it("leaves the schedule pass and the webhook redrive running on a failed read", async () => {
+    mocks.drainOldestPendingTrigger.mockReset().mockResolvedValue(null);
+    mocks.getConnectedRepositoryCatalogStateRow.mockRejectedValue(
+      new Error("neon: connection reset"),
+    );
+    state.discovered = ["AIW-503"];
+
+    const response = await request();
+
+    expect(response.status).toBe(200);
+    expect(mocks.dispatchTicket).not.toHaveBeenCalled();
+    expect(mocks.runScheduleTriggerPass).toHaveBeenCalledTimes(1);
+    expect(mocks.redispatchPendingWebhookDeliveries).toHaveBeenCalledTimes(1);
+  });
+
+  // The summary line the log carries, so "dispatch held for a tick" is not a
+  // fact only the cron response body knows.
+  it("logs the pass summary with the catalog read outcome", async () => {
+    const info = vi.spyOn(logger, "info");
+    state.discovered = ["AIW-504"];
+
+    await request();
+
+    const summary = info.mock.calls.filter((call) => call[1] === "poll_pass_summary");
+    expect(summary).toHaveLength(1);
+    expect(summary[0]?.[0]).toMatchObject({
+      catalogRead: "ok",
+      discovered: 1,
+      started: 1,
+      ticketsHeld: 0,
+    });
+  });
+
   it("does not add a polled start after released-owner recovery starts one", async () => {
     mocks.reconcileRuns.mockImplementationOnce(async (...args: any[]) => {
       await args[4]("pr:github:acme/app#released");

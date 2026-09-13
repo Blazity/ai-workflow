@@ -9,6 +9,17 @@ const state = vi.hoisted(() => ({
     repositories: [] as Array<Record<string, unknown>>,
     providers: [] as Array<Record<string, unknown>>,
   },
+  /** Empty on every test but the one that needs a suggestion to actually run:
+   *  no provider configured is what the suggestion path finds when it goes
+   *  looking for one, and the refusal that produces is its own test. */
+  providers: [] as Array<Record<string, unknown>>,
+}));
+
+/** The two things a suggestion spends money on, held so one test can keep a
+ *  call in flight while a second call arrives under the same key. */
+const suggestion = vi.hoisted(() => ({
+  loadProfile: vi.fn(),
+  generateProviderText: vi.fn(),
 }));
 
 vi.mock("../../infra/vcs-config.js", () => ({
@@ -20,10 +31,18 @@ vi.mock("../../infra/vcs-config.js", () => ({
     MCP_MUTATION_RATE_LIMIT_PER_MINUTE: 20,
     MCP_AUDIT_RETENTION_DAYS: 365,
     MAX_CONCURRENT_AGENTS: 3,
+    ANTHROPIC_API_KEY: "anthropic-key",
   },
-  // No provider is configured on this deployment, which is what the suggestion
-  // path finds when it goes looking for one.
-  getConfiguredVcsProviders: () => [],
+  getConfiguredVcsProviders: () => state.providers,
+  getVcsProviderConfig: () => state.providers[0],
+}));
+vi.mock("../../infra/llm.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/llm.js")>()),
+  generateProviderText: suggestion.generateProviderText,
+}));
+vi.mock("../../adapters/vcs/create-vcs.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../adapters/vcs/create-vcs.js")>()),
+  createRepositoryProfileSource: () => ({ loadProfile: suggestion.loadProfile }),
 }));
 vi.mock("../../db/client.js", () => ({ getDb: () => state.db }));
 // The provider listing is the one thing the import half cannot do from a test
@@ -53,11 +72,15 @@ import {
 import type { McpActorContext, McpScope } from "../contracts.js";
 import { policyFor } from "../policy.js";
 import { actorFor, depsFor } from "../../test-support/mcp.js";
-import { MCP_MAX_TOOL_TIMEOUT_MS } from "../execute-tool.js";
-import { REPOSITORY_SUGGESTION_TIMEOUT_MS } from "../../services/repository-catalog/index.js";
+import { MCP_MAX_TOOL_TIMEOUT_MS, mcpToolTimeoutMs } from "../execute-tool.js";
+import {
+  REPOSITORY_SUGGESTION_TIMEOUT_MS,
+  resetRepositorySuggestionsInFlightForTests,
+} from "../../services/repository-catalog/index.js";
 import {
   REPOSITORY_PROFILE_DEADLINE_MS as TOOL_PROFILE_DEADLINE_MS,
   registerRepositoryCatalogTools,
+  repositorySuggestionDeadlineMs,
 } from "./repositories.js";
 
 const ORG_ID = "org-execute";
@@ -66,6 +89,28 @@ const NOW = new Date("2026-09-12T09:00:00.000Z");
 const KEY_ONE = "11111111-1111-4111-8111-111111111111";
 const KEY_TWO = "22222222-2222-4222-8222-222222222222";
 const KEY_THREE = "33333333-3333-4333-8333-333333333333";
+
+/** What the repository says about itself, as the profile source hands it over.
+ *  Only the join is under test here; the bundle's content is irrelevant. */
+const PROFILE_BUNDLE = {
+  provider: "github",
+  repoPath: "acme/api",
+  defaultBranch: "main",
+  description: "The API",
+  readme: "# acme api",
+  manifests: [{ path: "package.json", content: '{"scripts":{"test":"vitest"}}' }],
+  lockfiles: ["pnpm-lock.yaml"],
+  ciDefinitions: [],
+  languages: ["TypeScript"],
+  truncated: [],
+};
+
+/** What the model answers with, in the shape the suggestion schema asks for. */
+const PROPOSAL = {
+  description: "The team's public API.",
+  rules: "- never force push",
+  groups: [{ name: "test", commands: ["pnpm test"] }],
+};
 
 const WRITE_ONLY: ReadonlySet<McpScope> = new Set(["repositories:write"]);
 const READ_ONLY: ReadonlySet<McpScope> = new Set(["mcp:read"]);
@@ -79,6 +124,10 @@ beforeEach(async () => {
   db = await createTestDb();
   state.db = db;
   state.directory = { repositories: [], providers: [] };
+  state.providers = [];
+  suggestion.loadProfile.mockReset();
+  suggestion.generateProviderText.mockReset();
+  resetRepositorySuggestionsInFlightForTests();
   await db.insert(organization).values({ id: ORG_ID, name: "Execute", slug: "execute" });
 });
 
@@ -178,6 +227,38 @@ describe("repositories.list", () => {
     ).toEqual([
       ["acme/api", true, "manual"],
       ["acme/web", false, "manual"],
+    ]);
+  });
+
+  // D6 / row M13. An agent deciding whether a repository is worth opening reads
+  // this list, and "has it got any script groups" was the one thing the row
+  // could not answer. Counted rather than listed: the names are one
+  // `repositories.get` away and a listing of every group of every repository is
+  // the payload nobody asked for.
+  it("says how many script groups each repository declares", async () => {
+    await seedRepository({
+      path: "acme/api",
+      enabled: true,
+      scriptGroups: {
+        provider: "github",
+        repoPath: "acme/api",
+        groups: { test: { commands: ["pnpm test"] }, lint: { commands: ["pnpm lint"] } },
+      },
+    });
+    await seedRepository({ path: "acme/web", enabled: false, scriptGroups: null });
+    const client = await connectedClient({ role: "member", scopes: READ_ONLY });
+
+    const data = dataOf(
+      await client.callTool({ name: "repositories.list", arguments: {} }),
+    );
+
+    expect(
+      (data.repositories as Array<{ path: string; scriptGroupCount: number }>).map(
+        (row) => [row.path, row.scriptGroupCount],
+      ),
+    ).toEqual([
+      ["acme/api", 2],
+      ["acme/web", 0],
     ]);
   });
 });
@@ -519,6 +600,192 @@ describe("repositories.upsert", () => {
       enabled: false,
       profileVersion: 1,
     });
+  });
+
+  // D11. `enabled` on an existing repository used to be accepted and silently
+  // discarded, which on the wire reads exactly like a grant that landed and
+  // taught agents there were two ways to grant access. Refused when it would
+  // MOVE the switch; the test below covers the value that moves nothing.
+  it("refuses an enabled that would move the switch, and names the tool that grants", async () => {
+    const id = await seedRepository({ path: "acme/api", enabled: false });
+    const client = await connectedClient();
+
+    const result = await client.callTool({
+      name: "repositories.upsert",
+      arguments: {
+        repositoryId: id,
+        provider: "github",
+        path: "acme/api",
+        enabled: true,
+        reason: "trying the quiet way in",
+        idempotencyKey: KEY_ONE,
+      },
+    });
+
+    expect(errorOf(result)).toMatchObject({
+      code: "VALIDATION_FAILED",
+      message:
+        "enabled is not a profile field and this save would change it; use the switch on the Repositories list or repositories.set_enabled",
+    });
+    const after = dataOf(
+      await client.callTool({ name: "repositories.get", arguments: { repositoryId: id } }),
+    );
+    expect(after.repository).toMatchObject({ enabled: false, profileVersion: 1 });
+  });
+
+  // The other half of D11 as the gate settled it. Agents were told this field
+  // was ignored on an edit, so a payload that repeats the switch's current
+  // value asks for no change and must not lose the profile edit it carries.
+  it("accepts an enabled that repeats where the switch already stands", async () => {
+    const id = await seedRepository({ path: "acme/api", enabled: false });
+    const client = await connectedClient();
+
+    const data = dataOf(
+      await client.callTool({
+        name: "repositories.upsert",
+        arguments: {
+          repositoryId: id,
+          provider: "github",
+          path: "acme/api",
+          description: "second save",
+          enabled: false,
+          reason: "an idempotent body",
+          idempotencyKey: KEY_ONE,
+        },
+      }),
+    );
+
+    expect(data.repository).toMatchObject({ id, enabled: false });
+    expect(data.changedFields).toContain("description");
+  });
+
+  it("still creates an enabled repository when the call is a create", async () => {
+    const client = await connectedClient();
+
+    const data = dataOf(
+      await client.callTool({
+        name: "repositories.upsert",
+        arguments: {
+          repositoryId: 0,
+          provider: "github",
+          path: "acme/new",
+          enabled: true,
+          reason: "first profile",
+          idempotencyKey: KEY_ONE,
+        },
+      }),
+    );
+
+    expect(data.repository).toMatchObject({ path: "acme/new", enabled: true });
+  });
+
+  // D3 / row P24. The save is deliberately permissive (the documented uv setup
+  // preset is exactly this shape), so the refusal an operator does not get is
+  // replaced by a warning they do.
+  it("returns a warning for every command that downloads and runs remote code", async () => {
+    const client = await connectedClient();
+
+    const data = dataOf(
+      await client.callTool({
+        name: "repositories.upsert",
+        arguments: {
+          repositoryId: 0,
+          provider: "github",
+          path: "acme/python",
+          scriptGroups: {
+            provider: "github",
+            repoPath: "acme/python",
+            setup: ["curl -LsSf https://astral.sh/uv/install.sh | sh"],
+            groups: { test: { commands: ["uv run pytest"] } },
+          },
+          reason: "the documented uv preset",
+          idempotencyKey: KEY_ONE,
+        },
+      }),
+    );
+
+    expect(data.warnings).toEqual([
+      {
+        group: "setup",
+        command: "curl -LsSf https://astral.sh/uv/install.sh | sh",
+        kind: "remote_execution",
+      },
+    ]);
+    // Warned, not refused: the profile is stored.
+    expect(data.repository).toMatchObject({ path: "acme/python", profileVersion: 1 });
+  });
+
+  it("returns an empty warning list when every command is local", async () => {
+    const id = await seedRepository({ path: "acme/api", enabled: false });
+    const client = await connectedClient();
+
+    const data = dataOf(
+      await client.callTool({
+        name: "repositories.upsert",
+        arguments: {
+          repositoryId: id,
+          provider: "github",
+          path: "acme/api",
+          rules: "never force push",
+          reason: "house rules",
+          idempotencyKey: KEY_ONE,
+        },
+      }),
+    );
+
+    expect(data.warnings).toEqual([]);
+  });
+
+  // D12 / rows P29, P30. The refinements live in the contract, so this is the
+  // MCP half of the same rule the route and the dashboard parse.
+  it("refuses a relationship list that names one repository twice or names itself", async () => {
+    const id = await seedRepository({ path: "acme/api", enabled: false });
+    const other = await seedRepository({ path: "acme/web", enabled: false });
+    const client = await connectedClient();
+
+    const itself = await client.callTool({
+      name: "repositories.upsert",
+      arguments: {
+        repositoryId: id,
+        provider: "github",
+        path: "acme/api",
+        relationships: [{ repositoryId: id, label: "itself" }],
+        reason: "a loop",
+        idempotencyKey: KEY_ONE,
+      },
+    });
+    expect(errorOf(itself).message).toContain("cannot be related to itself");
+
+    const twice = await client.callTool({
+      name: "repositories.upsert",
+      arguments: {
+        repositoryId: id,
+        provider: "github",
+        path: "acme/api",
+        relationships: [
+          { repositoryId: other, label: "the client" },
+          { repositoryId: other, label: "again" },
+        ],
+        reason: "a duplicate",
+        idempotencyKey: KEY_TWO,
+      },
+    });
+    expect(errorOf(twice).message).toContain("related twice");
+
+    // An id the catalog does not hold is still accepted: the row it names may
+    // be imported later.
+    const unknown = await client.callTool({
+      name: "repositories.upsert",
+      arguments: {
+        repositoryId: id,
+        provider: "github",
+        path: "acme/api",
+        relationships: [{ repositoryId: 4242, label: "imported next week" }],
+        reason: "a forward reference",
+        idempotencyKey: KEY_THREE,
+      },
+    });
+    expect(unknown.isError).not.toBe(true);
   });
 
   it("refuses a create for a path the catalog already holds rather than editing it", async () => {
@@ -1138,6 +1405,75 @@ describe("repositories.suggest", () => {
     expect(rows[0]?.outcome).toBe("failed");
   });
 
+  // D13 / row S17. The mutation wrapper refuses a second call under the same
+  // key while the first holds the lease, and for every other tool that refusal
+  // is right. For this one it was the place this surface was meaner than the
+  // screen it mirrors: a second browser click AWAITS the answer already being
+  // paid for, while an agent retried into the same refusal for as long as the
+  // model took.
+  it("joins the suggestion already running when the same key comes back in flight", async () => {
+    const id = await seedRepository({ path: "acme/api", enabled: true });
+    state.providers = [
+      { kind: "github", auth: { appId: 1, privateKeyBase64: "cGVt", installationId: 2 } },
+    ];
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    suggestion.loadProfile.mockImplementation(async () => {
+      await held;
+      return PROFILE_BUNDLE;
+    });
+    suggestion.generateProviderText.mockResolvedValue({
+      object: PROPOSAL,
+      text: "",
+      usage: null,
+    });
+    const client = await connectedClient();
+    const args = { repositoryId: id, idempotencyKey: KEY_ONE };
+
+    const first = client.callTool({ name: "repositories.suggest", arguments: args });
+    // The call is in flight once the service has reached the provider read.
+    await vi.waitFor(() => expect(suggestion.loadProfile).toHaveBeenCalledTimes(1));
+    const second = client.callTool({ name: "repositories.suggest", arguments: args });
+    // The first call writes no audit row until it finishes, so the first row to
+    // appear is the second call being refused the lease. Waiting for it is what
+    // makes this a JOIN rather than an idempotent replay of a finished call.
+    await vi.waitFor(async () => {
+      const rows = await db.select().from(mcpAuditEvents);
+      expect(rows.some((row) => row.outcome === "rejected")).toBe(true);
+    });
+    release();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(firstResult.isError).not.toBe(true);
+    expect(secondResult.isError).not.toBe(true);
+    expect(dataOf(secondResult).proposal).toEqual(dataOf(firstResult).proposal);
+    // One provider call and one history row: the join never buys a second one.
+    expect(suggestion.generateProviderText).toHaveBeenCalledTimes(1);
+    expect(await db.select().from(repositorySuggestions)).toHaveLength(1);
+  });
+
+  it("still refuses the same key once the work it named is no longer in flight", async () => {
+    const id = await seedRepository({ path: "acme/api", enabled: true });
+    const client = await connectedClient();
+
+    // The first call fails fast (no provider configured) and the lease is
+    // settled by the time the second arrives, so the ordinary idempotent replay
+    // answers rather than a join: by then the answer is either stored or gone.
+    const first = await client.callTool({
+      name: "repositories.suggest",
+      arguments: { repositoryId: id, idempotencyKey: KEY_ONE },
+    });
+    const second = await client.callTool({
+      name: "repositories.suggest",
+      arguments: { repositoryId: id, idempotencyKey: KEY_ONE },
+    });
+
+    expect(errorOf(first)).toMatchObject({ code: "DEPENDENCY_UNAVAILABLE" });
+    expect(errorOf(second).code).not.toBe("CONFLICT");
+  });
+
   it("answers NOT_FOUND for a repository that does not exist", async () => {
     const client = await connectedClient();
 
@@ -1291,5 +1627,24 @@ describe("the scopes this surface asks for", () => {
     expect(TOOL_PROFILE_DEADLINE_MS + REPOSITORY_SUGGESTION_TIMEOUT_MS).toBeLessThanOrEqual(
       MCP_MAX_TOOL_TIMEOUT_MS,
     );
+  });
+
+  it("waits out a joined suggestion on the suggestion's deadline, not the read path's", () => {
+    const { settings } = depsFor(db, () => NOW);
+
+    // What `executeMcpMutation` computes for the call that STARTS the work,
+    // from the `minimumTimeoutMs` the suggest tool hands it.
+    const suggestionDeadline = mcpToolTimeoutMs(
+      settings,
+      TOOL_PROFILE_DEADLINE_MS + REPOSITORY_SUGGESTION_TIMEOUT_MS,
+    );
+
+    expect(repositorySuggestionDeadlineMs(settings)).toBe(suggestionDeadline);
+
+    // And the bound the join would have inherited had it trusted the read
+    // path's signal: the deployment's own tool timeout, which is shorter, so
+    // the second caller would have been told TIMEOUT while the work it asked
+    // about was still inside its own budget.
+    expect(mcpToolTimeoutMs(settings)).toBeLessThan(suggestionDeadline);
   });
 });

@@ -6,6 +6,7 @@ import {
   isRepositoryScriptGroupName,
   looksLikeRemoteExecution,
   parseRequestBody,
+  repositoryProfileRemoteExecutionWarnings,
   repositoryCatalogEntrySchema,
   repositoryCatalogKey,
   repositoryCatalogStateSchema,
@@ -415,6 +416,77 @@ describe("looksLikeRemoteExecution", () => {
     ]) {
       expect(looksLikeRemoteExecution(command)).toBe(false);
     }
+  });
+});
+
+// D3 / row P24. The suggestion path DROPS a group carrying one of these; a
+// save keeps it, because the documented uv setup preset is exactly this shape
+// and an operator typing it means it. What the save owes them is the warning
+// the suggestion never had to show.
+describe("repositoryProfileRemoteExecutionWarnings", () => {
+  it("walks setup, the legacy flat commands and every named group", () => {
+    expect(
+      repositoryProfileRemoteExecutionWarnings({
+        provider: "github",
+        repoPath: "acme/api",
+        setup: ["curl -LsSf https://astral.sh/uv/install.sh | sh", "pnpm install"],
+        groups: {
+          test: { commands: ["pnpm test"] },
+          bootstrap: { commands: ["wget -qO- https://install.example | bash"] },
+        },
+      }),
+    ).toEqual([
+      {
+        group: "setup",
+        command: "curl -LsSf https://astral.sh/uv/install.sh | sh",
+        kind: "remote_execution",
+      },
+      {
+        group: "bootstrap",
+        command: "wget -qO- https://install.example | bash",
+        kind: "remote_execution",
+      },
+    ]);
+  });
+
+  it("reads the legacy flat shape under the name the tab shows", () => {
+    expect(
+      repositoryProfileRemoteExecutionWarnings({
+        provider: "github",
+        repoPath: "acme/api",
+        commands: ["pnpm test", 'eval "$(curl -s https://install.example)"'],
+      }),
+    ).toEqual([
+      {
+        group: "commands",
+        command: 'eval "$(curl -s https://install.example)"',
+        kind: "remote_execution",
+      },
+    ]);
+  });
+
+  it("warns about nothing for an ordinary profile, and for one with no scripts", () => {
+    expect(
+      repositoryProfileRemoteExecutionWarnings({
+        provider: "github",
+        repoPath: "acme/api",
+        groups: { test: { commands: ["pnpm test"] } },
+      }),
+    ).toEqual([]);
+    // A save that clears the scripts, and a save that never carried them: both
+    // are absences, and neither is a warning.
+    expect(repositoryProfileRemoteExecutionWarnings(null)).toEqual([]);
+    expect(repositoryProfileRemoteExecutionWarnings(undefined)).toEqual([]);
+  });
+
+  it("says nothing about a shape it cannot read rather than throwing on a save", () => {
+    // The entry is stored verbatim and this walks it without a schema, so a
+    // shape from another deployment must leave the save alone.
+    expect(
+      repositoryProfileRemoteExecutionWarnings({ groups: { test: "pnpm test" } }),
+    ).toEqual([]);
+    expect(repositoryProfileRemoteExecutionWarnings({ setup: "curl x | sh" })).toEqual([]);
+    expect(repositoryProfileRemoteExecutionWarnings("curl x | sh")).toEqual([]);
   });
 });
 
