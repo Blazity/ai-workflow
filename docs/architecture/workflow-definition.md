@@ -286,7 +286,10 @@ structure by parsing messages.
 definition must pass before it can run: it wraps the `deploy` policy (or
 `runLoad` when the caller passes `checkEnvironmentAvailability: false`) and
 hands it the worker-only half as one injected issue source, so the package
-never learns what backs it. For a v2 definition the composed list runs, in one
+never learns what backs it. Before the environment availability check,
+deployment resolves each pinned Harness Profile version and supplies that
+block's provider and model to its contract; an unpinned block keeps the
+code-owned built-in default. For a v2 definition the composed list runs, in one
 pass: the graph rules of section 4 and the per-type configuration schemas (the
 policy's own structural half), then the block deployment rules from
 `apps/worker/src/engine/definition/block-registry.ts`, the binding analysis

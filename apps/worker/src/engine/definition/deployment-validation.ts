@@ -19,6 +19,7 @@
  * fixture under `__golden__/` pins the order byte for byte.
  */
 import type {
+  HarnessProfileManifest,
   VcsProviderKind,
   WorkflowBlockContractResolver,
   WorkflowDefinition,
@@ -54,6 +55,16 @@ import {
   workflowBlockDeploymentDefinitionIssues,
   workflowRepositoryScopeIssues,
 } from "./block-registry.js";
+
+export type ResolvedHarnessProfileForDeployment = Pick<
+  HarnessProfileManifest,
+  "harness" | "model"
+>;
+
+export type ResolvedHarnessProfilesForDeployment = ReadonlyMap<
+  string,
+  ResolvedHarnessProfileForDeployment | null
+>;
 
 /** Validation required before a definition may become executable, and today
  * also what a draft candidate is measured against: `validation.ts` runs this
@@ -130,6 +141,7 @@ export function validateWorkflowDefinitionIssuesForDeployment(
   analysis: WorkflowValueAnalysis,
   options: {
     checkEnvironmentAvailability?: boolean;
+    resolvedHarnessProfiles?: ResolvedHarnessProfilesForDeployment;
   } = {},
 ): WorkflowDefinitionValidationIssue[] {
   const deps: WorkflowGraphDeploymentPolicyDeps = {
@@ -142,6 +154,7 @@ export function validateWorkflowDefinitionIssuesForDeployment(
       blockParamsSchemas,
       configuredVcsProviders,
       analysis,
+      options.resolvedHarnessProfiles,
     ),
   };
   const policy = options.checkEnvironmentAvailability === false ? runLoad : deploy;
@@ -164,6 +177,7 @@ function workerDeploymentIssues(
   blockParamsSchemas: WorkflowBlockParamsSchemas,
   configuredVcsProviders: readonly VcsProviderKind[],
   analysis: WorkflowValueAnalysis,
+  resolvedHarnessProfiles?: ResolvedHarnessProfilesForDeployment,
 ): WorkflowDeploymentIssueSource {
   const catalogAnalysis = analyzeWorkflowV2Catalog(analysis);
   return ({ checkEnvironmentAvailability }) => [
@@ -171,7 +185,7 @@ function workerDeploymentIssues(
       def,
       resolveContract,
       blockParamsSchemas,
-      { checkEnvironmentAvailability },
+      { checkEnvironmentAvailability, resolvedHarnessProfiles },
     ),
     ...analysis.issues,
     ...workflowValueReferenceIssues(def, catalogAnalysis.catalogByNode),
@@ -183,6 +197,7 @@ function workerDeploymentIssues(
 function v2ConfigurationParams(
   node: WorkflowDefinitionV2Node,
   blockParamsSchemas: WorkflowBlockParamsSchemas,
+  resolvedHarnessProfiles?: ResolvedHarnessProfilesForDeployment,
 ): Record<string, WorkflowParamValue> {
   // Branch and Transform keep their configuration out of params: their typed
   // shapes are operations, never executor params.
@@ -214,10 +229,10 @@ function v2ConfigurationParams(
     }
   }
   if (isHarnessProfileReference(node.configuration.harnessProfile)) {
-    const profile = resolveBuiltinHarnessProfile(
-      node.configuration.harnessProfile,
-    );
-    if (profile !== null) {
+    const profile = resolvedHarnessProfiles?.has(node.id)
+      ? resolvedHarnessProfiles.get(node.id)
+      : resolveBuiltinHarnessProfile(node.configuration.harnessProfile);
+    if (profile != null) {
       params.provider = profile.harness.provider;
       params.model = profile.model.id;
     }
@@ -229,11 +244,33 @@ function validateWorkflowV2BlockDeploymentIssues(
   def: WorkflowDefinitionV2,
   resolveContract: WorkflowBlockContractResolver,
   blockParamsSchemas: WorkflowBlockParamsSchemas,
-  options: { checkEnvironmentAvailability?: boolean },
+  options: {
+    checkEnvironmentAvailability?: boolean;
+    resolvedHarnessProfiles?: ResolvedHarnessProfilesForDeployment;
+  },
 ): WorkflowDefinitionValidationIssue[] {
   const issues: WorkflowDefinitionValidationIssue[] = [];
   for (const [nodeIndex, node] of def.nodes.entries()) {
-    const params = v2ConfigurationParams(node, blockParamsSchemas);
+    const profileReference = node.configuration.harnessProfile;
+    const profileUnavailable =
+      isHarnessProfileReference(profileReference) &&
+      options.resolvedHarnessProfiles?.has(node.id) === true &&
+      options.resolvedHarnessProfiles.get(node.id) === null;
+    if (profileUnavailable) {
+      issues.push({
+        code: "harness_profile_unavailable",
+        severity: "error",
+        nodeId: node.id,
+        path: `/nodes/${nodeIndex}/configuration/harnessProfile`,
+        message:
+          `Harness Profile "${profileReference.profileId}" version ${profileReference.version} is unavailable.`,
+      });
+    }
+    const params = v2ConfigurationParams(
+      node,
+      blockParamsSchemas,
+      options.resolvedHarnessProfiles,
+    );
     if (
       node.type === "trigger_schedule" &&
       (typeof params.cron !== "string" || params.cron.trim() === "")
@@ -375,7 +412,10 @@ function validateWorkflowV2BlockDeploymentIssues(
           message: `Block "${node.id}" (${node.type}) is unavailable: ${issue.message}`,
         })),
       );
-    } else if (options.checkEnvironmentAvailability !== false) {
+    } else if (
+      options.checkEnvironmentAvailability !== false &&
+      !profileUnavailable
+    ) {
       const availability = resolveContract(node.type, params).availability;
       if (!availability.available) {
         issues.push(
