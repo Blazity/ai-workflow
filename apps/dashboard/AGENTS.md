@@ -12,6 +12,8 @@ worker is the authority on run state.
 Root instructions: [../../AGENTS.md](../../AGENTS.md). Read those first; this
 file adds only what is true of the dashboard.
 
+The cockpit visual language and shared primitive contract live in [DESIGN.md](../../DESIGN.md).
+
 ## Run and test
 
 From `apps/dashboard` (workspace packages are consumed as TypeScript source;
