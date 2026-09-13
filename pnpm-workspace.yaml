@@ -8,6 +8,7 @@ packages:
 catalog:
   "@octokit/auth-app": ^8.2.0
   "@types/node": ^22.0.0
+  happy-dom: 20.14.5
   tsx: ^4.23.13
   typescript: ^5.8
   yaml: ^2.9.0

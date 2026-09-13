@@ -17,6 +17,7 @@ interface ListboxOption {
   value: string;
   label: string;
   hint?: string;
+  disabled?: boolean;
 }
 
 export interface ListboxProps {
@@ -24,9 +25,14 @@ export interface ListboxProps {
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
-  ariaLabel: string;
+  ariaLabel?: string;
   className?: string;
   fallbackLabel?: string;
+  id?: string;
+  ariaDescribedBy?: string;
+  invalid?: boolean;
+  density?: "compact" | "default";
+  triggerClassName?: string;
 }
 
 export function Listbox({
@@ -37,6 +43,11 @@ export function Listbox({
   ariaLabel,
   className,
   fallbackLabel,
+  id,
+  ariaDescribedBy,
+  invalid = false,
+  density = "compact",
+  triggerClassName,
 }: ListboxProps) {
   const [state, dispatch] = useReducer(listboxReducer, { open: false, activeIdx: 0 });
   const { open, activeIdx } = state;
@@ -47,6 +58,10 @@ export function Listbox({
   const [pos, setPos] = useState<PopupPosition | null>(null);
 
   const selectedIdx = options.findIndex((o) => o.value === value);
+  const firstEnabledIdx = options.findIndex((option) => !option.disabled);
+  const openingIdx = selectedIdx >= 0 && !options[selectedIdx]?.disabled
+    ? selectedIdx
+    : Math.max(0, firstEnabledIdx);
   const current = selectedIdx >= 0 ? options[selectedIdx] : undefined;
   const displayLabel = current
     ? current.label
@@ -103,17 +118,38 @@ export function Listbox({
 
   const commit = (idx: number) => {
     const opt = options[idx];
-    if (opt) onChange(opt.value);
+    if (!opt || opt.disabled) return;
+    onChange(opt.value);
     dispatch({ type: "close" });
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    const ev = keyToEvent(e.key, state, options.length, selectedIdx);
+    if (open && (e.key === "Home" || e.key === "End")) {
+      e.preventDefault();
+      const indexes = options
+        .map((option, idx) => ({ option, idx }))
+        .filter(({ option }) => !option.disabled);
+      const target = e.key === "Home" ? indexes[0] : indexes.at(-1);
+      if (target) dispatch({ type: "activate", idx: target.idx });
+      return;
+    }
+    const ev = keyToEvent(e.key, state, options.length, openingIdx);
     if (!ev) return;
     if (e.key !== "Tab") e.preventDefault();
+    if (open && ev.type === "move") {
+      let next = activeIdx + ev.delta;
+      while (next >= 0 && next < options.length && options[next]?.disabled) {
+        next += ev.delta;
+      }
+      if (next >= 0 && next < options.length) {
+        dispatch({ type: "activate", idx: next });
+      }
+      return;
+    }
     if (ev.type === "commit") {
       const opt = options[activeIdx];
-      if (opt) onChange(opt.value);
+      if (!opt || opt.disabled) return;
+      onChange(opt.value);
     }
     dispatch(ev);
   };
@@ -122,6 +158,7 @@ export function Listbox({
     <div ref={rootRef} className={`relative w-full ${className ?? ""}`}>
       <button
         ref={triggerRef}
+        id={id}
         type="button"
         role="combobox"
         aria-haspopup="listbox"
@@ -130,11 +167,13 @@ export function Listbox({
         // Focus never leaves the trigger, so the active option has to be announced from here.
         aria-activedescendant={open && options[activeIdx] ? `${listId}-opt-${activeIdx}` : undefined}
         aria-label={ariaLabel}
+        aria-describedby={ariaDescribedBy}
+        aria-invalid={invalid || undefined}
         disabled={disabled}
         data-open={open}
-        onClick={() => dispatch({ type: "toggle", selectedIdx })}
+        onClick={() => dispatch({ type: "toggle", selectedIdx: openingIdx })}
         onKeyDown={onKeyDown}
-        className="group/sel appearance-none w-full inline-flex items-center gap-2 h-[26px] px-2 bg-off-white border border-neutral-200 rounded-xs font-mono text-xs text-coal outline-none cursor-pointer transition-[color,background-color,border-color,box-shadow] duration-[120ms] ease-standard hover:border-neutral-300 focus-visible:border-mariner focus-visible:ring-2 focus-visible:ring-mariner-100 data-[open=true]:border-mariner data-[open=true]:ring-2 data-[open=true]:ring-mariner-100 disabled:opacity-60 disabled:cursor-default"
+        className={`group/sel appearance-none w-full inline-flex items-center gap-2 ${density === "compact" ? "h-[26px]" : "h-[30px]"} px-2 bg-off-white border rounded-xs font-mono text-xs text-coal outline-none cursor-pointer transition-[color,background-color,border-color,opacity,transform] duration-[var(--motion-fast)] ease-standard hover:border-neutral-300 focus-visible:border-mariner focus-visible:ring-2 focus-visible:ring-mariner data-[open=true]:border-mariner data-[open=true]:ring-2 data-[open=true]:ring-mariner disabled:opacity-60 disabled:cursor-default ${invalid ? "border-fail" : "border-neutral-200"} ${triggerClassName ?? ""}`}
       >
         <span className="flex-1 min-w-0 truncate text-left">{displayLabel}</span>
         <svg
@@ -145,7 +184,7 @@ export function Listbox({
           strokeWidth={2.5}
           strokeLinecap="round"
           strokeLinejoin="round"
-          className="size-3 shrink-0 -mr-0.5 text-neutral-400 transition-[transform,color] duration-[160ms] ease-standard group-hover/sel:text-neutral-600 group-data-[open=true]/sel:rotate-180 group-data-[open=true]/sel:text-mariner"
+          className="size-3 shrink-0 -mr-0.5 text-neutral-400 transition-[transform,color] duration-[var(--motion-base)] ease-standard group-hover/sel:text-neutral-600 group-data-[open=true]/sel:rotate-180 group-data-[open=true]/sel:text-mariner"
         >
           <path d="m6 9 6 6 6-6" />
         </svg>
@@ -178,10 +217,13 @@ export function Listbox({
                 id={`${listId}-opt-${i}`}
                 role="option"
                 aria-selected={selected}
+                aria-disabled={opt.disabled || undefined}
                 data-active={active}
-                onMouseEnter={() => dispatch({ type: "activate", idx: i })}
+                onMouseEnter={() => !opt.disabled && dispatch({ type: "activate", idx: i })}
                 onClick={() => commit(i)}
-                className={`relative mx-1 flex items-center gap-2.5 rounded-[3px] pl-3 pr-2 py-1.5 cursor-pointer transition-colors duration-[90ms] ${
+                className={`relative mx-1 flex items-center gap-2.5 rounded-[3px] pl-3 pr-2 py-1.5 transition-colors duration-[var(--motion-fast)] ${
+                  opt.disabled ? "cursor-default opacity-40" : "cursor-pointer"
+                } ${
                   active ? "bg-app-bg" : ""
                 }`}
               >

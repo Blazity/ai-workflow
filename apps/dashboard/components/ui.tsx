@@ -7,6 +7,15 @@ import type { RunPullRequest } from "@shared/contracts";
 import { runPullRequests } from "@/lib/run-prs";
 import type { RunStatus } from "@/lib/types";
 
+export * from "./ui/button";
+export * from "./ui/field";
+export * from "./ui/icon-button";
+export * from "./ui/input";
+export * from "./ui/modal";
+export * from "./ui/select";
+export * from "./ui/skeleton";
+export * from "./ui/textarea";
+
 /* ── BlazityLogo — inline SVG flame + wordmark ───────────────────────────── */
 export function BlazityLogo({
   size = 28,
