@@ -20,6 +20,7 @@ each `apps/*/AGENTS.md`, `packages/AGENTS.md`, and `README.md`, `AGENTS.md`,
 |---|---|
 | [README.md](../README.md) | What the product is, what works today, and what is planned |
 | [AGENTS.md](../AGENTS.md) | Routing table: which document to open for the work at hand, plus the rules that bind every edit |
+| [DESIGN.md](../DESIGN.md) | Dashboard cockpit visual language, tokens, shared primitive rules, layout, depth, and current gaps |
 | [SETUP.md](../SETUP.md) | Reference facts for setting up and deploying: accounts, environment variables, webhooks, smoke tests |
 | [CONTEXT.md](../CONTEXT.md) | Glossary. What a block, a run, a definition and a trigger mean here |
 | [delivery-gates.md](./delivery-gates.md) | How work is identified, verified, evidenced, closed, deployed and released |

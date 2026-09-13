@@ -19,6 +19,7 @@ the rules that bind every edit.
 |---|---|
 | Anything, first | [docs/index.md](docs/index.md), the only list of current documents |
 | Words that mean something specific here | [CONTEXT.md](CONTEXT.md) |
+| Visual language, tokens, shared primitives, what a screen may look like | [DESIGN.md](DESIGN.md) |
 | Evidence, closing a ticket, a release | [docs/delivery-gates.md](docs/delivery-gates.md) |
 | Workflow definitions, blocks, bindings, triggers, loops, validation | [docs/architecture/workflow-definition.md](docs/architecture/workflow-definition.md) |
 | Repository script groups and the checks blocks run | [docs/architecture/repository-scripts.md](docs/architecture/repository-scripts.md) |
