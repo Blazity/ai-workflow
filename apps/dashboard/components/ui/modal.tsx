@@ -53,6 +53,35 @@ interface InertMainState {
 
 const inertMainStates = new WeakMap<HTMLElement, InertMainState>();
 
+interface BodyScrollState {
+  count: number;
+  overflow: string;
+}
+
+const bodyScrollStates = new WeakMap<HTMLElement, BodyScrollState>();
+
+function lockBodyScroll(): () => void {
+  const body = document.body;
+  const current = bodyScrollStates.get(body);
+  if (current) {
+    current.count += 1;
+  } else {
+    bodyScrollStates.set(body, {
+      count: 1,
+      overflow: body.style.overflow,
+    });
+    body.style.overflow = "hidden";
+  }
+  return () => {
+    const state = bodyScrollStates.get(body);
+    if (!state) return;
+    state.count -= 1;
+    if (state.count > 0) return;
+    bodyScrollStates.delete(body);
+    body.style.overflow = state.overflow;
+  };
+}
+
 function makeCockpitMainInert(): () => void {
   const main = document.querySelector<HTMLElement>("[data-cockpit-main]");
   if (!main) {
@@ -142,8 +171,7 @@ export function Modal({
     previousFocusRef.current = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    const restoreBodyScroll = lockBodyScroll();
     const restoreCockpitMain = makeCockpitMainInert();
     const focusInside = (preferLast = false) => {
       const dialog = dialogRef.current;
@@ -213,7 +241,7 @@ export function Modal({
       cancelAnimationFrame(frame);
       window.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("focusin", onFocusIn, true);
-      document.body.style.overflow = previousOverflow;
+      restoreBodyScroll();
       restoreCockpitMain();
       const previous = previousFocusRef.current;
       if (previous && document.contains(previous)) previous.focus();

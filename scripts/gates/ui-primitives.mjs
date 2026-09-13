@@ -35,10 +35,47 @@ const inlineMotionProperties = new Set([
   "transition",
   "transitionDuration",
 ]);
+const completeFocusClassSets = [
+  [
+    "focus-visible:outline-none",
+    "focus-visible:ring-2",
+    "focus-visible:ring-mariner",
+    "focus-visible:ring-offset-1",
+  ],
+  [
+    "focus-visible:outline-none",
+    "focus-visible:ring-2",
+    "focus-visible:ring-inset",
+    "focus-visible:ring-mariner",
+  ],
+  [
+    "outline-none",
+    "focus-visible:border-mariner",
+    "focus-visible:ring-2",
+    "focus-visible:ring-mariner",
+  ],
+  [
+    "focus-visible:outline",
+    "focus-visible:outline-2",
+    "focus-visible:outline-white",
+    "focus-visible:outline-offset-1",
+  ],
+];
 const selfTestFixtures = [
   {
     file: "plain-button-without-focus.txt",
     path: "apps/dashboard/components/cockpit/plain-button-without-focus.tsx",
+    rule: "button-focus",
+  },
+  {
+    file: "conditional-focus-ring.txt",
+    path: "apps/dashboard/components/cockpit/conditional-focus-ring.tsx",
+    rule: "button-focus",
+  },
+  {
+    file: "unconditional-focus-ring.txt",
+    passesRule: true,
+    path: "apps/dashboard/components/cockpit/unconditional-focus-ring.tsx",
     rule: "button-focus",
   },
   {
@@ -223,9 +260,109 @@ function selectedPrimaryFindings(path, source, sourceFile) {
   return findings;
 }
 
+function localClassBindings(sourceFile) {
+  const bindings = new Map();
+  const visit = (node) => {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer
+    ) {
+      bindings.set(node.name.text, node.initializer);
+    } else if (ts.isFunctionDeclaration(node) && node.name && node.body) {
+      bindings.set(node.name.text, node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return bindings;
+}
+
+function returnedExpression(body) {
+  if (!ts.isBlock(body)) return body;
+  const returns = body.statements.filter(ts.isReturnStatement);
+  return returns.length === 1 ? returns[0].expression : undefined;
+}
+
+function unconditionalClassText(expression, bindings, seen = new Set()) {
+  const current = unwrapExpression(expression);
+  if (ts.isStringLiteral(current) || ts.isNoSubstitutionTemplateLiteral(current)) {
+    return current.text;
+  }
+  if (ts.isTemplateExpression(current)) {
+    return [
+      current.head.text,
+      ...current.templateSpans.flatMap((span) => [
+        unconditionalClassText(span.expression, bindings, seen),
+        span.literal.text,
+      ]),
+    ].join(" ");
+  }
+  if (
+    ts.isBinaryExpression(current) &&
+    current.operatorToken.kind === ts.SyntaxKind.PlusToken
+  ) {
+    return `${unconditionalClassText(current.left, bindings, seen)} ${unconditionalClassText(current.right, bindings, seen)}`;
+  }
+  if (ts.isArrayLiteralExpression(current)) {
+    return current.elements
+      .filter((element) => !ts.isSpreadElement(element))
+      .map((element) => unconditionalClassText(element, bindings, seen))
+      .join(" ");
+  }
+  if (
+    ts.isCallExpression(current) &&
+    ts.isPropertyAccessExpression(current.expression) &&
+    current.expression.name.text === "join"
+  ) {
+    return unconditionalClassText(current.expression.expression, bindings, seen);
+  }
+  if (ts.isIdentifier(current)) {
+    if (seen.has(current.text)) return "";
+    const binding = bindings.get(current.text);
+    if (!binding) return "";
+    const nextSeen = new Set(seen).add(current.text);
+    if (ts.isFunctionDeclaration(binding)) {
+      const returned = returnedExpression(binding.body);
+      return returned
+        ? unconditionalClassText(returned, bindings, nextSeen)
+        : "";
+    }
+    if (ts.isArrowFunction(binding) || ts.isFunctionExpression(binding)) {
+      const returned = returnedExpression(binding.body);
+      return returned
+        ? unconditionalClassText(returned, bindings, nextSeen)
+        : "";
+    }
+    return unconditionalClassText(binding, bindings, nextSeen);
+  }
+  if (ts.isCallExpression(current) && ts.isIdentifier(current.expression)) {
+    return unconditionalClassText(current.expression, bindings, seen);
+  }
+  return "";
+}
+
+function unconditionalClassNameText(attribute, bindings) {
+  const initializer = attribute?.initializer;
+  if (!initializer) return "";
+  if (ts.isStringLiteral(initializer)) return initializer.text;
+  if (ts.isJsxExpression(initializer) && initializer.expression) {
+    return unconditionalClassText(initializer.expression, bindings);
+  }
+  return "";
+}
+
+function hasCompleteFocusClasses(classText) {
+  const classes = new Set(classText.split(/\s+/u).filter(Boolean));
+  return completeFocusClassSets.some((required) =>
+    required.every((className) => classes.has(className)),
+  );
+}
+
 function buttonFocusFindings(path, source, sourceFile) {
   if (path.startsWith(primitiveRoot) || primitiveOwnerPaths.has(path)) return [];
   const findings = [];
+  const bindings = localClassBindings(sourceFile);
   const visit = (node) => {
     if (
       (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) &&
@@ -237,7 +374,7 @@ function buttonFocusFindings(path, source, sourceFile) {
           ts.isIdentifier(attribute.name) &&
           attribute.name.text === "className",
       );
-      if (!className?.initializer?.getText(sourceFile).includes("focus-visible:")) {
+      if (!hasCompleteFocusClasses(unconditionalClassNameText(className, bindings))) {
         findings.push(
           finding(
             path,
@@ -347,23 +484,31 @@ function runSelfTest(options, allowed) {
   for (const fixture of selfTestFixtures) {
     const source = readFileSync(join(fixtureRoot, fixture.file), "utf8");
     const findings = findingsForSource(fixture.path, source);
-    assert.ok(
-      findings.some((entry) => entry.rule === fixture.rule),
-      `${fixture.file} did not trigger ${fixture.rule}`,
-    );
+    if (fixture.passesRule) {
+      assert.ok(
+        findings.every((entry) => entry.rule !== fixture.rule),
+        `${fixture.file} unexpectedly triggered ${fixture.rule}`,
+      );
+      console.log(`ui-primitives self-test: ${fixture.file} passed ${fixture.rule}`);
+    } else {
+      assert.ok(
+        findings.some((entry) => entry.rule === fixture.rule),
+        `${fixture.file} did not trigger ${fixture.rule}`,
+      );
+      console.log(`ui-primitives self-test: ${fixture.file} caught ${fixture.rule}`);
+    }
     if (fixture.absentRule) {
       assert.ok(
         findings.every((entry) => entry.rule !== fixture.absentRule),
         `${fixture.file} unexpectedly triggered ${fixture.absentRule}`,
       );
     }
-    console.log(`ui-primitives self-test: ${fixture.file} caught ${fixture.rule}`);
   }
   const realFindings = collectFindings(options, allowed);
   reportFindings(realFindings);
   assert.equal(realFindings.length, 0, "the real dashboard tree must pass");
   console.log(
-    `ui-primitives self-test PASS: ${selfTestFixtures.length} fixture(s) caught; real tree has 0 violations`,
+    `ui-primitives self-test PASS: ${selfTestFixtures.length} fixture(s) verified; real tree has 0 violations`,
   );
 }
 

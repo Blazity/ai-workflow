@@ -326,6 +326,11 @@ const FlowNode = React.memo(function FlowNode({
           event.stopPropagation();
           onSelect(node.id, event);
         }}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          event.currentTarget.click();
+        }}
         aria-label={`${cat.label}: ${node.name || cat.label}`}
         aria-pressed={selected}
         aria-invalid={invalid || undefined}

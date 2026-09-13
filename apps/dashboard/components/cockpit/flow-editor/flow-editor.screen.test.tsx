@@ -38,6 +38,32 @@ const triggerContract: WorkflowBlockContract = {
   availability: { available: true, unavailableReason: null },
 };
 
+const promptContract: WorkflowBlockContract = {
+  type: "call_llm",
+  presentation: {
+    group: "utility",
+    label: "Call LLM",
+    description: "Runs a focused LLM transform.",
+    color: "#64748B",
+    softColor: "#EEF1F5",
+    glyph: "L",
+  },
+  defaults: { prompt: "" },
+  ports: ["out"],
+  allowsFailurePort: true,
+  inputs: {
+    prompt: { required: false, schema: { type: "string" } },
+    system: { required: false, schema: { type: "string" } },
+  },
+  additionalInputs: [],
+  output: {
+    schema: { type: "unknown" },
+    bindingSchema: { type: "unknown" },
+    statusVariants: ["ok"],
+  },
+  availability: { available: true, unavailableReason: null },
+};
+
 const options = {
   defaultModel: "model",
   blockRegistry: { trigger_ticket_ai: triggerContract },
@@ -60,6 +86,28 @@ const validation: WorkflowValidationState = {
   availableValuesByNode: {},
 };
 
+const promptNode: FlowNodeDef = {
+  id: "prompt",
+  type: "call_llm",
+  name: "Summarize ticket",
+  x: 40,
+  y: 40,
+  params: { prompt: "Summarize this ticket." },
+  inputs: {},
+};
+
+const promptOptions = {
+  defaultModel: "model",
+  blockRegistry: { call_llm: promptContract },
+} as WorkflowEditorOptions;
+
+const promptValidation: WorkflowValidationState = {
+  status: "valid",
+  issues: [],
+  nodeContracts: { prompt: promptContract },
+  availableValuesByNode: {},
+};
+
 function rect(left: number, top: number, width: number, height: number): DOMRect {
   return {
     x: left,
@@ -74,7 +122,15 @@ function rect(left: number, top: number, width: number, height: number): DOMRect
   } as DOMRect;
 }
 
-function mountEditor() {
+function mountEditor({
+  editorNode = node,
+  editorOptions = options,
+  editorValidation = validation,
+}: {
+  editorNode?: FlowNodeDef;
+  editorOptions?: WorkflowEditorOptions;
+  editorValidation?: WorkflowValidationState;
+} = {}) {
   const dom = installTestDom();
   const style = document.createElement("style");
   // Tailwind emits both declarations for the old Button-based overlay. The
@@ -82,7 +138,10 @@ function mountEditor() {
   style.textContent = ".absolute{position:absolute}.relative{position:relative}";
   document.head.append(style);
   const container = document.createElement("div");
-  document.body.append(container);
+  const cockpitMain = document.createElement("main");
+  cockpitMain.dataset.cockpitMain = "";
+  cockpitMain.append(container);
+  document.body.append(cockpitMain);
   let root: Root | undefined;
 
   act(() => {
@@ -96,7 +155,7 @@ function mountEditor() {
         }}
       >
         <FlowEditor
-          nodes={[node]}
+          nodes={[editorNode]}
           edges={[]}
           edgeGeometry={{}}
           limits={{}}
@@ -120,11 +179,11 @@ function mountEditor() {
           saveEnabled={false}
           saving={false}
           error={null}
-          validation={validation}
+          validation={editorValidation}
           onSave={() => undefined}
           headerTitle="Ticket workflow"
           headerVersionBadge="draft"
-          options={options}
+          options={editorOptions}
         />
       </RepositoryCatalogProvider>,
     );
@@ -132,10 +191,15 @@ function mountEditor() {
 
   return {
     container,
+    cockpitMain,
     dom,
+    unmount() {
+      act(() => root?.unmount());
+      root = undefined;
+    },
     cleanup() {
       act(() => root?.unmount());
-      container.remove();
+      cockpitMain.remove();
       style.remove();
       dom.restore();
     },
@@ -171,6 +235,150 @@ test("workflow editor node selector covers the card and a center click opens the
       }));
     });
     assert.ok(mounted.container.querySelector('[aria-label="Close inspector"]'));
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test("workflow editor node selector opens the inspector with Enter and Space", () => {
+  const mounted = mountEditor();
+  try {
+    const selector = mounted.container.querySelector<HTMLButtonElement>(
+      '[data-canvas-node-selector="entry"]',
+    );
+    assert.ok(selector);
+
+    for (const key of ["Enter", " "]) {
+      act(() => selector.focus());
+      assert.equal(document.activeElement, selector);
+      act(() => {
+        selector.dispatchEvent(new KeyboardEvent("keydown", {
+          key,
+          bubbles: true,
+          cancelable: true,
+        }));
+      });
+      const close = mounted.container.querySelector<HTMLButtonElement>(
+        '[aria-label="Close inspector"]',
+      );
+      assert.ok(close, `expected ${key === " " ? "Space" : key} to open the inspector`);
+      act(() => close.click());
+      assert.equal(
+        mounted.container.querySelector('[aria-label="Close inspector"]'),
+        null,
+      );
+    }
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test("workflow editor nested dialogs retain page locks when closed in both orders", () => {
+  const mounted = mountEditor({
+    editorNode: promptNode,
+    editorOptions: promptOptions,
+    editorValidation: promptValidation,
+  });
+  document.body.style.overflow = "clip";
+
+  const openNestedDialogs = () => {
+    const selector = mounted.container.querySelector<HTMLButtonElement>(
+      '[data-canvas-node-selector="prompt"]',
+    );
+    assert.ok(selector);
+    act(() => selector.click());
+    const editPrompt = mounted.container.querySelector<HTMLButtonElement>(
+      '[aria-label="Edit Prompt"]',
+    );
+    assert.ok(editPrompt);
+    act(() => editPrompt.click());
+    const editorDialog = Array.from(
+      document.querySelectorAll<HTMLElement>('[role="dialog"][data-state="open"]'),
+    ).find((dialog) => dialog.textContent?.includes("Edit Prompt"));
+    assert.ok(editorDialog);
+    const save = Array.from(editorDialog.querySelectorAll<HTMLButtonElement>("button")).find(
+      (candidate) => candidate.textContent?.trim() === "↥ Save",
+    );
+    assert.ok(save);
+    act(() => save.click());
+    assert.equal(
+      document.querySelectorAll('[role="dialog"][data-state="open"]').length,
+      2,
+    );
+    return editorDialog;
+  };
+
+  const closeSaveDialog = () => {
+    const dialogs = Array.from(
+      document.querySelectorAll<HTMLElement>('[role="dialog"][data-state="open"]'),
+    );
+    const saveDialog = dialogs.find((dialog) =>
+      dialog.textContent?.includes("Save to library"),
+    );
+    assert.ok(saveDialog);
+    const cancel = Array.from(saveDialog.querySelectorAll<HTMLButtonElement>("button")).find(
+      (candidate) => candidate.textContent?.trim() === "Cancel",
+    );
+    assert.ok(cancel);
+    act(() => cancel.click());
+  };
+
+  const closeEditorDialog = (dialog: HTMLElement) => {
+    const close = Array.from(dialog.querySelectorAll<HTMLButtonElement>("button")).find(
+      (candidate) => candidate.textContent?.trim() === "Close",
+    );
+    assert.ok(close);
+    act(() => close.click());
+  };
+
+  try {
+    let editorDialog = openNestedDialogs();
+    assert.equal(mounted.cockpitMain.hasAttribute("inert"), true);
+    assert.equal(document.body.style.overflow, "hidden");
+    closeSaveDialog();
+    assert.equal(mounted.cockpitMain.hasAttribute("inert"), true);
+    assert.equal(document.body.style.overflow, "hidden");
+    closeEditorDialog(editorDialog);
+    assert.equal(mounted.cockpitMain.hasAttribute("inert"), false);
+    assert.equal(document.body.style.overflow, "clip");
+
+    editorDialog = openNestedDialogs();
+    closeEditorDialog(editorDialog);
+    assert.equal(mounted.cockpitMain.hasAttribute("inert"), true);
+    assert.equal(document.body.style.overflow, "hidden");
+    closeSaveDialog();
+    assert.equal(mounted.cockpitMain.hasAttribute("inert"), false);
+    assert.equal(document.body.style.overflow, "clip");
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test("workflow editor unmount while dialogs are open clears inert and body overflow", () => {
+  const mounted = mountEditor({
+    editorNode: promptNode,
+    editorOptions: promptOptions,
+    editorValidation: promptValidation,
+  });
+  document.body.style.overflow = "scroll";
+
+  try {
+    const selector = mounted.container.querySelector<HTMLButtonElement>(
+      '[data-canvas-node-selector="prompt"]',
+    );
+    assert.ok(selector);
+    act(() => selector.click());
+    const editPrompt = mounted.container.querySelector<HTMLButtonElement>(
+      '[aria-label="Edit Prompt"]',
+    );
+    assert.ok(editPrompt);
+    act(() => editPrompt.click());
+    assert.equal(mounted.cockpitMain.hasAttribute("inert"), true);
+    assert.equal(document.body.style.overflow, "hidden");
+
+    mounted.unmount();
+    assert.equal(mounted.cockpitMain.hasAttribute("inert"), false);
+    assert.equal(document.body.style.overflow, "scroll");
   } finally {
     mounted.cleanup();
   }

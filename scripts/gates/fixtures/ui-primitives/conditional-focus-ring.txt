@@ -1,0 +1,11 @@
+export function ConditionalFocusRing({ active }: { active: boolean }) {
+  return (
+    <button
+      className={active
+        ? "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner focus-visible:ring-offset-1"
+        : "rounded-sm border"}
+    >
+      Open
+    </button>
+  );
+}
