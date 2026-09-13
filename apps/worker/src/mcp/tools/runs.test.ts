@@ -6,7 +6,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { asc } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// A small budget on purpose: it makes runs.trace's page-limit derivation
+// The snapshot below carries a small budget on purpose: it makes runs.trace's page-limit derivation
 // (half the budget, divided by the 8KB per-attempt cap) small enough to
 // exercise multi-page pagination with a handful of seeded attempts instead
 // of hundreds, while staying well above what any other tool in this file
@@ -14,15 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../../infra/vcs-config.js", () => ({
   env: {
     MCP_SERVER_VERSION: "0.1.0",
-    MCP_MAX_RESULT_BYTES: 65_536,
-    MCP_TOOL_TIMEOUT_MS: 30_000,
-    MCP_READ_RATE_LIMIT_PER_MINUTE: 120,
-    MCP_MUTATION_RATE_LIMIT_PER_MINUTE: 20,
-    MCP_AUDIT_RETENTION_DAYS: 365,
     JIRA_BASE_URL: "https://blazity.atlassian.net",
-    AGENT_KIND: "claude",
-    CLAUDE_MODEL: "claude-opus-4-8",
-    CODEX_MODEL: "gpt-5.4",
   },
 }));
 
@@ -46,6 +38,7 @@ import {
 } from "../../db/repositories/runs/run-observability.js";
 import { prepareReplayAttemptFinishPersistence } from "../../run-observability/runtime-hooks.js";
 import { depsFor } from "../../test-support/mcp.js";
+import { testSettingsSnapshot } from "../../test-support/settings.js";
 import { registerRunLogsTool, registerRunTools } from "./runs.js";
 
 const ORG_ID = "org-execute";
@@ -91,7 +84,9 @@ afterEach(async () => {
 
 async function connectedClient() {
   const server = new McpServer({ name: "runs-test", version: "0.1.0" });
-  const deps = depsFor(db, () => new Date("2026-08-11T12:00:00.000Z"));
+  const deps = depsFor(db, () => new Date("2026-08-11T12:00:00.000Z"), {
+    settings: testSettingsSnapshot({ MCP_MAX_RESULT_BYTES: 65_536 }),
+  });
   registerRunTools(server, deps);
   registerRunLogsTool(server, deps);
   const client = new Client({ name: "runs-test-client", version: "1.0.0" });

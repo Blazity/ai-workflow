@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-09
+Last-verified: 2026-09-13
 
 # ai-workflow — Setup & Deployment Guide
 
@@ -80,10 +80,9 @@ ai-workflow authenticates to Jira as an **Atlassian service account** — a mach
 
 1. Note your Atlassian instance URL (e.g. `https://your-domain.atlassian.net`) → `JIRA_BASE_URL`.
 2. Open the project ai-workflow will operate on. Note its key (e.g. `AWT`) → `JIRA_PROJECT_KEY`.
-3. On the project board, identify the three columns ai-workflow uses. Create them if they don't exist:
-   - `COLUMN_AI` — tickets assigned to the agent (default: `AI`)
-   - `COLUMN_AI_REVIEW` — completed tickets pending human review (default: `AI Review`)
-   - `COLUMN_BACKLOG` — tickets bounced back for clarification (default: `Backlog`)
+3. On the project board, identify the three columns ai-workflow uses. Create
+   them if they do not exist, then record their display names on the Settings
+   page as AI, AI Review, and Backlog column settings.
 4. Optional but recommended: capture stable Jira transition IDs for workflow moves:
    - `JIRA_BACKLOG_TRANSITION_ID` — transition back to `COLUMN_BACKLOG`
    - `JIRA_AI_REVIEW_TRANSITION_ID` — transition to `COLUMN_AI_REVIEW`
@@ -125,7 +124,8 @@ ai-workflow authenticates to GitHub via a **GitHub App**. The App scopes the bot
    - **Generate a private key** → download the `.pem`. Base64-encode the file contents (`base64 -i app.pem | tr -d '\n'`) → `GITHUB_APP_PRIVATE_KEY`.
    - From the **Installations** list, the numeric installation ID → `GITHUB_INSTALLATION_ID`.
 7. Note the target repo's `owner` and `name` → `GITHUB_OWNER`, `GITHUB_REPO`.
-8. Note the base branch (usually `main`) → `GITHUB_BASE_BRANCH`.
+8. Note the base branch (usually `main`) and set **GitHub base branch** on the
+   Settings page after the first deployment.
 
 > The legacy `GITHUB_TOKEN` PAT path was removed — `VCS_KIND=github` now requires the App vars above. `env.ts` enforces this at boot, including `GITHUB_WEBHOOK_SECRET`.
 
@@ -137,7 +137,8 @@ For GitLab.com single-project setup, see [`docs/GITLAB-SETUP.md`](./docs/runbook
 2. Give the token identity enough project access to create branches, open MRs, push commits, and create commit statuses. Maintainer is simplest. Prefer leaving `ai-workflow/*` unprotected; if protected, the token identity must be allowed to push and force-push that pattern.
 3. Set the namespace/project path, for example `my-group/my-repo` → `GITLAB_PROJECT_ID`. Numeric project IDs are not supported because sandbox clone/push needs a path.
 4. Generate a random webhook secret → `GITLAB_WEBHOOK_SECRET`.
-5. Note the base branch (usually `main`) → `GITLAB_BASE_BRANCH`.
+5. Note the base branch (usually `main`) and set **GitLab base branch** on the
+   Settings page after the first deployment.
 6. On a self-hosted instance, set the instance URL → `GITLAB_HOST`. It defaults to `https://gitlab.com` (`apps/worker/src/infra/runtime-env.ts`), so leave it unset for GitLab.com. The sandbox clone URL is built as `<host>/<project path>.git` (`apps/worker/src/infra/vcs-urls.ts`), which is also why step 3 requires a path and not a numeric id.
 
 ### 2.3 Slack
@@ -173,23 +174,23 @@ The slash command itself is registered in step 8 (after you have a deployment UR
 
 ### 2.4 Agent runtime
 
-Pick one — controlled by `AGENT_KIND`.
+Pick one. The default agent and provider models are selected on the Settings
+page after the first deployment.
 
 **Claude (default):**
 
 - Configure either a standard Console API key or a Claude Code OAuth token as
   `ANTHROPIC_API_KEY`. The same credential is used for execution and pinned-CLI
   Harness Profile discovery.
-- Optionally pin a model: `CLAUDE_MODEL=claude-opus-4-8` (default).
+- Optionally select a different Claude model on Settings.
 
 **Codex:**
 
-- `AGENT_KIND=codex`
 - `CODEX_API_KEY=sk-...` (or `CODEX_CHATGPT_OAUTH_TOKEN`)
-- Optionally `CODEX_MODEL=gpt-5-codex`.
+- Select Codex as the default agent on Settings and optionally choose its model.
 
 To edit Harness Profiles for both providers, configure `ANTHROPIC_API_KEY` and
-one Codex credential even when `AGENT_KIND` selects only one execution default.
+one Codex credential even when Settings selects only one execution default.
 The scheduled worker refresh populates both exact-version catalogs.
 
 ---
@@ -272,12 +273,11 @@ vercel env add JIRA_API_TOKEN production
 | Variable                                                                                           | Purpose                                                |
 | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
 | `JIRA_BASE_URL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY`                                              | Jira credentials (scoped service-account Bearer token) |
-| `COLUMN_AI`, `COLUMN_AI_REVIEW`, `COLUMN_BACKLOG`                                                  | Jira status/display names for polling, webhooks, and fallback transition lookup |
 | `JIRA_BACKLOG_TRANSITION_ID`, `JIRA_AI_REVIEW_TRANSITION_ID`                                       | Optional stable transition IDs for Jira moves; recommended when Jira localizes transition names |
 | `VCS_KIND`                                                                                         | Optional. Provider credentials are additive: configure GitHub, GitLab, or both in one deployment (a run can then mix repositories from both providers). Set `VCS_KIND` only to pin the legacy single-repo helpers to one provider; leave it unset in dual-provider deployments. |
 | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_INSTALLATION_ID`, `GITHUB_OWNER`, `GITHUB_REPO` | If GitHub is configured (GitHub App auth)              |
 | `GITHUB_WEBHOOK_SECRET`                                                                            | If GitHub is configured: signs the GitHub webhook deliveries that drive the PR workflow triggers. Required in **every** environment (Production, Preview, Development) because the webhook fires on preview deployments too. Generate: `openssl rand -hex 32`. |
-| `GITLAB_TOKEN`, `GITLAB_PROJECT_ID`, `GITLAB_BASE_BRANCH`, `GITLAB_WEBHOOK_SECRET`                  | If GitLab is configured — GitLab.com token with `api` + `write_repository`, namespace/project path, target branch, and merge request webhook secret. Generate: `openssl rand -hex 32`. |
+| `GITLAB_TOKEN`, `GITLAB_PROJECT_ID`, `GITLAB_WEBHOOK_SECRET`                                        | If GitLab is configured: GitLab.com token with `api` + `write_repository`, namespace/project path, and merge request webhook secret. Generate: `openssl rand -hex 32`. |
 | `ANTHROPIC_API_KEY`                                                                                | Claude execution and Harness Profile capability discovery; accepts a standard API key or Claude Code OAuth token |
 | `CODEX_API_KEY` (or `CODEX_CHATGPT_OAUTH_TOKEN`)                                                   | Codex execution or Harness Profile capability discovery |
 | `DATABASE_URL`                                                                                     | Auto-injected by Neon integration                      |
@@ -293,7 +293,6 @@ This is enough for password-only dashboard login. SSO and Resend are optional wo
 
 | Variable                                      | Default                                                                                                                                                     | Purpose                                                                                                                          |
 | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `GITHUB_BASE_BRANCH`                          | `main`                                                                                                                                                      | PR target branch                                                                                                                 |
 | `GITLAB_HOST`                                 | `https://gitlab.com`                                                                                                                                        | GitLab instance URL. Set it for a self-hosted instance; the sandbox clone URL is `<host>/<project path>.git`.                     |
 | `CHAT_SDK_SLACK_TOKEN`, `CHAT_SDK_CHANNEL_ID` | unset                                                                                                                                                       | Slack bot. When unset, runs proceed silently (no notifications).                                                                 |
 | `CHAT_SDK_BOT_NAME`                           | `ai-workflow`                                                                                                                                               | Slack display name                                                                                                               |
@@ -301,47 +300,35 @@ This is enough for password-only dashboard login. SSO and Resend are optional wo
 | `SLACK_ALLOWED_USER_IDS`                      | empty (anyone)                                                                                                                                              | Comma-separated user IDs allowed to run slash commands                                                                           |
 | `CRON_SECRET`                                 | unset                                                                                                                                                       | Generate: `openssl rand -hex 32`. Without it, `/cron/poll` accepts unauthenticated callers — strongly recommended in production. |
 | `JIRA_WEBHOOK_SECRET`                         | unset                                                                                                                                                       | Generate: `openssl rand -hex 32`. Without it, dispatch is cron-bound (1-min latency).                                            |
-| `CLAUDE_MODEL`                                | `claude-opus-4-8`                                                                                                                                           | Anthropic model                                                                                                                  |
-| `CODEX_MODEL`                                 | `gpt-5-codex`                                                                                                                                               | Codex model                                                                                                                      |
-| `MAX_CONCURRENT_AGENTS`                       | `3`                                                                                                                                                         | Parallel sandbox cap                                                                                                             |
-| `JOB_TIMEOUT_MS`                              | `1800000` (30 min)                                                                                                                                          | Per-run timeout                                                                                                                  |
-| `POLL_INTERVAL_MS`                            | `300000` (5 min)                                                                                                                                            | Internal poll cadence                                                                                                            |
 | `COMMIT_AUTHOR`, `COMMIT_EMAIL`               | _unset_ on GitHub → auto-derived from the App (commits author as `<app-slug>[bot]`); GitLab falls back to `ai-workflow-blazity` / `ai-workflow@blazity.com` | Optional override; set both or neither                                                                                           |
-| `DASHBOARD_ORG_NAME`, `DASHBOARD_ORG_SLUG`    | `AI Workflow`, `ai-workflow`                                                                                                                                | Fixed dashboard organization display name and slug. Override before first auth bootstrap only.                                    |
+| `DASHBOARD_ORG_SLUG`                          | `ai-workflow`                                                                                                                                               | Fixed dashboard organization slug. Override before first auth bootstrap only; changing it requires a redeploy.                    |
 | `SSO_ISSUER`, `SSO_ALLOWED_DOMAIN`, `SSO_CLIENT_ID`, `SSO_CLIENT_SECRET` | unset | Optional SSO config. Set all four together, or leave all four unset for password-only login. |
 | `RESEND_API_KEY`, `RESEND_FROM_EMAIL`         | unset                                                                                                                                                       | Optional email delivery config. `RESEND_API_KEY` requires `RESEND_FROM_EMAIL`.                                                    |
 | `RESEND_WEBHOOK_SECRET`                       | unset                                                                                                                                                       | Optional Resend webhook signing secret. Requires `RESEND_API_KEY`.                                                               |
-| `AGENT_ALLOWED_REPOS`                         | empty (**unrestricted**, see below)                                                                                                                         | Comma-separated `owner/repo` list, read by the build-time catalog seed only (case-insensitive, exactly one slash per entry). It seeds the **repository catalog**, which is what decides access from then on. **Fails open when empty.**  |
 | `DASHBOARD_TRUSTED_ORIGINS`                   | empty (only `DASHBOARD_ORIGIN` is trusted)                                                                                                                  | Extra origins trusted for dashboard login on top of `DASHBOARD_ORIGIN`, e.g. a preview deployment's stable alias. Comma-separated; each entry must be a full origin URL (scheme included) or startup validation fails. `DASHBOARD_ORIGIN` remains the canonical origin for links and SSO redirects. |
 | `GITHUB_BOT_LOGIN`, `GITLAB_BOT_LOGIN`        | unset (commented-review triggers for that provider are unavailable)                                                                                         | Provider-specific login of the bot's own VCS account. Required for every selected, configured provider when `trigger_pr_review.on` includes `commented`, so the bot cannot recursively trigger a run from its own review. For a GitHub App this is usually `<app-slug>[bot]`. |
 | `VCS_BOT_LOGIN`                               | unset                                                                                                                                                        | Legacy fallback for a commented-review bot identity, accepted only when exactly one VCS provider is configured. Mixed GitHub/GitLab deployments require provider-specific logins. |
-| `ENABLE_REVIEW_PHASE`                         | `false`                                                                                                                                                     | Adds a self-review step (a `review_agent` block) to the built-in workflow templates, so the agent reviews and fixes its own diff before push. Only shapes new default definitions: once a definition is saved via the dashboard, that definition's own `review_agent` block presence controls this instead. |
-| `ENABLE_LEAK_REVIEW`                          | `false`                                                                                                                                                     | Screens the unpushed diff for secrets and sensitive data before Finalize pushes the branch, via a built-in `leak_review` block. Like the review flag, it only shapes built-in templates: once a definition is saved via the dashboard, that definition's own `leak_review` block presence controls this instead. |
-| `ENABLE_REPO_MEMORY`                          | `false`                                                                                                                                                     | Distills per-repository facts and lessons at the end of a successful run, injects them into agent prompts, seeds them from the manifest, and reads repository-authored `.ai/memory` documents. Unlike the two flags above, this one gates execution directly at every read and write, so turning it off stops the feature immediately without a deploy and leaves stored documents untouched and unread. |
-| `ENABLE_ORG_MEMORY_PROMOTION`                 | `false`                                                                                                                                                     | Promotes facts shared by two or more repositories of one owner into an org-scoped document. Has no effect unless `ENABLE_REPO_MEMORY` is also on. |
-| `ENABLE_REPO_ROUTING_MEMORY`                  | `false`                                                                                                                                                     | Remembers which repository a human resolved a ticket to (keyed by ticket label), so the "which repository?" question is asked once instead of every time. Has no effect unless `ENABLE_REPO_MEMORY` is also on. |
 
 `env.ts` cross-validates at startup — missing required vars or wrong combinations (e.g. `VCS_KIND=github` without `GITHUB_OWNER`) crash the process with a precise error.
 
-#### `AGENT_ALLOWED_REPOS` fails open: read this before your first run
+#### Repository access and the retired `AGENT_ALLOWED_REPOS`
 
-**The repository catalog decides access; this variable only seeds it.** Which repositories the platform may act on, both when an event is dispatched and inside a run, is answered by the **repository catalog** (Repositories in the cockpit sidebar). A refusal names the repository and the page that fixes it: a dispatch is declined with "This repository is not enabled in the repository catalog", and inside a run the failure reads "Refusing to <action> <provider>:<path>: this repository was not enabled in the repository catalog when this run started. Enable it on the Repositories page and re-dispatch the ticket." The in-run wording says "when this run started" because the list is frozen at run start: enabling the row now moves the next run, not this one. A workflow definition's repository pin is a selection inside the catalog and extends nothing: a graph that pins a repository nobody enabled cannot reach it, whichever way the run started. While the catalog is **not activated** every accessible repository counts as enabled, so a deployment that has never opened that page behaves exactly as it did.
+The **Repositories** page is the only place that grants repository access. A
+workflow definition's repository pin selects inside that catalog and never
+extends it. While the catalog is not activated, every repository accessible to
+the VCS installation remains enabled through the compatibility bridge.
 
-**Enabling a row on the Repositories page is the whole action.** There is no variable to keep in step with it, and no run that starts and then fails late for want of one. Two things are worth knowing about the timing:
+Two timing rules matter:
 
 - A run reads the catalog **once, at its start**, and finishes under the list it started with. Disabling a repository stops the next run, not one already in flight. The same is true of every setting on the Settings page: `appliesToRunsInFlight` in the settings registry says which.
 - A pull request or merge request event is checked at dispatch, and a pending event queued while the deployment was busy is checked again on the tick that drains it, so a repository disabled in the meantime is dropped rather than dispatched late.
 
-**When the variable is empty or unset, the seed activates nothing: the agent may act on _any_ repository your VCS App installation can reach.** That is the intended default for the multi-repo product, but it is a fail-open default, so decide deliberately rather than inheriting it:
-
-- **Set it** on a first deploy to have the seed create one enabled catalog row per entry and activate the catalog, so the deployment starts restricted. Strongly recommended for a first deploy, a demo, or any environment whose App installation is scoped to more than the repos you want touched. Example: `AGENT_ALLOWED_REPOS=your-org/your-repo,your-org/another-repo`.
-- **Leave it empty** only when you genuinely intend every installed repository to be in scope, and restrict the App installation itself as well: the catalog is defense-in-depth, not a substitute for installation scope. You can restrict such a deployment at any time from the Repositories page, which needs no redeploy.
-
-An entry that is not a valid `owner/repo` path is ignored **individually** by the seed, so a single typo cannot silently widen the list to "all" as long as one valid entry remains.
-
-Unlike most variables here, `AGENT_ALLOWED_REPOS` is read from `process.env` directly, by the build-time seed alone (`apps/worker/scripts/db-seed-repository-catalog.ts`), rather than through the validated `env.ts` singleton, so it is deliberately absent from `env.ts` and a malformed value will not crash startup. Nothing reads it at runtime: the engine asks the catalog through the list its run-start step froze (`apps/worker/src/engine/steps/run-start-settings.ts`, `apps/worker/src/engine/support/repository-access.ts`).
-
-Every deploy imports this variable into the repository catalog: the seed creates one enabled catalog row per entry, plus one for every repository a stored workflow definition pins, and activates the catalog exactly when the variable is non-empty, recording the activation as `seeded from AGENT_ALLOWED_REPOS` so it can be reviewed later. An entry whose VCS provider cannot be determined (no definition pins it, no catalog row names it, and no VCS provider is configured) fails the build rather than being guessed at. The build also fails when this variable is non-empty and the stored catalog state says the catalog is **not activated**, which happens when an earlier build against the same database (typically a preview with the variable unset) wrote that state row: the state row is written once and never re-decided, so the deploy would otherwise run with no repository restriction at all. Activate the catalog on the Repositories page after reviewing the enabled rows, or clear the variable if the deployment is meant to be unrestricted. The cleanup stage removes the variable entirely, after which a value set here fails environment validation with a message naming the Repositories page that replaced it.
+`AGENT_ALLOWED_REPOS` has been unused since H2: neither startup, a build, nor a
+run reads it. If an existing Vercel environment still defines it, remove it at
+leisure; its presence does not change behavior and does not currently block
+boot. A follow-up cleanup should add it to the retired-variable startup check
+after operators have removed it everywhere. Configure access on the
+Repositories page instead.
 
 Repository scripts (per-repo commands run before push/PR creation) are configured in the dashboard:
 **Repository scripts** in the cockpit sidebar. Admins and owners can edit; changes are versioned
@@ -448,13 +435,8 @@ If you set `SLACK_ALLOWED_USER_IDS`, only those Slack user IDs can invoke the co
 
 ```bash
 curl https://<your-vercel-domain>/health
-# → {"status":"ok","timestamp":"...","commit":"...","settings":{"migratedVariablesSet":[]}}
+# → {"status":"ok","timestamp":"...","commit":"..."}
 ```
-
-`settings.migratedVariablesSet` lists, by name, the environment variables this
-deployment still sets that the Settings page now owns. An empty list is what a
-deployment ready for the next release looks like; see
-[Removing migrated environment variables](#14-removing-migrated-environment-variables).
 
 ### Cron auth
 
@@ -655,17 +637,17 @@ The key is **required for the feature but optional at boot**: the worker starts 
 
 A deployment can expose an [MCP](https://modelcontextprotocol.io) endpoint so an external agent (Claude, or any MCP-capable client) can inspect this deployment's workflows, block catalog and run history, and — if you grant it the scope — author and dispatch workflows itself. It is off by default and entirely additive: nothing here is required for the bot to run.
 
-| Variable | Value |
+| Control | Value |
 | --- | --- |
-| `MCP_ENABLED` | `true` to turn the endpoint on. Defaults to `false`. |
+| Settings → MCP enabled | Turn the endpoint on. Defaults to off. |
 | `MCP_ALLOW_PUBLIC_DCR` | `true` to let a connecting client register itself via OAuth Dynamic Client Registration, with no client pre-provisioned. Defaults to `false`. This is the path a customer engineer wiring up their own agent normally wants. |
 
 ```bash
-vercel env add MCP_ENABLED production
 vercel env add MCP_ALLOW_PUBLIC_DCR production
 ```
 
-Redeploy after setting either variable.
+Redeploy after changing `MCP_ALLOW_PUBLIC_DCR`. The stored MCP-enabled setting
+is read on each request and does not require a redeploy.
 
 **Connecting.** Point your agent's MCP client at:
 
@@ -718,7 +700,7 @@ trigger_ticket_ai -> planning_agent -> branch(gate)
 | Slack messages don't arrive                           | Bot not in channel, or wrong `CHAT_SDK_CHANNEL_ID`                                                                                      | Invite bot to the channel. Re-copy the channel ID.                                                                                                                      |
 | Slash command returns `dispatch_failed`               | Signing secret wrong, or app not reinstalled                                                                                            | Verify `SLACK_SIGNING_SECRET`. Reinstall the Slack app after adding the slash command.                                                                                  |
 | Two pollers race on the same ticket                   | Stale claim sentinel                                                                                                                    | The reconciler clears claims older than 5 minutes on every poll; wait one cycle after correcting the underlying issue. |
-| Sandbox times out                                     | Job too large for `JOB_TIMEOUT_MS`                                                                                                      | Increase to 60–90 minutes for complex tickets, or split the work.                                                                                                       |
+| Sandbox times out                                     | Job exceeds the timeout configured on Settings                                                                                          | Increase the job timeout to 60 to 90 minutes on Settings, or split the work.                                                                                            |
 
 ### Useful logs
 
@@ -730,77 +712,47 @@ trigger_ticket_ai -> planning_agent -> branch(gate)
 
 ## 14. Removing migrated environment variables
 
-Most product-behaviour variables in section 5 are now settings: the deployment
-stores one row per setting and the Settings page is where they are changed. The
-variables are still read as a fallback, and the next release removes that
-fallback, so each deployment has one job to do first.
+H2 completed the environment exit. Ordinary product behavior is read from a
+stored settings row and then the registry default; the worker no longer parses
+or imports an environment fallback. Change a value on the dashboard
+**Settings** page or with MCP `settings.set` (with the required reason). A run
+keeps the settings snapshot it started with, so a `next run` change applies to
+the next dispatch.
 
-**What the deployment already did for you.** The first settings read after this
-release writes a stored row for every migrated variable that is set and has no
-row yet, with the value the deployment was already running on, recorded in the
-history under the actor `environment import`. It never overwrites a row you
-saved yourself: where the variable and the stored value disagree, your stored
-value is the decision and the variable is the leftover. Running it again writes
-nothing.
+Startup, `pnpm build`, and `pnpm build:ci` now refuse any retired settings
+variable. One error names every offender and points back to this section.
 
-**How to see what is left.** Two lists, and the second one is the one that
-matters:
+For this release, production still carries `COLUMN_AI`, `COLUMN_AI_REVIEW`,
+`COLUMN_BACKLOG`, and `AGENT_KIND` from the rollback. The operator must remove
+those four names before this release is merged. The build refusal prevents a
+candidate with any retired name from being promoted. Remove every named
+variable from each deployment environment, then redeploy:
 
-```bash
-curl https://<your-vercel-domain>/health | jq '.settings'
-# → {
-#     "migratedVariablesSet": ["MAX_CONCURRENT_AGENTS", "COLUMN_AI"],
-#     "migratedVariablesUnstored": []
-#   }
+```text
+DASHBOARD_ORG_NAME, GITHUB_BASE_BRANCH, GITLAB_BASE_BRANCH,
+MAX_CONCURRENT_AGENTS, JOB_TIMEOUT_MS, V2_MAX_BLOCK_CONCURRENCY,
+POLL_INTERVAL_MS, ATTACHMENT_MAX_FILE_SIZE_MB,
+ATTACHMENT_MAX_TOTAL_SIZE_MB, ATTACHMENT_MAX_COUNT,
+ATTACHMENT_DOWNLOAD_TIMEOUT_MS, ENABLE_REVIEW_PHASE, ENABLE_LEAK_REVIEW,
+ENABLE_REPO_MEMORY, ENABLE_ORG_MEMORY_PROMOTION,
+ENABLE_REPO_ROUTING_MEMORY, REVIEW_LEDGER_ENABLED, MCP_ENABLED,
+MCP_AUDIT_RETENTION_DAYS, MCP_MAX_REQUEST_BYTES, MCP_MAX_RESULT_BYTES,
+MCP_TOOL_TIMEOUT_MS, MCP_READ_RATE_LIMIT_PER_MINUTE,
+MCP_MUTATION_RATE_LIMIT_PER_MINUTE, PRE_PR_COMMAND_TIMEOUT_MINUTES,
+AGENT_KIND, CLAUDE_MODEL, CODEX_MODEL, COLUMN_AI, COLUMN_AI_REVIEW,
+COLUMN_BACKLOG, TRIGGER_RATE_LIMIT_MAX, TRIGGER_RATE_LIMIT_WINDOW
 ```
 
-`migratedVariablesSet` is the to-do list: variables this deployment still sets.
-`migratedVariablesUnstored` is the subset whose value is NOT stored, read back
-from the settings table on every call rather than assumed from the import
-having run. A name there means the value lives nowhere but the variable, so
-removing it would change what the deployment does: leave it alone, check the
-worker logs for `settings_environment_import_failed`, and look again once the
-database accepts writes.
+Three settings remain deployment-owned and may stay in the environment:
+`DASHBOARD_ORG_SLUG`, `MCP_ALLOW_PUBLIC_DCR`, and
+`PRE_PR_CHECKS_ALLOWED_ENV`. They are marked `requiresRedeploy`; a stored row
+does not override them, and changing one takes effect only after redeploying.
 
-`"migratedVariablesUnstored": null` means something else again: `/health` could
-not read the settings table at all (it still answers, by design). That is
-"unknown", not "nothing left to worry about". Check the database, then look
-again. The Settings page, which needs a session, is where the same pair comes
-from a read that is allowed to fail loudly.
-
-The Settings page shows both as a banner, and the MCP tool `settings.list`
-carries both as `migratedVariablesSet` and `migratedVariablesUnstored`. Names
-only, never values.
-
-**What to do.** Only while `migratedVariablesUnstored` is empty. For each name
-in `migratedVariablesSet`: check the value on the Settings page (it is already
-stored, with its history), then delete the variable from the deployment in the
-Vercel dashboard, and **redeploy** (or wait for the next deploy). Removing a
-variable in the Vercel dashboard changes nothing for the running deployment: the
-environment it is holding was fixed when it started. After the redeploy, check
-the list again.
-
-**What is NOT on the list, and must stay set.** A handful of keys are marked
-"requires redeploy" because this deployment reads the variable itself rather
-than the stored row: `DASHBOARD_ORG_SLUG` and `MCP_ALLOW_PUBLIC_DCR` are handed
-to the auth instance when the process starts, and `PRE_PR_CHECKS_ALLOWED_ENV` is
-read inside a check step as the operator-side gate on what a tenant's command
-may be handed. They are never imported and never listed; leave them where they
-are.
-
-**`AGENT_ALLOWED_REPOS`.** Replaced by the Repositories page. The build-time
-seed still reads it and warns that it is deprecated. Once the catalog is
-activated it seeds no rows from the variable and leaves the activation state
-alone, because an activated catalog is one somebody curated; it still
-reconciles repository pins, default branches and script groups on every build.
-Curate the catalog, then remove the variable.
-
-**Why the hurry.** The cleanup release deletes the environment parsing for every
-migrated key and refuses to boot with one of them set, naming the dashboard page
-that replaced it. A deployment that empties the list first upgrades without
-noticing; one that does not will not start. The release is only safe to ship to
-a deployment whose `migratedVariablesUnstored` is empty: that, not the import
-having run, is what says every value survived the variable.
+`AGENT_ALLOWED_REPOS` is not part of the boot refusal because some existing
+production environments still carry it. It has been unused since H2 and may be
+removed at leisure. Configure repository access on the Repositories page. A
+follow-up cleanup should add the name to the retired list once operators have
+removed it everywhere.
 
 ---
 

@@ -8,6 +8,7 @@
  * label the acting operator is recorded under.
  */
 import { getConnectedDashboardUserLabel } from "../../db/repositories/auth.js";
+import type { SettingsSnapshot } from "@shared/contracts";
 import { createAdapters } from "../../engine/support/adapters.js";
 import {
   cancelConnectedRunForOperator,
@@ -17,6 +18,7 @@ import {
 export async function cancelRunAsOperator(
   runId: string,
   actor: { userId: string },
+  settings: SettingsSnapshot,
 ): Promise<CancelRunForOperatorResult> {
   const adapters = createAdapters();
   const actorLabel = await getConnectedDashboardUserLabel(actor.userId);
@@ -29,5 +31,6 @@ export async function cancelRunAsOperator(
     actorLabel,
     runRegistry: adapters.runRegistry,
     issueTracker: adapters.issueTracker,
+    settings,
   });
 }

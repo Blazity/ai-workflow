@@ -415,6 +415,10 @@ function deps(overrides: Partial<DispatchDeps> = {}): DispatchDeps {
   return {
     runRegistry: registry as unknown as RunRegistryAdapter,
     maxConcurrentAgents: 3,
+    settings: {
+      TRIGGER_RATE_LIMIT_MAX: testEnv.TRIGGER_RATE_LIMIT_MAX ?? null,
+      TRIGGER_RATE_LIMIT_WINDOW: testEnv.TRIGGER_RATE_LIMIT_WINDOW ?? null,
+    } as DispatchDeps["settings"],
     occurrences: ledger,
     schedules: {
       listEvaluable: async () => [],
@@ -1330,7 +1334,7 @@ describe("schedule trigger rate limit", () => {
     expect(consumeTriggerRateLimit).not.toHaveBeenCalled();
   });
 
-  it("applies the env default to a node with no params of its own", async () => {
+  it("applies the stored default to a node with no params of its own", async () => {
     testEnv.TRIGGER_RATE_LIMIT_MAX = 5;
     testEnv.TRIGGER_RATE_LIMIT_WINDOW = "day";
     consumeTriggerRateLimit.mockResolvedValue({ ...SPENT, allowed: true, count: 1 });
@@ -1344,7 +1348,7 @@ describe("schedule trigger rate limit", () => {
     );
   });
 
-  it("prefers the node's own params over the env default", async () => {
+  it("prefers the node's own params over the settings default", async () => {
     testEnv.TRIGGER_RATE_LIMIT_MAX = 5;
     testEnv.TRIGGER_RATE_LIMIT_WINDOW = "day";
     consumeTriggerRateLimit.mockResolvedValue({ ...SPENT, allowed: true, count: 1 });

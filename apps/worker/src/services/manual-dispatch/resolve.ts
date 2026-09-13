@@ -2,6 +2,7 @@ import type {
   ManualDispatchInput,
   ManualDispatchPreflightStep,
   ManuallyDispatchableTrigger,
+  SettingsSnapshot,
   WorkflowBlockType,
 } from "@shared/contracts";
 import {
@@ -34,7 +35,7 @@ import type { RepositoryCatalogSnapshot } from "../repository-catalog/index.js";
 import { prSubjectKey, ticketSubjectKey } from "../../engine/support/subject-key.js";
 import { createRepositoryVCS } from "../../engine/support/vcs-runtime.js";
 import { loadPostPrGateConfig } from "../../post-pr-gate/config.js";
-import { loadSettingsSnapshot } from "../settings/index.js";
+import { loadSettingsSnapshot, loadSettingsSnapshotOn } from "../settings/index.js";
 import {
   getWorkflowDefinitionName,
   runnableDefinitionOf,
@@ -81,6 +82,7 @@ export type ResolvedManualDispatch =
       subjectTitle: string;
       subjectUrl?: string;
       currentStatus: string;
+      aiColumn: string;
       steps: ManualDispatchPreflightStep[];
     }
   | {
@@ -100,6 +102,7 @@ export type ResolvedManualDispatch =
       ticketKey: string | null;
       subjectTitle: string;
       subjectUrl: string;
+      aiColumn: string;
       steps: ManualDispatchPreflightStep[];
     };
 
@@ -142,14 +145,27 @@ export async function resolveManualDispatch(input: {
   /** Resolve an already-accepted request against its immutable pinned graph. */
   definitionVersion?: number;
 }): Promise<ResolvedManualDispatch> {
-  return resolveManualDispatchWithPersistence(input, persistenceFor(input.db));
+  const settings = await loadSettingsSnapshotOn(input.db);
+  return resolveManualDispatchWithPersistence(
+    { ...input, settings },
+    persistenceFor(input.db),
+  );
 }
 
 export async function resolveConnectedManualDispatch(input: Omit<Parameters<typeof resolveManualDispatch>[0], "db">): Promise<ResolvedManualDispatch> {
-  return resolveManualDispatchWithPersistence(input, connectedPersistence);
+  const settings = await loadSettingsSnapshot();
+  return resolveManualDispatchWithPersistence(
+    { ...input, settings },
+    connectedPersistence,
+  );
 }
 
-async function resolveManualDispatchWithPersistence(input: Omit<Parameters<typeof resolveManualDispatch>[0], "db">, persistence: ManualDispatchPersistence): Promise<ResolvedManualDispatch> {
+async function resolveManualDispatchWithPersistence(
+  input: Omit<Parameters<typeof resolveManualDispatch>[0], "db"> & {
+    settings: SettingsSnapshot;
+  },
+  persistence: ManualDispatchPersistence,
+): Promise<ResolvedManualDispatch> {
   const deployed = await loadDeployedTrigger(
     persistence,
     input.definitionId,
@@ -221,6 +237,7 @@ async function resolveTicketDispatch(
     definitionId: number;
     triggerNodeId: string;
     dispatchInput: Extract<ManualDispatchInput, { kind: "ticket" }>;
+    settings: SettingsSnapshot;
   },
   deployed: {
     definition: WorkflowDefinitionVersionRow;
@@ -262,7 +279,8 @@ async function resolveTicketDispatch(
     );
   }
   const alreadyInAi =
-    ticket.trackerStatus.trim().toLowerCase() === env.COLUMN_AI.trim().toLowerCase();
+    ticket.trackerStatus.trim().toLowerCase() ===
+    input.settings.COLUMN_AI.trim().toLowerCase();
   return {
     definitionId: input.definitionId,
     definitionName: deployed.definitionName,
@@ -276,13 +294,16 @@ async function resolveTicketDispatch(
     ticketKey,
     subjectTitle: ticket.title,
     currentStatus: ticket.trackerStatus,
+    aiColumn: input.settings.COLUMN_AI,
     steps: [
       {
         title: "Reserve ticket",
         description: "Prevent duplicate automatic or manual runs",
       },
       {
-        title: alreadyInAi ? `Keep in ${env.COLUMN_AI}` : `Move ${ticket.trackerStatus} → ${env.COLUMN_AI}`,
+        title: alreadyInAi
+          ? `Keep in ${input.settings.COLUMN_AI}`
+          : `Move ${ticket.trackerStatus} → ${input.settings.COLUMN_AI}`,
         description:
           "Manual ownership suppresses automatic pickup until this run withdraws or moves the ticket",
       },
@@ -302,6 +323,7 @@ async function resolvePullRequestDispatch(
     triggerNodeId: string;
     dispatchInput: Extract<ManualDispatchInput, { kind: "pull_request" }>;
     repositoryCatalog: RepositoryCatalogSnapshot;
+    settings: SettingsSnapshot;
   },
   deployed: {
     definition: WorkflowDefinitionVersionRow;
@@ -320,7 +342,6 @@ async function resolvePullRequestDispatch(
       `${parsed.provider === "github" ? "GitHub" : "GitLab"} is not configured.`,
     );
   }
-  const settings = await loadSettingsSnapshot();
   const vcs = createRepositoryVCS({
     provider: parsed.provider,
     repoPath: parsed.repoPath,
@@ -331,8 +352,8 @@ async function resolvePullRequestDispatch(
     // human action that already costs several reads.
     baseBranch:
       parsed.provider === "github"
-        ? settings.GITHUB_BASE_BRANCH
-        : settings.GITLAB_BASE_BRANCH,
+        ? input.settings.GITHUB_BASE_BRANCH
+        : input.settings.GITLAB_BASE_BRANCH,
   });
   if (!hasManualDispatchPrCapability(vcs)) {
     throw new ManualDispatchError(
@@ -480,6 +501,7 @@ async function resolvePullRequestDispatch(
     ticketKey,
     subjectTitle: snapshot.title || `${parsed.repoPath}#${parsed.prNumber}`,
     subjectUrl: snapshot.prUrl,
+    aiColumn: input.settings.COLUMN_AI,
     steps: [
       {
         title: "Reserve pull request",

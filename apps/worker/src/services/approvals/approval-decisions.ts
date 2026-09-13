@@ -102,6 +102,7 @@ export async function approveApproval(
       approval: row,
       actor: approver,
       maxConcurrentAgents: maxConcurrentAgents(settings),
+      settings,
       onClaimed: isDispatchRetry
         ? async () => {
             const fresh = await getConnectedApproval(id);

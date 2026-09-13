@@ -243,9 +243,14 @@ export function createMcpToolServices(
     getResumeFailedClarificationForRun: (runId) =>
       getResumeFailedClarificationForRun(db, runId),
     answerClarificationAndResume: (input) =>
-      answerClarificationAndResume({ db, ...input }),
+      answerClarificationAndResume({
+        db,
+        ...input,
+        aiColumn: settings.COLUMN_AI,
+        cancelSettings: settings,
+      }),
     cancelRunForOperator: (runId, options) =>
-      cancelRunForOperator(db, runId, options),
+      cancelRunForOperator(db, runId, { ...options, settings }),
 
     listWorkflowDefinitionPage: workflowDefinitionPageQuery(db),
     readDeployedDefinitionVersions: deployedDefinitionVersionsQuery(db),

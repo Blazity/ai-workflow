@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultSettingsSnapshot } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
 import {
   IssueTrackerNotFoundError,
@@ -115,6 +116,8 @@ function run(tracker: ReturnType<typeof makeTracker>, allowNudge = false) {
     issueTracker: tracker as unknown as IssueTrackerAdapter,
     ticketKey: TICKET,
     allowNudge,
+    aiColumn: "AI",
+    cancelSettings: defaultSettingsSnapshot(),
   });
 }
 

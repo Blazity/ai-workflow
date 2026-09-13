@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { start } from "workflow/api";
-import type { WorkflowDefinition } from "@shared/contracts";
+import {
+  defaultSettingsSnapshot,
+  type SettingsSnapshot,
+  type WorkflowDefinition,
+} from "@shared/contracts";
 import { env } from "../../infra/vcs-config.js";
 import {
   RESERVATION_BIND_GRACE_MS,
@@ -73,9 +77,10 @@ export async function dispatchTicket(
   ticketKey: string,
   adapters: Adapters,
   maxConcurrentAgents: number,
+  settings: SettingsSnapshot = defaultSettingsSnapshot(),
 ): Promise<DispatchResult> {
   const expectedProjectKey = env.JIRA_PROJECT_KEY.trim().toUpperCase();
-  const expectedAiStatus = env.COLUMN_AI.trim().toLowerCase();
+  const expectedAiStatus = settings.COLUMN_AI.trim().toLowerCase();
   const { issueTracker, runRegistry } = adapters;
 
   try {
@@ -137,7 +142,7 @@ export async function dispatchTicket(
         // starts: a candidate refused by any guard above (approval pending,
         // wrong column, wrong project, no definition) must not spend the
         // trigger's start budget nor tally a rejection.
-        if (await ticketTriggerRateLimited(enabled, ticketKey)) {
+        if (await ticketTriggerRateLimited(enabled, ticketKey, settings)) {
           return { started: false, reason: "rate_limited" };
         }
         return null;
@@ -238,10 +243,14 @@ export function triggerRateLimitNodes(
 async function ticketTriggerRateLimited(
   enabled: NonNullable<Awaited<ReturnType<typeof getConnectedEnabledWorkflowDefinitionForTrigger>>>,
   ticketKey: string,
+  settings: SettingsSnapshot,
 ): Promise<boolean> {
   const limit = resolveTriggerRateLimitForType(
     triggerRateLimitNodes(runnableDefinitionOf(enabled.current), "trigger_ticket_ai"),
-    envTriggerRateLimitDefault(env),
+    envTriggerRateLimitDefault({
+      TRIGGER_RATE_LIMIT_MAX: settings.TRIGGER_RATE_LIMIT_MAX ?? undefined,
+      TRIGGER_RATE_LIMIT_WINDOW: settings.TRIGGER_RATE_LIMIT_WINDOW ?? undefined,
+    }),
   );
   if (!limit) return false;
   const key = { definitionId: String(enabled.definition.id), nodeId: limit.nodeId };

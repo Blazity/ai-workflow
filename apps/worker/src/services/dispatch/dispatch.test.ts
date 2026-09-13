@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultSettingsSnapshot } from "@shared/contracts";
 import type {
   ActiveRunEntry,
   RunRegistryAdapter,
@@ -21,6 +22,14 @@ const testEnv = vi.hoisted(() => ({
   TRIGGER_RATE_LIMIT_WINDOW: undefined as "minute" | "hour" | "day" | "month" | undefined,
 }));
 vi.mock("../../infra/vcs-config.js", () => ({ env: testEnv }));
+
+function testSettings() {
+  return {
+    ...defaultSettingsSnapshot(),
+    TRIGGER_RATE_LIMIT_MAX: testEnv.TRIGGER_RATE_LIMIT_MAX ?? null,
+    TRIGGER_RATE_LIMIT_WINDOW: testEnv.TRIGGER_RATE_LIMIT_WINDOW ?? null,
+  };
+}
 const mockStart = vi.fn();
 vi.mock("workflow/api", () => ({ start: (...args: any[]) => mockStart(...args) }));
 vi.mock("../../engine/index.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
@@ -271,7 +280,7 @@ describe("dispatchTicket owner reservation", () => {
   it("records the blocked run once while the ticket keeps being polled", async () => {
     mockGetEnabled.mockResolvedValue(null);
 
-    await dispatchTicket("PROJ-42", adapters(), 3);
+    await dispatchTicket("PROJ-42", adapters(), 3, testSettings());
     expect(await dispatchTicket("PROJ-42", adapters(), 3)).toEqual({
       started: false,
       reason: "no_definition",
@@ -522,6 +531,7 @@ describe("dispatchTicket trigger rate limit", () => {
         "PROJ-43",
         adapters(registry(), ticket({ identifier: "PROJ-43" })),
         3,
+        testSettings(),
       ),
     ).resolves.toEqual({ started: false, reason: "rate_limited" });
 
@@ -590,21 +600,22 @@ describe("dispatchTicket trigger rate limit", () => {
     expect(await dbRef.current.select().from(triggerRejectionCounters)).toEqual([]);
   });
 
-  it("applies the env default when the node has no params of its own", async () => {
+  it("applies the stored default when the node has no params of its own", async () => {
     testEnv.TRIGGER_RATE_LIMIT_MAX = 1;
     testEnv.TRIGGER_RATE_LIMIT_WINDOW = "day";
     mockGetEnabled.mockResolvedValue(enabledWithTriggerParams({}));
 
-    await dispatchTicket("PROJ-42", adapters(), 3);
+    await dispatchTicket("PROJ-42", adapters(), 3, testSettings());
     await expect(
       dispatchTicket(
         "PROJ-43",
         adapters(registry(), ticket({ identifier: "PROJ-43" })),
         3,
+        testSettings(),
       ),
     ).resolves.toEqual({ started: false, reason: "rate_limited" });
 
-    // A limit that is purely the env default is keyed under the definition's
+    // A limit that is purely the settings default is keyed under the definition's
     // first trigger node.
     expect(await dbRef.current.select().from(triggerRejectionCounters)).toEqual([
       expect.objectContaining({
@@ -616,7 +627,7 @@ describe("dispatchTicket trigger rate limit", () => {
     ]);
   });
 
-  it("prefers the node's own params over the env default", async () => {
+  it("prefers the node's own params over the settings default", async () => {
     testEnv.TRIGGER_RATE_LIMIT_MAX = 5;
     testEnv.TRIGGER_RATE_LIMIT_WINDOW = "day";
     mockGetEnabled.mockResolvedValue(

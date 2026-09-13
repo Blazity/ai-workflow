@@ -17,9 +17,6 @@ export const env = createEnv({
     JIRA_API_TOKEN: z.string().min(1),
     JIRA_PROJECT_KEY: z.string().min(1),
 
-    COLUMN_AI: z.string().min(1),
-    COLUMN_AI_REVIEW: z.string().min(1),
-    COLUMN_BACKLOG: z.string().min(1),
     JIRA_BACKLOG_TRANSITION_ID: z.string().min(1).optional(),
     JIRA_AI_TRANSITION_ID: z.string().min(1).optional(),
     JIRA_AI_REVIEW_TRANSITION_ID: z.string().min(1).optional(),
@@ -39,12 +36,10 @@ export const env = createEnv({
     GITHUB_INSTALLATION_ID: z.coerce.number().int().positive().optional(),
     GITHUB_OWNER: z.string().min(1).optional(),
     GITHUB_REPO: z.string().min(1).optional(),
-    GITHUB_BASE_BRANCH: z.string().default("main"),
 
     // GitLab VCS
     GITLAB_TOKEN: z.string().min(1).optional(),
     GITLAB_PROJECT_ID: z.string().min(1).optional(),
-    GITLAB_BASE_BRANCH: z.string().default("main"),
     /** Base URL for self-hosted GitLab. Defaults to https://gitlab.com. */
     GITLAB_HOST: z.string().url().default("https://gitlab.com"),
 
@@ -62,7 +57,6 @@ export const env = createEnv({
 
     // Agent
     ANTHROPIC_API_KEY: z.string().min(1).optional(),
-    CLAUDE_MODEL: z.string().min(1).optional(),
     // Optional overrides for the git identity used inside the sandbox.
     // - GitHub: when both are unset, the identity is derived from the App so
     //   commits render with the App's avatar and the `[bot]` badge in the UI.
@@ -71,15 +65,9 @@ export const env = createEnv({
     COMMIT_AUTHOR: z.string().min(1).optional(),
     COMMIT_EMAIL: z.string().min(1).optional(),
 
-    // Agent kind selection (claude | codex). Defaults to claude for back-compat.
-    AGENT_KIND: z.enum(["claude", "codex"]).default("claude"),
-
-    // Codex auth — at least one required when AGENT_KIND=codex.
+    // Codex auth is required when a stored harness selection chooses Codex.
     CODEX_API_KEY: z.string().min(1).optional(),
     CODEX_CHATGPT_OAUTH_TOKEN: z.string().min(1).optional(),
-
-    // Codex model selection.
-    CODEX_MODEL: z.string().min(1).optional(),
 
     // LiteLLM community-maintained pricing JSON. Operator overridable.
     CODEX_PRICING_URL: z
@@ -94,112 +82,7 @@ export const env = createEnv({
     GENAI_ENGINE_API_KEY: z.string().min(1).optional(),
     GENAI_ENGINE_TRACE_ENDPOINT: z.string().url().optional(),
 
-    // Sandbox
-    MAX_CONCURRENT_AGENTS: z.coerce.number().int().positive().default(3),
-    JOB_TIMEOUT_MS: z.coerce.number().int().positive().default(1_800_000),
-
-    /**
-     * Operational ceiling on how many blocks of one run are dispatched at once.
-     * Unset means the code-owned bound, which is what scenarios assert. This
-     * only ever lowers it: the scheduler clamps whatever arrives here against
-     * V2_PRODUCTION_SCHEDULER_BOUNDS.maxConcurrency, so a larger value buys
-     * nothing. It is here to throttle fan-out operationally, not to hand out
-     * more parallelism than the code owns.
-     *
-     * Concurrency is no longer known-broken. A real three-reviewer fan-out
-     * completes in production without a replay divergence, and what makes that
-     * safe is narrow: no block that can run beside a sibling may suspend on a
-     * Workflow wait. The SDK seeds a wait's expected resumeAt from Date.now()
-     * and corrects it only when that same consumer drains its own wait_created,
-     * which another block's deliveries can sit ahead of, and then the run dies
-     * as CORRUPTED_EVENT_LOG with no failure of ours recorded. A sleep() from
-     * "workflow" anywhere a block can reach reintroduces exactly that, so
-     * lowering this to 1 stays the emergency stop if it ever comes back. The SDK
-     * defect is pinned in workflow-sdk-tests/divergence/ and the workaround it
-     * forces lives in src/workflows/blocks/poll-delay.ts.
-     */
-    V2_MAX_BLOCK_CONCURRENCY: z.coerce.number().int().positive().optional(),
-
-    // Attachments
-    ATTACHMENT_MAX_FILE_SIZE_MB: z.coerce.number().int().positive().default(25),
-    ATTACHMENT_MAX_TOTAL_SIZE_MB: z.coerce.number().int().positive().default(100),
-    ATTACHMENT_MAX_COUNT: z.coerce.number().int().positive().default(20),
-    ATTACHMENT_DOWNLOAD_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
-
-    // Polling
-    POLL_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
-
-    // Review phase: agent self-reviews its diff and fixes issues before push.
-    // Off by default so existing deployments keep current two-phase behavior.
-    // This flag no longer gates execution directly; it only shapes the built-in
-    // default workflow definition (the includeReview input). Once a definition
-    // is saved via the dashboard, a review_agent block's presence drives it.
-    ENABLE_REVIEW_PHASE: z
-      .enum(["true", "false"])
-      .default("false")
-      .transform((v) => v === "true"),
-
-    // Leak review: screens the unpushed diff for secrets and sensitive data
-    // before Finalize pushes the branch. Off by default so existing built-in
-    // templates keep their current shape. Like the review flag it only shapes
-    // the built-in templates (the includeLeakReview input); once a definition is
-    // saved via the dashboard, a leak_review block's presence drives it.
-    ENABLE_LEAK_REVIEW: z
-      .enum(["true", "false"])
-      .default("false")
-      .transform((v) => v === "true"),
-
-    // Repository agent memory: distilling per-repository facts and lessons at the
-    // end of a successful run, injecting them into agent prompts, seeding them
-    // from the manifest, and reading repository-authored .ai/memory documents.
-    // Off by default. Unlike the two flags above this one gates execution
-    // directly, at every read and every write, so it is the kill switch: turning
-    // it off stops the feature without a deploy and leaves stored documents
-    // untouched and unread.
-    ENABLE_REPO_MEMORY: z
-      .enum(["true", "false"])
-      .default("false")
-      .transform((v) => v === "true"),
-
-    // Promotion of facts shared by two or more repositories of one owner into an
-    // org-scoped document. Gated separately from the flag above so an operator can
-    // run repository memory without it: on a forge where one top-level namespace
-    // holds several tenants, org scope is a cross-tenant path. Has no effect unless
-    // ENABLE_REPO_MEMORY is on.
-    ENABLE_ORG_MEMORY_PROMOTION: z
-      .enum(["true", "false"])
-      .default("false")
-      .transform((v) => v === "true"),
-
-    // Remembering which repository a human resolved a ticket to, keyed by ticket
-    // label, so the "which repository?" question is asked once instead of every
-    // time. Also an org-scoped document, so it carries across repository
-    // boundaries and gets its own switch for the same tenancy reason as the flag
-    // above. Kept separate from promotion rather than folded into it because the
-    // two carry different risk: promotion infers a shared fact from two
-    // repositories agreeing, while this records one human's explicit answer, and
-    // an operator may reasonably want either without the other. Has no effect
-    // unless ENABLE_REPO_MEMORY is on.
-    ENABLE_REPO_ROUTING_MEMORY: z
-      .enum(["true", "false"])
-      .default("false")
-      .transform((v) => v === "true"),
-
-    // Review ledger: turns every open review thread on a PR/MR into a tracked
-    // work item with a stable id and alias, verified against the planning/fix
-    // agent's per-alias dispositions. Off by default; the flag is read in
-    // src/workflows/blocks/fetch-pr-context.ts, which is what puts the thread
-    // feed into the agent's context and the ledger on ctx.
-    REVIEW_LEDGER_ENABLED: z
-      .enum(["true", "false"])
-      .default("false")
-      .transform((v) => v === "true"),
-
     // Remote MCP server
-    MCP_ENABLED: z
-      .enum(["true", "false"])
-      .default("false")
-      .transform((v) => v === "true"),
     MCP_SERVER_VERSION: z
       .string()
       .regex(
@@ -211,12 +94,6 @@ export const env = createEnv({
       .enum(["true", "false"])
       .default("false")
       .transform((v) => v === "true"),
-    MCP_AUDIT_RETENTION_DAYS: z.coerce.number().int().positive().default(365),
-    MCP_MAX_REQUEST_BYTES: z.coerce.number().int().positive().default(1_048_576),
-    MCP_MAX_RESULT_BYTES: z.coerce.number().int().positive().default(524_288),
-    MCP_TOOL_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(30_000),
-    MCP_READ_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(120),
-    MCP_MUTATION_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(20),
     MCP_DOGFOOD_FIXTURE_PREFIX: z.string().min(1).default("mcp-dogfood"),
 
     // Vercel (optional — auto via OIDC on Vercel)
@@ -249,13 +126,6 @@ export const env = createEnv({
     // use the feature.
     WEBHOOK_TRIGGER_ENCRYPTION_KEY: z.string().min(1).optional(),
 
-    // Trigger rate limits: optional global default for the per-node start
-    // limit (rateLimitMax / rateLimitWindow on trigger blocks). Applies only
-    // when a trigger node has no limit of its own; unset means unlimited, so
-    // existing workflows keep their current behavior.
-    TRIGGER_RATE_LIMIT_MAX: z.coerce.number().int().positive().optional(),
-    TRIGGER_RATE_LIMIT_WINDOW: z.enum(["minute", "hour", "day", "month"]).optional(),
-
     // Neon Postgres (run registry + post-PR gate store) — auto-injected by
     // the Neon Vercel Marketplace integration, one branch per environment.
     DATABASE_URL: z.string().url(),
@@ -279,7 +149,6 @@ export const env = createEnv({
     DASHBOARD_AUTH_PASSWORD: z.string().min(8, {
       message: "must be at least 8 characters",
     }),
-    DASHBOARD_ORG_NAME: z.string().min(1).default("AI Workflow"),
     DASHBOARD_ORG_SLUG: z.string().min(1).default("ai-workflow"),
     SSO_ISSUER: z.string().url().optional(),
     SSO_ALLOWED_DOMAIN: z.string().min(1).optional(),
@@ -289,14 +158,7 @@ export const env = createEnv({
     RESEND_FROM_EMAIL: z.string().email().optional(),
     RESEND_WEBHOOK_SECRET: z.string().min(1).optional(),
   },
-  createFinalSchema: (shape) =>
-    z.object(shape).refine(
-      (values) => values.MCP_MAX_RESULT_BYTES <= values.MCP_MAX_REQUEST_BYTES,
-      {
-        message: "must be less than or equal to MCP_MAX_REQUEST_BYTES",
-        path: ["MCP_MAX_RESULT_BYTES"],
-      },
-    ),
+  createFinalSchema: (shape) => z.object(shape),
   runtimeEnv: process.env,
   emptyStringAsUndefined: true,
 });
@@ -366,18 +228,6 @@ function isGithubProviderConfigured(): boolean {
     throw new Error(
       "Invalid environment variables:\n" +
         "  COMMIT_AUTHOR and COMMIT_EMAIL must be set together (or both omitted to auto-derive on GitHub)",
-    );
-  }
-  if (env.AGENT_KIND === "codex" && !env.CODEX_API_KEY && !env.CODEX_CHATGPT_OAUTH_TOKEN) {
-    throw new Error(
-      "Invalid environment variables:\n" +
-        "  AGENT_KIND=codex requires CODEX_API_KEY or CODEX_CHATGPT_OAUTH_TOKEN",
-    );
-  }
-  if (env.AGENT_KIND === "claude" && !env.ANTHROPIC_API_KEY) {
-    throw new Error(
-      "Invalid environment variables:\n" +
-        "  AGENT_KIND=claude requires ANTHROPIC_API_KEY",
     );
   }
   const ssoKeys = [

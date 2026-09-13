@@ -1,6 +1,5 @@
 /**
- * One resolved value per setting, from stored rows plus whatever the
- * deployment's environment still answers for.
+ * One resolved value per setting, from stored rows and registry defaults.
  *
  * The rule itself lives here, in the package every tier may import, because
  * two callers now need it and they are in tiers that cannot see each other:
@@ -9,9 +8,11 @@
  * from importing a service. A second implementation of "stored row, then
  * environment, then registry default" is the one outcome that would matter:
  * a run and the Settings page would disagree about the value the operator is
- * looking at, silently.
+ * looking at, silently. Ordinary keys resolve from a stored row and then their
+ * default; the three `requiresRedeploy` keys remain environment owned because
+ * their consumers cannot read the store yet.
  *
- * Reading the environment is NOT here. That half is per-deployment wiring
+ * Accessing `process.env` is NOT here. That half is per-deployment wiring
  * (`process.env` plus the worker's parsed schema), and this package is shared
  * with the dashboard, so the caller hands it in as a reader keyed by variable
  * name.
@@ -45,8 +46,7 @@ export interface SettingsEnvironmentReader {
   /**
    * Whether the deployment sets the variable at all. A presence question, not
    * a value one: a variable that is unset and one set to its schema default
-   * resolve to the same value, and only this tells the "where did it come
-   * from" label and the seed apart.
+   * resolve to the same value, and only this tells the source label apart.
    */
   isSet(variable: string): boolean;
 }
@@ -65,18 +65,17 @@ export interface SettingsResolution {
  * Module level rather than rebuilt per call: the registry is a frozen literal
  * and cannot change while the process is up.
  */
-const DEFINITIONS_BY_KEY: ReadonlyMap<string, (typeof SETTINGS_REGISTRY)[number]> =
+const DEFINITIONS_BY_KEY: ReadonlyMap<string, SettingDefinition> =
   new Map(SETTINGS_REGISTRY.map((definition) => [definition.key, definition]));
 
 /**
- * What ONE key resolves to with no stored row: the environment, then the
- * registry default.
+ * What ONE key resolves to with no stored row: the registry default, except
+ * for a `requiresRedeploy` key, which reads the environment first.
  *
  * The second and third steps of the rule, on their own, for the caller that has
  * exactly one key in hand and no reason to read every row in the table: the
  * reset operation, which has to record what takes over once the row it removes
- * is gone. Exported and used by the loop below rather than restated there, so
- * there is still one implementation of "environment, then default".
+ * is gone. Exported and used by the loop below rather than restated there.
  *
  * Null for a key the registry does not know, which is a question for the
  * caller's own validation and not something to answer with a default.
@@ -88,9 +87,14 @@ export function resolveSettingWithoutStoredRow(
   const definition = DEFINITIONS_BY_KEY.get(key);
   if (!definition) return null;
   const variable = definition.environmentVariable;
-  const fromEnvironment = variable === null ? undefined : environment.value(variable);
+  const fromEnvironment = definition.requiresRedeploy && variable
+    ? environment.value(variable)
+    : undefined;
   const isSet =
-    variable !== null && environment.isSet(variable) && fromEnvironment !== undefined;
+    definition.requiresRedeploy === true &&
+    variable !== undefined &&
+    environment.isSet(variable) &&
+    fromEnvironment !== undefined;
   return {
     value: fromEnvironment ?? definition.default,
     source: isSet ? "environment" : "default",
@@ -98,8 +102,9 @@ export function resolveSettingWithoutStoredRow(
 }
 
 /**
- * Resolve every registry key: the stored row wins, then the environment, then
- * the registry default.
+ * Resolve every registry key: an ordinary stored row wins, then the registry
+ * default. A `requiresRedeploy` key ignores a leftover row and resolves from
+ * its environment variable, then its default.
  *
  * With one exception, and it is the whole reason `requiresRedeploy` exists. For
  * a key so marked the running code reads the variable itself, at module load or
@@ -154,120 +159,4 @@ const NO_ENVIRONMENT: SettingsEnvironmentReader = {
  */
 export function defaultSettingsSnapshot(): SettingsSnapshot {
   return resolveSettingsSnapshot(new Map(), NO_ENVIRONMENT).snapshot;
-}
-
-/** One row the build-time seed would create from this deployment's variables. */
-export interface SettingsSeedRow {
-  key: string;
-  value: SettingValue;
-}
-
-/**
- * Every variable the cleanup stage will stop parsing.
- *
- * A key marked `requiresRedeploy` is deliberately absent: this deployment
- * still reads that variable itself, so removing it would break the deployment
- * rather than tidy it. The two lists this feeds (what to import, what to tell
- * the operator to remove) must be the same list or an operator would delete a
- * variable nothing stored.
- */
-export function migratedSettingVariables(): string[] {
-  return REGISTRY.filter(
-    (definition) => definition.environmentVariable !== null && !definition.requiresRedeploy,
-  ).map((definition) => definition.environmentVariable as string);
-}
-
-/**
- * The migrated variables this deployment still sets, by name.
- *
- * Names only, never values: the list is published on `/health` and on the
- * Settings page, and half of these variables carry nothing secret while the
- * other half is nobody's business. Presence is the whole question an operator
- * has here.
- */
-export function migratedVariablesSetIn(
-  environment: SettingsEnvironmentReader,
-): string[] {
-  return migratedSettingVariables().filter((variable) => environment.isSet(variable));
-}
-
-/**
- * The migrated variables this deployment sets that have no stored row yet.
- *
- * The honest half of the pair above. `migratedVariablesSetIn` answers "what is
- * still set", which is the operator's to-do list; this answers "what would be
- * LOST if you acted on it now", which is the only question that makes the
- * to-do list safe to act on. A name leaves this list the moment a row exists
- * for its key, whoever wrote it: the import, the build-time seed or an
- * operator on the Settings page.
- *
- * Taken from a resolution rather than from a set of keys so it cannot drift
- * from what the same read resolved: the test is `source === "environment"`,
- * which is exactly "the variable is what this deployment is running on".
- * A stored row answering instead makes the variable safe to remove, and so
- * does a variable that is set but parses to nothing (`FOO=` or `FOO=0` where
- * zero is not a value the key accepts): the deployment already resolves that
- * key to its registry default, so removing the variable loses nothing. Such a
- * variable stays on the to-do list above, because the cleanup release still
- * refuses to boot with it set.
- */
-export function migratedVariablesUnstoredIn(
-  environment: SettingsEnvironmentReader,
-  resolution: SettingsResolution,
-): string[] {
-  return REGISTRY.filter(
-    (definition) =>
-      definition.environmentVariable !== null &&
-      !definition.requiresRedeploy &&
-      environment.isSet(definition.environmentVariable) &&
-      resolution.sources.get(definition.key) === "environment",
-  ).map((definition) => definition.environmentVariable as string);
-}
-
-/**
- * Every `requiresRedeploy` key, with the value that answers for it once no
- * stored row is in the way.
- *
- * A row for one of these is ignored by the resolution above, which makes it a
- * lie in the only place an operator can see it: the Settings history says
- * somebody set the key, and the running code has never read it. The import
- * deletes such rows, and records each removal with this value as the new one,
- * so the history reads as "the environment took this key back" rather than as
- * a row vanishing.
- */
-export function redeployOwnedSettingRows(
-  environment: SettingsEnvironmentReader,
-): SettingsSeedRow[] {
-  const { snapshot } = resolveSettingsSnapshot(new Map(), environment);
-  const values = snapshot as unknown as Record<string, SettingValue>;
-  return REGISTRY.filter((definition) => definition.requiresRedeploy).map(
-    (definition) => ({ key: definition.key, value: values[definition.key] ?? null }),
-  );
-}
-
-/**
- * The rows the build-time seed and the runtime import write: one per key whose
- * variable this deployment actually sets, carrying the value the environment
- * already resolved to. A key with no variable, and a variable left unset,
- * produce no row, so the resolution order keeps answering for them.
- *
- * A `requiresRedeploy` key produces no row either. Its variable is not going
- * away, and a stored row would win over the environment in the resolution
- * above while the module-load reader kept answering from the variable: one key
- * with two live answers is exactly the drift this migration exists to end.
- */
-export function settingsSeedRowsFrom(
-  environment: SettingsEnvironmentReader,
-): SettingsSeedRow[] {
-  const rows: SettingsSeedRow[] = [];
-  for (const definition of REGISTRY) {
-    const variable = definition.environmentVariable;
-    if (variable === null) continue;
-    if (definition.requiresRedeploy) continue;
-    if (!environment.isSet(variable)) continue;
-    const value = environment.value(variable);
-    if (value === undefined) continue;
-    rows.push({ key: definition.key, value });
-  }
-  return rows;
 }

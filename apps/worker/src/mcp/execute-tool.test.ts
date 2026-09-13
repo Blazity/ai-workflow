@@ -43,15 +43,21 @@ import {
 import { beginMcpMutation, failMcpMutation } from "../services/mcp/idempotency-store.js";
 import { createMcpToolServices } from "../services/mcp/tool-services.js";
 import { actorFor as actor, depsFor } from "../test-support/mcp.js";
-import { settingsSnapshotFromEnvironment } from "../services/settings/snapshot.js";
+import { testSettingsSnapshot } from "../test-support/settings.js";
 
 let db: Db;
 let clock: Date;
 
-const settings = settingsSnapshotFromEnvironment();
+const settings = testSettingsSnapshot({
+  MCP_MAX_RESULT_BYTES: 4_096,
+  MCP_TOOL_TIMEOUT_MS: 25,
+  MCP_READ_RATE_LIMIT_PER_MINUTE: 2,
+  MCP_MUTATION_RATE_LIMIT_PER_MINUTE: 1,
+  MCP_AUDIT_RETENTION_DAYS: 365,
+});
 
 function deps(overrides: Partial<McpToolDependencies> = {}): McpToolDependencies {
-  return depsFor(db, () => clock, overrides);
+  return depsFor(db, () => clock, { settings, ...overrides });
 }
 
 describe("the deadline one call may take", () => {

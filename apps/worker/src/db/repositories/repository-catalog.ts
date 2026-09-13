@@ -8,11 +8,6 @@
  * be one file to review rather than a diff spread over three tiers.
  */
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
-import {
-  REPOSITORY_CATALOG_SEED_ACTIVATION_REASON,
-  REPOSITORY_CATALOG_SEED_ACTOR_ID,
-  REPOSITORY_CATALOG_SEED_ACTOR_LABEL,
-} from "@shared/contracts";
 import type {
   PrePrCheckRepositoryConfig,
   RepositoryCatalogSource,
@@ -812,16 +807,14 @@ export async function listRepositoryRules(
 }
 
 /**
- * The state row as stored, or null when no build has ever written one.
+ * The state row as stored, or null when the catalog has never been activated.
  *
  * The two are NOT the same fact, which is why this exists next to the reader
- * below. "No row yet" means nothing has been decided; "a row saying false"
- * means some build decided the catalog is off, and because the seed writes with
- * `onConflictDoNothing`, no later build can change its mind. Only the build
- * gate needs to tell them apart, and it has to
- * (`seedActivationConflict` in services/repository-catalog/policy.ts).
+ * below. "No row yet" means the compatibility bridge is still active. A stored
+ * row preserves historical activation provenance; H2 removed the build seed,
+ * so only the Repositories activation service changes this state now.
  */
-export async function readRepositoryCatalogStateRow(
+async function readRepositoryCatalogStateRow(
   db: Db,
 ): Promise<RepositoryCatalogStateRow | null> {
   const [row] = await db.select().from(repositoryCatalogState).limit(1);
@@ -839,14 +832,9 @@ export async function readRepositoryCatalogStateRow(
 export async function getRepositoryCatalogStateRow(
   db: Db,
 ): Promise<RepositoryCatalogStateRow> {
-  // Absent means "never seeded and never activated", which is the bridge: a
-  // deployment whose build has not run the seed yet, and every unit test that
-  // only replays migrations. It is NOT a statement that the deployment is
-  // unrestricted on purpose. A deployment that DOES restrict itself through
-  // AGENT_ALLOWED_REPOS and finds a stored row saying false is a build failure,
-  // not a bridge (see `readRepositoryCatalogStateRow` above); this reader
-  // deliberately cannot see the difference, because nothing at runtime should
-  // act on it.
+  // Absent means "never activated", which is the compatibility bridge. H2
+  // removed the build seed and AGENT_ALLOWED_REPOS is unused, so activation is
+  // now exclusively an operator action on the Repositories page.
   return (
     (await readRepositoryCatalogStateRow(db)) ?? {
       activated: false,
@@ -1195,34 +1183,6 @@ export function backfillConnectedRepositoryDefaultBranches(
 }
 
 /**
- * Every repository pinned by a stored workflow definition version, published or
- * draft.
- *
- * All versions, not only the deployed one. A pin grants access today, so a
- * repository named by a draft an author is still editing must survive into the
- * catalog: importing only deployed pins would quietly take a repository away
- * from the next publish.
- */
-export async function listPinnedRepositoriesFromDefinitions(
-  db: Db,
-): Promise<Array<{ provider: string; path: string }>> {
-  const result = await db.execute(sql`
-    SELECT DISTINCT
-      pinned.value->>'provider' AS provider,
-      btrim(pinned.value->>'repoPath') AS path
-    FROM workflow_definition_versions AS versions,
-      jsonb_array_elements(
-        COALESCE(versions.definition->'repositoryScope'->'repositories', '[]'::jsonb)
-      ) AS pinned(value)
-    WHERE pinned.value->>'provider' IN ('github', 'gitlab')
-      AND COALESCE(btrim(pinned.value->>'repoPath'), '') <> ''
-    ORDER BY 1, 2
-  `);
-  const rows = (result as { rows?: Array<{ provider: string; path: string }> }).rows ?? [];
-  return rows.map((row) => ({ provider: row.provider, path: row.path }));
-}
-
-/**
  * Create catalog rows for repositories this deployment already grants access
  * to, in one multi-row insert.
  *
@@ -1323,124 +1283,4 @@ export async function backfillRepositoryDefaultBranches(
     RETURNING target.id
   `);
   return ((result as { rows?: unknown[] }).rows ?? []).length;
-}
-
-/**
- * Write the catalog state row, once.
- *
- * On conflict it does nothing rather than updating: activation is an operator's
- * decision and a seed that ran again on the next deploy must never re-decide
- * it. A deployment that activated the catalog and later emptied its allowlist
- * variable stays activated; one that never activated stays on the bridge.
- */
-export async function seedRepositoryCatalogState(
-  db: Db,
-  input: { activated: boolean; now?: Date },
-): Promise<RepositoryCatalogStateRow> {
-  const now = input.now ?? new Date();
-  await db
-    .insert(repositoryCatalogState)
-    .values({
-      id: 1,
-      activated: input.activated,
-      activatedAt: input.activated ? now : null,
-      // Named, not anonymous. An activation nobody clicked is still an
-      // activation, and the Repositories screen has to be able to say so: the
-      // deployment was already restricted to this exact list, and the seed
-      // wrote that list down rather than widening it.
-      activatedById: input.activated ? REPOSITORY_CATALOG_SEED_ACTOR_ID : null,
-      activatedByLabel: input.activated ? REPOSITORY_CATALOG_SEED_ACTOR_LABEL : null,
-      // The seed records a reason for the same purpose an operator does: the
-      // History surface reads one line per activation and an activation nobody
-      // clicked is the one most worth explaining.
-      activationReason: input.activated
-        ? REPOSITORY_CATALOG_SEED_ACTIVATION_REASON
-        : null,
-      updatedAt: now,
-    })
-    .onConflictDoNothing();
-  return getRepositoryCatalogStateRow(db);
-}
-
-/**
- * Move the global script groups blob into one profile per repository it names.
- *
- * Two statements because they answer two questions and neither is a multi-row
- * change the other has to be atomic with: the first creates the rows the blob
- * names that the catalog does not have yet, the second gives a profile to every
- * named row that has none. Re-running is a no-op in both: the insert is guarded
- * on existence, and the update fires only on `current_profile_version = 0`, so
- * a repository that already has a profile is left exactly as it is.
- *
- * A row created here is DISABLED. The rows that may be enabled are the ones the
- * allowlist and the definition pins seeded before this ran, and a repository
- * that only ever appeared in the checks configuration was never a grant: the
- * configuration says what to run IF the agent may touch a repository, never
- * that it may.
- */
-export async function migrateScriptGroupsIntoProfiles(
-  db: Db,
-): Promise<{ repositoriesCreated: number; profilesCreated: number }> {
-  const blobEntries = sql`
-    WITH latest AS (
-      SELECT config FROM ${prePrCheckConfigVersions} ORDER BY version DESC LIMIT 1
-    ), entries AS (
-      SELECT
-        element.value AS entry,
-        element.value->>'provider' AS provider,
-        btrim(element.value->>'repoPath') AS path
-      FROM latest,
-        jsonb_array_elements(COALESCE(latest.config->'repositories', '[]'::jsonb))
-          AS element(value)
-      WHERE element.value->>'provider' IN ('github', 'gitlab')
-        AND COALESCE(btrim(element.value->>'repoPath'), '') <> ''
-    )
-  `;
-  const created = await db.execute(sql`
-    ${blobEntries}
-    INSERT INTO ${repositories} (
-      provider, path, display_name, source, enabled, current_profile_version
-    )
-    SELECT entries.provider, entries.path, entries.path, 'migrated', false, 0
-    FROM entries
-    WHERE NOT EXISTS (
-      SELECT 1 FROM ${repositories} AS existing
-      WHERE existing.provider = entries.provider
-        AND lower(existing.path) = lower(entries.path)
-    )
-    ON CONFLICT (provider, path) DO NOTHING
-    RETURNING id
-  `);
-  const profiles = await db.execute(sql`
-    ${blobEntries}, bumped AS (
-      UPDATE ${repositories} AS target
-      SET current_profile_version = 1, current_checks_version = 1, updated_at = now()
-      FROM entries
-      WHERE target.provider = entries.provider
-        AND lower(target.path) = lower(entries.path)
-        AND target.current_profile_version = 0
-      RETURNING target.id AS id, entries.entry AS entry
-    )
-    INSERT INTO ${repositoryProfileVersions} (
-      repository_id, version, script_groups, gate_groups, checks_version,
-      actor_id, actor_label, reason
-    )
-    SELECT
-      bumped.id, 1, bumped.entry,
-      CASE
-        WHEN jsonb_typeof(bumped.entry->'gateGroups') = 'array'
-        THEN bumped.entry->'gateGroups'
-        ELSE NULL
-      END,
-      1,
-      'migration', 'migration',
-      'script groups migration from pre_pr_check_config_versions'
-    FROM bumped
-    ON CONFLICT (repository_id, version) DO NOTHING
-    RETURNING repository_id
-  `);
-  return {
-    repositoriesCreated: ((created as { rows?: unknown[] }).rows ?? []).length,
-    profilesCreated: ((profiles as { rows?: unknown[] }).rows ?? []).length,
-  };
 }

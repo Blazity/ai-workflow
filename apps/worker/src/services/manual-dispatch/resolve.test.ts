@@ -9,6 +9,10 @@ import { createTestDb } from "../../db/test-db.js";
 // client mock; every other query here is stubbed outright.
 const dbState = vi.hoisted(() => ({ db: undefined as unknown }));
 vi.mock("../../db/client.js", () => ({ getDb: () => dbState.db }));
+vi.mock("../../db/repositories/settings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../db/repositories/settings.js")>()),
+  readAllSettings: vi.fn().mockResolvedValue([]),
+}));
 
 vi.mock("../../infra/vcs-config.js", () => ({
   env: {},

@@ -13,25 +13,9 @@ vi.mock("../../infra/vcs-config.js", () => ({
     MCP_READ_RATE_LIMIT_PER_MINUTE: 120,
     MCP_MUTATION_RATE_LIMIT_PER_MINUTE: 20,
     MCP_AUDIT_RETENTION_DAYS: 365,
-    // The one key this file resets: the environment answers 7 for it, so a
-    // reset has something other than the registry default (3) to fall back to,
-    // which is the whole difference between "clear the row" and "set it back to
-    // the default".
-    MAX_CONCURRENT_AGENTS: 7,
   },
 }));
 vi.mock("../../db/client.js", () => ({ getDb: () => state.db }));
-// The environment import is a one-off write the first settings read makes, and
-// it is memoised per process: left alone it would land in whichever test in
-// this file resolves a snapshot first and in none of the others, which would
-// make the resolution a test below asserts depend on file order. Its own
-// behaviour is pinned in services/settings/environment-import.test.ts; here the
-// question is what the tool answers, so only the write is stubbed out and
-// `migratedVariablesSet` stays the real reader of this file's environment.
-vi.mock("../../services/settings/environment-import.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../services/settings/environment-import.js")>()),
-  ensureEnvironmentSettingsImported: async () => [],
-}));
 
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
@@ -60,16 +44,11 @@ beforeEach(async () => {
   db = await createTestDb();
   state.db = db;
   await db.insert(organization).values({ id: ORG_ID, name: "Execute", slug: "execute" });
-  // isSet() reads process.env directly (infra/settings-environment.ts), so the
-  // variable has to be present here as well as in the mocked parsed env for the
-  // resolution to label the value "environment" rather than "default".
-  process.env.MAX_CONCURRENT_AGENTS = "7";
 });
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   await Promise.allSettled(cleanups.splice(0).map((cleanup) => cleanup()));
-  delete process.env.MAX_CONCURRENT_AGENTS;
 });
 
 async function connectedClient(
@@ -131,8 +110,8 @@ describe("settings.list", () => {
     expect(result.isError).not.toBe(true);
     const concurrency = rows.find((row) => row.key === "MAX_CONCURRENT_AGENTS");
     expect(concurrency).toMatchObject({
-      value: 7,
-      source: "environment",
+      value: 3,
+      source: "default",
       group: "capacity",
       editable: true,
       role: "owner_or_admin",
@@ -173,23 +152,6 @@ describe("settings.list", () => {
     expect(
       rows.find((row) => row.key === "MAX_CONCURRENT_AGENTS"),
     ).toMatchObject({ requiresRedeploy: false, appliesToRunsInFlight: "immediate" });
-  });
-
-  it("names the variables an operator still has to delete from the deployment", async () => {
-    const client = await connectedClient({ role: "member", scopes: READ_ONLY });
-
-    const data = dataOf(await client.callTool({ name: "settings.list", arguments: {} }));
-    const migrated = data.migratedVariablesSet as string[];
-
-    // Set in this file's environment, and its value is already stored the
-    // moment a snapshot is resolved, so deleting the variable changes nothing.
-    expect(migrated).toContain("MAX_CONCURRENT_AGENTS");
-    // Never a key the running code still reads from the environment: asking an
-    // operator to delete one of those would break the deployment.
-    expect(migrated).not.toContain("PRE_PR_CHECKS_ALLOWED_ENV");
-    expect(migrated).not.toContain("DASHBOARD_ORG_SLUG");
-    // A variable this deployment does not set is not something to remove.
-    expect(migrated).not.toContain("COLUMN_AI");
   });
 
   // The registry deliberately holds no credential: keys, tokens and URLs stay in
@@ -506,7 +468,7 @@ describe("settings.set", () => {
 });
 
 describe("settings.reset", () => {
-  it("clears the stored row so the environment answers again, and records it", async () => {
+  it("clears the stored row so the registry default answers again, and records it", async () => {
     const client = await connectedClient();
     await client.callTool({
       name: "settings.set",
@@ -530,16 +492,14 @@ describe("settings.reset", () => {
 
     expect(result.isError).not.toBe(true);
     expect(data.removed).toBe(true);
-    // Not the registry default (3): this deployment's environment says 7, and
-    // "reset" hands the key back to the resolution order rather than pinning it.
-    expect(data.setting).toMatchObject({ value: 7, source: "environment", default: 3 });
+    expect(data.setting).toMatchObject({ value: 3, source: "default", default: 3 });
     expect(await db.select().from(settings)).toEqual([]);
     const versions = await db.select().from(settingsVersions);
     expect(versions).toHaveLength(2);
     expect(versions[1]).toMatchObject({
       key: "MAX_CONCURRENT_AGENTS",
       previousValue: 5,
-      newValue: 7,
+      newValue: 3,
       reason: "let the deployment decide again",
     });
   });
@@ -558,7 +518,7 @@ describe("settings.reset", () => {
 
     expect(result.isError).not.toBe(true);
     expect(dataOf(result)).toMatchObject({ removed: false });
-    expect(dataOf(result).setting).toMatchObject({ value: 7, source: "environment" });
+    expect(dataOf(result).setting).toMatchObject({ value: 3, source: "default" });
     expect(await db.select().from(settingsVersions)).toEqual([]);
   });
 

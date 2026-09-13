@@ -1,4 +1,5 @@
 import { getRun } from "workflow/api";
+import type { SettingsSnapshot } from "@shared/contracts";
 import { logger } from "../../infra/logger.js";
 import type { Db } from "../../db/types.js";
 import type {
@@ -192,6 +193,7 @@ export interface CancelRunByIdDeps {
   actorLabel: string;
   runRegistry: RunRegistryAdapter;
   issueTracker?: IssueTrackerAdapter;
+  settings: Pick<SettingsSnapshot, "COLUMN_AI" | "COLUMN_BACKLOG">;
 }
 
 /**
@@ -242,13 +244,13 @@ export async function cancelRunById(
             await withdrawConnectedTicketFromAiForRun({
               issueTracker: opts.issueTracker!,
               ticketKey: claim.ticketKey!,
-              aiColumn: env.COLUMN_AI,
+              aiColumn: opts.settings.COLUMN_AI,
               target: env.JIRA_BACKLOG_TRANSITION_ID
                 ? {
-                    name: env.COLUMN_BACKLOG,
+                    name: opts.settings.COLUMN_BACKLOG,
                     transitionId: env.JIRA_BACKLOG_TRANSITION_ID,
                   }
-                : env.COLUMN_BACKLOG,
+                : opts.settings.COLUMN_BACKLOG,
               owner,
               requiredOwnerState: "cancelling",
             });

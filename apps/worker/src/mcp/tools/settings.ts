@@ -103,26 +103,6 @@ function viewOf(entry: SettingsEntryView): SettingView {
 
 type SettingsListData = {
   settings: SettingView[];
-  /**
-   * The environment variables this deployment still sets that the store has
-   * taken over, by name.
-   *
-   * The exit path for the settings migration: every one of these is a variable
-   * an operator deletes from the deployment, and the list is empty when the
-   * cleanup release (which refuses to boot with any of them set) can ship. A
-   * key marked `requiresRedeploy` is never here, because the running code still
-   * reads its variable. Names only, which is all the question needs.
-   */
-  migratedVariablesSet: string[];
-  /**
-   * Those of them no stored row answers for yet, by name.
-   *
-   * Never empty for free: it is read back from the settings table, so a failed
-   * import shows up here rather than as a silent claim that everything is
-   * durable. A name on this list must not be removed from the deployment, and
-   * an empty list is the condition the cleanup stage waits for.
-   */
-  migratedVariablesUnstored: string[];
 };
 type SettingsGetData = {
   setting: SettingView;
@@ -159,16 +139,9 @@ export function registerSettingsTools(
       deps,
       toolName: "settings.list",
       targetRefs: [],
-      // One read for both fields: the list of settings and the list of
-      // variables still set are two halves of the same answer, and reading
-      // twice could show a key whose row was written between them.
       operation: async (): Promise<SettingsListData> => {
         const read = await readSettings();
-        return {
-          settings: read.settings.map(viewOf),
-          migratedVariablesSet: [...read.migratedVariablesSet],
-          migratedVariablesUnstored: [...read.migratedVariablesUnstored],
-        };
+        return { settings: read.settings.map(viewOf) };
       },
     });
     return mcpEnvelopeResult(envelope);

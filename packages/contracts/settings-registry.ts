@@ -7,11 +7,9 @@
  * reasonably change it from the dashboard; credentials, provider identity,
  * database and auth URLs stay in the environment and are deliberately absent.
  *
- * Until the cleanup stage the environment is still the source a missing row
- * falls back to, so `environmentVariable` names the variable each key is
- * resolved from today and `default` repeats what that variable's schema
- * defaults to. A key with no variable (the repository catalog switch) has
- * only the default and whatever row the dashboard writes.
+ * Stored rows decide ordinary settings, with the registry default as the
+ * fallback. The three keys marked `requiresRedeploy` are the exception: their
+ * running consumers still read the named deployment variable directly.
  */
 
 /** The panels the dashboard groups these into. */
@@ -48,14 +46,14 @@ export interface SettingDefinition {
   readonly key: string;
   readonly group: SettingsGroup;
   readonly type: SettingType;
-  /** The value used when nothing is stored and the variable is unset. */
+  /** The fallback when no ordinary row or redeploy-owned variable answers. */
   readonly default: SettingValue;
   readonly description: string;
   readonly appliesToRunsInFlight: SettingsInFlightRule;
   /** Whether the trigger-owned configuration work may later override this. */
   readonly overridablePerTrigger: boolean;
-  /** The variable a missing row still falls back to, until the cleanup stage. */
-  readonly environmentVariable: string | null;
+  /** The deployment variable read by a key marked `requiresRedeploy`. */
+  readonly environmentVariable?: string;
   /**
    * Whether this deployment still reads the variable itself, so a stored row
    * cannot decide the value alone.
@@ -68,13 +66,10 @@ export interface SettingDefinition {
    * needs a redeploy, so the cleanup stage neither imports it into the store
    * nor asks the operator to remove it.
    *
-   * For a write this means the store records the decision and changes nothing
-   * until the worker is redeployed, in both directions: the old value keeps
-   * being used and the new one is not, however the Settings page renders it.
-   * `appliesToRunsInFlight` cannot say that ("next run" is a promise this key
-   * does not keep), so a surface that shows a key to somebody about to change
-   * it has to say it separately. Absent means the ordinary case: the value in
-   * the store is the value that is read.
+   * Settings write surfaces refuse these keys because a stored decision would
+   * never win. `appliesToRunsInFlight` cannot express that deployment cadence,
+   * so the dashboard renders it separately as "after redeploy". Absent means
+   * the ordinary case: the value in the store is the value that is read.
    */
   readonly requiresRedeploy?: boolean;
   /** For a string setting whose value is one of a fixed set. */
@@ -82,6 +77,50 @@ export interface SettingDefinition {
   /** For an integer setting, the smallest value its schema accepts today. */
   readonly minimum?: number;
 }
+
+/**
+ * Environment names whose values moved permanently into the settings store.
+ *
+ * This is intentionally a frozen literal rather than derived from the
+ * registry. Once retired, a later registry edit must not silently make one of
+ * these names legal again. A deployment that still sets any name here is
+ * refused at boot with instructions for changing the value through Settings.
+ */
+export const RETIRED_ENVIRONMENT_VARIABLES = Object.freeze([
+  "DASHBOARD_ORG_NAME",
+  "GITHUB_BASE_BRANCH",
+  "GITLAB_BASE_BRANCH",
+  "MAX_CONCURRENT_AGENTS",
+  "JOB_TIMEOUT_MS",
+  "V2_MAX_BLOCK_CONCURRENCY",
+  "POLL_INTERVAL_MS",
+  "ATTACHMENT_MAX_FILE_SIZE_MB",
+  "ATTACHMENT_MAX_TOTAL_SIZE_MB",
+  "ATTACHMENT_MAX_COUNT",
+  "ATTACHMENT_DOWNLOAD_TIMEOUT_MS",
+  "ENABLE_REVIEW_PHASE",
+  "ENABLE_LEAK_REVIEW",
+  "ENABLE_REPO_MEMORY",
+  "ENABLE_ORG_MEMORY_PROMOTION",
+  "ENABLE_REPO_ROUTING_MEMORY",
+  "REVIEW_LEDGER_ENABLED",
+  "MCP_ENABLED",
+  "MCP_AUDIT_RETENTION_DAYS",
+  "MCP_MAX_REQUEST_BYTES",
+  "MCP_MAX_RESULT_BYTES",
+  "MCP_TOOL_TIMEOUT_MS",
+  "MCP_READ_RATE_LIMIT_PER_MINUTE",
+  "MCP_MUTATION_RATE_LIMIT_PER_MINUTE",
+  "PRE_PR_COMMAND_TIMEOUT_MINUTES",
+  "AGENT_KIND",
+  "CLAUDE_MODEL",
+  "CODEX_MODEL",
+  "COLUMN_AI",
+  "COLUMN_AI_REVIEW",
+  "COLUMN_BACKLOG",
+  "TRIGGER_RATE_LIMIT_MAX",
+  "TRIGGER_RATE_LIMIT_WINDOW",
+] as const);
 
 export const SETTINGS_REGISTRY = [
   {
@@ -92,7 +131,6 @@ export const SETTINGS_REGISTRY = [
     description: "Display name of the organization the dashboard mints invites for.",
     appliesToRunsInFlight: "immediate",
     overridablePerTrigger: false,
-    environmentVariable: "DASHBOARD_ORG_NAME",
   },
   {
     key: "DASHBOARD_ORG_SLUG",
@@ -114,7 +152,6 @@ export const SETTINGS_REGISTRY = [
     description: "Branch new GitHub work branches are cut from when a repository names none.",
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: false,
-    environmentVariable: "GITHUB_BASE_BRANCH",
   },
   {
     key: "GITLAB_BASE_BRANCH",
@@ -124,7 +161,6 @@ export const SETTINGS_REGISTRY = [
     description: "Branch new GitLab work branches are cut from when a repository names none.",
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: false,
-    environmentVariable: "GITLAB_BASE_BRANCH",
   },
   {
     key: "MAX_CONCURRENT_AGENTS",
@@ -135,7 +171,6 @@ export const SETTINGS_REGISTRY = [
     description: "How many runs may hold an agent slot at once. Every dispatch path shares it.",
     appliesToRunsInFlight: "immediate",
     overridablePerTrigger: false,
-    environmentVariable: "MAX_CONCURRENT_AGENTS",
   },
   {
     key: "JOB_TIMEOUT_MS",
@@ -146,7 +181,6 @@ export const SETTINGS_REGISTRY = [
     description: "Wall clock a single agent phase may take before the run gives up on it.",
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: false,
-    environmentVariable: "JOB_TIMEOUT_MS",
   },
   {
     key: "V2_MAX_BLOCK_CONCURRENCY",
@@ -158,7 +192,6 @@ export const SETTINGS_REGISTRY = [
       "Operational ceiling on blocks of one run dispatched at once. Unset means the code-owned bound; this only ever lowers it.",
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: false,
-    environmentVariable: "V2_MAX_BLOCK_CONCURRENCY",
   },
   {
     key: "POLL_INTERVAL_MS",
@@ -169,7 +202,6 @@ export const SETTINGS_REGISTRY = [
     description: "Cadence the scheduled tick polls the issue tracker at.",
     appliesToRunsInFlight: "immediate",
     overridablePerTrigger: false,
-    environmentVariable: "POLL_INTERVAL_MS",
   },
   {
     key: "ATTACHMENT_MAX_FILE_SIZE_MB",
@@ -180,7 +212,6 @@ export const SETTINGS_REGISTRY = [
     description: "Largest single ticket attachment the agent will download.",
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: false,
-    environmentVariable: "ATTACHMENT_MAX_FILE_SIZE_MB",
   },
   {
     key: "ATTACHMENT_MAX_TOTAL_SIZE_MB",
@@ -191,7 +222,6 @@ export const SETTINGS_REGISTRY = [
     description: "Total attachment bytes one run may download.",
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: false,
-    environmentVariable: "ATTACHMENT_MAX_TOTAL_SIZE_MB",
   },
   {
     key: "ATTACHMENT_MAX_COUNT",
@@ -202,7 +232,6 @@ export const SETTINGS_REGISTRY = [
     description: "How many attachments of one ticket the agent will download.",
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: false,
-    environmentVariable: "ATTACHMENT_MAX_COUNT",
   },
   {
     key: "ATTACHMENT_DOWNLOAD_TIMEOUT_MS",
@@ -213,7 +242,6 @@ export const SETTINGS_REGISTRY = [
     description: "Per-attachment download timeout.",
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: false,
-    environmentVariable: "ATTACHMENT_DOWNLOAD_TIMEOUT_MS",
   },
   {
     key: "ENABLE_REVIEW_PHASE",
@@ -224,7 +252,6 @@ export const SETTINGS_REGISTRY = [
       "Shapes the built-in workflow templates with a review phase. A saved definition's blocks decide the rest.",
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: false,
-    environmentVariable: "ENABLE_REVIEW_PHASE",
   },
   {
     key: "ENABLE_LEAK_REVIEW",
@@ -235,7 +262,6 @@ export const SETTINGS_REGISTRY = [
       "Shapes the built-in workflow templates with a leak review before the branch is pushed.",
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: false,
-    environmentVariable: "ENABLE_LEAK_REVIEW",
   },
   {
     key: "ENABLE_REPO_MEMORY",
@@ -246,7 +272,6 @@ export const SETTINGS_REGISTRY = [
       "The kill switch for per-repository agent memory: gates every read and every write, and leaves stored documents untouched when off.",
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: false,
-    environmentVariable: "ENABLE_REPO_MEMORY",
   },
   {
     key: "ENABLE_ORG_MEMORY_PROMOTION",
@@ -257,7 +282,6 @@ export const SETTINGS_REGISTRY = [
       "Promotes facts two repositories of one owner agree on into an organization document. No effect unless repository memory is on.",
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: false,
-    environmentVariable: "ENABLE_ORG_MEMORY_PROMOTION",
   },
   {
     key: "ENABLE_REPO_ROUTING_MEMORY",
@@ -268,7 +292,6 @@ export const SETTINGS_REGISTRY = [
       "Remembers which repository a human resolved a ticket label to. No effect unless repository memory is on.",
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: false,
-    environmentVariable: "ENABLE_REPO_ROUTING_MEMORY",
   },
   {
     key: "REVIEW_LEDGER_ENABLED",
@@ -278,7 +301,6 @@ export const SETTINGS_REGISTRY = [
     description: "Tracks every open review thread on a pull request as a work item with a stable alias.",
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: false,
-    environmentVariable: "REVIEW_LEDGER_ENABLED",
   },
   {
     key: "MCP_ENABLED",
@@ -288,7 +310,6 @@ export const SETTINGS_REGISTRY = [
     description: "Serves the remote MCP endpoint. Off means the transport refuses every request.",
     appliesToRunsInFlight: "immediate",
     overridablePerTrigger: false,
-    environmentVariable: "MCP_ENABLED",
   },
   {
     key: "MCP_ALLOW_PUBLIC_DCR",
@@ -310,7 +331,6 @@ export const SETTINGS_REGISTRY = [
     description: "How long MCP audit rows are kept.",
     appliesToRunsInFlight: "immediate",
     overridablePerTrigger: false,
-    environmentVariable: "MCP_AUDIT_RETENTION_DAYS",
   },
   {
     key: "MCP_MAX_REQUEST_BYTES",
@@ -321,7 +341,6 @@ export const SETTINGS_REGISTRY = [
     description: "Largest MCP request body accepted.",
     appliesToRunsInFlight: "immediate",
     overridablePerTrigger: false,
-    environmentVariable: "MCP_MAX_REQUEST_BYTES",
   },
   {
     key: "MCP_MAX_RESULT_BYTES",
@@ -332,7 +351,6 @@ export const SETTINGS_REGISTRY = [
     description: "Largest MCP tool result returned. Must stay at or below the request limit.",
     appliesToRunsInFlight: "immediate",
     overridablePerTrigger: false,
-    environmentVariable: "MCP_MAX_RESULT_BYTES",
   },
   {
     key: "MCP_TOOL_TIMEOUT_MS",
@@ -343,7 +361,6 @@ export const SETTINGS_REGISTRY = [
     description: "Wall clock one MCP tool call may take.",
     appliesToRunsInFlight: "immediate",
     overridablePerTrigger: false,
-    environmentVariable: "MCP_TOOL_TIMEOUT_MS",
   },
   {
     key: "MCP_READ_RATE_LIMIT_PER_MINUTE",
@@ -354,7 +371,6 @@ export const SETTINGS_REGISTRY = [
     description: "Read calls one MCP client may make per minute.",
     appliesToRunsInFlight: "immediate",
     overridablePerTrigger: false,
-    environmentVariable: "MCP_READ_RATE_LIMIT_PER_MINUTE",
   },
   {
     key: "MCP_MUTATION_RATE_LIMIT_PER_MINUTE",
@@ -365,7 +381,6 @@ export const SETTINGS_REGISTRY = [
     description: "Mutating calls one MCP client may make per minute.",
     appliesToRunsInFlight: "immediate",
     overridablePerTrigger: false,
-    environmentVariable: "MCP_MUTATION_RATE_LIMIT_PER_MINUTE",
   },
   {
     key: "PRE_PR_COMMAND_TIMEOUT_MINUTES",
@@ -377,7 +392,6 @@ export const SETTINGS_REGISTRY = [
       "Per-command wall clock for repository checks when the repository names none of its own.",
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: false,
-    environmentVariable: "PRE_PR_COMMAND_TIMEOUT_MINUTES",
   },
   {
     key: "PRE_PR_CHECKS_ALLOWED_ENV",
@@ -392,9 +406,8 @@ export const SETTINGS_REGISTRY = [
     // The checks runner reads this straight off `process.env`
     // (`allowedRepoEnvNames`, engine/steps/pre-pr-checks-runner.ts), and says so
     // in its own comment: only the operator, in the hosting dashboard, decides
-    // the worker may hand a value to a tenant's command. Until that read moves
-    // to the store, a name added here is still refused at save time and a name
-    // removed here still forwards, until the next deployment is live.
+    // the worker may hand a value to a tenant's command. The settings surfaces
+    // expose this key read-only; change its variable and redeploy.
     requiresRedeploy: true,
   },
   {
@@ -407,7 +420,6 @@ export const SETTINGS_REGISTRY = [
       "Which coding agent a deployment defaults to. A harness profile still decides the agent of a given run.",
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: false,
-    environmentVariable: "AGENT_KIND",
   },
   {
     key: "CLAUDE_MODEL",
@@ -417,7 +429,6 @@ export const SETTINGS_REGISTRY = [
     description: "Default Claude model when no harness profile pins one.",
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: false,
-    environmentVariable: "CLAUDE_MODEL",
   },
   {
     key: "CODEX_MODEL",
@@ -427,7 +438,6 @@ export const SETTINGS_REGISTRY = [
     description: "Default Codex model when no harness profile pins one.",
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: false,
-    environmentVariable: "CODEX_MODEL",
   },
   {
     key: "COLUMN_AI",
@@ -437,7 +447,6 @@ export const SETTINGS_REGISTRY = [
     description: "Board column a ticket enters to be assigned to the agent.",
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: true,
-    environmentVariable: "COLUMN_AI",
   },
   {
     key: "COLUMN_AI_REVIEW",
@@ -447,7 +456,6 @@ export const SETTINGS_REGISTRY = [
     description: "Board column a finished ticket is moved to for human review.",
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: true,
-    environmentVariable: "COLUMN_AI_REVIEW",
   },
   {
     key: "COLUMN_BACKLOG",
@@ -457,7 +465,6 @@ export const SETTINGS_REGISTRY = [
     description: "Board column a ticket is bounced back to when the agent needs clarification.",
     appliesToRunsInFlight: "next run",
     overridablePerTrigger: true,
-    environmentVariable: "COLUMN_BACKLOG",
   },
   {
     key: "TRIGGER_RATE_LIMIT_MAX",
@@ -469,7 +476,6 @@ export const SETTINGS_REGISTRY = [
       "Default start budget for a trigger node that declares none. Unset means unlimited.",
     appliesToRunsInFlight: "immediate",
     overridablePerTrigger: true,
-    environmentVariable: "TRIGGER_RATE_LIMIT_MAX",
   },
   {
     key: "TRIGGER_RATE_LIMIT_WINDOW",
@@ -480,7 +486,6 @@ export const SETTINGS_REGISTRY = [
     description: "The window the default trigger start budget is counted over.",
     appliesToRunsInFlight: "immediate",
     overridablePerTrigger: true,
-    environmentVariable: "TRIGGER_RATE_LIMIT_WINDOW",
   },
   {
     key: "catalog.activated",
@@ -491,7 +496,6 @@ export const SETTINGS_REGISTRY = [
       "Whether the repository catalog decides access. While off the agent sees everything the installation sees. Set only from the Repositories page.",
     appliesToRunsInFlight: "immediate",
     overridablePerTrigger: false,
-    environmentVariable: null,
   },
 ] as const satisfies readonly SettingDefinition[];
 

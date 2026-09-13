@@ -1,4 +1,4 @@
-import type { ClarificationStatus } from "@shared/contracts";
+import type { ClarificationStatus, SettingsSnapshot } from "@shared/contracts";
 import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
 import {
   createConnectedPostgresRunRegistry,
@@ -111,6 +111,7 @@ function terminalizeConnectedExhaustedResume(
 
 type FailedResumeInput = {
   db: Db;
+  settings: Pick<SettingsSnapshot, "COLUMN_AI" | "COLUMN_BACKLOG">;
   row: ResumeAttemptSubject;
   reservation: ResumeAttemptReservation;
   issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket" | "postComment">;
@@ -123,6 +124,7 @@ async function cancelExhaustedResume(input: FailedResumeInput): Promise<void> {
     actorLabel: "clarification resume failure",
     runRegistry: new PostgresRunRegistry(db),
     issueTracker: input.issueTracker as IssueTrackerAdapter,
+    settings: input.settings,
   }).catch((cancelError: unknown) => {
     logger.warn(
       {
@@ -150,6 +152,7 @@ async function cancelConnectedExhaustedResume(input: ConnectedFailedResumeInput)
     actorLabel: "clarification resume failure",
     runRegistry: createConnectedPostgresRunRegistry(),
     issueTracker: input.issueTracker as IssueTrackerAdapter,
+    settings: input.settings,
   }).catch((cancelError: unknown) => {
     logger.warn(
       {

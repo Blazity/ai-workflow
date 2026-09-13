@@ -18,6 +18,7 @@ import {
   answerConnectedClarificationAndResume,
   type AnswerClarificationOutcome,
 } from "./answer-core.js";
+import { loadSettingsSnapshot } from "../settings/index.js";
 
 export type AnswerClarificationRequestOutcome =
   | Exclude<AnswerClarificationOutcome, { kind: "answered" }>
@@ -57,11 +58,14 @@ export async function answerClarificationRequest(input: {
   if (!row) return { kind: "unknown_clarification" };
 
   const label = await getConnectedDashboardUserLabel(input.actor.userId);
+  const settings = await loadSettingsSnapshot();
   const outcome = await answerConnectedClarificationAndResume({
     row,
     rawAnswer: input.rawAnswer,
     actor: { id: input.actor.userId, label },
     issueTracker: createAdapters().issueTracker,
+    aiColumn: settings.COLUMN_AI,
+    cancelSettings: settings,
   });
 
   if (outcome.kind === "answered") {

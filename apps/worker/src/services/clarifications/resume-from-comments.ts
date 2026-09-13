@@ -4,6 +4,7 @@ import {
   type IssueTrackerAdapter,
 } from "../../adapters/issue-tracker/types.js";
 import type { Db } from "../../db/types.js";
+import type { SettingsSnapshot } from "@shared/contracts";
 import { ticketPageUrl } from "../../engine/support/dashboard-links.js";
 import { logger } from "../../infra/logger.js";
 import {
@@ -55,8 +56,10 @@ export async function resumeClarificationFromComments(input: {
   issueTracker: IssueTrackerAdapter;
   ticketKey: string;
   allowNudge: boolean;
+  aiColumn: string;
+  cancelSettings: Pick<SettingsSnapshot, "COLUMN_AI" | "COLUMN_BACKLOG">;
 }): Promise<{ status: CommentResumeStatus; runId?: string; nudged?: boolean }> {
-  const { db, issueTracker, ticketKey, allowNudge } = input;
+  const { db, issueTracker, ticketKey, allowNudge, aiColumn } = input;
   const persistence: {
     getResumable: (key: string) => ReturnType<typeof getResumableClarificationForTicket>;
     claim: (row: { runId: string; subjectKey: string | null; ticketKey: string | null }) => Promise<"claimed" | "in_progress" | "resumed" | "settled">;
@@ -116,6 +119,8 @@ export async function resumeClarificationFromComments(input: {
         },
         issueTracker,
         skipTicketFetch: false,
+        aiColumn,
+        cancelSettings: input.cancelSettings,
       });
     } catch (error) {
       await persistence.finish(row.runId, "awaiting");
@@ -188,7 +193,7 @@ export async function resumeClarificationFromComments(input: {
   // live in the AI column. Guards the cron's stale JQL snapshot and
   // status-less webhook payloads from committing an answer prematurely.
   if (
-    ticket.trackerStatus.trim().toLowerCase() !== env.COLUMN_AI.trim().toLowerCase()
+    ticket.trackerStatus.trim().toLowerCase() !== aiColumn.trim().toLowerCase()
   ) {
     return { status: "not_in_ai_column" };
   }
@@ -244,7 +249,7 @@ export async function resumeClarificationFromComments(input: {
             ticketKey,
             formatClarificationNudgeComment({
               dashboardUrl: ticketPageUrl(env.DASHBOARD_ORIGIN, ticketKey),
-              aiColumnName: env.COLUMN_AI,
+              aiColumnName: aiColumn,
             }),
           );
           nudged = true;
@@ -293,6 +298,8 @@ export async function resumeClarificationFromComments(input: {
     // The guard above already proved the ticket is live in the AI column, so the
     // core's transition could only be a no-op costing one more provider read.
     skipTicketMove: true,
+    aiColumn,
+    cancelSettings: input.cancelSettings,
   });
   switch (outcome.kind) {
     case "answered":

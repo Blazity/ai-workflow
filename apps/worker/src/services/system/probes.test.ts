@@ -71,9 +71,15 @@ vi.mock("@octokit/auth-app", () => ({
 
 const { configFromEnvironment, probesForEnvironment } = await import("./probes.js");
 const { settingsSnapshotFromEnvironment } = await import("../settings/snapshot.js");
-// The snapshot an entry point would load on this deployment: no stored rows, so
-// every value is the one the mocked environment already resolved to.
-const settings = settingsSnapshotFromEnvironment();
+// Ordinary values arrive from stored rows. Only the redeploy-owned settings
+// below still consult the mocked deployment environment.
+const settings = {
+  ...settingsSnapshotFromEnvironment(),
+  AGENT_KIND: environment.AGENT_KIND,
+  CLAUDE_MODEL: environment.CLAUDE_MODEL,
+  CODEX_MODEL: environment.CODEX_MODEL,
+  MCP_ENABLED: environment.MCP_ENABLED,
+};
 const fetchMock = vi.fn();
 vi.stubGlobal("fetch", fetchMock);
 

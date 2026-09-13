@@ -108,29 +108,20 @@ names, harness defaults) are rows in the `settings` table, described once in
   `engine/workflow-import-boundary.test.ts` is the guard). Because that step is
   called before every other step, a change to it changes the journal of every
   run in flight: it merges only after a production drain.
-- **The transition rule.** Every accessor that reads a migrated key takes the
-  snapshot: `accessor(snapshot)`. The deprecated zero-argument forms that
-  resolved from the environment are gone, with one exception,
-  `ticketBoardSettings()`, which three trigger entry points still call; it goes
-  when the cleanup stage removes the environment parsing.
+- **The transition rule.** Every accessor that reads an ordinary settings key
+  takes the snapshot: `accessor(snapshot)`. No zero-argument or environment
+  fallback form remains.
   `services/settings/consumers-guard.test.ts` scans `routes`, `services`, `mcp`,
   `infra`, `engine`, `pre-sandbox` and `workflow-graph-suites` and fails on a
-  reintroduced `env.<migrated key>`, on a zero-argument accessor, on an import
+  reintroduced `env.<retired key>`, on a zero-argument accessor, on an import
   of a deleted allowlist module and on a read of `AGENT_ALLOWED_REPOS` inside a
-  run. Its exemptions are written down with reasons; add one only with a reason
-  that names the stage that removes it.
-- **Resolution order.** Stored row, then the value the environment already
-  resolved to, then the registry default. A deployment with a configured
-  environment and an empty table behaves exactly as it did before the table
-  existed, which is what makes the migration safe to deploy on its own.
-- **The seed.** `pnpm db:seed-settings` runs right after `db:migrate` in
-  `build` (not in `build:ci`) and inserts one row per key whose variable this
-  deployment actually sets, doing nothing on conflict. It never overwrites a
-  decision made in the dashboard, and it writes no version rows: the
-  environment is not an actor. A later save of the same value writes no version
-  row either, because the write skips a row whose value is not distinct from
-  the one stored, so an empty history on a seeded key means "never changed",
-  not "never decided".
+  run. Its only environment exemptions are the three `requiresRedeploy` keys,
+  pinned with their exact consumers.
+- **Resolution order.** An ordinary key resolves from its stored row and then
+  its registry default. A `requiresRedeploy` key ignores any leftover row and
+  resolves from its environment variable and then its default. Runtime startup
+  refuses every frozen retired variable name; there is no settings seed or
+  environment import path.
 
 ## Traps specific to this app
 
@@ -232,18 +223,11 @@ names, harness defaults) are rows in the `settings` table, described once in
   through the transparent-failure exit rather than preparing a workspace it may
   not touch, while a triage graph that needs no repository runs as it always
   did. The refusal sentence is the record: it is the run's status reason and the
-  ticket comment, and there is no failure-kind column behind it. The build-time
-  seed
-  `scripts/db-seed-repository-catalog.ts` (wired after `db:migrate` in `build`,
-  never in `build:ci`) imports the allowlist variable and every pinned
-  repository, activates only a deployment whose allowlist was already
-  restricting it, and moves the global script groups blob into profiles; every
-  write in it is guarded on existence, so a redeploy seeds nothing new. It
-  refuses to guess a provider: an allowlist entry nothing else names on a
-  deployment with no configured provider fails the build rather than creating a
-  row that grants the wrong thing. A row is created **disabled** by every path
-  except the seed and the enabled route: writing a profile configures a
-  repository, it never grants one. Each repository carries two counters,
+  ticket comment, and there is no failure-kind column behind it. There is no
+  build-time catalog seed after H2: `AGENT_ALLOWED_REPOS` is unused, and the
+  Repositories page owns catalog activation and access. A row is created
+  **disabled** unless the enabled route grants it: writing a profile configures
+  a repository, it never grants one. Each repository carries two counters,
   `current_profile_version` (every save) and `current_checks_version` (only a
   change to the script groups or the gate selection); the workspace gate records
   the CHECKS version, pinned when the checks were launched and carried out of

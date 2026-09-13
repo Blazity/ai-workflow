@@ -21,11 +21,9 @@ const state = vi.hoisted(() => ({
   classifyProtected: vi.fn(),
   listApprovalParked: vi.fn(),
   observeProviderWebhook: vi.fn(),
-  // An empty settings table is what a deployment that has stored no decision
-  // has, so every value still resolves from the mocked environment exactly as
-  // it did before the snapshot existed. It is a spy because when this runs, and
-  // whether it runs at all, is itself under test below.
-  readAllConnectedSettings: vi.fn(async () => [] as unknown[]),
+  // The stored settings read is a spy because when this runs, and whether it
+  // runs at all, is itself under test below.
+  readAllConnectedSettings: vi.fn(),
 }));
 
 vi.mock("../../infra/vcs-config.js", () => ({ env: state.env }));
@@ -136,6 +134,19 @@ describe("POST /webhooks/jira", () => {
     vi.clearAllMocks();
     resetAiReviewDestinationCache();
     state.env.JIRA_WEBHOOK_SECRET = "secret";
+    state.readAllConnectedSettings.mockResolvedValue(
+      Object.entries({
+        COLUMN_AI: "AI",
+        COLUMN_AI_REVIEW: "Review",
+        COLUMN_BACKLOG: "Backlog",
+        MAX_CONCURRENT_AGENTS: 3,
+      }).map(([key, value]) => ({
+        key,
+        value,
+        updatedAt: new Date("2026-09-13T00:00:00.000Z"),
+        updatedBy: "test",
+      })),
+    );
     state.cancel.mockResolvedValue({ cancelled: true, released: true });
     state.dispatch.mockResolvedValue({ started: false, reason: "not_applicable" });
     state.isRunRecordedFailed.mockResolvedValue(false);

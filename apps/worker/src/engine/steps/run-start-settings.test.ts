@@ -13,17 +13,16 @@ import { repositories } from "../../db/schema.js";
  * The run-start step against a real database.
  *
  * pglite rather than a mocked repository, because the two things worth proving
- * are what the STORE answers: that a stored settings row beats the environment
- * for that one key and leaves the rest alone, and that the enabled-key list is
+ * are what the STORE answers: that stored settings resolve as one snapshot,
+ * updates leave unrelated rows alone, and that the enabled-key list is
  * exactly the enabled rows, deduplicated, lowercased and sorted. A mock of the
  * repository would prove only that this file and that mock agree.
  */
 const state = vi.hoisted(() => ({
   db: undefined as unknown,
-  env: {} as Record<string, unknown>,
 }));
 
-vi.mock("../../infra/vcs-config.js", () => ({ env: state.env }));
+vi.mock("../../infra/vcs-config.js", () => ({ env: {} }));
 vi.mock("../../db/client.js", () => ({ getDb: () => state.db }));
 vi.mock("../../infra/logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -38,8 +37,8 @@ const {
 
 let db: Db;
 
-/** What this deployment's parsed environment holds, in miniature. */
-function environmentAsDeployed(): Record<string, unknown> {
+/** What this deployment has stored, in miniature. */
+function storedSettingsForDeployment() {
   return {
     MAX_CONCURRENT_AGENTS: 7,
     JOB_TIMEOUT_MS: 1_800_000,
@@ -55,23 +54,26 @@ function environmentAsDeployed(): Record<string, unknown> {
 beforeEach(async () => {
   db = await createTestDb();
   state.db = db;
-  for (const key of Object.keys(state.env)) delete state.env[key];
-  Object.assign(state.env, environmentAsDeployed());
+  await writeManySettings(db, {
+    patch: storedSettingsForDeployment(),
+    actor: "test",
+    reason: "seed run-start fixture",
+  });
 });
 
 describe("loadRunStartSettingsStep", () => {
-  it("resolves the snapshot from the environment while the table is empty", async () => {
+  it("resolves the snapshot from stored rows", async () => {
     const result = await loadRunStartSettingsStep();
 
     expect(result.version).toBe(1);
     expect(result.settings.MAX_CONCURRENT_AGENTS).toBe(7);
     expect(result.settings.AGENT_KIND).toBe("codex");
     expect(result.settings.JOB_TIMEOUT_MS).toBe(1_800_000);
-    // Unset in the environment, so the registry default stands.
+    // Unset in the store, so the registry default stands.
     expect(result.settings.CLAUDE_MODEL).toBeNull();
   });
 
-  it("lets a stored row beat the environment for that key alone", async () => {
+  it("lets stored updates change those keys alone", async () => {
     await writeManySettings(db, {
       patch: { MAX_CONCURRENT_AGENTS: 2, AGENT_KIND: "claude" },
       actor: "user_admin",
@@ -82,7 +84,7 @@ describe("loadRunStartSettingsStep", () => {
 
     expect(result.settings.MAX_CONCURRENT_AGENTS).toBe(2);
     expect(result.settings.AGENT_KIND).toBe("claude");
-    // Untouched keys still answer from the environment.
+    // Untouched stored keys keep their previous value.
     expect(result.settings.JOB_TIMEOUT_MS).toBe(1_800_000);
   });
 
@@ -164,12 +166,11 @@ describe("loadRunStartSettingsStep", () => {
     expect(Object.keys(settings).length).toBeGreaterThan(10);
   });
 
-  it("never lets the environment back in when filling that gap", async () => {
-    // The deployment's environment says 7 concurrent agents. A resumed run
-    // whose snapshot has no MAX_CONCURRENT_AGENTS must NOT pick that up: a
-    // value an operator changed under a suspended run is exactly the drift the
-    // frozen snapshot exists to prevent, so the gap is filled from the registry
-    // instead.
+  it("never lets current stored values into a replayed snapshot gap", async () => {
+    // The deployment currently stores 7 concurrent agents. A resumed run whose
+    // snapshot has no MAX_CONCURRENT_AGENTS must NOT pick that up: a value an
+    // operator changed under a suspended run is exactly the drift the frozen
+    // snapshot exists to prevent, so the gap is filled from the registry instead.
     const fresh = await loadRunStartSettingsStep();
     expect(fresh.settings.MAX_CONCURRENT_AGENTS).toBe(7);
 

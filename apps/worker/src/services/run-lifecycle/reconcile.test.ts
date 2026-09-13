@@ -9,6 +9,12 @@ import {
   type IssueTrackerAdapter,
 } from "../../adapters/issue-tracker/types.js";
 import type { Db } from "../../db/client.js";
+import { defaultSettingsSnapshot } from "@shared/contracts";
+
+const reviewSettings = {
+  ...defaultSettingsSnapshot(),
+  COLUMN_AI_REVIEW: "Review",
+};
 
 vi.mock("../../infra/vcs-config.js", () => ({
   env: {
@@ -964,6 +970,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       db: mockDb,
       issueTracker: tracker,
       moveTarget: "Backlog",
+      aiColumn: "AI",
       onSubjectReleased: onReleased,
     });
     expect(mockGetRun).not.toHaveBeenCalled();
@@ -1352,6 +1359,9 @@ describe("reconcileRuns owner-CAS recovery", () => {
         undefined,
         undefined,
         mockDb,
+        undefined,
+        undefined,
+        reviewSettings,
       ),
     ).toEqual({ cancelled: 0, cleaned: 0 });
     expect(mockCancelRunDetailed).not.toHaveBeenCalled();
@@ -1402,6 +1412,9 @@ describe("reconcileRuns owner-CAS recovery", () => {
         undefined,
         undefined,
         mockDb,
+        undefined,
+        undefined,
+        reviewSettings,
       ),
     ).toEqual({ cancelled: 1, cleaned: 0 });
     expect(mockHasDurableRunPublication).toHaveBeenCalledWith(expect.anything(), "run-1");
@@ -1432,6 +1445,9 @@ describe("reconcileRuns owner-CAS recovery", () => {
         undefined,
         undefined,
         mockDb,
+        undefined,
+        undefined,
+        reviewSettings,
       ),
     ).resolves.toEqual({ cancelled: 0, cleaned: 0 });
     expect(mockCancelRunDetailed).not.toHaveBeenCalled();
@@ -1454,6 +1470,9 @@ describe("reconcileRuns owner-CAS recovery", () => {
         undefined,
         undefined,
         mockDb,
+        undefined,
+        undefined,
+        reviewSettings,
       ),
     ).resolves.toEqual({ cancelled: 0, cleaned: 0 });
     expect(mockCancelRunDetailed).not.toHaveBeenCalled();

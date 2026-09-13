@@ -8,7 +8,6 @@ const REQUIRED_ENV = [
 ] as const;
 
 const OPTIONAL_ENV = [
-  "DASHBOARD_ORG_NAME",
   "DASHBOARD_ORG_SLUG",
   "SSO_ISSUER",
   "SSO_ALLOWED_DOMAIN",

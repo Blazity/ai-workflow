@@ -201,6 +201,10 @@ function deps(overrides: Record<string, unknown> = {}) {
     db,
     runRegistry: registry,
     maxConcurrentAgents: 3,
+    settings: {
+      TRIGGER_RATE_LIMIT_MAX: testEnv.TRIGGER_RATE_LIMIT_MAX ?? null,
+      TRIGGER_RATE_LIMIT_WINDOW: testEnv.TRIGGER_RATE_LIMIT_WINDOW ?? null,
+    },
     repositoryCatalog,
     getCurrentHead: vi.fn().mockResolvedValue("abc123"),
     getLatestCheckRuns: vi.fn().mockResolvedValue([]),
@@ -880,7 +884,7 @@ describe("PR trigger rate limit", () => {
     expect(await db.select().from(triggerRejectionCounters)).toEqual([]);
   });
 
-  it("applies the env default when the node has no params of its own", async () => {
+  it("applies the stored default when the node has no params of its own", async () => {
     testEnv.TRIGGER_RATE_LIMIT_MAX = 1;
     testEnv.TRIGGER_RATE_LIMIT_WINDOW = "day";
     mockGetEnabled.mockResolvedValue(enabled());
@@ -892,7 +896,7 @@ describe("PR trigger rate limit", () => {
       result: "coalesced",
     });
 
-    // A limit that is purely the env default is keyed under the definition's
+    // A limit that is purely the settings default is keyed under the definition's
     // first trigger node of this type.
     expect(await db.select().from(triggerRejectionCounters)).toEqual([
       expect.objectContaining({
@@ -904,7 +908,7 @@ describe("PR trigger rate limit", () => {
     ]);
   });
 
-  it("prefers the node's own params over the env default", async () => {
+  it("prefers the node's own params over the settings default", async () => {
     testEnv.TRIGGER_RATE_LIMIT_MAX = 5;
     testEnv.TRIGGER_RATE_LIMIT_WINDOW = "day";
     mockGetEnabled.mockResolvedValue(enabled());

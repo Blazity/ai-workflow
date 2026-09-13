@@ -184,6 +184,7 @@ async function handleVerifiedGitLabWebhook(request: GitLabWebhookRequest) {
       const candidateResult = await dispatchTriggerEvent(candidate, {
         runRegistry: createConnectedPostgresRunRegistry(),
         maxConcurrentAgents: maxConcurrentAgents(settings),
+        settings,
         repositoryCatalog,
       });
       result = candidateResult;

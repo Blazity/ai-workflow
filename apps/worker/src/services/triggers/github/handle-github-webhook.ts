@@ -172,6 +172,7 @@ async function handleVerifiedGitHubWebhook(request: GitHubWebhookRequest) {
       const candidateResult = await dispatchTriggerEvent(candidate, {
         runRegistry: createConnectedPostgresRunRegistry(),
         maxConcurrentAgents: maxConcurrentAgents(settings),
+        settings,
         repositoryCatalog,
       });
       result = candidateResult;

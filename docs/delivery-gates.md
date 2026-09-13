@@ -148,23 +148,12 @@ residual_risk: null
 redaction: "secrets, tokens, credentials, customer data, and unnecessary PII removed"
 ```
 
-`deployment.identity_proof` comes from the worker's `/health`, which also
-carries `settings.migratedVariablesSet` and `settings.migratedVariablesUnstored`:
-the environment variables the settings migration replaced that this deployment
-still sets, and the subset no stored row answers for yet. Both are lists of
-NAMES, by decision, and never values. The endpoint takes no session, so anyone
-who can reach the deployment can read which of these variables it sets; that is
-accepted because the names are public in this repository already (SETUP.md
-section 5 lists every one of them) and the operator's question here, which of
-these can I delete and which would I lose, cannot be answered by a count. No
-value ever appears in either list, and no key that carries a credential is in
-the settings registry at all: keys, tokens, database and auth URLs stay in the
-environment and are deliberately absent from it.
-
-`migratedVariablesUnstored` is `null` when the deployment could not read its
-settings table at all. `/health` keeps answering in that case, on purpose, so
-read the null as "unknown" and never as an empty list: a release that removes a
-variable on the strength of a null is removing it on the strength of nothing.
+`deployment.identity_proof` comes from the worker's `/health`. Record its exact
+`commit`, `env`, `databaseEnv`, and `databaseFingerprint`; together they prove
+which candidate the endpoint serves and which isolated database branch it uses.
+The completed settings migration fields are no longer part of `/health`.
+Retired settings variables are instead refused at build and runtime boot; see
+SETUP.md, section "Removing migrated environment variables".
 
 ## Jira disposition
 

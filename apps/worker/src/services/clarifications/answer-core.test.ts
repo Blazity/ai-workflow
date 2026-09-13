@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultSettingsSnapshot } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
 import type { IssueTrackerAdapter, TicketContent } from "../../adapters/issue-tracker/types.js";
 import { activeRuns, clarificationRequests, workflowRuns } from "../../db/schema.js";
@@ -97,6 +98,7 @@ async function answer(tracker: ReturnType<typeof makeTracker>, id: string, text:
       IssueTrackerAdapter,
       "fetchTicket" | "moveTicket" | "postComment"
     >,
+    cancelSettings: defaultSettingsSnapshot(),
   });
 }
 
