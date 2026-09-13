@@ -12,7 +12,7 @@ import type {
   JsonValue,
 } from "@shared/contracts";
 import { apiClient } from "@/lib/api/client";
-import { Button, Input, Select, Textarea } from "@/components/ui";
+import { Button, Checkbox, Input, Select, Textarea } from "@/components/ui";
 import {
   DEFAULT_VISUAL_JSON_SCHEMA,
   addVisualSchemaProperty,
@@ -94,18 +94,15 @@ function EnumField({
 
   return (
     <div className="mt-1.5">
-      <label className="flex items-center gap-1.5 font-body text-[10px] text-neutral-700">
-        <input
-          type="checkbox"
-          checked={value !== undefined}
-          disabled={disabled}
-          onChange={(event) =>
-            onChange(event.target.checked ? defaultValue : null)
-          }
-          className="h-3 w-3 accent-mariner"
-        />
-        Restrict to enum values
-      </label>
+      <Checkbox
+        checked={value !== undefined}
+        disabled={disabled}
+        onChange={(event) =>
+          onChange(event.target.checked ? defaultValue : null)
+        }
+        className="gap-1.5 text-[10px] text-neutral-700"
+        label="Restrict to enum values"
+      />
       {value !== undefined && (
         <>
           <Textarea
@@ -262,18 +259,15 @@ function SchemaNodeEditor({
           }
           className="flex-1"
         />
-        <label className="flex items-center gap-1 font-body text-[10px] text-neutral-700">
-          <input
-            type="checkbox"
-            checked={nullable}
-            disabled={disabled || type === "null"}
-            onChange={(event) =>
-              onChange(setVisualSchemaNullable(schema, event.target.checked))
-            }
-            className="h-3 w-3 accent-mariner"
-          />
-          Nullable
-        </label>
+        <Checkbox
+          checked={nullable}
+          disabled={disabled || type === "null"}
+          onChange={(event) =>
+            onChange(setVisualSchemaNullable(schema, event.target.checked))
+          }
+          className="gap-1 text-[10px] text-neutral-700"
+          label="Nullable"
+        />
       </div>
       <Input
         aria-label={`${pathLabel} description`}
@@ -295,23 +289,20 @@ function SchemaNodeEditor({
 
       {type === "object" && (
         <div className="space-y-2">
-          <label className="flex items-center gap-1.5 font-body text-[10px] text-neutral-700">
-            <input
-              type="checkbox"
-              checked={schema.additionalProperties !== false}
-              disabled={disabled}
-              onChange={(event) =>
-                onChange(
-                  setVisualSchemaAdditionalProperties(
-                    schema,
-                    event.target.checked,
-                  ),
-                )
-              }
-              className="h-3 w-3 accent-mariner"
-            />
-            Allow fields not listed below
-          </label>
+          <Checkbox
+            checked={schema.additionalProperties !== false}
+            disabled={disabled}
+            onChange={(event) =>
+              onChange(
+                setVisualSchemaAdditionalProperties(
+                  schema,
+                  event.target.checked,
+                ),
+              )
+            }
+            className="gap-1.5 text-[10px] text-neutral-700"
+            label="Allow fields not listed below"
+          />
           {Object.entries(properties).map(([name, child]) => {
             const siblingNames = new Set(Object.keys(properties));
             siblingNames.delete(name);
@@ -336,24 +327,21 @@ function SchemaNodeEditor({
                       return true;
                     }}
                   />
-                  <label className="mt-1 flex items-center gap-1 font-body text-[9px] text-neutral-700">
-                    <input
-                      type="checkbox"
-                      checked={required.has(name)}
-                      disabled={disabled}
-                      onChange={(event) =>
-                        onChange(
-                          setVisualSchemaPropertyRequired(
-                            schema,
-                            name,
-                            event.target.checked,
-                          ),
-                        )
-                      }
-                      className="h-3 w-3 accent-mariner"
-                    />
-                    Required
-                  </label>
+                  <Checkbox
+                    checked={required.has(name)}
+                    disabled={disabled}
+                    onChange={(event) =>
+                      onChange(
+                        setVisualSchemaPropertyRequired(
+                          schema,
+                          name,
+                          event.target.checked,
+                        ),
+                      )
+                    }
+                    className="mt-1 gap-1 text-[9px] text-neutral-700"
+                    label="Required"
+                  />
                   <Button
                     type="button"
                     variant="danger"

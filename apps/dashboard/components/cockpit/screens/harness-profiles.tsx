@@ -4,7 +4,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ProfileEditor, type ProfileAction } from "@/components/cockpit/harness-profiles/profile-editor";
-import { Button, Input, Select, Skeleton } from "@/components/ui";
+import { Button, Checkbox, Input, Select, Skeleton } from "@/components/ui";
 import { apiClient, type ApiResult } from "@/lib/api/client";
 import {
   isProfileSlug,
@@ -590,28 +590,25 @@ export function HarnessProfilesScreen({
           placeholder="Search profiles…"
           className="min-w-[220px] md:ml-auto"
         />
-        <label className="flex items-center gap-2 whitespace-nowrap font-body text-[11px] text-neutral-600">
-          <input
-            type="checkbox"
-            checked={showArchived}
-            onChange={(event) => {
-              const checked = event.target.checked;
-              if (
-                !checked &&
-                profiles.find((profile) => profile.id === activeId)?.archivedAt
-              ) {
-                const switched = selectProfile(
-                  profiles.find((profile) => profile.archivedAt === null)?.id ??
-                    null,
-                );
-                if (!switched) return;
-              }
-              setShowArchived(checked);
-            }}
-            className="size-3.5 accent-mariner"
-          />
-          Show archived
-        </label>
+        <Checkbox
+          checked={showArchived}
+          onChange={(event) => {
+            const checked = event.target.checked;
+            if (
+              !checked &&
+              profiles.find((profile) => profile.id === activeId)?.archivedAt
+            ) {
+              const switched = selectProfile(
+                profiles.find((profile) => profile.archivedAt === null)?.id ??
+                  null,
+              );
+              if (!switched) return;
+            }
+            setShowArchived(checked);
+          }}
+          className="whitespace-nowrap text-[11px] text-neutral-600"
+          label="Show archived"
+        />
       </div>
 
       <main className="min-w-0">

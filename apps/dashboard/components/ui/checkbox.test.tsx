@@ -16,12 +16,19 @@ test("Checkbox renders its label and applies indeterminate state", () => {
   try {
     act(() => {
       root = createRoot(container);
-      root.render(<Checkbox indeterminate label="Selected repositories" />);
+      root.render(
+        <Checkbox
+          indeterminate
+          label="Selected repositories"
+          labelTitle="Selection help"
+        />,
+      );
     });
     const input = container.querySelector<HTMLInputElement>('input[type="checkbox"]');
     assert.ok(input);
     assert.equal(input.indeterminate, true);
     assert.equal(input.getAttribute("aria-checked"), "mixed");
+    assert.equal(container.querySelector("label")?.title, "Selection help");
     assert.match(container.textContent ?? "", /Selected repositories/);
   } finally {
     act(() => root?.unmount());

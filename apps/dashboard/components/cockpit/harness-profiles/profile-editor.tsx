@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-import { Button, CkCard, CkChip, Input, Select, Textarea } from "@/components/ui";
+import { Button, Checkbox, CkCard, CkChip, Input, Select, Textarea } from "@/components/ui";
 import { SkillImport } from "./skill-import";
 import {
   canEditProfile,
@@ -96,17 +96,13 @@ function CheckboxField({
   onChange: (checked: boolean) => void;
 }) {
   return (
-    <label className="flex items-center gap-2 font-body text-[12px] text-neutral-800">
-      <input
-        aria-label={label}
-        type="checkbox"
-        checked={checked}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.checked)}
-        className="size-3.5 accent-mariner"
-      />
-      {label}
-    </label>
+    <Checkbox
+      aria-label={label}
+      checked={checked}
+      disabled={disabled}
+      onChange={(event) => onChange(event.target.checked)}
+      label={label}
+    />
   );
 }
 
@@ -1544,7 +1540,7 @@ export function ProfileEditor({
                         {draft.compaction.thresholdTokens.toLocaleString()}{" "}
                         tokens)
                       </span>
-                      <input
+                      <Input
                         aria-label="Compaction threshold percentage"
                         type="range"
                         min={1}
@@ -1573,7 +1569,7 @@ export function ProfileEditor({
                               : current,
                           );
                         }}
-                        className="w-full accent-mariner"
+                        className="h-auto w-full border-0 bg-transparent p-0 accent-mariner hover:border-transparent focus-visible:ring-0"
                       />
                     </label>
                   )}

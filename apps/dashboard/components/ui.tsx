@@ -8,15 +8,20 @@ import { runPullRequests } from "@/lib/run-prs";
 import type { RunStatus } from "@/lib/types";
 
 export * from "./ui/button";
+export * from "./ui/checkbox";
 export * from "./ui/field";
 export * from "./ui/icon-button";
 export * from "./ui/input";
 export * from "./ui/modal";
+export * from "./ui/nav-item";
+export * from "./ui/radio";
+export * from "./ui/route-tabs";
 export * from "./ui/select";
 export * from "./ui/skeleton";
+export * from "./ui/switch";
 export * from "./ui/textarea";
 
-/* ── BlazityLogo — inline SVG flame + wordmark ───────────────────────────── */
+/* BlazityLogo - inline SVG flame + wordmark */
 export function BlazityLogo({
   size = 28,
   color = "var(--color-burnt-orange)",
@@ -52,7 +57,7 @@ export function BlazityLogo({
   );
 }
 
-/* ── CkChip ───────────────────────────────────────────────────────────────── */
+/* CkChip */
 export type ChipTone =
   | "neutral"
   | "success"
@@ -96,7 +101,7 @@ export function CkChip({
   );
 }
 
-/* ── CkDot ───────────────────────────────────────────────────────────────── */
+/* CkDot */
 export function CkDot({ color = "#3C43E7", size = 6 }: { color?: string; size?: number }) {
   return (
     <span
@@ -106,7 +111,7 @@ export function CkDot({ color = "#3C43E7", size = 6 }: { color?: string; size?: 
   );
 }
 
-/* ── CkCard ──────────────────────────────────────────────────────────────── */
+/* CkCard */
 export function CkCard({
   title,
   eyebrow,
@@ -147,7 +152,7 @@ export function CkCard({
   );
 }
 
-/* ── CkKPI ───────────────────────────────────────────────────────────────── */
+/* CkKPI */
 export function CkKPI({
   label,
   value,
@@ -196,7 +201,7 @@ export function CkKPI({
   );
 }
 
-/* ── CkTabs ──────────────────────────────────────────────────────────────── */
+/* CkTabs */
 export function CkTabs({
   tabs,
   active,
@@ -219,7 +224,7 @@ export function CkTabs({
             type="button"
             aria-pressed={isActive}
             onClick={() => onChange(t.id)}
-            className={`appearance-none border-none cursor-pointer ${sizeClassName} rounded-[3px] font-mono font-medium text-[11px] uppercase tracking-[-0.01em] transition-all duration-[180ms] ease-[cubic-bezier(.2,0,0,1)] ${
+            className={`appearance-none border-none cursor-pointer ${sizeClassName} rounded-[3px] font-mono font-medium text-[11px] uppercase tracking-[-0.01em] transition-[color,background-color,box-shadow,transform] duration-[var(--motion-base)] ease-standard ${
               isActive ? "bg-panel shadow-[0_1px_2px_rgba(24,27,32,0.06)] text-coal" : "bg-transparent text-neutral-700"
             }`}
           >
@@ -231,7 +236,7 @@ export function CkTabs({
   );
 }
 
-/* ── CkStatusPill ────────────────────────────────────────────────────────── */
+/* CkStatusPill */
 export function CkStatusPill({ status }: { status: RunStatus | "warn" }) {
   const map: Record<string, { tone: ChipTone; label: string; dot: string }> = {
     success: { tone: "success", label: "Success", dot: "#5BB04A" },
@@ -258,7 +263,7 @@ export function CkStatusPill({ status }: { status: RunStatus | "warn" }) {
   );
 }
 
-/* ── CkPagination — table footer (prev/next + numbered pages) ─────────────── */
+/* CkPagination - table footer (prev/next + numbered pages) */
 export function CkPagination({
   page,
   totalPages,
@@ -279,7 +284,7 @@ export function CkPagination({
   const labelStart = total === 0 ? 0 : Math.min(start + 1, total);
   const labelEnd = total === 0 ? 0 : Math.min(start + shown, total);
   const btnClass = (disabled: boolean) =>
-    `appearance-none border border-neutral-200 py-[5px] px-2.5 rounded-[3px] font-mono text-[11px] font-medium uppercase tracking-[0.04em] inline-flex items-center gap-1 transition-all duration-[120ms] ${
+    `appearance-none border border-neutral-200 py-[5px] px-2.5 rounded-[3px] font-mono text-[11px] font-medium uppercase tracking-[0.04em] inline-flex items-center gap-1 transition-[color,background-color,border-color,opacity,transform] duration-[var(--motion-fast)] ${
       disabled ? "bg-off-white text-[#C7CBD0] cursor-default" : "bg-panel text-coal cursor-pointer"
     }`;
   const pages: (number | "…")[] = [];
@@ -290,7 +295,7 @@ export function CkPagination({
   return (
     <div className="flex items-center gap-2 py-3 px-5 border-t border-neutral-200 bg-[#FBFBFC]">
       <span className="font-mono text-[11px] text-neutral-700 tracking-[0.02em]">
-        {labelStart}–{labelEnd} <span className="text-neutral-500">of</span> {total}
+        {labelStart} to {labelEnd} <span className="text-neutral-500">of</span> {total}
       </span>
       <div className="ml-auto inline-flex items-center gap-1">
         <button disabled={prevDisabled} onClick={() => !prevDisabled && onChange(page - 1)} className={btnClass(prevDisabled)}>
@@ -304,7 +309,7 @@ export function CkPagination({
               <button
                 key={p}
                 onClick={() => onChange(p)}
-                className={`appearance-none cursor-pointer min-w-[26px] py-[5px] px-[7px] rounded-[3px] font-mono text-[11px] font-medium transition-all duration-[120ms] border ${
+                className={`appearance-none cursor-pointer min-w-[26px] py-[5px] px-[7px] rounded-[3px] font-mono text-[11px] font-medium transition-[color,background-color,border-color,transform] duration-[var(--motion-fast)] border ${
                   p === page ? "border-coal bg-coal text-white" : "border-neutral-200 bg-panel text-neutral-800"
                 }`}
               >
@@ -321,7 +326,7 @@ export function CkPagination({
   );
 }
 
-/* ── TicketLink / PRLink — clickable Linear/Jira & GitHub refs ────────────── */
+/* TicketLink / PRLink - clickable Linear/Jira and GitHub refs */
 export function TicketLink({ ticket, url, size = "sm" }: { ticket: string; url: string; size?: "sm" | "lg" }) {
   return (
     <a
@@ -329,7 +334,7 @@ export function TicketLink({ ticket, url, size = "sm" }: { ticket: string; url: 
       target="_blank"
       rel="noopener"
       onClick={(e) => e.stopPropagation()}
-      className={`inline-flex items-center gap-1 border border-neutral-200 rounded-xs bg-panel text-mariner no-underline font-mono font-medium tracking-[0.02em] whitespace-nowrap transition-all duration-[120ms] hover:bg-mariner-100 hover:border-mariner ${
+      className={`inline-flex items-center gap-1 border border-neutral-200 rounded-xs bg-panel text-mariner no-underline font-mono font-medium tracking-[0.02em] whitespace-nowrap transition-[color,background-color,border-color,transform] duration-[var(--motion-fast)] hover:bg-mariner-100 hover:border-mariner ${
         size === "sm" ? "py-0.5 px-1.5 text-[10px]" : "py-[3px] px-2 text-[11px]"
       }`}
     >
@@ -357,7 +362,7 @@ function PRLink({
       rel="noopener"
       onClick={(e) => e.stopPropagation()}
       title={pr.repoPath || undefined}
-      className={`inline-flex items-center gap-1 border border-neutral-200 rounded-xs bg-coal text-white no-underline font-mono font-medium tracking-[0.02em] whitespace-nowrap transition-all duration-[120ms] hover:bg-neutral-800 ${
+      className={`inline-flex items-center gap-1 border border-neutral-200 rounded-xs bg-coal text-white no-underline font-mono font-medium tracking-[0.02em] whitespace-nowrap transition-[color,background-color,border-color,transform] duration-[var(--motion-fast)] hover:bg-neutral-800 ${
         size === "sm" ? "py-0.5 px-1.5 text-[10px]" : "py-[3px] px-2 text-[11px]"
       }`}
     >

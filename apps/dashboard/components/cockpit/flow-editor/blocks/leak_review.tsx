@@ -2,6 +2,7 @@
 
 import { ConfigField, ConfigNote, NumberField, TextInput, str } from "./shared";
 import type { BlockRendererProps } from "./types";
+import { Checkbox } from "@/components/ui";
 
 export function LeakReviewFields(props: BlockRendererProps) {
   const { node, canEdit, onChange } = props;
@@ -15,16 +16,13 @@ export function LeakReviewFields(props: BlockRendererProps) {
               />
             </ConfigField>
             <ConfigField label="LLM scan">
-              <label className="flex items-center gap-2 font-body text-xs text-coal">
-                <input
-                  type="checkbox"
-                  checked={node.params.llmScan !== false}
-                  disabled={!canEdit}
-                  onChange={(e) => onChange("params.llmScan", e.target.checked)}
-                  className="w-3.5 h-3.5 accent-mariner"
-                />
-                Add a report-only LLM screen for sensitive data
-              </label>
+              <Checkbox
+                checked={node.params.llmScan !== false}
+                disabled={!canEdit}
+                onChange={(event) => onChange("params.llmScan", event.target.checked)}
+                label="Add a report-only LLM screen for sensitive data"
+                className="text-xs text-coal"
+              />
             </ConfigField>
             <ConfigField label="Max diff bytes">
               <NumberField

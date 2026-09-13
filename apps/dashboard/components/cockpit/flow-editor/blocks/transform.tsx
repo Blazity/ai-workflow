@@ -8,7 +8,7 @@ import type {
   WorkflowDataReferenceV2,
 } from "@shared/contracts";
 import { evaluateWorkflowValueCompatibility } from "@shared/contracts";
-import { Button, IconButton, Input, Select } from "@/components/ui";
+import { Button, Checkbox, IconButton, Input, Select } from "@/components/ui";
 import { JsonSchemaEditor } from "../json-schema-editor";
 import {
   compatibilityInvalidReason,
@@ -304,23 +304,21 @@ function BuildObjectRow({
       ) : null}
       {referenceValue && canDefault && (
         <div className="space-y-2">
-          <label className="flex items-center gap-2 font-body text-[11px] text-neutral-600">
-            <input
-              type="checkbox"
-              disabled={disabled}
-              checked={referenceValue.defaultValue !== undefined}
-              onChange={(event) =>
-                onChange({
-                  ...field,
-                  value: {
-                    ...referenceValue,
-                    defaultValue: event.target.checked ? "" : undefined,
-                  },
-                })
-              }
-            />
-            Use a default when missing or null
-          </label>
+          <Checkbox
+            disabled={disabled}
+            checked={referenceValue.defaultValue !== undefined}
+            onChange={(event) =>
+              onChange({
+                ...field,
+                value: {
+                  ...referenceValue,
+                  defaultValue: event.target.checked ? "" : undefined,
+                },
+              })
+            }
+            className="text-[11px] text-neutral-600"
+            label="Use a default when missing or null"
+          />
           {referenceValue.defaultValue !== undefined && (
             <ScalarEditor
               label="Default value"
@@ -452,17 +450,15 @@ export function TransformFields({
                     onChange({ ...configuration, replacement: event.target.value })
                   }
                 />
-                <label className="flex items-center gap-2 font-body text-[11px] text-neutral-600">
-                  <input
-                    type="checkbox"
-                    checked={configuration.ignoreCase}
-                    disabled={!canEdit}
-                    onChange={(event) =>
-                      onChange({ ...configuration, ignoreCase: event.target.checked })
-                    }
-                  />
-                  Ignore capitalization
-                </label>
+                <Checkbox
+                  checked={configuration.ignoreCase}
+                  disabled={!canEdit}
+                  onChange={(event) =>
+                    onChange({ ...configuration, ignoreCase: event.target.checked })
+                  }
+                  className="text-[11px] text-neutral-600"
+                  label="Ignore capitalization"
+                />
                 {configuration.mode === "regex" && (
                   <p className="m-0 font-body text-[10px] text-neutral-500">
                     Uses safe RE2 syntax. Replacement is always literal.
@@ -472,31 +468,29 @@ export function TransformFields({
             )}
             {configuration.operation === "parse_json" && (
               <>
-                <label className="flex items-center gap-2 font-body text-[11px] text-neutral-600">
-                  <input
-                    type="checkbox"
-                    checked={configuration.expectedSchema !== undefined}
-                    disabled={!canEdit}
-                    onChange={(event) =>
-                      onChange({
-                        ...configuration,
-                        expectedSchema: event.target.checked
-                          ? {
-                              dialect: DIALECT,
-                              source: JSON.stringify({
-                                $schema: DIALECT,
-                                type: "object",
-                                properties: {},
-                                required: [],
-                                additionalProperties: false,
-                              }, null, 2),
-                            }
-                          : undefined,
-                      })
-                    }
-                  />
-                  Validate the parsed value against a schema
-                </label>
+                <Checkbox
+                  checked={configuration.expectedSchema !== undefined}
+                  disabled={!canEdit}
+                  onChange={(event) =>
+                    onChange({
+                      ...configuration,
+                      expectedSchema: event.target.checked
+                        ? {
+                            dialect: DIALECT,
+                            source: JSON.stringify({
+                              $schema: DIALECT,
+                              type: "object",
+                              properties: {},
+                              required: [],
+                              additionalProperties: false,
+                            }, null, 2),
+                          }
+                        : undefined,
+                    })
+                  }
+                  className="text-[11px] text-neutral-600"
+                  label="Validate the parsed value against a schema"
+                />
                 {configuration.expectedSchema && (
                   <JsonSchemaEditor
                     value={configuration.expectedSchema.source}

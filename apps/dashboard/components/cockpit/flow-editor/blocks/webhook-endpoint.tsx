@@ -41,7 +41,7 @@ export type WebhookConfirmAction =
 function webhookConfirmCopy(
   action: WebhookConfirmAction,
   scheme: WebhookAuthScheme,
-): { title: string; body: string; confirmLabel: string; danger: boolean } {
+): { title: string; body: string; confirmLabel: string; confirmVariant: "danger" | "primary" } {
   const noun = webhookSecretNoun(scheme);
   const tokenAside =
     scheme === "shared_token"
@@ -53,35 +53,35 @@ function webhookConfirmCopy(
         title: `Reveal ${noun.inline}`,
         body: `Revealing the ${noun.inline} is recorded in the audit log with your name.${tokenAside} Copy it, then hide it again.`,
         confirmLabel: "Reveal",
-        danger: false,
+        confirmVariant: "primary",
       };
     case "rotate":
       return {
         title: `Rotate ${noun.inline}`,
         body: `A new ${noun.inline} is issued and shown once. The previous one keeps working for a short window so senders can catch up.`,
         confirmLabel: "Rotate",
-        danger: false,
+        confirmVariant: "primary",
       };
     case "force_rotate":
       return {
         title: "Force a second rotation",
         body: `A rotation is still in flight. Forcing another one ends the previous ${noun.inline} immediately, so any sender still using it starts failing.`,
         confirmLabel: "Force rotate",
-        danger: true,
+        confirmVariant: "danger",
       };
     case "revoke":
       return {
         title: "Revoke endpoint",
         body: "Deliveries to this URL are refused from now on and no run can start from them. You can bring the endpoint back later, with a new secret.",
         confirmLabel: "Revoke",
-        danger: true,
+        confirmVariant: "danger",
       };
     case "unrevoke":
       return {
         title: "Unrevoke endpoint",
         body: `The endpoint starts accepting deliveries again with a NEW ${noun.inline}, shown once. The revoked ${noun.inline} stays dead, so every sender has to be updated.`,
         confirmLabel: "Unrevoke",
-        danger: false,
+        confirmVariant: "primary",
       };
   }
 }
@@ -200,7 +200,7 @@ function WebhookConfirmPanel({
       <div className="flex items-center gap-1.5">
         <Button
           type="button"
-          variant={copy.danger ? "danger" : "primary"}
+          variant={copy.confirmVariant}
           size="sm"
           disabled={busy}
           onClick={onConfirm}

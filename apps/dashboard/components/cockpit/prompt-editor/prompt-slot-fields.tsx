@@ -13,7 +13,7 @@ import {
 import { isPromptSlotBinding } from "@shared/prompts";
 import { JsonSchemaEditor } from "@/components/cockpit/flow-editor/json-schema-editor";
 import type { JsonSchemaEditorValidationState } from "@/components/cockpit/flow-editor/json-schema-editor";
-import { Button, Input, Select, Textarea } from "@/components/ui";
+import { Button, Checkbox, Input, Select, Textarea } from "@/components/ui";
 
 function stableJson(value: unknown): string {
   return JSON.stringify(value, null, 2);
@@ -432,61 +432,52 @@ export function PromptSlotDefinitionsEditor({
                       (candidate) => ({ value: candidate, label: candidate }),
                     )}
                   />
-                  <label className="flex items-center gap-1.5 font-body text-[10px] text-neutral-700">
-                    <input
-                      type="checkbox"
-                      checked={nullable}
-                      disabled={disabled || type === "null"}
-                      onChange={(event) =>
-                        update(index, (current) => ({
-                          ...current,
-                          schema: schemaForType(
-                            primarySchemaType(current.schema),
-                            event.target.checked,
-                          ),
-                        }))
-                      }
-                      className="h-3 w-3 accent-mariner"
-                    />
-                    Allow null
-                  </label>
-                  <label className="flex items-center gap-1.5 font-body text-[10px] text-neutral-700">
-                    <input
-                      type="checkbox"
-                      checked={slot.required}
-                      disabled={disabled}
-                      onChange={(event) =>
-                        update(index, (current) => ({
-                          ...current,
-                          required: event.target.checked,
-                        }))
-                      }
-                      className="h-3 w-3 accent-mariner"
-                    />
-                    Required
-                  </label>
-                  <label className="flex items-center gap-1.5 font-body text-[10px] text-neutral-700">
-                    <input
-                      type="checkbox"
-                      checked={Object.hasOwn(slot, "defaultValue")}
-                      disabled={disabled}
-                      onChange={(event) =>
-                        update(index, (current) => {
-                          if (event.target.checked) {
-                            return {
-                              ...current,
-                              defaultValue: initialLiteral(current),
-                            };
-                          }
-                          const next = { ...current };
-                          delete next.defaultValue;
-                          return next;
-                        })
-                      }
-                      className="h-3 w-3 accent-mariner"
-                    />
-                    Has default
-                  </label>
+                  <Checkbox
+                    checked={nullable}
+                    disabled={disabled || type === "null"}
+                    onChange={(event) =>
+                      update(index, (current) => ({
+                        ...current,
+                        schema: schemaForType(
+                          primarySchemaType(current.schema),
+                          event.target.checked,
+                        ),
+                      }))
+                    }
+                    className="gap-1.5 text-[10px] text-neutral-700"
+                    label="Allow null"
+                  />
+                  <Checkbox
+                    checked={slot.required}
+                    disabled={disabled}
+                    onChange={(event) =>
+                      update(index, (current) => ({
+                        ...current,
+                        required: event.target.checked,
+                      }))
+                    }
+                    className="gap-1.5 text-[10px] text-neutral-700"
+                    label="Required"
+                  />
+                  <Checkbox
+                    checked={Object.hasOwn(slot, "defaultValue")}
+                    disabled={disabled}
+                    onChange={(event) =>
+                      update(index, (current) => {
+                        if (event.target.checked) {
+                          return {
+                            ...current,
+                            defaultValue: initialLiteral(current),
+                          };
+                        }
+                        const next = { ...current };
+                        delete next.defaultValue;
+                        return next;
+                      })
+                    }
+                    className="gap-1.5 text-[10px] text-neutral-700"
+                    label="Has default"
+                  />
                 </div>
                 {Object.hasOwn(slot, "defaultValue") && (
                   <JsonValueField

@@ -13,7 +13,7 @@ import {
   SKILL_SOURCE_KINDS,
   type SkillSourceKind,
 } from "@shared/skills";
-import { Button, Input, Modal } from "@/components/ui";
+import { Button, Checkbox, Input, Modal } from "@/components/ui";
 
 /**
  * Says what the deployment source does and, as importantly, what it does not:
@@ -79,35 +79,32 @@ Markdown the agent reads once the skill is loaded.`}
           {discovery.skills.map((skill) => {
             const checked = selected.includes(skill.path);
             return (
-              <label
+              <Checkbox
                 key={skill.path}
                 className={`flex cursor-pointer items-start gap-3 border-b border-neutral-100 px-3 py-3 last:border-b-0 ${
                   checked ? "bg-mariner-50" : "bg-panel"
                 }`}
-              >
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  disabled={disabled}
-                  onChange={(event) =>
-                    onToggle(skill.path, event.target.checked)
-                  }
-                  className="mt-0.5 size-3.5 accent-mariner"
-                />
-                <span className="min-w-0">
-                  <span className="block font-mono text-[11px] font-semibold text-coal">
-                    {skill.name}
-                  </span>
-                  {skill.description && (
-                    <span className="mt-0.5 block font-body text-[10px] text-neutral-600">
-                      {skill.description}
+                checked={checked}
+                disabled={disabled}
+                onChange={(event) =>
+                  onToggle(skill.path, event.target.checked)
+                }
+                label={
+                  <span className="min-w-0">
+                    <span className="block font-mono text-[11px] font-semibold text-coal">
+                      {skill.name}
                     </span>
-                  )}
-                  <span className="mt-1 block truncate font-mono text-[9px] text-neutral-500">
-                    skills/{skill.path}
+                    {skill.description && (
+                      <span className="mt-0.5 block font-body text-[10px] text-neutral-600">
+                        {skill.description}
+                      </span>
+                    )}
+                    <span className="mt-1 block truncate font-mono text-[9px] text-neutral-500">
+                      skills/{skill.path}
+                    </span>
                   </span>
-                </span>
-              </label>
+                }
+              />
             );
           })}
         </div>
@@ -616,35 +613,32 @@ export function SkillImport({
                   {visibleSkills.map((skill) => {
                     const checked = selected.includes(skill.path);
                     return (
-                      <label
+                      <Checkbox
                         key={skill.path}
                         className={`flex cursor-pointer items-start gap-3 border-b border-neutral-100 px-3 py-3 last:border-b-0 ${
                           checked ? "bg-mariner-50" : "bg-panel"
                         }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          disabled={disabled || busy !== null}
-                          onChange={(event) =>
-                            toggleSelected(skill.path, event.target.checked)
-                          }
-                          className="mt-0.5 size-3.5 accent-mariner"
-                        />
-                        <span className="min-w-0">
-                          <span className="block font-mono text-[11px] font-semibold text-coal">
-                            {skill.name}
-                          </span>
-                          {skill.description && (
-                            <span className="mt-0.5 block font-body text-[10px] text-neutral-600">
-                              {skill.description}
+                        checked={checked}
+                        disabled={disabled || busy !== null}
+                        onChange={(event) =>
+                          toggleSelected(skill.path, event.target.checked)
+                        }
+                        label={
+                          <span className="min-w-0">
+                            <span className="block font-mono text-[11px] font-semibold text-coal">
+                              {skill.name}
                             </span>
-                          )}
-                          <span className="mt-1 block truncate font-mono text-[9px] text-neutral-500">
-                            {skill.path || "repository root"}
+                            {skill.description && (
+                              <span className="mt-0.5 block font-body text-[10px] text-neutral-600">
+                                {skill.description}
+                              </span>
+                            )}
+                            <span className="mt-1 block truncate font-mono text-[9px] text-neutral-500">
+                              {skill.path || "repository root"}
+                            </span>
                           </span>
-                        </span>
-                      </label>
+                        }
+                      />
                     );
                   })}
                 </div>

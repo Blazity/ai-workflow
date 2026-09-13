@@ -8,7 +8,7 @@ import { REPOSITORY_SCRIPT_GROUP_NAME_MESSAGE } from "@shared/contracts";
 import { isRepositoryScriptGroupName } from "@/lib/workflow-editor/params";
 import { repositoryKey } from "@/lib/workflow-editor/repository-scope";
 import { useRepositoryScopeContext } from "../repository-scope-context";
-import { Button, Input } from "@/components/ui";
+import { Button, Checkbox, Input, Radio } from "@/components/ui";
 import { ConfigField, arr } from "./shared";
 import type { ConfigChange } from "./types";
 import { apiClient } from "@/lib/api/client";
@@ -311,29 +311,30 @@ function ScriptGroupRow({
   return (
     <div className="flex flex-col gap-0.5">
       <div className="flex items-center gap-2">
-        <label className="flex min-w-0 flex-1 items-center gap-2 font-mono text-[11px] text-neutral-700">
-          <input
-            type="checkbox"
-            aria-label={`Run group ${row.name}`}
-            checked={checked}
-            onChange={(e) => onToggle(e.target.checked)}
-            className="w-3.5 h-3.5 accent-mariner"
-          />
-          <span
-            title={row.name}
-            className={row.flag === "malformed" ? "truncate text-red-700" : "truncate"}
-          >
-            {row.name}
-          </span>
-          {row.writes && (
-            <span
-              title="This group runs with restoreTree false: it is allowed to leave tracked files modified."
-              className="rounded-xs border border-amber-300 bg-amber-50 px-1 py-[1px] font-mono text-[9px] uppercase tracking-[0.06em] text-amber-800"
-            >
-              Writes
-            </span>
-          )}
-        </label>
+        <Checkbox
+          aria-label={`Run group ${row.name}`}
+          checked={checked}
+          onChange={(event) => onToggle(event.target.checked)}
+          className="min-w-0 flex-1 font-mono text-[11px] text-neutral-700"
+          label={
+            <>
+              <span
+                title={row.name}
+                className={row.flag === "malformed" ? "truncate text-red-700" : "truncate"}
+              >
+                {row.name}
+              </span>
+              {row.writes && (
+                <span
+                  title="This group runs with restoreTree false: it is allowed to leave tracked files modified."
+                  className="rounded-xs border border-amber-300 bg-amber-50 px-1 py-[1px] font-mono text-[9px] uppercase tracking-[0.06em] text-amber-800"
+                >
+                  Writes
+                </span>
+              )}
+            </>
+          }
+        />
         {coverageKnown && (
           <Button
             type="button"
@@ -669,37 +670,31 @@ export function RunChecksGroupsField({
       >
         <div className="flex flex-wrap items-center gap-3">
           <span className={catalogLabelCls}>Selection:</span>
-          <label className={selectionRadioCls}>
-            <input
-              type="radio"
-              name={`${node.id}:groups-selection`}
-              checked={!named}
-              disabled={disabled || commandsRule}
-              onChange={() => {
-                setLastNamed(selected);
-                setMode("gate");
-                // Passing undefined deletes the optional groups parameter.
-                // eslint-disable-next-line unicorn/no-useless-undefined -- Clear groups to select the default gate.
-                onChange("params.groups", undefined);
-              }}
-              className="w-3 h-3 accent-mariner"
-            />
-            Gate groups (default)
-          </label>
-          <label className={selectionRadioCls}>
-            <input
-              type="radio"
-              name={`${node.id}:groups-selection`}
-              checked={named}
-              disabled={disabled || commandsRule}
-              onChange={() => {
-                setMode("named");
-                onChange("params.groups", lastNamed);
-              }}
-              className="w-3 h-3 accent-mariner"
-            />
-            Named groups
-          </label>
+          <Radio
+            name={`${node.id}:groups-selection`}
+            checked={!named}
+            disabled={disabled || commandsRule}
+            onChange={() => {
+              setLastNamed(selected);
+              setMode("gate");
+              // Passing undefined deletes the optional groups parameter.
+              // eslint-disable-next-line unicorn/no-useless-undefined -- Clear groups to select the default gate.
+              onChange("params.groups", undefined);
+            }}
+            className={selectionRadioCls}
+            label="Gate groups (default)"
+          />
+          <Radio
+            name={`${node.id}:groups-selection`}
+            checked={named}
+            disabled={disabled || commandsRule}
+            onChange={() => {
+              setMode("named");
+              onChange("params.groups", lastNamed);
+            }}
+            className={selectionRadioCls}
+            label="Named groups"
+          />
         </div>
         {named ? (
           <>

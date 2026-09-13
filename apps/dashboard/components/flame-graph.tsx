@@ -81,7 +81,7 @@ export function FlameGraph({
             aria-pressed={isSel}
             aria-label={`${s.name}, ${s.duration}ms`}
             disabled={!onSelect}
-            className={`absolute appearance-none border-0 text-white font-mono text-[11px] px-1.5 flex items-center rounded-xs opacity-95 hover:opacity-100 whitespace-nowrap overflow-hidden transition-transform duration-[120ms] ease-[cubic-bezier(.2,0,0,1)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-1 ${onSelect ? "cursor-pointer" : "cursor-default"}`}
+            className={`absolute appearance-none border-0 text-white font-mono text-[11px] px-1.5 flex items-center rounded-xs opacity-95 hover:opacity-100 whitespace-nowrap overflow-hidden transition-transform duration-[var(--motion-fast)] ease-standard focus-visible:outline focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-1 ${onSelect ? "cursor-pointer" : "cursor-default"}`}
             style={{
               left: x,
               top: y,

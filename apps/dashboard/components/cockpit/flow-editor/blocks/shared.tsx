@@ -4,7 +4,7 @@ import { useEffect, useState, useMemo } from "react";
 import type { FlowNodeDef } from "@/lib/flows";
 import type { WebhookRejectionSummaryEntry, WorkflowDataCatalogEntry, WorkflowEditorOptions, WorkflowParamValue } from "@shared/contracts";
 import { arrayToLines, linesToArray, textMatchesLines } from "@/lib/workflow-editor/params";
-import { Button, Input, Select, Textarea } from "@/components/ui";
+import { Button, Checkbox, Input, Select, Textarea } from "@/components/ui";
 import { investigateProviders } from "../block-palette";
 import { PromptEditor } from "@/components/cockpit/prompt-editor/prompt-editor";
 import { WorkflowTextTemplateEditor } from "../workflow-text-template-editor";
@@ -34,16 +34,13 @@ export function CheckboxRow({
   onChange: (v: boolean) => void;
 }) {
   return (
-    <label className="flex items-center gap-2 font-body text-xs text-coal">
-      <input
-        type="checkbox"
-        checked={checked}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.checked)}
-        className="w-3.5 h-3.5 accent-mariner"
-      />
-      {label}
-    </label>
+    <Checkbox
+      checked={checked}
+      disabled={disabled}
+      onChange={(event) => onChange(event.target.checked)}
+      label={label}
+      className="text-xs text-coal"
+    />
   );
 }
 
