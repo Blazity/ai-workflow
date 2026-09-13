@@ -16,8 +16,12 @@ import {
 } from "./cancel-run.js";
 import { logger } from "../../infra/logger.js";
 import { ticketSubjectKey } from "./subject-key.js";
-import { withdrawTicketFromAiForRun } from "../tickets/index.js";
 import {
+  withdrawConnectedTicketFromAiForRun,
+  withdrawTicketFromAiForRun,
+} from "../tickets/index.js";
+import {
+  markConnectedRunFailedByWatchdog,
   markRunFailedByWatchdog,
   WATCHDOG_FAILURE_REASON_PREFIX,
 } from "../../db/repositories/runs/telemetry.js";
@@ -189,17 +193,47 @@ function isIssueTrackerNotFound(error: unknown): boolean {
  * does not re-dispatch it). Returns true when the run was torn down, in which
  * case the caller must not treat the entry as healthy any further this tick.
  */
-export async function reconcileStalledRun(input: {
+interface StalledRunInput {
   entry: ActiveRunEntry & { runId: string };
   runRegistry: RunRegistryAdapter;
-  db: Db;
   issueTracker?: IssueTrackerAdapter;
   moveTarget?: IssueTrackerMoveTarget;
   aiColumn?: string;
   onSubjectReleased?: (subjectKey: string) => Promise<void> | void;
   now?: number;
-}): Promise<boolean> {
-  const { entry, runRegistry, db } = input;
+}
+
+interface StalledRunPersistence {
+  markFailure(runId: string, reason: string): Promise<boolean>;
+  withdraw(
+    input: Omit<Parameters<typeof withdrawTicketFromAiForRun>[0], "db">,
+  ): Promise<void>;
+}
+
+export function reconcileStalledRun(
+  input: StalledRunInput & { db: Db },
+): Promise<boolean> {
+  const { db, ...stalledInput } = input;
+  return reconcileStalledRunWithPersistence(stalledInput, {
+    markFailure: (runId, reason) => markRunFailedByWatchdog(db, runId, reason),
+    withdraw: (withdrawal) => withdrawTicketFromAiForRun({ db, ...withdrawal }),
+  });
+}
+
+export function reconcileConnectedStalledRun(
+  input: StalledRunInput,
+): Promise<boolean> {
+  return reconcileStalledRunWithPersistence(input, {
+    markFailure: markConnectedRunFailedByWatchdog,
+    withdraw: withdrawConnectedTicketFromAiForRun,
+  });
+}
+
+async function reconcileStalledRunWithPersistence(
+  input: StalledRunInput,
+  persistence: StalledRunPersistence,
+): Promise<boolean> {
+  const { entry, runRegistry } = input;
   const now = input.now ?? Date.now();
   const context = { subjectKey: entry.subjectKey, runId: entry.runId };
 
@@ -263,7 +297,7 @@ export async function reconcileStalledRun(input: {
 
   let statusPersisted: boolean;
   try {
-    statusPersisted = await markRunFailedByWatchdog(db, entry.runId, reason);
+    statusPersisted = await persistence.markFailure(entry.runId, reason);
   } catch (error) {
     logger.warn(
       { ...context, error: error instanceof Error ? error.message : String(error) },
@@ -287,8 +321,7 @@ export async function reconcileStalledRun(input: {
           input.onSubjectReleased,
           reason,
           async (owner) => {
-            await withdrawTicketFromAiForRun({
-              db,
+            await persistence.withdraw({
               issueTracker: input.issueTracker!,
               ticketKey,
               aiColumn: input.aiColumn ?? "AI",

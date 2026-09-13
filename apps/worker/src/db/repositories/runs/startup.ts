@@ -47,6 +47,12 @@ export async function listStartupWatchdogDueRuns(
     .limit(input.limit);
 }
 
+export function listConnectedStartupWatchdogDueRuns(
+  input: Parameters<typeof listStartupWatchdogDueRuns>[1],
+): Promise<StartupWatchdogDueRun[]> {
+  return listStartupWatchdogDueRuns(getDb(), input);
+}
+
 export async function claimStartupWatchdogTimeout(
   db: Db,
   input: {
@@ -77,6 +83,12 @@ export async function claimStartupWatchdogTimeout(
   return rows[0]?.diagnosticId ?? null;
 }
 
+export function claimConnectedStartupWatchdogTimeout(
+  input: Parameters<typeof claimStartupWatchdogTimeout>[1],
+): Promise<string | null> {
+  return claimStartupWatchdogTimeout(getDb(), input);
+}
+
 export async function persistStartupWatchdogDiagnosticId(
   db: Db,
   input: { runId: string; diagnosticId: string },
@@ -88,6 +100,12 @@ export async function persistStartupWatchdogDiagnosticId(
       updatedAt: sql`now()`,
     })
     .where(eq(workflowRuns.runId, input.runId));
+}
+
+export function persistConnectedStartupWatchdogDiagnosticId(
+  input: Parameters<typeof persistStartupWatchdogDiagnosticId>[1],
+): Promise<void> {
+  return persistStartupWatchdogDiagnosticId(getDb(), input);
 }
 
 export async function insertOrphanStartedRun(

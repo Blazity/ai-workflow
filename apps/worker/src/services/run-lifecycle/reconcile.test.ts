@@ -32,12 +32,28 @@ const mockCancelSubjectRunDetailed = vi.fn();
 const mockIsRunRecordedFailed = vi.fn();
 const mockIsRunRecordedSucceeded = vi.fn();
 const mockHasDurableRunPublication = vi.fn();
+const mockIsConnectedRunRecordedFailed = vi.fn();
+const mockIsConnectedRunRecordedSucceeded = vi.fn();
+const mockHasConnectedDurableRunPublication = vi.fn();
+const mockFindRunOutcomeByRunId = vi.fn();
+const mockFindConnectedRunOutcomeByRunId = vi.fn();
 const mockDb = {} as Db;
 const mockStopSandboxesByIds = vi.fn();
 const mockListWorkflowSteps = vi.fn();
 const mockReconcileStalledRun = vi.hoisted(() => vi.fn().mockResolvedValue(false));
+const mockReconcileConnectedStalledRun = vi.hoisted(() =>
+  vi.fn().mockResolvedValue(false),
+);
+const mockReconcileStartupWatchdog = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({ selected: 0, cancelled: 0, retryable: 0 }),
+);
+const mockReconcileConnectedStartupWatchdog = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({ selected: 0, cancelled: 0, retryable: 0 }),
+);
 const mockGetResumableClarificationForRun = vi.hoisted(() => vi.fn());
+const mockGetConnectedResumableClarificationForRun = vi.hoisted(() => vi.fn());
 const mockRetireClarificationForGoneTicket = vi.hoisted(() => vi.fn());
+const mockRetireConnectedClarificationForGoneTicket = vi.hoisted(() => vi.fn());
 const mockAssertActiveRunOwnerState = vi.hoisted(() => vi.fn());
 vi.mock("workflow/api", () => ({ getRun: (...args: any[]) => mockGetRun(...args) }));
 vi.mock("workflow/runtime", () => ({
@@ -53,19 +69,29 @@ vi.mock("../../db/repositories/runs.js", () => ({
   isRunRecordedFailed: (...args: any[]) => mockIsRunRecordedFailed(...args),
   isRunRecordedSucceeded: (...args: any[]) => mockIsRunRecordedSucceeded(...args),
   hasDurableRunPublication: (...args: any[]) => mockHasDurableRunPublication(...args),
+  isConnectedRunRecordedFailed: (...args: any[]) =>
+    mockIsConnectedRunRecordedFailed(...args),
+  isConnectedRunRecordedSucceeded: (...args: any[]) =>
+    mockIsConnectedRunRecordedSucceeded(...args),
+  hasConnectedDurableRunPublication: (...args: any[]) =>
+    mockHasConnectedDurableRunPublication(...args),
+  findRunOutcomeByRunId: (...args: any[]) => mockFindRunOutcomeByRunId(...args),
+  findConnectedRunOutcomeByRunId: (...args: any[]) =>
+    mockFindConnectedRunOutcomeByRunId(...args),
 }));
 vi.mock("./run-start-lifecycle.js", () => ({
-  reconcileStartupWatchdog: vi.fn().mockResolvedValue({
-    selected: 0,
-    cancelled: 0,
-    retryable: 0,
-  }),
+  reconcileStartupWatchdog: (...args: any[]) =>
+    mockReconcileStartupWatchdog(...args),
+  reconcileConnectedStartupWatchdog: (...args: any[]) =>
+    mockReconcileConnectedStartupWatchdog(...args),
 }));
 vi.mock("../../sandbox/stop-ticket-sandboxes.js", () => ({
   stopSandboxesByIds: (...args: any[]) => mockStopSandboxesByIds(...args),
 }));
 vi.mock("./run-stall-watchdog.js", () => ({
   reconcileStalledRun: (...args: any[]) => mockReconcileStalledRun(...args),
+  reconcileConnectedStalledRun: (...args: any[]) =>
+    mockReconcileConnectedStalledRun(...args),
 }));
 vi.mock("../../db/repositories/active-runs.js", () => ({
   assertActiveRunOwnerState: (...args: any[]) => mockAssertActiveRunOwnerState(...args),
@@ -73,6 +99,12 @@ vi.mock("../../db/repositories/active-runs.js", () => ({
 vi.mock("../../db/repositories/clarification-hooks.js", () => ({
   getResumableClarificationForRun: (...args: any[]) =>
     mockGetResumableClarificationForRun(...args),
+  getConnectedResumableClarificationForRun: (...args: any[]) =>
+    mockGetConnectedResumableClarificationForRun(...args),
+}));
+vi.mock("../../db/repositories/clarifications.js", () => ({
+  retireConnectedClarificationForGoneTicket: (...args: any[]) =>
+    mockRetireConnectedClarificationForGoneTicket(...args),
 }));
 
 function entry(overrides: Partial<ActiveRunEntry> = {}): ActiveRunEntry {
@@ -153,6 +185,11 @@ describe("reconcileRuns owner-CAS recovery", () => {
     mockIsRunRecordedFailed.mockResolvedValue(false);
     mockIsRunRecordedSucceeded.mockResolvedValue(false);
     mockHasDurableRunPublication.mockResolvedValue(false);
+    mockIsConnectedRunRecordedFailed.mockResolvedValue(false);
+    mockIsConnectedRunRecordedSucceeded.mockResolvedValue(false);
+    mockHasConnectedDurableRunPublication.mockResolvedValue(false);
+    mockFindRunOutcomeByRunId.mockResolvedValue(null);
+    mockFindConnectedRunOutcomeByRunId.mockResolvedValue(null);
     mockListWorkflowSteps.mockResolvedValue({
       data: [],
       cursor: null,
@@ -160,6 +197,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     });
     mockAssertActiveRunOwnerState.mockResolvedValue(undefined);
     mockGetResumableClarificationForRun.mockResolvedValue(null);
+    mockGetConnectedResumableClarificationForRun.mockResolvedValue(null);
   });
 
   it("leaves a fresh unbound reservation for its candidate", async () => {
@@ -446,6 +484,25 @@ describe("reconcileRuns owner-CAS recovery", () => {
     );
     expect(onReleased).toHaveBeenCalledTimes(1);
     expect(onReleased).toHaveBeenCalledWith(manual.subjectKey);
+  });
+
+  it("uses the connected owner fence for terminal manual-ticket cleanup without a db", async () => {
+    const manual = entry({ kind: "manual_ticket" });
+    const runRegistry = registry([manual]);
+    const tracker = issueTracker("AI");
+    mockGetRun.mockReturnValue({ status: Promise.resolve("completed") });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(new Set(), runRegistry, tracker),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 1 });
+    expect(mockAssertActiveRunOwnerState).toHaveBeenCalledWith(manual, "bound");
+    expect(tracker.moveTicket).toHaveBeenCalledWith("PROJ-1", "Backlog");
+    expect(runRegistry.release).toHaveBeenCalledWith(
+      manual.subjectKey,
+      manual.ownerToken,
+      manual.runId,
+    );
   });
 
   it("retains a manual claim omitted from the snapshot when Jira's live read is uncertain", async () => {
@@ -789,6 +846,34 @@ describe("reconcileRuns owner-CAS recovery", () => {
     );
     expect(onCancelled).toHaveBeenCalledTimes(1);
     expect(onCancelled).toHaveBeenCalledWith("PROJ-1", "orphaned_run");
+  });
+
+  it("uses connected clarification persistence for a deleted parked ticket without a db", async () => {
+    const parked = entry();
+    const runRegistry = registry([parked]);
+    const tracker = issueTracker("AI");
+    vi.mocked(tracker.fetchTicket).mockRejectedValue(
+      new IssueTrackerNotFoundError("issue", "PROJ-1"),
+    );
+    const clarification = { id: "clar-1", runId: "run-1", ticketKey: "PROJ-1" };
+    mockGetConnectedResumableClarificationForRun.mockResolvedValue(clarification);
+    mockCancelRunDetailed.mockResolvedValue({ cancelled: true, released: true });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(),
+        runRegistry,
+        tracker,
+        undefined,
+        undefined,
+        new Set([parked.subjectKey]),
+      ),
+    ).resolves.toEqual({ cancelled: 1, cleaned: 0 });
+    expect(mockGetConnectedResumableClarificationForRun).toHaveBeenCalledWith("run-1");
+    expect(mockRetireConnectedClarificationForGoneTicket).toHaveBeenCalledWith(
+      clarification,
+    );
   });
 
   it("skips the cancellation notification for an already terminal parked run", async () => {
@@ -1454,6 +1539,133 @@ describe("reconcileRuns owner-CAS recovery", () => {
     expect(mockHasDurableRunPublication).not.toHaveBeenCalled();
   });
 
+  it("releases an old store-success AI Review owner when Workflow status is unreachable", async () => {
+    const bound = entry();
+    const runRegistry = registry([bound]);
+    mockGetRun.mockImplementation(() => {
+      throw new Error("workflow status unavailable");
+    });
+    mockIsRunRecordedSucceeded.mockResolvedValue(true);
+    mockFindRunOutcomeByRunId.mockResolvedValue({
+      status: "success",
+      completedAt: new Date(Date.now() - 10 * 60_000),
+    });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(),
+        runRegistry,
+        issueTracker("Review"),
+        undefined,
+        undefined,
+        undefined,
+        mockDb,
+        undefined,
+        undefined,
+        reviewSettings,
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 1 });
+    expect(mockFindRunOutcomeByRunId).toHaveBeenCalledWith(expect.anything(), "run-1");
+    expect(runRegistry.release).toHaveBeenCalledWith(
+      bound.subjectKey,
+      bound.ownerToken,
+      bound.runId,
+    );
+    expect(mockCancelRunDetailed).not.toHaveBeenCalled();
+  });
+
+  it("retains a fresh store-success AI Review owner when Workflow status is unreachable", async () => {
+    const bound = entry();
+    const runRegistry = registry([bound]);
+    mockGetRun.mockImplementation(() => {
+      throw new Error("workflow status unavailable");
+    });
+    mockIsRunRecordedSucceeded.mockResolvedValue(true);
+    mockFindRunOutcomeByRunId.mockResolvedValue({
+      status: "success",
+      completedAt: new Date(Date.now() - 60_000),
+    });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(),
+        runRegistry,
+        issueTracker("Review"),
+        undefined,
+        undefined,
+        undefined,
+        mockDb,
+        undefined,
+        undefined,
+        reviewSettings,
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 0 });
+    expect(mockFindRunOutcomeByRunId).toHaveBeenCalledWith(expect.anything(), "run-1");
+    expect(runRegistry.release).not.toHaveBeenCalled();
+    expect(mockCancelRunDetailed).not.toHaveBeenCalled();
+  });
+
+  it("retains a durable-evidence AI Review owner while Workflow is running", async () => {
+    const bound = entry();
+    const runRegistry = registry([bound]);
+    mockGetRun.mockReturnValue({ status: Promise.resolve("running") });
+    mockIsRunRecordedSucceeded.mockResolvedValue(true);
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(),
+        runRegistry,
+        issueTracker("Review"),
+        undefined,
+        undefined,
+        undefined,
+        mockDb,
+        undefined,
+        undefined,
+        reviewSettings,
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 0 });
+    expect(mockFindRunOutcomeByRunId).not.toHaveBeenCalled();
+    expect(runRegistry.release).not.toHaveBeenCalled();
+    expect(mockCancelRunDetailed).not.toHaveBeenCalled();
+  });
+
+  it("releases an old store-blocked AI Review owner instead of cancelling it again", async () => {
+    const bound = entry();
+    const runRegistry = registry([bound]);
+    mockFindRunOutcomeByRunId.mockResolvedValue({
+      status: "blocked",
+      completedAt: new Date(Date.now() - 10 * 60_000),
+    });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(),
+        runRegistry,
+        issueTracker("Review"),
+        undefined,
+        undefined,
+        undefined,
+        mockDb,
+        undefined,
+        undefined,
+        reviewSettings,
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 1 });
+    expect(mockFindRunOutcomeByRunId).toHaveBeenCalledWith(expect.anything(), "run-1");
+    expect(mockGetRun).not.toHaveBeenCalled();
+    expect(runRegistry.release).toHaveBeenCalledWith(
+      bound.subjectKey,
+      bound.ownerToken,
+      bound.runId,
+    );
+    expect(mockCancelRunDetailed).not.toHaveBeenCalled();
+  });
+
   it("retains an AI Review owner when durable evidence lookup fails", async () => {
     const bound = entry();
     const runRegistry = registry([bound]);
@@ -1475,6 +1687,122 @@ describe("reconcileRuns owner-CAS recovery", () => {
         reviewSettings,
       ),
     ).resolves.toEqual({ cancelled: 0, cleaned: 0 });
+    expect(mockCancelRunDetailed).not.toHaveBeenCalled();
+  });
+
+  it("runs connected production reconciliation without a db and releases an old store-terminal AI Review owner", async () => {
+    const bound = entry();
+    const runRegistry = registry([bound]);
+    mockGetRun.mockImplementation(() => {
+      throw new Error("workflow status unavailable");
+    });
+    mockHasConnectedDurableRunPublication.mockRejectedValue(new Error("db down"));
+    mockFindConnectedRunOutcomeByRunId.mockResolvedValue({
+      status: "success",
+      completedAt: new Date(Date.now() - 10 * 60_000),
+    });
+    const { logger } = await import("../../infra/logger.js");
+    const info = vi.spyOn(logger, "info").mockImplementation(() => undefined);
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(),
+        runRegistry,
+        issueTracker("Review"),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        reviewSettings,
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 1 });
+    expect(mockReconcileConnectedStartupWatchdog).toHaveBeenCalledWith({
+      runRegistry,
+      onSubjectReleased: undefined,
+    });
+    expect(mockReconcileConnectedStalledRun).toHaveBeenCalledWith(
+      expect.objectContaining({ entry: expect.objectContaining({ runId: "run-1" }) }),
+    );
+    expect(mockIsConnectedRunRecordedFailed).toHaveBeenCalledWith("run-1");
+    expect(mockIsConnectedRunRecordedSucceeded).toHaveBeenCalledWith("run-1");
+    expect(mockHasConnectedDurableRunPublication).toHaveBeenCalledWith("run-1");
+    expect(mockFindConnectedRunOutcomeByRunId).toHaveBeenCalledWith("run-1");
+    expect(runRegistry.release).toHaveBeenCalledWith(
+      bound.subjectKey,
+      bound.ownerToken,
+      bound.runId,
+    );
+    expect(info).toHaveBeenCalledWith(
+      { subjectKey: bound.subjectKey, runId: "run-1", status: "success" },
+      "reconcile_released_store_terminal_run",
+    );
+    info.mockRestore();
+  });
+
+  it("retains an AI Review owner whose store completion is only one minute old", async () => {
+    const bound = entry();
+    const runRegistry = registry([bound]);
+    mockGetRun.mockImplementation(() => {
+      throw new Error("workflow status unavailable");
+    });
+    mockHasConnectedDurableRunPublication.mockRejectedValue(new Error("db down"));
+    mockFindConnectedRunOutcomeByRunId.mockResolvedValue({
+      status: "success",
+      completedAt: new Date(Date.now() - 60_000),
+    });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(),
+        runRegistry,
+        issueTracker("Review"),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        reviewSettings,
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 0 });
+    expect(mockFindConnectedRunOutcomeByRunId).toHaveBeenCalledWith("run-1");
+    expect(runRegistry.release).not.toHaveBeenCalled();
+    expect(mockCancelRunDetailed).not.toHaveBeenCalled();
+  });
+
+  it("retains an AI Review owner whose store row is not terminal", async () => {
+    const bound = entry();
+    const runRegistry = registry([bound]);
+    mockGetRun.mockImplementation(() => {
+      throw new Error("workflow status unavailable");
+    });
+    mockHasConnectedDurableRunPublication.mockRejectedValue(new Error("db down"));
+    mockFindConnectedRunOutcomeByRunId.mockResolvedValue({
+      status: "running",
+      completedAt: null,
+    });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(),
+        runRegistry,
+        issueTracker("Review"),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        reviewSettings,
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 0 });
+    expect(mockFindConnectedRunOutcomeByRunId).toHaveBeenCalledWith("run-1");
+    expect(runRegistry.release).not.toHaveBeenCalled();
     expect(mockCancelRunDetailed).not.toHaveBeenCalled();
   });
 

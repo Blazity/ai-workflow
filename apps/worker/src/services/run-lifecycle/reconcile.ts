@@ -2,9 +2,11 @@ import { getRun } from "workflow/api";
 import { defaultSettingsSnapshot, type SettingsSnapshot } from "@shared/contracts";
 import { env } from "../../infra/vcs-config.js";
 import {
+  decideConnectedAiReviewRun,
   decideAiReviewRun,
   isAiReviewDestination,
   PREMATURE_AI_REVIEW_CANCELLATION_REASON,
+  withdrawConnectedTicketFromAiForRun,
   withdrawTicketFromAiForRun,
 } from "../tickets/index.js";
 import {
@@ -14,9 +16,11 @@ import {
 } from "./cancel-run.js";
 import { logger } from "../../infra/logger.js";
 import {
+  getConnectedResumableClarificationForRun,
   getResumableClarificationForRun,
   type HookClarificationRow,
 } from "../../db/repositories/clarification-hooks.js";
+import { retireConnectedClarificationForGoneTicket } from "../../db/repositories/clarifications.js";
 import { stopSandboxesByIds } from "../../sandbox/stop-ticket-sandboxes.js";
 import {
   IssueTrackerNotFoundError,
@@ -28,12 +32,24 @@ import type {
   RunRegistryAdapter,
 } from "../../adapters/run-registry/types.js";
 import type { Db } from "../../db/types.js";
+import {
+  findConnectedRunOutcomeByRunId,
+  findRunOutcomeByRunId,
+} from "../../db/repositories/runs.js";
 import { confirmWorkflowStepsDrained } from "./workflow-step-drain.js";
-import { reconcileStartupWatchdog } from "./run-start-lifecycle.js";
-import { reconcileStalledRun } from "./run-stall-watchdog.js";
+import {
+  reconcileConnectedStartupWatchdog,
+  reconcileStartupWatchdog,
+} from "./run-start-lifecycle.js";
+import {
+  reconcileConnectedStalledRun,
+  reconcileStalledRun,
+} from "./run-stall-watchdog.js";
 import { ticketSubjectKey } from "./subject-key.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
+const NON_TERMINAL_STATUSES = new Set(["pending", "running"]);
+const STORE_TERMINAL_STATUSES = new Set(["success", "failed", "blocked"]);
 const STALE_RESERVATION_MS = 5 * 60 * 1000;
 const ORPHAN_GRACE_MS = 30 * 1000;
 
@@ -71,6 +87,53 @@ type ClarificationRetirement = (
   row: HookClarificationRow,
 ) => Promise<void>;
 
+interface ReconcilePersistence {
+  reconcileStartup(
+    input: Omit<Parameters<typeof reconcileStartupWatchdog>[0], "db">,
+  ): ReturnType<typeof reconcileStartupWatchdog>;
+  reconcileStalled(
+    input: Omit<Parameters<typeof reconcileStalledRun>[0], "db">,
+  ): ReturnType<typeof reconcileStalledRun>;
+  decideAiReview(runId: string): ReturnType<typeof decideAiReviewRun>;
+  findRunOutcome(runId: string): ReturnType<typeof findRunOutcomeByRunId>;
+  getResumableClarification(
+    runId: string,
+  ): ReturnType<typeof getResumableClarificationForRun>;
+  retireClarification?: (row: HookClarificationRow) => Promise<void>;
+  withdrawTicket(
+    input: Omit<Parameters<typeof withdrawTicketFromAiForRun>[0], "db">,
+  ): Promise<void>;
+}
+
+function createReconcilePersistence(
+  db: Db | undefined,
+  retireClarification: ClarificationRetirement | undefined,
+): ReconcilePersistence {
+  if (db) {
+    return {
+      reconcileStartup: (input) => reconcileStartupWatchdog({ ...input, db }),
+      reconcileStalled: (input) => reconcileStalledRun({ ...input, db }),
+      decideAiReview: (runId) => decideAiReviewRun(db, runId),
+      findRunOutcome: (runId) => findRunOutcomeByRunId(db, runId),
+      getResumableClarification: (runId) =>
+        getResumableClarificationForRun(db, runId),
+      retireClarification: retireClarification
+        ? (row) => retireClarification(db, row)
+        : undefined,
+      withdrawTicket: (input) => withdrawTicketFromAiForRun({ ...input, db }),
+    };
+  }
+  return {
+    reconcileStartup: reconcileConnectedStartupWatchdog,
+    reconcileStalled: reconcileConnectedStalledRun,
+    decideAiReview: decideConnectedAiReviewRun,
+    findRunOutcome: findConnectedRunOutcomeByRunId,
+    getResumableClarification: getConnectedResumableClarificationForRun,
+    retireClarification: retireConnectedClarificationForGoneTicket,
+    withdrawTicket: withdrawConnectedTicketFromAiForRun,
+  };
+}
+
 export async function reconcileRuns(
   aiColumnTickets: Set<string>,
   runRegistry: RunRegistryAdapter,
@@ -83,23 +146,21 @@ export async function reconcileRuns(
   retireClarification?: ClarificationRetirement,
   settings: SettingsSnapshot = defaultSettingsSnapshot(),
 ): Promise<{ cancelled: number; cleaned: number }> {
+  const persistence = createReconcilePersistence(db, retireClarification);
   let cancelled = 0;
-  if (db) {
-    try {
-      const startup = await reconcileStartupWatchdog({
-        db,
-        runRegistry,
-        onSubjectReleased,
-      });
-      cancelled += startup.cancelled;
-    } catch (error) {
-      logger.warn(
-        {
-          error: error instanceof Error ? error.message : String(error),
-        },
-        "startup_watchdog_reconciliation_failed",
-      );
-    }
+  try {
+    const startup = await persistence.reconcileStartup({
+      runRegistry,
+      onSubjectReleased,
+    });
+    cancelled += startup.cancelled;
+  } catch (error) {
+    logger.warn(
+      {
+        error: error instanceof Error ? error.message : String(error),
+      },
+      "startup_watchdog_reconciliation_failed",
+    );
   }
   const entries = await runRegistry.listAll();
   let cleaned = 0;
@@ -117,7 +178,7 @@ export async function reconcileRuns(
         runRegistry,
         issueTracker,
         onSubjectReleased,
-        db,
+        persistence,
         settings,
       );
       if (result.cancelled) {
@@ -179,9 +240,7 @@ export async function reconcileRuns(
         cleaned += await cleanFinishedRun(
           { ...entry, runId: entry.runId },
           runRegistry,
-          issueTracker,
           onSubjectReleased,
-          db,
         );
       }
       continue;
@@ -191,9 +250,7 @@ export async function reconcileRuns(
       cleaned += await recoverStaleReservation(
         entry,
         runRegistry,
-        issueTracker,
         onSubjectReleased,
-        db,
       );
       continue;
     }
@@ -210,17 +267,16 @@ export async function reconcileRuns(
     // than any invocation can live) looks exactly like a healthy in-progress
     // run to every branch below. Settle it here, before the column logic, so it
     // cannot sit in RUNNING with a live claim until someone notices.
-    if (db && entry.state === "bound") {
+    if (entry.state === "bound") {
       const backlogTarget: IssueTrackerMoveTarget = env.JIRA_BACKLOG_TRANSITION_ID
         ? {
             name: settings.COLUMN_BACKLOG,
             transitionId: env.JIRA_BACKLOG_TRANSITION_ID,
           }
         : settings.COLUMN_BACKLOG;
-      const stalled = await reconcileStalledRun({
+      const stalled = await persistence.reconcileStalled({
         entry: boundEntry,
         runRegistry,
-        db,
         issueTracker,
         // The snapshot only drives ordinary terminal/stuck cleanup. The stall
         // watchdog must receive the configured safe target for every ticket
@@ -254,9 +310,7 @@ export async function reconcileRuns(
       cleaned += await cleanFinishedRun(
         boundEntry,
         runRegistry,
-        issueTracker,
         onSubjectReleased,
-        db,
       );
       continue;
     }
@@ -265,9 +319,7 @@ export async function reconcileRuns(
       cleaned += await cleanFinishedRun(
         boundEntry,
         runRegistry,
-        issueTracker,
         onSubjectReleased,
-        db,
       );
       continue;
     }
@@ -279,7 +331,7 @@ export async function reconcileRuns(
             runRegistry,
             issueTracker,
             onSubjectReleased,
-            db,
+            persistence,
             settings,
           )
         : await cleanStuckTicketRun(
@@ -316,7 +368,7 @@ export async function reconcileRuns(
           runRegistry,
           issueTracker,
           onSubjectReleased,
-          db,
+          persistence,
           settings,
         );
       }
@@ -331,15 +383,22 @@ export async function reconcileRuns(
         statusId: departure.trackerStatusId,
         aiReviewColumn: settings.COLUMN_AI_REVIEW,
       }));
-    if (
-      reviewDestination &&
-      await shouldRetainFinalizingRunInAiReview(
+    if (reviewDestination) {
+      const finalization = await decideAiReviewFinalization(
         ticketKey,
         entry.runId,
-        db,
-      )
-    ) {
-      continue;
+        persistence,
+      );
+      if (finalization.retain) continue;
+      if (finalization.storeTerminalStatus) {
+        cleaned += await cleanStoreTerminalRun(
+          boundEntry,
+          finalization.storeTerminalStatus,
+          runRegistry,
+          onSubjectReleased,
+        );
+        continue;
+      }
     }
 
     const cancellationResult = await cancelRunDetailed(
@@ -374,8 +433,7 @@ export async function reconcileRuns(
         issueTracker,
         onTicketCancelled,
         onSubjectReleased,
-        db,
-        retireClarification,
+        persistence,
       ),
   );
   for (const disposed of parkedDisposals) {
@@ -415,8 +473,7 @@ function disposeParkedSubjectWithMissingTicket(
   issueTracker: IssueTrackerAdapter | undefined,
   onTicketCancelled: TicketCancellationCallback | undefined,
   onSubjectReleased: SubjectReleasedCallback | undefined,
-  db: Db | undefined,
-  retireClarification: ClarificationRetirement | undefined,
+  persistence: ReconcilePersistence,
 ): Promise<boolean> {
   return disposeParkedSubjectWithMissingTicketCore(
     entry,
@@ -424,8 +481,7 @@ function disposeParkedSubjectWithMissingTicket(
     issueTracker,
     onTicketCancelled,
     onSubjectReleased,
-    db,
-    retireClarification,
+    persistence,
   ).catch(
     (error: unknown) => {
       logger.warn(
@@ -447,14 +503,13 @@ async function disposeParkedSubjectWithMissingTicketCore(
   issueTracker: IssueTrackerAdapter | undefined,
   onTicketCancelled: TicketCancellationCallback | undefined,
   onSubjectReleased: SubjectReleasedCallback | undefined,
-  db: Db | undefined,
-  retireClarification: ClarificationRetirement | undefined,
+  persistence: ReconcilePersistence,
 ): Promise<boolean> {
   const { runId, ticketKey } = entry;
-  if (!db || !issueTracker || !runId || !ticketKey) return false;
+  if (!issueTracker || !runId || !ticketKey) return false;
 
   // A park without a resumable clarification owns another lifecycle.
-  const row = await getResumableClarificationForRun(db, runId).catch(() => null);
+  const row = await persistence.getResumableClarification(runId).catch(() => null);
   if (!row) return false;
 
   try {
@@ -474,10 +529,10 @@ async function disposeParkedSubjectWithMissingTicketCore(
     }
   }
 
-  if (!retireClarification) {
+  if (!persistence.retireClarification) {
     throw new Error("Clarification retirement dependency is unavailable");
   }
-  await retireClarification(db, row);
+  await persistence.retireClarification(row);
   const cancellation = await cancelRunDetailed(
     ticketKey,
     runId,
@@ -594,9 +649,9 @@ function isExactParkedClaim(
 async function retryCancellingClaim(
   entry: ActiveRunEntry,
   runRegistry: RunRegistryAdapter,
-  issueTracker?: IssueTrackerAdapter,
-  onSubjectReleased?: SubjectReleasedCallback,
-  db?: Db,
+  issueTracker: IssueTrackerAdapter | undefined,
+  onSubjectReleased: SubjectReleasedCallback | undefined,
+  persistence: ReconcilePersistence,
   settings: SettingsSnapshot = defaultSettingsSnapshot(),
 ): Promise<CancelRunResult> {
   const target = { ownerToken: entry.ownerToken, runId: entry.runId };
@@ -644,22 +699,7 @@ async function retryCancellingClaim(
     ownerToken: string;
     runId: string | null;
   }) => {
-    if (db) {
-      await withdrawTicketFromAiForRun({
-        db,
-        issueTracker: issueTracker!,
-        ticketKey,
-        aiColumn: settings.COLUMN_AI,
-        target: backlogTarget,
-        owner,
-        requiredOwnerState: "cancelling",
-      });
-      return;
-    }
-    const { withdrawConnectedTicketFromAiForRun } = await import(
-      "../tickets/ticket-transition.js"
-    );
-    await withdrawConnectedTicketFromAiForRun({
+    await persistence.withdrawTicket({
       issueTracker: issueTracker!,
       ticketKey,
       aiColumn: settings.COLUMN_AI,
@@ -710,9 +750,7 @@ async function readLiveTicketInAiColumn(
 async function recoverStaleReservation(
   entry: ActiveRunEntry,
   runRegistry: RunRegistryAdapter,
-  issueTracker?: IssueTrackerAdapter,
   onSubjectReleased?: SubjectReleasedCallback,
-  _db?: Db,
 ): Promise<number> {
   if (runRegistry.releaseExpiredReservation) {
     const released = await runRegistry
@@ -755,9 +793,7 @@ async function recoverStaleReservation(
 async function cleanFinishedRun(
   entry: ActiveRunEntry & { runId: string },
   runRegistry: RunRegistryAdapter,
-  issueTracker?: IssueTrackerAdapter,
   onSubjectReleased?: SubjectReleasedCallback,
-  _db?: Db,
 ): Promise<number> {
   try {
     const status = await getRun(entry.runId).status;
@@ -789,19 +825,18 @@ async function cleanFinishedRun(
 async function cleanFinishedManualTicket(
   entry: ActiveRunEntry & { runId: string },
   runRegistry: RunRegistryAdapter,
-  issueTracker?: IssueTrackerAdapter,
-  onSubjectReleased?: SubjectReleasedCallback,
-  db?: Db,
+  issueTracker: IssueTrackerAdapter | undefined,
+  onSubjectReleased: SubjectReleasedCallback | undefined,
+  persistence: ReconcilePersistence,
   settings: SettingsSnapshot = defaultSettingsSnapshot(),
 ): Promise<number> {
   try {
     const status = await getRun(entry.runId).status;
     if (!TERMINAL_STATUSES.has(status)) return 0;
     if (!(await confirmWorkflowStepsDrained(entry.subjectKey, entry.runId))) return 0;
-    if (!entry.ticketKey || !issueTracker || !db) return 0;
+    if (!entry.ticketKey || !issueTracker) return 0;
 
-    await withdrawTicketFromAiForRun({
-      db,
+    await persistence.withdrawTicket({
       issueTracker,
       ticketKey: entry.ticketKey,
       aiColumn: settings.COLUMN_AI,
@@ -978,33 +1013,92 @@ async function verifyTicketLeftAiColumn(
  * race without treating an eager human move with no evidence as success.
  * Once the Workflow world is terminal, release it through this same orphan
  * path (cancelRun's already-terminal branch) exactly as for normal completion.
+ * If Workflow status is unreachable or unreadable, an old terminal
+ * workflow_runs row is sufficient proof to drain and release the claim
+ * directly; a fresh or non-terminal row remains fail-closed. A no-evidence
+ * decision still cancels without probing Workflow, except that an old blocked
+ * row is already terminal and must not be cancelled again.
  */
-async function shouldRetainFinalizingRunInAiReview(
+async function decideAiReviewFinalization(
   ticketKey: string,
   runId: string,
-  db?: Db,
-): Promise<boolean> {
-  const decision = await decideAiReviewRun(db, runId);
+  persistence: ReconcilePersistence,
+): Promise<{ retain: boolean; storeTerminalStatus?: string }> {
+  const decision = await persistence.decideAiReview(runId);
   if (decision === "lookup_failed") {
     logger.warn(
       { ticketKey, runId },
       "reconcile_ai_review_run_evidence_lookup_failed",
     );
-    return true;
   }
-  if (decision === "cancel") return false;
+  if (decision === "cancel") {
+    const outcome = await readRunOutcomeFromStore(persistence, runId);
+    return outcome?.status === "blocked"
+      ? { retain: false, storeTerminalStatus: outcome.status }
+      : { retain: false };
+  }
   try {
     const status = await getRun(runId).status;
-    if (TERMINAL_STATUSES.has(status)) return false;
+    if (TERMINAL_STATUSES.has(status)) return { retain: false };
+    if (NON_TERMINAL_STATUSES.has(status)) {
+      logger.info(
+        { ticketKey, runId },
+        "reconcile_retained_finalizing_run_in_ai_review",
+      );
+      return { retain: true };
+    }
   } catch {
-    // Reachability is not terminal proof (same rule as cleanFinishedRun):
-    // retain the exact owner and let a later tick decide.
+    // Fall back to the durable store below.
+  }
+  const outcome = await readRunOutcomeFromStore(persistence, runId);
+  if (outcome) {
+    return { retain: false, storeTerminalStatus: outcome.status };
   }
   logger.info(
     { ticketKey, runId },
     "reconcile_retained_finalizing_run_in_ai_review",
   );
-  return true;
+  return { retain: true };
+}
+
+async function readRunOutcomeFromStore(
+  persistence: ReconcilePersistence,
+  runId: string,
+): Promise<{ status: string } | null> {
+  try {
+    const outcome = await persistence.findRunOutcome(runId);
+    const completedAtMs = outcome?.completedAt?.getTime();
+    if (
+      !outcome ||
+      !outcome.status ||
+      !STORE_TERMINAL_STATUSES.has(outcome.status) ||
+      completedAtMs === undefined ||
+      !Number.isFinite(completedAtMs) ||
+      Date.now() - completedAtMs <= STALE_RESERVATION_MS
+    ) {
+      return null;
+    }
+    return { status: outcome.status };
+  } catch {
+    return null;
+  }
+}
+
+async function cleanStoreTerminalRun(
+  entry: ActiveRunEntry & { runId: string },
+  status: string,
+  runRegistry: RunRegistryAdapter,
+  onSubjectReleased?: SubjectReleasedCallback,
+): Promise<number> {
+  if (!(await confirmWorkflowStepsDrained(entry.subjectKey, entry.runId))) return 0;
+  const released = await cleanupAndRelease(entry, runRegistry);
+  if (!released) return 0;
+  await notifySubjectReleased(entry.subjectKey, onSubjectReleased);
+  logger.info(
+    { subjectKey: entry.subjectKey, runId: entry.runId, status },
+    "reconcile_released_store_terminal_run",
+  );
+  return 1;
 }
 
 function resolveTicketProjectKey(ticket: {

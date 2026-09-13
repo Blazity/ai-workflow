@@ -7,12 +7,15 @@ import type {
 import type { Db } from "../../db/types.js";
 import {
   findConnectedRunOutcomeByRunId,
+  claimConnectedStartupWatchdogTimeout,
   claimStartupWatchdogTimeout,
   insertConnectedNoDefinitionBlockedRun,
   insertConnectedOrphanStartedRun,
+  listConnectedStartupWatchdogDueRuns,
   listStartupWatchdogDueRuns,
   markConnectedStartupRunFailure,
   markStartupRunFailure,
+  persistConnectedStartupWatchdogDiagnosticId,
   persistStartupWatchdogDiagnosticId,
 } from "../../db/repositories/runs.js";
 import { confirmWorkflowStepsDrained } from "./workflow-step-drain.js";
@@ -189,14 +192,57 @@ export interface StartupWatchdogResult {
   retryable: number;
 }
 
-export async function reconcileStartupWatchdog(input: {
-  db: Db;
+interface StartupWatchdogInput {
   runRegistry: RunRegistryAdapter;
   now?: Date;
   onSubjectReleased?: (subjectKey: string) => Promise<void> | void;
-}): Promise<StartupWatchdogResult> {
+}
+
+interface StartupWatchdogPersistence {
+  listDue(
+    input: Parameters<typeof listStartupWatchdogDueRuns>[1],
+  ): ReturnType<typeof listStartupWatchdogDueRuns>;
+  claim(
+    input: Parameters<typeof claimStartupWatchdogTimeout>[1],
+  ): ReturnType<typeof claimStartupWatchdogTimeout>;
+  persistDiagnostic(
+    input: Parameters<typeof persistStartupWatchdogDiagnosticId>[1],
+  ): ReturnType<typeof persistStartupWatchdogDiagnosticId>;
+  markFailure(
+    input: Parameters<typeof markStartupRunFailure>[1],
+  ): ReturnType<typeof markStartupRunFailure>;
+}
+
+export function reconcileStartupWatchdog(
+  input: StartupWatchdogInput & { db: Db },
+): Promise<StartupWatchdogResult> {
+  const { db, ...watchdogInput } = input;
+  return reconcileStartupWatchdogWithPersistence(watchdogInput, {
+    listDue: (query) => listStartupWatchdogDueRuns(db, query),
+    claim: (claim) => claimStartupWatchdogTimeout(db, claim),
+    persistDiagnostic: (diagnostic) =>
+      persistStartupWatchdogDiagnosticId(db, diagnostic),
+    markFailure: (failure) => markStartupRunFailure(db, failure),
+  });
+}
+
+export function reconcileConnectedStartupWatchdog(
+  input: StartupWatchdogInput,
+): Promise<StartupWatchdogResult> {
+  return reconcileStartupWatchdogWithPersistence(input, {
+    listDue: listConnectedStartupWatchdogDueRuns,
+    claim: claimConnectedStartupWatchdogTimeout,
+    persistDiagnostic: persistConnectedStartupWatchdogDiagnosticId,
+    markFailure: markConnectedStartupRunFailure,
+  });
+}
+
+async function reconcileStartupWatchdogWithPersistence(
+  input: StartupWatchdogInput,
+  persistence: StartupWatchdogPersistence,
+): Promise<StartupWatchdogResult> {
   const now = input.now ?? new Date();
-  const due = await listStartupWatchdogDueRuns(input.db, {
+  const due = await persistence.listDue({
     now,
     terminalStatuses: TERMINAL_LOCAL_STATUSES,
     limit: STARTUP_WATCHDOG_LIMIT,
@@ -208,7 +254,7 @@ export async function reconcileStartupWatchdog(input: {
     retryable: 0,
   };
   for (const row of due) {
-    const diagnosticId = await claimStartupWatchdogTimeout(input.db, {
+    const diagnosticId = await persistence.claim({
       runId: row.runId,
       now,
       diagnosticId: row.diagnosticId ?? diagnosticIdForStartup(),
@@ -232,11 +278,11 @@ export async function reconcileStartupWatchdog(input: {
           )
         : await cancelUnownedHostedRun(row.runId);
     if (!confirmed) {
-      await persistStartupWatchdogDiagnosticId(input.db, { runId: row.runId, diagnosticId });
+      await persistence.persistDiagnostic({ runId: row.runId, diagnosticId });
       result.retryable++;
       continue;
     }
-    await markStartupRunFailure(input.db, {
+    await persistence.markFailure({
       runId: row.runId,
       diagnosticId,
       reason: STARTUP_TIMEOUT_REASON,

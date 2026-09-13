@@ -22,6 +22,7 @@ import {
   hasDurableRunPublication,
   fetchRunModels,
   findLiveRunClaimByRunId,
+  findRunOutcomeByRunId,
 } from "./runs-read.js";
 
 /** Minimal fixture: attributeRunModel only reads `.nodeId` / `.manifest.model.id`. */
@@ -557,6 +558,19 @@ describe("findLiveRunClaimByRunId", () => {
       ownerToken: "owner-manual",
       kind: "manual_ticket",
     });
+  });
+});
+
+describe("findRunOutcomeByRunId", () => {
+  it("returns the durable status and completion time used by reconciliation", async () => {
+    const completedAt = new Date("2026-06-16T11:30:00.000Z");
+    await seed({ runId: "wrun_outcome", status: "success", completedAt });
+
+    await expect(findRunOutcomeByRunId(db, "wrun_outcome")).resolves.toEqual({
+      status: "success",
+      completedAt,
+    });
+    await expect(findRunOutcomeByRunId(db, "wrun_missing")).resolves.toBeNull();
   });
 });
 
