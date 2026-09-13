@@ -25,7 +25,7 @@ const PROFILE: RepositoryProfileVersion = {
   version: 3,
   description: "The storefront.",
   rules: "Never touch the payment module.",
-  relationships: [{ repositoryId: 9, label: "calls" }],
+  relationships: [{ repositoryId: 9, kind: "calls" }],
   scriptGroups: {
     provider: "github",
     repoPath: "acme/web",
@@ -53,7 +53,7 @@ test("a repository with no profile yet opens on an empty draft rather than nothi
 
 test("the draft is a copy, so editing it cannot reach back into the loaded profile", () => {
   const draft = draftFromProfile(PROFILE);
-  draft.relationships.push({ repositoryId: 1, label: "x" });
+  draft.relationships.push({ repositoryId: 1, kind: "related_to" });
   assert.equal(PROFILE.relationships.length, 1);
 });
 

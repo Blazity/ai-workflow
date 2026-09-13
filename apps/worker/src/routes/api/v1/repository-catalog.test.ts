@@ -321,26 +321,26 @@ describe("PUT /api/v1/repository-catalog/:id", () => {
 
     const refused = await put(id, {
       ...PROFILE,
-      relationships: [{ repositoryId: id, label: "shares the schema" }],
+      relationships: [{ repositoryId: id, kind: "shares_schema_with" }],
     });
 
     expect(refused.status).toBe(400);
     expect(await refused.text()).toContain("relationship_self_reference");
   });
 
-  it("refuses the same repository related twice", async () => {
+  it("refuses a repeated repository and kind pair", async () => {
     const other = await seedProfile("acme/web");
 
     const refused = await put(0, {
       ...PROFILE,
       relationships: [
-        { repositoryId: other, label: "shares the schema" },
-        { repositoryId: other, label: "and the client" },
+        { repositoryId: other, kind: "shares_schema_with" },
+        { repositoryId: other, kind: "shares_schema_with" },
       ],
     });
 
     expect(refused.status).toBe(400);
-    expect(await refused.text()).toContain("related twice");
+    expect(await refused.text()).toContain("already has relationship shares_schema_with");
   });
 
   // Deliberately still accepted: the row a relationship names may be imported
@@ -349,12 +349,12 @@ describe("PUT /api/v1/repository-catalog/:id", () => {
   it("accepts a relationship to a repository the catalog does not hold yet", async () => {
     const res = await put(0, {
       ...PROFILE,
-      relationships: [{ repositoryId: 4242, label: "imported next week" }],
+      relationships: [{ repositoryId: 4242, kind: "related_to", note: "imported next week" }],
     });
     expect(res.status).toBe(200);
     const stored = await (await get((await res.json()).repository.id)).json();
     expect(stored.currentProfile.relationships).toEqual([
-      { repositoryId: 4242, label: "imported next week" },
+      { repositoryId: 4242, kind: "related_to", note: "imported next week" },
     ]);
   });
 

@@ -188,27 +188,27 @@ describe("repositoryCatalogUpsertRequestSchema", () => {
 
   // D12 / rows P29, P30. Refused HERE rather than on one surface, because the
   // dashboard, the HTTP route and the MCP tool all parse this same schema.
-  it("refuses the same repository related twice", () => {
+  it("refuses a repeated repository and kind pair", () => {
     expect(
       parseRequestBody(repositoryCatalogUpsertRequestSchema, {
         provider: "github",
         path: "acme/api",
         reason: REASON,
         relationships: [
-          { repositoryId: 8, label: "the client" },
-          { repositoryId: 8, label: "again" },
+          { repositoryId: 8, kind: "calls" },
+          { repositoryId: 8, kind: "calls" },
         ],
       }),
     ).toEqual({
       ok: false,
-      message: "repository 8 is related twice; one relationship per repository",
+      message: "repository 8 already has relationship calls",
     });
   });
 
   it("caps a relationship list at what the Overview tab can be read from", () => {
     const withinBound = Array.from({ length: REPOSITORY_RELATIONSHIPS_MAX }, (_, index) => ({
       repositoryId: index + 1,
-      label: "related",
+      kind: "related_to",
     }));
     expect(
       parseRequestBody(repositoryCatalogUpsertRequestSchema, {
@@ -223,7 +223,7 @@ describe("repositoryCatalogUpsertRequestSchema", () => {
         provider: "github",
         path: "acme/api",
         reason: REASON,
-        relationships: [...withinBound, { repositoryId: 999, label: "one too many" }],
+        relationships: [...withinBound, { repositoryId: 999, kind: "related_to" }],
       }).ok,
     ).toBe(false);
   });
@@ -236,9 +236,61 @@ describe("repositoryCatalogUpsertRequestSchema", () => {
         provider: "github",
         path: "acme/api",
         reason: REASON,
-        relationships: [{ repositoryId: 4242, label: "imported next week" }],
+        relationships: [{ repositoryId: 4242, kind: "related_to" }],
       }).ok,
     ).toBe(true);
+  });
+
+  it("refuses opposite frontend and backend relationships to one target", () => {
+    expect(
+      parseRequestBody(repositoryCatalogUpsertRequestSchema, {
+        provider: "github", path: "acme/api", reason: REASON,
+        relationships: [
+          { repositoryId: 8, kind: "backend_for" },
+          { repositoryId: 8, kind: "frontend_for" },
+        ],
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("refuses legacy labels and normalizes a note to one safe line", () => {
+    expect(
+      parseRequestBody(repositoryCatalogUpsertRequestSchema, {
+        provider: "github", path: "acme/api", reason: REASON,
+        relationships: [{ repositoryId: 8, label: "calls" }],
+      }).ok,
+    ).toBe(false);
+    expect(
+      parseRequestBody(repositoryCatalogUpsertRequestSchema, {
+        provider: "github", path: "acme/api", reason: REASON,
+        relationships: [{ repositoryId: 8, kind: "calls", note: "  line one\n\u0000line two  " }],
+      }),
+    ).toMatchObject({
+      ok: true,
+      value: {
+        relationships: [{ repositoryId: 8, kind: "calls", note: "line one line two" }],
+      },
+    });
+  });
+
+  it("refuses a relationship kind outside the fixed vocabulary", () => {
+    expect(
+      parseRequestBody(repositoryCatalogUpsertRequestSchema, {
+        provider: "github",
+        path: "acme/api",
+        reason: REASON,
+        relationships: [{ repositoryId: 8, kind: "integrates_with" }],
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("refuses a note over 200 characters", () => {
+    expect(
+      parseRequestBody(repositoryCatalogUpsertRequestSchema, {
+        provider: "github", path: "acme/api", reason: REASON,
+        relationships: [{ repositoryId: 8, kind: "calls", note: "x".repeat(201) }],
+      }).ok,
+    ).toBe(false);
   });
 });
 
@@ -249,16 +301,16 @@ describe("relatesToItself", () => {
   it("finds a repository related to itself, whatever else the list holds", () => {
     expect(
       relatesToItself(7, [
-        { repositoryId: 8, label: "the client" },
-        { repositoryId: 7, label: "itself" },
+        { repositoryId: 8, kind: "calls" },
+        { repositoryId: 7, kind: "calls" },
       ]),
     ).toBe(true);
-    expect(relatesToItself(7, [{ repositoryId: 8, label: "the client" }])).toBe(false);
+    expect(relatesToItself(7, [{ repositoryId: 8, kind: "calls" }])).toBe(false);
   });
 
   it("says no for a repository that does not exist yet, and for an absent list", () => {
     // A create has no id, so nothing on its list can be itself.
-    expect(relatesToItself(0, [{ repositoryId: 7, label: "somebody" }])).toBe(false);
+    expect(relatesToItself(0, [{ repositoryId: 7, kind: "calls" }])).toBe(false);
     expect(relatesToItself(7, undefined)).toBe(false);
   });
 

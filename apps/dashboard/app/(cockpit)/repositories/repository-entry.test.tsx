@@ -737,9 +737,9 @@ test("an ordinary scripts entry raises no warning at all", (t) => {
   );
 });
 
-// D12 / row P30. The contract refuses the same repository twice, so the form
-// says so before the Save bar finds out from a 400.
-test("relating the same repository twice is refused by the form, not by the save", (t) => {
+// D12 / row P30. The contract refuses the same repository and kind pair twice,
+// so the form says so before the Save bar finds out from a 400.
+test("repeating a repository and kind pair is refused by the form, not by the save", (t) => {
   const other: RepositoryCatalogEntry = {
     ...REPOSITORY,
     id: 8,
@@ -749,7 +749,7 @@ test("relating the same repository twice is refused by the form, not by the save
   const harness = render(t, {
     catalog: [REPOSITORY, other],
     currentProfile: version(3, {
-      relationships: [{ repositoryId: 8, label: "the client" }],
+      relationships: [{ repositoryId: 8, kind: "calls" }],
     }),
   });
 
@@ -760,12 +760,44 @@ test("relating the same repository twice is refused by the form, not by the save
   });
   act(() => {
     harness.root
-      .findByProps({ "aria-label": "Relationship label" })
-      .props.onChange({ target: { value: "again" } });
+      .findByProps({ "aria-label": "Relationship kind" })
+      .props.onChange({ target: { value: "calls" } });
   });
 
   assert.equal(button(harness.root, "Add").props.disabled, true);
-  assert.match(text(harness.root), /This repository is already related\./);
+  assert.match(text(harness.root), /already has this relationship kind/);
+});
+
+test("backend and frontend relationships cannot coexist for one target", (t) => {
+  const other: RepositoryCatalogEntry = {
+    ...REPOSITORY,
+    id: 8,
+    path: "acme/api",
+    displayName: "API",
+  };
+  const harness = render(t, {
+    catalog: [REPOSITORY, other],
+    currentProfile: version(3, {
+      relationships: [{ repositoryId: 8, kind: "backend_for" }],
+    }),
+  });
+
+  act(() => {
+    harness.root
+      .findByProps({ "aria-label": "Related repository" })
+      .props.onChange({ target: { value: "8" } });
+  });
+  act(() => {
+    harness.root
+      .findByProps({ "aria-label": "Relationship kind" })
+      .props.onChange({ target: { value: "frontend_for" } });
+  });
+
+  assert.equal(button(harness.root, "Add").props.disabled, true);
+  assert.match(
+    text(harness.root),
+    /A repository cannot be both backend for and frontend for the same target/,
+  );
 });
 
 // F7. The contract caps relationships at 50 and refuses the WHOLE body over it,
@@ -785,7 +817,7 @@ test("the 51st relationship is refused by the form, with the count in view", (t)
     currentProfile: version(3, {
       relationships: Array.from(
         { length: REPOSITORY_RELATIONSHIPS_MAX },
-        (_unused, index) => ({ repositoryId: 100 + index, label: "calls" }),
+        (_unused, index) => ({ repositoryId: 100 + index, kind: "calls" }),
       ),
     }),
   });
@@ -799,12 +831,30 @@ test("the 51st relationship is refused by the form, with the count in view", (t)
   });
   act(() => {
     harness.root
-      .findByProps({ "aria-label": "Relationship label" })
-      .props.onChange({ target: { value: "one too many" } });
+      .findByProps({ "aria-label": "Relationship kind" })
+      .props.onChange({ target: { value: "calls" } });
   });
 
   assert.equal(button(harness.root, "Add").props.disabled, true);
   assert.match(text(harness.root), /at most 50 relationships/);
   // And the count is on screen before the cap is reached, not only at it.
   assert.match(text(harness.root), /50 of 50/);
+});
+
+test("the typed relationship editor enables Add, counts notes, renders, and removes", (t) => {
+  const other: RepositoryCatalogEntry = { ...REPOSITORY, id: 8, path: "acme/api" };
+  const harness = render(t, { catalog: [REPOSITORY, other] });
+  const add = () => button(harness.root, "Add");
+  assert.equal(add().props.disabled, true);
+  act(() => harness.root.findByProps({ "aria-label": "Related repository" }).props.onChange({ target: { value: "8" } }));
+  assert.equal(add().props.disabled, true);
+  act(() => harness.root.findByProps({ "aria-label": "Relationship kind" }).props.onChange({ target: { value: "calls" } }));
+  assert.equal(add().props.disabled, false);
+  act(() => harness.root.findByProps({ "aria-label": "Relationship note" }).props.onChange({ target: { value: "runtime" } }));
+  assert.match(text(harness.root), /7 of 200/);
+  act(() => add().props.onClick());
+  assert.match(text(harness.root), /calls acme\/api at runtime \(runtime\)/);
+  assert.equal(harness.root.findByProps({ "aria-label": "Relationship kind" }).props.value, "");
+  act(() => button(harness.root, "Remove").props.onClick());
+  assert.match(text(harness.root), /None recorded/);
 });

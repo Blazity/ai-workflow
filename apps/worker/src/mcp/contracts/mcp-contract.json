@@ -1,5 +1,5 @@
 {
-  "contractHash": "167df5bdded80f40bb24c71e18d5b7781768f954fc9b730653303ac1a3c06031",
+  "contractHash": "03a900fdd63fecbd84d242db1a764e40f628b7b7340c047ec273c307e147df04",
   "errorCodes": [
     "UNAUTHENTICATED",
     "INSUFFICIENT_SCOPE",
@@ -1080,7 +1080,7 @@
     },
     {
       "name": "repositories.upsert",
-      "description": "Save a repository's profile, minting its next version. The write the Repositories entry screen's Save bar performs. Identity is `provider` plus `path`; `repositoryId` is the row you believe you are editing, and 0 means a repository the catalog has never seen, which this call creates. A non-zero id that does not match the provider and path is refused with CONFLICT rather than reconciled, and so is a 0 for a provider and path the catalog already holds, because that write would land on the profile somebody configured. Fields you omit are left EXACTLY as the stored profile has them: absent stays absent all the way to the statement that writes, which carries the stored value forward. Clearing is explicit: send null for `scriptGroups`, `gateGroups` or `batchTimeoutMinutes`. Pass `expectedProfileVersion` (the `profileVersion` repositories.get reported, 0 for a repository with no profile) to make a concurrent edit a CONFLICT instead of a silent overwrite; the refusal is carried by the statement that writes, so a save that lands between your read and your write is caught rather than raced, and the refusal names the version to reload. `scriptGroups` is the FULL SET that should remain, not a patch: a group you leave out of the object is deleted, exactly as the dashboard's Scripts tab saves it, and its shape is the repository-scripts entry verbatim (`docs/architecture/repository-scripts.md` is the contract). A script group name the engine cannot resolve is refused with VALIDATION_FAILED naming it, rather than saved into a repository whose checks would then never run. `batchTimeoutMinutes` is how long this repository claims its checks need; a run spends one ceiling across every repository it composes and takes the largest claim among them, and null means the operator ceiling. `enabled` applies only to a repository this call CREATES. For one the catalog already holds it is REFUSED with VALIDATION_FAILED when it differs from where the switch currently stands, rather than accepted and discarded; a payload that repeats the switch's current value is accepted and moves nothing. Writing a profile says what to run in a repository, never that the agent may enter one, which is repositories.set_enabled. `relationships` may not relate a repository to itself, may not name the same repository twice, and is capped at 50; an id the catalog does not hold is still accepted, because the row it names may be imported later. `reason` is stored on the version and shown in the History tab. The reply says what the write actually did: `unchanged` is true when the profile already said everything you asked for, in which case no version was minted and `version` is the one that was already current, and `changedFields` names the fields that moved. `changedFields` is empty whenever `unchanged` is true and ALSO for a create whose first profile sets none of those fields, so read `unchanged` for whether anything happened. `warnings` says this save carried N commands that download and run remote code (`curl ... | sh` and friends), each named with its group: it describes what this request carried, not the profile as a whole, so a command an earlier save stored and this one left untouched is not listed. The save is deliberately permissive, because the documented uv setup preset is exactly that shape, and the suggestion path drops what this only reports. Idempotent per idempotencyKey.",
+      "description": "Relationships take `kind` from the fixed vocabulary calls, depends_on, backend_for, frontend_for, deploys, tests, documents, shares_schema_with, mirror_of, related_to, plus an optional `note`; `label` is no longer accepted. Save a repository's profile, minting its next version. The write the Repositories entry screen's Save bar performs. Identity is `provider` plus `path`; `repositoryId` is the row you believe you are editing, and 0 means a repository the catalog has never seen, which this call creates. A non-zero id that does not match the provider and path is refused with CONFLICT rather than reconciled, and so is a 0 for a provider and path the catalog already holds, because that write would land on the profile somebody configured. Fields you omit are left EXACTLY as the stored profile has them: absent stays absent all the way to the statement that writes, which carries the stored value forward. Clearing is explicit: send null for `scriptGroups`, `gateGroups` or `batchTimeoutMinutes`. Pass `expectedProfileVersion` (the `profileVersion` repositories.get reported, 0 for a repository with no profile) to make a concurrent edit a CONFLICT instead of a silent overwrite; the refusal is carried by the statement that writes, so a save that lands between your read and your write is caught rather than raced, and the refusal names the version to reload. `scriptGroups` is the FULL SET that should remain, not a patch: a group you leave out of the object is deleted, exactly as the dashboard's Scripts tab saves it, and its shape is the repository-scripts entry verbatim (`docs/architecture/repository-scripts.md` is the contract). A script group name the engine cannot resolve is refused with VALIDATION_FAILED naming it, rather than saved into a repository whose checks would then never run. `batchTimeoutMinutes` is how long this repository claims its checks need; a run spends one ceiling across every repository it composes and takes the largest claim among them, and null means the operator ceiling. `enabled` applies only to a repository this call CREATES. For one the catalog already holds it is REFUSED with VALIDATION_FAILED when it differs from where the switch currently stands, rather than accepted and discarded; a payload that repeats the switch's current value is accepted and moves nothing. Writing a profile says what to run in a repository, never that the agent may enter one, which is repositories.set_enabled. `relationships` may not relate a repository to itself, may not repeat a repository and kind pair, may not combine backend_for with frontend_for on one repository, and is capped at 50; an id the catalog does not hold is still accepted, because the row it names may be imported later. `reason` is stored on the version and shown in the History tab. The reply says what the write actually did: `unchanged` is true when the profile already said everything you asked for, in which case no version was minted and `version` is the one that was already current, and `changedFields` names the fields that moved. `changedFields` is empty whenever `unchanged` is true and ALSO for a create whose first profile sets none of those fields, so read `unchanged` for whether anything happened. `warnings` says this save carried N commands that download and run remote code (`curl ... | sh` and friends), each named with its group: it describes what this request carried, not the profile as a whole, so a command an earlier save stored and this one left untouched is not listed. The save is deliberately permissive, because the documented uv setup preset is exactly that shape, and the suggestion path drops what this only reports. Idempotent per idempotencyKey.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1127,14 +1127,29 @@
                   "exclusiveMinimum": 0,
                   "maximum": 2147483647
                 },
-                "label": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "calls",
+                    "depends_on",
+                    "backend_for",
+                    "frontend_for",
+                    "deploys",
+                    "tests",
+                    "documents",
+                    "shares_schema_with",
+                    "mirror_of",
+                    "related_to"
+                  ]
+                },
+                "note": {
                   "type": "string",
                   "maxLength": 200
                 }
               },
               "required": [
                 "repositoryId",
-                "label"
+                "kind"
               ],
               "additionalProperties": false
             },

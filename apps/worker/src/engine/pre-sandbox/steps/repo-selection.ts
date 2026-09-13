@@ -16,9 +16,11 @@ import type {
   PreSandboxStepResult,
 } from "../types.js";
 import {
+  addRepositoryDiscoveryRelationships,
   buildRepositoryCatalog,
   buildRepositoryCatalogEntries,
   type RepositoryCatalogEntry,
+  type RepositoryRelationshipSource,
 } from "../../repository-discovery/catalog.js";
 // Pure token parser, no adapters behind it: runner.js imports only types plus
 // catalog.js, which this module already pulls in.
@@ -209,10 +211,31 @@ export const repoSelectionStep: PreSandboxStepHandler = async ({ context, step }
       ? await rememberedRoutingSelection(context.ticket.labels ?? [], selected.catalog)
       : null;
     if (remembered) return selectionResult([remembered]);
+    let relationshipSources: RepositoryRelationshipSource[] = [];
+    try {
+      const { listConnectedRepositoryRules } = await import(
+        "../../../db/repositories/repository-catalog.js"
+      );
+      relationshipSources = await listConnectedRepositoryRules(
+        context.repositoryAccess.enabledKeys,
+      );
+    } catch (error) {
+      const { logger } = await import("../../../infra/logger.js");
+      logger.warn(
+        { err: error instanceof Error ? error.message : String(error) },
+        "repository_discovery_relationships_unreadable",
+      );
+    }
+    const catalog = addRepositoryDiscoveryRelationships({
+      catalog: selected.catalog,
+      sources: relationshipSources,
+      attachedKeys: selected.mandatoryRepositories.map(repositoryKey),
+      enabledKeys: context.repositoryAccess.enabledKeys,
+    });
     return {
       status: "continue",
       repositoryDiscovery: {
-        catalog: selected.catalog,
+        catalog,
         mandatoryRepositories: selected.mandatoryRepositories,
       },
       ...(narrowing ? { repositoryScopeNarrowing: narrowing } : {}),
@@ -830,7 +853,7 @@ export function selectRepositoriesFromMetadata(input: {
   // confidence signal than organic ticket text, so it's matched leniently: a
   // human naturally replies with a short name, not necessarily the full
   // owner/repo path the exact-mention scan above requires. Only added when it
-  // resolves to exactly one repository — an ambiguous or unmatched reply is
+  // resolves to exactly one repository. An ambiguous or unmatched reply is
   // left for the fallbacks below (discovery, or asking again).
   if (input.directAnswer) {
     const normalizedAnswer = normalizeRepoAnswer(input.directAnswer);
@@ -901,7 +924,7 @@ export function selectRepositoriesFromMetadata(input: {
   // needs a slash, so it reads paths that scan never could. Every named identity
   // is therefore resolved against the catalog first, and only the ones that
   // genuinely do not resolve are named. Announcing that a repository sitting in
-  // the catalog is unavailable is a confident, wrong statement to a human — worse
+  // the catalog is unavailable is a confident, wrong statement to a human, worse
   // than the loop this fallback exists to end.
   if (input.directAnswer) {
     const unresolved: string[] = [];
@@ -1046,7 +1069,7 @@ const MAX_TYPO_TOLERANT_ANSWER_LENGTH = 100;
  *  candidate is too short to fuzzy-match safely. At length <=4 the space of
  *  one-edit neighbors ("web" ~ "wet", "wed", " web") is large relative to the
  *  number of plausible short names, so a coincidental near-miss reply could
- *  silently resolve to the wrong repository — the exact failure mode keyword
+ *  silently resolve to the wrong repository, the exact failure mode keyword
  *  scoring caused in production (see the "asks for clarification" tests
  *  above). Below that floor we require an exact match instead of guessing.
  *  Longer names get one slip up to 7 characters, two beyond that, so
@@ -1077,7 +1100,7 @@ function fuzzyRepoMatches(
 
 /** Damerau-Levenshtein (optimal string alignment): counts an adjacent
  *  transposition ("aip" -> "api") as a single edit, like a plain
- *  substitution or insertion/deletion — the most common typo shapes for a
+ *  substitution or insertion/deletion, the most common typo shapes for a
  *  short reply. */
 function editDistance(a: string, b: string): number {
   const rows = a.length + 1;

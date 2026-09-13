@@ -421,4 +421,86 @@ describe("repository rules in a compiled prompt", () => {
       "acme/web/catalog:rules",
     ]);
   });
+
+  it("renders typed outgoing and incoming relationships with every marker", async () => {
+    mocks.listRules.mockResolvedValue([
+      {
+        key: "github:acme/service",
+        version: 1,
+        rules: "Service rules.",
+        relationships: [
+          { direction: "outgoing", repositoryId: 2, provider: "gitlab", path: "acme/web", enabled: true, kind: "calls", note: "runtime edge" },
+          { direction: "incoming", repositoryId: 3, provider: "github", path: "acme/tests", enabled: false, kind: "tests", note: null },
+          { direction: "incoming", repositoryId: 4, provider: "github", path: "acme/attached", enabled: true, kind: "documents", note: null },
+        ],
+      },
+    ]);
+
+    const [source] = await inject({
+      keys: ["github:acme/service", "github:acme/attached"],
+    });
+
+    expect(source?.content).toBe([
+      "Service rules.",
+      "",
+      "Related repositories:",
+      "github:acme/service is documented by github:acme/attached (attached to this run)",
+      "github:acme/service calls gitlab:acme/web at runtime (enabled in the catalog) (runtime edge)",
+      "github:acme/service is tested by github:acme/tests (not enabled)",
+    ].join("\n"));
+    expect(source?.content).not.toContain("()");
+  });
+
+  it("renders one-sided symmetric edges in both sections and keeps outgoing reciprocal", async () => {
+    mocks.listRules.mockResolvedValue([
+      {
+        key: "github:acme/service", version: 1, rules: "",
+        relationships: [
+          { direction: "outgoing", repositoryId: 2, provider: "gitlab", path: "acme/web", enabled: true, kind: "related_to", note: null },
+          { direction: "incoming", repositoryId: 2, provider: "gitlab", path: "acme/web", enabled: true, kind: "related_to", note: "reciprocal" },
+        ],
+      },
+      {
+        key: "gitlab:acme/web", version: 1, rules: "",
+        relationships: [
+          { direction: "incoming", repositoryId: 1, provider: "github", path: "acme/service", enabled: true, kind: "related_to", note: null },
+        ],
+      },
+    ]);
+
+    const sources = await inject({ keys: ["github:acme/service", "gitlab:acme/web"] });
+    expect(sources.map((source) => source.content)).toEqual([
+      ["Related repositories:", "github:acme/service is related to gitlab:acme/web (attached to this run)"].join("\n"),
+      ["Related repositories:", "gitlab:acme/web is related to github:acme/service (attached to this run)"].join("\n"),
+    ]);
+  });
+
+  it("caps related repositories and reports the omitted count", async () => {
+    mocks.listRules.mockResolvedValue([{
+      key: "github:acme/service", version: 1, rules: "",
+      relationships: Array.from({ length: 21 }, (_unused, index) => ({
+        direction: "outgoing", repositoryId: index + 1, provider: "github",
+        path: `acme/related-${String(index).padStart(2, "0")}`,
+        enabled: false, kind: "related_to", note: null,
+      })),
+    }]);
+    const [source] = await inject({ keys: ["github:acme/service"] });
+    const lines = source!.content.split("\n");
+    expect(lines).toHaveLength(22);
+    expect(lines.at(-1)).toBe("1 related repositories omitted.");
+  });
+
+  it("reserves a complete relationship omission line when the byte cap trims rules", async () => {
+    mocks.listRules.mockResolvedValue([{
+      key: "github:acme/service", version: 1, rules: "r".repeat(32 * 1024),
+      relationships: Array.from({ length: 21 }, (_unused, index) => ({
+        direction: "outgoing", repositoryId: index + 1, provider: "github",
+        path: `acme/related-${index}`, enabled: false, kind: "related_to", note: null,
+      })),
+    }]);
+    const [source] = await inject({ keys: ["github:acme/service"] });
+    expect(Buffer.byteLength(source!.content, "utf8")).toBeLessThanOrEqual(32 * 1024);
+    expect(source!.content).toMatch(/\n\d+ related repositories omitted\.$/);
+    expect(source!.content).toContain("Related repositories:\n");
+  });
 });
