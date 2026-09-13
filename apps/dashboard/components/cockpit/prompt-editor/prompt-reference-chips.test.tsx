@@ -5,6 +5,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { PromptLibraryListRowDto } from "@shared/contracts";
 import { PromptReferenceChipsView } from "./prompt-reference-chips";
 
+(globalThis as typeof globalThis & { React: typeof React }).React = React;
+
 const row: PromptLibraryListRowDto = {
   id: 7,
   slug: "research-plan",

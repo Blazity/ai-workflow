@@ -19,9 +19,7 @@ import {
   readPromptDrag,
   writePromptDrag,
 } from "./prompt-drag";
-
-const iconButton =
-  "inline-flex size-7 shrink-0 appearance-none items-center justify-center rounded-[3px] border border-transparent bg-transparent font-mono text-[11px] text-neutral-500 transition-colors hover:border-neutral-200 hover:bg-off-white hover:text-mariner disabled:cursor-default disabled:opacity-30";
+import { Button, IconButton, Textarea } from "@/components/ui";
 
 function DropTarget({
   index,
@@ -51,7 +49,7 @@ function DropTarget({
       className="relative h-2 shrink-0"
       aria-hidden="true"
     >
-      <div className={`absolute inset-x-1 top-1/2 h-0.5 -translate-y-1/2 rounded-full bg-mariner transition-opacity duration-100 ${active ? "opacity-100" : "opacity-0"}`} />
+      <div className={`absolute inset-x-1 top-1/2 h-0.5 -translate-y-1/2 rounded-full bg-mariner transition-opacity duration-[var(--motion-fast)] ${active ? "opacity-100" : "opacity-0"}`} />
     </div>
   );
 }
@@ -160,35 +158,41 @@ export function PromptSectionComposer({
           {raw ? "Markdown" : `${blocks.length} ${blocks.length === 1 ? "block" : "blocks"}`}
         </span>
         {!raw && (
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             type="button"
             onClick={addSection}
             disabled={disabled}
-            className="ml-auto rounded-[3px] px-2 py-1 font-mono text-[10px] uppercase tracking-[0.04em] text-mariner hover:bg-mariner-100 disabled:opacity-40"
+            className="ml-auto"
           >
             + New section
-          </button>
+          </Button>
         )}
-        <button
+        <Button
+          variant={raw ? "primary" : "ghost"}
+          size="sm"
           type="button"
           onClick={toggleRaw}
-          className={`${raw ? "ml-auto bg-mariner-100 text-mariner" : "ml-1 text-neutral-600 hover:bg-off-white"} rounded-[3px] px-2 py-1 font-mono text-[10px] uppercase tracking-[0.04em]`}
+          className={raw ? "ml-auto" : "ml-1"}
         >
           Raw
-        </button>
+        </Button>
       </div>
 
       {raw ? (
-        <textarea
+        <Textarea
+          monospace
           value={rawValue}
           disabled={disabled}
+          resize="none"
           onChange={(event) => {
             const next = event.target.value;
             setRawValue(next);
             lastEmitted.current = next;
             onChange(next);
           }}
-          className="min-h-0 w-full min-w-0 flex-1 resize-none border-none bg-panel px-3 py-2 font-mono text-[12px] leading-[1.6] text-coal outline-none"
+          className="min-h-0 w-full min-w-0 flex-1"
           aria-label="Raw prompt markdown"
         />
       ) : (
@@ -213,12 +217,14 @@ export function PromptSectionComposer({
               <div key={block.id}>
                 <article
                   data-composer-block={block.id}
-                  className={`overflow-hidden rounded-md border bg-panel transition-[border-color,box-shadow] duration-150 ${
-                    active ? "border-mariner-200 shadow-[0_4px_14px_rgba(31,90,166,0.10)]" : "border-neutral-200 shadow-[0_2px_8px_rgba(24,27,32,0.04)]"
+                  className={`overflow-hidden rounded-sm border bg-panel transition-[border-color,box-shadow] duration-[var(--motion-fast)] ${
+                    active ? "border-mariner-200 shadow-[0_1px_2px_rgba(24,27,32,0.06)]" : "border-neutral-200"
                   }`}
                 >
                   <div className="flex h-9 items-center gap-2 border-b border-neutral-100 px-2">
-                    <button
+                    <IconButton
+                      variant="ghost"
+                      size="sm"
                       type="button"
                       draggable={!disabled}
                       onDragStart={(event) => {
@@ -226,16 +232,16 @@ export function PromptSectionComposer({
                         writePromptDrag(event, { kind: "composer-block", blockId: block.id, label: block.title });
                       }}
                       aria-label={`Drag ${block.title}`}
-                      className={`${iconButton} cursor-grab active:cursor-grabbing`}
+                      className="cursor-grab active:cursor-grabbing"
                     >
                       ⠿
-                    </button>
+                    </IconButton>
                     <span className="min-w-0 flex-1 truncate font-mono text-[10px] font-semibold text-neutral-700">
                       {block.kind === "reference" ? "Live prompt" : block.level === 0 ? "Introduction" : `H${block.level}`} · {block.title}
                     </span>
-                    <button type="button" disabled={disabled || index === 0} onClick={() => commit(moveComposerBlock(blocks, block.id, index - 1))} className={iconButton} aria-label="Move up">↑</button>
-                    <button type="button" disabled={disabled || index === blocks.length - 1} onClick={() => commit(moveComposerBlock(blocks, block.id, index + 1))} className={iconButton} aria-label="Move down">↓</button>
-                    <button type="button" disabled={disabled} onClick={() => commit(removeComposerBlock(blocks, block.id))} className={iconButton} aria-label="Remove block">×</button>
+                    <IconButton variant="ghost" size="sm" type="button" disabled={disabled || index === 0} onClick={() => commit(moveComposerBlock(blocks, block.id, index - 1))} aria-label="Move up">↑</IconButton>
+                    <IconButton variant="ghost" size="sm" type="button" disabled={disabled || index === blocks.length - 1} onClick={() => commit(moveComposerBlock(blocks, block.id, index + 1))} aria-label="Move down">↓</IconButton>
+                    <IconButton variant="ghost" size="sm" type="button" disabled={disabled} onClick={() => commit(removeComposerBlock(blocks, block.id))} aria-label="Remove block">×</IconButton>
                   </div>
 
                   {block.kind === "reference" ? (
@@ -256,14 +262,16 @@ export function PromptSectionComposer({
                       />
                     </div>
                   ) : (
-                    <button
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       type="button"
                       disabled={disabled}
                       onClick={() => setActiveId(block.id)}
-                      className="block w-full appearance-none border-none bg-transparent px-3 py-2.5 text-left"
+                      className="h-auto w-full justify-start px-3 py-2.5 text-left normal-case"
                     >
                       <PromptPreview body={block.body} />
-                    </button>
+                    </Button>
                   )}
                 </article>
                 <DropTarget index={index + 1} active={dropIndex === index + 1} onDrop={handleDrop} onHover={setDropIndex} />

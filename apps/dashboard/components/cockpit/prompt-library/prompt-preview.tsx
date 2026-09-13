@@ -94,7 +94,7 @@ function Block({ block }: { block: MarkdownBlock }) {
 
 /** Read-only markdown render of a prompt body: headings, lists, fenced code, and
  *  inline bold/code, with {{variable}} tokens highlighted. Not a full CommonMark
- *  renderer — just the subset prompts use. */
+ *  renderer, just the subset prompts use. */
 export function PromptPreview({ body, maxHeightClass }: { body: string; maxHeightClass?: string }) {
   const blocks = parseMarkdownBlocks(body);
   const content = (

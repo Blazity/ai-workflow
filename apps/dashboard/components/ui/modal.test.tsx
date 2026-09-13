@@ -29,6 +29,16 @@ test("Modal renders all canonical panel widths", () => {
   }
 });
 
+test("Modal renders the drawer variant against the viewport edge", () => {
+  const html = renderToStaticMarkup(
+    <Modal open variant="drawer" onClose={() => undefined} title="Drawer">Body</Modal>,
+  );
+  assert.match(html, /data-variant="drawer"/);
+  assert.match(html, /justify-end/);
+  assert.match(html, /max-w-\[620px\]/);
+  assert.match(html, /rounded-none/);
+});
+
 test("Modal moves focus inside, traps Tab in both directions, and restores prior focus", () => {
   const dom = installTestDom();
   const opener = document.createElement("button");
@@ -139,6 +149,41 @@ test("Modal closes on Escape and overlay clicks but not panel clicks", () => {
       }));
     });
     assert.equal(closes, 2);
+  } finally {
+    act(() => root?.unmount());
+    container.remove();
+    dom.restore();
+  }
+});
+
+test("Modal ignores Escape and overlay clicks when it is not dismissible", () => {
+  const dom = installTestDom();
+  const container = document.createElement("div");
+  document.body.append(container);
+  let root: Root | undefined;
+  let closes = 0;
+
+  try {
+    act(() => {
+      root = createRoot(container);
+      root.render(
+        <Modal open dismissible={false} onClose={() => closes += 1} title="Dialog">
+          Body
+        </Modal>,
+      );
+    });
+    const overlay = document.querySelector<HTMLElement>('[aria-hidden="true"]');
+    assert.ok(overlay);
+
+    act(() => overlay.click());
+    act(() => {
+      dom.window.dispatchEvent(new dom.window.KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }));
+    });
+    assert.equal(closes, 0);
   } finally {
     act(() => root?.unmount());
     container.remove();

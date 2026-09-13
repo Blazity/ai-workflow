@@ -13,11 +13,7 @@ import {
   SKILL_SOURCE_KINDS,
   type SkillSourceKind,
 } from "@shared/skills";
-
-const primaryButtonClass =
-  "appearance-none rounded-[3px] border border-mariner bg-mariner px-4 py-2 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-white cursor-pointer disabled:cursor-default disabled:opacity-40";
-const secondaryButtonClass =
-  "appearance-none rounded-[3px] border border-neutral-300 bg-panel px-4 py-2 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-coal cursor-pointer disabled:cursor-default disabled:opacity-40";
+import { Button, IconButton, Input, Modal } from "@/components/ui";
 
 /**
  * Says what the deployment source does and, as importantly, what it does not:
@@ -377,8 +373,6 @@ export function SkillImport({
     }
   }
 
-  if (!open) return null;
-
   const selectedSkills: Array<{ name: string; artifactHash?: string }> =
     sourceKind === "local"
       ? (localDiscovery?.skills ?? []).filter((skill) =>
@@ -401,68 +395,87 @@ export function SkillImport({
         ];
 
   return (
-    <div className="fixed inset-0 z-[120] bg-coal/20" onMouseDown={onClose}>
-      <section
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="skill-import-title"
-        onMouseDown={(event) => event.stopPropagation()}
-        className="absolute inset-y-0 right-0 flex w-full max-w-[620px] flex-col border-l border-neutral-200 bg-panel shadow-2xl"
-      >
-        <header className="flex items-center justify-between border-b border-neutral-200 px-5 py-4">
-          <div>
-            <h2
-              id="skill-import-title"
-              className="m-0 font-display text-[20px] font-semibold text-coal"
+    <Modal
+      open={open}
+      onClose={onClose}
+      dismissible={!busy}
+      title="Add skills"
+      description={
+        sourceKind === "local"
+          ? "Take skills from the skills/ directory this deployment ships."
+          : "Discover skills first, then pin the selected files to one exact commit."
+      }
+      variant="drawer"
+      footer={
+        <div className="flex items-center justify-between">
+          <Button
+            variant="secondary"
+            type="button"
+            onClick={onClose}
+            disabled={busy !== null}
+          >
+            Cancel
+          </Button>
+          {step !== "review" ? (
+            <Button
+              type="button"
+              onClick={() => setStep("review")}
+              disabled={selected.length === 0 || busy !== null}
             >
-              Add skills
-            </h2>
-            <p className="mt-1 mb-0 font-body text-[11px] text-neutral-500">
-              {sourceKind === "local"
-                ? "Take skills from the skills/ directory this deployment ships."
-                : "Discover skills first, then pin the selected files to one exact commit."}
-            </p>
-          </div>
-          <button
+              Review {selected.length > 0 ? selected.length : ""}{" "}
+              {selected.length === 1 ? "skill" : "skills"}
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              onClick={() => void importSelected()}
+              disabled={selected.length === 0 || busy !== null}
+            >
+              {busy === "import"
+                ? "Adding…"
+                : `Add ${selected.length} to draft`}
+            </Button>
+          )}
+        </div>
+      }
+    >
+      <div className="absolute right-4 top-3 z-10">
+          <IconButton
             type="button"
             aria-label="Close skill import"
             onClick={onClose}
             disabled={busy !== null}
-            className="appearance-none border-none bg-transparent p-2 font-body text-[20px] text-neutral-500 cursor-pointer"
           >
             ×
-          </button>
-        </header>
+          </IconButton>
+      </div>
 
-        <div
-          role="radiogroup"
-          aria-label="Skill source"
-          className="flex gap-2 border-b border-neutral-200 px-5 py-3"
-        >
+      <div
+        role="radiogroup"
+        aria-label="Skill source"
+        className="flex gap-2 border-b border-neutral-200 py-3"
+      >
           {SKILL_SOURCE_KINDS.map((kind) => (
-            <button
+            <Button
+              variant={sourceKind === kind ? "primary" : "secondary"}
+              size="sm"
               key={kind}
               type="button"
               role="radio"
               aria-checked={sourceKind === kind}
               onClick={() => switchSource(kind)}
               disabled={busy !== null}
-              className={`appearance-none rounded-[3px] border px-3 py-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] cursor-pointer disabled:cursor-default disabled:opacity-40 ${
-                sourceKind === kind
-                  ? "border-mariner bg-mariner-50 text-mariner"
-                  : "border-neutral-300 bg-panel text-neutral-600"
-              }`}
             >
               {kind === "github" ? "GitHub repository" : "This deployment"}
-            </button>
+            </Button>
           ))}
-        </div>
+      </div>
 
-        <div
-          className={`grid border-b border-neutral-200 px-5 py-3 ${
-            sourceKind === "local" ? "grid-cols-2" : "grid-cols-3"
-          }`}
-        >
+      <div
+        className={`grid border-b border-neutral-200 py-3 ${
+          sourceKind === "local" ? "grid-cols-2" : "grid-cols-3"
+        }`}
+      >
           {steps.map(([id, label], index) => {
             const activeIndex = steps.findIndex(
               ([candidate]) => candidate === step,
@@ -480,9 +493,9 @@ export function SkillImport({
               </div>
             );
           })}
-        </div>
+      </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+      <div className="min-h-0 flex-1 overflow-y-auto py-4">
           {sourceKind === "local" ? (
             <div className="rounded-[3px] border border-neutral-200 bg-app-bg px-3 py-2 font-body text-[10px] text-neutral-600">
               {LOCAL_SOURCE_NOTE}
@@ -500,7 +513,8 @@ export function SkillImport({
                 skill.
               </p>
               <div className="flex gap-2">
-                <input
+                <Input
+                  monospace
                   id="github-skill-source"
                   value={source}
                   disabled={disabled || busy !== null}
@@ -513,16 +527,16 @@ export function SkillImport({
                     }
                   }}
                   placeholder="vercel-labs/agent-skills"
-                  className="h-[36px] min-w-0 flex-1 rounded-[3px] border border-neutral-200 bg-white px-3 font-mono text-[11px] text-coal outline-none focus:border-mariner"
+                  className="min-w-0 flex-1"
                 />
-                <button
+                <Button
+                  variant="secondary"
                   type="button"
                   onClick={() => void discover()}
                   disabled={disabled || busy !== null || source.trim() === ""}
-                  className={secondaryButtonClass}
                 >
                   {busy === "discover" ? "Discovering…" : "Discover"}
-                </button>
+                </Button>
               </div>
               <div className="mt-2 rounded-[3px] border border-neutral-200 bg-app-bg px-3 py-2 font-body text-[10px] text-neutral-600">
                 Uses the organization GitHub App with read-only repository
@@ -575,7 +589,9 @@ export function SkillImport({
                   {discovery.skills.length}{" "}
                   {discovery.skills.length === 1 ? "skill" : "skills"} found
                 </span>
-                <button
+                <Button
+                  variant="ghost"
+                  size="sm"
                   type="button"
                   onClick={() =>
                     setSelected(
@@ -584,20 +600,19 @@ export function SkillImport({
                         : discovery.skills.map((skill) => skill.path),
                     )
                   }
-                  className="appearance-none border-none bg-transparent p-0 font-body text-[10px] font-semibold text-mariner cursor-pointer"
                 >
                   {selected.length === discovery.skills.length
                     ? "Clear all"
                     : "Select all"}
-                </button>
+                </Button>
               </div>
 
-              <input
+              <Input
                 aria-label="Search discovered skills"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
                 placeholder="Search discovered skills…"
-                className="mt-2 h-[34px] w-full rounded-[3px] border border-neutral-200 bg-white px-3 font-body text-[11px] outline-none focus:border-mariner"
+                className="mt-2"
               />
 
               {discovery.skills.length === 0 ? (
@@ -687,41 +702,7 @@ export function SkillImport({
               />
             </>
           )}
-        </div>
-
-        <footer className="flex items-center justify-between border-t border-neutral-200 px-5 py-4">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={busy !== null}
-            className={secondaryButtonClass}
-          >
-            Cancel
-          </button>
-          {step !== "review" ? (
-            <button
-              type="button"
-              onClick={() => setStep("review")}
-              disabled={selected.length === 0 || busy !== null}
-              className={primaryButtonClass}
-            >
-              Review {selected.length > 0 ? selected.length : ""}{" "}
-              {selected.length === 1 ? "skill" : "skills"}
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => void importSelected()}
-              disabled={selected.length === 0 || busy !== null}
-              className={primaryButtonClass}
-            >
-              {busy === "import"
-                ? "Adding…"
-                : `Add ${selected.length} to draft`}
-            </button>
-          )}
-        </footer>
-      </section>
-    </div>
+      </div>
+    </Modal>
   );
 }

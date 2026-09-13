@@ -17,6 +17,7 @@ import type {
   PrePrCheckRepositoryConfig,
   RepoScriptsExpandedCommand,
 } from "@shared/contracts";
+import { Button, IconButton, Input } from "@/components/ui";
 
 /** Shared wording between GateGroupsEditor (after the fact) and the group
  *  delete site (before the fact), so a user sees the exact same phrase. */
@@ -511,14 +512,16 @@ function SecondaryRow({
 }) {
   return (
     <div className="mt-2 border-t border-neutral-200 pt-2">
-      <button
+      <Button
+        variant="ghost"
+        size="sm"
         onClick={onToggle}
         aria-expanded={open}
-        className="flex w-full items-center gap-2 appearance-none border-none bg-transparent px-0 text-left font-body text-[12px] font-semibold text-neutral-800 cursor-pointer"
+        className="w-full justify-start"
       >
         <Caret open={open} />
         {label}
-      </button>
+      </Button>
       {!open && problem && <ProblemLine text={problem} />}
       {!open && !problem && warning && <WarningLine text={warning} />}
       {open && <div className="mt-[6px]">{children}</div>}
@@ -541,14 +544,16 @@ function PreviewDisclosure({
 }) {
   return (
     <div className="mt-2">
-      <button
+      <Button
+        variant="ghost"
+        size="sm"
         onClick={onToggle}
         aria-expanded={open}
-        className="flex items-center gap-2 appearance-none border-none bg-transparent px-0 text-left font-body text-[11px] text-mariner cursor-pointer"
+        className="justify-start"
       >
         <Caret open={open} />
         {label}
-      </button>
+      </Button>
       {open && <div className="mt-[4px] ml-4">{children}</div>}
     </div>
   );
@@ -658,7 +663,8 @@ function TimeoutMinutesField({
   onChange: (v: number | undefined) => void;
 }) {
   return (
-    <input
+    <Input
+      monospace
       type="number"
       min={1}
       max={max}
@@ -678,7 +684,7 @@ function TimeoutMinutesField({
         const clamped = max !== undefined ? Math.min(max, n) : n;
         onChange(Math.max(1, clamped));
       }}
-      className="w-[100px] rounded-[3px] border border-neutral-200 bg-white px-2 py-[6px] font-mono text-[12px] text-neutral-900 disabled:bg-app-bg"
+      className="w-[100px]"
     />
   );
 }
@@ -810,45 +816,62 @@ function CommandListEditor({
         <div key={rowIds[i]} className="group mb-[6px]">
           <div className="flex items-center gap-2">
             <span className="font-mono text-[11px] text-neutral-400 w-4 text-right">{i + 1}.</span>
-            <input
+            <Input
+              monospace
               value={command}
               disabled={disabled}
               onChange={(e) => onChange(commands.map((c, idx) => (idx === i ? e.target.value : c)))}
               onPaste={(e) => paste(i, e)}
               placeholder={placeholder}
-              className="flex-1 rounded-[3px] border border-neutral-200 bg-white px-2 py-[6px] font-mono text-[12px] text-neutral-900 disabled:bg-app-bg"
+              className="flex-1"
             />
             {!disabled && commands.length > 1 && (
               // Order inside a group is the order the commands run in, so it
               // has to be editable without retyping every row. Revealed on
               // hover and on focus, so a keyboard reaches them too.
-              <span className="flex items-center opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-                <button
+              <span className="flex items-center opacity-0 transition-opacity duration-[var(--motion-fast)] group-hover:opacity-100 focus-within:opacity-100">
+                <span
+                  data-focus-label={`Move command ${i + 1} up`}
                   ref={(node) => {
-                    moveButtons.current.set(`${rowIds[i]}:up`, node);
+                    moveButtons.current.set(`${rowIds[i]}:up`, {
+                      focus: () => (node?.querySelector?.("button") ?? node)?.focus(),
+                    });
                   }}
-                  onClick={() => move(i, i - 1)}
-                  disabled={i === 0}
-                  aria-label={`Move command ${i + 1} up`}
-                  className="appearance-none border-none bg-transparent font-mono text-[11px] text-neutral-400 hover:text-mariner cursor-pointer disabled:opacity-30 disabled:cursor-default"
                 >
-                  ↑
-                </button>
-                <button
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => move(i, i - 1)}
+                    disabled={i === 0}
+                    aria-label={`Move command ${i + 1} up`}
+                  >
+                    ↑
+                  </IconButton>
+                </span>
+                <span
+                  data-focus-label={`Move command ${i + 1} down`}
                   ref={(node) => {
-                    moveButtons.current.set(`${rowIds[i]}:down`, node);
+                    moveButtons.current.set(`${rowIds[i]}:down`, {
+                      focus: () => (node?.querySelector?.("button") ?? node)?.focus(),
+                    });
                   }}
-                  onClick={() => move(i, i + 1)}
-                  disabled={i === commands.length - 1}
-                  aria-label={`Move command ${i + 1} down`}
-                  className="appearance-none border-none bg-transparent font-mono text-[11px] text-neutral-400 hover:text-mariner cursor-pointer disabled:opacity-30 disabled:cursor-default"
                 >
-                  ↓
-                </button>
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => move(i, i + 1)}
+                    disabled={i === commands.length - 1}
+                    aria-label={`Move command ${i + 1} down`}
+                  >
+                    ↓
+                  </IconButton>
+                </span>
               </span>
             )}
             {!disabled && (
-              <button
+              <IconButton
+                variant="danger"
+                size="sm"
                 onClick={() =>
                   apply(
                     commands.filter((_, idx) => idx !== i),
@@ -856,10 +879,9 @@ function CommandListEditor({
                   )
                 }
                 aria-label="Remove command"
-                className="appearance-none border-none bg-transparent font-mono text-[13px] text-neutral-400 hover:text-red-600 cursor-pointer"
               >
                 ×
-              </button>
+              </IconButton>
             )}
           </div>
           {command.trim() === "" && !suppressBlankError && (
@@ -879,12 +901,13 @@ function CommandListEditor({
         {announcement}
       </div>
       {!disabled && (
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={() => apply([...commands, ""], [...rowIds, nextRowId()])}
-          className="appearance-none border-none bg-transparent font-body text-[12px] text-mariner cursor-pointer px-0"
         >
           + {commands.length === 0 && firstAddLabel ? firstAddLabel : addLabel}
-        </button>
+        </Button>
       )}
     </>
   );
@@ -917,15 +940,17 @@ function EnvNamesEditor({
           <div className="mb-[6px] font-body text-[11px] text-neutral-600">
             Forwarded by this deployment:{" "}
             {allowedEnv.map((name) => (
-              <button
+              <Button
+                variant="secondary"
+                size="sm"
                 key={name}
                 onClick={() => onChange([...names, name])}
                 disabled={disabled || names.includes(name)}
                 aria-label={`Add env var name ${name}`}
-                className="mr-1 appearance-none rounded-[3px] border border-neutral-300 bg-white px-[6px] py-[2px] font-mono text-[11px] text-neutral-700 cursor-pointer hover:bg-app-bg disabled:opacity-40 disabled:cursor-default"
+                className="mr-1"
               >
                 {name}
-              </button>
+              </Button>
             ))}
           </div>
         ))}
@@ -939,21 +964,24 @@ function EnvNamesEditor({
         return (
           <div key={i} className="mb-[6px]">
             <div className="flex items-center gap-2">
-              <input
+              <Input
+                monospace
+                invalid={invalid || rejected}
                 value={name}
                 disabled={disabled}
                 onChange={(e) => onChange(names.map((n, idx) => (idx === i ? e.target.value : n)))}
                 placeholder="MY_TOKEN"
-                className="flex-1 rounded-[3px] border border-neutral-200 bg-white px-2 py-[6px] font-mono text-[12px] text-neutral-900 disabled:bg-app-bg"
+                className="flex-1"
               />
               {!disabled && (
-                <button
+                <IconButton
+                  variant="danger"
+                  size="sm"
                   onClick={() => onChange(names.filter((_, idx) => idx !== i))}
                   aria-label="Remove env var name"
-                  className="appearance-none border-none bg-transparent font-mono text-[13px] text-neutral-400 hover:text-red-600 cursor-pointer"
                 >
                   ×
-                </button>
+                </IconButton>
               )}
             </div>
             {invalid && (
@@ -973,12 +1001,13 @@ function EnvNamesEditor({
         );
       })}
       {!disabled && (
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={() => onChange([...names, ""])}
-          className="appearance-none border-none bg-transparent font-body text-[12px] text-mariner cursor-pointer px-0"
         >
           + Add env var name
-        </button>
+        </Button>
       )}
     </>
   );
@@ -1219,10 +1248,12 @@ function GroupCard({
     return (
       <div className="rounded-[3px] border border-neutral-200 bg-white px-3 py-2 mb-2">
         <div className="flex items-center gap-2">
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={onToggle}
             aria-expanded={false}
-            className="flex flex-1 items-center gap-2 appearance-none border-none bg-transparent px-0 text-left font-mono text-[12px] text-neutral-700 cursor-pointer"
+            className="h-auto flex-1 justify-start text-left normal-case"
           >
             <Caret open={false} />
             <span className="font-semibold text-neutral-900">{name}</span>
@@ -1230,7 +1261,7 @@ function GroupCard({
               {" · "}
               {groupSummaryTail(group)}
             </span>
-          </button>
+          </Button>
           <GateChip atGate={atGate} />
         </div>
         {rowProblem && <ProblemLine text={rowProblem} />}
@@ -1241,7 +1272,9 @@ function GroupCard({
   return (
     <div className="rounded-[3px] border border-neutral-200 bg-white px-3 py-2 mb-2">
       <div className="flex items-center justify-between gap-2 mb-1">
-        <button
+        <IconButton
+          variant="ghost"
+          size="sm"
           onClick={() => {
             // A draft the config never took would otherwise keep blocking Save
             // from behind a closed card, with no field left to correct it in.
@@ -1251,11 +1284,12 @@ function GroupCard({
           }}
           aria-expanded
           aria-label={`Collapse group ${name}`}
-          className="appearance-none border-none bg-transparent px-0 cursor-pointer"
         >
           <Caret open />
-        </button>
-        <input
+        </IconButton>
+        <Input
+          monospace
+          invalid={nameInvalid || pendingReason === "duplicate"}
           value={draftName}
           disabled={disabled}
           onFocus={() => setNameFocused(true)}
@@ -1268,31 +1302,34 @@ function GroupCard({
             if (e.key === "Escape") revertRename();
           }}
           onChange={(e) => setDraftName(e.target.value)}
-          className="flex-1 rounded-[3px] border border-neutral-200 bg-white px-2 py-[4px] font-mono text-[12px] font-semibold text-neutral-900 disabled:bg-app-bg"
+          className="flex-1 font-semibold"
         />
         <GateChip atGate={atGate} />
         {!disabled && canDelete && !confirmDelete && (
-          <button
+          <Button
+            variant="danger"
+            size="sm"
             onClick={() => setConfirmDelete(true)}
-            className="appearance-none border-none bg-transparent font-body text-[11px] text-neutral-500 hover:text-red-600 cursor-pointer"
           >
             Remove group
-          </button>
+          </Button>
         )}
         {!disabled && canDelete && confirmDelete && (
           <>
-            <button
+            <Button
+              variant="danger"
+              size="sm"
               onClick={onDelete}
-              className="appearance-none border-none bg-transparent font-body text-[11px] font-semibold text-red-600 cursor-pointer"
             >
               Confirm remove group
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => setConfirmDelete(false)}
-              className="appearance-none border-none bg-transparent font-body text-[11px] text-neutral-500 cursor-pointer"
             >
               Cancel
-            </button>
+            </Button>
           </>
         )}
       </div>
@@ -1403,15 +1440,16 @@ function GroupCard({
           // keyboard, by touch, and to a screen reader, and this sentence is
           // the only place the default behaviour is explained. It sits outside
           // the label so clicking it does not toggle the checkbox.
-          <button
+          <IconButton
+            variant="ghost"
+            size="sm"
             onClick={() => setRestoreNoteOpen(!restoreNoteOpen)}
             aria-expanded={restoreNoteOpen}
             aria-controls={restoreNoteId}
             aria-label="What restoring the tree does"
-            className="appearance-none border-none bg-transparent px-0 font-mono text-[10px] text-neutral-400 hover:text-mariner cursor-pointer"
           >
             (?)
-          </button>
+          </IconButton>
         )}
       </div>
       {(!restoreTree || restoreNoteOpen) && (
@@ -1577,12 +1615,14 @@ function GroupsSection({
         />
       ))}
       {!disabled && (
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={addGroup}
-          className="appearance-none border-none bg-transparent font-body text-[12px] text-mariner cursor-pointer px-0 mb-3"
+          className="mb-3"
         >
           + Add group
-        </button>
+        </Button>
       )}
       {autoGated.length > 0 && (
         <div className="mb-3 font-body text-[11px] text-neutral-600">
@@ -1591,12 +1631,13 @@ function GroupsSection({
             <React.Fragment key={name}>
               {i > 0 && ", "}
               <span className="font-mono">{name}</span>{" "}
-              <button
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => undoGateAdd(name)}
-                className="appearance-none border-none bg-transparent px-0 font-body text-[11px] text-mariner cursor-pointer"
               >
                 undo
-              </button>
+              </Button>
             </React.Fragment>
           ))}
         </div>
@@ -1694,12 +1735,14 @@ function RepoCard({
                 onChange={(commands) => onChange({ ...repo, commands })}
               />
               {!disabled && (
-                <button
+                <Button
+                  variant="secondary"
+                  size="sm"
                   onClick={() => onChange(convertedToGroups(repo))}
-                  className="mt-2 appearance-none rounded-[3px] border border-neutral-300 bg-white px-2 py-1 font-body text-[11px] text-neutral-700 cursor-pointer hover:bg-app-bg"
+                  className="mt-2"
                 >
                   Convert to groups
-                </button>
+                </Button>
               )}
               <p className="mt-1 font-body text-[10px] text-neutral-500">
                 Older format, still fully supported. Convert to add env vars, extends and per-group
@@ -1943,7 +1986,8 @@ export function RepositoryScriptGroupsEditor({
           gate, exactly as a repository absent from the old configuration did.
         </p>
         {!disabled && (
-          <button
+          <Button
+            variant="secondary"
             onClick={() => {
               onChange(emptyScriptsEntry(repository));
               ui.reveal(
@@ -1953,10 +1997,10 @@ export function RepositoryScriptGroupsEditor({
                 ),
               );
             }}
-            className="mt-3 appearance-none rounded-[3px] border border-neutral-300 bg-panel px-3 py-2 font-body text-[13px] text-neutral-800 cursor-pointer hover:bg-app-bg"
+            className="mt-3"
           >
             Add script groups
-          </button>
+          </Button>
         )}
       </div>
     );
@@ -1988,29 +2032,33 @@ export function RepositoryScriptGroupsEditor({
               <span className="font-body text-[11px] text-burnt-orange mr-2">
                 {GROUP_REMOVAL_NOTE}
               </span>
-              <button
+              <Button
+                variant="danger"
+                size="sm"
                 onClick={() => {
                   onChange(null);
                   setConfirmClear(false);
                 }}
-                className="appearance-none border-none bg-transparent font-body text-[12px] font-semibold text-red-600 cursor-pointer"
               >
                 Confirm remove all
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => setConfirmClear(false)}
-                className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer ml-2"
+                className="ml-2"
               >
                 Cancel
-              </button>
+              </Button>
             </>
           ) : (
-            <button
+            <Button
+              variant="danger"
+              size="sm"
               onClick={() => setConfirmClear(true)}
-              className="appearance-none border-none bg-transparent px-0 font-body text-[12px] text-neutral-500 hover:text-red-600 cursor-pointer"
             >
               Remove all script groups
-            </button>
+            </Button>
           )}
         </div>
       )}

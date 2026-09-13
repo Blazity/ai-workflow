@@ -18,6 +18,8 @@ export interface ModalProps {
   children: ReactNode;
   footer?: ReactNode;
   size?: "sm" | "md" | "lg";
+  variant?: "modal" | "drawer";
+  dismissible?: boolean;
   initialFocusRef?: React.RefObject<HTMLElement | null>;
   className?: string;
 }
@@ -51,6 +53,8 @@ export function Modal({
   children,
   footer,
   size = "md",
+  variant = "modal",
+  dismissible = true,
   initialFocusRef,
   className,
 }: ModalProps) {
@@ -95,7 +99,7 @@ export function Modal({
     });
 
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && dismissible) {
         event.preventDefault();
         onCloseRef.current();
         return;
@@ -128,20 +132,23 @@ export function Modal({
       const previous = previousFocusRef.current;
       if (previous && document.contains(previous)) previous.focus();
     };
-  }, [initialFocusRef, open]);
+  }, [dismissible, initialFocusRef, open]);
 
   if (!mounted) return null;
 
   const frame = (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center p-4 pointer-events-none"
+      className={[
+        "fixed inset-0 z-[100] flex pointer-events-none",
+        variant === "drawer" ? "items-stretch justify-end" : "items-center justify-center p-4",
+      ].join(" ")}
       data-state={state}
     >
       <div
         aria-hidden="true"
         className="absolute inset-0 bg-coal/40 opacity-100 pointer-events-auto transition-[opacity] duration-[var(--motion-base)] ease-emphasized data-[state=closed]:opacity-0 data-[state=closed]:ease-exit"
         data-state={state}
-        onClick={onClose}
+        onClick={dismissible ? onClose : undefined}
       />
       <section
         ref={dialogRef}
@@ -151,13 +158,16 @@ export function Modal({
         aria-describedby={description ? descriptionId : undefined}
         tabIndex={-1}
         data-state={state}
+        data-variant={variant}
         onTransitionEnd={(event: TransitionEvent<HTMLElement>) => {
           if (!open && event.target === event.currentTarget) setMounted(false);
         }}
         className={[
-          "relative flex max-h-[calc(100dvh-32px)] w-full flex-col overflow-hidden rounded-md border border-neutral-200 bg-panel opacity-100 shadow-[0_24px_64px_-16px_rgba(24,27,32,0.45)] pointer-events-auto",
+          "relative flex max-h-[calc(100dvh-32px)] w-full flex-col overflow-hidden rounded-md border border-neutral-200 bg-panel opacity-100 pointer-events-auto",
           "transition-[opacity,transform] data-[state=open]:duration-[var(--motion-slow)] data-[state=open]:ease-emphasized data-[state=closed]:scale-[0.98] data-[state=closed]:opacity-0 data-[state=closed]:duration-[var(--motion-base)] data-[state=closed]:ease-exit",
-          sizeClasses[size],
+          variant === "drawer"
+            ? "h-full max-h-none max-w-[620px] rounded-none border-y-0 border-r-0 shadow-[-12px_0_32px_rgba(24,27,32,0.08)]"
+            : `${sizeClasses[size]} shadow-[0_24px_64px_-16px_rgba(24,27,32,0.45)]`,
           className,
         ]
           .filter(Boolean)
@@ -167,7 +177,15 @@ export function Modal({
           <h2 id={titleId} className="m-0 font-display text-base font-semibold text-coal">{title}</h2>
           {description ? <p id={descriptionId} className="mt-1 mb-0 font-body text-xs leading-relaxed text-neutral-700">{description}</p> : null}
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
+        <div
+          className={
+            variant === "drawer"
+              ? "flex min-h-0 flex-1 flex-col overflow-hidden px-5"
+              : "min-h-0 flex-1 overflow-y-auto px-5 py-4"
+          }
+        >
+          {children}
+        </div>
         {footer ? <footer className="shrink-0 border-t border-neutral-200 px-5 py-4">{footer}</footer> : null}
       </section>
     </div>

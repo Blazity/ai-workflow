@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { IconButton, Input } from "@/components/ui";
 
 /** Chip-style tag editor: Enter/comma/blur commits the typed tag, Backspace on
  *  an empty input removes the last chip. Extracted from the retired
@@ -23,25 +24,27 @@ export function TagChipsInput({
   }
 
   return (
-    <div className="flex items-center gap-1.5 flex-wrap border border-neutral-200 bg-panel rounded-[3px] px-2 py-1.5">
+    <div className="flex flex-wrap items-center gap-1.5">
       {tags.map((t) => (
         <span
           key={t}
           className="inline-flex items-center gap-1 rounded-pill border border-neutral-200 bg-app-bg px-2 py-0.5 font-mono text-[10px] text-neutral-800"
         >
           {t}
-          <button
+          <IconButton
+            variant="ghost"
+            size="sm"
             type="button"
             disabled={disabled}
             aria-label={`Remove ${t}`}
             onClick={() => onChange(tags.filter((x) => x !== t))}
-            className="appearance-none border-none bg-transparent cursor-pointer text-neutral-500 hover:text-coal disabled:cursor-default"
           >
             ×
-          </button>
+          </IconButton>
         </span>
       ))}
-      <input
+      <Input
+        size="sm"
         value={tagInput}
         disabled={disabled}
         onChange={(e) => setTagInput(e.target.value)}
@@ -56,7 +59,7 @@ export function TagChipsInput({
         }}
         placeholder="Add tag"
         aria-label="Add tag"
-        className="flex-1 min-w-[80px] appearance-none border-none bg-transparent outline-none font-body text-[12px] text-neutral-900"
+        className="min-w-[80px] flex-1"
       />
     </div>
   );
