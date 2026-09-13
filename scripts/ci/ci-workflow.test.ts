@@ -69,6 +69,7 @@ const DIFF_CHECK_COMMAND = [
 /** Every command the source gate must still run, wherever it now lives. */
 const SOURCE_COMMANDS = [
   DIFF_CHECK_COMMAND,
+  "pnpm --filter @shared/workflow-graph run test:zod4",
   "pnpm --filter ai-workflow-dashboard run test",
   "pnpm --filter worker exec vitest run --shard=${{ matrix.shard }}/4",
   "pnpm --filter worker run test:zod4",

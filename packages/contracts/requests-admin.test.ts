@@ -22,9 +22,8 @@ describe("dashboardInviteCreateRequestSchema", () => {
   });
 
   it("refuses an email that is present but not a string", () => {
-    // The deliberate change: the handler passed a truthy non-string straight to
-    // the invite store, so this case gets its own sentence rather than the one
-    // an absent email answers.
+    // A truthy non-string is present but invalid, so it keeps a distinct
+    // sentence from an absent or falsy email.
     expect(
       parseRequestBody(dashboardInviteCreateRequestSchema, { email: 42 }),
     ).toEqual({ ok: false, message: "Invalid email" });

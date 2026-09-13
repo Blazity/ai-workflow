@@ -159,12 +159,15 @@ names, harness defaults) are rows in the `settings` table, described once in
   a one-argument `z.record(valueSchema)` is the zod 3 spelling, is read as
   `z.record(keySchema, valueSchema)` by zod 4, and throws `Cannot read
   properties of undefined` on the first body that carries a key, which is how
-  every repository profile save answered 500 on 13.09. The zod 4 runs are the
-  gate: `pnpm run test:packages:zod4` for the contracts schemas and
+  every repository profile save answered 500 on 13.09. Curated schema errors
+  use `{ message }`, which both versions honour; a union carries the same text
+  in `message` and `errorMap` because zod 3 ignores the former there and zod 4
+  ignores the latter. The zod 4 runs are the gate:
+  `pnpm run test:packages:zod4` for the contracts and workflow-graph schemas and
   `pnpm --filter worker run test:zod4` for the MCP tool catalog. The rest of
   this app's suite does not pass under zod 4 and is not meant to; the error
-  wording differs everywhere, and the alias runs assert refusals rather than
-  sentences for that reason.
+  wording differs everywhere, and the worker alias run asserts refusals rather
+  than sentences for that reason.
 - **`engine/agent-workflow.ts` has no top-level adapter or logger imports.** Inside a step,
   `logger` and adapters are deferred `await import(...)` calls. Do not add a
   top-level import to that module, and do not assume one exists.

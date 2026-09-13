@@ -11,10 +11,7 @@ import { objectOrEmpty } from "./request-parsing";
 
 export const jsonSchemaInspectRequestSchema = objectOrEmpty(
   z.object({
-    source: z.string({
-      required_error: "source must be a JSON Schema string",
-      invalid_type_error: "source must be a JSON Schema string",
-    }),
+    source: z.string({ message: "source must be a JSON Schema string" }),
   }),
 );
 export type JsonSchemaInspectRequest = z.infer<typeof jsonSchemaInspectRequestSchema>;

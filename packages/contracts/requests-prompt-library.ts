@@ -14,22 +14,16 @@ import type { PromptSlotDefinition } from "./prompt-slots";
  *  straight to the store, which validates them itself, so the element check
  *  stays where it already is. */
 const slotsField = z
-  .array(z.custom<PromptSlotDefinition>(), { invalid_type_error: "Invalid slots" })
+  .array(z.custom<PromptSlotDefinition>(), { message: "Invalid slots" })
   .optional();
 const tagsField = z
-  .array(z.custom<string>(), { invalid_type_error: "Invalid tags" })
+  .array(z.custom<string>(), { message: "Invalid tags" })
   .optional();
 
-const nameField = z.string({
-  required_error: "Invalid name",
-  invalid_type_error: "Invalid name",
-});
-const bodyField = z.string({
-  required_error: "Invalid body",
-  invalid_type_error: "Invalid body",
-});
+const nameField = z.string({ message: "Invalid name" });
+const bodyField = z.string({ message: "Invalid body" });
 const descriptionField = z
-  .string({ invalid_type_error: "Invalid description" })
+  .string({ message: "Invalid description" })
   .nullable()
   .optional();
 
@@ -72,10 +66,7 @@ export type PromptLibrarySaveVersionRequest = z.infer<
 export const promptLibraryRestoreRequestSchema = objectOrEmpty(
   z.object({
     version: z
-      .number({
-        required_error: "Invalid version",
-        invalid_type_error: "Invalid version",
-      })
+      .number({ message: "Invalid version" })
       .int({ message: "Invalid version" })
       .min(1, { message: "Invalid version" })
       .max(2147483647, { message: "Invalid version" }),

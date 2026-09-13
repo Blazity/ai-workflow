@@ -73,6 +73,7 @@ const C = {
   workflowSdk: ["pnpm", "run", "test:workflow-sdk"],
   packages: ["pnpm", "run", "test:packages"],
   packagesZod4: ["pnpm", "run", "test:packages:zod4"],
+  workflowGraphZod4: ["pnpm", "--filter", "@shared/workflow-graph", "run", "test:zod4"],
   releaseType: ["pnpm", "run", "typecheck:release-notes"],
   releaseTest: ["pnpm", "run", "test:release-notes"],
   gates: ["pnpm", "run", "gates"],
@@ -295,6 +296,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
   if (shared) {
     add(C.packages);
     add(C.packagesZod4);
+    if (any(paths, isWorkflowGraph)) add(C.workflowGraphZod4);
   }
   if (gates) add(C.gates);
   return { scopes: scopes.length > 0 ? scopes : ["unclassified"], commands };

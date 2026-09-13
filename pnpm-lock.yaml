@@ -368,6 +368,10 @@ importers:
       zod:
         specifier: 'catalog:'
         version: 3.25.76
+    devDependencies:
+      zod4:
+        specifier: 'catalog:'
+        version: zod@4.3.6
 
 packages:
 
