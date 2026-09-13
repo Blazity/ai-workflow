@@ -95,3 +95,5 @@ export async function supersedeClarificationHookStep(id: string): Promise<void> 
   );
   await supersedeConnectedPreparingHookClarification(id);
 }
+
+// engine-canary probe: exercises the stage 5b scope step on a pull request (throwaway).
