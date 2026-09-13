@@ -27,7 +27,6 @@ import { repositories } from "../db/schema.js";
  */
 const state = vi.hoisted(() => ({
   db: undefined as unknown,
-  env: {} as Record<string, unknown>,
 }));
 
 const mocks = vi.hoisted(() => ({
@@ -37,7 +36,7 @@ const mocks = vi.hoisted(() => ({
   assertActiveRunOwner: vi.fn(),
 }));
 
-vi.mock("../infra/vcs-config.js", () => ({ env: state.env }));
+vi.mock("../infra/vcs-config.js", () => ({ env: {} }));
 vi.mock("../db/client.js", () => ({ getDb: () => state.db }));
 vi.mock("../infra/logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -92,13 +91,16 @@ beforeEach(async () => {
   vi.clearAllMocks();
   db = await createTestDb();
   state.db = db;
-  for (const key of Object.keys(state.env)) delete state.env[key];
-  Object.assign(state.env, {
-    JOB_TIMEOUT_MS: 1_800_000,
-    MAX_CONCURRENT_AGENTS: 7,
-    AGENT_KIND: "claude",
-    ENABLE_REVIEW_PHASE: true,
-    ENABLE_LEAK_REVIEW: false,
+  await writeManySettings(db, {
+    patch: {
+      JOB_TIMEOUT_MS: 1_800_000,
+      MAX_CONCURRENT_AGENTS: 7,
+      AGENT_KIND: "claude",
+      ENABLE_REVIEW_PHASE: true,
+      ENABLE_LEAK_REVIEW: false,
+    },
+    actor: "test",
+    reason: "seed run-carried settings fixture",
   });
   mocks.assertActiveRunOwner.mockResolvedValue(undefined);
   mocks.findPR.mockResolvedValue(null);

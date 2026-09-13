@@ -13,6 +13,7 @@ import {
   workflowDefinitionVersions,
 } from "../../../db/schema.js";
 import { createTestDb } from "../../../db/test-db.js";
+import { writeManySettings } from "../../../db/repositories/settings.js";
 import { encryptWebhookSecret } from "../../../infra/webhook-crypto.js";
 import { webhookRateWindowStart } from "../../../services/webhook-trigger/rate-limit.js";
 import { mintWebhookEndpointsForDefinition } from "../../../webhook-trigger/endpoint-store.js";
@@ -30,9 +31,7 @@ const state = vi.hoisted(() => ({
   db: undefined as unknown,
   env: {
     WEBHOOK_TRIGGER_ENCRYPTION_KEY: "a".repeat(64) as string | undefined,
-    MAX_CONCURRENT_AGENTS: 3,
     JIRA_PROJECT_KEY: "PROJ",
-    COLUMN_AI: "AI",
   },
 }));
 const mockStart = vi.hoisted(() => vi.fn());
@@ -202,7 +201,11 @@ beforeEach(async () => {
   db = await createTestDb();
   state.db = db;
   state.env.WEBHOOK_TRIGGER_ENCRYPTION_KEY = KEY;
-  state.env.MAX_CONCURRENT_AGENTS = 3;
+  await writeManySettings(db, {
+    patch: { MAX_CONCURRENT_AGENTS: 3 },
+    actor: "test",
+    reason: "seed custom-webhook fixture",
+  });
   mockStart.mockReset().mockResolvedValue({ runId: "run-1" });
 
   await db.insert(workflowDefinitions).values({
@@ -638,7 +641,11 @@ describe("POST /webhooks/custom/:endpointId", () => {
   });
 
   it("503s and keeps the delivery pending when there is no capacity", async () => {
-    state.env.MAX_CONCURRENT_AGENTS = 0;
+    await writeManySettings(db, {
+      patch: { MAX_CONCURRENT_AGENTS: 0 },
+      actor: "test",
+      reason: "exercise exhausted capacity",
+    });
 
     const response = await handler()(
       signed(BODY, { headers: { "x-delivery-id": "d-1" } }),

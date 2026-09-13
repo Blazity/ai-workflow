@@ -95,6 +95,7 @@ import {
   replaceWorkflowBlockAttemptPersistence,
   startWorkflowBlockAttempt,
 } from "../db/repositories/runs/run-observability.js";
+import { writeManySettings } from "../db/repositories/settings.js";
 import { prepareReplayAttemptFinishPersistence } from "../run-observability/runtime-hooks.js";
 
 const mcpPost = (await import("../routes/mcp.post.js")).default;
@@ -572,9 +573,23 @@ afterAll(async () => {
 
 beforeEach(async () => {
   vi.clearAllMocks();
-  state.env.MCP_ENABLED = true;
-  state.env.MCP_READ_RATE_LIMIT_PER_MINUTE = 120;
-  state.env.MCP_MUTATION_RATE_LIMIT_PER_MINUTE = 20;
+  await writeManySettings(db(), {
+    patch: {
+      MCP_ENABLED: true,
+      MCP_MAX_REQUEST_BYTES: 65_536,
+      MCP_MAX_RESULT_BYTES: 65_536,
+      MCP_TOOL_TIMEOUT_MS: 30_000,
+      MCP_READ_RATE_LIMIT_PER_MINUTE: 120,
+      MCP_MUTATION_RATE_LIMIT_PER_MINUTE: 20,
+      MCP_AUDIT_RETENTION_DAYS: 365,
+      MAX_CONCURRENT_AGENTS: 4,
+      AGENT_KIND: "claude",
+      CLAUDE_MODEL: "claude-opus-4-8",
+      CODEX_MODEL: "gpt-5.4",
+    },
+    actor: "test",
+    reason: "reset MCP surface fixture",
+  });
   state.requireMcpActor.mockImplementation(async (request: Request) => {
     const token = (request.headers.get("authorization") ?? "").replace(/^Bearer /, "");
     const resolved = ACTORS[token];
@@ -1459,7 +1474,11 @@ describe("D. authorization, through the whole stack", () => {
 
 describe("E. bounded under a burst", () => {
   it("answers RATE_LIMITED with retryAfterMs once a read exhausts its budget", async () => {
-    state.env.MCP_READ_RATE_LIMIT_PER_MINUTE = 2;
+    await writeManySettings(db(), {
+      patch: { MCP_READ_RATE_LIMIT_PER_MINUTE: 2 },
+      actor: "test",
+      reason: "exercise read rate limit",
+    });
     const client = await connect();
 
     const results: ToolResult[] = [];
@@ -1514,7 +1533,11 @@ describe("E. bounded under a burst", () => {
   });
 
   it("does not let a new invented name buy a fresh window", async () => {
-    state.env.MCP_READ_RATE_LIMIT_PER_MINUTE = 2;
+    await writeManySettings(db(), {
+      patch: { MCP_READ_RATE_LIMIT_PER_MINUTE: 2 },
+      actor: "test",
+      reason: "exercise unrecognized-tool rate limit",
+    });
     const client = await connect();
     await client.callTool({ name: "tickets.nope", arguments: {} });
     await client.callTool({ name: "runs.nope", arguments: {} });

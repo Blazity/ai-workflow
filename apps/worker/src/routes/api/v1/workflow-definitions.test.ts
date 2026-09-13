@@ -19,6 +19,7 @@ import {
   deployWorkflowDefinition,
   saveWorkflowDefinitionDraft,
 } from "../../../services/workflow-definitions/policy-operations.js";
+import { writeManySettings } from "../../../db/repositories/settings.js";
 
 const state = vi.hoisted(() => ({
   db: undefined as unknown,
@@ -225,6 +226,18 @@ beforeEach(async () => {
     { id: "member_admin", organizationId: "org_aiw", userId: "user_admin", role: "admin" },
     { id: "member_member", organizationId: "org_aiw", userId: "user_member", role: "member" },
   ]);
+  await writeManySettings(db, {
+    patch: {
+      ENABLE_REVIEW_PHASE: true,
+      AGENT_KIND: "claude",
+      CLAUDE_MODEL: "claude-test-default",
+      CODEX_MODEL: "gpt-5-codex",
+      COLUMN_AI_REVIEW: "AI Review",
+      COLUMN_BACKLOG: "Backlog",
+    },
+    actor: "test",
+    reason: "seed workflow-definition fixture",
+  });
 });
 
 // The 0013 migration seeds one enabled definition ("Ticket workflow", id 1,
@@ -318,47 +331,47 @@ describe("GET /api/v1/workflow-definitions", () => {
   });
 
   it("pins the installation's configured built-in profile in new authoring choices", async () => {
-    state.env.AGENT_KIND = "codex";
-    try {
-      const res = await handlerFor(definitionsGet)(
-        new Request("http://worker.test/"),
-      );
-      const body = await res.json();
-      const agentConfigurations = [
-        body.defaultDefinition,
-        ...body.templates.map(
-          (template: { definition: unknown }) => template.definition,
-        ),
-      ].flatMap(
-        (definition: {
-          nodes: Array<{ type: string; configuration: Record<string, unknown> }>;
-        }) =>
-          definition.nodes
-            .filter((node) =>
-              [
-                "planning_agent",
-                "implementation_agent",
-                "review_agent",
-                "fix_agent",
-                "generic_agent",
-              ].includes(node.type),
-            )
-            .map((node) => node.configuration),
-      );
-      expect(agentConfigurations.length).toBeGreaterThan(0);
-      expect(
-        agentConfigurations.every(
-          (configuration) =>
-            JSON.stringify(configuration.harnessProfile) ===
-            JSON.stringify({
-              profileId: BUILTIN_HARNESS_PROFILE_IDS.codex,
-              version: 2,
-            }),
-        ),
-      ).toBe(true);
-    } finally {
-      state.env.AGENT_KIND = "claude";
-    }
+    await writeManySettings(db, {
+      patch: { AGENT_KIND: "codex" },
+      actor: "test",
+      reason: "exercise configured Codex profile",
+    });
+    const res = await handlerFor(definitionsGet)(
+      new Request("http://worker.test/"),
+    );
+    const body = await res.json();
+    const agentConfigurations = [
+      body.defaultDefinition,
+      ...body.templates.map(
+        (template: { definition: unknown }) => template.definition,
+      ),
+    ].flatMap(
+      (definition: {
+        nodes: Array<{ type: string; configuration: Record<string, unknown> }>;
+      }) =>
+        definition.nodes
+          .filter((node) =>
+            [
+              "planning_agent",
+              "implementation_agent",
+              "review_agent",
+              "fix_agent",
+              "generic_agent",
+            ].includes(node.type),
+          )
+          .map((node) => node.configuration),
+    );
+    expect(agentConfigurations.length).toBeGreaterThan(0);
+    expect(
+      agentConfigurations.every(
+        (configuration) =>
+          JSON.stringify(configuration.harnessProfile) ===
+          JSON.stringify({
+            profileId: BUILTIN_HARNESS_PROFILE_IDS.codex,
+            version: 2,
+          }),
+      ),
+    ).toBe(true);
   });
 });
 

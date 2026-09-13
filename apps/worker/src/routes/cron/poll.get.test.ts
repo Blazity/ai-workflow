@@ -273,6 +273,15 @@ describe("cron clarification recovery ordering", () => {
     vi.clearAllMocks();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (state.db as any).delete(settingsTable);
+    await writeManyConnectedSettings({
+      patch: {
+        COLUMN_AI: "AI",
+        COLUMN_BACKLOG: "Backlog",
+        MAX_CONCURRENT_AGENTS: 1,
+      },
+      actor: "test",
+      reason: "reset poll fixture",
+    });
     state.order = [];
     state.discovered = [];
     mocks.reconcileAtCapacityQueue.mockResolvedValue({ queued: 0, commented: 0 });
@@ -482,6 +491,7 @@ describe("cron clarification recovery ordering", () => {
     expect(mocks.createScheduleDispatchDeps).toHaveBeenCalledWith(
       {},
       1,
+      expect.objectContaining({ MAX_CONCURRENT_AGENTS: 1 }),
     );
     expect(mocks.runScheduleTriggerPass).toHaveBeenCalledWith({
       kind: "schedule-deps",
@@ -536,6 +546,7 @@ describe("cron clarification recovery ordering", () => {
       undefined,
       new Set(["ticket:jira:AIW-CONTINUATION"]),
       expect.any(Function),
+      expect.objectContaining({ MAX_CONCURRENT_AGENTS: 1 }),
     );
     await expect(response.json()).resolves.toMatchObject({
       pendingRecovered: 0,
@@ -644,6 +655,7 @@ describe("cron clarification recovery ordering", () => {
       undefined,
       new Set(["ticket:jira:AIW-1"]),
       expect.any(Function),
+      expect.objectContaining({ MAX_CONCURRENT_AGENTS: 1 }),
     );
     expect(mocks.dispatchPlanApproved).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -898,12 +910,13 @@ describe("cron clarification recovery ordering", () => {
       terminal: [],
     });
 
-    // No decision stored yet: the tick runs on what the deployment booted with.
+    // The tick starts under the stored ceiling for this deployment.
     expect((await request()).status).toBe(200);
     expect(mocks.dispatchTicket).toHaveBeenCalledWith(
       "AIW-400",
       expect.anything(),
       1,
+      expect.objectContaining({ MAX_CONCURRENT_AGENTS: 1 }),
     );
 
     await writeManyConnectedSettings({
@@ -918,6 +931,7 @@ describe("cron clarification recovery ordering", () => {
       "AIW-400",
       expect.anything(),
       6,
+      expect.objectContaining({ MAX_CONCURRENT_AGENTS: 6 }),
     );
   });
 

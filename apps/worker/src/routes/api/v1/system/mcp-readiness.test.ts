@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 
 import { createApp, toWebHandler } from "h3";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Db } from "../../../../db/client.js";
+import { writeManySettings } from "../../../../db/repositories/settings.js";
 import { member, organization, user } from "../../../../db/schema.js";
 import { createTestDb } from "../../../../db/test-db.js";
 import { FIRST_SLICE_TOOLS } from "../../../../mcp/contracts.js";
@@ -15,7 +17,6 @@ const state = vi.hoisted(() => ({
   sessionUserId: "user_admin" as string | null,
   env: {
     DASHBOARD_ORG_SLUG: "ai-workflow",
-    MCP_ENABLED: true,
     MCP_SERVER_VERSION: "0.1.0",
     MCP_ALLOW_PUBLIC_DCR: false,
     MCP_AUDIT_RETENTION_DAYS: 365,
@@ -54,6 +55,7 @@ const { MCP_CONTRACT_SNAPSHOT_PATH } = await import(
 const committed = JSON.parse(readFileSync(MCP_CONTRACT_SNAPSHOT_PATH, "utf8")) as {
   contractHash: string;
 };
+let db: Db;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function handlerFor(route: any) {
@@ -79,7 +81,7 @@ function jsonLeaves(value: unknown): unknown[] {
 // membership the guard checks, so a fresh migration replay per test bought nothing
 // and cost more than vitest's 10s hook budget allows.
 beforeAll(async () => {
-  const db = await createTestDb();
+  db = await createTestDb();
   state.db = db;
   await db
     .insert(organization)
@@ -98,10 +100,14 @@ beforeAll(async () => {
   ]);
 }, 120_000);
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
   state.sessionUserId = "user_admin";
-  state.env.MCP_ENABLED = true;
+  await writeManySettings(db, {
+    patch: { MCP_ENABLED: true },
+    actor: "test",
+    reason: "reset MCP readiness fixture",
+  });
 });
 
 describe("GET /api/v1/system/mcp-readiness", () => {
@@ -148,7 +154,7 @@ describe("GET /api/v1/system/mcp-readiness", () => {
   it("publishes no env value beyond the switch and the version", async () => {
     const body = (await (await request()).json()) as unknown;
     const leaves = jsonLeaves(body);
-    const published = new Set<unknown>([state.env.MCP_ENABLED, state.env.MCP_SERVER_VERSION]);
+    const published = new Set<unknown>([state.env.MCP_SERVER_VERSION]);
 
     for (const [key, value] of Object.entries(state.env)) {
       if (published.has(value)) continue;
@@ -172,7 +178,11 @@ describe("GET /api/v1/system/mcp-readiness", () => {
   // Whether MCP is switched on here is the first question this endpoint exists to
   // answer, so it has to track the flag rather than report a constant.
   it("reports MCP as disabled when this deployment has it switched off", async () => {
-    state.env.MCP_ENABLED = false;
+    await writeManySettings(db, {
+      patch: { MCP_ENABLED: false },
+      actor: "test",
+      reason: "exercise disabled MCP readiness",
+    });
 
     expect(await (await request()).json()).toMatchObject({ enabled: false });
   });
