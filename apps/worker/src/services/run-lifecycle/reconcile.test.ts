@@ -1539,6 +1539,133 @@ describe("reconcileRuns owner-CAS recovery", () => {
     expect(mockHasDurableRunPublication).not.toHaveBeenCalled();
   });
 
+  it("releases an old store-success AI Review owner when Workflow status is unreachable", async () => {
+    const bound = entry();
+    const runRegistry = registry([bound]);
+    mockGetRun.mockImplementation(() => {
+      throw new Error("workflow status unavailable");
+    });
+    mockIsRunRecordedSucceeded.mockResolvedValue(true);
+    mockFindRunOutcomeByRunId.mockResolvedValue({
+      status: "success",
+      completedAt: new Date(Date.now() - 10 * 60_000),
+    });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(),
+        runRegistry,
+        issueTracker("Review"),
+        undefined,
+        undefined,
+        undefined,
+        mockDb,
+        undefined,
+        undefined,
+        reviewSettings,
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 1 });
+    expect(mockFindRunOutcomeByRunId).toHaveBeenCalledWith(expect.anything(), "run-1");
+    expect(runRegistry.release).toHaveBeenCalledWith(
+      bound.subjectKey,
+      bound.ownerToken,
+      bound.runId,
+    );
+    expect(mockCancelRunDetailed).not.toHaveBeenCalled();
+  });
+
+  it("retains a fresh store-success AI Review owner when Workflow status is unreachable", async () => {
+    const bound = entry();
+    const runRegistry = registry([bound]);
+    mockGetRun.mockImplementation(() => {
+      throw new Error("workflow status unavailable");
+    });
+    mockIsRunRecordedSucceeded.mockResolvedValue(true);
+    mockFindRunOutcomeByRunId.mockResolvedValue({
+      status: "success",
+      completedAt: new Date(Date.now() - 60_000),
+    });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(),
+        runRegistry,
+        issueTracker("Review"),
+        undefined,
+        undefined,
+        undefined,
+        mockDb,
+        undefined,
+        undefined,
+        reviewSettings,
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 0 });
+    expect(mockFindRunOutcomeByRunId).toHaveBeenCalledWith(expect.anything(), "run-1");
+    expect(runRegistry.release).not.toHaveBeenCalled();
+    expect(mockCancelRunDetailed).not.toHaveBeenCalled();
+  });
+
+  it("retains a durable-evidence AI Review owner while Workflow is running", async () => {
+    const bound = entry();
+    const runRegistry = registry([bound]);
+    mockGetRun.mockReturnValue({ status: Promise.resolve("running") });
+    mockIsRunRecordedSucceeded.mockResolvedValue(true);
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(),
+        runRegistry,
+        issueTracker("Review"),
+        undefined,
+        undefined,
+        undefined,
+        mockDb,
+        undefined,
+        undefined,
+        reviewSettings,
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 0 });
+    expect(mockFindRunOutcomeByRunId).not.toHaveBeenCalled();
+    expect(runRegistry.release).not.toHaveBeenCalled();
+    expect(mockCancelRunDetailed).not.toHaveBeenCalled();
+  });
+
+  it("releases an old store-blocked AI Review owner instead of cancelling it again", async () => {
+    const bound = entry();
+    const runRegistry = registry([bound]);
+    mockFindRunOutcomeByRunId.mockResolvedValue({
+      status: "blocked",
+      completedAt: new Date(Date.now() - 10 * 60_000),
+    });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(),
+        runRegistry,
+        issueTracker("Review"),
+        undefined,
+        undefined,
+        undefined,
+        mockDb,
+        undefined,
+        undefined,
+        reviewSettings,
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 1 });
+    expect(mockFindRunOutcomeByRunId).toHaveBeenCalledWith(expect.anything(), "run-1");
+    expect(mockGetRun).not.toHaveBeenCalled();
+    expect(runRegistry.release).toHaveBeenCalledWith(
+      bound.subjectKey,
+      bound.ownerToken,
+      bound.runId,
+    );
+    expect(mockCancelRunDetailed).not.toHaveBeenCalled();
+  });
+
   it("retains an AI Review owner when durable evidence lookup fails", async () => {
     const bound = entry();
     const runRegistry = registry([bound]);

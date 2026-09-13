@@ -48,6 +48,7 @@ import {
 import { ticketSubjectKey } from "./subject-key.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
+const NON_TERMINAL_STATUSES = new Set(["pending", "running"]);
 const STORE_TERMINAL_STATUSES = new Set(["success", "failed", "blocked"]);
 const STALE_RESERVATION_MS = 5 * 60 * 1000;
 const ORPHAN_GRACE_MS = 30 * 1000;
@@ -239,7 +240,6 @@ export async function reconcileRuns(
         cleaned += await cleanFinishedRun(
           { ...entry, runId: entry.runId },
           runRegistry,
-          issueTracker,
           onSubjectReleased,
         );
       }
@@ -250,7 +250,6 @@ export async function reconcileRuns(
       cleaned += await recoverStaleReservation(
         entry,
         runRegistry,
-        issueTracker,
         onSubjectReleased,
       );
       continue;
@@ -311,7 +310,6 @@ export async function reconcileRuns(
       cleaned += await cleanFinishedRun(
         boundEntry,
         runRegistry,
-        issueTracker,
         onSubjectReleased,
       );
       continue;
@@ -321,7 +319,6 @@ export async function reconcileRuns(
       cleaned += await cleanFinishedRun(
         boundEntry,
         runRegistry,
-        issueTracker,
         onSubjectReleased,
       );
       continue;
@@ -753,7 +750,6 @@ async function readLiveTicketInAiColumn(
 async function recoverStaleReservation(
   entry: ActiveRunEntry,
   runRegistry: RunRegistryAdapter,
-  issueTracker?: IssueTrackerAdapter,
   onSubjectReleased?: SubjectReleasedCallback,
 ): Promise<number> {
   if (runRegistry.releaseExpiredReservation) {
@@ -797,7 +793,6 @@ async function recoverStaleReservation(
 async function cleanFinishedRun(
   entry: ActiveRunEntry & { runId: string },
   runRegistry: RunRegistryAdapter,
-  issueTracker?: IssueTrackerAdapter,
   onSubjectReleased?: SubjectReleasedCallback,
 ): Promise<number> {
   try {
@@ -1018,9 +1013,11 @@ async function verifyTicketLeftAiColumn(
  * race without treating an eager human move with no evidence as success.
  * Once the Workflow world is terminal, release it through this same orphan
  * path (cancelRun's already-terminal branch) exactly as for normal completion.
- * If both durable evidence lookup and Workflow status are unreachable, an old
- * terminal workflow_runs row is sufficient proof to drain and release the
- * claim directly; a fresh or non-terminal row remains fail-closed.
+ * If Workflow status is unreachable or unreadable, an old terminal
+ * workflow_runs row is sufficient proof to drain and release the claim
+ * directly; a fresh or non-terminal row remains fail-closed. A no-evidence
+ * decision still cancels without probing Workflow, except that an old blocked
+ * row is already terminal and must not be cancelled again.
  */
 async function decideAiReviewFinalization(
   ticketKey: string,
@@ -1034,17 +1031,28 @@ async function decideAiReviewFinalization(
       "reconcile_ai_review_run_evidence_lookup_failed",
     );
   }
-  if (decision === "cancel") return { retain: false };
+  if (decision === "cancel") {
+    const outcome = await readRunOutcomeFromStore(persistence, runId);
+    return outcome?.status === "blocked"
+      ? { retain: false, storeTerminalStatus: outcome.status }
+      : { retain: false };
+  }
   try {
     const status = await getRun(runId).status;
     if (TERMINAL_STATUSES.has(status)) return { retain: false };
-  } catch {
-    if (decision === "lookup_failed") {
-      const outcome = await readRunOutcomeFromStore(persistence, runId);
-      if (outcome) {
-        return { retain: false, storeTerminalStatus: outcome.status };
-      }
+    if (NON_TERMINAL_STATUSES.has(status)) {
+      logger.info(
+        { ticketKey, runId },
+        "reconcile_retained_finalizing_run_in_ai_review",
+      );
+      return { retain: true };
     }
+  } catch {
+    // Fall back to the durable store below.
+  }
+  const outcome = await readRunOutcomeFromStore(persistence, runId);
+  if (outcome) {
+    return { retain: false, storeTerminalStatus: outcome.status };
   }
   logger.info(
     { ticketKey, runId },
