@@ -1,0 +1,78 @@
+name: Changelog
+
+on:
+  schedule:
+    - cron: "30 23 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  collate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Compute the collation date
+        id: date
+        run: |
+          set -euo pipefail
+          echo "value=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+      - name: Collate pending changelog entries
+        run: pnpm run changelog:collate -- --date "${{ steps.date.outputs.value }}"
+      - name: Check for changes
+        id: diff
+        run: |
+          set -euo pipefail
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Create a pull request App token
+        if: steps.diff.outputs.changed == 'true'
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
+          owner: Blazity
+          repositories: ai-workflow
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Open the collation pull request
+        if: steps.diff.outputs.changed == 'true'
+        id: pr
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          add-paths: |
+            CHANGELOG.md
+            changelog/unreleased/*
+          branch: chore/changelog-${{ steps.date.outputs.value }}
+          base: main
+          commit-message: "docs(changelog): collate entries for ${{ steps.date.outputs.value }}"
+          title: "docs(changelog): collate entries for ${{ steps.date.outputs.value }}"
+          body: "Folds the pending files in `changelog/unreleased/` into `CHANGELOG.md`. Opened automatically by the daily collation; merges on its own once `ci` passes."
+          delete-branch: true
+      - name: Enable auto-merge
+        if: steps.diff.outputs.changed == 'true' && steps.pr.outputs.pull-request-number
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.pull-request-number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh pr merge --auto --merge "$PR_NUMBER" --repo "$REPO"
