@@ -691,7 +691,7 @@ export interface RepositorySuggestionRecord {
   durationMs: number | null;
   /** The stored, redacted provider reason, capped for display. Null when the
    *  call succeeded or no useful reason was recorded. */
-  failureReason?: string | null;
+  failureReason: string | null;
   /** False when the tokens are null: unpriced, never zero. */
   priced: boolean;
 }
