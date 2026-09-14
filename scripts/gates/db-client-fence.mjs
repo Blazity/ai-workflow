@@ -71,13 +71,33 @@ function moduleTokens(source) {
   return tokens;
 }
 
+function inlineNamedClauseIsTypeOnly(tokens, start, end) {
+  if (tokens[start]?.value !== "{") return false;
+  let found = false;
+  for (let cursor = start + 1; cursor < end;) {
+    if (tokens[cursor]?.value === ",") { cursor += 1; continue; }
+    if (tokens[cursor]?.value === "}") return found && cursor === end - 1;
+    if (
+      tokens[cursor]?.kind !== "word" || tokens[cursor].value !== "type" ||
+      tokens[cursor + 1]?.value === "as" || tokens[cursor + 1]?.value === "," ||
+      tokens[cursor + 1]?.value === "}"
+    ) return false;
+    found = true;
+    cursor += 2;
+    while (cursor < end && tokens[cursor]?.value !== "," && tokens[cursor]?.value !== "}") {
+      cursor += 1;
+    }
+  }
+  return false;
+}
+
 function staticAndDynamicImports(source) {
   const tokens = moduleTokens(source), found = [];
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
     if (token.kind !== "word" || (token.value !== "import" && token.value !== "export")) continue;
     const reexport = token.value === "export", next = tokens[index + 1];
-    const typeOnly = next?.kind === "word" && next.value === "type";
+    const clauseTypeOnly = next?.kind === "word" && next.value === "type";
     if (!reexport && next?.kind === "string") {
       found.push({ reexport: false, specifier: next.value, typeOnly: false });
       continue;
@@ -96,6 +116,7 @@ function staticAndDynamicImports(source) {
         candidate.kind === "word" && candidate.value === "from" &&
         tokens[cursor + 1]?.kind === "string"
       ) {
+        const typeOnly = clauseTypeOnly || inlineNamedClauseIsTypeOnly(tokens, index + 1, cursor);
         found.push({ reexport, specifier: tokens[cursor + 1].value, typeOnly });
         break;
       }

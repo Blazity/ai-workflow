@@ -16,7 +16,7 @@ exits non-zero when its check fails.
 | Single schema | Retired workflow schema v1 spellings and production references | `scripts/gates/single-schema-version.mjs` | A retired schema branch, helper, type, or production test import is found |
 | Transactions | Production worker source for `.transaction(` | `scripts/gates/transactions-in-repositories.mjs` | Any production transaction call is found |
 | Consecutive writes | Awaited `db.insert`, `db.update`, `db.delete`, or `db.execute` calls in one non-repository production function | `scripts/gates/consecutive-writes.mjs` | A function contains two or more awaited database writes outside the repository tier and allowlist |
-| Database client fence | Direct or local-barrel reaches from production worker files to `db/client` | `scripts/gates/db-client-fence.mjs` | Any file reaches `db/client` |
+| Database client fence | Production worker reaches to `db/client`, Drizzle value imports, and schema value reachability, directly or through local barrels | `scripts/gates/db-client-fence.mjs` | Any production file reaches `db/client`, imports a Drizzle value, or reaches a schema value |
 | Package contracts | Descriptions for every package under `packages/` | `scripts/gates/package-contracts.mjs` | A package has no non-empty description |
 | Model catalog drift | Model literals outside the catalog's declared exclusions | `scripts/gates/model-catalog-drift.mjs` | A model identifier is duplicated outside an approved owner or exclusion |
 | Dependency consistency | Shared dependency versions against the pnpm catalog | `scripts/gates/check-deps-consistency.mjs` | A shared dependency is not cataloged, is split across specifiers, or is missing from the catalog |
