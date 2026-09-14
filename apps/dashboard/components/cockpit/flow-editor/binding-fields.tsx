@@ -117,6 +117,7 @@ function JsonValueField({
         onBlur={commit}
         size="sm"
         monospace
+        className="min-h-[64px] w-full resize-y rounded-xs border border-neutral-200 bg-off-white px-2 py-1.5 font-mono text-[10px] leading-[1.4] text-coal outline-none focus:border-mariner disabled:opacity-60"
       />
       {error && <p className="m-0 mt-1 font-body text-[10px] text-red-700">{error}</p>}
     </>
@@ -234,6 +235,8 @@ function V2BindingEditor({
         value={binding?.kind ?? ""}
         disabled={!canEdit}
         size="compact"
+        className="min-w-0 w-full"
+        triggerClassName="h-[28px] min-w-0 w-full px-2 bg-off-white border border-neutral-200 rounded-xs font-mono text-[11px] text-coal outline-none disabled:opacity-60"
         options={[
           { value: "", label: required ? "Choose a value…" : "Not bound" },
           { value: "reference", label: "Workflow value" },
@@ -311,6 +314,7 @@ function V2BindingEditor({
                     disabled={!canEdit || index === 0}
                     onClick={() => moveListReference(index, index - 1)}
                     aria-label={`Move ${moveLabel} up`}
+                    className="h-5 w-7 border border-neutral-200 bg-panel font-mono text-[10px] text-neutral-600 disabled:opacity-30"
                   >
                     ↑
                   </IconButton>
@@ -322,6 +326,7 @@ function V2BindingEditor({
                     }
                     onClick={() => moveListReference(index, index + 1)}
                     aria-label={`Move ${moveLabel} down`}
+                    className="h-5 w-7 border border-t-0 border-neutral-200 bg-panel font-mono text-[10px] text-neutral-600 disabled:opacity-30"
                   >
                     ↓
                   </IconButton>
@@ -335,7 +340,7 @@ function V2BindingEditor({
             size="md"
             disabled={!canEdit}
             onClick={() => openListPicker(null)}
-            className="w-full justify-start"
+            className="min-h-9 w-full justify-start rounded-[3px] border border-dashed border-neutral-300 bg-panel px-3 text-left font-body text-[12px] text-mariner disabled:opacity-50"
           >
             ＋ Add workflow value
           </Button>
@@ -485,7 +490,7 @@ export function V2BindingFields({
             {canEdit && (
               <Button
                 type="button"
-                variant="danger"
+                variant="text"
                 size="sm"
                 onClick={() =>
                   onChange(
@@ -494,6 +499,7 @@ export function V2BindingFields({
                   )
                 }
                 aria-label={`Remove ${input.name} input`}
+                className="appearance-none border-none bg-transparent font-mono text-[9px] text-red-700"
               >
                 Remove
               </Button>
@@ -540,7 +546,7 @@ export function V2BindingFields({
               onChange={(event) => setNewInputName(event.target.value)}
               size="sm"
               monospace
-              className="flex-1"
+              className="h-[28px] min-w-0 flex-1 px-2 bg-off-white border border-neutral-200 rounded-xs font-mono text-[11px] text-coal outline-none disabled:opacity-60"
             />
             <Button
               type="button"
@@ -561,6 +567,7 @@ export function V2BindingFields({
                 setNewInputName("");
                 setNewInputSchema({ type: "string" });
               }}
+              className="h-[28px] appearance-none rounded-xs border border-mariner bg-panel px-2 font-mono text-[10px] uppercase tracking-[0.04em] text-mariner disabled:opacity-40"
             >
               Add
             </Button>

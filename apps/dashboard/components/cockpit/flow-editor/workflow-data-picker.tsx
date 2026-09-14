@@ -128,7 +128,7 @@ export function WorkflowValueChip({
           size="md"
           disabled={disabled}
           onClick={onOpen}
-          className="h-auto w-full justify-start text-left"
+          className="flex min-h-9 h-auto w-full items-center gap-2 rounded-[3px] border border-dashed border-neutral-300 bg-panel px-3 text-left font-body text-[12px] text-mariner disabled:opacity-50"
         >
           <span aria-hidden>＋</span>
           Choose workflow value
@@ -146,12 +146,12 @@ export function WorkflowValueChip({
       <div className="flex min-h-10 overflow-hidden rounded-[3px] border border-neutral-200 bg-panel">
         <Button
           type="button"
-          variant="ghost"
+          variant="text"
           size="md"
           disabled={disabled}
           onClick={onOpen}
           aria-label={`Change ${value.label}`}
-          className="h-auto min-w-0 flex-1 justify-start px-2.5 py-1.5 text-left [&>span]:w-full"
+          className="flex h-auto min-w-0 flex-1 items-center gap-2 border-none bg-transparent px-2.5 py-1.5 text-left disabled:opacity-50 [&>span]:w-full"
         >
           <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-[3px] bg-mariner-100 font-mono text-[12px] text-mariner">
             {sourceGlyph(value)}
@@ -171,11 +171,12 @@ export function WorkflowValueChip({
         {onClear && (
           <IconButton
             type="button"
+            variant="text"
             size="md"
             disabled={disabled}
             onClick={onClear}
             aria-label={`Remove ${value.label}`}
-            className="shrink-0"
+            className="w-9 shrink-0 border-y-0 border-r-0 border-l border-neutral-200 bg-transparent font-mono text-[13px] text-neutral-500 disabled:opacity-50"
           >
             ×
           </IconButton>
@@ -215,7 +216,6 @@ export function WorkflowDataPicker({
 
   useEffect(() => {
     if (!open) return;
-    requestAnimationFrame(() => searchRef.current?.focus());
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
       const buttons = Array.from(
@@ -234,7 +234,7 @@ export function WorkflowDataPicker({
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [onClose, open]);
+  }, [open]);
 
   useEffect(() => {
     if (!open || !selectedReference) return;
@@ -274,23 +274,36 @@ export function WorkflowDataPicker({
     <Modal
       open={open}
       onClose={onClose}
-      title="Choose a value"
-      description="Workflow data"
+      chrome="none"
+      aria-label="Choose workflow value"
       size="md"
       initialFocusRef={searchRef}
-      className="relative"
+      frameClassName="!z-[130] [&_[data-modal-overlay]]:bg-black/25"
+      className="flex max-h-[min(680px,calc(100vh-32px))] w-full !max-w-[560px] flex-col overflow-hidden rounded-[6px] border border-neutral-200 bg-panel shadow-[0_24px_70px_-20px_rgba(24,27,32,0.45)]"
     >
-        <div ref={dialogRef}>
+      <div ref={dialogRef} className="flex min-h-0 flex-1 flex-col">
+        <header className="flex items-start justify-between border-b border-neutral-200 px-5 py-4">
+          <div>
+            <span className="font-mono text-[9px] uppercase tracking-[0.08em] text-neutral-500">
+              Workflow data
+            </span>
+            <h2 className="m-0 mt-1 font-display text-xl font-medium text-coal">
+              Choose a value
+            </h2>
+          </div>
           <IconButton
             type="button"
             onClick={onClose}
             aria-label="Close workflow value picker"
+            variant="text"
             size="sm"
-            className="absolute right-4 top-3 z-10"
+            className="size-8 border-none bg-transparent font-mono text-lg text-neutral-500"
           >
             ×
           </IconButton>
-          <label className="flex items-center gap-2">
+        </header>
+        <div className="p-4 pb-0">
+          <label className="flex h-10 items-center gap-2 rounded-[3px] border border-neutral-200 bg-off-white px-3">
             <span aria-hidden className="text-neutral-400">
               ⌕
             </span>
@@ -300,12 +313,13 @@ export function WorkflowDataPicker({
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Search steps and fields"
               aria-label="Search steps and fields"
-              className="min-w-0 flex-1"
+              className="min-w-0 flex-1 border-none bg-transparent font-body text-[12px] outline-none"
             />
           </label>
+        </div>
         <nav
           aria-label="Workflow data sources"
-          className="mt-3 flex border-b border-neutral-200"
+          className="flex border-b border-neutral-200 px-4 pt-3"
         >
           {([
             ["steps", "Previous steps"],
@@ -314,10 +328,15 @@ export function WorkflowDataPicker({
             <Button
               key={value}
               type="button"
-              variant={tab === value ? "selected" : "ghost"}
+              variant="text"
               size="sm"
               onClick={() => setTab(value)}
               aria-pressed={tab === value}
+              className={`border-x-0 border-t-0 bg-transparent px-3 py-2 font-body text-[12px] ${
+                tab === value
+                  ? "border-b-2 border-mariner text-mariner"
+                  : "border-b-2 border-transparent text-neutral-600"
+              }`}
             >
               {label}
             </Button>
@@ -336,7 +355,7 @@ export function WorkflowDataPicker({
               <div key={key} className="border-b border-neutral-100 last:border-b-0">
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="text"
                   size="sm"
                   aria-expanded={isExpanded}
                   onClick={() =>
@@ -347,7 +366,7 @@ export function WorkflowDataPicker({
                       return next;
                     })
                   }
-                  className="h-auto w-full justify-start px-2 py-2.5 text-left [&>span]:w-full"
+                  className="flex h-auto w-full items-center gap-2 border-none bg-transparent px-2 py-2.5 text-left [&>span]:w-full"
                 >
                   <span className="inline-flex size-7 items-center justify-center rounded-[3px] bg-mariner-100 font-mono text-[11px] text-mariner">
                     {sourceGlyph(values[0]!)}
@@ -367,7 +386,7 @@ export function WorkflowDataPicker({
                         <Button
                           key={entry.reference}
                           type="button"
-                          variant={selectedReference === entry.reference ? "selected" : "ghost"}
+                          variant="text"
                           size="sm"
                           data-picker-value
                           disabled={refreshing}
@@ -380,7 +399,13 @@ export function WorkflowDataPicker({
                           onClick={() => {
                             if (reason === null) onSelect(entry);
                           }}
-                          className="h-auto w-full items-start justify-start px-3 py-2 text-left [&>span]:w-full [&>span]:items-start"
+                          className={`flex h-auto w-full items-start gap-3 rounded-[3px] border-none px-3 py-2 text-left disabled:opacity-50 [&>span]:w-full [&>span]:items-start ${
+                            reason !== null
+                              ? "cursor-not-allowed bg-off-white text-neutral-500"
+                              : selectedReference === entry.reference
+                                ? "bg-mariner-100"
+                                : "bg-transparent hover:bg-off-white"
+                          }`}
                         >
                           <span className="min-w-0 flex-1">
                             <strong className="block font-body text-[12px] font-medium text-coal">

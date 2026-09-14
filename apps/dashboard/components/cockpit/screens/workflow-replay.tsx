@@ -40,57 +40,57 @@ const STATE_STYLE: Record<
   { border: string; background: string; dot: string; label: string }
 > = {
   loading_history: {
-    border: "border-neutral-300",
-    background: "bg-neutral-100",
-    dot: "bg-mariner",
+    border: "#D9DDE2",
+    background: "#F8F9FB",
+    dot: "#3C43E7",
     label: "Loading history",
   },
   pending: {
-    border: "border-neutral-300",
-    background: "bg-panel",
-    dot: "bg-neutral-500",
+    border: "#D9DDE2",
+    background: "#FFFFFF",
+    dot: "#9EA3AA",
     label: "Not reached",
   },
   running: {
-    border: "border-mariner",
-    background: "bg-mariner-100",
-    dot: "bg-mariner",
+    border: "#3C43E7",
+    background: "#F2F3FF",
+    dot: "#3C43E7",
     label: "Running",
   },
   waiting_loop: {
-    border: "border-orange-700",
-    background: "bg-orange-100",
-    dot: "bg-orange-700",
+    border: "#FD6027",
+    background: "#FFF7F3",
+    dot: "#FD6027",
     label: "Waiting for loop",
   },
   waiting_for_clarification: {
-    border: "border-orange-700",
-    background: "bg-orange-100",
-    dot: "bg-orange-700",
+    border: "#FD6027",
+    background: "#FFF7F3",
+    dot: "#FD6027",
     label: "Awaiting input",
   },
   completed: {
-    border: "border-success",
-    background: "bg-success-bg",
-    dot: "bg-success",
+    border: "#5BB04A",
+    background: "#F4FBF2",
+    dot: "#5BB04A",
     label: "Completed",
   },
   failed: {
-    border: "border-fail",
-    background: "bg-fail-bg",
-    dot: "bg-fail",
+    border: "#D14343",
+    background: "#FFF4F4",
+    dot: "#D14343",
     label: "Failed",
   },
   cancelled: {
-    border: "border-neutral-500",
-    background: "bg-neutral-100",
-    dot: "bg-neutral-700",
+    border: "#9EA3AA",
+    background: "#F6F7F8",
+    dot: "#737981",
     label: "Cancelled",
   },
   skipped: {
-    border: "border-neutral-400",
-    background: "bg-neutral-100",
-    dot: "bg-neutral-400",
+    border: "#B7BBC1",
+    background: "#F6F7F8",
+    dot: "#B7BBC1",
     label: "Skipped",
   },
 };
@@ -558,26 +558,24 @@ function ReplayCanvas({
           return (
             <Button
               key={node.id}
-              variant="ghost"
+              variant="text"
               size="sm"
               onClick={() => onSelectNode(node.id)}
               aria-label={`${node.name ?? labelForType(node.type)}: ${style.label}`}
               aria-pressed={selected}
-              className="absolute h-auto overflow-hidden p-0 text-left [&>span]:h-full [&>span]:w-full"
+              className="absolute h-auto appearance-none overflow-hidden rounded-[4px] p-0 text-left shadow-[0_2px_8px_rgba(24,27,32,0.08)] [&>span]:h-full [&>span]:w-full"
               style={{
                 left: position.x,
                 top: position.y,
                 width: NODE_WIDTH,
                 height: NODE_HEIGHT,
+                border: `${selected ? 3 : 2}px solid ${style.border}`,
+                background: style.background,
               }}
             >
-              <span
-                className={`flex h-full w-full flex-col justify-between rounded-sm border px-3 py-2.5 shadow-sm ${style.border} ${style.background} ${selected ? "border-[3px]" : "border-2"}`}
-              >
+              <span className="flex h-full flex-col justify-between px-3 py-2.5">
                 <span className="flex items-center gap-2 min-w-0">
-                  <span
-                    className={`h-2 w-2 shrink-0 rounded-full ${style.dot}`}
-                  />
+                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: style.dot }} />
                   <span className="truncate font-display text-[13px] font-semibold text-coal">
                     {node.name ?? labelForType(node.type)}
                   </span>
@@ -619,7 +617,7 @@ function CopyButton({
           })
           .catch(() => {});
       }}
-      className={className}
+      className={`rounded-[3px] border border-neutral-700 bg-[#1A1D24] px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-300 hover:bg-[#242832] ${className ?? ""}`}
     >
       {copied ? "Copied" : "Copy"}
     </Button>
@@ -1163,6 +1161,7 @@ function AttemptInspector({
                 variant="secondary"
                 size="sm"
                 onClick={onFollowLatest}
+                className="rounded-[3px] border border-neutral-200 bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-700 hover:bg-app-bg"
               >
                 Follow latest
               </Button>
@@ -1210,7 +1209,11 @@ function AttemptInspector({
                 size="sm"
                 onClick={() => onSelectAttempt(attempt)}
                 aria-pressed={selectedAttempt?.id === attempt.id}
-                className="h-auto w-full py-2 text-left [&>span]:w-full [&>span]:justify-between"
+                className={`flex h-auto w-full items-center justify-between gap-3 rounded-[3px] border px-3 py-2 text-left font-mono text-[11px] [&>span]:w-full [&>span]:justify-between ${
+                  selectedAttempt?.id === attempt.id
+                    ? "border-mariner bg-mariner-100 text-mariner"
+                    : "border-neutral-200 bg-panel text-neutral-800 hover:bg-app-bg"
+                }`}
               >
                 <span className="min-w-0 truncate">
                   {displayAttempt(attempt)}
@@ -1534,6 +1537,7 @@ export function WorkflowReplay({
               size="sm"
               onClick={loadMore}
               disabled={loadingMore}
+              className="rounded-[3px] border border-neutral-200 bg-panel px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.04em] text-neutral-800 hover:bg-app-bg disabled:opacity-50"
             >
               {loadingMore ? "Loading…" : "Load older attempts"}
             </Button>

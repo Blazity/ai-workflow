@@ -16,6 +16,7 @@ export type ButtonSize = "sm" | "md";
 interface ButtonSharedProps {
   children: React.ReactNode;
   className?: string;
+  contentClassName?: string;
   variant?: ButtonVariant;
   size?: ButtonSize;
   loading?: boolean;
@@ -108,6 +109,7 @@ export function ButtonSpinner() {
 export function Button({
   children,
   className,
+  contentClassName,
   variant = "primary",
   size = "md",
   loading = false,
@@ -117,7 +119,13 @@ export function Button({
   const content = (
     <>
       {loading ? <ButtonSpinner /> : null}
-      <span className={loading ? "inline-flex items-center gap-1.5 opacity-0" : "inline-flex items-center gap-1.5"}>
+      <span
+        className={[
+          "inline-flex items-center gap-1.5",
+          loading ? "opacity-0" : undefined,
+          contentClassName,
+        ].filter(Boolean).join(" ")}
+      >
         {leadingIcon ? <span aria-hidden="true" className="inline-flex shrink-0">{leadingIcon}</span> : null}
         {children}
       </span>

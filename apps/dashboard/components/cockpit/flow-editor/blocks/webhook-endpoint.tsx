@@ -6,6 +6,12 @@ import { DEFAULT_WEBHOOK_SIGNATURE_HEADER, DEFAULT_WEBHOOK_TOKEN_HEADER } from "
 import { Button, Input, Textarea } from "@/components/ui";
 import { ConfigField, ConfigNote, readOnlyRowCls, webhookBannerCls } from "./shared";
 
+const inputCls = "h-[26px] px-2 bg-off-white border border-neutral-200 rounded-xs font-mono text-xs text-coal outline-none disabled:opacity-60";
+const readOnlyMonoCls = "w-full resize-none break-all rounded-xs border border-neutral-200 bg-off-white px-2 py-1.5 font-mono text-[11px] leading-[1.5] text-neutral-600 outline-none cursor-default";
+const actionButtonCls = "appearance-none rounded-xs border border-mariner bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-mariner disabled:opacity-40";
+const dangerButtonCls = "appearance-none rounded-xs border border-red-300 bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-red-700 disabled:opacity-40";
+const quietButtonCls = "appearance-none border-none bg-transparent p-0 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-600 disabled:opacity-40";
+
 export function defaultWebhookHeader(scheme: WebhookAuthScheme): string {
   return scheme === "shared_token"
     ? DEFAULT_WEBHOOK_TOKEN_HEADER
@@ -204,15 +210,17 @@ function WebhookConfirmPanel({
           size="sm"
           disabled={busy}
           onClick={onConfirm}
+          className={copy.confirmVariant === "danger" ? dangerButtonCls : actionButtonCls}
         >
           {busy ? "Working…" : copy.confirmLabel}
         </Button>
         <Button
           type="button"
-          variant="ghost"
+          variant="text"
           size="sm"
           disabled={busy}
           onClick={onCancel}
+          className={quietButtonCls}
         >
           Cancel
         </Button>
@@ -265,6 +273,7 @@ function WebhookSetSecretPanel({
         placeholder="Paste the sender's secret"
         size="sm"
         monospace
+        className={`${inputCls} w-full`}
       />
       <div className="flex items-center gap-1.5">
         <Button
@@ -272,15 +281,17 @@ function WebhookSetSecretPanel({
           size="sm"
           disabled={busy || value.trim() === ""}
           onClick={submit}
+          className={actionButtonCls}
         >
           {busy ? "Working…" : "Set secret"}
         </Button>
         <Button
           type="button"
-          variant="ghost"
+          variant="text"
           size="sm"
           disabled={busy}
           onClick={onCancel}
+          className={quietButtonCls}
         >
           Cancel
         </Button>
@@ -318,15 +329,17 @@ function WebhookSecretReveal({
             size="sm"
             onClick={onCopy}
             aria-label={`Copy ${noun.inline}`}
+            className={actionButtonCls}
           >
             {copied ? "Copied" : "Copy"}
           </Button>
           <Button
             type="button"
-            variant="ghost"
+            variant="secondary"
             size="sm"
             onClick={onDismiss}
             aria-label={`Hide ${noun.inline}`}
+            className={actionButtonCls}
           >
             Hide
           </Button>
@@ -341,6 +354,7 @@ function WebhookSecretReveal({
         rows={2}
         size="sm"
         monospace
+        className={readOnlyMonoCls}
       />
       {copyError ? (
         <div role="alert" className="font-body text-[11px] leading-[1.5] text-red-700">
@@ -364,7 +378,7 @@ function WebhookAwaitDeployNote({ onReload }: { onReload: () => void }) {
     <ConfigField
       label="Endpoint"
       action={
-        <Button type="button" variant="secondary" size="sm" onClick={onReload}>
+        <Button type="button" variant="secondary" size="sm" onClick={onReload} className={actionButtonCls}>
           Refresh
         </Button>
       }
@@ -431,7 +445,7 @@ export function WebhookEndpointSection({
       <ConfigField
         label="Endpoint"
         action={
-          <Button type="button" variant="secondary" size="sm" onClick={onReload}>
+          <Button type="button" variant="secondary" size="sm" onClick={onReload} className={actionButtonCls}>
             Retry
           </Button>
         }
@@ -499,6 +513,7 @@ export function WebhookEndpointSection({
             variant="secondary"
             size="sm"
             onClick={onCopyUrl}
+            className={actionButtonCls}
             aria-label="Copy endpoint URL"
           >
             {copied === "url" ? "Copied" : "Copy"}
@@ -513,6 +528,7 @@ export function WebhookEndpointSection({
           rows={2}
           size="sm"
           monospace
+          className={readOnlyMonoCls}
         />
       </ConfigField>
       <ConfigField label="Deployed authentication">
@@ -549,6 +565,7 @@ export function WebhookEndpointSection({
                 size="sm"
                 disabled={!canEdit || busy}
                 onClick={() => onConfirmRequest("reveal")}
+                className={actionButtonCls}
                 aria-label={`Reveal ${webhookSecretNoun(scheme).inline}`}
               >
                 Reveal
@@ -564,6 +581,7 @@ export function WebhookEndpointSection({
             rows={2}
             size="sm"
             monospace
+            className={readOnlyMonoCls}
           />
         </ConfigField>
       )}
@@ -596,6 +614,7 @@ export function WebhookEndpointSection({
             size="sm"
             disabled={!canEdit || busy}
             onClick={() => onConfirmRequest("unrevoke")}
+            className={actionButtonCls}
           >
             Unrevoke
           </Button>
@@ -606,6 +625,7 @@ export function WebhookEndpointSection({
               size="sm"
               disabled={!canEdit || busy}
               onClick={() => onConfirmRequest("rotate")}
+              className={actionButtonCls}
             >
               Rotate
             </Button>
@@ -615,6 +635,7 @@ export function WebhookEndpointSection({
               size="sm"
               disabled={!canEdit || busy}
               onClick={onSetSecretOpen}
+              className={actionButtonCls}
               aria-label={`Set ${webhookSecretNoun(scheme).inline}`}
             >
               Set secret
@@ -625,6 +646,7 @@ export function WebhookEndpointSection({
               size="sm"
               disabled={!canEdit || busy}
               onClick={() => onConfirmRequest("revoke")}
+              className={dangerButtonCls}
             >
               Revoke
             </Button>
@@ -665,6 +687,7 @@ export function WebhookDeliveriesSection({
             size="sm"
             disabled={loading}
             onClick={onRefresh}
+            className={actionButtonCls}
           >
             {loading ? "Loading…" : "Refresh"}
           </Button>
@@ -673,6 +696,7 @@ export function WebhookDeliveriesSection({
             size="sm"
             disabled={!canTest}
             onClick={onTest}
+            className={actionButtonCls}
             aria-haspopup="dialog"
           >
             Send test

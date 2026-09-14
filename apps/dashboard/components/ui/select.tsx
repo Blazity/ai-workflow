@@ -19,6 +19,7 @@ export interface SelectProps {
   disabled?: boolean;
   id?: string;
   className?: string;
+  triggerClassName?: string;
   "aria-label"?: string;
   "aria-describedby"?: string;
   "aria-invalid"?: boolean | "true" | "false";
@@ -34,6 +35,7 @@ export function Select({
   disabled = false,
   id,
   className,
+  triggerClassName,
   "aria-label": ariaLabel,
   "aria-describedby": ariaDescribedBy,
   "aria-invalid": ariaInvalid,
@@ -55,6 +57,7 @@ export function Select({
       triggerClassName={[
         size === "default" ? "bg-panel" : undefined,
         "active:scale-[0.98] disabled:active:scale-100",
+        triggerClassName,
       ].filter(Boolean).join(" ")}
     />
   );

@@ -147,6 +147,7 @@ export function RepositoryScopeBar({
           aria-haspopup="dialog"
           onClick={() => setModalOpen(true)}
           disabled={!canEdit}
+          className="inline-flex h-10 shrink-0 items-center justify-center rounded-[4px] border border-neutral-300 bg-panel px-3 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-coal transition-transform hover:bg-white active:scale-[0.96] motion-reduce:transform-none disabled:cursor-default disabled:opacity-40"
         >
           Configure
         </Button>

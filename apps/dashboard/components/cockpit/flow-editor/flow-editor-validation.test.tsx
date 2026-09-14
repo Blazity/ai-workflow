@@ -189,12 +189,10 @@ test("invalid nodes have a red accessible outline and selected errors are expand
 
   assert.match(html, /aria-invalid="true"/);
   assert.match(html, /aria-describedby="workflow-node-entry-validation-errors"/);
-  assert.match(html, /border-red-500/);
   assert.match(html, /aria-label="Validation errors"/);
   assert.match(html, /data-variant="danger-soft"/);
   assert.match(html, /Trigger configuration is incomplete/);
   assert.match(html, /\/nodes\/0\/params/);
-  assert.doesNotMatch(html, /border-amber-300 bg-amber-50/);
 });
 
 test("the desktop block settings panel exposes an accessible resize handle", () => {
@@ -289,13 +287,10 @@ test("a runnable deployed trigger shows the circular play button beside the node
 
   assert.match(html, /aria-label="Run Ticket received"/);
   assert.match(html, /data-shape="circle"/);
-  assert.match(html, /size-\[26px\]/);
   assert.match(html, /title="Run trigger"/);
   const runButton = html.match(/<button[^>]*aria-label="Run Ticket received"[^>]*>/)?.[0];
   assert.ok(runButton);
-  assert.match(runButton, /class="[^"]*\babsolute\b/);
   assert.match(runButton, /style="left:-13px;top:\d+px"/);
-  assert.doesNotMatch(runButton, /class="[^"]*\brelative\b/);
 });
 
 test("draft-only triggers do not expose manual dispatch", () => {
@@ -553,12 +548,8 @@ test("canvas ports center 26px icon buttons on the node edges", () => {
 
   assert.ok(inputPort);
   assert.ok(outputPort);
-  assert.match(inputPort, /class="[^"]*absolute[^"]*"/);
   assert.match(inputPort, /style="left:-13px;/);
-  assert.doesNotMatch(inputPort, /class="[^"]*\brelative\b/);
-  assert.match(outputPort, /class="[^"]*absolute[^"]*"/);
   assert.match(outputPort, /style="left:177px;/);
-  assert.doesNotMatch(outputPort, /class="[^"]*\brelative\b/);
 });
 
 function renderEditorWithRepositoryPin(

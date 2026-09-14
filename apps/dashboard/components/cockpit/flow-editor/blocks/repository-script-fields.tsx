@@ -203,7 +203,7 @@ function ScriptCatalogStatus({
         <div className="flex items-center gap-1.5">
           <span className={`${catalogLabelCls} text-amber-800`}>Configured:</span>
           <span className="font-mono text-[10px] text-amber-800">unavailable</span>
-          <Button type="button" variant="secondary" size="sm" onClick={onReload}>
+          <Button type="button" variant="secondary" size="sm" onClick={onReload} className="appearance-none rounded-xs border border-neutral-300 bg-white px-1.5 py-[2px] font-mono text-[10px] text-neutral-700 hover:bg-app-bg disabled:cursor-default disabled:opacity-40">
             Retry
           </Button>
         </div>
@@ -222,7 +222,7 @@ function ScriptCatalogStatus({
         {pinned ? " " : ""}
         {repositories.length === 1 ? "repo" : "repos"}
       </span>
-      <Button type="button" variant="secondary" size="sm" onClick={onReload}>
+      <Button type="button" variant="secondary" size="sm" onClick={onReload} className="appearance-none rounded-xs border border-neutral-300 bg-white px-1.5 py-[2px] font-mono text-[10px] text-neutral-700 hover:bg-app-bg disabled:cursor-default disabled:opacity-40">
         Refresh
       </Button>
     </div>
@@ -315,7 +315,7 @@ function ScriptGroupRow({
           aria-label={`Run group ${row.name}`}
           checked={checked}
           onChange={(event) => onToggle(event.target.checked)}
-          className="min-w-0 flex-1 font-mono text-[11px] text-neutral-700"
+          className="flex min-w-0 flex-1 items-center gap-2 font-mono text-[11px] text-neutral-700 [&_input]:w-3.5 [&_input]:h-3.5 [&_input]:accent-mariner"
           label={
             <>
               <span
@@ -338,12 +338,12 @@ function ScriptGroupRow({
         {coverageKnown && (
           <Button
             type="button"
-            variant="ghost"
+            variant="text"
             size="sm"
             aria-expanded={expanded}
             aria-label={`Repository coverage for ${row.name}`}
             onClick={() => setExpanded((v) => !v)}
-            className="shrink-0"
+            className="appearance-none shrink-0 border-none bg-transparent p-0 font-mono text-[10px] text-neutral-500 hover:text-neutral-700"
           >
             {row.repoKeys.length}/{allRepositories.length} {pinned ? "pinned " : ""}repos
           </Button>
@@ -391,7 +391,7 @@ function AddScriptGroupName({ onAdd }: { onAdd: (name: string) => void }) {
           }}
           size="sm"
           monospace
-          className="min-w-0 flex-1"
+          className="h-[26px] min-w-0 flex-1 px-2 bg-off-white border border-neutral-200 rounded-xs font-mono text-xs text-coal outline-none disabled:opacity-60"
         />
         <Button
           type="button"
@@ -399,6 +399,7 @@ function AddScriptGroupName({ onAdd }: { onAdd: (name: string) => void }) {
           size="sm"
           disabled={trimmed === "" || invalid}
           onClick={submit}
+          className="appearance-none rounded-xs border border-neutral-300 bg-white px-1.5 py-[2px] font-mono text-[10px] text-neutral-700 hover:bg-app-bg disabled:cursor-default disabled:opacity-40"
         >
           Add
         </Button>
@@ -681,7 +682,7 @@ export function RunChecksGroupsField({
               // eslint-disable-next-line unicorn/no-useless-undefined -- Clear groups to select the default gate.
               onChange("params.groups", undefined);
             }}
-            className={selectionRadioCls}
+            className={`${selectionRadioCls} [&_input]:w-3 [&_input]:h-3 [&_input]:accent-mariner`}
             label="Gate groups (default)"
           />
           <Radio
@@ -692,7 +693,7 @@ export function RunChecksGroupsField({
               setMode("named");
               onChange("params.groups", lastNamed);
             }}
-            className={selectionRadioCls}
+            className={`${selectionRadioCls} [&_input]:w-3 [&_input]:h-3 [&_input]:accent-mariner`}
             label="Named groups"
           />
         </div>
@@ -729,7 +730,7 @@ export function RunChecksGroupsField({
             // eslint-disable-next-line unicorn/no-useless-undefined -- Clear commands to select groups.
             onChange("params.commands", undefined);
           }}
-          className="self-start"
+          className="appearance-none self-start rounded-xs border border-neutral-300 bg-white px-1.5 py-[3px] font-mono text-[10px] text-neutral-700 hover:bg-app-bg"
         >
           Clear commands to select groups
         </Button>

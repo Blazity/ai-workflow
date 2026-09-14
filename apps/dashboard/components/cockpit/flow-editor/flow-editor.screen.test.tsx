@@ -132,11 +132,6 @@ function mountEditor({
   editorValidation?: WorkflowValidationState;
 } = {}) {
   const dom = installTestDom();
-  const style = document.createElement("style");
-  // Tailwind emits both declarations for the old Button-based overlay. The
-  // later `relative` declaration wins just as it did in the production CSS.
-  style.textContent = ".absolute{position:absolute}.relative{position:relative}";
-  document.head.append(style);
   const container = document.createElement("div");
   const cockpitMain = document.createElement("main");
   cockpitMain.dataset.cockpitMain = "";
@@ -200,7 +195,6 @@ function mountEditor({
     cleanup() {
       act(() => root?.unmount());
       cockpitMain.remove();
-      style.remove();
       dom.restore();
     },
   };
@@ -216,7 +210,7 @@ test("workflow editor node selector covers the card and a center click opens the
 
     card.getBoundingClientRect = () => rect(40, 40, 224, 116);
     selector.getBoundingClientRect = () =>
-      getComputedStyle(selector).position === "absolute"
+      selector.style.position === "absolute" && selector.style.inset === "0px"
         ? card.getBoundingClientRect()
         : rect(40, 40, 18, 2);
 
@@ -294,7 +288,7 @@ test("workflow editor nested dialogs retain page locks when closed in both order
     act(() => editPrompt.click());
     const editorDialog = Array.from(
       document.querySelectorAll<HTMLElement>('[role="dialog"][data-state="open"]'),
-    ).find((dialog) => dialog.textContent?.includes("Edit Prompt"));
+    ).find((dialog) => dialog.getAttribute("aria-label") === "Edit Prompt");
     assert.ok(editorDialog);
     const save = Array.from(editorDialog.querySelectorAll<HTMLButtonElement>("button")).find(
       (candidate) => candidate.textContent?.trim() === "↥ Save",
@@ -410,9 +404,7 @@ test("workflow editor repository scope closes from focused Escape and the visibl
     act(() => configure.click());
     dialog = document.querySelector<HTMLElement>('[role="dialog"]');
     assert.ok(dialog);
-    const backdrop = Array.from(document.querySelectorAll<HTMLElement>("div")).find(
-      (element) => element.className.includes("absolute inset-0 bg-coal/40"),
-    );
+    const backdrop = document.querySelector<HTMLElement>("[data-modal-overlay]");
     assert.ok(backdrop, "expected the production modal backdrop");
     act(() => {
       backdrop.dispatchEvent(new MouseEvent("mousedown", {

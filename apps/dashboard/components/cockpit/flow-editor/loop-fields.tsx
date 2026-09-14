@@ -126,11 +126,11 @@ export function LoopFields({
         </div>
         <Button
           type="button"
-          variant="ghost"
+          variant="text"
           size="sm"
           disabled={!canEdit || valuesRefreshing}
           onClick={() => setPickerIndex("new")}
-          className="shrink-0"
+          className="shrink-0 border-none bg-transparent font-mono text-[9px] uppercase tracking-[0.05em] text-mariner disabled:opacity-40"
         >
           + Add value
         </Button>
@@ -177,6 +177,7 @@ export function LoopFields({
                     }}
                     size="sm"
                     monospace
+                    className="h-8 w-full rounded-[3px] border border-neutral-200 bg-panel px-2 font-mono text-[11px] outline-none disabled:opacity-50"
                   />
                   {nameIssue && (
                     <p className="m-0 mt-1 font-body text-[10px] text-red-700">
@@ -190,6 +191,7 @@ export function LoopFields({
                   disabled={!canEdit}
                   aria-label={`Remove carried value ${item.name}`}
                   onClick={() => update(carry.filter((_, itemIndex) => itemIndex !== index))}
+                  className="size-8 rounded-[3px] border border-neutral-200 bg-panel font-mono text-neutral-500 disabled:opacity-40"
                 >
                   ×
                 </IconButton>

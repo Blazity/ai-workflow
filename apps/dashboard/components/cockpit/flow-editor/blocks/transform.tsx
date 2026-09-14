@@ -19,6 +19,10 @@ import { WorkflowTextTemplateEditor } from "../workflow-text-template-editor";
 import type { BlockRendererProps } from "./types";
 
 const DIALECT = "https://json-schema.org/draft/2020-12/schema" as const;
+const inputClass =
+  "h-9 min-w-0 rounded-[3px] border border-neutral-200 bg-off-white px-2.5 font-body text-[12px] text-coal outline-none disabled:opacity-50";
+const buttonClass =
+  "h-8 rounded-[3px] border border-mariner bg-panel px-3 font-mono text-[9px] uppercase tracking-[0.05em] text-mariner disabled:opacity-40";
 type Operation = TransformConfiguration["operation"];
 
 const operationLabels: Record<Operation, string> = {
@@ -153,10 +157,12 @@ function ScalarEditor({
 }) {
   const kind = value === null ? "null" : typeof value;
   return (
-    <div className="grid grid-cols-1 gap-2 sm:grid-cols-[110px_1fr]">
+    <div className="grid grid-cols-[110px_1fr] gap-2">
       <Select
         aria-label={`${label} type`}
         size="compact"
+        className="min-w-0"
+        triggerClassName={inputClass}
         disabled={disabled}
         value={kind}
         options={[
@@ -181,6 +187,8 @@ function ScalarEditor({
         <Select
           aria-label={label}
           size="compact"
+          className="min-w-0"
+          triggerClassName={inputClass}
           disabled={disabled}
           value={value === true ? "true" : "false"}
           options={[
@@ -190,11 +198,12 @@ function ScalarEditor({
           onChange={(next) => onChange(next === "true")}
         />
       ) : kind === "null" ? (
-        <Input aria-label={label} size="sm" disabled value="null" />
+        <Input aria-label={label} size="sm" disabled value="null" className={inputClass} />
       ) : (
         <Input
           aria-label={label}
           size="sm"
+          className={inputClass}
           disabled={disabled}
           type={kind === "number" ? "number" : "text"}
           value={String(value)}
@@ -236,10 +245,11 @@ function BuildObjectRow({
     (selected.presence !== "required" || types(selected).includes("null"));
   return (
     <div className="space-y-2 border-b border-neutral-200 px-[14px] py-3">
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_120px_auto]">
+      <div className="grid grid-cols-[1fr_120px_auto] gap-2">
         <Input
           aria-label="Output field name"
           size="sm"
+          className={inputClass}
           disabled={disabled}
           placeholder="field_name"
           value={field.name}
@@ -248,6 +258,8 @@ function BuildObjectRow({
         <Select
           aria-label="Value kind"
           size="compact"
+          className="min-w-0"
+          triggerClassName={inputClass}
           disabled={disabled}
           value={field.value.kind}
           options={[
@@ -270,6 +282,7 @@ function BuildObjectRow({
           aria-label="Delete output field"
           disabled={disabled}
           onClick={onDelete}
+          className="h-9 w-9 border-none bg-transparent text-neutral-500"
         >
           ×
         </IconButton>
@@ -371,6 +384,8 @@ export function TransformFields({
         <Select
           aria-label="Action"
           size="compact"
+          className="min-w-0"
+          triggerClassName={inputClass}
           value={configuration.operation}
           disabled={!canEdit}
           options={(Object.keys(operationLabels) as Operation[]).map((operation) => ({
@@ -417,6 +432,8 @@ export function TransformFields({
                 <Select
                   aria-label="Match mode"
                   size="compact"
+                  className="min-w-0 w-full"
+                  triggerClassName={`${inputClass} w-full`}
                   disabled={!canEdit}
                   value={configuration.mode}
                   options={[
@@ -433,6 +450,7 @@ export function TransformFields({
                 <Input
                   aria-label="Find"
                   size="sm"
+                  className={`${inputClass} w-full`}
                   disabled={!canEdit}
                   placeholder={configuration.mode === "regex" ? "RE2 pattern" : "Text to find"}
                   value={configuration.pattern}
@@ -443,6 +461,7 @@ export function TransformFields({
                 <Input
                   aria-label="Replace with"
                   size="sm"
+                  className={`${inputClass} w-full`}
                   disabled={!canEdit}
                   placeholder="Replacement text"
                   value={configuration.replacement}
@@ -538,6 +557,7 @@ export function TransformFields({
               <Button
                 type="button"
                 size="sm"
+                className={buttonClass}
                 onClick={() =>
                   onChange({
                     ...configuration,

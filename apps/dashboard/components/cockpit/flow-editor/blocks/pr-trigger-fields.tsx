@@ -101,11 +101,12 @@ export function PrRepositoriesField({
         action={
           <Button
             type="button"
-            variant="ghost"
+            variant="text"
             size="sm"
             aria-haspopup="dialog"
             disabled={!canEdit}
             onClick={() => setModalOpen(true)}
+            className="appearance-none border-none bg-transparent cursor-pointer p-0 font-body text-[11px] text-mariner disabled:cursor-default disabled:opacity-40"
           >
             Configure repositories
           </Button>

@@ -264,31 +264,33 @@ export function RepositoryScopeModal({
     <Modal
       open={open}
       onClose={onCancel}
+      chrome="none"
       title="Configure source scope"
       description="Choose which providers and repositories every ticket can use."
       size="md"
-      footer={
-        <div className="flex items-center justify-end gap-2">
-          <Button type="button" variant="secondary" onClick={onCancel}>
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            disabled={!canEdit}
-            onClick={() => onApply(draft)}
-          >
-            Apply scope
-          </Button>
-        </div>
-      }
+      frameClassName="!z-[80] [&_[data-modal-overlay]]:bg-coal/30"
+      className="flex max-h-[calc(100dvh-32px)] w-full max-w-[680px] flex-col overflow-hidden rounded-[6px] border-0 bg-panel shadow-2xl"
     >
-      <IconButton
-        aria-label="Close source scope"
-        onClick={onCancel}
-        className="absolute right-4 top-3"
-      >
-        ×
-      </IconButton>
+      <header className="flex items-start justify-between gap-4 border-b border-neutral-200 px-5 py-4">
+        <div>
+          <h2 className="font-mono text-[13px] font-semibold uppercase tracking-[0.04em] text-coal">
+            Configure source scope
+          </h2>
+          <p className="mt-1 font-body text-[11px] text-neutral-500">
+            Choose which providers and repositories every ticket can use.
+          </p>
+        </div>
+        <IconButton
+          aria-label="Close source scope"
+          variant="text"
+          onClick={onCancel}
+          className="inline-flex size-10 items-center justify-center rounded-[4px] border border-transparent bg-transparent font-mono text-[18px] text-neutral-500 hover:bg-app-bg hover:text-coal"
+        >
+          ×
+        </IconButton>
+      </header>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
           <section aria-labelledby={providersId}>
             <h3
               id={providersId}
@@ -325,7 +327,11 @@ export function RepositoryScopeModal({
                           : undefined
                     }
                     onClick={() => toggleProvider(provider)}
-                    className="h-11 w-full justify-between sm:w-[164px] [&>span]:w-full [&>span]:justify-between"
+                    className={`inline-flex h-11 w-[164px] items-center justify-between gap-3 rounded-[4px] border px-3 font-mono text-[11px] font-semibold transition-transform active:scale-[0.96] motion-reduce:transform-none disabled:cursor-default disabled:opacity-50 [&>span]:w-full [&>span]:justify-between ${
+                      active
+                        ? "border-mariner bg-mariner-100 text-mariner"
+                        : "border-neutral-300 bg-panel text-neutral-600 hover:bg-app-bg"
+                    }`}
                   >
                     <span>{providerLabel(provider)}</span>
                     <span
@@ -366,9 +372,10 @@ export function RepositoryScopeModal({
               </div>
               <Button
                 type="button"
-                variant="ghost"
+                variant="text"
                 size="sm"
                 onClick={catalog.refresh}
+                className="inline-flex h-10 shrink-0 items-center justify-center rounded-[4px] px-2 font-body text-[11px] font-semibold text-mariner"
               >
                 Refresh catalog
               </Button>
@@ -387,7 +394,7 @@ export function RepositoryScopeModal({
                     </span>
                     <IconButton
                       type="button"
-                      size="sm"
+                      variant="text"
                       disabled={!canEdit}
                       aria-label={`Remove ${repository.repoPath}`}
                       onClick={() =>
@@ -395,6 +402,7 @@ export function RepositoryScopeModal({
                           removePinnedRepository(current, repository),
                         )
                       }
+                      className="inline-flex size-10 items-center justify-center rounded-r-[4px] text-[16px] text-neutral-500 hover:bg-white hover:text-coal disabled:cursor-default disabled:opacity-40"
                     >
                       ×
                     </IconButton>
@@ -497,7 +505,7 @@ export function RepositoryScopeModal({
                   onChange={(event) => setFilter(event.target.value)}
                   placeholder="Filter repositories…"
                   aria-label="Filter repositories"
-                  className="mt-3"
+                  className="mt-3 h-10 w-full rounded-[4px] border border-neutral-200 bg-white px-3 font-mono text-[11px] text-coal outline-none focus:border-mariner disabled:opacity-60"
                   monospace
                 />
                 <div className="mt-2 max-h-[260px] overflow-y-auto rounded-[4px] border border-neutral-200">
@@ -515,7 +523,7 @@ export function RepositoryScopeModal({
                             disabledReason === null
                               ? "cursor-pointer bg-panel hover:bg-app-bg"
                               : "cursor-default bg-app-bg"
-                          }`}
+                          } [&_input]:size-4 [&_input]:accent-mariner`}
                           checked={checked}
                           disabled={!canEdit || disabledReason !== null}
                           aria-label={`Pin ${option.repoPath}`}
@@ -585,8 +593,8 @@ export function RepositoryScopeModal({
                     owner/repo if the workspace can reach one it does not list.
                   </div>
                 )}
-                <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
-                  <div className="w-full sm:w-[120px] sm:shrink-0">
+                <div className="mt-3 flex items-center gap-2">
+                  <div className="w-[120px] shrink-0">
                     <Select
                       options={manualProviders.map((provider) => ({
                         value: provider,
@@ -609,7 +617,7 @@ export function RepositoryScopeModal({
                     onChange={(event) => setManualPath(event.target.value)}
                     placeholder="owner/repo"
                     aria-label="Repository path"
-                    className="min-w-0 flex-1"
+                    className="h-10 min-w-0 flex-1 rounded-[4px] border border-neutral-200 bg-white px-3 font-mono text-[11px] text-coal outline-none focus:border-mariner disabled:opacity-60"
                     monospace
                   />
                   <Button
@@ -617,6 +625,7 @@ export function RepositoryScopeModal({
                     variant="secondary"
                     onClick={addManualRepository}
                     disabled={!manualAddable}
+                    className="inline-flex h-10 shrink-0 items-center justify-center rounded-[4px] border border-neutral-300 bg-panel px-3 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-coal disabled:cursor-default disabled:opacity-40"
                   >
                     Add to selection
                   </Button>
@@ -636,6 +645,26 @@ export function RepositoryScopeModal({
               </div>
             )}
           </section>
+      </div>
+
+      <footer className="flex items-center justify-end gap-2 border-t border-neutral-200 bg-app-bg px-5 py-3">
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={onCancel}
+          className="inline-flex h-10 items-center justify-center rounded-[4px] border border-neutral-300 bg-panel px-4 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-coal transition-transform active:scale-[0.96] motion-reduce:transform-none"
+        >
+          Cancel
+        </Button>
+        <Button
+          type="button"
+          disabled={!canEdit}
+          onClick={() => onApply(draft)}
+          className="inline-flex h-10 items-center justify-center rounded-[4px] border border-mariner bg-mariner px-4 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-white transition-transform active:scale-[0.96] motion-reduce:transform-none disabled:cursor-default disabled:opacity-40"
+        >
+          Apply scope
+        </Button>
+      </footer>
     </Modal>
   );
 }

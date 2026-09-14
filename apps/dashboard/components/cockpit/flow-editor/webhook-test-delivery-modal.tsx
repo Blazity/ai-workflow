@@ -137,33 +137,35 @@ export function WebhookTestDeliveryModal({
   return (
     <Modal
       onClose={onClose}
+      chrome="none"
       title="Send test delivery"
       description={triggerLabel}
       size="sm"
       initialFocusRef={textareaRef}
-      footer={
-        <div className="flex items-center justify-end gap-3">
-          <Button variant="ghost" onClick={onClose}>
-            {result ? "Close" : "Cancel"}
-          </Button>
-          <Button
-            onClick={() => void send()}
-            disabled={busy || payload.trim() === ""}
-          >
-            {busy ? "Sending…" : "Send test delivery"}
-          </Button>
-        </div>
-      }
+      frameClassName="!z-[80] !px-4 !py-6 [&_[data-modal-overlay]]:bg-coal/30 [&_[data-modal-overlay]]:backdrop-blur-[1px]"
+      className="w-full max-w-[476px] overflow-hidden rounded-[6px] border border-neutral-200 bg-panel shadow-[0_18px_60px_rgba(24,27,32,0.22)]"
     >
-      <IconButton
-        aria-label="Close test delivery"
-        onClick={onClose}
-        shape="circle"
-        className="absolute right-4 top-3"
-      >
-        <XIcon size={19} weight="bold" aria-hidden />
-      </IconButton>
-      <div>
+      <div className="px-7 pb-6 pt-7">
+        <div className="flex items-start gap-4">
+          <div className="min-w-0 flex-1">
+            <h2 className="font-display text-[20px] font-semibold leading-tight text-coal">
+              Send test delivery
+            </h2>
+            <p className="mt-1 font-body text-[13px] text-neutral-600">
+              {triggerLabel}
+            </p>
+          </div>
+          <IconButton
+            aria-label="Close test delivery"
+            onClick={onClose}
+            variant="text"
+            shape="circle"
+            className="inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full border-none bg-transparent text-neutral-600 hover:bg-app-bg hover:text-coal"
+          >
+            <XIcon size={19} weight="bold" aria-hidden />
+          </IconButton>
+        </div>
+
           <div className="mt-4 border-l-2 border-mariner bg-app-bg px-3 py-2 font-body text-[12px] leading-relaxed text-neutral-700">
             This is a dry run. The body is mapped exactly like a real delivery
             and the result is logged as a test, but no workflow starts and no
@@ -188,7 +190,7 @@ export function WebhookTestDeliveryModal({
               setError(null);
             }}
             monospace
-            className="mt-2"
+            className="mt-2 w-full resize-y rounded-[3px] border border-neutral-300 bg-panel px-3 py-2 font-mono text-[12px] leading-[1.5] text-coal outline-none focus:border-mariner focus:ring-2 focus:ring-mariner/15"
           />
 
           {error && (
@@ -201,6 +203,23 @@ export function WebhookTestDeliveryModal({
           )}
 
           {result && <WebhookTestDeliveryResultView result={result} />}
+      </div>
+
+      <div className="flex items-center justify-end gap-3 border-t border-neutral-200 bg-app-bg px-7 py-4">
+        <Button
+          variant="text"
+          onClick={onClose}
+          className="cursor-pointer border-none bg-transparent px-2 py-2 font-mono text-[11px] font-semibold uppercase tracking-[0.05em] text-neutral-700"
+        >
+          {result ? "Close" : "Cancel"}
+        </Button>
+        <Button
+          onClick={() => void send()}
+          disabled={busy || payload.trim() === ""}
+          className="cursor-pointer rounded-[3px] border border-mariner bg-mariner px-4 py-2.5 font-mono text-[11px] font-semibold uppercase tracking-[0.05em] text-white shadow-[0_2px_4px_rgba(60,67,231,0.2)] hover:bg-[#3037d8] disabled:cursor-default disabled:opacity-40"
+        >
+          {busy ? "Sending…" : "Send test delivery"}
+        </Button>
       </div>
     </Modal>
   );

@@ -14,6 +14,10 @@ import { AgentHarnessProfile } from "../agent-harness-profile";
 import type { ConfigChange } from "./types";
 import { apiClient } from "@/lib/api/client";
 
+const inputCls = "h-[26px] px-2 bg-off-white border border-neutral-200 rounded-xs font-mono text-xs text-coal outline-none disabled:opacity-60";
+const textareaCls = "min-h-[64px] px-2 py-1.5 bg-off-white border border-neutral-200 rounded-xs font-body text-xs leading-[1.5] text-coal outline-none resize-y disabled:opacity-60";
+const monoTextareaCls = "min-h-[64px] px-2 py-1.5 bg-off-white border border-neutral-200 rounded-xs font-mono text-xs leading-[1.5] text-coal outline-none resize-y disabled:opacity-60";
+
 export function str(value: WorkflowParamValue | undefined): string {
   return typeof value === "string" ? value : "";
 }
@@ -39,7 +43,7 @@ export function CheckboxRow({
       disabled={disabled}
       onChange={(event) => onChange(event.target.checked)}
       label={label}
-      className="text-xs text-coal"
+      className="flex items-center gap-2 font-body text-xs text-coal [&_input]:w-3.5 [&_input]:h-3.5 [&_input]:accent-mariner"
     />
   );
 }
@@ -91,6 +95,7 @@ export function TextInput({
       onChange={(e) => onChange(e.target.value)}
       size="sm"
       monospace
+      className={inputCls}
     />
   );
 }
@@ -117,6 +122,7 @@ export function TextArea({
       onChange={(e) => onChange(e.target.value)}
       size="sm"
       monospace={mono}
+      className={mono ? monoTextareaCls : textareaCls}
     />
   );
 }
@@ -248,7 +254,7 @@ export function CanonicalQuestionsField({
           {visibleQuestions.length > 1 && (
             <Button
               type="button"
-              variant="danger"
+              variant="secondary"
               size="sm"
               disabled={disabled}
               aria-label={`Remove question ${index + 1}`}
@@ -262,6 +268,7 @@ export function CanonicalQuestionsField({
                     : undefined,
                 );
               }}
+              className="appearance-none rounded-xs border border-neutral-200 bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-red-700 disabled:opacity-40"
             >
               Remove
             </Button>
@@ -273,7 +280,7 @@ export function CanonicalQuestionsField({
         size="sm"
         disabled={disabled}
         onClick={() => onChange([...visibleQuestions, ""])}
-        className="self-start"
+        className="self-start appearance-none rounded-xs border border-mariner bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-mariner disabled:opacity-40"
       >
         + Add question
       </Button>
@@ -314,6 +321,7 @@ export function NumberField({
       }}
       size="sm"
       monospace
+      className={inputCls}
     />
   );
 }
@@ -356,6 +364,7 @@ export function ArrayTextarea({
       }}
       size="sm"
       monospace={mono}
+      className={mono ? monoTextareaCls : textareaCls}
     />
   );
 }
@@ -716,6 +725,7 @@ function ModelField({
           onChange={(e) => onChange(e.target.value)}
           size="sm"
           monospace
+          className={inputCls}
         />
       )}
     </div>
@@ -761,6 +771,7 @@ export function TicketStatusField({
           onChange={(e) => onChange(e.target.value)}
           size="sm"
           monospace
+          className={inputCls}
         />
       )}
     </div>

@@ -14,7 +14,7 @@ export function SendPlanApprovalFields(props: BlockRendererProps) {
                 disabled={!canEdit}
                 onChange={(event) => onChange("params.mirrorComment", event.target.checked)}
                 label="Mirror the plan as a ticket comment"
-                className="text-xs text-coal"
+                className="flex items-center gap-2 font-body text-xs text-coal [&_input]:w-3.5 [&_input]:h-3.5 [&_input]:accent-mariner"
               />
             </ConfigField>
             <ConfigNote>

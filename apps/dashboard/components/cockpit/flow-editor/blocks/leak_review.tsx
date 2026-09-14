@@ -21,7 +21,7 @@ export function LeakReviewFields(props: BlockRendererProps) {
                 disabled={!canEdit}
                 onChange={(event) => onChange("params.llmScan", event.target.checked)}
                 label="Add a report-only LLM screen for sensitive data"
-                className="text-xs text-coal"
+                className="flex items-center gap-2 font-body text-xs text-coal [&_input]:w-3.5 [&_input]:h-3.5 [&_input]:accent-mariner"
               />
             </ConfigField>
             <ConfigField label="Max diff bytes">

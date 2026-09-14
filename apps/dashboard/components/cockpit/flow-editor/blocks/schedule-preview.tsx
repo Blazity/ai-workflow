@@ -37,6 +37,10 @@ export const SCHEDULE_OVERLAP_POLICY_OPTIONS: { value: ScheduleOverlapPolicy; la
   { value: "allow", label: "Allow concurrent" },
 ];
 
+export const scheduleModeToggleCls = "appearance-none rounded-xs border border-neutral-200 bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-600 disabled:opacity-40";
+const actionButtonCls = "appearance-none rounded-xs border border-mariner bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-mariner disabled:opacity-40";
+const dangerButtonCls = "appearance-none rounded-xs border border-red-300 bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-red-700 disabled:opacity-40";
+
 export const SCHEDULE_OUTCOME_STYLES: Record<ScheduleOccurrenceOutcome, string> = {
   started: "border-green-300 bg-green-50 text-green-800",
   skipped_overlap: "border-amber-300 bg-amber-50 text-amber-800",
@@ -96,6 +100,11 @@ export function ScheduleWeekdayToggles({
                   : [...value, day].sort((a, b) => a - b),
               )
             }
+            className={`rounded-xs border px-1.5 py-1 font-mono text-[9px] uppercase tracking-[0.04em] disabled:opacity-40 ${
+              active
+                ? "border-mariner bg-mariner-100 text-mariner"
+                : "border-neutral-200 bg-panel text-neutral-600"
+            }`}
           >
             {label}
           </Button>
@@ -310,6 +319,7 @@ export function ScheduleNextRunsSection({
             size="sm"
             disabled={!canEdit || busy}
             onClick={onPause}
+            className={dangerButtonCls}
           >
             Pause
           </Button>
@@ -318,10 +328,11 @@ export function ScheduleNextRunsSection({
             size="sm"
             disabled={!canEdit || busy}
             onClick={onResume}
+            className={actionButtonCls}
           >
             Resume
           </Button>
-          <Button type="button" size="sm" onClick={onReload}>
+          <Button type="button" size="sm" onClick={onReload} className={actionButtonCls}>
             Retry
           </Button>
         </div>
@@ -352,6 +363,7 @@ export function ScheduleNextRunsSection({
             size="sm"
             disabled={!canEdit || busy}
             onClick={onPause}
+            className={dangerButtonCls}
           >
             Pause
           </Button>
@@ -372,7 +384,7 @@ export function ScheduleNextRunsSection({
         </div>
         <SchedulePreviewErrorBanner preview={preview} />
         <div className="flex items-center gap-1.5 py-2.5 px-[14px] border-b border-neutral-200">
-          <Button type="button" size="sm" onClick={onReload}>
+          <Button type="button" size="sm" onClick={onReload} className={actionButtonCls}>
             Refresh
           </Button>
         </div>
@@ -402,6 +414,7 @@ export function ScheduleNextRunsSection({
             size="sm"
             disabled={!canEdit || busy}
             onClick={onResume}
+            className={actionButtonCls}
           >
             Resume
           </Button>
@@ -419,7 +432,7 @@ export function ScheduleNextRunsSection({
     <ConfigField
       label="Next occurrences"
       action={
-        <Button type="button" size="sm" onClick={onReload}>
+        <Button type="button" size="sm" onClick={onReload} className={actionButtonCls}>
           Refresh
         </Button>
       }
@@ -457,6 +470,7 @@ export function ScheduleNextRunsSection({
             size="sm"
             disabled={!canEdit || busy}
             onClick={onPause}
+            className={dangerButtonCls}
           >
             Pause
           </Button>
@@ -484,15 +498,17 @@ export function ScheduleNextRunsSection({
                   size="sm"
                   disabled={busy}
                   onClick={onCancelConfirm}
+                  className={dangerButtonCls}
                 >
                   {busy ? "Working…" : "Cancel this run"}
                 </Button>
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="text"
                   size="sm"
                   disabled={busy}
                   onClick={onCancelDismiss}
+                  className="appearance-none border-none bg-transparent p-0 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-600 disabled:opacity-40"
                 >
                   Keep it
                 </Button>
@@ -505,7 +521,7 @@ export function ScheduleNextRunsSection({
               size="sm"
               disabled={!canEdit || busy}
               onClick={onCancelRequest}
-              className="self-start"
+              className={`${dangerButtonCls} self-start`}
             >
               Cancel current run
             </Button>

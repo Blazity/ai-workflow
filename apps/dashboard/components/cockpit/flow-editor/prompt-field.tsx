@@ -251,7 +251,7 @@ export function PromptField({
   }
 
   const detachButton = !disabled ? (
-    <Button type="button" variant="ghost" size="sm" onClick={detach}>
+    <Button type="button" variant="text" size="sm" onClick={detach} className="appearance-none border-none bg-transparent cursor-pointer p-0 font-body text-[11px] text-neutral-500 hover:text-coal">
       Detach
     </Button>
   ) : null;
@@ -290,7 +290,7 @@ export function PromptField({
               ❡ {row.name} · v{ref.version} of v{latest}
             </CkChip>
             {!disabled && (
-              <Button type="button" variant="ghost" size="sm" onClick={() => setConfirmUpdate(true)}>
+              <Button type="button" variant="text" size="sm" onClick={() => setConfirmUpdate(true)} className="appearance-none border-none bg-transparent cursor-pointer p-0 font-body text-[11px] text-mariner">
                 Update to v{latest}
               </Button>
             )}
@@ -302,14 +302,15 @@ export function PromptField({
                 <DiffView oldText={value} newText={row.body} />
               </div>
               <div className="flex items-center gap-3">
-                <Button type="button" size="sm" onClick={() => applyUpdate(row)}>
+                <Button type="button" size="sm" onClick={() => applyUpdate(row)} className="appearance-none cursor-pointer border border-mariner bg-mariner text-white py-1 px-2.5 rounded-[3px] font-mono text-[10px] tracking-[0.04em] uppercase">
                   Replace with v{latest}
                 </Button>
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="text"
                   size="sm"
                   onClick={() => setConfirmUpdate(false)}
+                  className="appearance-none border-none bg-transparent cursor-pointer p-0 font-body text-[11px] text-neutral-500 hover:text-coal"
                 >
                   Cancel
                 </Button>
