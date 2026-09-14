@@ -529,9 +529,13 @@ Arm the gate for the demo custom environment with these repository variables:
 
 ```text
 ENGINE_CANARY_TARGET=ai-workflow-demo
+ENGINE_CANARY_TARGET_URL=https://ai-workflow-app-env-ai-workflow-demo-blazity.vercel.app
 ENGINE_CANARY_DB_ENV=production
 ENGINE_CANARY_DB_FINGERPRINT=d1995828824d
 ```
+
+Use the alias rather than the unique deployment URL because the auth base URL
+and token issuer are the alias.
 
 In the `ai-workflow-demo` Vercel environment, set `DATABASE_URL` to the
 production connection string as a manual entry and set
@@ -550,7 +554,7 @@ commit must also match. The `production` Vercel target name is forbidden
 because deploying a pull request to it would replace the live deployment.
 
 Repository variables that arm and configure the job are
-`ENGINE_CANARY_TARGET`, `ENGINE_CANARY_DB_ENV`,
+`ENGINE_CANARY_TARGET`, `ENGINE_CANARY_TARGET_URL`, `ENGINE_CANARY_DB_ENV`,
 `ENGINE_CANARY_DB_FINGERPRINT`,
 `HARNESS_CANARY_CLAUDE_WORKFLOW_ID`, `HARNESS_CANARY_CODEX_WORKFLOW_ID`,
 `HARNESS_CANARY_CUSTOM_WORKFLOW_ID`, `HARNESS_CANARY_TICKET_KEY`,

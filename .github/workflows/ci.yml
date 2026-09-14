@@ -161,6 +161,7 @@ jobs:
         if: steps.scope.outputs.run == 'true' && steps.scope.outputs.migrations != 'true'
         env:
           ENGINE_CANARY_TARGET: ${{ vars.ENGINE_CANARY_TARGET }}
+          ENGINE_CANARY_TARGET_URL: ${{ vars.ENGINE_CANARY_TARGET_URL }}
           ENGINE_CANARY_DB_ENV: ${{ vars.ENGINE_CANARY_DB_ENV }}
           ENGINE_CANARY_DB_FINGERPRINT: ${{ vars.ENGINE_CANARY_DB_FINGERPRINT }}
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
@@ -200,6 +201,7 @@ jobs:
             exit 0
           fi
           required=(
+            ENGINE_CANARY_TARGET_URL
             ENGINE_CANARY_DB_ENV
             ENGINE_CANARY_DB_FINGERPRINT
             VERCEL_TOKEN
@@ -238,6 +240,29 @@ jobs:
             echo "::error title=engine-canary configuration::missing required names: ${missing[*]}"
             exit 1
           fi
+          target_host="$(
+            node -e '
+              const value = process.argv[1];
+              let url;
+              try {
+                url = new URL(value);
+              } catch {
+                process.exit(1);
+              }
+              if (
+                !value.startsWith("https://") ||
+                value !== url.origin ||
+                url.hostname === "ai-workflow-app-eight.vercel.app"
+              ) {
+                process.exit(1);
+              }
+              process.stdout.write(url.host);
+            ' "$ENGINE_CANARY_TARGET_URL"
+          )" || {
+            echo "::error title=engine-canary configuration::ENGINE_CANARY_TARGET_URL must be an HTTPS origin without a path and must not use ai-workflow-app-eight.vercel.app"
+            exit 1
+          }
+          echo "host=$target_host" >> "$GITHUB_OUTPUT"
           echo "armed=true" >> "$GITHUB_OUTPUT"
       - name: Deploy engine canary target
         id: deploy
@@ -258,8 +283,6 @@ jobs:
             *) echo "::error::vercel deploy did not return an HTTPS deployment URL"; exit 1 ;;
           esac
           echo "url=$url" >> "$GITHUB_OUTPUT"
-          host="$(node -e 'process.stdout.write(new URL(process.argv[1]).host)' "$url")"
-          echo "host=$host" >> "$GITHUB_OUTPUT"
           deadline=$((SECONDS + 300))
           until [ "$SECONDS" -ge "$deadline" ]; do
             status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --header "x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET" "$url/health" || true)"
@@ -273,18 +296,30 @@ jobs:
       - name: Verify deployment and database identity
         if: steps.scope.outputs.run == 'true' && steps.target.outputs.armed == 'true'
         env:
-          URL: ${{ steps.deploy.outputs.url }}
+          URL: ${{ vars.ENGINE_CANARY_TARGET_URL }}
           ENGINE_CANARY_TARGET: ${{ vars.ENGINE_CANARY_TARGET }}
           ENGINE_CANARY_DB_ENV: ${{ vars.ENGINE_CANARY_DB_ENV }}
           ENGINE_CANARY_DB_FINGERPRINT: ${{ vars.ENGINE_CANARY_DB_FINGERPRINT }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-        run: node --import tsx scripts/ci/engine-canary-preflight.ts --url "$URL" --target "$ENGINE_CANARY_TARGET" --commit "$GITHUB_SHA" --database-env "$ENGINE_CANARY_DB_ENV" --database-fingerprint "$ENGINE_CANARY_DB_FINGERPRINT" --database-url "$DATABASE_URL"
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 300))
+          while true; do
+            if node --import tsx scripts/ci/engine-canary-preflight.ts --url "$URL" --target "$ENGINE_CANARY_TARGET" --commit "$GITHUB_SHA" --database-env "$ENGINE_CANARY_DB_ENV" --database-fingerprint "$ENGINE_CANARY_DB_FINGERPRINT" --database-url "$DATABASE_URL"; then
+              exit 0
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::engine-canary target alias did not report commit $GITHUB_SHA within 5 minutes"
+              exit 1
+            fi
+            sleep 10
+          done
       - name: Run engine canaries
         if: steps.scope.outputs.run == 'true' && steps.target.outputs.armed == 'true'
         env:
-          HARNESS_CANARY_BASE_URL: ${{ steps.deploy.outputs.url }}
-          HARNESS_CANARY_EXPECTED_HOST: ${{ steps.deploy.outputs.host }}
+          HARNESS_CANARY_BASE_URL: ${{ vars.ENGINE_CANARY_TARGET_URL }}
+          HARNESS_CANARY_EXPECTED_HOST: ${{ steps.target.outputs.host }}
           ENGINE_CANARY_MCP_CLIENT_ID: ${{ secrets.ENGINE_CANARY_MCP_CLIENT_ID }}
           ENGINE_CANARY_MCP_CLIENT_SECRET: ${{ secrets.ENGINE_CANARY_MCP_CLIENT_SECRET }}
           HARNESS_CANARY_CONFIRM_PREVIEW_MUTATIONS: run-preview-harness-canary

@@ -239,6 +239,20 @@ test("the engine canary is a fail-closed pull request dependency", async () => {
   assert.match(target?.run ?? "", /engine-canary idle/u);
   assert.match(target?.run ?? "", /armed=false/u);
   assert.match(target?.run ?? "", /missing required names/u);
+  assert.equal(
+    target?.env?.ENGINE_CANARY_TARGET_URL,
+    "${{ vars.ENGINE_CANARY_TARGET_URL }}",
+  );
+  assert.match(
+    target?.run ?? "",
+    /required=\([\s\S]*ENGINE_CANARY_TARGET_URL/u,
+  );
+  assert.match(target?.run ?? "", /value\.startsWith\("https:\/\/"\)/u);
+  assert.match(target?.run ?? "", /value !== url\.origin/u);
+  assert.match(
+    target?.run ?? "",
+    /url\.hostname === "ai-workflow-app-eight\.vercel\.app"/u,
+  );
   assert.match(
     target?.run ?? "",
     /if \[ "\$ENGINE_CANARY_TARGET" = "production" \]; then\n\s+echo "::error title=engine-canary configuration::the Vercel production target is forbidden"\n\s+exit 1\n\s*fi/u,
@@ -254,11 +268,30 @@ test("the engine canary is a fail-closed pull request dependency", async () => {
   const preflight = steps.find(
     (step) => step.name === "Verify deployment and database identity",
   );
+  assert.equal(
+    preflight?.env?.URL,
+    "${{ vars.ENGINE_CANARY_TARGET_URL }}",
+  );
   assert.match(preflight?.run ?? "", /--target "\$ENGINE_CANARY_TARGET"/u);
+  assert.match(preflight?.run ?? "", /deadline=\$\(\(SECONDS \+ 300\)\)/u);
+  assert.match(preflight?.run ?? "", /sleep 10/u);
+  assert.match(
+    preflight?.run ?? "",
+    /target alias did not report commit \$GITHUB_SHA within 5 minutes/u,
+  );
   const preflightIndex = steps.findIndex((step) => step === preflight);
-  const canariesIndex = steps.findIndex(
+  const canaries = steps.find(
     (step) => step.name === "Run engine canaries",
   );
+  assert.equal(
+    canaries?.env?.HARNESS_CANARY_BASE_URL,
+    "${{ vars.ENGINE_CANARY_TARGET_URL }}",
+  );
+  assert.equal(
+    canaries?.env?.HARNESS_CANARY_EXPECTED_HOST,
+    "${{ steps.target.outputs.host }}",
+  );
+  const canariesIndex = steps.findIndex((step) => step === canaries);
   assert.ok(
     scopeIndex < migrationSkipIndex &&
       migrationSkipIndex < targetIndex &&
