@@ -178,6 +178,11 @@ export function suggestionFailureCopy(input: {
           "Reading the repository's files took too long, so no suggestion was made. Nothing was changed. Try again.",
         retryable: true,
       };
+    case "profile_source_failed":
+      return {
+        message: "Reading the repository failed. Nothing was changed.",
+        retryable: true,
+      };
     case "suggestion_timed_out":
       return {
         message:

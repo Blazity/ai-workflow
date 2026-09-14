@@ -1352,6 +1352,11 @@ function SuggestionHistory({ repositoryId }: { repositoryId: number }) {
               <div className="font-body text-[12px] text-neutral-600">
                 {suggestionUsageLabel(row)} · {durationLabel(row.durationMs)}
               </div>
+              {row.outcome !== "proposed" && row.failureReason && (
+                <div className="font-body text-[12px] font-normal text-neutral-600">
+                  {row.failureReason}
+                </div>
+              )}
             </li>
           ))}
         </ul>

@@ -115,6 +115,7 @@ test("a suggestion row that reported no usage is unpriced, never free", () => {
     tokensInput: null,
     tokensOutput: null,
     durationMs: null,
+    failureReason: "provider call: timed out",
     priced: false,
   };
   assert.equal(suggestionUsageLabel(row), "unpriced");
@@ -124,6 +125,7 @@ test("a suggestion row that reported no usage is unpriced, never free", () => {
       outcome: "proposed",
       tokensInput: 100,
       tokensOutput: 20,
+      failureReason: null,
       priced: true,
     }),
     "120 tokens (100 in, 20 out)",

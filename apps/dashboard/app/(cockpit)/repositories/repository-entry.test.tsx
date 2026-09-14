@@ -17,6 +17,7 @@ import {
 import type {
   RepositoryCatalogEntry,
   RepositoryProfileVersion,
+  RepositorySuggestionRecord,
 } from "@shared/contracts";
 import { REPOSITORY_RELATIONSHIPS_MAX } from "@shared/contracts";
 
@@ -126,6 +127,7 @@ function render(
     catalog?: RepositoryCatalogEntry[];
     /** The query string the screen was opened on, as a link would carry it. */
     search?: string;
+    suggestions?: RepositorySuggestionRecord[];
   } = {},
 ): Harness {
   const calls: Call[] = [];
@@ -135,7 +137,9 @@ function render(
     const body = init?.body === undefined ? null : JSON.parse(String(init.body));
     calls.push({ url: String(url), method, body });
     if (String(url).startsWith("/api/repository-catalog/7/suggestions")) {
-      return Promise.resolve(Response.json({ suggestions: [], nextCursor: null }));
+      return Promise.resolve(
+        Response.json({ suggestions: options.suggestions ?? [], nextCursor: null }),
+      );
     }
     if (String(url).startsWith("/api/repository-catalog/7/versions")) {
       return Promise.resolve(
@@ -628,6 +632,31 @@ test("the History tab offers Load more only while older versions exist", (t) => 
     ).length,
     0,
   );
+});
+
+test("a failed suggestion row renders its redacted reason", async (t) => {
+  const harness = render(t, {
+    search: "tab=history",
+    suggestions: [
+      {
+        id: 3,
+        createdAt: "2026-09-14T09:00:00.000Z",
+        outcome: "failed",
+        model: "claude-haiku-4-5",
+        actorLabel: "Admin",
+        tokensInput: null,
+        tokensOutput: null,
+        durationMs: 1_050,
+        failureReason: "profile source: GitHub answered 403 Forbidden",
+        priced: false,
+      },
+    ],
+  });
+
+  await act(async () => {});
+
+  assert.match(text(harness.root), /Suggestion calls/);
+  assert.match(text(harness.root), /profile source: GitHub answered 403 Forbidden/);
 });
 
 test("Load more asks for what is older than the oldest row it is showing", async (t) => {

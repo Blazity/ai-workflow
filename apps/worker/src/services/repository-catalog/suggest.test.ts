@@ -270,7 +270,7 @@ describe("suggestRepositoryProfile", () => {
     expect(rows[1]?.error).toBe("provider call: provider exploded");
   });
 
-  it("never puts the provider's own words in what the caller gets back", async () => {
+  it("returns only the bounded redacted provider reason", async () => {
     mocks.generateProviderText.mockRejectedValue(
       new Error("401 from https://api.anthropic.com with x-api-key sk-ant-secret"),
     );
@@ -280,26 +280,34 @@ describe("suggestRepositoryProfile", () => {
       repositoryId,
     }).catch((error: Error) => error);
 
-    expect(failure).toMatchObject({ statusCode: 502, message: "suggestion_failed" });
-    expect((failure as Error).message).not.toContain("api.anthropic.com");
+    expect(failure).toMatchObject({
+      statusCode: 502,
+      message: "suggestion_failed",
+      failureReason:
+        "provider call: 401 from https://api.anthropic.com with x-api-key [redacted]",
+    });
+    expect(JSON.stringify(failure)).not.toContain("sk-ant-secret");
   });
 
   it("redacts credential shapes out of the recorded failure and bounds its length", async () => {
     mocks.generateProviderText.mockRejectedValue(
       new Error(
-        `refused for token ghp_abcdefghijklmnop and Bearer sk-ant-9999 ${"x".repeat(4_000)}`,
+        `refused for token ghp_abcdefghijklmnop and Bearer sk-ant-9999 ${"detail ".repeat(1_000)}`,
       ),
     );
 
-    await expect(
-      suggestRepositoryProfile({ actor: ADMIN, repositoryId }),
-    ).rejects.toMatchObject({ statusCode: 502 });
+    const failure = await suggestRepositoryProfile({
+      actor: ADMIN,
+      repositoryId,
+    }).catch((error: Error) => error);
+    expect(failure).toMatchObject({ statusCode: 502 });
 
     const [row] = await listRepositorySuggestions(db, repositoryId);
     expect(row?.error).not.toContain("ghp_abcdefghijklmnop");
     expect(row?.error).not.toContain("sk-ant-9999");
     expect(row?.error).toContain("[redacted]");
     expect((row?.error ?? "").length).toBeLessThanOrEqual(2_000);
+    expect((failure as { failureReason?: string }).failureReason).toHaveLength(500);
   });
 
   it("answers retryable on a provider timeout and records it with the tokens it never got", async () => {

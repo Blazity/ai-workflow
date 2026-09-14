@@ -723,6 +723,7 @@ describe("GET /api/v1/repository-catalog/:id/suggestions", () => {
       outcome: "proposed",
       usage: { inputTokens: 100, cachedTokens: 0, outputTokens: 20 },
       durationMs: 1500,
+      error: "ignored on success",
     });
     await insertRepositorySuggestion(db, {
       repositoryId: id,
@@ -731,6 +732,7 @@ describe("GET /api/v1/repository-catalog/:id/suggestions", () => {
       model: "claude-sonnet",
       outcome: "timeout",
       usage: null,
+      error: `  profile source: ${"x".repeat(600)}  `,
     });
 
     const res = await suggestions(id);
@@ -748,13 +750,16 @@ describe("GET /api/v1/repository-catalog/:id/suggestions", () => {
       tokensInput: null,
       tokensOutput: null,
       durationMs: null,
+      failureReason: `profile source: ${"x".repeat(472)} [truncated]`,
     });
     expect(body.suggestions[1]).toMatchObject({
       priced: true,
       tokensInput: 100,
       tokensOutput: 20,
       durationMs: 1500,
+      failureReason: null,
     });
+    expect(body.suggestions[0].failureReason).toHaveLength(500);
   });
 
   it("refuses a cursor nobody issued rather than answering somebody else's page", async () => {

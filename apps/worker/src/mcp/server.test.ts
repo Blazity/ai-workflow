@@ -240,6 +240,29 @@ describe("createMcpServer", () => {
     });
   });
 
+  it("includes a redacted failure reason only when one is supplied", async () => {
+    state.executeMcpRead.mockRejectedValue(
+      new McpPublicError(
+        "DEPENDENCY_UNAVAILABLE",
+        "profile_source_failed",
+        true,
+        undefined,
+        true,
+        "profile source: GitHub answered 403 Forbidden",
+      ),
+    );
+    const client = await connectedClient();
+
+    const called = await client.callTool({ name: "system.capabilities", arguments: {} });
+
+    expect(errorPayload(called)).toEqual({
+      code: "DEPENDENCY_UNAVAILABLE",
+      message: "profile_source_failed",
+      retryable: true,
+      failureReason: "profile source: GitHub answered 403 Forbidden",
+    });
+  });
+
   // An unexpected throw may carry a host, a query or a credential in its message,
   // so nothing of it survives: same verdict execute-tool.ts already stores.
   it("collapses an unexpected failure onto INTERNAL_ERROR without its text", async () => {

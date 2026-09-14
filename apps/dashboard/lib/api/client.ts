@@ -39,6 +39,7 @@ import type {
   RepositoryCatalogMutationResponse,
   RepositoryCatalogProfileConflict,
   RepositoryCatalogSuggestRateLimited,
+  RepositoryCatalogSuggestError,
   RepositoryCatalogSuggestResponse,
   RepositoryCatalogSuggestionsResponse,
   RepositoryCatalogUpsertRequest,
@@ -593,7 +594,7 @@ export const apiClient = {
     suggest: (repositoryId: number, options?: BrowserRequestOptions) =>
       requestJson<
         RepositoryCatalogSuggestResponse | RepositoryCatalogSuggestRateLimited,
-        { statusMessage?: string; message?: string; error?: string }
+        RepositoryCatalogSuggestError | { statusMessage?: string; message?: string }
       >(
         "/api/repository-catalog/suggest",
         jsonInit("POST", { repositoryId }, options),

@@ -121,6 +121,7 @@ test("a dropped group carries the reason in words, and is never something to acc
 test("every refusal code has copy of its own, and none of it is provider text", () => {
   const cases: [string, number, boolean][] = [
     ["profile_source_timed_out", 503, true],
+    ["profile_source_failed", 502, true],
     ["suggestion_timed_out", 503, true],
     ["suggestion_provider_unavailable", 503, true],
     ["suggestion_rate_limited", 429, false],

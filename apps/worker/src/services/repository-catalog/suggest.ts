@@ -28,6 +28,7 @@ import {
   repositorySuggestionAnswerSchema,
   REPOSITORY_SUGGESTION_ANSWER_JSON_SCHEMA,
   type RepositoryCatalogSuggestResponse,
+  type RepositoryCatalogSuggestFailureCode,
   type RepositorySuggestionAnswer,
   type RepositorySuggestionDroppedGroup,
   type RepositorySuggestionOutcome,
@@ -51,6 +52,7 @@ import { env } from "../../infra/vcs-config.js";
 import { getConnectedDashboardUserLabel } from "../auth/index.js";
 import { configuredVcsProviders } from "../settings/index.js";
 import { requireCatalogManager, type RepositoryCatalogActor } from "./authoring.js";
+import { publicSuggestionFailureReason } from "./suggestion-failure.js";
 
 /**
  * The caller's own bound on the provider call.
@@ -93,6 +95,17 @@ export const REPOSITORY_SUGGESTION_RATE_WINDOW_MS = 60 * 60 * 1_000;
 export class RepositorySuggestionRateLimitedError extends DashboardAuthError {
   constructor(readonly retryAfterSeconds: number) {
     super(429, "suggestion_rate_limited");
+  }
+}
+
+/** A failed provider call and the safe reason written to its history row. */
+export class RepositorySuggestionFailureError extends DashboardAuthError {
+  constructor(
+    statusCode: number,
+    readonly code: RepositoryCatalogSuggestFailureCode,
+    readonly failureReason: string | null,
+  ) {
+    super(statusCode, code);
   }
 }
 
@@ -280,10 +293,10 @@ async function runSuggestion(input: {
     failure = classified.failure;
   }
 
-  // The one write, on every path, after everything that could fail. The error
-  // text that goes in here is the provider's own; the error that goes back to
-  // the caller is a code and nothing else, because a provider message quotes
-  // the request it failed on and a dashboard is not where that belongs.
+  // The one write, on every path, after everything that could fail. Redaction
+  // happens once before storage, then the smaller public boundary is derived
+  // from exactly that safe value so the response and history cannot disagree.
+  const redactedError = redactSuggestionError(errorText);
   await insertConnectedRepositorySuggestion({
     repositoryId: input.repositoryId,
     actorId: input.actorId,
@@ -292,9 +305,15 @@ async function runSuggestion(input: {
     outcome,
     usage,
     durationMs: Date.now() - startedAt,
-    error: redactSuggestionError(errorText),
+    error: redactedError,
   });
-  if (failure) throw failure;
+  if (failure) {
+    throw new RepositorySuggestionFailureError(
+      failure.statusCode,
+      failure.message as RepositoryCatalogSuggestFailureCode,
+      publicSuggestionFailureReason(redactedError),
+    );
+  }
   if (!answer) {
     // Unreachable: every path that leaves `answer` unset sets `failure` too.
     throw new DashboardAuthError(502, "suggestion_failed");

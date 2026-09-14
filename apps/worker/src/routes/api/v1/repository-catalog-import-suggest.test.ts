@@ -278,7 +278,7 @@ describe("POST /api/v1/repository-catalog/suggest", () => {
     const res = await post(suggestPost, { repositoryId });
 
     expect(res.status).toBe(503);
-    expect((await res.json()).statusMessage).toBe("suggestion_timed_out");
+    expect((await res.json()).error).toBe("suggestion_timed_out");
     const rows = await listRepositorySuggestions(db, repositoryId);
     expect(rows).toHaveLength(1);
     expect(rows[0]?.outcome).toBe("timeout");
@@ -299,7 +299,7 @@ describe("POST /api/v1/repository-catalog/suggest", () => {
     const res = await post(suggestPost, { repositoryId });
 
     expect(res.status).toBe(502);
-    expect((await res.json()).statusMessage).toBe("suggestion_malformed");
+    expect((await res.json()).error).toBe("suggestion_malformed");
     const rows = await listRepositorySuggestions(db, repositoryId);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ outcome: "malformed", tokensInput: 10 });
@@ -307,7 +307,7 @@ describe("POST /api/v1/repository-catalog/suggest", () => {
     expect(await listRepositoryProfileVersionRows(db, repositoryId)).toHaveLength(1);
   });
 
-  it("never puts the provider's own words in the body it answers with", async () => {
+  it("answers with the stored redacted reason beside the stable code", async () => {
     mocks.generateProviderText.mockRejectedValue(
       new Error("401 from https://api.anthropic.com with x-api-key sk-ant-secret"),
     );
@@ -315,13 +315,15 @@ describe("POST /api/v1/repository-catalog/suggest", () => {
     const res = await post(suggestPost, { repositoryId });
 
     expect(res.status).toBe(502);
-    const body = await res.text();
-    expect(body).toContain("suggestion_failed");
-    expect(body).not.toContain("api.anthropic.com");
-    expect(body).not.toContain("sk-ant-secret");
-    // The message is kept where it is useful and not public: the row.
+    const body = await res.json();
+    expect(body).toEqual({
+      error: "suggestion_failed",
+      failureReason:
+        "provider call: 401 from https://api.anthropic.com with x-api-key [redacted]",
+    });
+    expect(JSON.stringify(body)).not.toContain("sk-ant-secret");
     const rows = await listRepositorySuggestions(db, repositoryId);
-    expect(rows[0]?.error).toContain("provider call:");
+    expect(body.failureReason).toBe(rows[0]?.error);
   });
 
   it("answers 404 when the provider no longer has the repository", async () => {
@@ -335,7 +337,7 @@ describe("POST /api/v1/repository-catalog/suggest", () => {
     const res = await post(suggestPost, { repositoryId });
 
     expect(res.status).toBe(404);
-    expect((await res.json()).statusMessage).toBe("repository_missing_at_provider");
+    expect((await res.json()).error).toBe("repository_missing_at_provider");
     const rows = await listRepositorySuggestions(db, repositoryId);
     expect(rows[0]).toMatchObject({ outcome: "missing", tokensInput: null });
   });
