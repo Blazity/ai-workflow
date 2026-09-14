@@ -75,16 +75,6 @@ interface WorkflowListData {
   truncated: boolean;
 }
 
-interface WorkflowGraphData {
-  definitionId: number;
-  enabled: boolean;
-  deployedVersion: number | null;
-  deployed:
-    | WorkflowDefinitionV2
-    | { schema: "legacy-v1"; message: string }
-    | null;
-}
-
 interface DispatchPreflightData {
   deployedVersion: number;
   runnable: boolean;
@@ -186,7 +176,7 @@ export async function runHarnessProfilePreviewCanary(
     if (listed.truncated) {
       throw new Error("Workflow list is truncated before canary fixture validation");
     }
-    const cases = await buildCanaryCases(mcp, env, listed, {
+    const cases = await buildCanaryCases(sql, env, listed, {
       claude,
       codex,
       customProvider,
@@ -233,7 +223,7 @@ export async function runHarnessProfilePreviewCanary(
 }
 
 async function buildCanaryCases(
-  mcp: CanaryMcpClient,
+  sql: SqlClient,
   env: HarnessCanaryEnv,
   listed: WorkflowListData,
   profiles: {
@@ -242,22 +232,40 @@ async function buildCanaryCases(
     customProvider: "claude" | "codex";
   },
 ): Promise<CanaryCase[]> {
+  // Read the deployed definitions from the database rather than through
+  // workflows.get_graph: that tool rides workflows:write (the read half of
+  // authoring, policy.ts) and the canary's machine token deliberately holds
+  // only mcp:read and runs:dispatch, so the call answers INSUFFICIENT_SCOPE.
   const definitions = await Promise.all(
     [
       env.HARNESS_CANARY_CLAUDE_WORKFLOW_ID,
       env.HARNESS_CANARY_CODEX_WORKFLOW_ID,
       env.HARNESS_CANARY_CUSTOM_WORKFLOW_ID,
     ].map(async (id) => {
-      const graph = await mcp.call<WorkflowGraphData>("workflows.get_graph", {
-        definitionId: id,
-      });
+      const rows = await sql`
+        SELECT d.id, d.enabled, d.deployed_version, v.definition
+        FROM workflow_definitions d
+        LEFT JOIN workflow_definition_versions v
+          ON v.definition_id = d.id AND v.version = d.deployed_version
+        WHERE d.id = ${id} AND d.archived_at IS NULL
+      `;
+      const row = rows[0] as
+        | {
+            id: number;
+            enabled: boolean;
+            deployed_version: number | null;
+            definition: unknown;
+          }
+        | undefined;
+      if (!row) throw new Error(`Workflow ${id} does not exist or is archived`);
+      const deployed = row.definition;
       return {
-        id: graph.definitionId,
-        enabled: graph.enabled,
-        deployedVersion: graph.deployedVersion,
+        id: row.id,
+        enabled: row.enabled,
+        deployedVersion: row.deployed_version,
         definition:
-          graph.deployed && "schemaVersion" in graph.deployed
-            ? graph.deployed
+          deployed && typeof deployed === "object" && "schemaVersion" in deployed
+            ? (deployed as WorkflowDefinitionV2)
             : null,
       };
     }),
