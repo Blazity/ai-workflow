@@ -22,11 +22,11 @@ export * from "./ui/skeleton";
 export * from "./ui/switch";
 export * from "./ui/textarea";
 
-/* BlazityLogo - inline SVG flame + wordmark */
+/* BlazityLogo, inline SVG flame and wordmark. */
 export function BlazityLogo({
   size = 28,
-  color = "var(--color-burnt-orange)",
-  wordmarkColor = "var(--color-coal)",
+  color = "#FD6027",
+  wordmarkColor = "#181B20",
   showWord = true,
 }: {
   size?: number;
@@ -34,14 +34,11 @@ export function BlazityLogo({
   wordmarkColor?: string;
   showWord?: boolean;
 }) {
-  const w = Math.round(size * (246 / 257)); // preserve aspect
+  const w = Math.round(size * (1168.768 / 1219.666)); // preserve aspect
   return (
     <span className="inline-flex items-center gap-[10px] leading-none">
-      <svg width={w} height={size} viewBox="0 0 246 257" fill="none" aria-hidden="true">
-        <path
-          d="M128.528 50.6272C114.492 42.8058 104.235 38.3392 104.235 38.3392L115.695 65.5526L0 0L61.8541 124.931L33.3877 112.562C33.3877 112.562 37.6218 120.293 42.6744 131.843C51.6579 152.377 58.3274 170.809 65.2495 190.696C77.7597 226.6 111.865 256.683 153.731 256.683C204.671 256.683 245.971 215.464 245.971 164.614C245.971 125.881 222.002 92.7256 188.058 79.134C167.615 70.9488 147.759 61.359 128.518 50.6373L128.528 50.6272Z"
-          fill={color}
-        />
+      <svg width={w} height={size} viewBox="0 0 1168.768 1219.666" fill={color} aria-hidden="true">
+        <path d="M 610.721 240.562 C 544.026 203.398 495.29 182.174 495.29 182.174 L 549.74 311.483 L 0 0 L 293.909 593.627 L 158.646 534.855 C 158.646 534.855 178.765 571.588 202.773 626.471 C 245.46 724.04 277.151 811.622 310.042 906.119 C 369.487 1076.721 531.542 1219.666 730.474 1219.666 C 972.525 1219.666 1168.768 1023.807 1168.768 782.188 C 1168.768 598.141 1054.873 440.599 893.586 376.017 C 796.449 337.124 702.096 291.556 610.673 240.61 L 610.721 240.61 Z" />
       </svg>
       {showWord && (
         <span
@@ -58,7 +55,7 @@ export function BlazityLogo({
   );
 }
 
-/* CkChip */
+/* ── CkChip ───────────────────────────────────────────────────────────────── */
 export type ChipTone =
   | "neutral"
   | "success"
@@ -88,7 +85,7 @@ export function CkChip({
     warn: "bg-[#FFF4CC] text-[#7A5A00]",
     blocked: "bg-app-bg text-neutral-700",
     awaiting: "bg-[#FFEFE9] text-fail-fg",
-    mariner: "border border-mariner-200 bg-mariner-100 text-mariner",
+    mariner: "bg-mariner text-white",
     orange: "bg-burnt-orange text-white",
     coal: "bg-coal text-white",
   };
@@ -102,7 +99,7 @@ export function CkChip({
   );
 }
 
-/* CkDot */
+/* ── CkDot ───────────────────────────────────────────────────────────────── */
 export function CkDot({ color = "#3C43E7", size = 6 }: { color?: string; size?: number }) {
   return (
     <span
@@ -112,7 +109,7 @@ export function CkDot({ color = "#3C43E7", size = 6 }: { color?: string; size?: 
   );
 }
 
-/* CkCard */
+/* ── CkCard ──────────────────────────────────────────────────────────────── */
 export function CkCard({
   title,
   eyebrow,
@@ -153,7 +150,7 @@ export function CkCard({
   );
 }
 
-/* CkKPI */
+/* ── CkKPI ───────────────────────────────────────────────────────────────── */
 export function CkKPI({
   label,
   value,
@@ -202,7 +199,7 @@ export function CkKPI({
   );
 }
 
-/* CkTabs */
+/* ── CkTabs ──────────────────────────────────────────────────────────────── */
 export function CkTabs({
   tabs,
   active,
@@ -214,6 +211,7 @@ export function CkTabs({
   onChange: (id: string) => void;
   size?: "sm" | "md";
 }) {
+  const pad = size === "sm" ? "py-1 px-2" : "py-1.5 px-3";
   return (
     <div className="inline-flex gap-0.5 p-[3px] bg-app-bg rounded-sm border border-neutral-200" data-size={size}>
       {tabs.map((t) => {
@@ -222,11 +220,13 @@ export function CkTabs({
           <Button
             key={t.id}
             type="button"
-            variant={isActive ? "selected" : "ghost"}
+            variant="text"
             size={size}
             aria-pressed={isActive}
             onClick={() => onChange(t.id)}
-            className="uppercase tracking-[0.04em]"
+            className={`border-none cursor-pointer ${pad} rounded-[3px] font-mono font-medium text-[11px] uppercase tracking-[-0.01em] transition-[color,background-color,box-shadow] duration-[var(--motion-base)] ease-[cubic-bezier(.2,0,0,1)] ${
+              isActive ? "bg-panel shadow-[0_1px_2px_rgba(24,27,32,0.06)] text-coal" : "bg-transparent text-neutral-700"
+            }`}
           >
             {t.label}
           </Button>
@@ -236,7 +236,7 @@ export function CkTabs({
   );
 }
 
-/* CkStatusPill */
+/* ── CkStatusPill ────────────────────────────────────────────────────────── */
 export function CkStatusPill({ status }: { status: RunStatus | "warn" }) {
   const map: Record<string, { tone: ChipTone; label: string; dot: string }> = {
     success: { tone: "success", label: "Success", dot: "#5BB04A" },
@@ -263,7 +263,7 @@ export function CkStatusPill({ status }: { status: RunStatus | "warn" }) {
   );
 }
 
-/* CkPagination - table footer (prev/next + numbered pages) */
+/* CkPagination, table footer with previous, next, and numbered pages. */
 export function CkPagination({
   page,
   totalPages,
@@ -284,7 +284,7 @@ export function CkPagination({
   const labelStart = total === 0 ? 0 : Math.min(start + 1, total);
   const labelEnd = total === 0 ? 0 : Math.min(start + shown, total);
   const btnClass = (disabled: boolean) =>
-    `appearance-none border border-neutral-200 py-[5px] px-2.5 rounded-[3px] font-mono text-[11px] font-medium uppercase tracking-[0.04em] inline-flex items-center gap-1 transition-[color,background-color,border-color,opacity,transform] duration-[var(--motion-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner focus-visible:ring-offset-1 ${
+    `border border-neutral-200 py-[5px] px-2.5 rounded-[3px] font-mono text-[11px] font-medium uppercase tracking-[0.04em] inline-flex items-center gap-1 transition-[color,background-color,border-color,opacity,transform] duration-[var(--motion-fast)] ${
       disabled ? "bg-off-white text-[#C7CBD0] cursor-default" : "bg-panel text-coal cursor-pointer"
     }`;
   const pages: (number | "…")[] = [];
@@ -298,35 +298,38 @@ export function CkPagination({
         {labelStart} to {labelEnd} <span className="text-neutral-500">of</span> {total}
       </span>
       <div className="ml-auto inline-flex items-center gap-1">
-        <button disabled={prevDisabled} onClick={() => !prevDisabled && onChange(page - 1)} className={btnClass(prevDisabled)}>
+        <Button variant="text" disabled={prevDisabled} onClick={() => !prevDisabled && onChange(page - 1)} className={btnClass(prevDisabled)}>
           ← Prev
-        </button>
+        </Button>
         <div className="inline-flex gap-0.5 mx-1">
           {pages.map((p, i) =>
             p === "…" ? (
               <span key={"e" + i} className="py-[5px] px-1.5 font-mono text-[11px] text-neutral-500">…</span>
             ) : (
-              <button
+              <Button
                 key={p}
+                type="button"
+                variant="text"
+                aria-pressed={p === page}
                 onClick={() => onChange(p)}
-                className={`appearance-none cursor-pointer min-w-[26px] py-[5px] px-[7px] rounded-[3px] font-mono text-[11px] font-medium transition-[color,background-color,border-color,transform] duration-[var(--motion-fast)] border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner focus-visible:ring-offset-1 ${
+                className={`cursor-pointer min-w-[26px] py-[5px] px-[7px] rounded-[3px] font-mono text-[11px] font-medium transition-[color,background-color,border-color,transform] duration-[var(--motion-fast)] border ${
                   p === page ? "border-coal bg-coal text-white" : "border-neutral-200 bg-panel text-neutral-800"
                 }`}
               >
                 {p + 1}
-              </button>
+              </Button>
             ),
           )}
         </div>
-        <button disabled={nextDisabled} onClick={() => !nextDisabled && onChange(page + 1)} className={btnClass(nextDisabled)}>
+        <Button variant="text" disabled={nextDisabled} onClick={() => !nextDisabled && onChange(page + 1)} className={btnClass(nextDisabled)}>
           Next →
-        </button>
+        </Button>
       </div>
     </div>
   );
 }
 
-/* TicketLink / PRLink - clickable Linear/Jira and GitHub refs */
+/* TicketLink and PRLink, clickable Linear, Jira, and GitHub refs. */
 export function TicketLink({ ticket, url, size = "sm" }: { ticket: string; url: string; size?: "sm" | "lg" }) {
   return (
     <a

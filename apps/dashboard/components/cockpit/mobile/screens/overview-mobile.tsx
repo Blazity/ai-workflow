@@ -40,7 +40,7 @@ export function OverviewMobileScreen({
   const workflows = data.workflows.rows;
 
   return (
-    <div className="flex flex-col gap-4 px-4 pt-4 pb-6 [&_a]:min-h-6">
+    <div className="flex flex-col gap-4 px-4 pt-4 pb-6">
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">{windowPhrase(window)}</div>
@@ -64,10 +64,10 @@ export function OverviewMobileScreen({
               <Button
                 key={r.id}
                 onClick={() => openRun(r)}
-                variant="secondary"
-                className="h-auto w-full justify-start px-0 py-0 normal-case tracking-normal"
+                variant="text"
+                className="w-full text-left cursor-pointer bg-panel border border-neutral-200 rounded-sm px-3 py-2.5 active:bg-neutral-100 [&>span]:w-full"
               >
-                <span className="flex w-full flex-col px-3 py-2.5 text-left">
+                <span className="flex w-full flex-col text-left">
                 <div className="flex items-center gap-2">
                   <CkStatusPill status="running" />
                   <span className="font-semibold text-[13px] text-neutral-900 overflow-hidden text-ellipsis whitespace-nowrap flex-1">{r.workflowName}</span>
@@ -93,7 +93,7 @@ export function OverviewMobileScreen({
 
       {awaiting.length > 0 && (
         <div>
-          <div className="font-mono text-[10px] tracking-[0.06em] uppercase text-fail-fg mb-2">Input needed · {awaiting.length}</div>
+          <div className="font-mono text-[10px] tracking-[0.06em] uppercase text-[#A2351C] mb-2">Input needed · {awaiting.length}</div>
           <div className="flex flex-col gap-2">
             {awaiting.map((r) => {
               // A plan parked for human approval has no clarification: send
@@ -105,7 +105,7 @@ export function OverviewMobileScreen({
                 // the relative wrapper keeps the link on top and clickable.
                 <div
                   key={r.id}
-                  className="relative rounded-sm border border-orange-200 bg-orange-100 px-3 py-2.5 active:bg-orange-200"
+                  className="relative bg-[#FFFCFA] border border-[#FFE4D6] rounded-sm px-3 py-2.5 active:bg-[#FFF4EC]"
                 >
                   {isApproval ? (
                     <Link
@@ -118,8 +118,8 @@ export function OverviewMobileScreen({
                       type="button"
                       onClick={() => openRun(r)}
                       aria-label={`Open run: ${r.workflowName}`}
-                      variant="ghost"
-                      className="absolute inset-0 h-auto w-full"
+                      variant="text"
+                      className="absolute inset-0 cursor-pointer rounded-sm"
                     >
                       <span className="sr-only">{r.workflowName}</span>
                     </Button>
@@ -159,8 +159,8 @@ export function OverviewMobileScreen({
             <Button
               key={r.id}
               onClick={() => openRun(r)}
-              variant="secondary"
-              className="h-auto w-full justify-start px-3 py-2.5 normal-case tracking-normal"
+              variant="text"
+              className="w-full text-left cursor-pointer bg-panel border border-neutral-200 rounded-sm px-3 py-2.5 flex items-center gap-2.5 active:bg-neutral-100 [&>span]:w-full [&>span]:gap-2.5"
             >
               <CkStatusPill status={r.status} />
               <span className="font-semibold text-[13px] text-neutral-900 overflow-hidden text-ellipsis whitespace-nowrap flex-1">{r.ticketTitle}</span>

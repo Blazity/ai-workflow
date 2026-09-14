@@ -5,7 +5,6 @@ import { useEffect, useState } from "react";
 import { apiClient } from "@/lib/api/client";
 import { CkChip, CkTabs } from "@/components/ui";
 import { Button } from "@/components/ui/button";
-import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 
@@ -40,14 +39,7 @@ export type DashboardInviteRow = {
   };
 };
 
-const AVATAR_COLORS = [
-  "var(--color-mariner)",
-  "var(--color-burnt-orange)",
-  "var(--color-coal)",
-  "var(--color-success)",
-  "var(--color-orange-600)",
-  "var(--color-fail-fg)",
-];
+const AVATAR_COLORS = ["#3C43E7", "#FD6027", "#181B20", "#5BB04A", "#7A5AE0", "#A2351C"];
 
 export function UsersScreen({
   initialUsers,
@@ -171,7 +163,7 @@ export function UsersScreen({
               { id: "invites", label: `Invites · ${pendingCount}` },
             ]}
           />
-          <DarkButton type="button" onClick={() => setInviteOpen(true)}>
+          <DarkButton className="py-[7px]" type="button" onClick={() => setInviteOpen(true)}>
             + Invite member
           </DarkButton>
         </div>
@@ -240,11 +232,12 @@ export function NotAuthorizedScreen() {
         <p className="m-0 mb-[22px] text-[14px] leading-[1.6] text-neutral-700">
           This area is restricted. Head back to your dashboard to keep working.
         </p>
-        <Button
+        <a
           href="/"
+          className="inline-flex h-10 items-center justify-center rounded-[3px] border border-neutral-900 bg-neutral-900 px-[18px] font-mono text-[11px] font-medium uppercase tracking-[0.04em] text-white transition hover:bg-neutral-800"
         >
           ← Back to dashboard
-        </Button>
+        </a>
       </section>
     </div>
   );
@@ -276,7 +269,7 @@ function MembersTable({
             ].map(([head, align]) => (
               <th
                 className={[
-                  "border-b border-neutral-200 px-3 py-2.5 font-medium whitespace-nowrap",
+                  "border-b border-neutral-200 px-4 py-[11px] font-medium whitespace-nowrap",
                   align === "right" ? "text-right" : "text-left",
                 ].join(" ")}
                 key={head}
@@ -295,23 +288,23 @@ function MembersTable({
               ].join(" ")}
               key={user.id}
             >
-              <td className="px-3 py-2.5">
+              <td className="px-4 py-3">
                 <div className="flex items-center gap-2.5">
                   <Avatar user={user} />
                   <span className="font-semibold text-neutral-900">{user.name}</span>
                 </div>
               </td>
-              <td className="px-3 py-2.5 font-mono text-[12px] text-neutral-700">{user.email}</td>
-              <td className="px-3 py-2.5">
+              <td className="px-4 py-3 font-mono text-[12px] text-neutral-700">{user.email}</td>
+              <td className="px-4 py-3">
                 <RoleChip role={user.role} />
               </td>
-              <td className="px-3 py-2.5">
+              <td className="px-4 py-3">
                 <AuthMethod method={user.authMethod} />
               </td>
-              <td className="px-3 py-2.5 font-mono text-[12px] text-neutral-500">
+              <td className="px-4 py-3 font-mono text-[12px] text-neutral-500">
                 {formatMonthYear(user.joinedAt)}
               </td>
-              <td className="px-3 py-2.5 text-right">
+              <td className="px-4 py-3 text-right">
                 {user.actions.canPromote ? (
                   <GhostButton
                     disabled={busyId === user.id}
@@ -336,7 +329,7 @@ function MembersTable({
           ))}
         </tbody>
       </table>
-      <div className="border-t border-neutral-200 bg-neutral-100 px-4 py-[11px] font-mono text-[11px] tracking-[0.02em] text-neutral-700">
+      <div className="border-t border-neutral-200 bg-[#FBFBFC] px-4 py-[11px] font-mono text-[11px] tracking-[0.02em] text-neutral-700">
         {users.length} members · {elevatedCount} with elevated access
       </div>
     </div>
@@ -374,7 +367,7 @@ function InvitesTable({
             ].map(([head, align]) => (
               <th
                 className={[
-                  "border-b border-neutral-200 px-3 py-2.5 font-medium whitespace-nowrap",
+                  "border-b border-neutral-200 px-4 py-[11px] font-medium whitespace-nowrap",
                   align === "right" ? "text-right" : "text-left",
                 ].join(" ")}
                 key={head}
@@ -400,14 +393,14 @@ function InvitesTable({
                 <tr
                   className={[
                     "transition-colors",
-                    state === "failed" ? "bg-orange-100" : "hover:bg-neutral-100",
+                    state === "failed" ? "bg-[#FFFCFA]" : "hover:bg-neutral-100",
                     index < invites.length - 1 ? "border-b border-neutral-200" : "",
                   ].join(" ")}
                   key={invite.id}
                 >
-                  <td className="px-3 py-2.5">
+                  <td className="px-4 py-[13px]">
                     <div className="flex items-center gap-2.5">
-                      <span className="inline-flex h-[30px] w-[30px] flex-none items-center justify-center rounded-full border border-dashed border-neutral-300 font-mono text-[12px] text-neutral-500">
+                      <span className="inline-flex h-[30px] w-[30px] flex-none items-center justify-center rounded-full border border-dashed border-[#C7CBD0] font-mono text-[12px] text-neutral-500">
                         ✉
                       </span>
                       <span className="font-mono text-[13px] font-medium text-neutral-900">
@@ -415,16 +408,16 @@ function InvitesTable({
                       </span>
                     </div>
                   </td>
-                  <td className="px-3 py-2.5 font-mono text-[12px] text-neutral-700">
+                  <td className="px-4 py-[13px] font-mono text-[12px] text-neutral-700">
                     {invite.invitedBy}
                   </td>
-                  <td className="px-3 py-2.5">
+                  <td className="px-4 py-[13px]">
                     <InviteStatus invite={invite} />
                   </td>
-                  <td className="px-3 py-2.5 font-mono text-[12px] text-neutral-500">
+                  <td className="px-4 py-[13px] font-mono text-[12px] text-neutral-500">
                     {formatRelativeTime(invite.sentAt)}
                   </td>
-                  <td className="px-3 py-2.5 text-right">
+                  <td className="px-4 py-[13px] text-right">
                     <div className="inline-flex items-center gap-1.5">
                       {justResentId === invite.id ? (
                         <span className="font-mono text-[10px] uppercase tracking-[0.04em] text-success-fg">
@@ -459,7 +452,7 @@ function InvitesTable({
           )}
         </tbody>
       </table>
-      <div className="flex gap-4 border-t border-neutral-200 bg-neutral-100 px-4 py-[11px] font-mono text-[11px] tracking-[0.02em] text-neutral-700">
+      <div className="flex gap-4 border-t border-neutral-200 bg-[#FBFBFC] px-4 py-[11px] font-mono text-[11px] tracking-[0.02em] text-neutral-700">
         <span>{pendingCount} pending</span>
         {failedCount > 0 ? <span className="text-fail-fg">{failedCount} delivery failed</span> : null}
         {expiredCount > 0 ? <span>{expiredCount} expired</span> : null}
@@ -499,36 +492,41 @@ function InviteModal({
 
   return (
     <Modal
-      open
       onClose={onClose}
       title="Invite a member"
-      description={`They'll get an email to set a password and join ${workspaceName}.`}
+      chrome="none"
       size="sm"
-      footer={
-        <div className="flex justify-end gap-2">
-          <GhostButton onClick={onClose} type="button">Cancel</GhostButton>
-          <DarkButton disabled={!valid || pending} form="invite-member-form" type="submit">
-            Send invite →
-          </DarkButton>
-        </div>
-      }
+      className="relative w-[440px] max-w-[92vw] overflow-hidden rounded-md border border-neutral-200 bg-panel shadow-[0_24px_56px_rgba(24,27,32,0.16)]"
     >
-      <form id="invite-member-form" onSubmit={onSubmit}>
-        <div className="mb-3 font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-700">
-          {workspaceName} · invite
+      <form onSubmit={onSubmit}>
+        <div className="px-[22px] pt-5">
+          <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-700">
+            {workspaceName} · invite
+          </div>
+          <h3 className="m-0 mt-1.5 font-display text-xl font-medium leading-[1.3] text-neutral-900">
+            Invite a member
+          </h3>
+          <p className="m-0 mt-1 text-[13px] leading-[1.5] text-neutral-700">
+            They'll get an email to set a password and join {workspaceName}.
+          </p>
         </div>
-        <div className="flex flex-col gap-3.5">
+
+        <div className="flex flex-col gap-3.5 px-[22px] pt-[18px]">
           {error ? <InlineError>{error}</InlineError> : null}
-          <Field label="Email address">
+          <label className="flex flex-col gap-1.5">
+            <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-700">
+              Email address
+            </span>
             <Input
               autoFocus
+              className="h-[38px] rounded-[3px] border border-neutral-200 bg-white px-3 font-body text-sm text-neutral-900 outline-none focus:shadow-[0_0_0_3px_rgba(60,67,231,0.18)]"
               onChange={(event) => setEmail(event.target.value)}
               placeholder="name@company.com"
               required
               type="email"
               value={email}
             />
-          </Field>
+          </label>
           <label className="flex flex-col gap-1.5">
             <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-700">
               Role
@@ -543,6 +541,15 @@ function InviteModal({
               New members join as Member. Promote to admin later from the table.
             </span>
           </label>
+        </div>
+
+        <div className="mt-2 flex justify-end gap-2 px-[22px] pb-[22px] pt-5">
+          <GhostButton onClick={onClose} type="button">
+            Cancel
+          </GhostButton>
+          <DarkButton disabled={!valid || pending} type="submit">
+            Send invite →
+          </DarkButton>
         </div>
       </form>
     </Modal>
@@ -567,19 +574,21 @@ function RoleChangeModal({
 
   return (
     <Modal
-      open
       onClose={onClose}
       title={promoting ? "Promote to admin?" : "Demote to member?"}
-      description={`${workspaceName} · role change`}
+      chrome="none"
       size="sm"
-      footer={
-        <div className="flex justify-end gap-2">
-          <GhostButton onClick={onClose} type="button">Cancel</GhostButton>
-          <DarkButton disabled={pending} onClick={onConfirm} type="button">{confirmLabel}</DarkButton>
-        </div>
-      }
+      className="relative w-[440px] max-w-[92vw] overflow-hidden rounded-md border border-neutral-200 bg-panel shadow-[0_24px_56px_rgba(24,27,32,0.16)]"
     >
-      <div>
+      <div className="px-[22px] pt-5">
+        <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-700">
+          {workspaceName} · role change
+        </div>
+        <h3 className="m-0 mt-1.5 font-display text-xl font-medium leading-[1.3] text-neutral-900">
+          {promoting ? "Promote to admin?" : "Demote to member?"}
+        </h3>
+      </div>
+      <div className="px-[22px] pt-3.5">
         <div className="flex items-center gap-2.5 rounded-[3px] border border-neutral-200 bg-neutral-100 px-3.5 py-3">
           <Avatar user={target.user} />
           <div className="flex min-w-0 flex-col gap-0.5">
@@ -600,6 +609,14 @@ function RoleChangeModal({
             : "They'll lose access to user management and the Users page. They'll keep their account and sign-in method."}
         </p>
       </div>
+      <div className="mt-2 flex justify-end gap-2 px-[22px] pb-[22px] pt-5">
+        <GhostButton onClick={onClose} type="button">
+          Cancel
+        </GhostButton>
+        <DarkButton disabled={pending} onClick={onConfirm} type="button">
+          {confirmLabel}
+        </DarkButton>
+      </div>
     </Modal>
   );
 }
@@ -619,33 +636,47 @@ function Avatar({ user }: { user: DashboardUserRow }) {
 }
 
 function RoleChip({ role }: { role: DashboardRole }) {
-  const styles: Record<DashboardRole, { tone: "coal" | "running" | "neutral"; label: string }> = {
-    owner: { tone: "coal", label: "Owner" },
-    admin: { tone: "running", label: "Admin" },
-    member: { tone: "neutral", label: "Member" },
+  const styles: Record<DashboardRole, { bg: string; fg: string; border: string; label: string }> = {
+    owner: { bg: "#181B20", fg: "#FFFFFF", border: "#181B20", label: "Owner" },
+    admin: { bg: "#ECECFD", fg: "#3C43E7", border: "#ECECFD", label: "Admin" },
+    member: { bg: "#F2F4F6", fg: "#5F666F", border: "#E6E8EB", label: "Member" },
   };
   const roleStyle = styles[role];
-  return <CkChip tone={roleStyle.tone}>{roleStyle.label}</CkChip>;
+
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 rounded-[2px] border px-[9px] py-[3px] font-mono text-[10px] font-medium uppercase tracking-[0.04em]"
+      style={{
+        backgroundColor: roleStyle.bg,
+        borderColor: roleStyle.border,
+        color: roleStyle.fg,
+      }}
+    >
+      {roleStyle.label}
+    </span>
+  );
 }
 
 function AuthMethod({ method }: { method: DashboardAuthMethod }) {
   const map: Record<DashboardAuthMethod, { label: string; dots: string[]; fg: string }> = {
-    Password: { label: "Password", dots: ["bg-neutral-500"], fg: "text-neutral-700" },
-    SSO: { label: "SSO", dots: ["bg-mariner"], fg: "text-mariner" },
-    "Password + SSO": { label: "Password + SSO", dots: ["bg-neutral-500", "bg-mariner"], fg: "text-neutral-800" },
-    Unknown: { label: "Unknown", dots: ["bg-neutral-500"], fg: "text-neutral-700" },
+    Password: { label: "Password", dots: ["#9EA3AA"], fg: "#5F666F" },
+    SSO: { label: "SSO", dots: ["#3C43E7"], fg: "#3C43E7" },
+    "Password + SSO": { label: "Password + SSO", dots: ["#9EA3AA", "#3C43E7"], fg: "#3E444C" },
+    Unknown: { label: "Unknown", dots: ["#9EA3AA"], fg: "#5F666F" },
   };
   const auth = map[method] ?? map.Unknown;
 
   return (
     <span
-      className={`inline-flex items-center gap-[7px] font-mono text-[11px] ${auth.fg}`}
+      className="inline-flex items-center gap-[7px] font-mono text-[11px]"
+      style={{ color: auth.fg }}
     >
       <span className="inline-flex gap-[3px]">
         {auth.dots.map((dot, index) => (
           <span
-            className={`inline-block h-1.5 w-1.5 rounded-full ${dot}`}
+            className="inline-block h-1.5 w-1.5 rounded-full"
             key={`${dot}-${index}`}
+            style={{ backgroundColor: dot }}
           />
         ))}
       </span>
@@ -722,8 +753,14 @@ function GhostButton({
   return (
     <Button
       {...props}
-      className={className}
-      variant={danger ? "danger" : "secondary"}
+      variant="text"
+      className={[
+        "inline-flex items-center justify-center whitespace-nowrap rounded-[3px] border bg-white px-2.5 py-[5px] font-mono text-[10px] font-medium uppercase tracking-[0.04em] transition disabled:cursor-default disabled:opacity-40",
+        danger
+          ? "border-[#F3CFC7] text-fail-fg hover:bg-fail-bg"
+          : "border-neutral-200 text-neutral-900 hover:bg-app-bg",
+        className ?? "",
+      ].join(" ")}
     >
       {children}
     </Button>
@@ -738,7 +775,11 @@ function DarkButton({
   return (
     <Button
       {...props}
-      className={className}
+      variant="text"
+      className={[
+        "inline-flex items-center justify-center whitespace-nowrap rounded-[3px] border border-neutral-900 bg-neutral-900 px-3.5 py-[5px] font-mono text-[11px] font-medium uppercase tracking-[0.04em] text-white transition hover:bg-neutral-800 disabled:cursor-default disabled:opacity-40",
+        className ?? "",
+      ].join(" ")}
     >
       {children}
     </Button>
@@ -746,7 +787,7 @@ function DarkButton({
 }
 
 function NoAction() {
-  return <span className="font-mono text-[11px] text-neutral-300">{"\u2014"}</span>;
+  return <span className="font-mono text-[11px] text-neutral-300">n/a</span>;
 }
 
 function InlineError({ children }: { children: React.ReactNode }) {

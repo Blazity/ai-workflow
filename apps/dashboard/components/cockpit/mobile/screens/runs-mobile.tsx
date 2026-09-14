@@ -1,7 +1,7 @@
 // apps/dashboard/components/cockpit/mobile/screens/runs-mobile.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ButtonHTMLAttributes } from "react";
 import { useRouter } from "next/navigation";
 import { CkStatusPill, CkChip, CkPagination, TicketLink, PRLinks } from "@/components/ui";
 import { useCockpit } from "@/components/cockpit/context";
@@ -12,7 +12,6 @@ import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
 import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
 import type { RunsResponse } from "@shared/contracts";
 import { Button } from "@/components/ui/button";
-import { formatAgeMinutes } from "@/lib/date-time";
 import {
   RUN_STATUS_FILTERS,
   runIdentity,
@@ -29,7 +28,7 @@ type CancelFeedback = { tone: "success" | "info" | "warn" | "error"; message: st
 const FEEDBACK_TONE_CLASS: Record<CancelFeedback["tone"], string> = {
   success: "text-success-fg",
   info: "text-neutral-700",
-  warn: "text-neutral-800",
+  warn: "text-[#7A5A00]",
   error: "text-fail-fg",
 };
 
@@ -152,8 +151,10 @@ export function RunsMobileScreen({
             key={f.id}
             onClick={() => changeFilter(f.id)}
             aria-pressed={filter === f.id}
-            className="flex-none"
-            variant={filter === f.id ? "selected" : "secondary"}
+            variant="text"
+            className={`flex-none cursor-pointer px-3 py-1.5 rounded-[3px] border font-mono text-[11px] uppercase tracking-[0.04em] ${
+              filter === f.id ? "bg-neutral-900 text-white border-neutral-900" : "bg-panel text-neutral-700 border-neutral-200"
+            }`}
           >{f.label}</Button>
         ))}
       </div>
@@ -194,8 +195,8 @@ export function RunsMobileScreen({
             <div className="flex items-center gap-2">
               <CkStatusPill status={r.status} />
               {showCancel && confirmId !== r.id ? (
-                <Button
-                  variant="danger"
+                <GhostButton
+                  danger
                   onClick={(e) => {
                     e.stopPropagation();
                     setConfirmId(r.id);
@@ -203,9 +204,9 @@ export function RunsMobileScreen({
                   type="button"
                 >
                   Cancel
-                </Button>
+                </GhostButton>
               ) : null}
-              <span className="ml-auto font-mono text-[10px] text-neutral-500">{formatAgeMinutes(r.startedAtMin)}</span>
+              <span className="ml-auto font-mono text-[10px] text-neutral-500">{r.startedAtMin}m ago</span>
             </div>
             {showCancel && confirmId === r.id ? (
               <div
@@ -213,12 +214,12 @@ export function RunsMobileScreen({
                 onClick={(e) => e.stopPropagation()}
               >
                 <span className="font-mono text-[10px] text-neutral-700">Cancel run?</span>
-                <Button disabled={busyId === r.id} onClick={() => handleCancel(r.id)} type="button">
+                <DarkButton disabled={busyId === r.id} onClick={() => handleCancel(r.id)} type="button">
                   {busyId === r.id ? "Cancelling…" : "Confirm"}
-                </Button>
-                <Button variant="secondary" disabled={busyId === r.id} onClick={() => setConfirmId(null)} type="button">
+                </DarkButton>
+                <GhostButton disabled={busyId === r.id} onClick={() => setConfirmId(null)} type="button">
                   Keep running
-                </Button>
+                </GhostButton>
               </div>
             ) : null}
             {rowFeedback ? (
@@ -227,7 +228,7 @@ export function RunsMobileScreen({
               </div>
             ) : null}
             <div className="font-semibold text-neutral-900 text-[14px] mt-1.5 overflow-hidden text-ellipsis whitespace-nowrap">{identity.primary}</div>
-            <div className="flex items-center gap-1.5 mt-1.5 flex-wrap [&_a]:min-h-6">
+            <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
               {identity.showTicketLink && <TicketLink ticket={r.ticket} url={r.ticketUrl} />}
               <PRLinks run={r} />
               <CkChip>{r.workflowName}</CkChip>
@@ -254,11 +255,44 @@ export function RunsMobileScreen({
 }
 
 function Metric({ label, value, tone }: { label: string; value: string; tone?: "ok" | "warn" | "fail" }) {
-  const color = tone === "ok" ? "text-success-fg" : tone === "warn" ? "text-neutral-800" : tone === "fail" ? "text-fail-fg" : "text-neutral-900";
+  const color = tone === "ok" ? "text-success-fg" : tone === "warn" ? "text-[#7A5A00]" : tone === "fail" ? "text-fail-fg" : "text-neutral-900";
   return (
     <div>
       <div className="text-[9px] text-neutral-500 tracking-[0.04em] uppercase">{label}</div>
       <div className={`text-[13px] font-semibold ${color}`}>{value}</div>
     </div>
+  );
+}
+
+function GhostButton({
+  children,
+  danger = false,
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & { danger?: boolean }) {
+  return (
+    <Button
+      {...props}
+      variant="text"
+      className={[
+        "inline-flex items-center justify-center whitespace-nowrap rounded-[3px] border bg-white px-2.5 py-[5px] font-mono text-[10px] font-medium uppercase tracking-[0.04em] transition disabled:cursor-default disabled:opacity-40",
+        danger
+          ? "border-[#F3CFC7] text-fail-fg hover:bg-fail-bg"
+          : "border-neutral-200 text-neutral-900 hover:bg-app-bg",
+      ].join(" ")}
+    >
+      {children}
+    </Button>
+  );
+}
+
+function DarkButton({ children, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <Button
+      {...props}
+      variant="text"
+      className="inline-flex items-center justify-center whitespace-nowrap rounded-[3px] border border-neutral-900 bg-neutral-900 px-3.5 py-[5px] font-mono text-[11px] font-medium uppercase tracking-[0.04em] text-white transition hover:bg-neutral-800 disabled:cursor-default disabled:opacity-40"
+    >
+      {children}
+    </Button>
   );
 }

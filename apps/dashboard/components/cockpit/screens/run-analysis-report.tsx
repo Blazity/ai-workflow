@@ -57,7 +57,7 @@ function DeliveryStatus({
           href={delivery.commentUrl}
           target="_blank"
           rel="noreferrer"
-          className="inline-flex min-h-6 items-center text-mariner underline-offset-2 hover:underline"
+          className="text-mariner underline-offset-2 hover:underline"
         >
           {deliveryLabel(delivery)} ↗
         </a>
@@ -72,11 +72,10 @@ function Disclosure({ title, children, defaultOpen = false }: { title: string; c
     <div className="border-t border-neutral-200 pt-3">
       <Button
         type="button"
-        variant="ghost"
-        size="sm"
+        variant="text"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className="h-auto w-full justify-between p-0 text-left [&>span]:w-full [&>span]:justify-between"
+        className="flex w-full items-center justify-between gap-3 border-0 bg-transparent p-0 text-left font-mono text-[11px] uppercase tracking-[0.04em] text-neutral-800 [&>span]:w-full [&>span]:justify-between"
       >
         <span>{title}</span>
         <span aria-hidden="true">{open ? "−" : "+"}</span>
@@ -103,8 +102,8 @@ function UsageTable({ report }: { report: RunAnalysisReport }) {
                 <td className="py-2 pr-3 font-medium text-neutral-900">{name}</td>
                 <td className="py-2 pr-3 text-neutral-800">{costLabel(snapshot)}</td>
                 <td className="py-2 pr-3 text-neutral-700">{snapshot?.tokensInput === null || !snapshot ? "Unknown" : `${snapshot.tokensInput} in / ${snapshot.tokensCached ?? 0} cached / ${snapshot.tokensOutput ?? 0} out`}</td>
-                <td className="py-2 pr-3 text-neutral-500">{snapshot ? `Captured ${new Date(snapshot.capturedAt).toLocaleString()}` : "\u2014"}</td>
-                <td className="py-2 text-neutral-500">{"\u2014"}</td>
+                <td className="py-2 pr-3 text-neutral-500">{snapshot ? `Captured ${new Date(snapshot.capturedAt).toLocaleString()}` : "Unknown"}</td>
+                <td className="py-2 text-neutral-500">Unknown</td>
               </tr>
               {snapshot ? Object.entries(snapshot.phases).map(([phaseName, phase]) => (
                 <tr key={`${name}:${phaseName}`} className="border-t border-neutral-100 align-top">
@@ -136,7 +135,7 @@ export function RunAnalysisReportCard({ report, runStatus: _runStatus, currentRu
         </div>
         <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
           <Metric label="Repositories inspected" value={report.repositories.length} />
-          <Metric label="Evidence items" value={report.evidenceStatus === "not_retained" ? "\u2014" : report.evidence.length} />
+          <Metric label="Evidence items" value={report.evidenceStatus === "not_retained" ? "Unknown" : report.evidence.length} />
           <Metric label="Expansion rounds" value={report.expansionRounds} />
           <Metric label="Current cost" value={costLabel(finalOrPublication)} />
         </div>
@@ -165,7 +164,7 @@ export function RunAnalysisReportCard({ report, runStatus: _runStatus, currentRu
           <div className="min-w-0 overflow-hidden"><PromptPreview body={report.planMarkdown || "No implementation plan was retained."} /></div>
         </Disclosure>
         <div className="border-t border-neutral-200 pt-3"><h3 className="m-0 mb-2 font-mono text-[10px] uppercase tracking-[0.05em] text-neutral-500">Usage</h3><UsageTable report={report} /></div>
-        {report.publication && <div className="border-t border-neutral-200 pt-3"><h3 className="m-0 mb-2 font-mono text-[10px] uppercase tracking-[0.05em] text-neutral-500">Published</h3><div className="flex flex-col gap-2"><div className="flex flex-wrap gap-2">{report.publication.prs.map((pr) => <a key={`${pr.provider}:${pr.repoPath}:${pr.id}`} href={pr.url} target="_blank" rel="noreferrer" className="inline-flex min-h-6 max-w-full items-center break-all text-mariner underline-offset-2 hover:underline">{pr.provider}:{pr.repoPath} #{pr.id} ↗</a>)}</div><p className="m-0 whitespace-pre-wrap break-words text-neutral-800">{report.publication.changeSummary}</p></div></div>}
+        {report.publication && <div className="border-t border-neutral-200 pt-3"><h3 className="m-0 mb-2 font-mono text-[10px] uppercase tracking-[0.05em] text-neutral-500">Published</h3><div className="flex flex-col gap-2"><div className="flex flex-wrap gap-2">{report.publication.prs.map((pr) => <a key={`${pr.provider}:${pr.repoPath}:${pr.id}`} href={pr.url} target="_blank" rel="noreferrer" className="max-w-full break-all text-mariner underline-offset-2 hover:underline">{pr.provider}:{pr.repoPath} #{pr.id} ↗</a>)}</div><p className="m-0 whitespace-pre-wrap break-words text-neutral-800">{report.publication.changeSummary}</p></div></div>}
         <div className="border-t border-neutral-200 pt-3"><h3 className="m-0 mb-2 font-mono text-[10px] uppercase tracking-[0.05em] text-neutral-500">Jira delivery</h3><div className="grid gap-1 font-mono text-[11px] text-neutral-700 md:grid-cols-2"><DeliveryStatus label="Research" delivery={report.jira.research} /><DeliveryStatus label="PR/MR" delivery={report.jira.pullRequest} /></div>{(report.jira.research.state === "failed" || report.jira.pullRequest.state === "failed") && <p className="m-0 mt-2 text-[12px] text-fail-fg">Automatic retries exhausted; code delivery was not blocked.</p>}</div>
       </div>
     </CkCard>
@@ -190,7 +189,7 @@ function DecisionList({
       <ul className="m-0 mt-1 flex list-disc flex-col gap-1 pl-5">
         {items.map((item) => (
           <li key={`${item.provider}:${item.repoPath}`} className="break-words">
-            <span className="font-mono">{item.provider}:{item.repoPath}</span>{" \u2014 "}{item.rationale}
+            <span className="font-mono">{item.provider}:{item.repoPath}</span>{": "}{item.rationale}
           </li>
         ))}
       </ul>

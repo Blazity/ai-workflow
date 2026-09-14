@@ -141,13 +141,6 @@ test("a stored scan renders on load with its time and no request", (t) => {
   assert.match(text, /This scan is older than 24 hours/);
   assert.doesNotMatch(text, /No scan has been recorded/);
   assert.doesNotMatch(text, /Values saved here/);
-  const down = renderer.root.findAll(
-    (node) =>
-      typeof node.props.className === "string" &&
-      node.props.className.includes("text-fail-fg") &&
-      textOf(node).includes("1 down"),
-  );
-  assert.equal(down.length, 1);
   renderer.root.findByProps({ children: "Scan again" });
   act(() => renderer.unmount());
 });

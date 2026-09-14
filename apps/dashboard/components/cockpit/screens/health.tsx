@@ -12,7 +12,7 @@ import type {
 } from "@shared/contracts";
 import { apiClient } from "@/lib/api/client";
 import { SetupOverview } from "@/app/(cockpit)/settings/setup-overview";
-import { CkChip, type ChipTone } from "@/components/ui";
+import { SettingsCadenceNotice } from "@/app/(cockpit)/settings/settings-cadence-notice";
 import { Button } from "@/components/ui/button";
 import { formatDateTime, isOlderThanHours } from "@/lib/date-time";
 
@@ -43,7 +43,7 @@ const DESCRIPTIONS: Record<string, string> = {
   jira: "Authenticates the account, checks the project, and verifies the webhook registration.",
   github: "Checks App auth, repository access, webhook configuration, and the latest delivery separately.",
   gitlab: "Checks API access, projects, and sends a real test delivery through the project webhook.",
-  agent: "Authenticates the built-in profile provider and checks its model when possible.",
+  agent: "Authenticates the active provider and checks the configured model when possible.",
   "dashboard-auth": "Presence-checks auth settings; this request already proves session enforcement.",
   sso: "Checks OIDC discovery; client credentials are presence-checked.",
   email: "Checks Resend sender readiness and the delivery-status webhook registration.",
@@ -55,42 +55,42 @@ const DESCRIPTIONS: Record<string, string> = {
 
 const STATUS: Record<
   SystemHealthMode,
-  { label: string; dot: string; tone: ChipTone }
+  { label: string; dot: string; badge: string }
 > = {
   live: {
     label: "Live",
     dot: "bg-success",
-    tone: "success",
+    badge: "border-[#B8DDAA] bg-success-bg text-success-fg",
   },
   down: {
     label: "Down",
     dot: "bg-fail",
-    tone: "failed",
+    badge: "border-[#F0B8AE] bg-fail-bg text-fail-fg",
   },
   degraded: {
     label: "Degraded",
     dot: "bg-burnt-orange",
-    tone: "orange",
+    badge: "border-orange-300 bg-orange-100 text-[#A23E18]",
   },
   configured: {
     label: "Configured",
     dot: "bg-mariner",
-    tone: "running",
+    badge: "border-mariner-300 bg-mariner-100 text-mariner",
   },
   "not-configured": {
     label: "Not configured",
     dot: "bg-neutral-400",
-    tone: "neutral",
+    badge: "border-neutral-200 bg-app-bg text-neutral-600",
   },
   misconfigured: {
     label: "Needs configuration",
     dot: "bg-burnt-orange",
-    tone: "awaiting",
+    badge: "border-orange-300 bg-orange-100 text-[#A23E18]",
   },
   mock: {
     label: "Mock mode",
     dot: "bg-neutral-500",
-    tone: "blocked",
+    badge: "border-neutral-300 bg-neutral-100 text-neutral-700",
   },
 };
 
@@ -176,7 +176,7 @@ export function HealthScreen({
             System health
           </h1>
           <p className="mt-1 max-w-[650px] font-body text-[13px] leading-5 text-neutral-600">
-            Review the last recorded scan, then press Scan to verify every integration again; secret values never appear here.
+            Shows the last scan; nothing runs in the background. Press Scan to verify every integration again. Secret values never appear here.
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-3">
@@ -185,14 +185,15 @@ export function HealthScreen({
               <time dateTime={data.generatedAt}>
                 Scanned {hydrated ? formatDateTime(data.generatedAt) : ""}
               </time>
-              <HealthSummary data={data} />
+              <div>{summaryLine(data)}</div>
             </div>
           )}
           <Button
             type="button"
+            variant="text"
             disabled={scanning}
             onClick={scan}
-            variant="secondary"
+            className="rounded-[3px] border border-neutral-300 bg-panel px-3 py-2 font-body text-[12px] font-semibold text-neutral-800 transition-colors duration-[var(--motion-fast)] hover:border-neutral-400 hover:bg-app-bg disabled:cursor-wait disabled:opacity-60"
           >
             {scanning ? "Scanning…" : data ? "Scan again" : "Scan"}
           </Button>
@@ -200,7 +201,7 @@ export function HealthScreen({
       </header>
 
       {scanError && (
-        <div role="alert" className="mb-5 rounded-sm border border-fail bg-fail-bg px-3 py-3 font-body text-[12px] text-fail-fg">
+        <div role="alert" className="mb-5 rounded-[4px] border border-[#F0B8AE] bg-fail-bg px-3 py-3 font-body text-[12px] text-fail-fg">
           {scanError}
         </div>
       )}
@@ -212,7 +213,8 @@ export function HealthScreen({
       ) : null}
 
       {settings.length > 0 && (
-        <div className="mb-5">
+        <div className="mb-5 flex flex-col gap-2">
+          <SettingsCadenceNotice />
           <SetupOverview
             settings={settings}
             scan={data}
@@ -271,22 +273,16 @@ export function HealthScreen({
   );
 }
 
-function HealthSummary({ data }: { data: SystemHealthResponse }) {
+function summaryLine(data: SystemHealthResponse): string {
   const parts = [
-    [data.summary.checksLive, "live", ""],
-    [data.summary.checksDown, "down", "text-fail-fg"],
-    [data.summary.checksDegraded, "degraded", ""],
+    [data.summary.checksLive, "live"],
+    [data.summary.checksDown, "down"],
+    [data.summary.checksDegraded, "degraded"],
   ] as const;
-  const visible = parts.filter(([count]) => count > 0);
-  return (
-    <div>
-      {visible.map(([count, label, className], index) => (
-        <span key={label} className={className || undefined}>
-          {`${index > 0 ? " · " : ""}${count} ${label}`}
-        </span>
-      ))}
-    </div>
-  );
+  return parts
+    .filter(([count]) => count > 0)
+    .map(([count, label]) => `${count} ${label}`)
+    .join(" · ");
 }
 
 function HealthRow({
@@ -341,14 +337,18 @@ function HealthRow({
             {showProviderVars && <EnvVarChips names={integration.envVars} />}
           </div>
           <div className="flex items-center gap-2 sm:justify-self-end">
-            <CkChip tone={status.tone}>{status.label}</CkChip>
+            <span
+              className={`inline-flex rounded-pill border px-2 py-1 font-mono text-[9px] font-semibold uppercase tracking-[0.05em] ${status.badge}`}
+            >
+              {status.label}
+            </span>
             <Button
               type="button"
+              variant="text"
               aria-expanded={expanded}
               aria-controls={`health-checks-${integration.id}`}
               onClick={() => setExpanded((value) => !value)}
-              size="sm"
-              variant="secondary"
+              className="rounded-[3px] border border-neutral-200 bg-panel px-2 py-1 font-mono text-[9px] text-neutral-700 hover:bg-app-bg"
             >
               {expanded ? "Hide checks" : `${checks.length} checks`}
             </Button>
@@ -406,7 +406,9 @@ function HealthCheckRow({
       <div className="flex min-w-0 flex-wrap gap-1.5">
         {showEnvVars && <EnvVarChips names={check.envVars} panel />}
       </div>
-      <CkChip tone={status.tone}>{status.label}</CkChip>
+      <span className={`inline-flex w-fit rounded-pill border px-2 py-1 font-mono text-[9px] font-semibold uppercase tracking-[0.05em] ${status.badge}`}>
+        {status.label}
+      </span>
     </li>
   );
 }
@@ -442,8 +444,16 @@ function evidenceLabel(check: SystemHealthCheck): string {
   };
   const timestamp = check.observedAt ?? check.checkedAt;
   return timestamp
-    ? `${source[check.evidenceSource]} · ${formatDateTime(timestamp)}`
+    ? `${source[check.evidenceSource]} · ${formatTime(timestamp)}`
     : source[check.evidenceSource];
+}
+
+function formatTime(value: string): string {
+  return new Intl.DateTimeFormat("en", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(value));
 }
 
 /** Subscribes to nothing: the store only tells server and client renders apart. */

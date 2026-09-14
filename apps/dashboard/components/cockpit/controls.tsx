@@ -6,7 +6,6 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { WINDOWS, type TimeWindow, windowShort } from "@/lib/window";
 import { useCockpit } from "@/components/cockpit/context";
 import { Button } from "@/components/ui/button";
-import { CkTabs } from "@/components/ui";
 
 /** Replace the current URL's search params, preserving every key not given. */
 function useParamWriter() {
@@ -39,27 +38,46 @@ export function WindowSelector({
   size?: "md" | "sm";
 }) {
   const write = useParamWriter();
+  const pad = size === "sm" ? "py-1 px-2" : "py-1.5 px-2.5";
   return (
-    <div role="group" aria-label="Time window">
-      <CkTabs
-        active={value}
-        onChange={(window) => write("window", window === "24h" ? null : window)}
-        size={size}
-        tabs={WINDOWS.map((window) => ({ id: window, label: windowShort(window) }))}
-      />
+    <div
+      role="group"
+      aria-label="Time window"
+      className="inline-flex gap-0.5 p-[3px] bg-app-bg rounded-sm border border-neutral-200"
+    >
+      {WINDOWS.map((w) => {
+        const on = w === value;
+        return (
+          <Button
+            key={w}
+            type="button"
+            variant="text"
+            aria-pressed={on}
+            onClick={() => write("window", w === "24h" ? null : w)}
+            className={`border-none cursor-pointer ${pad} rounded-[3px] font-mono font-medium text-[11px] uppercase tracking-[-0.01em] transition-[color,background-color,box-shadow] duration-[var(--motion-base)] ease-[cubic-bezier(.2,0,0,1)] ${
+              on
+                ? "bg-panel shadow-[0_1px_2px_rgba(24,27,32,0.06)] text-mariner"
+                : "bg-transparent text-neutral-700 hover:text-neutral-900"
+            }`}
+          >
+            {windowShort(w)}
+          </Button>
+        );
+      })}
     </div>
   );
 }
 
 /**
- * Live-poll indicator, sits beside the WindowSelector. It reports the refresh
+ * Live-poll indicator. It sits beside the WindowSelector and reports the refresh
  * loop's *actual* state (`liveRunning`, owned by CockpitShell), never the
  * intent: a badge reading "Live" over a stopped loop is worse than no badge,
  * because it takes away the user's only cue to reload (AIW-266).
  *
- * Screens whose refreshing is driven by their own content keep the same Button
- * skin and vocabulary, but disable it with an explanation because the global
- * toggle does not govern that cadence. Screens that cannot poll do the same.
+ * On a screen whose refreshing is driven by its own content (a runs list, a run
+ * in flight) the badge is a read-only status, because the global toggle does not
+ * govern it and a pressable control would imply otherwise. Everywhere else it
+ * stays the toggle it always was.
  */
 export function LivePollControl({
   size = "md",
@@ -87,8 +105,10 @@ export function LivePollControl({
     : livePolling
       ? "Live updates are paused while this tab is in the background."
       : "Live updates are off. Click to enable.");
-  const pad = size === "sm" ? "px-2" : "px-2.5";
-  const tone = liveRunning ? "text-mariner" : "text-neutral-700";
+  const pad = size === "sm" ? "py-1 px-2" : "py-1.5 px-2.5";
+  const tone = liveRunning
+    ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+    : "border-neutral-200 bg-app-bg text-neutral-700";
   const body = (
     <>
       <LiveRing
@@ -106,14 +126,13 @@ export function LivePollControl({
   return (
     <Button
       type="button"
+      variant="text"
       onClick={toggleLive}
       aria-pressed={liveRunning}
       aria-label="Toggle live updates"
       title={title}
-      variant={liveRunning ? "selected" : "secondary"}
-      size={size}
       disabled={controlDisabledReason !== undefined}
-      className={`${pad} ${tone} ${
+      className={`cursor-pointer rounded-sm border transition-colors duration-[var(--motion-base)] ease-[cubic-bezier(.2,0,0,1)] ${pad} ${tone} ${
         liveRunning ? "" : "hover:text-neutral-900"
       }`}
     >
@@ -155,7 +174,7 @@ function LiveRing({
     <svg width={dim} height={dim} viewBox={`0 0 ${dim} ${dim}`} aria-hidden="true" className="-rotate-90">
       {/* faint track */}
       <circle cx={center} cy={center} r={r} fill="none" stroke="currentColor" strokeWidth={sw} opacity={0.2} />
-      {/* draining arc, remounts each cycle via key, restarting the animation */}
+      {/* Draining arc remounts each cycle via key, restarting the animation. */}
       <circle
         key={nextRefreshAt ?? 0}
         cx={center}

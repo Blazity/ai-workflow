@@ -12,8 +12,4 @@ test("CkTabs exposes its compact size and selected state", () => {
   );
   assert.match(html, /data-size="sm"/);
   assert.match(html, /aria-pressed="true"/);
-  assert.match(html, /data-variant="selected"/);
-  assert.match(html, /bg-mariner-100/);
-  assert.match(html, /text-mariner/);
-  assert.match(html, /focus-visible:ring-2/);
 });

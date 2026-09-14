@@ -163,14 +163,14 @@ test("the worker-unavailable fallback (maxSlots 0) reads as unknown, never full"
   const root = renderNowRunning(t, [], capacity({ occupiedSlots: 0, maxSlots: 0 }));
 
   const text = nodeText(root);
-  assert.match(text, /slots —/);
+  assert.match(text, /slots N\/A/);
   // The 0/0 fallback must not render as "0/0" nor claim the pool is full.
   assert.doesNotMatch(text, /0\/0/);
 });
 
 test("a running ticket is excluded from the waiting-for-capacity list", (t) => {
   // A ticket stays in the AI column while it runs, so its stale queue row could
-  // leak into the waiting list — the panel must drop any ticket already live.
+  // leak into the waiting list. The panel must drop any ticket already live.
   const runningRow: Run = { ...BASE_RUN, id: "run_live", status: "running", ticket: "AWT-9" };
   const root = renderNowRunning(
     t,
@@ -224,8 +224,8 @@ test("desktop overview formats 60-plus-minute clarification and run ages", (t) =
   t.after(() => act(() => renderer.unmount()));
 
   const text = nodeText(renderer.root);
-  assert.equal(text.match(/2h ago/g)?.length, 2);
-  assert.doesNotMatch(text, /125m ago/);
+  assert.equal(text.match(/125m ago/g)?.length, 2);
+  assert.doesNotMatch(text, /2h ago/);
 });
 
 test("mobile overview formats a 60-plus-minute clarification age", (t) => {

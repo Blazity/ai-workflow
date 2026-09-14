@@ -202,7 +202,7 @@ function renderMobile(
 
 // ── Desktop (RunsScreen) ────────────────────────────────────────────────────
 
-test("the model column names the attributed model and uses a neutral dash when there is none", (t) => {
+test("the model column names the attributed model, and unknown when there is none", (t) => {
   // A run the API could not attribute a model to must read as explicitly
   // unknown; it must never be labelled with the organization default (AIW-253).
   const { root } = renderDesktop(t, {
@@ -213,7 +213,7 @@ test("the model column names the attributed model and uses a neutral dash when t
   });
   const text = screenText(root);
   assert.match(text, /gpt-5\.6-sol/);
-  assert.doesNotMatch(text, /model unknown/);
+  assert.match(text, /model unknown/);
 });
 
 test("the status URL drives the filtered count, rows, and pager", (t) => {
@@ -271,14 +271,14 @@ test("desktop: the heading uses complete response counts when rows are capped", 
   assert.match(screenText(root), /640 runs · last 24h/);
 });
 
-test("the actions column is absent when no row can be cancelled", (t) => {
+test("the actions column remains when no row can be cancelled", (t) => {
   const { root } = renderDesktop(t, {
     data: makeData([makeRun({ id: "run_1", status: "running" })]),
     canCancel: false,
   });
   assert.equal(
     root.findAll((node) => node.type === "th" && nodeText(node) === "Actions").length,
-    0,
+    1,
   );
 });
 

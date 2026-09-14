@@ -39,8 +39,8 @@ function SpendChart({
         data={values}
         w={width}
         h={height}
-        stroke="var(--color-burnt-orange)"
-        fill="var(--color-burnt-orange)"
+        stroke="#FD6027"
+        fill="#FD6027"
         labels={labels}
         yDomain={[0, scale.max]}
         yTicks={scale.ticks}
@@ -116,21 +116,21 @@ export function CostScreen({
             <thead>
               <tr className="bg-neutral-100 text-neutral-700 font-mono text-[10px] uppercase tracking-[0.06em]">
                 {["Workflow", "Runs", "Tokens", "Cost", "$/run"].map((h, i) =>
-                  <th key={i} className={`px-3 py-2.5 font-medium border-b border-neutral-200 ${i >= 1 ? "text-right" : "text-left"}`}>{h}</th>
+                  <th key={i} className={`px-4 py-2.5 font-medium border-b border-neutral-200 ${i >= 1 ? "text-right" : "text-left"}`}>{h}</th>
                 )}
               </tr>
             </thead>
             <tbody>
               {[...byWorkflow].sort((a, b) => b.cost - a.cost).map((w, i, arr) =>
                 <tr key={w.taskId} className={i < arr.length - 1 ? "border-b border-neutral-200" : ""}>
-                  <td className="px-3 py-2.5">
+                  <td className="px-4 py-3">
                     <span className="font-semibold text-neutral-900">{w.name}</span>
                     <div className="text-[11px] text-neutral-500 font-mono mt-0.5">{w.taskId}</div>
                   </td>
-                  <td className="px-3 py-2.5 text-right font-mono">{w.runs.toLocaleString("en-US")}</td>
-                  <td className="px-3 py-2.5 text-right font-mono text-neutral-700">{(w.tokens / 1000).toFixed(0)}k</td>
-                  <td className="px-3 py-2.5 text-right font-mono font-semibold">${w.cost.toFixed(2)}</td>
-                  <td className="px-3 py-2.5 text-right font-mono text-neutral-700">${w.costPerRun.toFixed(2)}</td>
+                  <td className="px-4 py-3 text-right font-mono">{w.runs.toLocaleString("en-US")}</td>
+                  <td className="px-4 py-3 text-right font-mono text-neutral-700">{(w.tokens / 1000).toFixed(0)}k</td>
+                  <td className="px-4 py-3 text-right font-mono font-semibold">${w.cost.toFixed(2)}</td>
+                  <td className="px-4 py-3 text-right font-mono text-neutral-700">${w.costPerRun.toFixed(3)}</td>
                 </tr>
               )}
             </tbody>

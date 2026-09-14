@@ -22,6 +22,7 @@ export function LogoutButton() {
       ) : null}
       <Button
         type="button"
+        variant="text"
         onClick={async () => {
           // Signing out is the widest exit there is: it replaces the route AND
           // ends the session, so an unsaved edit behind it is gone twice over.
@@ -49,8 +50,7 @@ export function LogoutButton() {
           router.replace("/login");
           router.refresh();
         }}
-        size="sm"
-        variant="ghost"
+        className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500 hover:text-neutral-800"
       >
         Sign out
       </Button>
