@@ -239,12 +239,34 @@ test("the engine canary is a fail-closed pull request dependency", async () => {
   assert.match(target?.run ?? "", /engine-canary idle/u);
   assert.match(target?.run ?? "", /armed=false/u);
   assert.match(target?.run ?? "", /missing required names/u);
-  assert.match(target?.run ?? "", /ENGINE_CANARY_TARGET.*production/su);
+  assert.match(
+    target?.run ?? "",
+    /if \[ "\$ENGINE_CANARY_TARGET" = "production" \]; then\n\s+echo "::error title=engine-canary configuration::the Vercel production target is forbidden"\n\s+exit 1\n\s*fi/u,
+  );
+
+  const scopeIndex = steps.findIndex((step) => step === scope);
+  const migrationSkipIndex = steps.findIndex((step) => step === migrationSkip);
+  const targetIndex = steps.findIndex((step) => step === target);
+  const deployIndex = steps.findIndex(
+    (step) => step.name === "Deploy engine canary target",
+  );
 
   const preflight = steps.find(
     (step) => step.name === "Verify deployment and database identity",
   );
   assert.match(preflight?.run ?? "", /--target "\$ENGINE_CANARY_TARGET"/u);
+  const preflightIndex = steps.findIndex((step) => step === preflight);
+  const canariesIndex = steps.findIndex(
+    (step) => step.name === "Run engine canaries",
+  );
+  assert.ok(
+    scopeIndex < migrationSkipIndex &&
+      migrationSkipIndex < targetIndex &&
+      targetIndex < deployIndex &&
+      deployIndex < preflightIndex &&
+      preflightIndex < canariesIndex,
+    "engine canary steps must preserve scope, migration skip, target validation, deploy, preflight, and canary order",
+  );
 
   for (const step of steps) {
     if (step === target || step === migrationSkip) continue;
