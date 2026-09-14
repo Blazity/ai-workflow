@@ -204,18 +204,25 @@ export interface McpToolServices extends McpGateServices {
   ): ReturnType<typeof readDeployedWorkflowDefinitionVersion>;
 
   // --- manual dispatch ---------------------------------------------------
-  preflightManualDispatch(
+  // Function-typed properties, not method shorthand: a method-shorthand
+  // member is checked bivariantly, so a binding whose implementation
+  // REQUIRES maxConcurrentAgents (a field this signature omits) would still
+  // satisfy the interface even when the binding forgets to supply it. A
+  // property of function type is checked contravariantly under
+  // strictFunctionTypes, so that same omission fails `pnpm run typecheck`
+  // instead of shipping a `maxConcurrentAgents: undefined` at runtime.
+  preflightManualDispatch: (
     input: Omit<
       Parameters<typeof preflightManualDispatch>[0],
       "db" | "maxConcurrentAgents"
     >,
-  ): ReturnType<typeof preflightManualDispatch>;
+  ) => ReturnType<typeof preflightManualDispatch>;
   // `repositoryCatalog` stays in the caller's hands rather than being bound
   // here: the transport reads it once per call and every tool answers from that
   // one snapshot, which a factory built before the request could not provide.
-  dispatchManualWorkflow(
+  dispatchManualWorkflow: (
     input: Omit<Parameters<typeof dispatchManualWorkflow>[0], "db" | "maxConcurrentAgents">,
-  ): ReturnType<typeof dispatchManualWorkflow>;
+  ) => ReturnType<typeof dispatchManualWorkflow>;
 }
 
 /**

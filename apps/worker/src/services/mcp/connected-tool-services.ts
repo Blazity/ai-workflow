@@ -35,6 +35,7 @@ import {
   preflightConnectedManualDispatch,
 } from "../manual-dispatch/index.js";
 import { requirePromptLibraryEditRole, saveConnectedPromptVersionWithPolicy, validatePromptBody } from "../prompts/index.js";
+import { maxConcurrentAgents } from "../settings/index.js";
 import { createConnectedMcpGateServices } from "./gate-services.js";
 import type { McpToolServices } from "./tool-services.js";
 import { mapMcpTicketRunRows } from "./tool-queries.js";
@@ -110,7 +111,15 @@ export function createConnectedMcpToolServices(
     getWorkflowDefinitionVersion: readConnectedWorkflowDefinitionVersion,
     getCurrentWorkflowDefinitionVersion: readConnectedCurrentWorkflowDefinitionVersion,
     getDeployedWorkflowDefinitionVersion: readConnectedDeployedWorkflowDefinitionVersion,
-    preflightManualDispatch: preflightConnectedManualDispatch,
-    dispatchManualWorkflow: dispatchConnectedManualWorkflow,
+    preflightManualDispatch: (input) =>
+      preflightConnectedManualDispatch({
+        ...input,
+        maxConcurrentAgents: maxConcurrentAgents(settings),
+      }),
+    dispatchManualWorkflow: (input) =>
+      dispatchConnectedManualWorkflow({
+        ...input,
+        maxConcurrentAgents: maxConcurrentAgents(settings),
+      }),
   };
 }
