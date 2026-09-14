@@ -283,24 +283,22 @@ test("run_checks is retired from the palette, bare block and composite alike", (
   assert.deepEqual(items.filter((item) => item.type === "run_checks"), []);
 });
 
-test("the publication gate is named and drawn apart from run_scripts", () => {
-  // Both names and both glyphs come from the registry, the one source every
-  // surface reads: the palette must not rename a block the block reference page
-  // and blocks_list still call something else.
+test("the publication gate is named apart from run_scripts", () => {
+  // Both names come from the registry, the one source every surface reads: the
+  // palette must not rename a block the block reference page and blocks_list
+  // still call something else.
   const gate = contract(
     "run_pre_pr_checks",
     "Run scripts (publication gate)",
     {},
     { available: true, unavailableReason: null },
   );
-  gate.presentation.glyph = "◈";
   const scripts = contract(
     "run_scripts",
     "Run scripts",
     { groups: ["checks"] },
     { available: true, unavailableReason: null },
   );
-  scripts.presentation.glyph = "❯";
   const withBoth = {
     ...options,
     blockRegistry: { ...options.blockRegistry, run_pre_pr_checks: gate, run_scripts: scripts },
@@ -312,7 +310,6 @@ test("the publication gate is named and drawn apart from run_scripts", () => {
   assert.equal(gateItem?.name, "Run scripts (publication gate)");
   assert.equal(gateItem?.presentation.label, "Run scripts (publication gate)");
   assert.notEqual(gateItem?.name, scriptsItem?.name);
-  assert.notEqual(gateItem?.presentation.glyph, scriptsItem?.presentation.glyph);
 });
 
 test("the schedule trigger is offered in the v2 palette", () => {

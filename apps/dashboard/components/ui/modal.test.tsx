@@ -46,6 +46,8 @@ test("Modal chrome none renders custom content with an accessible name", () => {
   assert.match(html, /aria-label="Prompt editor"/);
   assert.doesNotMatch(html, /aria-labelledby=/);
   assert.match(html, /Custom header, tabs, body, and footer/);
+  assert.doesNotMatch(html, /<header/);
+  assert.doesNotMatch(html, /<footer/);
 
   const titled = renderToStaticMarkup(
     <Modal chrome="none" title="Custom titled dialog" onClose={() => undefined}>
@@ -54,7 +56,12 @@ test("Modal chrome none renders custom content with an accessible name", () => {
   );
   assert.match(titled, /aria-labelledby=/);
   assert.doesNotMatch(titled, /aria-label=/);
-  assert.match(titled, /Custom titled dialog/);
+  const headingId = titled.match(
+    /<h2[^>]*id="([^"]+)"[^>]*>Custom titled dialog<\/h2>/,
+  )?.[1];
+  assert.ok(headingId);
+  const dialog = titled.match(/<section[^>]*role="dialog"[^>]*>/)?.[0] ?? "";
+  assert.ok(dialog.includes(`aria-labelledby="${headingId}"`));
 });
 
 test("Modal chrome none closes on Escape and backdrop mouse down", () => {

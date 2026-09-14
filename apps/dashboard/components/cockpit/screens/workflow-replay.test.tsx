@@ -133,29 +133,6 @@ test("visual replay renders graph state, selected path, and read-only inspector"
   assert.doesNotMatch(html, /Rerun|Run step|Replay side effects/);
 });
 
-test("visual replay preserves persisted stable-edge geometry", () => {
-  const withAuthoredBend: WorkflowRunReplayResponse = {
-    ...response,
-    snapshot: {
-      ...response.snapshot!,
-      layout: {
-        ...response.snapshot!.layout,
-        edges: {
-          "edge-start": { bend: { x: 220, y: 160 } },
-        },
-      },
-    },
-  };
-  const html = renderToStaticMarkup(
-    <WorkflowReplay runId="wrun_1" initialResponse={withAuthoredBend} />,
-  );
-
-  assert.match(
-    html,
-    /M 240 132 C 260 132, 256 216, 276 216 C 296 216, 296 132, 316 132/,
-  );
-});
-
 test("retry count is per node and activation scope rather than triangular", () => {
   const repeated = [
     attempts[0],

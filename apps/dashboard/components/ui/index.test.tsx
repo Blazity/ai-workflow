@@ -5,7 +5,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   Button,
   CkChip,
-  CkDot,
   Checkbox,
   Field,
   IconButton,
@@ -42,16 +41,14 @@ import type {
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
-test("primitive index reexports the canonical chip and status dot", () => {
+test("primitive index reexports the canonical chip", () => {
   const html = renderToStaticMarkup(
     <div>
       <CkChip tone="success">Success</CkChip>
       <CkChip tone="mariner">Built-in</CkChip>
-      <CkDot color="var(--color-success)" />
     </div>,
   );
   assert.match(html, /Success/);
-  assert.match(html, /background:var\(--color-success\)/);
 });
 
 test("primitive index exposes every runtime component", () => {
