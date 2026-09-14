@@ -34,6 +34,7 @@ import {
   getHarnessProfile,
   listHarnessProfiles,
   listHarnessProfileVersions,
+  persistHarnessSkillArtifacts,
   type HarnessProfileActor,
 } from "./harness-profiles.js";
 import { readHarnessProfileDetailFromDb as getHarnessProfileDetail } from "../../services/harness/profile-reads.js";
@@ -78,6 +79,96 @@ beforeEach(async () => {
     { id: "org-a", name: "Organization A", slug: "profile-org-a" },
     { id: "org-b", name: "Organization B", slug: "profile-org-b" },
   ]);
+});
+
+describe("skill artifact persistence", () => {
+  it("persists GitHub and local artifact rows with their files in one repository call", async () => {
+    await persistHarnessSkillArtifacts(db, {
+      organizationId: ADMIN.organizationId,
+      actorId: ADMIN.id,
+      artifacts: [
+        {
+          artifactHash: "a".repeat(64),
+          name: "github-skill",
+          description: "GitHub skill",
+          source: {
+            owner: "acme",
+            repository: "skills",
+            path: "skills/github-skill",
+            commitSha: "c".repeat(40),
+          },
+          files: [
+            {
+              path: "SKILL.md",
+              mode: 0o644,
+              sizeBytes: 12,
+              sha256: "d".repeat(64),
+              contentBase64: "Z2l0aHViIHNraWxs",
+            },
+          ],
+        },
+        {
+          artifactHash: "b".repeat(64),
+          name: "local-skill",
+          description: "Local skill",
+          source: {
+            path: "local-skill",
+            contentSha256: "e".repeat(64),
+          },
+          files: [
+            {
+              path: "SKILL.md",
+              mode: 0o755,
+              sizeBytes: 11,
+              sha256: "f".repeat(64),
+              contentBase64: "bG9jYWwgc2tpbGw=",
+            },
+          ],
+        },
+      ],
+    });
+
+    const artifacts = await db
+      .select()
+      .from(harnessSkillArtifacts)
+      .orderBy(harnessSkillArtifacts.artifactHash);
+    expect(artifacts).toEqual([
+      expect.objectContaining({
+        artifactHash: "a".repeat(64),
+        sourceKind: "github",
+        sourceOwner: "acme",
+        sourceRepository: "skills",
+        sourcePath: "skills/github-skill",
+        sourceCommitSha: "c".repeat(40),
+        localPath: null,
+        localContentSha256: null,
+      }),
+      expect.objectContaining({
+        artifactHash: "b".repeat(64),
+        sourceKind: "local",
+        sourceOwner: null,
+        sourceRepository: null,
+        sourcePath: null,
+        sourceCommitSha: null,
+        localPath: "local-skill",
+        localContentSha256: "e".repeat(64),
+      }),
+    ]);
+    const files = await db
+      .select()
+      .from(harnessSkillArtifactFiles)
+      .orderBy(harnessSkillArtifactFiles.artifactId);
+    expect(files).toEqual([
+      expect.objectContaining({
+        mode: 0o644,
+        contentBase64: "Z2l0aHViIHNraWxs",
+      }),
+      expect.objectContaining({
+        mode: 0o755,
+        contentBase64: "bG9jYWwgc2tpbGw=",
+      }),
+    ]);
+  });
 });
 
 function draft(

@@ -11,7 +11,6 @@ import {
   notExists,
   or,
   sql,
-  type SQL,
 } from "drizzle-orm";
 import type {
   HarnessProfileDraftManifest,
@@ -19,6 +18,7 @@ import type {
   HarnessProfileManifest,
   HarnessProfileReference,
   HarnessProfileVersionDto,
+  HarnessSkillArtifactFile,
   HarnessSkillSource,
 } from "@shared/contracts";
 import {
@@ -877,20 +877,72 @@ export async function getHarnessSkillArtifactEnvelopeByHashes(
 }
 
 /** Persist an imported artifact batch in one statement. Validation remains above the DB tier. */
-export async function persistHarnessSkillArtifactRows(
+export async function persistHarnessSkillArtifacts(
   db: Db,
   input: {
     organizationId: string;
     actorId: string;
-    artifactRows: SQL[];
-    fileRows: SQL[];
+    artifacts: Array<{
+      artifactHash: string;
+      name: string;
+      description: string;
+      source: HarnessSkillSource;
+      files: Array<HarnessSkillArtifactFile & { contentBase64: string }>;
+    }>;
   },
 ): Promise<void> {
+  const artifactRows = input.artifacts.map((artifact) => {
+    const source = artifact.source;
+    const columns = "commitSha" in source
+      ? {
+          kind: "github",
+          owner: source.owner,
+          repository: source.repository,
+          path: source.path,
+          commitSha: source.commitSha,
+          localPath: null,
+          localContentSha256: null,
+        }
+      : {
+          kind: "local",
+          owner: null,
+          repository: null,
+          path: null,
+          commitSha: null,
+          localPath: source.path,
+          localContentSha256: source.contentSha256,
+        };
+    return sql`(
+        ${artifact.artifactHash}::text,
+        ${artifact.name}::text,
+        ${artifact.description}::text,
+        ${columns.kind}::text,
+        ${columns.owner}::text,
+        ${columns.repository}::text,
+        ${columns.path}::text,
+        ${columns.commitSha}::text,
+        ${columns.localPath}::text,
+        ${columns.localContentSha256}::text
+      )`;
+  });
+  const fileRows = input.artifacts.flatMap((artifact) =>
+    artifact.files.map(
+      (file) =>
+        sql`(
+          ${artifact.artifactHash}::text,
+          ${file.path}::text,
+          ${file.mode}::integer,
+          ${file.sizeBytes}::integer,
+          ${file.sha256}::text,
+          ${file.contentBase64}::text
+        )`,
+    ),
+  );
   await db.execute(sql`
     WITH imported_artifact (
       artifact_hash, name, description, source_kind, source_owner,
       source_repository, source_path, source_commit_sha, local_path, local_content_sha256
-    ) AS (VALUES ${sql.join(input.artifactRows, sql`, `)}),
+    ) AS (VALUES ${sql.join(artifactRows, sql`, `)}),
     inserted_artifact AS (
       INSERT INTO harness_skill_artifacts (
         organization_id, artifact_hash, name, description, source_kind, source_owner,
@@ -915,7 +967,7 @@ export async function persistHarnessSkillArtifactRows(
           WHERE inserted.artifact_hash = artifact.artifact_hash
         )
     ), imported_file (artifact_hash, path, mode, size_bytes, sha256, content_base64)
-      AS (VALUES ${sql.join(input.fileRows, sql`, `)})
+      AS (VALUES ${sql.join(fileRows, sql`, `)})
     INSERT INTO harness_skill_artifact_files (
       artifact_id, path, mode, size_bytes, sha256, content_base64
     )
@@ -981,8 +1033,8 @@ export function createHarnessProfileRepository(db: Db) {
         artifactHashes: [input.artifactHash],
       }).then(([artifact]) => artifact ?? null);
     },
-    persistArtifactRows(input: Parameters<typeof persistHarnessSkillArtifactRows>[1]) {
-      return persistHarnessSkillArtifactRows(db, input);
+    persistArtifacts(input: Parameters<typeof persistHarnessSkillArtifacts>[1]) {
+      return persistHarnessSkillArtifacts(db, input);
     },
     getLatestVersion(profileId: string) {
       return getLatestHarnessProfileVersionNumber(db, profileId);

@@ -367,10 +367,13 @@ test("sibling functions, nested arrows, and select pairs are scoped independentl
   assert.match(result.stdout, /consecutive-writes PASS/u);
 });
 
-test("the db client fence counts import forms, ignores comments, and is a hard gate", async () => {
+test("the db client fence rejects raw database imports and allows new type only imports", async () => {
   const root = standaloneGateRoot(makeDepsRoot("db-client-fence-", {
     "apps/worker/src/db/client.ts": "export const db = 1;\n",
     "apps/worker/src/db/barrel.ts": 'export { db } from "./client.js";\n',
+    "apps/worker/src/db/schema.ts": 'export { harnessTable } from "./schema/harness.js";\nexport type { HarnessTable } from "./schema/harness.js";\n',
+    "apps/worker/src/db/schema/harness.ts": "export const harnessTable = 1;\nexport type HarnessTable = number;\n",
+    "apps/worker/src/db/schema-barrel.ts": 'export { harnessTable } from "./schema/harness.js";\n',
     "apps/worker/src/services/static.ts": 'import { db } from "../db/client.js"; void db;\n',
     "apps/worker/src/services/multiline.ts": 'import {\n  db,\n} from "../db/client.js";\nvoid db;\n',
     "apps/worker/src/services/side-effect.ts": 'import "../db/client.js";\n',
@@ -379,6 +382,11 @@ test("the db client fence counts import forms, ignores comments, and is a hard g
     "apps/worker/src/services/exported.ts": 'export { db } from "../db/client.js";\n',
     "apps/worker/src/services/mocked.ts": 'vi.mock("../db/client.js");\n',
     "apps/worker/src/services/barrel.ts": 'import { db } from "../db/barrel.js"; void db;\n',
+    "apps/worker/src/services/drizzle.ts": 'import { sql } from "drizzle-orm"; void sql;\n',
+    "apps/worker/src/services/drizzle-subpath.ts": 'import { pgTable } from "drizzle-orm/pg-core"; void pgTable;\n',
+    "apps/worker/src/services/schema.ts": 'import { harnessTable } from "../db/schema.js"; void harnessTable;\n',
+    "apps/worker/src/services/schema-barrel.ts": 'import { harnessTable } from "../db/schema-barrel.js"; void harnessTable;\n',
+    "apps/worker/src/services/allowed-types.ts": 'import type { SQL } from "drizzle-orm";\nimport type { HarnessTable } from "../db/schema.js";\ntype Pair = [SQL, HarnessTable];\n',
     "apps/worker/src/services/comment.ts": '// import { db } from "../db/client.js";\nconst text = "db/client";\n',
     "apps/worker/src/services/ignored.test.ts": 'import { db } from "../db/client.js"; void db;\n',
   }));
@@ -386,10 +394,16 @@ test("the db client fence counts import forms, ignores comments, and is a hard g
   assert.equal(fail.status, gateFailure, fail.stderr || fail.stdout);
   assert.match(fail.stdout, /services\/static\.ts/u);
   assert.match(fail.stdout, /services\/barrel\.ts/u);
+  assert.match(fail.stdout, /services\/drizzle\.ts/u);
+  assert.match(fail.stdout, /services\/drizzle-subpath\.ts/u);
+  assert.match(fail.stdout, /services\/schema\.ts/u);
+  assert.match(fail.stdout, /services\/schema-barrel\.ts/u);
+  assert.doesNotMatch(fail.stdout, /services\/allowed-types\.ts/u);
 
   await Promise.all([
     "static.ts", "multiline.ts", "side-effect.ts", "type.ts", "dynamic.ts",
-    "exported.ts", "mocked.ts", "barrel.ts",
+    "exported.ts", "mocked.ts", "barrel.ts", "drizzle.ts",
+    "drizzle-subpath.ts", "schema.ts", "schema-barrel.ts",
   ].map((name) => rename(
     join(root, `apps/worker/src/services/${name}`),
     join(root, `apps/worker/src/services/${name}.test.ts`),
@@ -400,7 +414,7 @@ test("the db client fence counts import forms, ignores comments, and is a hard g
   );
   const pass = gate("db-client-fence.mjs", ["--root", root], root);
   assert.equal(pass.status, gateSuccess, pass.stderr || pass.stdout);
-  assert.match(pass.stdout, /production db\/client reachability\s+0/u);
+  assert.match(pass.stdout, /production raw database reachability\s+0/u);
 });
 
 test("a reintroduced definition schema branch fails the single schema version gate", async () => {
