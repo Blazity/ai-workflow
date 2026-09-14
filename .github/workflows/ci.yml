@@ -148,9 +148,15 @@ jobs:
       - name: Select engine canary scope
         id: scope
         run: node --import tsx scripts/ci/engine-canary-scope.ts --base "origin/${{ github.base_ref }}" --head HEAD
-      - name: Validate isolated target configuration
+      - name: Skip pull request migrations
+        if: steps.scope.outputs.migrations == 'true'
+        run: |
+          set -euo pipefail
+          echo "::warning title=engine-canary skipped::the pull request carries a database migration; the canary target shares the production database, so it runs after merge only"
+          exit 0
+      - name: Validate engine canary target configuration
         id: target
-        if: steps.scope.outputs.run == 'true'
+        if: steps.scope.outputs.run == 'true' && steps.scope.outputs.migrations != 'true'
         env:
           ENGINE_CANARY_TARGET: ${{ vars.ENGINE_CANARY_TARGET }}
           ENGINE_CANARY_DB_ENV: ${{ vars.ENGINE_CANARY_DB_ENV }}
@@ -190,8 +196,12 @@ jobs:
           REPLAY_CANARY_LOG_MAX_BYTES: ${{ vars.REPLAY_CANARY_LOG_MAX_BYTES }}
         run: |
           set -euo pipefail
+          if [ "$ENGINE_CANARY_TARGET" = "production" ]; then
+            echo "::error title=engine-canary configuration::the Vercel production target is forbidden"
+            exit 1
+          fi
           if [ -z "$ENGINE_CANARY_TARGET" ]; then
-            echo "::warning title=engine-canary idle::no isolated target declared (repository variable ENGINE_CANARY_TARGET); the behavioural gate is wired but did not run"
+            echo "::warning title=engine-canary idle::no custom target declared (repository variable ENGINE_CANARY_TARGET); the behavioural gate is wired but did not run"
             echo "armed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -243,7 +253,7 @@ jobs:
             exit 1
           fi
           echo "armed=true" >> "$GITHUB_OUTPUT"
-      - name: Deploy isolated engine canary target
+      - name: Deploy engine canary target
         id: deploy
         if: steps.scope.outputs.run == 'true' && steps.target.outputs.armed == 'true'
         env:
@@ -278,11 +288,12 @@ jobs:
         if: steps.scope.outputs.run == 'true' && steps.target.outputs.armed == 'true'
         env:
           URL: ${{ steps.deploy.outputs.url }}
+          ENGINE_CANARY_TARGET: ${{ vars.ENGINE_CANARY_TARGET }}
           ENGINE_CANARY_DB_ENV: ${{ vars.ENGINE_CANARY_DB_ENV }}
           ENGINE_CANARY_DB_FINGERPRINT: ${{ vars.ENGINE_CANARY_DB_FINGERPRINT }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-        run: node --import tsx scripts/ci/engine-canary-preflight.ts --url "$URL" --commit "$GITHUB_SHA" --database-env "$ENGINE_CANARY_DB_ENV" --database-fingerprint "$ENGINE_CANARY_DB_FINGERPRINT" --database-url "$DATABASE_URL"
+        run: node --import tsx scripts/ci/engine-canary-preflight.ts --url "$URL" --target "$ENGINE_CANARY_TARGET" --commit "$GITHUB_SHA" --database-env "$ENGINE_CANARY_DB_ENV" --database-fingerprint "$ENGINE_CANARY_DB_FINGERPRINT" --database-url "$DATABASE_URL"
       - name: Run engine canaries
         if: steps.scope.outputs.run == 'true' && steps.target.outputs.armed == 'true'
         env:
