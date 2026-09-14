@@ -189,6 +189,8 @@ export async function runHarnessProfilePreviewCanary(
       ? createReplayCanaryFixture(REPLAY_CANARY_FIXTURE_NONCE)
       : null;
 
+    await releaseStaleCanaryClaim(sql, mcp, env.HARNESS_CANARY_TICKET_KEY);
+
     for (const canary of cases) {
       const replay =
         canary.label === "custom" &&
@@ -371,7 +373,7 @@ async function executeCase(
     if (replay) {
       await verifyReplayCase(replay, mcp, sql, dispatched.runId, deadline);
     }
-    await waitForRegistryRelease(sql, env.HARNESS_CANARY_TICKET_KEY, 120_000);
+    await releaseFinishedRunClaim(sql, env.HARNESS_CANARY_TICKET_KEY, dispatched.runId);
     return { runId: dispatched.runId, manifests };
   } catch (error) {
     if (Date.now() >= deadline) {
@@ -629,20 +631,55 @@ async function readReplayDatabaseRows(
   };
 }
 
-async function waitForRegistryRelease(
+// A finished run's registry claim is released only by the reconciler inside the
+// production poll cron (services/run-lifecycle/reconcile.ts, every 15 minutes),
+// and the canary target runs no cron of its own. The canary therefore releases
+// the claims of its OWN runs, and only after it has proven them terminal, which
+// is the same predicate the reconciler applies later.
+async function releaseFinishedRunClaim(
   sql: SqlClient,
   ticketKey: string,
-  timeoutMs: number,
+  runId: string,
 ): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const rows = await sql`
-      SELECT 1 FROM active_runs WHERE ticket_key = ${ticketKey} LIMIT 1
-    `;
-    if (rows.length === 0) return;
-    await delay(2_000);
+  await sql`
+    DELETE FROM active_runs WHERE ticket_key = ${ticketKey} AND run_id = ${runId}
+  `;
+  const rows = await sql`
+    SELECT run_id FROM active_runs WHERE ticket_key = ${ticketKey} LIMIT 1
+  `;
+  if (rows.length > 0) {
+    throw new Error(
+      `Run registry still holds ${ticketKey} for run ${String(rows[0]?.run_id)}`,
+    );
   }
-  throw new Error(`Run registry did not release ${ticketKey}`);
+}
+
+// A previous canary job that ended between a dispatch and its release (a timeout,
+// a cancelled job) leaves a claim the next preflight refuses as already_claimed.
+// Release it only when its run is terminal; a live run keeps its claim and the
+// canary fails loudly instead of racing it.
+async function releaseStaleCanaryClaim(
+  sql: SqlClient,
+  mcp: CanaryMcpClient,
+  ticketKey: string,
+): Promise<void> {
+  const rows = await sql`
+    SELECT run_id FROM active_runs WHERE ticket_key = ${ticketKey}
+  `;
+  for (const row of rows) {
+    const runId = row.run_id as string | null;
+    if (!runId) {
+      throw new Error(`Run registry holds ${ticketKey} without a run id`);
+    }
+    const run = await mcp.call<RunData>("runs.get", { runId });
+    if (!run.terminal) {
+      throw new Error(`Run registry holds ${ticketKey} for live run ${runId}`);
+    }
+    await releaseFinishedRunClaim(sql, ticketKey, runId);
+    console.log(
+      `[harness-canary] released the stale claim of terminal run ${runId} on ${ticketKey}`,
+    );
+  }
 }
 
 async function waitForReplayLogExport(
