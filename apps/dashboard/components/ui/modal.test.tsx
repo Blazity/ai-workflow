@@ -143,7 +143,7 @@ test("Modal chrome none closes only the topmost dialog on Escape", () => {
 test("Modal chrome none makes cockpit main inert and restores it on close", () => {
   const dom = installTestDom();
   const main = document.createElement("main");
-  main.setAttribute("data-cockpit-main", "");
+  main.dataset.cockpitMain = "";
   document.body.append(main);
   const container = document.createElement("div");
   document.body.append(container);
