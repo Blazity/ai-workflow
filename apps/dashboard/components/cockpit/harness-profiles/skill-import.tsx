@@ -13,7 +13,7 @@ import {
   SKILL_SOURCE_KINDS,
   type SkillSourceKind,
 } from "@shared/skills";
-import { Button, Checkbox, Input, Modal } from "@/components/ui";
+import { Button, Checkbox, IconButton, Input, Modal } from "@/components/ui";
 
 /**
  * Says what the deployment source does and, as importantly, what it does not:
@@ -214,15 +214,6 @@ export function SkillImport({
   const [busy, setBusy] = useState<"discover" | "import" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && busy === null) onClose();
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [busy, onClose, open]);
-
   // Re-read on every opening rather than caching: a redeploy between two
   // openings swaps the bytes on disk, and a stale list would offer hashes the
   // import then rejects.
@@ -396,64 +387,58 @@ export function SkillImport({
       open={open}
       onClose={onClose}
       dismissible={!busy}
-      showCloseButton
-      closeLabel="Close skill import"
+      chrome="none"
       title="Add skills"
-      description={
-        sourceKind === "local"
-          ? "Take skills from the skills/ directory this deployment ships."
-          : "Discover skills first, then pin the selected files to one exact commit."
-      }
       variant="drawer"
-      footer={
-        <div className="flex items-center justify-between">
-          <Button
-            variant="secondary"
-            type="button"
-            onClick={onClose}
-            disabled={busy !== null}
-          >
-            Cancel
-          </Button>
-          {step !== "review" ? (
-            <Button
-              type="button"
-              onClick={() => setStep("review")}
-              disabled={selected.length === 0 || busy !== null}
-            >
-              Review {selected.length > 0 ? selected.length : ""}{" "}
-              {selected.length === 1 ? "skill" : "skills"}
-            </Button>
-          ) : (
-            <Button
-              type="button"
-              onClick={() => void importSelected()}
-              disabled={selected.length === 0 || busy !== null}
-            >
-              {busy === "import"
-                ? "Adding…"
-                : `Add ${selected.length} to draft`}
-            </Button>
-          )}
-        </div>
-      }
+      className="w-full max-w-[620px] border-l border-neutral-200 bg-panel shadow-2xl"
     >
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-5">
+      <header className="flex items-center justify-between border-b border-neutral-200 px-5 py-4">
+        <div>
+          <h2
+            id="skill-import-title"
+            className="m-0 font-display text-[20px] font-semibold text-coal"
+          >
+            Add skills
+          </h2>
+          <p className="mt-1 mb-0 font-body text-[11px] text-neutral-500">
+            {sourceKind === "local"
+              ? "Take skills from the skills/ directory this deployment ships."
+              : "Discover skills first, then pin the selected files to one exact commit."}
+          </p>
+        </div>
+        {busy === null && (
+          <IconButton
+            variant="text"
+            type="button"
+            aria-label="Close skill import"
+            onClick={onClose}
+            className="cursor-pointer bg-transparent p-2 font-body text-[20px] text-neutral-500"
+          >
+            ×
+          </IconButton>
+        )}
+      </header>
+
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div
           role="radiogroup"
           aria-label="Skill source"
-          className="flex gap-2 border-b border-neutral-200 py-3"
+          className="flex gap-2 border-b border-neutral-200 px-5 py-3"
         >
           {SKILL_SOURCE_KINDS.map((kind) => (
             <Button
-              variant={sourceKind === kind ? "selected" : "secondary"}
-              size="sm"
+              variant="text"
               key={kind}
               type="button"
               role="radio"
               aria-checked={sourceKind === kind}
               onClick={() => switchSource(kind)}
               disabled={busy !== null}
+              className={`cursor-pointer rounded-[3px] border px-3 py-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] disabled:cursor-default disabled:opacity-40 ${
+                sourceKind === kind
+                  ? "border-mariner bg-mariner-50 text-mariner"
+                  : "border-neutral-300 bg-panel text-neutral-600"
+              }`}
             >
               {kind === "github" ? "GitHub repository" : "This deployment"}
             </Button>
@@ -461,7 +446,7 @@ export function SkillImport({
         </div>
 
         <div
-          className={`grid border-b border-neutral-200 py-3 ${
+          className={`grid border-b border-neutral-200 px-5 py-3 ${
             sourceKind === "local" ? "grid-cols-2" : "grid-cols-3"
           }`}
         >
@@ -484,7 +469,7 @@ export function SkillImport({
           })}
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto py-4">
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
           {sourceKind === "local" ? (
             <div className="rounded-[3px] border border-neutral-200 bg-app-bg px-3 py-2 font-body text-[10px] text-neutral-600">
               {LOCAL_SOURCE_NOTE}
@@ -516,7 +501,7 @@ export function SkillImport({
                     }
                   }}
                   placeholder="vercel-labs/agent-skills"
-                  className="min-w-0 flex-1"
+                  className="h-[36px] min-w-0 flex-1 px-3 text-[11px]"
                 />
                 <Button
                   variant="secondary"
@@ -579,8 +564,7 @@ export function SkillImport({
                   {discovery.skills.length === 1 ? "skill" : "skills"} found
                 </span>
                 <Button
-                  variant="ghost"
-                  size="sm"
+                  variant="text"
                   type="button"
                   onClick={() =>
                     setSelected(
@@ -589,6 +573,7 @@ export function SkillImport({
                         : discovery.skills.map((skill) => skill.path),
                     )
                   }
+                  className="cursor-pointer font-body text-[10px] font-semibold text-mariner"
                 >
                   {selected.length === discovery.skills.length
                     ? "Clear all"
@@ -601,7 +586,7 @@ export function SkillImport({
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
                 placeholder="Search discovered skills…"
-                className="mt-2"
+                className="mt-2 h-[34px] px-3 text-[11px]"
               />
 
               {discovery.skills.length === 0 ? (
@@ -690,6 +675,36 @@ export function SkillImport({
           )}
         </div>
       </div>
+      <footer className="flex items-center justify-between border-t border-neutral-200 px-5 py-4">
+        <Button
+          variant="secondary"
+          type="button"
+          onClick={onClose}
+          disabled={busy !== null}
+        >
+          Cancel
+        </Button>
+        {step !== "review" ? (
+          <Button
+            type="button"
+            onClick={() => setStep("review")}
+            disabled={selected.length === 0 || busy !== null}
+          >
+            Review {selected.length > 0 ? selected.length : ""}{" "}
+            {selected.length === 1 ? "skill" : "skills"}
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            onClick={() => void importSelected()}
+            disabled={selected.length === 0 || busy !== null}
+          >
+            {busy === "import"
+              ? "Adding…"
+              : `Add ${selected.length} to draft`}
+          </Button>
+        )}
+      </footer>
     </Modal>
   );
 }

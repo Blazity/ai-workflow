@@ -48,12 +48,12 @@ export function VariableChips({
         <>
           <span ref={btnRef} className="self-start">
             <Button
-              variant="ghost"
-              size="sm"
+              variant="text"
               type="button"
               onClick={() => setOpen((o) => !o)}
               aria-haspopup="listbox"
               aria-expanded={open}
+              className="cursor-pointer rounded-xs px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.04em] text-mariner transition-[background-color,transform] duration-[var(--motion-fast)] ease-standard hover:bg-mariner-100 active:scale-[0.96]"
             >
               + variable
             </Button>

@@ -24,7 +24,7 @@ export function TagChipsInput({
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
+    <div className="flex flex-wrap items-center gap-1.5 rounded-[3px] border border-neutral-200 bg-panel px-2 py-1.5">
       {tags.map((t) => (
         <span
           key={t}
@@ -32,12 +32,12 @@ export function TagChipsInput({
         >
           {t}
           <IconButton
-            variant="ghost"
-            size="sm"
+            variant="text"
             type="button"
             disabled={disabled}
             aria-label={`Remove ${t}`}
             onClick={() => onChange(tags.filter((x) => x !== t))}
+            className="cursor-pointer bg-transparent text-neutral-500 hover:text-coal"
           >
             ×
           </IconButton>
@@ -59,7 +59,7 @@ export function TagChipsInput({
         }}
         placeholder="Add tag"
         aria-label="Add tag"
-        className="min-w-[80px] flex-1"
+        className="h-auto min-w-[80px] flex-1 appearance-none border-none bg-transparent p-0 text-neutral-900 outline-none hover:border-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
       />
     </div>
   );

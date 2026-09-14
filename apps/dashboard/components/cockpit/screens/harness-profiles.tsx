@@ -4,7 +4,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ProfileEditor, type ProfileAction } from "@/components/cockpit/harness-profiles/profile-editor";
-import { Button, Checkbox, Input, Select, Skeleton } from "@/components/ui";
+import { Button, Checkbox, Input, Select } from "@/components/ui";
 import { apiClient, type ApiResult } from "@/lib/api/client";
 import {
   isProfileSlug,
@@ -115,6 +115,7 @@ function NewProfilePanel({
             Start from
           </span>
           <Select
+            size="compact"
             options={[
               { value: "", label: "Provider baseline" },
               ...sources.map((profile) => ({
@@ -134,6 +135,7 @@ function NewProfilePanel({
               Provider
             </span>
             <Select
+              size="compact"
               options={[
                 { value: "codex", label: "Codex" },
                 { value: "claude", label: "Claude" },
@@ -524,7 +526,7 @@ export function HarnessProfilesScreen({
     <div className="px-4 pb-8 pt-5 lg:px-6">
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="m-0 font-display text-2xl font-semibold text-coal">
+          <h1 className="m-0 font-display text-[26px] font-semibold text-coal">
             Harness profiles
           </h1>
           <p className="mt-1 mb-0 max-w-[740px] font-body text-[12px] leading-[1.5] text-neutral-600">
@@ -563,6 +565,7 @@ export function HarnessProfilesScreen({
       <div className="mb-5 flex flex-col gap-3 border-y border-neutral-200 bg-panel px-3 py-3 md:flex-row md:items-center">
         <div className="min-w-[260px] md:max-w-[360px] md:flex-1">
           <Select
+            size="compact"
             options={visibleProfiles.map((profile) => ({
               value: profile.id,
               label: `${profile.draft.displayName} · ${
@@ -588,7 +591,7 @@ export function HarnessProfilesScreen({
           value={search}
           onChange={(event) => setSearch(event.target.value)}
           placeholder="Search profiles…"
-          className="min-w-[220px] md:ml-auto"
+          className="h-[32px] min-w-[220px] px-3 text-[11px] md:ml-auto"
         />
         <Checkbox
           checked={showArchived}
@@ -613,8 +616,8 @@ export function HarnessProfilesScreen({
 
       <main className="min-w-0">
           {detailLoading && !detail ? (
-            <div className="rounded-sm border border-neutral-200 bg-panel p-4">
-              <Skeleton height={88} />
+            <div className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-12 text-center font-body text-[12px] text-neutral-500">
+              Loading profile…
             </div>
           ) : detail ? (
             <ProfileEditor

@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Button, CkCard, CkChip, CkTabs, Skeleton } from "@/components/ui";
+import { Button, CkCard, CkChip, CkTabs } from "@/components/ui";
+import { Block } from "@/app/skeleton-block";
 import { DiffView } from "@/components/cockpit/prompt-diff";
 import { PromptBodyBlocks } from "@/components/cockpit/prompt-library/prompt-body-blocks";
 import { promptLibraryHref } from "@shared/prompts";
@@ -11,6 +12,9 @@ import type {
   PromptLibraryUsageResponse,
   PromptLibraryUsageRow,
 } from "@shared/contracts";
+
+const headerButtonClass =
+  "appearance-none cursor-pointer border border-neutral-200 bg-panel text-coal py-1.5 px-3 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase hover:bg-app-bg";
 
 function UsageStateChip({
   state,
@@ -72,12 +76,12 @@ export function PromptDetail({
       <div className="flex flex-col gap-3 lg:h-full min-w-0">
         <CkCard eyebrow={`LIBRARY · v${row.currentVersion}`} title={row.name}>
           <div className="flex flex-col gap-2">
-            <Skeleton variant="line" className="w-3/4" />
-            <Skeleton variant="line" className="w-1/2" />
+            <Block className="h-4 w-3/4" />
+            <Block className="h-4 w-1/2" />
           </div>
         </CkCard>
         <CkCard eyebrow="PROMPT BODY">
-          <Skeleton height={220} />
+          <Block className="h-[220px] w-full" />
         </CkCard>
       </div>
     );
@@ -123,10 +127,14 @@ export function PromptDetail({
         action={
           canEdit && !archived ? (
             <div className="flex items-center gap-2">
-              <Button variant="secondary" onClick={onEdit}>
+              <Button variant="secondary" onClick={onEdit} className={headerButtonClass}>
                 Edit
               </Button>
-              <Button variant="secondary" onClick={() => setConfirmArchive(true)}>
+              <Button
+                variant="secondary"
+                onClick={() => setConfirmArchive(true)}
+                className={headerButtonClass}
+              >
                 Archive
               </Button>
             </div>
@@ -142,17 +150,17 @@ export function PromptDetail({
                 : "Nothing references it."}
             </span>
             <Button
-              variant="danger"
-              size="sm"
+              variant="text"
               onClick={onArchive}
               disabled={busy !== null}
+              className="cursor-pointer font-body text-[12px] font-semibold text-red-600"
             >
               {busy === "archive" ? "Archiving…" : "Archive"}
             </Button>
             <Button
-              variant="ghost"
-              size="sm"
+              variant="text"
               onClick={() => setConfirmArchive(false)}
+              className="cursor-pointer font-body text-[12px] text-neutral-500"
             >
               Cancel
             </Button>
@@ -180,33 +188,36 @@ export function PromptDetail({
             const notLast = i < versions.length - 1;
             const dropRight = notLast && !on;
             return (
-              <button
+              <Button
+                variant="text"
                 type="button"
                 key={v.version}
                 data-version-card={v.version}
                 aria-pressed={on}
                 onClick={() => setSelectedVersion(v.version)}
-                className={`relative w-[176px] shrink-0 appearance-none cursor-pointer border px-4 py-[14px] text-left transition-[color,background-color,border-color,transform] duration-[var(--motion-fast)] ease-standard active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner focus-visible:ring-offset-1 ${
-                  on ? "border-mariner bg-mariner-100" : "border-neutral-200 bg-panel hover:bg-off-white"
+                className={`relative w-[176px] shrink-0 cursor-pointer border px-4 py-[14px] text-left ${
+                  on ? "border-mariner bg-mariner-100" : "border-neutral-200 bg-panel"
                 } ${dropRight ? "border-r-0" : ""}`}
               >
-                <div className="mb-1.5 flex items-center justify-between">
-                  <span className="font-mono text-sm font-semibold text-neutral-900">
-                    v{v.version}
-                  </span>
-                  {v.restoredFromVersion !== null && (
-                    <span className="rounded-[3px] bg-app-bg px-[6px] py-[2px] font-mono text-[9px] text-neutral-600">
-                      from v{v.restoredFromVersion}
+                <span className="block w-full">
+                  <span className="mb-1.5 flex items-center justify-between">
+                    <span className="font-mono text-sm font-semibold text-neutral-900">
+                      v{v.version}
                     </span>
-                  )}
-                </div>
-                <div className="mb-1 font-mono text-[10px] text-neutral-500">
-                  {new Date(v.createdAt).toLocaleDateString()}
-                </div>
-                <div className="truncate font-mono text-[10px] text-neutral-700">
-                  {v.createdByLabel}
-                </div>
-              </button>
+                    {v.restoredFromVersion !== null && (
+                      <span className="rounded-[3px] bg-app-bg px-[6px] py-[2px] font-mono text-[9px] text-neutral-600">
+                        from v{v.restoredFromVersion}
+                      </span>
+                    )}
+                  </span>
+                  <span className="mb-1 block font-mono text-[10px] text-neutral-500">
+                    {new Date(v.createdAt).toLocaleDateString()}
+                  </span>
+                  <span className="block truncate font-mono text-[10px] text-neutral-700">
+                    {v.createdByLabel}
+                  </span>
+                </span>
+              </Button>
             );
           })}
         </div>
@@ -242,34 +253,34 @@ export function PromptDetail({
               (confirmRestore === shownVersion ? (
                 <span className="flex items-center gap-2">
                   <Button
-                    variant="danger"
-                    size="sm"
+                    variant="text"
                     onClick={() => onRestore(shownVersion)}
                     disabled={busy !== null}
+                    className="cursor-pointer font-body text-[12px] font-semibold text-red-600"
                   >
                     {busy === `restore-${shownVersion}` ? "Restoring…" : "Confirm restore"}
                   </Button>
                   <Button
-                    variant="ghost"
-                    size="sm"
+                    variant="text"
                     onClick={() => setConfirmRestore(null)}
+                    className="cursor-pointer font-body text-[12px] text-neutral-500"
                   >
                     Cancel
                   </Button>
                 </span>
               ) : (
                 <Button
-                  variant="ghost"
-                  size="sm"
+                  variant="text"
                   onClick={() => setConfirmRestore(shownVersion)}
+                  className="cursor-pointer font-body text-[12px] text-mariner"
                 >
                   Restore
                 </Button>
               ))}
             <Button
-              variant="ghost"
-              size="sm"
+              variant="text"
               onClick={copyBody}
+              className="cursor-pointer font-mono text-[11px] uppercase tracking-[0.04em] text-neutral-700 hover:text-coal"
             >
               {copied ? "Copied" : "Copy body"}
             </Button>
@@ -293,8 +304,8 @@ export function PromptDetail({
       <CkCard eyebrow="Used in" title="Workflows and prompts">
         {usage === undefined ? (
           <div className="flex flex-col gap-2">
-            <Skeleton height={32} />
-            <Skeleton height={32} />
+            <Block className="h-8 w-full" />
+            <Block className="h-8 w-full" />
           </div>
         ) : usage.rows.length === 0 && usage.prompts.length === 0 ? (
           <div className="font-body text-[12px] text-neutral-500">
