@@ -290,11 +290,11 @@ test("a runnable deployed trigger shows the circular play button beside the node
   assert.match(html, /aria-label="Run Ticket received"/);
   assert.match(html, /data-shape="circle"/);
   assert.match(html, /size-\[26px\]/);
-  assert.match(html, /-right-\[38px\] -top-\[15px\]/);
   assert.match(html, /title="Run trigger"/);
   const runButton = html.match(/<button[^>]*aria-label="Run Ticket received"[^>]*>/)?.[0];
   assert.ok(runButton);
   assert.match(runButton, /class="[^"]*\babsolute\b/);
+  assert.match(runButton, /style="left:-13px;top:\d+px"/);
   assert.doesNotMatch(runButton, /class="[^"]*\brelative\b/);
 });
 
