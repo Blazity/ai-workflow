@@ -101,6 +101,137 @@ test("Modal chrome none closes on Escape and backdrop mouse down", () => {
   }
 });
 
+test("Modal chrome none closes only the topmost dialog on Escape", () => {
+  const dom = installTestDom();
+  const container = document.createElement("div");
+  document.body.append(container);
+  let root: Root | undefined;
+  let lowerCloses = 0;
+  let upperCloses = 0;
+
+  try {
+    act(() => {
+      root = createRoot(container);
+      root.render(
+        <>
+          <Modal chrome="none" aria-label="Lower dialog" onClose={() => lowerCloses += 1}>
+            Lower
+          </Modal>
+          <Modal chrome="none" aria-label="Upper dialog" onClose={() => upperCloses += 1}>
+            Upper
+          </Modal>
+        </>,
+      );
+    });
+
+    act(() => {
+      dom.window.dispatchEvent(new dom.window.KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }));
+    });
+    assert.equal(lowerCloses, 0);
+    assert.equal(upperCloses, 1);
+  } finally {
+    act(() => root?.unmount());
+    container.remove();
+    dom.restore();
+  }
+});
+
+test("Modal chrome none makes cockpit main inert and restores it on close", () => {
+  const dom = installTestDom();
+  const main = document.createElement("main");
+  main.setAttribute("data-cockpit-main", "");
+  document.body.append(main);
+  const container = document.createElement("div");
+  document.body.append(container);
+  let root: Root | undefined;
+  const render = (open: boolean) => (
+    <Modal chrome="none" aria-label="Custom dialog" open={open} onClose={() => undefined}>
+      Custom chrome
+    </Modal>
+  );
+
+  try {
+    act(() => {
+      root = createRoot(container);
+      root.render(render(true));
+    });
+    assert.equal(main.hasAttribute("inert"), true);
+
+    act(() => root?.render(render(false)));
+    assert.equal(main.hasAttribute("inert"), false);
+  } finally {
+    act(() => root?.unmount());
+    container.remove();
+    main.remove();
+    dom.restore();
+  }
+});
+
+test("Modal chrome none focuses its initial focus ref", () => {
+  const dom = installTestDom();
+  const container = document.createElement("div");
+  document.body.append(container);
+  const initialFocusRef = createRef<HTMLButtonElement>();
+  let root: Root | undefined;
+
+  try {
+    act(() => {
+      root = createRoot(container);
+      root.render(
+        <Modal
+          chrome="none"
+          aria-label="Custom dialog"
+          onClose={() => undefined}
+          initialFocusRef={initialFocusRef}
+        >
+          <button>First</button>
+          <button ref={initialFocusRef}>Initial</button>
+        </Modal>,
+      );
+    });
+    assert.equal(document.activeElement, initialFocusRef.current);
+  } finally {
+    act(() => root?.unmount());
+    container.remove();
+    dom.restore();
+  }
+});
+
+test("Modal chrome none restores focus to the previously focused element", () => {
+  const dom = installTestDom();
+  const opener = document.createElement("button");
+  document.body.append(opener);
+  opener.focus();
+  const container = document.createElement("div");
+  document.body.append(container);
+  let root: Root | undefined;
+  const render = (open: boolean) => (
+    <Modal chrome="none" aria-label="Custom dialog" open={open} onClose={() => undefined}>
+      <button>First</button>
+    </Modal>
+  );
+
+  try {
+    act(() => {
+      root = createRoot(container);
+      root.render(render(true));
+    });
+    assert.notEqual(document.activeElement, opener);
+
+    act(() => root?.render(render(false)));
+    assert.equal(document.activeElement, opener);
+  } finally {
+    act(() => root?.unmount());
+    container.remove();
+    opener.remove();
+    dom.restore();
+  }
+});
+
 test("Modal renders all canonical panel widths", () => {
   for (const [size, width] of [["sm", "476"], ["md", "680"], ["lg", "1240"]] as const) {
     const html = renderToStaticMarkup(<Modal open size={size} onClose={() => undefined} title="Dialog">Body</Modal>);
