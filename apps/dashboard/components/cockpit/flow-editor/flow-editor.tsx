@@ -356,7 +356,8 @@ const FlowNode = React.memo(function FlowNode({
             event.stopPropagation();
             onRun(node);
           }}
-          className="absolute -right-[38px] -top-[15px] z-[8]"
+          className="absolute z-[8]"
+          style={{ left: -13, top: NODE_H / 2 - 13 }}
         >
           <PlayIcon size={13} weight="fill" aria-hidden />
         </IconButton>
