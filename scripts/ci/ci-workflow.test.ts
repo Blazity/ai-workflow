@@ -288,6 +288,14 @@ test("the engine canary is a fail-closed pull request dependency", async () => {
     "${{ vars.ENGINE_CANARY_TARGET_URL }}",
   );
   assert.equal(
+    canaries?.env?.ENGINE_CANARY_LOG_SOURCE_URL,
+    "${{ steps.deploy.outputs.url }}",
+  );
+  assert.match(
+    String(canaries?.run),
+    /logs "\$ENGINE_CANARY_LOG_SOURCE_URL" --follow/u,
+  );
+  assert.equal(
     canaries?.env?.HARNESS_CANARY_EXPECTED_HOST,
     "${{ steps.target.outputs.host }}",
   );

@@ -320,6 +320,11 @@ jobs:
         env:
           HARNESS_CANARY_BASE_URL: ${{ vars.ENGINE_CANARY_TARGET_URL }}
           HARNESS_CANARY_EXPECTED_HOST: ${{ steps.target.outputs.host }}
+          # The runtime log stream follows the unique deployment URL, not the
+          # alias: the pinned CLI resolves only deployment URLs, and an alias
+          # made every iteration of the follow loop append an error, so the
+          # export never settled.
+          ENGINE_CANARY_LOG_SOURCE_URL: ${{ steps.deploy.outputs.url }}
           ENGINE_CANARY_MCP_CLIENT_ID: ${{ secrets.ENGINE_CANARY_MCP_CLIENT_ID }}
           ENGINE_CANARY_MCP_CLIENT_SECRET: ${{ secrets.ENGINE_CANARY_MCP_CLIENT_SECRET }}
           HARNESS_CANARY_CONFIRM_PREVIEW_MUTATIONS: run-preview-harness-canary
@@ -352,7 +357,7 @@ jobs:
           : > "$REPLAY_CANARY_LOG_EXPORT_PATH"
           stream_logs() {
             while true; do
-              npx --yes vercel@56.4.1 logs "$HARNESS_CANARY_BASE_URL" --follow --json --scope blazity --token "$VERCEL_TOKEN" >> "$REPLAY_CANARY_LOG_EXPORT_PATH" 2>&1 || true
+              npx --yes vercel@56.4.1 logs "$ENGINE_CANARY_LOG_SOURCE_URL" --follow --json --scope blazity --token "$VERCEL_TOKEN" >> "$REPLAY_CANARY_LOG_EXPORT_PATH" 2>&1 || true
               sleep 1
             done
           }
@@ -360,6 +365,14 @@ jobs:
           log_stream_pid=$!
           trap 'kill "$log_stream_pid" 2>/dev/null || true' EXIT
           pnpm --filter worker test:e2e:replay
+      - name: Show the tail of the replay log export on failure
+        if: failure() && steps.scope.outputs.run == 'true' && steps.target.outputs.armed == 'true'
+        env:
+          REPLAY_CANARY_LOG_EXPORT_PATH: ${{ vars.REPLAY_CANARY_LOG_EXPORT_PATH }}
+        run: |
+          set -euo pipefail
+          echo "export size: $(wc -c < "$REPLAY_CANARY_LOG_EXPORT_PATH") bytes"
+          tail -c 6000 "$REPLAY_CANARY_LOG_EXPORT_PATH" | cut -c1-400
 
   # The one check branch protection requires (ADR-004). It has to reach a
   # verdict on every pull request, so three things about it are load bearing.
