@@ -126,13 +126,13 @@ export function ValidationSummary({
             <Button
               key={nodeId}
               type="button"
-              variant="ghost"
+              variant="text"
               size="sm"
               onClick={(event) => {
                 event.currentTarget.closest("details")?.removeAttribute("open");
                 onSelectNode(nodeId);
               }}
-              className="h-auto w-full justify-start px-2 py-2 text-left [&>span]:w-full [&>span]:flex-col [&>span]:items-stretch"
+              className="block h-auto w-full cursor-pointer rounded-[3px] border-none bg-transparent px-2 py-2 text-left hover:bg-red-50 [&>span]:w-full [&>span]:flex-col [&>span]:items-stretch"
               aria-label={`Select block ${nodeNames[nodeId] ?? nodeId}`}
             >
               <span className="mb-1 flex items-center justify-between gap-2 font-mono text-[9px] font-semibold uppercase tracking-[0.05em] text-red-700">

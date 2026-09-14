@@ -7,6 +7,12 @@ import { Button, IconButton, Input, Modal, Textarea } from "@/components/ui";
 import { usePromptLibrary } from "./prompt-library-context";
 
 const labelCls = "font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500";
+const inputCls =
+  "w-full border border-neutral-200 bg-panel rounded-[3px] px-2 py-1.5 font-body text-[13px] text-neutral-900 outline-none";
+const primaryBtn =
+  "appearance-none cursor-pointer border border-mariner bg-mariner text-white py-1.5 px-3.5 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase disabled:opacity-40 disabled:cursor-default";
+const ghostBtn =
+  "appearance-none border-none bg-transparent cursor-pointer font-body text-[12px] text-neutral-500";
 
 /** Modal to lift a block field's text into a new library prompt. Posts to the
  *  dashboard proxy, refreshes the shared library so the new prompt is pickable,
@@ -72,28 +78,27 @@ export function PromptSavePopover({
     <Modal
       open={open}
       onClose={onClose}
-      title="Save to library"
+      chrome="none"
+      aria-label="Save to library"
+      variant="command"
       size="md"
       initialFocusRef={nameRef}
-      footer={
-        <div className="flex items-center gap-3">
-          <Button onClick={() => void save()} disabled={!canSave}>
-            {busy ? "Saving…" : "Save"}
-          </Button>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-        </div>
-      }
+      frameClassName="!pt-[12vh] [&_[data-modal-overlay]]:bg-coal/50 [&_[data-modal-overlay]]:backdrop-blur-[2px]"
+      className="flex w-full max-w-[560px] flex-col gap-3 overflow-hidden rounded-md border-0 bg-panel p-4 shadow-[0_24px_64px_-16px_rgba(24,27,32,0.45)]"
     >
-      <IconButton
-        aria-label="Close"
-        onClick={onClose}
-        className="absolute right-4 top-3"
-      >
-        ×
-      </IconButton>
-      <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <h3 className="m-0 font-display text-[15px] font-semibold text-neutral-900">Save to library</h3>
+        <IconButton
+          aria-label="Close"
+          variant="text"
+          size="sm"
+          onClick={onClose}
+          className="ml-auto appearance-none border-none bg-transparent cursor-pointer w-[22px] h-[22px] rounded-xs inline-flex items-center justify-center font-mono text-sm text-neutral-500 hover:bg-app-bg hover:text-coal"
+        >
+          ×
+        </IconButton>
+      </div>
+
         <div className="flex flex-col gap-1">
           <label className={labelCls} htmlFor="pl-save-name">
             Name
@@ -103,6 +108,7 @@ export function PromptSavePopover({
             ref={nameRef}
             value={name}
             onChange={(e) => setName(e.target.value)}
+            className={inputCls}
           />
         </div>
 
@@ -115,6 +121,7 @@ export function PromptSavePopover({
             value={tags}
             onChange={(e) => setTags(e.target.value)}
             placeholder="comma, separated"
+            className={inputCls}
           />
         </div>
 
@@ -131,12 +138,20 @@ export function PromptSavePopover({
             readOnly
             aria-readonly="true"
             monospace
-            className="min-h-[200px] max-h-[40vh] bg-off-white text-neutral-600 cursor-default"
+            className="w-full min-h-[200px] max-h-[40vh] resize-y border border-neutral-200 bg-off-white rounded-[3px] px-3 py-2 font-mono text-[12px] leading-[1.55] text-neutral-600 outline-none cursor-default"
           />
         </div>
 
         {error && <div className="font-body text-[11px] text-red-600">{error}</div>}
-      </div>
+
+        <div className="flex items-center gap-3">
+          <Button variant="text" onClick={() => void save()} disabled={!canSave} className={primaryBtn}>
+            {busy ? "Saving…" : "Save"}
+          </Button>
+          <Button variant="text" onClick={onClose} className={ghostBtn}>
+            Cancel
+          </Button>
+        </div>
     </Modal>
   );
 }

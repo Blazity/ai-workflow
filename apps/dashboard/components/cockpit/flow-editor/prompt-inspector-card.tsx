@@ -21,7 +21,7 @@ export function PromptInspectorCard({
       aria-haspopup="dialog"
       aria-label={`${disabled ? "View" : "Edit"} ${label}`}
       onClick={onOpen}
-      className="group h-auto w-full justify-start p-2.5 text-left [&>span]:w-full [&>span]:flex-col [&>span]:items-stretch"
+      className="group h-auto w-full cursor-pointer rounded-[3px] border border-neutral-200 bg-off-white p-2.5 text-left outline-none transition-[border-color,background-color,box-shadow] hover:border-mariner-200 hover:bg-mariner-100 focus-visible:border-mariner focus-visible:ring-2 focus-visible:ring-mariner-200 [&>span]:w-full [&>span]:flex-col [&>span]:items-stretch"
     >
       <span className="flex items-start gap-2">
         <span className="min-w-0 flex-1">

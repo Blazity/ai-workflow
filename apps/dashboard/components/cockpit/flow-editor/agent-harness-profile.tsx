@@ -300,15 +300,6 @@ export function AgentHarnessProfile({
     setDetailsOpen(false);
   }, [reference?.profileId, reference?.version]);
 
-  useEffect(() => {
-    if (!detailsOpen) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setDetailsOpen(false);
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [detailsOpen]);
-
   const contract = options.blockRegistry[node.type];
   const profileVersionOptions = useMemo(() => {
     const profileOptions = selectableProfiles.flatMap((profile) => {
@@ -446,7 +437,7 @@ export function AgentHarnessProfile({
             aria-label={`View ${selectedProfile.draft.displayName} version ${reference.version} details`}
             onClick={() => setDetailsOpen(true)}
             disabled={!selectedVersion}
-            className="group h-auto w-full justify-start p-2.5 text-left [&>span]:w-full [&>span]:flex-col [&>span]:items-stretch"
+            className="group h-auto w-full cursor-pointer rounded-[3px] border border-neutral-200 bg-off-white p-2.5 text-left outline-none transition-[border-color,background-color,box-shadow] hover:border-mariner-200 hover:bg-mariner-100 focus-visible:border-mariner focus-visible:ring-2 focus-visible:ring-mariner-200 disabled:cursor-default disabled:opacity-60 [&>span]:w-full [&>span]:flex-col [&>span]:items-stretch"
           >
             <span className="flex items-start gap-2">
               <span className="min-w-0 flex-1">
@@ -509,26 +500,41 @@ export function AgentHarnessProfile({
         <Modal
           open={detailsOpen}
           onClose={() => setDetailsOpen(false)}
+          chrome="none"
           title={`${selectedProfile.draft.displayName} · v${reference.version}`}
           description="Exact immutable environment used by this block."
           size="md"
-          className="relative"
+          frameClassName="!z-[140] [&_[data-modal-overlay]]:backdrop-blur-[1px]"
+          className="flex max-h-[86vh] w-full max-w-[680px] flex-col overflow-hidden rounded-[5px] border border-neutral-200 bg-panel shadow-[0_18px_50px_-12px_rgba(24,27,32,0.4)]"
         >
-          <IconButton
-            type="button"
-            autoFocus
-            size="sm"
-            onClick={() => setDetailsOpen(false)}
-            aria-label="Close harness profile details"
-            className="absolute right-4 top-3 z-10"
-          >
-            ×
-          </IconButton>
-          <ManifestDetails
-            node={node}
-            manifest={selectedVersion.manifest}
-            manifestHash={selectedVersion.manifestHash}
-          />
+          <header className="flex items-start gap-3 border-b border-neutral-200 px-4 py-3">
+            <div className="min-w-0 flex-1">
+              <h2 className="m-0 font-display text-[18px] font-semibold text-coal">
+                {selectedProfile.draft.displayName} · v{reference.version}
+              </h2>
+              <p className="mt-0.5 mb-0 font-body text-[11px] text-neutral-600">
+                Exact immutable environment used by this block.
+              </p>
+            </div>
+            <IconButton
+              type="button"
+              data-dialog-initial-focus
+              variant="text"
+              size="sm"
+              onClick={() => setDetailsOpen(false)}
+              aria-label="Close harness profile details"
+              className="appearance-none border-none bg-transparent p-1 font-mono text-[16px] text-neutral-500 cursor-pointer hover:text-coal"
+            >
+              ×
+            </IconButton>
+          </header>
+          <div className="overflow-auto p-4">
+            <ManifestDetails
+              node={node}
+              manifest={selectedVersion.manifest}
+              manifestHash={selectedVersion.manifestHash}
+            />
+          </div>
         </Modal>
       )}
     </>

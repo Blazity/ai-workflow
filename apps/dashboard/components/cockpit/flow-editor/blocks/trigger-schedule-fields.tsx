@@ -6,9 +6,11 @@ import type { ScheduleOverlapPolicy, SchedulePreset, SchedulePreviewRequest, Sch
 import { apiClient } from "@/lib/api/client";
 import { Button, Select } from "@/components/ui";
 import { ConfigField, ConfigNote, NumberField, TextArea, TextInput, TriggerRateLimitFields, str } from "./shared";
-import { SCHEDULE_EVERY_N_HOURS_STEPS, SCHEDULE_EVERY_N_MINUTES_STEPS, SCHEDULE_OVERLAP_POLICY_OPTIONS, SCHEDULE_PRESET_KIND_OPTIONS, ScheduleWeekdayToggles } from "./schedule-preview";
+import { SCHEDULE_EVERY_N_HOURS_STEPS, SCHEDULE_EVERY_N_MINUTES_STEPS, SCHEDULE_OVERLAP_POLICY_OPTIONS, SCHEDULE_PRESET_KIND_OPTIONS, ScheduleWeekdayToggles, scheduleModeToggleCls } from "./schedule-preview";
 import { ScheduleStatusPanel } from "./schedule-history";
 import type { ConfigChange } from "./types";
+
+const actionButtonCls = "appearance-none rounded-xs border border-mariner bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-mariner disabled:opacity-40";
 import type { SchedulePreviewState } from "./schedule-preview";
 
 const SCHEDULE_INTERVAL_PRESET_TIMEZONE = "UTC";
@@ -230,6 +232,7 @@ function ScheduleCronBuilder({
               size="sm"
               disabled={!canEdit}
               onClick={() => setBuilderMode("custom")}
+              className={builderMode === "custom" ? actionButtonCls : scheduleModeToggleCls}
             >
               Custom
             </Button>
@@ -239,6 +242,7 @@ function ScheduleCronBuilder({
               size="sm"
               disabled={!canEdit}
               onClick={() => setBuilderMode("preset")}
+              className={builderMode === "preset" ? actionButtonCls : scheduleModeToggleCls}
             >
               Preset
             </Button>
@@ -353,6 +357,7 @@ function ScheduleCronBuilder({
                   setBuilderMode("custom");
                 }
               }}
+              className={actionButtonCls}
             >
               Apply preset
             </Button>
@@ -509,6 +514,7 @@ export function ScheduleTriggerFields({
                 variant="secondary"
                 size="sm"
                 onClick={() => onChange("params.catchUpGraceMinutes", suggestedGraceMinutes)}
+                className={actionButtonCls}
               >
                 Use suggested {suggestedGraceMinutes}
               </Button>

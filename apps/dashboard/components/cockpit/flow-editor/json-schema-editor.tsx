@@ -33,6 +33,8 @@ import {
 } from "@/lib/workflow-editor/json-schema-authoring";
 
 const DIALECT = "https://json-schema.org/draft/2020-12/schema";
+const fieldClass =
+  "min-w-0 rounded-xs border border-neutral-200 bg-off-white px-2 py-1 font-mono text-[10px] text-coal outline-none focus:border-mariner disabled:opacity-60";
 const schemaTypes: VisualJsonSchemaType[] = [
   "object",
   "array",
@@ -100,7 +102,7 @@ function EnumField({
         onChange={(event) =>
           onChange(event.target.checked ? defaultValue : null)
         }
-        className="gap-1.5 text-[10px] text-neutral-700"
+        className="flex items-center gap-1.5 font-body text-[10px] text-neutral-700 [&_input]:h-3 [&_input]:w-3 [&_input]:accent-mariner"
         label="Restrict to enum values"
       />
       {value !== undefined && (
@@ -114,7 +116,7 @@ function EnumField({
             onBlur={commit}
             size="sm"
             monospace
-            className="mt-1"
+            className={`${fieldClass} mt-1 w-full resize-y`}
           />
           {error && (
             <p className="m-0 mt-1 font-body text-[10px] text-red-700">
@@ -169,6 +171,7 @@ function PropertyNameField({
         onKeyDown={keyDown}
         size="sm"
         monospace
+        className={`${fieldClass} w-full`}
       />
       {error && (
         <p className="m-0 mt-1 font-body text-[9px] text-red-700">{error}</p>
@@ -257,7 +260,7 @@ function SchemaNodeEditor({
               ),
             )
           }
-          className="flex-1"
+          className={`${fieldClass} flex-1`}
         />
         <Checkbox
           checked={nullable}
@@ -265,7 +268,7 @@ function SchemaNodeEditor({
           onChange={(event) =>
             onChange(setVisualSchemaNullable(schema, event.target.checked))
           }
-          className="gap-1 text-[10px] text-neutral-700"
+          className="flex items-center gap-1 font-body text-[10px] text-neutral-700 [&_input]:h-3 [&_input]:w-3 [&_input]:accent-mariner"
           label="Nullable"
         />
       </div>
@@ -278,6 +281,7 @@ function SchemaNodeEditor({
           onChange(setVisualSchemaDescription(schema, event.target.value))
         }
         size="sm"
+        className={`${fieldClass} w-full font-body`}
       />
 
       <EnumField
@@ -300,7 +304,7 @@ function SchemaNodeEditor({
                 ),
               )
             }
-            className="gap-1.5 text-[10px] text-neutral-700"
+            className="flex items-center gap-1.5 font-body text-[10px] text-neutral-700 [&_input]:h-3 [&_input]:w-3 [&_input]:accent-mariner"
             label="Allow fields not listed below"
           />
           {Object.entries(properties).map(([name, child]) => {
@@ -339,18 +343,19 @@ function SchemaNodeEditor({
                         ),
                       )
                     }
-                    className="mt-1 gap-1 text-[9px] text-neutral-700"
+                    className="mt-1 flex items-center gap-1 font-body text-[9px] text-neutral-700 [&_input]:h-3 [&_input]:w-3 [&_input]:accent-mariner"
                     label="Required"
                   />
                   <Button
                     type="button"
-                    variant="danger"
+                    variant="text"
                     size="sm"
                     disabled={disabled}
                     aria-label={`Remove ${name} property`}
                     onClick={() =>
                       onChange(removeVisualSchemaProperty(schema, name))
                     }
+                    className="appearance-none border-none bg-transparent px-1 font-mono text-[10px] text-red-700 disabled:opacity-40"
                   >
                     Remove
                   </Button>
@@ -380,6 +385,7 @@ function SchemaNodeEditor({
                 }}
                 size="sm"
                 monospace
+                className={`${fieldClass} w-full`}
               />
               {newPropertyError && (
                 <p className="m-0 mt-1 font-body text-[9px] text-red-700">
@@ -403,6 +409,7 @@ function SchemaNodeEditor({
                 setNewProperty("");
                 setNewPropertyError(null);
               }}
+              className="h-[26px] appearance-none rounded-xs border border-mariner bg-panel px-2 font-mono text-[9px] uppercase tracking-[0.04em] text-mariner disabled:opacity-40"
             >
               Add field
             </Button>
@@ -552,6 +559,11 @@ export function JsonSchemaEditor({
             size="sm"
             onClick={() => setMode(candidate)}
             aria-pressed={mode === candidate}
+            className={`appearance-none rounded-xs border px-2 py-1 font-mono text-[9px] uppercase tracking-[0.05em] ${
+              mode === candidate
+                ? "border-mariner bg-panel text-mariner"
+                : "border-transparent bg-transparent text-neutral-500"
+            }`}
           >
             {candidate}
           </Button>
@@ -578,7 +590,7 @@ export function JsonSchemaEditor({
             }}
             size="sm"
             monospace
-            className="min-h-[180px]"
+            className={`${fieldClass} min-h-[180px] w-full resize-y leading-[1.45]`}
           />
         </div>
       ) : (
@@ -608,6 +620,7 @@ export function JsonSchemaEditor({
                 onClick={() =>
                   applyVisualChange(structuredClone(DEFAULT_VISUAL_JSON_SCHEMA))
                 }
+                className="appearance-none rounded-xs border border-mariner bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.05em] text-mariner disabled:opacity-40"
               >
                 Create schema
               </Button>
@@ -639,10 +652,10 @@ export function JsonSchemaEditor({
               >
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="text"
                   size="sm"
                   onClick={() => showRawIssue(issue.path)}
-                  className="h-auto justify-start whitespace-normal text-left"
+                  className="appearance-none h-auto border-none bg-transparent p-0 text-left text-inherit"
                 >
                   <span className="font-mono">
                     {issue.path === "" ? "/" : issue.path}

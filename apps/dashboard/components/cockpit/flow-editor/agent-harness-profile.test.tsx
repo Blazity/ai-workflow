@@ -195,7 +195,6 @@ test("an exact old version remains selected and advertises an explicit update", 
   assert.match(html, /Codex · v1/);
   assert.match(html, /View details/);
   assert.match(html, /aria-haspopup="dialog"/);
-  assert.match(html, /data-variant="secondary"/);
   assert.match(html, /role="combobox"/);
   assert.match(html, /v2 available/);
   assert.match(html, /0 skills/);

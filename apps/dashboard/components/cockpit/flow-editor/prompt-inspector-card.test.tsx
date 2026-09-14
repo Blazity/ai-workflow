@@ -22,7 +22,6 @@ test("renders an interactive structural summary without raw prompt content", () 
     />,
   );
   assert.match(html, /Edit prompt/);
-  assert.match(html, /data-variant="secondary"/);
   assert.match(html, /aria-hidden="true">→/);
   assert.match(html, /research-plan/);
   assert.match(html, /New section/);

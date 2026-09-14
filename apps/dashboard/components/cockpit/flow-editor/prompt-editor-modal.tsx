@@ -24,7 +24,14 @@ import type { PromptInsertPayload } from "./prompt-insert-popup";
 import { promptEditorModalCapabilities, promptEditorSurface } from "@shared/prompts";
 import type { PromptPreviewRequest, PromptPreviewTarget } from "@shared/prompts";
 
+const headBtn =
+  "appearance-none cursor-pointer inline-flex items-center gap-1 border border-neutral-200 bg-panel text-coal py-1 px-2 rounded-[3px] font-mono text-[10px] tracking-[0.04em] uppercase transition-[background-color,color,transform] duration-[var(--motion-fast)] ease-standard hover:bg-app-bg active:scale-[0.96]";
+const headBtnActive = "border-mariner-200 bg-mariner-100 text-mariner";
+const primaryHeadBtn =
+  "appearance-none cursor-pointer inline-flex items-center gap-1 border border-mariner bg-mariner text-white py-1 px-2.5 rounded-[3px] font-mono text-[10px] tracking-[0.04em] uppercase transition-transform duration-[var(--motion-fast)] ease-standard active:scale-[0.96] disabled:opacity-40 disabled:cursor-default";
 const metaLabelCls = "font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500";
+const metaInputCls =
+  "w-full border border-neutral-200 bg-panel rounded-[3px] px-2 py-1.5 font-body text-[13px] text-neutral-900 outline-none focus:border-mariner";
 
 export interface PromptEditorModalMeta {
   name: string;
@@ -208,63 +215,72 @@ export function PromptEditorModal({
     <Modal
       open={open}
       onClose={attemptClose}
-      title={`${disabled ? "View" : "Edit"} ${fieldLabel}`}
-      description={`${blockName} · ${fieldLabel}`}
+      chrome="none"
+      aria-label={`${disabled ? "View" : "Edit"} ${fieldLabel}`}
       size="lg"
-      className="h-[90vh]"
+      frameClassName="!items-start !justify-center !px-[3vw] !pt-[5vh] !pb-0 [&_[data-modal-overlay]]:bg-coal/50 [&_[data-modal-overlay]]:backdrop-blur-[2px]"
+      className="flex h-[90vh] max-h-[90vh] w-[94vw] max-w-[1240px] flex-col overflow-hidden rounded-md border-0 bg-panel shadow-[0_24px_64px_-16px_rgba(24,27,32,0.45)] origin-top"
     >
-      <div ref={dialogRef} className="-mx-5 -my-4 flex h-full min-h-0 flex-col">
-        <div className="flex min-h-[52px] shrink-0 items-center gap-3 border-b border-neutral-200 px-4">
+      <div ref={dialogRef} className="flex h-full min-h-0 flex-col">
+        <div className="flex h-[52px] shrink-0 items-center gap-3 border-b border-neutral-200 px-4">
+          <span className="truncate font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">
+            {blockName} · {fieldLabel}
+          </span>
           <div className="ml-auto flex items-center gap-2">
             <Button
               type="button"
-              variant={libOpen ? "selected" : "ghost"}
+              variant="text"
               size="sm"
               aria-pressed={libOpen}
               onClick={() => setLibOpen((o) => !o)}
+              className={`${headBtn} ${libOpen ? headBtnActive : "text-mariner"}`}
             >
               ❡ Library
             </Button>
             {canSave && (
-              <Button type="button" variant="secondary" size="sm" aria-haspopup="dialog" onClick={() => setSaveOpen(true)}>
+              <Button type="button" variant="text" size="sm" aria-haspopup="dialog" onClick={() => setSaveOpen(true)} className={headBtn}>
                 ↥ Save
               </Button>
             )}
             {library && (
               <Button
                 type="button"
+                variant="text"
                 size="sm"
                 onClick={library.onPrimary}
                 disabled={library.primaryDisabled}
+                className={primaryHeadBtn}
               >
                 {library.primaryBusy ? "Saving…" : library.primaryLabel}
               </Button>
             )}
-            <Button type="button" variant="secondary" size="sm" data-dialog-initial-focus onClick={attemptClose}>
+            <Button type="button" variant="text" size="sm" data-dialog-initial-focus onClick={attemptClose} className={headBtn}>
               Close
             </Button>
           </div>
         </div>
 
         {confirmDiscard && (
-          <div className="flex shrink-0 items-center gap-3 border-b border-yellow-300 bg-yellow-100 px-4 py-2 font-body text-[12px] text-neutral-700">
+          <div className="flex shrink-0 items-center gap-3 border-b border-yellow-300 bg-[#FFF9E6] px-4 py-2 font-body text-[12px] text-neutral-700">
             <span>Discard draft?</span>
             <Button
               type="button"
-              variant="danger"
+              variant="text"
               size="sm"
               onClick={() => {
                 setConfirmDiscard(false);
                 onCloseRef.current();
               }}
+              className="appearance-none border-none bg-transparent font-body text-[12px] font-semibold text-red-600 cursor-pointer"
             >
               Discard
             </Button>
             <Button
               type="button"
-              variant="ghost"
+              variant="text"
               size="sm"
               onClick={() => setConfirmDiscard(false)}
+              className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer"
             >
               Keep editing
             </Button>
@@ -283,6 +299,7 @@ export function PromptEditorModal({
                   value={library.meta.name}
                   disabled={!canEdit}
                   onChange={(e) => library.onMetaChange({ ...library.meta, name: e.target.value })}
+                  className={metaInputCls}
                 />
               </div>
               <div className="flex min-w-[200px] flex-1 flex-col gap-1">
@@ -302,6 +319,7 @@ export function PromptEditorModal({
                   value={library.meta.description}
                   disabled={!canEdit}
                   onChange={(e) => library.onMetaChange({ ...library.meta, description: e.target.value })}
+                  className={metaInputCls}
                 />
               </div>
             </div>
@@ -318,9 +336,12 @@ export function PromptEditorModal({
           </div>
         )}
 
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col md:flex-row">
-          {libOpen && (
-          <div className="min-h-0 min-w-0 shrink-0 overflow-hidden border-b border-neutral-200 max-md:max-h-[40%] md:w-[40%] md:border-r md:border-b-0">
+        <div className="flex min-h-0 min-w-0 flex-1">
+          <div
+            className={`min-h-0 min-w-0 shrink-0 overflow-hidden transition-[width] duration-[var(--motion-base)] ease-standard motion-reduce:transition-none ${
+              libOpen ? "w-[40%] border-r border-neutral-200" : "w-0"
+            }`}
+          >
             <div className="h-full w-full min-w-0">
               <PromptLibraryRail
                 disabled={!canInsert}
@@ -333,7 +354,6 @@ export function PromptEditorModal({
               />
             </div>
           </div>
-          )}
 
           <div className="flex min-h-0 min-w-0 flex-1 p-4">
             {editorSurface === "continuous" ? (

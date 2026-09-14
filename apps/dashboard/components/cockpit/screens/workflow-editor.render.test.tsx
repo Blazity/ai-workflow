@@ -188,7 +188,6 @@ test("retired list status wins and a legacy JSON toggle resets across a definiti
   });
   assert.equal(button(renderer.root, /^Deploy$/).props.disabled, true);
   assert.equal(button(renderer.root, /^Deploy$/).props["data-variant"], "success");
-  assert.equal(button(renderer.root, /^Reset to deployed$/).props["data-variant"], "ghost");
   assert.equal(button(renderer.root, /^Save draft$/).props.disabled, true);
   assert.equal(button(renderer.root, /^Save draft$/).props["data-variant"], "primary");
 

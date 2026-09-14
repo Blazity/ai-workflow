@@ -152,12 +152,13 @@ export function WorkflowTextTemplateEditor({
       <div className="flex items-center border-b border-neutral-200 px-1.5 py-1">
         <Button
           type="button"
-          variant="ghost"
+          variant="text"
           size="sm"
           aria-label="Insert workflow value"
           disabled={disabled}
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => setPickerOpen(true)}
+          className="inline-flex h-7 items-center gap-1 rounded-[3px] border border-transparent bg-transparent px-2 font-mono text-[10px] text-mariner hover:bg-off-white disabled:opacity-40"
         >
           <span className="text-[13px]" aria-hidden>
             +

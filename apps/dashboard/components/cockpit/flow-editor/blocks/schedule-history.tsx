@@ -149,6 +149,7 @@ function ScheduleOccurrenceHistorySection({
           size="sm"
           disabled={loading}
           onClick={onRefresh}
+          className="appearance-none rounded-xs border border-mariner bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-mariner disabled:opacity-40"
         >
           {loading ? "Loading…" : "Refresh"}
         </Button>

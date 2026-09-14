@@ -17,6 +17,11 @@ import {
   WorkflowValueChip,
 } from "./workflow-data-picker";
 
+const inputClass =
+  "h-9 min-w-0 rounded-[3px] border border-neutral-200 bg-off-white px-2.5 font-body text-[12px] text-coal outline-none disabled:opacity-50";
+const buttonClass =
+  "h-8 rounded-[3px] border border-mariner bg-panel px-3 font-mono text-[9px] uppercase tracking-[0.05em] text-mariner disabled:opacity-40";
+
 function schemaTypes(entry: WorkflowDataCatalogEntry): string[] {
   const raw = entry.schema.type;
   if (Array.isArray(raw)) {
@@ -149,6 +154,7 @@ function LiteralEditor({
       <Select
         aria-label="Comparison value"
         size="compact"
+        className={inputClass}
         disabled={disabled}
         value={JSON.stringify(condition.value)}
         options={enumValues.map((value) => ({
@@ -165,6 +171,7 @@ function LiteralEditor({
       <Select
         aria-label="Comparison value"
         size="compact"
+        className={inputClass}
         disabled={disabled}
         value={condition.value === false ? "false" : "true"}
         options={[
@@ -180,6 +187,7 @@ function LiteralEditor({
       <Input
         aria-label="Comparison value"
         size="sm"
+        className={inputClass}
         disabled={disabled}
         type="number"
         value={typeof condition.value === "number" ? condition.value : ""}
@@ -191,6 +199,7 @@ function LiteralEditor({
     <Input
       aria-label="Comparison value"
       size="sm"
+      className={inputClass}
       disabled={disabled}
       value={typeof condition.value === "string" ? condition.value : ""}
       onChange={(event) => onChange(event.target.value)}
@@ -221,7 +230,7 @@ export function BranchFields({
           This pre-release Branch uses an obsolete configuration.
         </p>
         {canEdit && (
-          <Button type="button" size="sm" className="mt-2" onClick={replace}>
+          <Button type="button" size="sm" className={`${buttonClass} mt-2`} onClick={replace}>
             Replace condition
           </Button>
         )}
@@ -244,6 +253,7 @@ export function BranchFields({
           <Select
             aria-label="Match"
             size="compact"
+            className={inputClass}
             disabled={!canEdit}
             value={parsed.combinator}
             options={[
@@ -291,10 +301,11 @@ export function BranchFields({
                   }}
                 />
                 {entry && (
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_auto]">
+                  <div className="grid grid-cols-[1fr_1fr_auto] gap-2">
                     <Select
                       aria-label="Operator"
                       size="compact"
+                      className={inputClass}
                       disabled={!canEdit}
                       value={condition.operator}
                       options={operators(entry).map((operator) => ({
@@ -340,6 +351,7 @@ export function BranchFields({
                       size="sm"
                       aria-label="Delete condition"
                       disabled={!canEdit}
+                      className="h-9 w-9 border-none bg-transparent text-neutral-500"
                       onClick={() =>
                         onChange({
                           ...parsed,
@@ -365,7 +377,7 @@ export function BranchFields({
                         ),
                       })
                     }
-                    className="text-[11px] text-neutral-600"
+                    className="flex items-center gap-2 font-body text-[11px] text-neutral-600"
                     label="Ignore capitalization"
                   />
                 )}
@@ -377,7 +389,7 @@ export function BranchFields({
           <Button
             type="button"
             size="sm"
-            className="mt-3"
+            className={`${buttonClass} mt-3`}
             disabled={!availableValues.some((entry) => entry.availability.state === "available")}
             onClick={() => {
               const entry = availableValues.find(
