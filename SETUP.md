@@ -583,36 +583,37 @@ confidential `client_credentials` registration only for an owner or admin in
 the active fixed organization, binds the client to that organization, and
 returns the client secret only in this response.
 
+Register through the production worker because it shares the database with the
+demo target. Do not use the demo alias for registration because it receives a
+new build only when an armed canary deploys there. Use the dashboard origin on
+both POST requests because Better Auth trusts that origin, not the worker's own.
+
 ```bash
-export ENGINE_CANARY_WORKER_URL=https://ai-workflow-app-env-ai-workflow-demo-blazity.vercel.app
+export ENGINE_CANARY_WORKER_URL=https://ai-workflow-app-eight.vercel.app
+export ENGINE_CANARY_ORIGIN=https://ai-workflow-app-dashboard.vercel.app
 export ENGINE_CANARY_ORG_SLUG=ai-workflow
 read -rsp "Owner ba_session: " ENGINE_CANARY_OWNER_SESSION
 echo
-read -rsp "Vercel protection bypass: " ENGINE_CANARY_BYPASS
-echo
 curl --fail-with-body --silent --show-error \
   --header "Authorization: Bearer $ENGINE_CANARY_OWNER_SESSION" \
-  --header "x-vercel-protection-bypass: $ENGINE_CANARY_BYPASS" \
   "$ENGINE_CANARY_WORKER_URL/api/v1/session" | jq -e '.role == "owner"'
 curl --fail-with-body --silent --show-error \
   --request POST \
   --header "Authorization: Bearer $ENGINE_CANARY_OWNER_SESSION" \
   --header "Content-Type: application/json" \
-  --header "Origin: $ENGINE_CANARY_WORKER_URL" \
-  --header "x-vercel-protection-bypass: $ENGINE_CANARY_BYPASS" \
+  --header "Origin: $ENGINE_CANARY_ORIGIN" \
   --data "{\"organizationSlug\":\"$ENGINE_CANARY_ORG_SLUG\"}" \
   "$ENGINE_CANARY_WORKER_URL/api/auth/organization/set-active" > /dev/null
 ENGINE_CANARY_REGISTRATION="$(curl --fail-with-body --silent --show-error \
   --request POST \
   --header "Authorization: Bearer $ENGINE_CANARY_OWNER_SESSION" \
   --header "Content-Type: application/json" \
-  --header "Origin: $ENGINE_CANARY_WORKER_URL" \
-  --header "x-vercel-protection-bypass: $ENGINE_CANARY_BYPASS" \
+  --header "Origin: $ENGINE_CANARY_ORIGIN" \
   --data '{"client_name":"engine-canary","token_endpoint_auth_method":"client_secret_post","grant_types":["client_credentials"],"response_types":[],"redirect_uris":["https://ai-workflow-app-env-ai-workflow-demo-blazity.vercel.app/mcp"],"scope":"mcp:read runs:dispatch"}' \
   "$ENGINE_CANARY_WORKER_URL/api/auth/oauth2/register")"
 printf '%s' "$ENGINE_CANARY_REGISTRATION" | jq -er '.client_id' | gh secret set --env e2e ENGINE_CANARY_MCP_CLIENT_ID
 printf '%s' "$ENGINE_CANARY_REGISTRATION" | jq -er '.client_secret' | gh secret set --env e2e ENGINE_CANARY_MCP_CLIENT_SECRET
-unset ENGINE_CANARY_REGISTRATION ENGINE_CANARY_OWNER_SESSION ENGINE_CANARY_BYPASS ENGINE_CANARY_ORG_SLUG
+unset ENGINE_CANARY_REGISTRATION ENGINE_CANARY_OWNER_SESSION ENGINE_CANARY_ORIGIN ENGINE_CANARY_ORG_SLUG
 ```
 
 The registration must name exactly `mcp:read runs:dispatch`. At job start the
@@ -643,8 +644,10 @@ the variables above. Each definition must stay disabled and contain exactly
 and pin the expected immutable profile version. The published
 `builtin-claude@2` fixture uses `claude-opus-4-8`, and the published
 `builtin-codex@2` fixture uses `gpt-5.4`. The custom profile must use
-`claude-haiku-4-5` when its provider is Claude or `gpt-5-mini` when its provider
-is Codex. A workflow cannot make the built-in fixtures cheaper by setting the
+`haiku` when its provider is Claude or `gpt-5.4-mini` when its provider is
+Codex, which are the IDs exposed by the capability catalog. The dashboard's
+model picker offers exactly those IDs. A workflow cannot make the built-in
+fixtures cheaper by setting the
 Generic Agent's `model` parameter: a pinned Harness Profile overrides that
 parameter, and the published profile manifest's `model.id` controls the model.
 Changing a built-in model therefore requires a newly published built-in profile
