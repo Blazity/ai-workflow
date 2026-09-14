@@ -404,25 +404,25 @@ export function TraceDetail({
               />
             )}
             {run.ticketUrl && (
-              <Button
+              <a
                 href={run.ticketUrl}
-                variant="secondary"
                 target="_blank"
                 rel="noreferrer"
+                className="appearance-none border border-neutral-200 bg-panel px-3.5 py-2 rounded-[3px] font-mono text-[11px] text-neutral-900 uppercase tracking-[0.04em] cursor-pointer no-underline"
               >
                 Open ticket ↗
-              </Button>
+              </a>
             )}
             {/* One button per repository the run published to, so a multi-repo
                 run does not hide every PR/MR but the first. */}
             {runPrs.map((pr, i) => (
-              <Button
+              <a
                 key={`${pr.provider}:${pr.repoPath}:${pr.id}`}
                 href={pr.url}
                 target="_blank"
                 rel="noreferrer"
                 title={pr.repoPath || undefined}
-                className="max-w-full"
+                className="inline-flex items-center gap-1 max-w-full appearance-none border border-neutral-200 bg-coal px-3.5 py-2 rounded-[3px] font-mono text-[11px] text-white uppercase tracking-[0.04em] cursor-pointer no-underline hover:bg-neutral-800"
               >
                 {runPrLabels[i] && (
                   <span className="truncate max-w-[180px]">{runPrLabels[i]}</span>
@@ -430,7 +430,7 @@ export function TraceDetail({
                 <span className="whitespace-nowrap">
                   {pr.provider === "gitlab" ? "MR" : "PR"} {pullRequestRef(pr)} ↗
                 </span>
-              </Button>
+              </a>
             ))}
           </div>
         )}
@@ -739,7 +739,8 @@ function AnswerPanel({
     <CkCard
       eyebrow="Human-in-the-loop"
       title={panelAnswered ? "Answered" : "Input needed"}
-      className={panelAnswered ? "!border-success !bg-success-bg" : "!border-orange-200 !bg-orange-100"}
+      className={panelAnswered ? "!border-success !bg-success-bg" : undefined}
+      style={panelAnswered ? undefined : { background: "#FFFCFA", borderColor: "#FFE4D6" }}
     >
       <div className="flex flex-col gap-4">
         <ol className="m-0 flex list-decimal flex-col gap-1.5 pl-5 font-body text-[13px] leading-[1.55] text-neutral-800">
@@ -809,10 +810,11 @@ function AnswerPanel({
                     {clarification.suggestedAnswers.map((a, j) => (
                       <Button
                         key={j}
-                        variant="secondary"
-                        size="sm"
+                        type="button"
+                        variant="text"
                         disabled={busy}
                         onClick={() => setAnswer(a)}
+                        className="border border-neutral-200 bg-panel px-2.5 py-[5px] rounded-[3px] cursor-pointer font-body text-xs text-neutral-900 transition-[color,background-color,border-color,transform] duration-[var(--motion-fast)] hover:bg-coal hover:text-white disabled:cursor-default disabled:opacity-40"
                       >
                         {a}
                       </Button>
@@ -827,6 +829,7 @@ function AnswerPanel({
                   rows={4}
                   aria-label="Answer"
                   placeholder="Type your answer…"
+                  className="w-full resize-y rounded-[3px] border border-neutral-200 bg-panel p-3 font-body text-[13px] leading-[1.5] text-coal placeholder:text-neutral-400 disabled:opacity-60"
                 />
               </>
             )}
@@ -834,7 +837,7 @@ function AnswerPanel({
             {error ? <InlineError>{error}</InlineError> : null}
 
             <div className="flex items-center gap-2">
-              <Button
+              <DarkButton
                 disabled={busy || (!retry && answer.trim().length === 0)}
                 onClick={submit}
               >
@@ -843,7 +846,7 @@ function AnswerPanel({
                   : retry
                     ? "Retry resume run"
                     : "Submit answer"}
-              </Button>
+              </DarkButton>
             </div>
           </>
         )}
@@ -857,6 +860,18 @@ function InlineError({ children }: { children: React.ReactNode }) {
     <div className="rounded-[3px] border border-fail-bg bg-fail-bg px-3 py-2 text-[13px] text-fail-fg">
       {children}
     </div>
+  );
+}
+
+function DarkButton({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <Button
+      {...props}
+      variant="text"
+      className="inline-flex items-center justify-center whitespace-nowrap rounded-[3px] border border-neutral-900 bg-neutral-900 px-3.5 py-[5px] font-mono text-[11px] font-medium uppercase tracking-[0.04em] text-white transition hover:bg-neutral-800 disabled:cursor-default disabled:opacity-40"
+    >
+      {children}
+    </Button>
   );
 }
 
@@ -874,11 +889,11 @@ function Breadcrumb({
   return (
     <div className="flex items-center gap-3 font-body text-[13px] min-w-0">
       <Button
-        variant="ghost"
-        size="sm"
+        type="button"
+        variant="text"
         onClick={onBack}
         aria-label="Back to runs"
-        className="h-auto p-0"
+        className="border-0 bg-transparent p-0 font-mono text-[11px] text-mariner cursor-pointer uppercase tracking-[0.04em] shrink-0"
       >
         ← Runs
       </Button>
@@ -886,11 +901,11 @@ function Breadcrumb({
         <>
           <span className="text-[#D2D6DA] shrink-0">/</span>
           <Button
-            variant="ghost"
-            size="sm"
+            type="button"
+            variant="text"
             onClick={() => onTicket(ticket)}
             aria-label={`All runs for ${ticket}`}
-            className="h-auto p-0"
+            className="border-0 bg-transparent p-0 font-mono text-[11px] text-mariner cursor-pointer tracking-[0.04em] shrink-0"
           >
             {ticket}
           </Button>

@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ButtonHTMLAttributes } from "react";
 import { useRouter } from "next/navigation";
-import { CkCard, CkChip, CkStatusPill, CkPagination, TicketLink, PRLinks } from "@/components/ui";
+import { CkCard, CkChip, CkStatusPill, CkTabs, CkPagination, TicketLink, PRLinks } from "@/components/ui";
 import { useCockpit } from "@/components/cockpit/context";
 import { WindowSelector } from "@/components/cockpit/controls";
 import { SpotlightTrigger } from "@/components/cockpit/spotlight-search";
@@ -13,7 +13,6 @@ import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
 import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
 import type { RunsResponse } from "@shared/contracts";
 import { Button } from "@/components/ui/button";
-import { formatAgeMinutes } from "@/lib/date-time";
 import {
   RUN_STATUS_FILTERS,
   runIdentity,
@@ -29,7 +28,7 @@ type CancelFeedback = { tone: "success" | "info" | "warn" | "error"; message: st
 const FEEDBACK_TONE_CLASS: Record<CancelFeedback["tone"], string> = {
   success: "text-success-fg",
   info: "text-neutral-700",
-  warn: "text-neutral-800",
+  warn: "text-[#7A5A00]",
   error: "text-fail-fg",
 };
 
@@ -131,7 +130,7 @@ export function RunsScreen({
   }
 
   return (
-    <div className="flex flex-col gap-4 px-4 pb-8 pt-5 lg:px-6">
+    <div className="flex flex-col gap-4 px-6 pt-5 pb-8">
       {/* Spotlight ticket search (⌘K) and global window control, same placement across screens */}
       <div className="flex items-center justify-between gap-4">
         <SpotlightTrigger />
@@ -147,19 +146,11 @@ export function RunsScreen({
         </h2>
       </div>
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <div className="flex flex-wrap gap-1.5">
-          {RUN_STATUS_FILTERS.map((item) => (
-            <Button
-              key={item.id}
-              type="button"
-              variant={filter === item.id ? "selected" : "secondary"}
-              aria-pressed={filter === item.id}
-              onClick={() => changeFilter(item.id)}
-            >
-              {item.label}
-            </Button>
-          ))}
-        </div>
+        <CkTabs
+          active={filter}
+          onChange={(next) => changeFilter(next as RunStatusFilter)}
+          tabs={RUN_STATUS_FILTERS.map((item) => ({ id: item.id, label: item.label }))}
+        />
         <RunRefreshControl
           isRefreshing={isRefreshing}
           error={stale ? "Refresh failed; showing last good data." : null}
@@ -213,7 +204,7 @@ export function RunsScreen({
                 <td className="px-3 py-2.5">
                   <div className="flex flex-col gap-1">
                     <span className="block font-semibold text-neutral-900 max-w-[320px] overflow-hidden text-ellipsis whitespace-nowrap">{identity.primary}</span>
-                    <div className="flex items-center gap-1.5 flex-wrap [&_a]:min-h-6">
+                    <div className="flex items-center gap-1.5 flex-wrap">
                       {identity.showTicketLink && <TicketLink ticket={r.ticket} url={r.ticketUrl} />}
                       <PRLinks run={r} />
                       {identity.showRunIdMeta && <span className="font-mono text-[10px] text-neutral-500">{r.id}</span>}
@@ -224,7 +215,7 @@ export function RunsScreen({
                   <CkChip>{r.workflowName}</CkChip>
                 </td>
                 <td className="px-3 py-2.5 font-mono text-[11px] text-neutral-700">{r.model ? runModelLabel(r.model) : EM_DASH}</td>
-                <td className="px-3 py-2.5 text-right font-mono text-[11px] text-neutral-500">{formatAgeMinutes(r.startedAtMin)}</td>
+                <td className="px-3 py-2.5 text-right font-mono text-[11px] text-neutral-500">{r.startedAtMin}m ago</td>
                 <td className="px-3 py-2.5 text-right font-mono font-medium">{r.duration === null ? EM_DASH : `${r.duration}s`}</td>
                 <td className="px-3 py-2.5 text-right font-mono text-neutral-700">{r.tokens === null ? EM_DASH : `${(r.tokens / 1000).toFixed(1)}k`}</td>
                 <td className="px-3 py-2.5 text-right font-mono font-medium">{r.cost === null ? EM_DASH : `$${r.cost.toFixed(2)}`}</td>
@@ -234,26 +225,25 @@ export function RunsScreen({
                       confirmId === r.id ? (
                         <div className="flex items-center justify-end gap-1.5 flex-wrap">
                           <span className="font-mono text-[10px] text-neutral-700 whitespace-nowrap">Cancel run?</span>
-                          <Button
+                          <DarkButton
                             disabled={busyId === r.id}
                             onClick={() => handleCancel(r.id)}
                             type="button"
                           >
                             {busyId === r.id ? "Cancelling…" : "Confirm"}
-                          </Button>
-                          <Button
+                          </DarkButton>
+                          <GhostButton
                             disabled={busyId === r.id}
                             onClick={() => setConfirmId(null)}
                             type="button"
-                            variant="secondary"
                           >
                             Keep running
-                          </Button>
+                          </GhostButton>
                         </div>
                       ) : (
-                        <Button variant="danger" onClick={() => setConfirmId(r.id)} type="button">
+                        <GhostButton danger onClick={() => setConfirmId(r.id)} type="button">
                           Cancel
-                        </Button>
+                        </GhostButton>
                       )
                     ) : null}
                     {rowFeedback ? (
@@ -278,5 +268,38 @@ export function RunsScreen({
         />
       </CkCard>
     </div>
+  );
+}
+
+function GhostButton({
+  children,
+  danger = false,
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & { danger?: boolean }) {
+  return (
+    <Button
+      {...props}
+      variant="text"
+      className={[
+        "inline-flex items-center justify-center whitespace-nowrap rounded-[3px] border bg-white px-2.5 py-[5px] font-mono text-[10px] font-medium uppercase tracking-[0.04em] transition disabled:cursor-default disabled:opacity-40",
+        danger
+          ? "border-[#F3CFC7] text-fail-fg hover:bg-fail-bg"
+          : "border-neutral-200 text-neutral-900 hover:bg-app-bg",
+      ].join(" ")}
+    >
+      {children}
+    </Button>
+  );
+}
+
+function DarkButton({ children, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <Button
+      {...props}
+      variant="text"
+      className="inline-flex items-center justify-center whitespace-nowrap rounded-[3px] border border-neutral-900 bg-neutral-900 px-3.5 py-[5px] font-mono text-[11px] font-medium uppercase tracking-[0.04em] text-white transition hover:bg-neutral-800 disabled:cursor-default disabled:opacity-40"
+    >
+      {children}
+    </Button>
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import {
   CkCard,
   CkKPI,
@@ -60,8 +61,8 @@ function EvalHealthKPI({ data }: { data: EvalHealthResponse | undefined }) {
           </div>
           <Button
             type="button"
-            size="sm"
-            variant="ghost"
+            variant="text"
+            className="border-0 bg-transparent p-0 font-mono text-[10px] text-mariner tracking-[0.04em] uppercase cursor-pointer"
           >
             Detail →
           </Button>
@@ -69,24 +70,24 @@ function EvalHealthKPI({ data }: { data: EvalHealthResponse | undefined }) {
         <div className="flex items-center gap-3 mt-0.5">
           <Donut
             shares={[data.pass / total, data.warn / total, data.fail / total]}
-            colors={["var(--color-success)", "var(--color-vibe-yellow)", "var(--color-fail)"]}
+            colors={["#5BB04A", "#FFC800", "#D14343"]}
             size={64}
             thickness={10}
             centerLabel={data.score.toFixed(1)}
           />
           <div className="flex-1 flex flex-col gap-[3px]">
             <div className="flex items-center gap-1.5 font-body text-xs">
-              <CkDot color="var(--color-success)" />
+              <CkDot color="#5BB04A" />
               <span className="flex-1 text-neutral-800">Pass</span>
               <b className="font-mono text-neutral-900">{data.pass}</b>
             </div>
             <div className="flex items-center gap-1.5 font-body text-xs">
-              <CkDot color="var(--color-vibe-yellow)" />
+              <CkDot color="#FFC800" />
               <span className="flex-1 text-neutral-800">Warn</span>
               <b className="font-mono text-neutral-900">{data.warn}</b>
             </div>
             <div className="flex items-center gap-1.5 font-body text-xs">
-              <CkDot color="var(--color-fail)" />
+              <CkDot color="#D14343" />
               <span className="flex-1 text-neutral-800">Fail</span>
               <b className="font-mono text-neutral-900">{data.fail}</b>
             </div>
@@ -111,7 +112,7 @@ function EvalHealthKPI({ data }: { data: EvalHealthResponse | undefined }) {
       <div className="flex items-center gap-3 mt-0.5">
         <Donut
           shares={[1, 0, 0]}
-          colors={["var(--color-neutral-200)", "var(--color-neutral-200)", "var(--color-neutral-200)"]}
+          colors={["#E6E8EB", "#E6E8EB", "#E6E8EB"]}
           size={64}
           thickness={10}
           centerLabel={EM_DASH}
@@ -169,7 +170,7 @@ export function NowRunningPanel({
           <span
             className={`inline-flex items-center rounded-[3px] border px-1.5 py-[2px] ${
               poolFull
-                ? "border-orange-300 bg-orange-100 text-neutral-800"
+                ? "border-amber-300 bg-amber-50 text-amber-800"
                 : "border-neutral-200 bg-off-white text-neutral-600"
             }`}
           >
@@ -208,14 +209,14 @@ export function NowRunningPanel({
                     <div className="flex items-center gap-2.5">
                       <div className="flex-1 h-1.5 bg-app-bg rounded-[1px] relative overflow-hidden">
                         <div
-                          className="relative h-full rounded-[1px] bg-mariner"
+                          className="h-full bg-mariner rounded-[1px] transition-[width] duration-[var(--motion-slow)] ease-linear relative"
                           style={{ width: (r.progress ?? 0) * 100 + "%" }}
                         >
                           <span
                             className="absolute inset-0 animate-ck-shimmer"
                             style={{
                               background:
-                                "linear-gradient(90deg, transparent, color-mix(in srgb, var(--color-panel) 40%, transparent), transparent)",
+                                "linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent)",
                             }}
                           />
                         </div>
@@ -244,18 +245,18 @@ export function NowRunningPanel({
         </div>
       )}
       {queued.length > 0 && (
-        <div className="border-t border-orange-200 bg-orange-100 px-5 py-3">
-          <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-800 mb-2">
+        <div className="border-t border-amber-200 bg-amber-50 px-5 py-3">
+          <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-amber-800 mb-2">
             {queued.length} waiting for capacity
           </div>
           <div className="flex flex-col gap-1.5">
             {queued.map((q) => (
               <div
                 key={q.ticketKey}
-                className="flex items-center justify-between gap-2 font-body text-xs text-neutral-900"
+                className="flex items-center justify-between gap-2 font-body text-xs text-amber-900"
               >
                 <span className="font-medium">{q.ticketKey}</span>
-                <span className="font-mono text-[11px] text-neutral-700 whitespace-nowrap">
+                <span className="font-mono text-[11px] text-amber-700 whitespace-nowrap">
                   waiting {formatWaited(q.queuedAt)}
                 </span>
               </div>
@@ -283,7 +284,7 @@ export function AwaitingInputPanel({
       eyebrow="Human-in-the-loop"
       title="Input needed"
       action={
-        <span className="inline-flex items-center gap-1.5 font-mono text-[10px] text-fail-fg tracking-[0.04em] uppercase">
+        <span className="inline-flex items-center gap-1.5 font-mono text-[10px] text-[#A2351C] tracking-[0.04em] uppercase">
           <span className="relative w-1.5 h-1.5">
             <span className="absolute inset-0 rounded-full bg-burnt-orange" />
             <span className="absolute -inset-[3px] rounded-full border border-burnt-orange animate-ck-pulse" />
@@ -292,7 +293,7 @@ export function AwaitingInputPanel({
         </span>
       }
       pad={0}
-      className="border-orange-200 bg-orange-100"
+      style={{ background: "#FFFCFA", borderColor: "#FFE4D6" }}
     >
       {awaiting.length === 0 ? (
         <div className="px-5 py-8 text-center text-neutral-500 text-sm">No clarifications pending</div>
@@ -305,7 +306,7 @@ export function AwaitingInputPanel({
             return (
               <div
                 key={r.id}
-                className={`px-5 py-[14px] ${i < awaiting.length - 1 ? "border-b border-orange-200" : ""}`}
+                className={`px-5 py-[14px] ${i < awaiting.length - 1 ? "border-b border-[#FFE4D6]" : ""}`}
               >
                 <div className="flex items-center gap-2 mb-2 flex-wrap">
                   <CkStatusPill status="awaiting" />
@@ -348,16 +349,19 @@ export function AwaitingInputPanel({
                     </span>
                   ))}
                   {isApproval ? (
-                    <Button
+                    <Link
                       href="/approvals"
                       onClick={(e) => e.stopPropagation()}
+                      className="appearance-none border border-neutral-900 bg-neutral-900 px-3 py-[6px] rounded-[3px] cursor-pointer font-mono text-[10px] font-medium uppercase tracking-[0.04em] text-white no-underline transition-[color,background-color,border-color,transform] duration-[var(--motion-fast)] hover:bg-neutral-800"
                     >
                       Review plan →
-                    </Button>
+                    </Link>
                   ) : (
                     <Button
                       type="button"
+                      variant="primary"
                       onClick={() => onOpenRun(r)}
+                      className="border-neutral-900 bg-neutral-900 px-3 py-[6px] font-mono text-[10px] font-medium uppercase tracking-[0.04em] text-white hover:bg-neutral-800"
                     >
                       Answer →
                     </Button>
@@ -419,7 +423,7 @@ export function OverviewScreen({
     evalData.available === true ? evalData : null;
 
   return (
-    <div className="flex flex-col gap-5 px-4 pb-8 pt-5 lg:px-6 [&_a]:min-h-6">
+    <div className="px-6 pt-5 pb-8 flex flex-col gap-5">
       {/* Spotlight ticket search (⌘K) + global window control */}
       <div className="flex items-center justify-between gap-4">
         <SpotlightTrigger />
@@ -442,7 +446,7 @@ export function OverviewScreen({
                 cy="160"
                 r={16 + i * 18}
                 fill="none"
-                stroke="currentColor"
+                stroke="#fff"
                 strokeWidth="1"
               />
             ))}
@@ -490,7 +494,7 @@ export function OverviewScreen({
           }
           deltaTone={heroRuns && heroRuns.deltaPct >= 0 ? "good" : "bad"}
           spark={heroRuns?.spark ?? []}
-          sparkColor="var(--color-mariner)"
+          sparkColor="#3C43E7"
           disabled={!heroRuns}
         />
         <EvalHealthKPI data={data.evalHealth} />
@@ -504,7 +508,7 @@ export function OverviewScreen({
           }
           deltaTone={heroP95 && heroP95.deltaSec <= 0 ? "good" : "bad"}
           spark={heroP95?.spark ?? []}
-          sparkColor="var(--color-coal)"
+          sparkColor="#181B20"
           disabled={!heroP95}
         />
         <CkKPI
@@ -517,7 +521,7 @@ export function OverviewScreen({
           }
           deltaTone={heroErrors && heroErrors.deltaPct <= 0 ? "good" : "bad"}
           spark={heroErrors?.spark ?? []}
-          sparkColor="var(--color-fail)"
+          sparkColor="#D14343"
           disabled={!heroErrors}
         />
       </div>
@@ -551,7 +555,7 @@ export function OverviewScreen({
           <>
             <table className="w-full border-collapse font-body text-[13px]">
               <thead>
-                <tr className="bg-neutral-100 text-neutral-700 font-mono text-[10px] tracking-[0.06em] uppercase">
+                <tr className="bg-off-white text-neutral-700 font-mono text-[10px] tracking-[0.06em] uppercase">
                   {[
                     "Status",
                     "Ticket · title",
@@ -598,7 +602,9 @@ export function OverviewScreen({
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <CkChip tone="neutral">{r.workflowName}</CkChip>
+                      <CkChip style={{ background: "#F2F4F6", color: "#3E444C" }}>
+                        {r.workflowName}
+                      </CkChip>
                     </td>
                     <td className="px-4 py-3 font-mono text-[11px] text-neutral-700">
                       {runModelLabel(r.model)}
@@ -614,18 +620,19 @@ export function OverviewScreen({
                     </td>
                     <td className="px-4 py-3 text-right">
                       {r.evalScore === null ? (
-                        <span className="font-mono text-[11px] text-neutral-300">
+                        <span className="font-mono text-[11px] text-[#D2D6DA]">
                           {EM_DASH}
                         </span>
                       ) : (
                         <span
                           className="font-mono text-xs font-semibold"
                           style={{
-                            color: r.evalScore > 0.9
-                              ? "var(--color-success-fg)"
-                              : r.evalScore > 0.85
-                                ? "var(--color-neutral-800)"
-                                : "var(--color-fail-fg)",
+                            color:
+                              r.evalScore > 0.9
+                                ? "#3F6B1E"
+                                : r.evalScore > 0.85
+                                  ? "#7A5A00"
+                                  : "#A2351C",
                           }}
                         >
                           {(r.evalScore * 100).toFixed(0)}
@@ -657,7 +664,7 @@ export function OverviewScreen({
       >
         <table className="w-full border-collapse font-body text-[13px]">
           <thead>
-            <tr className="bg-neutral-100 text-neutral-700 font-mono text-[10px] tracking-[0.06em] uppercase">
+            <tr className="bg-off-white text-neutral-700 font-mono text-[10px] tracking-[0.06em] uppercase">
               <th className="px-4 py-2.5 text-left font-medium border-b border-neutral-200">
                 Workflow · latest ticket
               </th>
@@ -705,7 +712,7 @@ export function OverviewScreen({
                     {w.p95 === null ? EM_DASH : `${w.p95}s`}
                   </td>
                   <td
-                    className={`px-2 py-3 text-right font-mono ${w.errRate !== null && w.errRate > 0.02 ? "text-fail-fg" : "text-neutral-700"}`}
+                    className={`px-2 py-3 text-right font-mono ${w.errRate !== null && w.errRate > 0.02 ? "text-[#A2351C]" : "text-neutral-700"}`}
                   >
                     {w.errRate === null ? EM_DASH : `${(w.errRate * 100).toFixed(2)}%`}
                   </td>
@@ -715,7 +722,7 @@ export function OverviewScreen({
                   <td className="px-4 py-3 text-right">
                     {w.trend24h && w.trend24h.length > 0 ? (
                       <div className="inline-block">
-                        <Spark data={w.trend24h} w={120} h={24} stroke="var(--color-mariner)" fill="var(--color-mariner)" />
+                        <Spark data={w.trend24h} w={120} h={24} stroke="#3C43E7" fill="#3C43E7" />
                       </div>
                     ) : (
                       <div className="inline-block w-[120px] h-[24px] bg-app-bg rounded-[1px]" />

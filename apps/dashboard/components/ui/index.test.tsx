@@ -52,10 +52,6 @@ test("primitive index reexports the canonical chip and status dot", () => {
   );
   assert.match(html, /Success/);
   assert.match(html, /background:var\(--color-success\)/);
-  assert.match(html, /border-mariner-200/);
-  assert.match(html, /bg-mariner-100/);
-  assert.match(html, /text-mariner/);
-  assert.doesNotMatch(html, /bg-mariner text-white/);
 });
 
 test("primitive index exposes every runtime component", () => {

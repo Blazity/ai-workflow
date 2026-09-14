@@ -8,7 +8,6 @@ import type { TicketRunsResponse } from "@shared/contracts";
 import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
 import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
 import { Button } from "@/components/ui/button";
-import { NavItem } from "@/components/ui/nav-item";
 import { formatAgeMinutes } from "@/lib/date-time";
 
 const EM_DASH = "\u2014";
@@ -24,12 +23,14 @@ function fmtTokens(n: number): string {
 export function MobileBackToRuns({ ticketKey }: { ticketKey: string }) {
   const router = useRouter();
   return (
-    <NavItem
+    <Button
       type="button"
+      variant="text"
       onClick={() => router.push(`/ticket/${encodeURIComponent(ticketKey)}`)}
-      label={`← All runs · ${ticketKey}`}
-      className="self-start px-0 text-mariner hover:bg-transparent"
-    />
+      className="self-start border-0 bg-transparent p-0 font-mono text-[11px] text-mariner cursor-pointer uppercase tracking-[0.04em]"
+    >
+      ← All runs · {ticketKey}
+    </Button>
   );
 }
 
@@ -86,15 +87,15 @@ export function TicketMobileScreen({
           <Button
             key={r.id}
             onClick={() => openRun(r)}
-            className="h-auto w-full justify-start p-0 normal-case tracking-normal"
-            variant="secondary"
+            className="w-full text-left cursor-pointer bg-panel border border-neutral-200 rounded-sm p-0 active:bg-neutral-100 [&>span]:w-full"
+            variant="text"
           >
             <span className="flex w-full flex-col p-3.5 text-left">
             <div className="flex items-center gap-2">
               <CkStatusPill status={r.status} />
               <span className="ml-auto font-mono text-[10px] text-neutral-500">{formatAgeMinutes(r.startedAtMin)}</span>
             </div>
-            <div className="flex items-center gap-1.5 mt-2 flex-wrap [&_a]:min-h-6">
+            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
               <CkChip>{r.workflowName}</CkChip>
               <PRLinks run={r} />
             </div>

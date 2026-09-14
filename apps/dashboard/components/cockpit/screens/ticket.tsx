@@ -83,7 +83,7 @@ export function TicketScreen({
               href={ticket.url}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex min-h-6 items-center font-mono text-[11px] text-mariner no-underline"
+              className="font-mono text-[11px] text-mariner no-underline"
             >
               Open ticket ↗
             </a>
@@ -133,8 +133,8 @@ export function TicketScreen({
                 type="button"
                 aria-current={active}
                 onClick={() => onSelect(r.id)}
-                variant="ghost"
-                className={`h-auto w-full justify-start rounded-none border-b border-neutral-200 px-0 py-0 normal-case tracking-normal ${
+                variant="text"
+                className={`relative w-full border-0 border-b border-neutral-200 cursor-pointer text-left px-0 py-0 [&>span]:w-full ${
                   active ? "bg-mariner-100" : "bg-panel hover:bg-neutral-100"
                 }`}
               >

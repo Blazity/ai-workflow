@@ -52,11 +52,11 @@ export function SpotlightTrigger() {
   return (
     <Button
       type="button"
+      variant="text"
       onClick={openSpotlight}
       aria-label="Search tickets (Command-K)"
       aria-keyshortcuts="Meta+K Control+K"
-      variant="secondary"
-      className="group w-full max-w-[320px] justify-start"
+      className="group flex items-center gap-2 h-[38px] w-full max-w-[320px] pl-3 pr-2 bg-panel border border-neutral-200 rounded-sm text-left cursor-pointer transition-colors hover:border-neutral-300 focus:outline-none focus-visible:border-mariner focus-visible:ring-2 focus-visible:ring-mariner/20 [&>span]:w-full [&>span]:gap-2"
     >
       <SearchGlyph />
       <span className="flex-1 min-w-0 font-body text-[13px] text-neutral-500 group-hover:text-neutral-700 transition-colors">
@@ -198,9 +198,11 @@ export function SpotlightSearch({
     <Modal
       open={open}
       onClose={close}
-      title="Search tickets"
+      chrome="none"
+      aria-label="Search tickets"
       variant="command"
       initialFocusRef={inputRef}
+      className="w-full max-w-[560px] bg-panel border border-neutral-200 rounded-md shadow-[0_24px_64px_-16px_rgba(24,27,32,0.45)] overflow-hidden animate-ck-pop motion-reduce:animate-none"
     >
         {/* Query row, the input is the one large element on the surface. */}
         <div className="flex items-center gap-3 px-4 h-[60px] border-b border-neutral-200">
@@ -225,7 +227,7 @@ export function SpotlightSearch({
             onKeyDown={onKeyDown}
             placeholder="Search by ticket key or title"
             aria-label="Search by ticket key or title"
-            className="h-auto min-w-0 flex-1 border-0 bg-transparent px-0 text-lg focus-visible:ring-0 focus-visible:ring-offset-0"
+            className="flex-1 min-w-0 bg-transparent border-none outline-none font-body text-[18px] text-neutral-900 placeholder:text-neutral-400"
           />
           <Kbd>esc</Kbd>
         </div>
@@ -267,14 +269,13 @@ export function SpotlightSearch({
                   role="option"
                   aria-selected={i === active}
                   type="button"
+                  variant="text"
                   onMouseEnter={() => setActive(i)}
                   onClick={() => go(h)}
-                  variant="ghost"
-                  className={`relative h-auto w-full justify-start rounded-none px-0 py-0 normal-case tracking-normal ${
+                  className={`relative w-full appearance-none border-none cursor-pointer text-left flex items-center gap-3 pl-4 pr-3 py-2.5 [&>span]:w-full [&>span]:gap-3 ${
                     i === active ? "bg-mariner-100" : "bg-panel"
                   }`}
                 >
-                  <span className="flex w-full items-center gap-3 py-2.5 pl-4 pr-3 text-left">
                   {/* Signature: the mariner rail marks the active row. */}
                   {i === active && (
                     <span className="absolute left-0 top-1 bottom-1 w-[2px] rounded-full bg-mariner" aria-hidden="true" />
@@ -299,7 +300,6 @@ export function SpotlightSearch({
                     aria-hidden="true"
                   >
                     ↩
-                  </span>
                   </span>
                 </Button>
               ))}
