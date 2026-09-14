@@ -179,7 +179,7 @@ test("terminal run state also stops stale polling for available replay", () => {
   assert.equal(replayForRunLifecycle(replay, false).mayAdvance, false);
 });
 
-test("a completed run renders an answered clarification with inline markdown", () => {
+test("a completed run renders an answered clarification as plain text", () => {
   const replay: WorkflowRunReplayResponse = {
     availability: "not_captured",
     mayAdvance: false,
@@ -216,6 +216,6 @@ test("a completed run renders an answered clarification with inline markdown", (
 
   assert.match(html, />Answered</);
   assert.doesNotMatch(html, /Input needed/);
-  assert.match(html, /<code[^>]*>facts<\/code>/);
-  assert.doesNotMatch(html, /`facts`/);
+  assert.doesNotMatch(html, /<code[^>]*>facts<\/code>/);
+  assert.match(html, /`facts`/);
 });

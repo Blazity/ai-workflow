@@ -787,7 +787,7 @@ function DarkButton({
 }
 
 function NoAction() {
-  return <span className="font-mono text-[11px] text-neutral-300">{"\u2014"}</span>;
+  return <span className="font-mono text-[11px] text-neutral-300">n/a</span>;
 }
 
 function InlineError({ children }: { children: React.ReactNode }) {

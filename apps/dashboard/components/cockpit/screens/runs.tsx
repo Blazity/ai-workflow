@@ -15,13 +15,12 @@ import type { RunsResponse } from "@shared/contracts";
 import { Button } from "@/components/ui/button";
 import {
   RUN_STATUS_FILTERS,
-  runIdentity,
   runStatusHref,
   type RunStatusFilter,
 } from "@/lib/runs-display";
 
 const PAGE_SIZE = 25;
-const EM_DASH = "\u2014";
+const MISSING_VALUE = "n/a";
 
 type CancelFeedback = { tone: "success" | "info" | "warn" | "error"; message: string };
 
@@ -79,7 +78,6 @@ export function RunsScreen({
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const start = page * PAGE_SIZE;
   const paged = filtered.slice(start, start + PAGE_SIZE);
-  const showActions = canCancel && filtered.some((run) => run.status === "running");
 
   function changeFilter(next: RunStatusFilter) {
     setFilter(next);
@@ -162,7 +160,7 @@ export function RunsScreen({
         <table className="w-full border-collapse font-body text-[13px]">
           <thead>
             <tr className="bg-neutral-100 text-neutral-700 font-mono text-[10px] uppercase tracking-[0.06em]">
-              {["Status", "Ticket · title", "Workflow", "Model", "Started", "Duration", "Tokens", "Cost", ...(showActions ? ["Actions"] : [])].map((h, i) =>
+              {["Status", "Ticket · title", "Workflow", "Model", "Started", "Duration", "Tokens", "Cost", "Actions"].map((h, i) =>
                 <th key={i} className={`px-3 py-2.5 font-medium border-b border-neutral-200 whitespace-nowrap ${i >= 4 ? "text-right" : "text-left"}`}>{h}</th>
               )}
             </tr>
@@ -170,7 +168,7 @@ export function RunsScreen({
           <tbody>
             {paged.length === 0 && (
               <tr>
-                <td colSpan={showActions ? 9 : 8} className="px-3 py-10 text-center font-body text-[13px] text-neutral-500">
+                <td colSpan={9} className="px-3 py-10 text-center font-body text-[13px] text-neutral-500">
                   {q
                     ? `No runs match “${q}” in the ${windowPhrase(window)}.`
                     : `No runs in the ${windowPhrase(window)}.`}
@@ -180,13 +178,12 @@ export function RunsScreen({
             {paged.map((r, i) => {
               const showCancel = canCancel && r.status === "running";
               const rowFeedback = feedback[r.id];
-              const identity = runIdentity(r);
               return (
               <tr
                 key={r.id}
                 role="button"
                 tabIndex={0}
-                aria-label={`Open run ${r.id}: ${identity.primary}`}
+                aria-label={`Open run ${r.id}: ${r.ticketTitle}`}
                 onClick={() => openRun(r)}
                 onKeyDown={(event) => {
                   // Ignore keydowns that bubbled up from a nested control (the
@@ -203,23 +200,23 @@ export function RunsScreen({
                 <td className="px-3 py-2.5"><CkStatusPill status={r.status} /></td>
                 <td className="px-3 py-2.5">
                   <div className="flex flex-col gap-1">
-                    <span className="block font-semibold text-neutral-900 max-w-[320px] overflow-hidden text-ellipsis whitespace-nowrap">{identity.primary}</span>
+                    <span className="block font-semibold text-neutral-900 max-w-[320px] overflow-hidden text-ellipsis whitespace-nowrap">{r.ticketTitle}</span>
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      {identity.showTicketLink && <TicketLink ticket={r.ticket} url={r.ticketUrl} />}
+                      <TicketLink ticket={r.ticket} url={r.ticketUrl} />
                       <PRLinks run={r} />
-                      {identity.showRunIdMeta && <span className="font-mono text-[10px] text-neutral-500">{r.id}</span>}
+                      <span className="font-mono text-[10px] text-neutral-500">{r.id}</span>
                     </div>
                   </div>
                 </td>
                 <td className="px-3 py-2.5">
                   <CkChip>{r.workflowName}</CkChip>
                 </td>
-                <td className="px-3 py-2.5 font-mono text-[11px] text-neutral-700">{r.model ? runModelLabel(r.model) : EM_DASH}</td>
+                <td className="px-3 py-2.5 font-mono text-[11px] text-neutral-700">{runModelLabel(r.model)}</td>
                 <td className="px-3 py-2.5 text-right font-mono text-[11px] text-neutral-500">{r.startedAtMin}m ago</td>
-                <td className="px-3 py-2.5 text-right font-mono font-medium">{r.duration === null ? EM_DASH : `${r.duration}s`}</td>
-                <td className="px-3 py-2.5 text-right font-mono text-neutral-700">{r.tokens === null ? EM_DASH : `${(r.tokens / 1000).toFixed(1)}k`}</td>
-                <td className="px-3 py-2.5 text-right font-mono font-medium">{r.cost === null ? EM_DASH : `$${r.cost.toFixed(2)}`}</td>
-                {showActions && <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
+                <td className="px-3 py-2.5 text-right font-mono font-medium">{r.duration === null ? MISSING_VALUE : `${r.duration}s`}</td>
+                <td className="px-3 py-2.5 text-right font-mono text-neutral-700">{r.tokens === null ? MISSING_VALUE : `${(r.tokens / 1000).toFixed(1)}k`}</td>
+                <td className="px-3 py-2.5 text-right font-mono font-medium">{r.cost === null ? MISSING_VALUE : `$${r.cost.toFixed(2)}`}</td>
+                <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
                   <div className="flex flex-col items-end gap-1">
                     {showCancel ? (
                       confirmId === r.id ? (
@@ -252,7 +249,7 @@ export function RunsScreen({
                       </span>
                     ) : null}
                   </div>
-                </td>}
+                </td>
               </tr>
               );
             })}

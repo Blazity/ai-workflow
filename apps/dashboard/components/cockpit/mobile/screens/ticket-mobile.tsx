@@ -8,9 +8,8 @@ import type { TicketRunsResponse } from "@shared/contracts";
 import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
 import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
 import { Button } from "@/components/ui/button";
-import { formatAgeMinutes } from "@/lib/date-time";
 
-const EM_DASH = "\u2014";
+const MISSING_VALUE = "n/a";
 
 function fmtCost(n: number): string {
   return `$${n.toFixed(2)}`;
@@ -93,7 +92,7 @@ export function TicketMobileScreen({
             <span className="flex w-full flex-col p-3.5 text-left">
             <div className="flex items-center gap-2">
               <CkStatusPill status={r.status} />
-              <span className="ml-auto font-mono text-[10px] text-neutral-500">{formatAgeMinutes(r.startedAtMin)}</span>
+              <span className="ml-auto font-mono text-[10px] text-neutral-500">{r.startedAtMin}m ago</span>
             </div>
             <div className="flex items-center gap-1.5 mt-2 flex-wrap">
               <CkChip>{r.workflowName}</CkChip>
@@ -102,11 +101,11 @@ export function TicketMobileScreen({
             <div className="grid grid-cols-2 gap-2 mt-3 pt-2.5 border-t border-neutral-200 font-mono">
               <div>
                 <div className="text-[9px] text-neutral-500 tracking-[0.04em] uppercase">Dur</div>
-                <div className="text-[13px] font-semibold text-neutral-900">{r.duration === null ? EM_DASH : `${r.duration}s`}</div>
+                <div className="text-[13px] font-semibold text-neutral-900">{r.duration === null ? MISSING_VALUE : `${r.duration}s`}</div>
               </div>
               <div>
                 <div className="text-[9px] text-neutral-500 tracking-[0.04em] uppercase">Cost</div>
-                <div className="text-[13px] font-semibold text-neutral-900">{r.cost === null ? EM_DASH : fmtCost(r.cost)}</div>
+                <div className="text-[13px] font-semibold text-neutral-900">{r.cost === null ? MISSING_VALUE : fmtCost(r.cost)}</div>
               </div>
             </div>
             </span>

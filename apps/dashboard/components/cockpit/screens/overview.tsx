@@ -35,9 +35,8 @@ import type {
   WorkflowsResponse,
 } from "@shared/contracts";
 import { Button } from "@/components/ui/button";
-import { formatAgeMinutes } from "@/lib/date-time";
 
-const EM_DASH = "\u2014";
+const MISSING_VALUE = "N/A";
 
 /** Bundle of the server-fetched responses passed into the presentational Overview. */
 export interface OverviewScreenData {
@@ -115,14 +114,14 @@ function EvalHealthKPI({ data }: { data: EvalHealthResponse | undefined }) {
           colors={["#E6E8EB", "#E6E8EB", "#E6E8EB"]}
           size={64}
           thickness={10}
-          centerLabel={EM_DASH}
+          centerLabel={MISSING_VALUE}
         />
         <div className="flex-1 font-body text-xs text-neutral-500 leading-snug">
           {reason}
         </div>
       </div>
       <div className="mt-auto font-mono text-[10px] text-neutral-500 tracking-[0.04em]">
-        {EM_DASH}
+        {MISSING_VALUE}
       </div>
     </div>
   );
@@ -174,7 +173,7 @@ export function NowRunningPanel({
                 : "border-neutral-200 bg-off-white text-neutral-600"
             }`}
           >
-            {capacityUnknown ? `slots ${EM_DASH}` : `${occupiedSlots}/${maxSlots} slots`}
+            {capacityUnknown ? `slots ${MISSING_VALUE}` : `${occupiedSlots}/${maxSlots} slots`}
           </span>
         </span>
       }
@@ -222,7 +221,7 @@ export function NowRunningPanel({
                         </div>
                       </div>
                       <span className="font-mono text-[11px] text-neutral-500 w-[58px] text-right">
-                        {r.spanIndex ?? EM_DASH}/{r.spansTotal ?? EM_DASH}
+                        {r.spanIndex ?? MISSING_VALUE}/{r.spansTotal ?? MISSING_VALUE}
                       </span>
                     </div>
                     <div className="mt-1.5 flex items-center gap-1.5 font-mono text-[11px]">
@@ -322,7 +321,7 @@ export function AwaitingInputPanel({
                   {r.questionFor && <CkChip tone="warn">@{r.questionFor}</CkChip>}
                   {typeof r.askedAtMin === "number" && (
                     <span className="ml-auto font-mono text-[11px] text-neutral-500 whitespace-nowrap">
-                      {formatAgeMinutes(r.askedAtMin)}
+                      {r.askedAtMin}m ago
                     </span>
                   )}
                 </div>
@@ -456,7 +455,7 @@ export function OverviewScreen({
               {windowPhrase(window)}
             </div>
             <div className="font-display font-medium text-[36px] leading-[1.15] tracking-[-0.025em] m-0 text-balance">
-              Overview · {data.kpis.generatedAt ? new Date(data.kpis.generatedAt).toLocaleTimeString() : EM_DASH}
+              Overview · {data.kpis.generatedAt ? new Date(data.kpis.generatedAt).toLocaleTimeString() : MISSING_VALUE}
             </div>
             <div className="font-body font-normal text-sm leading-[1.55] text-white/70 max-w-[540px]">
               Historical aggregates are not wired up yet. The Now-running and Workflows panels reflect the worker's live state.
@@ -610,18 +609,18 @@ export function OverviewScreen({
                       {runModelLabel(r.model)}
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-[11px] text-neutral-500">
-                      {formatAgeMinutes(r.startedAtMin)}
+                      {r.startedAtMin}m ago
                     </td>
                     <td className="px-4 py-3 text-right font-mono font-medium">
-                      {r.duration === null ? EM_DASH : `${r.duration}s`}
+                      {r.duration === null ? MISSING_VALUE : `${r.duration}s`}
                     </td>
                     <td className="px-4 py-3 text-right font-mono font-medium">
-                      {r.cost === null ? EM_DASH : `$${r.cost.toFixed(2)}`}
+                      {r.cost === null ? MISSING_VALUE : `$${r.cost.toFixed(2)}`}
                     </td>
                     <td className="px-4 py-3 text-right">
                       {r.evalScore === null ? (
                         <span className="font-mono text-[11px] text-[#D2D6DA]">
-                          {EM_DASH}
+                          {MISSING_VALUE}
                         </span>
                       ) : (
                         <span
@@ -706,18 +705,18 @@ export function OverviewScreen({
                     </div>
                   </td>
                   <td className="px-2 py-3 text-right font-mono font-medium">
-                    {w.runs24h === null ? EM_DASH : w.runs24h.toLocaleString("en-US")}
+                    {w.runs24h === null ? MISSING_VALUE : w.runs24h.toLocaleString("en-US")}
                   </td>
                   <td className="px-2 py-3 text-right font-mono text-neutral-700">
-                    {w.p95 === null ? EM_DASH : `${w.p95}s`}
+                    {w.p95 === null ? MISSING_VALUE : `${w.p95}s`}
                   </td>
                   <td
                     className={`px-2 py-3 text-right font-mono ${w.errRate !== null && w.errRate > 0.02 ? "text-[#A2351C]" : "text-neutral-700"}`}
                   >
-                    {w.errRate === null ? EM_DASH : `${(w.errRate * 100).toFixed(2)}%`}
+                    {w.errRate === null ? MISSING_VALUE : `${(w.errRate * 100).toFixed(2)}%`}
                   </td>
                   <td className="px-2 py-3 text-right font-mono font-medium">
-                    {w.costToday === null ? EM_DASH : `$${w.costToday.toFixed(2)}`}
+                    {w.costToday === null ? MISSING_VALUE : `$${w.costToday.toFixed(2)}`}
                   </td>
                   <td className="px-4 py-3 text-right">
                     {w.trend24h && w.trend24h.length > 0 ? (

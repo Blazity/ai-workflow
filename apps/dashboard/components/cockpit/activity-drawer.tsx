@@ -20,7 +20,7 @@ const ACT_EVENTS: ActEvent[] = [
   { id: "e1",  t: "14:32:08", src: "vercel.workflow", lvl: "ok",    scope: "wf_pr_review",     msg: "run_4a82b1 completed · 18.34s · $0.34 · eval 94",  ticket: "LIN-4521" },
   { id: "e2",  t: "14:32:01", src: "github",          lvl: "ok",    scope: "pulls.create",     msg: "PR #2147 opened · checkout: multi-currency support" },
   { id: "e3",  t: "14:31:58", src: "vercel.sandbox",  lvl: "ok",    scope: "exec",             msg: "pnpm test → 312 passed, 0 failed (4.12s)" },
-  { id: "e4",  t: "14:31:54", src: "arthur",          lvl: "warn",  scope: "guardrail",        msg: "toxicity = 0.071 \u2014 flagged on output of span s08" },
+  { id: "e4",  t: "14:31:54", src: "arthur",          lvl: "warn",  scope: "guardrail",        msg: "toxicity = 0.071, flagged on output of span s08" },
   { id: "e5",  t: "14:31:48", src: "vercel.gateway",  lvl: "info",  scope: "claude-sonnet-4",  msg: "5.68s · 12,440 → 3,210 tokens · $0.182" },
   { id: "e6",  t: "14:30:12", src: "arthur",          lvl: "ok",    scope: "guardrail",        msg: "prompt_injection pass · 0.001 score" },
   { id: "e7",  t: "14:30:09", src: "linear",          lvl: "info",  scope: "issue.assigned",   msg: "ai-bot picked up LIN-4521 from sara.k" },

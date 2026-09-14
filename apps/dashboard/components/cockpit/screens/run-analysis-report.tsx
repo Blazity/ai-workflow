@@ -102,8 +102,8 @@ function UsageTable({ report }: { report: RunAnalysisReport }) {
                 <td className="py-2 pr-3 font-medium text-neutral-900">{name}</td>
                 <td className="py-2 pr-3 text-neutral-800">{costLabel(snapshot)}</td>
                 <td className="py-2 pr-3 text-neutral-700">{snapshot?.tokensInput === null || !snapshot ? "Unknown" : `${snapshot.tokensInput} in / ${snapshot.tokensCached ?? 0} cached / ${snapshot.tokensOutput ?? 0} out`}</td>
-                <td className="py-2 pr-3 text-neutral-500">{snapshot ? `Captured ${new Date(snapshot.capturedAt).toLocaleString()}` : "\u2014"}</td>
-                <td className="py-2 text-neutral-500">{"\u2014"}</td>
+                <td className="py-2 pr-3 text-neutral-500">{snapshot ? `Captured ${new Date(snapshot.capturedAt).toLocaleString()}` : "Unknown"}</td>
+                <td className="py-2 text-neutral-500">Unknown</td>
               </tr>
               {snapshot ? Object.entries(snapshot.phases).map(([phaseName, phase]) => (
                 <tr key={`${name}:${phaseName}`} className="border-t border-neutral-100 align-top">
@@ -135,7 +135,7 @@ export function RunAnalysisReportCard({ report, runStatus: _runStatus, currentRu
         </div>
         <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
           <Metric label="Repositories inspected" value={report.repositories.length} />
-          <Metric label="Evidence items" value={report.evidenceStatus === "not_retained" ? "\u2014" : report.evidence.length} />
+          <Metric label="Evidence items" value={report.evidenceStatus === "not_retained" ? "Unknown" : report.evidence.length} />
           <Metric label="Expansion rounds" value={report.expansionRounds} />
           <Metric label="Current cost" value={costLabel(finalOrPublication)} />
         </div>
@@ -189,7 +189,7 @@ function DecisionList({
       <ul className="m-0 mt-1 flex list-disc flex-col gap-1 pl-5">
         {items.map((item) => (
           <li key={`${item.provider}:${item.repoPath}`} className="break-words">
-            <span className="font-mono">{item.provider}:{item.repoPath}</span>{" \u2014 "}{item.rationale}
+            <span className="font-mono">{item.provider}:{item.repoPath}</span>{": "}{item.rationale}
           </li>
         ))}
       </ul>

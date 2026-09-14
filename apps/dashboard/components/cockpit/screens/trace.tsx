@@ -19,7 +19,6 @@ import { runPullRequests } from "@/lib/run-prs";
 import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
 import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
 import { RunAnalysisReportCard } from "./run-analysis-report";
-import { PromptPreview } from "@/components/cockpit/prompt-library/prompt-preview";
 import { SPAN_KIND_COLOR } from "@/lib/theme";
 import { pullRequestRef, pullRequestRepoLabels } from "@shared/contracts";
 import type { Span, SpanKind, SpanStatus } from "@/lib/types";
@@ -126,13 +125,13 @@ const STEP_SPAN_STATUS: Record<StepStatus, SpanStatus> = {
 };
 
 function fmtMs(ms: number | null): string {
-  if (ms === null) return "\u2014";
+  if (ms === null) return "n/a";
   if (ms < 1000) return `${Math.round(ms)}ms`;
   return `${(ms / 1000).toFixed(2)}s`;
 }
 
 function fmtClock(iso: string | null): string {
-  if (!iso) return "\u2014";
+  if (!iso) return "n/a";
   return iso.replace("T", " ").replace(/\.\d+Z$/, "Z");
 }
 
@@ -439,7 +438,7 @@ export function TraceDetail({
       <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
         <CkKPI
           label="Duration"
-          value={run.durationSec === null ? "\u2014" : `${run.durationSec}s`}
+          value={run.durationSec === null ? "n/a" : `${run.durationSec}s`}
           sub={run.status === "running" ? "in progress" : "elapsed"}
         />
         <CkKPI
@@ -622,7 +621,7 @@ export function TraceDetail({
 
               <CkCard
                 eyebrow="Phase"
-                title={selectedPhase ?? "\u2014"}
+                title={selectedPhase ?? "n/a"}
                 action={
                   selectedGroup && (
                     <CkChip
@@ -745,7 +744,7 @@ function AnswerPanel({
       <div className="flex flex-col gap-4">
         <ol className="m-0 flex list-decimal flex-col gap-1.5 pl-5 font-body text-[13px] leading-[1.55] text-neutral-800">
           {clarification.questions.map((q, i) => (
-            <li key={i}><PromptPreview body={q} /></li>
+            <li key={i}>{q}</li>
           ))}
         </ol>
 
@@ -754,9 +753,9 @@ function AnswerPanel({
             <span className="font-mono text-[9px] uppercase tracking-[0.06em] text-neutral-700">
               Answer
             </span>
-            <div className="rounded-[3px] border border-neutral-200 bg-off-white p-3 font-body text-[13px] leading-[1.5] text-coal">
-              <PromptPreview body={view.answer ?? ""} />
-            </div>
+            <p className="m-0 whitespace-pre-wrap break-words rounded-[3px] border border-neutral-200 bg-off-white p-3 font-body text-[13px] leading-[1.5] text-coal">
+              {view.answer}
+            </p>
             {view.answeredAt && (
               <span className="font-mono text-[11px] text-neutral-500">
                 Answered by{" "}

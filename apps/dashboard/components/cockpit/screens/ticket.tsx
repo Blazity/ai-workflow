@@ -8,10 +8,8 @@ import type { TicketRunsResponse } from "@shared/contracts";
 import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
 import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
 import { Button } from "@/components/ui/button";
-import { formatAgeMinutes } from "@/lib/date-time";
-import { primaryPullRequestLabel } from "@/lib/run-prs";
 
-const EM_DASH = "\u2014";
+const MISSING_VALUE = "n/a";
 
 function fmtCost(n: number): string {
   return `$${n.toFixed(2)}`;
@@ -126,7 +124,6 @@ export function TicketScreen({
         ) : (
           runs.map((r) => {
             const active = r.id === activeId;
-            const pullRequest = primaryPullRequestLabel(r);
             return (
               <Button
                 key={r.id}
@@ -144,7 +141,7 @@ export function TicketScreen({
                 )}
                 <div className="flex items-center gap-2">
                   <CkStatusPill status={r.status} />
-                  <span className="ml-auto font-mono text-[10px] text-neutral-500">{formatAgeMinutes(r.startedAtMin)}</span>
+                  <span className="ml-auto font-mono text-[10px] text-neutral-500">{r.startedAtMin}m ago</span>
                 </div>
                 {r.statusReason && (r.status === "blocked" || r.status === "failed") && (
                   <div
@@ -156,11 +153,11 @@ export function TicketScreen({
                 )}
                 <div className="flex items-center justify-between gap-2 font-mono text-[11px] text-neutral-700">
                   <span className="truncate">{runModelLabel(r.model)}</span>
-                  <span className="shrink-0">{r.cost === null ? EM_DASH : fmtCost(r.cost)}</span>
+                  <span className="shrink-0">{r.cost === null ? MISSING_VALUE : fmtCost(r.cost)}</span>
                 </div>
                 <div className="flex items-center gap-2 font-mono text-[10px] text-neutral-500">
                   <span className="truncate">{r.id}</span>
-                  {pullRequest && <span className="shrink-0">{pullRequest}</span>}
+                  {r.prNumber && <span className="shrink-0">PR #{r.prNumber}</span>}
                 </div>
                 </span>
               </Button>
