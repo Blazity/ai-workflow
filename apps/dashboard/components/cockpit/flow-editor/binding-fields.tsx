@@ -235,6 +235,8 @@ function V2BindingEditor({
         value={binding?.kind ?? ""}
         disabled={!canEdit}
         size="compact"
+        className="min-w-0 w-full"
+        triggerClassName="h-[28px] min-w-0 w-full px-2 bg-off-white border border-neutral-200 rounded-xs font-mono text-[11px] text-coal outline-none disabled:opacity-60"
         options={[
           { value: "", label: required ? "Choose a value…" : "Not bound" },
           { value: "reference", label: "Workflow value" },
@@ -258,7 +260,6 @@ function V2BindingEditor({
             onChange({ kind: "literal", value: literalDefault });
           }
         }}
-        className="h-[28px] min-w-0 w-full px-2 bg-off-white border border-neutral-200 rounded-xs font-mono text-[11px] text-coal outline-none disabled:opacity-60"
       />
       {binding?.kind === "reference" && (
         <WorkflowValueChip

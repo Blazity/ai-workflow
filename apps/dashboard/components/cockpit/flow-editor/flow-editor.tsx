@@ -338,7 +338,8 @@ const FlowNode = React.memo(function FlowNode({
           invalid ? validationDescriptionId(node.id) : undefined
         }
         data-canvas-node-selector={node.id}
-        className="absolute inset-0 z-[1] appearance-none rounded-[3px] border-0 bg-transparent p-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner focus-visible:ring-offset-1"
+        className="z-[1] appearance-none rounded-[3px] border-0 bg-transparent p-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner focus-visible:ring-offset-1"
+        style={{ position: "absolute", inset: "0px" }}
       >
         <span className="sr-only">Select {node.name || cat.label}</span>
       </button>

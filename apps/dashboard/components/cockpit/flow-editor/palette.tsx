@@ -43,7 +43,8 @@ export function NodePalette({ groups, onAdd }: { groups: PaletteGroup[]; onAdd: 
                   }}
                   onMouseEnter={(e) => (e.currentTarget.style.background = cat.softColor)}
                   onMouseLeave={(e) => (e.currentTarget.style.background = "#fff")}
-                  className="appearance-none text-left mx-2 my-px h-auto py-2 px-2 border border-neutral-200 rounded-[3px] flex items-start gap-2 cursor-grab active:cursor-grabbing bg-panel transition-colors duration-[var(--motion-fast)] disabled:cursor-not-allowed disabled:opacity-55 [&>span]:w-full"
+                  className="appearance-none text-left mx-2 my-px h-auto py-2 px-2 border border-neutral-200 rounded-[3px] cursor-grab active:cursor-grabbing bg-panel transition-colors duration-[var(--motion-fast)] disabled:cursor-not-allowed disabled:opacity-55"
+                  contentClassName="w-full items-start gap-2"
                 >
                   <span
                     className="w-[18px] h-[18px] rounded-xs text-white inline-flex items-center justify-center font-mono text-[11px] font-bold flex-[0_0_18px]"
@@ -87,7 +88,8 @@ export function MobilePaletteList({ groups, onAdd }: { groups: PaletteGroup[]; o
                 onClick={() => {
                   if (it.available) onAdd(it);
                 }}
-                className="appearance-none h-auto w-full text-left border-none cursor-pointer flex items-start gap-3 px-[18px] py-3 bg-transparent active:bg-app-bg disabled:cursor-not-allowed disabled:opacity-55 [&>span]:w-full"
+                className="appearance-none h-auto w-full text-left border-none cursor-pointer px-[18px] py-3 bg-transparent active:bg-app-bg disabled:cursor-not-allowed disabled:opacity-55"
+                contentClassName="w-full items-start gap-3"
               >
                 <span
                   className="w-[22px] h-[22px] rounded-xs text-white inline-flex items-center justify-center font-mono text-[12px] font-bold flex-[0_0_22px]"

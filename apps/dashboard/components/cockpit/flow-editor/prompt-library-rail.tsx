@@ -338,7 +338,8 @@ export function PromptLibraryRail({
                   }}
                   aria-label="Version"
                   size="compact"
-                  className="shrink-0 cursor-pointer appearance-none rounded-[3px] border border-neutral-200 bg-off-white px-1.5 py-0.5 font-mono text-[10px] text-neutral-700 outline-none focus:border-mariner"
+                  className="shrink-0"
+                  triggerClassName="h-auto cursor-pointer appearance-none rounded-[3px] border border-neutral-200 bg-off-white px-1.5 py-0.5 font-mono text-[10px] text-neutral-700 outline-none focus:border-mariner"
                   options={versions.map((version) => ({
                     value: String(version.version),
                     label: `v${version.version}${version.version === activeRow.currentVersion ? " · current" : ""}`,

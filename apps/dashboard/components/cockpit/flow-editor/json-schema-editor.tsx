@@ -248,6 +248,8 @@ function SchemaNodeEditor({
           value={type}
           disabled={disabled}
           size="compact"
+          className="min-w-0 flex-1"
+          triggerClassName={fieldClass}
           options={schemaTypes.map((candidate) => ({
             value: candidate,
             label: candidate,
@@ -260,7 +262,6 @@ function SchemaNodeEditor({
               ),
             )
           }
-          className={`${fieldClass} flex-1`}
         />
         <Checkbox
           checked={nullable}

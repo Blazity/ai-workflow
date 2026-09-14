@@ -108,6 +108,20 @@ const promptValidation: WorkflowValidationState = {
   availableValuesByNode: {},
 };
 
+function rect(left: number, top: number, width: number, height: number): DOMRect {
+  return {
+    x: left,
+    y: top,
+    left,
+    top,
+    width,
+    height,
+    right: left + width,
+    bottom: top + height,
+    toJSON: () => ({}),
+  } as DOMRect;
+}
+
 function mountEditor({
   editorNode = node,
   editorOptions = options,
@@ -186,7 +200,7 @@ function mountEditor({
   };
 }
 
-test("workflow editor node selector opens the inspector", () => {
+test("workflow editor node selector covers the card and a center click opens the inspector", () => {
   const mounted = mountEditor();
   try {
     const card = mounted.container.querySelector<HTMLElement>('[data-canvas-node-id="entry"]');
@@ -194,9 +208,24 @@ test("workflow editor node selector opens the inspector", () => {
     assert.ok(card);
     assert.ok(selector);
 
+    card.getBoundingClientRect = () => rect(40, 40, 224, 116);
+    selector.getBoundingClientRect = () =>
+      selector.style.position === "absolute" && selector.style.inset === "0px"
+        ? card.getBoundingClientRect()
+        : rect(40, 40, 18, 2);
+
+    const cardBox = card.getBoundingClientRect();
+    const selectorBox = selector.getBoundingClientRect();
+    assert.deepEqual(
+      [selectorBox.left, selectorBox.top, selectorBox.right, selectorBox.bottom],
+      [cardBox.left, cardBox.top, cardBox.right, cardBox.bottom],
+    );
+
     act(() => {
       selector.dispatchEvent(new MouseEvent("click", {
         bubbles: true,
+        clientX: cardBox.left + cardBox.width / 2,
+        clientY: cardBox.top + cardBox.height / 2,
       }));
     });
     assert.ok(mounted.container.querySelector('[aria-label="Close inspector"]'));

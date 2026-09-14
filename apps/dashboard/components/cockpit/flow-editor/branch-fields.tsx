@@ -154,7 +154,8 @@ function LiteralEditor({
       <Select
         aria-label="Comparison value"
         size="compact"
-        className={inputClass}
+        className="min-w-0"
+        triggerClassName={inputClass}
         disabled={disabled}
         value={JSON.stringify(condition.value)}
         options={enumValues.map((value) => ({
@@ -171,7 +172,8 @@ function LiteralEditor({
       <Select
         aria-label="Comparison value"
         size="compact"
-        className={inputClass}
+        className="min-w-0"
+        triggerClassName={inputClass}
         disabled={disabled}
         value={condition.value === false ? "false" : "true"}
         options={[
@@ -253,7 +255,8 @@ export function BranchFields({
           <Select
             aria-label="Match"
             size="compact"
-            className={inputClass}
+            className="min-w-0"
+            triggerClassName={inputClass}
             disabled={!canEdit}
             value={parsed.combinator}
             options={[
@@ -305,7 +308,8 @@ export function BranchFields({
                     <Select
                       aria-label="Operator"
                       size="compact"
-                      className={inputClass}
+                      className="min-w-0"
+                      triggerClassName={inputClass}
                       disabled={!canEdit}
                       value={condition.operator}
                       options={operators(entry).map((operator) => ({

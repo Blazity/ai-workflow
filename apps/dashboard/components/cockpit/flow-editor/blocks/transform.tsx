@@ -161,7 +161,8 @@ function ScalarEditor({
       <Select
         aria-label={`${label} type`}
         size="compact"
-        className={inputClass}
+        className="min-w-0"
+        triggerClassName={inputClass}
         disabled={disabled}
         value={kind}
         options={[
@@ -186,7 +187,8 @@ function ScalarEditor({
         <Select
           aria-label={label}
           size="compact"
-          className={inputClass}
+          className="min-w-0"
+          triggerClassName={inputClass}
           disabled={disabled}
           value={value === true ? "true" : "false"}
           options={[
@@ -256,7 +258,8 @@ function BuildObjectRow({
         <Select
           aria-label="Value kind"
           size="compact"
-          className={inputClass}
+          className="min-w-0"
+          triggerClassName={inputClass}
           disabled={disabled}
           value={field.value.kind}
           options={[
@@ -381,7 +384,8 @@ export function TransformFields({
         <Select
           aria-label="Action"
           size="compact"
-          className={inputClass}
+          className="min-w-0"
+          triggerClassName={inputClass}
           value={configuration.operation}
           disabled={!canEdit}
           options={(Object.keys(operationLabels) as Operation[]).map((operation) => ({
@@ -428,7 +432,8 @@ export function TransformFields({
                 <Select
                   aria-label="Match mode"
                   size="compact"
-                  className={`${inputClass} w-full`}
+                  className="min-w-0 w-full"
+                  triggerClassName={`${inputClass} w-full`}
                   disabled={!canEdit}
                   value={configuration.mode}
                   options={[
