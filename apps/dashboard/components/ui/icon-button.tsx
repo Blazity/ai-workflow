@@ -36,7 +36,7 @@ export function IconButton({
       className={getButtonClassName({
         variant,
         size,
-        className: [shape === "circle" ? "rounded-full" : undefined, className]
+        className: [variant !== "text" && shape === "circle" ? "rounded-full" : undefined, className]
           .filter(Boolean)
           .join(" "),
         iconOnly: true,

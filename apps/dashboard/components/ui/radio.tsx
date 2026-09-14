@@ -11,7 +11,7 @@ export function Radio({ label, className, ...props }: RadioProps) {
   return (
     <label
       className={[
-        "inline-flex items-center gap-2 font-body text-[12px] text-neutral-800",
+        "flex items-center gap-2 font-body text-[12px] text-neutral-800",
         props.disabled ? "opacity-60" : "cursor-pointer",
         className,
       ]
