@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-13
+Last-verified: 2026-09-14
 
 # Documentation index
 
@@ -100,6 +100,7 @@ research file records what was true on its date.
 | [plans/2026-09-11-workflow-graph-package.md](./plans/2026-09-11-workflow-graph-package.md) | Stage 12 of the restructure: the workflow graph rules extracted into `packages/workflow-graph` |
 | [plans/2026-09-14-run-capacity-package.md](./plans/2026-09-14-run-capacity-package.md) | First P0 package after the restructure: MCP manual dispatch honours the capacity limit (AIW-373, AIW-385) and AIW-277 closes with production evidence |
 | [plans/2026-09-11-repository-catalog-and-settings.md](./plans/2026-09-11-repository-catalog-and-settings.md) | Delivered 2026-09-11 to 2026-09-13: repository catalog and dashboard settings replacing the product-behaviour environment variables |
+| [plans/2026-09-14-product-changelog.md](./plans/2026-09-14-product-changelog.md) | The product changelog: an entry folder authors fill per pull request, a daily collation workflow, and the CI check that a product change carries an entry |
 
 Every other file in `plans/` is a historical delivery plan. It stays in place
 for provenance and carries `superseded-by docs/index.md`: read it as a record
@@ -133,3 +134,5 @@ have no status header and the docs gate skips them.
 | `docs/releases/artur/YYYY.MM.PATCH.md` | The release pipeline copies the reviewed note into the tenant repository |
 | `docs/example-skill/SKILL.md` | The example agent skill referenced from SETUP.md |
 | `docs/example-workflows/loop-branch-workflow.json` | An importable example definition |
+| `CHANGELOG.md` | The daily collation workflow (`.github/workflows/changelog.yml`) writes it; readers consume it directly |
+| `changelog/unreleased/*.md` | The daily collation workflow reads and deletes them |

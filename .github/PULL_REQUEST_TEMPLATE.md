@@ -14,6 +14,10 @@
 
 <!-- One non-technical sentence, or "internal". -->
 
+## Changelog
+
+<!-- Add changelog/unreleased/<slug>.md in product tone (see changelog/README.md), or apply the label "changelog: skip" for internal changes. -->
+
 ## Testing
 
 <!-- How was this verified? -->

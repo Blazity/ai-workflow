@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-11
+Last-verified: 2026-09-14
 
 # AGENTS.md
 
@@ -23,6 +23,7 @@ the rules that bind every edit.
 | Evidence, closing a ticket, a release | [docs/delivery-gates.md](docs/delivery-gates.md) |
 | Workflow definitions, blocks, bindings, triggers, loops, validation | [docs/architecture/workflow-definition.md](docs/architecture/workflow-definition.md) |
 | Repository script groups and the checks blocks run | [docs/architecture/repository-scripts.md](docs/architecture/repository-scripts.md) |
+| Telling users what changed | [changelog/README.md](changelog/README.md) |
 | Why the code is shaped this way, or a rule you want to change | [docs/adr/README.md](docs/adr/README.md) |
 | Tiers, allowed imports, which package owns what | [docs/adr/ADR-001-layering-and-packages.md](docs/adr/ADR-001-layering-and-packages.md) |
 | Gates, CI, what may be required and what may be bypassed | [docs/adr/ADR-004-gates-and-required-ci.md](docs/adr/ADR-004-gates-and-required-ci.md) |
