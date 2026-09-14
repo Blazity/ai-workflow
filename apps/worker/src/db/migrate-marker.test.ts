@@ -25,7 +25,7 @@ describe("database migration marker decision", () => {
   it("claims an unclaimed database", () => {
     expect(decide({ marker: null })).toEqual({
       action: "claim",
-      message: "[db-migrate] OK \u2014 branch claimed by 'preview'.",
+      message: "[db-migrate] OK: branch claimed by 'preview'.",
     });
   });
 
@@ -33,15 +33,15 @@ describe("database migration marker decision", () => {
     expect(decide({ host: "copy.example.test" })).toEqual({
       action: "reclaim",
       message:
-        "[db-migrate] branch copied from 'preview' (preview.example.test) " +
-        "\u2014 re-claiming for 'preview'.",
+        "[db-migrate] branch copied from 'preview' (preview.example.test), " +
+        "re-claiming for 'preview'.",
     });
   });
 
   it("accepts a marker owned by this environment", () => {
     expect(decide()).toEqual({
       action: "ok",
-      message: "[db-migrate] OK \u2014 branch claimed by 'preview'.",
+      message: "[db-migrate] OK: branch claimed by 'preview'.",
     });
   });
 

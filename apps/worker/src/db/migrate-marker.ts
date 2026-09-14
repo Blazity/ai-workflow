@@ -61,7 +61,7 @@ export function decideMarkerAction({
   if (marker === null) {
     return {
       action: "claim",
-      message: `[db-migrate] OK \u2014 branch claimed by '${vercelEnv}'.`,
+      message: `[db-migrate] OK: branch claimed by '${vercelEnv}'.`,
     };
   }
 
@@ -69,8 +69,8 @@ export function decideMarkerAction({
     return {
       action: "reclaim",
       message:
-        `[db-migrate] branch copied from '${marker.env}' (${marker.endpointHost}) ` +
-        `\u2014 re-claiming for '${vercelEnv}'.`,
+        `[db-migrate] branch copied from '${marker.env}' (${marker.endpointHost}), ` +
+        `re-claiming for '${vercelEnv}'.`,
     };
   }
 
@@ -79,13 +79,13 @@ export function decideMarkerAction({
       action: "fatal",
       message:
         `[db-migrate] FATAL: this Neon branch is already claimed by VERCEL_ENV='${marker.env}', ` +
-        `but this build is VERCEL_ENV='${vercelEnv}'. Environments must not share a branch \u2014 ` +
+        `but this build is VERCEL_ENV='${vercelEnv}'. Environments must not share a branch: ` +
         "enable branch-per-environment in the Neon Vercel integration (see SETUP.md \u00A74).",
     };
   }
 
   return {
     action: "ok",
-    message: `[db-migrate] OK \u2014 branch claimed by '${vercelEnv}'.`,
+    message: `[db-migrate] OK: branch claimed by '${vercelEnv}'.`,
   };
 }
