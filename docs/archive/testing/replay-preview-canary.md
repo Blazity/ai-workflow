@@ -1,3 +1,9 @@
+> 2026-09-14 retirement note: the dashboard URL, dashboard protection bypass,
+> and owner session inputs are retired. The current gate verifies replay through
+> MCP `runs.trace` and `runs.logs`, plus the database rows and worker log export.
+> Dashboard rendering is covered by dashboard tests. This file remains the
+> historical contract from before that change.
+
 # Replay sanitization preview canary
 
 This is the rollout gate for persisted attempts and visual replay. It extends

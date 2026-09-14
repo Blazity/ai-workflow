@@ -26,13 +26,18 @@ exits non-zero when its check fails.
 The gate is armed with `ENGINE_CANARY_TARGET=ai-workflow-demo`,
 `ENGINE_CANARY_DB_ENV=production`, and the
 `ENGINE_CANARY_DB_FINGERPRINT` reported by the target's `/health` response.
-The Vercel token, production `DATABASE_URL`, Jira token, canary session token,
-and the other canary credentials live in GitHub's `e2e` environment. The demo
-Vercel environment retains the production GitHub App credentials used by
-triggered workflows. By the owner's decision of 2026-09-14, the canaries write
-to the production database, create run records under the trigger owner, and
-create, move, and delete Jira tickets. A pull request migration is skipped so
-the shared production database is changed only after merge.
+The Vercel token, production `DATABASE_URL`, protection bypass, and the OAuth
+client id and secret live in GitHub's `e2e` environment. The client is
+registered once by an owner with exactly `mcp:read runs:dispatch`; the job mints
+a `client_credentials` token and calls the target's MCP tools. The three
+deployed fixture definitions stay disabled and are dispatched directly against
+one permanent Jira fixture, so the gate neither changes workflow enablement nor
+carries a Jira credential. The demo Vercel environment retains the production
+GitHub App credentials used by triggered workflows. By the owner's decision of
+2026-09-14, the canaries write run and replay records to the production
+database, and the normal manual dispatch lifecycle may move the permanent Jira
+fixture. A pull request migration is skipped so the shared production database
+is changed only after merge.
 
 ## Lint policy
 

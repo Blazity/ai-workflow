@@ -1,45 +1,43 @@
-import { randomBytes } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { open, stat } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { neon } from "@neondatabase/serverless";
 import type {
-  HarnessProfileDetailResponse,
-  HarnessProfilesResponse,
+  HarnessProfileManifest,
   HarnessRunManifestRecord,
-  RunDetailResponse,
+  ReplaySanitizedEnvelope,
+  WorkflowDefinitionV2,
   WorkflowReplayAttemptDetail,
   WorkflowRunReplayResponse,
-  WorkflowDefinitionDetailResponse,
-  WorkflowDefinitionMeta,
-  WorkflowDefinitionsResponse,
 } from "@shared/contracts";
 import {
   assertCustomProfilePin,
   assertMinimalCanaryWorkflow,
   assertRunHarnessManifest,
+  cancelTimedOutCanaryRun,
   parseHarnessCanaryEnv,
   type HarnessCanaryEnv,
 } from "./canary-contract.js";
+import { createMcpAuthorizedFetch } from "./mcp-machine-credential.js";
 import {
   assertReplayCanaryEvidence,
   createReplayCanaryFixture,
   parseReplayCanaryEnv,
+  REPLAY_CANARY_FIXTURE_NONCE,
   type ReplayCanaryEnv,
   type ReplayCanaryFixture,
 } from "../replay/canary-contract.js";
 
 type SqlClient = ReturnType<typeof neon>;
 
-interface DurableRun {
-  runId: string;
-  status: string | null;
-  definitionVersion: number | null;
-  harnessManifests: HarnessRunManifestRecord[] | null;
-}
-
 interface CanaryCase {
   label: "claude" | "codex" | "custom";
   workflowId: number;
+  triggerNodeId: string;
+  deployedVersion: number;
   reference: { profileId: string; version: number };
   provider: "claude" | "codex";
   skill?: {
@@ -52,6 +50,96 @@ interface CanaryCase {
   };
 }
 
+interface StoredHarnessProfile {
+  id: string;
+  organizationId: string | null;
+  system: boolean;
+  archivedAt: string | null;
+  publishedVersion: number | null;
+  manifest: HarnessProfileManifest | null;
+}
+
+interface WorkflowListData {
+  workflows: Array<{
+    definitionId: number;
+    name: string;
+    enabled: boolean;
+    deployedVersion: number | null;
+    deployedSchema: "v2" | "legacy-v1";
+    triggers: Array<{
+      triggerNodeId: string;
+      triggerType: string;
+      manuallyDispatchable: boolean;
+    }>;
+  }>;
+  truncated: boolean;
+}
+
+interface WorkflowGraphData {
+  definitionId: number;
+  enabled: boolean;
+  deployedVersion: number | null;
+  deployed:
+    | WorkflowDefinitionV2
+    | { schema: "legacy-v1"; message: string }
+    | null;
+}
+
+interface DispatchPreflightData {
+  deployedVersion: number;
+  runnable: boolean;
+  blocker?: { code: string; message: string };
+  preflightDigest: string;
+}
+
+interface DispatchData {
+  runId: string;
+}
+
+interface RunData {
+  runId: string;
+  status: string;
+  terminal: boolean;
+  pollAfterMs: number;
+}
+
+interface RunResultData {
+  status: string;
+  terminal: boolean;
+  completionPending: boolean;
+}
+
+interface RunLogsOverview {
+  replay: {
+    availability: string;
+    manifest: ReplaySanitizedEnvelope | null;
+    manifestTruncated: boolean;
+    definitionVersion: number | null;
+    attempts: Array<{ id: number }>;
+  };
+}
+
+interface RunLogsDetail {
+  availability: string;
+  attempt: WorkflowReplayAttemptDetail | null;
+}
+
+interface ReplayCaseVerification {
+  env: ReplayCanaryEnv;
+  fixture: ReplayCanaryFixture;
+  logCapture: ReplayLogCapture;
+}
+
+interface ReplayLogCapture {
+  path: string;
+  startOffset: number;
+}
+
+interface CanaryMcpClient {
+  call<T>(name: string, args?: Record<string, unknown>): Promise<T>;
+  close(): Promise<void>;
+}
+
 export interface HarnessProfilePreviewCanaryOptions {
   verifyReplay?: boolean;
 }
@@ -61,109 +149,144 @@ export async function runHarnessProfilePreviewCanary(
   options: HarnessProfilePreviewCanaryOptions = {},
 ): Promise<void> {
   const env = parseHarnessCanaryEnv(source);
-  const replayEnv = options.verifyReplay
-    ? parseReplayCanaryEnv(source)
-    : null;
+  const replayEnv = options.verifyReplay ? parseReplayCanaryEnv(source) : null;
   const sql = neon(env.DATABASE_URL);
-  const api = createWorkerApi(env);
+  const mcp = await createCanaryMcpClient(env);
 
-  const session = await api.get<{
-    role: string;
-    canEditWorkflows: boolean;
-  }>("/api/v1/session");
-  if (
-    !session.canEditWorkflows ||
-    (session.role !== "owner" && session.role !== "admin")
-  ) {
-    throw new Error("Canary session must belong to an owner or admin");
-  }
+  try {
+    await mcp.call("system.capabilities");
+    const ticket = await mcp.call<{ ticketKey: string }>("tickets.get", {
+      ticketKey: env.HARNESS_CANARY_TICKET_KEY,
+    });
+    if (ticket.ticketKey.toUpperCase() !== env.HARNESS_CANARY_TICKET_KEY) {
+      throw new Error("Permanent canary ticket did not resolve to the configured key");
+    }
 
-  const [{ profiles }, definitions] = await Promise.all([
-    api.get<HarnessProfilesResponse>("/api/v1/harness-profiles"),
-    api.get<WorkflowDefinitionsResponse>("/api/v1/workflow-definitions"),
-  ]);
-  const claude = profiles.find((profile) => profile.id === "builtin-claude");
-  const codex = profiles.find((profile) => profile.id === "builtin-codex");
-  if (
-    !claude?.system ||
-    !claude.publishedVersion ||
-    !codex?.system ||
-    !codex.publishedVersion
-  ) {
-    throw new Error("Both stable built-in Harness Profiles must be published");
-  }
-
-  const custom = await api.get<HarnessProfileDetailResponse>(
-    `/api/v1/harness-profiles/${encodeURIComponent(
-      env.HARNESS_CANARY_CUSTOM_PROFILE_ID,
-    )}?version=${env.HARNESS_CANARY_CUSTOM_PROFILE_VERSION}`,
-  );
-  assertCustomProfilePin(custom, {
-    profileId: env.HARNESS_CANARY_CUSTOM_PROFILE_ID,
-    version: env.HARNESS_CANARY_CUSTOM_PROFILE_VERSION,
-    artifactHash: env.HARNESS_CANARY_CUSTOM_SKILL_ARTIFACT_HASH,
-    skillName: env.HARNESS_CANARY_CUSTOM_SKILL_NAME,
-  });
-  const customProvider = custom.published!.manifest.harness.provider;
-
-  await assertPinnedSkillExists(sql, env, custom.profile.organizationId);
-  await assertNoActiveRuns(sql);
-  const replayLogCapture = replayEnv
-    ? await prepareReplayLogCapture(replayEnv)
-    : null;
-  const replayFixture = replayEnv
-    ? createReplayCanaryFixture(randomBytes(12).toString("hex"))
-    : null;
-
-  const restore = findDefinition(
-    definitions.definitions,
-    env.HARNESS_CANARY_RESTORE_WORKFLOW_ID,
-  );
-  if (
-    !restore.enabled ||
-    !restore.triggerTypes.includes("trigger_ticket_ai")
-  ) {
-    throw new Error(
-      "The exact restore workflow must currently own trigger_ticket_ai",
+    const profiles = await readHarnessProfiles(sql, env);
+    const claude = requiredSystemProfile(profiles, "builtin-claude", "claude");
+    const codex = requiredSystemProfile(profiles, "builtin-codex", "codex");
+    const custom = profiles.find(
+      (profile) => profile.id === env.HARNESS_CANARY_CUSTOM_PROFILE_ID,
     );
-  }
-  const otherEnabledTicketDefinitions = definitions.definitions.filter(
-    (definition) =>
-      definition.id !== restore.id &&
-      definition.enabled &&
-      definition.triggerTypes.includes("trigger_ticket_ai"),
-  );
-  if (otherEnabledTicketDefinitions.length > 0) {
-    throw new Error("More than one workflow claims trigger_ticket_ai");
+    if (!custom) throw new Error("Custom canary profile is not available");
+    assertCustomProfilePin(custom, {
+      profileId: env.HARNESS_CANARY_CUSTOM_PROFILE_ID,
+      version: env.HARNESS_CANARY_CUSTOM_PROFILE_VERSION,
+      artifactHash: env.HARNESS_CANARY_CUSTOM_SKILL_ARTIFACT_HASH,
+      skillName: env.HARNESS_CANARY_CUSTOM_SKILL_NAME,
+    });
+    const customProvider = custom.manifest!.harness.provider;
+    await assertPinnedSkillExists(sql, env, custom.organizationId);
+
+    const listed = await mcp.call<WorkflowListData>("workflows.list", {
+      limit: 200,
+    });
+    if (listed.truncated) {
+      throw new Error("Workflow list is truncated before canary fixture validation");
+    }
+    const cases = await buildCanaryCases(mcp, env, listed, {
+      claude,
+      codex,
+      customProvider,
+    });
+
+    const replayLogCapture = replayEnv
+      ? await prepareReplayLogCapture(replayEnv)
+      : null;
+    const replayFixture = replayEnv
+      ? createReplayCanaryFixture(REPLAY_CANARY_FIXTURE_NONCE)
+      : null;
+
+    for (const canary of cases) {
+      const replay =
+        canary.label === "custom" &&
+        replayEnv &&
+        replayLogCapture &&
+        replayFixture
+          ? {
+              env: replayEnv,
+              fixture: replayFixture,
+              logCapture: replayLogCapture,
+            }
+          : undefined;
+      const run = await executeCase(env, mcp, sql, canary, replay);
+      assertRunHarnessManifest(run.manifests, {
+        reference: canary.reference,
+        provider: canary.provider,
+        ...(canary.skill ? { skill: canary.skill } : {}),
+      });
+      console.log(
+        `[harness-canary] ${canary.label}: ${run.runId} succeeded with ${canary.reference.profileId}@${canary.reference.version}`,
+      );
+    }
+  } finally {
+    await mcp.close();
   }
 
-  const cases: CanaryCase[] = [
+  console.log(
+    options.verifyReplay
+      ? "[harness-canary] PASS: provider/profile execution and replay sanitization completed on the preview."
+      : "[harness-canary] PASS: built-in Claude, built-in Codex, and the exact custom skill profile completed on the preview.",
+  );
+}
+
+async function buildCanaryCases(
+  mcp: CanaryMcpClient,
+  env: HarnessCanaryEnv,
+  listed: WorkflowListData,
+  profiles: {
+    claude: StoredHarnessProfile;
+    codex: StoredHarnessProfile;
+    customProvider: "claude" | "codex";
+  },
+): Promise<CanaryCase[]> {
+  const definitions = await Promise.all(
+    [
+      env.HARNESS_CANARY_CLAUDE_WORKFLOW_ID,
+      env.HARNESS_CANARY_CODEX_WORKFLOW_ID,
+      env.HARNESS_CANARY_CUSTOM_WORKFLOW_ID,
+    ].map(async (id) => {
+      const graph = await mcp.call<WorkflowGraphData>("workflows.get_graph", {
+        definitionId: id,
+      });
+      return {
+        id: graph.definitionId,
+        enabled: graph.enabled,
+        deployedVersion: graph.deployedVersion,
+        definition:
+          graph.deployed && "schemaVersion" in graph.deployed
+            ? graph.deployed
+            : null,
+      };
+    }),
+  );
+  const inputs = [
     {
-      label: "claude",
+      label: "claude" as const,
       workflowId: env.HARNESS_CANARY_CLAUDE_WORKFLOW_ID,
       reference: {
-        profileId: claude.id,
-        version: claude.publishedVersion,
+        profileId: profiles.claude.id,
+        version: profiles.claude.publishedVersion!,
       },
-      provider: "claude",
+      provider: "claude" as const,
     },
     {
-      label: "codex",
+      label: "codex" as const,
       workflowId: env.HARNESS_CANARY_CODEX_WORKFLOW_ID,
       reference: {
-        profileId: codex.id,
-        version: codex.publishedVersion,
+        profileId: profiles.codex.id,
+        version: profiles.codex.publishedVersion!,
       },
-      provider: "codex",
+      provider: "codex" as const,
     },
     {
-      label: "custom",
+      label: "custom" as const,
       workflowId: env.HARNESS_CANARY_CUSTOM_WORKFLOW_ID,
       reference: {
-        profileId: custom.profile.id,
+        profileId: env.HARNESS_CANARY_CUSTOM_PROFILE_ID,
         version: env.HARNESS_CANARY_CUSTOM_PROFILE_VERSION,
       },
-      provider: customProvider,
+      provider: profiles.customProvider,
       skill: {
         artifactHash: env.HARNESS_CANARY_CUSTOM_SKILL_ARTIFACT_HASH,
         name: env.HARNESS_CANARY_CUSTOM_SKILL_NAME,
@@ -175,212 +298,155 @@ export async function runHarnessProfilePreviewCanary(
     },
   ];
 
-  for (const canary of cases) {
-    const meta = findDefinition(definitions.definitions, canary.workflowId);
-    if (meta.enabled) {
-      throw new Error(`Canary workflow ${canary.workflowId} must start disabled`);
-    }
-    const detail = await api.get<WorkflowDefinitionDetailResponse>(
-      `/api/v1/workflow-definitions/${canary.workflowId}`,
+  return inputs.map((input, index) => {
+    const definition = definitions[index]!;
+    assertMinimalCanaryWorkflow(definition, input.reference);
+    const summary = listed.workflows.find(
+      (workflow) => workflow.definitionId === input.workflowId,
     );
-    assertMinimalCanaryWorkflow(detail, canary.reference);
-  }
-
-  let restoreDisabled = false;
-  let activeCanary: number | null = null;
-  try {
-    await api.patch(`/api/v1/workflow-definitions/${restore.id}`, {
-      enabled: false,
+    if (!summary) throw new Error(`Workflow ${input.workflowId} is not available`);
+    if (
+      summary.enabled ||
+      summary.deployedSchema !== "v2" ||
+      summary.deployedVersion !== definition.deployedVersion ||
+      summary.triggers.length !== 1 ||
+      summary.triggers[0]?.triggerType !== "trigger_ticket_ai" ||
+      !summary.triggers[0].manuallyDispatchable
+    ) {
+      throw new Error(
+        `Workflow ${input.workflowId} must stay disabled with one manually dispatchable ticket trigger`,
+      );
+    }
+    return Object.assign(input, {
+      triggerNodeId: summary.triggers[0].triggerNodeId,
+      deployedVersion: definition.deployedVersion!,
     });
-    restoreDisabled = true;
-
-    for (const canary of cases) {
-      await api.patch(`/api/v1/workflow-definitions/${canary.workflowId}`, {
-        enabled: true,
-      });
-      activeCanary = canary.workflowId;
-      try {
-        const replay =
-          canary.label === "custom" &&
-          replayEnv &&
-          replayLogCapture &&
-          replayFixture
-            ? {
-                env: replayEnv,
-                fixture: replayFixture,
-                logCapture: replayLogCapture,
-              }
-            : undefined;
-        const run = await executeCase(env, api, sql, canary, replay);
-        assertRunHarnessManifest(run.harnessManifests, {
-          reference: canary.reference,
-          provider: canary.provider,
-          ...(canary.skill ? { skill: canary.skill } : {}),
-        });
-        console.log(
-          `[harness-canary] ${canary.label}: ${run.runId} succeeded with ${canary.reference.profileId}@${canary.reference.version}`,
-        );
-      } finally {
-        await api.patch(
-          `/api/v1/workflow-definitions/${canary.workflowId}`,
-          { enabled: false },
-        );
-        activeCanary = null;
-      }
-    }
-  } finally {
-    if (activeCanary !== null) {
-      await api
-        .patch(`/api/v1/workflow-definitions/${activeCanary}`, {
-          enabled: false,
-        })
-        .catch(() => undefined);
-    }
-    if (restoreDisabled) {
-      await api.patch(`/api/v1/workflow-definitions/${restore.id}`, {
-        enabled: true,
-      });
-    }
-  }
-
-  console.log(
-    options.verifyReplay
-      ? "[harness-canary] PASS: provider/profile execution and replay sanitization completed on the preview."
-      : "[harness-canary] PASS: built-in Claude, built-in Codex, and the exact custom skill profile completed on the preview.",
-  );
-}
-
-interface ReplayCaseVerification {
-  env: ReplayCanaryEnv;
-  fixture: ReplayCanaryFixture;
-  logCapture: ReplayLogCapture;
+  });
 }
 
 async function executeCase(
   env: HarnessCanaryEnv,
-  api: ReturnType<typeof createWorkerApi>,
+  mcp: CanaryMcpClient,
   sql: SqlClient,
   canary: CanaryCase,
   replay?: ReplayCaseVerification,
-): Promise<DurableRun> {
-  const ticketKey = await createTicket(
-    env,
-    canary.label,
-    replay?.fixture.ticketDescription,
-  );
-  try {
-    await transitionTicket(env, ticketKey, env.COLUMN_AI);
-    const deadline = Date.now() + env.HARNESS_CANARY_TIMEOUT_MS;
-    let run: DurableRun | null = null;
-    while (Date.now() < deadline) {
-      await callCron(env);
-      run = await findDurableRun(sql, ticketKey, canary.workflowId);
-      if (run) {
-        const detail = await api.get<RunDetailResponse>(
-          `/api/v1/runs/${encodeURIComponent(run.runId)}`,
-        );
-        if (detail.run?.status === "success") {
-          const captured = await waitForHarnessManifest(
-            sql,
-            run.runId,
-            deadline,
-          );
-          if (captured.definitionVersion === null) {
-            throw new Error(`Run ${run.runId} did not pin a definition version`);
-          }
-          if (replay) {
-            await verifyReplayCase(
-              env,
-              replay,
-              api,
-              sql,
-              run.runId,
-              deadline,
-            );
-          }
-          return captured;
-        }
-        if (
-          detail.run &&
-          ["failed", "blocked", "awaiting"].includes(detail.run.status)
-        ) {
-          throw new Error(
-            `${canary.label} canary run ${run.runId} ended as ${detail.run.status}`,
-          );
-        }
-      }
-      await delay(5_000);
-    }
-    throw new Error(
-      `Timed out waiting for ${canary.label} canary workflow ${canary.workflowId}`,
-    );
-  } finally {
-    await transitionTicket(env, ticketKey, env.COLUMN_BACKLOG).catch(
-      () => undefined,
-    );
-    await waitForRegistryRelease(sql, ticketKey, 120_000).catch(
-      () => undefined,
-    );
-    await deleteTicket(env, ticketKey).catch(() => undefined);
-  }
-}
-
-interface ReplayLogCapture {
-  path: string;
-  startOffset: number;
-}
-
-async function prepareReplayLogCapture(
-  env: ReplayCanaryEnv,
-): Promise<ReplayLogCapture> {
-  const metadata = await stat(env.REPLAY_CANARY_LOG_EXPORT_PATH).catch(
-    () => null,
-  );
-  if (!metadata?.isFile()) {
-    throw new Error(
-      "Replay canary log export must exist as a regular file before mutation",
-    );
-  }
-  return {
-    path: env.REPLAY_CANARY_LOG_EXPORT_PATH,
-    startOffset: metadata.size,
+): Promise<{ runId: string; manifests: HarnessRunManifestRecord[] }> {
+  const input = {
+    definitionId: canary.workflowId,
+    triggerNodeId: canary.triggerNodeId,
+    input: { kind: "ticket", ticketKey: env.HARNESS_CANARY_TICKET_KEY },
   };
+  const preflight = await mcp.call<DispatchPreflightData>(
+    "workflows.dispatch_preflight",
+    input,
+  );
+  if (!preflight.runnable) {
+    throw new Error(
+      `${canary.label} dispatch preflight refused: ${preflight.blocker?.code ?? "unknown"}`,
+    );
+  }
+  if (preflight.deployedVersion !== canary.deployedVersion) {
+    throw new Error(`Workflow ${canary.workflowId} deployment changed after validation`);
+  }
+  const dispatched = await mcp.call<DispatchData>("workflows.dispatch", {
+    ...input,
+    expectedDeployedVersion: preflight.deployedVersion,
+    preflightDigest: preflight.preflightDigest,
+    idempotencyKey: randomUUID(),
+  });
+  const deadline = Date.now() + env.HARNESS_CANARY_TIMEOUT_MS;
+  try {
+    await waitForSuccessfulRun(mcp, dispatched.runId, deadline);
+    const manifests = await waitForHarnessManifest(mcp, dispatched.runId, deadline);
+    if (replay) {
+      await verifyReplayCase(replay, mcp, sql, dispatched.runId, deadline);
+    }
+    await waitForRegistryRelease(sql, env.HARNESS_CANARY_TICKET_KEY, 120_000);
+    return { runId: dispatched.runId, manifests };
+  } catch (error) {
+    if (Date.now() >= deadline) {
+      await cancelTimedOutCanaryRun(mcp, dispatched.runId);
+    }
+    throw error;
+  }
+}
+
+async function waitForSuccessfulRun(
+  mcp: CanaryMcpClient,
+  runId: string,
+  deadline: number,
+): Promise<void> {
+  while (Date.now() < deadline) {
+    const run = await mcp.call<RunData>("runs.get", { runId });
+    if (run.terminal) {
+      const result = await mcp.call<RunResultData>("runs.result", { runId });
+      if (
+        run.status !== "success" ||
+        result.status !== "success" ||
+        !result.terminal ||
+        result.completionPending
+      ) {
+        throw new Error(`Canary run ${runId} ended as ${run.status}`);
+      }
+      return;
+    }
+    await delay(Math.max(1_000, run.pollAfterMs));
+  }
+  throw new Error(`Timed out waiting for canary run ${runId}`);
+}
+
+async function waitForHarnessManifest(
+  mcp: CanaryMcpClient,
+  runId: string,
+  deadline: number,
+): Promise<HarnessRunManifestRecord[]> {
+  while (Date.now() < deadline) {
+    const logs = await mcp.call<RunLogsOverview>("runs.logs", { runId });
+    const value = logs.replay.manifest?.value;
+    if (
+      logs.replay.availability === "available" &&
+      logs.replay.definitionVersion !== null &&
+      !logs.replay.manifestTruncated &&
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value)
+    ) {
+      const harnesses = (value as Record<string, unknown>).harnesses;
+      if (Array.isArray(harnesses)) {
+        return harnesses as unknown as HarnessRunManifestRecord[];
+      }
+    }
+    await delay(2_000);
+  }
+  throw new Error(`Run ${runId} did not expose its Harness Profile manifest`);
 }
 
 async function verifyReplayCase(
-  harnessEnv: HarnessCanaryEnv,
   replay: ReplayCaseVerification,
-  api: ReturnType<typeof createWorkerApi>,
+  mcp: CanaryMcpClient,
   sql: SqlClient,
   runId: string,
   deadline: number,
 ): Promise<void> {
-  const { summary, details } = await waitForReplayApi(
-    api,
-    runId,
-    deadline,
-  );
-  const [databaseRows, dashboardHtml, appendedLogExport] = await Promise.all([
+  const { summary, details } = await waitForReplayMcp(mcp, runId, deadline);
+  const [databaseRows, appendedLogExport] = await Promise.all([
     readReplayDatabaseRows(sql, runId),
-    fetchRenderedReplay(harnessEnv, replay.env, runId),
     waitForReplayLogExport(replay.env, replay.logCapture, runId),
   ]);
-
   assertReplayCanaryEvidence(
     {
       runId,
       databaseRows,
       apiSummary: summary,
       apiDetails: details,
-      dashboardHtml,
       appendedLogExport,
     },
     replay.fixture,
   );
 }
 
-async function waitForReplayApi(
-  api: ReturnType<typeof createWorkerApi>,
+async function waitForReplayMcp(
+  mcp: CanaryMcpClient,
   runId: string,
   deadline: number,
 ): Promise<{
@@ -388,11 +454,11 @@ async function waitForReplayApi(
   details: WorkflowReplayAttemptDetail[];
 }> {
   while (Date.now() < deadline) {
-    const summary = await api.get<WorkflowRunReplayResponse>(
-      `/api/v1/runs/${encodeURIComponent(runId)}/replay?limit=200`,
-    );
+    const summary = await mcp.call<WorkflowRunReplayResponse & {
+      snapshotOmitted?: boolean;
+    }>("runs.trace", { runId });
     if (summary.nextCursor !== null) {
-      throw new Error("Minimal replay canary unexpectedly exceeded 200 attempts");
+      throw new Error("Minimal replay canary unexpectedly exceeded one trace page");
     }
     const expectedAttempts = summary.snapshot?.graph.nodes.length ?? 0;
     const terminal =
@@ -408,23 +474,124 @@ async function waitForReplayApi(
     if (
       summary.availability === "available" &&
       summary.snapshot &&
+      !summary.snapshotOmitted &&
       expectedAttempts > 0 &&
       terminal
     ) {
       const details = await Promise.all(
-        summary.attempts.map((attempt) =>
-          api.get<WorkflowReplayAttemptDetail>(
-            `/api/v1/runs/${encodeURIComponent(runId)}/attempts/${attempt.id}`,
-          ),
-        ),
+        summary.attempts.map(async (attempt) => {
+          const logs = await mcp.call<RunLogsDetail>("runs.logs", {
+            runId,
+            attemptId: attempt.id,
+          });
+          return logs.attempt;
+        }),
       );
-      if (details.some((detail) => detail.logs !== null)) {
+      if (
+        details.every(
+          (detail): detail is WorkflowReplayAttemptDetail => detail !== null,
+        ) &&
+        details.some((detail) => detail.logs !== null)
+      ) {
         return { summary, details };
       }
     }
     await delay(2_000);
   }
-  throw new Error("Replay API did not finish capture before the canary deadline");
+  throw new Error("Replay MCP tools did not finish capture before the deadline");
+}
+
+async function readHarnessProfiles(
+  sql: SqlClient,
+  env: HarnessCanaryEnv,
+): Promise<StoredHarnessProfile[]> {
+  const rows = await sql`
+    SELECT hp.id, hp.organization_id, hp.system, hp.archived_at,
+           hp.published_version, hpv.manifest
+    FROM harness_profiles hp
+    LEFT JOIN harness_profile_versions hpv
+      ON hpv.profile_id = hp.id AND hpv.version = hp.published_version
+    WHERE hp.id IN (
+      'builtin-claude',
+      'builtin-codex',
+      ${env.HARNESS_CANARY_CUSTOM_PROFILE_ID}
+    )
+  `;
+  return rows.map((row) => ({
+    id: String(row.id),
+    organizationId:
+      typeof row.organization_id === "string" ? row.organization_id : null,
+    system: row.system === true,
+    archivedAt: row.archived_at ? String(row.archived_at) : null,
+    publishedVersion:
+      typeof row.published_version === "number" ? row.published_version : null,
+    manifest: (row.manifest as HarnessProfileManifest | null) ?? null,
+  }));
+}
+
+function requiredSystemProfile(
+  profiles: StoredHarnessProfile[],
+  id: "builtin-claude" | "builtin-codex",
+  provider: "claude" | "codex",
+): StoredHarnessProfile {
+  const profile = profiles.find((candidate) => candidate.id === id);
+  if (
+    !profile?.system ||
+    profile.organizationId !== null ||
+    profile.archivedAt !== null ||
+    !profile.publishedVersion ||
+    profile.manifest?.harness.provider !== provider
+  ) {
+    throw new Error(`Stable built-in ${provider} Harness Profile must be published`);
+  }
+  return profile;
+}
+
+async function assertPinnedSkillExists(
+  sql: SqlClient,
+  env: HarnessCanaryEnv,
+  organizationId: string | null,
+): Promise<void> {
+  if (!organizationId) throw new Error("Custom profile must be organization-owned");
+  const rows = await sql`
+    SELECT hsa.artifact_hash, hsa.name, hsa.source_owner,
+           hsa.source_repository, hsa.source_path, hsa.source_commit_sha
+    FROM harness_profile_version_skills hpvs
+    JOIN harness_skill_artifacts hsa ON hsa.id = hpvs.artifact_id
+    WHERE hpvs.profile_id = ${env.HARNESS_CANARY_CUSTOM_PROFILE_ID}
+      AND hpvs.profile_version = ${env.HARNESS_CANARY_CUSTOM_PROFILE_VERSION}
+      AND hpvs.skill_name = ${env.HARNESS_CANARY_CUSTOM_SKILL_NAME}
+      AND hsa.organization_id = ${organizationId}
+      AND hsa.artifact_hash = ${env.HARNESS_CANARY_CUSTOM_SKILL_ARTIFACT_HASH}
+  `;
+  const row = rows[0] as Record<string, unknown> | undefined;
+  if (
+    row?.source_owner !== env.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_OWNER ||
+    row?.source_repository !==
+      env.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_REPOSITORY ||
+    row?.source_path !== env.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_PATH ||
+    row?.source_commit_sha !==
+      env.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_COMMIT_SHA
+  ) {
+    throw new Error("Pinned skill source does not match the exact expected commit");
+  }
+}
+
+async function prepareReplayLogCapture(
+  env: ReplayCanaryEnv,
+): Promise<ReplayLogCapture> {
+  const metadata = await stat(env.REPLAY_CANARY_LOG_EXPORT_PATH).catch(
+    () => null,
+  );
+  if (!metadata?.isFile()) {
+    throw new Error(
+      "Replay canary log export must exist as a regular file before dispatch",
+    );
+  }
+  return {
+    path: env.REPLAY_CANARY_LOG_EXPORT_PATH,
+    startOffset: metadata.size,
+  };
 }
 
 async function readReplayDatabaseRows(
@@ -452,36 +619,20 @@ async function readReplayDatabaseRows(
   };
 }
 
-async function fetchRenderedReplay(
-  harnessEnv: HarnessCanaryEnv,
-  replayEnv: ReplayCanaryEnv,
-  runId: string,
-): Promise<string> {
-  const base = replayEnv.REPLAY_CANARY_DASHBOARD_BASE_URL.replace(/\/+$/, "");
-  const response = await fetch(`${base}/trace/${encodeURIComponent(runId)}`, {
-    cache: "no-store",
-    redirect: "manual",
-    headers: {
-      Cookie: `ba_session=${harnessEnv.HARNESS_CANARY_SESSION_TOKEN}`,
-      "x-vercel-protection-bypass":
-        replayEnv.REPLAY_CANARY_DASHBOARD_AUTOMATION_BYPASS_SECRET,
-    },
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!response.ok) {
-    throw new Error(
-      `Dashboard replay trace request failed with status ${response.status}`,
-    );
+async function waitForRegistryRelease(
+  sql: SqlClient,
+  ticketKey: string,
+  timeoutMs: number,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const rows = await sql`
+      SELECT 1 FROM active_runs WHERE ticket_key = ${ticketKey} LIMIT 1
+    `;
+    if (rows.length === 0) return;
+    await delay(2_000);
   }
-  const contentLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(contentLength) && contentLength > 10 * 1024 * 1024) {
-    throw new Error("Dashboard replay trace exceeds the canary response limit");
-  }
-  const html = await response.text();
-  if (Buffer.byteLength(html, "utf8") > 10 * 1024 * 1024) {
-    throw new Error("Dashboard replay trace exceeds the canary response limit");
-  }
-  return html;
+  throw new Error(`Run registry did not release ${ticketKey}`);
 }
 
 async function waitForReplayLogExport(
@@ -555,275 +706,34 @@ async function readLogRange(
   }
 }
 
-function createWorkerApi(env: HarnessCanaryEnv) {
-  const base = env.HARNESS_CANARY_BASE_URL.replace(/\/+$/, "");
-  const request = async <T>(
-    path: string,
-    init: RequestInit = {},
-  ): Promise<T> => {
-    const response = await fetch(`${base}${path}`, {
-      ...init,
-      headers: {
-        Authorization: `Bearer ${env.HARNESS_CANARY_SESSION_TOKEN}`,
-        "Content-Type": "application/json",
-        "x-vercel-protection-bypass":
-          env.VERCEL_AUTOMATION_BYPASS_SECRET,
-        ...init.headers,
-      },
-    });
-    const text = await response.text();
-    if (!response.ok) {
-      throw new Error(
-        `Preview API ${init.method ?? "GET"} ${path} failed: ${
-          response.status
-        }`,
-      );
-    }
-    return (text ? JSON.parse(text) : null) as T;
-  };
-  return {
-    get: <T>(path: string) => request<T>(path),
-    patch: (path: string, body: unknown) =>
-      request<WorkflowDefinitionMeta>(path, {
-        method: "PATCH",
-        body: JSON.stringify(body),
-      }),
-  };
-}
-
-function findDefinition(
-  definitions: WorkflowDefinitionMeta[],
-  id: number,
-): WorkflowDefinitionMeta {
-  const definition = definitions.find((candidate) => candidate.id === id);
-  if (!definition) throw new Error(`Workflow ${id} is not available`);
-  return definition;
-}
-
-async function assertPinnedSkillExists(
-  sql: SqlClient,
+async function createCanaryMcpClient(
   env: HarnessCanaryEnv,
-  organizationId: string | null,
-): Promise<void> {
-  if (!organizationId) throw new Error("Custom profile must be organization-owned");
-  const rows = await sql`
-    SELECT hsa.artifact_hash, hsa.name, hsa.source_owner,
-           hsa.source_repository, hsa.source_path, hsa.source_commit_sha
-    FROM harness_profile_version_skills hpvs
-    JOIN harness_skill_artifacts hsa ON hsa.id = hpvs.artifact_id
-    WHERE hpvs.profile_id = ${env.HARNESS_CANARY_CUSTOM_PROFILE_ID}
-      AND hpvs.profile_version = ${env.HARNESS_CANARY_CUSTOM_PROFILE_VERSION}
-      AND hpvs.skill_name = ${env.HARNESS_CANARY_CUSTOM_SKILL_NAME}
-      AND hsa.organization_id = ${organizationId}
-      AND hsa.artifact_hash = ${env.HARNESS_CANARY_CUSTOM_SKILL_ARTIFACT_HASH}
-  `;
-  const row = rows[0] as Record<string, unknown> | undefined;
-  if (
-    row?.source_owner !== env.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_OWNER ||
-    row?.source_repository !==
-      env.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_REPOSITORY ||
-    row?.source_path !== env.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_PATH ||
-    row?.source_commit_sha !==
-      env.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_COMMIT_SHA
-  ) {
-    throw new Error("Pinned skill source does not match the exact expected commit");
-  }
-}
-
-async function assertNoActiveRuns(sql: SqlClient): Promise<void> {
-  const rows = await sql`SELECT count(*)::int AS count FROM active_runs`;
-  if (Number(rows[0]?.count ?? 0) !== 0) {
-    throw new Error("Preview has active runs; retry the canary when it is idle");
-  }
-}
-
-async function findDurableRun(
-  sql: SqlClient,
-  ticketKey: string,
-  definitionId: number,
-): Promise<DurableRun | null> {
-  const rows = await sql`
-    SELECT run_id, status, definition_version, harness_manifests
-    FROM workflow_runs
-    WHERE ticket_key = ${ticketKey}
-      AND definition_id = ${definitionId}
-    ORDER BY first_seen_at DESC
-    LIMIT 1
-  `;
-  const row = rows[0];
-  return row
-    ? {
-        runId: String(row.run_id),
-        status: typeof row.status === "string" ? row.status : null,
-        definitionVersion:
-          typeof row.definition_version === "number"
-            ? row.definition_version
-            : null,
-        harnessManifests:
-          (row.harness_manifests as HarnessRunManifestRecord[] | null) ?? null,
-      }
-    : null;
-}
-
-async function waitForHarnessManifest(
-  sql: SqlClient,
-  runId: string,
-  deadline: number,
-): Promise<DurableRun> {
-  while (Date.now() < deadline) {
-    const rows = await sql`
-      SELECT run_id, status, definition_version, harness_manifests
-      FROM workflow_runs
-      WHERE run_id = ${runId}
-      LIMIT 1
-    `;
-    const row = rows[0];
-    if (row?.harness_manifests) {
-      return {
-        runId,
-        status: typeof row.status === "string" ? row.status : null,
-        definitionVersion:
-          typeof row.definition_version === "number"
-            ? row.definition_version
-            : null,
-        harnessManifests:
-          row.harness_manifests as HarnessRunManifestRecord[],
-      };
-    }
-    await delay(2_000);
-  }
-  throw new Error(`Run ${runId} did not persist its Harness Profile manifest`);
-}
-
-async function waitForRegistryRelease(
-  sql: SqlClient,
-  ticketKey: string,
-  timeoutMs: number,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const rows = await sql`
-      SELECT 1 FROM active_runs WHERE ticket_key = ${ticketKey} LIMIT 1
-    `;
-    if (rows.length === 0) return;
-    await delay(2_000);
-  }
-  throw new Error(`Run registry did not release ${ticketKey}`);
-}
-
-let cloudId: string | null = null;
-
-async function jiraRequest<T>(
-  env: HarnessCanaryEnv,
-  path: string,
-  init: RequestInit = {},
-): Promise<T> {
-  if (!cloudId) {
-    const tenant = new URL(env.JIRA_BASE_URL).origin;
-    const response = await fetch(`${tenant}/_edge/tenant_info`);
-    if (!response.ok) throw new Error("Jira cloud ID discovery failed");
-    cloudId = String(((await response.json()) as { cloudId?: string }).cloudId);
-  }
-  const response = await fetch(
-    `https://api.atlassian.com/ex/jira/${cloudId}${path}`,
-    {
-      ...init,
-      headers: {
-        Authorization: `Bearer ${env.JIRA_API_TOKEN}`,
-        "Content-Type": "application/json",
-        ...init.headers,
-      },
-    },
-  );
-  if (!response.ok) {
-    throw new Error(`Jira ${init.method ?? "GET"} ${path} failed: ${response.status}`);
-  }
-  if (response.status === 204) return null as T;
-  return (await response.json()) as T;
-}
-
-async function createTicket(
-  env: HarnessCanaryEnv,
-  label: string,
-  description = "Return the deployed canary workflow's structured success response. Do not modify repositories or external systems.",
-): Promise<string> {
-  const result = await jiraRequest<{ key: string }>(
-    env,
-    "/rest/api/3/issue",
-    {
-      method: "POST",
-      body: JSON.stringify({
-        fields: {
-          project: { key: env.JIRA_PROJECT_KEY },
-          summary: `[E2E] Harness Profile preview canary: ${label}`,
-          description: {
-            type: "doc",
-            version: 1,
-            content: [
-              {
-                type: "paragraph",
-                content: [
-                  {
-                    type: "text",
-                    text: description,
-                  },
-                ],
-              },
-            ],
-          },
-          issuetype: { name: "Task" },
-        },
-      }),
-    },
-  );
-  return result.key;
-}
-
-async function transitionTicket(
-  env: HarnessCanaryEnv,
-  ticketKey: string,
-  column: string,
-): Promise<void> {
-  const result = await jiraRequest<{
-    transitions: Array<{ id: string; name: string }>;
-  }>(env, `/rest/api/3/issue/${ticketKey}/transitions`);
-  const transition = result.transitions.find(
-    (candidate) => candidate.name.toLowerCase() === column.toLowerCase(),
-  );
-  if (!transition) throw new Error(`No Jira transition to ${column}`);
-  await jiraRequest(
-    env,
-    `/rest/api/3/issue/${ticketKey}/transitions`,
-    {
-      method: "POST",
-      body: JSON.stringify({ transition: { id: transition.id } }),
-    },
-  );
-}
-
-async function deleteTicket(
-  env: HarnessCanaryEnv,
-  ticketKey: string,
-): Promise<void> {
-  await jiraRequest(env, `/rest/api/3/issue/${ticketKey}`, {
-    method: "DELETE",
+): Promise<CanaryMcpClient> {
+  const endpoint = new URL("/mcp", env.HARNESS_CANARY_BASE_URL);
+  const transport = new StreamableHTTPClientTransport(endpoint, {
+    fetch: createMcpAuthorizedFetch({
+      baseUrl: env.HARNESS_CANARY_BASE_URL,
+      bypassSecret: env.VERCEL_AUTOMATION_BYPASS_SECRET,
+      clientId: env.ENGINE_CANARY_MCP_CLIENT_ID,
+      clientSecret: env.ENGINE_CANARY_MCP_CLIENT_SECRET,
+    }) as FetchLike,
   });
-}
-
-async function callCron(env: HarnessCanaryEnv): Promise<void> {
-  const response = await fetch(
-    `${env.HARNESS_CANARY_BASE_URL.replace(/\/+$/, "")}/cron/poll`,
-    {
-      headers: {
-        Authorization: `Bearer ${env.CRON_SECRET}`,
-        "x-vercel-protection-bypass":
-          env.VERCEL_AUTOMATION_BYPASS_SECRET,
-      },
+  const client = new Client({
+    name: "ai-workflow-engine-canary",
+    version: "1.0.0",
+  });
+  await client.connect(transport);
+  return {
+    call: async <T>(name: string, args: Record<string, unknown> = {}) => {
+      const result = await client.callTool({ name, arguments: args });
+      const envelope = result.structuredContent as { data?: T } | undefined;
+      if (result.isError || envelope?.data === undefined) {
+        throw new Error(`MCP tool ${name} failed`);
+      }
+      return envelope.data;
     },
-  );
-  if (!response.ok) {
-    throw new Error(`Preview cron failed: ${response.status}`);
-  }
+    close: () => client.close(),
+  };
 }
 
 function delay(ms: number): Promise<void> {

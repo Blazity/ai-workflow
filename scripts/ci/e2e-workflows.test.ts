@@ -164,6 +164,19 @@ test("only the guarded engine canary carries secrets or an environment in CI", a
         job.if,
         "github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository",
       );
+      const secretNames = Array.from(
+        JSON.stringify(job).matchAll(/secrets\.([A-Z0-9_]+)/gu),
+        (match) => match[1],
+      );
+      assert.deepEqual(Array.from(new Set(secretNames)).sort(), [
+        "DATABASE_URL",
+        "ENGINE_CANARY_MCP_CLIENT_ID",
+        "ENGINE_CANARY_MCP_CLIENT_SECRET",
+        "VERCEL_AUTOMATION_BYPASS_SECRET",
+        "VERCEL_ORG_ID",
+        "VERCEL_PROJECT_ID",
+        "VERCEL_TOKEN",
+      ]);
       continue;
     }
     assert.equal(job.environment, undefined, `${jobName} must not name an environment`);
@@ -173,6 +186,19 @@ test("only the guarded engine canary carries secrets or an environment in CI", a
       `${jobName} must not reference any secret`,
     );
   }
+});
+
+test("engine canary cancels a superseded PR run and starts only three agents", async () => {
+  const [, workflow] = (await loadWorkflows())[0]!;
+  const canary = workflow.jobs?.["engine-canary"];
+  assert.ok(canary);
+  assert.deepEqual(canary.concurrency, {
+    group: "engine-canary-pr-${{ github.event.pull_request.number }}",
+    "cancel-in-progress": true,
+  });
+  const run = canary.steps?.find((step) => step.name === "Run engine canaries")?.run ?? "";
+  assert.match(run, /test:e2e:replay/u);
+  assert.doesNotMatch(run, /test:e2e:harness-profiles/u);
 });
 
 test("the nightly schedule reaches the two tiers that cost nothing to repeat", async () => {

@@ -207,8 +207,8 @@ test("the engine canary is a fail-closed pull request dependency", async () => {
   assert.equal(canary.environment, "e2e");
   assert.equal(canary["timeout-minutes"], 75);
   assert.deepEqual(canary.concurrency, {
-    group: "engine-canary",
-    "cancel-in-progress": false,
+    group: "engine-canary-pr-${{ github.event.pull_request.number }}",
+    "cancel-in-progress": true,
   });
 
   const steps = canary.steps ?? [];

@@ -14,7 +14,10 @@ import {
   findDeploymentOrganizationId,
   findOrganizationMemberRole,
 } from "./mcp-oauth-store.js";
-import type { McpOAuthDeployment } from "./mcp-oauth-policy.js";
+import {
+  MCP_CLIENT_REGISTRATION_ALLOWED_SCOPES,
+  type McpOAuthDeployment,
+} from "./mcp-oauth-policy.js";
 
 export {
   validateMcpOAuthHookRequest,
@@ -70,8 +73,7 @@ export function createMcpOAuthOptions(deployment: McpOAuthDeployment) {
   // issued scopes against MCP_SCOPES, so offline_access never becomes a permission.
   // It stays out of both defaults below, so it is opt-in and never written into an
   // unattended client's grant.
-  const OFFLINE_ACCESS = "offline_access";
-  const advertisedScopes = [...scopes, OFFLINE_ACCESS];
+  const advertisedScopes = [...MCP_CLIENT_REGISTRATION_ALLOWED_SCOPES];
   const resolveOrganizationId = async (): Promise<string> => {
     if (deployment.organizationId) return deployment.organizationId;
     if (!deployment.organizationSlug) {

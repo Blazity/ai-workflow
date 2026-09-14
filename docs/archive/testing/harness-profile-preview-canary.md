@@ -1,3 +1,9 @@
+> 2026-09-14 retirement note: `HARNESS_CANARY_SESSION_TOKEN`, workflow toggles,
+> temporary Jira tickets, and direct Jira writes are retired. The current gate
+> uses an OAuth `client_credentials` token with `mcp:read runs:dispatch`, direct
+> MCP dispatch of disabled fixtures, and one permanent Jira fixture. This file
+> remains the historical contract from before that change.
+
 # Harness Profile preview canary
 
 This canary is the rollout gate for Harness Profile authoring. Keep

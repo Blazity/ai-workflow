@@ -8,9 +8,6 @@ import { z } from "zod";
 
 const schema = z
   .object({
-    REPLAY_CANARY_DASHBOARD_BASE_URL: z.string().url(),
-    REPLAY_CANARY_DASHBOARD_EXPECTED_HOST: z.string().trim().min(1),
-    REPLAY_CANARY_DASHBOARD_AUTOMATION_BYPASS_SECRET: z.string().min(1),
     REPLAY_CANARY_LOG_EXPORT_PATH: z
       .string()
       .trim()
@@ -34,23 +31,6 @@ const schema = z
       .min(1_048_576)
       .max(134_217_728)
       .default(33_554_432),
-  })
-  .superRefine((value, context) => {
-    const base = new URL(value.REPLAY_CANARY_DASHBOARD_BASE_URL);
-    if (base.protocol !== "https:") {
-      context.addIssue({
-        code: "custom",
-        path: ["REPLAY_CANARY_DASHBOARD_BASE_URL"],
-        message: "The replay canary must target an HTTPS dashboard preview",
-      });
-    }
-    if (base.host !== value.REPLAY_CANARY_DASHBOARD_EXPECTED_HOST) {
-      context.addIssue({
-        code: "custom",
-        path: ["REPLAY_CANARY_DASHBOARD_EXPECTED_HOST"],
-        message: "The dashboard preview host does not match the expected host",
-      });
-    }
   });
 
 export type ReplayCanaryEnv = z.infer<typeof schema>;
@@ -67,6 +47,7 @@ export interface ReplayCanaryFixture {
 }
 
 const NONCE_PATTERN = /^[a-f0-9]{24}$/;
+export const REPLAY_CANARY_FIXTURE_NONCE = "0123456789abcdef01234567";
 
 export function createReplayCanaryFixture(nonce: string): ReplayCanaryFixture {
   if (!NONCE_PATTERN.test(nonce)) {
@@ -119,7 +100,6 @@ export interface ReplayCanaryEvidence {
   databaseRows: ReplayCanaryDatabaseRows;
   apiSummary: WorkflowRunReplayResponse;
   apiDetails: WorkflowReplayAttemptDetail[];
-  dashboardHtml: string;
   appendedLogExport: string;
 }
 
@@ -215,12 +195,6 @@ export function assertReplayCanaryEvidence(
     }
   }
 
-  if (
-    !evidence.dashboardHtml.includes('data-replay-canvas="true"') ||
-    !evidence.dashboardHtml.includes("Visual replay")
-  ) {
-    throw new Error("Dashboard did not server-render the visual replay trace");
-  }
   if (!evidence.appendedLogExport.includes(evidence.runId)) {
     throw new Error("Log export does not prove coverage of the canary run");
   }
@@ -238,11 +212,6 @@ export function assertReplayCanaryEvidence(
   assertSurfaceDoesNotContainFixture(
     "Replay API details",
     evidence.apiDetails,
-    fixture,
-  );
-  assertSurfaceDoesNotContainFixture(
-    "Server-rendered dashboard trace",
-    evidence.dashboardHtml,
     fixture,
   );
   assertSurfaceDoesNotContainFixture(
