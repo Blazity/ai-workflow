@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
-  HarnessProfileDetailResponse,
+  HarnessProfileManifest,
   HarnessRunManifestRecord,
-  WorkflowDefinitionDetailResponse,
   WorkflowDefinitionV2,
 } from "@shared/contracts";
 import {
@@ -15,12 +14,13 @@ import {
 const completeEnv = {
   HARNESS_CANARY_BASE_URL: "https://preview.example.test",
   HARNESS_CANARY_EXPECTED_HOST: "preview.example.test",
-  HARNESS_CANARY_SESSION_TOKEN: "session-token-with-enough-length",
+  ENGINE_CANARY_MCP_CLIENT_ID: "engine-canary-client",
+  ENGINE_CANARY_MCP_CLIENT_SECRET: "machine-secret-with-enough-length",
   HARNESS_CANARY_CONFIRM_PREVIEW_MUTATIONS: "run-preview-harness-canary",
-  HARNESS_CANARY_RESTORE_WORKFLOW_ID: "1",
   HARNESS_CANARY_CLAUDE_WORKFLOW_ID: "2",
   HARNESS_CANARY_CODEX_WORKFLOW_ID: "3",
   HARNESS_CANARY_CUSTOM_WORKFLOW_ID: "4",
+  HARNESS_CANARY_TICKET_KEY: "AIW-999",
   HARNESS_CANARY_CUSTOM_PROFILE_ID: "custom-profile",
   HARNESS_CANARY_CUSTOM_PROFILE_VERSION: "7",
   HARNESS_CANARY_CUSTOM_SKILL_ARTIFACT_HASH: "a".repeat(64),
@@ -29,12 +29,6 @@ const completeEnv = {
   HARNESS_CANARY_CUSTOM_SKILL_SOURCE_REPOSITORY: "skills",
   HARNESS_CANARY_CUSTOM_SKILL_SOURCE_PATH: "canary",
   HARNESS_CANARY_CUSTOM_SKILL_SOURCE_COMMIT_SHA: "b".repeat(40),
-  JIRA_BASE_URL: "https://jira.example.test",
-  JIRA_API_TOKEN: "jira-token",
-  JIRA_PROJECT_KEY: "AIW",
-  COLUMN_AI: "AI",
-  COLUMN_BACKLOG: "Backlog",
-  CRON_SECRET: "cron-token",
   DATABASE_URL: "postgresql://test:test@example.test/test",
   VERCEL_ENV: "preview",
   VERCEL_AUTOMATION_BYPASS_SECRET: "preview-bypass",
@@ -43,7 +37,12 @@ const completeEnv = {
 
 function workflowDetail(
   reference = { profileId: "builtin-codex", version: 1 },
-): WorkflowDefinitionDetailResponse {
+): {
+  id: number;
+  enabled: boolean;
+  deployedVersion: number;
+  definition: WorkflowDefinitionV2;
+} {
   const definition: WorkflowDefinitionV2 = {
     schemaVersion: 2,
     nodes: [
@@ -73,38 +72,19 @@ function workflowDetail(
     edges: [{ id: "edge", from: "trigger", to: "agent" }],
   };
   return {
-    meta: {
-      id: 2,
-      name: "Canary",
+    id: 2,
     enabled: false,
-    deployedSchema: "v2",
-      triggerTypes: ["trigger_ticket_ai"],
-      currentVersion: 1,
-      draftRevision: 1,
-      layoutRevision: 0,
-      deployedVersion: 1,
-      createdAt: new Date(0).toISOString(),
-      updatedAt: new Date(0).toISOString(),
-    },
-    draft: definition,
-    layout: { nodes: {}, edges: {} },
-    deployed: {
-      definitionId: 2,
-      version: 1,
-      schema: "v2",
-      definition,
-      createdAt: new Date(0).toISOString(),
-      createdById: "user",
-      createdByLabel: "User",
-      restoredFromVersion: null,
-    },
-    current: null,
-    versions: [],
+    deployedVersion: 1,
+    definition,
   };
 }
 
 describe("Harness Profile preview canary dry checks", () => {
   it("fails closed on missing confirmation, wrong host, or enabled authoring", () => {
+    expect(parseHarnessCanaryEnv(completeEnv)).toMatchObject({
+      ENGINE_CANARY_MCP_CLIENT_ID: "engine-canary-client",
+      HARNESS_CANARY_TICKET_KEY: "AIW-999",
+    });
     expect(() =>
       parseHarnessCanaryEnv({
         ...completeEnv,
@@ -123,19 +103,38 @@ describe("Harness Profile preview canary dry checks", () => {
         NEXT_PUBLIC_HARNESS_PROFILE_AUTHORING_ENABLED: "1",
       }),
     ).toThrow();
+    expect(() =>
+      parseHarnessCanaryEnv({
+        ...completeEnv,
+        ENGINE_CANARY_MCP_CLIENT_ID: undefined,
+      }),
+    ).toThrow();
+    expect(() =>
+      parseHarnessCanaryEnv({
+        ...completeEnv,
+        HARNESS_CANARY_TICKET_KEY: "not-a-ticket",
+      }),
+    ).toThrow();
   });
 
-  it("accepts only a deployed trigger-to-agent workspace-free workflow", () => {
+  it("accepts only a disabled deployed trigger-to-agent workspace-free workflow", () => {
     const detail = workflowDetail();
     expect(
       assertMinimalCanaryWorkflow(detail, {
         profileId: "builtin-codex",
         version: 1,
       }),
-    ).toBe(detail.deployed?.definition);
+    ).toBe(detail.definition);
+    const enabled = workflowDetail();
+    enabled.enabled = true;
+    expect(() =>
+      assertMinimalCanaryWorkflow(enabled, {
+        profileId: "builtin-codex",
+        version: 1,
+      }),
+    ).toThrow(/disabled/);
     const unsafe = workflowDetail();
-    const unsafeDefinition = unsafe.deployed!
-      .definition as WorkflowDefinitionV2;
+    const unsafeDefinition = unsafe.definition;
     (
       unsafeDefinition.nodes[1]!.configuration as Record<
         string,
@@ -152,19 +151,15 @@ describe("Harness Profile preview canary dry checks", () => {
 
   it("requires the exact custom profile, skill pin, and run provenance", () => {
     const profile = {
-      profile: {
-        id: "custom-profile",
-        system: false,
-        archivedAt: null,
-        publishedVersion: 7,
-      },
-      published: {
-        version: 7,
-        manifest: {
-          skills: [{ artifactHash: "a".repeat(64), name: "canary-skill" }],
-        },
-      },
-    } as HarnessProfileDetailResponse;
+      id: "custom-profile",
+      organizationId: "org-canary",
+      system: false,
+      archivedAt: null,
+      publishedVersion: 7,
+      manifest: {
+        skills: [{ artifactHash: "a".repeat(64), name: "canary-skill" }],
+      } as HarnessProfileManifest,
+    };
     expect(() =>
       assertCustomProfilePin(profile, {
         profileId: "custom-profile",

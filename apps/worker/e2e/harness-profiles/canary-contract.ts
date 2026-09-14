@@ -1,8 +1,7 @@
 import type {
-  HarnessProfileDetailResponse,
+  HarnessProfileManifest,
   HarnessProfileReference,
   HarnessRunManifestRecord,
-  WorkflowDefinitionDetailResponse,
   WorkflowDefinitionV2,
 } from "@shared/contracts";
 import {
@@ -19,14 +18,15 @@ const schema = z
   .object({
     HARNESS_CANARY_BASE_URL: z.string().url(),
     HARNESS_CANARY_EXPECTED_HOST: z.string().trim().min(1),
-    HARNESS_CANARY_SESSION_TOKEN: z.string().min(20),
+    ENGINE_CANARY_MCP_CLIENT_ID: z.string().trim().min(1),
+    ENGINE_CANARY_MCP_CLIENT_SECRET: z.string().min(20),
     HARNESS_CANARY_CONFIRM_PREVIEW_MUTATIONS: z.literal(
       "run-preview-harness-canary",
     ),
-    HARNESS_CANARY_RESTORE_WORKFLOW_ID: positiveInteger,
     HARNESS_CANARY_CLAUDE_WORKFLOW_ID: positiveInteger,
     HARNESS_CANARY_CODEX_WORKFLOW_ID: positiveInteger,
     HARNESS_CANARY_CUSTOM_WORKFLOW_ID: positiveInteger,
+    HARNESS_CANARY_TICKET_KEY: z.string().regex(/^[A-Z][A-Z0-9_]*-\d+$/),
     HARNESS_CANARY_CUSTOM_PROFILE_ID: z.string().trim().min(1),
     HARNESS_CANARY_CUSTOM_PROFILE_VERSION: positiveInteger,
     HARNESS_CANARY_CUSTOM_SKILL_ARTIFACT_HASH: sha256,
@@ -35,12 +35,6 @@ const schema = z
     HARNESS_CANARY_CUSTOM_SKILL_SOURCE_REPOSITORY: z.string().trim().min(1),
     HARNESS_CANARY_CUSTOM_SKILL_SOURCE_PATH: z.string().trim().min(1),
     HARNESS_CANARY_CUSTOM_SKILL_SOURCE_COMMIT_SHA: gitSha,
-    JIRA_BASE_URL: z.string().url(),
-    JIRA_API_TOKEN: z.string().min(1),
-    JIRA_PROJECT_KEY: z.string().trim().min(1),
-    COLUMN_AI: z.string().trim().min(1),
-    COLUMN_BACKLOG: z.string().trim().min(1),
-    CRON_SECRET: z.string().min(1),
     DATABASE_URL: z.string().url(),
     VERCEL_ENV: z.literal("preview"),
     VERCEL_AUTOMATION_BYPASS_SECRET: z.string().min(1),
@@ -72,7 +66,6 @@ const schema = z
       });
     }
     const workflowIds = [
-      value.HARNESS_CANARY_RESTORE_WORKFLOW_ID,
       value.HARNESS_CANARY_CLAUDE_WORKFLOW_ID,
       value.HARNESS_CANARY_CODEX_WORKFLOW_ID,
       value.HARNESS_CANARY_CUSTOM_WORKFLOW_ID,
@@ -81,7 +74,7 @@ const schema = z
       context.addIssue({
         code: "custom",
         path: ["HARNESS_CANARY_CLAUDE_WORKFLOW_ID"],
-        message: "Restore and canary workflow IDs must all be distinct",
+        message: "Canary workflow IDs must all be distinct",
       });
     }
   });
@@ -95,21 +88,29 @@ export function parseHarnessCanaryEnv(
 }
 
 export function assertMinimalCanaryWorkflow(
-  detail: WorkflowDefinitionDetailResponse,
+  detail: {
+    id: number;
+    enabled: boolean;
+    deployedVersion: number | null;
+    definition: WorkflowDefinitionV2 | null;
+  },
   expected: HarnessProfileReference,
 ): WorkflowDefinitionV2 {
-  if (!detail.deployed || detail.meta.deployedVersion !== detail.deployed.version) {
-    throw new Error(`Workflow ${detail.meta.id} must have one selected deployment`);
+  if (detail.enabled) {
+    throw new Error(`Workflow ${detail.id} must stay disabled`);
   }
-  if (detail.deployed.schema !== "v2") {
+  if (!detail.definition || detail.deployedVersion === null) {
+    throw new Error(`Workflow ${detail.id} must have one selected deployment`);
+  }
+  if (detail.definition.schemaVersion !== WORKFLOW_SCHEMA_VERSION) {
     throw new Error(
-      `Workflow ${detail.meta.id} must deploy schema version ${WORKFLOW_SCHEMA_VERSION}`,
+      `Workflow ${detail.id} must deploy schema version ${WORKFLOW_SCHEMA_VERSION}`,
     );
   }
-  const definition = detail.deployed.definition;
+  const definition = detail.definition;
   if (definition.nodes.length !== 2 || definition.edges.length !== 1) {
     throw new Error(
-      `Workflow ${detail.meta.id} must contain only a trigger and one Generic Agent`,
+      `Workflow ${detail.id} must contain only a trigger and one Generic Agent`,
     );
   }
   const trigger = definition.nodes.find(
@@ -118,17 +119,17 @@ export function assertMinimalCanaryWorkflow(
   const agent = definition.nodes.find((node) => node.type === "generic_agent");
   if (!trigger || !agent) {
     throw new Error(
-      `Workflow ${detail.meta.id} must contain trigger_ticket_ai -> generic_agent`,
+      `Workflow ${detail.id} must contain trigger_ticket_ai -> generic_agent`,
     );
   }
   if (
     definition.edges[0]?.from !== trigger.id ||
     definition.edges[0]?.to !== agent.id
   ) {
-    throw new Error(`Workflow ${detail.meta.id} has an unsafe canary graph`);
+    throw new Error(`Workflow ${detail.id} has an unsafe canary graph`);
   }
   if (agent.configuration.workspaceMode !== "none") {
-    throw new Error(`Workflow ${detail.meta.id} must use workspaceMode "none"`);
+    throw new Error(`Workflow ${detail.id} must use workspaceMode "none"`);
   }
   const reference = agent.configuration.harnessProfile;
   if (
@@ -139,14 +140,21 @@ export function assertMinimalCanaryWorkflow(
     reference.version !== expected.version
   ) {
     throw new Error(
-      `Workflow ${detail.meta.id} does not pin ${expected.profileId}@${expected.version}`,
+      `Workflow ${detail.id} does not pin ${expected.profileId}@${expected.version}`,
     );
   }
   return definition;
 }
 
 export function assertCustomProfilePin(
-  detail: HarnessProfileDetailResponse,
+  detail: {
+    id: string;
+    organizationId: string | null;
+    system: boolean;
+    archivedAt: string | null;
+    publishedVersion: number | null;
+    manifest: HarnessProfileManifest | null;
+  },
   expected: {
     profileId: string;
     version: number;
@@ -155,16 +163,17 @@ export function assertCustomProfilePin(
   },
 ): void {
   if (
-    detail.profile.id !== expected.profileId ||
-    detail.profile.system ||
-    detail.profile.archivedAt !== null ||
-    detail.profile.publishedVersion !== expected.version
+    detail.id !== expected.profileId ||
+    !detail.organizationId ||
+    detail.system ||
+    detail.archivedAt !== null ||
+    detail.publishedVersion !== expected.version
   ) {
     throw new Error("Custom canary profile is not the exact active published profile");
   }
   if (
-    detail.published?.version !== expected.version ||
-    !detail.published.manifest.skills.some(
+    !detail.manifest ||
+    !detail.manifest.skills.some(
       (skill) =>
         skill.artifactHash === expected.artifactHash &&
         skill.name === expected.skillName,
