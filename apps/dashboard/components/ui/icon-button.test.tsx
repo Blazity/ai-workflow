@@ -28,3 +28,16 @@ test("IconButton exposes the circular shape for round icon actions", () => {
   assert.match(html, /data-shape="circle"/);
   assert.match(html, /rounded-full/);
 });
+
+test("IconButton text variant does not add icon sizing or shape chrome", () => {
+  const html = renderToStaticMarkup(
+    <IconButton aria-label="Remove" variant="text" shape="circle" className="text-[11px] text-neutral-500">
+      ×
+    </IconButton>,
+  );
+  assert.match(html, /data-variant="text"/);
+  assert.match(html, /text-\[11px\] text-neutral-500/);
+  assert.doesNotMatch(html, /size-\[(?:26|30)px\]/);
+  assert.doesNotMatch(html, /rounded-full/);
+  assert.doesNotMatch(html, /active:scale-\[0\.98\]/);
+});

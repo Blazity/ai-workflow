@@ -13,10 +13,11 @@ import { IconButton } from "./icon-button";
 
 type ModalVariant = "center" | "drawer" | "sheet" | "command";
 
-export interface ModalProps {
+type ModalTitle = Exclude<ReactNode, boolean | null | undefined>;
+
+interface ModalBaseProps {
   open?: boolean;
   onClose: () => void;
-  title: ReactNode;
   description?: ReactNode;
   children: ReactNode;
   footer?: ReactNode;
@@ -29,6 +30,23 @@ export interface ModalProps {
   className?: string;
   frameClassName?: string;
 }
+
+export type ModalProps =
+  | (ModalBaseProps & {
+    chrome?: "default";
+    title: ModalTitle;
+    "aria-label"?: string;
+  })
+  | (ModalBaseProps & {
+    chrome: "none";
+    title: ModalTitle;
+    "aria-label"?: string;
+  })
+  | (ModalBaseProps & {
+    chrome: "none";
+    title?: never;
+    "aria-label": string;
+  });
 
 const focusableSelector = [
   "a[href]",
@@ -126,9 +144,11 @@ export function Modal({
   open = true,
   onClose,
   title,
+  "aria-label": ariaLabel,
   description,
   children,
   footer,
+  chrome = "default",
   size = "md",
   variant = "center",
   dismissible = true,
@@ -250,6 +270,7 @@ export function Modal({
 
   if (!mounted) return null;
 
+  const hasTitle = title !== undefined;
   const placementClassName = {
     center: "items-center justify-center p-4",
     drawer: "items-stretch justify-end",
@@ -296,7 +317,8 @@ export function Modal({
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-labelledby={titleId}
+        aria-labelledby={hasTitle ? titleId : undefined}
+        aria-label={hasTitle ? undefined : ariaLabel}
         aria-describedby={description ? descriptionId : undefined}
         tabIndex={-1}
         data-state={state}
@@ -312,23 +334,34 @@ export function Modal({
           .filter(Boolean)
           .join(" ")}
         data-variant={variant}
+        data-chrome={chrome}
       >
-        {variant === "sheet" ? (
+        {chrome === "default" && variant === "sheet" ? (
           <span className="absolute left-1/2 top-2 h-1 w-9 -translate-x-1/2 rounded-full bg-neutral-300" aria-hidden="true" />
         ) : null}
-        <header className={headerClassName}>
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <h2 id={titleId} className="m-0 font-display text-base font-semibold text-coal">{title}</h2>
-              {description ? <p id={descriptionId} className="mt-1 mb-0 font-body text-xs leading-relaxed text-neutral-700">{description}</p> : null}
-            </div>
-            {showCloseButton && dismissible ? (
-              <IconButton aria-label={closeLabel} onClick={onClose} size="sm">×</IconButton>
-            ) : null}
-          </div>
-        </header>
-        <div className={bodyClassName}>{children}</div>
-        {footer ? <footer className={footerClassName}>{footer}</footer> : null}
+        {chrome === "none" ? (
+          <>
+            {hasTitle ? <h2 id={titleId} className="sr-only">{title}</h2> : null}
+            {description ? <p id={descriptionId} className="sr-only">{description}</p> : null}
+            {children}
+          </>
+        ) : (
+          <>
+            <header className={headerClassName}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h2 id={titleId} className="m-0 font-display text-base font-semibold text-coal">{title}</h2>
+                  {description ? <p id={descriptionId} className="mt-1 mb-0 font-body text-xs leading-relaxed text-neutral-700">{description}</p> : null}
+                </div>
+                {showCloseButton && dismissible ? (
+                  <IconButton aria-label={closeLabel} onClick={onClose} size="sm">×</IconButton>
+                ) : null}
+              </div>
+            </header>
+            <div className={bodyClassName}>{children}</div>
+            {footer ? <footer className={footerClassName}>{footer}</footer> : null}
+          </>
+        )}
       </section>
     </div>
   );

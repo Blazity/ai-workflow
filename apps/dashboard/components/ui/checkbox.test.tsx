@@ -28,7 +28,10 @@ test("Checkbox renders its label and applies indeterminate state", () => {
     assert.ok(input);
     assert.equal(input.indeterminate, true);
     assert.equal(input.getAttribute("aria-checked"), "mixed");
-    assert.equal(container.querySelector("label")?.title, "Selection help");
+    const wrapper = container.querySelector("label");
+    assert.equal(wrapper?.title, "Selection help");
+    assert.match(wrapper?.className ?? "", /(?:^|\s)flex(?:\s|$)/);
+    assert.doesNotMatch(wrapper?.className ?? "", /(?:^|\s)inline-flex(?:\s|$)/);
     assert.match(container.textContent ?? "", /Selected repositories/);
   } finally {
     act(() => root?.unmount());

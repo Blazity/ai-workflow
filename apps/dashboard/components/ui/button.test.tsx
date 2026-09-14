@@ -15,13 +15,50 @@ test("Button renders every variant and size contract", () => {
     "danger",
     "success",
     "danger-soft",
+    "text",
   ] as ButtonVariant[]) {
     const html = renderToStaticMarkup(<Button variant={variant} size="sm">Run</Button>);
     assert.match(html, new RegExp(`data-variant="${variant}"`));
     assert.match(html, /data-size="sm"/);
     assert.match(html, /focus-visible:ring-2/);
-    assert.match(html, /active:scale-\[0\.98\]/);
+    if (variant === "text") {
+      assert.doesNotMatch(html, /active:scale-\[0\.98\]/);
+    } else {
+      assert.match(html, /active:scale-\[0\.98\]/);
+    }
   }
+});
+
+test("Button text variant leaves geometry and typography to the caller", () => {
+  const classes = getButtonClassName({ variant: "text", size: "sm", iconOnly: true });
+  const tokens = classes.split(/\s+/);
+
+  assert.ok(tokens.includes("inline-flex"));
+  assert.ok(tokens.includes("items-center"));
+  assert.ok(tokens.includes("gap-1.5"));
+  assert.ok(tokens.includes("focus-visible:ring-2"));
+  assert.ok(tokens.includes("disabled:opacity-40"));
+  assert.equal(
+    tokens.some((token) =>
+      token === "border" ||
+      token.startsWith("bg-") ||
+      token.startsWith("p-") ||
+      token.startsWith("px-") ||
+      token.startsWith("h-") ||
+      token.startsWith("size-") ||
+      token.startsWith("font-") ||
+      token.startsWith("rounded") ||
+      token.startsWith("active:scale"),
+    ),
+    false,
+  );
+
+  const html = renderToStaticMarkup(
+    <Button variant="text" className="font-mono text-[10px] text-neutral-400 hover:text-mariner">
+      Edit
+    </Button>,
+  );
+  assert.match(html, /font-mono text-\[10px\] text-neutral-400 hover:text-mariner/);
 });
 
 test("Button semantic variants preserve success and soft danger treatments", () => {
