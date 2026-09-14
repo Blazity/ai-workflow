@@ -7,9 +7,11 @@ const CANARY_PREFIXES = [
   "apps/worker/src/db/",
   "packages/",
 ] as const;
+const MIGRATIONS_PREFIX = "apps/worker/drizzle/";
 
 export interface EngineCanaryScope {
   run: boolean;
+  migrations: boolean;
   matched: string[];
 }
 
@@ -17,7 +19,10 @@ export function engineCanaryScope(changedPaths: string[]): EngineCanaryScope {
   const matched = changedPaths.filter((path) =>
     CANARY_PREFIXES.some((prefix) => path.startsWith(prefix)),
   );
-  return { run: matched.length > 0, matched };
+  const migrations = changedPaths.some((path) =>
+    path.startsWith(MIGRATIONS_PREFIX),
+  );
+  return { run: matched.length > 0, migrations, matched };
 }
 
 function parseArgs(argv: string[]): Record<string, string> {
@@ -62,7 +67,14 @@ function main(): void {
     const result = engineCanaryScope(changedPaths(args.base, args.head));
     for (const path of result.matched) console.log(path);
     appendLine(process.env.GITHUB_OUTPUT, `run=${String(result.run)}`);
-    if (!process.env.GITHUB_OUTPUT) console.log(`run=${String(result.run)}`);
+    appendLine(
+      process.env.GITHUB_OUTPUT,
+      `migrations=${String(result.migrations)}`,
+    );
+    if (!process.env.GITHUB_OUTPUT) {
+      console.log(`run=${String(result.run)}`);
+      console.log(`migrations=${String(result.migrations)}`);
+    }
     if (!result.run) {
       appendLine(
         process.env.GITHUB_STEP_SUMMARY,

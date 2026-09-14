@@ -9,6 +9,7 @@ import {
 const FINGERPRINT_PATTERN = /^[0-9a-f]{12}$/;
 
 export interface EngineCanaryExpectations {
+  target: string;
   commit: string;
   databaseEnv: string;
   databaseFingerprint: string;
@@ -23,16 +24,10 @@ export function evaluatePreflight(
   health: HealthPayload,
   expectations: EngineCanaryExpectations,
 ): PreflightResult {
-  if (health.databaseEnv === "production") {
+  if (expectations.target === "production") {
     return {
       ok: false,
-      reason: "database environment 'production' is forbidden for engine-canary",
-    };
-  }
-  if (expectations.databaseEnv === "production") {
-    return {
-      ok: false,
-      reason: "declared database environment 'production' is forbidden for engine-canary",
+      reason: "declared Vercel target 'production' is forbidden for engine-canary",
     };
   }
   if (typeof health.databaseEnv !== "string") {
@@ -84,13 +79,15 @@ export function evaluatePreflight(
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const url = args.url;
+  const target = args.target;
   const commit = args.commit;
   const databaseEnv = args["database-env"];
   const databaseFingerprint = args["database-fingerprint"];
   const databaseUrl = args["database-url"];
-  if (!url || !commit || !databaseEnv || !databaseFingerprint) {
+  if (!url || !target || !commit || !databaseEnv || !databaseFingerprint) {
     console.error(
-      "FAIL usage: engine-canary-preflight --url <base-url> --commit <40-hex>" +
+      "FAIL usage: engine-canary-preflight --url <base-url> --target <name>" +
+        " --commit <40-hex>" +
         " --database-env <name> --database-fingerprint <12-hex>" +
         " [--database-url <connection-string>]",
     );
@@ -123,6 +120,7 @@ async function main(): Promise<void> {
   }
 
   const result = evaluatePreflight(health, {
+    target,
     commit,
     databaseEnv,
     databaseFingerprint,

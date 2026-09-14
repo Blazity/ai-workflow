@@ -15,18 +15,19 @@ const health: HealthPayload = {
   status: "ok",
   commit: SHA,
   env: "preview",
-  databaseEnv: "canary",
+  databaseEnv: "production",
   databaseFingerprint: FINGERPRINT,
 };
 
 const expectations: EngineCanaryExpectations = {
+  target: "ai-workflow-demo",
   commit: SHA,
-  databaseEnv: "canary",
+  databaseEnv: "production",
   databaseFingerprint: FINGERPRINT,
   runnerDatabaseFingerprint: FINGERPRINT,
 };
 
-test("accepts only an exact candidate and isolated database identity", () => {
+test("accepts an exact candidate on the declared production database", () => {
   assert.deepEqual(evaluatePreflight(health, expectations), { ok: true });
 });
 
@@ -39,13 +40,13 @@ test("requires the exact candidate commit", () => {
   if (!result.ok) assert.match(result.reason, /commit/u);
 });
 
-test("refuses a declared production environment when the observed one differs", () => {
-  const result = evaluatePreflight(
-    health,
-    { ...expectations, databaseEnv: "production" },
-  );
+test("refuses the production Vercel target", () => {
+  const result = evaluatePreflight(health, {
+    ...expectations,
+    target: "production",
+  });
   assert.equal(result.ok, false);
-  if (!result.ok) assert.match(result.reason, /database.*production/iu);
+  if (!result.ok) assert.match(result.reason, /target.*production/iu);
 });
 
 test("refuses an observed environment different from the declared one", () => {
@@ -84,16 +85,16 @@ test("refuses a deployment database fingerprint mismatch", () => {
   if (!result.ok) assert.match(result.reason, /database/u);
 });
 
-test("refuses the observed production-shaped health with a database reason", () => {
+test("accepts production only when its database identity matches the declaration", () => {
   const result = evaluatePreflight(
     {
-      commit: null,
+      status: "ok",
+      commit: SHA,
       env: "preview",
       databaseEnv: "production",
-      databaseFingerprint: "d1995828824d",
+      databaseFingerprint: FINGERPRINT,
     },
     expectations,
   );
-  assert.equal(result.ok, false);
-  if (!result.ok) assert.match(result.reason, /database.*production/iu);
+  assert.deepEqual(result, { ok: true });
 });

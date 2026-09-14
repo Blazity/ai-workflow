@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-13
+Last-verified: 2026-09-14
 
 # Delivery gates
 
@@ -21,7 +21,18 @@ exits non-zero when its check fails.
 | Model catalog drift | Model literals outside the catalog's declared exclusions | `scripts/gates/model-catalog-drift.mjs` | A model identifier is duplicated outside an approved owner or exclusion |
 | Dependency consistency | Shared dependency versions against the pnpm catalog | `scripts/gates/check-deps-consistency.mjs` | A shared dependency is not cataloged, is split across specifiers, or is missing from the catalog |
 | Documentation status | Headers, freshness, status targets, and reachability for current documents | `scripts/gates/docs-status.mjs` | A document header is invalid, a current document is stale or unreachable, or a superseded target is missing |
-| engine-canary | Pull request changes under `apps/worker/src/engine/**`, `apps/worker/src/db/**`, or `packages/**`; idle with a green warning when no target is declared; exact deployment commit and isolated non-production database identity when armed | `.github/workflows/ci.yml`, `scripts/ci/engine-canary-scope.ts`, `scripts/ci/engine-canary-preflight.ts` | An armed target is incomplete, deployment identity is unproven, the database is production or mismatched, or either live canary fails |
+| engine-canary | Pull request changes under `apps/worker/src/engine/**`, `apps/worker/src/db/**`, or `packages/**`; idle with a green warning when no target is declared; skips deployment when `apps/worker/drizzle/**` changes; exact deployment commit and declared production database identity on the `ai-workflow-demo` custom environment | `.github/workflows/ci.yml`, `scripts/ci/engine-canary-scope.ts`, `scripts/ci/engine-canary-preflight.ts` | An armed target is incomplete, the target name is `production`, deployment identity is unproven, the database environment or fingerprint is mismatched, or either live canary fails |
+
+The gate is armed with `ENGINE_CANARY_TARGET=ai-workflow-demo`,
+`ENGINE_CANARY_DB_ENV=production`, and the
+`ENGINE_CANARY_DB_FINGERPRINT` reported by the target's `/health` response.
+The Vercel token, production `DATABASE_URL`, Jira token, canary session token,
+and the other canary credentials live in GitHub's `e2e` environment. The demo
+Vercel environment retains the production GitHub App credentials used by
+triggered workflows. By the owner's decision of 2026-09-14, the canaries write
+to the production database, create run records under the trigger owner, and
+create, move, and delete Jira tickets. A pull request migration is skipped so
+the shared production database is changed only after merge.
 
 ## Lint policy
 

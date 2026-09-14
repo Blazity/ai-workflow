@@ -216,15 +216,61 @@ test("the engine canary is a fail-closed pull request dependency", async () => {
   assert.equal(checkout?.with?.["fetch-depth"], 0);
   const scope = steps.find((step) => step.name === "Select engine canary scope");
   assert.match(scope?.run ?? "", /engine-canary-scope\.ts/u);
+  const migrationSkip = steps.find(
+    (step) => step.name === "Skip pull request migrations",
+  );
+  assert.equal(
+    migrationSkip?.if,
+    "steps.scope.outputs.migrations == 'true'",
+  );
+  assert.match(migrationSkip?.run ?? "", /engine-canary skipped/u);
+  assert.match(
+    migrationSkip?.run ?? "",
+    /the pull request carries a database migration; the canary target shares the production database, so it runs after merge only/u,
+  );
+  assert.match(migrationSkip?.run ?? "", /exit 0/u);
   const target = steps.find(
-    (step) => step.name === "Validate isolated target configuration",
+    (step) => step.name === "Validate engine canary target configuration",
+  );
+  assert.equal(
+    target?.if,
+    "steps.scope.outputs.run == 'true' && steps.scope.outputs.migrations != 'true'",
   );
   assert.match(target?.run ?? "", /engine-canary idle/u);
   assert.match(target?.run ?? "", /armed=false/u);
   assert.match(target?.run ?? "", /missing required names/u);
+  assert.match(
+    target?.run ?? "",
+    /if \[ "\$ENGINE_CANARY_TARGET" = "production" \]; then\n\s+echo "::error title=engine-canary configuration::the Vercel production target is forbidden"\n\s+exit 1\n\s*fi/u,
+  );
 
-  for (const step of steps.slice(5)) {
-    if (step === target) continue;
+  const scopeIndex = steps.findIndex((step) => step === scope);
+  const migrationSkipIndex = steps.findIndex((step) => step === migrationSkip);
+  const targetIndex = steps.findIndex((step) => step === target);
+  const deployIndex = steps.findIndex(
+    (step) => step.name === "Deploy engine canary target",
+  );
+
+  const preflight = steps.find(
+    (step) => step.name === "Verify deployment and database identity",
+  );
+  assert.match(preflight?.run ?? "", /--target "\$ENGINE_CANARY_TARGET"/u);
+  const preflightIndex = steps.findIndex((step) => step === preflight);
+  const canariesIndex = steps.findIndex(
+    (step) => step.name === "Run engine canaries",
+  );
+  assert.ok(
+    scopeIndex < migrationSkipIndex &&
+      migrationSkipIndex < targetIndex &&
+      targetIndex < deployIndex &&
+      deployIndex < preflightIndex &&
+      preflightIndex < canariesIndex,
+    "engine canary steps must preserve scope, migration skip, target validation, deploy, preflight, and canary order",
+  );
+
+  for (const step of steps) {
+    if (step === target || step === migrationSkip) continue;
+    if (!step.if) continue;
     assert.match(
       step.if ?? "",
       /steps\.target\.outputs\.armed == 'true'/u,

@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-13
+Last-verified: 2026-09-14
 
 # ai-workflow — Setup & Deployment Guide
 
@@ -509,7 +509,27 @@ The `engine-canary` job is considered for pull requests that change
 `ENGINE_CANARY_TARGET`, it exits green and emits a warning that the behavioural
 gate is wired but idle. Once a target is declared, missing configuration fails
 before deployment and a failed identity check stops the job before any canary
-write.
+write. A pull request that changes anything under `apps/worker/drizzle/**` also
+exits green with a warning, but it does not deploy or run the canaries. The
+canary runs after that migration has merged and the shared database has been
+migrated.
+
+Arm the gate for the demo custom environment with these repository variables:
+
+```text
+ENGINE_CANARY_TARGET=ai-workflow-demo
+ENGINE_CANARY_DB_ENV=production
+ENGINE_CANARY_DB_FINGERPRINT=d1995828824d
+```
+
+The current alias is
+`https://ai-workflow-app-env-ai-workflow-demo-blazity.vercel.app`. Read the
+fingerprint from that target's `/health` response and update the repository
+variable if the database changes. The declared database environment must equal
+the `/health` value. The fingerprint must equal both `/health` and the value
+derived from the runner's production `DATABASE_URL`. The exact candidate
+commit must also match. The `production` Vercel target name is forbidden
+because deploying a pull request to it would replace the live deployment.
 
 Repository variables that arm and configure the job are
 `ENGINE_CANARY_TARGET`, `ENGINE_CANARY_DB_ENV`,
@@ -533,12 +553,19 @@ Repository variables that arm and configure the job are
 Secrets read from the `e2e` environment are `VERCEL_TOKEN`, `VERCEL_ORG_ID`,
 `VERCEL_PROJECT_ID`, `HARNESS_CANARY_SESSION_TOKEN`, `JIRA_API_TOKEN`,
 `CRON_SECRET`, `DATABASE_URL`, `VERCEL_AUTOMATION_BYPASS_SECRET`, and
-`REPLAY_CANARY_DASHBOARD_AUTOMATION_BYPASS_SECRET`.
+`REPLAY_CANARY_DASHBOARD_AUTOMATION_BYPASS_SECRET`. `DATABASE_URL` must be the
+production connection string. Keep these as environment secrets in GitHub's
+`e2e` environment, including the Vercel token, Jira token, and canary session
+token. The demo Vercel environment must also retain the production worker's
+GitHub App credentials, including `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`,
+and `GITHUB_INSTALLATION_ID`, so workflows triggered by the canaries use the
+configured GitHub identity.
 
-The Vercel target must be a dedicated non-production environment with its own
-database. Its `/health` response must prove the exact candidate commit, the
-declared non-production `databaseEnv`, the declared 12-hex database
-fingerprint, and the same fingerprint derived from the runner's `DATABASE_URL`.
+By the owner's decision of 2026-09-14, this custom environment shares the
+production database. The canaries make real writes there. They temporarily
+change deployed workflow state, create run records under the trigger owner,
+and create, move, and delete Jira tickets. This is accepted only while the
+product is under development and is not used for real work.
 
 Release-note preparation uses a separate `artur-release-preparation`
 environment restricted to protected `main`. Put the release GitHub App
