@@ -35,7 +35,7 @@ function TagChip({ label, active, onClick }: { label: string; active: boolean; o
   return (
     <Button
       type="button"
-      variant={active ? "secondary" : "ghost"}
+      variant={active ? "selected" : "ghost"}
       size="sm"
       onClick={onClick}
       aria-pressed={active}

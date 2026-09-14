@@ -314,7 +314,7 @@ export function WorkflowDataPicker({
             <Button
               key={value}
               type="button"
-              variant={tab === value ? "secondary" : "ghost"}
+              variant={tab === value ? "selected" : "ghost"}
               size="sm"
               onClick={() => setTab(value)}
               aria-pressed={tab === value}
@@ -367,7 +367,7 @@ export function WorkflowDataPicker({
                         <Button
                           key={entry.reference}
                           type="button"
-                          variant={selectedReference === entry.reference ? "secondary" : "ghost"}
+                          variant={selectedReference === entry.reference ? "selected" : "ghost"}
                           size="sm"
                           data-picker-value
                           disabled={refreshing}

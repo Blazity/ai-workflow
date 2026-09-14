@@ -85,7 +85,7 @@ export function ScheduleWeekdayToggles({
           <Button
             key={day}
             type="button"
-            variant={active ? "secondary" : "ghost"}
+            variant={active ? "selected" : "ghost"}
             size="sm"
             disabled={disabled}
             aria-pressed={active}

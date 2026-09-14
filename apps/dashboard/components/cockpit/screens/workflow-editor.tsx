@@ -1260,6 +1260,7 @@ export function WorkflowEditorScreen({
             <>
               {canEdit && (
                 <Button
+                  variant="success"
                   onClick={() => void deploy()}
                   disabled={!canDeploy || busy !== null}
                 >
@@ -1388,7 +1389,7 @@ export function WorkflowEditorScreen({
                     </span>
                   ) : canEdit ? (
                     <Button
-                      variant={m.enabled ? "secondary" : "ghost"}
+                      variant={m.enabled ? "selected" : "ghost"}
                       size="sm"
                       onClick={() => void patchDefinition(m.id, { enabled: !m.enabled })}
                       disabled={busy !== null}

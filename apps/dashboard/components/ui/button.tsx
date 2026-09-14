@@ -2,7 +2,14 @@
 
 import type React from "react";
 
-export type ButtonVariant = "primary" | "selected" | "secondary" | "ghost" | "danger";
+export type ButtonVariant =
+  | "primary"
+  | "selected"
+  | "secondary"
+  | "ghost"
+  | "danger"
+  | "success"
+  | "danger-soft";
 export type ButtonSize = "sm" | "md";
 
 interface ButtonSharedProps {
@@ -36,12 +43,16 @@ const variantClasses: Record<ButtonVariant, string> = {
   ghost:
     "border-transparent bg-transparent text-neutral-700 hover:bg-app-bg hover:text-coal",
   danger: "border-fail bg-fail text-white hover:bg-fail-fg",
+  success: "border-emerald-600 bg-emerald-600 text-white hover:opacity-90",
+  "danger-soft": "rounded-full border-red-400 bg-red-50 text-red-700",
 };
 
 const sizeClasses: Record<ButtonSize, string> = {
   sm: "h-[26px] px-2 text-[10px]",
   md: "h-[30px] px-3 text-[11px]",
 };
+
+const callerPositionUtility = /(?:^|:)(?:absolute|fixed|sticky)$/;
 
 export function getButtonClassName({
   variant,
@@ -54,8 +65,13 @@ export function getButtonClassName({
   className?: string;
   iconOnly?: boolean;
 }) {
+  const hasCallerPosition = className
+    ?.split(/\s+/)
+    .some((token) => callerPositionUtility.test(token));
+
   return [
-    "relative inline-flex shrink-0 appearance-none items-center justify-center gap-1.5 rounded-[3px] border font-mono font-semibold leading-none no-underline",
+    hasCallerPosition ? undefined : "relative",
+    "inline-flex shrink-0 appearance-none items-center justify-center gap-1.5 rounded-[3px] border font-mono font-semibold leading-none no-underline",
     "transition-[color,background-color,border-color,opacity,transform] duration-[var(--motion-fast)] ease-standard",
     "active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner focus-visible:ring-offset-1",
     "disabled:cursor-default disabled:opacity-40 disabled:active:scale-100 aria-disabled:pointer-events-none aria-disabled:opacity-40",

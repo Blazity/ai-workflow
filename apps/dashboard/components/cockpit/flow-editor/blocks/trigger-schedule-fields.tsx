@@ -226,7 +226,7 @@ function ScheduleCronBuilder({
           <div className="flex items-center gap-1">
             <Button
               type="button"
-              variant={builderMode === "custom" ? "secondary" : "ghost"}
+              variant={builderMode === "custom" ? "selected" : "ghost"}
               size="sm"
               disabled={!canEdit}
               onClick={() => setBuilderMode("custom")}
@@ -235,7 +235,7 @@ function ScheduleCronBuilder({
             </Button>
             <Button
               type="button"
-              variant={builderMode === "preset" ? "secondary" : "ghost"}
+              variant={builderMode === "preset" ? "selected" : "ghost"}
               size="sm"
               disabled={!canEdit}
               onClick={() => setBuilderMode("preset")}

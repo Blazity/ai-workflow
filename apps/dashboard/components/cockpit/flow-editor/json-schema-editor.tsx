@@ -548,7 +548,7 @@ export function JsonSchemaEditor({
           <Button
             key={candidate}
             type="button"
-            variant={mode === candidate ? "secondary" : "ghost"}
+            variant={mode === candidate ? "selected" : "ghost"}
             size="sm"
             onClick={() => setMode(candidate)}
             aria-pressed={mode === candidate}

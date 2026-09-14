@@ -389,6 +389,8 @@ Canonical variants:
 | Secondary | Alternative or cancel | White panel, neutral 300 border |
 | Ghost | Low emphasis action in a dense row | Transparent background, no border |
 | Danger | Delete, revoke, cancel irreversible state | Red intent, never mariner |
+| Success | Positive operational action | Emerald fill for deployment |
+| Danger soft | Error-status action | Red tint, red border, and red text |
 | Icon | One glyph with accessible label | 26 px or 30 px square controls |
 
 Sizes:
