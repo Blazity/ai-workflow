@@ -8,8 +8,7 @@ import type {
   RepositoryCatalogState,
 } from "@shared/contracts";
 
-import { Button } from "@/components/ui";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Button, Checkbox } from "@/components/ui";
 import { apiClient } from "@/lib/api/client";
 import {
   activationBannerLine,
@@ -48,20 +47,6 @@ function checksLabel(repository: RepositoryCatalogEntry): string {
 const ENABLED_SWITCH_NOTE =
   "Disabling stops the next run. A run already in flight keeps the list it started with; cancel it to stop it.";
 
-/**
- * What an empty enabled set means, said once, under the list header.
- *
- * The standing note above says what disabling ONE repository does. It cannot
- * say this, which is a different fact about the whole catalog: with nothing
- * enabled every dispatch is refused, and a row that reads "not enabled" says
- * nothing about the other ninety. The worker answers `enabledRemaining` on the
- * switch for exactly this line.
- *
- * Shown only on an ACTIVATED catalog. On the bridge the enabled flags are
- * recorded and not yet enforced, so "every dispatch is refused" would be false,
- * and it would sit directly under the banner saying the agent sees everything
- * the installation sees.
- */
 export const NO_ENABLED_REPOSITORY_WARNING =
   "No repository is enabled. Every dispatch is refused until one is enabled again.";
 
@@ -86,10 +71,10 @@ function EnabledSwitch({
   }
 
   return (
-    <span className="flex flex-col items-end gap-1">
+    <span className="flex flex-col items-end gap-[2px]">
       <Checkbox
-        title={ENABLED_SWITCH_NOTE}
-        className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-600"
+        labelTitle={ENABLED_SWITCH_NOTE}
+        className="flex items-center gap-[6px] font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-600"
         checked={repository.enabled}
         disabled={busy}
         aria-label={`Let the agent touch ${repository.path}`}
@@ -116,7 +101,7 @@ function EnabledSwitch({
         label={repository.enabled ? "enabled" : "not enabled"}
       />
       {error && (
-        <span role="status" className="font-body text-[10px] text-fail-fg">
+        <span role="status" className="font-body text-[10px] text-red-600">
           {error}
         </span>
       )}
@@ -146,9 +131,6 @@ export function RepositoriesScreen({
   const [overrides, setOverrides] = useState<Record<number, RepositoryCatalogEntry>>({});
   const [activated, setActivated] = useState<RepositoryCatalogState | null>(null);
   const [dialog, setDialog] = useState<"none" | "activate" | "import">("none");
-  // What the worker said was left enabled after the last flip, which is the
-  // number the warning below reads. Null until a flip: before one, the rendered
-  // rows are the only thing that knows.
   const [enabledRemaining, setEnabledRemaining] = useState<number | null>(null);
 
   // A fresh server render supersedes every optimistic row: keeping one would
@@ -164,9 +146,6 @@ export function RepositoriesScreen({
     [repositories, overrides],
   );
   const catalogState = activated ?? state;
-  // The worker's count when there is one, the rendered rows otherwise. Both
-  // answer the same question and the first is the one that counted rows this
-  // screen may not be holding.
   const enabledCount =
     enabledRemaining ?? rows.filter((repository) => repository.enabled).length;
 
@@ -201,7 +180,7 @@ export function RepositoriesScreen({
       </div>
 
       {!available && (
-        <div className="rounded-[3px] border border-fail bg-fail-bg px-3 py-2 font-body text-xs text-fail-fg">
+        <div className="rounded-[3px] border border-[#F0B8AE] bg-fail-bg px-3 py-2 font-body text-[12px] text-fail-fg">
           {canManage
             ? "The worker did not answer, so nothing can be shown or changed here. Check the worker on the System health page and reload."
             : "The worker did not answer, so nothing can be shown here. Ask an owner or admin to check the worker, then reload."}
@@ -209,14 +188,13 @@ export function RepositoriesScreen({
       )}
 
       {available && catalogState !== null && !catalogState.activated && (
-        <div className="rounded-[3px] border border-orange-300 bg-orange-100 px-3 py-2 font-body text-xs text-neutral-800">
+        <div className="rounded-[3px] border border-orange-300 bg-orange-100 px-3 py-2 font-body text-[12px] text-[#A23E18]">
           <span>{NOT_ACTIVATED_BANNER}.</span>{" "}
           {canManage ? (
             <Button
-              variant="ghost"
-              size="sm"
+              variant="text"
               onClick={() => setDialog(dialog === "activate" ? "none" : "activate")}
-              className="underline"
+              className="appearance-none border-none bg-transparent px-0 font-body text-[12px] font-semibold text-[#A23E18] underline cursor-pointer"
             >
               Activate
             </Button>
@@ -267,6 +245,7 @@ export function RepositoriesScreen({
           </p>
           {canManage && (
             <Button
+              variant="primary"
               onClick={() => setDialog("import")}
               className="mt-3"
             >
@@ -301,21 +280,21 @@ export function RepositoriesScreen({
             return (
               <li
                 key={repository.id}
-                className="rounded-sm border border-neutral-200 bg-panel px-4 py-3"
+                className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3"
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
                     <a
                       href={`/repositories/${repository.id}`}
-                      className="font-display text-base font-medium text-coal no-underline transition-colors duration-[var(--motion-fast)] hover:underline"
+                      className="font-display text-[15px] font-medium text-coal no-underline hover:underline"
                     >
-                      {repository.path}
+                      {repository.displayName || repository.path}
                     </a>
-                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                    <div className="mt-[2px] flex flex-wrap items-center gap-2">
                       <span className="font-mono text-[11px] text-neutral-700">
                         {repository.provider}:{repository.path}
                       </span>
-                      <span className="rounded-[3px] bg-app-bg px-1.5 py-px font-mono text-[10px] uppercase tracking-[0.04em] text-neutral-600">
+                      <span className="rounded-[3px] bg-app-bg px-[5px] py-[1px] font-mono text-[10px] uppercase tracking-[0.05em] text-neutral-600">
                         {sourceLabel(repository.source)}
                       </span>
                     </div>

@@ -9,8 +9,7 @@ import type {
   RepositoryProviderStatus,
 } from "@shared/contracts";
 
-import { Button, Input, Modal } from "@/components/ui";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Button, Checkbox, Input, Modal } from "@/components/ui";
 import { apiClient } from "@/lib/api/client";
 import {
   ALREADY_IN_CATALOG_NOTE,
@@ -134,19 +133,27 @@ export function ImportDialog({
 
   return (
     <Modal
+      chrome="none"
+      title="Import repositories"
       onClose={onClose}
-      title="Import from the provider"
       size="md"
-      footer={
-        <div className="flex justify-end">
-          <Button variant="secondary" onClick={onClose}>
-            Close
-          </Button>
-        </div>
-      }
+      className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3"
     >
+      <div className="flex items-baseline justify-between gap-2">
+        <h3 className="m-0 font-display text-[15px] font-medium text-coal">
+          Import from the provider
+        </h3>
+        <Button
+          variant="text"
+          onClick={onClose}
+          className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer"
+        >
+          Close
+        </Button>
+      </div>
+
       {phase.kind === "loading" && (
-        <p className="m-0 font-body text-xs text-neutral-500">
+        <p className="m-0 mt-2 font-body text-[12px] text-neutral-500">
           Listing what the installation exposes…
         </p>
       )}
@@ -155,7 +162,7 @@ export function ImportDialog({
         <div className="mt-2">
           <div
             role="status"
-            className="rounded-[3px] border border-fail bg-fail-bg px-2 py-1.5 font-body text-xs text-fail-fg"
+            className="rounded-[3px] border border-red-300 bg-red-50 px-2 py-[6px] font-body text-[12px] text-red-700"
           >
             {PROVIDER_FAILED_NOTE}
           </div>
@@ -188,6 +195,7 @@ export function ImportDialog({
             </div>
           ))}
           <Button
+            variant="primary"
             onClick={onClose}
             className="mt-3"
           >
@@ -204,7 +212,7 @@ export function ImportDialog({
                 <div
                   key={provider.provider}
                   role="status"
-                  className="rounded-[3px] border border-fail bg-fail-bg px-2 py-1.5 font-body text-[11px] text-fail-fg"
+                  className="rounded-[3px] border border-red-200 bg-red-50 px-2 py-[6px] font-body text-[11px] text-red-700"
                 >
                   {provider.provider}: {providerStatusLabel(provider)}. This list does not
                   include its repositories.
@@ -240,7 +248,7 @@ export function ImportDialog({
                 return (
                   <Checkbox
                     key={candidate.key}
-                    className={`flex items-center gap-2 px-1 py-1.5 ${
+                    className={`flex items-center gap-2 px-1 py-[6px] ${
                       held ? "opacity-60" : ""
                     }`}
                     checked={held || selected.has(candidate.key)}
@@ -271,7 +279,7 @@ export function ImportDialog({
           )}
 
           <Checkbox
-            className="mt-3"
+            className="mt-3 flex items-center gap-2 font-body text-[12px] text-neutral-800"
             checked={enabled}
             onChange={(event) => setEnabled(event.target.checked)}
             label="Let the agent touch these repositories"
@@ -283,7 +291,7 @@ export function ImportDialog({
           {error && (
             <div
               role="status"
-              className="mt-2 rounded-[3px] border border-fail bg-fail-bg px-2 py-1.5 font-body text-xs text-fail-fg"
+              className="mt-2 rounded-[3px] border border-red-300 bg-red-50 px-2 py-[6px] font-body text-[12px] text-red-700"
             >
               {error}
             </div>
@@ -291,6 +299,7 @@ export function ImportDialog({
 
           <div className="mt-3 flex items-center gap-3">
             <Button
+              variant="primary"
               onClick={commit}
               disabled={selected.size === 0 || busy}
               loading={busy}

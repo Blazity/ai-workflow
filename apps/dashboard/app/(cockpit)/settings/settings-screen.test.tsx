@@ -198,7 +198,7 @@ test("saving is refused until a reason is typed, and edits register with the she
         text(node).includes("Store 1 change"));
 
   assert.equal(hasUnsavedSettings(), false, "a freshly rendered form is not dirty");
-  assert.equal(saveButton()?.props["data-variant"], "secondary");
+  assert.equal(saveButton()?.props["data-variant"], "primary");
 
   const field = root.find(
     (node) => node.props?.["aria-label"] === "Value of MAX_CONCURRENT_AGENTS",
