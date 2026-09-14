@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /* oxlint-disable eslint/sort-vars, unicorn/no-array-sort */
 /**
- * The database client is a db-tier implementation detail. This gate fails on
- * production worker files outside src/db that reach db/client directly or
- * through a re-exporting local barrel. Tests, fixtures, e2e, test support,
- * and test-db are intentionally excluded.
+ * Drizzle, the database client, and table schemas are db-tier implementation
+ * details. This gate fails when production worker files outside src/db reach
+ * them through value imports, directly or through a re-exporting local barrel.
+ * The existing db/client rule also includes type imports. Tests, fixtures,
+ * e2e, test support, and test-db are intentionally excluded.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, join, relative, resolve } from "node:path";
@@ -70,21 +71,42 @@ function moduleTokens(source) {
   return tokens;
 }
 
+function inlineNamedClauseIsTypeOnly(tokens, start, end) {
+  if (tokens[start]?.value !== "{") return false;
+  let found = false;
+  for (let cursor = start + 1; cursor < end;) {
+    if (tokens[cursor]?.value === ",") { cursor += 1; continue; }
+    if (tokens[cursor]?.value === "}") return found && cursor === end - 1;
+    if (
+      tokens[cursor]?.kind !== "word" || tokens[cursor].value !== "type" ||
+      tokens[cursor + 1]?.value === "as" || tokens[cursor + 1]?.value === "," ||
+      tokens[cursor + 1]?.value === "}"
+    ) return false;
+    found = true;
+    cursor += 2;
+    while (cursor < end && tokens[cursor]?.value !== "," && tokens[cursor]?.value !== "}") {
+      cursor += 1;
+    }
+  }
+  return false;
+}
+
 function staticAndDynamicImports(source) {
   const tokens = moduleTokens(source), found = [];
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
     if (token.kind !== "word" || (token.value !== "import" && token.value !== "export")) continue;
     const reexport = token.value === "export", next = tokens[index + 1];
+    const clauseTypeOnly = next?.kind === "word" && next.value === "type";
     if (!reexport && next?.kind === "string") {
-      found.push({ reexport: false, specifier: next.value });
+      found.push({ reexport: false, specifier: next.value, typeOnly: false });
       continue;
     }
     if (
       !reexport && next?.value === "(" &&
       tokens[index + 2]?.kind === "string" && tokens[index + 3]?.value === ")"
     ) {
-      found.push({ reexport: false, specifier: tokens[index + 2].value });
+      found.push({ reexport: false, specifier: tokens[index + 2].value, typeOnly: false });
       continue;
     }
     for (let cursor = index + 1; cursor < tokens.length; cursor += 1) {
@@ -94,7 +116,8 @@ function staticAndDynamicImports(source) {
         candidate.kind === "word" && candidate.value === "from" &&
         tokens[cursor + 1]?.kind === "string"
       ) {
-        found.push({ reexport, specifier: tokens[cursor + 1].value });
+        const typeOnly = clauseTypeOnly || inlineNamedClauseIsTypeOnly(tokens, index + 1, cursor);
+        found.push({ reexport, specifier: tokens[cursor + 1].value, typeOnly });
         break;
       }
     }
@@ -106,7 +129,7 @@ function imports(file) {
   const source = withoutComments(readFileSync(file, "utf8"));
   const found = staticAndDynamicImports(source);
   for (const match of source.matchAll(mockPattern)) {
-    if (match[1]) found.push({ reexport: false, specifier: match[1] });
+    if (match[1]) found.push({ reexport: false, specifier: match[1], typeOnly: false });
   }
   return found;
 }
@@ -128,34 +151,64 @@ function isClientModule(root, target) {
   return target === join(root, "apps/worker/src/db/client.ts");
 }
 
+function isSchemaModule(root, target) {
+  const schema = join(root, "apps/worker/src/db/schema");
+  return target === `${schema}.ts` || target.startsWith(`${schema}/`);
+}
+
+function isDrizzleModule(specifier) {
+  return specifier === "drizzle-orm" || specifier.startsWith("drizzle-orm/");
+}
+
 function main() {
   const options = parseOptions(process.argv.slice(2), { "--root": "root" });
   const root = options.root;
   const source = join(root, "apps/worker/src");
   const reexportCache = new Map();
-  const reexportsClient = (file, visiting = new Set()) => {
-    if (reexportCache.has(file)) return reexportCache.get(file);
-    if (visiting.has(file)) return false;
-    visiting.add(file);
-    const result = imports(file).some(({ reexport, specifier }) => {
+  const reexportsRestrictedModule = (file, restriction, visiting = new Set()) => {
+    const cacheKey = `${restriction}:${file}`;
+    if (reexportCache.has(cacheKey)) return reexportCache.get(cacheKey);
+    if (visiting.has(cacheKey)) return false;
+    visiting.add(cacheKey);
+    const result = imports(file).some(({ reexport, specifier, typeOnly }) => {
       if (!reexport) return false;
       const target = resolveLocal(root, file, specifier);
-      return target && (isClientModule(root, target) || reexportsClient(target, visiting));
+      if (restriction === "client") {
+        return target && (
+          isClientModule(root, target) ||
+          reexportsRestrictedModule(target, restriction, visiting)
+        );
+      }
+      if (typeOnly) return false;
+      if (restriction === "drizzle" && isDrizzleModule(specifier)) return true;
+      if (restriction === "schema" && target && isSchemaModule(root, target)) return true;
+      return target && reexportsRestrictedModule(target, restriction, visiting);
     });
-    visiting.delete(file);
-    reexportCache.set(file, result);
+    visiting.delete(cacheKey);
+    reexportCache.set(cacheKey, result);
     return result;
   };
   const paths = sourceFiles(source)
     .filter((file) => !testPath.test(relative(root, file).replaceAll("\\", "/")))
     .filter((file) => !file.startsWith(join(source, "db")))
-    .filter((file) => imports(file).some(({ specifier }) => {
+    .filter((file) => imports(file).some(({ specifier, typeOnly }) => {
       const target = resolveLocal(root, file, specifier);
-      return target && (isClientModule(root, target) || reexportsClient(target));
+      if (target && (
+        isClientModule(root, target) ||
+        reexportsRestrictedModule(target, "client")
+      )) return true;
+      if (typeOnly) return false;
+      if (isDrizzleModule(specifier)) return true;
+      if (target && (
+        isSchemaModule(root, target) ||
+        reexportsRestrictedModule(target, "schema") ||
+        reexportsRestrictedModule(target, "drizzle")
+      )) return true;
+      return false;
     }))
     .map((file) => relative(root, file).replaceAll("\\", "/"))
     .sort();
-  printTable(["metric", "now"], [["production db/client reachability", paths.length]]);
+  printTable(["metric", "now"], [["production raw database reachability", paths.length]]);
   if (paths.length > 0) {
     console.log(paths.join("\n"));
     console.log("db-client-fence FAIL");

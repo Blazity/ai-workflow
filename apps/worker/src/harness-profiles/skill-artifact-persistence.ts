@@ -5,10 +5,8 @@ import type {
 } from "@shared/contracts";
 import {
   HarnessSkillArtifactIntegrityError,
-  isGitHubSkillSource,
   verifyHarnessSkillArtifact,
 } from "@shared/skills";
-import { sql } from "drizzle-orm";
 import { sha256Digest } from "./skill-artifact-digest.js";
 import { HarnessSkillImportError } from "./skill-errors.js";
 import {
@@ -47,58 +45,10 @@ export async function persistHarnessSkillArtifactsFromRepository(
     );
   }
 
-  const artifactRows = input.artifacts.map((artifact) => {
-    const source = artifact.source;
-    const columns = isGitHubSkillSource(source)
-      ? {
-          kind: "github",
-          owner: source.owner,
-          repository: source.repository,
-          path: source.path,
-          commitSha: source.commitSha,
-          localPath: null,
-          localContentSha256: null,
-        }
-      : {
-          kind: "local",
-          owner: null,
-          repository: null,
-          path: null,
-          commitSha: null,
-          localPath: source.path,
-          localContentSha256: source.contentSha256,
-        };
-    return sql`(
-        ${artifact.artifactHash}::text,
-        ${artifact.name}::text,
-        ${artifact.description}::text,
-        ${columns.kind}::text,
-        ${columns.owner}::text,
-        ${columns.repository}::text,
-        ${columns.path}::text,
-        ${columns.commitSha}::text,
-        ${columns.localPath}::text,
-        ${columns.localContentSha256}::text
-      )`;
-  });
-  const fileRows = input.artifacts.flatMap((artifact) =>
-    artifact.files.map(
-      (file) =>
-        sql`(
-          ${artifact.artifactHash}::text,
-          ${file.path}::text,
-          ${file.mode}::integer,
-          ${file.sizeBytes}::integer,
-          ${file.sha256}::text,
-          ${file.contentBase64}::text
-        )`,
-    ),
-  );
-  await repository.persistArtifactRows({
+  await repository.persistArtifacts({
     organizationId: input.organizationId,
     actorId: input.actorId,
-    artifactRows,
-    fileRows,
+    artifacts: input.artifacts,
   });
 
   const { artifacts: storedArtifacts, files: storedFiles } =

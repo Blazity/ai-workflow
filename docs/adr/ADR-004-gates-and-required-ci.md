@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-09
+Last-verified: 2026-09-14
 
 # ADR-004: Gates and required CI
 
@@ -67,7 +67,7 @@ One line per gate: what it observes, and whether it carries a recorded list.
 | `check-deps-consistency` | the pnpm catalog and the four dependency rules | no | stage 3 |
 | `single-schema-version` | a reinstated `schemaVersion === 1` branch | no | stage 3b |
 | `transactions-in-repositories` | `.transaction(` in every non-test file under `apps/worker/src` | no | stage 7 |
-| `db-client-fence` | `db/client` imports outside `db/` | no | stage 7 |
+| `db-client-fence` | value imports of Drizzle or table schemas, and all `db/client` imports, outside `db/` | no | stage 7 |
 
 As of 2026-09-11, stage 11 has driven the ratchets to zero. Import boundaries,
 unused code, lint, and the database client fence are hard checks; their
