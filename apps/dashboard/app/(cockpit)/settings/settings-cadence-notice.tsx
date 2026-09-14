@@ -13,7 +13,7 @@ export function SettingsCadenceNotice() {
   return (
     <div
       role="note"
-      className="rounded-[3px] border border-orange-300 bg-orange-100 px-3 py-2 font-body text-[11px] leading-4 text-neutral-800"
+      className="rounded-[3px] border border-orange-300 bg-orange-100 px-3 py-2 font-body text-[11px] leading-4 text-[#A23E18]"
     >
       {SETTINGS_CADENCE_NOTICE}
     </div>

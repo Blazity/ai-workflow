@@ -67,7 +67,7 @@ function SettingField({
   onChange: (next: string | boolean) => void;
 }) {
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-[6px]">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-body text-[12px] font-semibold text-neutral-800">
           {settingLabel(entry.key)}
@@ -98,10 +98,10 @@ function SettingField({
       {issue && <p className="m-0 font-body text-[11px] text-fail-fg">{issue}</p>}
       <div>
         <Button
-          variant="ghost"
-          size="sm"
+          variant="text"
           onClick={onToggleHistory}
           aria-expanded={historyOpen}
+          className="appearance-none border-none bg-transparent p-0 cursor-pointer font-mono text-[10px] uppercase tracking-[0.06em] text-mariner"
         >
           {historyOpen ? "Hide history" : "History"}
           {entry.lastVersion ? " (changed here before)" : " (never changed here)"}
@@ -166,8 +166,6 @@ export function SettingsGroupForm({
   const patch = buildSettingsPatch(saved, draft);
   const changedCount = Object.keys(patch).length;
   const dirty = changedCount > 0;
-  const saveVariant = dirty ? "primary" : "secondary";
-
   // The shell asks the module below before every router.push, and the browser
   // asks the listener below before a tab close. Back and forward are left to
   // the Repository scripts sentinel: one sentinel per dirty form would stack up
@@ -252,10 +250,10 @@ export function SettingsGroupForm({
   const reasonMissing = reason.trim() === "";
 
   return (
-    <section className="rounded-sm border border-neutral-200 bg-panel">
-      <header className="border-b border-neutral-200 px-4 py-3">
+    <section className="rounded-[4px] border border-neutral-200 bg-panel">
+      <header className="px-4 pt-3 pb-[10px] border-b border-neutral-200">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h3 className="m-0 font-display text-base font-medium text-coal">{title}</h3>
+          <h3 className="m-0 font-display text-[15px] font-medium text-coal">{title}</h3>
           <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">
             {stored} of {saved.length} stored
           </span>
@@ -301,8 +299,8 @@ export function SettingsGroupForm({
         <p
           className={`mx-4 mb-3 mt-0 rounded-[3px] border px-3 py-2 font-body text-[11px] ${
             message.tone === "ok"
-              ? "border-success bg-success-bg text-success-fg"
-              : "border-fail bg-fail-bg text-fail-fg"
+              ? "border-[#B8DDAA] bg-success-bg text-success-fg"
+              : "border-[#F0B8AE] bg-fail-bg text-fail-fg"
           }`}
         >
           {message.text}
@@ -310,13 +308,13 @@ export function SettingsGroupForm({
       )}
 
       {!canEdit && saved.length > 0 && (
-        <footer className="border-t border-neutral-200 px-4 py-3 font-body text-[11px] text-neutral-600">
+        <footer className="px-4 py-[10px] border-t border-neutral-200 font-body text-[11px] text-neutral-600">
           Read-only: ask an owner or admin to change these settings.
         </footer>
       )}
 
       {canEdit && saved.length > 0 && (
-        <footer className="px-4 py-3 border-t border-neutral-200 flex flex-col gap-1.5">
+        <footer className="px-4 py-3 border-t border-neutral-200 flex flex-col gap-[6px]">
           <div className="flex flex-wrap items-center gap-2">
             <Input
               type="text"
@@ -327,7 +325,7 @@ export function SettingsGroupForm({
               placeholder="Why is this changing? (required)"
               disabled={saving}
               onChange={(event) => setReason(event.target.value)}
-              className="min-w-[180px] flex-1"
+              className="flex-1 min-w-[180px]"
             />
             <Button
               variant="secondary"
@@ -337,7 +335,7 @@ export function SettingsGroupForm({
               Discard
             </Button>
             <Button
-              variant={saveVariant}
+              variant="primary"
               onClick={save}
               disabled={!dirty || saving || reasonMissing}
               loading={saving}

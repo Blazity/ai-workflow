@@ -121,10 +121,6 @@ export function ActivateDialog({
         reason.trim(),
       );
       if (result.ok && result.status === 409) {
-        // The service refuses a catalog with nothing enabled, and it can get
-        // there from here: somebody switching the last row off while this
-        // dialog is open moves the button's own blocker underneath it. Its own
-        // arm, because this 409 carries a sentence and not a population.
         const blocked = result.data as RepositoryCatalogActivateBlocked;
         if (blocked.error === "no_enabled_repository") {
           setError(blocked.message);
@@ -158,22 +154,30 @@ export function ActivateDialog({
 
   return (
     <Modal
-      onClose={onClose}
+      chrome="none"
       title="Activate the repository catalog"
+      onClose={onClose}
       size="md"
-      footer={
-        <div className="flex justify-end">
-          <Button variant="secondary" onClick={onClose}>
-            Close
-          </Button>
-        </div>
-      }
+      className="rounded-[4px] border border-orange-300 bg-panel px-4 py-3"
     >
-      <p className="m-0 font-body text-xs text-neutral-700">
+      <div className="flex items-baseline justify-between gap-2">
+        <h3 className="m-0 font-display text-[15px] font-medium text-coal">
+          Activate the repository catalog
+        </h3>
+        <Button
+          variant="text"
+          onClick={onClose}
+          className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer"
+        >
+          Close
+        </Button>
+      </div>
+
+      <p className="m-0 mt-2 font-body text-[12px] text-neutral-700">
         {activationSummary(impact)}
       </p>
 
-      <p className="m-0 mt-1 font-body text-xs text-neutral-700">
+      <p className="m-0 mt-1 font-body text-[12px] text-neutral-700">
         {directory.kind === "reading"
           ? "Reading the provider directory to find the repositories outside this catalog…"
           : uncataloguedSummary(impact)}
@@ -182,7 +186,7 @@ export function ActivateDialog({
       {refusal !== null && (
         <div
           role="status"
-          className="mt-2 rounded-[3px] border border-fail bg-fail-bg px-2 py-1.5 font-body text-xs text-fail-fg"
+          className="mt-2 rounded-[3px] border border-red-300 bg-red-50 px-2 py-[6px] font-body text-[12px] text-red-700"
         >
           Activation is refused: {refusal}.
         </div>
@@ -193,7 +197,7 @@ export function ActivateDialog({
           <summary className="font-body text-[12px] text-mariner cursor-pointer">
             Repositories that stop passing ({impact.stopping.length})
           </summary>
-          <ul className="list-none m-0 mt-1 p-0 flex flex-col gap-1">
+          <ul className="list-none m-0 mt-1 p-0 flex flex-col gap-[2px]">
             {impact.stopping.map((repository) => (
               <li
                 key={`${repository.provider}:${repository.path}`}
@@ -215,9 +219,9 @@ export function ActivateDialog({
             {impact.claimed.map((entry) => (
               <li
                 key={entry.key}
-                className="rounded-[3px] border border-orange-300 bg-orange-100 px-2 py-1.5"
+                className="rounded-[3px] border border-orange-300 bg-orange-100 px-2 py-[6px]"
               >
-                <div className="font-mono text-[11px] text-neutral-800">{entry.key}</div>
+                <div className="font-mono text-[11px] text-[#A23E18]">{entry.key}</div>
                 <div className="font-body text-[11px] text-neutral-700">
                   {claimedDetail(entry)}
                 </div>
@@ -230,13 +234,13 @@ export function ActivateDialog({
       {stale && (
         <div
           role="status"
-          className="mt-2 rounded-[3px] border border-fail bg-fail-bg px-2 py-1.5 font-body text-xs text-fail-fg"
+          className="mt-2 rounded-[3px] border border-red-300 bg-red-50 px-2 py-[6px] font-body text-[12px] text-red-700"
         >
           {staleActivationNotice(impact.claimed)}
         </div>
       )}
 
-      <label className="mt-3 block font-body text-xs text-neutral-800">
+      <label className="mt-3 block font-body text-[12px] text-neutral-800">
         Reason
         <Input
           value={reason}
@@ -250,13 +254,14 @@ export function ActivateDialog({
       </p>
 
       {error && (
-        <div className="mt-2 rounded-[3px] border border-fail bg-fail-bg px-2 py-1.5 font-body text-xs text-fail-fg">
+        <div className="mt-2 rounded-[3px] border border-red-300 bg-red-50 px-2 py-[6px] font-body text-[12px] text-red-700">
           {error}
         </div>
       )}
 
       <div className="mt-3 flex items-center gap-3">
         <Button
+          variant="primary"
           onClick={confirm}
           disabled={blocker !== null || busy}
           loading={busy}
@@ -264,7 +269,7 @@ export function ActivateDialog({
           {confirmLabel}
         </Button>
         {blocker !== null && refusal === null && (
-          <span role="status" className="font-body text-[11px] text-fail-fg">
+          <span role="status" className="font-body text-[11px] text-red-600">
             Activate is disabled: {blocker}.
           </span>
         )}

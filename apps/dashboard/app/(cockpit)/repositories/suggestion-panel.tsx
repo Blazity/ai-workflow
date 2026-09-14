@@ -8,8 +8,7 @@ import type {
   RepositoryCatalogSuggestResponse,
 } from "@shared/contracts";
 
-import { Button } from "@/components/ui";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Button, Checkbox } from "@/components/ui";
 import { apiClient } from "@/lib/api/client";
 import { usageLabel } from "@/lib/repository-catalog/format";
 import {
@@ -189,9 +188,9 @@ export function SuggestionPanel({
   }
 
   return (
-    <section className="rounded-sm border border-neutral-200 bg-panel px-4 py-3">
+    <section className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="m-0 font-display text-base font-medium text-coal">
+        <h3 className="m-0 font-display text-[15px] font-medium text-coal">
           Suggest from repository
         </h3>
         <Button
@@ -231,7 +230,7 @@ export function SuggestionPanel({
         <div className="mt-2">
           <div
             role="status"
-            className="rounded-[3px] border border-fail bg-fail-bg px-2 py-1.5 font-body text-xs text-fail-fg"
+            className="rounded-[3px] border border-red-300 bg-red-50 px-2 py-[6px] font-body text-[12px] text-red-700"
           >
             {state.message}
           </div>
@@ -249,7 +248,7 @@ export function SuggestionPanel({
 
       {state.kind === "proposed" && (
         <div className="mt-2">
-          <div className="rounded-[3px] border border-orange-300 bg-orange-100 px-2 py-1.5 font-body text-[11px] text-neutral-800">
+          <div className="rounded-[3px] border border-orange-300 bg-orange-100 px-2 py-[6px] font-body text-[11px] text-[#A23E18]">
             {SUGGESTION_REVIEW_NOTICE}
           </div>
           <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">
@@ -281,9 +280,10 @@ export function SuggestionPanel({
           {diffs.map((diff) => (
             <div
               key={diff.name}
-              className="mt-2 rounded-[3px] border border-neutral-200 px-2 py-1.5"
+              className="mt-2 rounded-[3px] border border-neutral-200 px-2 py-[6px]"
             >
               <Checkbox
+                className="flex items-center gap-2"
                 checked={accepted.has(diff.name)}
                 onChange={() => toggle(diff.name)}
                 label={
@@ -320,7 +320,7 @@ export function SuggestionPanel({
               {state.answer.droppedGroups.map((group) => (
                 <div
                   key={group.name}
-                  className="mt-1 rounded-[3px] border border-dashed border-neutral-300 px-2 py-1.5 opacity-70"
+                  className="mt-1 rounded-[3px] border border-dashed border-neutral-300 px-2 py-[6px] opacity-70"
                 >
                   <div className="font-mono text-[12px] text-neutral-600">{group.name}</div>
                   <div className="font-body text-[11px] text-neutral-600">
@@ -383,9 +383,9 @@ function SuggestedField({
         <div className="font-body text-[12px] font-semibold text-neutral-800">{label}</div>
         {proposed.trim().length > 0 && (
           <Button
-            variant="ghost"
-            size="sm"
+            variant="text"
             onClick={onUse}
+            className="appearance-none border-none bg-transparent px-0 font-body text-[12px] text-mariner cursor-pointer"
           >
             {USE_THIS_LABEL}
           </Button>

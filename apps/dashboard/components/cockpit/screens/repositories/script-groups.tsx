@@ -513,11 +513,10 @@ function SecondaryRow({
   return (
     <div className="mt-2 border-t border-neutral-200 pt-2">
       <Button
-        variant="ghost"
-        size="sm"
+        variant="text"
         onClick={onToggle}
         aria-expanded={open}
-        className="w-full justify-start"
+        className="flex w-full items-center gap-2 appearance-none border-none bg-transparent px-0 text-left font-body text-[12px] font-semibold text-neutral-800 cursor-pointer"
       >
         <Caret open={open} />
         {label}
@@ -545,11 +544,10 @@ function PreviewDisclosure({
   return (
     <div className="mt-2">
       <Button
-        variant="ghost"
-        size="sm"
+        variant="text"
         onClick={onToggle}
         aria-expanded={open}
-        className="justify-start"
+        className="flex items-center gap-2 appearance-none border-none bg-transparent px-0 text-left font-body text-[11px] text-mariner cursor-pointer"
       >
         <Caret open={open} />
         {label}
@@ -839,11 +837,11 @@ function CommandListEditor({
                   }}
                 >
                   <IconButton
-                    variant="ghost"
-                    size="sm"
+                    variant="text"
                     onClick={() => move(i, i - 1)}
                     disabled={i === 0}
                     aria-label={`Move command ${i + 1} up`}
+                    className="appearance-none border-none bg-transparent font-mono text-[11px] text-neutral-400 hover:text-mariner cursor-pointer disabled:opacity-30 disabled:cursor-default"
                   >
                     ↑
                   </IconButton>
@@ -857,11 +855,11 @@ function CommandListEditor({
                   }}
                 >
                   <IconButton
-                    variant="ghost"
-                    size="sm"
+                    variant="text"
                     onClick={() => move(i, i + 1)}
                     disabled={i === commands.length - 1}
                     aria-label={`Move command ${i + 1} down`}
+                    className="appearance-none border-none bg-transparent font-mono text-[11px] text-neutral-400 hover:text-mariner cursor-pointer disabled:opacity-30 disabled:cursor-default"
                   >
                     ↓
                   </IconButton>
@@ -870,8 +868,7 @@ function CommandListEditor({
             )}
             {!disabled && (
               <IconButton
-                variant="danger"
-                size="sm"
+                variant="text"
                 onClick={() =>
                   apply(
                     commands.filter((_, idx) => idx !== i),
@@ -879,6 +876,7 @@ function CommandListEditor({
                   )
                 }
                 aria-label="Remove command"
+                className="appearance-none border-none bg-transparent font-mono text-[13px] text-neutral-400 hover:text-red-600 cursor-pointer"
               >
                 ×
               </IconButton>
@@ -902,9 +900,9 @@ function CommandListEditor({
       </div>
       {!disabled && (
         <Button
-          variant="ghost"
-          size="sm"
+          variant="text"
           onClick={() => apply([...commands, ""], [...rowIds, nextRowId()])}
+          className="appearance-none border-none bg-transparent font-body text-[12px] text-mariner cursor-pointer px-0"
         >
           + {commands.length === 0 && firstAddLabel ? firstAddLabel : addLabel}
         </Button>
@@ -942,7 +940,6 @@ function EnvNamesEditor({
             {allowedEnv.map((name) => (
               <Button
                 variant="secondary"
-                size="sm"
                 key={name}
                 onClick={() => onChange([...names, name])}
                 disabled={disabled || names.includes(name)}
@@ -975,10 +972,10 @@ function EnvNamesEditor({
               />
               {!disabled && (
                 <IconButton
-                  variant="danger"
-                  size="sm"
+                  variant="text"
                   onClick={() => onChange(names.filter((_, idx) => idx !== i))}
                   aria-label="Remove env var name"
+                  className="appearance-none border-none bg-transparent font-mono text-[13px] text-neutral-400 hover:text-red-600 cursor-pointer"
                 >
                   ×
                 </IconButton>
@@ -1002,9 +999,9 @@ function EnvNamesEditor({
       })}
       {!disabled && (
         <Button
-          variant="ghost"
-          size="sm"
+          variant="text"
           onClick={() => onChange([...names, ""])}
+          className="appearance-none border-none bg-transparent font-body text-[12px] text-mariner cursor-pointer px-0"
         >
           + Add env var name
         </Button>
@@ -1241,11 +1238,10 @@ function GroupCard({
       <div className="rounded-[3px] border border-neutral-200 bg-white px-3 py-2 mb-2">
         <div className="flex items-center gap-2">
           <Button
-            variant="ghost"
-            size="sm"
+            variant="text"
             onClick={onToggle}
             aria-expanded={false}
-            className="h-auto flex-1 justify-start text-left normal-case"
+            className="flex flex-1 items-center gap-2 appearance-none border-none bg-transparent px-0 text-left font-mono text-[12px] text-neutral-700 cursor-pointer"
           >
             <Caret open={false} />
             <span className="font-semibold text-neutral-900">{name}</span>
@@ -1265,8 +1261,7 @@ function GroupCard({
     <div className="rounded-[3px] border border-neutral-200 bg-white px-3 py-2 mb-2">
       <div className="flex items-center justify-between gap-2 mb-1">
         <IconButton
-          variant="ghost"
-          size="sm"
+          variant="text"
           onClick={() => {
             // A draft the config never took would otherwise keep blocking Save
             // from behind a closed card, with no field left to correct it in.
@@ -1276,6 +1271,7 @@ function GroupCard({
           }}
           aria-expanded
           aria-label={`Collapse group ${name}`}
+          className="appearance-none border-none bg-transparent px-0 cursor-pointer"
         >
           <Caret open />
         </IconButton>
@@ -1299,9 +1295,9 @@ function GroupCard({
         <GateChip atGate={atGate} />
         {!disabled && canDelete && !confirmDelete && (
           <Button
-            variant="danger"
-            size="sm"
+            variant="text"
             onClick={() => setConfirmDelete(true)}
+            className="appearance-none border-none bg-transparent font-body text-[11px] text-neutral-500 hover:text-red-600 cursor-pointer"
           >
             Remove group
           </Button>
@@ -1309,16 +1305,16 @@ function GroupCard({
         {!disabled && canDelete && confirmDelete && (
           <>
             <Button
-              variant="danger"
-              size="sm"
+              variant="text"
               onClick={onDelete}
+              className="appearance-none border-none bg-transparent font-body text-[11px] font-semibold text-red-600 cursor-pointer"
             >
               Confirm remove group
             </Button>
             <Button
-              variant="ghost"
-              size="sm"
+              variant="text"
               onClick={() => setConfirmDelete(false)}
+              className="appearance-none border-none bg-transparent font-body text-[11px] text-neutral-500 cursor-pointer"
             >
               Cancel
             </Button>
@@ -1425,16 +1421,16 @@ function GroupCard({
           // keyboard, by touch, and to a screen reader, and this sentence is
           // the only place the default behaviour is explained. It sits outside
           // the label so clicking it does not toggle the checkbox.
-          <IconButton
-            variant="ghost"
-            size="sm"
+          <Button
+            variant="text"
             onClick={() => setRestoreNoteOpen(!restoreNoteOpen)}
             aria-expanded={restoreNoteOpen}
             aria-controls={restoreNoteId}
             aria-label="What restoring the tree does"
+            className="appearance-none border-none bg-transparent px-0 font-mono text-[10px] text-neutral-400 hover:text-mariner cursor-pointer"
           >
             (?)
-          </IconButton>
+          </Button>
         )}
       </div>
       {(!restoreTree || restoreNoteOpen) && (
@@ -1601,10 +1597,9 @@ function GroupsSection({
       ))}
       {!disabled && (
         <Button
-          variant="ghost"
-          size="sm"
+          variant="text"
           onClick={addGroup}
-          className="mb-3"
+          className="appearance-none border-none bg-transparent font-body text-[12px] text-mariner cursor-pointer px-0 mb-3"
         >
           + Add group
         </Button>
@@ -1617,9 +1612,9 @@ function GroupsSection({
               {i > 0 && ", "}
               <span className="font-mono">{name}</span>{" "}
               <Button
-                variant="ghost"
-                size="sm"
+                variant="text"
                 onClick={() => undoGateAdd(name)}
+                className="appearance-none border-none bg-transparent px-0 font-body text-[11px] text-mariner cursor-pointer"
               >
                 undo
               </Button>
@@ -1722,7 +1717,6 @@ function RepoCard({
               {!disabled && (
                 <Button
                   variant="secondary"
-                  size="sm"
                   onClick={() => onChange(convertedToGroups(repo))}
                   className="mt-2"
                 >
@@ -2018,29 +2012,28 @@ export function RepositoryScriptGroupsEditor({
                 {GROUP_REMOVAL_NOTE}
               </span>
               <Button
-                variant="danger"
-                size="sm"
+                variant="text"
                 onClick={() => {
                   onChange(null);
                   setConfirmClear(false);
                 }}
+                className="appearance-none border-none bg-transparent font-body text-[12px] font-semibold text-red-600 cursor-pointer"
               >
                 Confirm remove all
               </Button>
               <Button
-                variant="ghost"
-                size="sm"
+                variant="text"
                 onClick={() => setConfirmClear(false)}
-                className="ml-2"
+                className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer ml-2"
               >
                 Cancel
               </Button>
             </>
           ) : (
             <Button
-              variant="danger"
-              size="sm"
+              variant="text"
               onClick={() => setConfirmClear(true)}
+              className="appearance-none border-none bg-transparent px-0 font-body text-[12px] text-neutral-500 hover:text-red-600 cursor-pointer"
             >
               Remove all script groups
             </Button>

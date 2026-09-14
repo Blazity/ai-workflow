@@ -10,7 +10,7 @@ import { useRouter } from "next/navigation";
 
 import { Button, CkCard, CkChip } from "@/components/ui";
 import { apiClient } from "@/lib/api/client";
-import { formatDateTime } from "@/lib/date-time";
+import { SettingsCadenceNotice } from "@/app/(cockpit)/settings/settings-cadence-notice";
 import { SettingsGroupForm } from "@/app/(cockpit)/settings/settings-group-form";
 import { groupSettings, selectGroupKeys } from "@/lib/settings/groups";
 import type {
@@ -121,19 +121,19 @@ export function MemoryScreen({
         <h2 className="m-0 font-display text-2xl font-medium leading-[1.2] text-neutral-900">
           {visible.length} {visible.length === 1 ? "document" : "documents"}
         </h2>
-        <p className="m-0 font-body text-[13px] text-neutral-600">
-          Review what the agent remembered and trace each document to the run that wrote it.
-        </p>
       </div>
 
       {features && memorySettings.length > 0 ? (
-        <SettingsGroupForm
-          group={features}
-          keys={MEMORY_SETTING_KEYS}
-          heading="Memory switches"
-          description="Whether the agent reads and writes memory at all. A change reaches the next run, never one already in flight, and stored documents are left untouched either way."
-          canEdit={canEditSettings}
-        />
+        <div className="flex flex-col gap-2">
+          <SettingsCadenceNotice />
+          <SettingsGroupForm
+            group={features}
+            keys={MEMORY_SETTING_KEYS}
+            heading="Memory switches"
+            description="Whether the agent reads and writes memory at all. A change reaches the next run, never one already in flight, and stored documents are left untouched either way."
+            canEdit={canEditSettings}
+          />
+        </div>
       ) : null}
 
       {selection ? (
@@ -149,8 +149,9 @@ export function MemoryScreen({
                       Delete from the store?
                     </span>
                     <Button
-                      variant="primary"
+                      variant="secondary"
                       size="sm"
+                      className="h-auto border-neutral-900 bg-neutral-900 px-3.5 py-[5px] text-[11px] font-medium uppercase tracking-[0.04em] text-white hover:border-neutral-900 hover:bg-neutral-800"
                       disabled={pending.phase === "deleting"}
                       onClick={() => remove(selection)}
                       type="button"
@@ -160,6 +161,7 @@ export function MemoryScreen({
                     <Button
                       variant="secondary"
                       size="sm"
+                      className="h-auto border-neutral-200 bg-white px-2.5 py-[5px] font-medium uppercase tracking-[0.04em] text-neutral-900 hover:border-neutral-200 hover:bg-app-bg"
                       disabled={pending.phase === "deleting"}
                       onClick={() => setDeleteState(null)}
                       type="button"
@@ -169,8 +171,9 @@ export function MemoryScreen({
                   </>
                 ) : (
                   <Button
-                    variant="danger"
+                    variant="secondary"
                     size="sm"
+                    className="h-auto border-[#F3CFC7] bg-white px-2.5 py-[5px] font-medium uppercase tracking-[0.04em] text-fail-fg hover:border-[#F3CFC7] hover:bg-fail-bg"
                     onClick={() =>
                       setDeleteState({ doc: selection, phase: "confirming", error: null })
                     }
@@ -294,4 +297,15 @@ function InlineError({ children }: { children: React.ReactNode }) {
 
 function formatBytes(bytes: number): string {
   return bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} kB`;
+}
+
+function formatDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }

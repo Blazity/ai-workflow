@@ -48,8 +48,7 @@ import {
 import { DISCARD_UNSAVED_PROMPT, trackUnsavedSettings } from "@/lib/settings/unsaved";
 import { RepositoryScriptGroupsEditor } from "@/components/cockpit/screens/repositories/script-groups";
 import { PromptEditor } from "@/components/cockpit/prompt-editor/prompt-editor";
-import { Button, Field, Input, Select } from "@/components/ui";
-import { RouteTabs } from "@/components/ui/route-tabs";
+import { Button, Input, Select } from "@/components/ui";
 
 import { SuggestionPanel } from "./suggestion-panel";
 
@@ -116,40 +115,6 @@ function scriptsEntryOf(draft: RepositoryProfileDraft): PrePrCheckRepositoryConf
   const entry = asScriptsEntry(draft.scriptGroups);
   if (entry === null) return null;
   return draft.gateGroups === null ? entry : { ...entry, gateGroups: draft.gateGroups };
-}
-
-/** Field-compatible shell around the compound prompt editor. */
-function RulesEditorControl({
-  id,
-  value,
-  disabled,
-  onChange,
-  "aria-describedby": describedBy,
-  "aria-invalid": invalid,
-}: {
-  id?: string;
-  value: string;
-  disabled: boolean;
-  onChange: (rules: string) => void;
-  "aria-describedby"?: string;
-  "aria-invalid"?: boolean | "true" | "false";
-}) {
-  return (
-    <div
-      id={id}
-      aria-label="Rules"
-      aria-describedby={describedBy}
-      aria-invalid={invalid}
-    >
-      <PromptEditor
-        value={value}
-        disabled={disabled}
-        minHeightClass="min-h-[320px]"
-        variables={REPOSITORY_RULES_VARIABLES}
-        onChange={onChange}
-      />
-    </div>
-  );
 }
 
 function whatChanged(
@@ -426,7 +391,7 @@ export function RepositoryEntryScreen({
           {repositoryLabel(repository)}
         </h2>
         <div className="flex flex-wrap items-center gap-2 font-body text-[12px] text-neutral-600">
-          <span className="rounded-[3px] bg-app-bg px-1.5 py-px font-mono text-[10px] uppercase tracking-[0.04em] text-neutral-600">
+          <span className="rounded-[3px] bg-app-bg px-[5px] py-[1px] font-mono text-[10px] uppercase tracking-[0.05em] text-neutral-600">
             {sourceLabel(repository.source)}
           </span>
           <span>{repository.enabled ? "enabled" : "not enabled"}</span>
@@ -434,12 +399,23 @@ export function RepositoryEntryScreen({
         </div>
       </div>
 
-      <RouteTabs
-        aria-label="Repository sections"
-        tabs={TABS.map((id) => ({ id, label: TAB_LABELS[id] }))}
-        active={tab}
-        onChange={setTab}
-      />
+      <nav className="flex flex-wrap gap-1 border-b border-neutral-200">
+        {TABS.map((id) => (
+          <Button
+            key={id}
+            variant="text"
+            onClick={() => setTab(id)}
+            aria-current={tab === id ? "page" : undefined}
+            className={`appearance-none border-none bg-transparent px-3 py-2 font-body text-[13px] cursor-pointer ${
+              tab === id
+                ? "text-coal font-semibold border-b-2 border-mariner"
+                : "text-neutral-600"
+            }`}
+          >
+            {TAB_LABELS[id]}
+          </Button>
+        ))}
+      </nav>
 
       {notice && (
         <div
@@ -450,7 +426,7 @@ export function RepositoryEntryScreen({
         </div>
       )}
       {error && (
-        <div className="rounded-[3px] border border-fail bg-fail-bg px-3 py-2 font-body text-xs text-fail-fg">
+        <div className="rounded-[3px] border border-red-300 bg-red-50 px-3 py-2 font-body text-[12px] text-red-700">
           {error}
         </div>
       )}
@@ -472,21 +448,37 @@ export function RepositoryEntryScreen({
       )}
 
       {tab === "rules" && (
-        <section className="rounded-sm border border-neutral-200 bg-panel px-4 py-3">
-          <h3 className="m-0 font-display text-base font-medium text-coal">Rules</h3>
+        <section className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3">
+          <h3 className="m-0 font-display text-[15px] font-medium text-coal">Rules</h3>
           <p className="m-0 mt-1 font-body text-[12px] text-neutral-600">
             Markdown. Handed to the agent as standing instructions for this
             repository, so write what it must and must not do, not what the code
             already says. Same editor as the prompt library: what is stored is
             still the markdown, and a {"{{variable}}"} is shown as one.
           </p>
-          <Field label="Rules document" error={rulesError} className="mt-2">
-            <RulesEditorControl
+          <div
+            className="mt-2"
+            aria-label="Rules"
+            aria-invalid={rulesError ? true : undefined}
+            aria-describedby={rulesError ? "repository-rules-error" : undefined}
+          >
+            <PromptEditor
               value={draft.rules}
               disabled={!canManage}
+              minHeightClass="min-h-[320px]"
+              variables={REPOSITORY_RULES_VARIABLES}
               onChange={(rules) => setDraft({ ...draft, rules })}
             />
-          </Field>
+          </div>
+          {rulesError && (
+            <p
+              id="repository-rules-error"
+              role="alert"
+              className="m-0 mt-1 font-body text-[11px] text-red-600"
+            >
+              {rulesError}
+            </p>
+          )}
           <p className="m-0 mt-1 font-body text-[11px] text-neutral-500">
             {RULES_DESTINATION_NOTE}
           </p>
@@ -494,8 +486,8 @@ export function RepositoryEntryScreen({
       )}
 
       {tab === "scripts" && (
-        <section className="rounded-sm border border-neutral-200 bg-panel px-4 py-3">
-          <h3 className="m-0 font-display text-base font-medium text-coal">
+        <section className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3">
+          <h3 className="m-0 font-display text-[15px] font-medium text-coal">
             Script groups
           </h3>
           <RemoteExecutionWarnings entry={scriptsEntryOf(draft)} />
@@ -594,6 +586,7 @@ export function RepositoryEntryScreen({
                 Discard
               </Button>
               <Button
+                variant="primary"
                 onClick={save}
                 disabled={blocker !== null || busy}
                 loading={busy}
@@ -603,11 +596,11 @@ export function RepositoryEntryScreen({
             </span>
           </div>
           {blocker && (
-            <p role="status" className="m-0 mt-1.5 font-body text-[11px] text-fail-fg">
+            <p role="status" className="m-0 mt-[6px] font-body text-[11px] text-red-600">
               Save is disabled: {blocker}.
             </p>
           )}
-          <p className="m-0 mt-1.5 font-body text-[10px] text-neutral-500">
+          <p className="m-0 mt-[6px] font-body text-[10px] text-neutral-500">
             {REASON_REQUIRED_NOTE}
           </p>
         </div>
@@ -660,8 +653,8 @@ function OverviewTab({
     catalog.find((entry) => entry.id === id)?.path ?? `repository ${id}`;
 
   return (
-    <section className="rounded-sm border border-neutral-200 bg-panel px-4 py-3">
-      <h3 className="m-0 font-display text-base font-medium text-coal">Overview</h3>
+    <section className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3">
+      <h3 className="m-0 font-display text-[15px] font-medium text-coal">Overview</h3>
 
       <dl className="m-0 mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
         <dt className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">
@@ -695,9 +688,9 @@ function OverviewTab({
         />
       </div>
       <p className="m-0 mt-1 font-body text-[10px] text-neutral-500">
-        Markdown. Read by people and by the agent as this repository&apos;s
-        one-line summary. The agent gets the first paragraph as plain text,
-        limited to 500 characters; a {"{{variable}}"} in it is never rendered.
+        Markdown. The first line is what the Repositories list shows. Read by
+        people, not by the agent: unlike Rules, a description reaches no prompt,
+        so a {"{{variable}}"} in one is never rendered.
       </p>
 
       <div className="mt-3 font-body text-[12px] font-semibold text-neutral-800">
@@ -726,14 +719,14 @@ function OverviewTab({
             </span>
             {!disabled && (
               <Button
-                variant="ghost"
-                size="sm"
+                variant="text"
                 onClick={() =>
                   onChange({
                     ...draft,
                     relationships: draft.relationships.filter((_, i) => i !== index),
                   })
                 }
+                className="appearance-none border-none bg-transparent font-body text-[11px] text-neutral-500 hover:text-red-600 cursor-pointer"
               >
                 Remove
               </Button>
@@ -748,7 +741,7 @@ function OverviewTab({
             value={target}
             aria-label="Related repository"
             onChange={setTarget}
-            className="sm:w-auto sm:min-w-[220px]"
+            className="w-auto min-w-[220px]"
             options={[
               { value: "", label: "Choose a repository…" },
               ...others.map((entry) => ({
@@ -761,7 +754,7 @@ function OverviewTab({
             value={kind}
             aria-label="Relationship kind"
             onChange={setKind}
-            className="sm:w-auto sm:min-w-[220px]"
+            className="w-auto min-w-[220px]"
             options={[
               { value: "", label: "Choose a relationship…" },
               ...REPOSITORY_RELATIONSHIP_KINDS.map((entry) => ({
@@ -770,14 +763,14 @@ function OverviewTab({
               })),
             ]}
           />
-          <label className="w-full font-body text-[11px] text-neutral-500 sm:w-auto">
+          <label className="font-body text-[11px] text-neutral-500">
             <Input
               value={note}
               aria-label="Relationship note"
               maxLength={REPOSITORY_RELATIONSHIP_NOTE_MAX_LENGTH}
               placeholder="Optional note"
               onChange={(event) => setNote(event.target.value)}
-              className="sm:w-[220px]"
+              className="w-[220px]"
             />
             {note.length} of {REPOSITORY_RELATIONSHIP_NOTE_MAX_LENGTH}
           </label>
@@ -891,15 +884,15 @@ function MemoryTab({
   const [erasing, setErasing] = useState<string | null>(null);
 
   return (
-    <section className="rounded-sm border border-neutral-200 bg-panel px-4 py-3">
-      <h3 className="m-0 font-display text-base font-medium text-coal">Agent memory</h3>
+    <section className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3">
+      <h3 className="m-0 font-display text-[15px] font-medium text-coal">Agent memory</h3>
       <p className="m-0 mt-1 font-body text-[12px] text-neutral-600">
         Two documents per repository, written by runs rather than by hand:
         `facts` is what the agent learned about this repository, `lessons` is
         what it learned from getting it wrong. Erasing one cannot be undone.
       </p>
       {error && (
-        <div className="mt-2 rounded-[3px] border border-fail bg-fail-bg px-2 py-1.5 font-body text-xs text-fail-fg">
+        <div className="mt-2 rounded-[3px] border border-red-300 bg-red-50 px-2 py-[6px] font-body text-[12px] text-red-700">
           {error}
         </div>
       )}
@@ -908,7 +901,7 @@ function MemoryTab({
         return (
           <div
             key={slot.docPath}
-            className="mt-2 rounded-[3px] border border-neutral-200 px-2 py-1.5"
+            className="mt-2 rounded-[3px] border border-neutral-200 px-2 py-[6px]"
           >
             <div className="flex flex-wrap items-baseline justify-between gap-2">
               <span className="font-mono text-[12px] text-neutral-900">{slot.docPath}</span>
@@ -931,13 +924,12 @@ function MemoryTab({
                 </pre>
                 {canDelete && armed !== slot.docPath && (
                   <Button
-                    variant="ghost"
-                    size="sm"
+                    variant="text"
                     onClick={() => {
                       setError(null);
                       setArmed(slot.docPath);
                     }}
-                    className="mt-1"
+                    className="mt-1 appearance-none border-none bg-transparent px-0 font-body text-[12px] text-neutral-500 hover:text-red-600 cursor-pointer"
                   >
                     Erase {slot.docPath}
                   </Button>
@@ -950,7 +942,6 @@ function MemoryTab({
                     </span>
                     <Button
                       variant="danger"
-                      size="sm"
                       disabled={erasing === slot.docPath}
                       onClick={async () => {
                         setError(null);
@@ -975,10 +966,10 @@ function MemoryTab({
                       {erasing === slot.docPath ? "Erasing…" : "Confirm erase"}
                     </Button>
                     <Button
-                      variant="ghost"
-                      size="sm"
+                      variant="text"
                       disabled={erasing === slot.docPath}
                       onClick={() => setArmed(null)}
+                      className="appearance-none border-none bg-transparent px-0 font-body text-[12px] text-neutral-500 cursor-pointer disabled:opacity-40 disabled:cursor-default"
                     >
                       Cancel
                     </Button>
@@ -1055,8 +1046,8 @@ function HistoryTab({
 
   if (all.length === 0) {
     return (
-      <section className="rounded-sm border border-neutral-200 bg-panel px-4 py-3">
-        <h3 className="m-0 font-display text-base font-medium text-coal">History</h3>
+      <section className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3">
+        <h3 className="m-0 font-display text-[15px] font-medium text-coal">History</h3>
         <p className="m-0 mt-1 font-body text-[12px] text-neutral-500">
           No versions yet. This repository is known to the catalog and has never
           been given a profile.
@@ -1068,8 +1059,8 @@ function HistoryTab({
   // one below it, which is the version it replaced.
   const ordered = [...all].sort((a, b) => b.version - a.version);
   return (
-    <section className="rounded-sm border border-neutral-200 bg-panel px-4 py-3">
-      <h3 className="m-0 font-display text-base font-medium text-coal">History</h3>
+    <section className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3">
+      <h3 className="m-0 font-display text-[15px] font-medium text-coal">History</h3>
       {onRestore !== null && (
         <p className="m-0 mt-1 font-body text-[11px] text-neutral-500">
           Restoring mints a NEW version holding that version&apos;s profile. It
@@ -1112,10 +1103,9 @@ function HistoryTab({
             </div>
             {onRestore !== null && version.version !== currentVersion && (
               <Button
-                variant="ghost"
-                size="sm"
+                variant="text"
                 onClick={() => onRestore(version)}
-                className="mt-1"
+                className="mt-1 appearance-none border-none bg-transparent px-0 font-body text-[12px] text-mariner cursor-pointer"
               >
                 Restore this version
               </Button>
@@ -1123,7 +1113,7 @@ function HistoryTab({
           </li>
         ))}
       </ul>
-      {error && <p className="m-0 mt-2 font-body text-xs text-fail-fg">{error}</p>}
+      {error && <p className="m-0 mt-2 font-body text-[12px] text-red-600">{error}</p>}
       {more && (
         <Button
           variant="secondary"
@@ -1242,7 +1232,7 @@ function ChecksCeilingField({
         bounds the run and not one repository&apos;s share of it.
       </p>
       {invalid && (
-        <p role="status" className="m-0 mt-1 font-body text-[11px] text-fail-fg">
+        <p role="status" className="m-0 mt-1 font-body text-[11px] text-red-600">
           {CHECKS_CEILING_FIELD_ERROR}
         </p>
       )}
@@ -1318,8 +1308,8 @@ function SuggestionHistory({ repositoryId }: { repositoryId: number }) {
   }
 
   return (
-    <section className="rounded-sm border border-neutral-200 bg-panel px-4 py-3">
-      <h3 className="m-0 font-display text-base font-medium text-coal">
+    <section className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-3">
+      <h3 className="m-0 font-display text-[15px] font-medium text-coal">
         Suggestion calls
       </h3>
       <p className="m-0 mt-1 font-body text-[11px] text-neutral-500">
@@ -1328,7 +1318,7 @@ function SuggestionHistory({ repositoryId }: { repositoryId: number }) {
         free.
       </p>
       {error && (
-        <p className="m-0 mt-2 font-body text-xs text-fail-fg">{error}</p>
+        <p className="m-0 mt-2 font-body text-[12px] text-red-600">{error}</p>
       )}
       {rows === null && error === null && (
         <p className="m-0 mt-2 font-body text-[12px] text-neutral-500">Loading…</p>
