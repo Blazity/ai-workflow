@@ -178,8 +178,10 @@ export async function runHarnessProfilePreviewCanary(
     const customProvider = custom.manifest!.harness.provider;
     await assertPinnedSkillExists(sql, env, custom.organizationId);
 
+    // The tool schema caps limit at 100 (mcp-contract.json); 200 is rejected as
+    // VALIDATION_FAILED before the handler runs.
     const listed = await mcp.call<WorkflowListData>("workflows.list", {
-      limit: 200,
+      limit: 100,
     });
     if (listed.truncated) {
       throw new Error("Workflow list is truncated before canary fixture validation");
@@ -728,7 +730,13 @@ async function createCanaryMcpClient(
       const result = await client.callTool({ name, arguments: args });
       const envelope = result.structuredContent as { data?: T } | undefined;
       if (result.isError || envelope?.data === undefined) {
-        throw new Error(`MCP tool ${name} failed`);
+        const detail = Array.isArray(result.content)
+          ? result.content
+              .flatMap((block) => (block.type === "text" ? [block.text] : []))
+              .join(" ")
+              .slice(0, 300)
+          : "";
+        throw new Error(`MCP tool ${name} failed${detail ? `: ${detail}` : ""}`);
       }
       return envelope.data;
     },
