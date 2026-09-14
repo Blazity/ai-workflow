@@ -230,9 +230,11 @@ migrations run during every deploy's build step.
 2. Connect it to the ai-workflow Vercel project.
 3. **Critical:** enable a **separate branch per environment** (development /
    preview / production) when configuring the integration. Each environment's
-   `DATABASE_URL` must point at its own Neon branch. The build fails with an
-   `env_marker` error if two environments share one branch — that guard
-   protects the production run registry from preview deployments.
+   `DATABASE_URL` must point at its own Neon branch. The single exception is
+   the `ai-workflow-demo` engine canary environment. It shares the production
+   branch and declares the owner with `DATABASE_SHARED_WITH=production`. The
+   build fails with an `env_marker` error if any other environments share one
+   branch, which protects the production run registry from preview deployments.
 
 Verify:
 
@@ -243,7 +245,8 @@ vercel env ls | grep DATABASE_URL
 You should see `DATABASE_URL` present for each environment. (`vercel env ls`
 shows values as Encrypted, so it can't confirm branch isolation — use the
 pull-and-compare check in `.claude/skills/init-neon/` to verify each
-environment points at its own Neon branch.)
+environment points at its own Neon branch, except for the documented engine
+canary environment.)
 
 ---
 
@@ -529,6 +532,13 @@ ENGINE_CANARY_TARGET=ai-workflow-demo
 ENGINE_CANARY_DB_ENV=production
 ENGINE_CANARY_DB_FINGERPRINT=d1995828824d
 ```
+
+In the `ai-workflow-demo` Vercel environment, set `DATABASE_URL` to the
+production connection string as a manual entry and set
+`DATABASE_SHARED_WITH=production`. Remove the Neon integration value for
+`DATABASE_URL` from that environment because it points at a separate branch.
+Every retired settings variable listed in section 14 must also be absent from
+that environment because the build refuses those variables.
 
 The current alias is
 `https://ai-workflow-app-env-ai-workflow-demo-blazity.vercel.app`. Read the
