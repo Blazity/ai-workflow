@@ -92,6 +92,8 @@ export class McpPublicError extends Error {
     // undone. A mutation may only give an idempotency key back on this one,
     // because guessing wrong here means a second run on somebody's ticket.
     readonly effectNotApplied: boolean = false,
+    /** Present only when a service exposes an already redacted failure reason. */
+    readonly failureReason?: string,
   ) {
     super(safeMessage);
     this.name = "McpPublicError";

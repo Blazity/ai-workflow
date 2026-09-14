@@ -544,6 +544,33 @@ export interface RepositoryCatalogSuggestResponse {
   costUsd: number | null;
 }
 
+/** The stable codes a suggestion call may answer after work has started. */
+export const REPOSITORY_CATALOG_SUGGEST_ERROR_CODES = [
+  "profile_source_timed_out",
+  "profile_source_failed",
+  "suggestion_timed_out",
+  "suggestion_provider_unavailable",
+  "suggestion_rate_limited",
+  "repository_missing_at_provider",
+  "suggestion_malformed",
+  "suggestion_failed",
+] as const;
+export type RepositoryCatalogSuggestErrorCode =
+  (typeof REPOSITORY_CATALOG_SUGGEST_ERROR_CODES)[number];
+export type RepositoryCatalogSuggestFailureCode = Exclude<
+  RepositoryCatalogSuggestErrorCode,
+  "suggestion_rate_limited"
+>;
+
+/** A failed call, with the same safe reason written to its history row. */
+export interface RepositoryCatalogSuggestError {
+  error: RepositoryCatalogSuggestFailureCode;
+  failureReason: string | null;
+}
+
+/** The most provider failure text exposed by HTTP, MCP, or the dashboard. */
+export const REPOSITORY_SUGGESTION_FAILURE_REASON_MAX_LENGTH = 500;
+
 /**
  * What a refused suggestion answers with when the repository has had too many
  * of them too recently.
@@ -581,6 +608,7 @@ export const REPOSITORY_SUGGESTION_PAGE_SIZE = 50;
  * or skip one.
  */
 export interface RepositoryCatalogSuggestionsResponse {
+  /** Each record carries its redacted failure reason, or null for success. */
   suggestions: RepositorySuggestionRecord[];
   /** Opaque; hand it back as `cursor` for the next page. Null on the last
    *  page. */

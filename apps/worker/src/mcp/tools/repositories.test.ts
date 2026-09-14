@@ -197,6 +197,7 @@ function errorOf(result: ToolResult): {
   message: string;
   retryable?: boolean;
   retryAfterMs?: number;
+  failureReason?: string;
 } {
   const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
   return (JSON.parse(text) as { error: { code: string; message: string } }).error;
@@ -1471,6 +1472,8 @@ describe("repositories.suggest", () => {
       code: "DEPENDENCY_UNAVAILABLE",
       message: "profile_source_failed",
       retryable: true,
+      failureReason:
+        "profile source: no github provider is configured on this deployment",
     });
     // The failed attempt is still recorded, because it is what the hourly
     // budget counts and what the cost page reads.

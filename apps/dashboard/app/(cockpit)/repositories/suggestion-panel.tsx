@@ -29,7 +29,7 @@ import { emptyScriptsEntry } from "@/components/cockpit/screens/repositories/scr
 type State =
   | { kind: "idle" }
   | { kind: "pending"; retrying: boolean }
-  | { kind: "failed"; message: string; retryable: boolean }
+  | { kind: "failed"; message: string; retryable: boolean; failureReason: string | null }
   | { kind: "proposed"; answer: RepositoryCatalogSuggestResponse };
 
 function errorCodeOf(error: unknown): string {
@@ -39,6 +39,12 @@ function errorCodeOf(error: unknown): string {
     if (typeof value === "string" && value.trim().length > 0) return value.trim();
   }
   return "";
+}
+
+function failureReasonOf(error: unknown): string | null {
+  if (!error || typeof error !== "object") return null;
+  const value = (error as { failureReason?: unknown }).failureReason;
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
 function CommandList({
@@ -131,6 +137,7 @@ export function SuggestionPanel({
         );
         setState({
           kind: "failed",
+          failureReason: null,
           ...suggestionFailureCopy({
             status: 429,
             code: "suggestion_rate_limited",
@@ -148,7 +155,11 @@ export function SuggestionPanel({
           await ask(true);
           return;
         }
-        setState({ kind: "failed", ...copy });
+        setState({
+          kind: "failed",
+          failureReason: failureReasonOf(result.error),
+          ...copy,
+        });
         return;
       }
       setState({ kind: "proposed", answer: result.data as RepositoryCatalogSuggestResponse });
@@ -157,6 +168,7 @@ export function SuggestionPanel({
         kind: "failed",
         message: "Could not reach the server. Check your connection and try again.",
         retryable: true,
+        failureReason: null,
       });
     } finally {
       inFlight.current = false;
@@ -232,7 +244,12 @@ export function SuggestionPanel({
             role="status"
             className="rounded-[3px] border border-red-300 bg-red-50 px-2 py-[6px] font-body text-[12px] text-red-700"
           >
-            {state.message}
+            <div>{state.message}</div>
+            {state.failureReason && (
+              <div className="mt-1 font-body text-[12px] font-normal text-neutral-700">
+                {state.failureReason}
+              </div>
+            )}
           </div>
           {state.retryable && !cooling && (
             <Button

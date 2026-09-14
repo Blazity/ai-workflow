@@ -270,6 +270,24 @@ test("a malformed answer offers nothing and never shows the provider's own words
   assert.equal(harness.calls(), 1, "a 502 is not retried by the screen");
 });
 
+test("a failed profile read shows its redacted reason under the generic sentence", async (t) => {
+  const harness = render(t, [
+    () =>
+      Response.json(
+        {
+          error: "profile_source_failed",
+          failureReason: "profile source: GitHub answered 403 Forbidden",
+        },
+        { status: 502 },
+      ),
+  ]);
+  await ask(harness);
+  const rendered = text(harness.root);
+
+  assert.match(rendered, /Reading the repository failed\. Nothing was changed\./);
+  assert.match(rendered, /profile source: GitHub answered 403 Forbidden/);
+});
+
 test("a rate limit names the wait, counts it down, and refuses the click until it passes", async (t) => {
   const harness = render(t, [
     () =>

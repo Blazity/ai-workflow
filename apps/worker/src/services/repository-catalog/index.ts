@@ -31,6 +31,7 @@ export {
   REPOSITORY_SUGGESTION_RATE_LIMIT,
   REPOSITORY_SUGGESTION_RATE_WINDOW_MS,
   REPOSITORY_SUGGESTION_TIMEOUT_MS,
+  RepositorySuggestionFailureError,
   RepositorySuggestionRateLimitedError,
   resetRepositorySuggestionsInFlightForTests,
   suggestRepositoryProfile,

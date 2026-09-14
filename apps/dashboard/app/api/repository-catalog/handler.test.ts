@@ -188,6 +188,20 @@ test("a suggestion refused for the rate limit keeps its 429 and its wait", async
   });
 });
 
+test("a suggestion failure keeps its status, code, and redacted reason", async () => {
+  const failure = {
+    error: "profile_source_failed",
+    failureReason: "profile source: GitHub answered 403 Forbidden",
+  };
+  const response = await handleCatalogSuggest(
+    post("https://dashboard.test/api/repository-catalog/suggest", { repositoryId: 4 }),
+    async () => Response.json(failure, { status: 502 }),
+  );
+
+  assert.equal(response.status, 502);
+  assert.deepEqual(await response.json(), failure);
+});
+
 test("a member's 403 on a write is passed through rather than turned into an error page", async () => {
   const response = await handleCatalogEnabledPatch(
     "7",

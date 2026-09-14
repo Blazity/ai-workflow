@@ -44,6 +44,7 @@ import {
 import {
   REPOSITORY_SUGGESTION_TIMEOUT_MS,
   RepositorySuggestionRateLimitedError,
+  RepositorySuggestionFailureError,
   activateRepositoryCatalog,
   commitRepositoryImport,
   countRepositoryProfileVersions,
@@ -160,6 +161,16 @@ function throwPublicCatalogError(error: unknown): never {
       // Refused by the predicate the writing statement carries, so the write
       // never happened and the idempotency key is free to reuse.
       true,
+    );
+  }
+  if (error instanceof RepositorySuggestionFailureError) {
+    throw new McpPublicError(
+      error.statusCode === 404 ? "NOT_FOUND" : "DEPENDENCY_UNAVAILABLE",
+      error.message,
+      error.statusCode !== 404,
+      undefined,
+      true,
+      error.failureReason ?? undefined,
     );
   }
   if (error instanceof DashboardAuthError) {

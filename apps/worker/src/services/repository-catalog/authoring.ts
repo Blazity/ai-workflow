@@ -42,6 +42,7 @@ import {
 } from "../../db/repositories/repository-suggestions.js";
 import { getConnectedDashboardUserLabel, type DashboardRole } from "../auth/index.js";
 import { loadRepositoryCatalogEntries, serializeRepositoryCatalogEntry } from "./store.js";
+import { publicSuggestionFailureReason } from "./suggestion-failure.js";
 import { serializeRepositoryProfileVersion } from "./versions.js";
 
 /** Who is acting, as the profile version records them. */
@@ -286,6 +287,8 @@ export async function readRepositorySuggestions(input: {
         tokensInput: row.tokensInput,
         tokensOutput: row.tokensOutput,
         durationMs: row.durationMs,
+        failureReason:
+          row.outcome === "proposed" ? null : publicSuggestionFailureReason(row.error),
         // Unpriced, never zero: the provider reported nothing, which is what a
         // timeout and a repository missing at the provider both look like.
         priced: row.tokensInput !== null || row.tokensOutput !== null,

@@ -14,6 +14,7 @@ import {
   repositoryCatalogStateSchema,
   REPOSITORY_CATALOG_SEED_ACTIVATION_REASON,
   REPOSITORY_CATALOG_SEED_ACTOR_LABEL,
+  REPOSITORY_CATALOG_SUGGEST_ERROR_CODES,
   pinnedRepositoriesNotEnabledSentence,
   repositoryProfileVersionSchema,
   REPOSITORY_SCRIPT_GROUP_NAME_MAX_LENGTH,
@@ -539,6 +540,19 @@ describe("the suggestion outcomes", () => {
       "malformed",
       "failed",
       "missing",
+    ]);
+  });
+
+  it("publishes every suggestion refusal code, including profile source failures", () => {
+    expect([...REPOSITORY_CATALOG_SUGGEST_ERROR_CODES]).toEqual([
+      "profile_source_timed_out",
+      "profile_source_failed",
+      "suggestion_timed_out",
+      "suggestion_provider_unavailable",
+      "suggestion_rate_limited",
+      "repository_missing_at_provider",
+      "suggestion_malformed",
+      "suggestion_failed",
     ]);
   });
 });

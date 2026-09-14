@@ -2,6 +2,7 @@ import { createError, defineEventHandler, readBody, setResponseHeader, setRespon
 import {
   parseRequestBody,
   repositoryCatalogSuggestRequestSchema,
+  type RepositoryCatalogSuggestError,
   type RepositoryCatalogSuggestRateLimited,
   type RepositoryCatalogSuggestResponse,
 } from "@shared/contracts";
@@ -11,6 +12,7 @@ import {
 } from "../../../../services/auth/request-context.js";
 import {
   RepositorySuggestionRateLimitedError,
+  RepositorySuggestionFailureError,
   suggestRepositoryProfile,
 } from "../../../../services/repository-catalog/index.js";
 
@@ -41,7 +43,10 @@ export default defineEventHandler(
   async (
     event,
   ): Promise<
-    RepositoryCatalogSuggestResponse | RepositoryCatalogSuggestRateLimited | undefined
+    | RepositoryCatalogSuggestResponse
+    | RepositoryCatalogSuggestError
+    | RepositoryCatalogSuggestRateLimited
+    | undefined
   > => {
     try {
       const actor = await requireDashboardActor(event);
@@ -57,6 +62,17 @@ export default defineEventHandler(
         repositoryId: parsed.value.repositoryId,
       });
     } catch (error) {
+      // Work started and its row was written. Return the stable code beside the
+      // same bounded, redacted reason the history route exposes. A response
+      // body is deliberate here: H3 error metadata would nest the reason under
+      // `data`, while the dashboard proxy passes this top level object through.
+      if (error instanceof RepositorySuggestionFailureError) {
+        setResponseStatus(event, error.statusCode);
+        return {
+          error: error.code,
+          failureReason: error.failureReason,
+        };
+      }
       // A 429 carrying the wait is a body rather than a bare status, the way
       // the activation conflict is: the screen has something useful to say and
       // `toHttpError` can only carry a message. The header is set as well, for
