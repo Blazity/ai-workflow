@@ -4,11 +4,11 @@
 import { useEffect, useRef, useState } from "react";
 import { createLivePoll } from "./live-poll";
 
-/** Live-mode poll cadence (ms). Single source of truth — tune here. */
+/** Live-mode poll cadence (ms). Single source of truth, tune here. */
 export const LIVE_POLL_MS = 5000;
 
 /**
- * Cadence for a surface that is still worth watching but has nothing in flight —
+ * Cadence for a surface that is still worth watching but has nothing in flight,
  * a runs list whose visible runs have all finished still has to notice the next
  * run starting. Slower rather than stopped, which is what AIW-266 asks for.
  */

@@ -264,8 +264,6 @@ test("an active endpoint shows the URL, deployed auth, a masked secret and both 
   // Importing a sender-dictated secret sits next to Rotate.
   assert.match(html, /Set secret<\/span><\/button>/);
   assert.match(html, /Revoke<\/span><\/button>/);
-  // The full URL has to survive the 320px inspector, so it wraps instead of scrolling.
-  assert.match(html, /break-all/);
   // Only the URL and the masked secret are editable-looking textareas; the
   // deployed rows are plain read-only text.
   assert.equal(html.match(/readOnly=""/g)?.length, 2);

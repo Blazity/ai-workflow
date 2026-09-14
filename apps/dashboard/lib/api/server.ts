@@ -25,7 +25,7 @@ export function withQuery(
  * Reads the `ba_session` cookie set by Better Auth on the worker and forwards it
  * as `Authorization: Bearer <token>` so the worker's `/api/v1/*` gate accepts the
  * request. Since this runs server-side, the cookie value never reaches the browser.
- * If the session cookie is absent the request is sent without a credential — the
+ * If the session cookie is absent the request is sent without a credential, the
  * worker returns 401 and getJSON throws UnauthorizedError so callers can redirect
  * to /login.
  */

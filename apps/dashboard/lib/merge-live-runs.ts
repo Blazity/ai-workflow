@@ -3,7 +3,7 @@ import type { RunsResponse, LiveRunsResponse, RunStatus } from "@shared/contract
 /**
  * Statuses the run store reports only once a run has finished. The workflow
  * writes its own authoritative success/failed on completion (recordRunUsage),
- * and the poll cron records cancellations as blocked — none of which a live
+ * and the poll cron records cancellations as blocked, none of which a live
  * overlay row may override.
  */
 const TERMINAL_STATUSES = new Set<RunStatus>(["success", "failed", "blocked"]);

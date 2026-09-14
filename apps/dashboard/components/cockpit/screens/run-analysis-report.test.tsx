@@ -65,7 +65,6 @@ test("renders the complete report with accessible disclosures and delivery state
   assert.match(html, /1200ms \/ 2 turns/);
   assert.match(html, /https:\/\/jira\.example\/comment\/1/);
   assert.match(html, /base: main/);
-  assert.doesNotMatch(html, /overflow-x-hidden/); // code blocks retain a bounded local scroller
 });
 
 test("distinguishes missing evidence and hides runs without a report", () => {

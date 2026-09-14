@@ -12,7 +12,7 @@ import type { OverviewScreenData } from "@/components/cockpit/screens/overview";
 import { Button } from "@/components/ui/button";
 import { formatAgeMinutes } from "@/lib/date-time";
 
-const EM_DASH = "\u2014";
+const MISSING_VALUE = "n/a";
 
 export function OverviewMobileScreen({
   data,
@@ -50,10 +50,10 @@ export function OverviewMobileScreen({
       </div>
 
       <div className="grid grid-cols-2 gap-2.5">
-        <CkKPI label={`Runs ${wShort}`} value={k.runs24h ? k.runs24h.value.toLocaleString("en-US") : EM_DASH} />
-        <CkKPI label="p95" value={k.p95 ? `${k.p95.valueSec}s` : EM_DASH} />
-        <CkKPI label={`Errors ${wShort}`} value={k.errors24h ? k.errors24h.value.toString() : EM_DASH} />
-        <CkKPI label={`Cost ${wShort}`} value={k.cost24h ? `$${k.cost24h.value.toFixed(0)}` : EM_DASH} />
+        <CkKPI label={`Runs ${wShort}`} value={k.runs24h ? k.runs24h.value.toLocaleString("en-US") : MISSING_VALUE} />
+        <CkKPI label="p95" value={k.p95 ? `${k.p95.valueSec}s` : MISSING_VALUE} />
+        <CkKPI label={`Errors ${wShort}`} value={k.errors24h ? k.errors24h.value.toString() : MISSING_VALUE} />
+        <CkKPI label={`Cost ${wShort}`} value={k.cost24h ? `$${k.cost24h.value.toFixed(0)}` : MISSING_VALUE} />
       </div>
 
       {running.length > 0 && (
@@ -80,7 +80,7 @@ export function OverviewMobileScreen({
                     </div>
                     <div className="mt-1.5 flex items-center gap-1.5 font-mono text-[11px]">
                       <span className="text-neutral-900 font-medium overflow-hidden text-ellipsis whitespace-nowrap flex-1">{r.currentSpan}</span>
-                      <span className="text-neutral-500">{r.spanIndex ?? EM_DASH}/{r.spansTotal ?? EM_DASH}</span>
+                      <span className="text-neutral-500">{r.spanIndex ?? MISSING_VALUE}/{r.spansTotal ?? MISSING_VALUE}</span>
                     </div>
                   </>
                 )}
@@ -194,10 +194,10 @@ export function OverviewMobileScreen({
                   <span className="font-mono text-[10px] text-neutral-500">· {w.gateway}</span>
                 </div>
                 <div className="grid grid-cols-4 gap-2 mt-2.5 pt-2 border-t border-neutral-200">
-                  <Stat label="Runs" value={w.runs24h === null ? EM_DASH : w.runs24h.toLocaleString("en-US")} />
-                  <Stat label="p95" value={w.p95 === null ? EM_DASH : `${w.p95}s`} />
-                  <Stat label="Err" value={w.errRate === null ? EM_DASH : `${(w.errRate * 100).toFixed(1)}%`} />
-                  <Stat label="Cost" value={w.costToday === null ? EM_DASH : `$${w.costToday.toFixed(0)}`} />
+                  <Stat label="Runs" value={w.runs24h === null ? MISSING_VALUE : w.runs24h.toLocaleString("en-US")} />
+                  <Stat label="p95" value={w.p95 === null ? MISSING_VALUE : `${w.p95}s`} />
+                  <Stat label="Err" value={w.errRate === null ? MISSING_VALUE : `${(w.errRate * 100).toFixed(1)}%`} />
+                  <Stat label="Cost" value={w.costToday === null ? MISSING_VALUE : `$${w.costToday.toFixed(0)}`} />
                 </div>
               </div>
             ))}

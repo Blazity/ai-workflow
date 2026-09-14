@@ -185,9 +185,7 @@ test("prompt library editor owns focus, traps Tab, dismisses, and restores the E
       await new Promise((resolve) => setTimeout(resolve, 20));
     });
     dialog = openDialog();
-    const backdrop = Array.from(document.querySelectorAll<HTMLElement>("div")).find(
-      (element) => element.className.includes("absolute inset-0 bg-coal/40"),
-    );
+    const backdrop = document.querySelector<HTMLElement>("[data-modal-overlay]");
     assert.ok(backdrop, "expected the production modal backdrop");
     act(() => {
       backdrop.dispatchEvent(new MouseEvent("mousedown", {

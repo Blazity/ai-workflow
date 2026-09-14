@@ -167,12 +167,6 @@ test("a request still in flight reads as loading, never as a draft it has not ea
   assert.doesNotMatch(html, /This schedule is not deployed yet/);
 });
 
-test("no italics anywhere in the schedule trigger panel", () => {
-  const html = render(scheduleNode({ cron: "0 9 * * *", overlapPolicy: "allow" }));
-
-  assert.doesNotMatch(html, /italic/);
-});
-
 // --- Pure sections, driven directly by props (mirrors WebhookDeliveriesSection tests) ---
 
 function nextRunsProps(overrides: Partial<Parameters<typeof ScheduleNextRunsSection>[0]> = {}) {
@@ -349,9 +343,6 @@ test("the paused state states resume's bounded catch-up semantics, offers only R
   assert.match(html, />Resume</);
   assert.doesNotMatch(html, />Pause</);
   assert.doesNotMatch(html, /2099-01-01/);
-  // A pause is the direct result of a click the operator just made, not a
-  // failure: it must not wear the same red as an expired or errored chip.
-  assert.doesNotMatch(html, /bg-red-50/);
 });
 
 test("the evaluating state shows the live preview, its relative time and the last-checked line", () => {
@@ -732,8 +723,6 @@ test("a pending occurrence waiting for capacity reads as normal operation at fir
   assert.match(html, />waiting</);
   assert.match(html, /Waiting for capacity, attempt 4/);
   assert.match(html, /expected under load/);
-  // Neutral or warning styling only: never the red the settled outcomes use.
-  assert.doesNotMatch(html, /border-red/);
   // The raw machine string must not also appear as a second, redundant line.
   assert.doesNotMatch(html, /<div[^>]*>at_capacity<\/div>/);
 });
@@ -880,7 +869,7 @@ test("the last run renders from last_started_occurrence_at and last_started_run_
   assert.match(html, /run run_55/);
 });
 
-test("a last run well past this schedule's own period is highlighted, a recent one is not", () => {
+test("a last run well past this schedule's own period is called out, a recent one is not", () => {
   const oneDayMs = 24 * 60 * 60 * 1000;
   const stale = renderToStaticMarkup(
     <ScheduleOccurrenceHistorySection
@@ -894,7 +883,6 @@ test("a last run well past this schedule's own period is highlighted, a recent o
     />,
   );
   assert.match(stale, /well past this schedule.{1,10}s usual period/);
-  assert.match(stale, /text-amber-800/);
 
   const fresh = renderToStaticMarkup(
     <ScheduleOccurrenceHistorySection

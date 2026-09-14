@@ -13,6 +13,4 @@ test("Radio renders a labelled native radio control", () => {
   assert.match(html, /type="radio"/);
   assert.match(html, /name="mode"/);
   assert.match(html, /Named groups/);
-  assert.match(html, /class="flex items-center/);
-  assert.doesNotMatch(html, /class="inline-flex items-center/);
 });

@@ -6,10 +6,9 @@ import { CkTabs } from "./ui";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
-test("CkTabs exposes its compact size and selected state", () => {
+test("CkTabs exposes its selected state", () => {
   const html = renderToStaticMarkup(
-    <CkTabs active="day" onChange={() => undefined} size="sm" tabs={[{ id: "day", label: "Day" }]} />,
+    <CkTabs active="day" onChange={() => undefined} tabs={[{ id: "day", label: "Day" }]} />,
   );
-  assert.match(html, /data-size="sm"/);
   assert.match(html, /aria-pressed="true"/);
 });

@@ -27,7 +27,7 @@ export async function TicketMobileListData({
 }
 
 /**
- * The selected run's trace — its own Suspense boundary so switching runs streams
+ * The selected run's trace, its own Suspense boundary so switching runs streams
  * a fresh skeleton without touching the rail. When a run is named in the URL
  * (a rail click / deep link) we fetch it directly and never block on the runs
  * list; only the default (newest) run needs the list, on first load of

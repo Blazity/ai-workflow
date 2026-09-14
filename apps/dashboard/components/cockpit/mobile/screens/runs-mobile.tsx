@@ -21,7 +21,7 @@ import {
 
 const PAGE_SIZE = 25;
 
-const EM_DASH = "\u2014";
+const MISSING_VALUE = "n/a";
 
 type CancelFeedback = { tone: "success" | "info" | "warn" | "error"; message: string };
 
@@ -235,8 +235,8 @@ export function RunsMobileScreen({
               {identity.showRunIdMeta && <span className="font-mono text-[10px] text-neutral-500">{r.id}</span>}
             </div>
             <div className="grid grid-cols-2 gap-2 mt-3 pt-2.5 border-t border-neutral-200 font-mono">
-              <Metric label="Dur" value={r.duration === null ? EM_DASH : `${r.duration}s`} />
-              <Metric label="Cost" value={r.cost === null ? EM_DASH : `$${r.cost.toFixed(2)}`} />
+              <Metric label="Dur" value={r.duration === null ? MISSING_VALUE : `${r.duration}s`} />
+              <Metric label="Cost" value={r.cost === null ? MISSING_VALUE : `$${r.cost.toFixed(2)}`} />
             </div>
           </div>
           );

@@ -3,7 +3,7 @@ function Block({ className = "" }: { className?: string }) {
   return <div className={`bg-neutral-200/60 rounded-sm animate-pulse ${className}`} />;
 }
 
-/** Desktop shell fallback — fills the `header` and `rail` grid areas. */
+/** Desktop shell fallback, fills the `header` and `rail` grid areas. */
 export function TicketShellSkeleton() {
   return (
     <>

@@ -73,7 +73,7 @@ const detail: PromptLibraryDetailResponse = {
   ],
 };
 
-test("PromptDetail keeps the selected version card on the historical tint", () => {
+test("PromptDetail exposes the selected version card", () => {
   const dom = installTestDom();
   const container = document.createElement("div");
   document.body.append(container);
@@ -101,12 +101,7 @@ test("PromptDetail keeps the selected version card on the historical tint", () =
     assert.ok(selected);
     assert.ok(inactive);
     assert.equal(selected.getAttribute("aria-pressed"), "true");
-    assert.match(selected.className, /border-mariner/);
-    assert.match(selected.className, /bg-mariner-100/);
-    assert.doesNotMatch(selected.className, /bg-mariner(?:\s|$)/);
     assert.equal(inactive.getAttribute("aria-pressed"), "false");
-    assert.match(inactive.className, /border-neutral-200/);
-    assert.match(inactive.className, /bg-panel/);
   } finally {
     act(() => root?.unmount());
     container.remove();

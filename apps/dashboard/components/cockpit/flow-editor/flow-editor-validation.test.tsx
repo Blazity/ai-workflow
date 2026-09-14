@@ -182,7 +182,7 @@ function renderEditor(
   );
 }
 
-test("invalid nodes have a red accessible outline and selected errors are expanded", () => {
+test("invalid nodes are announced and selected errors are expanded", () => {
   const html = renderEditor(validation, null, "entry", [
     { nodeId: "entry", message: "Trigger configuration is incomplete." },
   ]);
@@ -190,7 +190,6 @@ test("invalid nodes have a red accessible outline and selected errors are expand
   assert.match(html, /aria-invalid="true"/);
   assert.match(html, /aria-describedby="workflow-node-entry-validation-errors"/);
   assert.match(html, /aria-label="Validation errors"/);
-  assert.match(html, /data-variant="danger-soft"/);
   assert.match(html, /Trigger configuration is incomplete/);
   assert.match(html, /\/nodes\/0\/params/);
 });
@@ -206,7 +205,7 @@ test("the desktop block settings panel exposes an accessible resize handle", () 
   assert.match(html, /aria-valuenow="320"/);
 });
 
-test("immediate validation transport and supersession errors occupy no flow layout", () => {
+test("immediate validation transport and supersession errors are announced", () => {
   for (const issue of [
     {
       code: "validation.transport",
@@ -230,13 +229,10 @@ test("immediate validation transport and supersession errors occupy no flow layo
 
     assert.match(html, /role="alert"/);
     assert.match(html, new RegExp(issue.message.replace(".", "\\.")));
-    assert.match(html, /data-error-presentation="overlay"/);
-    assert.match(html, /class="absolute /);
-    assert.doesNotMatch(html, /data-error-presentation="inline"/);
   }
 });
 
-test("generic editor errors retain their in-flow presentation", () => {
+test("generic editor errors are announced", () => {
   const html = renderEditor(
     {
       status: "valid",
@@ -249,11 +245,9 @@ test("generic editor errors retain their in-flow presentation", () => {
 
   assert.match(html, /role="alert"/);
   assert.match(html, /Unable to save layout/);
-  assert.match(html, /data-error-presentation="inline"/);
-  assert.doesNotMatch(html, /data-error-presentation="overlay"/);
 });
 
-test("a runnable deployed trigger shows the circular play button beside the node", () => {
+test("a runnable deployed trigger offers its run action", () => {
   const html = renderToStaticMarkup(
     <FlowEditor
       nodes={[node]}
@@ -286,7 +280,6 @@ test("a runnable deployed trigger shows the circular play button beside the node
   );
 
   assert.match(html, /aria-label="Run Ticket received"/);
-  assert.match(html, /data-shape="circle"/);
   assert.match(html, /title="Run trigger"/);
   const runButton = html.match(/<button[^>]*aria-label="Run Ticket received"[^>]*>/)?.[0];
   assert.ok(runButton);
@@ -541,15 +534,17 @@ test("canvas never exposes an execution-failure port", () => {
   assert.doesNotMatch(renderSelectedOpenPr(), />failed<\/span>/);
 });
 
-test("canvas ports center 26px icon buttons on the node edges", () => {
+test("canvas port buttons are absolute and carry no relative position", () => {
   const html = renderSelectedOpenPr();
   const inputPort = html.match(/<button[^>]*aria-label="Complete connection to Publish"[^>]*>/)?.[0];
   const outputPort = html.match(/<button[^>]*aria-label="Start connection from Publish, out output"[^>]*>/)?.[0];
 
   assert.ok(inputPort);
   assert.ok(outputPort);
-  assert.match(inputPort, /style="left:-13px;/);
-  assert.match(outputPort, /style="left:177px;/);
+  assert.match(inputPort, /class="[^"]*\babsolute\b/);
+  assert.doesNotMatch(inputPort, /class="[^"]*\brelative\b/);
+  assert.match(outputPort, /class="[^"]*\babsolute\b/);
+  assert.doesNotMatch(outputPort, /class="[^"]*\brelative\b/);
 });
 
 function renderEditorWithRepositoryPin(

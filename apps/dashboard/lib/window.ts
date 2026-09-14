@@ -32,7 +32,7 @@ export function windowPhrase(w: TimeWindow): string {
   }
 }
 
-/** "vs prior 24h" etc. — empty for "all", which has no comparable prior period. */
+/** "vs prior 24h" etc., empty for "all", which has no comparable prior period. */
 export function windowDeltaSuffix(w: TimeWindow): string {
   return w === "all" ? "" : `vs prior ${w}`;
 }

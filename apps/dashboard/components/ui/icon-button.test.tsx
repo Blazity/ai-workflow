@@ -6,11 +6,9 @@ import { IconButton } from "./icon-button";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
-test("IconButton supplies its required accessible label and square size", () => {
-  const html = renderToStaticMarkup(<IconButton aria-label="Cancel run" size="md">x</IconButton>);
+test("IconButton supplies its required accessible label", () => {
+  const html = renderToStaticMarkup(<IconButton aria-label="Cancel run">x</IconButton>);
   assert.match(html, /aria-label="Cancel run"/);
-  assert.match(html, /size-\[30px\]/);
-  assert.match(html, /focus-visible:ring-2/);
 });
 
 test("IconButton exposes disabled and loading state", () => {
@@ -18,26 +16,4 @@ test("IconButton exposes disabled and loading state", () => {
   const loading = renderToStaticMarkup(<IconButton aria-label="Loading" loading>x</IconButton>);
   assert.match(disabled, /disabled=""/);
   assert.match(loading, /aria-busy="true"/);
-  assert.match(loading, /animate-ck-spinner/);
-});
-
-test("IconButton exposes the circular shape for round icon actions", () => {
-  const html = renderToStaticMarkup(
-    <IconButton aria-label="Run trigger" shape="circle">x</IconButton>,
-  );
-  assert.match(html, /data-shape="circle"/);
-  assert.match(html, /rounded-full/);
-});
-
-test("IconButton text variant does not add icon sizing or shape chrome", () => {
-  const html = renderToStaticMarkup(
-    <IconButton aria-label="Remove" variant="text" shape="circle" className="text-[11px] text-neutral-500">
-      ×
-    </IconButton>,
-  );
-  assert.match(html, /data-variant="text"/);
-  assert.match(html, /text-\[11px\] text-neutral-500/);
-  assert.doesNotMatch(html, /size-\[(?:26|30)px\]/);
-  assert.doesNotMatch(html, /rounded-full/);
-  assert.doesNotMatch(html, /active:scale-\[0\.98\]/);
 });

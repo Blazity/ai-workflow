@@ -26,7 +26,7 @@ export interface LivePoll {
 
 /**
  * There is deliberately no tick budget. A counter cannot know how long the work
- * being watched takes — production runs last 400-730s, so a five minute budget
+ * being watched takes, production runs last 400-730s, so a five minute budget
  * expired mid-run and froze the screen with no signal. Worse, once the budget
  * was spent the visibility handler could no longer restart the interval, so
  * returning to the tab bought a single refresh and then silence. The only thing

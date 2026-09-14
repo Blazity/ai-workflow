@@ -1,7 +1,7 @@
 /* ───── Unified line diff (LCS-based, no external dep) ───── */
 export type DiffLine = { type: "add" | "del" | "ctx"; text: string };
 
-/** Longest-common-subsequence line diff. O(n·m) — fine for prompt-sized bodies. */
+/** Longest-common-subsequence line diff. O(n·m), fine for prompt-sized bodies. */
 function diffLines(oldText: string, newText: string): DiffLine[] {
   const a = oldText.split("\n");
   const b = newText.split("\n");

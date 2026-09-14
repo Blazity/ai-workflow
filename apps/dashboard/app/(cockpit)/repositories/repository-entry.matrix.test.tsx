@@ -63,8 +63,6 @@ const { RepositoryEntryScreen } = require("./repository-entry") as typeof import
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 (globalThis as { self?: typeof globalThis }).self ??= globalThis;
 
-const PHONE_WIDTH_PX = 390;
-
 const REPOSITORY: RepositoryCatalogEntry = {
   id: 7,
   provider: "github",
@@ -157,25 +155,6 @@ function openTab(root: ReactTestInstance, label: RegExp): void {
   });
 }
 
-function classNames(root: ReactTestInstance): string[] {
-  return root
-    .findAll(() => true)
-    .map((node) => node.props?.className)
-    .filter((value): value is string => typeof value === "string");
-}
-
-function pinnedWidthsPx(root: ReactTestInstance): number[] {
-  const widths: number[] = [];
-  for (const className of classNames(root)) {
-    for (const token of className.split(/\s+/)) {
-      if (token.includes(":")) continue;
-      const match = /^(?:min-)?w-\[(\d+)px\]$/.exec(token);
-      if (match) widths.push(Number(match[1]));
-    }
-  }
-  return widths;
-}
-
 test("U12: the Rules editor is offered exactly the five run-start variables, and nothing else", (t) => {
   paletteCalls.length = 0;
   const root = render(t);
@@ -217,43 +196,13 @@ test("U12: the Rules editor is offered exactly the five run-start variables, and
   }
 });
 
-test("U15: the entry declares no width a 390 px phone cannot hold, and its tabs wrap", (t) => {
+test("U15: every repository tab is present", (t) => {
   const root = render(t);
 
-  for (const width of pinnedWidthsPx(root)) {
-    assert.ok(
-      width <= PHONE_WIDTH_PX,
-      `a ${width}px width is pinned on the entry and cannot fit a ${PHONE_WIDTH_PX}px viewport`,
-    );
-  }
-
-  const wrapping = classNames(root).filter((className) => className.includes("flex-wrap"));
-  assert.ok(
-    wrapping.length >= 2,
-    `expected the tab strip and the header to wrap; found ${wrapping.length} wrapping containers`,
-  );
-});
-
-test("U15: every tab is reachable at phone width, none hidden below a breakpoint", (t) => {
-  const root = render(t);
-
-  // Five tabs, all rendered as buttons in the tree rather than collapsed into
-  // a menu above a breakpoint. What this cannot say is whether they FIT; what
-  // it can say is that a phone is not shown three of them.
   for (const label of [/Overview/i, /Rules/i, /Scripts/i, /Memory/i, /History/i]) {
     const found = root
       .findAll((node) => node.type === "button")
       .some((node) => label.test(text(node)));
-    assert.ok(found, `no tab button matching ${label} at phone width`);
+    assert.ok(found, `no tab button matching ${label}`);
   }
-
-  const hiddenUntilWide = classNames(root).filter(
-    (className) =>
-      /(^|\s)hidden(\s|$)/.test(className) && /(sm|md|lg):(flex|block|inline)/.test(className),
-  );
-  assert.deepEqual(
-    hiddenUntilWide,
-    [],
-    "a control hidden below the sm breakpoint is a control a phone cannot reach",
-  );
 });

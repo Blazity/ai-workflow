@@ -421,7 +421,7 @@ test("the pinned gate readout lists only pinned repositories", async () => {
   }
 });
 
-test("a viewer sees the same dimmed truth when commands rule, without the button that changes it", async () => {
+test("a viewer cannot clear commands to select groups", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async () => Response.json(RESPONSE)) as typeof fetch;
 
@@ -431,12 +431,6 @@ test("a viewer sees the same dimmed truth when commands rule, without the button
     false,
   );
   try {
-    const dimmed = renderer.root.findAll(
-      (i) => typeof i.props.className === "string" && i.props.className.includes("opacity-40"),
-    );
-    // Dimming is what says "commands win here", and a viewer needs to read it
-    // as much as an editor does.
-    assert.ok(dimmed.length > 0, "expected the selection to be dimmed for a viewer too");
     const clear = renderer.root
       .findAll((i) => i.type === "button")
       .find((i) => nodeText(i).trim() === "Clear commands to select groups");

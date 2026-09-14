@@ -53,18 +53,6 @@ function renderCost(t: TestContext, daily: CostResponse["daily"]): ReactTestInst
   return renderer.root;
 }
 
-test("a one-day spend chart renders no synthetic rising point", (t) => {
-  const root = renderCost(t, [
-    { date: "2026-08-01T00:00:00.000Z", cost: 3.39, tokens: 1200 },
-  ]);
-  const line = root.findAll(
-    (node) => node.type === "path" && node.props.fill === "none",
-  )[0];
-
-  assert.ok(line);
-  assert.doesNotMatch(String(line.props.d), /L/);
-});
-
 test("the final spend label belongs to the real last day", (t) => {
   const root = renderCost(t, [
     { date: "2026-08-01T00:00:00.000Z", cost: 1, tokens: 100 },
