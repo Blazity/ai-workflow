@@ -1,5 +1,5 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { open, stat } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -26,10 +26,24 @@ import {
   assertReplayCanaryEvidence,
   createReplayCanaryFixture,
   parseReplayCanaryEnv,
+  parseReplayCanaryLogLines,
+  REPLAY_CANARY_COVERAGE_PATHS,
   REPLAY_CANARY_FIXTURE_NONCE,
+  scanReplayCanaryLogRows,
   type ReplayCanaryEnv,
   type ReplayCanaryFixture,
+  type ReplayCanaryLogWindow,
 } from "../replay/canary-contract.js";
+
+// The historical query replaced a `--follow` stream: the stream prints a
+// keepalive line every few seconds, so a file fed by it never settles, and its
+// lines never named the run, so coverage by run id could not pass either.
+const REPLAY_CANARY_VERCEL_CLI = "vercel@59.17.0";
+const REPLAY_CANARY_LOG_QUERY_LIMIT = 1_000;
+// Vercel indexes a request some seconds after it answers, so the query starts
+// before the run and is retried until the step route shows up.
+const REPLAY_CANARY_LOG_SINCE_GRACE_MS = 30_000;
+const REPLAY_CANARY_LOG_QUERY_FLOOR_MS = 30_000;
 
 type SqlClient = ReturnType<typeof neon>;
 
@@ -117,12 +131,6 @@ interface RunLogsDetail {
 interface ReplayCaseVerification {
   env: ReplayCanaryEnv;
   fixture: ReplayCanaryFixture;
-  logCapture: ReplayLogCapture;
-}
-
-interface ReplayLogCapture {
-  path: string;
-  startOffset: number;
 }
 
 interface CanaryMcpClient {
@@ -182,9 +190,6 @@ export async function runHarnessProfilePreviewCanary(
       customProvider,
     });
 
-    const replayLogCapture = replayEnv
-      ? await prepareReplayLogCapture(replayEnv)
-      : null;
     const replayFixture = replayEnv
       ? createReplayCanaryFixture(REPLAY_CANARY_FIXTURE_NONCE)
       : null;
@@ -193,15 +198,8 @@ export async function runHarnessProfilePreviewCanary(
 
     for (const canary of cases) {
       const replay =
-        canary.label === "custom" &&
-        replayEnv &&
-        replayLogCapture &&
-        replayFixture
-          ? {
-              env: replayEnv,
-              fixture: replayFixture,
-              logCapture: replayLogCapture,
-            }
+        canary.label === "custom" && replayEnv && replayFixture
+          ? { env: replayEnv, fixture: replayFixture }
           : undefined;
       const run = await executeCase(env, mcp, sql, canary, replay);
       assertRunHarnessManifest(run.manifests, {
@@ -360,6 +358,7 @@ async function executeCase(
   if (preflight.deployedVersion !== canary.deployedVersion) {
     throw new Error(`Workflow ${canary.workflowId} deployment changed after validation`);
   }
+  const startedAt = Date.now();
   const dispatched = await mcp.call<DispatchData>("workflows.dispatch", {
     ...input,
     expectedDeployedVersion: preflight.deployedVersion,
@@ -369,9 +368,20 @@ async function executeCase(
   const deadline = Date.now() + env.HARNESS_CANARY_TIMEOUT_MS;
   try {
     await waitForSuccessfulRun(mcp, dispatched.runId, deadline);
+    // Every step and flow request of this run answered between the dispatch and
+    // the read that reported it terminal, so that is the window the log query
+    // has to cover.
+    const runWindow = { startedAt, endedAt: Date.now() };
     const manifests = await waitForHarnessManifest(mcp, dispatched.runId, deadline);
     if (replay) {
-      await verifyReplayCase(replay, mcp, sql, dispatched.runId, deadline);
+      await verifyReplayCase(
+        replay,
+        mcp,
+        sql,
+        dispatched.runId,
+        deadline,
+        runWindow,
+      );
     }
     await releaseFinishedRunClaim(sql, env.HARNESS_CANARY_TICKET_KEY, dispatched.runId);
     return { runId: dispatched.runId, manifests };
@@ -439,15 +449,15 @@ async function verifyReplayCase(
   sql: SqlClient,
   runId: string,
   deadline: number,
+  runWindow: ReplayCanaryLogWindow,
 ): Promise<void> {
   const { summary, details } = await waitForReplayMcp(mcp, runId, deadline);
   const [databaseRows, appendedLogExport] = await Promise.all([
     readReplayDatabaseRows(sql, runId),
-    waitForReplayLogExport(replay.env, replay.logCapture, runId),
+    readCoveredReplayLogWindow(replay.env, runWindow),
   ]);
   assertReplayCanaryEvidence(
     {
-      runId,
       databaseRows,
       apiSummary: summary,
       apiDetails: details,
@@ -589,23 +599,6 @@ async function assertPinnedSkillExists(
   }
 }
 
-async function prepareReplayLogCapture(
-  env: ReplayCanaryEnv,
-): Promise<ReplayLogCapture> {
-  const metadata = await stat(env.REPLAY_CANARY_LOG_EXPORT_PATH).catch(
-    () => null,
-  );
-  if (!metadata?.isFile()) {
-    throw new Error(
-      "Replay canary log export must exist as a regular file before dispatch",
-    );
-  }
-  return {
-    path: env.REPLAY_CANARY_LOG_EXPORT_PATH,
-    startOffset: metadata.size,
-  };
-}
-
 async function readReplayDatabaseRows(
   sql: SqlClient,
   runId: string,
@@ -682,75 +675,138 @@ async function releaseStaleCanaryClaim(
   }
 }
 
-async function waitForReplayLogExport(
+// Coverage and the leak scan both come from one historical query, retried until
+// the indexer has the run's step requests or the wait budget runs out.
+async function readCoveredReplayLogWindow(
   env: ReplayCanaryEnv,
-  capture: ReplayLogCapture,
-  runId: string,
+  runWindow: ReplayCanaryLogWindow,
 ): Promise<string> {
   const deadline = Date.now() + env.REPLAY_CANARY_LOG_WAIT_MS;
-  let lastSize = -1;
-  let unchangedSince = 0;
-  let latest = "";
-  while (Date.now() < deadline) {
-    const current = await stat(capture.path).catch(() => null);
-    if (!current?.isFile() || current.size < capture.startOffset) {
-      throw new Error("Replay canary log export was removed or truncated");
-    }
-    const appendedBytes = current.size - capture.startOffset;
-    if (appendedBytes > env.REPLAY_CANARY_LOG_MAX_BYTES) {
-      throw new Error("Replay canary log export exceeds its bounded scan limit");
-    }
-    if (current.size !== lastSize) {
-      latest = await readLogRange(
-        capture.path,
-        capture.startOffset,
-        appendedBytes,
+  let lastFailure = "the query returned no rows";
+  for (;;) {
+    try {
+      const stdout = await queryDeploymentLogs(env, runWindow, deadline);
+      const scan = scanReplayCanaryLogRows(
+        parseReplayCanaryLogLines(stdout),
+        runWindow,
       );
-      lastSize = current.size;
-      unchangedSince = Date.now();
+      if (scan.covered) {
+        console.log(
+          `[replay-canary] log window: ${scan.rowCount} rows, coveredRows ${scan.coveredRows}, logTextBytes ${scan.logTextBytes}`,
+        );
+        // A covered window with no runtime text means the leak assertion below
+        // proves nothing, so it says so instead of passing silently.
+        if (scan.logTextBytes === 0) {
+          console.log(
+            `replay canary: runtime log text empty for ${scan.coveredRows} covered rows in the window, the leak assertion ran against 0 bytes`,
+          );
+        }
+        return scan.logText;
+      }
+      lastFailure = `${scan.rowCount} rows fell inside the run window and none answered ${REPLAY_CANARY_COVERAGE_PATHS.join(" or ")}`;
+    } catch (error) {
+      lastFailure = error instanceof Error ? error.message : String(error);
     }
-    if (
-      latest.includes(runId) &&
-      unchangedSince > 0 &&
-      Date.now() - unchangedSince >= env.REPLAY_CANARY_LOG_SETTLE_MS
-    ) {
-      return latest;
-    }
+    if (Date.now() >= deadline) break;
     await delay(2_000);
   }
   throw new Error(
-    "Replay canary log export did not cover and settle after the canary run",
+    `Replay canary runtime log query did not prove coverage of the run: ${lastFailure}`,
   );
 }
 
-async function readLogRange(
-  path: string,
-  startOffset: number,
-  byteLength: number,
+// `spawn` rather than `execFile`: the access token rides argv, and an execFile
+// failure puts the whole argument list into its own error message.
+function queryDeploymentLogs(
+  env: ReplayCanaryEnv,
+  runWindow: ReplayCanaryLogWindow,
+  deadline: number,
 ): Promise<string> {
-  if (byteLength === 0) return "";
-  const handle = await open(path, "r");
-  try {
-    const buffer = Buffer.alloc(byteLength);
-    let offset = 0;
-    while (offset < buffer.length) {
-      const result = await handle.read(
-        buffer,
-        offset,
-        buffer.length - offset,
-        startOffset + offset,
-      );
-      if (result.bytesRead === 0) break;
-      offset += result.bytesRead;
-    }
-    return new TextDecoder("utf-8", { fatal: true }).decode(
-      buffer.subarray(0, offset),
+  const args = [
+    "--yes",
+    REPLAY_CANARY_VERCEL_CLI,
+    "logs",
+    env.ENGINE_CANARY_LOG_SOURCE_URL,
+    "--json",
+    "--scope",
+    "blazity",
+    "--token",
+    env.VERCEL_TOKEN,
+    "--since",
+    new Date(
+      runWindow.startedAt - REPLAY_CANARY_LOG_SINCE_GRACE_MS,
+    ).toISOString(),
+    "--until",
+    new Date().toISOString(),
+    "--limit",
+    String(REPLAY_CANARY_LOG_QUERY_LIMIT),
+  ];
+  const timeoutMs = Math.max(
+    REPLAY_CANARY_LOG_QUERY_FLOOR_MS,
+    deadline - Date.now(),
+  );
+  return new Promise((resolve, reject) => {
+    // `detached` puts npx and the CLI it spawns in one process group. Killing
+    // only npx would leave the CLI holding the pipes open, and `close` would
+    // never fire.
+    const child = spawn("npx", args, {
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let bytes = 0;
+    let failure: string | null = null;
+    const stop = (message: string) => {
+      failure ??= message;
+      try {
+        process.kill(-(child.pid ?? 0), "SIGKILL");
+      } catch {
+        child.kill("SIGKILL");
+      }
+    };
+    const timer = setTimeout(
+      () => stop("the Vercel CLI log query did not answer in time"),
+      timeoutMs,
     );
-  } catch {
-    throw new Error("Replay canary log export is not valid UTF-8");
-  } finally {
-    await handle.close();
-  }
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      bytes += Buffer.byteLength(chunk, "utf8");
+      if (bytes > env.REPLAY_CANARY_LOG_MAX_BYTES) {
+        stop("the runtime log query exceeded its bounded scan limit");
+        return;
+      }
+      stdout += chunk;
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr = (stderr + chunk).slice(-2_000);
+    });
+    child.on("error", () => {
+      clearTimeout(timer);
+      reject(new Error("the Vercel CLI could not be started"));
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (failure) {
+        reject(new Error(failure));
+        return;
+      }
+      if (code !== 0) {
+        reject(
+          new Error(
+            `the Vercel CLI log query exited with ${code}: ${withoutSecret(stderr, env.VERCEL_TOKEN)}`,
+          ),
+        );
+        return;
+      }
+      resolve(stdout);
+    });
+  });
+}
+
+function withoutSecret(text: string, secret: string): string {
+  return secret.length > 0 ? text.split(secret).join("[redacted]") : text;
 }
 
 async function createCanaryMcpClient(

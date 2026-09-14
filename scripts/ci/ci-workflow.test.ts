@@ -291,10 +291,35 @@ test("the engine canary is a fail-closed pull request dependency", async () => {
     canaries?.env?.ENGINE_CANARY_LOG_SOURCE_URL,
     "${{ steps.deploy.outputs.url }}",
   );
-  assert.match(
-    String(canaries?.run),
-    /logs "\$ENGINE_CANARY_LOG_SOURCE_URL" --follow/u,
+  assert.equal(canaries?.env?.VERCEL_TOKEN, "${{ secrets.VERCEL_TOKEN }}");
+  // The canary queries the runtime logs itself. A background follow stream
+  // never settled, and its export never named the run.
+  assert.doesNotMatch(String(canaries?.run), /vercel@\d|--follow/u);
+  assert.ok(
+    !steps.some(
+      (step) => step.name === "Show the tail of the replay log export on failure",
+    ),
+    "the retired log export must have no tail step left behind",
   );
+  for (const step of [target, canaries]) {
+    for (const name of [
+      "REPLAY_CANARY_LOG_WAIT_MS",
+      "REPLAY_CANARY_LOG_MAX_BYTES",
+    ]) {
+      assert.equal(step?.env?.[name], `\${{ vars.${name} }}`);
+    }
+    for (const name of [
+      "REPLAY_CANARY_LOG_EXPORT_PATH",
+      "REPLAY_CANARY_LOG_SETTLE_MS",
+    ]) {
+      assert.equal(
+        step?.env?.[name],
+        undefined,
+        `${name} is retired and must not stay in the engine canary env`,
+      );
+      assert.doesNotMatch(String(step?.run), new RegExp(name, "u"));
+    }
+  }
   assert.equal(
     canaries?.env?.HARNESS_CANARY_EXPECTED_HOST,
     "${{ steps.target.outputs.host }}",

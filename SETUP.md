@@ -567,9 +567,16 @@ Repository variables that arm and configure the job are
 `HARNESS_CANARY_CUSTOM_SKILL_SOURCE_PATH`,
 `HARNESS_CANARY_CUSTOM_SKILL_SOURCE_COMMIT_SHA`,
 `NEXT_PUBLIC_HARNESS_PROFILE_AUTHORING_ENABLED`, `HARNESS_CANARY_TIMEOUT_MS`,
-`REPLAY_CANARY_LOG_EXPORT_PATH`,
-`REPLAY_CANARY_LOG_WAIT_MS`, `REPLAY_CANARY_LOG_SETTLE_MS`, and
-`REPLAY_CANARY_LOG_MAX_BYTES`.
+`REPLAY_CANARY_LOG_WAIT_MS`, and `REPLAY_CANARY_LOG_MAX_BYTES`.
+
+The replay leg used to follow a live log stream into a file. It now makes one
+historical `vercel logs` query per verified run, bounded by
+`REPLAY_CANARY_LOG_WAIT_MS` and `REPLAY_CANARY_LOG_MAX_BYTES`, and proves
+coverage from a Workflow DevKit step or flow request inside the run window
+rather than from the run id, which the runtime lines never carry. The two
+variables that configured the file, `REPLAY_CANARY_LOG_EXPORT_PATH` and
+`REPLAY_CANARY_LOG_SETTLE_MS`, are retired and can be deleted from the
+repository variables.
 
 `HARNESS_CANARY_TIMEOUT_MS` defaults to `900000` milliseconds (15 minutes) in
 the runner. Set it explicitly for an armed GitHub gate because configuration

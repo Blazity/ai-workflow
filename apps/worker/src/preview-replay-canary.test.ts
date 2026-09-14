@@ -9,6 +9,8 @@ import {
   assertReplayCanaryEvidence,
   createReplayCanaryFixture,
   parseReplayCanaryEnv,
+  parseReplayCanaryLogLines,
+  scanReplayCanaryLogRows,
   type ReplayCanaryEvidence,
 } from "../e2e/replay/canary-contract.js";
 import {
@@ -18,7 +20,9 @@ import {
 } from "../e2e/harness-profiles/mcp-machine-credential.js";
 
 const replayEnv = {
-  REPLAY_CANARY_LOG_EXPORT_PATH: "/workspace/replay-preview-canary.log",
+  ENGINE_CANARY_LOG_SOURCE_URL:
+    "https://ai-workflow-app-abc123def-blazity.vercel.app",
+  VERCEL_TOKEN: "vercel-token",
 };
 
 const fixture = createReplayCanaryFixture("0123456789abcdef01234567");
@@ -111,7 +115,6 @@ function evidence(): ReplayCanaryEvidence {
     nextCursor: null,
   };
   return {
-    runId: "wrun_canary",
     databaseRows: {
       observation: { run_id: "wrun_canary", runtime_manifest: envelope("safe") },
       attempts: [
@@ -124,23 +127,30 @@ function evidence(): ReplayCanaryEvidence {
     },
     apiSummary: summary,
     apiDetails: [attempt],
-    appendedLogExport:
-      '{"workflow_run_id":"wrun_canary","message":"completed"}',
+    appendedLogExport: '{"msg":"workflow_step_completed"}',
   };
 }
 
+const RUN_WINDOW = { startedAt: 1_000_000, endedAt: 1_060_000 };
+
+function logLine(row: unknown): string {
+  return JSON.stringify(row);
+}
+
 describe("Replay preview canary dry checks", () => {
-  it("requires an absolute log path", () => {
+  it("requires an HTTPS log source and a token", () => {
     expect(parseReplayCanaryEnv(replayEnv)).toMatchObject({
       REPLAY_CANARY_LOG_WAIT_MS: 120_000,
-      REPLAY_CANARY_LOG_SETTLE_MS: 15_000,
       REPLAY_CANARY_LOG_MAX_BYTES: 33_554_432,
     });
     expect(() =>
       parseReplayCanaryEnv({
         ...replayEnv,
-        REPLAY_CANARY_LOG_EXPORT_PATH: "relative.log",
+        ENGINE_CANARY_LOG_SOURCE_URL: "http://preview.example.test",
       }),
+    ).toThrow();
+    expect(() =>
+      parseReplayCanaryEnv({ ...replayEnv, VERCEL_TOKEN: "" }),
     ).toThrow();
   });
 
@@ -187,7 +197,7 @@ describe("Replay preview canary dry checks", () => {
     expect(message).not.toContain(leaked);
   });
 
-  it("requires API/DB log envelopes and run-scoped settled log evidence", () => {
+  it("requires API and DB log envelopes", () => {
     const noApiLog = evidence();
     noApiLog.apiDetails[0]!.logs = null;
     expect(() =>
@@ -201,12 +211,6 @@ describe("Replay preview canary dry checks", () => {
     expect(() =>
       assertReplayCanaryEvidence(noDbLog, fixture),
     ).toThrow(/log envelope/);
-
-    const unrelatedLogs = evidence();
-    unrelatedLogs.appendedLogExport = '{"message":"another run"}';
-    expect(() =>
-      assertReplayCanaryEvidence(unrelatedLogs, fixture),
-    ).toThrow(/does not prove coverage/);
   });
 
   it("requires redaction proof for every injected sensitive-data class", () => {
@@ -215,6 +219,147 @@ describe("Replay preview canary dry checks", () => {
     expect(() =>
       assertReplayCanaryEvidence(candidate, fixture),
     ).toThrow(/expected hard_exclusion redaction/);
+  });
+});
+
+describe("Replay canary runtime log query", () => {
+  it("keeps only JSON object rows that carry a timestamp", () => {
+    const output = [
+      "Fetching logs...",
+      "waiting for new logs...",
+      "{ not json",
+      logLine([1, 2, 3]),
+      logLine({ requestPath: "/mcp", message: "no timestamp" }),
+      logLine({
+        timestamp: RUN_WINDOW.startedAt + 1_000,
+        requestPath: "/mcp",
+        message: "kept",
+      }),
+      "",
+    ].join("\n");
+
+    expect(parseReplayCanaryLogLines(output)).toEqual([
+      {
+        timestampMs: RUN_WINDOW.startedAt + 1_000,
+        requestPath: "/mcp",
+        text: "kept",
+      },
+    ]);
+  });
+
+  it("accepts an ISO timestamp as well as epoch milliseconds", () => {
+    const iso = new Date(RUN_WINDOW.startedAt + 500).toISOString();
+    expect(
+      parseReplayCanaryLogLines(
+        logLine({ timestamp: iso, requestPath: "/mcp", message: "" }),
+      ),
+    ).toEqual([
+      {
+        timestampMs: RUN_WINDOW.startedAt + 500,
+        requestPath: "/mcp",
+        text: "",
+      },
+    ]);
+  });
+
+  it("proves coverage only from a step or flow row inside the window", () => {
+    const stepRow = {
+      timestamp: RUN_WINDOW.startedAt + 5_000,
+      requestPath: "/.well-known/workflow/v1/step",
+      message: "",
+    };
+    const flowRow = {
+      ...stepRow,
+      requestPath: "/.well-known/workflow/v1/flow",
+    };
+
+    for (const covering of [stepRow, flowRow]) {
+      expect(
+        scanReplayCanaryLogRows(
+          parseReplayCanaryLogLines(logLine(covering)),
+          RUN_WINDOW,
+        ).covered,
+      ).toBe(true);
+    }
+
+    const outsideWindow = parseReplayCanaryLogLines(
+      [
+        logLine({ ...stepRow, timestamp: RUN_WINDOW.startedAt - 1 }),
+        logLine({ ...stepRow, timestamp: RUN_WINDOW.endedAt + 1 }),
+      ].join("\n"),
+    );
+    expect(scanReplayCanaryLogRows(outsideWindow, RUN_WINDOW)).toMatchObject({
+      covered: false,
+      rowCount: 0,
+    });
+
+    const unrelatedPath = parseReplayCanaryLogLines(
+      logLine({ ...stepRow, requestPath: "/mcp" }),
+    );
+    expect(scanReplayCanaryLogRows(unrelatedPath, RUN_WINDOW)).toMatchObject({
+      covered: false,
+      rowCount: 1,
+    });
+  });
+
+  it("reports an empty leak scan when the covered rows carry no runtime text", () => {
+    const rows = parseReplayCanaryLogLines(
+      [
+        logLine({
+          timestamp: RUN_WINDOW.startedAt + 1_000,
+          requestPath: "/.well-known/workflow/v1/step",
+          message: "",
+          logs: [],
+        }),
+        logLine({
+          timestamp: RUN_WINDOW.startedAt + 2_000,
+          requestPath: "/.well-known/workflow/v1/flow",
+          message: "",
+        }),
+      ].join("\n"),
+    );
+
+    expect(scanReplayCanaryLogRows(rows, RUN_WINDOW)).toEqual({
+      covered: true,
+      rowCount: 2,
+      coveredRows: 2,
+      logText: "",
+      logTextBytes: 0,
+    });
+  });
+
+  it("scans every runtime line of an in-window row for a leaked value", () => {
+    const leaked = fixture.forbiddenValues[0]!;
+    const rows = parseReplayCanaryLogLines(
+      [
+        logLine({
+          timestamp: RUN_WINDOW.startedAt + 1_000,
+          requestPath: "/.well-known/workflow/v1/step",
+          message: "first line",
+          logs: [
+            { message: "first line" },
+            { message: `second line ${leaked}` },
+          ],
+        }),
+        logLine({
+          timestamp: RUN_WINDOW.endedAt + 60_000,
+          requestPath: "/mcp",
+          message: "after the window",
+        }),
+      ].join("\n"),
+    );
+    const scan = scanReplayCanaryLogRows(rows, RUN_WINDOW);
+
+    expect(scan.covered).toBe(true);
+    expect(scan.rowCount).toBe(1);
+    expect(scan.logText).toBe(`first line\nsecond line ${leaked}`);
+    expect(scan.logText).not.toContain("after the window");
+
+    const candidate = evidence();
+    candidate.appendedLogExport = scan.logText;
+    expect(() => assertReplayCanaryEvidence(candidate, fixture)).toThrow(
+      /Application log export contains a replay canary value/,
+    );
   });
 });
 
