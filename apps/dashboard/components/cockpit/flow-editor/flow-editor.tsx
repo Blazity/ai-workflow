@@ -2073,7 +2073,7 @@ export function FlowEditor({
           {canEdit && saveIssues.length > 0 && (
             <Button
               type="button"
-              variant="danger"
+              variant="danger-soft"
               size="sm"
               title={saveIssues.map((issue) => issue.message).join(" ")}
               onClick={() => setSelectedId(saveIssues[0]!.nodeId)}
@@ -2085,7 +2085,7 @@ export function FlowEditor({
           )}
           {canEdit && (
             <Button
-              variant="secondary"
+              variant="primary"
               onClick={onSave}
               disabled={!saveEnabled || saving}
             >{saving ? "Saving…" : saveLabel}</Button>

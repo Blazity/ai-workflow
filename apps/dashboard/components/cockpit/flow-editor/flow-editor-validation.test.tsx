@@ -153,6 +153,7 @@ function renderEditor(
   validationState: WorkflowValidationState,
   error: string | null = null,
   initialSelectedId?: string,
+  saveIssues: { nodeId: string; message: string }[] = [],
 ) {
   return renderToStaticMarkup(
     <FlowEditor
@@ -168,6 +169,7 @@ function renderEditor(
       canEdit
       dirty
       saveEnabled
+      saveIssues={saveIssues}
       saving={false}
       error={error}
       validation={validationState}
@@ -181,12 +183,15 @@ function renderEditor(
 }
 
 test("invalid nodes have a red accessible outline and selected errors are expanded", () => {
-  const html = renderEditor(validation, null, "entry");
+  const html = renderEditor(validation, null, "entry", [
+    { nodeId: "entry", message: "Trigger configuration is incomplete." },
+  ]);
 
   assert.match(html, /aria-invalid="true"/);
   assert.match(html, /aria-describedby="workflow-node-entry-validation-errors"/);
   assert.match(html, /border-red-500/);
   assert.match(html, /aria-label="Validation errors"/);
+  assert.match(html, /data-variant="danger-soft"/);
   assert.match(html, /Trigger configuration is incomplete/);
   assert.match(html, /\/nodes\/0\/params/);
   assert.doesNotMatch(html, /border-amber-300 bg-amber-50/);
@@ -287,6 +292,10 @@ test("a runnable deployed trigger shows the circular play button beside the node
   assert.match(html, /size-\[26px\]/);
   assert.match(html, /-right-\[38px\] -top-\[15px\]/);
   assert.match(html, /title="Run trigger"/);
+  const runButton = html.match(/<button[^>]*aria-label="Run Ticket received"[^>]*>/)?.[0];
+  assert.ok(runButton);
+  assert.match(runButton, /class="[^"]*\babsolute\b/);
+  assert.doesNotMatch(runButton, /class="[^"]*\brelative\b/);
 });
 
 test("draft-only triggers do not expose manual dispatch", () => {
@@ -535,6 +544,21 @@ function renderSelectedOpenPr(): string {
 
 test("canvas never exposes an execution-failure port", () => {
   assert.doesNotMatch(renderSelectedOpenPr(), />failed<\/span>/);
+});
+
+test("canvas ports center 26px icon buttons on the node edges", () => {
+  const html = renderSelectedOpenPr();
+  const inputPort = html.match(/<button[^>]*aria-label="Complete connection to Publish"[^>]*>/)?.[0];
+  const outputPort = html.match(/<button[^>]*aria-label="Start connection from Publish, out output"[^>]*>/)?.[0];
+
+  assert.ok(inputPort);
+  assert.ok(outputPort);
+  assert.match(inputPort, /class="[^"]*absolute[^"]*"/);
+  assert.match(inputPort, /style="left:-13px;/);
+  assert.doesNotMatch(inputPort, /class="[^"]*\brelative\b/);
+  assert.match(outputPort, /class="[^"]*absolute[^"]*"/);
+  assert.match(outputPort, /style="left:177px;/);
+  assert.doesNotMatch(outputPort, /class="[^"]*\brelative\b/);
 });
 
 function renderEditorWithRepositoryPin(

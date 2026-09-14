@@ -41,6 +41,8 @@ export function NodePalette({ groups, onAdd }: { groups: PaletteGroup[]; onAdd: 
                   onClick={() => {
                     if (it.available) onAdd(it);
                   }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = cat.softColor)}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "#fff")}
                   className="mx-2 my-px h-auto cursor-grab items-start justify-start px-2 py-2 text-left active:cursor-grabbing [&>span]:w-full"
                 >
                   <span

@@ -2,18 +2,47 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Button, type ButtonVariant } from "./button";
+import { Button, getButtonClassName, type ButtonVariant } from "./button";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
 test("Button renders every variant and size contract", () => {
-  for (const variant of ["primary", "selected", "secondary", "ghost", "danger"] as ButtonVariant[]) {
+  for (const variant of [
+    "primary",
+    "selected",
+    "secondary",
+    "ghost",
+    "danger",
+    "success",
+    "danger-soft",
+  ] as ButtonVariant[]) {
     const html = renderToStaticMarkup(<Button variant={variant} size="sm">Run</Button>);
     assert.match(html, new RegExp(`data-variant="${variant}"`));
     assert.match(html, /data-size="sm"/);
     assert.match(html, /focus-visible:ring-2/);
     assert.match(html, /active:scale-\[0\.98\]/);
   }
+});
+
+test("Button semantic variants preserve success and soft danger treatments", () => {
+  const success = renderToStaticMarkup(<Button variant="success">Deploy</Button>);
+  const dangerSoft = renderToStaticMarkup(<Button variant="danger-soft">1 block has an error</Button>);
+
+  assert.match(success, /border-emerald-600 bg-emerald-600 text-white/);
+  assert.match(dangerSoft, /border-red-400 bg-red-50 text-red-700/);
+});
+
+test("Button positioning yields to an explicit caller position utility", () => {
+  const absolute = getButtonClassName({
+    variant: "ghost",
+    size: "sm",
+    className: "absolute left-0",
+  });
+  const plain = getButtonClassName({ variant: "ghost", size: "sm" });
+
+  assert.match(absolute, /(?:^|\s)absolute(?:\s|$)/);
+  assert.doesNotMatch(absolute, /(?:^|\s)relative(?:\s|$)/);
+  assert.match(plain, /(?:^|\s)relative(?:\s|$)/);
 });
 
 test("Button selected uses a persistent mariner tint", () => {

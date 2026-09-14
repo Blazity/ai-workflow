@@ -312,7 +312,7 @@ export function RepositoryScopeModal({
                   <Button
                     key={provider}
                     type="button"
-                    variant={active ? "secondary" : "ghost"}
+                    variant={active ? "selected" : "ghost"}
                     size="md"
                     autoFocus={provider === PINNABLE_PROVIDERS[0]}
                     aria-pressed={active}
