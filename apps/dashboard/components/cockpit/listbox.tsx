@@ -156,7 +156,15 @@ export function Listbox({
   };
 
   return (
-    <div ref={rootRef} className={`relative w-full ${className ?? ""}`}>
+    <div
+      ref={rootRef}
+      className={[
+        "relative",
+        // A caller-supplied width utility wins; the default is full width.
+        /(?:^|\s|:)w-/u.test(className ?? "") ? undefined : "w-full",
+        className,
+      ].filter(Boolean).join(" ")}
+    >
       <button
         ref={triggerRef}
         id={id}
