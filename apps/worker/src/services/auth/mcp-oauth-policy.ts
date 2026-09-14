@@ -4,6 +4,7 @@ import { MCP_SCOPES } from "@shared/contracts";
 import type { Db } from "../../db/types.js";
 import {
   findDeploymentOrganizationId,
+  findOrganizationMemberRole,
   findRegisteredOAuthClient,
 } from "./mcp-oauth-store.js";
 
@@ -32,27 +33,59 @@ export type McpOAuthRequest = {
   path: string;
   body: Record<string, unknown> | undefined;
   allowPublicDcr: boolean;
+  actorRole?: string | null;
   organizationId?: string;
   serviceClient?: ServiceClient | null;
 };
 
+export type McpOAuthRegistrationActor = {
+  userId: string;
+  activeOrganizationId?: string | null;
+};
+
+export const MCP_CLIENT_REGISTRATION_ALLOWED_SCOPES = [
+  ...MCP_SCOPES,
+  "offline_access",
+] as const;
+
 export function validateMcpOAuthRequest(input: McpOAuthRequest): void {
   if (input.path === "/oauth2/register") {
-    if (!input.allowPublicDcr) return;
-    if (input.body?.token_endpoint_auth_method !== "none") {
+    const body = input.body;
+    const privilegedActor = input.actorRole === "owner" || input.actorRole === "admin";
+    if (input.actorRole !== undefined && !privilegedActor) {
       throw new Error("Invalid OAuth client registration");
     }
-    const redirects = input.body.redirect_uris;
+    if (!input.allowPublicDcr && !privilegedActor) return;
+
+    const authMethod = body?.token_endpoint_auth_method;
+    const grants = body?.grant_types;
+    if (!privilegedActor && authMethod !== "none") {
+      throw new Error("Invalid OAuth client registration");
+    }
+    if (
+      privilegedActor &&
+      Array.isArray(grants) &&
+      grants.includes("client_credentials") &&
+      authMethod !== "client_secret_post" &&
+      authMethod !== "client_secret_basic"
+    ) {
+      throw new Error("Invalid OAuth client registration");
+    }
+    const redirects = body?.redirect_uris;
     if (!Array.isArray(redirects) || redirects.length === 0) {
       throw new Error("Invalid OAuth client registration");
     }
     if (!redirects.every((value) => typeof value === "string" && isSafeClientRedirect(value))) {
       throw new Error("Invalid OAuth client registration");
     }
-    const grants = input.body.grant_types;
-    if (Array.isArray(grants) && grants.some((grant) => grant === "client_credentials")) {
+    if (
+      !privilegedActor &&
+      Array.isArray(grants) &&
+      grants.some((grant) => grant === "client_credentials")
+    ) {
       throw new Error("Invalid OAuth client registration");
     }
+    if (privilegedActor) validateRegistrationScopes(body?.scope);
   }
 
   if (input.path === "/oauth2/token" && input.body?.grant_type === "client_credentials") {
@@ -84,9 +117,20 @@ export async function validateMcpOAuthHookRequest(
   path: string,
   body: Record<string, unknown> | undefined,
   authorization?: string | null,
+  registrationActor?: McpOAuthRegistrationActor,
 ): Promise<void> {
   let organizationId: string | undefined;
   let serviceClient: ServiceClient | null | undefined;
+  let actorRole: string | null | undefined;
+
+  if (path === "/oauth2/register" && registrationActor) {
+    organizationId = await deploymentOrganizationId(deployment);
+    actorRole = await registrationActorRole(
+      deployment,
+      organizationId,
+      registrationActor,
+    );
+  }
 
   if (path === "/oauth2/token" && body?.grant_type === "client_credentials") {
     organizationId = await deploymentOrganizationId(deployment);
@@ -105,6 +149,7 @@ export async function validateMcpOAuthHookRequest(
       path,
       body,
       allowPublicDcr: deployment.allowPublicDcr ?? false,
+      actorRole,
       organizationId,
       serviceClient,
     });
@@ -113,6 +158,29 @@ export async function validateMcpOAuthHookRequest(
       error: "invalid_client_metadata",
       message: "OAuth client request rejected",
     });
+  }
+}
+
+async function registrationActorRole(
+  deployment: McpOAuthDeployment,
+  organizationId: string,
+  actor: McpOAuthRegistrationActor,
+): Promise<string | null> {
+  if (actor.activeOrganizationId !== organizationId) return null;
+  if (!deployment.db && !deployment.findMemberRole) return null;
+  return deployment.findMemberRole
+    ? deployment.findMemberRole(organizationId, actor.userId)
+    : findOrganizationMemberRole(deployment.db!, organizationId, actor.userId);
+}
+
+function validateRegistrationScopes(scope: unknown): void {
+  if (scope === undefined) return;
+  if (typeof scope !== "string") {
+    throw new TypeError("Invalid OAuth client registration");
+  }
+  const allowed = new Set<string>(MCP_CLIENT_REGISTRATION_ALLOWED_SCOPES);
+  if (scope.split(/\s+/u).filter(Boolean).some((value) => !allowed.has(value))) {
+    throw new Error("Invalid OAuth client registration");
   }
 }
 

@@ -128,6 +128,41 @@ describe("MCP OAuth provider options", () => {
     ).not.toThrow();
   });
 
+  it.each(["owner", "admin"])(
+    "accepts an allowlisted confidential client_credentials registration for an %s",
+    (actorRole) => {
+      expect(() =>
+        validateMcpOAuthRequest({
+          path: "/oauth2/register",
+          body: {
+            token_endpoint_auth_method: "client_secret_basic",
+            grant_types: ["client_credentials"],
+            redirect_uris: ["https://worker.example.com/mcp"],
+            scope: "mcp:read runs:dispatch",
+          },
+          allowPublicDcr: true,
+          actorRole,
+        }),
+      ).not.toThrow();
+    },
+  );
+
+  it("rejects a privileged registration that requests an unlisted scope", () => {
+    expect(() =>
+      validateMcpOAuthRequest({
+        path: "/oauth2/register",
+        body: {
+          token_endpoint_auth_method: "client_secret_post",
+          grant_types: ["client_credentials"],
+          redirect_uris: ["https://worker.example.com/mcp"],
+          scope: "mcp:read admin:all",
+        },
+        allowPublicDcr: true,
+        actorRole: "owner",
+      }),
+    ).toThrow("Invalid OAuth client registration");
+  });
+
   it("binds client ownership to the fixed active organization", async () => {
     const options = createMcpOAuthOptions(DEPLOYMENT);
 

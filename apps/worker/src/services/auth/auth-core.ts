@@ -44,6 +44,7 @@ export type AuthPersistence = {
   adapter: ReturnType<typeof createBetterAuthAdapter>;
   repository: ReturnType<typeof createAuthRepository>;
   mcp: {
+    db?: Db;
     findOrganizationId?: (slug: string) => Promise<string | null>;
     findRegisteredClient?: (clientId: string) => Promise<{
       referenceId: string | null;
@@ -57,7 +58,7 @@ export function createAuthPersistence(db: Db): AuthPersistence {
   return {
     adapter: createBetterAuthAdapter(db),
     repository: createAuthRepository(db),
-    mcp: {},
+    mcp: { db },
   };
 }
 

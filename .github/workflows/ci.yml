@@ -132,7 +132,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 75
     environment: e2e
-    concurrency: { group: engine-canary, cancel-in-progress: false }
+    concurrency:
+      group: engine-canary-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
         with:
@@ -312,7 +314,6 @@ jobs:
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
           set -euo pipefail
-          pnpm --filter worker test:e2e:harness-profiles
           : > "$REPLAY_CANARY_LOG_EXPORT_PATH"
           stream_logs() {
             while true; do

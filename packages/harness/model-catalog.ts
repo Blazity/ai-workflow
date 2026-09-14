@@ -23,6 +23,11 @@ export const DEFAULT_MODELS = {
   codex: "gpt-5.4",
 } as const satisfies Record<HarnessProvider, string>;
 
+export const CANARY_FIXTURE_MODELS = {
+  claude: "claude-haiku-4-5",
+  codex: "gpt-5-mini",
+} as const satisfies Record<HarnessProvider, string>;
+
 export const CALL_LLM_DEFAULT_MODEL = "claude-haiku-4-5";
 export const CODE_HYGIENE_DEFAULT_MODEL = "claude-haiku-4-5";
 export const REPO_MEMORY_DISTILL_MODEL_CODEX = "gpt-5-mini";

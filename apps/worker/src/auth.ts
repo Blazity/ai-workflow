@@ -1,7 +1,7 @@
 import { sso } from "@better-auth/sso";
 import { oauthProvider, type OAuthOptions } from "@better-auth/oauth-provider";
-import { betterAuth } from "better-auth";
-import { createAuthMiddleware } from "better-auth/api";
+import { betterAuth, type BetterAuthPlugin } from "better-auth";
+import { createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
 import {
   bearer,
   jwt,
@@ -99,17 +99,22 @@ function createAuthFromPersistence(
     hooks: mcpDeployment
       ? {
           before: createAuthMiddleware(async (ctx) => {
+            if (ctx.path === "/oauth2/register") return;
             await validateMcpOAuthHookRequest(
               mcpDeployment,
               ctx.path,
               ctx.body as Record<string, unknown> | undefined,
-              ctx.request?.headers.get("authorization"),
+              ctx.request?.headers.get("authorization") ??
+                ctx.headers?.get("authorization"),
             );
           }),
         }
       : undefined,
     plugins: [
       bearer(),
+      ...(mcpDeployment
+        ? [createMcpRegistrationPolicyPlugin(mcpDeployment)]
+        : []),
       oneTimeToken({
         disableClientRequest: true,
         expiresIn: 1,
@@ -147,4 +152,59 @@ export type Auth = ReturnType<typeof createAuth>;
 
 function createMcpOAuthProvider(deployment: McpOAuthDeployment) {
   return oauthProvider(createMcpOAuthOptions(deployment) as OAuthOptions<string[]>);
+}
+
+function createMcpRegistrationPolicyPlugin(deployment: McpOAuthDeployment) {
+  return {
+    id: "mcp-registration-policy",
+    hooks: {
+      before: [
+        {
+          matcher: (ctx) => ctx.path === "/oauth2/register",
+          handler: createAuthMiddleware(async (ctx) => {
+            let session = await getSessionFromCtx(ctx);
+            if (!session) {
+              // Global hooks run before bearer() has converted the signed bearer
+              // value into Better Auth's session cookie. Resolve that same stored
+              // session here so the registration policy sees the route's actor.
+              const authorization =
+                ctx.request?.headers.get("authorization") ??
+                ctx.headers?.get("authorization");
+              const bearerValue = authorization
+                ?.match(/^Bearer\s+(.+)$/iu)?.[1]
+                ?.trim();
+              const sessionToken = decodeBearerSessionToken(bearerValue);
+              const candidate = sessionToken
+                ? await ctx.context.internalAdapter.findSession(sessionToken)
+                : null;
+              if (candidate && candidate.session.expiresAt > new Date()) {
+                session = candidate;
+              }
+            }
+            await validateMcpOAuthHookRequest(
+              deployment,
+              ctx.path,
+              ctx.body as Record<string, unknown> | undefined,
+              undefined,
+              session
+                ? {
+                    userId: session.user.id,
+                    activeOrganizationId: session.session.activeOrganizationId,
+                  }
+                : undefined,
+            );
+          }),
+        },
+      ],
+    },
+  } satisfies BetterAuthPlugin;
+}
+
+function decodeBearerSessionToken(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    return decodeURIComponent(value.split(".", 1)[0]!);
+  } catch {
+    return null;
+  }
 }

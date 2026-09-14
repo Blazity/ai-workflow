@@ -17,6 +17,7 @@ import {
   assertCustomProfilePin,
   assertMinimalCanaryWorkflow,
   assertRunHarnessManifest,
+  cancelTimedOutCanaryRun,
   parseHarnessCanaryEnv,
   type HarnessCanaryEnv,
 } from "./canary-contract.js";
@@ -354,13 +355,20 @@ async function executeCase(
     idempotencyKey: randomUUID(),
   });
   const deadline = Date.now() + env.HARNESS_CANARY_TIMEOUT_MS;
-  await waitForSuccessfulRun(mcp, dispatched.runId, deadline);
-  const manifests = await waitForHarnessManifest(mcp, dispatched.runId, deadline);
-  if (replay) {
-    await verifyReplayCase(replay, mcp, sql, dispatched.runId, deadline);
+  try {
+    await waitForSuccessfulRun(mcp, dispatched.runId, deadline);
+    const manifests = await waitForHarnessManifest(mcp, dispatched.runId, deadline);
+    if (replay) {
+      await verifyReplayCase(replay, mcp, sql, dispatched.runId, deadline);
+    }
+    await waitForRegistryRelease(sql, env.HARNESS_CANARY_TICKET_KEY, 120_000);
+    return { runId: dispatched.runId, manifests };
+  } catch (error) {
+    if (Date.now() >= deadline) {
+      await cancelTimedOutCanaryRun(mcp, dispatched.runId);
+    }
+    throw error;
   }
-  await waitForRegistryRelease(sql, env.HARNESS_CANARY_TICKET_KEY, 120_000);
-  return { runId: dispatched.runId, manifests };
 }
 
 async function waitForSuccessfulRun(

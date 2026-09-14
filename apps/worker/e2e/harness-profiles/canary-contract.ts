@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   HarnessProfileManifest,
   HarnessProfileReference,
@@ -8,6 +9,7 @@ import {
   isHarnessGitHubSkillSource,
   WORKFLOW_SCHEMA_VERSION,
 } from "@shared/contracts";
+import { CANARY_FIXTURE_MODELS } from "@shared/harness";
 import { z } from "zod";
 
 const positiveInteger = z.coerce.number().int().positive();
@@ -85,6 +87,18 @@ export function parseHarnessCanaryEnv(
   source: NodeJS.ProcessEnv | Record<string, string | undefined>,
 ): HarnessCanaryEnv {
   return schema.parse(source);
+}
+
+export async function cancelTimedOutCanaryRun(
+  mcp: {
+    call<T>(name: string, args?: Record<string, unknown>): Promise<T>;
+  },
+  runId: string,
+): Promise<void> {
+  await mcp.call("runs.cancel", {
+    runId,
+    idempotencyKey: randomUUID(),
+  });
 }
 
 export function assertMinimalCanaryWorkflow(
@@ -180,6 +194,10 @@ export function assertCustomProfilePin(
     )
   ) {
     throw new Error("Custom canary profile does not pin the expected skill");
+  }
+  const cheapestModel = CANARY_FIXTURE_MODELS[detail.manifest.harness.provider];
+  if (detail.manifest.model.id !== cheapestModel) {
+    throw new Error(`Custom canary profile must use ${cheapestModel}`);
   }
 }
 

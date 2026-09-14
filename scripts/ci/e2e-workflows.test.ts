@@ -188,6 +188,19 @@ test("only the guarded engine canary carries secrets or an environment in CI", a
   }
 });
 
+test("engine canary cancels a superseded PR run and starts only three agents", async () => {
+  const [, workflow] = (await loadWorkflows())[0]!;
+  const canary = workflow.jobs?.["engine-canary"];
+  assert.ok(canary);
+  assert.deepEqual(canary.concurrency, {
+    group: "engine-canary-pr-${{ github.event.pull_request.number }}",
+    "cancel-in-progress": true,
+  });
+  const run = canary.steps?.find((step) => step.name === "Run engine canaries")?.run ?? "";
+  assert.match(run, /test:e2e:replay/u);
+  assert.doesNotMatch(run, /test:e2e:harness-profiles/u);
+});
+
 test("the nightly schedule reaches the two tiers that cost nothing to repeat", async () => {
   const [, workflow] = (await loadE2e())[0]!;
 

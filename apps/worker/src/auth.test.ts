@@ -362,6 +362,46 @@ describe("MCP OAuth provider", () => {
     expect(unsafe.status).toBeGreaterThanOrEqual(400);
   });
 
+  it("registers a confidential client_credentials client for an active owner", async () => {
+    const { auth, token } = await authenticatedRegistrant("owner");
+
+    const response = await registerConfidentialClient(auth, token);
+
+    expect(response.status, await response.clone().text()).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      token_endpoint_auth_method: "client_secret_post",
+      grant_types: ["client_credentials"],
+      scope: "mcp:read runs:dispatch",
+      reference_id: "org_fixed",
+      client_secret: expect.any(String),
+    });
+  });
+
+  it("rejects an anonymous confidential client when public DCR is enabled", async () => {
+    const db = await createTestDb();
+    await db.insert(organization).values({
+      id: "org_fixed",
+      name: "AI Workflow",
+      slug: "ai-workflow",
+    });
+    const auth = createAuth(db, {
+      ...OPTS,
+      mcp: { organizationId: "org_fixed", allowPublicDcr: true },
+    });
+
+    const response = await registerConfidentialClient(auth);
+
+    expect(response.status).toBeGreaterThanOrEqual(400);
+  });
+
+  it("rejects a confidential client registered by a member", async () => {
+    const { auth, token } = await authenticatedRegistrant("member");
+
+    const response = await registerConfidentialClient(auth, token);
+
+    expect(response.status).toBeGreaterThanOrEqual(400);
+  });
+
   /**
    * The MCP branch of createAuth also mounts jwt(), and jwt() hooks
    * /get-session to mint a JWT from a key it reads out of the jwks table. So
@@ -418,6 +458,81 @@ function registerPublicClient(auth: Auth, redirectUri: string): Promise<Response
         grant_types: ["authorization_code", "refresh_token"],
         response_types: ["code"],
         redirect_uris: [redirectUri],
+        scope: "mcp:read runs:dispatch",
+      }),
+    }),
+  );
+}
+
+async function authenticatedRegistrant(role: "owner" | "member"): Promise<{
+  auth: Auth;
+  token: string;
+}> {
+  const db = await createTestDb();
+  await db.insert(organization).values({
+    id: "org_fixed",
+    name: "AI Workflow",
+    slug: "ai-workflow",
+  });
+  const auth = createAuth(db, {
+    ...OPTS,
+    mcp: { organizationId: "org_fixed", allowPublicDcr: true },
+  });
+  const email = `${role}@example.com`;
+  await seedAuthUser(auth, { email, password: "password123" });
+  const context = await auth.$context;
+  const registrant = await context.internalAdapter.findUserByEmail(email);
+  if (!registrant) throw new Error("Registrant was not seeded");
+  await db.insert(member).values({
+    id: `member_${role}`,
+    organizationId: "org_fixed",
+    userId: registrant.user.id,
+    role,
+  });
+  const signIn = await auth.api.signInEmail({
+    body: { email, password: "password123" },
+    returnHeaders: true,
+  });
+  const token = tokenFrom(signIn);
+  const active = await auth.handler(
+    new Request("http://localhost:3000/api/auth/organization/set-active", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        origin: "http://localhost:3000",
+      },
+      body: JSON.stringify({ organizationId: "org_fixed" }),
+    }),
+  );
+  if (!active.ok) throw new Error("Registrant organization was not activated");
+  const session = await auth.api.getSession({
+    headers: new Headers({ authorization: `Bearer ${token}` }),
+  });
+  if (
+    (session?.session as { activeOrganizationId?: string } | undefined)
+      ?.activeOrganizationId !== "org_fixed"
+  ) {
+    throw new Error("Registrant active organization was not persisted");
+  }
+  return { auth, token };
+}
+
+function registerConfidentialClient(auth: Auth, token?: string): Promise<Response> {
+  return auth.handler(
+    new Request("http://localhost:3000/api/auth/oauth2/register", {
+      method: "POST",
+      headers: {
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        "content-type": "application/json",
+        origin: "http://localhost:3000",
+      },
+      body: JSON.stringify({
+        client_name: "Engine canary",
+        token_endpoint_auth_method: "client_secret_post",
+        grant_types: ["client_credentials"],
+        response_types: [],
+        redirect_uris: ["https://worker.example.com/mcp"],
         scope: "mcp:read runs:dispatch",
       }),
     }),

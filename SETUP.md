@@ -514,6 +514,14 @@ exits green with a warning, but it does not deploy or run the canaries. The
 canary runs after that migration has merged and the shared database has been
 migrated.
 
+**Cost per gate run.** One armed gate starts exactly three agent runs: the
+built-in Claude fixture, the built-in Codex fixture, and the custom profile
+fixture. Every fixture contains only the canary prompt in one `generic_agent`
+with `workspaceMode: "none"`. Replay verification reuses the custom fixture's
+run and starts no additional agent. A newer push to the same pull request
+cancels the older `engine-canary` job, so the two revisions do not keep running
+these fixtures concurrently.
+
 Arm the gate for the demo custom environment with these repository variables:
 
 ```text
@@ -549,6 +557,13 @@ Repository variables that arm and configure the job are
 `REPLAY_CANARY_LOG_WAIT_MS`, `REPLAY_CANARY_LOG_SETTLE_MS`, and
 `REPLAY_CANARY_LOG_MAX_BYTES`.
 
+`HARNESS_CANARY_TIMEOUT_MS` defaults to `900000` milliseconds (15 minutes) in
+the runner. Set it explicitly for an armed GitHub gate because configuration
+preflight requires the variable. When the deadline expires, the runner calls
+`runs.cancel` for the dispatched run before reporting the timeout. The machine
+client can do this because the `runs.cancel` policy allows the `service` role
+with its `runs:dispatch` scope.
+
 Secrets read from the `e2e` environment are `VERCEL_TOKEN`, `VERCEL_ORG_ID`,
 `VERCEL_PROJECT_ID`, `ENGINE_CANARY_MCP_CLIENT_ID`,
 `ENGINE_CANARY_MCP_CLIENT_SECRET`, `DATABASE_URL`, and
@@ -559,12 +574,14 @@ GitHub App credentials, including `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`,
 and `GITHUB_INSTALLATION_ID`, so workflows triggered by the canaries use the
 configured GitHub identity.
 
-Register the machine client once with an owner session. Public DCR is not used,
-so leave `MCP_ALLOW_PUBLIC_DCR=false`. Sign in to the dashboard as the seeded
-owner, copy the `ba_session` cookie from the browser's storage inspector, and
-run the following from this repository. The registration endpoint requires the
-owner session, binds the client to the active fixed organization, and returns
-the client secret only in this response.
+Register the machine client once with an owner or admin session while the
+production deployment keeps `MCP_ALLOW_PUBLIC_DCR=true`. No flag change or
+extra redeploy is needed. Sign in to the dashboard as the seeded owner, copy
+the `ba_session` cookie from the browser's storage inspector, and run the
+following from this repository. The registration endpoint accepts the
+confidential `client_credentials` registration only for an owner or admin in
+the active fixed organization, binds the client to that organization, and
+returns the client secret only in this response.
 
 ```bash
 export ENGINE_CANARY_WORKER_URL=https://ai-workflow-app-env-ai-workflow-demo-blazity.vercel.app
@@ -623,11 +640,18 @@ Provision three deployed v2 workflow definitions, one for built-in Claude, one
 for built-in Codex, and one for the exact custom profile and skill pin named by
 the variables above. Each definition must stay disabled and contain exactly
 `trigger_ticket_ai -> generic_agent`. The agent must use `workspaceMode: "none"`
-and pin the expected immutable profile version. There is no manual-only
-trigger block. Manual dispatch resolves a deployed definition without checking
-its enabled flag, so disabled fixtures can be dispatched through
-`workflows.dispatch_preflight` and `workflows.dispatch` without ever claiming
-the real Jira trigger.
+and pin the expected immutable profile version. The published
+`builtin-claude@2` fixture uses `claude-opus-4-8`, and the published
+`builtin-codex@2` fixture uses `gpt-5.4`. The custom profile must use
+`claude-haiku-4-5` when its provider is Claude or `gpt-5-mini` when its provider
+is Codex. A workflow cannot make the built-in fixtures cheaper by setting the
+Generic Agent's `model` parameter: a pinned Harness Profile overrides that
+parameter, and the published profile manifest's `model.id` controls the model.
+Changing a built-in model therefore requires a newly published built-in profile
+version. There is no manual-only trigger block. Manual dispatch resolves a
+deployed definition without checking its enabled flag, so disabled fixtures
+can be dispatched through `workflows.dispatch_preflight` and
+`workflows.dispatch` without ever claiming the real Jira trigger.
 
 By the owner's decision of 2026-09-14, this custom environment shares the
 production database. The canaries create run and replay records there and the

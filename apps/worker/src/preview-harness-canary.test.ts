@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   HarnessProfileManifest,
   HarnessRunManifestRecord,
@@ -8,6 +8,7 @@ import {
   assertCustomProfilePin,
   assertMinimalCanaryWorkflow,
   assertRunHarnessManifest,
+  cancelTimedOutCanaryRun,
   parseHarnessCanaryEnv,
 } from "../e2e/harness-profiles/canary-contract.js";
 
@@ -84,6 +85,7 @@ describe("Harness Profile preview canary dry checks", () => {
     expect(parseHarnessCanaryEnv(completeEnv)).toMatchObject({
       ENGINE_CANARY_MCP_CLIENT_ID: "engine-canary-client",
       HARNESS_CANARY_TICKET_KEY: "AIW-999",
+      HARNESS_CANARY_TIMEOUT_MS: 900_000,
     });
     expect(() =>
       parseHarnessCanaryEnv({
@@ -157,6 +159,8 @@ describe("Harness Profile preview canary dry checks", () => {
       archivedAt: null,
       publishedVersion: 7,
       manifest: {
+        harness: { provider: "codex" },
+        model: { id: "gpt-5-mini" },
         skills: [{ artifactHash: "a".repeat(64), name: "canary-skill" }],
       } as HarnessProfileManifest,
     };
@@ -168,6 +172,17 @@ describe("Harness Profile preview canary dry checks", () => {
         skillName: "canary-skill",
       }),
     ).not.toThrow();
+
+    const expensiveProfile = structuredClone(profile);
+    expensiveProfile.manifest!.model.id = "gpt-5.4";
+    expect(() =>
+      assertCustomProfilePin(expensiveProfile, {
+        profileId: "custom-profile",
+        version: 7,
+        artifactHash: "a".repeat(64),
+        skillName: "canary-skill",
+      }),
+    ).toThrow(/gpt-5-mini/);
 
     const records = [
       {
@@ -201,5 +216,17 @@ describe("Harness Profile preview canary dry checks", () => {
         },
       }),
     ).not.toThrow();
+  });
+
+  it("cancels a run when the canary deadline expires", async () => {
+    const call = vi.fn().mockResolvedValue({ outcome: "cancelled" });
+
+    await cancelTimedOutCanaryRun({ call } as never, "wrun_timeout");
+
+    expect(call).toHaveBeenCalledOnce();
+    expect(call).toHaveBeenCalledWith("runs.cancel", {
+      runId: "wrun_timeout",
+      idempotencyKey: expect.any(String),
+    });
   });
 });
