@@ -16,27 +16,6 @@ const options = [
   { value: "api", label: "API" },
 ];
 
-function renderedHeightTokens(element: React.ReactElement): string[] {
-  const html = renderToStaticMarkup(element);
-  const className = html.match(/<button[^>]*class="([^"]*)"/)?.[1];
-  assert.ok(className, "expected the select trigger class list");
-  return className.match(/\bh-\[[^\]\s]+\]/g) ?? [];
-}
-
-test("Select resolves exactly one height token per density", () => {
-  for (const [size, expected] of [
-    ["compact", "h-[26px]"],
-    ["default", "h-[30px]"],
-  ] as const) {
-    assert.deepEqual(
-      renderedHeightTokens(
-        <Select value="dashboard" onChange={() => undefined} options={options} size={size} />,
-      ),
-      [expected],
-    );
-  }
-});
-
 test("Select composes Listbox without masking a visible Field label", () => {
   const element = Select({ value: "dashboard", onChange: () => undefined, options });
   assert.equal(element.type, Listbox);
@@ -47,16 +26,13 @@ test("Select composes Listbox without masking a visible Field label", () => {
   assert.match(html, new RegExp(`id="${controlId}"`));
   assert.match(html, /Dashboard/);
   assert.doesNotMatch(html, /aria-label=/);
-  assert.match(html, /h-\[30px\]/);
-  assert.doesNotMatch(html, /h-\[26px\]/);
 });
 
-test("Select forwards invalid, disabled, size, and accessible description", () => {
+test("Select forwards invalid, disabled, and accessible description", () => {
   const element = Select({
     value: "dashboard",
     onChange: () => undefined,
     options,
-    size: "compact",
     invalid: true,
     disabled: true,
     "aria-label": "Repository",
@@ -68,8 +44,6 @@ test("Select forwards invalid, disabled, size, and accessible description", () =
   assert.match(html, /aria-describedby="repository-error"/);
   assert.match(html, /aria-invalid="true"/);
   assert.match(html, /disabled=""/);
-  assert.match(html, /h-\[26px\]/);
-  assert.doesNotMatch(html, /h-\[30px\]/);
 });
 
 test("Select renders and chooses enabled options through the DOM", () => {

@@ -16,11 +16,11 @@ import {
 import { mergeTicketLiveRuns } from "@/lib/ticket";
 
 /**
- * Ticket runs list — header rollup + the runs rail — with in-flight
+ * Ticket runs list, header rollup + the runs rail, with in-flight
  * (running/awaiting) runs merged in from the registry. Wrapped in React
  * `cache()` so the rail shell and the detail boundary's default-run resolution
  * share a single fetch within one server render. `cache()` is per-request, so
- * every navigation / `router.refresh()` still fetches fresh — it only dedupes
+ * every navigation / `router.refresh()` still fetches fresh, it only dedupes
  * within a single render pass, never across loads.
  */
 export const getTicketRuns = cache(
@@ -43,7 +43,7 @@ export const getTicketRuns = cache(
 
 /**
  * A single run's trace detail. Cached per request so the desktop split view and
- * the mobile inline view — both mounted, one hidden by CSS — share one fetch.
+ * the mobile inline view, both mounted, one hidden by CSS, share one fetch.
  */
 export const getRunDetail = cache(
   async (runId: string): Promise<RunDetailResponse> => {

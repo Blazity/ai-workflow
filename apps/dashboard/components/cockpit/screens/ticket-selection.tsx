@@ -12,11 +12,11 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { TraceDetailSkeleton } from "@/app/ticket-skeleton";
 
 interface TicketSelection {
-  /** Run the user just clicked — shown active immediately, before the URL commits. */
+  /** Run the user just clicked, shown active immediately, before the URL commits. */
   pendingRun: string | null;
   /** The committed `?run=` from the URL. */
   urlRun: string | null;
-  /** A run switch is navigating — render the trace skeleton meanwhile. */
+  /** A run switch is navigating, render the trace skeleton meanwhile. */
   isPending: boolean;
   select: (runId: string) => void;
 }
@@ -29,7 +29,7 @@ const Ctx = createContext<TicketSelection | null>(null);
  * transition; `isPending` stays true for the whole navigation so the detail
  * panel can show its skeleton itself. We drive the loading state off
  * `isPending` rather than the detail Suspense boundary because an App Router
- * navigation is a transition — it intentionally keeps the previous trace on
+ * navigation is a transition, it intentionally keeps the previous trace on
  * screen and won't reliably surface the boundary's fallback on a `?run=` change.
  */
 export function TicketSelectionProvider({
@@ -76,7 +76,7 @@ export function useTicketSelection(): TicketSelection {
 /**
  * Desktop detail slot. `children` (the trace's Suspense boundary) is always
  * rendered so the new run fetches in parallel; while a switch is pending we lay
- * the skeleton over it, so you see the skeleton — not the previous run's trace —
+ * the skeleton over it, so you see the skeleton, not the previous run's trace,
  * until the new one is ready. On first load `isPending` is false and the
  * boundary streams its own skeleton normally.
  */

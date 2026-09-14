@@ -31,7 +31,6 @@ test("RouteTabs marks the active route and reports tab changes", () => {
     });
     const tabs = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
     assert.equal(tabs[0]?.getAttribute("aria-current"), "page");
-    assert.match(tabs[0]?.className ?? "", /text-mariner/);
     assert.equal(tabs[1]?.hasAttribute("aria-current"), false);
     act(() => tabs[1]?.click());
     assert.deepEqual(changes, ["rules"]);

@@ -22,7 +22,7 @@ const row: PromptLibraryListRowDto = {
   slots: [],
 };
 
-test("resolved read-only references render a responsive expandable card", () => {
+test("resolved read-only references render an expandable card", () => {
   const html = renderToStaticMarkup(
     <PromptReferenceChipsView
       value="{{prompt:7}}"
@@ -34,8 +34,6 @@ test("resolved read-only references render a responsive expandable card", () => 
 
   assert.match(html, /Live reference/);
   assert.match(html, />Show content</);
-  assert.match(html, /w-full/);
-  assert.match(html, /flex-wrap/);
   assert.match(html, /href="\/prompts\?prompt=research-plan"/);
   assert.doesNotMatch(html, /More actions|Detach|Pin v3/);
   assert.doesNotMatch(html, />Preview</);

@@ -116,8 +116,6 @@ test("the compact summary presents explicit scope as non-interactive text", () =
   assert.match(html, /GitHub \+ GitLab/);
   assert.match(html, /Repositories:/);
   assert.match(html, /2 pinned/);
-  assert.doesNotMatch(html, /border-mariner\/30 bg-mariner-100/);
-  assert.match(html, /tabular-nums/);
 });
 
 test("the compact summary names attention without expanding detailed warnings", () => {

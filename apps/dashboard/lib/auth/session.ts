@@ -38,7 +38,7 @@ function isDashboardSession(value: unknown): value is DashboardSession {
  * redirect to /login. One round-trip in the cockpit layout gates every page.
  *
  * Fails closed: we never render the cockpit on a session we couldn't confirm.
- * (Note: we do NOT clear the cookie here — cookie mutation is illegal during a
+ * (Note: we do NOT clear the cookie here: cookie mutation is illegal during a
  * Server Component render. A stale cookie is overwritten at next login, or
  * cleared by the explicit logout route.)
  */

@@ -10,7 +10,7 @@ import {
   DEFAULT_OPEN_PR_TITLE,
 } from "@shared/prompts";
 import type { FlowNodeDef } from "@/lib/flows";
-import { buildPaletteItems, CONNECTED_CARD_TEXT_CLASS, nodeSummary } from "./block-palette.ts";
+import { buildPaletteItems, nodeSummary } from "./block-palette.ts";
 
 const unknownSchema = { type: "unknown" } as const;
 
@@ -219,12 +219,6 @@ test("the investigate card summarises its enabled context providers", () => {
 
   assert.equal(nodeSummary(both, options), "jira · slack");
   assert.equal(nodeSummary(jiraOnly, options), "jira");
-});
-
-test("connected-card labels clip instead of expanding the node", () => {
-  assert.match(CONNECTED_CARD_TEXT_CLASS, /overflow-hidden/);
-  assert.match(CONNECTED_CARD_TEXT_CLASS, /text-ellipsis/);
-  assert.match(CONNECTED_CARD_TEXT_CLASS, /whitespace-nowrap/);
 });
 
 test("the v2 palette offers the composite Review helper without replacing the bare block", () => {

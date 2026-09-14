@@ -30,7 +30,7 @@ export function useTweaks<T extends Record<string, unknown>>(
         return next;
       });
     } catch {
-      // Corrupt/blocked storage — fall back to defaults.
+      // Corrupt/blocked storage, fall back to defaults.
     }
     // defaults is the initial source of truth; re-running on identity changes
     // would clobber user edits, so we intentionally run this once on mount.
@@ -46,7 +46,7 @@ export function useTweaks<T extends Record<string, unknown>>(
         try {
           window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
         } catch {
-          // Storage unavailable (private mode / quota) — state still updates.
+          // Storage unavailable (private mode / quota), state still updates.
         }
         window.dispatchEvent(
           new CustomEvent("tweakchange", { detail: { [key]: value } }),

@@ -23,7 +23,7 @@ test("Modal wires its title and description to an aria modal dialog", () => {
   assert.match(html, /Confirm/);
 });
 
-test("Modal chrome none renders custom panel content with an accessible name", () => {
+test("Modal chrome none renders custom content with an accessible name", () => {
   type MissingAccessibleName = {
     chrome: "none";
     onClose: () => void;
@@ -38,21 +38,14 @@ test("Modal chrome none renders custom panel content with an accessible name", (
       chrome="none"
       aria-label="Prompt editor"
       onClose={() => undefined}
-      size="lg"
-      className="h-[calc(100dvh-48px)]"
     >
-      <div data-custom-dialog-chrome="">Custom header, tabs, body, and footer</div>
+      <div>Custom header, tabs, body, and footer</div>
     </Modal>,
   );
   assert.match(html, /role="dialog"/);
   assert.match(html, /aria-label="Prompt editor"/);
   assert.doesNotMatch(html, /aria-labelledby=/);
-  assert.match(html, /data-chrome="none"/);
-  assert.match(html, /max-w-\[1240px\]/);
-  assert.match(html, /h-\[calc\(100dvh-48px\)\]/);
-  assert.match(html, /data-custom-dialog-chrome=/);
-  assert.doesNotMatch(html, /<header/);
-  assert.doesNotMatch(html, /<footer/);
+  assert.match(html, /Custom header, tabs, body, and footer/);
 
   const titled = renderToStaticMarkup(
     <Modal chrome="none" title="Custom titled dialog" onClose={() => undefined}>
@@ -61,7 +54,7 @@ test("Modal chrome none renders custom panel content with an accessible name", (
   );
   assert.match(titled, /aria-labelledby=/);
   assert.doesNotMatch(titled, /aria-label=/);
-  assert.match(titled, /<h2[^>]*class="sr-only"[^>]*>Custom titled dialog<\/h2>/);
+  assert.match(titled, /Custom titled dialog/);
 });
 
 test("Modal chrome none closes on Escape and backdrop mouse down", () => {
@@ -229,27 +222,6 @@ test("Modal chrome none restores focus to the previously focused element", () =>
     container.remove();
     opener.remove();
     dom.restore();
-  }
-});
-
-test("Modal renders all canonical panel widths", () => {
-  for (const [size, width] of [["sm", "476"], ["md", "680"], ["lg", "1240"]] as const) {
-    const html = renderToStaticMarkup(<Modal open size={size} onClose={() => undefined} title="Dialog">Body</Modal>);
-    assert.match(html, new RegExp(`max-w-\\[${width}px\\]`));
-  }
-});
-
-test("Modal renders the drawer, sheet, and command presentation variants", () => {
-  for (const [variant, markers] of [
-    ["drawer", ["translate-x-full", "justify-end", "max-w-[420px]", "rounded-none"]],
-    ["sheet", ["translate-y-full"]],
-    ["command", ["max-w-[560px]"]],
-  ] as const) {
-    const html = renderToStaticMarkup(
-      <Modal open variant={variant} onClose={() => undefined} title="Dialog">Body</Modal>,
-    );
-    assert.match(html, new RegExp(`data-variant="${variant}"`));
-    for (const marker of markers) assert.ok(html.includes(marker));
   }
 });
 

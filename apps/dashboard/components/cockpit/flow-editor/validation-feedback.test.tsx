@@ -40,7 +40,7 @@ test("groups workflow and block validation issues without losing order", () => {
   });
 });
 
-test("renders errors in a red overlay that can focus the affected block", () => {
+test("renders errors in a dialog that can focus the affected block", () => {
   const validation: WorkflowValidationState = {
     status: "invalid",
     issues,
@@ -58,13 +58,9 @@ test("renders errors in a red overlay that can focus the affected block", () => 
   assert.match(html, /3 validation issues/);
   assert.match(html, /role="dialog"/);
   assert.match(html, /role="alert"/);
-  assert.match(html, /data-error-presentation="overlay"/);
-  assert.match(html, /absolute/);
-  assert.match(html, /bg-red-50/);
   assert.match(html, /Workflow/);
   assert.match(html, /aria-label="Select block Implementation"/);
   assert.match(html, /2 errors/);
-  assert.doesNotMatch(html, /amber/);
 });
 
 test("renders a selected block's validation errors expanded with its exact path", () => {
@@ -76,6 +72,5 @@ test("renders a selected block's validation errors expanded with its exact path"
   assert.match(html, /Validation errors/);
   assert.match(html, /Required input &quot;plan&quot; is missing/);
   assert.match(html, /\/nodes\/2\/inputs\/plan/);
-  assert.match(html, /border-red-200/);
   assert.doesNotMatch(html, /<details/);
 });

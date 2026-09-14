@@ -19,8 +19,8 @@ export function pickSelectedRunId(
 /**
  * Fold in-flight runs (`running`/`awaiting`) for this ticket into the ticket
  * view. `listRunsForTicket` reads only the durable `workflow_runs` table, so a
- * run that is still in the registry — and not yet snapshotted by the poll cron
- * (which doesn't fire on every deployment) or finished — would otherwise be
+ * run that is still in the registry, and not yet snapshotted by the poll cron
+ * (which doesn't fire on every deployment) or finished, would otherwise be
  * invisible here, even though `/runs` shows it. Reuses the same store-authoritative
  * merge as the runs screen, then recomputes the rollup over the merged set.
  */

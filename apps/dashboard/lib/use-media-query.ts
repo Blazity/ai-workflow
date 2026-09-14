@@ -5,7 +5,7 @@ import { useSyncExternalStore } from "react";
 
 /**
  * SSR-safe media-query hook. Returns `false` during SSR and first paint, then
- * the real match after hydration — no layout thrash because we only use it for
+ * the real match after hydration, no layout thrash because we only use it for
  * runtime branching (e.g. the editor's touch affordances), never for the
  * desktop/mobile *layout* split (that's CSS `lg:` visibility).
  */
@@ -22,7 +22,7 @@ function useMediaQuery(query: string): boolean {
   return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 }
 
-/** True below the `lg` breakpoint (1024px) — i.e. mobile/tablet chrome band. */
+/** True below the `lg` breakpoint (1024px), i.e. mobile/tablet chrome band. */
 export function useIsMobileViewport(): boolean {
   return useMediaQuery("(max-width: 1023px)");
 }

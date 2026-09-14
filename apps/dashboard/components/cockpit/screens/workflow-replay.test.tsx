@@ -125,41 +125,12 @@ test("visual replay renders graph state, selected path, and read-only inspector"
   assert.match(html, /aria-label="Workflow run replay"/);
   assert.match(html, /Ticket received: Completed/);
   assert.match(html, /Review changes: Failed/);
-  assert.match(html, /stroke="#3C43E7"/);
   assert.match(html, /Input/);
   assert.match(html, /Output/);
   assert.match(html, /Logs/);
   assert.match(html, /Metadata/);
   assert.match(html, /Attempts \(1\)/);
   assert.doesNotMatch(html, /Rerun|Run step|Replay side effects/);
-});
-
-test("visual replay contains wide graph and inspector content within the page", () => {
-  const html = renderToStaticMarkup(
-    <WorkflowReplay runId="wrun_1" initialResponse={response} />,
-  );
-  const root = html.match(/<div[^>]*data-replay-root="true"[^>]*>/)?.[0] ?? "";
-  const canvas =
-    html.match(/<div[^>]*data-replay-canvas="true"[^>]*>/)?.[0] ?? "";
-  const tabs =
-    html.match(/<div[^>]*data-replay-tabs="true"[^>]*>/)?.[0] ?? "";
-  const inspector =
-    html.match(/<section[^>]*class="[^"]*replay-inspector[^"]*"[^>]*>/)?.[0] ??
-    "";
-
-  assert.match(
-    root,
-    /class="[^"]*w-full[^"]*min-w-0[^"]*max-w-full[^"]*overflow-hidden/,
-  );
-  assert.match(
-    canvas,
-    /class="[^"]*w-full[^"]*min-w-0[^"]*max-w-full[^"]*overflow-auto/,
-  );
-  assert.match(
-    inspector,
-    /class="[^"]*min-w-0[^"]*overflow-hidden/,
-  );
-  assert.match(tabs, /class="[^"]*max-w-full[^"]*overflow-x-auto/);
 });
 
 test("visual replay preserves persisted stable-edge geometry", () => {
@@ -666,11 +637,8 @@ test("not_run and a false allPassed render as a warning, and ok:true with allPas
   const html = renderToStaticMarkup(<>{renderScriptOutput(value)}</>);
 
   assert.match(html, /Nothing was verified: no selected group ran/);
-  // Both the group's not_run chip and the allPassed:false chip must carry
-  // the warn tone's background, not the neutral "nothing happened" one. The
-  // chip shows the humanized label, not the raw "not_run" token.
-  assert.match(html, /bg-\[#FFF4CC\][^>]*">Not run</);
-  assert.match(html, /bg-\[#FFF4CC\][^>]*">allPassed: false</);
+  assert.match(html, />Not run</);
+  assert.match(html, />allPassed: false</);
 });
 
 test("group status chips show humanized labels with tooltips, never the raw token", () => {

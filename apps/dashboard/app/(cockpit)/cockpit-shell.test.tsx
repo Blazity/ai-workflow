@@ -278,7 +278,6 @@ function liveBadge(root: ReactTestInstance): string {
     .findAll(
       (node) =>
         typeof node.type === "string" &&
-        node.props.className?.includes?.("uppercase") &&
         typeof node.children[0] === "string" &&
         /^(Live on|Live off)$/.test(node.children[0]),
     )

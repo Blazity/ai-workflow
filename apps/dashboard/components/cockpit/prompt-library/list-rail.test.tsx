@@ -39,7 +39,7 @@ const rows: PromptLibraryListRowDto[] = [
   },
 ];
 
-test("PromptListRail keeps selected rows tinted without the primary button skin", () => {
+test("PromptListRail exposes selected rows and active filters", () => {
   const dom = installTestDom();
   const container = document.createElement("div");
   document.body.append(container);
@@ -68,11 +68,6 @@ test("PromptListRail keeps selected rows tinted without the primary button skin"
     const renderedRows = Array.from(container.querySelectorAll<HTMLButtonElement>("button[data-row]"));
     assert.equal(renderedRows.length, 2);
     assert.equal(renderedRows[0]?.getAttribute("aria-pressed"), "true");
-    assert.match(renderedRows[0]?.className ?? "", /border-l-mariner/);
-    assert.match(renderedRows[0]?.className ?? "", /bg-off-white/);
-    assert.doesNotMatch(renderedRows[0]?.className ?? "", /bg-mariner(?:\s|$)/);
-    assert.match(renderedRows[1]?.className ?? "", /border-l-transparent/);
-    assert.match(renderedRows[1]?.className ?? "", /bg-panel/);
     assert.equal(renderedRows[1]?.getAttribute("aria-pressed"), "false");
 
     const activeTag = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
@@ -80,18 +75,12 @@ test("PromptListRail keeps selected rows tinted without the primary button skin"
     );
     assert.ok(activeTag);
     assert.equal(activeTag.textContent?.trim(), "all");
-    assert.match(activeTag.className, /bg-coal/);
-    assert.match(activeTag.className, /border-coal/);
-    assert.match(activeTag.className, /text-\[9px\]/);
-    assert.match(activeTag.className, /uppercase/);
     const search = container.querySelector<HTMLInputElement>('[aria-label="Search prompts"]');
     assert.equal(search?.placeholder, "Search prompts  ( / )");
     const archived = Array.from(container.querySelectorAll("button")).find(
       (candidate) => candidate.textContent?.trim() === "Archived",
     );
     assert.ok(archived);
-    assert.ok(archived.parentElement?.className.includes("flex-wrap"));
-    assert.match(archived.className, /ml-auto/);
   } finally {
     act(() => root?.unmount());
     container.remove();

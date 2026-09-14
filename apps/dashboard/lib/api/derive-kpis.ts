@@ -8,7 +8,7 @@ const DAY_MIN = 24 * 60;
  * Workflow API's `limit` cap; when that happens we reconstruct the tiles from
  * the (already-fetched) runs list instead. Cost is not tracked per run, so
  * `cost24h` stays null. The runs list is capped at one page (~50 rows), so the
- * 48h delta window is best-effort — `deltaPct`/`deltaSec` are 0 when the prior
+ * 48h delta window is best-effort, `deltaPct`/`deltaSec` are 0 when the prior
  * metric data isn't covered by that page.
  */
 export function deriveKpisFromRuns(
