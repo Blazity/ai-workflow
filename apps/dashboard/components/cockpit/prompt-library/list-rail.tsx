@@ -20,6 +20,12 @@ function relativeTime(iso: string): string {
   return `${Math.round(mo / 12)}y ago`;
 }
 
+function tagChipClass(active: boolean): string {
+  return `cursor-pointer rounded-xs border px-2 py-1 font-mono text-[9px] font-medium uppercase tracking-[0.04em] ${
+    active ? "border-coal bg-coal text-white" : "border-neutral-200 bg-panel text-neutral-700"
+  }`;
+}
+
 export function PromptListRail({
   rows,
   tags,
@@ -91,39 +97,34 @@ export function PromptListRail({
               focusFirstRow();
             }
           }}
-          placeholder="Search prompts ( / )"
+          placeholder="Search prompts  ( / )"
           aria-label="Search prompts"
         />
-        <div className="flex items-start gap-2">
-          <div className="flex min-w-0 flex-1 flex-wrap gap-1">
-            <Button
-              variant={tag === null ? "selected" : "secondary"}
-              size="sm"
-              onClick={() => onTagChange(null)}
-              aria-pressed={tag === null}
-              className="text-[9px] font-medium uppercase tracking-[0.04em]"
-            >
-              all
-            </Button>
-            {tags.map((t) => (
-              <Button
-                variant={tag === t ? "selected" : "secondary"}
-                size="sm"
-                key={t}
-                onClick={() => onTagChange(t)}
-                aria-pressed={tag === t}
-                className="text-[9px] font-medium uppercase tracking-[0.04em]"
-              >
-                {t}
-              </Button>
-            ))}
-          </div>
+        <div className="flex flex-wrap gap-1">
           <Button
-            variant={showArchived ? "selected" : "secondary"}
-            size="sm"
+            variant="text"
+            onClick={() => onTagChange(null)}
+            aria-pressed={tag === null}
+            className={tagChipClass(tag === null)}
+          >
+            all
+          </Button>
+          {tags.map((t) => (
+            <Button
+              variant="text"
+              key={t}
+              onClick={() => onTagChange(t)}
+              aria-pressed={tag === t}
+              className={tagChipClass(tag === t)}
+            >
+              {t}
+            </Button>
+          ))}
+          <Button
+            variant="text"
             onClick={onToggleArchived}
             aria-pressed={showArchived}
-            className="shrink-0 text-[9px] font-medium uppercase tracking-[0.04em]"
+            className={`${tagChipClass(showArchived)} ml-auto`}
           >
             Archived
           </Button>
@@ -136,9 +137,9 @@ export function PromptListRail({
             {query ? `No prompts match "${query}".` : "No prompts here."}
             <div className="mt-2">
               <Button
-                variant="ghost"
-                size="sm"
+                variant="text"
                 onClick={onClearFilters}
+                className="cursor-pointer font-body text-[12px] text-mariner"
               >
                 Clear filters
               </Button>
@@ -149,36 +150,41 @@ export function PromptListRail({
             const on = activeId === row.id;
             const archived = row.archivedAt !== null;
             return (
-              <button
+              <Button
+                variant="text"
                 type="button"
                 key={row.id}
                 data-row
                 aria-pressed={on}
                 onClick={() => onSelect(row.id)}
-                className={`block w-full appearance-none cursor-pointer border-l-[3px] px-4 py-[14px] text-left transition-[color,background-color,border-color,transform] duration-[var(--motion-fast)] ease-standard active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-mariner ${
+                className={`block w-full cursor-pointer border-l-[3px] px-4 py-[14px] text-left transition-[color,background-color,border-color] duration-[var(--motion-fast)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-mariner focus-visible:outline-offset-[-2px] ${
                   i < filtered.length - 1 ? "border-b border-b-neutral-200" : ""
-                } ${on ? "border-l-mariner bg-off-white" : "border-l-transparent bg-panel hover:bg-off-white"} ${archived ? "opacity-60" : ""}`}
+                } ${on ? "border-l-mariner bg-off-white" : "border-l-transparent bg-panel hover:bg-[#FAFBFC]"} ${
+                  archived ? "opacity-60" : ""
+                }`}
               >
-                <div className="truncate font-mono text-[13px] font-semibold text-neutral-900">
-                  {row.name}
-                </div>
-                {row.description && (
-                  <div className="mt-[3px] truncate text-[11px] text-neutral-500">
-                    {row.description}
-                  </div>
-                )}
-                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                  <span className="font-mono text-[10px] text-neutral-500">
-                    v{row.currentVersion} · {relativeTime(row.updatedAt)}
+                <span className="block w-full">
+                  <span className="block truncate font-mono text-[13px] font-semibold text-neutral-900">
+                    {row.name}
                   </span>
-                  {archived && <CkChip tone="neutral">archived</CkChip>}
-                  {row.tags.map((t) => (
-                    <CkChip key={t} tone={t === "built-in" ? "mariner" : "neutral"}>
-                      {t}
-                    </CkChip>
-                  ))}
-                </div>
-              </button>
+                  {row.description && (
+                    <span className="mt-[3px] block truncate text-[11px] text-neutral-500">
+                      {row.description}
+                    </span>
+                  )}
+                  <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    <span className="font-mono text-[10px] text-neutral-500">
+                      v{row.currentVersion} · {relativeTime(row.updatedAt)}
+                    </span>
+                    {archived && <CkChip tone="neutral">archived</CkChip>}
+                    {row.tags.map((t) => (
+                      <CkChip key={t} tone={t === "built-in" ? "mariner" : "neutral"}>
+                        {t}
+                      </CkChip>
+                    ))}
+                  </span>
+                </span>
+              </Button>
             );
           })
         )}

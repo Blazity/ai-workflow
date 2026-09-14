@@ -36,6 +36,9 @@ import {
 import { canonicalMarkdownForEditor } from "@/components/cockpit/prompt-editor/markdown-round-trip";
 import { promptEditorExtensions } from "@/components/cockpit/prompt-editor/prompt-editor-extensions";
 
+const primaryButtonClass =
+  "appearance-none cursor-pointer border border-mariner bg-mariner text-white py-1.5 px-3.5 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase disabled:opacity-40 disabled:cursor-default";
+
 const validSlotSchemaDraftState: PromptSlotSchemaDraftState = {
   state: "valid",
   hasUncommittedInvalidSource: false,
@@ -470,10 +473,10 @@ export function PromptLibraryScreen({
         <div className="p-10 text-center font-body text-[13px] text-neutral-600">
           Could not load this prompt.{" "}
           <Button
-            variant="ghost"
-            size="sm"
+            variant="text"
             type="button"
             onClick={retryDetail}
+            className="cursor-pointer font-body text-[13px] font-semibold text-mariner"
           >
             Retry
           </Button>
@@ -517,7 +520,7 @@ export function PromptLibraryScreen({
           </p>
         </div>
         {canEdit && available && !showEmptyState && (
-          <Button onClick={openCreate}>
+          <Button onClick={openCreate} className={primaryButtonClass}>
             New prompt
           </Button>
         )}
@@ -538,7 +541,7 @@ export function PromptLibraryScreen({
             </p>
             {canEdit && (
               <div className="mt-4">
-                <Button onClick={openCreate}>
+                <Button onClick={openCreate} className={primaryButtonClass}>
                   New prompt
                 </Button>
               </div>

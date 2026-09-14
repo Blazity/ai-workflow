@@ -75,20 +75,23 @@ test("PromptListRail keeps selected rows tinted without the primary button skin"
     assert.match(renderedRows[1]?.className ?? "", /bg-panel/);
     assert.equal(renderedRows[1]?.getAttribute("aria-pressed"), "false");
 
-    const activeTag = container.querySelector<HTMLButtonElement>('[data-variant="selected"]');
+    const activeTag = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (candidate) => candidate.textContent?.trim() === "all",
+    );
     assert.ok(activeTag);
     assert.equal(activeTag.textContent?.trim(), "all");
-    assert.match(activeTag.className, /bg-mariner-100/);
+    assert.match(activeTag.className, /bg-coal/);
+    assert.match(activeTag.className, /border-coal/);
     assert.match(activeTag.className, /text-\[9px\]/);
     assert.match(activeTag.className, /uppercase/);
     const search = container.querySelector<HTMLInputElement>('[aria-label="Search prompts"]');
-    assert.equal(search?.placeholder, "Search prompts ( / )");
+    assert.equal(search?.placeholder, "Search prompts  ( / )");
     const archived = Array.from(container.querySelectorAll("button")).find(
       (candidate) => candidate.textContent?.trim() === "Archived",
     );
     assert.ok(archived);
-    assert.ok(archived.parentElement?.className.includes("items-start"));
-    assert.match(archived.className, /shrink-0/);
+    assert.ok(archived.parentElement?.className.includes("flex-wrap"));
+    assert.match(archived.className, /ml-auto/);
   } finally {
     act(() => root?.unmount());
     container.remove();

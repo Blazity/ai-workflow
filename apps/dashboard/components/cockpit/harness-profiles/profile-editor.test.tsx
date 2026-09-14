@@ -382,8 +382,8 @@ test("a pinned skill names the source it came from", () => {
 
   assert.match(html, /blazity\/ai-workflow @ cccccccccccc/);
   assert.match(html, /This deployment · skills\/review-checklist @ dddddddddddd/);
-  assert.match(html, />aaaaaaaaaaaa<\/code>/);
-  assert.match(html, /aria-label="Copy full artifact digest a{64}"/);
+  assert.match(html, new RegExp(`>${"a".repeat(64)}</div>`));
+  assert.doesNotMatch(html, /Copy full artifact digest/);
 });
 
 test("refreshing tells a moved pin apart from a deployment carrying the same bytes", () => {

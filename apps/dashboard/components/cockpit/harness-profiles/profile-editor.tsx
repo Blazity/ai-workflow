@@ -14,7 +14,6 @@ import {
   withHarnessProvider,
 } from "@/lib/harness-profiles/editor";
 import { apiClient } from "@/lib/api/client";
-import { formatDateTime } from "@/lib/date-time";
 import type {
   HarnessCapabilitiesResponse,
   HarnessLocalSkillDiscoveryResponse,
@@ -31,6 +30,11 @@ import {
   stableJson,
 } from "@shared/contracts";
 import { isGitHubSkillSource } from "@shared/skills";
+
+const secondaryButtonClass =
+  "appearance-none rounded-[3px] border border-neutral-300 bg-panel px-3 py-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-coal cursor-pointer disabled:cursor-default disabled:opacity-40";
+const primaryButtonClass =
+  "appearance-none rounded-[3px] border border-mariner bg-mariner px-3 py-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-white cursor-pointer disabled:cursor-default disabled:opacity-40";
 
 type ProfileAction =
   | "save"
@@ -104,35 +108,6 @@ function CheckboxField({
       onChange={(event) => onChange(event.target.checked)}
       label={label}
     />
-  );
-}
-
-function ArtifactDigest({ value }: { value: string }) {
-  const [copied, setCopied] = useState(false);
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(true);
-    } catch {
-      setCopied(false);
-    }
-  }
-
-  return (
-    <div className="flex min-w-0 items-center gap-1.5 font-mono text-[9px] text-neutral-500">
-      <code title={value}>{value.slice(0, 12)}</code>
-      <Button
-        aria-label={`Copy full artifact digest ${value}`}
-        className="min-h-6"
-        onClick={() => void copy()}
-        size="sm"
-        type="button"
-        variant="ghost"
-      >
-        {copied ? "Copied" : "Copy"}
-      </Button>
-    </div>
   );
 }
 
@@ -582,7 +557,7 @@ export function ProfileEditor({
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3 border-b border-neutral-200 pb-4">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="m-0 font-display text-2xl font-semibold text-coal">
+            <h1 className="m-0 font-display text-[22px] font-semibold text-coal">
               {profile.draft.displayName}
             </h1>
             {profile.archivedAt && <CkChip tone="blocked">Archived</CkChip>}
@@ -613,6 +588,7 @@ export function ProfileEditor({
               title={
                 dirty ? "Save local changes before forking the profile" : undefined
               }
+              className={secondaryButtonClass}
             >
               Duplicate
             </Button>
@@ -622,6 +598,7 @@ export function ProfileEditor({
               type="button"
               onClick={() => setMode("edit")}
               disabled={busy !== null}
+              className={primaryButtonClass}
             >
               Edit draft
             </Button>
@@ -633,6 +610,7 @@ export function ProfileEditor({
                 type="button"
                 onClick={discardLocalChanges}
                 disabled={busy !== null}
+                className={secondaryButtonClass}
               >
                 Discard changes
               </Button>
@@ -640,6 +618,7 @@ export function ProfileEditor({
                 type="button"
                 onClick={() => void onSave(draft)}
                 disabled={busy !== null || !dirty || !valid}
+                className={primaryButtonClass}
               >
                 {busy === "save" ? "Saving…" : "Save draft"}
               </Button>
@@ -652,6 +631,7 @@ export function ProfileEditor({
                 type="button"
                 onClick={() => setMode("edit")}
                 disabled={busy !== null}
+                className={secondaryButtonClass}
               >
                 Back to edit
               </Button>
@@ -659,6 +639,7 @@ export function ProfileEditor({
                 type="button"
                 onClick={() => void onPublish()}
                 disabled={busy !== null || dirty || !valid}
+                className={primaryButtonClass}
               >
                 {busy === "publish"
                   ? "Publishing…"
@@ -681,10 +662,10 @@ export function ProfileEditor({
                 : `v${profile.publishedVersion}`}.
             </span>
             <Button
-              variant="ghost"
-              size="sm"
+              variant="text"
               type="button"
               onClick={() => setMode("review")}
+              className="cursor-pointer font-body text-[11px] font-semibold text-mariner"
             >
               Review changes
             </Button>
@@ -733,6 +714,7 @@ export function ProfileEditor({
             type="button"
             onClick={() => void onFork(forkSlug.trim())}
             disabled={busy !== null || !isProfileSlug(forkSlug.trim())}
+            className={primaryButtonClass}
           >
             {busy === "fork" ? "Forking…" : "Create fork"}
           </Button>
@@ -741,6 +723,7 @@ export function ProfileEditor({
             type="button"
             onClick={() => setShowFork(false)}
             disabled={busy !== null}
+            className={secondaryButtonClass}
           >
             Cancel
           </Button>
@@ -750,7 +733,7 @@ export function ProfileEditor({
       {mode === "overview" && (
         <div className="grid min-h-[560px] gap-5 xl:grid-cols-[minmax(0,1fr)_280px]">
           <div className="min-w-0">
-            <CkCard pad={0}>
+            <div className="rounded-[4px] border border-neutral-200 bg-panel">
               {[
                 {
                   label: "Runtime",
@@ -854,7 +837,7 @@ export function ProfileEditor({
                   key={section.label}
                   className="grid gap-3 border-b border-neutral-100 px-4 py-4 last:border-b-0 md:grid-cols-[100px_minmax(0,1fr)]"
                 >
-                  <div className="font-mono text-[9px] uppercase tracking-[0.06em] text-neutral-500">
+                  <div className="font-mono text-[9px] uppercase tracking-[0.08em] text-neutral-500">
                     {section.label}
                   </div>
                   <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -871,7 +854,7 @@ export function ProfileEditor({
                   </div>
                 </div>
               ))}
-            </CkCard>
+            </div>
 
             <div className="mt-5">
               <div className="mb-2 flex items-end justify-between gap-3">
@@ -888,12 +871,13 @@ export function ProfileEditor({
                   <Button
                     type="button"
                     onClick={() => setShowSkillImport(true)}
+                    className={primaryButtonClass}
                   >
                     Add skills
                   </Button>
                 )}
               </div>
-              <CkCard pad={0}>
+              <div className="overflow-hidden rounded-[4px] border border-neutral-200 bg-panel">
                 {draft.skills.length === 0 ? (
                   <div className="px-4 py-8 text-center font-body text-[12px] text-neutral-500">
                     No skills are attached to this profile.
@@ -921,16 +905,18 @@ export function ProfileEditor({
                             discovery={deploymentSkills}
                           />
                         </div>
-                        <ArtifactDigest value={skill.artifactHash} />
+                        <div className="truncate font-mono text-[9px] text-neutral-500">
+                          {skill.artifactHash}
+                        </div>
                       </div>
                     );
                   })
                 )}
-              </CkCard>
+              </div>
             </div>
 
             {usage.length > 0 && (
-              <CkCard className="mt-5">
+              <div className="mt-5 rounded-[4px] border border-neutral-200 bg-panel p-4">
                 <h2 className="m-0 font-body text-[14px] font-semibold text-coal">
                   Used by {usage.length}{" "}
                   {usage.length === 1 ? "workflow" : "workflows"}
@@ -949,11 +935,11 @@ export function ProfileEditor({
                     </div>
                   ))}
                 </div>
-              </CkCard>
+              </div>
             )}
           </div>
 
-          <CkCard className="self-start">
+          <aside className="self-start rounded-[4px] border border-neutral-200 bg-panel p-4">
             <h2 className="m-0 font-body text-[14px] font-semibold text-coal">
               Version history
             </h2>
@@ -984,21 +970,20 @@ export function ProfileEditor({
                       )}
                     </div>
                     <div className="mt-1 font-body text-[10px] text-neutral-500">
-                      {formatDateTime(version.createdAt)}
+                      {new Date(version.createdAt).toLocaleString()}
                     </div>
                     <div className="mt-1 truncate font-mono text-[9px] text-neutral-500">
                       {version.manifestHash}
                     </div>
                     <Button
-                      variant="ghost"
-                      size="sm"
+                      variant="text"
                       type="button"
                       onClick={() =>
                         setInspectedVersion((current) =>
                           current === version.version ? null : version.version,
                         )
                       }
-                      className="mt-2"
+                      className="mt-2 cursor-pointer font-body text-[10px] font-semibold text-mariner"
                     >
                       {inspectedVersion === version.version
                         ? "Hide details"
@@ -1022,12 +1007,11 @@ export function ProfileEditor({
                     {editable &&
                       version.version !== profile.publishedVersion && (
                         <Button
-                          variant="ghost"
-                          size="sm"
+                          variant="text"
                           type="button"
                           onClick={() => setConfirmRestore(version.version)}
                           disabled={busy !== null}
-                          className="mt-2"
+                          className="mt-2 cursor-pointer font-body text-[10px] font-semibold text-mariner"
                         >
                           Restore into draft
                         </Button>
@@ -1035,18 +1019,18 @@ export function ProfileEditor({
                     {confirmRestore === version.version && (
                       <div className="mt-2 flex gap-2">
                         <Button
-                          variant="danger"
-                          size="sm"
+                          variant="text"
                           type="button"
                           onClick={() => void onRestore(version.version)}
+                          className="cursor-pointer font-body text-[10px] font-semibold text-red-600"
                         >
                           Confirm
                         </Button>
                         <Button
-                          variant="ghost"
-                          size="sm"
+                          variant="text"
                           type="button"
                           onClick={() => setConfirmRestore(null)}
+                          className="cursor-pointer font-body text-[10px] text-neutral-500"
                         >
                           Cancel
                         </Button>
@@ -1056,12 +1040,12 @@ export function ProfileEditor({
                 ))}
               </div>
             )}
-          </CkCard>
+          </aside>
         </div>
       )}
 
       {mode === "review" && (
-        <CkCard pad={0}>
+        <div className="rounded-[4px] border border-neutral-200 bg-panel">
           <div className="grid grid-cols-[150px_minmax(0,1fr)_minmax(0,1fr)] border-b border-neutral-200 bg-app-bg px-4 py-2 font-mono text-[9px] uppercase tracking-[0.06em] text-neutral-500">
             <span>Section</span>
             <span>Published {profile.publishedVersion ? `v${profile.publishedVersion}` : ""}</span>
@@ -1108,7 +1092,7 @@ export function ProfileEditor({
             Publishing creates an immutable version. Existing workflows remain
             pinned until they are explicitly updated.
           </div>
-        </CkCard>
+        </div>
       )}
 
       {mode === "edit" && (
@@ -1126,7 +1110,8 @@ export function ProfileEditor({
             ["limits", "Limits & workspace"],
             ["home-files", "Home files"],
           ].map(([id, label]) => (
-            <button
+            <Button
+              variant="text"
               key={id}
               type="button"
               onClick={() =>
@@ -1142,14 +1127,14 @@ export function ProfileEditor({
                 )
               }
               aria-current={editSection === id ? "page" : undefined}
-              className={`appearance-none border-none border-l-2 bg-transparent px-3 py-2 text-left font-body text-[11px] transition-[color,border-color,transform] duration-[var(--motion-fast)] ease-standard active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner focus-visible:ring-offset-1 ${
+              className={`cursor-pointer border-l-2 bg-transparent px-3 py-2 text-left font-body text-[11px] ${
                 editSection === id
                   ? "border-mariner text-mariner font-semibold"
                   : "border-transparent text-neutral-600 hover:text-coal"
               }`}
             >
               {label}
-            </button>
+            </Button>
           ))}
         </nav>
         <div className="min-w-0">
@@ -1196,6 +1181,7 @@ export function ProfileEditor({
                   maxLength={2_000}
                   disabled={!editable}
                   onChange={(event) => update({ description: event.target.value })}
+                  className="min-h-[74px]"
                 />
               </Field>
             </div>
@@ -1810,7 +1796,9 @@ export function ProfileEditor({
                       <div className="font-mono text-[11px] font-semibold text-coal">
                         {skill.name}
                       </div>
-                      <ArtifactDigest value={skill.artifactHash} />
+                      <div className="truncate font-mono text-[9px] text-neutral-500">
+                        {skill.artifactHash}
+                      </div>
                       {source && (
                         <div className="mt-1 font-mono text-[9px] text-neutral-500">
                           {skillSourceLabel(source)}
@@ -1841,11 +1829,11 @@ export function ProfileEditor({
                     {editable && (
                       <div className="flex gap-2">
                         <Button
-                          variant="ghost"
-                          size="sm"
+                          variant="text"
                           type="button"
                           onClick={() => void onRefreshSkill(skill.artifactHash)}
                           disabled={busy !== null || dirty}
+                          className="cursor-pointer font-body text-[11px] text-mariner"
                           title={
                             dirty
                               ? "Save local profile changes before refreshing a skill"
@@ -1859,8 +1847,7 @@ export function ProfileEditor({
                             : "Refresh"}
                         </Button>
                         <Button
-                          variant="danger"
-                          size="sm"
+                          variant="text"
                           type="button"
                           onClick={() =>
                             setDraft((current) => ({
@@ -1872,6 +1859,7 @@ export function ProfileEditor({
                             }))
                           }
                           disabled={busy !== null}
+                          className="cursor-pointer font-body text-[11px] text-red-600"
                         >
                           Remove
                         </Button>
@@ -1887,6 +1875,7 @@ export function ProfileEditor({
                 type="button"
                 onClick={() => setShowSkillImport(true)}
                 disabled={busy !== null}
+                className={secondaryButtonClass}
               >
                 Add skills
               </Button>
@@ -1952,7 +1941,7 @@ export function ProfileEditor({
                     {version.manifestHash}
                   </span>
                   <span className="text-neutral-500">
-                    {formatDateTime(version.createdAt)}
+                    {new Date(version.createdAt).toLocaleString()}
                   </span>
                   {version.restoredFromVersion !== null && (
                     <CkChip>restored from v{version.restoredFromVersion}</CkChip>
@@ -1963,32 +1952,32 @@ export function ProfileEditor({
                         {confirmRestore === version.version ? (
                           <span className="flex gap-2">
                             <Button
-                              variant="danger"
-                              size="sm"
+                              variant="text"
                               type="button"
                               onClick={() => void onRestore(version.version)}
                               disabled={busy !== null || dirty}
+                              className="cursor-pointer font-body text-[11px] font-semibold text-red-600"
                             >
                               {busy === `restore-${version.version}`
                                 ? "Restoring…"
                                 : "Confirm restore"}
                             </Button>
                             <Button
-                              variant="ghost"
-                              size="sm"
+                              variant="text"
                               type="button"
                               onClick={() => setConfirmRestore(null)}
+                              className="cursor-pointer font-body text-[11px] text-neutral-500"
                             >
                               Cancel
                             </Button>
                           </span>
                         ) : (
                           <Button
-                            variant="ghost"
-                            size="sm"
+                            variant="text"
                             type="button"
                             onClick={() => setConfirmRestore(version.version)}
                             disabled={busy !== null || dirty}
+                            className="cursor-pointer font-body text-[11px] text-mariner"
                             title={
                               dirty
                                 ? "Save local changes before restoring a version"
@@ -2017,6 +2006,7 @@ export function ProfileEditor({
               type="button"
               onClick={() => void onUnarchive()}
               disabled={busy !== null}
+              className={secondaryButtonClass}
             >
               {busy === "unarchive" ? "Restoring…" : "Restore profile"}
             </Button>
@@ -2028,30 +2018,30 @@ export function ProfileEditor({
                   be undone.
                 </span>
                 <Button
-                  variant="danger"
-                  size="sm"
+                  variant="text"
                   type="button"
                   onClick={() => void onDelete()}
                   disabled={busy !== null}
+                  className="cursor-pointer font-body text-[12px] font-semibold text-red-600"
                 >
                   {busy === "remove" ? "Deleting…" : "Delete profile"}
                 </Button>
                 <Button
-                  variant="ghost"
-                  size="sm"
+                  variant="text"
                   type="button"
                   onClick={() => setConfirmDelete(false)}
+                  className="cursor-pointer font-body text-[12px] text-neutral-500"
                 >
                   Cancel
                 </Button>
               </div>
             ) : (
               <Button
-                variant="danger"
-                size="sm"
+                variant="text"
                 type="button"
                 onClick={() => setConfirmDelete(true)}
                 disabled={busy !== null}
+                className="cursor-pointer font-body text-[12px] text-red-600"
               >
                 Delete unused draft
               </Button>
@@ -2063,33 +2053,33 @@ export function ProfileEditor({
                 exact version.
               </span>
               <Button
-                variant="danger"
-                size="sm"
+                variant="text"
                 type="button"
                 onClick={() => void onArchive()}
                 disabled={busy !== null || dirty}
+                className="cursor-pointer font-body text-[12px] font-semibold text-red-600"
               >
                 {busy === "archive" ? "Archiving…" : "Confirm archive"}
               </Button>
               <Button
-                variant="ghost"
-                size="sm"
+                variant="text"
                 type="button"
                 onClick={() => setConfirmArchive(false)}
+                className="cursor-pointer font-body text-[12px] text-neutral-500"
               >
                 Cancel
               </Button>
             </div>
           ) : (
             <Button
-              variant="danger"
-              size="sm"
+              variant="text"
               type="button"
               onClick={() => setConfirmArchive(true)}
               disabled={busy !== null || dirty}
               title={
                 dirty ? "Save local changes before archiving" : undefined
               }
+              className="cursor-pointer font-body text-[12px] text-red-600"
             >
               Archive profile
             </Button>

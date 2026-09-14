@@ -36,7 +36,7 @@ export function PromptBodyBlocksView({
       {blocks.map((block) => (
         <article
           key={block.id}
-          className="overflow-hidden rounded-sm border border-neutral-200 bg-panel"
+          className="overflow-hidden rounded-md border border-neutral-200 bg-panel shadow-[0_2px_8px_rgba(24,27,32,0.04)]"
         >
           {block.kind === "reference" ? (
             <div className="px-3 py-2.5">

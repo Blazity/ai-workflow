@@ -107,7 +107,7 @@ export function VariablePickerPopover<T extends HTMLElement>({
       aria-label="Insert variable"
       data-state={state}
       style={{ left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.width, maxHeight: pos.maxHeight }}
-      className={`fixed z-[110] flex flex-col overflow-y-auto rounded-sm border border-neutral-200 bg-panel shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] transition-[opacity,transform] duration-[var(--motion-base)] ease-standard motion-reduce:transition-none motion-reduce:transform-none ${
+      className={`fixed z-[110] flex flex-col overflow-y-auto rounded-md border border-neutral-200 bg-panel shadow-[0_16px_40px_-12px_rgba(24,27,32,0.35)] transition-[opacity,transform] duration-[var(--motion-base)] ease-standard motion-reduce:transition-none motion-reduce:transform-none ${
         pos.up ? "origin-bottom" : "origin-top"
       } ${
         state === "open"
@@ -117,8 +117,7 @@ export function VariablePickerPopover<T extends HTMLElement>({
     >
       {variables.map((spec) => (
         <Button
-          variant="ghost"
-          size="sm"
+          variant="text"
           key={spec.name}
           type="button"
           role="option"
@@ -126,7 +125,7 @@ export function VariablePickerPopover<T extends HTMLElement>({
           // Keep focus in the editor/textarea so inserting doesn't blur the caret.
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => onPick(`{{${spec.name}}}`)}
-          className="h-auto min-h-10 w-full justify-start rounded-none border-b border-neutral-200 px-2.5 py-2 text-left normal-case last:border-b-0"
+          className="block w-full cursor-pointer border-b border-neutral-200 bg-panel px-2.5 py-2 text-left transition-colors duration-[var(--motion-fast)] last:border-b-0 hover:bg-off-white"
         >
           <span className="flex w-full min-w-0 flex-col">
             <span className="font-mono text-[11px] text-neutral-900">{spec.name}</span>

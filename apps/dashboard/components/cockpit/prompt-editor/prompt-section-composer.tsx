@@ -21,6 +21,9 @@ import {
 } from "./prompt-drag";
 import { Button, IconButton, Textarea } from "@/components/ui";
 
+const iconButton =
+  "inline-flex size-7 shrink-0 items-center justify-center rounded-[3px] border border-transparent bg-transparent font-mono text-[11px] text-neutral-500 transition-colors duration-[var(--motion-fast)] hover:border-neutral-200 hover:bg-off-white hover:text-mariner disabled:cursor-default disabled:opacity-30";
+
 function DropTarget({
   index,
   active,
@@ -159,23 +162,21 @@ export function PromptSectionComposer({
         </span>
         {!raw && (
           <Button
-            variant="ghost"
-            size="sm"
+            variant="text"
             type="button"
             onClick={addSection}
             disabled={disabled}
-            className="ml-auto"
+            className="ml-auto rounded-[3px] px-2 py-1 font-mono text-[10px] uppercase tracking-[0.04em] text-mariner hover:bg-mariner-100 disabled:opacity-40"
           >
             + New section
           </Button>
         )}
         <Button
-          variant={raw ? "selected" : "ghost"}
-          size="sm"
+          variant="text"
           type="button"
           onClick={toggleRaw}
           aria-pressed={raw}
-          className={raw ? "ml-auto" : "ml-1"}
+          className={`${raw ? "ml-auto bg-mariner-100 text-mariner" : "ml-1 text-neutral-600 hover:bg-off-white"} rounded-[3px] px-2 py-1 font-mono text-[10px] uppercase tracking-[0.04em]`}
         >
           Raw
         </Button>
@@ -193,7 +194,7 @@ export function PromptSectionComposer({
             lastEmitted.current = next;
             onChange(next);
           }}
-          className="min-h-0 w-full min-w-0 flex-1"
+          className="min-h-0 w-full min-w-0 flex-1 rounded-none border-none bg-panel px-3 py-2 font-mono text-[12px] leading-[1.6] text-coal outline-none hover:border-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
           aria-label="Raw prompt markdown"
         />
       ) : (
@@ -218,14 +219,13 @@ export function PromptSectionComposer({
               <div key={block.id}>
                 <article
                   data-composer-block={block.id}
-                  className={`overflow-hidden rounded-sm border bg-panel transition-[border-color,box-shadow] duration-[var(--motion-fast)] ${
-                    active ? "border-mariner-200 shadow-[0_1px_2px_rgba(24,27,32,0.06)]" : "border-neutral-200"
+                  className={`overflow-hidden rounded-md border bg-panel transition-[border-color,box-shadow] duration-[var(--motion-fast)] ${
+                    active ? "border-mariner-200 shadow-[0_4px_14px_rgba(31,90,166,0.10)]" : "border-neutral-200 shadow-[0_2px_8px_rgba(24,27,32,0.04)]"
                   }`}
                 >
                   <div className="flex h-9 items-center gap-2 border-b border-neutral-100 px-2">
                     <IconButton
-                      variant="ghost"
-                      size="sm"
+                      variant="text"
                       type="button"
                       draggable={!disabled}
                       onDragStart={(event) => {
@@ -233,16 +233,16 @@ export function PromptSectionComposer({
                         writePromptDrag(event, { kind: "composer-block", blockId: block.id, label: block.title });
                       }}
                       aria-label={`Drag ${block.title}`}
-                      className="cursor-grab active:cursor-grabbing"
+                      className={`${iconButton} cursor-grab active:cursor-grabbing`}
                     >
                       ⠿
                     </IconButton>
                     <span className="min-w-0 flex-1 truncate font-mono text-[10px] font-semibold text-neutral-700">
                       {block.kind === "reference" ? "Live prompt" : block.level === 0 ? "Introduction" : `H${block.level}`} · {block.title}
                     </span>
-                    <IconButton variant="ghost" size="sm" type="button" disabled={disabled || index === 0} onClick={() => commit(moveComposerBlock(blocks, block.id, index - 1))} aria-label="Move up">↑</IconButton>
-                    <IconButton variant="ghost" size="sm" type="button" disabled={disabled || index === blocks.length - 1} onClick={() => commit(moveComposerBlock(blocks, block.id, index + 1))} aria-label="Move down">↓</IconButton>
-                    <IconButton variant="ghost" size="sm" type="button" disabled={disabled} onClick={() => commit(removeComposerBlock(blocks, block.id))} aria-label="Remove block">×</IconButton>
+                    <IconButton variant="text" type="button" disabled={disabled || index === 0} onClick={() => commit(moveComposerBlock(blocks, block.id, index - 1))} className={iconButton} aria-label="Move up">↑</IconButton>
+                    <IconButton variant="text" type="button" disabled={disabled || index === blocks.length - 1} onClick={() => commit(moveComposerBlock(blocks, block.id, index + 1))} className={iconButton} aria-label="Move down">↓</IconButton>
+                    <IconButton variant="text" type="button" disabled={disabled} onClick={() => commit(removeComposerBlock(blocks, block.id))} className={iconButton} aria-label="Remove block">×</IconButton>
                   </div>
 
                   {block.kind === "reference" ? (
@@ -264,12 +264,11 @@ export function PromptSectionComposer({
                     </div>
                   ) : (
                     <Button
-                      variant="ghost"
-                      size="sm"
+                      variant="text"
                       type="button"
                       disabled={disabled}
                       onClick={() => setActiveId(block.id)}
-                      className="h-auto w-full justify-start px-3 py-2.5 text-left normal-case"
+                      className="block w-full bg-transparent px-3 py-2.5 text-left"
                     >
                       <PromptPreview body={block.body} />
                     </Button>

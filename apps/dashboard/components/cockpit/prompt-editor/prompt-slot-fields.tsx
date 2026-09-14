@@ -15,6 +15,9 @@ import { JsonSchemaEditor } from "@/components/cockpit/flow-editor/json-schema-e
 import type { JsonSchemaEditorValidationState } from "@/components/cockpit/flow-editor/json-schema-editor";
 import { Button, Checkbox, Input, Select, Textarea } from "@/components/ui";
 
+const inputClass =
+  "min-w-0 rounded-xs border border-neutral-200 bg-off-white px-2 py-1 font-mono text-[10px] text-coal outline-none focus:border-mariner disabled:opacity-60";
+
 function stableJson(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
@@ -163,6 +166,7 @@ function JsonValueField({
         rows={2}
         onChange={(event) => setDraft(event.target.value)}
         onBlur={commit}
+        className={`${inputClass} w-full leading-[1.45]`}
       />
       {error && (
         <p className="m-0 mt-1 font-body text-[10px] text-red-700">{error}</p>
@@ -265,6 +269,7 @@ function SlotNameField({
         disabled={disabled}
         onChange={(event) => setDraft(event.target.value)}
         onBlur={commit}
+        className={`${inputClass} w-full`}
       />
       {error && (
         <p className="m-0 mt-1 font-body text-[9px] text-red-700">{error}</p>
@@ -339,7 +344,7 @@ export function PromptSlotDefinitionsEditor({
           </p>
         </div>
         <Button
-          variant="ghost"
+          variant="secondary"
           size="sm"
           type="button"
           disabled={disabled}
@@ -354,7 +359,7 @@ export function PromptSlotDefinitionsEditor({
               },
             ])
           }
-          className="ml-auto"
+          className="ml-auto text-mariner"
         >
           + Add slot
         </Button>
@@ -386,7 +391,7 @@ export function PromptSlotDefinitionsEditor({
                     }}
                   />
                   <Button
-                    variant="danger"
+                    variant="secondary"
                     size="sm"
                     type="button"
                     disabled={disabled}
@@ -395,6 +400,7 @@ export function PromptSlotDefinitionsEditor({
                         slots.filter((_, candidate) => candidate !== index),
                       )
                     }
+                    className="text-red-700"
                   >
                     Remove
                   </Button>
@@ -411,6 +417,7 @@ export function PromptSlotDefinitionsEditor({
                       description: event.target.value,
                     }))
                   }
+                  className={`${inputClass} w-full font-body`}
                 />
                 <div className="flex flex-wrap items-center gap-3">
                   <Select
