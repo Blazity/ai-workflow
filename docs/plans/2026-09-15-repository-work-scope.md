@@ -223,7 +223,7 @@ type TriggerRepositoryPolicy = {
  *  the one case a lower origin may overwrite a higher one. */
 type WorkScopeWritePlan = {
   upserts: Array<{ entry: WorkScopeEntry; replacesExpired: boolean }>; // at most 16, one per key
-  deletes: RepositoryKey[];                                             // at most 16, disjoint from upserts
+  deletes: Array<{ repositoryKey: RepositoryKey; origin: WorkScopeOrigin }>; // at most 16, compare-and-delete on the origin the writer saw
   trail: WorkScopeTrailEvent[];                                         // at most 32
 };
 /** workScopeOriginRank(origin) is the index in WORK_SCOPE_ORIGINS. */
