@@ -68,6 +68,33 @@ const DIFF_CHECK_COMMAND = [
   'git diff --check "$base...HEAD"',
 ].join("\n");
 
+const CHANGELOG_CHECK_STEP_NAME = "Require a changelog entry for product changes";
+
+const CHANGELOG_CHECK_COMMAND = [
+  "set -euo pipefail",
+  'if [ "$EVENT_NAME" != "pull_request" ]; then',
+  '  echo "::notice::Not a pull request event, skipping the changelog check."',
+  "  exit 0",
+  "fi",
+  'if [ "$HEAD_IS_FORK" = "true" ]; then',
+  '  echo "::notice::Fork pull request, skipping the changelog check."',
+  "  exit 0",
+  "fi",
+  'pr_json="$(gh pr view "$PR_NUMBER" --json labels,files)"',
+  "has_skip_label=\"$(echo \"$pr_json\" | jq -r '[.labels[].name] | index(\"changelog: skip\") != null')\"",
+  'if [ "$has_skip_label" = "true" ]; then',
+  '  echo "::notice::Pull request labeled changelog: skip."',
+  "  exit 0",
+  "fi",
+  "touches_product=\"$(echo \"$pr_json\" | jq -r '[.files[].path] | any(startswith(\"apps/\") or startswith(\"packages/\"))')\"",
+  "has_changelog_entry=\"$(echo \"$pr_json\" | jq -r '[.files[].path] | any(startswith(\"changelog/unreleased/\"))')\"",
+  'if [ "$touches_product" = "true" ] && [ "$has_changelog_entry" != "true" ]; then',
+  '  echo "::error::This pull request changes apps/** or packages/** but adds no file under changelog/unreleased/. Add an entry (see changelog/README.md) or apply the changelog: skip label."',
+  "  exit 1",
+  "fi",
+  'echo "changelog check passed"',
+].join("\n");
+
 /** Every command the source gate must still run, wherever it now lives. */
 const SOURCE_COMMANDS = [
   "pnpm --filter @shared/workflow-graph run test:zod4",
@@ -85,6 +112,7 @@ const SOURCE_COMMANDS = [
   "pnpm run test:workflow-sdk",
   "pnpm run typecheck",
   DIFF_CHECK_COMMAND,
+  CHANGELOG_CHECK_COMMAND,
 ];
 
 interface CiJob {
@@ -164,9 +192,55 @@ test("no source job can be skipped or reach a live environment", async () => {
         undefined,
         `"${name}" must not carry a step that continues on error`,
       );
+      if (step.name === CHANGELOG_CHECK_STEP_NAME) {
+        // This step reads the pull request's own labels and files through
+        // `gh`, which needs the default token and the PR number; GitHub's own
+        // guidance against interpolating event fields into `run:` puts those,
+        // plus the event name and fork flag the skip logic reads, through
+        // env: instead. It is the one named exception: every other step in
+        // these jobs stays free of step-level env, and the check just above
+        // already proves this step (like every other) carries no secret.
+        assert.deepEqual(Object.keys(step.env ?? {}).sort(), [
+          "EVENT_NAME",
+          "GH_TOKEN",
+          "HEAD_IS_FORK",
+          "PR_NUMBER",
+        ]);
+        continue;
+      }
       assert.equal(step.env, undefined, `"${name}" must not carry step-level env`);
     }
   }
+});
+
+test("the changelog completeness check reads the pull request's own labels and files", async () => {
+  const jobs = await ciJobs();
+  const steps = jobs["source-checks"].steps ?? [];
+  const step = steps.find((entry) => entry.name === CHANGELOG_CHECK_STEP_NAME);
+
+  assert.ok(step, "source-checks must carry the changelog completeness check");
+  assert.equal(step?.if, undefined, "the check must not be conditional; it skips itself in the script");
+  assert.equal(step?.["continue-on-error"], undefined);
+  assert.equal(step?.run?.trim(), CHANGELOG_CHECK_COMMAND);
+  assert.deepEqual(step?.env, {
+    EVENT_NAME: "${{ github.event_name }}",
+    GH_TOKEN: "${{ github.token }}",
+    HEAD_IS_FORK: "${{ github.event.pull_request.head.repo.fork }}",
+    PR_NUMBER: "${{ github.event.pull_request.number }}",
+  });
+  assert.doesNotMatch(
+    JSON.stringify(step),
+    /\$\{\{[^}]*\bsecrets\b/,
+    "the changelog check must not read a configured secret; github.token is the default, unconfigured token",
+  );
+  assert.match(step?.run ?? "", /gh pr view "\$PR_NUMBER" --json labels,files/u);
+  assert.match(step?.run ?? "", /changelog: skip/u);
+  assert.match(step?.run ?? "", /changelog\/unreleased\//u);
+  assert.doesNotMatch(
+    step?.run ?? "",
+    /\$\{\{/u,
+    "the run: script must read every event field through env:, never interpolate it directly",
+  );
 });
 
 test("the required check fails when any pull request dependency does not succeed", async () => {
@@ -300,6 +374,25 @@ test("every multiline CI run block starts in strict mode", async () => {
   }
 
   assert.ok(multilineRuns > 0, "ci.yml must contain multiline run blocks");
+});
+
+test("every multiline changelog workflow run block starts in strict mode", async () => {
+  const source = await readFile(".github/workflows/changelog.yml", "utf8");
+  const workflow = parse(source) as { jobs: Record<string, CiJob> };
+  let multilineRuns = 0;
+
+  for (const [jobName, job] of Object.entries(workflow.jobs)) {
+    for (const step of job.steps ?? []) {
+      if (!step.run?.includes("\n")) continue;
+      multilineRuns += 1;
+      assert.ok(
+        step.run.startsWith("set -euo pipefail\n"),
+        `${jobName}: ${step.name ?? "unnamed run"} must start with set -euo pipefail`,
+      );
+    }
+  }
+
+  assert.ok(multilineRuns > 0, "changelog.yml must contain multiline run blocks");
 });
 
 test("the source build covers worker and dashboard without deployment side effects", async () => {
