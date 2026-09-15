@@ -169,8 +169,9 @@ test("only the guarded engine canary carries secrets or an environment in CI", a
         JSON.stringify(job).matchAll(/secrets\.([A-Z0-9_]+)/gu),
         (match) => match[1],
       );
+      // No DATABASE_URL: identity is proved through /health alone, and the
+      // job holds no production database credential.
       assert.deepEqual(Array.from(new Set(secretNames)).sort(), [
-        "DATABASE_URL",
         "ENGINE_CANARY_MCP_CLIENT_ID",
         "ENGINE_CANARY_MCP_CLIENT_SECRET",
         "VERCEL_AUTOMATION_BYPASS_SECRET",
@@ -189,13 +190,16 @@ test("only the guarded engine canary carries secrets or an environment in CI", a
   }
 });
 
-test("engine canary cancels a superseded PR run and starts only three agents", async () => {
+test("engine canary queues behind the shared fixtures and starts only three agents", async () => {
   const [, workflow] = (await loadWorkflows())[0]!;
   const canary = workflow.jobs?.["engine-canary"];
   assert.ok(canary);
+  // Repository-wide, not per pull request: the three fixture tickets are
+  // shared, so a second pull request's run queues rather than cancelling the
+  // first one or racing it onto the same tickets.
   assert.deepEqual(canary.concurrency, {
-    group: "engine-canary-pr-${{ github.event.pull_request.number }}",
-    "cancel-in-progress": true,
+    group: "engine-canary-shared-fixtures",
+    "cancel-in-progress": false,
   });
   const run = canary.steps?.find((step) => step.name === "Run engine canaries")?.run ?? "";
   assert.match(run, /test:e2e:replay/u);

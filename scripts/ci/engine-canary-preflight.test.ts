@@ -9,7 +9,6 @@ import type { HealthPayload } from "./verify-deployment-identity.ts";
 const SHA = "a".repeat(40);
 const OTHER_SHA = "b".repeat(40);
 const FINGERPRINT = "a1b2c3d4e5f6";
-const OTHER_FINGERPRINT = "0f1e2d3c4b5a";
 
 const health: HealthPayload = {
   status: "ok",
@@ -24,10 +23,9 @@ const expectations: EngineCanaryExpectations = {
   commit: SHA,
   databaseEnv: "production",
   databaseFingerprint: FINGERPRINT,
-  runnerDatabaseFingerprint: FINGERPRINT,
 };
 
-test("accepts an exact candidate on the declared production database", () => {
+test("accepts an exact candidate on the declared production database, no connection string needed", () => {
   assert.deepEqual(evaluatePreflight(health, expectations), { ok: true });
 });
 
@@ -58,22 +56,15 @@ test("refuses an observed environment different from the declared one", () => {
   if (!result.ok) assert.match(result.reason, /environment.*does not match/iu);
 });
 
-test("refuses a runner fingerprint different from matching health and declaration", () => {
+test("refuses a declared database fingerprint that is not 12 lowercase hex characters", () => {
   const result = evaluatePreflight(health, {
     ...expectations,
-    runnerDatabaseFingerprint: OTHER_FINGERPRINT,
+    databaseFingerprint: "not-a-fingerprint",
   });
   assert.equal(result.ok, false);
-  if (!result.ok) assert.match(result.reason, /runner.*declared/iu);
-});
-
-test("refuses a declaration different from matching health and runner fingerprints", () => {
-  const result = evaluatePreflight(health, {
-    ...expectations,
-    databaseFingerprint: OTHER_FINGERPRINT,
-  });
-  assert.equal(result.ok, false);
-  if (!result.ok) assert.match(result.reason, /runner.*declared/iu);
+  if (!result.ok) {
+    assert.match(result.reason, /fingerprint.*12 lowercase hex/iu);
+  }
 });
 
 test("refuses a deployment database fingerprint mismatch", () => {

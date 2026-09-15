@@ -161,9 +161,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 75
     environment: e2e
+    # Repository-wide, not per pull request: the three fixture tickets are
+    # shared across every run of this job, so two pull requests running the
+    # canary at once would collide on them. cancel-in-progress stays false so
+    # a second pull request queues behind the first instead of cancelling it
+    # or racing it onto the same tickets.
     concurrency:
-      group: engine-canary-pr-${{ github.event.pull_request.number }}
-      cancel-in-progress: true
+      group: engine-canary-shared-fixtures
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
         with:
@@ -198,7 +203,6 @@ jobs:
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
           ENGINE_CANARY_MCP_CLIENT_ID: ${{ secrets.ENGINE_CANARY_MCP_CLIENT_ID }}
           ENGINE_CANARY_MCP_CLIENT_SECRET: ${{ secrets.ENGINE_CANARY_MCP_CLIENT_SECRET }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           NEXT_PUBLIC_HARNESS_PROFILE_AUTHORING_ENABLED: ${{ vars.NEXT_PUBLIC_HARNESS_PROFILE_AUTHORING_ENABLED }}
           HARNESS_CANARY_TIMEOUT_MS: ${{ vars.HARNESS_CANARY_TIMEOUT_MS }}
@@ -224,7 +228,6 @@ jobs:
             VERCEL_PROJECT_ID
             ENGINE_CANARY_MCP_CLIENT_ID
             ENGINE_CANARY_MCP_CLIENT_SECRET
-            DATABASE_URL
             VERCEL_AUTOMATION_BYPASS_SECRET
             NEXT_PUBLIC_HARNESS_PROFILE_AUTHORING_ENABLED
             HARNESS_CANARY_TIMEOUT_MS
@@ -301,13 +304,12 @@ jobs:
           ENGINE_CANARY_TARGET: ${{ vars.ENGINE_CANARY_TARGET }}
           ENGINE_CANARY_DB_ENV: ${{ vars.ENGINE_CANARY_DB_ENV }}
           ENGINE_CANARY_DB_FINGERPRINT: ${{ vars.ENGINE_CANARY_DB_FINGERPRINT }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
           set -euo pipefail
           deadline=$((SECONDS + 300))
           while true; do
-            if node --import tsx scripts/ci/engine-canary-preflight.ts --url "$URL" --target "$ENGINE_CANARY_TARGET" --commit "$GITHUB_SHA" --database-env "$ENGINE_CANARY_DB_ENV" --database-fingerprint "$ENGINE_CANARY_DB_FINGERPRINT" --database-url "$DATABASE_URL"; then
+            if node --import tsx scripts/ci/engine-canary-preflight.ts --url "$URL" --target "$ENGINE_CANARY_TARGET" --commit "$GITHUB_SHA" --database-env "$ENGINE_CANARY_DB_ENV" --database-fingerprint "$ENGINE_CANARY_DB_FINGERPRINT"; then
               exit 0
             fi
             if [ "$SECONDS" -ge "$deadline" ]; then
@@ -328,7 +330,6 @@ jobs:
           ENGINE_CANARY_MCP_CLIENT_ID: ${{ secrets.ENGINE_CANARY_MCP_CLIENT_ID }}
           ENGINE_CANARY_MCP_CLIENT_SECRET: ${{ secrets.ENGINE_CANARY_MCP_CLIENT_SECRET }}
           HARNESS_CANARY_CONFIRM_PREVIEW_MUTATIONS: run-preview-harness-canary
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           VERCEL_ENV: preview
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           NEXT_PUBLIC_HARNESS_PROFILE_AUTHORING_ENABLED: ${{ vars.NEXT_PUBLIC_HARNESS_PROFILE_AUTHORING_ENABLED }}

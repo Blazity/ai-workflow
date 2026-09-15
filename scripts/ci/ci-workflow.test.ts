@@ -280,9 +280,13 @@ test("the engine canary is a fail-closed pull request dependency", async () => {
   );
   assert.equal(canary.environment, "e2e");
   assert.equal(canary["timeout-minutes"], 75);
+  // Repository-wide, not per pull request: the three fixture tickets are
+  // shared, so two pull requests running at once would collide on them.
+  // cancel-in-progress stays false so a second pull request queues instead
+  // of cancelling or racing the first one's runs.
   assert.deepEqual(canary.concurrency, {
-    group: "engine-canary-pr-${{ github.event.pull_request.number }}",
-    "cancel-in-progress": true,
+    group: "engine-canary-shared-fixtures",
+    "cancel-in-progress": false,
   });
 
   const steps = canary.steps ?? [];
@@ -331,6 +335,11 @@ test("the engine canary is a fail-closed pull request dependency", async () => {
     target?.run ?? "",
     /if \[ "\$ENGINE_CANARY_TARGET" = "production" \]; then\n\s+echo "::error title=engine-canary configuration::the Vercel production target is forbidden"\n\s+exit 1\n\s*fi/u,
   );
+  // The job holds no production database credential: identity is proved
+  // through /health alone, not by fingerprinting a connection string on the
+  // runner.
+  assert.equal(target?.env?.DATABASE_URL, undefined);
+  assert.doesNotMatch(target?.run ?? "", /DATABASE_URL/u);
 
   const scopeIndex = steps.findIndex((step) => step === scope);
   const migrationSkipIndex = steps.findIndex((step) => step === migrationSkip);
@@ -353,6 +362,9 @@ test("the engine canary is a fail-closed pull request dependency", async () => {
     preflight?.run ?? "",
     /target alias did not report commit \$GITHUB_SHA within 5 minutes/u,
   );
+  assert.equal(preflight?.env?.DATABASE_URL, undefined);
+  assert.doesNotMatch(preflight?.run ?? "", /--database-url/u);
+  assert.doesNotMatch(preflight?.run ?? "", /DATABASE_URL/u);
   const preflightIndex = steps.findIndex((step) => step === preflight);
   const canaries = steps.find(
     (step) => step.name === "Run engine canaries",
@@ -361,6 +373,8 @@ test("the engine canary is a fail-closed pull request dependency", async () => {
     canaries?.env?.HARNESS_CANARY_BASE_URL,
     "${{ vars.ENGINE_CANARY_TARGET_URL }}",
   );
+  assert.equal(canaries?.env?.DATABASE_URL, undefined);
+  assert.doesNotMatch(canaries?.run ?? "", /DATABASE_URL/u);
   assert.equal(
     canaries?.env?.ENGINE_CANARY_LOG_SOURCE_URL,
     "${{ steps.deploy.outputs.url }}",

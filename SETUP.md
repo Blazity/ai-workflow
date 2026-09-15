@@ -513,17 +513,23 @@ The `engine-canary` job is considered for pull requests that change
 gate is wired but idle. Once a target is declared, missing configuration fails
 before deployment and a failed identity check stops the job before any canary
 write. A pull request that changes anything under `apps/worker/drizzle/**` also
-exits green with a warning, but it does not deploy or run the canaries. The
-canary runs after that migration has merged and the shared database has been
+exits green with a warning and skips deployment and the canaries, because the
+target shares the production database with every migration; the canary runs
+only after that migration has merged and the shared database has been
 migrated.
 
 **Cost per gate run.** One armed gate starts exactly three agent runs: the
 built-in Claude fixture, the built-in Codex fixture, and the custom profile
 fixture. Every fixture contains only the canary prompt in one `generic_agent`
 with `workspaceMode: "none"`. Replay verification reuses the custom fixture's
-run and starts no additional agent. A newer push to the same pull request
-cancels the older `engine-canary` job, so the two revisions do not keep running
-these fixtures concurrently.
+run and starts no additional agent. The job's concurrency group is
+repository-wide, not per pull request, because all three fixtures share one
+permanent ticket each across every pull request: a second pull request's run
+queues behind the first instead of cancelling it or racing it onto the same
+tickets. GitHub keeps one running and one pending run per group, so a third
+pull request arriving while one runs and one waits cancels the waiting run;
+that pull request shows a cancelled `engine-canary` and a failed `ci` until its
+job is re-run or it receives another push.
 
 Arm the gate for the demo custom environment with these repository variables:
 
@@ -548,10 +554,11 @@ The current alias is
 `https://ai-workflow-app-env-ai-workflow-demo-blazity.vercel.app`. Read the
 fingerprint from that target's `/health` response and update the repository
 variable if the database changes. The declared database environment must equal
-the `/health` value. The fingerprint must equal both `/health` and the value
-derived from the runner's production `DATABASE_URL`. The exact candidate
-commit must also match. The `production` Vercel target name is forbidden
-because deploying a pull request to it would replace the live deployment.
+the `/health` value. The fingerprint must equal the `/health` value too: the
+job holds no database connection string of its own to derive one from, so
+`/health` is the only source of truth. The exact candidate commit must also
+match. The `production` Vercel target name is forbidden because deploying a
+pull request to it would replace the live deployment.
 
 Repository variables that arm and configure the job are
 `ENGINE_CANARY_TARGET`, `ENGINE_CANARY_TARGET_URL`, `ENGINE_CANARY_DB_ENV`,
@@ -580,12 +587,16 @@ preflight requires the variable. When the deadline expires, the runner calls
 client can do this because the `runs.cancel` policy allows the `service` role
 with its `runs:dispatch` scope.
 
-Secrets read from the `e2e` environment are `VERCEL_TOKEN`, `VERCEL_ORG_ID`,
-`VERCEL_PROJECT_ID`, `ENGINE_CANARY_MCP_CLIENT_ID`,
-`ENGINE_CANARY_MCP_CLIENT_SECRET`, `DATABASE_URL`, and
-`VERCEL_AUTOMATION_BYPASS_SECRET`. `DATABASE_URL` must be the production
-connection string. Keep these as environment secrets in GitHub's `e2e`
-environment. The demo Vercel environment must also retain the production worker's
+Secrets the `engine-canary` job reads from the `e2e` environment are
+`VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`,
+`ENGINE_CANARY_MCP_CLIENT_ID`, `ENGINE_CANARY_MCP_CLIENT_SECRET`, and
+`VERCEL_AUTOMATION_BYPASS_SECRET`. The job holds no production database
+credential: identity is proved through `/health` alone. `DATABASE_URL` still
+belongs in the `e2e` environment as the production connection string, because
+the three e2e tiers in `e2e.yml` read it for their own identity preflight; do
+not remove it on the engine-canary job's account. Keep these as environment
+secrets in GitHub's `e2e` environment. The demo Vercel environment must also
+retain the production worker's
 GitHub App credentials, including `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`,
 and `GITHUB_INSTALLATION_ID`, so workflows triggered by the canaries use the
 configured GitHub identity.
