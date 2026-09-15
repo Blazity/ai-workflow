@@ -23,6 +23,7 @@ const SQL_TABLES = [
   "trigger_deliveries", "trigger_rate_limits", "trigger_rejection_counters", "user",
   "verification", "webhook_trigger_deliveries", "webhook_trigger_endpoints",
   "webhook_trigger_rate_limits", "webhook_trigger_rejection_counters",
+  "work_scope_entries", "work_scope_trail", "work_scopes",
   "workflow_block_attempts", "workflow_definition_triggers",
   "workflow_definition_versions", "workflow_definitions", "workflow_owned_branches",
   "workflow_pr_review_publication_comments", "workflow_pr_review_publications",
@@ -31,12 +32,12 @@ const SQL_TABLES = [
 ] as const;
 
 describe("schema barrel", () => {
-  it("exports the literal 68-table schema exactly once", () => {
+  it("exports the literal 71-table schema exactly once", () => {
     const names = Object.values(schema)
       .filter((value) => is(value, PgTable))
       .map((table) => getTableName(table as PgTable))
       .sort();
     expect(names).toEqual([...SQL_TABLES].sort());
-    expect(new Set(names).size).toBe(68);
+    expect(new Set(names).size).toBe(71);
   });
 });

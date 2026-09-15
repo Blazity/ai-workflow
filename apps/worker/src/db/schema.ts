@@ -15,6 +15,7 @@ export * from "./schema/settings.js";
 export * from "./schema/system.js";
 export * from "./schema/triggers.js";
 export * from "./schema/webhooks.js";
+export * from "./schema/work-scopes.js";
 export * from "./auth-schema.js";
 export * from "./approvals-schema.js";
 export * from "./clarifications-schema.js";

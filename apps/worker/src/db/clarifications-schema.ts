@@ -8,6 +8,7 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import type { WorkScopeAskedRepository } from "@shared/contracts";
 
 /** One human question suspended inside its asking Workflow run. */
 export const clarificationRequests = pgTable(
@@ -22,6 +23,10 @@ export const clarificationRequests = pgTable(
     definitionVersion: integer("definition_version"),
     questions: jsonb("questions").$type<string[]>().notNull(),
     suggestedAnswers: jsonb("suggested_answers").$type<string[]>(),
+    /** Written when the question is asked, because the answer path receives
+     *  only the row and the catalog may have changed by then, so neither the
+     *  repository nor the reason it was asked can be recovered later. */
+    askedRepositories: jsonb("asked_repositories").$type<WorkScopeAskedRepository[]>(),
     status: text("status").notNull().default("preparing"),
     hookToken: text("hook_token"),
     askedAt: timestamp("asked_at", { withTimezone: true }).notNull().defaultNow(),
