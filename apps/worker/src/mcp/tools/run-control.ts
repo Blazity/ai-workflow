@@ -71,7 +71,8 @@ type CancelRunData = {
   // retrying something already done. The dashboard answers 200 for the same reason.
   outcome: "cancelled" | "already_terminal";
   // The claim this cancel released, so a caller can see which subject is now free.
-  // Null on already_terminal: there was no claim left to release.
+  // Set on already_terminal too whenever the run had left a claim behind and this
+  // call released it; null only when the run owned no claim to begin with.
   subjectKey: string | null;
   // As observed, and only meaningful on already_terminal. It MAY read non-terminal,
   // because workflow_runs can lag the registry; reporting it raw beats inventing a

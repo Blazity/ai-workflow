@@ -4,6 +4,7 @@ import { logger } from "../../infra/logger.js";
 import type { Db } from "../../db/types.js";
 import type {
   ActiveRunEntry,
+  RunKind,
   RunRegistryAdapter,
 } from "../../adapters/run-registry/types.js";
 import type {
@@ -13,6 +14,23 @@ import type {
 import { stopSandboxesByIds } from "../../sandbox/stop-ticket-sandboxes.js";
 import { ticketSubjectKey } from "./subject-key.js";
 import { confirmWorkflowStepsDrained } from "./workflow-step-drain.js";
+
+/**
+ * Run statuses the store writes for a run that has reached its outcome. They are
+ * the cheap first filter for a claim that may be lingering, and nothing more: a
+ * store status is NOT proof the run is over, because markRunSucceededOnSelfMove
+ * commits "success" mid-run, before the ticket self-move and everything after it
+ * (agent-workflow.ts). Workflow's own status is what retires a run here.
+ * "awaiting" is deliberately absent: a run parked on a question is a live park
+ * that still owns its subject and is waiting to be resumed, so cancelling one
+ * keeps the full teardown. Mirrors the reconciler's STORE_TERMINAL_STATUSES
+ * rather than importing it, because reconcile.ts already imports this module.
+ */
+const STORE_TERMINAL_RUN_STATUSES = new Set(["success", "failed", "blocked"]);
+
+/** Workflow statuses that mean the run will not advance again. Same three the
+ * already-terminal branch of cancelOwnedSubject accepts. */
+const WORKFLOW_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
 /** Claim identity observed by a route before it delegates cancellation. Keeping
  * the owner as well as the stage lets cancellation follow an in-flight
@@ -167,8 +185,9 @@ export async function cancelSubjectRunDetailed(
  *     "blocked" with the operator reason. Usually its subject is released too so
  *     a schedule/webhook blocked behind it resumes; when only the teardown could
  *     be confirmed, the dying run's own finally releases the claim instead.
- *   - "already_terminal": the run had already reached a terminal outcome, either
- *     Workflow reported it terminal while the claim still lingered, or the run
+ *   - "already_terminal": the run had already reached a terminal outcome. Either
+ *     the run was confirmed over and the claim it left behind was released here,
+ *     or Workflow reported it terminal while the claim still lingered, or the run
  *     had already left active_runs. No status is written; `status` carries the
  *     recorded outcome when known.
  *   - "unconfirmed": a live run was found but cancellation never began, so the
@@ -222,6 +241,26 @@ export async function cancelRunById(
 
   const claim = await findConnectedLiveRunClaimByRunId(runId);
   if (claim) {
+    // A claim carried by a run that is really over is the run's own bookkeeping
+    // left behind, not liveness. Free the subject and report the recorded
+    // outcome, without cancelling anything and without writing a status. Without
+    // this the leftover claim reads as a live run and the cancel answers
+    // "unconfirmed", which is how the engine canary could not release its own
+    // finished runs (2026-09-14, wrun_01M2GX079YXKGCF3ZQQ9B9Z91Y). The store
+    // status is only the cheap filter; releaseLingeringTerminalClaim is what
+    // proves the run is over.
+    const recorded = await findConnectedRunOutcomeByRunId(runId);
+    if (
+      recorded?.status &&
+      STORE_TERMINAL_RUN_STATUSES.has(recorded.status) &&
+      (await releaseLingeringTerminalClaim(claim, runId, opts))
+    ) {
+      return {
+        outcome: "already_terminal",
+        subjectKey: claim.subjectKey,
+        status: recorded.status,
+      };
+    }
     const reason = `cancelled by ${actorLabel}`;
     if (claim.kind === "manual_ticket" && (!claim.ticketKey || !opts.issueTracker)) {
       logger.warn(
@@ -408,6 +447,192 @@ export function cancelConnectedRunForOperator(
   opts: CancelRunByIdDeps,
 ): Promise<CancelRunForOperatorResult> {
   return cancelRunForOperator(undefined as unknown as Db, runId, opts);
+}
+
+/** The live claim a cancel-by-id resolved its run id to. */
+interface LiveRunClaim {
+  subjectKey: string;
+  ticketKey: string | null;
+  ownerToken: string;
+  kind: RunKind;
+}
+
+/**
+ * Release the claim a finished run left on its subject, doing the same bookkeeping
+ * the reconciler does for a terminal run and nothing more.
+ *
+ * Four barriers, each of which declines to the full cancel path rather than
+ * guessing, so no answer this shortcut refuses to give gets weaker:
+ *
+ * 1. Workflow itself reports the run terminal. A terminal STORE status is not
+ *    enough: markRunSucceededOnSelfMove commits "success" while the run is still
+ *    moving the ticket and notifying, so releasing on the store alone would free a
+ *    subject under a live run. No staleness grace is applied on top (the
+ *    reconciler's readRunOutcomeFromStore has one) because that grace exists to
+ *    cover exactly this window, which asking Workflow closes directly, and the
+ *    canary needs its claim back seconds after the run ends, not minutes.
+ * 2. The claim is still the exact bound owner of this run. "cancelling" is left
+ *    alone: it belongs to a cancel that began and did not finish, and converging it
+ *    needs the clarification tombstone and the cancelling fence the full path
+ *    carries. "parking" and "parked" are a live park.
+ * 3. Every step has drained (the barrier cleanStoreTerminalRun runs before its
+ *    release): a terminal run can still have a handler that started before it went
+ *    terminal executing, and releasing under one would let a second run start.
+ * 4. The ticket is out of the Ai column and the run's sandboxes are stopped, in
+ *    the reconciler's order for a finished ticket run (cleanFinishedManualTicket:
+ *    withdraw, then cleanupAndRelease). Releasing a ticket run's claim while the
+ *    ticket is still in Ai is what lets the very next poll dispatch a stray run on
+ *    it.
+ *
+ * Nothing here cancels: Workflow is only asked for a status, the claim is never
+ * closed, no clarification is retired and no run status is written. The run keeps
+ * the outcome it reached on its own.
+ *
+ * True also when the claim is already gone, including when the release itself is
+ * refused because it went away underneath: the subject is free, which is the whole
+ * promise, and the full cancel path would only report an unconfirmed cancellation
+ * of a run nobody owns.
+ *
+ * A claim whose run has outlived Workflow's retention stays with the reconciler,
+ * which has the `completedAt` this path does not read; here an unreadable status
+ * simply declines.
+ */
+async function releaseLingeringTerminalClaim(
+  claim: LiveRunClaim,
+  runId: string,
+  opts: CancelRunByIdDeps,
+): Promise<boolean> {
+  const { runRegistry } = opts;
+  if (!(await isWorkflowRunRetired(claim.subjectKey, runId))) return false;
+
+  let entry: ActiveRunEntry | null;
+  try {
+    entry = await runRegistry.get(claim.subjectKey);
+  } catch {
+    return false;
+  }
+  if (entry === null) return true;
+  if (
+    entry.state !== "bound" ||
+    entry.ownerToken !== claim.ownerToken ||
+    entry.runId !== runId
+  ) {
+    return false;
+  }
+
+  if (!(await confirmWorkflowStepsDrained(claim.subjectKey, runId))) return false;
+
+  if (!(await withdrawTerminalTicketFromAi(claim, entry, runId, opts))) return false;
+
+  const sandboxIds = await runRegistry
+    .listSandboxes(claim.subjectKey, entry.ownerToken)
+    .catch(() => null);
+  if (sandboxIds === null) return false;
+  try {
+    await stopSandboxesByIds(sandboxIds);
+  } catch (error) {
+    logger.warn(
+      { subjectKey: claim.subjectKey, runId, error: (error as Error).message },
+      "cancel_terminal_run_sandbox_cleanup_unconfirmed",
+    );
+    return false;
+  }
+
+  const released = await runRegistry
+    .release(claim.subjectKey, entry.ownerToken, runId)
+    .catch(() => false);
+  if (!released) {
+    // The compare-and-delete can match nothing for two different reasons. One is
+    // that the claim went away underneath, which is the outcome this was asking
+    // for; the other is that it is still held by something this path must not
+    // overrule. Only a re-read tells them apart.
+    let refreshed: ActiveRunEntry | null;
+    try {
+      refreshed = await runRegistry.get(claim.subjectKey);
+    } catch {
+      return false;
+    }
+    if (refreshed !== null) return false;
+  }
+  logger.info(
+    { subjectKey: claim.subjectKey, runId },
+    "cancel_released_already_terminal_run",
+  );
+  return true;
+}
+
+/** Workflow's verdict that the run will not advance again. Unreachable counts as
+ * live: a status nobody can read is never proof a subject may be freed. */
+async function isWorkflowRunRetired(subjectKey: string, runId: string): Promise<boolean> {
+  try {
+    const status = await getRun(runId).status;
+    return WORKFLOW_TERMINAL_STATUSES.has(status);
+  } catch (error) {
+    logger.warn(
+      { subjectKey, runId, error: (error as Error).message },
+      "cancel_terminal_run_status_unreachable",
+    );
+    return false;
+  }
+}
+
+/**
+ * The ticket half of the release, mirroring the withdrawal the reconciler runs
+ * before releasing a finished ticket run. Both ticket kinds use the Ai column as
+ * execution state, so a claim released while the ticket is still there is read by
+ * the very next poll as unowned work and dispatched again: the stray run observed
+ * on the canary fixture. Idempotent for a run that did move its ticket:
+ * withdrawConnectedTicketFromAiForRun reads the ticket first and returns without a
+ * write when it no longer matches the Ai column, under the same owner fence.
+ *
+ * A ticketless subject (schedule, webhook, PR trigger) has nothing to withdraw and
+ * passes straight through.
+ */
+async function withdrawTerminalTicketFromAi(
+  claim: LiveRunClaim,
+  entry: ActiveRunEntry,
+  runId: string,
+  opts: CancelRunByIdDeps,
+): Promise<boolean> {
+  if (claim.kind !== "ticket" && claim.kind !== "manual_ticket") return true;
+  if (!claim.ticketKey || !opts.issueTracker) {
+    logger.warn(
+      { subjectKey: claim.subjectKey, runId, kind: claim.kind },
+      "cancel_terminal_run_ticket_withdrawal_unavailable",
+    );
+    return false;
+  }
+  try {
+    const [{ env }, { withdrawConnectedTicketFromAiForRun }] = await Promise.all([
+      import("../../infra/vcs-config.js"),
+      import("../tickets/ticket-transition.js"),
+    ]);
+    await withdrawConnectedTicketFromAiForRun({
+      issueTracker: opts.issueTracker,
+      ticketKey: claim.ticketKey,
+      aiColumn: opts.settings.COLUMN_AI,
+      target: env.JIRA_BACKLOG_TRANSITION_ID
+        ? {
+            name: opts.settings.COLUMN_BACKLOG,
+            transitionId: env.JIRA_BACKLOG_TRANSITION_ID,
+          }
+        : opts.settings.COLUMN_BACKLOG,
+      owner: {
+        subjectKey: claim.subjectKey,
+        ownerToken: entry.ownerToken,
+        runId,
+      },
+      // The claim was never closed by this path, so the fence is the bound owner.
+      requiredOwnerState: "bound",
+    });
+    return true;
+  } catch (error) {
+    logger.warn(
+      { subjectKey: claim.subjectKey, runId, error: (error as Error).message },
+      "cancel_terminal_run_ticket_withdrawal_unconfirmed",
+    );
+    return false;
+  }
 }
 
 async function cancelOwnedSubject(
