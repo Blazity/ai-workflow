@@ -453,7 +453,7 @@ async function verifyReplayCase(
 ): Promise<void> {
   const { summary, details } = await waitForReplayMcp(mcp, runId, deadline);
   const [databaseRows, appendedLogExport] = await Promise.all([
-    readReplayDatabaseRows(sql, runId),
+    readReplayDatabaseRows(sql, runId, deadline),
     readCoveredReplayLogWindow(replay.env, runWindow),
   ]);
   assertReplayCanaryEvidence(
@@ -599,29 +599,55 @@ async function assertPinnedSkillExists(
   }
 }
 
+// The attempt row is written before the run answers terminal and its log
+// envelope is patched in afterwards, so a single read can catch the row without
+// one. The MCP half already waits for its own copy; this half waits for the
+// same cell with the same budget rather than failing on the first miss.
 async function readReplayDatabaseRows(
   sql: SqlClient,
   runId: string,
+  deadline: number,
 ): Promise<{ observation: unknown; attempts: unknown[] }> {
-  const observations = await sql`
-    SELECT to_jsonb(observation) AS payload
-    FROM workflow_run_observations observation
-    WHERE observation.run_id = ${runId}
-    LIMIT 1
-  `;
-  const attempts = await sql`
-    SELECT to_jsonb(attempt) AS payload
-    FROM workflow_block_attempts attempt
-    WHERE attempt.run_id = ${runId}
-    ORDER BY attempt.id
-  `;
-  if (!observations[0]?.payload || attempts.length === 0) {
-    throw new Error("Replay canary database capture is incomplete");
+  let observationSeen = false;
+  let diagnostics: string[] = [];
+  for (;;) {
+    const observations = await sql`
+      SELECT to_jsonb(observation) AS payload
+      FROM workflow_run_observations observation
+      WHERE observation.run_id = ${runId}
+      LIMIT 1
+    `;
+    const attempts = await sql`
+      SELECT attempt.id AS id,
+             to_jsonb(attempt) AS payload,
+             attempt.log_envelope AS log_envelope,
+             attempt.observation_revision AS observation_revision,
+             attempt.updated_at AS updated_at
+      FROM workflow_block_attempts attempt
+      WHERE attempt.run_id = ${runId}
+      ORDER BY attempt.id
+    `;
+    const observation = observations[0]?.payload;
+    observationSeen = observation != null;
+    diagnostics = attempts.map(
+      (row) =>
+        `attempt ${String(row.id)}: log_envelope=${row.log_envelope == null ? "null" : "present"} observation_revision=${String(row.observation_revision)} updated_at=${String(row.updated_at)}`,
+    );
+    if (
+      observationSeen &&
+      attempts.some((row) => row.log_envelope != null)
+    ) {
+      return {
+        observation,
+        attempts: attempts.map((row) => row.payload),
+      };
+    }
+    if (Date.now() >= deadline) break;
+    await delay(2_000);
   }
-  return {
-    observation: observations[0].payload,
-    attempts: attempts.map((row) => row.payload),
-  };
+  throw new Error(
+    `Replay canary database capture never held a log envelope for ${runId}: observation row ${observationSeen ? "present" : "missing"}, ${diagnostics.length === 0 ? "no attempt rows" : diagnostics.join("; ")}`,
+  );
 }
 
 // A finished run's registry claim is released only by the reconciler inside the
