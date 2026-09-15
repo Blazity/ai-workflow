@@ -25,6 +25,7 @@ export * from "./repository-catalog";
 export * from "./repository-catalog-api";
 export * from "./repository-scripts";
 export * from "./repository-script-group";
+export * from "./work-scope";
 export * from "./run-analysis";
 export * from "./execution-error";
 export * from "./agent-protocol-diagnostic";

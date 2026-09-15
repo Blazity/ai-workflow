@@ -38,6 +38,32 @@ An accessible repository chosen for a specific workflow run. One workflow run
 has one or more selected repositories.
 _Avoid_: Active repo, target repo
 
+**Work Scope**:
+The per-subject record of which repositories a piece of work touches and why.
+Its entries are repositories with a state (selected, excluded, unavailable), a
+reason when unavailable, an origin, a short rationale, and who decided, when,
+in which run. Only finite work carries one: a ticket, a pull request, or a
+webhook delivery whose endpoint resolves a subject id, never a schedule.
+_Avoid_: Repository scope (that is the definition pin), repo selection
+
+**Trigger Repository Policy**:
+The optional policy on a trigger node of a workflow definition: a candidate set
+(the whole enabled catalog, the event repository and its related repositories,
+or an explicit list of catalog keys) and an expansion rule (attach, ask once,
+never). An absent policy means the defaults for that trigger kind, with the
+definition's repository pin, where one names repositories, as the candidate set.
+_Avoid_: Repository scope, trigger scope
+
+**Decision Trail**:
+The append-only history behind a work scope. The entries are its fold; the
+trail is why each entry looks the way it does.
+_Avoid_: Audit log, scope history
+
+**Repository Map**:
+The compact index of repositories rendered into the agent's context. It is
+deterministic, ranked by relationship first and then lexically.
+_Avoid_: Repository list, catalog dump
+
 **Changed Repository**:
 A selected repository where the agent produced changes that should be published
 for review.

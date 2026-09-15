@@ -1,0 +1,606 @@
+import { describe, it } from "node:test";
+import { expect } from "./test-expect.js";
+import {
+  WORK_SCOPE_ENTRY_STATES,
+  WORK_SCOPE_ORIGINS,
+  WORK_SCOPE_REFUSAL_REASONS,
+  WORK_SCOPE_UNAVAILABLE_REASONS,
+  repositoryKeySchema,
+  resolveTriggerRepositoryPolicy,
+  triggerRepositoryPolicySchema,
+  validateTriggerRepositoryPolicy,
+  workScopeEditRequestSchema,
+  workScopeEntrySchema,
+  workScopeOriginRank,
+  workScopeSchema,
+  workScopeTrailRowSchema,
+  workScopeWritePlanSchema,
+} from "@shared/contracts";
+
+const selectedEntry = {
+  repositoryKey: "github:blazity/ai-workflow-demo",
+  state: "selected",
+  origin: "ticket_text",
+  rationale: "The ticket names this repository.",
+  decidedBy: {
+    kind: "run",
+    runId: "run-1",
+    definitionId: 40,
+    definitionVersion: 3,
+    model: "gpt-5",
+  },
+  decidedAt: "2026-09-15T10:00:00.000Z",
+};
+
+const PULL_REQUEST_TRIGGER_TYPES = [
+  "trigger_pr_created",
+  "trigger_pr_ready",
+  "trigger_pr_updated",
+  "trigger_pr_checks_failed",
+  "trigger_pr_review",
+  "trigger_pr_merged",
+] as const;
+
+describe("work scope vocabulary", () => {
+  it("freezes the states, reasons and origins, with origins in precedence order", () => {
+    expect(WORK_SCOPE_ENTRY_STATES).toEqual(["selected", "excluded", "unavailable"]);
+    expect(WORK_SCOPE_UNAVAILABLE_REASONS).toEqual(["not_enabled", "unusable"]);
+    expect(WORK_SCOPE_ORIGINS).toEqual([
+      "person",
+      "workflow_owned_branch",
+      "ticket_text",
+      "trigger_policy",
+      "inferred",
+    ]);
+    expect(WORK_SCOPE_REFUSAL_REASONS).toEqual([
+      "outside_catalog",
+      "outside_policy",
+      "excluded",
+      "unavailable",
+      "workspace_cap",
+      "rounds_exhausted",
+    ]);
+  });
+});
+
+describe("workScopeOriginRank", () => {
+  it("ranks each origin by its precedence, person first", () => {
+    expect(workScopeOriginRank("person")).toBe(0);
+    expect(workScopeOriginRank("workflow_owned_branch")).toBe(1);
+    expect(workScopeOriginRank("ticket_text")).toBe(2);
+    expect(workScopeOriginRank("trigger_policy")).toBe(3);
+    expect(workScopeOriginRank("inferred")).toBe(4);
+  });
+});
+
+describe("repository key", () => {
+  it("trims and lower-cases a key to the catalog spelling", () => {
+    expect(repositoryKeySchema.parse(" GitHub:Blazity/AI-Workflow-Demo ")).toBe(
+      "github:blazity/ai-workflow-demo",
+    );
+  });
+
+  it("accepts a GitLab project inside nested groups", () => {
+    expect(repositoryKeySchema.parse("gitlab:group/sub/project")).toBe("gitlab:group/sub/project");
+  });
+
+  it("refuses a path with no provider", () => {
+    expect(repositoryKeySchema.safeParse("blazity/ai-workflow").success).toBe(false);
+  });
+
+  it("refuses a provider the catalog does not know and a path with no slash", () => {
+    expect(repositoryKeySchema.safeParse("bitbucket:blazity/ai-workflow").success).toBe(false);
+    expect(repositoryKeySchema.safeParse("github:blazity").success).toBe(false);
+  });
+});
+
+describe("work scope entry", () => {
+  it("accepts a selected entry decided by a run", () => {
+    expect(workScopeEntrySchema.safeParse(selectedEntry).success).toBe(true);
+  });
+
+  it("refuses an unavailable entry without a reason", () => {
+    expect(
+      workScopeEntrySchema.safeParse({ ...selectedEntry, state: "unavailable" }).success,
+    ).toBe(false);
+  });
+
+  it("accepts an unavailable entry that carries its reason", () => {
+    expect(
+      workScopeEntrySchema.safeParse({
+        ...selectedEntry,
+        state: "unavailable",
+        unavailableReason: "not_enabled",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("refuses a reason on an entry that is not unavailable", () => {
+    expect(
+      workScopeEntrySchema.safeParse({ ...selectedEntry, unavailableReason: "unusable" }).success,
+    ).toBe(false);
+  });
+
+  it("holds the rationale to 500 characters", () => {
+    expect(
+      workScopeEntrySchema.safeParse({ ...selectedEntry, rationale: "x".repeat(500) }).success,
+    ).toBe(true);
+    expect(
+      workScopeEntrySchema.safeParse({ ...selectedEntry, rationale: "x".repeat(501) }).success,
+    ).toBe(false);
+  });
+
+  it("accepts a person as the actor", () => {
+    expect(
+      workScopeEntrySchema.safeParse({
+        ...selectedEntry,
+        origin: "person",
+        decidedBy: { kind: "person", actorId: "user-1", actorLabel: "Filip" },
+      }).success,
+    ).toBe(true);
+  });
+
+  it("belongs to a versioned work scope", () => {
+    expect(
+      workScopeSchema.safeParse({
+        subjectKey: "AWP-176",
+        version: 1,
+        entries: [selectedEntry],
+      }).success,
+    ).toBe(true);
+  });
+});
+
+describe("work scope trail row", () => {
+  const mapShown = (text: string) => ({
+    kind: "map_shown",
+    text,
+    repositoryKeys: ["github:blazity/ai-workflow-demo"],
+  });
+  const row = (subjectKey: string | null, runId: string | null, event: unknown) => ({
+    id: 1,
+    subjectKey,
+    runId,
+    at: "2026-09-15T10:00:00.000Z",
+    event,
+  });
+
+  it("refuses a row with neither a subject nor a run", () => {
+    expect(workScopeTrailRowSchema.safeParse(row(null, null, mapShown("map"))).success).toBe(false);
+  });
+
+  it("accepts a panel edit with no run and a schedule run with no subject", () => {
+    expect(
+      workScopeTrailRowSchema.safeParse(
+        row("AWP-176", null, { kind: "entry_written", entry: selectedEntry, previousState: null }),
+      ).success,
+    ).toBe(true);
+    expect(workScopeTrailRowSchema.safeParse(row(null, "run-1", mapShown("map"))).success).toBe(true);
+  });
+
+  it("holds a shown map to 1600 characters", () => {
+    expect(
+      workScopeTrailRowSchema.safeParse(row("AWP-176", "run-1", mapShown("x".repeat(1600)))).success,
+    ).toBe(true);
+    expect(
+      workScopeTrailRowSchema.safeParse(row("AWP-176", "run-1", mapShown("x".repeat(1601)))).success,
+    ).toBe(false);
+  });
+
+  it("accepts a question and a refusal", () => {
+    expect(
+      workScopeTrailRowSchema.safeParse(
+        row("AWP-176", "run-1", {
+          kind: "question_asked",
+          clarificationId: "clarification-1",
+          repositoryKeys: ["gitlab:group/sub/project"],
+        }),
+      ).success,
+    ).toBe(true);
+    expect(
+      workScopeTrailRowSchema.safeParse(
+        row("AWP-176", "run-1", {
+          kind: "request_refused",
+          repositoryKey: "gitlab:group/sub/project",
+          reason: "outside_policy",
+        }),
+      ).success,
+    ).toBe(true);
+  });
+});
+
+describe("work scope edit request", () => {
+  const change = (index: number) => ({
+    repositoryKey: `github:blazity/repository-${index}`,
+    action: "select",
+  });
+  const request = (changes: unknown[], expectedVersion = 0) => ({
+    subjectKey: "AWP-176",
+    expectedVersion,
+    changes,
+  });
+
+  it("accepts one to sixteen changes", () => {
+    expect(workScopeEditRequestSchema.safeParse(request([change(1)])).success).toBe(true);
+    expect(
+      workScopeEditRequestSchema.safeParse(
+        request(Array.from({ length: 16 }, (_, index) => change(index))),
+      ).success,
+    ).toBe(true);
+  });
+
+  it("refuses an edit with no changes", () => {
+    expect(workScopeEditRequestSchema.safeParse(request([])).success).toBe(false);
+  });
+
+  it("refuses an edit with seventeen changes", () => {
+    expect(
+      workScopeEditRequestSchema.safeParse(
+        request(Array.from({ length: 17 }, (_, index) => change(index))),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("refuses two changes to the same repository, whatever its casing", () => {
+    expect(
+      workScopeEditRequestSchema.safeParse(
+        request([
+          { repositoryKey: "github:blazity/ai-workflow", action: "select" },
+          { repositoryKey: "GitHub:Blazity/AI-Workflow", action: "exclude", rationale: "Not this one." },
+        ]),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("refuses a negative expected version", () => {
+    expect(workScopeEditRequestSchema.safeParse(request([change(1)], -1)).success).toBe(false);
+  });
+});
+
+describe("work scope write plan", () => {
+  const entryFor = (repositoryKey: string, state = "selected") => ({
+    ...selectedEntry,
+    repositoryKey,
+    state,
+  });
+  const upsert = (repositoryKey: string, replacesExpired = false, state = "selected") => ({
+    entry: entryFor(repositoryKey, state),
+    replacesExpired,
+  });
+  const remove = (repositoryKey: string, origin = "inferred") => ({ repositoryKey, origin });
+  const keys = (count: number) =>
+    Array.from({ length: count }, (_, index) => `github:blazity/repository-${index}`);
+  const mapShown = { kind: "map_shown", text: "map", repositoryKeys: [] };
+  const plan = (upserts: unknown[], deletes: unknown[], trail: unknown[]) =>
+    workScopeWritePlanSchema.safeParse({ upserts, deletes, trail }).success;
+
+  it("accepts an entirely empty plan", () => {
+    expect(plan([], [], [])).toBe(true);
+  });
+
+  it("accepts upserts, deletes and trail events on different keys", () => {
+    expect(
+      plan(
+        [upsert("github:blazity/ai-workflow-demo")],
+        [remove("gitlab:group/sub/project", "ticket_text")],
+        [{ kind: "entry_written", entry: entryFor("github:blazity/ai-workflow-demo"), previousState: null }],
+      ),
+    ).toBe(true);
+  });
+
+  it("refuses an upsert and a delete of the same key, whatever its casing", () => {
+    expect(
+      plan([upsert("github:blazity/ai-workflow")], [remove("GitHub:Blazity/AI-Workflow")], []),
+    ).toBe(false);
+  });
+
+  it("refuses two deletes of the same key", () => {
+    expect(
+      plan([], [remove("github:blazity/ai-workflow"), remove("GitHub:Blazity/AI-Workflow", "person")], []),
+    ).toBe(false);
+  });
+
+  it("refuses a delete that does not name the origin it observed", () => {
+    expect(plan([], [{ repositoryKey: "github:blazity/ai-workflow" }], [])).toBe(false);
+    expect(plan([], [remove("github:blazity/ai-workflow", "guessed")], [])).toBe(false);
+  });
+
+  it("refuses two upserts of the same key", () => {
+    expect(
+      plan([upsert("github:blazity/ai-workflow"), upsert("GitHub:Blazity/AI-Workflow")], [], []),
+    ).toBe(false);
+  });
+
+  it("allows replacesExpired only on a selected entry", () => {
+    expect(plan([upsert("github:blazity/ai-workflow", true, "selected")], [], [])).toBe(true);
+    expect(plan([upsert("github:blazity/ai-workflow", true, "excluded")], [], [])).toBe(false);
+    expect(
+      plan(
+        [
+          {
+            entry: { ...entryFor("github:blazity/ai-workflow", "unavailable"), unavailableReason: "not_enabled" },
+            replacesExpired: true,
+          },
+        ],
+        [],
+        [],
+      ),
+    ).toBe(false);
+    expect(plan([upsert("github:blazity/ai-workflow", false, "excluded")], [], [])).toBe(true);
+  });
+
+  it("holds upserts and deletes to sixteen and trail events to thirty-two", () => {
+    expect(plan(keys(16).map((key) => upsert(key)), [], [])).toBe(true);
+    expect(plan(keys(17).map((key) => upsert(key)), [], [])).toBe(false);
+    expect(plan([], keys(16).map((key) => remove(key)), [])).toBe(true);
+    expect(plan([], keys(17).map((key) => remove(key)), [])).toBe(false);
+    expect(plan([], [], Array.from({ length: 32 }, () => mapShown))).toBe(true);
+    expect(plan([], [], Array.from({ length: 33 }, () => mapShown))).toBe(false);
+  });
+});
+
+describe("trigger repository policy shape", () => {
+  it("accepts each candidate kind", () => {
+    for (const candidates of [
+      { kind: "enabled_catalog" },
+      { kind: "event_repository_and_related" },
+      { kind: "listed", repositoryKeys: ["github:blazity/ai-workflow-demo"] },
+    ]) {
+      expect(
+        triggerRepositoryPolicySchema.safeParse({ candidates, expansion: "attach" }).success,
+        candidates.kind,
+      ).toBe(true);
+    }
+  });
+
+  it("holds a listed candidate set to one to fifty unique keys", () => {
+    const listed = (repositoryKeys: string[]) =>
+      triggerRepositoryPolicySchema.safeParse({
+        candidates: { kind: "listed", repositoryKeys },
+        expansion: "never",
+      }).success;
+    const keys = (count: number) =>
+      Array.from({ length: count }, (_, index) => `github:blazity/repository-${index}`);
+    expect(listed([])).toBe(false);
+    expect(listed(keys(50))).toBe(true);
+    expect(listed(keys(51))).toBe(false);
+    expect(listed(["github:blazity/ai-workflow", "GitHub:Blazity/AI-Workflow"])).toBe(false);
+  });
+
+  it("refuses a key the policy does not own", () => {
+    expect(
+      triggerRepositoryPolicySchema.safeParse({
+        candidates: { kind: "enabled_catalog" },
+        expansion: "attach",
+        maxRepositories: 3,
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("resolveTriggerRepositoryPolicy", () => {
+  const pin = {
+    repositories: [
+      { provider: "github" as const, repoPath: "Blazity/AI-Workflow-Demo" },
+      { provider: "gitlab" as const, repoPath: "group/sub/project" },
+    ],
+  };
+  const pinnedKeys = ["github:blazity/ai-workflow-demo", "gitlab:group/sub/project"];
+
+  it("returns a configured policy as it is", () => {
+    const configured = {
+      candidates: { kind: "listed" as const, repositoryKeys: ["github:blazity/ai-workflow"] },
+      expansion: "never" as const,
+    };
+    expect(
+      resolveTriggerRepositoryPolicy({
+        triggerType: "trigger_ticket_ai",
+        configured,
+        webhookHasSubjectPath: false,
+      }),
+    ).toEqual({
+      candidates: { kind: "listed", repositoryKeys: ["github:blazity/ai-workflow"] },
+      expansion: "never",
+    });
+  });
+
+  it("prefers a configured policy over the definition pin", () => {
+    expect(
+      resolveTriggerRepositoryPolicy({
+        triggerType: "trigger_ticket_ai",
+        configured: { candidates: { kind: "enabled_catalog" }, expansion: "ask_once" },
+        definitionPin: pin,
+        webhookHasSubjectPath: false,
+      }),
+    ).toEqual({ candidates: { kind: "enabled_catalog" }, expansion: "ask_once" });
+  });
+
+  it("lists the pinned repositories as keys and keeps the kind's expansion", () => {
+    expect(
+      resolveTriggerRepositoryPolicy({
+        triggerType: "trigger_ticket_ai",
+        definitionPin: pin,
+        webhookHasSubjectPath: false,
+      }),
+    ).toEqual({ candidates: { kind: "listed", repositoryKeys: pinnedKeys }, expansion: "attach" });
+    expect(
+      resolveTriggerRepositoryPolicy({
+        triggerType: "trigger_pr_review",
+        definitionPin: pin,
+        webhookHasSubjectPath: false,
+      }),
+    ).toEqual({ candidates: { kind: "listed", repositoryKeys: pinnedKeys }, expansion: "attach" });
+    expect(
+      resolveTriggerRepositoryPolicy({
+        triggerType: "trigger_schedule",
+        definitionPin: pin,
+        webhookHasSubjectPath: false,
+      }),
+    ).toEqual({ candidates: { kind: "listed", repositoryKeys: pinnedKeys }, expansion: "never" });
+    expect(
+      resolveTriggerRepositoryPolicy({
+        triggerType: "trigger_webhook",
+        definitionPin: pin,
+        webhookHasSubjectPath: true,
+      }),
+    ).toEqual({ candidates: { kind: "listed", repositoryKeys: pinnedKeys }, expansion: "ask_once" });
+  });
+
+  it("counts a pin that carries only providers as no pin", () => {
+    expect(
+      resolveTriggerRepositoryPolicy({
+        triggerType: "trigger_ticket_ai",
+        definitionPin: { providers: ["github"] },
+        webhookHasSubjectPath: false,
+      }),
+    ).toEqual({ candidates: { kind: "enabled_catalog" }, expansion: "attach" });
+    expect(
+      resolveTriggerRepositoryPolicy({
+        triggerType: "trigger_ticket_ai",
+        definitionPin: { repositories: [], providers: ["gitlab"] },
+        webhookHasSubjectPath: false,
+      }),
+    ).toEqual({ candidates: { kind: "enabled_catalog" }, expansion: "attach" });
+  });
+
+  it("attaches over the enabled catalog for a ticket by default", () => {
+    expect(
+      resolveTriggerRepositoryPolicy({ triggerType: "trigger_ticket_ai", webhookHasSubjectPath: false }),
+    ).toEqual({ candidates: { kind: "enabled_catalog" }, expansion: "attach" });
+  });
+
+  for (const triggerType of PULL_REQUEST_TRIGGER_TYPES) {
+    it(`attaches the event repository and its related repositories for ${triggerType} by default`, () => {
+      expect(resolveTriggerRepositoryPolicy({ triggerType, webhookHasSubjectPath: false })).toEqual({
+        candidates: { kind: "event_repository_and_related" },
+        expansion: "attach",
+      });
+    });
+  }
+
+  it("never expands a schedule by default", () => {
+    expect(
+      resolveTriggerRepositoryPolicy({ triggerType: "trigger_schedule", webhookHasSubjectPath: false }),
+    ).toEqual({ candidates: { kind: "enabled_catalog" }, expansion: "never" });
+  });
+
+  it("asks once for a webhook with a subject path and never without one", () => {
+    expect(
+      resolveTriggerRepositoryPolicy({ triggerType: "trigger_webhook", webhookHasSubjectPath: true }),
+    ).toEqual({ candidates: { kind: "enabled_catalog" }, expansion: "ask_once" });
+    expect(
+      resolveTriggerRepositoryPolicy({ triggerType: "trigger_webhook", webhookHasSubjectPath: false }),
+    ).toEqual({ candidates: { kind: "enabled_catalog" }, expansion: "never" });
+  });
+
+  it("returns nothing for an approved plan, which carries its own frozen scope", () => {
+    expect(
+      resolveTriggerRepositoryPolicy({
+        triggerType: "trigger_plan_approved",
+        definitionPin: pin,
+        webhookHasSubjectPath: false,
+      }),
+    ).toBe(null);
+  });
+});
+
+describe("validateTriggerRepositoryPolicy", () => {
+  it("refuses the event repository outside the pull request triggers", () => {
+    expect(
+      validateTriggerRepositoryPolicy(
+        "trigger_ticket_ai",
+        { candidates: { kind: "event_repository_and_related" }, expansion: "attach" },
+        { webhookHasSubjectPath: false },
+      ),
+    ).toEqual([
+      {
+        code: "event_repository_outside_pull_request",
+        path: ["candidates", "kind"],
+        message:
+          "Only a pull request trigger has an event repository, so this trigger cannot take its candidates from one.",
+      },
+    ]);
+  });
+
+  it("accepts the event repository on every pull request trigger", () => {
+    for (const triggerType of PULL_REQUEST_TRIGGER_TYPES) {
+      expect(
+        validateTriggerRepositoryPolicy(
+          triggerType,
+          { candidates: { kind: "event_repository_and_related" }, expansion: "attach" },
+          { webhookHasSubjectPath: false },
+        ),
+        triggerType,
+      ).toEqual([]);
+    }
+  });
+
+  it("refuses ask_once on a schedule", () => {
+    expect(
+      validateTriggerRepositoryPolicy(
+        "trigger_schedule",
+        { candidates: { kind: "enabled_catalog" }, expansion: "ask_once" },
+        { webhookHasSubjectPath: false },
+      ),
+    ).toEqual([
+      {
+        code: "ask_once_on_schedule",
+        path: ["expansion"],
+        message: "A schedule cannot ask about repositories, because nobody is there to answer.",
+      },
+    ]);
+  });
+
+  it("refuses ask_once on a webhook with no subject path", () => {
+    expect(
+      validateTriggerRepositoryPolicy(
+        "trigger_webhook",
+        { candidates: { kind: "enabled_catalog" }, expansion: "ask_once" },
+        { webhookHasSubjectPath: false },
+      ),
+    ).toEqual([
+      {
+        code: "ask_once_without_subject_path",
+        path: ["expansion"],
+        message:
+          "A webhook can ask about repositories only when it configures a subject path, because without one every delivery is a new subject.",
+      },
+    ]);
+  });
+
+  it("accepts ask_once on a webhook with a subject path", () => {
+    expect(
+      validateTriggerRepositoryPolicy(
+        "trigger_webhook",
+        { candidates: { kind: "enabled_catalog" }, expansion: "ask_once" },
+        { webhookHasSubjectPath: true },
+      ),
+    ).toEqual([]);
+  });
+
+  it("refuses a repository listed twice", () => {
+    expect(
+      validateTriggerRepositoryPolicy(
+        "trigger_ticket_ai",
+        {
+          candidates: {
+            kind: "listed",
+            repositoryKeys: [
+              "github:blazity/ai-workflow",
+              "gitlab:group/sub/project",
+              "GitHub:Blazity/AI-Workflow",
+            ],
+          },
+          expansion: "attach",
+        },
+        { webhookHasSubjectPath: false },
+      ),
+    ).toEqual([
+      {
+        code: "duplicate_repository_key",
+        path: ["candidates", "repositoryKeys", 2],
+        message: 'Repository "github:blazity/ai-workflow" is listed more than once.',
+      },
+    ]);
+  });
+});
