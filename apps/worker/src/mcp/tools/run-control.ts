@@ -71,7 +71,8 @@ type CancelRunData = {
   // retrying something already done. The dashboard answers 200 for the same reason.
   outcome: "cancelled" | "already_terminal";
   // The claim this cancel released, so a caller can see which subject is now free.
-  // Null on already_terminal: there was no claim left to release.
+  // Set on already_terminal too whenever the run had left a claim behind and this
+  // call released it; null only when the run owned no claim to begin with.
   subjectKey: string | null;
   // As observed, and only meaningful on already_terminal. It MAY read non-terminal,
   // because workflow_runs can lag the registry; reporting it raw beats inventing a
@@ -355,6 +356,30 @@ export function registerRunControlTools(server: McpServer, deps: McpToolDependen
               // The claim is retained and Workflow was never touched (cancel-run.ts:
               // "A live run cancellation that never began"), so nothing was torn down
               // and the key must return to circulation for the retry to be possible.
+              if (result.reason === "retiring") {
+                // Same guarantees (nothing touched, key given back), different fact:
+                // the run has already finished and Workflow is still retiring it, so
+                // calling it live would send a caller looking for a run that is done.
+                throw new McpPublicError(
+                  "CONFLICT",
+                  "The run has finished and is still being retired; retry in a few seconds with the same idempotencyKey.",
+                  true,
+                  5_000,
+                  true,
+                );
+              }
+              if (result.reason === "cleanup_unconfirmed") {
+                // Same guarantees (nothing touched, key given back), different fact:
+                // the run is finished but a barrier declined to release its claim, so
+                // calling it live would send a caller looking for a run that is done.
+                throw new McpPublicError(
+                  "CONFLICT",
+                  "The run has finished, but its subject could not be released on this attempt (for example its ticket could not be confirmed out of the AI column), so nothing was changed. Retry with the same idempotencyKey.",
+                  true,
+                  5_000,
+                  true,
+                );
+              }
               throw new McpPublicError(
                 "CONFLICT",
                 "The cancel could not be confirmed on this attempt and nothing was torn down: the run is still live and still owns its subject. Retry with the same idempotencyKey.",

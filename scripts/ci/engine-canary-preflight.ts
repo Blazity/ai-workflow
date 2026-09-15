@@ -1,5 +1,4 @@
 import { pathToFileURL } from "node:url";
-import { databaseFingerprintFromUrl } from "../../apps/worker/src/db/database-fingerprint.ts";
 import {
   checkDeploymentIdentity,
   parseArgs,
@@ -13,7 +12,6 @@ export interface EngineCanaryExpectations {
   commit: string;
   databaseEnv: string;
   databaseFingerprint: string;
-  runnerDatabaseFingerprint: string | null;
 }
 
 export type PreflightResult =
@@ -48,23 +46,6 @@ export function evaluatePreflight(
       reason: "declared database fingerprint is not 12 lowercase hex characters",
     };
   }
-  if (
-    expectations.runnerDatabaseFingerprint === null ||
-    !FINGERPRINT_PATTERN.test(expectations.runnerDatabaseFingerprint)
-  ) {
-    return {
-      ok: false,
-      reason: "runner DATABASE_URL does not produce a valid database fingerprint",
-    };
-  }
-  if (
-    expectations.runnerDatabaseFingerprint !== expectations.databaseFingerprint
-  ) {
-    return {
-      ok: false,
-      reason: "runner DATABASE_URL fingerprint does not match the declared database fingerprint",
-    };
-  }
 
   const identityProblems = checkDeploymentIdentity(health, {
     commit: expectations.commit,
@@ -83,13 +64,11 @@ async function main(): Promise<void> {
   const commit = args.commit;
   const databaseEnv = args["database-env"];
   const databaseFingerprint = args["database-fingerprint"];
-  const databaseUrl = args["database-url"];
   if (!url || !target || !commit || !databaseEnv || !databaseFingerprint) {
     console.error(
       "FAIL usage: engine-canary-preflight --url <base-url> --target <name>" +
         " --commit <40-hex>" +
-        " --database-env <name> --database-fingerprint <12-hex>" +
-        " [--database-url <connection-string>]",
+        " --database-env <name> --database-fingerprint <12-hex>",
     );
     process.exitCode = 2;
     return;
@@ -124,9 +103,6 @@ async function main(): Promise<void> {
     commit,
     databaseEnv,
     databaseFingerprint,
-    runnerDatabaseFingerprint: databaseUrl
-      ? databaseFingerprintFromUrl(databaseUrl)
-      : null,
   });
   if (!result.ok) {
     console.error(`FAIL ${result.reason}`);

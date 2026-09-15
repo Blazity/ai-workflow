@@ -6,6 +6,13 @@ const CANARY_PREFIXES = [
   "apps/worker/src/engine/",
   "apps/worker/src/db/",
   "packages/",
+  // The gate itself and the run lifecycle it drives: a change to either must
+  // prove itself on the canary before it can merge.
+  "apps/worker/src/services/run-lifecycle/",
+  "apps/worker/e2e/harness-profiles/",
+  "apps/worker/e2e/replay/",
+  "scripts/ci/engine-canary",
+  ".github/workflows/ci.yml",
 ] as const;
 const MIGRATIONS_PREFIX = "apps/worker/drizzle/";
 

@@ -155,15 +155,19 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run test:workflow-sdk
 
-  # Fork pull requests must never reach the secret-bearing `e2e` environment.
-  engine-canary:
+  # Decides whether a same-repository pull request needs the engine canary.
+  # It is its own job, outside the canary's queue, because every
+  # same-repository pull request passes through it: with the selection inside
+  # the queued job, docs-only pull requests took the single pending slot too,
+  # and a third arrival cancelled the waiting one and turned `ci` red for a
+  # pull request that never needed the canary. No secrets, no environment.
+  engine-canary-scope:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 75
-    environment: e2e
-    concurrency:
-      group: engine-canary-pr-${{ github.event.pull_request.number }}
-      cancel-in-progress: true
+    timeout-minutes: 15
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
+      migrations: ${{ steps.scope.outputs.migrations }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -171,8 +175,6 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          # Node 24 to match local dev and the Vercel runtime: the dashboard
-          # test script relies on node --test glob patterns (Node 21+).
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
@@ -185,9 +187,39 @@ jobs:
           set -euo pipefail
           echo "::warning title=engine-canary skipped::the pull request carries a database migration; the canary target shares the production database, so it runs after merge only"
           exit 0
+
+  # Fork pull requests must never reach the secret-bearing `e2e` environment.
+  # A scope job that fails leaves this job skipped; `ci` reads the scope job's
+  # own result, so that skip never counts as "not needed".
+  engine-canary:
+    needs: [engine-canary-scope]
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && needs.engine-canary-scope.outputs.run == 'true' && needs.engine-canary-scope.outputs.migrations != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 95
+    environment: e2e
+    # Repository-wide, not per pull request: the three fixture tickets are
+    # shared across every run of this job, so two pull requests running the
+    # canary at once would collide on them. cancel-in-progress stays false so
+    # a second pull request queues behind the first instead of cancelling it
+    # or racing it onto the same tickets. Only pull requests that need the
+    # canary reach this queue.
+    concurrency:
+      group: engine-canary-shared-fixtures
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          # Node 24 to match local dev and the Vercel runtime: the dashboard
+          # test script relies on node --test glob patterns (Node 21+).
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - name: Validate engine canary target configuration
         id: target
-        if: steps.scope.outputs.run == 'true' && steps.scope.outputs.migrations != 'true'
         env:
           ENGINE_CANARY_TARGET: ${{ vars.ENGINE_CANARY_TARGET }}
           ENGINE_CANARY_TARGET_URL: ${{ vars.ENGINE_CANARY_TARGET_URL }}
@@ -198,19 +230,6 @@ jobs:
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
           ENGINE_CANARY_MCP_CLIENT_ID: ${{ secrets.ENGINE_CANARY_MCP_CLIENT_ID }}
           ENGINE_CANARY_MCP_CLIENT_SECRET: ${{ secrets.ENGINE_CANARY_MCP_CLIENT_SECRET }}
-          HARNESS_CANARY_CLAUDE_WORKFLOW_ID: ${{ vars.HARNESS_CANARY_CLAUDE_WORKFLOW_ID }}
-          HARNESS_CANARY_CODEX_WORKFLOW_ID: ${{ vars.HARNESS_CANARY_CODEX_WORKFLOW_ID }}
-          HARNESS_CANARY_CUSTOM_WORKFLOW_ID: ${{ vars.HARNESS_CANARY_CUSTOM_WORKFLOW_ID }}
-          HARNESS_CANARY_TICKET_KEY: ${{ vars.HARNESS_CANARY_TICKET_KEY }}
-          HARNESS_CANARY_CUSTOM_PROFILE_ID: ${{ vars.HARNESS_CANARY_CUSTOM_PROFILE_ID }}
-          HARNESS_CANARY_CUSTOM_PROFILE_VERSION: ${{ vars.HARNESS_CANARY_CUSTOM_PROFILE_VERSION }}
-          HARNESS_CANARY_CUSTOM_SKILL_ARTIFACT_HASH: ${{ vars.HARNESS_CANARY_CUSTOM_SKILL_ARTIFACT_HASH }}
-          HARNESS_CANARY_CUSTOM_SKILL_NAME: ${{ vars.HARNESS_CANARY_CUSTOM_SKILL_NAME }}
-          HARNESS_CANARY_CUSTOM_SKILL_SOURCE_OWNER: ${{ vars.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_OWNER }}
-          HARNESS_CANARY_CUSTOM_SKILL_SOURCE_REPOSITORY: ${{ vars.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_REPOSITORY }}
-          HARNESS_CANARY_CUSTOM_SKILL_SOURCE_PATH: ${{ vars.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_PATH }}
-          HARNESS_CANARY_CUSTOM_SKILL_SOURCE_COMMIT_SHA: ${{ vars.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_COMMIT_SHA }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           NEXT_PUBLIC_HARNESS_PROFILE_AUTHORING_ENABLED: ${{ vars.NEXT_PUBLIC_HARNESS_PROFILE_AUTHORING_ENABLED }}
           HARNESS_CANARY_TIMEOUT_MS: ${{ vars.HARNESS_CANARY_TIMEOUT_MS }}
@@ -236,19 +255,6 @@ jobs:
             VERCEL_PROJECT_ID
             ENGINE_CANARY_MCP_CLIENT_ID
             ENGINE_CANARY_MCP_CLIENT_SECRET
-            HARNESS_CANARY_CLAUDE_WORKFLOW_ID
-            HARNESS_CANARY_CODEX_WORKFLOW_ID
-            HARNESS_CANARY_CUSTOM_WORKFLOW_ID
-            HARNESS_CANARY_TICKET_KEY
-            HARNESS_CANARY_CUSTOM_PROFILE_ID
-            HARNESS_CANARY_CUSTOM_PROFILE_VERSION
-            HARNESS_CANARY_CUSTOM_SKILL_ARTIFACT_HASH
-            HARNESS_CANARY_CUSTOM_SKILL_NAME
-            HARNESS_CANARY_CUSTOM_SKILL_SOURCE_OWNER
-            HARNESS_CANARY_CUSTOM_SKILL_SOURCE_REPOSITORY
-            HARNESS_CANARY_CUSTOM_SKILL_SOURCE_PATH
-            HARNESS_CANARY_CUSTOM_SKILL_SOURCE_COMMIT_SHA
-            DATABASE_URL
             VERCEL_AUTOMATION_BYPASS_SECRET
             NEXT_PUBLIC_HARNESS_PROFILE_AUTHORING_ENABLED
             HARNESS_CANARY_TIMEOUT_MS
@@ -291,7 +297,7 @@ jobs:
           echo "armed=true" >> "$GITHUB_OUTPUT"
       - name: Deploy engine canary target
         id: deploy
-        if: steps.scope.outputs.run == 'true' && steps.target.outputs.armed == 'true'
+        if: steps.target.outputs.armed == 'true'
         env:
           ENGINE_CANARY_TARGET: ${{ vars.ENGINE_CANARY_TARGET }}
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
@@ -319,19 +325,18 @@ jobs:
           echo "::error::engine-canary deployment health did not answer HTTP 200 within 5 minutes"
           exit 1
       - name: Verify deployment and database identity
-        if: steps.scope.outputs.run == 'true' && steps.target.outputs.armed == 'true'
+        if: steps.target.outputs.armed == 'true'
         env:
           URL: ${{ vars.ENGINE_CANARY_TARGET_URL }}
           ENGINE_CANARY_TARGET: ${{ vars.ENGINE_CANARY_TARGET }}
           ENGINE_CANARY_DB_ENV: ${{ vars.ENGINE_CANARY_DB_ENV }}
           ENGINE_CANARY_DB_FINGERPRINT: ${{ vars.ENGINE_CANARY_DB_FINGERPRINT }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
           set -euo pipefail
           deadline=$((SECONDS + 300))
           while true; do
-            if node --import tsx scripts/ci/engine-canary-preflight.ts --url "$URL" --target "$ENGINE_CANARY_TARGET" --commit "$GITHUB_SHA" --database-env "$ENGINE_CANARY_DB_ENV" --database-fingerprint "$ENGINE_CANARY_DB_FINGERPRINT" --database-url "$DATABASE_URL"; then
+            if node --import tsx scripts/ci/engine-canary-preflight.ts --url "$URL" --target "$ENGINE_CANARY_TARGET" --commit "$GITHUB_SHA" --database-env "$ENGINE_CANARY_DB_ENV" --database-fingerprint "$ENGINE_CANARY_DB_FINGERPRINT"; then
               exit 0
             fi
             if [ "$SECONDS" -ge "$deadline" ]; then
@@ -341,7 +346,7 @@ jobs:
             sleep 10
           done
       - name: Run engine canaries
-        if: steps.scope.outputs.run == 'true' && steps.target.outputs.armed == 'true'
+        if: steps.target.outputs.armed == 'true'
         env:
           HARNESS_CANARY_BASE_URL: ${{ vars.ENGINE_CANARY_TARGET_URL }}
           HARNESS_CANARY_EXPECTED_HOST: ${{ steps.target.outputs.host }}
@@ -352,19 +357,6 @@ jobs:
           ENGINE_CANARY_MCP_CLIENT_ID: ${{ secrets.ENGINE_CANARY_MCP_CLIENT_ID }}
           ENGINE_CANARY_MCP_CLIENT_SECRET: ${{ secrets.ENGINE_CANARY_MCP_CLIENT_SECRET }}
           HARNESS_CANARY_CONFIRM_PREVIEW_MUTATIONS: run-preview-harness-canary
-          HARNESS_CANARY_CLAUDE_WORKFLOW_ID: ${{ vars.HARNESS_CANARY_CLAUDE_WORKFLOW_ID }}
-          HARNESS_CANARY_CODEX_WORKFLOW_ID: ${{ vars.HARNESS_CANARY_CODEX_WORKFLOW_ID }}
-          HARNESS_CANARY_CUSTOM_WORKFLOW_ID: ${{ vars.HARNESS_CANARY_CUSTOM_WORKFLOW_ID }}
-          HARNESS_CANARY_TICKET_KEY: ${{ vars.HARNESS_CANARY_TICKET_KEY }}
-          HARNESS_CANARY_CUSTOM_PROFILE_ID: ${{ vars.HARNESS_CANARY_CUSTOM_PROFILE_ID }}
-          HARNESS_CANARY_CUSTOM_PROFILE_VERSION: ${{ vars.HARNESS_CANARY_CUSTOM_PROFILE_VERSION }}
-          HARNESS_CANARY_CUSTOM_SKILL_ARTIFACT_HASH: ${{ vars.HARNESS_CANARY_CUSTOM_SKILL_ARTIFACT_HASH }}
-          HARNESS_CANARY_CUSTOM_SKILL_NAME: ${{ vars.HARNESS_CANARY_CUSTOM_SKILL_NAME }}
-          HARNESS_CANARY_CUSTOM_SKILL_SOURCE_OWNER: ${{ vars.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_OWNER }}
-          HARNESS_CANARY_CUSTOM_SKILL_SOURCE_REPOSITORY: ${{ vars.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_REPOSITORY }}
-          HARNESS_CANARY_CUSTOM_SKILL_SOURCE_PATH: ${{ vars.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_PATH }}
-          HARNESS_CANARY_CUSTOM_SKILL_SOURCE_COMMIT_SHA: ${{ vars.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_COMMIT_SHA }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           VERCEL_ENV: preview
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           NEXT_PUBLIC_HARNESS_PROFILE_AUTHORING_ENABLED: ${{ vars.NEXT_PUBLIC_HARNESS_PROFILE_AUTHORING_ENABLED }}
@@ -389,12 +381,18 @@ jobs:
   # leaves the pull request on a permanent "Expected". Path filtering belongs
   # on the expensive jobs behind this one, never on the trigger or on this job.
   ci:
-    needs: [source-checks, unit-worker, unit-dashboard, workflow-sdk, engine-canary]
+    needs: [source-checks, unit-worker, unit-dashboard, workflow-sdk, engine-canary-scope, engine-canary]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Require every source job to have succeeded
+        # The scope job's verdict reaches the script as quoted variables rather
+        # than expressions rendered into its body.
+        env:
+          SCOPE_RESULT: ${{ needs.engine-canary-scope.result }}
+          SCOPE_RUN: ${{ needs.engine-canary-scope.outputs.run }}
+          SCOPE_MIGRATIONS: ${{ needs.engine-canary-scope.outputs.migrations }}
         run: |
           set -euo pipefail
           failed=""
@@ -403,12 +401,22 @@ jobs:
             "unit-worker:${{ needs.unit-worker.result }}" \
             "unit-dashboard:${{ needs.unit-dashboard.result }}" \
             "workflow-sdk:${{ needs.workflow-sdk.result }}" \
+            "engine-canary-scope:$SCOPE_RESULT" \
             "engine-canary:${{ needs.engine-canary.result }}"; do
             name="${entry%%:*}"
             result="${entry#*:}"
             echo "$name: $result"
-            # Fork pull requests must never reach the secret-bearing `e2e` environment.
-            if [ "$name" = "engine-canary" ] && [ "$result" = "skipped" ] && { [ "${{ github.event_name }}" != "pull_request" ] || [ "${{ github.event.pull_request.head.repo.fork }}" = "true" ]; }; then
+            # Neither canary job runs outside a same-repository pull request:
+            # fork pull requests must never reach the secret-bearing `e2e`
+            # environment.
+            if { [ "$name" = "engine-canary-scope" ] || [ "$name" = "engine-canary" ]; } && [ "$result" = "skipped" ] && { [ "${{ github.event_name }}" != "pull_request" ] || [ "${{ github.event.pull_request.head.repo.fork }}" = "true" ]; }; then
+              continue
+            fi
+            # On a same-repository pull request a skipped canary is accepted
+            # only on the word of a scope job that succeeded and said the
+            # canary is not needed (nothing in scope, or a migration). A failed,
+            # cancelled or silent scope job never turns into that skip.
+            if [ "$name" = "engine-canary" ] && [ "$result" = "skipped" ] && [ "$SCOPE_RESULT" = "success" ] && { [ "$SCOPE_RUN" = "false" ] || [ "$SCOPE_MIGRATIONS" = "true" ]; }; then
               continue
             fi
             if [ "$result" != "success" ]; then
@@ -419,8 +427,8 @@ jobs:
           # `needs.*.result` is the count guard: a job added to `needs:` above
           # without a line in the loop would otherwise go unchecked here.
           declared=$(echo "${{ join(needs.*.result, ' ') }}" | wc -w | tr -d ' ')
-          if [ "$declared" != "5" ]; then
-            echo "::error::ci needs $declared jobs but checks 5 by name"
+          if [ "$declared" != "6" ]; then
+            echo "::error::ci needs $declared jobs but checks 6 by name"
             failed="$failed needs-list"
           fi
           if [ -n "$failed" ]; then

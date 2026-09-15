@@ -4,23 +4,18 @@ import { pathToFileURL } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { neon } from "@neondatabase/serverless";
-import type {
-  HarnessProfileManifest,
-  HarnessRunManifestRecord,
-  ReplaySanitizedEnvelope,
-  WorkflowDefinitionV2,
-  WorkflowReplayAttemptDetail,
-  WorkflowRunReplayResponse,
-} from "@shared/contracts";
 import {
-  assertCustomProfilePin,
-  assertMinimalCanaryWorkflow,
-  assertRunHarnessManifest,
-  cancelTimedOutCanaryRun,
+  isHarnessGitHubSkillSource,
+  type HarnessRunManifestRecord,
+  type WorkflowReplayAttemptDetail,
+  type WorkflowRunReplayResponse,
+} from "@shared/contracts";
+import { CANARY_FIXTURE_MODELS } from "@shared/harness";
+import {
   parseHarnessCanaryEnv,
   type HarnessCanaryEnv,
 } from "./canary-contract.js";
+import { ENGINE_CANARY_FIXTURES } from "./engine-canary-fixtures.js";
 import { createMcpAuthorizedFetch } from "./mcp-machine-credential.js";
 import {
   assertReplayCanaryEvidence,
@@ -33,7 +28,14 @@ import {
   type ReplayCanaryEnv,
   type ReplayCanaryFixture,
   type ReplayCanaryLogWindow,
+  type ReplayCanaryRunLogs,
 } from "../replay/canary-contract.js";
+
+// The canary observes the target only through the MCP surface its machine
+// credential reaches (`mcp:read runs:dispatch`): no database connection, no
+// SQL. Identity comes from workflows.list before a dispatch and from the run's
+// own runs.logs manifest after it, claims are released through runs.cancel, and
+// every fixture ticket is checked out of the Ai column before and after its run.
 
 // The historical query replaced a `--follow` stream: the stream prints a
 // keepalive line every few seconds, so a file fed by it never settles, and its
@@ -45,35 +47,54 @@ const REPLAY_CANARY_LOG_QUERY_LIMIT = 1_000;
 const REPLAY_CANARY_LOG_SINCE_GRACE_MS = 30_000;
 const REPLAY_CANARY_LOG_QUERY_FLOOR_MS = 30_000;
 
-type SqlClient = ReturnType<typeof neon>;
+const FIXTURE_LABELS = ["claude", "codex", "custom"] as const;
+type FixtureLabel = (typeof FIXTURE_LABELS)[number];
 
-interface CanaryCase {
-  label: "claude" | "codex" | "custom";
+const BUILTIN_PROFILE_IDS = {
+  claude: "builtin-claude",
+  codex: "builtin-codex",
+} as const;
+
+// Newest first (tickets.list_runs orders by start). Only the newest run and a
+// run that is still live can hold the fixture ticket's claim, so a short page
+// is enough to find them.
+const SWEEP_RUN_PAGE_LIMIT = 5;
+
+// Where a fixture ticket rests between runs in the QA project.
+const FIXTURE_TICKET_HOME_STATUS = "Do zrobienia";
+
+// A success whose end-of-run write has not landed is withheld by runs.result
+// until its own pendingUntil. The grace ends on the server clock and the write
+// may land just after it, so the canary keeps reading this much longer before
+// it calls the completion stuck.
+const COMPLETION_PENDING_SLACK_MS = 30_000;
+
+interface CancelBudget {
+  budgetMs: number;
+  delayMs: number;
+}
+
+// runs.cancel answers unconfirmed (CONFLICT, nothing changed) on a run whose
+// stored outcome is final but whose Workflow run has not retired yet, for up to
+// two minutes after its completion (RETIRING_RUN_GRACE_MS in cancel-run.ts). The
+// release outlasts that window with room for the calls themselves.
+const RELEASE_BUDGET: CancelBudget = { budgetMs: 160_000, delayMs: 5_000 };
+
+// Settling a run nobody watched finish: a live run answers cancelled while its
+// steps drain and only a later ask converges it to already_terminal, and the
+// demo target runs no cron that would converge it instead. The run first has to
+// finish draining, then retire, so this budget is longer than the release's.
+const SETTLE_BUDGET: CancelBudget = { budgetMs: 300_000, delayMs: 10_000 };
+
+export interface CanaryCase {
+  label: FixtureLabel;
   workflowId: number;
+  ticketKey: string;
   triggerNodeId: string;
   deployedVersion: number;
-  reference: { profileId: string; version: number };
-  provider: "claude" | "codex";
-  skill?: {
-    artifactHash: string;
-    name: string;
-    owner: string;
-    repository: string;
-    path: string;
-    commitSha: string;
-  };
 }
 
-interface StoredHarnessProfile {
-  id: string;
-  organizationId: string | null;
-  system: boolean;
-  archivedAt: string | null;
-  publishedVersion: number | null;
-  manifest: HarnessProfileManifest | null;
-}
-
-interface WorkflowListData {
+export interface WorkflowListData {
   workflows: Array<{
     definitionId: number;
     name: string;
@@ -87,6 +108,15 @@ interface WorkflowListData {
     }>;
   }>;
   truncated: boolean;
+}
+
+// The run level runs.logs reply: the replay half the replay check reads, plus
+// the definition the capture was taken from.
+export interface CanaryRunLogsOverview {
+  replay: ReplayCanaryRunLogs & {
+    definitionId: number | null;
+    definitionVersion: number | null;
+  };
 }
 
 interface DispatchPreflightData {
@@ -111,16 +141,9 @@ interface RunResultData {
   status: string;
   terminal: boolean;
   completionPending: boolean;
-}
-
-interface RunLogsOverview {
-  replay: {
-    availability: string;
-    manifest: ReplaySanitizedEnvelope | null;
-    manifestTruncated: boolean;
-    definitionVersion: number | null;
-    attempts: Array<{ id: number }>;
-  };
+  pendingUntil: string | null;
+  result: Record<string, unknown> | null;
+  pollAfterMs: number;
 }
 
 interface RunLogsDetail {
@@ -128,14 +151,78 @@ interface RunLogsDetail {
   attempt: WorkflowReplayAttemptDetail | null;
 }
 
+interface TicketData {
+  ticketKey: string;
+  status: string | null;
+}
+
+interface TicketRunsData {
+  runs: Array<{ runId: string; status: string; terminal: boolean }>;
+  truncated: boolean;
+}
+
+interface CancelRunData {
+  runId: string;
+  outcome: string;
+}
+
+interface SettingData {
+  setting: { key: string; value: unknown };
+}
+
 interface ReplayCaseVerification {
   env: ReplayCanaryEnv;
   fixture: ReplayCanaryFixture;
 }
 
-interface CanaryMcpClient {
+interface CanaryMcpCaller {
   call<T>(name: string, args?: Record<string, unknown>): Promise<T>;
+}
+
+interface CanaryMcpClient extends CanaryMcpCaller {
   close(): Promise<void>;
+}
+
+interface CanaryClock {
+  now(): number;
+  sleep(ms: number): Promise<void>;
+}
+
+const SYSTEM_CLOCK: CanaryClock = { now: () => Date.now(), sleep: delay };
+
+/**
+ * A tool that answered isError. The reply text is the error envelope the
+ * server renders (tool-catalog.ts, mcpToolErrorResult), so its code is read
+ * from there rather than matched in prose.
+ */
+export class CanaryMcpToolError extends Error {
+  readonly tool: string;
+  readonly code: string | null;
+  /** The envelope's retryable flag, null when the reply does not carry one. */
+  readonly retryable: boolean | null;
+
+  constructor(tool: string, reply: string) {
+    super(`MCP tool ${tool} failed${reply ? `: ${reply.slice(0, 300)}` : ""}`);
+    this.name = "CanaryMcpToolError";
+    this.tool = tool;
+    const error = readErrorEnvelope(reply);
+    this.code = typeof error?.code === "string" ? error.code : null;
+    this.retryable =
+      typeof error?.retryable === "boolean" ? error.retryable : null;
+  }
+}
+
+function readErrorEnvelope(
+  reply: string,
+): { code?: unknown; retryable?: unknown } | null {
+  try {
+    const parsed = JSON.parse(reply) as {
+      error?: { code?: unknown; retryable?: unknown };
+    } | null;
+    return parsed?.error ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export interface HarnessProfilePreviewCanaryOptions {
@@ -148,67 +235,38 @@ export async function runHarnessProfilePreviewCanary(
 ): Promise<void> {
   const env = parseHarnessCanaryEnv(source);
   const replayEnv = options.verifyReplay ? parseReplayCanaryEnv(source) : null;
-  const sql = neon(env.DATABASE_URL);
   const mcp = await createCanaryMcpClient(env);
 
   try {
     await mcp.call("system.capabilities");
-    const ticket = await mcp.call<{ ticketKey: string }>("tickets.get", {
-      ticketKey: env.HARNESS_CANARY_TICKET_KEY,
-    });
-    if (ticket.ticketKey.toUpperCase() !== env.HARNESS_CANARY_TICKET_KEY) {
-      throw new Error("Permanent canary ticket did not resolve to the configured key");
-    }
-
-    const profiles = await readHarnessProfiles(sql, env);
-    const claude = requiredSystemProfile(profiles, "builtin-claude", "claude");
-    const codex = requiredSystemProfile(profiles, "builtin-codex", "codex");
-    const custom = profiles.find(
-      (profile) => profile.id === env.HARNESS_CANARY_CUSTOM_PROFILE_ID,
-    );
-    if (!custom) throw new Error("Custom canary profile is not available");
-    assertCustomProfilePin(custom, {
-      profileId: env.HARNESS_CANARY_CUSTOM_PROFILE_ID,
-      version: env.HARNESS_CANARY_CUSTOM_PROFILE_VERSION,
-      artifactHash: env.HARNESS_CANARY_CUSTOM_SKILL_ARTIFACT_HASH,
-      skillName: env.HARNESS_CANARY_CUSTOM_SKILL_NAME,
-    });
-    const customProvider = custom.manifest!.harness.provider;
-    await assertPinnedSkillExists(sql, env, custom.organizationId);
+    const aiColumn = await readAiColumn(mcp);
 
     // The tool schema caps limit at 100 (mcp-contract.json); 200 is rejected as
     // VALIDATION_FAILED before the handler runs.
     const listed = await mcp.call<WorkflowListData>("workflows.list", {
       limit: 100,
     });
-    if (listed.truncated) {
-      throw new Error("Workflow list is truncated before canary fixture validation");
+    const cases = resolveCanaryCases(listed);
+
+    // A previous job that ended between a dispatch and its release (a timeout,
+    // a cancelled job) leaves a claim the next preflight refuses as active_run,
+    // and a ticket left in Ai is dispatched again by the poll.
+    for (const canary of cases) {
+      await sweepFixtureTicket(mcp, canary, aiColumn);
     }
-    const cases = await buildCanaryCases(sql, env, listed, {
-      claude,
-      codex,
-      customProvider,
-    });
 
     const replayFixture = replayEnv
       ? createReplayCanaryFixture(REPLAY_CANARY_FIXTURE_NONCE)
       : null;
-
-    await releaseStaleCanaryClaim(sql, mcp, env.HARNESS_CANARY_TICKET_KEY);
 
     for (const canary of cases) {
       const replay =
         canary.label === "custom" && replayEnv && replayFixture
           ? { env: replayEnv, fixture: replayFixture }
           : undefined;
-      const run = await executeCase(env, mcp, sql, canary, replay);
-      assertRunHarnessManifest(run.manifests, {
-        reference: canary.reference,
-        provider: canary.provider,
-        ...(canary.skill ? { skill: canary.skill } : {}),
-      });
+      const runId = await executeCase(env, mcp, canary, aiColumn, replay);
       console.log(
-        `[harness-canary] ${canary.label}: ${run.runId} succeeded with ${canary.reference.profileId}@${canary.reference.version}`,
+        `[harness-canary] ${canary.label}: ${runId} succeeded on ${canary.ticketKey} with definition ${canary.workflowId}@${canary.deployedVersion}`,
       );
     }
   } finally {
@@ -222,129 +280,536 @@ export async function runHarnessProfilePreviewCanary(
   );
 }
 
-async function buildCanaryCases(
-  sql: SqlClient,
-  env: HarnessCanaryEnv,
-  listed: WorkflowListData,
-  profiles: {
-    claude: StoredHarnessProfile;
-    codex: StoredHarnessProfile;
-    customProvider: "claude" | "codex";
-  },
-): Promise<CanaryCase[]> {
-  // Read the deployed definitions from the database rather than through
-  // workflows.get_graph: that tool rides workflows:write (the read half of
-  // authoring, policy.ts) and the canary's machine token deliberately holds
-  // only mcp:read and runs:dispatch, so the call answers INSUFFICIENT_SCOPE.
-  const definitions = await Promise.all(
-    [
-      env.HARNESS_CANARY_CLAUDE_WORKFLOW_ID,
-      env.HARNESS_CANARY_CODEX_WORKFLOW_ID,
-      env.HARNESS_CANARY_CUSTOM_WORKFLOW_ID,
-    ].map(async (id) => {
-      const rows = await sql`
-        SELECT d.id, d.enabled, d.deployed_version, v.definition
-        FROM workflow_definitions d
-        LEFT JOIN workflow_definition_versions v
-          ON v.definition_id = d.id AND v.version = d.deployed_version
-        WHERE d.id = ${id} AND d.archived_at IS NULL
-      `;
-      const row = rows[0] as
-        | {
-            id: number;
-            enabled: boolean;
-            deployed_version: number | null;
-            definition: unknown;
-          }
-        | undefined;
-      if (!row) throw new Error(`Workflow ${id} does not exist or is archived`);
-      const deployed = row.definition;
-      return {
-        id: row.id,
-        enabled: row.enabled,
-        deployedVersion: row.deployed_version,
-        definition:
-          deployed && typeof deployed === "object" && "schemaVersion" in deployed
-            ? (deployed as WorkflowDefinitionV2)
-            : null,
-      };
-    }),
-  );
-  const inputs = [
-    {
-      label: "claude" as const,
-      workflowId: env.HARNESS_CANARY_CLAUDE_WORKFLOW_ID,
-      reference: {
-        profileId: profiles.claude.id,
-        version: profiles.claude.publishedVersion!,
-      },
-      provider: "claude" as const,
-    },
-    {
-      label: "codex" as const,
-      workflowId: env.HARNESS_CANARY_CODEX_WORKFLOW_ID,
-      reference: {
-        profileId: profiles.codex.id,
-        version: profiles.codex.publishedVersion!,
-      },
-      provider: "codex" as const,
-    },
-    {
-      label: "custom" as const,
-      workflowId: env.HARNESS_CANARY_CUSTOM_WORKFLOW_ID,
-      reference: {
-        profileId: env.HARNESS_CANARY_CUSTOM_PROFILE_ID,
-        version: env.HARNESS_CANARY_CUSTOM_PROFILE_VERSION,
-      },
-      provider: profiles.customProvider,
-      skill: {
-        artifactHash: env.HARNESS_CANARY_CUSTOM_SKILL_ARTIFACT_HASH,
-        name: env.HARNESS_CANARY_CUSTOM_SKILL_NAME,
-        owner: env.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_OWNER,
-        repository: env.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_REPOSITORY,
-        path: env.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_PATH,
-        commitSha: env.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_COMMIT_SHA,
-      },
-    },
-  ];
-
-  return inputs.map((input, index) => {
-    const definition = definitions[index]!;
-    assertMinimalCanaryWorkflow(definition, input.reference);
+/**
+ * Before any dispatch: every fixture definition the file pins is listed,
+ * disabled, deployed at the pinned version, and carries exactly one manually
+ * dispatchable ticket trigger.
+ */
+export function resolveCanaryCases(listed: WorkflowListData): CanaryCase[] {
+  if (listed.truncated) {
+    throw new Error("Workflow list is truncated before canary fixture validation");
+  }
+  return FIXTURE_LABELS.map((label) => {
+    const fixture = ENGINE_CANARY_FIXTURES[label];
+    const name = `Workflow ${fixture.workflowId} (${label} fixture)`;
     const summary = listed.workflows.find(
-      (workflow) => workflow.definitionId === input.workflowId,
+      (workflow) => workflow.definitionId === fixture.workflowId,
     );
-    if (!summary) throw new Error(`Workflow ${input.workflowId} is not available`);
+    if (!summary) throw new Error(`${name} is not listed on the target`);
+    if (summary.enabled) throw new Error(`${name} must stay disabled`);
     if (
-      summary.enabled ||
       summary.deployedSchema !== "v2" ||
-      summary.deployedVersion !== definition.deployedVersion ||
-      summary.triggers.length !== 1 ||
-      summary.triggers[0]?.triggerType !== "trigger_ticket_ai" ||
-      !summary.triggers[0].manuallyDispatchable
+      summary.deployedVersion !== fixture.deployedVersion
     ) {
       throw new Error(
-        `Workflow ${input.workflowId} must stay disabled with one manually dispatchable ticket trigger`,
+        `${name} deploys version ${summary.deployedVersion ?? "none"} (${summary.deployedSchema}), the fixture file pins v2 version ${fixture.deployedVersion}. The pin stands in for the graph the canary cannot read: before bumping deployedVersion in apps/worker/e2e/harness-profiles/engine-canary-fixtures.ts, review the republished graph (two nodes, one edge, workspaceMode "none", and the profile pin)`,
       );
     }
-    return Object.assign(input, {
-      triggerNodeId: summary.triggers[0].triggerNodeId,
-      deployedVersion: definition.deployedVersion!,
-    });
+    const trigger = summary.triggers[0];
+    if (
+      summary.triggers.length !== 1 ||
+      trigger?.triggerType !== "trigger_ticket_ai" ||
+      !trigger.manuallyDispatchable
+    ) {
+      throw new Error(
+        `${name} must keep one manually dispatchable ticket trigger`,
+      );
+    }
+    return {
+      label,
+      workflowId: fixture.workflowId,
+      ticketKey: fixture.ticketKey,
+      triggerNodeId: trigger.triggerNodeId,
+      deployedVersion: fixture.deployedVersion,
+    };
   });
+}
+
+/**
+ * After the run: the capture names the pinned definition and version, and the
+ * Harness Profile manifest the run recorded is the one the fixture expects. For
+ * the custom fixture that is the exact profile version, the cheapest model of
+ * its provider, and the pinned GitHub skill down to its commit.
+ */
+export function assertCanaryRunIdentity(
+  overview: CanaryRunLogsOverview,
+  canary: Pick<CanaryCase, "label" | "workflowId" | "deployedVersion">,
+): void {
+  const { replay } = overview;
+  const records = readHarnessManifests(overview);
+  if (!records) {
+    throw new Error(
+      `Run did not expose its Harness Profile manifest (availability ${replay.availability}, truncated ${replay.manifestTruncated})`,
+    );
+  }
+  if (replay.definitionId !== canary.workflowId) {
+    throw new Error(
+      `Run captured definition ${replay.definitionId}, the ${canary.label} fixture pins definition ${canary.workflowId}`,
+    );
+  }
+  if (replay.definitionVersion !== canary.deployedVersion) {
+    throw new Error(
+      `Run captured definition version ${replay.definitionVersion}, the ${canary.label} fixture pins version ${canary.deployedVersion}`,
+    );
+  }
+  if (canary.label === "custom") {
+    assertCustomProfileRun(records);
+  } else {
+    assertBuiltinProfileRun(records, canary.label);
+  }
+}
+
+function readHarnessManifests(
+  overview: CanaryRunLogsOverview,
+): HarnessRunManifestRecord[] | null {
+  const { replay } = overview;
+  const value = replay.manifest?.value;
+  if (
+    replay.availability !== "available" ||
+    replay.manifestTruncated ||
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value)
+  ) {
+    return null;
+  }
+  const harnesses = (value as Record<string, unknown>).harnesses;
+  return Array.isArray(harnesses)
+    ? (harnesses as HarnessRunManifestRecord[])
+    : null;
+}
+
+function assertBuiltinProfileRun(
+  records: HarnessRunManifestRecord[],
+  provider: "claude" | "codex",
+): void {
+  const profileId = BUILTIN_PROFILE_IDS[provider];
+  const record = records.find(
+    (candidate) => candidate.reference?.profileId === profileId,
+  );
+  if (!record) {
+    throw new Error(`Run did not capture the built-in Harness Profile ${profileId}`);
+  }
+  if (record.manifest.system !== true) {
+    throw new Error(`${profileId} did not run as a system profile`);
+  }
+  if (record.manifest.harness.provider !== provider) {
+    throw new Error(
+      `${profileId} ran on provider ${record.manifest.harness.provider}, expected ${provider}`,
+    );
+  }
+}
+
+function assertCustomProfileRun(records: HarnessRunManifestRecord[]): void {
+  const fixture = ENGINE_CANARY_FIXTURES.custom;
+  const record = records.find(
+    (candidate) => candidate.reference?.profileId === fixture.profileId,
+  );
+  if (!record) {
+    throw new Error(
+      `Run did not capture the custom Harness Profile ${fixture.profileId}`,
+    );
+  }
+  if (record.reference.version !== fixture.profileVersion) {
+    throw new Error(
+      `Run captured custom profile version ${record.reference.version}, the fixture file pins ${fixture.profileVersion}`,
+    );
+  }
+  if (record.manifest.system !== false) {
+    throw new Error("Custom canary profile ran as a system profile");
+  }
+  const cheapestModel = CANARY_FIXTURE_MODELS[record.manifest.harness.provider];
+  if (record.manifest.model.id !== cheapestModel) {
+    throw new Error(
+      `Custom canary profile must use ${cheapestModel}, the run used ${record.manifest.model.id}`,
+    );
+  }
+  const skill = record.skills.find(
+    (candidate) => candidate.name === fixture.skillName,
+  );
+  if (!skill) {
+    throw new Error(
+      `Run did not capture the pinned skill name ${fixture.skillName}`,
+    );
+  }
+  if (skill.artifactHash !== fixture.skillArtifactHash) {
+    throw new Error(
+      `Run captured skill artifact hash ${skill.artifactHash}, the fixture file pins ${fixture.skillArtifactHash}`,
+    );
+  }
+  // The canary pins a GitHub-imported skill; a deployment-local source in this
+  // slot is itself the failure, not a shape to branch on.
+  if (!isHarnessGitHubSkillSource(skill.source)) {
+    throw new Error("Run captured a pinned skill whose source is not a GitHub import");
+  }
+  for (const field of ["owner", "repository", "path", "commitSha"] as const) {
+    if (skill.source[field] !== fixture.skillSource[field]) {
+      throw new Error(
+        `Run captured skill source ${field} ${skill.source[field]}, the fixture file pins ${fixture.skillSource[field]}`,
+      );
+    }
+  }
+}
+
+/** The Ai column as the target itself is configured, the column the poll reads. */
+export async function readAiColumn(mcp: CanaryMcpCaller): Promise<string> {
+  const reply = await mcp.call<SettingData>("settings.get", {
+    key: "COLUMN_AI",
+    limit: 1,
+  });
+  const value = reply.setting?.value;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(
+      `Target setting COLUMN_AI does not name a column: ${JSON.stringify(value)}`,
+    );
+  }
+  return value.trim();
+}
+
+/**
+ * A fixture ticket left in the Ai column is unowned work to the poll, which
+ * dispatches a stray run on it (AWP-176, 2026-09-15). runs.cancel withdraws the
+ * ticket when it releases a finished run's claim, so a ticket still in Ai
+ * afterwards is a product failure to report, not something to move by hand.
+ */
+export async function assertFixtureTicketOutsideAiColumn(
+  mcp: CanaryMcpCaller,
+  ticketKey: string,
+  aiColumn: string,
+): Promise<void> {
+  const status = await readFixtureTicketAiStatus(mcp, ticketKey, aiColumn);
+  if (status !== null) {
+    throw new Error(
+      `Fixture ticket ${ticketKey} is still in the Ai column (status "${status}") after runs.cancel; the next poll would dispatch a stray run on it`,
+    );
+  }
+}
+
+/** The ticket's status when it sits in the Ai column, null when it does not. */
+async function readFixtureTicketAiStatus(
+  mcp: CanaryMcpCaller,
+  ticketKey: string,
+  aiColumn: string,
+): Promise<string | null> {
+  const ticket = await mcp.call<TicketData>("tickets.get", { ticketKey });
+  if (ticket.ticketKey.toUpperCase() !== ticketKey.toUpperCase()) {
+    throw new Error(
+      `Fixture ticket ${ticketKey} did not resolve to the configured key (resolved ${ticket.ticketKey})`,
+    );
+  }
+  const status = ticket.status ?? "";
+  return status.trim().toLowerCase() === aiColumn.trim().toLowerCase()
+    ? status
+    : null;
+}
+
+/**
+ * Release the claim of a run the canary watched finish. The target runs no
+ * reconciler cron of its own, so the canary asks the run lifecycle to do the
+ * reconciler's bookkeeping: on a finished run runs.cancel answers
+ * already_terminal after releasing the claim and withdrawing the ticket. An
+ * unconfirmed answer is retried within the release budget. "cancelled" would
+ * mean the run was still live, which the canary had already reported it was not.
+ */
+export async function releaseCanaryRun(
+  mcp: CanaryMcpCaller,
+  runId: string,
+  clock: CanaryClock = SYSTEM_CLOCK,
+): Promise<void> {
+  // One idempotency key for the whole release: an unconfirmed cancel hands the
+  // key back, so its retries ask the same question again.
+  const idempotencyKey = randomUUID();
+  const deadline = clock.now() + RELEASE_BUDGET.budgetMs;
+  let attempts = 0;
+  for (;;) {
+    attempts += 1;
+    const answer = await askRunsCancel(mcp, runId, idempotencyKey);
+    if (answer.outcome === "cancelled" && attempts > 1) {
+      // The canary saw this run succeed, so the unconfirmed answers were the
+      // retiring window, and a cancel after it is the full path on a finished run.
+      throw new Error(
+        `Canary run ${runId} finished, but Workflow did not retire the run within the two minute window: runs.cancel answered unconfirmed ${attempts - 1} time${attempts === 2 ? "" : "s"}, then cancelled, so the cancel overwrote its outcome`,
+      );
+    }
+    if (answer.outcome === "cancelled") {
+      throw new Error(
+        `Canary run ${runId} was still live when the canary released it: runs.cancel answered cancelled`,
+      );
+    }
+    if (answer.outcome === "already_terminal") return;
+    if (clock.now() + RELEASE_BUDGET.delayMs > deadline) {
+      throw new Error(
+        `runs.cancel did not confirm run ${runId} within ${RELEASE_BUDGET.budgetMs / 1_000} s (${attempts} attempts): ${answer.reply}`,
+      );
+    }
+    await clock.sleep(RELEASE_BUDGET.delayMs);
+  }
+}
+
+/**
+ * Before the first dispatch on a fixture ticket: settle whatever could still
+ * hold its claim. Only a run of the fixture's own definition is the canary's to
+ * settle; one of those still live was most likely left by a canary job stopped
+ * mid run (the per pull request cancel, the job timeout). Any other run belongs
+ * to production (its poll dispatching on a ticket left in Ai), which this
+ * target cannot reach: a live one fails the precondition untouched, a finished
+ * one is left for production's reconciler.
+ */
+export async function sweepFixtureTicket(
+  mcp: CanaryMcpCaller,
+  fixture: { ticketKey: string; workflowId: number },
+  aiColumn: string,
+  clock: CanaryClock = SYSTEM_CLOCK,
+): Promise<void> {
+  const { ticketKey, workflowId } = fixture;
+  const page = await mcp.call<TicketRunsData>("tickets.list_runs", {
+    ticketKey,
+    limit: SWEEP_RUN_PAGE_LIMIT,
+  });
+  // A subject carries at most one claim and a claim refuses every later
+  // dispatch, so the holder is the newest run or a run that is still live.
+  const candidates = page.runs.filter(
+    (run, index) => index === 0 || !run.terminal,
+  );
+  const owned: string[] = [];
+  for (const run of candidates) {
+    const captured = await readCapturedDefinitionId(mcp, run.runId);
+    if (captured.definitionId === workflowId) {
+      owned.push(run.runId);
+      continue;
+    }
+    if (run.terminal) {
+      const definition =
+        captured.definitionId === null
+          ? `a definition that could not be read from runs.logs (${captured.unreadable})`
+          : `definition ${captured.definitionId}`;
+      console.log(
+        `[harness-canary] ${ticketKey}: leaving finished run ${run.runId} of ${definition} untouched; it is not a run of fixture definition ${workflowId}`,
+      );
+      continue;
+    }
+    if (captured.definitionId === null) {
+      throw new Error(
+        `Fixture ticket ${ticketKey} has live run ${run.runId} whose definition could not be read from runs.logs (${captured.unreadable}): it is unknown whose run it is, so nothing was touched. Settle it where it was dispatched, then run the canary again`,
+      );
+    }
+    throw new Error(
+      `Fixture ticket ${ticketKey} has live run ${run.runId} of definition ${captured.definitionId}, not fixture definition ${workflowId}: the canary did not dispatch it and leaves it untouched. Production owns it and must settle it first (let it finish or cancel it on production), then run the canary again`,
+    );
+  }
+  let cancelledLiveRun = false;
+  for (const runId of owned) {
+    const settled = await settleCanaryRun(
+      mcp,
+      { runId, ticketKey },
+      "a run of the fixture definition was still live on the fixture ticket, most likely left by a canary job stopped mid run",
+      clock,
+    );
+    cancelledLiveRun ||= settled.cancelledLiveRun;
+  }
+  const status = await readFixtureTicketAiStatus(mcp, ticketKey, aiColumn);
+  if (status === null) return;
+  if (cancelledLiveRun) {
+    throw new Error(
+      `Fixture ticket ${ticketKey} is still in the Ai column (status "${status}") after runs.cancel; the next poll would dispatch a stray run on it`,
+    );
+  }
+  // Nothing live held the ticket and every finished run answered
+  // already_terminal, so no run of the product put it there or kept it there.
+  throw new Error(
+    `Fixture ticket ${ticketKey} is in the Ai column (status "${status}") with no live run: it was moved into Ai outside the canary. The canary does not move tickets; move it back to "${FIXTURE_TICKET_HOME_STATUS}" by hand, then run the canary again`,
+  );
+}
+
+/**
+ * The definition a run's capture was taken from. When runs.logs does not show
+ * one, definitionId is null and unreadable says why (the caught error, or no
+ * captured definition in the reply).
+ */
+async function readCapturedDefinitionId(
+  mcp: CanaryMcpCaller,
+  runId: string,
+): Promise<
+  { definitionId: number } | { definitionId: null; unreadable: string }
+> {
+  try {
+    const overview = await mcp.call<Partial<CanaryRunLogsOverview> | null>(
+      "runs.logs",
+      { runId },
+    );
+    const definitionId = overview?.replay?.definitionId;
+    return typeof definitionId === "number"
+      ? { definitionId }
+      : { definitionId: null, unreadable: "the reply carries no captured definition" };
+  } catch (error) {
+    return { definitionId: null, unreadable: errorMessage(error) };
+  }
+}
+
+/**
+ * Everything after a dispatch: the observations, then the release and the Ai
+ * check. Any failure among them, the release included, still leaves the target
+ * the way the canary found it before the failure is reported.
+ */
+export async function finishCanaryRun(
+  mcp: CanaryMcpCaller,
+  target: { runId: string; ticketKey: string; aiColumn: string },
+  observe: () => Promise<void>,
+  clock: CanaryClock = SYSTEM_CLOCK,
+): Promise<void> {
+  try {
+    await observe();
+    await releaseCanaryRun(mcp, target.runId, clock);
+    await assertFixtureTicketOutsideAiColumn(
+      mcp,
+      target.ticketKey,
+      target.aiColumn,
+    );
+  } catch (error) {
+    const cleanupFailure = await leaveTargetAfterFailedRun(
+      mcp,
+      target.runId,
+      target.ticketKey,
+      target.aiColumn,
+      clock,
+    );
+    if (cleanupFailure) {
+      throw new Error(
+        `${errorMessage(error)}; leaving the target clean also failed: ${cleanupFailure}`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+}
+
+/**
+ * A failed case still leaves the target the way it found it. The run may be
+ * finished (it failed, or an assertion about it did) or live (a timeout, a read
+ * that failed mid-poll), so it is settled until runs.cancel answers
+ * already_terminal. Returns why the cleanup failed, or null.
+ */
+export async function leaveTargetAfterFailedRun(
+  mcp: CanaryMcpCaller,
+  runId: string,
+  ticketKey: string,
+  aiColumn: string,
+  clock: CanaryClock = SYSTEM_CLOCK,
+): Promise<string | null> {
+  try {
+    await settleCanaryRun(
+      mcp,
+      { runId, ticketKey },
+      "the case failed while its run was still live",
+      clock,
+    );
+    await assertFixtureTicketOutsideAiColumn(mcp, ticketKey, aiColumn);
+    return null;
+  } catch (error) {
+    return errorMessage(error);
+  }
+}
+
+/**
+ * Ask runs.cancel until it answers already_terminal, the only answer that
+ * releases the claim and withdraws the ticket. "cancelled" is not final: the
+ * run's steps may still be draining, its claim stays "cancelling" and its
+ * ticket stays in Ai until a later ask converges it. An unconfirmed answer (the
+ * run is still being retired) is asked again too.
+ *
+ * Every ask carries a fresh idempotency key: a key whose call answered
+ * cancelled is stored and would replay cancelled forever.
+ */
+async function settleCanaryRun(
+  mcp: CanaryMcpCaller,
+  target: { runId: string; ticketKey: string },
+  whyLive: string,
+  clock: CanaryClock,
+): Promise<{ cancelledLiveRun: boolean }> {
+  const { runId, ticketKey } = target;
+  const deadline = clock.now() + SETTLE_BUDGET.budgetMs;
+  let cancelledLiveRun = false;
+  let unconfirmedBefore = 0;
+  let attempts = 0;
+  for (;;) {
+    attempts += 1;
+    const answer = await askRunsCancel(mcp, runId, randomUUID());
+    if (answer.outcome === "already_terminal") return { cancelledLiveRun };
+    if (answer.outcome === "cancelled" && !cancelledLiveRun) {
+      cancelledLiveRun = true;
+      console.warn(
+        unconfirmedBefore === 0
+          ? `[harness-canary] WARNING: cancelled live run ${runId} on ${ticketKey}; ${whyLive}`
+          : `[harness-canary] WARNING: cancelled run ${runId} on ${ticketKey} after ${unconfirmedBefore} unconfirmed answer${unconfirmedBefore === 1 ? "" : "s"}; if the run had already finished on its own, Workflow did not retire it within the two minute window and the cancel overwrote its outcome`,
+      );
+    }
+    if (answer.outcome === "unconfirmed" && !cancelledLiveRun) {
+      unconfirmedBefore += 1;
+    }
+    if (clock.now() + SETTLE_BUDGET.delayMs > deadline) {
+      const last =
+        answer.outcome === "cancelled"
+          ? "cancelled (the run was still draining)"
+          : answer.reply;
+      throw new Error(
+        `Run ${runId} did not settle to already_terminal within ${SETTLE_BUDGET.budgetMs / 1_000} s (${attempts} runs.cancel attempts); the last answer was ${last}. Its claim may still be held and fixture ticket ${ticketKey} may still be in the Ai column`,
+      );
+    }
+    await clock.sleep(SETTLE_BUDGET.delayMs);
+  }
+}
+
+type CancelAnswer =
+  | { outcome: "cancelled" }
+  | { outcome: "already_terminal" }
+  | { outcome: "unconfirmed"; reply: string };
+
+/** One runs.cancel call. Only a retryable CONFLICT comes back unconfirmed; any other refusal throws. */
+async function askRunsCancel(
+  mcp: CanaryMcpCaller,
+  runId: string,
+  idempotencyKey: string,
+): Promise<CancelAnswer> {
+  let reply: CancelRunData;
+  try {
+    reply = await mcp.call<CancelRunData>("runs.cancel", {
+      runId,
+      idempotencyKey,
+    });
+  } catch (error) {
+    if (
+      error instanceof CanaryMcpToolError &&
+      error.code === "CONFLICT" &&
+      error.retryable !== false
+    ) {
+      return { outcome: "unconfirmed", reply: error.message };
+    }
+    throw new Error(
+      `runs.cancel did not confirm run ${runId}: ${errorMessage(error)}`,
+      { cause: error },
+    );
+  }
+  if (reply.outcome !== "already_terminal" && reply.outcome !== "cancelled") {
+    throw new Error(
+      `runs.cancel answered an unexpected outcome for run ${runId}: ${JSON.stringify(reply)}`,
+    );
+  }
+  return reply.outcome === "cancelled"
+    ? { outcome: "cancelled" }
+    : { outcome: "already_terminal" };
 }
 
 async function executeCase(
   env: HarnessCanaryEnv,
   mcp: CanaryMcpClient,
-  sql: SqlClient,
   canary: CanaryCase,
+  aiColumn: string,
   replay?: ReplayCaseVerification,
-): Promise<{ runId: string; manifests: HarnessRunManifestRecord[] }> {
+): Promise<string> {
   const input = {
     definitionId: canary.workflowId,
     triggerNodeId: canary.triggerNodeId,
-    input: { kind: "ticket", ticketKey: env.HARNESS_CANARY_TICKET_KEY },
+    input: { kind: "ticket", ticketKey: canary.ticketKey },
   };
   const preflight = await mcp.call<DispatchPreflightData>(
     "workflows.dispatch_preflight",
@@ -366,53 +831,69 @@ async function executeCase(
     idempotencyKey: randomUUID(),
   });
   const deadline = Date.now() + env.HARNESS_CANARY_TIMEOUT_MS;
-  try {
-    await waitForSuccessfulRun(mcp, dispatched.runId, deadline);
-    // Every step and flow request of this run answered between the dispatch and
-    // the read that reported it terminal, so that is the window the log query
-    // has to cover.
-    const runWindow = { startedAt, endedAt: Date.now() };
-    const manifests = await waitForHarnessManifest(mcp, dispatched.runId, deadline);
-    if (replay) {
-      await verifyReplayCase(
-        replay,
+  await finishCanaryRun(
+    mcp,
+    { runId: dispatched.runId, ticketKey: canary.ticketKey, aiColumn },
+    async () => {
+      await waitForSuccessfulRun(mcp, dispatched.runId, deadline);
+      // Every step and flow request of this run answered between the dispatch
+      // and the read that reported it settled, so that is the window the log
+      // query has to cover.
+      const runWindow = { startedAt, endedAt: Date.now() };
+      const overview = await waitForHarnessManifest(
         mcp,
-        sql,
         dispatched.runId,
         deadline,
-        runWindow,
       );
-    }
-    await releaseFinishedRunClaim(sql, env.HARNESS_CANARY_TICKET_KEY, dispatched.runId);
-    return { runId: dispatched.runId, manifests };
-  } catch (error) {
-    if (Date.now() >= deadline) {
-      await cancelTimedOutCanaryRun(mcp, dispatched.runId);
-    }
-    throw error;
-  }
+      assertCanaryRunIdentity(overview, canary);
+      if (replay) {
+        await verifyReplayCase(replay, mcp, dispatched.runId, deadline, runWindow);
+      }
+    },
+  );
+  return dispatched.runId;
 }
 
-async function waitForSuccessfulRun(
-  mcp: CanaryMcpClient,
+/**
+ * Wait for the run to succeed and for its end-of-run write to land. Releasing
+ * before that write is how the release raced the run's own finalization, so a
+ * success with completionPending is waited on, honouring the reply's
+ * pollAfterMs, until a read carries a result and no pending completion.
+ */
+export async function waitForSuccessfulRun(
+  mcp: CanaryMcpCaller,
   runId: string,
   deadline: number,
+  clock: CanaryClock = SYSTEM_CLOCK,
 ): Promise<void> {
-  while (Date.now() < deadline) {
+  let pendingBound: number | null = null;
+  while (clock.now() < deadline) {
     const run = await mcp.call<RunData>("runs.get", { runId });
-    if (run.terminal) {
-      const result = await mcp.call<RunResultData>("runs.result", { runId });
-      if (
-        run.status !== "success" ||
-        result.status !== "success" ||
-        !result.terminal ||
-        result.completionPending
-      ) {
-        throw new Error(`Canary run ${runId} ended as ${run.status}`);
-      }
-      return;
+    if (!run.terminal) {
+      await clock.sleep(Math.max(1_000, run.pollAfterMs));
+      continue;
     }
-    await delay(Math.max(1_000, run.pollAfterMs));
+    const result = await mcp.call<RunResultData>("runs.result", { runId });
+    if (
+      run.status !== "success" ||
+      result.status !== "success" ||
+      !result.terminal
+    ) {
+      throw new Error(`Canary run ${runId} ended as ${run.status}`);
+    }
+    if (!result.completionPending && result.result !== null) return;
+    const pendingUntil =
+      result.pendingUntil === null ? Number.NaN : Date.parse(result.pendingUntil);
+    if (!Number.isNaN(pendingUntil)) {
+      pendingBound = pendingUntil + COMPLETION_PENDING_SLACK_MS;
+    }
+    pendingBound ??= clock.now() + COMPLETION_PENDING_SLACK_MS;
+    if (clock.now() >= pendingBound) {
+      throw new Error(
+        `Canary run ${runId} succeeded but its completion never settled: completionPending ${result.completionPending}, result ${result.result === null ? "withheld" : "present"}, pendingUntil ${result.pendingUntil ?? "none"}`,
+      );
+    }
+    await clock.sleep(Math.max(1_000, result.pollAfterMs));
   }
   throw new Error(`Timed out waiting for canary run ${runId}`);
 }
@@ -421,22 +902,16 @@ async function waitForHarnessManifest(
   mcp: CanaryMcpClient,
   runId: string,
   deadline: number,
-): Promise<HarnessRunManifestRecord[]> {
+): Promise<CanaryRunLogsOverview> {
   while (Date.now() < deadline) {
-    const logs = await mcp.call<RunLogsOverview>("runs.logs", { runId });
-    const value = logs.replay.manifest?.value;
+    const overview = await mcp.call<CanaryRunLogsOverview>("runs.logs", {
+      runId,
+    });
     if (
-      logs.replay.availability === "available" &&
-      logs.replay.definitionVersion !== null &&
-      !logs.replay.manifestTruncated &&
-      value &&
-      typeof value === "object" &&
-      !Array.isArray(value)
+      overview.replay.definitionVersion !== null &&
+      readHarnessManifests(overview) !== null
     ) {
-      const harnesses = (value as Record<string, unknown>).harnesses;
-      if (Array.isArray(harnesses)) {
-        return harnesses as unknown as HarnessRunManifestRecord[];
-      }
+      return overview;
     }
     await delay(2_000);
   }
@@ -446,19 +921,22 @@ async function waitForHarnessManifest(
 async function verifyReplayCase(
   replay: ReplayCaseVerification,
   mcp: CanaryMcpClient,
-  sql: SqlClient,
   runId: string,
   deadline: number,
   runWindow: ReplayCanaryLogWindow,
 ): Promise<void> {
-  const { summary, details } = await waitForReplayMcp(mcp, runId, deadline);
-  const [databaseRows, appendedLogExport] = await Promise.all([
-    readReplayDatabaseRows(sql, runId, deadline),
-    readCoveredReplayLogWindow(replay.env, runWindow),
-  ]);
+  const { runLogs, summary, details } = await waitForReplayMcp(
+    mcp,
+    runId,
+    deadline,
+  );
+  const appendedLogExport = await readCoveredReplayLogWindow(
+    replay.env,
+    runWindow,
+  );
   assertReplayCanaryEvidence(
     {
-      databaseRows,
+      runLogs,
       apiSummary: summary,
       apiDetails: details,
       appendedLogExport,
@@ -467,11 +945,17 @@ async function verifyReplayCase(
   );
 }
 
+// The attempt row is written before the run answers terminal and its log
+// envelope is patched in afterwards, so a single read can catch an attempt
+// without one. The wait covers the trace, every attempt's detail and the run
+// level index together, so the three surfaces the check compares describe the
+// same capture.
 async function waitForReplayMcp(
   mcp: CanaryMcpClient,
   runId: string,
   deadline: number,
 ): Promise<{
+  runLogs: ReplayCanaryRunLogs;
   summary: WorkflowRunReplayResponse;
   details: WorkflowReplayAttemptDetail[];
 }> {
@@ -515,7 +999,19 @@ async function waitForReplayMcp(
         ) &&
         details.some((detail) => detail.logs !== null)
       ) {
-        return { summary, details };
+        const overview = await mcp.call<CanaryRunLogsOverview>("runs.logs", {
+          runId,
+        });
+        const indexed = new Set(
+          overview.replay.attempts.map((attempt) => attempt.id),
+        );
+        if (
+          overview.replay.availability === "available" &&
+          overview.replay.manifest !== null &&
+          summary.attempts.every((attempt) => indexed.has(attempt.id))
+        ) {
+          return { runLogs: overview.replay, summary, details };
+        }
       }
     }
     await delay(2_000);
@@ -523,199 +1019,8 @@ async function waitForReplayMcp(
   throw new Error("Replay MCP tools did not finish capture before the deadline");
 }
 
-async function readHarnessProfiles(
-  sql: SqlClient,
-  env: HarnessCanaryEnv,
-): Promise<StoredHarnessProfile[]> {
-  const rows = await sql`
-    SELECT hp.id, hp.organization_id, hp.system, hp.archived_at,
-           hp.published_version, hpv.manifest
-    FROM harness_profiles hp
-    LEFT JOIN harness_profile_versions hpv
-      ON hpv.profile_id = hp.id AND hpv.version = hp.published_version
-    WHERE hp.id IN (
-      'builtin-claude',
-      'builtin-codex',
-      ${env.HARNESS_CANARY_CUSTOM_PROFILE_ID}
-    )
-  `;
-  return rows.map((row) => ({
-    id: String(row.id),
-    organizationId:
-      typeof row.organization_id === "string" ? row.organization_id : null,
-    system: row.system === true,
-    archivedAt: row.archived_at ? String(row.archived_at) : null,
-    publishedVersion:
-      typeof row.published_version === "number" ? row.published_version : null,
-    manifest: (row.manifest as HarnessProfileManifest | null) ?? null,
-  }));
-}
-
-function requiredSystemProfile(
-  profiles: StoredHarnessProfile[],
-  id: "builtin-claude" | "builtin-codex",
-  provider: "claude" | "codex",
-): StoredHarnessProfile {
-  const profile = profiles.find((candidate) => candidate.id === id);
-  if (
-    !profile?.system ||
-    profile.organizationId !== null ||
-    profile.archivedAt !== null ||
-    !profile.publishedVersion ||
-    profile.manifest?.harness.provider !== provider
-  ) {
-    throw new Error(`Stable built-in ${provider} Harness Profile must be published`);
-  }
-  return profile;
-}
-
-async function assertPinnedSkillExists(
-  sql: SqlClient,
-  env: HarnessCanaryEnv,
-  organizationId: string | null,
-): Promise<void> {
-  if (!organizationId) throw new Error("Custom profile must be organization-owned");
-  const rows = await sql`
-    SELECT hsa.artifact_hash, hsa.name, hsa.source_owner,
-           hsa.source_repository, hsa.source_path, hsa.source_commit_sha
-    FROM harness_profile_version_skills hpvs
-    JOIN harness_skill_artifacts hsa ON hsa.id = hpvs.artifact_id
-    WHERE hpvs.profile_id = ${env.HARNESS_CANARY_CUSTOM_PROFILE_ID}
-      AND hpvs.profile_version = ${env.HARNESS_CANARY_CUSTOM_PROFILE_VERSION}
-      AND hpvs.skill_name = ${env.HARNESS_CANARY_CUSTOM_SKILL_NAME}
-      AND hsa.organization_id = ${organizationId}
-      AND hsa.artifact_hash = ${env.HARNESS_CANARY_CUSTOM_SKILL_ARTIFACT_HASH}
-  `;
-  const row = rows[0] as Record<string, unknown> | undefined;
-  if (
-    row?.source_owner !== env.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_OWNER ||
-    row?.source_repository !==
-      env.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_REPOSITORY ||
-    row?.source_path !== env.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_PATH ||
-    row?.source_commit_sha !==
-      env.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_COMMIT_SHA
-  ) {
-    throw new Error("Pinned skill source does not match the exact expected commit");
-  }
-}
-
-// The attempt row is written before the run answers terminal and its log
-// envelope is patched in afterwards, so a single read can catch the row without
-// one. The MCP half already waits for its own copy; this half waits for the
-// same cell with the same budget rather than failing on the first miss.
-async function readReplayDatabaseRows(
-  sql: SqlClient,
-  runId: string,
-  deadline: number,
-): Promise<{ observation: unknown; attempts: unknown[] }> {
-  let observationSeen = false;
-  let diagnostics: string[] = [];
-  for (;;) {
-    const observations = await sql`
-      SELECT to_jsonb(observation) AS payload
-      FROM workflow_run_observations observation
-      WHERE observation.run_id = ${runId}
-      LIMIT 1
-    `;
-    // The alias must not be `attempt`: `workflow_block_attempts` has a column of
-    // that name, a bare name in an expression binds to the column before the
-    // table alias, and `to_jsonb(attempt)` then returns the attempt NUMBER
-    // instead of the row. That is why the database half of the evidence used to
-    // fail while the explicit column below showed the envelope.
-    const attempts = await sql`
-      SELECT attempt_row.id AS id,
-             to_jsonb(attempt_row) AS payload,
-             attempt_row.log_envelope AS log_envelope,
-             attempt_row.observation_revision AS observation_revision,
-             attempt_row.updated_at AS updated_at
-      FROM workflow_block_attempts attempt_row
-      WHERE attempt_row.run_id = ${runId}
-      ORDER BY attempt_row.id
-    `;
-    const observation = observations[0]?.payload;
-    observationSeen = observation != null;
-    diagnostics = attempts.map(
-      (row) =>
-        `attempt ${String(row.id)}: log_envelope=${row.log_envelope == null ? "null" : "present"} observation_revision=${String(row.observation_revision)} updated_at=${String(row.updated_at)}`,
-    );
-    if (
-      observationSeen &&
-      attempts.some((row) => row.log_envelope != null)
-    ) {
-      // The driver hands jsonb back parsed, but the contract reads keys off the
-      // payload, so prove the shape here rather than assume it.
-      const payloads = attempts.map((row) => parseJsonPayload(row.payload));
-      console.log(
-        `[replay-canary] database attempts: ${payloads.length}, payload types: ${payloads.map((payload) => (payload === null ? "null" : typeof payload)).join(", ")}`,
-      );
-      return { observation, attempts: payloads };
-    }
-    if (Date.now() >= deadline) break;
-    await delay(2_000);
-  }
-  throw new Error(
-    `Replay canary database capture never held a log envelope for ${runId}: observation row ${observationSeen ? "present" : "missing"}, ${diagnostics.length === 0 ? "no attempt rows" : diagnostics.join("; ")}`,
-  );
-}
-
-function parseJsonPayload(value: unknown): unknown {
-  if (typeof value !== "string") return value;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value;
-  }
-}
-
-// A finished run's registry claim is released only by the reconciler inside the
-// production poll cron (services/run-lifecycle/reconcile.ts, every 15 minutes),
-// and the canary target runs no cron of its own. The canary therefore releases
-// the claims of its OWN runs, and only after it has proven them terminal, which
-// is the same predicate the reconciler applies later.
-async function releaseFinishedRunClaim(
-  sql: SqlClient,
-  ticketKey: string,
-  runId: string,
-): Promise<void> {
-  await sql`
-    DELETE FROM active_runs WHERE ticket_key = ${ticketKey} AND run_id = ${runId}
-  `;
-  const rows = await sql`
-    SELECT run_id FROM active_runs WHERE ticket_key = ${ticketKey} LIMIT 1
-  `;
-  if (rows.length > 0) {
-    throw new Error(
-      `Run registry still holds ${ticketKey} for run ${String(rows[0]?.run_id)}`,
-    );
-  }
-}
-
-// A previous canary job that ended between a dispatch and its release (a timeout,
-// a cancelled job) leaves a claim the next preflight refuses as already_claimed.
-// Release it only when its run is terminal; a live run keeps its claim and the
-// canary fails loudly instead of racing it.
-async function releaseStaleCanaryClaim(
-  sql: SqlClient,
-  mcp: CanaryMcpClient,
-  ticketKey: string,
-): Promise<void> {
-  const rows = await sql`
-    SELECT run_id FROM active_runs WHERE ticket_key = ${ticketKey}
-  `;
-  for (const row of rows) {
-    const runId = row.run_id as string | null;
-    if (!runId) {
-      throw new Error(`Run registry holds ${ticketKey} without a run id`);
-    }
-    const run = await mcp.call<RunData>("runs.get", { runId });
-    if (!run.terminal) {
-      throw new Error(`Run registry holds ${ticketKey} for live run ${runId}`);
-    }
-    await releaseFinishedRunClaim(sql, ticketKey, runId);
-    console.log(
-      `[harness-canary] released the stale claim of terminal run ${runId} on ${ticketKey}`,
-    );
-  }
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 // Coverage and the leak scan both come from one historical query, retried until
@@ -878,9 +1183,8 @@ async function createCanaryMcpClient(
           ? result.content
               .flatMap((block) => (block.type === "text" ? [block.text] : []))
               .join(" ")
-              .slice(0, 300)
           : "";
-        throw new Error(`MCP tool ${name} failed${detail ? `: ${detail}` : ""}`);
+        throw new CanaryMcpToolError(name, detail);
       }
       return envelope.data;
     },

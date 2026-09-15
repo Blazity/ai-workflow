@@ -100,7 +100,7 @@ function registry(entry: ActiveRunEntry | null = active()): RunRegistryAdapter {
     beginCancellation: vi.fn().mockResolvedValue(true),
     releaseCancellation: vi.fn().mockResolvedValue(true),
     releaseReservation: vi.fn(),
-    release: vi.fn(),
+    release: vi.fn().mockResolvedValue(true),
     listAll: vi.fn(),
     registerSandbox: vi.fn(),
     listSandboxes: vi.fn().mockResolvedValue(["sandbox-1"]),
@@ -331,6 +331,9 @@ describe("cancelRunById", () => {
     state.stopSandboxes.mockResolvedValue(undefined);
     state.tombstone.mockResolvedValue({ matched: false, successorOwnerToken: null });
     state.retireApproval.mockResolvedValue(0);
+    // A ticket withdrawal is now reachable from two paths here, and clearAllMocks
+    // keeps implementations, so the default has to be restored per test.
+    state.moveTicket.mockResolvedValue(undefined);
     state.recordStatusReason.mockResolvedValue(undefined);
     state.markBlockedOnCancel.mockResolvedValue(undefined);
     state.markBlockedByOperator.mockResolvedValue(undefined);
@@ -498,10 +501,323 @@ describe("cancelRunById", () => {
     expect(state.markBlockedByOperator).toHaveBeenCalled();
   });
 
-  it("reports already_terminal without writing status when the run had already finished", async () => {
+  it("reports already_terminal without writing status when only Workflow knows the run finished", async () => {
+    // workflow_runs lags the registry here, so the store status is no proof and the
+    // full cancel path runs: Workflow reports the run terminal, and the claim is
+    // released through the cancellation primitive that path uses.
     state.getRun.mockReturnValue({
       cancel: vi.fn().mockRejectedValue(new Error("run already terminal")),
       status: Promise.resolve("failed"),
+    });
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "sched:demo:hourly",
+      ownerToken: "owner-a",
+    });
+    state.findRunOutcome.mockResolvedValue({ status: "running" });
+    const runRegistry = registry(scheduleClaim());
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "operator kate",
+        runRegistry,
+        settings: cancelSettings,
+      }),
+    ).resolves.toEqual({
+      outcome: "already_terminal",
+      subjectKey: "sched:demo:hourly",
+      status: "running",
+    });
+
+    // Invariant 2: no status write for an already-terminal run.
+    expect(state.markBlockedByOperator).not.toHaveBeenCalled();
+    // The lingering claim is still released so a blocked schedule/webhook resumes.
+    expect(runRegistry.releaseCancellation).toHaveBeenCalled();
+  });
+
+  /** Workflow's own verdict that the run will not advance again, which a store
+   * status alone never proves: markRunSucceededOnSelfMove writes "success" while
+   * the run is still moving the ticket and notifying. */
+  const workflowTerminal = (status = "completed") => {
+    const cancelWorkflow = vi.fn().mockRejectedValue(new Error("never called by the shortcut"));
+    state.getRun.mockReturnValue({
+      cancel: cancelWorkflow,
+      status: Promise.resolve(status),
+    });
+    return cancelWorkflow;
+  };
+
+  /**
+   * A retired run whose leftover claim could not be released answers unconfirmed
+   * and leaves everything as it found it. Falling to the full path instead would
+   * clear the failed_tickets mark (beginCancellation), stamp "cancelled by" into a
+   * failed row, report a run that ended on its own as cancelled, and for a ticket
+   * run release the claim with the ticket still in Ai.
+   */
+  const expectDeclinedUntouched = (
+    runRegistry: RunRegistryAdapter,
+    cancelWorkflow: ReturnType<typeof vi.fn>,
+    barrier: string,
+  ) => {
+    expect(cancelWorkflow).not.toHaveBeenCalled();
+    expect(state.tombstone).not.toHaveBeenCalled();
+    expect(runRegistry.beginCancellation).not.toHaveBeenCalled();
+    expect(runRegistry.clearFailedMark).not.toHaveBeenCalled();
+    expect(runRegistry.release).not.toHaveBeenCalled();
+    expect(runRegistry.releaseCancellation).not.toHaveBeenCalled();
+    expect(state.markBlockedByOperator).not.toHaveBeenCalled();
+    expect(state.markBlockedOnCancel).not.toHaveBeenCalled();
+    expect(state.recordStatusReason).not.toHaveBeenCalled();
+    expect(state.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-1", barrier }),
+      "cancel_terminal_run_release_declined",
+    );
+  };
+
+  // Fixed clock for the retiring window: "now" is injected through the deps, and
+  // completedAt is placed relative to it, so no test depends on real time.
+  const NOW = Date.parse("2026-09-15T12:00:00.000Z");
+  // Mirrors RETIRING_RUN_GRACE_MS in cancel-run.ts.
+  const RETIRING_GRACE_MS = 2 * 60_000;
+  const workflowRunning = () => {
+    const cancelWorkflow = vi.fn().mockResolvedValue(undefined);
+    state.getRun.mockReturnValue({
+      cancel: cancelWorkflow,
+      status: Promise.resolve("running"),
+    });
+    return cancelWorkflow;
+  };
+
+  // A run that finished on its own leaves its claim behind whenever nothing
+  // releases it (the engine-canary target runs no reconciler cron). Cancelling it
+  // must free the subject and report the recorded outcome instead of reading the
+  // leftover claim as liveness, which is what answered CONFLICT on 2026-09-14.
+  it("releases a lingering claim and reports already_terminal for a finished run", async () => {
+    workflowTerminal();
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "sched:demo:hourly",
+      ownerToken: "owner-a",
+    });
+    // Freshly finished as well, which changes nothing once Workflow has retired the
+    // run: the retiring window only applies while Workflow still reports it live.
+    state.findRunOutcome.mockResolvedValue({
+      status: "success",
+      completedAt: new Date(NOW - 1_000),
+    });
+    const runRegistry = registry(scheduleClaim());
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "MCP canary",
+        runRegistry,
+        settings: cancelSettings,
+        now: () => NOW,
+      }),
+    ).resolves.toEqual({
+      outcome: "already_terminal",
+      subjectKey: "sched:demo:hourly",
+      status: "success",
+    });
+
+    // Workflow is asked whether the run is really over, and never asked to cancel.
+    expect(state.getRun).toHaveBeenCalledWith("run-1");
+    // The reconciler's terminal order: stop the owned sandboxes, then release.
+    expect(state.stopSandboxes).toHaveBeenCalledWith(["sandbox-1"]);
+    expect(runRegistry.release).toHaveBeenCalledWith(
+      "sched:demo:hourly",
+      "owner-a",
+      "run-1",
+    );
+    expect(state.stopSandboxes.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(runRegistry.release).mock.invocationCallOrder[0]!,
+    );
+    // No status write anywhere: the run keeps the outcome it reached on its own.
+    expect(state.markBlockedByOperator).not.toHaveBeenCalled();
+    expect(state.markBlockedOnCancel).not.toHaveBeenCalled();
+    expect(state.recordStatusReason).not.toHaveBeenCalled();
+    // No cancellation: the claim is never closed and no clarification is retired.
+    expect(runRegistry.beginCancellation).not.toHaveBeenCalled();
+    expect(state.tombstone).not.toHaveBeenCalled();
+  });
+
+  // The window the engine canary hit: the run has written its outcome and
+  // Workflow is still replaying its return for a second or two. The full path
+  // would record a good run as cancelled or leave its claim in "cancelling", so a
+  // freshly finished run answers unconfirmed, marked as retiring, with nothing
+  // touched. The key goes back into circulation and a retry converges.
+  it.each([
+    ["success", "the success tail (ticket self-move, notify, usage)"],
+    ["failed", "the failure tail (ticket move, status reason, Jira comment)"],
+  ])(
+    "answers unconfirmed as retiring and touches nothing for a fresh %s run",
+    async (status, _tail) => {
+      const cancelWorkflow = workflowRunning();
+      state.findLiveClaim.mockResolvedValue({
+        subjectKey: "ticket:jira:PROJ-1",
+        ticketKey: "PROJ-1",
+        ownerToken: "owner-a",
+        kind: "manual_ticket",
+      });
+      state.findRunOutcome.mockResolvedValue({
+        status,
+        completedAt: new Date(NOW - 30_000),
+      });
+      const runRegistry = registry(active({ kind: "manual_ticket" }));
+
+      await expect(
+        cancelRunById(outerDb, "run-1", {
+          actorLabel: "MCP canary",
+          runRegistry,
+          issueTracker: {} as IssueTrackerAdapter,
+          settings: cancelSettings,
+          now: () => NOW,
+        }),
+      ).resolves.toEqual({
+        outcome: "unconfirmed",
+        reason: "retiring",
+        subjectKey: "ticket:jira:PROJ-1",
+      });
+
+      expect(cancelWorkflow).not.toHaveBeenCalled();
+      expect(state.tombstone).not.toHaveBeenCalled();
+      expect(runRegistry.beginCancellation).not.toHaveBeenCalled();
+      expect(runRegistry.listSandboxes).not.toHaveBeenCalled();
+      expect(state.stopSandboxes).not.toHaveBeenCalled();
+      expect(state.listSteps).not.toHaveBeenCalled();
+      expect(state.moveTicket).not.toHaveBeenCalled();
+      expect(runRegistry.release).not.toHaveBeenCalled();
+      expect(runRegistry.releaseCancellation).not.toHaveBeenCalled();
+      expect(state.markBlockedByOperator).not.toHaveBeenCalled();
+      expect(state.markBlockedOnCancel).not.toHaveBeenCalled();
+      expect(state.recordStatusReason).not.toHaveBeenCalled();
+      expect(state.retireApproval).not.toHaveBeenCalled();
+    },
+  );
+
+  // Past the window the run is not retiring any more: its tail hangs, or its
+  // Workflow run will never retire. Answering unconfirmed forever would leave
+  // nothing able to stop it, so the operator gets today's full cancel back.
+  it("keeps the full cancel for a finished run past the retiring window", async () => {
+    const cancelWorkflow = workflowRunning();
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "sched:demo:hourly",
+      ownerToken: "owner-a",
+    });
+    state.findRunOutcome.mockResolvedValue({
+      status: "success",
+      completedAt: new Date(NOW - RETIRING_GRACE_MS - 1),
+    });
+    const runRegistry = registry(scheduleClaim());
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "operator kate",
+        runRegistry,
+        settings: cancelSettings,
+        now: () => NOW,
+      }),
+    ).resolves.toEqual({ outcome: "cancelled", subjectKey: "sched:demo:hourly" });
+
+    expect(runRegistry.beginCancellation).toHaveBeenCalled();
+    expect(cancelWorkflow).toHaveBeenCalledTimes(1);
+    expect(runRegistry.release).not.toHaveBeenCalled();
+  });
+
+  // A terminal status with no completion time carries no evidence of when the
+  // run finished, so nothing proves it is inside the window: full path.
+  it("keeps the full cancel for a finished run with no recorded completion time", async () => {
+    const cancelWorkflow = workflowRunning();
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "sched:demo:hourly",
+      ownerToken: "owner-a",
+    });
+    state.findRunOutcome.mockResolvedValue({ status: "success", completedAt: null });
+    const runRegistry = registry(scheduleClaim());
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "operator kate",
+        runRegistry,
+        settings: cancelSettings,
+        now: () => NOW,
+      }),
+    ).resolves.toEqual({ outcome: "cancelled", subjectKey: "sched:demo:hourly" });
+
+    expect(cancelWorkflow).toHaveBeenCalledTimes(1);
+    // The operator settle is still attempted; its writer only touches
+    // awaiting/running rows, so a stored success is not overwritten.
+    expect(state.markBlockedByOperator).toHaveBeenCalledWith(
+      "run-1",
+      "cancelled by operator kate",
+    );
+  });
+
+  // The shape that broke the cost_known criterion: a run that had already written
+  // a terminal outcome once, parked, resumed and then committed "success" ahead of
+  // a ticket move that hangs. Neither the park (markRunAwaiting sets only the
+  // status) nor markRunResumed touches completedAt, and every terminal writer
+  // keeps an existing one, so the row still carries that earlier completion time
+  // and reads as long past the window: the operator can kill the hung tail.
+  it("keeps the full cancel for a resumed run whose completion time is an earlier one", async () => {
+    const cancelWorkflow = workflowRunning();
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "ticket:jira:PROJ-1",
+      ticketKey: "PROJ-1",
+      ownerToken: "owner-a",
+      kind: "ticket",
+    });
+    state.findRunOutcome.mockResolvedValue({
+      status: "success",
+      completedAt: new Date(NOW - 45 * 60_000),
+    });
+    const runRegistry = registry(active({ kind: "ticket" }));
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "operator kate",
+        runRegistry,
+        issueTracker: {} as IssueTrackerAdapter,
+        settings: cancelSettings,
+        now: () => NOW,
+      }),
+    ).resolves.toEqual({ outcome: "cancelled", subjectKey: "ticket:jira:PROJ-1" });
+
+    expect(runRegistry.beginCancellation).toHaveBeenCalled();
+    expect(cancelWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  // A run parked on a question is not finished, however fresh its park time is.
+  it("keeps the full cancel for a parked run even with a fresh completion time", async () => {
+    workflowRunning();
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "sched:demo:hourly",
+      ownerToken: "owner-a",
+    });
+    state.findRunOutcome.mockResolvedValue({
+      status: "awaiting",
+      completedAt: new Date(NOW - 5_000),
+    });
+    const runRegistry = registry(scheduleClaim({ state: "parked" }));
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "operator kate",
+        runRegistry,
+        settings: cancelSettings,
+        now: () => NOW,
+      }),
+    ).resolves.toEqual({ outcome: "cancelled", subjectKey: "sched:demo:hourly" });
+
+    expect(runRegistry.beginCancellation).toHaveBeenCalled();
+  });
+
+  // The step drain stays the second barrier: a Workflow run can be terminal while
+  // a handler that started before it went terminal is still executing.
+  it("answers unconfirmed and touches nothing while a step of a retired run is still running", async () => {
+    const cancelWorkflow = workflowTerminal();
+    state.listSteps.mockResolvedValue({
+      data: [{ status: "running" }],
+      cursor: null,
+      hasMore: false,
     });
     state.findLiveClaim.mockResolvedValue({
       subjectKey: "sched:demo:hourly",
@@ -516,16 +832,426 @@ describe("cancelRunById", () => {
         runRegistry,
         settings: cancelSettings,
       }),
+    ).resolves.toEqual({ outcome: "unconfirmed", reason: "cleanup_unconfirmed", subjectKey: "sched:demo:hourly" });
+
+    expectDeclinedUntouched(runRegistry, cancelWorkflow, "drain_pending");
+  });
+
+  // Brief invariant 4: a run whose liveness cannot be established still answers
+  // CONFLICT, terminal store status or not.
+  it("still reports unconfirmed when Workflow cannot be reached at all", async () => {
+    state.getRun.mockReturnValue({
+      cancel: vi.fn().mockRejectedValue(new Error("unreachable")),
+      get status() {
+        return Promise.reject(new Error("unreachable"));
+      },
+    });
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "sched:demo:hourly",
+      ownerToken: "owner-a",
+    });
+    state.findRunOutcome.mockResolvedValue({ status: "success" });
+    const runRegistry = registry(scheduleClaim());
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "operator kate",
+        runRegistry,
+        settings: cancelSettings,
+      }),
+    ).resolves.toEqual({ outcome: "unconfirmed", subjectKey: "sched:demo:hourly" });
+
+    expect(runRegistry.release).not.toHaveBeenCalled();
+    expect(state.markBlockedByOperator).not.toHaveBeenCalled();
+  });
+
+  // Releasing a claim while the run's sandboxes are still up would strand them,
+  // so the stop is a precondition of the release, exactly as in the reconciler.
+  it("answers unconfirmed and releases nothing when the sandbox stop fails", async () => {
+    const cancelWorkflow = workflowTerminal();
+    state.stopSandboxes.mockRejectedValue(new Error("sandbox api down"));
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "sched:demo:hourly",
+      ownerToken: "owner-a",
+    });
+    state.findRunOutcome.mockResolvedValue({ status: "success" });
+    const runRegistry = registry(scheduleClaim());
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "operator kate",
+        runRegistry,
+        settings: cancelSettings,
+      }),
+    ).resolves.toEqual({ outcome: "unconfirmed", reason: "cleanup_unconfirmed", subjectKey: "sched:demo:hourly" });
+
+    expectDeclinedUntouched(runRegistry, cancelWorkflow, "sandbox_stop_unconfirmed");
+  });
+
+  // A manual ticket uses the Ai column as execution state. Releasing its claim
+  // while the ticket is still in Ai is what let the poll dispatch a stray run on
+  // the canary fixture 15 minutes later, so the shortcut applies the same
+  // withdrawal the full cancel path applies, before the release.
+  it("withdraws a finished manual ticket from Ai before releasing its claim", async () => {
+    workflowTerminal();
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "ticket:jira:PROJ-1",
+      ticketKey: "PROJ-1",
+      ownerToken: "owner-a",
+      kind: "manual_ticket",
+    });
+    state.findRunOutcome.mockResolvedValue({ status: "success" });
+    const runRegistry = registry(active({ kind: "manual_ticket" }));
+    const issueTracker = {} as IssueTrackerAdapter;
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "MCP canary",
+        runRegistry,
+        issueTracker,
+        settings: cancelSettings,
+      }),
+    ).resolves.toEqual({
+      outcome: "already_terminal",
+      subjectKey: "ticket:jira:PROJ-1",
+      status: "success",
+    });
+
+    expect(state.moveTicket).toHaveBeenCalledWith({
+      issueTracker,
+      ticketKey: "PROJ-1",
+      aiColumn: expect.any(String),
+      target: expect.any(String),
+      owner: expect.objectContaining({
+        subjectKey: "ticket:jira:PROJ-1",
+        ownerToken: "owner-a",
+        runId: "run-1",
+      }),
+      // The claim was never closed, so the fence is the bound owner, not cancelling.
+      requiredOwnerState: "bound",
+    });
+    // The reconciler's order for a finished ticket run (cleanFinishedManualTicket):
+    // withdraw the ticket, stop the sandboxes, then release.
+    expect(state.moveTicket.mock.invocationCallOrder[0]).toBeLessThan(
+      state.stopSandboxes.mock.invocationCallOrder[0]!,
+    );
+    expect(state.stopSandboxes.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(runRegistry.release).mock.invocationCallOrder[0]!,
+    );
+    expect(state.markBlockedByOperator).not.toHaveBeenCalled();
+  });
+
+  // A poll-dispatched ticket run reaches the same state: terminal, claim left
+  // behind, ticket still in Ai because the graph never moved it. Releasing that
+  // claim without the withdrawal hands the very next poll a ticket in Ai with no
+  // owner, which it dispatches as new work. The withdrawal is a no-op for a run
+  // that did move its ticket (ticket-transition.test.ts, "preserves a
+  // workflow-selected destination outside AI").
+  it("withdraws a finished poll-dispatched ticket from Ai before releasing its claim", async () => {
+    workflowTerminal();
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "ticket:jira:PROJ-1",
+      ticketKey: "PROJ-1",
+      ownerToken: "owner-a",
+      kind: "ticket",
+    });
+    state.findRunOutcome.mockResolvedValue({ status: "success" });
+    const runRegistry = registry(active({ kind: "ticket" }));
+    const issueTracker = {} as IssueTrackerAdapter;
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "MCP canary",
+        runRegistry,
+        issueTracker,
+        settings: cancelSettings,
+      }),
+    ).resolves.toEqual({
+      outcome: "already_terminal",
+      subjectKey: "ticket:jira:PROJ-1",
+      status: "success",
+    });
+
+    expect(state.moveTicket).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ticketKey: "PROJ-1",
+        requiredOwnerState: "bound",
+      }),
+    );
+    expect(state.moveTicket.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(runRegistry.release).mock.invocationCallOrder[0]!,
+    );
+  });
+
+  // Enumerating the run's children is a precondition of stopping them, so a
+  // lookup that fails must not be read as "there were none".
+  it("answers unconfirmed and releases nothing when the sandbox lookup fails", async () => {
+    const cancelWorkflow = workflowTerminal();
+    const runRegistry = registry(scheduleClaim());
+    vi.mocked(runRegistry.listSandboxes).mockRejectedValue(new Error("registry down"));
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "sched:demo:hourly",
+      ownerToken: "owner-a",
+    });
+    state.findRunOutcome.mockResolvedValue({ status: "success" });
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "operator kate",
+        runRegistry,
+        settings: cancelSettings,
+      }),
+    ).resolves.toEqual({ outcome: "unconfirmed", reason: "cleanup_unconfirmed", subjectKey: "sched:demo:hourly" });
+
+    expect(state.stopSandboxes).not.toHaveBeenCalled();
+    expectDeclinedUntouched(runRegistry, cancelWorkflow, "sandbox_lookup_unconfirmed");
+  });
+
+  // The compare-and-delete matched nothing because the claim had already gone.
+  // The subject is free, so this is the same answer as finding it gone earlier,
+  // not a conflict to retry.
+  it("counts a refused release as done when the claim had already gone", async () => {
+    workflowTerminal();
+    const runRegistry = registry(scheduleClaim());
+    vi.mocked(runRegistry.release).mockResolvedValue(false);
+    vi.mocked(runRegistry.get)
+      .mockResolvedValueOnce(scheduleClaim())
+      .mockResolvedValue(null);
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "sched:demo:hourly",
+      ownerToken: "owner-a",
+    });
+    state.findRunOutcome.mockResolvedValue({ status: "success" });
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "MCP canary",
+        runRegistry,
+        settings: cancelSettings,
+      }),
     ).resolves.toEqual({
       outcome: "already_terminal",
       subjectKey: "sched:demo:hourly",
-      status: "failed",
+      status: "success",
     });
 
-    // Invariant 2: no status write for an already-terminal run.
+    expect(runRegistry.beginCancellation).not.toHaveBeenCalled();
+  });
+
+  // The other half: the release was refused and the claim is still there, so the
+  // subject is not free and nothing may be claimed about it: unconfirmed.
+  it("answers unconfirmed for a refused release while the claim is still held", async () => {
+    const cancelWorkflow = workflowTerminal();
+    const runRegistry = registry(scheduleClaim());
+    vi.mocked(runRegistry.release).mockResolvedValue(false);
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "sched:demo:hourly",
+      ownerToken: "owner-a",
+    });
+    state.findRunOutcome.mockResolvedValue({ status: "success" });
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "operator kate",
+        runRegistry,
+        settings: cancelSettings,
+      }),
+    ).resolves.toEqual({ outcome: "unconfirmed", reason: "cleanup_unconfirmed", subjectKey: "sched:demo:hourly" });
+
+    // The release itself was attempted and refused; nothing else ran after it.
+    expect(cancelWorkflow).not.toHaveBeenCalled();
+    expect(runRegistry.beginCancellation).not.toHaveBeenCalled();
     expect(state.markBlockedByOperator).not.toHaveBeenCalled();
-    // The lingering claim is still released so a blocked schedule/webhook resumes.
+    expect(state.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-1", barrier: "release_refused" }),
+      "cancel_terminal_run_release_declined",
+    );
+  });
+
+  // The withdrawal is a fence, not a courtesy: if the ticket cannot be proven out
+  // of Ai the claim stays and the answer is unconfirmed.
+  it("answers unconfirmed and releases nothing when a manual ticket withdrawal fails", async () => {
+    const cancelWorkflow = workflowTerminal();
+    state.moveTicket.mockRejectedValue(new Error("jira 503"));
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "ticket:jira:PROJ-1",
+      ticketKey: "PROJ-1",
+      ownerToken: "owner-a",
+      kind: "manual_ticket",
+    });
+    state.findRunOutcome.mockResolvedValue({ status: "success" });
+    const runRegistry = registry(active({ kind: "manual_ticket" }));
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "MCP canary",
+        runRegistry,
+        issueTracker: {} as IssueTrackerAdapter,
+        settings: cancelSettings,
+      }),
+    ).resolves.toEqual({ outcome: "unconfirmed", reason: "cleanup_unconfirmed", subjectKey: "ticket:jira:PROJ-1" });
+
+    expectDeclinedUntouched(runRegistry, cancelWorkflow, "ticket_withdrawal_unconfirmed");
+  });
+
+  // The defect this guards against: for a poll-dispatched ticket the full path
+  // would release the claim with the ticket still in Ai and its failed mark
+  // cleared, and the next poll dispatches the ticket again. The claim has to stay
+  // exactly as it was.
+  it("keeps a ticket run's claim bound when the withdrawal throws", async () => {
+    const cancelWorkflow = workflowTerminal();
+    state.moveTicket.mockRejectedValue(new Error("jira 503"));
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "ticket:jira:PROJ-1",
+      ticketKey: "PROJ-1",
+      ownerToken: "owner-a",
+      kind: "ticket",
+    });
+    state.findRunOutcome.mockResolvedValue({ status: "failed" });
+    const runRegistry = registry(active({ kind: "ticket" }));
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "operator kate",
+        runRegistry,
+        issueTracker: {} as IssueTrackerAdapter,
+        settings: cancelSettings,
+      }),
+    ).resolves.toEqual({ outcome: "unconfirmed", reason: "cleanup_unconfirmed", subjectKey: "ticket:jira:PROJ-1" });
+
+    expectDeclinedUntouched(runRegistry, cancelWorkflow, "ticket_withdrawal_unconfirmed");
+    expect(state.stopSandboxes).not.toHaveBeenCalled();
+    await expect(runRegistry.get("ticket:jira:PROJ-1")).resolves.toMatchObject({
+      state: "bound",
+      ownerToken: "owner-a",
+      runId: "run-1",
+    });
+  });
+
+  it("answers unconfirmed for a ticket run when no issue tracker can withdraw it", async () => {
+    const cancelWorkflow = workflowTerminal();
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "ticket:jira:PROJ-1",
+      ticketKey: "PROJ-1",
+      ownerToken: "owner-a",
+      kind: "ticket",
+    });
+    state.findRunOutcome.mockResolvedValue({ status: "success" });
+    const runRegistry = registry(active({ kind: "ticket" }));
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "operator kate",
+        runRegistry,
+        settings: cancelSettings,
+      }),
+    ).resolves.toEqual({ outcome: "unconfirmed", reason: "cleanup_unconfirmed", subjectKey: "ticket:jira:PROJ-1" });
+
+    expectDeclinedUntouched(runRegistry, cancelWorkflow, "ticket_withdrawal_unavailable");
+  });
+
+  // A claim already in "cancelling" belongs to a cancel that began and did not
+  // finish. Converging it needs the clarification tombstone and the cancelling
+  // fence the full path carries, so the shortcut declines it.
+  it("leaves a cancelling claim to the full cancel path", async () => {
+    workflowTerminal("cancelled");
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "sched:demo:hourly",
+      ownerToken: "owner-a",
+    });
+    state.findRunOutcome.mockResolvedValue({ status: "blocked" });
+    const runRegistry = registry(scheduleClaim({ state: "cancelling" }));
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "MCP canary",
+        runRegistry,
+        settings: cancelSettings,
+      }),
+    ).resolves.toEqual({
+      outcome: "already_terminal",
+      subjectKey: "sched:demo:hourly",
+      status: "blocked",
+    });
+
+    expect(runRegistry.release).not.toHaveBeenCalled();
+    expect(runRegistry.beginCancellation).toHaveBeenCalled();
+    expect(state.tombstone).toHaveBeenCalled();
     expect(runRegistry.releaseCancellation).toHaveBeenCalled();
+  });
+
+  // "awaiting" is a live park, not a terminal outcome: the run still owns its
+  // subject and is waiting to be resumed, so cancelling one keeps today's teardown.
+  it("keeps the full teardown for a run parked on a question", async () => {
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "sched:demo:hourly",
+      ownerToken: "owner-a",
+    });
+    state.findRunOutcome.mockResolvedValue({ status: "awaiting" });
+    const runRegistry = registry(scheduleClaim({ state: "parked" }));
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "operator kate",
+        runRegistry,
+        settings: cancelSettings,
+      }),
+    ).resolves.toEqual({ outcome: "cancelled", subjectKey: "sched:demo:hourly" });
+
+    expect(runRegistry.beginCancellation).toHaveBeenCalled();
+    expect(state.markBlockedByOperator).toHaveBeenCalled();
+    expect(runRegistry.release).not.toHaveBeenCalled();
+  });
+
+  // The claim went away between the reverse lookup and the release. The subject is
+  // free, which is all the caller asked for, so this is not a retryable conflict.
+  it("reports already_terminal when the lingering claim was released concurrently", async () => {
+    workflowTerminal();
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "sched:demo:hourly",
+      ownerToken: "owner-a",
+    });
+    state.findRunOutcome.mockResolvedValue({ status: "success" });
+    const runRegistry = registry(null);
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "MCP canary",
+        runRegistry,
+        settings: cancelSettings,
+      }),
+    ).resolves.toEqual({
+      outcome: "already_terminal",
+      subjectKey: "sched:demo:hourly",
+      status: "success",
+    });
+
+    expect(runRegistry.release).not.toHaveBeenCalled();
+    expect(runRegistry.beginCancellation).not.toHaveBeenCalled();
+  });
+
+  // A replacement run bound the same subject after the finished one left its claim
+  // behind. Releasing that claim would free a subject a live run owns, so the
+  // terminal shortcut declines it and the full path answers for the run asked for.
+  it("does not release a claim that has moved to another owner", async () => {
+    workflowTerminal();
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "sched:demo:hourly",
+      ownerToken: "owner-a",
+    });
+    state.findRunOutcome.mockResolvedValue({ status: "success" });
+    const runRegistry = registry(scheduleClaim({ ownerToken: "owner-b", runId: "run-2" }));
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "MCP canary",
+        runRegistry,
+        settings: cancelSettings,
+      }),
+    ).resolves.toEqual({ outcome: "unconfirmed", reason: "cleanup_unconfirmed", subjectKey: "sched:demo:hourly" });
+
+    expect(runRegistry.release).not.toHaveBeenCalled();
+    expect(runRegistry.releaseCancellation).not.toHaveBeenCalled();
   });
 
   it("reports unconfirmed and keeps the claim when the live cancel cannot be confirmed", async () => {

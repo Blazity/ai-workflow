@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { parse } from "yaml";
@@ -56,7 +57,11 @@ test("CI preserves every authoritative source trigger", async () => {
  * tests hold exactly those lines, together, rather than pinning one job's steps.
  */
 const SOURCE_JOBS = ["source-checks", "unit-worker", "unit-dashboard", "workflow-sdk"] as const;
-const REQUIRED_JOBS = [...SOURCE_JOBS, "engine-canary"] as const;
+const REQUIRED_JOBS = [
+  ...SOURCE_JOBS,
+  "engine-canary-scope",
+  "engine-canary",
+] as const;
 
 const DIFF_CHECK_COMMAND = [
   "set -euo pipefail",
@@ -261,36 +266,272 @@ test("the required check fails when any pull request dependency does not succeed
 
   const script = (aggregate.steps ?? []).map((step) => step.run ?? "").join("\n");
   assert.match(script, /needs\.\*\.result/, "the check must read every dependency result");
-  assert.match(script, /!=\s*"success"/, "the check must reject any non-success result");
-  assert.match(
+  assert.doesNotMatch(
     script,
-    /"engine-canary".*"skipped".*github\.event_name.*!= "pull_request".*github\.event\.pull_request\.head\.repo\.fork.*= "true"/su,
-    "only a non-pull-request or fork-pull-request engine canary skip may satisfy the aggregate",
+    /\$\{\{[^}]*engine-canary-scope/u,
+    "the scope job's result and outputs must reach the script through env:, not the script body",
   );
+  const check = (aggregate.steps ?? []).find((step) => step.run);
+  assert.deepEqual(check?.env, {
+    SCOPE_RESULT: "${{ needs.engine-canary-scope.result }}",
+    SCOPE_RUN: "${{ needs.engine-canary-scope.outputs.run }}",
+    SCOPE_MIGRATIONS: "${{ needs.engine-canary-scope.outputs.migrations }}",
+  });
+  assert.match(script, /!=\s*"success"/, "the check must reject any non-success result");
   assert.match(script, /exit 1/, "the check must fail the job on a non-success result");
+});
+
+type RequiredJob = (typeof REQUIRED_JOBS)[number];
+
+interface AggregateScenario {
+  event?: string;
+  fork?: string;
+  results?: Partial<Record<RequiredJob, string>>;
+  scope?: { run?: string; migrations?: string };
+}
+
+/**
+ * The aggregate's verdict for one set of dependency results, from its own
+ * script run the way the runner runs it once GitHub has rendered the
+ * expressions. An expression the scenario does not render fails the test
+ * instead of rendering empty, so a new input cannot slip past these cases.
+ */
+async function aggregateVerdict(scenario: AggregateScenario): Promise<{
+  green: boolean;
+  output: string;
+}> {
+  const aggregate = (await ciJobs()).ci as CiJob;
+  const needs = aggregate.needs ?? [];
+  const results: Record<string, string> = {};
+  for (const name of needs) {
+    results[name] = scenario.results?.[name as RequiredJob] ?? "success";
+  }
+  const context: Record<string, string> = {
+    "github.event_name": scenario.event ?? "pull_request",
+    "github.event.pull_request.head.repo.fork": scenario.fork ?? "false",
+    "needs.engine-canary-scope.outputs.run": scenario.scope?.run ?? "",
+    "needs.engine-canary-scope.outputs.migrations":
+      scenario.scope?.migrations ?? "",
+    "join(needs.*.result, ' ')": needs.map((name) => results[name]).join(" "),
+  };
+  for (const name of needs) context[`needs.${name}.result`] = results[name]!;
+  const render = (text: string) =>
+    text.replace(/\$\{\{\s*(.*?)\s*\}\}/gu, (_expression, inner: string) => {
+      const value = context[inner];
+      if (value === undefined) throw new Error(`unrendered expression: ${inner}`);
+      return value;
+    });
+
+  let green = true;
+  let output = "";
+  for (const step of aggregate.steps ?? []) {
+    if (!step.run) continue;
+    const env: Record<string, string> = { PATH: process.env.PATH ?? "" };
+    for (const [name, value] of Object.entries(step.env ?? {})) {
+      env[name] = render(value);
+    }
+    const run = spawnSync("bash", ["-c", render(step.run)], {
+      encoding: "utf8",
+      env,
+    });
+    output += `${run.stdout}${run.stderr}`;
+    if (run.status !== 0) {
+      green = false;
+      break;
+    }
+  }
+  return { green, output };
+}
+
+const CANARY_NOT_NEEDED = { run: "false", migrations: "false" };
+const CANARY_NEEDED = { run: "true", migrations: "false" };
+
+test("the required check accepts a skipped canary only when it could not or need not run", async () => {
+  const accepted: Array<[string, AggregateScenario]> = [
+    [
+      "a same-repository pull request the scope job says does not need it",
+      {
+        results: { "engine-canary": "skipped" },
+        scope: CANARY_NOT_NEEDED,
+      },
+    ],
+    [
+      "a same-repository pull request carrying a migration",
+      {
+        results: { "engine-canary": "skipped" },
+        scope: { run: "true", migrations: "true" },
+      },
+    ],
+    [
+      "a same-repository pull request whose canary ran green",
+      { scope: CANARY_NEEDED },
+    ],
+    ...(["workflow_dispatch", "merge_group"] as const).map(
+      (event): [string, AggregateScenario] => [
+        `a ${event} run, where neither canary job runs`,
+        {
+          event,
+          fork: "",
+          results: {
+            "engine-canary-scope": "skipped",
+            "engine-canary": "skipped",
+          },
+        },
+      ],
+    ),
+    [
+      "a push, where neither canary job runs",
+      {
+        event: "push",
+        fork: "",
+        results: { "engine-canary-scope": "skipped", "engine-canary": "skipped" },
+      },
+    ],
+    [
+      "a fork pull request, where neither canary job runs",
+      {
+        fork: "true",
+        results: { "engine-canary-scope": "skipped", "engine-canary": "skipped" },
+      },
+    ],
+  ];
+  for (const [name, scenario] of accepted) {
+    const verdict = await aggregateVerdict(scenario);
+    assert.ok(verdict.green, `${name} must leave ci green:\n${verdict.output}`);
+  }
+});
+
+test("the required check never turns a broken or unfinished scope job into an accepted skip", async () => {
+  const refused: Array<[string, AggregateScenario, RegExp]> = [
+    [
+      "a failed scope job",
+      { results: { "engine-canary-scope": "failure", "engine-canary": "skipped" } },
+      /engine-canary-scope.*failure/u,
+    ],
+    [
+      "a cancelled scope job",
+      { results: { "engine-canary-scope": "cancelled", "engine-canary": "skipped" } },
+      /engine-canary-scope.*cancelled/u,
+    ],
+    [
+      "a skipped scope job on a same-repository pull request",
+      { results: { "engine-canary-scope": "skipped", "engine-canary": "skipped" } },
+      /engine-canary-scope.*skipped/u,
+    ],
+    [
+      "a successful scope job that said the canary is needed",
+      { results: { "engine-canary": "skipped" }, scope: CANARY_NEEDED },
+      /'engine-canary' reported 'skipped'/u,
+    ],
+    [
+      "a successful scope job that wrote no answer",
+      { results: { "engine-canary": "skipped" }, scope: {} },
+      /'engine-canary' reported 'skipped'/u,
+    ],
+    [
+      "a cancelled canary, the queue's third arrival",
+      { results: { "engine-canary": "cancelled" }, scope: CANARY_NEEDED },
+      /'engine-canary' reported 'cancelled'/u,
+    ],
+    [
+      "a failed canary",
+      { results: { "engine-canary": "failure" }, scope: CANARY_NEEDED },
+      /'engine-canary' reported 'failure'/u,
+    ],
+    [
+      "a same-repository pull request with an empty fork field and both canary jobs skipped",
+      {
+        fork: "",
+        results: { "engine-canary-scope": "skipped", "engine-canary": "skipped" },
+      },
+      /'engine-canary-scope' reported 'skipped'/u,
+    ],
+    [
+      "a successful scope job whose run output is not exactly false",
+      {
+        results: { "engine-canary": "skipped" },
+        scope: { run: "True", migrations: "false" },
+      },
+      /'engine-canary' reported 'skipped'/u,
+    ],
+    [
+      "a failed source job on a push",
+      {
+        event: "push",
+        fork: "",
+        results: {
+          "unit-worker": "failure",
+          "engine-canary-scope": "skipped",
+          "engine-canary": "skipped",
+        },
+      },
+      /'unit-worker' reported 'failure'/u,
+    ],
+  ];
+  for (const [name, scenario, reason] of refused) {
+    const verdict = await aggregateVerdict(scenario);
+    assert.equal(verdict.green, false, `${name} must turn ci red:\n${verdict.output}`);
+    assert.match(verdict.output, reason, `${name} must be named in the log`);
+  }
+});
+
+test("only the canary itself queues on the shared fixtures, and only when the scope needs it", async () => {
+  const jobs = await ciJobs();
+  const scope = jobs["engine-canary-scope"] as CiJob;
+  const canary = jobs["engine-canary"] as CiJob;
+
+  // Every same-repository pull request passes through the scope job, so it
+  // must never enter the canary's single pending slot, where a third arrival
+  // cancels the waiting run and turns ci red for a pull request that never
+  // needed the canary.
+  for (const [name, job] of Object.entries(jobs)) {
+    if (name === "engine-canary") continue;
+    assert.equal(job.concurrency, undefined, `"${name}" must not join a job-level queue`);
+  }
+  assert.equal(
+    scope.if,
+    "github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository",
+  );
+  assert.equal(scope.environment, undefined);
+  assert.doesNotMatch(JSON.stringify(scope), /\bsecrets\./u);
+  assert.equal(scope.needs, undefined);
+  assert.deepEqual(canary.needs, ["engine-canary-scope"]);
+  assert.equal(
+    canary.if,
+    "github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && needs.engine-canary-scope.outputs.run == 'true' && needs.engine-canary-scope.outputs.migrations != 'true'",
+  );
 });
 
 test("the engine canary is a fail-closed pull request dependency", async () => {
   const jobs = await ciJobs();
+  const scopeJob = jobs["engine-canary-scope"] as CiJob;
   const canary = jobs["engine-canary"] as CiJob;
 
-  assert.equal(
-    canary.if,
-    "github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository",
-  );
   assert.equal(canary.environment, "e2e");
-  assert.equal(canary["timeout-minutes"], 75);
+  // The three runs, their cleanup, and a sweep that may settle a stopped
+  // predecessor for up to five minutes per fixture ticket.
+  assert.equal(canary["timeout-minutes"], 95);
+  // Repository-wide, not per pull request: the three fixture tickets are
+  // shared, so two pull requests running at once would collide on them.
+  // cancel-in-progress stays false so a second pull request queues instead
+  // of cancelling or racing the first one's runs.
   assert.deepEqual(canary.concurrency, {
-    group: "engine-canary-pr-${{ github.event.pull_request.number }}",
-    "cancel-in-progress": true,
+    group: "engine-canary-shared-fixtures",
+    "cancel-in-progress": false,
   });
 
-  const steps = canary.steps ?? [];
-  const checkout = steps.find((step) => step.uses === "actions/checkout@v4");
+  // The scope job decides, diffing the pull request against its base, and
+  // hands its answer to the canary job's condition.
+  const scopeSteps = scopeJob.steps ?? [];
+  const checkout = scopeSteps.find((step) => step.uses === "actions/checkout@v4");
   assert.equal(checkout?.with?.["fetch-depth"], 0);
-  const scope = steps.find((step) => step.name === "Select engine canary scope");
+  const scope = scopeSteps.find((step) => step.name === "Select engine canary scope");
   assert.match(scope?.run ?? "", /engine-canary-scope\.ts/u);
-  const migrationSkip = steps.find(
+  assert.deepEqual((scopeJob as { outputs?: unknown }).outputs, {
+    run: "${{ steps.scope.outputs.run }}",
+    migrations: "${{ steps.scope.outputs.migrations }}",
+  });
+  const migrationSkip = scopeSteps.find(
     (step) => step.name === "Skip pull request migrations",
   );
   assert.equal(
@@ -303,13 +544,21 @@ test("the engine canary is a fail-closed pull request dependency", async () => {
     /the pull request carries a database migration; the canary target shares the production database, so it runs after merge only/u,
   );
   assert.match(migrationSkip?.run ?? "", /exit 0/u);
+  assert.ok(
+    scopeSteps.indexOf(scope!) < scopeSteps.indexOf(migrationSkip!),
+    "the migration warning must follow the scope selection",
+  );
+
+  const steps = canary.steps ?? [];
+  assert.ok(
+    !steps.some((step) => step.name === "Select engine canary scope"),
+    "the canary job must not select its own scope inside the shared queue",
+  );
   const target = steps.find(
     (step) => step.name === "Validate engine canary target configuration",
   );
-  assert.equal(
-    target?.if,
-    "steps.scope.outputs.run == 'true' && steps.scope.outputs.migrations != 'true'",
-  );
+  // The job runs only when the scope needs it, so the target check is unconditional.
+  assert.equal(target?.if, undefined);
   assert.match(target?.run ?? "", /engine-canary idle/u);
   assert.match(target?.run ?? "", /armed=false/u);
   assert.match(target?.run ?? "", /missing required names/u);
@@ -331,9 +580,12 @@ test("the engine canary is a fail-closed pull request dependency", async () => {
     target?.run ?? "",
     /if \[ "\$ENGINE_CANARY_TARGET" = "production" \]; then\n\s+echo "::error title=engine-canary configuration::the Vercel production target is forbidden"\n\s+exit 1\n\s*fi/u,
   );
+  // The job holds no production database credential: identity is proved
+  // through /health alone, not by fingerprinting a connection string on the
+  // runner.
+  assert.equal(target?.env?.DATABASE_URL, undefined);
+  assert.doesNotMatch(target?.run ?? "", /DATABASE_URL/u);
 
-  const scopeIndex = steps.findIndex((step) => step === scope);
-  const migrationSkipIndex = steps.findIndex((step) => step === migrationSkip);
   const targetIndex = steps.findIndex((step) => step === target);
   const deployIndex = steps.findIndex(
     (step) => step.name === "Deploy engine canary target",
@@ -353,6 +605,9 @@ test("the engine canary is a fail-closed pull request dependency", async () => {
     preflight?.run ?? "",
     /target alias did not report commit \$GITHUB_SHA within 5 minutes/u,
   );
+  assert.equal(preflight?.env?.DATABASE_URL, undefined);
+  assert.doesNotMatch(preflight?.run ?? "", /--database-url/u);
+  assert.doesNotMatch(preflight?.run ?? "", /DATABASE_URL/u);
   const preflightIndex = steps.findIndex((step) => step === preflight);
   const canaries = steps.find(
     (step) => step.name === "Run engine canaries",
@@ -361,6 +616,8 @@ test("the engine canary is a fail-closed pull request dependency", async () => {
     canaries?.env?.HARNESS_CANARY_BASE_URL,
     "${{ vars.ENGINE_CANARY_TARGET_URL }}",
   );
+  assert.equal(canaries?.env?.DATABASE_URL, undefined);
+  assert.doesNotMatch(canaries?.run ?? "", /DATABASE_URL/u);
   assert.equal(
     canaries?.env?.ENGINE_CANARY_LOG_SOURCE_URL,
     "${{ steps.deploy.outputs.url }}",
@@ -400,16 +657,14 @@ test("the engine canary is a fail-closed pull request dependency", async () => {
   );
   const canariesIndex = steps.findIndex((step) => step === canaries);
   assert.ok(
-    scopeIndex < migrationSkipIndex &&
-      migrationSkipIndex < targetIndex &&
-      targetIndex < deployIndex &&
+    targetIndex < deployIndex &&
       deployIndex < preflightIndex &&
       preflightIndex < canariesIndex,
-    "engine canary steps must preserve scope, migration skip, target validation, deploy, preflight, and canary order",
+    "engine canary steps must preserve target validation, deploy, preflight, and canary order",
   );
 
   for (const step of steps) {
-    if (step === target || step === migrationSkip) continue;
+    if (step === target) continue;
     if (!step.if) continue;
     assert.match(
       step.if ?? "",
@@ -558,14 +813,14 @@ test("all setup-node workflow jobs use Node 24", async () => {
     }
   }
 
-  // Four source jobs and one canary in ci.yml (the `ci` aggregate installs
-  // nothing) plus three
+  // Four source jobs, the canary scope and the canary in ci.yml (the `ci`
+  // aggregate installs nothing) plus three
   // e2e tiers in e2e.yml. The count is pinned so a new job cannot quietly join
   // on an older Node; it dropped from ten when the three e2e tiers duplicated
   // into ci.yml behind an unreachable `merge_group` were removed.
   assert.equal(
     setupNodeJobs,
-    8,
-    `expected 8 setup-node jobs across CI workflows, found ${setupNodeJobs}`,
+    9,
+    `expected 9 setup-node jobs across CI workflows, found ${setupNodeJobs}`,
   );
 });

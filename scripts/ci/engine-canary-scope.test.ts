@@ -79,3 +79,18 @@ test("a migration lookalike directory is not detected", () => {
     matched: [],
   });
 });
+
+test("a change to the canary itself or to the run lifecycle it drives is in scope", () => {
+  const paths = [
+    "apps/worker/src/services/run-lifecycle/cancel-run.ts",
+    "apps/worker/e2e/harness-profiles/preview-canary.ts",
+    "apps/worker/e2e/replay/preview-canary.ts",
+    "scripts/ci/engine-canary-preflight.ts",
+    ".github/workflows/ci.yml",
+  ];
+  assert.deepEqual(engineCanaryScope(paths), {
+    run: true,
+    migrations: false,
+    matched: paths,
+  });
+});

@@ -610,6 +610,60 @@ describe("runs.cancel", () => {
     expect(dataOf(await cancel(client))).toMatchObject({ outcome: "cancelled" });
   });
 
+  it("tells a caller a just-finished run is still retiring, and gives the key back", async () => {
+    // The run has written its outcome moments ago and Workflow still reports it
+    // running: the core touches nothing and answers unconfirmed as retiring.
+    await db
+      .update(workflowRuns)
+      .set({ status: "success", completedAt: new Date() })
+      .where(eq(workflowRuns.runId, RUN_ID));
+    const client = await connectedClient();
+
+    const result = await cancel(client);
+
+    const error = errorPayload(result);
+    expect(error).toMatchObject({ code: "CONFLICT", retryable: true });
+    // Not the "still live and still owns its subject" text: the run has finished.
+    expect(error.message).toBe(
+      "The run has finished and is still being retired; retry in a few seconds with the same idempotencyKey.",
+    );
+    expect(hooks.cancelWorkflowRun).not.toHaveBeenCalled();
+    expect(runRegistry.beginCancellation).not.toHaveBeenCalled();
+
+    // effectNotApplied: the key went back into circulation instead of storing the
+    // CONFLICT. A replay would answer the same error; re-execution instead sees the
+    // run fall out of the retiring window and takes the full cancel.
+    await db
+      .update(workflowRuns)
+      .set({ completedAt: new Date(Date.now() - 10 * 60_000) })
+      .where(eq(workflowRuns.runId, RUN_ID));
+    expect(dataOf(await cancel(client))).toMatchObject({ outcome: "cancelled" });
+    expect(hooks.cancelWorkflowRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells a caller a finished run's cleanup could not be confirmed, and gives the key back", async () => {
+    // Workflow reports the run retired, but the ticket cannot be confirmed out of
+    // the Ai column (the gap SETUP.md now names): the shortcut declines and the
+    // core touches nothing, so this must not read as "still live".
+    hooks.workflowRunStatus = "completed";
+    fetchTicket.mockResolvedValue({ identifier: TICKET, trackerStatus: "Ai" });
+    moveTicket.mockRejectedValue(new Error("jira 503"));
+    await db
+      .update(workflowRuns)
+      .set({ status: "success", completedAt: new Date() })
+      .where(eq(workflowRuns.runId, RUN_ID));
+    const client = await connectedClient();
+
+    const result = await cancel(client);
+
+    const error = errorPayload(result);
+    expect(error).toMatchObject({ code: "CONFLICT", retryable: true });
+    expect(error.message).toContain("has finished");
+    expect(error.message).not.toContain("still live");
+    expect(hooks.cancelWorkflowRun).not.toHaveBeenCalled();
+    expect(runRegistry.releaseCancellation).not.toHaveBeenCalled();
+  });
+
   it("refuses a member and admits an unattended automation", async () => {
     const asMember = await connectedClient({ role: "member", scopes: DISPATCH_ONLY });
 

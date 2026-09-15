@@ -115,15 +115,11 @@ function evidence(): ReplayCanaryEvidence {
     nextCursor: null,
   };
   return {
-    databaseRows: {
-      observation: { run_id: "wrun_canary", runtime_manifest: envelope("safe") },
-      attempts: [
-        {
-          id: 41,
-          input_envelope: attempt.input,
-          log_envelope: attempt.logs,
-        },
-      ],
+    runLogs: {
+      availability: "available",
+      manifest: envelope("safe manifest"),
+      manifestTruncated: false,
+      attempts: [{ id: attempt.id }],
     },
     apiSummary: summary,
     apiDetails: [attempt],
@@ -161,22 +157,22 @@ describe("Replay preview canary dry checks", () => {
     expect(() => createReplayCanaryFixture("not-a-valid-nonce")).toThrow();
   });
 
-  it("accepts complete sanitized DB, MCP trace, MCP logs, and export evidence", () => {
+  it("accepts complete sanitized MCP run logs, MCP trace, MCP attempt logs, and export evidence", () => {
     expect(() =>
       assertReplayCanaryEvidence(evidence(), fixture),
     ).not.toThrow();
   });
 
   it.each([
-    "database",
+    "run logs",
     "summary",
     "detail",
     "log",
   ] as const)("fails closed when the %s surface leaks a canary value", (surface) => {
     const candidate = evidence();
     const leaked = fixture.forbiddenValues[0]!;
-    if (surface === "database") {
-      candidate.databaseRows.observation = { leaked };
+    if (surface === "run logs") {
+      candidate.runLogs.manifest = envelope(leaked);
     } else if (surface === "summary") {
       candidate.apiSummary.attempts[0]!.outcome = {
         kind: "completed",
@@ -197,31 +193,40 @@ describe("Replay preview canary dry checks", () => {
     expect(message).not.toContain(leaked);
   });
 
-  it("requires API and DB log envelopes", () => {
+  it("requires an attempt log envelope over the replay API", () => {
     const noApiLog = evidence();
     noApiLog.apiDetails[0]!.logs = null;
     expect(() =>
       assertReplayCanaryEvidence(noApiLog, fixture),
     ).toThrow(/log envelope/);
-
-    const noDbLog = evidence();
-    (
-      noDbLog.databaseRows.attempts[0] as Record<string, unknown>
-    ).log_envelope = null;
-    expect(() =>
-      assertReplayCanaryEvidence(noDbLog, fixture),
-    ).toThrow(/log envelope/);
   });
 
-  // `to_jsonb(attempt)` over a table aliased `attempt` returns the attempt
-  // NUMBER, because a bare name binds to the column of that name before the
-  // alias. The contract has to name that shape instead of reporting a bare
-  // missing envelope.
-  it("names the payload shape when an attempt row is not an object", () => {
-    const scalarPayload = evidence();
-    scalarPayload.databaseRows.attempts = [1];
-    expect(() => assertReplayCanaryEvidence(scalarPayload, fixture)).toThrow(
-      /in the database: 1 attempts; row 0: payload number/,
+  // The run level runs.logs reply is the second surface the database rows used
+  // to be: the captured runtime manifest (the observation row) and the index of
+  // attempts (the attempt rows), read through the product instead of SQL.
+  it("requires the run logs reply to hold the capture the trace describes", () => {
+    const unavailable = evidence();
+    unavailable.runLogs.availability = "expired";
+    expect(() => assertReplayCanaryEvidence(unavailable, fixture)).toThrow(
+      /run logs did not report an available capture/,
+    );
+
+    const noManifest = evidence();
+    noManifest.runLogs.manifest = null;
+    expect(() => assertReplayCanaryEvidence(noManifest, fixture)).toThrow(
+      /run logs did not return the runtime manifest/,
+    );
+
+    const truncatedManifest = evidence();
+    truncatedManifest.runLogs.manifestTruncated = true;
+    expect(() =>
+      assertReplayCanaryEvidence(truncatedManifest, fixture),
+    ).toThrow(/run logs did not return the runtime manifest/);
+
+    const otherAttempts = evidence();
+    otherAttempts.runLogs.attempts = [{ id: 41 }, { id: 42 }];
+    expect(() => assertReplayCanaryEvidence(otherAttempts, fixture)).toThrow(
+      /run logs attempt index \[41,42\] does not match the trace \[41\]/,
     );
   });
 
