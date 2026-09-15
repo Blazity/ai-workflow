@@ -1,0 +1,2 @@
+- `runs.cancel` on a run that has already finished answers `already_terminal` and frees its ticket for the next run, so an integration can clean up after a finished run through MCP without waiting for the scheduled sweep.
+- Right after a run finishes, `runs.cancel` answers with a retryable conflict for a short moment while the run wraps up, and a retry with the same idempotency key completes the call.
