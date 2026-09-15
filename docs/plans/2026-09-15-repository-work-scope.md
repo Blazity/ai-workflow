@@ -318,16 +318,16 @@ That asymmetry is what makes one mechanism safe for both.
   question never listed the matches. Naming a repository records it `selected`
   by the person, even while it cannot be used. `excluded` is otherwise written
   only by an explicit edit on the ticket screen or through MCP.
-- An `unavailable` entry carries the reason it was unavailable, and only
-  `not_enabled` expires: at run start the record is reconciled against the
-  catalog snapshot the run froze, and an entry the catalog now enables becomes a
-  candidate the agent may attach without a question. An `unusable` entry (the
-  catalog holds no default branch for it, so `usable` is false at
-  `apps/worker/src/engine/repository-discovery/catalog.ts:193`) does not expire
-  on an enable, because being enabled was never why it failed. Nothing expires
-  while the catalog is a bridge (`activated: false`), where every repository
-  answers enabled and an expiry would ask the person a second time. An
-  `excluded` entry never expires. An expired entry does not wait for the model
+- An `unavailable` entry carries the reason it was unavailable and expires
+  when that reason is gone: at run start the record is reconciled against the
+  catalog snapshot and the repository listing the run froze. A `not_enabled`
+  entry expires once the catalog enables the repository, and never while the
+  catalog is a bridge (`activated: false`), where every repository answers
+  enabled and an expiry would ask the person a second time. An `unusable` entry
+  (the catalog holds no default branch for it, so `usable` is false at
+  `apps/worker/src/engine/repository-discovery/catalog.ts:193`) expires once the
+  repository becomes usable, typically with its first commit, on any catalog.
+  An `excluded` entry never expires. An expired entry does not wait for the model
   to ask again: the next run start attaches it when this trigger's policy would
   have attached a request for it, which is what makes "enable it later and the
   next run takes it" a guarantee.
@@ -370,15 +370,21 @@ That asymmetry is what makes one mechanism safe for both.
   recorded, never turned into a question to a person, because no answer to it
   could be recorded and it would come back on the next run (A22). A panel edit
   that swaps one repository for another is ONE write carrying a version, never
-  a remove followed by an add, and it is refused for the cap only when it
-  leaves more than eight `selected` entries and more than it found.
+  a remove followed by an add. An edit is never refused for the cap: selecting
+  a repository on the ticket screen is exactly how a person gets past a model
+  that was refused `workspace_cap`, and the room of every run still bounds the
+  workspace.
 - **Storage is one row per repository per subject, not a list in one field.**
   A list rewritten whole by each writer loses the other writer's decision when
   two runs on one ticket write at once. With a row per key, the precedence rule
   is enforced by the statement itself: an upsert overwrites an existing row only
   when its origin rank is lower or equal (a person is rank 0, `inferred` rank
   4), or when the plan marks it `replacesExpired`. A separate one-row-per-subject
-  version counter moves on every write, from a run or a person.
+  version counter moves only when an entry row actually changed, so the
+  refusals a run appends on every start never turn a person's open panel into
+  a conflict. A trail line saying an entry was written or removed is appended
+  only for rows the statement really wrote or removed: the trail never claims a
+  change the record did not take.
 - Every write is one statement, because production has no interactive
   transactions. A run's write carries no expected version and cannot conflict:
   precedence decides. A person's edit carries the version it read, so a run or
@@ -399,7 +405,7 @@ decideWorkScope(context: {
   policy: TriggerRepositoryPolicy | null;    // resolved; null only for "answered" and "edited", which ignore it
   eventRelatedKeys: RepositoryKey[];  // candidates of event_repository_and_related, empty otherwise
   attachedKeys: RepositoryKey[] | null; // what the workspace holds now; null outside a run
-  selectionAnswered: boolean;         // the subject's trail holds a question_answered for a selection question
+  selectionAnswered: boolean;         // a selection question on the subject was answered none or with repositories
   actor: WorkScopeActor;
   now: string;
 }, event:
@@ -415,16 +421,17 @@ decideWorkScope(context: {
   attach: RepositoryKey[];
   ask: WorkScopeAskedRepository[];
   refused: Array<{ repositoryKey: RepositoryKey; reason: WorkScopeRefusalReason }>;
-  editRejected: Array<{ repositoryKey: RepositoryKey; reason: "not_enabled" | "workspace_cap" }>;
+  editRejected: Array<{ repositoryKey: RepositoryKey; reason: "not_enabled" }>;
 }
 ```
 
 Words used below.
 
 - **Usable**: in `enabledKeys` and not in `unusableKeys`.
-- **Reachable**: usable, and its provider (the key's prefix) is in
-  `pinnedProviders` when that is not null. The provider pin is a capability
-  bound of the definition, like the catalog, so nothing is exempt from it.
+- **In providers**: `pinnedProviders` is null, or the key's provider prefix is
+  in it. The provider pin is a capability bound of the definition, like the
+  catalog, so nothing is exempt from it and nothing outside it is ever asked.
+- **Reachable**: usable and in providers.
 - **Candidate**: allowed by the policy's candidate set (`enabled_catalog`: every
   usable key; `event_repository_and_related`: `eventRelatedKeys`; `listed`: the
   listed keys).
@@ -433,10 +440,15 @@ Words used below.
   is never a selection, so exemption does not apply to it), because a person outranks a default made for
   machines and a workflow-owned branch must never strand its open pull request
   (`apps/worker/src/engine/pre-sandbox/steps/repo-selection.ts:783-799`).
-- **Expired**: an `unavailable` entry with reason `not_enabled`, on an ACTIVATED
-  catalog, whose key is now usable. An expired entry behaves as if there were
-  no entry, and a `selected` upsert over it sets `replacesExpired`.
+- **Expired**: an `unavailable` entry whose key is now usable; for reason
+  `not_enabled` only on an ACTIVATED catalog, where "enabled" means something.
+  An `unusable` entry expires too, because a repository without a default
+  branch becomes usable with its first commit and the question's own advice
+  would otherwise do nothing. An expired entry behaves as if there were no
+  entry, and a `selected` upsert over it sets `replacesExpired`.
 - **Blocking entry**: `excluded`, or `unavailable` that is not expired.
+- **Allowed**: the key is a candidate, or the expansion is `attach`, or its
+  entry is a `selected` entry of exempt origin.
 - **Room**: 8 minus `attachedKeys`, minus what this event already attached. The
   cap bounds the WORKSPACE of one run, never the record: a subject may hold more
   `selected` entries than one workspace takes (two workflows on one ticket, a
@@ -464,7 +476,7 @@ the `ask` list and its reasons.
 | `run_started` | `selected`, not usable | refused `outside_catalog`, entry kept, no question |
 | `run_started` | `selected`, usable, not reachable | refused `outside_policy`, entry kept |
 | `run_started` | `selected`, reachable, not candidate, origin not exempt | refused `outside_policy`, entry kept |
-| `run_started` | expired, reachable, candidate or expansion `attach`, room | attach; upsert `selected` origin `inferred` with `replacesExpired`, the rationale naming the answer it replaces. The person said "continue without it" because it could not be had; this replays the request that raised the question, which makes "enable it later and the next run takes it" deterministic rather than a hope that the model asks again, and it stays inside this trigger's policy because the person selected nothing |
+| `run_started` | expired (either reason), reachable, candidate or expansion `attach`, room | attach; upsert `selected` origin `inferred` with `replacesExpired`, the rationale naming the answer it replaces. The person said "continue without it" because it could not be had; this replays the request that raised the question, which makes "enable it later and the next run takes it" deterministic rather than a hope that the model asks again, and it stays inside this trigger's policy because the person selected nothing |
 | `run_started` | any other entry | nothing |
 | `resumed` | the listed keys, read against the scope after an answer arrived | exactly the `run_started` rows, for those keys only |
 | `derived` | key has a blocking entry | refused with `excluded` or `unavailable` |
@@ -476,16 +488,16 @@ the `ask` list and its reasons.
 | `derived` | origin `ticket_text` or `workflow_owned_branch`, an entry of THAT origin exists for a key not in this event | delete it, comparing on that origin |
 | `text_ambiguous` | `carriesRecord`, no `selected` entry of origin `person`, `selectionAnswered` false | ask every matched key (at most 8, the caller's ranking) with reason `selection` |
 | `text_ambiguous` | otherwise | nothing asked; the run starts from what the record holds |
-| `requested` | more than 3 keys | the first 3 are decided below; the rest refused `request_limit`, never a question |
+| `requested` | more than 3 keys | the first 3 are decided below, first matching row wins; the rest refused `request_limit`, never a question |
 | `requested` | key already attached | nothing |
+| `requested` | key not in providers | refused `outside_policy`, never a question |
 | `requested` | key has a blocking entry | refused with `excluded` or `unavailable`, never a question |
-| `requested` | key not usable, no entry, `carriesRecord`, expansion not `never` | ask with reason `unusable` when enabled, otherwise `not_enabled` |
-| `requested` | key not usable, otherwise | refused `outside_catalog` |
-| `requested` | key usable, not reachable | refused `outside_policy`, never a question |
-| `requested` | key reachable, candidate or expansion `attach`, room | attach; upsert `selected` `inferred` |
-| `requested` | key reachable, candidate or expansion `attach`, no room | refused `workspace_cap`, no entry, never a question |
-| `requested` | key reachable, not candidate, `ask_once`, no entry, `carriesRecord`, room | ask with reason `outside_policy` |
-| `requested` | key reachable, not candidate, otherwise | refused `workspace_cap` when room is the only obstacle, otherwise `outside_policy` |
+| `requested` | key not allowed, expansion `ask_once`, `carriesRecord`, room, and no entry or a `selected` entry of non-exempt origin | ask with reason `outside_policy`, usable or not: a repository outside the policy is asked about ONCE, and an answer naming it records `selected` `person`, which attaches once it is usable |
+| `requested` | key not allowed, otherwise | refused `workspace_cap` when room is the only obstacle, otherwise `outside_policy` |
+| `requested` | key allowed, not usable, no entry, `carriesRecord`, expansion not `never` | ask with reason `unusable` when enabled, otherwise `not_enabled` |
+| `requested` | key allowed, not usable, otherwise (a `selected` entry included) | refused `outside_catalog` |
+| `requested` | key allowed, usable, room | attach; upsert `selected` `inferred`, `replacesExpired` over an expired entry |
+| `requested` | key allowed, usable, no room | refused `workspace_cap`, no entry, never a question |
 | `answered` | `carriesRecord` false | programming error, thrown |
 | `answered` | answer `unrecognised` | no entries; `question_answered` only; the protocol asks its follow-up, which carries the same `asked` list |
 | `answered` | answer `none` or `repositories`: an asked key the answer does not name | reason `not_enabled`: upsert `unavailable` `not_enabled` `person`; reason `unusable`: upsert `unavailable` `unusable` `person`; reason `outside_policy`: upsert `excluded` `person` (the person could have given it and declined); reason `selection`: nothing (the question never listed the matches, so an omission is not a decision) |
@@ -495,7 +507,6 @@ the `ask` list and its reasons.
 | `edited` | `select` | enabled: upsert `selected` `person`; not enabled: rejected `not_enabled` |
 | `edited` | `exclude` | upsert `excluded` `person` |
 | `edited` | `remove` | delete comparing on the current entry's origin; no entry: nothing |
-| `edited` | cap | rejected `workspace_cap` only when the edit leaves more than 8 `selected` entries AND more than before it, so swapping one for another is always allowed |
 
 Bounds. The caller never passes more than 8 derived keys, 8 matched keys, 8
 asked keys or 8 named keys (asked keys are read before named ones, so every
@@ -527,6 +538,26 @@ the status reason, so nothing is dropped without saying so.
 - Exactly once: `question_answered` is unique per clarification id, and the
   statement applies the entries only when that row was inserted. A retried
   resume of the same answer (`answer-core.ts:205-209`) writes nothing twice.
+- The answer is read against the catalog store's keys PLUS the question's
+  asked keys, so a person naming back the repository they were asked about is
+  always understood, even when the catalog table does not hold it. On a bridge
+  catalog a repository that is neither in the table nor asked about cannot be
+  named, and the follow-up says which name did not resolve.
+- A second unreadable answer to the follow-up of a question in the same run
+  (same asked keys, an earlier `question_answered` of kind `unrecognised` in
+  the run's trail) is decided as `none`, which is how the protocol already
+  closes expansion; that is what records it.
+- On `already_applied` the hook payload is rebuilt from the stored
+  `question_answered` row and the current entries, never from a second read of
+  the text, so a retry hours later cannot tell the run something the record
+  does not hold. If the record write fails after the answer was accepted, the
+  answer function reports an error, and the channel's retry of the same answer
+  applies it once and resumes.
+- After a resume the run's context is its frozen scope with the payload's
+  entries merged in, and `selectionAnswered` is true when the answered question
+  was a selection question answered `none` or with repositories; an
+  `unrecognised` answer leaves it false, so the follow-up is asked in the same
+  run and nowhere else.
 - A clarification whose row carries no asked repositories (any question that is
   not about repositories, and a question asked before this ships) writes
   nothing to the record, and its hook payload carries no read answer.
@@ -624,8 +655,14 @@ nobody reads it.
   its existing write at `:581`), which is on the stack for both the model's
   expansion and a person's answer (`apps/worker/src/engine/agent-workflow.ts:1762`
   and `:2013`). A question rides the step that parks the run and publishes the
-  clarification. A refusal that asks nobody rides the step that writes the
-  run's status reason. Naming a carrier per outcome is required, because the
+  clarification. A refusal that asks nobody rides the next existing step
+  with `maxRetries = 0` after the decision (the attach step or the phase start
+  step); stage 4 names each one and tests it. A refusal line lost when that
+  step's invocation dies is accepted, because a refusal changes no entry; a
+  duplicate is not, which is why a retried step may never carry one. The status
+  reason names refusals only when the run fails
+  (`apps/worker/src/engine/steps/telemetry.ts:93-99`); a successful run's
+  refusals live in the trail. Naming a carrier per outcome is required, because the
   decision functions themselves run in WORKFLOW scope
   (`apps/worker/src/engine/agent-workflow.ts:1705-1725`), where a write would
   be repeated on every replay of a parked run and would break determinism.
@@ -750,13 +787,13 @@ nobody reads it.
   answer it; a webhook `ask_once` only when the endpoint configures a subject
   path, and `never` otherwise, because without one every delivery is a new
   subject.
-- A3. Expiry is decided against the catalog snapshot frozen at run start, and
-  only for an entry recorded as `not_enabled` on an activated catalog, so no
-  catalog migration and no version counter is needed.
+- A3. Expiry is decided against the catalog snapshot and the repository
+  listing frozen at run start: `not_enabled` only on an activated catalog,
+  `unusable` on any catalog once the repository is usable. No catalog migration
+  and no catalog version counter is needed.
 - A4. A person's edit may add any enabled repository and may not add a
   disabled one; an answer may name a disabled one, because it answers a run's
-  request and the entry waits for the enable. The cap refuses an edit only when
-  the edit leaves more than eight `selected` entries and more than it found. A
+  request and the entry waits for the enable. No cap applies to an edit (A28). A
   person's `selected` entry is exempt from the trigger policy filter, never
   from the definition pin's providers.
 - A5. Prompts, memory documents and trigger output keep the full clarification
@@ -770,10 +807,11 @@ nobody reads it.
   that time of day; the code path tolerates the old output shape.
 - A8. `runs.diagnose` gains no new category; a refusal by trigger policy is a
   status reason sentence, like the catalog refusal today.
-- A9. Production evidence is five runs on definition 40 and 14: the AIW-402
+- A9. Production evidence is six runs on definition 40 and 14: the AIW-402
   reproduction before the change, the same ticket twice after it (one question
-  the first time, per A23, none the second), the enable-later path, and a vague
-  ticket resolved from the map without a question.
+  the first time, per A23, none the second), the enable-later path (two runs),
+  and a vague ticket resolved from the map without a question. Each is judged
+  on the trail, not on the run outcome.
 - A10. A trigger policy filters inherited entries as well as new attachments.
   Decided by the advisor rather than asked, because the subject key carries no
   definition and the alternative lets any workflow widen any other workflow on
@@ -871,6 +909,26 @@ nobody reads it.
 - A27. Every answer is recorded as read (`question_answered`), including answers
   that wrote no entry, so `work_scope.get` returns every question with its
   answer, and the "which of these" question can tell it was already answered.
+- A28. The second skeptic pre-mortem (2026-09-15) raised ten majors and no
+  blocker; every one was verified and fixed rather than deferred, because each
+  broke the ask-once promise or the evidence. Refusals now ride steps that
+  cannot retry them; a second unreadable answer closes as `none`; the run's
+  context after a resume is defined; `unusable` expires once usable; an answer
+  is read against the asked keys too, a retry rebuilds its payload from the
+  record, and a failed record write is retried by the channel; a repository
+  outside the policy under `ask_once` is asked about once, whatever its
+  availability, and a provider outside the pin never; the edit cap is gone; pull
+  request runs read the scope (stage 4 owns their selection step); the evidence
+  is judged on the trail. Residual risks accepted: an answer arriving after a
+  cancel retired its question is refused and the next run asks; a panel
+  exclusion made between an answer and the resumed run's wake still attaches in
+  that run; eight `person` entries can take the whole room before a
+  workflow-owned branch; a pull request and its ticket are two subjects (A1).
+- A29. A repository asked about because the trigger policy did not include it
+  is asked for the ticket, not for the workflow: the question says that
+  declining keeps it out of this ticket, because the record carries no
+  definition (A10) and a decline recorded silently per ticket would surprise the
+  next workflow on it.
 - A13. A Jira project move changes the ticket key and orphans its scope, so a
   person is asked once more under the new key. Accepted: nothing in the worker
   anchors a ticket to an immutable id
@@ -885,11 +943,11 @@ nobody reads it.
 | 1 | Contract: work scope, trigger policy | trigger policy validation | `packages/contracts/work-scope.ts` (new) and its test, `packages/contracts/index.ts`, `packages/contracts/workflow-graph.ts` (`BLOCK_PARAM_KEYS` only), `apps/worker/src/engine/definition/block-params-schemas.ts` (ONE shared parameter spread, applied to the eight trigger configurations behind the nine trigger types that start a run) and its test, the nine `apps/worker/src/engine/blocks/trigger-*/manifest.ts`, `apps/worker/src/engine/definition/deployment-validation.ts` and its test, the `pnpm gen:blocks` output, `CONTEXT.md`; the set of places mirrors how the rate limit reached every trigger | opus | no | yes | no | `pnpm run test:packages:zod4` green for the new contracts; block params tests green with a policy accepted on each of the eight configurations covering all ten trigger types, refused on `trigger_plan_approved`, an unknown key still rejected by `.strict()`, and a stored definition WITHOUT the field parsing exactly as before; `pnpm run typecheck` |
 | 2 | Store: migration 0066, entries and trail | work scope store; decision trail append | `apps/worker/drizzle/0066_*.sql` plus the generated meta (a version row per subject, one entry row per subject and repository key with its persisted origin rank, the append-only trail whose row carries a subject, a run or both and never neither, a partial unique index making an answer apply once, and a nullable `asked_repositories` column on `clarification_requests` holding each asked key with the reason it was asked), `apps/worker/src/db/schema/work-scopes.ts` (new), `apps/worker/src/db/clarifications-schema.ts` (that column only), `apps/worker/src/db/repositories/clarification-hooks.ts` (the prepare insert accepts and returns the asked repositories), `apps/worker/src/db/schema.ts` export, `apps/worker/src/db/repositories/work-scope.ts` (new) and test | opus | no | yes | no | pglite tests: upsert, read by subject, an append and its entry update landing in ONE data-modifying CTE with no `db.transaction` in the module, TWO runs appending on one subject concurrently both succeeding and merging by origin precedence with no version pin, a person's edit still refused on a stale version, a trail row with no subject readable by run, a read returning entries and trail together, the trail filtered by kind, an answer plan applied once and `already_applied` on a retry or a concurrent twin; `pnpm run db:generate` produces no diff and the generated `.sql` contains no `$1` |
 | 3 | Decision module (pure) | work scope decision; repository map rendering | `apps/worker/src/engine/work-scope/**` (new: decide, reconcile with catalog, map render, tests) | opus | yes | yes | no | one test per row of the decision table and one per sequence in the brief, including: expiry only of `not_enabled` and only on an activated catalog, `unusable` and `excluded` never expiring, an expired entry attached at run start only where a request would attach, each expansion rule applied to an INHERITED entry as well as a new request, the cap counted on the workspace (a record holding eight `selected` entries of which two attach still takes a request), an edit decided on its final set, each asked reason giving its own record on "none", a named unusable repository recorded `selected`, the "which of these" question asked at most once per subject, a provider outside the pin never attached or asked, the plan staying inside the contract bounds for the largest inputs, subject eligibility for all four trigger kinds, a `person` entry surviving a policy filter that removes every other inherited entry, map ranking, the twenty five repository threshold and a request for a key outside the map being allowed; no imports from services or db (`workflow-import-boundary.test.ts` green) |
-| 4 | Run integration | run-start freeze; selection from scope; expansion from scope; cross-run engine test | `apps/worker/src/engine/steps/run-start-settings.ts`, `apps/worker/src/engine/pre-sandbox/steps/repo-selection.ts`, `apps/worker/src/engine/steps/phase.ts`, `apps/worker/src/engine/repository-discovery/runner.ts` (integration lines only) and its tests in `apps/worker/src/services/repository-discovery/runner.test.ts` (the source file there is a one line re-export), `apps/worker/src/engine/agent-workflow.ts` (ctx wiring only), `apps/worker/src/services/clarifications/answer-core.ts` (decide and record the answer on arrival, the answer as read in the hook payload), `apps/worker/src/engine/blocks/prepare-workspace/execute.ts` (the answer as read instead of the synthetic comment), `apps/worker/src/engine/tests/**` | opus | yes | yes | no | engine test: run 2 inherits run 1's entries and asks nothing; a run that dies right after an answer leaves the answer recorded and the next run asks nothing; a question stores its asked repositories and reasons; no guard rail of the protocol reaches a person; AIW-402 scenario passes; the trigger policy is resolved at run start from the deployed graph and filters inherited entries with `person` exempt; every attach, every refusal and every person answer appends exactly one trail line carrying the repository, the origin and the reason, and a parked run resumed twice still appends it once; a test fails if any append happens in workflow scope rather than inside a step; the brief lists every path by which data from one run reaches a later run on the same subject (the clarification history read, the pre-sandbox current answer, the label routing memory, the approved plan, the human decisions memory, repository memory, trigger output), and for each the DoD shows it can no longer change a repository decision, or says why it never could (AIW-402 asks for exactly this audit); a `plan_approved` run ignores the subject scope and still refuses expansion; a replayed run-start output without the field takes the whole old path; `step-registration-coverage` and `workflow-import-boundary` green; no step added, removed or reordered (reviewer diffs the file); merge only under a drain proved by a query, zero `running` and zero `awaiting` agent-workflow rows and an empty `active_runs` |
+| 4 | Run integration | run-start freeze; selection from scope; expansion from scope; cross-run engine test | `apps/worker/src/engine/steps/run-start-settings.ts`, `apps/worker/src/engine/pre-sandbox/steps/repo-selection.ts`, `apps/worker/src/engine/steps/phase.ts`, `apps/worker/src/engine/repository-discovery/runner.ts` (integration lines only) and its tests in `apps/worker/src/services/repository-discovery/runner.test.ts` (the source file there is a one line re-export), `apps/worker/src/engine/agent-workflow.ts` (ctx wiring only), `apps/worker/src/services/clarifications/answer-core.ts` (decide and record the answer on arrival, the answer as read in the hook payload), `apps/worker/src/engine/blocks/prepare-workspace/execute.ts` (the answer as read instead of the synthetic comment), `apps/worker/src/engine/blocks/fetch-pr-context/execute.ts` (pull request runs start from the scope), `apps/worker/src/engine/tests/**` | opus | yes | yes | no | engine test: run 2 inherits run 1's entries and asks nothing; a run that dies right after an answer leaves the answer recorded and the next run asks nothing; a pull request run attaches a repository a person selected on its subject; the bot's own clarification comments are excluded from the ticket text the matcher reads (`apps/worker/src/engine/pre-sandbox/steps/repo-selection.ts:1136`); every trail append rides a step with `maxRetries = 0`, listed in the brief; a question stores its asked repositories and reasons; no guard rail of the protocol reaches a person; AIW-402 scenario passes; the trigger policy is resolved at run start from the deployed graph and filters inherited entries with `person` exempt; every attach, every refusal and every person answer appends exactly one trail line carrying the repository, the origin and the reason, and a parked run resumed twice still appends it once; a test fails if any append happens in workflow scope rather than inside a step; the brief lists every path by which data from one run reaches a later run on the same subject (the clarification history read, the pre-sandbox current answer, the label routing memory, the approved plan, the human decisions memory, repository memory, trigger output), and for each the DoD shows it can no longer change a repository decision, or says why it never could (AIW-402 asks for exactly this audit); a `plan_approved` run ignores the subject scope and still refuses expansion; a replayed run-start output without the field takes the whole old path; `step-registration-coverage` and `workflow-import-boundary` green; no step added, removed or reordered (reviewer diffs the file); merge only under a drain proved by a query, zero `running` and zero `awaiting` agent-workflow rows and an empty `active_runs` |
 | 5 | Repository map in the agent context, including the sentence AIW-377 asks for (an `access: read` research checkout does not block implementation, so the model stops requesting an attached repository again for write) | repository map rendering (integration); what the agent was shown | `apps/worker/src/sandbox/context.ts`, `apps/worker/src/engine/repository-discovery/protocol.ts` (prompt text and request-by-key), `apps/worker/src/sandbox/context.test.ts` | opus | yes | yes | no | rendered prompt for a 40 repository catalog stays at 12 map lines and under 1600 characters (the repository has no tokenizer, so the budget is counted in characters); a 20 repository catalog renders whole; a request by a map key attaches; a request for a catalog key the map did not show still attaches; only a key outside the catalog or outside the policy is refused; the map recorded by stage 4 reads back through `work_scope.get` identical to the text that was rendered |
 | 6 | Trigger policy in dispatch and the flow editor | trigger policy validation (runtime) | `apps/worker/src/services/dispatch/**`, `apps/worker/src/services/manual-dispatch/resolve.ts`, `apps/worker/src/services/repository-catalog/pins.ts`, `apps/dashboard/components/cockpit/flow-editor/blocks/index.ts:75-86` and the TEN `blocks/trigger_*.tsx` field components (copying the shared group pattern of `blocks/pr-trigger-fields.tsx` and `blocks/shared.tsx`), `apps/dashboard/components/cockpit/flow-editor/repository-scope-bar.tsx` (its copy becomes "the default a trigger inherits unless it sets its own"), `docs/architecture/workflow-definition.md` | sonnet | yes | yes | no | dispatch tests: each kind default per A2, including a webhook with and without a subject path and a schedule under both overlap policies writing no record at all, and a pull request whose catalog carries no relationships falling back to the enabled catalog; explicit policy overrides the pin; the pin still applies with no policy; dashboard test renders and saves the field group |
 | 7 | Surfaces: API, MCP, ticket screen, run report | MCP parity; run repository report | `apps/worker/src/routes/api/v1/work-scope/**` (new), `apps/worker/src/mcp/tools/work-scope.ts` (new), `apps/worker/src/mcp/tools/runs.ts` (one tool added), `apps/worker/src/mcp/tool-catalog.ts`, `apps/worker/src/mcp/server.ts`, generated contract, `apps/dashboard/app/(cockpit)/ticket/**`, the run detail screen, `apps/dashboard/app/api/work-scope/**` (new) | sonnet | yes | no | yes | `mcp:contract:check` green with the three tools; route tests for read, update, conflict; `runs.repositories` returns the repositories used with their rationale, the rounds, the requests with a verdict each and the map shown, and answers clearly rather than emptily for a run that recorded none; dashboard test: panel lists entries and an edit sends the version |
-| 8 | Evidence, docs, roadmap | none (verification) | `changelog/unreleased/*.md`, `docs/product/roadmap-2026-08-27.md`, `docs/index.md`, `docs/qa/**` | sonnet | no | no | no | four production runs per A9 recorded with run ids and first terminal reads; AIW-402, AIW-377 and the roadmap P1 item commented; changelog entries present |
+| 8 | Evidence, docs, roadmap | none (verification) | `changelog/unreleased/*.md`, `docs/product/roadmap-2026-08-27.md`, `docs/index.md`, `docs/qa/**` | sonnet | no | no | no | six production runs per A9 recorded with run ids, each judged on its trail rows; AIW-402, AIW-377 and the roadmap P1 item commented; changelog entries present |
 
 Order: 1, then 2 and 3 in parallel, then 4, then 5 (it edits files stage 4
 owns, so it cannot run beside it), then 6 and 7 in parallel (7 needs 2 and 4,
@@ -903,11 +961,14 @@ the terminal helper behind it counts a parked run as finished.
 1. Before any merge: dispatch definition 40 on ticket AWP-211, whose previous
    run was answered "none". Expected today: no question, immediate failure
    naming the repository. This is the AIW-402 reproduction.
-2. After stage 4 deploys: the same ticket, twice. First dispatch: one question
-   (A23: the old answer predates the record), answered "none"; the scope shows
-   the repository `unavailable` decided by the person and a `question_answered`
-   row. Second dispatch: no question, and the run continues without it with a
-   reason that names the scope.
+2. After stage 4 deploys: the same ticket, twice, judged on the trail through
+   `work_scope.get`, not on whether the run succeeds (a run without the
+   repository may still fail, which is what step 1 also shows). First
+   dispatch: `question_asked`, `question_answered` "none", and the entry
+   `unavailable` decided by the person (A23). Second dispatch: a
+   `request_refused` `unavailable` for that repository and no `question_asked`.
+   A dispatch in which the model never requests the repository proves nothing
+   and is recorded INCONCLUSIVE, not PASS.
 3. Enable-later path: a fresh ticket naming a repository disabled in the
    catalog, answered "continue without it"; enable the repository; a second
    run attaches it at run start without a question (the trail shows the
