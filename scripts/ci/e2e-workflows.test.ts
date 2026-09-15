@@ -6,6 +6,7 @@ import { parse } from "yaml";
 type Step = {
   name?: string;
   if?: string;
+  env?: Record<string, string>;
   run?: string;
   "working-directory"?: string;
   "timeout-minutes"?: number;
@@ -199,6 +200,36 @@ test("engine canary cancels a superseded PR run and starts only three agents", a
   const run = canary.steps?.find((step) => step.name === "Run engine canaries")?.run ?? "";
   assert.match(run, /test:e2e:replay/u);
   assert.doesNotMatch(run, /test:e2e:harness-profiles/u);
+});
+
+test("engine canary waits for the target alias and runs against it", async () => {
+  const [, workflow] = (await loadWorkflows())[0]!;
+  const canary = workflow.jobs?.["engine-canary"];
+  assert.ok(canary);
+  const steps = canary.steps ?? [];
+  const target = steps.find(
+    (step) => step.name === "Validate engine canary target configuration",
+  );
+  const deploy = steps.find(
+    (step) => step.name === "Deploy engine canary target",
+  );
+  const preflight = steps.find(
+    (step) => step.name === "Verify deployment and database identity",
+  );
+  const run = steps.find((step) => step.name === "Run engine canaries");
+
+  assert.equal(
+    target?.env?.ENGINE_CANARY_TARGET_URL,
+    "${{ vars.ENGINE_CANARY_TARGET_URL }}",
+  );
+  assert.match(target?.run ?? "", /ENGINE_CANARY_TARGET_URL/u);
+  assert.match(deploy?.run ?? "", /"\$url\/health"/u);
+  assert.equal(preflight?.env?.URL, "${{ vars.ENGINE_CANARY_TARGET_URL }}");
+  assert.match(preflight?.run ?? "", /sleep 10/u);
+  assert.equal(
+    run?.env?.HARNESS_CANARY_BASE_URL,
+    "${{ vars.ENGINE_CANARY_TARGET_URL }}",
+  );
 });
 
 test("the nightly schedule reaches the two tiers that cost nothing to repeat", async () => {

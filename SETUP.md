@@ -230,9 +230,11 @@ migrations run during every deploy's build step.
 2. Connect it to the ai-workflow Vercel project.
 3. **Critical:** enable a **separate branch per environment** (development /
    preview / production) when configuring the integration. Each environment's
-   `DATABASE_URL` must point at its own Neon branch. The build fails with an
-   `env_marker` error if two environments share one branch — that guard
-   protects the production run registry from preview deployments.
+   `DATABASE_URL` must point at its own Neon branch. The single exception is
+   the `ai-workflow-demo` engine canary environment. It shares the production
+   branch and declares the owner with `DATABASE_SHARED_WITH=production`. The
+   build fails with an `env_marker` error if any other environments share one
+   branch, which protects the production run registry from preview deployments.
 
 Verify:
 
@@ -243,7 +245,8 @@ vercel env ls | grep DATABASE_URL
 You should see `DATABASE_URL` present for each environment. (`vercel env ls`
 shows values as Encrypted, so it can't confirm branch isolation — use the
 pull-and-compare check in `.claude/skills/init-neon/` to verify each
-environment points at its own Neon branch.)
+environment points at its own Neon branch, except for the documented engine
+canary environment.)
 
 ---
 
@@ -526,9 +529,20 @@ Arm the gate for the demo custom environment with these repository variables:
 
 ```text
 ENGINE_CANARY_TARGET=ai-workflow-demo
+ENGINE_CANARY_TARGET_URL=https://ai-workflow-app-env-ai-workflow-demo-blazity.vercel.app
 ENGINE_CANARY_DB_ENV=production
 ENGINE_CANARY_DB_FINGERPRINT=d1995828824d
 ```
+
+Use the alias rather than the unique deployment URL because the auth base URL
+and token issuer are the alias.
+
+In the `ai-workflow-demo` Vercel environment, set `DATABASE_URL` to the
+production connection string as a manual entry and set
+`DATABASE_SHARED_WITH=production`. Remove the Neon integration value for
+`DATABASE_URL` from that environment because it points at a separate branch.
+Every retired settings variable listed in section 14 must also be absent from
+that environment because the build refuses those variables.
 
 The current alias is
 `https://ai-workflow-app-env-ai-workflow-demo-blazity.vercel.app`. Read the
@@ -540,7 +554,7 @@ commit must also match. The `production` Vercel target name is forbidden
 because deploying a pull request to it would replace the live deployment.
 
 Repository variables that arm and configure the job are
-`ENGINE_CANARY_TARGET`, `ENGINE_CANARY_DB_ENV`,
+`ENGINE_CANARY_TARGET`, `ENGINE_CANARY_TARGET_URL`, `ENGINE_CANARY_DB_ENV`,
 `ENGINE_CANARY_DB_FINGERPRINT`,
 `HARNESS_CANARY_CLAUDE_WORKFLOW_ID`, `HARNESS_CANARY_CODEX_WORKFLOW_ID`,
 `HARNESS_CANARY_CUSTOM_WORKFLOW_ID`, `HARNESS_CANARY_TICKET_KEY`,
@@ -553,9 +567,16 @@ Repository variables that arm and configure the job are
 `HARNESS_CANARY_CUSTOM_SKILL_SOURCE_PATH`,
 `HARNESS_CANARY_CUSTOM_SKILL_SOURCE_COMMIT_SHA`,
 `NEXT_PUBLIC_HARNESS_PROFILE_AUTHORING_ENABLED`, `HARNESS_CANARY_TIMEOUT_MS`,
-`REPLAY_CANARY_LOG_EXPORT_PATH`,
-`REPLAY_CANARY_LOG_WAIT_MS`, `REPLAY_CANARY_LOG_SETTLE_MS`, and
-`REPLAY_CANARY_LOG_MAX_BYTES`.
+`REPLAY_CANARY_LOG_WAIT_MS`, and `REPLAY_CANARY_LOG_MAX_BYTES`.
+
+The replay leg used to follow a live log stream into a file. It now makes one
+historical `vercel logs` query per verified run, bounded by
+`REPLAY_CANARY_LOG_WAIT_MS` and `REPLAY_CANARY_LOG_MAX_BYTES`, and proves
+coverage from a Workflow DevKit step or flow request inside the run window
+rather than from the run id, which the runtime lines never carry. The two
+variables that configured the file, `REPLAY_CANARY_LOG_EXPORT_PATH` and
+`REPLAY_CANARY_LOG_SETTLE_MS`, are retired and can be deleted from the
+repository variables.
 
 `HARNESS_CANARY_TIMEOUT_MS` defaults to `900000` milliseconds (15 minutes) in
 the runner. Set it explicitly for an armed GitHub gate because configuration
@@ -583,36 +604,37 @@ confidential `client_credentials` registration only for an owner or admin in
 the active fixed organization, binds the client to that organization, and
 returns the client secret only in this response.
 
+Register through the production worker because it shares the database with the
+demo target. Do not use the demo alias for registration because it receives a
+new build only when an armed canary deploys there. Use the dashboard origin on
+both POST requests because Better Auth trusts that origin, not the worker's own.
+
 ```bash
-export ENGINE_CANARY_WORKER_URL=https://ai-workflow-app-env-ai-workflow-demo-blazity.vercel.app
+export ENGINE_CANARY_WORKER_URL=https://ai-workflow-app-eight.vercel.app
+export ENGINE_CANARY_ORIGIN=https://ai-workflow-app-dashboard.vercel.app
 export ENGINE_CANARY_ORG_SLUG=ai-workflow
 read -rsp "Owner ba_session: " ENGINE_CANARY_OWNER_SESSION
 echo
-read -rsp "Vercel protection bypass: " ENGINE_CANARY_BYPASS
-echo
 curl --fail-with-body --silent --show-error \
   --header "Authorization: Bearer $ENGINE_CANARY_OWNER_SESSION" \
-  --header "x-vercel-protection-bypass: $ENGINE_CANARY_BYPASS" \
   "$ENGINE_CANARY_WORKER_URL/api/v1/session" | jq -e '.role == "owner"'
 curl --fail-with-body --silent --show-error \
   --request POST \
   --header "Authorization: Bearer $ENGINE_CANARY_OWNER_SESSION" \
   --header "Content-Type: application/json" \
-  --header "Origin: $ENGINE_CANARY_WORKER_URL" \
-  --header "x-vercel-protection-bypass: $ENGINE_CANARY_BYPASS" \
+  --header "Origin: $ENGINE_CANARY_ORIGIN" \
   --data "{\"organizationSlug\":\"$ENGINE_CANARY_ORG_SLUG\"}" \
   "$ENGINE_CANARY_WORKER_URL/api/auth/organization/set-active" > /dev/null
 ENGINE_CANARY_REGISTRATION="$(curl --fail-with-body --silent --show-error \
   --request POST \
   --header "Authorization: Bearer $ENGINE_CANARY_OWNER_SESSION" \
   --header "Content-Type: application/json" \
-  --header "Origin: $ENGINE_CANARY_WORKER_URL" \
-  --header "x-vercel-protection-bypass: $ENGINE_CANARY_BYPASS" \
+  --header "Origin: $ENGINE_CANARY_ORIGIN" \
   --data '{"client_name":"engine-canary","token_endpoint_auth_method":"client_secret_post","grant_types":["client_credentials"],"response_types":[],"redirect_uris":["https://ai-workflow-app-env-ai-workflow-demo-blazity.vercel.app/mcp"],"scope":"mcp:read runs:dispatch"}' \
   "$ENGINE_CANARY_WORKER_URL/api/auth/oauth2/register")"
 printf '%s' "$ENGINE_CANARY_REGISTRATION" | jq -er '.client_id' | gh secret set --env e2e ENGINE_CANARY_MCP_CLIENT_ID
 printf '%s' "$ENGINE_CANARY_REGISTRATION" | jq -er '.client_secret' | gh secret set --env e2e ENGINE_CANARY_MCP_CLIENT_SECRET
-unset ENGINE_CANARY_REGISTRATION ENGINE_CANARY_OWNER_SESSION ENGINE_CANARY_BYPASS ENGINE_CANARY_ORG_SLUG
+unset ENGINE_CANARY_REGISTRATION ENGINE_CANARY_OWNER_SESSION ENGINE_CANARY_ORIGIN ENGINE_CANARY_ORG_SLUG
 ```
 
 The registration must name exactly `mcp:read runs:dispatch`. At job start the
@@ -643,8 +665,10 @@ the variables above. Each definition must stay disabled and contain exactly
 and pin the expected immutable profile version. The published
 `builtin-claude@2` fixture uses `claude-opus-4-8`, and the published
 `builtin-codex@2` fixture uses `gpt-5.4`. The custom profile must use
-`claude-haiku-4-5` when its provider is Claude or `gpt-5-mini` when its provider
-is Codex. A workflow cannot make the built-in fixtures cheaper by setting the
+`haiku` when its provider is Claude or `gpt-5.4-mini` when its provider is
+Codex, which are the IDs exposed by the capability catalog. The dashboard's
+model picker offers exactly those IDs. A workflow cannot make the built-in
+fixtures cheaper by setting the
 Generic Agent's `model` parameter: a pinned Harness Profile overrides that
 parameter, and the published profile manifest's `model.id` controls the model.
 Changing a built-in model therefore requires a newly published built-in profile

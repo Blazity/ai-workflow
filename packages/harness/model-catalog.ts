@@ -23,9 +23,12 @@ export const DEFAULT_MODELS = {
   codex: "gpt-5.4",
 } as const satisfies Record<HarnessProvider, string>;
 
+// These are capability catalog IDs exposed by /api/v1/harness-capabilities:
+// a Claude CLI alias and a Codex CLI model ID. Published custom profiles can
+// only carry catalog IDs, not API model IDs.
 export const CANARY_FIXTURE_MODELS = {
-  claude: "claude-haiku-4-5",
-  codex: "gpt-5-mini",
+  claude: "haiku",
+  codex: "gpt-5.4-mini",
 } as const satisfies Record<HarnessProvider, string>;
 
 export const CALL_LLM_DEFAULT_MODEL = "claude-haiku-4-5";
