@@ -19,6 +19,7 @@ const run: RunDetail = {
   startedAt: "2026-07-23T10:00:00.000Z",
   completedAt: "2026-07-23T10:00:01.000Z",
   durationSec: 1,
+  usageRecorded: true,
   error: {
     message:
       "Error: failed for person@example.com with Bearer secret-token-value\n    at run (/srv/private.ts:4:2)",

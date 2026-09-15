@@ -18,6 +18,7 @@ const RUN = (id: string): RunDetail => ({
   startedAt: "2026-06-16T10:00:00Z",
   completedAt: "2026-06-16T10:05:00Z",
   durationSec: 300,
+  usageRecorded: true,
   error: null,
   deploymentId: null,
 });

@@ -137,10 +137,11 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
               workflowName: r.workflowName ?? r.workflowId ?? "wf_unknown",
               status,
               terminal: isTerminalRunStatus(status),
-              completionPending: isRunCompletionPending(
+              completionPending: isRunCompletionPending({
                 status,
-                r.completedAt ? r.completedAt.toISOString() : null,
-              ),
+                workflowId: r.workflowId,
+                usageRecorded: r.costKnown !== null,
+              }),
               ticketKey: r.ticketKey,
               createdAt: (r.createdAt ?? r.firstSeenAt).toISOString(),
               startedAt: r.startedAt ? r.startedAt.toISOString() : null,

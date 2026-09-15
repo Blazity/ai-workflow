@@ -4,6 +4,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
 
+import { AGENT_WORKFLOW_ID, RUN_COMPLETION_GRACE_MS } from "@shared/contracts";
 import type {
   RunDetailResponse,
   WorkflowRunReplayResponse,
@@ -31,6 +32,7 @@ const detail: RunDetailResponse = {
     startedAt: "2026-07-23T10:00:00.000Z",
     completedAt: "2026-07-23T10:00:02.000Z",
     durationSec: 2,
+    usageRecorded: true,
     error: {
       code: "AIW-DIAG-123",
       message: "Workflow execution failed. Diagnostic ID: AIW-DIAG-123",
@@ -218,4 +220,73 @@ test("a completed run renders an answered clarification as plain text", () => {
   assert.doesNotMatch(html, /Input needed/);
   assert.doesNotMatch(html, /<code[^>]*>facts<\/code>/);
   assert.match(html, /`facts`/);
+});
+
+const notCaptured: WorkflowRunReplayResponse = {
+  availability: "not_captured",
+  mayAdvance: false,
+  snapshot: null,
+  attempts: [],
+  nextCursor: null,
+};
+
+/** A successful agent run missing its end-of-run write, finished `agoMs` ago. */
+function pendingUsageDetail(agoMs: number): RunDetailResponse {
+  return {
+    ...detail,
+    run: {
+      ...detail.run!,
+      workflow: AGENT_WORKFLOW_ID,
+      status: "success",
+      error: null,
+      usageRecorded: false,
+      completedAt: new Date(Date.now() - agoMs).toISOString(),
+    },
+  };
+}
+
+// A successful agent run gets its duration from the statement that flips its
+// status, minutes before the write that records cost and pull requests. The
+// header must not read as finished while that is still outstanding.
+test("a successful agent run whose end-of-run write is still expected says pending beside Duration", () => {
+  const html = renderToStaticMarkup(
+    <TraceDetail runId="wrun_1" data={pendingUsageDetail(60_000)} replay={notCaptured} />,
+  );
+
+  assert.match(html, /completion data pending/);
+});
+
+// Same run, past the window runs.result publishes as pendingUntil: the write is
+// not late any more, it is not coming, and the caption has to stop promising it.
+test("a successful agent run past the grace says the completion data was not recorded", () => {
+  const html = renderToStaticMarkup(
+    <TraceDetail
+      runId="wrun_1"
+      data={pendingUsageDetail(RUN_COMPLETION_GRACE_MS + 60_000)}
+      replay={notCaptured}
+    />,
+  );
+
+  assert.match(html, /completion data not recorded/);
+  assert.doesNotMatch(html, />completion data pending</);
+});
+
+test("a run whose end-of-run write has landed keeps the plain Duration caption", () => {
+  const settled: RunDetailResponse = {
+    ...detail,
+    run: {
+      ...detail.run!,
+      workflow: AGENT_WORKFLOW_ID,
+      status: "success",
+      error: null,
+      usageRecorded: true,
+    },
+  };
+
+  const html = renderToStaticMarkup(
+    <TraceDetail runId="wrun_1" data={settled} replay={notCaptured} />,
+  );
+
+  assert.doesNotMatch(html, /completion data/);
+  assert.match(html, />elapsed</);
 });

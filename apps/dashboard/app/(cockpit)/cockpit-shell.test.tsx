@@ -166,6 +166,7 @@ function makeDetail(status: Run["status"]): RunDetailResponse {
       startedAt: "2026-08-10T00:00:00.000Z",
       completedAt: null,
       durationSec: null,
+      usageRecorded: true,
       error: null,
       deploymentId: null,
     },

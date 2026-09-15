@@ -8,6 +8,7 @@
  * re-exports every name here, so the transport and the tools keep importing them
  * from one place.
  */
+import { AGENT_WORKFLOW_ID } from "@shared/contracts";
 import type { McpScope, McpToolName } from "@shared/contracts";
 
 export { FIRST_SLICE_TOOLS, MCP_SCOPES } from "@shared/contracts";
@@ -193,9 +194,43 @@ export function isTerminalRunStatus(status: McpRunSummary["status"]): boolean {
   );
 }
 
-export function isRunCompletionPending(
-  status: McpRunSummary["status"],
-  completedAt: string | null,
-): boolean {
-  return status !== "running" && status !== "awaiting" && completedAt === null;
+/**
+ * Whether a run's own end-of-run write is still expected: the one statement
+ * (recordRunUsage) that records cost, phases and the pull requests.
+ *
+ * This is the single meaning of `completionPending` across runs.get,
+ * runs.result and tickets.list_runs, and the signal runs.diagnose classifies as
+ * `completion_fields_pending`. It reads `usageRecorded` (derived from
+ * `cost_known`, which that write alone sets) and NOT `completed_at`, because
+ * the status flip stamps `completed_at` minutes before the pull requests exist:
+ * every timestamp on the row says finished while the outcome is not.
+ *
+ * Deliberately narrow: "pending" is a claim that something is still coming, so
+ * it is scoped to the one case where that is true.
+ *
+ * - Only "success". A failed or blocked run is very often settled by a writer
+ *   that never records usage by design (an operator cancel, the stall watchdog,
+ *   the two orphan sweeps), so the write is not late, it is never coming. A
+ *   permanent true on those rows would be noise a reader learns to ignore, and
+ *   the flag would stop meaning anything on the rows where it matters.
+ * - Not "awaiting", which isTerminalRunStatus counts as terminal: that status
+ *   is a LIVE run parked on a human (markRunAwaiting), not a run that stopped.
+ *   Including it would also shadow run-diagnosis's `awaiting_input` rule, which
+ *   sits after `completion_fields_pending` in the ordered rule list.
+ * - Only the agent workflow, and this is the guard that is easy to miss:
+ *   `workflow_runs` also holds the Post-PR gate rows the poll cron snapshots,
+ *   and a gate run has no end-of-run write at all, ever. Without this check
+ *   every gate run would read pending for good, and runs.result would withhold
+ *   each of their outcomes for the whole grace window.
+ */
+export function isRunCompletionPending(run: {
+  status: McpRunSummary["status"];
+  workflowId: string | null;
+  usageRecorded: boolean;
+}): boolean {
+  return (
+    run.status === "success" &&
+    run.workflowId === AGENT_WORKFLOW_ID &&
+    !run.usageRecorded
+  );
 }

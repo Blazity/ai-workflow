@@ -20,11 +20,17 @@ import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
 import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
 import { RunAnalysisReportCard } from "./run-analysis-report";
 import { SPAN_KIND_COLOR } from "@/lib/theme";
-import { pullRequestRef, pullRequestRepoLabels } from "@shared/contracts";
+import {
+  AGENT_WORKFLOW_ID,
+  RUN_COMPLETION_GRACE_MS,
+  pullRequestRef,
+  pullRequestRepoLabels,
+} from "@shared/contracts";
 import type { Span, SpanKind, SpanStatus } from "@/lib/types";
 import type {
   ClarificationAnswerResponse,
   ClarificationRequest,
+  RunDetail,
   RunDetailResponse,
   RunStatus,
   RunStep,
@@ -133,6 +139,28 @@ function fmtMs(ms: number | null): string {
 function fmtClock(iso: string | null): string {
   if (!iso) return "n/a";
   return iso.replace("T", " ").replace(/\.\d+Z$/, "Z");
+}
+
+/**
+ * The caption under the Duration number.
+ *
+ * A successful agent run gets its duration from the statement that flips its
+ * status, minutes before the write that records cost and pull requests. The
+ * number is real either way; what is missing has to say so, or the header reads
+ * as a finished run. Two different things to say, on the same fifteen-minute
+ * window and the same anchor runs.result uses for `pendingUntil`: inside it the
+ * write is still expected, after it it is not coming and the row is what it is.
+ */
+function durationCaption(run: RunDetail): string {
+  if (run.status === "running") return "in progress";
+  if (run.status !== "success" || run.workflow !== AGENT_WORKFLOW_ID || run.usageRecorded) {
+    return "elapsed";
+  }
+  const anchor = Date.parse(run.completedAt ?? run.startedAt ?? run.createdAt ?? "");
+  if (Number.isNaN(anchor)) return "completion data not recorded";
+  return Date.now() < anchor + RUN_COMPLETION_GRACE_MS
+    ? "completion data pending"
+    : "completion data not recorded";
 }
 
 export function TraceScreen({
@@ -439,7 +467,7 @@ export function TraceDetail({
         <CkKPI
           label="Duration"
           value={run.durationSec === null ? "n/a" : `${run.durationSec}s`}
-          sub={run.status === "running" ? "in progress" : "elapsed"}
+          sub={durationCaption(run)}
         />
         <CkKPI
           label={hasReplay ? "Blocks" : "Phases"}

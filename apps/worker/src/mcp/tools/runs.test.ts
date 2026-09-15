@@ -109,6 +109,13 @@ async function seedRun(
     durationSec?: number | null;
     prNumber?: number | null;
     prUrl?: string | null;
+    /** The end-of-run telemetry write is this column's only writer, so null is
+     *  a run whose usage (cost, phases, pull requests) has not landed yet.
+     *  Defaults to the ordinary shape of a finished run: it did land. */
+    costKnown?: boolean | null;
+    /** "wf_post_pr_gate" is the other kind of row in this table: a gate run the
+     *  poll cron snapshots, which never gets an end-of-run write of its own. */
+    workflowId?: string;
     repositoryAccess?: RunRepositoryAccess | null;
   } = {},
 ): Promise<string> {
@@ -116,7 +123,7 @@ async function seedRun(
   const runId = over.runId ?? `wrun_${runSeq}`;
   await db.insert(workflowRuns).values({
     runId,
-    workflowId: "wf_agent",
+    workflowId: over.workflowId ?? "wf_agent",
     workflowName: "Agent",
     status: over.status ?? "success",
     ticketKey: over.ticketKey === undefined ? "PROJ-1" : over.ticketKey,
@@ -127,6 +134,7 @@ async function seedRun(
     durationSec: over.durationSec === undefined ? 120 : over.durationSec,
     prNumber: over.prNumber ?? null,
     prUrl: over.prUrl ?? null,
+    costKnown: over.costKnown === undefined ? true : over.costKnown,
     // Left null unless a test says otherwise, which is the shape of a run that
     // started before the column existed.
     repositoryAccess: over.repositoryAccess ?? null,
@@ -259,15 +267,29 @@ describe("runs.get", () => {
     },
   );
 
+  // One meaning across runs.get, runs.result and tickets.list_runs: the run's
+  // own end-of-run write has not landed. Keyed on cost_known and NOT on
+  // completedAt, which the status flip stamps long before the pull requests
+  // exist, so a row that reads finished in every timestamp still answers true.
   it.each([
     ["success", null, true],
-    ["success", new Date("2026-08-11T09:05:00.000Z"), false],
+    ["success", true, false],
+    // Not "the write is late" but "no write is coming": a cancel, the stall
+    // watchdog and the orphan sweeps all settle a run without recording usage
+    // by design, so a permanent true here would be noise.
+    ["failed", null, false],
+    ["blocked", null, false],
+    // A live park has not stopped, so it has no end-of-run write to be late.
     ["awaiting", null, false],
     ["running", null, false],
   ] as const)(
-    "status %s with completedAt %s reports completionPending=%s",
-    async (status, completedAt, completionPending) => {
-      const runId = await seedRun({ status, completedAt });
+    "status %s with costKnown %s reports completionPending=%s",
+    async (status, costKnown, completionPending) => {
+      const runId = await seedRun({
+        status,
+        costKnown,
+        completedAt: new Date("2026-08-11T09:05:00.000Z"),
+      });
       const client = await connectedClient();
 
       const result = await client.callTool({ name: "runs.get", arguments: { runId } });
@@ -276,6 +298,24 @@ describe("runs.get", () => {
       expect(envelope.data.completionPending).toBe(completionPending);
     },
   );
+
+  // workflow_runs is not only agent runs: the poll cron snapshots Post-PR gate
+  // rows into the same table and those never get an end-of-run write at all, so
+  // "has it landed yet?" has no answer for them and must not read as "pending".
+  it("never reports a Post-PR gate run as completion pending", async () => {
+    const runId = await seedRun({
+      workflowId: "wf_post_pr_gate",
+      status: "success",
+      costKnown: null,
+      completedAt: new Date("2026-08-11T11:59:00.000Z"),
+    });
+    const client = await connectedClient();
+
+    const result = await client.callTool({ name: "runs.get", arguments: { runId } });
+    const envelope = result.structuredContent as Envelope<{ completionPending: boolean }>;
+
+    expect(envelope.data.completionPending).toBe(false);
+  });
 
   it.each([
     [
@@ -338,15 +378,26 @@ describe("runs.get", () => {
 });
 
 describe("runs.result", () => {
+  // The same table as runs.get above, asserted again here because the whole
+  // point of the shared predicate is that the two tools cannot drift apart:
+  // an agent that polls runs.get and then reads runs.result must not be told
+  // two different things about the same row.
   it.each([
     ["success", null, true],
-    ["success", new Date("2026-08-11T09:05:00.000Z"), false],
+    ["success", true, false],
+    ["success", false, false],
+    ["failed", null, false],
+    ["blocked", null, false],
     ["awaiting", null, false],
     ["running", null, false],
   ] as const)(
-    "status %s with completedAt %s reports completionPending=%s",
-    async (status, completedAt, completionPending) => {
-      const runId = await seedRun({ status, completedAt });
+    "status %s with costKnown %s reports completionPending=%s",
+    async (status, costKnown, completionPending) => {
+      const runId = await seedRun({
+        status,
+        costKnown,
+        completedAt: new Date("2026-08-11T11:55:00.000Z"),
+      });
       const client = await connectedClient();
 
       const result = await client.callTool({ name: "runs.result", arguments: { runId } });
@@ -370,6 +421,161 @@ describe("runs.result", () => {
     expect(envelope.data.terminal).toBe(false);
     expect(envelope.data.result).toBeNull();
     expect(envelope.data.pollAfterMs).toBe(5_000);
+  });
+
+  // AIW-369. This is the real shape of the window: the self-move stamped the
+  // status AND completedAt, so every timestamp on the row says "finished", while
+  // the write that records the pull requests is still minutes away. Answering
+  // with a populated result here hands the caller prs: null and
+  // pollAfterMs: null, which reads as "finished, no pull request" for a run that
+  // opened one, with no way to find out otherwise.
+  it("withholds the result of a success run whose end-of-run write has not landed", async () => {
+    const runId = await seedRun({
+      status: "success",
+      costKnown: null,
+      completedAt: new Date("2026-08-11T11:55:00.000Z"),
+    });
+    const client = await connectedClient();
+
+    const result = await client.callTool({ name: "runs.result", arguments: { runId } });
+
+    const envelope = result.structuredContent as Envelope<{
+      terminal: boolean;
+      completionPending: boolean;
+      result: unknown;
+      pollAfterMs: number | null;
+      pendingUntil: string | null;
+    }>;
+    expect(envelope.data.terminal).toBe(true);
+    expect(envelope.data.completionPending).toBe(true);
+    expect(envelope.data.result).toBeNull();
+    // The one terminal row that still gets a poll interval: there is something
+    // to come back for, and a stated instant it stops being worth waiting for
+    // (fifteen minutes after the completion the status flip stamped).
+    expect(envelope.data.pollAfterMs).toBe(15_000);
+    expect(envelope.data.pendingUntil).toBe("2026-08-11T12:10:00.000Z");
+  });
+
+  // Every other kind of row: no wait, so no instant to state.
+  it.each([
+    ["a settled success", { costKnown: true }],
+    ["a failed run", { status: "failed", costKnown: null }],
+    ["a gate run", { workflowId: "wf_post_pr_gate", costKnown: null }],
+    ["a run still in progress", { status: "running", costKnown: null }],
+  ] as const)("reports pendingUntil null for %s", async (_label, over) => {
+    const runId = await seedRun({
+      completedAt: new Date("2026-08-11T11:55:00.000Z"),
+      ...over,
+    });
+    const client = await connectedClient();
+
+    const result = await client.callTool({ name: "runs.result", arguments: { runId } });
+    const envelope = result.structuredContent as Envelope<{ pendingUntil: string | null }>;
+
+    expect(envelope.data.pendingUntil).toBeNull();
+  });
+
+  // The same row once the usage write lands: nothing is withheld any more, and
+  // the pull request the caller was waiting for is in the result.
+  it("returns the result as soon as the end-of-run write has landed", async () => {
+    const runId = await seedRun({
+      status: "success",
+      costKnown: true,
+      completedAt: new Date("2026-08-11T11:55:00.000Z"),
+      prNumber: 42,
+      prUrl: "https://github.com/acme/demo/pull/42",
+    });
+    const client = await connectedClient();
+
+    const result = await client.callTool({ name: "runs.result", arguments: { runId } });
+
+    const envelope = result.structuredContent as Envelope<{
+      completionPending: boolean;
+      result: { prNumber: number | null } | null;
+      pollAfterMs: number | null;
+    }>;
+    expect(envelope.data.completionPending).toBe(false);
+    expect(envelope.data.pollAfterMs).toBeNull();
+    expect(envelope.data.result).toMatchObject({ prNumber: 42 });
+  });
+
+  // Bounded on a wall clock: a row whose usage write never lands must not
+  // withhold the outcome for good. Past the bound it answers exactly as it did
+  // before, with completionPending still true so the caller can see that what
+  // it is holding may be incomplete.
+  it("hands back a long-pending success run's result, still flagged pending", async () => {
+    const runId = await seedRun({
+      status: "success",
+      costKnown: null,
+      // Twenty minutes before the clock, past the fifteen the grace allows.
+      completedAt: new Date("2026-08-11T11:40:00.000Z"),
+      prNumber: 42,
+      prUrl: "https://github.com/acme/demo/pull/42",
+    });
+    const client = await connectedClient();
+
+    const result = await client.callTool({ name: "runs.result", arguments: { runId } });
+
+    const envelope = result.structuredContent as Envelope<{
+      completionPending: boolean;
+      result: { prNumber: number | null } | null;
+      pollAfterMs: number | null;
+    }>;
+    expect(envelope.data.completionPending).toBe(true);
+    expect(envelope.data.pollAfterMs).toBeNull();
+    expect(envelope.data.result).toMatchObject({ prNumber: 42 });
+  });
+
+  // Only "success" is withheld, and only a success is ever flagged: a failed or
+  // blocked run's outcome IS the reason it stopped, that reason is on the row
+  // already, and no end-of-run write is coming for it to wait on.
+  it.each(["failed", "blocked"] as const)(
+    "returns a %s run's result without flagging it pending",
+    async (status) => {
+      const runId = await seedRun({
+        status,
+        costKnown: null,
+        completedAt: new Date("2026-08-11T11:55:00.000Z"),
+      });
+      const client = await connectedClient();
+
+      const result = await client.callTool({ name: "runs.result", arguments: { runId } });
+
+      const envelope = result.structuredContent as Envelope<{
+        completionPending: boolean;
+        result: unknown;
+        pollAfterMs: number | null;
+      }>;
+      expect(envelope.data.completionPending).toBe(false);
+      expect(envelope.data.result).not.toBeNull();
+      expect(envelope.data.pollAfterMs).toBeNull();
+    },
+  );
+
+  // A gate run is snapshotted into the same table and never gets an end-of-run
+  // write, so without the agent check it would be withheld on every call for
+  // fifteen minutes and flagged pending for good.
+  it("returns a Post-PR gate run's result immediately", async () => {
+    const runId = await seedRun({
+      workflowId: "wf_post_pr_gate",
+      status: "success",
+      costKnown: null,
+      completedAt: new Date("2026-08-11T11:59:00.000Z"),
+      prNumber: 7,
+      prUrl: "https://github.com/acme/demo/pull/7",
+    });
+    const client = await connectedClient();
+
+    const result = await client.callTool({ name: "runs.result", arguments: { runId } });
+
+    const envelope = result.structuredContent as Envelope<{
+      completionPending: boolean;
+      result: { prNumber: number | null } | null;
+      pollAfterMs: number | null;
+    }>;
+    expect(envelope.data.completionPending).toBe(false);
+    expect(envelope.data.pollAfterMs).toBeNull();
+    expect(envelope.data.result).toMatchObject({ prNumber: 7 });
   });
 
   it("returns the final outcome for a terminal success run", async () => {
@@ -468,8 +674,16 @@ describe("runs.result", () => {
 });
 
 describe("runs.diagnose", () => {
+  // Keyed on the same predicate the completionPending flag reports, so the
+  // classifier and the two run reads cannot tell an operator different things
+  // about one row. completedAt is set here on purpose: the status flip stamps
+  // it, so the old timestamp-based rule would have called this run finished.
   it("returns the low-confidence completion-fields-pending lead", async () => {
-    const runId = await seedRun({ status: "success", completedAt: null });
+    const runId = await seedRun({
+      status: "success",
+      costKnown: null,
+      completedAt: new Date("2026-08-11T11:55:00.000Z"),
+    });
     const client = await connectedClient();
 
     const result = await client.callTool({ name: "runs.diagnose", arguments: { runId } });
@@ -484,6 +698,26 @@ describe("runs.diagnose", () => {
       confidence: "low",
     });
     expect(envelope.data.nextActions.join(" ")).toMatch(/completion fields are pending/i);
+  });
+
+  // The two rows that are NOT that signal, and would each lose their real cause
+  // if the rule widened: a gate run has no end-of-run write to wait for, and a
+  // parked run's answer is awaiting_input, which sits after this rule.
+  it.each([
+    ["a Post-PR gate run", { workflowId: "wf_post_pr_gate", status: "success" }, "succeeded"],
+    ["a parked run", { status: "awaiting" }, "awaiting_input"],
+  ] as const)("does not classify %s as completion-fields-pending", async (_label, over, category) => {
+    const runId = await seedRun({
+      costKnown: null,
+      completedAt: new Date("2026-08-11T11:55:00.000Z"),
+      ...over,
+    });
+    const client = await connectedClient();
+
+    const result = await client.callTool({ name: "runs.diagnose", arguments: { runId } });
+    const envelope = result.structuredContent as Envelope<{ category: string }>;
+
+    expect(envelope.data.category).toBe(category);
   });
 
   it("returns a structural category for a successful run", async () => {

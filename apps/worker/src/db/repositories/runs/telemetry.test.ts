@@ -594,6 +594,26 @@ describe("markRunFailedOnSelfMove", () => {
     await markRunFailedOnSelfMove(db, "wrun_missing");
     expect(await row("wrun_missing")).toBeUndefined();
   });
+
+  // Same bookkeeping argument as the success flip: "failed" is terminal here,
+  // and the run's own end-of-run telemetry is exactly what a failure path
+  // cannot be relied on to deliver.
+  it("finalizes completedAt/durationSec in the statement that flips the status", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "wrun_f_bookkeeping",
+      subjectKey: "ticket:jira:PROJ-1",
+      workflowId: "wf_agent",
+      workflowName: "Agent",
+      ticketKey: "PROJ-1",
+      status: "running",
+      startedAt: new Date("2026-06-15T10:00:05Z"),
+    });
+    await markRunFailedOnSelfMove(db, "wrun_f_bookkeeping");
+    const r = await row("wrun_f_bookkeeping");
+    expect(r.status).toBe("failed");
+    expect(r.completedAt).not.toBeNull();
+    expect(r.durationSec!).toBeGreaterThan(0);
+  });
 });
 
 describe("markRunFailedByWatchdog", () => {
@@ -797,6 +817,77 @@ describe("markRunSucceededOnSelfMove", () => {
     await markRunSucceededOnSelfMove(db, "wrun_s_missing");
     expect(await row("wrun_s_missing")).toBeUndefined();
   });
+
+  // AIW-369: "success" is terminal the moment this lands, so the flip has to
+  // finalize the same completion bookkeeping a normally-finished run gets, in
+  // the SAME statement (neon-http cannot open a transaction, so a second write
+  // would be its own visible window). Without it the row reads
+  // terminal-yet-never-completed for the whole tail of the run, and forever
+  // whenever the end-of-run telemetry step never lands.
+  it("finalizes completedAt/durationSec in the statement that flips the status", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "wrun_s_bookkeeping",
+      subjectKey: "ticket:jira:PROJ-1",
+      workflowId: "wf_agent",
+      workflowName: "Agent",
+      ticketKey: "PROJ-1",
+      status: "running",
+      startedAt: new Date("2026-06-15T10:00:05Z"),
+    });
+    await markRunSucceededOnSelfMove(db, "wrun_s_bookkeeping");
+    const r = await row("wrun_s_bookkeeping");
+    expect(r.status).toBe("success");
+    expect(r.completedAt).not.toBeNull();
+    expect(r.durationSec).not.toBeNull();
+    expect(r.durationSec!).toBeGreaterThan(0); // now() - startedAt
+  });
+
+  it("stamps completedAt but no duration when no start was recorded", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "wrun_s_no_start",
+      subjectKey: "ticket:jira:PROJ-1",
+      workflowId: "wf_agent",
+      workflowName: "Agent",
+      ticketKey: "PROJ-1",
+      status: "running",
+      createdAt: null,
+      startedAt: null,
+    });
+    await markRunSucceededOnSelfMove(db, "wrun_s_no_start");
+    const r = await row("wrun_s_no_start");
+    expect(r.status).toBe("success");
+    expect(r.completedAt).not.toBeNull(); // the flip time itself
+    expect(r.durationSec).toBeNull(); // no start to measure from, no fabricated zero
+  });
+
+  it("leaves the earlier stamp in place when the end-of-run usage write lands later", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "wrun_1",
+      subjectKey: "ticket:jira:PROJ-1",
+      workflowId: "wf_agent",
+      workflowName: "Agent",
+      ticketKey: "PROJ-1",
+      status: "running",
+      startedAt: new Date("2026-06-15T10:00:05Z"),
+    });
+    await markRunSucceededOnSelfMove(db, "wrun_1");
+    const stamped = await row("wrun_1");
+    expect(stamped.completedAt).not.toBeNull();
+    expect(stamped.durationSec).not.toBeNull();
+
+    await recordRunUsage(db, usage());
+
+    const r = await row("wrun_1");
+    // coalesce in recordRunUsage and durationFromStart's own coalesce: the flip
+    // owns both completion fields, the usage write still lands everything only
+    // it knows. Neither is recomputed against the run's longer tail, so a
+    // reader never sees the duration of one run change between two polls.
+    expect(r.completedAt).toEqual(stamped.completedAt);
+    expect(r.durationSec).toBe(stamped.durationSec);
+    expect(r.status).toBe("success");
+    expect(r.prNumber).toBe(7);
+    expect(r.costUsd).toBeCloseTo(1.23);
+  });
 });
 
 describe("awaiting (clarification park)", () => {
@@ -848,6 +939,44 @@ describe("awaiting (clarification park)", () => {
     expect(flipped).toBe(0);
     expect((await row("wrun_other_ticket")).status).toBe("awaiting");
     expect((await row("wrun_done")).status).toBe("success");
+  });
+
+  // Both writers settle a parked run on a terminal status, so both owe the
+  // completion bookkeeping recordRunUsage writes. A park that was never given
+  // one (the row exists from the run's own registration write) would otherwise
+  // stay terminal-yet-never-completed for good: nothing runs afterwards.
+  it("resolveAwaitingRun finalizes completedAt/durationSec with the flip", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "wrun_park_resolved",
+      subjectKey: "ticket:jira:PROJ-1",
+      workflowId: "wf_agent",
+      workflowName: "Agent",
+      ticketKey: "PROJ-1",
+      status: "awaiting",
+      startedAt: new Date("2026-06-15T10:00:05Z"),
+    });
+    expect(await resolveAwaitingRun(db, "wrun_park_resolved")).toBe(true);
+    const r = await row("wrun_park_resolved");
+    expect(r.status).toBe("success");
+    expect(r.completedAt).not.toBeNull();
+    expect(r.durationSec!).toBeGreaterThan(0);
+  });
+
+  it("resolveAwaitingRunsForTicket finalizes completedAt/durationSec on every superseded row", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "wrun_park_superseded",
+      subjectKey: "ticket:jira:PROJ-1",
+      workflowId: "wf_agent",
+      workflowName: "Agent",
+      ticketKey: "PROJ-1",
+      status: "awaiting",
+      startedAt: new Date("2026-06-15T10:00:05Z"),
+    });
+    expect(await resolveAwaitingRunsForTicket(db, "PROJ-1", "wrun_fresh")).toBe(1);
+    const r = await row("wrun_park_superseded");
+    expect(r.status).toBe("blocked");
+    expect(r.completedAt).not.toBeNull();
+    expect(r.durationSec!).toBeGreaterThan(0);
   });
 });
 
@@ -1148,6 +1277,25 @@ describe("sweepOrphanedAwaitingRuns", () => {
     expect(await sweepOrphanedAwaitingRuns(db)).toBe(0);
     expect((await row("wrun_orphan")).status).toBe("blocked");
   });
+
+  // The sweep is the last writer such a row will ever see, so a settle without
+  // the completion bookkeeping freezes it terminal-yet-never-completed.
+  it("finalizes completedAt/durationSec on the rows it settles", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "wrun_orphan_bookkeeping",
+      subjectKey: "ticket:jira:PROJ-1",
+      workflowId: "wf_agent",
+      workflowName: "Agent",
+      ticketKey: "PROJ-1",
+      status: "awaiting",
+      startedAt: new Date("2026-06-15T10:00:05Z"),
+    });
+    expect(await sweepOrphanedAwaitingRuns(db)).toBe(1);
+    const r = await row("wrun_orphan_bookkeeping");
+    expect(r.status).toBe("blocked");
+    expect(r.completedAt).not.toBeNull();
+    expect(r.durationSec!).toBeGreaterThan(0);
+  });
 });
 
 describe("sweepOrphanedRunningRuns", () => {
@@ -1195,5 +1343,22 @@ describe("sweepOrphanedRunningRuns", () => {
 
     expect(await sweepOrphanedRunningRuns(db)).toBe(0);
     expect((await row("wrun_gate")).status).toBe("running");
+  });
+
+  // Same argument as the awaiting sweep: this is the row's last writer.
+  it("finalizes completedAt/durationSec on the rows it settles", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "wrun_lost_claim_bookkeeping",
+      subjectKey: "ticket:jira:PROJ-1",
+      ticketKey: "PROJ-1",
+      status: "running",
+      startedAt: new Date("2026-06-15T10:00:05Z"),
+    });
+
+    expect(await sweepOrphanedRunningRuns(db)).toBe(1);
+    const r = await row("wrun_lost_claim_bookkeeping");
+    expect(r.status).toBe("blocked");
+    expect(r.completedAt).not.toBeNull();
+    expect(r.durationSec!).toBeGreaterThan(0);
   });
 });

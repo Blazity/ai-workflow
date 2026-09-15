@@ -6,9 +6,14 @@
  * model over that content and never lets raw message/log text leave through
  * evidenceRefs or nextActions, only stable references (step ids, error
  * codes) and a fixed, code-owned set of action phrases. No IO, no runtime
- * state, no other src/mcp module.
+ * state.
  *
- * Two imports, on purpose, and both of the same kind: the per-category
+ * Three imports, on purpose. The third is isRunCompletionPending from this
+ * cluster's own contracts module, which is a pure predicate over three fields
+ * and side-effect free: `completion_fields_pending` has to answer exactly what
+ * `completionPending` answers on runs.get, runs.result and tickets.list_runs,
+ * and a second copy of that rule here is how the two would come to disagree
+ * about the same run. The other two are of one kind: the per-category
  * sentences this file matches on live in exactly one place each
  * (`SAFE_EXECUTION_ERROR_MESSAGES` in packages/workflow-graph/interpreter.ts,
  * the repository scripts classes in workflows/blocks/repository-scripts-
@@ -30,6 +35,7 @@ import {
   isRepositoryScriptsRefusal,
   REPOSITORY_SCRIPTS_SETUP_FAILED_PREFIX,
 } from "../../engine/blocks/support/repository-scripts-output.js";
+import { isRunCompletionPending } from "./contracts.js";
 
 type RunDiagnosisCategory =
   | "completion_fields_pending"
@@ -67,6 +73,13 @@ export type RunDiagnosis = {
 export interface DiagnoseRunInput {
   status: "success" | "running" | "failed" | "blocked" | "awaiting";
   completedAt?: string | null;
+  /** The row's workflow id and whether its end-of-run write has landed: the two
+   *  inputs isRunCompletionPending reads. Required, and required together: a
+   *  default for either would decide the completion_fields_pending rule from
+   *  the absence of an argument rather than from the run, which is how a caller
+   *  that forgot one would silently get a confident wrong category. */
+  workflowId: string | null;
+  usageRecorded: boolean;
   error: { code?: string; message?: string } | null;
   steps: ReadonlyArray<{
     stepId: string;
@@ -377,13 +390,13 @@ interface Rule {
  *
  * One deliberate exception to "non-error statuses first":
  * completion_fields_pending sits immediately BEFORE succeeded, because it is
- * the same structured signal seen one step earlier (a success whose completion
- * write has not landed yet). It is scoped to status "success" for exactly that
- * reason. Statuses that legitimately carry no completed_at are none of its
- * business: resolveAwaitingRunsForTicket writes "blocked" and
- * markRunFailedOnSelfMove writes "failed" without one, and widening this rule
- * to them would diagnose those rows as pending forever instead of giving their
- * real cause.
+ * the same structured signal seen one step earlier (a success whose end-of-run
+ * write has not landed yet). It is scoped to status "success" on top of the
+ * shared predicate for exactly that reason: a failed or blocked run is also
+ * allowed to be missing that write, and diagnosing one as "pending" instead of
+ * giving its real cause is the opposite of useful. The predicate answers false
+ * for a Post-PR gate row and for a live park, so neither can reach this rule
+ * and shadow cancelled / awaiting_input below.
  */
 const RULES: readonly Rule[] = [
   {
@@ -393,7 +406,7 @@ const RULES: readonly Rule[] = [
   {
     category: "completion_fields_pending",
     match: (input) =>
-      input.status === "success" && input.completedAt === null
+      isRunCompletionPending(input)
         ? { confidence: "low", evidenceRefs: evidenceFrom(input) }
         : null,
   },

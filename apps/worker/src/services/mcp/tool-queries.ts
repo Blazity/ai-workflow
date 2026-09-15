@@ -35,6 +35,9 @@ export interface TicketRunRow {
   startedAt: Date | null;
   completedAt: Date | null;
   durationSec: number | null;
+  /** Null until the run's own end-of-run write lands: the page answers
+   *  completionPending from this, exactly as runs.get does. */
+  costKnown: boolean | null;
 }
 
 export function mapMcpTicketRunRows(

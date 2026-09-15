@@ -149,7 +149,7 @@ export const SETTINGS_REGISTRY = [
     default: 3,
     minimum: 1,
     description:
-      "How many automatic runs may hold an agent slot at once. Manual dispatch (workflows.dispatch and the dashboard) does not check it yet (T40).",
+      "How many automatic runs may hold an agent slot at once. Every way a run starts (triggers, the dashboard and workflows.dispatch) checks it.",
     appliesToRunsInFlight: "immediate",
     overridablePerTrigger: false,
   },

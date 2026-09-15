@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
+import { RUN_COMPLETION_GRACE_MS } from "@shared/contracts";
 import type {
   JsonValue,
   ReplayAttemptOutcome,
@@ -43,6 +44,46 @@ const RUN_POLL_INTERVAL_MS = 5_000;
 
 function pollAfterMs(terminal: boolean): number | null {
   return terminal ? null : RUN_POLL_INTERVAL_MS;
+}
+
+// How long runs.result waits for a successful run's end-of-run write before it
+// answers without it. The gap is the tail of a run: the status flip lands with
+// the self-move (engine/steps/ticket-analysis.ts) and the pull requests with the
+// telemetry step in the workflow's outer finally. The window itself is shared
+// with the dashboard's trace header (RUN_COMPLETION_GRACE_MS), which has to say
+// the same thing about the same run at the same second. It exists at all
+// because a row whose usage write never lands must not withhold the outcome for
+// good.
+//
+// Slower than RUN_POLL_INTERVAL_MS on purpose: an in-flight run can change on
+// any tick, while this one is waiting for a single write that arrives once.
+const COMPLETION_PENDING_POLL_MS = 15_000;
+
+/**
+ * When the grace on a pending result runs out, as epoch milliseconds, or null
+ * when the run carries no timestamp to anchor it to.
+ *
+ * Anchored on the completion the status flip stamped, falling back to the run's
+ * start. The row's `updated_at` would be the exact clock, but it is not part of
+ * the contract this tool reads, and the completion stamp is written by the same
+ * statement as the status on every path that finishes a run. A null (no
+ * parseable anchor) expires at once, because never withholding forever is the
+ * property that matters here.
+ */
+function completionGraceEndsAtMs(run: RunDetail): number | null {
+  const anchor = Date.parse(run.completedAt ?? run.startedAt ?? run.createdAt ?? "");
+  return Number.isNaN(anchor) ? null : anchor + RUN_COMPLETION_GRACE_MS;
+}
+
+/** The shared predicate against a run detail. `run.workflow` is the row's
+ *  workflow id (durable-run-detail.ts maps it), so a Post-PR gate row answers
+ *  false here, as it must: no gate run ever gets an end-of-run usage write. */
+function runCompletionPending(run: RunDetail): boolean {
+  return isRunCompletionPending({
+    status: run.status,
+    workflowId: run.workflow,
+    usageRecorded: run.usageRecorded,
+  });
 }
 
 /**
@@ -94,7 +135,7 @@ function toRunSummary(run: RunDetail): McpRunSummary {
     workflowName: run.workflowName,
     status: run.status,
     terminal,
-    completionPending: isRunCompletionPending(run.status, run.completedAt),
+    completionPending: runCompletionPending(run),
     ticketKey: run.ticket ? run.ticket : null,
     createdAt: run.createdAt,
     startedAt: run.startedAt,
@@ -517,7 +558,7 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
         operation: async () => {
           const { run } = await loadSanitizedRun(deps.services, input.runId);
           const terminal = isTerminalRunStatus(run.status);
-          const completionPending = isRunCompletionPending(run.status, run.completedAt);
+          const completionPending = runCompletionPending(run);
           // "awaiting" is terminal for polling, which contracts.ts freezes so an
           // agent stops instead of spinning to the timeout. It is NOT a finished
           // run: markRunAwaiting parks a live run that resumes once a human
@@ -527,14 +568,31 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
           // done to the very person being waited on. There is no final outcome
           // yet, so this says so rather than inventing an empty one.
           const awaitingHumanInput = run.status === "awaiting";
+          // A success whose usage write has not landed is the one terminal row
+          // this tool does not answer: the outcome it could build carries
+          // prs: null with pollAfterMs: null, which reads as "finished, no pull
+          // request" for a run that opened one. The predicate is already scoped
+          // to exactly that case, so there is nothing to narrow here; the grace
+          // is what keeps the wait from lasting for good.
+          const graceEndsAtMs = completionGraceEndsAtMs(run);
+          const withholdingResult =
+            completionPending &&
+            graceEndsAtMs !== null &&
+            deps.now().getTime() < graceEndsAtMs;
           return {
             runId: run.id,
             status: run.status,
             terminal,
             completionPending,
+            // Only ever set while the result is actually being withheld, so a
+            // caller can wait for a stated instant instead of counting polls.
+            pendingUntil:
+              withholdingResult && graceEndsAtMs !== null
+                ? new Date(graceEndsAtMs).toISOString()
+                : null,
             awaitingHumanInput,
             result:
-              terminal && !awaitingHumanInput
+              terminal && !awaitingHumanInput && !withholdingResult
                 ? {
                     error: run.error,
                     prNumber: run.prNumber,
@@ -544,7 +602,10 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
                     durationSec: run.durationSec,
                   }
                 : null,
-            pollAfterMs: pollAfterMs(terminal),
+            // Positive on a withheld success even though it is terminal: there
+            // is something to come back for, and this is the only terminal row
+            // for which that is true.
+            pollAfterMs: withholdingResult ? COMPLETION_PENDING_POLL_MS : pollAfterMs(terminal),
           };
         },
       });
@@ -568,6 +629,11 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
           const diagnoseInput: DiagnoseRunInput = {
             status: run.status,
             completedAt: run.completedAt,
+            // The same two fields the completionPending predicate reads, so the
+            // diagnosis and the reply of runs.get / runs.result cannot disagree
+            // about whether this run's own write has landed.
+            workflowId: run.workflow,
+            usageRecorded: run.usageRecorded,
             error: run.error ? { code: run.error.code, message: run.error.message } : null,
             steps: steps.map((step) => ({
               stepId: step.stepId,
