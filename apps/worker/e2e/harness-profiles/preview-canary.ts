@@ -1,5 +1,5 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { open, stat } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -26,10 +26,24 @@ import {
   assertReplayCanaryEvidence,
   createReplayCanaryFixture,
   parseReplayCanaryEnv,
+  parseReplayCanaryLogLines,
+  REPLAY_CANARY_COVERAGE_PATHS,
   REPLAY_CANARY_FIXTURE_NONCE,
+  scanReplayCanaryLogRows,
   type ReplayCanaryEnv,
   type ReplayCanaryFixture,
+  type ReplayCanaryLogWindow,
 } from "../replay/canary-contract.js";
+
+// The historical query replaced a `--follow` stream: the stream prints a
+// keepalive line every few seconds, so a file fed by it never settles, and its
+// lines never named the run, so coverage by run id could not pass either.
+const REPLAY_CANARY_VERCEL_CLI = "vercel@59.17.0";
+const REPLAY_CANARY_LOG_QUERY_LIMIT = 1_000;
+// Vercel indexes a request some seconds after it answers, so the query starts
+// before the run and is retried until the step route shows up.
+const REPLAY_CANARY_LOG_SINCE_GRACE_MS = 30_000;
+const REPLAY_CANARY_LOG_QUERY_FLOOR_MS = 30_000;
 
 type SqlClient = ReturnType<typeof neon>;
 
@@ -75,16 +89,6 @@ interface WorkflowListData {
   truncated: boolean;
 }
 
-interface WorkflowGraphData {
-  definitionId: number;
-  enabled: boolean;
-  deployedVersion: number | null;
-  deployed:
-    | WorkflowDefinitionV2
-    | { schema: "legacy-v1"; message: string }
-    | null;
-}
-
 interface DispatchPreflightData {
   deployedVersion: number;
   runnable: boolean;
@@ -127,12 +131,6 @@ interface RunLogsDetail {
 interface ReplayCaseVerification {
   env: ReplayCanaryEnv;
   fixture: ReplayCanaryFixture;
-  logCapture: ReplayLogCapture;
-}
-
-interface ReplayLogCapture {
-  path: string;
-  startOffset: number;
 }
 
 interface CanaryMcpClient {
@@ -178,36 +176,30 @@ export async function runHarnessProfilePreviewCanary(
     const customProvider = custom.manifest!.harness.provider;
     await assertPinnedSkillExists(sql, env, custom.organizationId);
 
+    // The tool schema caps limit at 100 (mcp-contract.json); 200 is rejected as
+    // VALIDATION_FAILED before the handler runs.
     const listed = await mcp.call<WorkflowListData>("workflows.list", {
-      limit: 200,
+      limit: 100,
     });
     if (listed.truncated) {
       throw new Error("Workflow list is truncated before canary fixture validation");
     }
-    const cases = await buildCanaryCases(mcp, env, listed, {
+    const cases = await buildCanaryCases(sql, env, listed, {
       claude,
       codex,
       customProvider,
     });
 
-    const replayLogCapture = replayEnv
-      ? await prepareReplayLogCapture(replayEnv)
-      : null;
     const replayFixture = replayEnv
       ? createReplayCanaryFixture(REPLAY_CANARY_FIXTURE_NONCE)
       : null;
 
+    await releaseStaleCanaryClaim(sql, mcp, env.HARNESS_CANARY_TICKET_KEY);
+
     for (const canary of cases) {
       const replay =
-        canary.label === "custom" &&
-        replayEnv &&
-        replayLogCapture &&
-        replayFixture
-          ? {
-              env: replayEnv,
-              fixture: replayFixture,
-              logCapture: replayLogCapture,
-            }
+        canary.label === "custom" && replayEnv && replayFixture
+          ? { env: replayEnv, fixture: replayFixture }
           : undefined;
       const run = await executeCase(env, mcp, sql, canary, replay);
       assertRunHarnessManifest(run.manifests, {
@@ -231,7 +223,7 @@ export async function runHarnessProfilePreviewCanary(
 }
 
 async function buildCanaryCases(
-  mcp: CanaryMcpClient,
+  sql: SqlClient,
   env: HarnessCanaryEnv,
   listed: WorkflowListData,
   profiles: {
@@ -240,22 +232,40 @@ async function buildCanaryCases(
     customProvider: "claude" | "codex";
   },
 ): Promise<CanaryCase[]> {
+  // Read the deployed definitions from the database rather than through
+  // workflows.get_graph: that tool rides workflows:write (the read half of
+  // authoring, policy.ts) and the canary's machine token deliberately holds
+  // only mcp:read and runs:dispatch, so the call answers INSUFFICIENT_SCOPE.
   const definitions = await Promise.all(
     [
       env.HARNESS_CANARY_CLAUDE_WORKFLOW_ID,
       env.HARNESS_CANARY_CODEX_WORKFLOW_ID,
       env.HARNESS_CANARY_CUSTOM_WORKFLOW_ID,
     ].map(async (id) => {
-      const graph = await mcp.call<WorkflowGraphData>("workflows.get_graph", {
-        definitionId: id,
-      });
+      const rows = await sql`
+        SELECT d.id, d.enabled, d.deployed_version, v.definition
+        FROM workflow_definitions d
+        LEFT JOIN workflow_definition_versions v
+          ON v.definition_id = d.id AND v.version = d.deployed_version
+        WHERE d.id = ${id} AND d.archived_at IS NULL
+      `;
+      const row = rows[0] as
+        | {
+            id: number;
+            enabled: boolean;
+            deployed_version: number | null;
+            definition: unknown;
+          }
+        | undefined;
+      if (!row) throw new Error(`Workflow ${id} does not exist or is archived`);
+      const deployed = row.definition;
       return {
-        id: graph.definitionId,
-        enabled: graph.enabled,
-        deployedVersion: graph.deployedVersion,
+        id: row.id,
+        enabled: row.enabled,
+        deployedVersion: row.deployed_version,
         definition:
-          graph.deployed && "schemaVersion" in graph.deployed
-            ? graph.deployed
+          deployed && typeof deployed === "object" && "schemaVersion" in deployed
+            ? (deployed as WorkflowDefinitionV2)
             : null,
       };
     }),
@@ -348,6 +358,7 @@ async function executeCase(
   if (preflight.deployedVersion !== canary.deployedVersion) {
     throw new Error(`Workflow ${canary.workflowId} deployment changed after validation`);
   }
+  const startedAt = Date.now();
   const dispatched = await mcp.call<DispatchData>("workflows.dispatch", {
     ...input,
     expectedDeployedVersion: preflight.deployedVersion,
@@ -357,11 +368,22 @@ async function executeCase(
   const deadline = Date.now() + env.HARNESS_CANARY_TIMEOUT_MS;
   try {
     await waitForSuccessfulRun(mcp, dispatched.runId, deadline);
+    // Every step and flow request of this run answered between the dispatch and
+    // the read that reported it terminal, so that is the window the log query
+    // has to cover.
+    const runWindow = { startedAt, endedAt: Date.now() };
     const manifests = await waitForHarnessManifest(mcp, dispatched.runId, deadline);
     if (replay) {
-      await verifyReplayCase(replay, mcp, sql, dispatched.runId, deadline);
+      await verifyReplayCase(
+        replay,
+        mcp,
+        sql,
+        dispatched.runId,
+        deadline,
+        runWindow,
+      );
     }
-    await waitForRegistryRelease(sql, env.HARNESS_CANARY_TICKET_KEY, 120_000);
+    await releaseFinishedRunClaim(sql, env.HARNESS_CANARY_TICKET_KEY, dispatched.runId);
     return { runId: dispatched.runId, manifests };
   } catch (error) {
     if (Date.now() >= deadline) {
@@ -427,15 +449,15 @@ async function verifyReplayCase(
   sql: SqlClient,
   runId: string,
   deadline: number,
+  runWindow: ReplayCanaryLogWindow,
 ): Promise<void> {
   const { summary, details } = await waitForReplayMcp(mcp, runId, deadline);
   const [databaseRows, appendedLogExport] = await Promise.all([
-    readReplayDatabaseRows(sql, runId),
-    waitForReplayLogExport(replay.env, replay.logCapture, runId),
+    readReplayDatabaseRows(sql, runId, deadline),
+    readCoveredReplayLogWindow(replay.env, runWindow),
   ]);
   assertReplayCanaryEvidence(
     {
-      runId,
       databaseRows,
       apiSummary: summary,
       apiDetails: details,
@@ -577,133 +599,257 @@ async function assertPinnedSkillExists(
   }
 }
 
-async function prepareReplayLogCapture(
-  env: ReplayCanaryEnv,
-): Promise<ReplayLogCapture> {
-  const metadata = await stat(env.REPLAY_CANARY_LOG_EXPORT_PATH).catch(
-    () => null,
-  );
-  if (!metadata?.isFile()) {
-    throw new Error(
-      "Replay canary log export must exist as a regular file before dispatch",
-    );
-  }
-  return {
-    path: env.REPLAY_CANARY_LOG_EXPORT_PATH,
-    startOffset: metadata.size,
-  };
-}
-
+// The attempt row is written before the run answers terminal and its log
+// envelope is patched in afterwards, so a single read can catch the row without
+// one. The MCP half already waits for its own copy; this half waits for the
+// same cell with the same budget rather than failing on the first miss.
 async function readReplayDatabaseRows(
   sql: SqlClient,
   runId: string,
+  deadline: number,
 ): Promise<{ observation: unknown; attempts: unknown[] }> {
-  const observations = await sql`
-    SELECT to_jsonb(observation) AS payload
-    FROM workflow_run_observations observation
-    WHERE observation.run_id = ${runId}
-    LIMIT 1
-  `;
-  const attempts = await sql`
-    SELECT to_jsonb(attempt) AS payload
-    FROM workflow_block_attempts attempt
-    WHERE attempt.run_id = ${runId}
-    ORDER BY attempt.id
-  `;
-  if (!observations[0]?.payload || attempts.length === 0) {
-    throw new Error("Replay canary database capture is incomplete");
-  }
-  return {
-    observation: observations[0].payload,
-    attempts: attempts.map((row) => row.payload),
-  };
-}
-
-async function waitForRegistryRelease(
-  sql: SqlClient,
-  ticketKey: string,
-  timeoutMs: number,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const rows = await sql`
-      SELECT 1 FROM active_runs WHERE ticket_key = ${ticketKey} LIMIT 1
+  let observationSeen = false;
+  let diagnostics: string[] = [];
+  for (;;) {
+    const observations = await sql`
+      SELECT to_jsonb(observation) AS payload
+      FROM workflow_run_observations observation
+      WHERE observation.run_id = ${runId}
+      LIMIT 1
     `;
-    if (rows.length === 0) return;
-    await delay(2_000);
-  }
-  throw new Error(`Run registry did not release ${ticketKey}`);
-}
-
-async function waitForReplayLogExport(
-  env: ReplayCanaryEnv,
-  capture: ReplayLogCapture,
-  runId: string,
-): Promise<string> {
-  const deadline = Date.now() + env.REPLAY_CANARY_LOG_WAIT_MS;
-  let lastSize = -1;
-  let unchangedSince = 0;
-  let latest = "";
-  while (Date.now() < deadline) {
-    const current = await stat(capture.path).catch(() => null);
-    if (!current?.isFile() || current.size < capture.startOffset) {
-      throw new Error("Replay canary log export was removed or truncated");
-    }
-    const appendedBytes = current.size - capture.startOffset;
-    if (appendedBytes > env.REPLAY_CANARY_LOG_MAX_BYTES) {
-      throw new Error("Replay canary log export exceeds its bounded scan limit");
-    }
-    if (current.size !== lastSize) {
-      latest = await readLogRange(
-        capture.path,
-        capture.startOffset,
-        appendedBytes,
-      );
-      lastSize = current.size;
-      unchangedSince = Date.now();
-    }
+    // The alias must not be `attempt`: `workflow_block_attempts` has a column of
+    // that name, a bare name in an expression binds to the column before the
+    // table alias, and `to_jsonb(attempt)` then returns the attempt NUMBER
+    // instead of the row. That is why the database half of the evidence used to
+    // fail while the explicit column below showed the envelope.
+    const attempts = await sql`
+      SELECT attempt_row.id AS id,
+             to_jsonb(attempt_row) AS payload,
+             attempt_row.log_envelope AS log_envelope,
+             attempt_row.observation_revision AS observation_revision,
+             attempt_row.updated_at AS updated_at
+      FROM workflow_block_attempts attempt_row
+      WHERE attempt_row.run_id = ${runId}
+      ORDER BY attempt_row.id
+    `;
+    const observation = observations[0]?.payload;
+    observationSeen = observation != null;
+    diagnostics = attempts.map(
+      (row) =>
+        `attempt ${String(row.id)}: log_envelope=${row.log_envelope == null ? "null" : "present"} observation_revision=${String(row.observation_revision)} updated_at=${String(row.updated_at)}`,
+    );
     if (
-      latest.includes(runId) &&
-      unchangedSince > 0 &&
-      Date.now() - unchangedSince >= env.REPLAY_CANARY_LOG_SETTLE_MS
+      observationSeen &&
+      attempts.some((row) => row.log_envelope != null)
     ) {
-      return latest;
+      // The driver hands jsonb back parsed, but the contract reads keys off the
+      // payload, so prove the shape here rather than assume it.
+      const payloads = attempts.map((row) => parseJsonPayload(row.payload));
+      console.log(
+        `[replay-canary] database attempts: ${payloads.length}, payload types: ${payloads.map((payload) => (payload === null ? "null" : typeof payload)).join(", ")}`,
+      );
+      return { observation, attempts: payloads };
     }
+    if (Date.now() >= deadline) break;
     await delay(2_000);
   }
   throw new Error(
-    "Replay canary log export did not cover and settle after the canary run",
+    `Replay canary database capture never held a log envelope for ${runId}: observation row ${observationSeen ? "present" : "missing"}, ${diagnostics.length === 0 ? "no attempt rows" : diagnostics.join("; ")}`,
   );
 }
 
-async function readLogRange(
-  path: string,
-  startOffset: number,
-  byteLength: number,
-): Promise<string> {
-  if (byteLength === 0) return "";
-  const handle = await open(path, "r");
+function parseJsonPayload(value: unknown): unknown {
+  if (typeof value !== "string") return value;
   try {
-    const buffer = Buffer.alloc(byteLength);
-    let offset = 0;
-    while (offset < buffer.length) {
-      const result = await handle.read(
-        buffer,
-        offset,
-        buffer.length - offset,
-        startOffset + offset,
-      );
-      if (result.bytesRead === 0) break;
-      offset += result.bytesRead;
-    }
-    return new TextDecoder("utf-8", { fatal: true }).decode(
-      buffer.subarray(0, offset),
-    );
+    return JSON.parse(value);
   } catch {
-    throw new Error("Replay canary log export is not valid UTF-8");
-  } finally {
-    await handle.close();
+    return value;
   }
+}
+
+// A finished run's registry claim is released only by the reconciler inside the
+// production poll cron (services/run-lifecycle/reconcile.ts, every 15 minutes),
+// and the canary target runs no cron of its own. The canary therefore releases
+// the claims of its OWN runs, and only after it has proven them terminal, which
+// is the same predicate the reconciler applies later.
+async function releaseFinishedRunClaim(
+  sql: SqlClient,
+  ticketKey: string,
+  runId: string,
+): Promise<void> {
+  await sql`
+    DELETE FROM active_runs WHERE ticket_key = ${ticketKey} AND run_id = ${runId}
+  `;
+  const rows = await sql`
+    SELECT run_id FROM active_runs WHERE ticket_key = ${ticketKey} LIMIT 1
+  `;
+  if (rows.length > 0) {
+    throw new Error(
+      `Run registry still holds ${ticketKey} for run ${String(rows[0]?.run_id)}`,
+    );
+  }
+}
+
+// A previous canary job that ended between a dispatch and its release (a timeout,
+// a cancelled job) leaves a claim the next preflight refuses as already_claimed.
+// Release it only when its run is terminal; a live run keeps its claim and the
+// canary fails loudly instead of racing it.
+async function releaseStaleCanaryClaim(
+  sql: SqlClient,
+  mcp: CanaryMcpClient,
+  ticketKey: string,
+): Promise<void> {
+  const rows = await sql`
+    SELECT run_id FROM active_runs WHERE ticket_key = ${ticketKey}
+  `;
+  for (const row of rows) {
+    const runId = row.run_id as string | null;
+    if (!runId) {
+      throw new Error(`Run registry holds ${ticketKey} without a run id`);
+    }
+    const run = await mcp.call<RunData>("runs.get", { runId });
+    if (!run.terminal) {
+      throw new Error(`Run registry holds ${ticketKey} for live run ${runId}`);
+    }
+    await releaseFinishedRunClaim(sql, ticketKey, runId);
+    console.log(
+      `[harness-canary] released the stale claim of terminal run ${runId} on ${ticketKey}`,
+    );
+  }
+}
+
+// Coverage and the leak scan both come from one historical query, retried until
+// the indexer has the run's step requests or the wait budget runs out.
+async function readCoveredReplayLogWindow(
+  env: ReplayCanaryEnv,
+  runWindow: ReplayCanaryLogWindow,
+): Promise<string> {
+  const deadline = Date.now() + env.REPLAY_CANARY_LOG_WAIT_MS;
+  let lastFailure = "the query returned no rows";
+  for (;;) {
+    try {
+      const stdout = await queryDeploymentLogs(env, runWindow, deadline);
+      const scan = scanReplayCanaryLogRows(
+        parseReplayCanaryLogLines(stdout),
+        runWindow,
+      );
+      if (scan.covered) {
+        console.log(
+          `[replay-canary] log window: ${scan.rowCount} rows, coveredRows ${scan.coveredRows}, logTextBytes ${scan.logTextBytes}`,
+        );
+        // A covered window with no runtime text means the leak assertion below
+        // proves nothing, so it says so instead of passing silently.
+        if (scan.logTextBytes === 0) {
+          console.log(
+            `replay canary: runtime log text empty for ${scan.coveredRows} covered rows in the window, the leak assertion ran against 0 bytes`,
+          );
+        }
+        return scan.logText;
+      }
+      lastFailure = `${scan.rowCount} rows fell inside the run window and none answered ${REPLAY_CANARY_COVERAGE_PATHS.join(" or ")}`;
+    } catch (error) {
+      lastFailure = error instanceof Error ? error.message : String(error);
+    }
+    if (Date.now() >= deadline) break;
+    await delay(2_000);
+  }
+  throw new Error(
+    `Replay canary runtime log query did not prove coverage of the run: ${lastFailure}`,
+  );
+}
+
+// `spawn` rather than `execFile`: the access token rides argv, and an execFile
+// failure puts the whole argument list into its own error message.
+function queryDeploymentLogs(
+  env: ReplayCanaryEnv,
+  runWindow: ReplayCanaryLogWindow,
+  deadline: number,
+): Promise<string> {
+  const args = [
+    "--yes",
+    REPLAY_CANARY_VERCEL_CLI,
+    "logs",
+    env.ENGINE_CANARY_LOG_SOURCE_URL,
+    "--json",
+    "--scope",
+    "blazity",
+    "--token",
+    env.VERCEL_TOKEN,
+    "--since",
+    new Date(
+      runWindow.startedAt - REPLAY_CANARY_LOG_SINCE_GRACE_MS,
+    ).toISOString(),
+    "--until",
+    new Date().toISOString(),
+    "--limit",
+    String(REPLAY_CANARY_LOG_QUERY_LIMIT),
+  ];
+  const timeoutMs = Math.max(
+    REPLAY_CANARY_LOG_QUERY_FLOOR_MS,
+    deadline - Date.now(),
+  );
+  return new Promise((resolve, reject) => {
+    // `detached` puts npx and the CLI it spawns in one process group. Killing
+    // only npx would leave the CLI holding the pipes open, and `close` would
+    // never fire.
+    const child = spawn("npx", args, {
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let bytes = 0;
+    let failure: string | null = null;
+    const stop = (message: string) => {
+      failure ??= message;
+      try {
+        process.kill(-(child.pid ?? 0), "SIGKILL");
+      } catch {
+        child.kill("SIGKILL");
+      }
+    };
+    const timer = setTimeout(
+      () => stop("the Vercel CLI log query did not answer in time"),
+      timeoutMs,
+    );
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      bytes += Buffer.byteLength(chunk, "utf8");
+      if (bytes > env.REPLAY_CANARY_LOG_MAX_BYTES) {
+        stop("the runtime log query exceeded its bounded scan limit");
+        return;
+      }
+      stdout += chunk;
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr = (stderr + chunk).slice(-2_000);
+    });
+    child.on("error", () => {
+      clearTimeout(timer);
+      reject(new Error("the Vercel CLI could not be started"));
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (failure) {
+        reject(new Error(failure));
+        return;
+      }
+      if (code !== 0) {
+        reject(
+          new Error(
+            `the Vercel CLI log query exited with ${code}: ${withoutSecret(stderr, env.VERCEL_TOKEN)}`,
+          ),
+        );
+        return;
+      }
+      resolve(stdout);
+    });
+  });
+}
+
+function withoutSecret(text: string, secret: string): string {
+  return secret.length > 0 ? text.split(secret).join("[redacted]") : text;
 }
 
 async function createCanaryMcpClient(
@@ -728,7 +874,13 @@ async function createCanaryMcpClient(
       const result = await client.callTool({ name, arguments: args });
       const envelope = result.structuredContent as { data?: T } | undefined;
       if (result.isError || envelope?.data === undefined) {
-        throw new Error(`MCP tool ${name} failed`);
+        const detail = Array.isArray(result.content)
+          ? result.content
+              .flatMap((block) => (block.type === "text" ? [block.text] : []))
+              .join(" ")
+              .slice(0, 300)
+          : "";
+        throw new Error(`MCP tool ${name} failed${detail ? `: ${detail}` : ""}`);
       }
       return envelope.data;
     },

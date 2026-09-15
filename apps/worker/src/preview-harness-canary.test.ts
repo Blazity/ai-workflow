@@ -160,7 +160,7 @@ describe("Harness Profile preview canary dry checks", () => {
       publishedVersion: 7,
       manifest: {
         harness: { provider: "codex" },
-        model: { id: "gpt-5-mini" },
+        model: { id: "gpt-5.4-mini" },
         skills: [{ artifactHash: "a".repeat(64), name: "canary-skill" }],
       } as HarnessProfileManifest,
     };
@@ -182,7 +182,7 @@ describe("Harness Profile preview canary dry checks", () => {
         artifactHash: "a".repeat(64),
         skillName: "canary-skill",
       }),
-    ).toThrow(/gpt-5-mini/);
+    ).toThrow(/gpt-5\.4-mini/);
 
     const records = [
       {
