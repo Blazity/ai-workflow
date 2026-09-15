@@ -167,6 +167,54 @@ function expiredKeysPredicate(plan: WorkScopeWritePlan, column: SQL) {
   return sql`${column} IN (${sql.join(keys, sql`, `)})`;
 }
 
+/**
+ * Whether the `proposed` entry may overwrite the `stored` row for its key.
+ *
+ * One fragment for the snapshot prediction and for the conflict clause, so the
+ * version cannot be moved by one rule while the row is written by another.
+ * Rank 0 wins, and an origin overwrites its own kind: a corrected ticket
+ * replaces the ticket text entry it wrote before. The one case a lower origin
+ * may overwrite a higher one is an upsert the plan marks `replacesExpired`,
+ * over an unavailable row of either reason. Whether it has expired is the
+ * decision module's call; the store only refuses to let such a write replace
+ * an exclusion or a selection.
+ */
+function overwriteAllowed(plan: WorkScopeWritePlan, proposed: SQL, stored: SQL) {
+  return sql`(
+    ${proposed}.origin_rank <= ${stored}.origin_rank
+    OR (
+      ${expiredKeysPredicate(plan, sql`${proposed}.repository_key`)}
+      AND ${stored}.state = 'unavailable'
+    )
+  )`;
+}
+
+/**
+ * Whether the `stored` row is the one a removal names: same key, and still the
+ * origin its writer saw, so a person who took the repository over in the
+ * meantime is not undone by a run dropping its text match. Shared by the
+ * prediction and the delete for the same reason as `overwriteAllowed`.
+ */
+function removalMatches(removal: SQL, stored: SQL) {
+  return sql`(
+    ${stored}.repository_key = ${removal}.repository_key
+    AND ${stored}.origin = ${removal}.origin
+  )`;
+}
+
+/** The columns a `trailEventsJson` document is read back as. */
+const TRAIL_EVENT_COLUMNS = sql`ordinal integer, kind text, repository_key text, event jsonb`;
+
+/** Answer rows are keyed once per clarification, so they are written only by
+ *  `applyAnswerWorkScopePlan`: through any other path one would either break
+ *  the unique index or make the real answer read as already applied and drop
+ *  its entries. */
+function refuseAnswerEvents(plan: WorkScopeWritePlan): void {
+  if (plan.trail.some((event) => event.kind === "question_answered")) {
+    throw new Error("A question_answered event is written only through the answer path.");
+  }
+}
+
 function trailEventsJson(plan: WorkScopeWritePlan): string {
   return JSON.stringify(
     plan.trail.map((event, ordinal) => ({
@@ -186,8 +234,9 @@ function trailEventsJson(plan: WorkScopeWritePlan): string {
  * Order matters, and it is forced by which CTE reads which:
  * - `answered` is the answer-once gate (a constant row for any other write).
  * - `predicted` says, from this statement's snapshot, whether the plan changes
- *   an entry row. It mirrors the conflict clause of `upserted` and the join of
- *   `deleted` exactly; the two must stay in step.
+ *   an entry row. It is built from the same `overwriteAllowed` and
+ *   `removalMatches` fragments as `upserted` and `deleted`, so it cannot drift
+ *   from what they write.
  * - `scope` locks the version row before any entry row is touched, in every
  *   writer, and moves the version only for a change. Under that lock the
  *   snapshot is exact whenever the stored version still equals the snapshot's:
@@ -234,9 +283,9 @@ function writePlanStatement(input: {
         repository_key text, state text, unavailable_reason text, origin text,
         origin_rank smallint, rationale text, decided_by jsonb, decided_at timestamptz
       )
-    ), doomed AS (
+    ), removals AS (
       SELECT *
-      FROM jsonb_to_recordset(${deletesJson(plan)}::jsonb) AS doomed(
+      FROM jsonb_to_recordset(${deletesJson(plan)}::jsonb) AS removals(
         repository_key text, origin text
       )
     ), predicted AS (
@@ -248,20 +297,14 @@ function writePlanStatement(input: {
             ON stored.subject_key = ${input.subjectKey}::text
            AND stored.repository_key = incoming.repository_key
           WHERE stored.repository_key IS NULL
-            OR incoming.origin_rank <= stored.origin_rank
-            OR (
-              ${expiredKeysPredicate(plan, sql`incoming.repository_key`)}
-              AND stored.state = 'unavailable'
-              AND stored.unavailable_reason = 'not_enabled'
-            )
+            OR ${overwriteAllowed(plan, sql`incoming`, sql`stored`)}
         )
         OR EXISTS (
           SELECT 1
-          FROM doomed
+          FROM removals
           JOIN ${workScopeEntries} AS stored
             ON stored.subject_key = ${input.subjectKey}::text
-           AND stored.repository_key = doomed.repository_key
-           AND stored.origin = doomed.origin
+           AND ${removalMatches(sql`removals`, sql`stored`)}
         )
       ) AS changes
     ), scope AS (
@@ -313,35 +356,21 @@ function writePlanStatement(input: {
         rationale = EXCLUDED.rationale,
         decided_by = EXCLUDED.decided_by,
         decided_at = EXCLUDED.decided_at
-      -- Rank 0 wins, and an origin overwrites its own kind: a corrected ticket
-      -- replaces the ticket text entry it wrote before.
-      WHERE EXCLUDED.origin_rank <= ${workScopeEntries}.origin_rank
-        -- The one case a lower origin may overwrite a higher one: a repository
-        -- recorded as not enabled that the catalog has since enabled.
-        OR (
-          ${expiredKeysPredicate(plan, sql`EXCLUDED.repository_key`)}
-          AND ${workScopeEntries}.state = 'unavailable'
-          AND ${workScopeEntries}.unavailable_reason = 'not_enabled'
-        )
+      WHERE ${overwriteAllowed(plan, sql`EXCLUDED`, sql`${workScopeEntries}`)}
       RETURNING repository_key, state, unavailable_reason, origin, origin_rank,
         rationale, decided_by, decided_at
     ), deleted AS (
-      -- Only a row still carrying the origin its writer saw: a person who took
-      -- the repository over in the meantime is not undone by a run dropping
-      -- its text match.
       DELETE FROM ${workScopeEntries} AS stored
-      USING scope, doomed
+      USING scope, removals
       WHERE stored.subject_key = scope.subject_key
-        AND stored.repository_key = doomed.repository_key
-        AND stored.origin = doomed.origin
+        AND ${removalMatches(sql`removals`, sql`stored`)}
       RETURNING stored.repository_key
     ), appended AS (
       INSERT INTO ${workScopeTrail} (subject_key, run_id, kind, repository_key, event)
       SELECT ${input.subjectKey}::text, ${input.runId}::text, event.kind,
         event.repository_key, event.event
-      FROM applied, jsonb_to_recordset(${trailEventsJson(plan)}::jsonb) AS event(
-        ordinal integer, kind text, repository_key text, event jsonb
-      )
+      FROM applied, jsonb_to_recordset(${trailEventsJson(plan)}::jsonb)
+        AS event(${TRAIL_EVENT_COLUMNS})
       -- The entries are the fold of the trail, so a line saying an entry was
       -- written or removed exists only when the statement did write or remove
       -- it. A refused upsert or a missed delete is a lost race, and a missing
@@ -376,24 +405,23 @@ export async function applyRunWorkScopePlan(
   input: { subjectKey: string | null; runId: string; plan: WorkScopeWritePlan },
 ): Promise<{ version: number | null }> {
   const { plan } = input;
+  refuseAnswerEvents(plan);
   if (input.subjectKey === null) {
     // A schedule or a subjectless webhook delivery has no record to hold an
-    // entry, so an entry in its plan is a caller bug, refused before any SQL
-    // rather than half written.
-    if (plan.upserts.length > 0 || plan.deletes.length > 0) {
-      throw new Error("A run with no subject can write only trail rows.");
+    // entry, so an entry, or a line saying one was written or removed, is a
+    // caller bug, refused before any SQL rather than half written.
+    if (
+      plan.upserts.length > 0 ||
+      plan.deletes.length > 0 ||
+      plan.trail.some((event) => event.kind === "entry_written" || event.kind === "entry_removed")
+    ) {
+      throw new Error("A run with no subject writes no entry and no entry event.");
     }
-    // Nothing was written, so no line may say an entry was.
-    const trail = plan.trail.filter(
-      (event) => event.kind !== "entry_written" && event.kind !== "entry_removed",
-    );
-    if (trail.length === 0) return { version: null };
+    if (plan.trail.length === 0) return { version: null };
     await db.execute(sql`
       INSERT INTO ${workScopeTrail} (subject_key, run_id, kind, repository_key, event)
       SELECT NULL, ${input.runId}::text, event.kind, event.repository_key, event.event
-      FROM jsonb_to_recordset(${trailEventsJson({ ...plan, trail })}::jsonb) AS event(
-        ordinal integer, kind text, repository_key text, event jsonb
-      )
+      FROM jsonb_to_recordset(${trailEventsJson(plan)}::jsonb) AS event(${TRAIL_EVENT_COLUMNS})
       ORDER BY event.ordinal
     `);
     return { version: null };
@@ -418,6 +446,9 @@ export async function applyRunWorkScopePlan(
  * person read, so a run or another person writing in between is a conflict the
  * panel shows rather than a silently lost update. The person is named by the
  * plan itself, on its entries and its removals.
+ *
+ * Under a race, `currentVersion` in a conflict can equal the expected version,
+ * so a caller re-reads the scope rather than retrying with that number.
  */
 export async function applyPersonWorkScopeEdit(
   db: Db,
@@ -425,6 +456,7 @@ export async function applyPersonWorkScopeEdit(
 ): Promise<
   { outcome: "applied"; scope: WorkScope } | { outcome: "conflict"; currentVersion: number }
 > {
+  refuseAnswerEvents(input.plan);
   const result = await db.execute(sql`
     ${writePlanStatement({
       subjectKey: input.subjectKey,
@@ -507,11 +539,15 @@ export async function applyAnswerWorkScopePlan(
   db: Db,
   input: { subjectKey: string; runId: string; clarificationId: string; plan: WorkScopeWritePlan },
 ): Promise<{ outcome: "applied"; version: number } | { outcome: "already_applied" }> {
-  const answers = input.plan.trail.filter(
-    (event) => event.kind === "question_answered" && event.clarificationId === input.clarificationId,
-  );
+  // Exactly one answer, and it is this clarification's: a second one would
+  // bypass the answer-once gate its own clarification needs.
+  const answers = input.plan.trail.filter((event) => event.kind === "question_answered");
   const [answer] = answers;
-  if (answers.length !== 1 || !answer) {
+  if (
+    answers.length !== 1 ||
+    answer?.kind !== "question_answered" ||
+    answer.clarificationId !== input.clarificationId
+  ) {
     throw new Error(
       `An answer plan carries exactly one question_answered event for "${input.clarificationId}".`,
     );

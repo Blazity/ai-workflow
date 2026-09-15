@@ -293,17 +293,32 @@ describe("replacesExpired", () => {
     ]);
   });
 
-  it("leaves an unavailable entry whose reason was unusable", async () => {
+  it("replaces an unavailable entry whose reason was unusable", async () => {
     await seedPersonEntry({ state: "unavailable", unavailableReason: "unusable" });
     await attachEnabled();
 
     await expect(entriesOf(subjectKey)).resolves.toEqual([
       {
         repositoryKey: "github:acme/api",
-        state: "unavailable",
-        unavailableReason: "unusable",
+        state: "selected",
+        origin: "inferred",
+        rationale: "Enabled since, attached.",
+        decidedBy: runActor,
+        decidedAt: "2026-09-15T12:00:00.000Z",
+      },
+    ]);
+  });
+
+  it("leaves a selected entry", async () => {
+    await seedPersonEntry({ rationale: "Ada chose it." });
+    await attachEnabled();
+
+    await expect(entriesOf(subjectKey)).resolves.toEqual([
+      {
+        repositoryKey: "github:acme/api",
+        state: "selected",
         origin: "person",
-        rationale: "Ada could not give it.",
+        rationale: "Ada chose it.",
         decidedBy: { kind: "person", actorId: "user-1", actorLabel: "Ada" },
         decidedAt: "2026-09-15T10:00:00.000Z",
       },
@@ -611,16 +626,41 @@ describe("a run with no subject", () => {
           trail: [refusal],
         },
       }),
-    ).rejects.toThrow("A run with no subject can write only trail rows.");
+    ).rejects.toThrow("A run with no subject writes no entry and no entry event.");
 
     await expect(db.select().from(workScopeTrail)).resolves.toEqual([]);
     await expect(db.select().from(workScopeEntries)).resolves.toEqual([]);
+  });
+
+  it("throws on an entry event and writes nothing", async () => {
+    await expect(
+      applyRunWorkScopePlan(db, {
+        subjectKey: null,
+        runId: "run-schedule-1",
+        plan: {
+          upserts: [],
+          deletes: [],
+          trail: [
+            refusal,
+            {
+              kind: "entry_removed",
+              entry: entry("github:acme/web"),
+              removedBy: runActor,
+            },
+          ],
+        },
+      }),
+    ).rejects.toThrow("A run with no subject writes no entry and no entry event.");
+
+    await expect(db.select().from(workScopeTrail)).resolves.toEqual([]);
   });
 });
 
 describe("listWorkScopeTrail paging", () => {
   const ada: WorkScopeActor = { kind: "person", actorId: "user-1", actorLabel: "Ada" };
 
+  // Ids 1 to 6 in this order; the answers go through the only path that may
+  // write them.
   async function seedSixRows() {
     await applyRunWorkScopePlan(db, {
       subjectKey,
@@ -635,18 +675,50 @@ describe("listWorkScopeTrail paging", () => {
             repositories: [{ repositoryKey: "github:acme/api", askedBecause: "selection" }],
           },
           { kind: "map_shown", text: "api", repositoryKeys: ["github:acme/api"] },
+        ],
+      },
+    });
+    await applyAnswerWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId: "clarification-1",
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [
           {
             kind: "question_answered",
             clarificationId: "clarification-1",
             answer: { kind: "none" },
             answeredBy: ada,
           },
+        ],
+      },
+    });
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-2",
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [
           {
             kind: "question_asked",
             clarificationId: "clarification-2",
             repositories: [{ repositoryKey: "github:acme/web", askedBecause: "not_enabled" }],
           },
           { kind: "map_shown", text: "api, web", repositoryKeys: ["github:acme/api"] },
+        ],
+      },
+    });
+    await applyAnswerWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-2",
+      clarificationId: "clarification-2",
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [
           {
             kind: "question_answered",
             clarificationId: "clarification-2",
@@ -1000,6 +1072,127 @@ describe("the version moves only when an entry changed", () => {
             origin: "ticket_text",
             rationale: "The ticket names it.",
             decidedBy: { kind: "run", runId: "run-1", definitionId: 4, definitionVersion: 7 },
+            decidedAt: "2026-09-15T10:00:00.000Z",
+          },
+        ],
+      },
+    });
+    expect((await readWorkScope(db, subjectKey))?.version).toBe(1);
+  });
+});
+
+describe("answer rows only through the answer path", () => {
+  const ada: WorkScopeActor = { kind: "person", actorId: "user-1", actorLabel: "Ada" };
+  const answeredNone = {
+    kind: "question_answered",
+    clarificationId: "clarification-1",
+    answer: { kind: "none" },
+    answeredBy: ada,
+  } as const;
+
+  it("throws on a run plan carrying an answer and writes nothing", async () => {
+    await expect(
+      applyRunWorkScopePlan(db, {
+        subjectKey,
+        runId: "run-1",
+        plan: { ...upsertsOnly(entry("github:acme/api")), trail: [answeredNone] },
+      }),
+    ).rejects.toThrow("A question_answered event is written only through the answer path.");
+
+    await expect(db.select().from(workScopes)).resolves.toEqual([]);
+    await expect(db.select().from(workScopeTrail)).resolves.toEqual([]);
+  });
+
+  it("throws on a person plan carrying an answer and writes nothing", async () => {
+    await expect(
+      applyPersonWorkScopeEdit(db, {
+        subjectKey,
+        expectedVersion: 0,
+        plan: { upserts: [], deletes: [], trail: [answeredNone] },
+      }),
+    ).rejects.toThrow("A question_answered event is written only through the answer path.");
+
+    await expect(db.select().from(workScopeTrail)).resolves.toEqual([]);
+  });
+
+  it("throws on an answer plan carrying a second, different answer", async () => {
+    await expect(
+      applyAnswerWorkScopePlan(db, {
+        subjectKey,
+        runId: "run-1",
+        clarificationId: "clarification-1",
+        plan: {
+          upserts: [],
+          deletes: [],
+          trail: [answeredNone, { ...answeredNone, clarificationId: "clarification-2" }],
+        },
+      }),
+    ).rejects.toThrow(
+      'An answer plan carries exactly one question_answered event for "clarification-1".',
+    );
+
+    await expect(db.select().from(workScopeTrail)).resolves.toEqual([]);
+  });
+});
+
+describe("a subject with no record", () => {
+  it("gets no record from a plan that carries only trail rows", async () => {
+    await expect(
+      applyRunWorkScopePlan(db, {
+        subjectKey,
+        runId: "run-1",
+        plan: {
+          upserts: [],
+          deletes: [],
+          trail: [
+            { kind: "request_refused", repositoryKey: "github:acme/api", reason: "outside_policy" },
+          ],
+        },
+      }),
+    ).resolves.toEqual({ version: 0 });
+
+    await expect(db.select().from(workScopes)).resolves.toEqual([]);
+    await expect(readWorkScope(db, subjectKey)).resolves.toBeNull();
+    expect((await db.select().from(workScopeTrail)).map((row) => row.subjectKey)).toEqual([
+      "ticket:jira:AWT-1",
+    ]);
+  });
+
+  it("gets version 1 from a person edit expecting version 0", async () => {
+    const ada: WorkScopeActor = { kind: "person", actorId: "user-1", actorLabel: "Ada" };
+
+    await expect(
+      applyPersonWorkScopeEdit(db, {
+        subjectKey,
+        expectedVersion: 0,
+        plan: {
+          upserts: [
+            {
+              entry: entry("github:acme/api", {
+                state: "excluded",
+                origin: "person",
+                rationale: "Ada ruled it out.",
+                decidedBy: ada,
+              }),
+              replacesExpired: false,
+            },
+          ],
+          deletes: [],
+          trail: [],
+        },
+      }),
+    ).resolves.toEqual({
+      outcome: "applied",
+      scope: {
+        subjectKey: "ticket:jira:AWT-1",
+        version: 1,
+        entries: [
+          {
+            repositoryKey: "github:acme/api",
+            state: "excluded",
+            origin: "person",
+            rationale: "Ada ruled it out.",
+            decidedBy: { kind: "person", actorId: "user-1", actorLabel: "Ada" },
             decidedAt: "2026-09-15T10:00:00.000Z",
           },
         ],
