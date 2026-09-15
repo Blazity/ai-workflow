@@ -1713,6 +1713,7 @@ async function agentWorkflowBody(
           attached: ctx.selectedRepositories,
           completedRounds: ctx.repositoryExpansion.rounds,
           allAttachedRequests: ctx.repositoryExpansion.allAttachedRequests ?? 0,
+          askedUnavailable: ctx.repositoryExpansion.askedUnavailable,
         });
         // The policy is the pure decideRepositoryExpansion; this closure only
         // performs the action it names and stores the state it returns
@@ -1724,6 +1725,10 @@ async function agentWorkflowBody(
           requests,
         });
         if (action.kind === "ask_limit" || action.kind === "ask_unrecognised") {
+          // The question is part of the state: a repository a person is asked
+          // about is recorded there, so the same question is never raised
+          // twice in one run.
+          ctx.repositoryExpansion = expansionState;
           return planningClarificationResult(action.questions);
         }
         if (action.kind === "fail") {

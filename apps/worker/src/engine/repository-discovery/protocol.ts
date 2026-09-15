@@ -147,7 +147,7 @@ export function validateRepositoryDiscoveryResult(
  * clarification about duplicates or an unparseable answer, so the other
  * refusals keep the bare question.
  */
-export const UNAVAILABLE_REPOSITORY_HINT =
+const UNAVAILABLE_REPOSITORY_HINT =
   "Enable it on the Repositories page, or answer with another repository.";
 
 function clarification(reason: string, hint?: string): RepositoryDiscoveryDecision {

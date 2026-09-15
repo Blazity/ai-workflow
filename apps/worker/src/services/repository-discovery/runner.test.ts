@@ -566,38 +566,75 @@ describe("parseRepositoryExpansionAnswer", () => {
       { provider: "github", repoPath: "acme/app" },
       { provider: "gitlab", repoPath: "group/sub/lib" },
       { repoPath: "acme/api" },
-      { repoPath: "x/y" },
+      { provider: "github", repoPath: "x/y" },
     ]);
   });
 
   it.each([
-    "https://github.com/acme/api",
-    "https://github.com/acme/api.git",
-    "https://github.com/acme/api/",
-    "http://gitlab.com/acme/api",
-    "https://github.com/acme/api/blob/main/src/index.ts",
-    "https://github.com/acme/api/pull/42",
-    "https://github.com/acme/api/issues/7#issuecomment-1",
-  ])("reduces %s to its owner/repo path", (url) => {
+    ["https://github.com/acme/api", "github"],
+    ["https://github.com/acme/api.git", "github"],
+    ["https://github.com/acme/api/", "github"],
+    ["https://www.github.com/acme/api.git/", "github"],
+    ["http://gitlab.com/acme/api", "gitlab"],
+    ["https://github.com/acme/api/blob/main/src/index.ts", "github"],
+    ["https://github.com/acme/api/pull/42", "github"],
+    ["https://github.com/acme/api/issues/7#issuecomment-1", "github"],
+  ] as const)("reduces %s to its owner/repo path on %s", (url, provider) => {
     // A human answering in Jira pastes the link they have open, which is
     // usually the file or the pull request, not the repository page. Refusing
     // it and asking again is the loop this clarification is supposed to end.
-    expect(parseRepositoryExpansionAnswer(url)).toEqual([{ repoPath: "acme/api" }]);
+    // The host says which provider the person was looking at, so the link
+    // carries it instead of leaving the choice to whatever the catalog holds.
+    expect(parseRepositoryExpansionAnswer(url)).toEqual([{ provider, repoPath: "acme/api" }]);
   });
 
   it.each([
     "https://gitlab.com/acme/shared/contracts",
+    "https://www.gitlab.com/acme/shared/contracts.git",
     "https://gitlab.com/acme/shared/contracts/-/tree/main?ref_type=heads",
     "https://gitlab.com/acme/shared/contracts/-/merge_requests/12",
   ])("keeps the whole subgroup path of %s", (url) => {
     expect(parseRepositoryExpansionAnswer(url)).toEqual([
-      { repoPath: "acme/shared/contracts" },
+      { provider: "gitlab", repoPath: "acme/shared/contracts" },
+    ]);
+  });
+
+  it.each([
+    "https://git.example.com/acme/api",
+    "https://gitlab.example.com/acme/api/-/tree/main",
+    "https://github.example.com/acme/api.git",
+  ])("leaves the provider to the catalog for a link on another host: %s", (url) => {
+    // Only the two public hosts say which provider they are. A self-hosted
+    // host could be either, so it stays a bare path the catalog resolves.
+    expect(parseRepositoryExpansionAnswer(url)).toEqual([{ repoPath: "acme/api" }]);
+  });
+
+  it.each([
+    "https://github.com/acme/api/wiki",
+    "https://github.com/acme/api/actions/runs/1",
+    "https://github.com/acme/api/releases",
+    "https://github.com/acme/api/compare/a...b",
+    "https://github.com/acme/api/blob/main/x",
+    "git@github.com:acme/api.git",
+  ])("reads the GitHub repository as the first two path segments of %s", (link) => {
+    expect(parseRepositoryExpansionAnswer(link)).toEqual([
+      { provider: "github", repoPath: "acme/api" },
+    ]);
+  });
+
+  it.each([
+    "https://gitlab.com/acme/shared/contracts.git",
+    "https://gitlab.com/acme/shared/contracts/-/wikis/home",
+    "git@gitlab.com:acme/shared/contracts.git",
+  ])("reads the GitLab repository as the path before /-/ of %s", (link) => {
+    expect(parseRepositoryExpansionAnswer(link)).toEqual([
+      { provider: "gitlab", repoPath: "acme/shared/contracts" },
     ]);
   });
 
   it("keeps a repository whose own name collides with a url path segment", () => {
     expect(parseRepositoryExpansionAnswer("https://github.com/acme/tree")).toEqual([
-      { repoPath: "acme/tree" },
+      { provider: "github", repoPath: "acme/tree" },
     ]);
   });
 
@@ -704,6 +741,75 @@ describe("validateHumanRepositoryExpansion", () => {
     },
   );
 
+  it.each(
+    [
+      "none",
+      "None.",
+      "No.",
+      "none, continue without it",
+      "None. Thanks",
+      "none: continue without it",
+    ].flatMap(
+      (answer) => [answer, `Filip Maszota: ${answer}`],
+    ),
+  )("reads %o as no further repositories, with or without the Jira author", (answer) => {
+    // An answer from Jira comments arrives as "<author>: <body>", and people
+    // add a few words after "none", the keyword the question asks for. Asking
+    // again because of either is the loop this answer exists to end.
+    expect(
+      validateHumanRepositoryExpansion({
+        answer,
+        catalog: humanCatalog,
+        attached: [{ provider: "github", repoPath: "acme/api" }],
+      }),
+    ).toEqual({ kind: "exhausted" });
+  });
+
+  it("reads several Jira comments that each say none as no further repositories", () => {
+    // Several comments are joined with a blank line, each with its author.
+    expect(
+      validateHumanRepositoryExpansion({
+        answer: "Filip Maszota: none\n\nAnna Nowak: None, continue without it",
+        catalog: humanCatalog,
+        attached: [],
+      }),
+    ).toEqual({ kind: "exhausted" });
+  });
+
+  it.each(["no, use github:acme/app", "Filip Maszota: no, use github:acme/app"])(
+    "attaches the repository an answer names even when it starts with a refusal: %o",
+    (answer) => {
+      expect(
+        validateHumanRepositoryExpansion({ answer, catalog: humanCatalog, attached: [] }),
+      ).toEqual({
+        kind: "attach",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/app",
+            defaultBranch: "main",
+            selectedRationale: "requested by human clarification answer",
+          },
+        ],
+      });
+    },
+  );
+
+  it.each(
+    [
+      "nonexistent-repo",
+      "nobody knows",
+      // Only "none" may carry more words: after any other refusal word they
+      // are usually the actual answer.
+      "No, continue without it",
+      "No, the code lives in the web repo, attach that",
+    ].flatMap((answer) => [answer, `Filip Maszota: ${answer}`]),
+  )("does not read %o as a refusal", (answer) => {
+    expect(
+      validateHumanRepositoryExpansion({ answer, catalog: humanCatalog, attached: [] }).kind,
+    ).toBe("unrecognised_answer");
+  });
+
   it("rejects an off-catalog repository with a clarification", () => {
     expect(
       validateHumanRepositoryExpansion({
@@ -736,6 +842,80 @@ describe("validateHumanRepositoryExpansion", () => {
       expect(decision.questions[0]).toContain("github:acme/app");
       expect(decision.questions[0]).toContain("gitlab:acme/app");
     }
+  });
+
+  it.each([
+    "https://github.com/acme/app",
+    "https://www.github.com/acme/app.git",
+    "https://github.com/acme/app/blob/main/README.md",
+  ])("attaches the GitHub repository a pasted GitHub link names: %s", (answer) => {
+    // acme/app exists on both providers, so a bare path would have to ask. The
+    // link already says which one the person meant.
+    expect(
+      validateHumanRepositoryExpansion({ answer, catalog: humanCatalog, attached: [] }),
+    ).toEqual({
+      kind: "attach",
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/app",
+          defaultBranch: "main",
+          selectedRationale: "requested by human clarification answer",
+        },
+      ],
+    });
+  });
+
+  it.each([
+    "https://gitlab.com/acme/app",
+    "https://gitlab.com/acme/app/-/tree/trunk",
+  ])("attaches the GitLab repository a pasted GitLab link names: %s", (answer) => {
+    expect(
+      validateHumanRepositoryExpansion({ answer, catalog: humanCatalog, attached: [] }),
+    ).toEqual({
+      kind: "attach",
+      repositories: [
+        {
+          provider: "gitlab",
+          repoPath: "acme/app",
+          defaultBranch: "trunk",
+          selectedRationale: "requested by human clarification answer",
+        },
+      ],
+    });
+  });
+
+  it("answers a GitHub link to a repository off the catalog as not on the catalog, once", () => {
+    // gitlab:acme/secret does not exist either, but the link named GitHub, so
+    // the answer is about the GitHub repository and only that one.
+    const decision = validateHumanRepositoryExpansion({
+      answer: "https://github.com/acme/secret",
+      catalog: humanCatalog,
+      attached: [],
+    });
+    expect(decision.kind).toBe("clarification_needed");
+    if (decision.kind !== "clarification_needed") return;
+    expect(decision.questions).toHaveLength(1);
+    expect(decision.questions[0]).toContain(
+      "github:acme/secret is not on the accessible repository catalog.",
+    );
+    expect(isRepositoryExpansionClarification(decision.questions)).toBe(true);
+  });
+
+  it("answers a GitHub link as not on the catalog when only the GitLab twin exists", () => {
+    // The GitLab mirror is on the catalog under the same path. Attaching it
+    // would hand the person a repository their link did not name.
+    const decision = validateHumanRepositoryExpansion({
+      answer: "https://github.com/acme/app",
+      catalog: humanCatalog.filter((entry) => entry.provider === "gitlab"),
+      attached: [],
+    });
+    expect(decision.kind).toBe("clarification_needed");
+    if (decision.kind !== "clarification_needed") return;
+    expect(decision.questions).toHaveLength(1);
+    expect(decision.questions[0]).toContain(
+      "github:acme/app is not on the accessible repository catalog.",
+    );
   });
 
   it("asks once more when the answer is prose that names no repository", () => {
@@ -1155,6 +1335,504 @@ describe("decideRepositoryExpansion", () => {
         allAttachedRequests: 0,
         humanAttachRound: 2,
       });
+    });
+  });
+
+  describe("a repository that is not available to the run", () => {
+    // The run starts with github:acme/service attached. github:acme/private is
+    // what the agent keeps asking for: the catalog the run was frozen with
+    // does not hold it. gitlab:acme/shared/contracts is what a person can add.
+    const service: RepositoryCatalogEntry = {
+      provider: "github",
+      repoPath: "acme/service",
+      name: "service",
+      defaultBranch: "main",
+      description: "",
+      topics: [],
+      relationships: [],
+      usable: true,
+    };
+    const contracts: RepositoryCatalogEntry = {
+      provider: "gitlab",
+      repoPath: "acme/shared/contracts",
+      name: "contracts",
+      defaultBranch: "main",
+      description: "",
+      topics: [],
+      relationships: [],
+      usable: true,
+    };
+    // On the catalog but not usable: the other way a repository cannot be
+    // attached, next to github:acme/private, which is off the catalog.
+    const broken: RepositoryCatalogEntry = {
+      provider: "github",
+      repoPath: "acme/broken",
+      name: "broken",
+      defaultBranch: "",
+      description: "",
+      topics: [],
+      relationships: [],
+      usable: false,
+      unusableReason: "missing_default_branch",
+    };
+    const runCatalog = [service, contracts, broken];
+    const privateRequest = {
+      provider: "github" as const,
+      repoPath: "acme/private",
+      rationale: "the ticket names it",
+    };
+
+    /** One research pass asking for repositories, as the planning closure runs
+     *  it: the validator gives the verdict, the decision gives the action and
+     *  the state the closure stores. */
+    function modelPass(
+      current: RepositoryExpansionState,
+      attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+      requests: Array<{ provider: "github" | "gitlab"; repoPath: string; rationale: string }> = [
+        privateRequest,
+      ],
+    ) {
+      const verdict = validateRepositoryExpansionRequests({
+        requests,
+        catalog: runCatalog,
+        attached,
+        completedRounds: current.rounds,
+        allAttachedRequests: current.allAttachedRequests,
+        askedUnavailable: current.askedUnavailable,
+      });
+      return decideRepositoryExpansion({
+        origin: "model",
+        verdict,
+        state: current,
+        requests,
+      });
+    }
+
+    const contractsRequest = {
+      provider: "gitlab" as const,
+      repoPath: "acme/shared/contracts",
+      rationale: "shared types",
+    };
+    const unknownRequest = {
+      provider: "github" as const,
+      repoPath: "acme/unknown",
+      rationale: "named in a stack trace",
+    };
+
+    /** A person's answer to the latest expansion question, as the resume path
+     *  applies it. */
+    function humanPass(
+      current: RepositoryExpansionState,
+      answer: string,
+      round: number,
+      attached: Array<{ provider: "github" | "gitlab"; repoPath: string }> = [service],
+    ) {
+      return decideRepositoryExpansion({
+        origin: "human",
+        verdict: validateHumanRepositoryExpansion({
+          answer,
+          catalog: runCatalog,
+          attached,
+        }),
+        state: current,
+        clarificationRounds: round,
+      });
+    }
+
+    it("asks once, saying the run cannot use it and what a person can do instead", () => {
+      const decision = modelPass(state(), [service]);
+
+      expect(decision.action.kind).toBe("ask_unrecognised");
+      if (decision.action.kind !== "ask_unrecognised") return;
+      expect(decision.action.questions).toHaveLength(1);
+      const [question] = decision.action.questions;
+      expect(isRepositoryExpansionClarification(decision.action.questions)).toBe(true);
+      expect(question).toContain("github:acme/private, which is not available to this run.");
+      expect(question).toContain("another repository alongside the ones already attached");
+      expect(question).toContain(
+        "To use it, enable it on the Repositories page and start a new run.",
+      );
+      // "none" is the keyword to reply with, and it is honest about what it
+      // means: the run goes on without the repository only as far as it can.
+      expect(question).toContain(
+        'Reply "none" to continue without github:acme/private; the run stops if the agent cannot plan without it.',
+      );
+      // Said once: the guidance appended to every question does not repeat it.
+      expect(question.split('"none"')).toHaveLength(2);
+      expect(question).not.toContain("if no further repositories are needed");
+      // The run only ever adds repositories, and its access was frozen when it
+      // started, so neither a replacement nor enabling it mid-run is offered.
+      expect(question).not.toContain("Which accessible repository should be used?");
+      expect(question).not.toContain("or answer with another repository");
+      expect(question).toContain('Reply "none"');
+      // Asking is not a round: the round counter stays where it was.
+      expect(decision.state.rounds).toBe(0);
+    });
+
+    it("does not ask again after a person answered with another repository", () => {
+      const asked = modelPass(state(), [service]);
+      expect(asked.action.kind).toBe("ask_unrecognised");
+
+      // The person names a repository to add, and it is attached.
+      const answered = decideRepositoryExpansion({
+        origin: "human",
+        verdict: validateHumanRepositoryExpansion({
+          answer: "https://gitlab.com/acme/shared/contracts",
+          catalog: runCatalog,
+          attached: [service],
+        }),
+        state: asked.state,
+        clarificationRounds: 1,
+      });
+      expect(answered.action).toEqual({
+        kind: "attach",
+        repositories: [
+          {
+            provider: "gitlab",
+            repoPath: "acme/shared/contracts",
+            defaultBranch: "main",
+            selectedRationale: "requested by human clarification answer",
+          },
+        ],
+      });
+
+      // The next pass asks for github:acme/private again. The person already
+      // answered that question, so it is not raised a second time: the run
+      // carries on exactly as if they had answered "none" to it.
+      const repeated = modelPass(answered.state, [service, contracts]);
+      expect(repeated.action).toEqual({ kind: "proceed" });
+      expect(repeated.state.expansionClosed).toBe("human");
+      expect(repeated.state.rounds).toBe(0);
+
+      // The pass after that still needs it, which ends the run with a message
+      // that says why and what to do.
+      const closedPass = modelPass(repeated.state, [service, contracts]);
+      expect(closedPass.action.kind).toBe("fail");
+      if (closedPass.action.kind !== "fail") return;
+      expect(closedPass.action.message).toContain("still needs github:acme/private");
+      expect(closedPass.action.message).toContain("which this run cannot use");
+      expect(closedPass.action.message).toContain(
+        "Enable it on the Repositories page and start a new run.",
+      );
+      expect(closedPass.action.message.length).toBeLessThanOrEqual(200);
+    });
+
+    it("ends a closed run on the repeated request instead of asking again", () => {
+      // The bound closed expansion after the person was asked once, so every
+      // pass since carried the "expansion closed" note. A repeated request for
+      // the repository they were asked about has nothing new to ask.
+      const asked = modelPass(state(), [service]);
+      const closed = { ...asked.state, expansionClosed: "bound" as const };
+
+      const decision = modelPass(closed, [service]);
+
+      expect(decision.action.kind).toBe("fail");
+      if (decision.action.kind !== "fail") return;
+      expect(decision.action.message).toContain("still needs github:acme/private");
+      expect(decision.action.message).toContain(
+        "Enable it on the Repositories page and start a new run.",
+      );
+    });
+
+    it("still asks about a different unavailable repository", () => {
+      const asked = modelPass(state(), [service]);
+
+      const other = { provider: "github" as const, repoPath: "acme/other", rationale: "x" };
+      const decision = decideRepositoryExpansion({
+        origin: "model",
+        verdict: validateRepositoryExpansionRequests({
+          requests: [other],
+          catalog: runCatalog,
+          attached: [service],
+          completedRounds: asked.state.rounds,
+        }),
+        state: asked.state,
+        requests: [other],
+      });
+
+      expect(decision.action.kind).toBe("ask_unrecognised");
+      if (decision.action.kind !== "ask_unrecognised") return;
+      expect(decision.action.questions[0]).toContain("github:acme/other");
+    });
+
+    it.each([
+      ["listed first", () => [privateRequest, contractsRequest]],
+      ["listed last", () => [contractsRequest, privateRequest]],
+    ])(
+      "attaches an enabled repository requested with one a person was already asked about, %s",
+      (_, requests) => {
+        const asked = modelPass(state(), [service]);
+
+        const decision = modelPass(asked.state, [service], requests());
+
+        // The repeated request has its answer already; the enabled repository
+        // beside it is a request of its own and attaches as any other would.
+        expect(decision.action).toEqual({
+          kind: "attach",
+          repositories: [
+            {
+              provider: "gitlab",
+              repoPath: "acme/shared/contracts",
+              defaultBranch: "main",
+              selectedRationale: "shared types",
+            },
+          ],
+        });
+        expect(decision.state.rounds).toBe(1);
+        expect(decision.state.expansionClosed).toBeUndefined();
+        expect(decision.state.askedUnavailable).toEqual(["github:acme/private"]);
+      },
+    );
+
+    it("asks about a new unavailable repository requested with one a person was already asked about", () => {
+      const asked = modelPass(state(), [service]);
+
+      const decision = modelPass(asked.state, [service], [privateRequest, unknownRequest]);
+
+      expect(decision.action.kind).toBe("ask_unrecognised");
+      if (decision.action.kind !== "ask_unrecognised") return;
+      expect(decision.action.questions).toHaveLength(1);
+      expect(decision.action.questions[0]).toContain(
+        "Research requested github:acme/unknown, which is not available to this run.",
+      );
+      expect(decision.action.questions[0]).not.toContain("github:acme/private");
+      expect(decision.state.askedUnavailable).toEqual([
+        "github:acme/private",
+        "github:acme/unknown",
+      ]);
+    });
+
+    it("reads a repeated request beside an attached repository as the repeated request alone", () => {
+      const asked = modelPass(state(), [service]);
+      const serviceRequest = { provider: "github" as const, repoPath: "acme/service", rationale: "x" };
+
+      const decision = modelPass(asked.state, [service], [serviceRequest, privateRequest]);
+
+      expect(decision.action).toEqual({ kind: "proceed" });
+      expect(decision.state.expansionClosed).toBe("human");
+      expect(decision.state.rounds).toBe(0);
+    });
+
+    it("records the repository behind the round-limit question, so a person is asked about it once", () => {
+      const raised: string[][] = [];
+      const limited = modelPass(state({ rounds: 2 }), [service]);
+      expect(limited.action.kind).toBe("ask_limit");
+      if (limited.action.kind === "ask_limit") raised.push(limited.action.questions);
+      expect(limited.state.askedUnavailable).toEqual(["github:acme/private"]);
+
+      // The person answers the limit question with another repository.
+      const answered = humanPass(limited.state, "gitlab:acme/shared/contracts", 1);
+      expect(answered.action.kind).toBe("attach");
+
+      // Research asks for the same unusable repository again: not a second
+      // limit question, but the closure a repeated request always takes.
+      const repeated = modelPass(answered.state, [service, contracts]);
+      if (repeated.action.kind === "ask_limit" || repeated.action.kind === "ask_unrecognised") {
+        raised.push(repeated.action.questions);
+      }
+      expect(repeated.action).toEqual({ kind: "proceed" });
+      expect(repeated.state.expansionClosed).toBe("human");
+      expect(raised).toHaveLength(1);
+    });
+
+    it("closes expansion on the second answer that names only the repository the run cannot use", () => {
+      // The question says to enable it on the Repositories page, so a person
+      // may well answer with the repository itself. The run still cannot use
+      // it, and answering so twice must not ask a third time.
+      const asked = modelPass(state(), [service]);
+
+      const first = humanPass(asked.state, "github:acme/private", 1);
+      expect(first.action.kind).toBe("ask_unrecognised");
+      if (first.action.kind !== "ask_unrecognised") return;
+      expect(first.action.questions).toHaveLength(1);
+      expect(isRepositoryExpansionClarification(first.action.questions)).toBe(true);
+      expect(first.action.questions[0]).toContain(
+        "github:acme/private is not on the accessible repository catalog.",
+      );
+      expect(first.state.expansionClosed).toBeUndefined();
+
+      const second = humanPass(first.state, "github:acme/private", 2);
+      expect(second.action).toEqual({ kind: "proceed" });
+      expect(second.state.expansionClosed).toBe("human");
+    });
+
+    const contractsAttached = {
+      provider: "gitlab",
+      repoPath: "acme/shared/contracts",
+      defaultBranch: "main",
+      selectedRationale: "requested by human clarification answer",
+    };
+
+    it.each([
+      ["named first", "github:acme/private, gitlab:acme/shared/contracts"],
+      ["named last", "gitlab:acme/shared/contracts github:acme/private"],
+      [
+        "in two Jira comments",
+        "Filip Maszota: github:acme/private\n\nAnna Nowak: gitlab:acme/shared/contracts",
+      ],
+    ])(
+      "attaches the usable repository from an answer that also names the one the run cannot use, %s",
+      (_, answer) => {
+        const asked = modelPass(state(), [service]);
+
+        const answered = humanPass(asked.state, answer, 1);
+        expect(answered.action).toEqual({ kind: "attach", repositories: [contractsAttached] });
+        expect(answered.state.askedUnavailable).toEqual(["github:acme/private"]);
+
+        // The next loop pass reads the same answer again with contracts
+        // attached. It names nothing new that can be attached, so it is
+        // `exhausted`, and the consumed-answer guard (humanAttachRound) keeps
+        // expansion open without a question.
+        const reread = humanPass(answered.state, answer, 1, [service, contracts]);
+        expect(reread.action).toEqual({ kind: "proceed" });
+        expect(reread.state.expansionClosed).toBeUndefined();
+
+        // Given again as the answer to a later question, the same `exhausted`
+        // verdict closes expansion by a person, as any answer naming nothing
+        // new does. Neither pass asks about github:acme/private.
+        const again = humanPass(answered.state, answer, 2, [service, contracts]);
+        expect(again.action).toEqual({ kind: "proceed" });
+        expect(again.state.expansionClosed).toBe("human");
+      },
+    );
+
+    it("records an unusable repository a person names beside a usable one", () => {
+      // github:acme/broken was never asked about. The person names it with
+      // contracts; contracts attaches, and a later request for broken is the
+      // repeated request, not a new question.
+      const asked = modelPass(state(), [service]);
+
+      const answered = humanPass(asked.state, "github:acme/broken, gitlab:acme/shared/contracts", 1);
+      expect(answered.action).toEqual({ kind: "attach", repositories: [contractsAttached] });
+      expect(answered.state.askedUnavailable).toEqual(["github:acme/private", "github:acme/broken"]);
+
+      const brokenRequest = { provider: "github" as const, repoPath: "acme/broken", rationale: "x" };
+      const repeated = modelPass(answered.state, [service, contracts], [brokenRequest]);
+      expect(repeated.action).toEqual({ kind: "proceed" });
+      expect(repeated.state.expansionClosed).toBe("human");
+    });
+
+    it("records every unusable repository behind the round-limit question", () => {
+      const limited = modelPass(state({ rounds: 2 }), [service], [privateRequest, unknownRequest]);
+
+      expect(limited.action.kind).toBe("ask_limit");
+      if (limited.action.kind !== "ask_limit") return;
+      // The question text stays the plain limit question: the resume path
+      // recognises questions by their text, parked ones included.
+      const plainLimit = validateRepositoryExpansionRequests({
+        requests: [contractsRequest],
+        catalog: runCatalog,
+        attached: [service],
+        completedRounds: 2,
+      });
+      expect(plainLimit.kind).toBe("clarification_needed");
+      if (plainLimit.kind !== "clarification_needed") return;
+      expect(limited.action.questions).toEqual(plainLimit.questions);
+      expect(limited.state.askedUnavailable).toEqual([
+        "github:acme/private",
+        "github:acme/unknown",
+      ]);
+
+      const answered = humanPass(limited.state, "gitlab:acme/shared/contracts", 1);
+      expect(answered.action.kind).toBe("attach");
+      for (const requests of [[unknownRequest], [privateRequest]]) {
+        const repeated = modelPass(answered.state, [service, contracts], requests);
+        expect(repeated.action).toEqual({ kind: "proceed" });
+        expect(repeated.state.expansionClosed).toBe("human");
+      }
+    });
+
+    describe("after the already-attached bound closed expansion", () => {
+      // Three requests for attached repositories closed expansion; research
+      // then asks for contracts, which it could use, and the limit question
+      // goes out.
+      const closedByBound = () =>
+        modelPass(
+          state({ rounds: 3, allAttachedRequests: 3, expansionClosed: "bound" }),
+          [service],
+          [contractsRequest],
+        );
+
+      it("closes expansion on the second answer that names nothing usable", () => {
+        const limited = closedByBound();
+        expect(limited.action.kind).toBe("ask_limit");
+
+        const first = humanPass(limited.state, "not sure", 1);
+        expect(first.action.kind).toBe("ask_unrecognised");
+        expect(first.state.unrecognisedAnswers).toBe(1);
+
+        const second = humanPass(first.state, "hmm", 2);
+        expect(second.action).toEqual({ kind: "proceed" });
+        expect(second.state.expansionClosed).toBe("human");
+      });
+
+      it("still attaches a usable answer", () => {
+        const limited = closedByBound();
+
+        const answered = humanPass(limited.state, "gitlab:acme/shared/contracts", 1);
+
+        expect(answered.action).toEqual({ kind: "attach", repositories: [contractsAttached] });
+        expect(answered.state.expansionClosed).toBeUndefined();
+      });
+    });
+
+    it("advises enabling a repository the run cannot use even when nobody was asked about it", () => {
+      const decision = modelPass(state({ expansionClosed: "human" }), [service]);
+
+      expect(decision.action.kind).toBe("fail");
+      if (decision.action.kind !== "fail") return;
+      expect(decision.action.message).toBe(
+        "The agent still needs github:acme/private, which this run cannot use." +
+          " Enable it on the Repositories page and start a new run.",
+      );
+    });
+
+    it("advises attaching only a repository the run can use but did not attach", () => {
+      const decision = modelPass(state({ expansionClosed: "human" }), [service], [contractsRequest]);
+
+      expect(decision.action.kind).toBe("fail");
+      if (decision.action.kind !== "fail") return;
+      expect(decision.action.message).toBe(
+        "Repository expansion is closed for this run and the agent still needs" +
+          " gitlab:acme/shared/contracts. Attach it and start a new run.",
+      );
+    });
+
+    it("keeps the failure inside 200 characters for a long nested GitLab path and 2 more", () => {
+      // An 80-character identity, the bound the message comment states, with
+      // the most a request can add to it: a request names at most 3.
+      const nested = (suffix: string) => {
+        const prefix = "gitlab:blazity-clients/arthur/platform/backend-services/";
+        const repoPath = `${prefix}${"r".repeat(80 - prefix.length - suffix.length)}${suffix}`.slice(
+          "gitlab:".length,
+        );
+        return { provider: "gitlab" as const, repoPath, rationale: "x" };
+      };
+      const requests = [nested("-a"), nested("-b"), nested("-c")];
+      expect(`gitlab:${requests[0].repoPath}`).toHaveLength(80);
+      const keys = requests.map((request) => `gitlab:${request.repoPath}`);
+
+      const unusable = modelPass(
+        state({ expansionClosed: "human", askedUnavailable: keys }),
+        [service],
+        requests,
+      );
+      const attachable = decideRepositoryExpansion({
+        origin: "model",
+        verdict: { kind: "attach", repositories: [] },
+        state: state({ expansionClosed: "human" }),
+        requests,
+      });
+
+      for (const decision of [unusable, attachable]) {
+        expect(decision.action.kind).toBe("fail");
+        if (decision.action.kind !== "fail") continue;
+        expect(decision.action.message).toContain(`gitlab:${requests[0].repoPath} and 2 more`);
+        expect(decision.action.message.length).toBeLessThanOrEqual(200);
+      }
+      if (unusable.action.kind === "fail") {
+        expect(unusable.action.message).toContain("Enable them on the Repositories page");
+      }
     });
   });
 

@@ -308,7 +308,9 @@ describe("multi-repository research workflow scenarios", () => {
       }),
     ).toMatchObject({
       kind: "clarification_needed",
-      questions: [expect.stringContaining("unavailable repository github:acme/service")],
+      questions: [
+        expect.stringContaining("github:acme/service, which is not available to this run"),
+      ],
     });
   });
 
@@ -541,6 +543,101 @@ describe("human repository expansion beyond the model round limit", () => {
     const third = await applyHumanRepositoryExpansion(ctx, deps);
     expect(third).toEqual({ kind: "noop" });
     expect(deps.attach).not.toHaveBeenCalled();
+  });
+
+  it("asks once about an unavailable repository, even after the answer attached another", async () => {
+    // Driven the way the planning block drives it: at the top of every loop
+    // pass the resume path reads the latest answer, then research asks for
+    // repositories and the closure applies the decision and stores its state.
+    // github:acme/private is not on the catalog this run was frozen with, so
+    // the person can add another repository but cannot give the run that one.
+    const ctx = makeCtx({
+      sandboxId: "sbx-research",
+      workspaceManifest: v2Manifest,
+      selectedRepositories: [
+        {
+          provider: "github",
+          repoPath: "acme/service",
+          defaultBranch: "main",
+          selectedRationale: "symptom",
+        },
+      ],
+    });
+    const deps = {
+      resolve: async (
+        answer: string,
+        attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+      ) => validateHumanRepositoryExpansion({ answer, catalog, attached }),
+      attach: vi.fn(async () => ({ manifest: attachedManifest, cloneDurationMs: 5 })),
+      fetchContexts: async () => [],
+    };
+    const privateRequest = {
+      provider: "github" as const,
+      repoPath: "acme/private",
+      rationale: "the ticket names it",
+    };
+    const raised: string[][] = [];
+    // What the closure does with one research pass that asked for the private
+    // repository: every action it can take, and the state it keeps.
+    const researchAsksForPrivate = () => {
+      const { action, state } = decideRepositoryExpansion({
+        origin: "model",
+        verdict: validateRepositoryExpansionRequests({
+          requests: [privateRequest],
+          catalog,
+          attached: ctx.selectedRepositories,
+          completedRounds: ctx.repositoryExpansion.rounds,
+          allAttachedRequests: ctx.repositoryExpansion.allAttachedRequests ?? 0,
+          askedUnavailable: ctx.repositoryExpansion.askedUnavailable,
+        }),
+        state: ctx.repositoryExpansion,
+        requests: [privateRequest],
+      });
+      ctx.repositoryExpansion = state;
+      if (action.kind === "ask_limit" || action.kind === "ask_unrecognised") {
+        raised.push(action.questions);
+      }
+      return action;
+    };
+
+    // Pass one: nothing answered yet, research asks, the person is asked once.
+    expect(await applyHumanRepositoryExpansion(ctx, deps)).toEqual({ kind: "noop" });
+    const first = researchAsksForPrivate();
+    expect(first.kind).toBe("ask_unrecognised");
+    expect(raised).toHaveLength(1);
+
+    // The person answers with a link to another repository, which is attached.
+    ctx.clarifications = [
+      { questions: raised[0], answer: "https://gitlab.com/acme/shared/contracts" },
+    ];
+    const attached = await applyHumanRepositoryExpansion(ctx, deps);
+    expect(attached.kind).toBe("attached");
+    expect(deps.attach).toHaveBeenCalledWith([
+      {
+        provider: "gitlab",
+        repoPath: "acme/shared/contracts",
+        defaultBranch: "main",
+        selectedRationale: "requested by human clarification answer",
+      },
+    ]);
+
+    // Pass two: research asks for the private repository again. Nobody is
+    // asked; the run carries on as if the person had answered "none".
+    expect(await applyHumanRepositoryExpansion(ctx, deps)).toEqual({ kind: "noop" });
+    expect(researchAsksForPrivate()).toEqual({ kind: "proceed" });
+    expect(ctx.repositoryExpansion.expansionClosed).toBe("human");
+
+    // Pass three, closed: still asking for it ends the run, still without a
+    // second question, and the last word says what to do about it.
+    expect(await applyHumanRepositoryExpansion(ctx, deps)).toEqual({ kind: "noop" });
+    const last = researchAsksForPrivate();
+    expect(last.kind).toBe("fail");
+    if (last.kind === "fail") {
+      expect(last.message).toContain("github:acme/private");
+      expect(last.message).toContain("Enable it on the Repositories page and start a new run.");
+    }
+    expect(raised).toHaveLength(1);
+    expect(deps.attach).toHaveBeenCalledTimes(1);
   });
 
   it("does not read a consumed answer as a refusal on the next loop pass", async () => {
