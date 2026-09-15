@@ -1779,10 +1779,10 @@ async function agentWorkflowBody(
           repositories,
           ctx.repositories,
         );
-        ctx.repositoryExpansion = state;
+        ctx.repositoryExpansion = expansionState;
         await emitRepositoryWorkflowObservation(execution?.observations, {
           event: "expansion",
-          round: state.rounds,
+          round: expansionState.rounds,
           attachedCount: action.repositories.length,
           totalCount: repositories.length,
           cloneDurationMs: attached.cloneDurationMs,
