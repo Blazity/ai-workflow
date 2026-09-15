@@ -617,15 +617,20 @@ async function readReplayDatabaseRows(
       WHERE observation.run_id = ${runId}
       LIMIT 1
     `;
+    // The alias must not be `attempt`: `workflow_block_attempts` has a column of
+    // that name, a bare name in an expression binds to the column before the
+    // table alias, and `to_jsonb(attempt)` then returns the attempt NUMBER
+    // instead of the row. That is why the database half of the evidence used to
+    // fail while the explicit column below showed the envelope.
     const attempts = await sql`
-      SELECT attempt.id AS id,
-             to_jsonb(attempt) AS payload,
-             attempt.log_envelope AS log_envelope,
-             attempt.observation_revision AS observation_revision,
-             attempt.updated_at AS updated_at
-      FROM workflow_block_attempts attempt
-      WHERE attempt.run_id = ${runId}
-      ORDER BY attempt.id
+      SELECT attempt_row.id AS id,
+             to_jsonb(attempt_row) AS payload,
+             attempt_row.log_envelope AS log_envelope,
+             attempt_row.observation_revision AS observation_revision,
+             attempt_row.updated_at AS updated_at
+      FROM workflow_block_attempts attempt_row
+      WHERE attempt_row.run_id = ${runId}
+      ORDER BY attempt_row.id
     `;
     const observation = observations[0]?.payload;
     observationSeen = observation != null;
@@ -637,10 +642,13 @@ async function readReplayDatabaseRows(
       observationSeen &&
       attempts.some((row) => row.log_envelope != null)
     ) {
-      return {
-        observation,
-        attempts: attempts.map((row) => row.payload),
-      };
+      // The driver hands jsonb back parsed, but the contract reads keys off the
+      // payload, so prove the shape here rather than assume it.
+      const payloads = attempts.map((row) => parseJsonPayload(row.payload));
+      console.log(
+        `[replay-canary] database attempts: ${payloads.length}, payload types: ${payloads.map((payload) => (payload === null ? "null" : typeof payload)).join(", ")}`,
+      );
+      return { observation, attempts: payloads };
     }
     if (Date.now() >= deadline) break;
     await delay(2_000);
@@ -648,6 +656,15 @@ async function readReplayDatabaseRows(
   throw new Error(
     `Replay canary database capture never held a log envelope for ${runId}: observation row ${observationSeen ? "present" : "missing"}, ${diagnostics.length === 0 ? "no attempt rows" : diagnostics.join("; ")}`,
   );
+}
+
+function parseJsonPayload(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
 }
 
 // A finished run's registry claim is released only by the reconciler inside the

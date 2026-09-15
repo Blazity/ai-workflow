@@ -267,6 +267,37 @@ function collectRedactions(
   return found;
 }
 
+function describeType(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
+// Both halves of the log-envelope proof are checked upstream as well, so when
+// one fails here the interesting question is what the surface actually held.
+// These render shapes and key names only, never values.
+function describeApiLogs(details: WorkflowReplayAttemptDetail[]): string {
+  if (details.length === 0) return "no attempt details";
+  return details
+    .map((detail) => `attempt ${detail.id}: logs ${describeType(detail.logs)}`)
+    .join("; ");
+}
+
+function describeDatabaseAttempts(rows: ReplayCanaryDatabaseRows): string {
+  if (rows.attempts.length === 0) return "no attempt rows";
+  return rows.attempts
+    .map((attempt, index) => {
+      const shape = describeType(attempt);
+      if (shape !== "object") {
+        return `row ${index}: payload ${shape}`;
+      }
+      const record = attempt as Record<string, unknown>;
+      const keys = Object.keys(record).slice(0, 12).join(",");
+      return `row ${index}: payload object, isArray false, keys [${keys}], log_envelope ${describeType(record.log_envelope)}`;
+    })
+    .join("; ");
+}
+
 function hasDatabaseLogEnvelope(rows: ReplayCanaryDatabaseRows): boolean {
   return rows.attempts.some((attempt) => {
     if (!attempt || typeof attempt !== "object" || Array.isArray(attempt)) {
@@ -298,11 +329,15 @@ export function assertReplayCanaryEvidence(
   ) {
     throw new Error("Replay API detail coverage does not match its summaries");
   }
-  if (
-    !evidence.apiDetails.some((detail) => detail.logs !== null) ||
-    !hasDatabaseLogEnvelope(evidence.databaseRows)
-  ) {
-    throw new Error("Replay canary did not capture a log envelope");
+  if (!evidence.apiDetails.some((detail) => detail.logs !== null)) {
+    throw new Error(
+      `Replay canary did not capture a log envelope over the replay API: ${describeApiLogs(evidence.apiDetails)}`,
+    );
+  }
+  if (!hasDatabaseLogEnvelope(evidence.databaseRows)) {
+    throw new Error(
+      `Replay canary did not capture a log envelope in the database: ${evidence.databaseRows.attempts.length} attempts; ${describeDatabaseAttempts(evidence.databaseRows)}`,
+    );
   }
 
   const redactions = collectRedactions(evidence.apiDetails);

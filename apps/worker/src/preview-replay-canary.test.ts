@@ -213,6 +213,18 @@ describe("Replay preview canary dry checks", () => {
     ).toThrow(/log envelope/);
   });
 
+  // `to_jsonb(attempt)` over a table aliased `attempt` returns the attempt
+  // NUMBER, because a bare name binds to the column of that name before the
+  // alias. The contract has to name that shape instead of reporting a bare
+  // missing envelope.
+  it("names the payload shape when an attempt row is not an object", () => {
+    const scalarPayload = evidence();
+    scalarPayload.databaseRows.attempts = [1];
+    expect(() => assertReplayCanaryEvidence(scalarPayload, fixture)).toThrow(
+      /in the database: 1 attempts; row 0: payload number/,
+    );
+  });
+
   it("requires redaction proof for every injected sensitive-data class", () => {
     const candidate = evidence();
     candidate.apiDetails[0]!.input = envelope("sanitized", ["token"]);
