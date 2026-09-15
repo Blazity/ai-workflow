@@ -59,7 +59,7 @@ function questionsOf(
 }
 
 describe("a repository research named that the catalog cannot reach", () => {
-  it("R06: asks which accessible repository to use, naming the one it could not get", () => {
+  it("R06: says the run cannot use the repository it named and what a person can do instead", () => {
     const decision = validateRepositoryExpansionRequests({
       requests: [request("acme/nope")],
       catalog: [entry("acme/api")],
@@ -71,10 +71,16 @@ describe("a repository research named that the catalog cannot reach", () => {
     // provider prefix is part of it: a bare "acme/nope" would not tell a reader
     // which installation was asked.
     expect(questionsOf(decision)[0]).toContain(
-      "Research requested unavailable repository github:acme/nope",
+      "Research requested github:acme/nope, which is not available to this run.",
+    );
+    // The run only adds repositories and its access was frozen at start, so
+    // the question offers an addition, not a replacement, and a new run for
+    // the repository itself.
+    expect(questionsOf(decision)[0]).toContain(
+      "This run can only add another repository alongside the ones already attached.",
     );
     expect(questionsOf(decision)[0]).toContain(
-      "Which accessible repository should be used?",
+      "To use it, enable it on the Repositories page and start a new run.",
     );
   });
 
@@ -92,7 +98,7 @@ describe("a repository research named that the catalog cannot reach", () => {
     });
 
     expect(questionsOf(decision)[0]).toContain(
-      "Research requested unavailable repository github:acme/api",
+      "Research requested github:acme/api, which is not available to this run.",
     );
   });
 });
