@@ -1717,7 +1717,7 @@ async function agentWorkflowBody(
         // The policy is the pure decideRepositoryExpansion; this closure only
         // performs the action it names and stores the state it returns
         // (AIW-377).
-        const { action, state } = decideRepositoryExpansion({
+        const { action, state: expansionState } = decideRepositoryExpansion({
           origin: "model",
           verdict,
           state: ctx.repositoryExpansion,
@@ -1734,7 +1734,7 @@ async function agentWorkflowBody(
         }
         // A round that advanced is a round worth reporting; a request absorbed
         // after expansion closed changes nothing, so it emits nothing.
-        const advanced = state.rounds > ctx.repositoryExpansion.rounds;
+        const advanced = expansionState.rounds > ctx.repositoryExpansion.rounds;
         if (action.kind === "proceed") {
           // Research either asked only for repositories the workspace already
           // holds, or asked for more context without naming a repository at
@@ -1742,11 +1742,11 @@ async function agentWorkflowBody(
           // answer, so continue with what is attached instead of parking the
           // run (AIW-284). The recorded requests are what the next research
           // prompt reports back as attached.
-          ctx.repositoryExpansion = state;
+          ctx.repositoryExpansion = expansionState;
           if (advanced) {
             await emitRepositoryWorkflowObservation(execution?.observations, {
               event: "expansion",
-              round: state.rounds,
+              round: expansionState.rounds,
               attachedCount: 0,
               totalCount: ctx.selectedRepositories.length,
               cloneDurationMs: 0,
