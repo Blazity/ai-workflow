@@ -1,5 +1,5 @@
 {
-  "contractHash": "8911c3050a736ac8cd1b07aab1a67860c18b50fc592f2e345e82f8903cdcb3b7",
+  "contractHash": "c39e2c475be10ca8dad2425022ec4d8308d66c42d19d0bbf7e349dcb289afeb9",
   "errorCodes": [
     "UNAUTHENTICATED",
     "INSUFFICIENT_SCOPE",
@@ -670,7 +670,7 @@
     },
     {
       "name": "runs.cancel",
-      "description": "Stop an in-flight run: its sandbox is torn down, its subject claim is released so whatever was queued behind it can proceed, and its status is settled as blocked with the cancelling client named. This is not undoable and the work in progress is lost. A run that already finished on its own comes back as `outcome: \"already_terminal\"` with the status as observed, which is a success, not an error: the run is stopped either way, so do not retry it. That reply also releases the subject claim the finished run left behind, moving its ticket out of the Ai column first, so `subjectKey` names the subject this call freed and is null only when the run owned no claim; no status is written, because the run keeps the outcome it reached. An `unconfirmed` CONFLICT means the cancel could not be confirmed and nothing was torn down, so retrying with the same idempotencyKey is safe and expected. Cancelling a run that is parked on a question retires the question too, so an answer sent afterwards is refused.",
+      "description": "Stop an in-flight run: its sandbox is torn down, its subject claim is released so whatever was queued behind it can proceed, and its status is settled as blocked with the cancelling client named. This is not undoable and the work in progress is lost. A run that already finished on its own comes back as `outcome: \"already_terminal\"` with the status as observed, which is a success, not an error: the run is stopped either way, so do not retry it. That reply also releases the subject claim the finished run left behind, moving its ticket out of the Ai column first, so `subjectKey` names the subject this call freed and is null only when the run owned no claim; no status is written, because the run keeps the outcome it reached. An `unconfirmed` CONFLICT means the cancel could not be confirmed and nothing was torn down, so retrying with the same idempotencyKey is safe and expected; a run that finished moments ago can answer `unconfirmed` while it retires, normally for a few seconds and never beyond two minutes after it finished, and a retry converges, normally to `already_terminal`. Cancelling a run that is parked on a question retires the question too, so an answer sent afterwards is refused.",
       "inputSchema": {
         "type": "object",
         "properties": {

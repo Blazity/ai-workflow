@@ -32,6 +32,16 @@ const STORE_TERMINAL_RUN_STATUSES = new Set(["success", "failed", "blocked"]);
  * already-terminal branch of cancelOwnedSubject accepts. */
 const WORKFLOW_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
+/**
+ * How long after its stored completion a finished run that Workflow still reports
+ * live is treated as retiring rather than hung. Long enough to cover the tail a
+ * run executes after committing its outcome (the ticket move, the notification,
+ * the usage write) and Workflow replaying its return; short enough that a tail
+ * that hangs, or a run Workflow never retires, is back in an operator's hands
+ * within two minutes.
+ */
+const RETIRING_RUN_GRACE_MS = 2 * 60 * 1000;
+
 /** Claim identity observed by a route before it delegates cancellation. Keeping
  * the owner as well as the stage lets cancellation follow an in-flight
  * reserved-to-bound promotion without ever targeting a replacement owner. */
@@ -193,7 +203,10 @@ export async function cancelSubjectRunDetailed(
  *   - "unconfirmed": a live run was found but cancellation never began, so the
  *     Workflow run was never touched and the claim is retained. This is the only
  *     state where a retry is the right advice: once the run is torn down it
- *     cannot be un-cancelled, and that case reports "cancelled" instead.
+ *     cannot be un-cancelled, and that case reports "cancelled" instead. It is
+ *     also the answer, with `reason: "retiring"`, for a run that finished within
+ *     RETIRING_RUN_GRACE_MS while Workflow is still retiring it: nothing is
+ *     touched, and a retry converges, normally to "already_terminal".
  *   - "not_found": neither a live claim nor a workflow_runs row carries the id.
  * `subjectKey` is set whenever a live claim was located.
  */
@@ -201,6 +214,10 @@ export interface CancelRunByIdResult {
   outcome: "cancelled" | "already_terminal" | "not_found" | "unconfirmed";
   status?: string;
   subjectKey?: string;
+  /** Only on "unconfirmed": "retiring" when the run has already finished and
+   * Workflow is still retiring it, so a surface can say that instead of calling
+   * the run live. Absent for a live run whose cancel never began. */
+  reason?: "retiring";
 }
 
 /**
@@ -213,6 +230,8 @@ export interface CancelRunByIdDeps {
   runRegistry: RunRegistryAdapter;
   issueTracker?: IssueTrackerAdapter;
   settings: Pick<SettingsSnapshot, "COLUMN_AI" | "COLUMN_BACKLOG">;
+  /** Epoch milliseconds, for the retiring window. Defaults to Date.now. */
+  now?: () => number;
 }
 
 /**
@@ -242,24 +261,20 @@ export async function cancelRunById(
   const claim = await findConnectedLiveRunClaimByRunId(runId);
   if (claim) {
     // A claim carried by a run that is really over is the run's own bookkeeping
-    // left behind, not liveness. Free the subject and report the recorded
-    // outcome, without cancelling anything and without writing a status. Without
-    // this the leftover claim reads as a live run and the cancel answers
-    // "unconfirmed", which is how the engine canary could not release its own
-    // finished runs (2026-09-14, wrun_01M2GX079YXKGCF3ZQQ9B9Z91Y). The store
-    // status is only the cheap filter; releaseLingeringTerminalClaim is what
-    // proves the run is over.
+    // left behind, not liveness. Without this the leftover claim reads as a live
+    // run and the cancel answers "unconfirmed", which is how the engine canary
+    // could not release its own finished runs (2026-09-14,
+    // wrun_01M2GX079YXKGCF3ZQQ9B9Z91Y). The store status is only the cheap
+    // filter; answerForFinishedRun is what tells a finished run from a live one.
     const recorded = await findConnectedRunOutcomeByRunId(runId);
-    if (
-      recorded?.status &&
-      STORE_TERMINAL_RUN_STATUSES.has(recorded.status) &&
-      (await releaseLingeringTerminalClaim(claim, runId, opts))
-    ) {
-      return {
-        outcome: "already_terminal",
-        subjectKey: claim.subjectKey,
-        status: recorded.status,
-      };
+    if (recorded?.status && STORE_TERMINAL_RUN_STATUSES.has(recorded.status)) {
+      const answer = await answerForFinishedRun(
+        claim,
+        runId,
+        { status: recorded.status, completedAt: recorded.completedAt },
+        opts,
+      );
+      if (answer) return answer;
     }
     const reason = `cancelled by ${actorLabel}`;
     if (claim.kind === "manual_ticket" && (!claim.ticketKey || !opts.issueTracker)) {
@@ -458,16 +473,71 @@ interface LiveRunClaim {
 }
 
 /**
+ * The answer for a live claim whose run the store already records as finished,
+ * or null to let the full cancel path answer.
+ *
+ * - Workflow has retired the run: release the claim it left behind
+ *   (releaseLingeringTerminalClaim) and answer "already_terminal".
+ * - Workflow has not retired it yet (or its status is unreadable) and the stored
+ *   completion is within RETIRING_RUN_GRACE_MS: answer "unconfirmed" with
+ *   `reason: "retiring"` and touch nothing. The run has committed its outcome
+ *   and is running its tail or Workflow is replaying its return, so cancelling
+ *   would record a good run as cancelled, cut its failure tail (status reason,
+ *   Jira comment), or leave its claim in "cancelling". The key goes back into
+ *   circulation on "unconfirmed" and a retry converges (the engine canary polls
+ *   into exactly this window).
+ * - Otherwise the full path: a completion past the window means a tail that
+ *   hangs or a run Workflow will not retire, and a null completion carries no
+ *   evidence the run just finished. Either way an operator keeps the power to
+ *   kill it.
+ *
+ * Why the completion time and not cost_known: every terminal writer keeps a
+ * completedAt that is already set (terminalCompletionFields and its inline
+ * copies use coalesce), and markRunResumed does not clear it. A run that parked,
+ * resumed and then hangs after committing "success" therefore still carries the
+ * old park time and falls outside the window, while cost_known, set by the park's
+ * usage write, would have kept it "retiring" for as long as it hangs.
+ */
+async function answerForFinishedRun(
+  claim: LiveRunClaim,
+  runId: string,
+  recorded: { status: string; completedAt: Date | null },
+  opts: CancelRunByIdDeps,
+): Promise<CancelRunByIdResult | null> {
+  if (await isWorkflowRunRetired(claim.subjectKey, runId)) {
+    return (await releaseLingeringTerminalClaim(claim, runId, opts))
+      ? { outcome: "already_terminal", subjectKey: claim.subjectKey, status: recorded.status }
+      : null;
+  }
+  const completedAtMs = recorded.completedAt?.getTime();
+  const nowMs = (opts.now ?? Date.now)();
+  if (
+    completedAtMs !== undefined &&
+    Number.isFinite(completedAtMs) &&
+    nowMs - completedAtMs <= RETIRING_RUN_GRACE_MS
+  ) {
+    logger.info(
+      { subjectKey: claim.subjectKey, runId, status: recorded.status },
+      "cancel_run_still_retiring_unconfirmed",
+    );
+    return { outcome: "unconfirmed", reason: "retiring", subjectKey: claim.subjectKey };
+  }
+  return null;
+}
+
+/**
  * Release the claim a finished run left on its subject, doing the same bookkeeping
- * the reconciler does for a terminal run and nothing more.
+ * the reconciler does for a terminal run and nothing more. Called only once
+ * Workflow reports the run retired (answerForFinishedRun).
  *
  * Four barriers, each of which declines to the full cancel path rather than
  * guessing, so no answer this shortcut refuses to give gets weaker:
  *
- * 1. Workflow itself reports the run terminal. A terminal STORE status is not
- *    enough: markRunSucceededOnSelfMove commits "success" while the run is still
- *    moving the ticket and notifying, so releasing on the store alone would free a
- *    subject under a live run. No staleness grace is applied on top (the
+ * 1. Workflow itself reports the run terminal, checked by the caller. A terminal
+ *    STORE status is not enough: markRunSucceededOnSelfMove commits "success"
+ *    while the run is still moving the ticket and notifying, so releasing on the
+ *    store alone would free a subject under a live run. No staleness grace is
+ *    applied on top (the
  *    reconciler's readRunOutcomeFromStore has one) because that grace exists to
  *    cover exactly this window, which asking Workflow closes directly, and the
  *    canary needs its claim back seconds after the run ends, not minutes.
@@ -503,7 +573,6 @@ async function releaseLingeringTerminalClaim(
   opts: CancelRunByIdDeps,
 ): Promise<boolean> {
   const { runRegistry } = opts;
-  if (!(await isWorkflowRunRetired(claim.subjectKey, runId))) return false;
 
   let entry: ActiveRunEntry | null;
   try {

@@ -544,6 +544,20 @@ describe("cancelRunById", () => {
     });
   };
 
+  // Fixed clock for the retiring window: "now" is injected through the deps, and
+  // completedAt is placed relative to it, so no test depends on real time.
+  const NOW = Date.parse("2026-09-15T12:00:00.000Z");
+  // Mirrors RETIRING_RUN_GRACE_MS in cancel-run.ts.
+  const RETIRING_GRACE_MS = 2 * 60_000;
+  const workflowRunning = () => {
+    const cancelWorkflow = vi.fn().mockResolvedValue(undefined);
+    state.getRun.mockReturnValue({
+      cancel: cancelWorkflow,
+      status: Promise.resolve("running"),
+    });
+    return cancelWorkflow;
+  };
+
   // A run that finished on its own leaves its claim behind whenever nothing
   // releases it (the engine-canary target runs no reconciler cron). Cancelling it
   // must free the subject and report the recorded outcome instead of reading the
@@ -554,7 +568,12 @@ describe("cancelRunById", () => {
       subjectKey: "sched:demo:hourly",
       ownerToken: "owner-a",
     });
-    state.findRunOutcome.mockResolvedValue({ status: "success" });
+    // Freshly finished as well, which changes nothing once Workflow has retired the
+    // run: the retiring window only applies while Workflow still reports it live.
+    state.findRunOutcome.mockResolvedValue({
+      status: "success",
+      completedAt: new Date(NOW - 1_000),
+    });
     const runRegistry = registry(scheduleClaim());
 
     await expect(
@@ -562,6 +581,7 @@ describe("cancelRunById", () => {
         actorLabel: "MCP canary",
         runRegistry,
         settings: cancelSettings,
+        now: () => NOW,
       }),
     ).resolves.toEqual({
       outcome: "already_terminal",
@@ -590,19 +610,73 @@ describe("cancelRunById", () => {
     expect(state.tombstone).not.toHaveBeenCalled();
   });
 
-  // The blocker the gate caught: "success" is committed mid-run, before the
-  // self-move of the ticket and everything after it. A store status is therefore
-  // never liveness proof on its own, and only Workflow can retire the run.
-  it("does not release a claim while Workflow still reports the run running", async () => {
-    state.getRun.mockReturnValue({
-      cancel: vi.fn().mockResolvedValue(undefined),
-      status: Promise.resolve("running"),
-    });
+  // The window the engine canary hit: the run has written its outcome and
+  // Workflow is still replaying its return for a second or two. The full path
+  // would record a good run as cancelled or leave its claim in "cancelling", so a
+  // freshly finished run answers unconfirmed, marked as retiring, with nothing
+  // touched. The key goes back into circulation and a retry converges.
+  it.each([
+    ["success", "the success tail (ticket self-move, notify, usage)"],
+    ["failed", "the failure tail (ticket move, status reason, Jira comment)"],
+  ])(
+    "answers unconfirmed as retiring and touches nothing for a fresh %s run",
+    async (status, _tail) => {
+      const cancelWorkflow = workflowRunning();
+      state.findLiveClaim.mockResolvedValue({
+        subjectKey: "ticket:jira:PROJ-1",
+        ticketKey: "PROJ-1",
+        ownerToken: "owner-a",
+        kind: "manual_ticket",
+      });
+      state.findRunOutcome.mockResolvedValue({
+        status,
+        completedAt: new Date(NOW - 30_000),
+      });
+      const runRegistry = registry(active({ kind: "manual_ticket" }));
+
+      await expect(
+        cancelRunById(outerDb, "run-1", {
+          actorLabel: "MCP canary",
+          runRegistry,
+          issueTracker: {} as IssueTrackerAdapter,
+          settings: cancelSettings,
+          now: () => NOW,
+        }),
+      ).resolves.toEqual({
+        outcome: "unconfirmed",
+        reason: "retiring",
+        subjectKey: "ticket:jira:PROJ-1",
+      });
+
+      expect(cancelWorkflow).not.toHaveBeenCalled();
+      expect(state.tombstone).not.toHaveBeenCalled();
+      expect(runRegistry.beginCancellation).not.toHaveBeenCalled();
+      expect(runRegistry.listSandboxes).not.toHaveBeenCalled();
+      expect(state.stopSandboxes).not.toHaveBeenCalled();
+      expect(state.listSteps).not.toHaveBeenCalled();
+      expect(state.moveTicket).not.toHaveBeenCalled();
+      expect(runRegistry.release).not.toHaveBeenCalled();
+      expect(runRegistry.releaseCancellation).not.toHaveBeenCalled();
+      expect(state.markBlockedByOperator).not.toHaveBeenCalled();
+      expect(state.markBlockedOnCancel).not.toHaveBeenCalled();
+      expect(state.recordStatusReason).not.toHaveBeenCalled();
+      expect(state.retireApproval).not.toHaveBeenCalled();
+    },
+  );
+
+  // Past the window the run is not retiring any more: its tail hangs, or its
+  // Workflow run will never retire. Answering unconfirmed forever would leave
+  // nothing able to stop it, so the operator gets today's full cancel back.
+  it("keeps the full cancel for a finished run past the retiring window", async () => {
+    const cancelWorkflow = workflowRunning();
     state.findLiveClaim.mockResolvedValue({
       subjectKey: "sched:demo:hourly",
       ownerToken: "owner-a",
     });
-    state.findRunOutcome.mockResolvedValue({ status: "success" });
+    state.findRunOutcome.mockResolvedValue({
+      status: "success",
+      completedAt: new Date(NOW - RETIRING_GRACE_MS - 1),
+    });
     const runRegistry = registry(scheduleClaim());
 
     await expect(
@@ -610,16 +684,101 @@ describe("cancelRunById", () => {
         actorLabel: "operator kate",
         runRegistry,
         settings: cancelSettings,
+        now: () => NOW,
       }),
     ).resolves.toEqual({ outcome: "cancelled", subjectKey: "sched:demo:hourly" });
 
-    // Today's behaviour, unchanged: the full teardown and the operator status write.
-    expect(runRegistry.release).not.toHaveBeenCalled();
     expect(runRegistry.beginCancellation).toHaveBeenCalled();
+    expect(cancelWorkflow).toHaveBeenCalledTimes(1);
+    expect(runRegistry.release).not.toHaveBeenCalled();
+  });
+
+  // A terminal status with no completion time carries no evidence of when the
+  // run finished, so nothing proves it is inside the window: full path.
+  it("keeps the full cancel for a finished run with no recorded completion time", async () => {
+    const cancelWorkflow = workflowRunning();
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "sched:demo:hourly",
+      ownerToken: "owner-a",
+    });
+    state.findRunOutcome.mockResolvedValue({ status: "success", completedAt: null });
+    const runRegistry = registry(scheduleClaim());
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "operator kate",
+        runRegistry,
+        settings: cancelSettings,
+        now: () => NOW,
+      }),
+    ).resolves.toEqual({ outcome: "cancelled", subjectKey: "sched:demo:hourly" });
+
+    expect(cancelWorkflow).toHaveBeenCalledTimes(1);
+    // The operator settle is still attempted; its writer only touches
+    // awaiting/running rows, so a stored success is not overwritten.
     expect(state.markBlockedByOperator).toHaveBeenCalledWith(
       "run-1",
       "cancelled by operator kate",
     );
+  });
+
+  // The shape that broke the cost_known criterion: a run that parked had its
+  // usage recorded (cost_known set, completedAt stamped at the park), resumed
+  // (markRunResumed keeps completedAt), then committed "success" ahead of a ticket
+  // move that hangs. Every terminal writer keeps an existing completedAt, so the
+  // row still carries the old park time and reads as long past the window: the
+  // operator can kill the hung tail.
+  it("keeps the full cancel for a resumed run whose completion time is the old park", async () => {
+    const cancelWorkflow = workflowRunning();
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "ticket:jira:PROJ-1",
+      ticketKey: "PROJ-1",
+      ownerToken: "owner-a",
+      kind: "ticket",
+    });
+    state.findRunOutcome.mockResolvedValue({
+      status: "success",
+      completedAt: new Date(NOW - 45 * 60_000),
+    });
+    const runRegistry = registry(active({ kind: "ticket" }));
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "operator kate",
+        runRegistry,
+        issueTracker: {} as IssueTrackerAdapter,
+        settings: cancelSettings,
+        now: () => NOW,
+      }),
+    ).resolves.toEqual({ outcome: "cancelled", subjectKey: "ticket:jira:PROJ-1" });
+
+    expect(runRegistry.beginCancellation).toHaveBeenCalled();
+    expect(cancelWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  // A run parked on a question is not finished, however fresh its park time is.
+  it("keeps the full cancel for a parked run even with a fresh completion time", async () => {
+    workflowRunning();
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "sched:demo:hourly",
+      ownerToken: "owner-a",
+    });
+    state.findRunOutcome.mockResolvedValue({
+      status: "awaiting",
+      completedAt: new Date(NOW - 5_000),
+    });
+    const runRegistry = registry(scheduleClaim({ state: "parked" }));
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "operator kate",
+        runRegistry,
+        settings: cancelSettings,
+        now: () => NOW,
+      }),
+    ).resolves.toEqual({ outcome: "cancelled", subjectKey: "sched:demo:hourly" });
+
+    expect(runRegistry.beginCancellation).toHaveBeenCalled();
   });
 
   // The step drain stays the second barrier: a Workflow run can be terminal while

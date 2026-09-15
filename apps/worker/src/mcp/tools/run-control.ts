@@ -356,6 +356,18 @@ export function registerRunControlTools(server: McpServer, deps: McpToolDependen
               // The claim is retained and Workflow was never touched (cancel-run.ts:
               // "A live run cancellation that never began"), so nothing was torn down
               // and the key must return to circulation for the retry to be possible.
+              if (result.reason === "retiring") {
+                // Same guarantees (nothing touched, key given back), different fact:
+                // the run has already finished and Workflow is still retiring it, so
+                // calling it live would send a caller looking for a run that is done.
+                throw new McpPublicError(
+                  "CONFLICT",
+                  "The run has finished and is still being retired; retry in a few seconds with the same idempotencyKey.",
+                  true,
+                  5_000,
+                  true,
+                );
+              }
               throw new McpPublicError(
                 "CONFLICT",
                 "The cancel could not be confirmed on this attempt and nothing was torn down: the run is still live and still owns its subject. Retry with the same idempotencyKey.",
