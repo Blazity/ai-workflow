@@ -2,7 +2,7 @@
  * The exact words the expansion refusals use (matrix rows R06, R08, R09, R10).
  *
  * `runner.test.ts` next door proves the DECISIONS: which branch each input
- * reaches, and that the round limit wins over the already-attached no-op. What
+ * reaches, and that the already-attached no-op wins over the round limit. What
  * it mostly does not pin is the TEXT, and the text is the whole product here:
  * every one of these refusals is rendered into a Jira clarification a person
  * reads and answers. A branch that is reached with the wrong sentence is a run
@@ -117,8 +117,9 @@ describe("more repositories than one round may attach", () => {
   });
 
   it("R08: the bound counts requests, not fresh repositories", () => {
-    // Four requests, three of them already attached. The round check runs
-    // BEFORE the already-attached filter, so this is still a refusal, and a
+    // Four requests, three of them already attached. The per-round bound counts
+    // requests before the already-attached filter runs (only an ALL-attached
+    // request short-circuits earlier), so this is still a refusal, and a
     // reader is asked to pick 3 out of a set that mostly did not need
     // attaching. Pinned as it behaves, not as it reads: the alternative
     // (filter first, then count) would let a planner walk the workspace up
@@ -208,31 +209,46 @@ describe("the third expansion round", () => {
     expect(question).toContain('"github:owner/repo"');
     expect(question).toContain("Only repositories on the accessible catalog can be attached");
     expect(question).toContain("8-repository workspace limit still applies");
+    // The way out for a reader who has nothing to add. Without it the only
+    // answer the parser understands is a repository path, so a person with
+    // none to give writes prose and gets asked again.
+    expect(question).toContain(
+      'Reply "none" if no further repositories are needed; the run then continues with the repositories already attached.',
+    );
     // The recognizer the caller uses to tell this clarification from every
     // other one has to agree with the text that was actually produced.
     expect(isExpansionLimitClarification(questionsOf(decision))).toBe(true);
   });
 
-  it("R10: asks again on a third round even when the only repository is already attached", () => {
-    // The T32 loop, pinned as it behaves. A round-2 request naming a repository
-    // that is ALREADY attached would be reported as the `already_attached`
-    // no-op; past the round limit the limit check runs first, so the same
-    // request becomes a question the operator has no new answer to. Answering
-    // it does not advance `completedRounds`, which is why production saw the
-    // run ask in circles.
-    const attachedOnly = validateRepositoryExpansionRequests({
-      requests: [request("acme/api")],
-      catalog: [entry("acme/api")],
-      attached: [{ provider: "github", repoPath: "acme/api" }],
-      completedRounds: 1,
-    });
-    expect(attachedOnly.kind).toBe("already_attached");
+  it("R10: never asks on any round when the only repository is already attached", () => {
+    // The T32 loop, pinned as it was fixed (AIW-377). The already-attached
+    // filter now runs before the limit check, so a request naming only what the
+    // workspace already holds is the `already_attached` no-op on every round.
+    // Before the fix the limit check ran first, so past round 2 the same
+    // request became a question the operator had no new answer to, and
+    // answering it did not advance `completedRounds`, which is why production
+    // saw the run ask in circles.
+    for (const completedRounds of [1, 2, 3]) {
+      expect(
+        validateRepositoryExpansionRequests({
+          requests: [request("acme/api")],
+          catalog: [entry("acme/api")],
+          attached: [{ provider: "github", repoPath: "acme/api" }],
+          completedRounds,
+        }).kind,
+      ).toBe("already_attached");
+    }
+  });
 
+  it("R10: still asks when the request names a repository the workspace does not hold", () => {
+    // The limit question survives for the case it was written for: a fresh
+    // repository named after the model rounds ran out.
     const pastTheLimit = validateRepositoryExpansionRequests({
-      requests: [request("acme/api")],
-      catalog: [entry("acme/api")],
+      requests: [request("acme/fresh")],
+      catalog: [entry("acme/api"), entry("acme/fresh")],
       attached: [{ provider: "github", repoPath: "acme/api" }],
       completedRounds: 2,
+      allAttachedRequests: 2,
     });
     expect(pastTheLimit.kind).toBe("clarification_needed");
     expect(isExpansionLimitClarification(questionsOf(pastTheLimit))).toBe(true);

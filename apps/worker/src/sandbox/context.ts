@@ -158,6 +158,7 @@ This protocol extends and overrides any older Output Format instructions above.
   declare at least one write repository.
 - Set fields that do not apply to \`null\`, as required by the structured schema.
 - Research is read-only: do not modify files, create commits, or change branches.
+- A read-only research checkout is checked out again with write access when implementation starts, so needing to write to an attached repository is never a reason to request it again.
 `;
   if (!hasPrFeedback) {
     md += `

@@ -48,6 +48,12 @@ describe("assembleResearchPlanContext", () => {
     expect(result).toContain('status: "repositories_needed"');
     expect(result).toContain("writeRepositories");
     expect(result).toContain("Research is read-only");
+    // AIW-377: the read-only rule used to read as "this repository can never be
+    // written", which is why research kept requesting an attached repository to
+    // get write access and parked the run on the expansion question.
+    expect(result).toContain(
+      "checked out again with write access when implementation starts",
+    );
   });
 
   it("adds a Resolution Check section instructing the agent to look for prior fixes", () => {
