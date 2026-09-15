@@ -217,6 +217,17 @@ type TriggerRepositoryPolicy = {
   expansion: "attach" | "ask_once" | "never";
 };
 
+/** The one shape a caller hands the store for a single write, from a run or
+ *  from a person. replacesExpired is valid only on a "selected" entry that
+ *  replaces an unavailable / not_enabled entry the catalog has since enabled:
+ *  the one case a lower origin may overwrite a higher one. */
+type WorkScopeWritePlan = {
+  upserts: Array<{ entry: WorkScopeEntry; replacesExpired: boolean }>; // at most 16, one per key
+  deletes: RepositoryKey[];                                             // at most 16, disjoint from upserts
+  trail: WorkScopeTrailEvent[];                                         // at most 32
+};
+/** workScopeOriginRank(origin) is the index in WORK_SCOPE_ORIGINS. */
+
 /** A person's edit. One write, whole change set, one version. */
 type WorkScopeEditRequest = {
   subjectKey: string;
@@ -318,9 +329,18 @@ That asymmetry is what makes one mechanism safe for both.
   record the ninth, or the promise breaks exactly at the limit. A panel edit
   that swaps one repository for another is ONE write of the whole entry set
   carrying a version, never a remove followed by an add.
-- Every write is one statement with an optimistic version, because production
-  has no interactive transactions. Concurrent writers (a run and a person) get
-  a version conflict, never a lost update.
+- **Storage is one row per repository per subject, not a list in one field.**
+  A list rewritten whole by each writer loses the other writer's decision when
+  two runs on one ticket write at once. With a row per key, the precedence rule
+  is enforced by the statement itself: an upsert overwrites an existing row only
+  when its origin rank is lower or equal (a person is rank 0, `inferred` rank
+  4), or when the plan marks it `replacesExpired`. A separate one-row-per-subject
+  version counter moves on every write, from a run or a person.
+- Every write is one statement, because production has no interactive
+  transactions. A run's write carries no expected version and cannot conflict:
+  precedence decides. A person's edit carries the version it read, so a run or
+  another person writing in between turns it into a conflict the panel shows,
+  never a silently lost update.
 
 ### What stops re-deriving
 
@@ -569,6 +589,15 @@ nobody reads it.
   the richer view on top of it, not the other way round, because the report is
   written only after a phase completes and the runs worth debugging are the
   ones that never got there. Nothing is copied into the report.
+- A20. The recon of 2026-09-15 reported that the clarification history read
+  reaches only prompt text. That is wrong and is the defect itself:
+  `applyHumanRepositoryExpansion` takes the LAST answered clarification of the
+  whole ticket and applies it as a repository answer
+  (`apps/worker/src/engine/steps/phase.ts:139-152`, fed by
+  `loadClarificationHistoryStep`, `apps/worker/src/engine/steps/clarification.ts:196-210`,
+  which filters by ticket and never by run). Stage 4 restricts that re-apply to
+  clarifications asked by the current run; what earlier runs decided reaches a
+  later run only through the work scope.
 - A15. Clarification rows keep their prose. The repository a question is about
   is written at ask time, not parsed out of the question afterwards, and
   nothing in the product ever turns a sentence back into a repository key.
@@ -598,7 +627,7 @@ nobody reads it.
 | # | Stage | Seam | File scope | Tier | Skeptic | TDD | Delegation | DoD |
 |---|-------|------|------------|------|---------|-----|------------|-----|
 | 1 | Contract: work scope, trigger policy | trigger policy validation | `packages/contracts/work-scope.ts` (new) and its test, `packages/contracts/index.ts`, `packages/contracts/workflow-graph.ts` (`BLOCK_PARAM_KEYS` only), `apps/worker/src/engine/definition/block-params-schemas.ts` (ONE shared parameter spread, applied to the eight trigger configurations behind the nine trigger types that start a run) and its test, the nine `apps/worker/src/engine/blocks/trigger-*/manifest.ts`, `apps/worker/src/engine/definition/deployment-validation.ts` and its test, the `pnpm gen:blocks` output, `CONTEXT.md`; the set of places mirrors how the rate limit reached every trigger | opus | no | yes | no | `pnpm run test:packages:zod4` green for the new contracts; block params tests green with a policy accepted on each of the eight configurations covering all ten trigger types, refused on `trigger_plan_approved`, an unknown key still rejected by `.strict()`, and a stored definition WITHOUT the field parsing exactly as before; `pnpm run typecheck` |
-| 2 | Store: migration 0066, entries and trail | work scope store; decision trail append | `apps/worker/drizzle/0066_work_scopes.sql` (the versioned entries per subject, the append-only trail whose row carries a subject, a run or both and never neither, and the record of which repository a clarification asked about), `apps/worker/src/db/schema/work-scopes.ts` (new), `apps/worker/src/db/clarifications-schema.ts` (the asked-repository column only), `apps/worker/src/db/schema.ts` export, `apps/worker/src/db/repositories/work-scope.ts` (new) and test | sonnet | no | yes | no | pglite tests: upsert, read by subject, an append and its entry update landing in ONE data-modifying CTE with no `db.transaction` in the module, TWO runs appending on one subject concurrently both succeeding and merging by origin precedence with no version pin, a person's edit still refused on a stale version, a trail row with no subject readable by run, a read returning entries and trail together; `pnpm run db:generate` produces no diff and the generated `.sql` contains no `$1` |
+| 2 | Store: migration 0066, entries and trail | work scope store; decision trail append | `apps/worker/drizzle/0066_*.sql` plus the generated meta (a version row per subject, one entry row per subject and repository key with its persisted origin rank, the append-only trail whose row carries a subject, a run or both and never neither, and a nullable `asked_repository_keys` column on `clarification_requests`), `apps/worker/src/db/schema/work-scopes.ts` (new), `apps/worker/src/db/clarifications-schema.ts` (that column only), `apps/worker/src/db/repositories/clarification-hooks.ts` (the prepare insert accepts and returns the keys), `apps/worker/src/db/schema.ts` export, `apps/worker/src/db/repositories/work-scope.ts` (new) and test | opus | no | yes | no | pglite tests: upsert, read by subject, an append and its entry update landing in ONE data-modifying CTE with no `db.transaction` in the module, TWO runs appending on one subject concurrently both succeeding and merging by origin precedence with no version pin, a person's edit still refused on a stale version, a trail row with no subject readable by run, a read returning entries and trail together; `pnpm run db:generate` produces no diff and the generated `.sql` contains no `$1` |
 | 3 | Decision module (pure) | work scope decision; repository map rendering | `apps/worker/src/engine/work-scope/**` (new: decide, reconcile with catalog, map render, tests) | opus | yes | yes | no | tests for every origin precedence pair and for an origin overwriting its own kind, expiry only of `not_enabled` and only on an activated catalog, `unusable` and `excluded` never expiring, each expansion rule applied to an INHERITED entry as well as a new request, the cap refusing a ninth `selected` write while still accepting a ninth `unavailable` one, subject eligibility for all four trigger kinds, a `person` entry surviving a policy filter that removes every other inherited entry, map ranking, the twenty five repository threshold and a request for a key outside the map being allowed; no imports from services or db (`workflow-import-boundary.test.ts` green) |
 | 4 | Run integration | run-start freeze; selection from scope; expansion from scope; cross-run engine test | `apps/worker/src/engine/steps/run-start-settings.ts`, `apps/worker/src/engine/pre-sandbox/steps/repo-selection.ts`, `apps/worker/src/engine/steps/phase.ts`, `apps/worker/src/engine/repository-discovery/runner.ts` (integration lines only) and its tests in `apps/worker/src/services/repository-discovery/runner.test.ts` (the source file there is a one line re-export), `apps/worker/src/engine/agent-workflow.ts` (ctx wiring only), `apps/worker/src/services/clarifications/answer-core.ts` (write-through), `apps/worker/src/engine/tests/**` | opus | yes | yes | no | engine test: run 2 inherits run 1's entries and asks nothing; AIW-402 scenario passes; the trigger policy is resolved at run start from the deployed graph and filters inherited entries with `person` exempt; every attach, every refusal and every person answer appends exactly one trail line carrying the repository, the origin and the reason, and a parked run resumed twice still appends it once; a test fails if any append happens in workflow scope rather than inside a step; the brief lists every path by which data from one run reaches a later run on the same subject (the clarification history read, the approved plan, the human decisions memory, repository memory, trigger output), and for each the DoD shows it can no longer change a repository decision, or says why it never could (AIW-402 asks for exactly this audit); a `plan_approved` run ignores the subject scope and still refuses expansion; a replayed run-start output without the field takes the whole old path; `step-registration-coverage` and `workflow-import-boundary` green; no step added, removed or reordered (reviewer diffs the file); merge only under a drain proved by a query, zero `running` and zero `awaiting` agent-workflow rows and an empty `active_runs` |
 | 5 | Repository map in the agent context, including the sentence AIW-377 asks for (an `access: read` research checkout does not block implementation, so the model stops requesting an attached repository again for write) | repository map rendering (integration); what the agent was shown | `apps/worker/src/sandbox/context.ts`, `apps/worker/src/engine/repository-discovery/protocol.ts` (prompt text and request-by-key), `apps/worker/src/sandbox/context.test.ts` | opus | yes | yes | no | rendered prompt for a 40 repository catalog stays at 12 map lines and under 1600 characters (the repository has no tokenizer, so the budget is counted in characters); a 20 repository catalog renders whole; a request by a map key attaches; a request for a catalog key the map did not show still attaches; only a key outside the catalog or outside the policy is refused; the map recorded by stage 4 reads back through `work_scope.get` identical to the text that was rendered |
