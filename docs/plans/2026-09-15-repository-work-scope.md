@@ -342,6 +342,81 @@ That asymmetry is what makes one mechanism safe for both.
   another person writing in between turns it into a conflict the panel shows,
   never a silently lost update.
 
+### The decision table (stage 3 implements exactly this)
+
+One pure function answers every event against one context. Nothing below reads
+a database, a clock or the network; the caller passes all of it in.
+
+```ts
+decideWorkScope(context: {
+  scope: WorkScope | null;          // null: no record yet, or a subject that carries none
+  carriesRecord: boolean;           // ticket, pull request, webhook delivery with a resolved subject id
+  catalog: { activated: boolean; enabledKeys: RepositoryKey[]; unusableKeys: RepositoryKey[] };
+  policy: TriggerRepositoryPolicy;  // already resolved
+  eventRelatedKeys: RepositoryKey[];// candidates of event_repository_and_related, empty otherwise
+  attachedKeys: RepositoryKey[];    // what the workspace holds right now
+  actor: WorkScopeActor;
+  now: string;
+}, event:
+  | { kind: "run_started" }
+  | { kind: "derived"; origin: "workflow_owned_branch" | "ticket_text" | "trigger_policy" | "inferred"; repositoryKeys: RepositoryKey[]; rationale: string }
+  | { kind: "requested"; repositoryKeys: RepositoryKey[] }
+  | { kind: "answered"; clarificationId: string; askedRepositoryKeys: RepositoryKey[]; answer: { kind: "none" } | { kind: "repositories"; repositoryKeys: RepositoryKey[] } }
+  | { kind: "edited"; changes: WorkScopeEditRequest["changes"] }
+): {
+  plan: WorkScopeWritePlan;
+  attach: RepositoryKey[];
+  ask: RepositoryKey[];
+  refused: Array<{ repositoryKey: RepositoryKey; reason: WorkScopeRefusalReason }>;
+  editRejected: Array<{ repositoryKey: RepositoryKey; reason: "not_enabled" | "workspace_cap" }>;
+}
+```
+
+Words used below. **Usable**: in `enabledKeys` and not in `unusableKeys`.
+**Candidate**: allowed by the policy's candidate set (`enabled_catalog`: every
+usable key; `event_repository_and_related`: `eventRelatedKeys`; `listed`: the
+listed keys). **Expired**: an `unavailable` entry with reason `not_enabled`,
+on an ACTIVATED catalog, whose key is now usable; an expired entry behaves as if
+there were no entry, and a `selected` upsert over it sets `replacesExpired`.
+**Blocking entry**: `excluded`, or `unavailable` that is not expired. **Cap**:
+at most 8 `selected` entries after the write. Every refusal appends one
+`request_refused` trail event; every upsert appends one `entry_written` event
+with the previous state. Output arrays keep input order.
+
+| Event | Situation | Result |
+|---|---|---|
+| `run_started` | `carriesRecord` false | empty plan, nothing attached |
+| `run_started` | `selected` entry, usable, and (origin `person` or candidate) | attach |
+| `run_started` | `selected` entry, not usable | refused `outside_catalog`, entry kept, no question |
+| `run_started` | `selected` entry, usable, not candidate, origin not `person` | refused `outside_policy`, entry kept, no question |
+| `run_started` | any other entry | nothing |
+| `derived` | key has a blocking entry | refused with `excluded` or `unavailable` |
+| `derived` | key not usable | refused `outside_catalog` (a derived key never asks) |
+| `derived` | key usable, candidate, or expansion `attach` | attach; upsert `selected` with the event's origin, which the store keeps only if precedence allows; over the cap: refused `workspace_cap` |
+| `derived` | key usable, not candidate, expansion `ask_once` or `never` | refused `outside_policy` (a derived key never asks) |
+| `derived` | origin `ticket_text` or `workflow_owned_branch`, and an entry of THAT origin exists for a key not in this event | delete it, comparing on that origin |
+| `derived` | `carriesRecord` false | the attach and refusal columns as above, no upserts, no deletes |
+| `requested` | key already attached | nothing |
+| `requested` | key has a blocking entry | refused with `excluded` or `unavailable`, **never a question** |
+| `requested` | key not usable, no entry, `carriesRecord`, expansion not `never` | ask |
+| `requested` | key not usable, otherwise | refused `outside_catalog` |
+| `requested` | key usable and candidate | attach; upsert `selected` `inferred`; over the cap: refused `workspace_cap` |
+| `requested` | key usable, not candidate, expansion `attach` | as the row above |
+| `requested` | key usable, not candidate, `ask_once`, no entry, `carriesRecord` | ask |
+| `requested` | key usable, not candidate, otherwise | refused `outside_policy` |
+| `answered` | answer `none` | every asked key: upsert `unavailable` origin `person`, reason `unusable` when enabled but unusable, otherwise `not_enabled`; trail carries the `clarificationId` |
+| `answered` | answer names keys | each named usable key: attach and upsert `selected` origin `person` (over the cap: refused `workspace_cap`); each named key not usable: refused `outside_catalog`; each asked key not named: upsert `unavailable` origin `person` as above |
+| `edited` | `select` | usable: upsert `selected` `person`; not usable: `editRejected` `not_enabled`; over the cap: `editRejected` `workspace_cap` |
+| `edited` | `exclude` | upsert `excluded` `person` |
+| `edited` | `remove` | delete comparing on the current entry's origin; no entry: nothing |
+| `answered`, `edited` | `carriesRecord` false | programming error, thrown |
+
+A person's answer and a person's edit ignore the policy on purpose (A10): a
+person outranks a default made for machines. Round limits, the three per request
+bound and unrecognised answers stay where they are today, in the expansion
+protocol; this function is consulted before it and decides only what the record
+already knows.
+
 ### What stops re-deriving
 
 - Pre-sandbox selection starts from the work scope. Only a subject with no
