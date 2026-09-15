@@ -141,6 +141,26 @@ function durationFromStart() {
 }
 
 /**
+ * The completion bookkeeping a terminal write owes the row, as SET assignments
+ * that go into the SAME statement as the status flip. Production runs on
+ * neon-http, which cannot open a transaction, so a follow-up write would be its
+ * own visible window - a run reading terminal-yet-never-completed - and its own
+ * way to fail. completedAt keeps a precise value that was already recorded, else
+ * stamps now(); durationSec is filled from a known start and stays null when
+ * there is none, rather than fabricating a zero.
+ *
+ * markRunBlockedOnCancel and markRunBlockedByOperator spell the same two
+ * assignments out inline; this generalizes them for the writers that only ever
+ * wrote a status.
+ */
+function terminalCompletionFields() {
+  return {
+    completedAt: sql`coalesce(${workflowRuns.completedAt}, now())`,
+    durationSec: durationFromStart(),
+  };
+}
+
+/**
  * Cron writer. Upserts one row per run, setting only lifecycle columns.
  * status/workflowName come straight from the world (always known); ticket and
  * PR fields use COALESCE so a transient lookup miss doesn't wipe a good value
@@ -443,11 +463,15 @@ export function recordConnectedRunStatusReason(
  * outcome durable before that self-triggered cancel can land: the cron never
  * downgrades a frozen status, so the run stays "failed". Guarded to only
  * advance an in-flight row and never clobber an already-frozen outcome.
+ *
+ * "failed" is terminal here, so the flip also finalizes the lifecycle (see
+ * terminalCompletionFields): a failure path is exactly the one whose end-of-run
+ * telemetry cannot be relied on to land.
  */
 export async function markRunFailedOnSelfMove(db: Db, runId: string): Promise<void> {
   await db
     .update(workflowRuns)
-    .set({ status: "failed", updatedAt: sql`now()` })
+    .set({ status: "failed", ...terminalCompletionFields(), updatedAt: sql`now()` })
     .where(
       and(
         eq(workflowRuns.runId, runId),
@@ -477,11 +501,16 @@ export function markConnectedRunFailedOnSelfMove(runId: string): Promise<void> {
  * can land: the cron never downgrades a frozen status, so the run stays
  * "success". Guarded to only advance an in-flight row and never clobber an
  * already-frozen outcome.
+ *
+ * The run is terminal from this statement on, so this is also where its
+ * completion is stamped (see terminalCompletionFields). recordRunUsage lands
+ * minutes later at the end of the workflow and coalesces, so the flip owns the
+ * completion instant and the usage write still owns everything only it knows.
  */
 export async function markRunSucceededOnSelfMove(db: Db, runId: string): Promise<void> {
   await db
     .update(workflowRuns)
-    .set({ status: "success", updatedAt: sql`now()` })
+    .set({ status: "success", ...terminalCompletionFields(), updatedAt: sql`now()` })
     .where(
       and(
         eq(workflowRuns.runId, runId),
@@ -506,11 +535,14 @@ export function markConnectedRunSucceededOnSelfMove(runId: string): Promise<void
  * runs don't stay "awaiting" forever. Guarded on status='awaiting', so it is a
  * tolerant no-op when the run is missing or already moved on. Returns whether a
  * row actually flipped.
+ *
+ * Terminal, and nothing runs after it for this run, so it finalizes the
+ * lifecycle too (see terminalCompletionFields).
  */
 export async function resolveAwaitingRun(db: Db, runId: string): Promise<boolean> {
   const rows = await db
     .update(workflowRuns)
-    .set({ status: "success", updatedAt: sql`now()` })
+    .set({ status: "success", ...terminalCompletionFields(), updatedAt: sql`now()` })
     .where(and(eq(workflowRuns.runId, runId), eq(workflowRuns.status, "awaiting")))
     .returning({ runId: workflowRuns.runId });
   return rows.length > 0;
@@ -530,6 +562,9 @@ export function resolveConnectedAwaitingRun(runId: string): Promise<boolean> {
  * a run still suspended on its own hook would be frozen into a permanent lie.
  * Guarded on status='awaiting' and run_id <> exclude, so it is a tolerant no-op
  * when nothing is parked. Returns the number of rows flipped.
+ *
+ * Terminal for every row it touches, and the last writer any of them will see,
+ * so it finalizes the lifecycle too (see terminalCompletionFields).
  */
 export async function resolveAwaitingRunsForTicket(
   db: Db,
@@ -538,7 +573,7 @@ export async function resolveAwaitingRunsForTicket(
 ): Promise<number> {
   const rows = await db
     .update(workflowRuns)
-    .set({ status: "blocked", updatedAt: sql`now()` })
+    .set({ status: "blocked", ...terminalCompletionFields(), updatedAt: sql`now()` })
     .where(
       and(
         eq(workflowRuns.ticketKey, ticketKey),
@@ -769,11 +804,14 @@ export function markConnectedRunFailedByWatchdog(
  * state the dashboard retries and must stay awaiting, and a pending approval is
  * a human continuation of the same kind. Everything else (superseded, expired,
  * decided, or no continuation at all) has no way back.
+ *
+ * Terminal and last, so it finalizes the lifecycle too (see
+ * terminalCompletionFields).
  */
 export async function sweepOrphanedAwaitingRuns(db: Db): Promise<number> {
   const rows = await db
     .update(workflowRuns)
-    .set({ status: "blocked", updatedAt: sql`now()` })
+    .set({ status: "blocked", ...terminalCompletionFields(), updatedAt: sql`now()` })
     .where(
       and(
         eq(workflowRuns.status, "awaiting"),
@@ -802,7 +840,8 @@ export function sweepConnectedOrphanedAwaitingRuns(): Promise<number> {
  * recorded a terminal outcome. Agent runs are the only workflow rows with a
  * subject key; post-PR gate rows are intentionally unclaimed and must not be
  * treated as orphans. A terminal blocked row is the same settled outcome used
- * for an awaiting run with no continuation.
+ * for an awaiting run with no continuation, finalized the same way (see
+ * terminalCompletionFields).
  */
 export async function sweepOrphanedRunningRuns(db: Db): Promise<number> {
   const rows = await db
@@ -810,6 +849,7 @@ export async function sweepOrphanedRunningRuns(db: Db): Promise<number> {
     .set({
       status: "blocked",
       statusReason: "Run lost its active claim before reaching a terminal status.",
+      ...terminalCompletionFields(),
       updatedAt: sql`now()`,
     })
     .where(

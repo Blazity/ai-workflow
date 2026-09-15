@@ -306,7 +306,7 @@ export const MCP_TOOL_CATALOG = {
   },
   "tickets.list_runs": {
     description:
-      "List runs associated with a ticket, most recent first. A terminal run with `completionPending: true` has not persisted its completion fields yet, so its pull request data may still be incomplete.",
+      "List runs associated with a ticket, most recent first. `completionPending: true` means the run's own end-of-run write (cost, phases, pull requests) has not landed yet, so its pull request data may still be incomplete. It applies to successful agent runs only: no other kind of run is still expecting that write, so everything else reports false.",
     inputSchema: z
       .object({
         ticketKey: z.string().min(1).max(TICKET_KEY_MAX_LENGTH),
@@ -317,7 +317,7 @@ export const MCP_TOOL_CATALOG = {
   },
   "runs.get": {
     description:
-      "Get a run's current status. Returns `terminal` and `pollAfterMs` so a caller knows whether to poll again and how soon. A terminal run with `completionPending: true` has not persisted its completion fields yet, so its pull request data may still be incomplete. `repositoryAccess` is the repository list this run was frozen with at start: `activated: false` is the bridge, where `enabledKeys` is meaningless and everything the installation exposes was reachable, and null means the run started before the list was recorded, which is not the same as an empty one.",
+      "Get a run's current status. Returns `terminal` and `pollAfterMs` so a caller knows whether to poll again and how soon. `completionPending: true` means the run's own end-of-run write (cost, phases, pull requests) has not landed yet, so its pull request data may still be incomplete. It applies to successful agent runs only: no other kind of run is still expecting that write, so everything else reports false. `repositoryAccess` is the repository list this run was frozen with at start: `activated: false` is the bridge, where `enabledKeys` is meaningless and everything the installation exposes was reachable, and null means the run started before the list was recorded, which is not the same as an empty one.",
     inputSchema: runIdInputSchema.strict(),
     annotations: policyFor("runs.get").annotations,
   },
@@ -331,13 +331,13 @@ export const MCP_TOOL_CATALOG = {
   },
   "runs.result": {
     description:
-      "Get a run's final outcome. While the run is still in progress this returns `result: null` and `terminal: false`, and a run parked on human input returns `result: null` with `awaitingHumanInput: true` even though it is terminal for polling. A terminal run with `completionPending: true` has not persisted its completion fields yet, so its pull request data may still be incomplete.",
+      "Get a run's final outcome. Every reply carries `completionPending`, with the same meaning as on runs.get: `completionPending: true` means the run's own end-of-run write (cost, phases, pull requests) has not landed yet, so its pull request data may still be incomplete. It applies to successful agent runs only: no other kind of run is still expecting that write, so everything else reports false. While the run is still in progress this returns `result: null` and `terminal: false`, and a run parked on human input returns `result: null` with `awaitingHumanInput: true` even though it is terminal for polling. A successful run whose end-of-run write is still pending also returns `result: null` rather than an outcome whose pull request data would be missing: `pollAfterMs` is how long to wait between polls and `pendingUntil` is the instant after which polling is no longer worth it. Past that instant the result is returned anyway, with `completionPending` still true, so it is never withheld for good. `pendingUntil` is null on every reply that is not withholding a result.",
     inputSchema: runIdInputSchema.strict(),
     annotations: policyFor("runs.result").annotations,
   },
   "runs.diagnose": {
     description:
-      "Deterministically classify why a run stands where it does (category, confidence, evidence refs, next actions), including a low-confidence `completion_fields_pending` lead when a successful run has no completion timestamp. Never runs a model over log content. `confidence` is \"high\" only for structural signals, the run status and a step status; it is \"low\" for tentative leads and whenever the category came from the wording of a recorded reason, so confirm it rather than treating it as an established cause. `repositoryAccess` is the repository list this run was frozen with at start: `activated: false` is the bridge, where `enabledKeys` is meaningless and everything the installation exposes was reachable, and null means the run started before the list was recorded, which is not the same as an empty one. It is carried beside the diagnosis, never as evidence for it: the classifier reads the run status, the error and the steps and nothing else.",
+      "Deterministically classify why a run stands where it does (category, confidence, evidence refs, next actions), including a low-confidence `completion_fields_pending` lead when a successful agent run's own end-of-run write (cost, phases, pull requests) has not landed yet. Never runs a model over log content. `confidence` is \"high\" only for structural signals, the run status and a step status; it is \"low\" for tentative leads and whenever the category came from the wording of a recorded reason, so confirm it rather than treating it as an established cause. `repositoryAccess` is the repository list this run was frozen with at start: `activated: false` is the bridge, where `enabledKeys` is meaningless and everything the installation exposes was reachable, and null means the run started before the list was recorded, which is not the same as an empty one. It is carried beside the diagnosis, never as evidence for it: the classifier reads the run status, the error and the steps and nothing else.",
     inputSchema: runIdInputSchema.strict(),
     annotations: policyFor("runs.diagnose").annotations,
   },

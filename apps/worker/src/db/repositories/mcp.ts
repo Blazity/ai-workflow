@@ -228,6 +228,9 @@ export async function listMcpTicketRunPage(db: Db, ticketKey: string, limit: num
       startedAt: workflowRuns.startedAt,
       completedAt: workflowRuns.completedAt,
       durationSec: workflowRuns.durationSec,
+      // Only the run's own end-of-run write sets this, so "not null" is how the
+      // page answers completionPending the same way runs.get does.
+      costKnown: workflowRuns.costKnown,
     })
     .from(workflowRuns)
     .where(eq(workflowRuns.ticketKey, ticketKey))

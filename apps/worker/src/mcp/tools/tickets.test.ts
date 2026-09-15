@@ -81,11 +81,15 @@ async function seedRun(
     startedAt?: Date | null;
     completedAt?: Date | null;
     durationSec?: number | null;
+    /** Only the run's own end-of-run write sets this, so null is a run whose
+     *  usage has not landed. Defaults to the shape of a finished run. */
+    costKnown?: boolean | null;
   } = {},
 ): Promise<void> {
   runSeq += 1;
   await db.insert(workflowRuns).values({
     runId: over.runId ?? `wrun_${runSeq}`,
+    costKnown: over.costKnown === undefined ? true : over.costKnown,
     workflowId: over.workflowId === undefined ? "wf_agent" : over.workflowId,
     workflowName: over.workflowName === undefined ? "Agent" : over.workflowName,
     status: over.status === undefined ? "success" : over.status,
@@ -308,15 +312,24 @@ describe("tickets.list_runs", () => {
     expect(data.runs[0]).toMatchObject({ status, terminal });
   });
 
+  // The same table runs.get and runs.result assert, from the list page's own
+  // columns: one meaning of completionPending wherever a run is reported.
   it.each([
     ["success", null, true],
-    ["success", new Date("2026-08-11T09:05:00.000Z"), false],
+    ["success", true, false],
+    ["failed", null, false],
+    ["blocked", null, false],
     ["awaiting", null, false],
     ["running", null, false],
   ] as const)(
-    "status %s with completedAt %s reports completionPending=%s",
-    async (status, completedAt, completionPending) => {
-      await seedRun({ runId: `r_pending_${status}_${completionPending}`, status, completedAt });
+    "status %s with costKnown %s reports completionPending=%s",
+    async (status, costKnown, completionPending) => {
+      await seedRun({
+        runId: `r_pending_${status}_${completionPending}`,
+        status,
+        costKnown,
+        completedAt: new Date("2026-08-11T09:05:00.000Z"),
+      });
 
       const result = await listRuns({ ticketKey: "PROJ-1" });
       const data = (result.structuredContent as { data: { runs: McpRunSummary[] } }).data;
@@ -324,6 +337,22 @@ describe("tickets.list_runs", () => {
       expect(data.runs[0]?.completionPending).toBe(completionPending);
     },
   );
+
+  // A gate run lands in this table too and never gets an end-of-run write.
+  it("never reports a Post-PR gate run as completion pending", async () => {
+    await seedRun({
+      runId: "r_gate_pending",
+      workflowId: "wf_post_pr_gate",
+      workflowName: "Post-PR gate",
+      status: "success",
+      costKnown: null,
+    });
+
+    const result = await listRuns({ ticketKey: "PROJ-1" });
+    const data = (result.structuredContent as { data: { runs: McpRunSummary[] } }).data;
+
+    expect(data.runs[0]?.completionPending).toBe(false);
+  });
 
   it("coerces an unknown persisted status at the MCP response boundary", async () => {
     await seedRun({ runId: "r_unknown", status: "orphaned" });

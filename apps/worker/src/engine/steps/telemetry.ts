@@ -123,10 +123,17 @@ export async function recordRunTelemetryStep(payload: {
         usageSnapshot(payload.totals, new Date().toISOString()),
       );
     } catch (error) {
-      console.error(
+      // Swallowed, but not silent: this runs inside the step, so the module's
+      // own logger is reachable and the line is queryable by run id instead of
+      // being a console string nobody can search for.
+      const { logger } = await import("../../infra/logger.js");
+      logger.error(
+        {
+          runId: payload.runId,
+          ticketKey: payload.ticketKey,
+          error: redactDiagnosticText(errorMessage(error)),
+        },
         "run_analysis_final_usage_failed",
-        payload.runId,
-        redactDiagnosticText(errorMessage(error)),
       );
     }
   } catch (error) {

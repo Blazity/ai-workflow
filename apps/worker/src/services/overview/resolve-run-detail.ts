@@ -32,6 +32,10 @@ export async function resolveRunDetail(opts: {
       ...world.run,
       repositoryAccess:
         world.run.repositoryAccess ?? dbDetail?.run.repositoryAccess ?? null,
+      // Same argument as the line above, one step stronger: whether the run's
+      // own end-of-run write has landed is a fact about the durable row and the
+      // world cannot know it at all, so the row answers whenever there is one.
+      usageRecorded: dbDetail?.run.usageRecorded ?? world.run.usageRecorded,
     };
     // A run parked on a clarification is suspended on a workflow hook, which the
     // world still reports as "running". Only the durable row knows it is waiting

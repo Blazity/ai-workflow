@@ -4016,7 +4016,20 @@ async function agentWorkflowBody(
           budgetMetric: terminalBudgetFailure?.metric,
         }),
         details,
-      }).catch(() => ({ closed: 0, pending: 1 }));
+      }).catch((error: unknown) => {
+        // Still swallowed - the pessimistic { pending: 1 } below is what decides
+        // the run's outcome, and throwing here would lose it. But it used to be
+        // swallowed without a trace, so a run that turned "failed" on this
+        // branch had no recorded reason anywhere. console and not the pino
+        // logger: this runs in the workflow bundle, which rejects any module
+        // reaching a Node builtin (see persistRunTelemetryBestEffort).
+        console.error(
+          "pr_check_cleanup_failed",
+          workflowRunId,
+          truncateError(errorMessage(error)),
+        );
+        return { closed: 0, pending: 1 };
+      });
       if (
         successfulWithPendingCheck &&
         (cleanup.closed > 0 || cleanup.pending > 0)

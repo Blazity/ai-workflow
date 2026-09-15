@@ -60,7 +60,7 @@ const run = (status: RunDetail["status"] = "running"): RunDetail => ({
   ticket: "AWT-1", ticketTitle: "Ticket", ticketUrl: "https://jira.example/browse/AWT-1",
   prNumber: null, prUrl: null, prs: null, model: null,
   createdAt: "2026-08-20T00:00:00.000Z", startedAt: "2026-08-20T00:00:00.000Z", completedAt: null,
-  durationSec: null, error: null, deploymentId: null,
+  durationSec: null, usageRecorded: false, error: null, deploymentId: null,
 });
 
 const report = { version: 1, runId: "run-1", sourceResearchRunId: "run-1", researchRevision: 1, stage: "research_complete", researchCompletedAt: "2026-08-20T00:00:00.000Z", repositories: [], expansionRounds: 0, repositoryRequests: [], writeRepositories: [], evidenceStatus: "captured", evidence: [], planMarkdown: "plan", noChangeNeeded: false, resolutionEvidence: [], publication: null, usage: { research: { capturedAt: "now", costUsd: 0, costKnown: true, tokensInput: 0, tokensCached: 0, tokensOutput: 0, phases: {} }, publication: null, final: null }, jira: { research: { state: "pending", attemptedAt: null, commentUrl: null, error: null }, pullRequest: { state: "not_applicable", attemptedAt: null, commentUrl: null, error: null } }, sanitization: { redactions: {}, truncated: false, originalBytes: 1, storedBytes: 1, unavailable: false, unavailableReason: null } } as unknown as RunAnalysisReport;

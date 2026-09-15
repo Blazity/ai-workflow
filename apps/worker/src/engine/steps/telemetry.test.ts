@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   captureRunSteps: vi.fn(),
+  finalizeRunAnalysisUsage: vi.fn(),
   loggerError: vi.fn(),
   recordRunUsage: vi.fn(),
 }));
@@ -14,6 +15,10 @@ vi.mock("../internal/ports.js", () => ({
 vi.mock("../support/collect-run-detail.js", () => ({
   captureRunStepsBestEffort: (...args: unknown[]) => state.captureRunSteps(...args),
   sanitizeRunStepsForDiagnosticError: (steps: unknown) => steps,
+}));
+vi.mock("../../run-analysis/persistence.js", () => ({
+  finalizeConnectedRunAnalysisUsage: (...args: unknown[]) =>
+    state.finalizeRunAnalysisUsage(...args),
 }));
 vi.mock("../../infra/logger.js", () => ({
   logger: { error: (...args: unknown[]) => state.loggerError(...args) },
@@ -56,6 +61,7 @@ const expectedLog = [
 beforeEach(() => {
   vi.clearAllMocks();
   state.captureRunSteps.mockResolvedValue(null);
+  state.finalizeRunAnalysisUsage.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -83,6 +89,26 @@ describe("recordRunTelemetryStep", () => {
 
     expect(state.recordRunUsage).not.toHaveBeenCalled();
     expect(state.loggerError).toHaveBeenCalledWith(...expectedLog);
+  });
+
+  // The analysis snapshot stays a nice-to-have (the telemetry write above it
+  // has already landed, and failing the step would retry that write for
+  // nothing), but "swallowed" used to mean a console line nothing queries. The
+  // run id is what makes it findable at all.
+  it("logs a failed final usage snapshot at error level with the run id, and still resolves", async () => {
+    state.recordRunUsage.mockResolvedValue(undefined);
+    state.finalizeRunAnalysisUsage.mockRejectedValue(new Error("analysis store unavailable"));
+
+    await expect(recordRunTelemetryStep(telemetryPayload())).resolves.toBeUndefined();
+
+    expect(state.loggerError).toHaveBeenCalledWith(
+      {
+        runId: "wrun_completion_pending",
+        ticketKey: "PROJ-1",
+        error: "analysis store unavailable",
+      },
+      "run_analysis_final_usage_failed",
+    );
   });
 });
 

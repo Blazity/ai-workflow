@@ -203,6 +203,29 @@ export interface RunStep {
 }
 
 /**
+ * The value `RunDetail.workflow` (and `Run.workflow`) carries for an agent run.
+ *
+ * Named here because `workflow_runs` holds two kinds of row: agent runs, and
+ * Post-PR gate runs the poll cron snapshots. Only the first kind has an
+ * end-of-run write of its own, so anything reasoning about that write has to
+ * tell them apart, and it does it by this id.
+ */
+export const AGENT_WORKFLOW_ID = "wf_agent";
+
+/**
+ * How long a stopped agent run's end-of-run write is still worth waiting for,
+ * measured from `completedAt ?? startedAt ?? createdAt`.
+ *
+ * Sized on the invocation ceiling rather than on a guess: the deployed step
+ * function is killed at 800 s, so a tail that is going to arrive has arrived
+ * within this window. Shared because two surfaces have to agree on it to the
+ * second or they contradict each other about the same run: runs.result stops
+ * withholding the outcome here (and publishes the instant as `pendingUntil`),
+ * and the trace header stops calling the missing data pending here.
+ */
+export const RUN_COMPLETION_GRACE_MS = 15 * 60 * 1_000;
+
+/**
  * Single-run header for the trace screen. Aggregate metrics (tokens, cost,
  * eval score) are deliberately absent — the Workflow runtime does not persist
  * them per run, so the trace screen does not pretend to show them.
@@ -226,6 +249,20 @@ export interface RunDetail {
   completedAt: string | null;
   durationSec: number | null;
   error: RunError | null;
+  /**
+   * Whether the run's own end-of-run telemetry write has landed on the row.
+   *
+   * That single write (`recordRunUsage`) is what fills cost, tokens, phases and
+   * `prs`, and it is minutes behind the status flip: a run is marked successful
+   * by its self-move step so a self-triggered Jira webhook cannot cancel it, and
+   * the workflow's outer finally records the usage afterwards. Between the two
+   * the row is terminal with no pull requests recorded, and nothing else on the
+   * run says so - `completedAt` is stamped by the flip, and `workflowId` /
+   * `workflowName` / the harness manifests are written mid-run by the
+   * block-status writer. Derived from `cost_known`, which that write owns and
+   * no other writer sets.
+   */
+  usageRecorded: boolean;
   /** Durable reason for a blocked/failed run (who cancelled it / why it failed). */
   statusReason?: string | null;
   /**

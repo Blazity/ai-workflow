@@ -632,6 +632,12 @@ async function seedRun(over: {
       startedAt: new Date("2026-08-12T09:00:00.000Z"),
       completedAt: new Date("2026-08-12T09:05:00.000Z"),
       durationSec: 300,
+      // The end-of-run write landed: these fixtures stand for runs that are
+      // over, not for rows caught between the status flip and the telemetry
+      // step. cost_known is what recordRunUsage alone sets, so leaving it null
+      // would make every read report completionPending and runs.diagnose would
+      // answer completion_fields_pending instead of succeeded.
+      costKnown: true,
       prNumber: over.prNumber ?? null,
       prUrl: over.prNumber ? `https://github.com/acme/demo/pull/${over.prNumber}` : null,
     });

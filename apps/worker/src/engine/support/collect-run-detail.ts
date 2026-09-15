@@ -203,6 +203,10 @@ export async function collectRunDetail(
     startedAt: run.startedAt?.toISOString() ?? null,
     completedAt: run.completedAt?.toISOString() ?? null,
     durationSec,
+    // The world has no notion of the durable usage write, so this says "not as
+    // far as this source knows"; resolve-run-detail.ts takes the durable row's
+    // answer whenever there is one.
+    usageRecorded: false,
     error: runError,
     deploymentId: run.deploymentId ?? null,
   };

@@ -87,6 +87,10 @@ function mapRunDetailRow(
     startedAt: row.startedAt?.toISOString() ?? null,
     completedAt: row.completedAt?.toISOString() ?? null,
     durationSec: row.durationSec,
+    // cost_known is nullable with no default and recordRunUsage is its only
+    // writer (it always supplies a boolean, true or false), so "not null" is an
+    // exact answer to "has the end-of-run telemetry write landed?".
+    usageRecorded: row.costKnown !== null,
     error: row.statusReason && (status === "blocked" || status === "failed")
       ? { message: row.statusReason }
       : null,
