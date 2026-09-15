@@ -30,6 +30,7 @@ const TRIGGER_POLICY_LISTED_KEYS_MAX = 50;
 const WORK_SCOPE_EDIT_CHANGES_MAX = 16;
 const WORK_SCOPE_WRITE_PLAN_KEYS_MAX = 16;
 const WORK_SCOPE_WRITE_PLAN_TRAIL_MAX = 32;
+const WORK_SCOPE_ASKED_REPOSITORIES_MAX = 8;
 
 export const WORK_SCOPE_ENTRY_STATES = ["selected", "excluded", "unavailable"] as const;
 export const workScopeEntryStateSchema = z.enum(WORK_SCOPE_ENTRY_STATES);
@@ -38,6 +39,14 @@ export type WorkScopeEntryState = z.infer<typeof workScopeEntryStateSchema>;
 export const WORK_SCOPE_UNAVAILABLE_REASONS = ["not_enabled", "unusable"] as const;
 export const workScopeUnavailableReasonSchema = z.enum(WORK_SCOPE_UNAVAILABLE_REASONS);
 export type WorkScopeUnavailableReason = z.infer<typeof workScopeUnavailableReasonSchema>;
+
+/** Why a question about a repository was raised, recorded at ask time,
+ *  because a "none" answer means something different for each reason: not
+ *  enabled or unusable are recorded as unavailable, outside policy as
+ *  excluded, selection records nothing. */
+export const WORK_SCOPE_ASK_REASONS = ["not_enabled", "unusable", "outside_policy", "selection"] as const;
+export const workScopeAskReasonSchema = z.enum(WORK_SCOPE_ASK_REASONS);
+export type WorkScopeAskReason = z.infer<typeof workScopeAskReasonSchema>;
 
 /** Index order IS precedence: index 0 wins. */
 export const WORK_SCOPE_ORIGINS = [
@@ -62,6 +71,9 @@ export const WORK_SCOPE_REFUSAL_REASONS = [
   "excluded",
   "unavailable",
   "workspace_cap",
+  // More than three repositories were requested at once; the extras are
+  // refused without a question.
+  "request_limit",
   "rounds_exhausted",
 ] as const;
 export const workScopeRefusalReasonSchema = z.enum(WORK_SCOPE_REFUSAL_REASONS);
@@ -147,6 +159,42 @@ export const workScopeSchema = z
   .strict();
 export type WorkScope = z.infer<typeof workScopeSchema>;
 
+/** A repository a question named, and why it was asked: not enabled or
+ *  unusable are recorded as unavailable if the answer is "none", outside
+ *  policy is recorded as excluded, and selection records nothing. */
+export const workScopeAskedRepositorySchema = z
+  .object({
+    repositoryKey: repositoryKeySchema,
+    askedBecause: workScopeAskReasonSchema,
+  })
+  .strict();
+export type WorkScopeAskedRepository = z.infer<typeof workScopeAskedRepositorySchema>;
+
+export const workScopeAskedRepositoriesSchema = z
+  .array(workScopeAskedRepositorySchema)
+  .min(1)
+  .max(WORK_SCOPE_ASKED_REPOSITORIES_MAX)
+  .refine(
+    (repositories) => hasUniqueValues(repositories.map((repository) => repository.repositoryKey)),
+    { message: "Asked repositories must be unique." },
+  );
+
+export const workScopeQuestionAnswerSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("none") }).strict(),
+  z
+    .object({
+      kind: z.literal("repositories"),
+      repositoryKeys: z
+        .array(repositoryKeySchema)
+        .min(1)
+        .max(WORK_SCOPE_ASKED_REPOSITORIES_MAX)
+        .refine(hasUniqueValues, { message: "Answered repositories must be unique." }),
+    })
+    .strict(),
+  z.object({ kind: z.literal("unrecognised") }).strict(),
+]);
+export type WorkScopeQuestionAnswer = z.infer<typeof workScopeQuestionAnswerSchema>;
+
 export const workScopeTrailEventSchema = z.discriminatedUnion("kind", [
   z
     .object({
@@ -156,11 +204,31 @@ export const workScopeTrailEventSchema = z.discriminatedUnion("kind", [
       clarificationId: z.string().min(1).optional(),
     })
     .strict(),
+  // `entry` is the row as it was before the delete.
+  z
+    .object({
+      kind: z.literal("entry_removed"),
+      entry: workScopeEntrySchema,
+      removedBy: workScopeActorSchema,
+    })
+    .strict(),
   z
     .object({
       kind: z.literal("question_asked"),
       clarificationId: z.string().min(1),
-      repositoryKeys: z.array(repositoryKeySchema),
+      repositories: workScopeAskedRepositoriesSchema,
+    })
+    .strict(),
+  // A person's answer as the run read it. With `question_asked` under the
+  // same clarification id it gives the full question and answer history of a
+  // subject, including answers that wrote no entry (a none to a selection
+  // question, an unreadable answer).
+  z
+    .object({
+      kind: z.literal("question_answered"),
+      clarificationId: z.string().min(1),
+      answer: workScopeQuestionAnswerSchema,
+      answeredBy: workScopeActorSchema,
     })
     .strict(),
   z

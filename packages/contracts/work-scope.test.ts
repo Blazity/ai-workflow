@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import { expect } from "./test-expect.js";
 import {
+  WORK_SCOPE_ASK_REASONS,
   WORK_SCOPE_ENTRY_STATES,
   WORK_SCOPE_ORIGINS,
   WORK_SCOPE_REFUSAL_REASONS,
@@ -9,6 +10,8 @@ import {
   resolveTriggerRepositoryPolicy,
   triggerRepositoryPolicySchema,
   validateTriggerRepositoryPolicy,
+  workScopeAskedRepositoriesSchema,
+  workScopeAskReasonSchema,
   workScopeEditRequestSchema,
   workScopeEntrySchema,
   workScopeOriginRank,
@@ -45,6 +48,7 @@ describe("work scope vocabulary", () => {
   it("freezes the states, reasons and origins, with origins in precedence order", () => {
     expect(WORK_SCOPE_ENTRY_STATES).toEqual(["selected", "excluded", "unavailable"]);
     expect(WORK_SCOPE_UNAVAILABLE_REASONS).toEqual(["not_enabled", "unusable"]);
+    expect(WORK_SCOPE_ASK_REASONS).toEqual(["not_enabled", "unusable", "outside_policy", "selection"]);
     expect(WORK_SCOPE_ORIGINS).toEqual([
       "person",
       "workflow_owned_branch",
@@ -58,8 +62,53 @@ describe("work scope vocabulary", () => {
       "excluded",
       "unavailable",
       "workspace_cap",
+      "request_limit",
       "rounds_exhausted",
     ]);
+  });
+});
+
+describe("work scope ask reason", () => {
+  it("parses each ask reason", () => {
+    for (const reason of WORK_SCOPE_ASK_REASONS) {
+      expect(workScopeAskReasonSchema.safeParse(reason).success, reason).toBe(true);
+    }
+  });
+
+  it("refuses an unknown ask reason", () => {
+    expect(workScopeAskReasonSchema.safeParse("timed_out").success).toBe(false);
+  });
+});
+
+describe("asked repositories", () => {
+  const askedRepository = (index: number) => ({
+    repositoryKey: `github:blazity/repository-${index}`,
+    askedBecause: "not_enabled",
+  });
+
+  it("refuses an asked repository with an extra key", () => {
+    expect(
+      workScopeAskedRepositoriesSchema.safeParse([{ ...askedRepository(1), extra: true }]).success,
+    ).toBe(false);
+  });
+
+  it("holds asked repositories to one to eight, unique", () => {
+    expect(
+      workScopeAskedRepositoriesSchema.safeParse(
+        Array.from({ length: 8 }, (_, index) => askedRepository(index)),
+      ).success,
+    ).toBe(true);
+    expect(
+      workScopeAskedRepositoriesSchema.safeParse(
+        Array.from({ length: 9 }, (_, index) => askedRepository(index)),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("refuses duplicate repository keys", () => {
+    expect(
+      workScopeAskedRepositoriesSchema.safeParse([askedRepository(1), askedRepository(1)]).success,
+    ).toBe(false);
   });
 });
 
@@ -187,16 +236,7 @@ describe("work scope trail row", () => {
     ).toBe(false);
   });
 
-  it("accepts a question and a refusal", () => {
-    expect(
-      workScopeTrailRowSchema.safeParse(
-        row("AWP-176", "run-1", {
-          kind: "question_asked",
-          clarificationId: "clarification-1",
-          repositoryKeys: ["gitlab:group/sub/project"],
-        }),
-      ).success,
-    ).toBe(true);
+  it("accepts a refusal, including the request_limit reason", () => {
     expect(
       workScopeTrailRowSchema.safeParse(
         row("AWP-176", "run-1", {
@@ -206,6 +246,102 @@ describe("work scope trail row", () => {
         }),
       ).success,
     ).toBe(true);
+    expect(
+      workScopeTrailRowSchema.safeParse(
+        row("AWP-176", "run-1", {
+          kind: "request_refused",
+          repositoryKey: "gitlab:group/sub/project",
+          reason: "request_limit",
+        }),
+      ).success,
+    ).toBe(true);
+  });
+
+  it("accepts a question naming asked repositories and refuses an empty list", () => {
+    expect(
+      workScopeTrailRowSchema.safeParse(
+        row("AWP-176", "run-1", {
+          kind: "question_asked",
+          clarificationId: "clarification-1",
+          repositories: [{ repositoryKey: "gitlab:group/sub/project", askedBecause: "not_enabled" }],
+        }),
+      ).success,
+    ).toBe(true);
+    expect(
+      workScopeTrailRowSchema.safeParse(
+        row("AWP-176", "run-1", {
+          kind: "question_asked",
+          clarificationId: "clarification-1",
+          repositories: [],
+        }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("round-trips entry_removed and refuses it without removedBy", () => {
+    const removedBy = { kind: "person", actorId: "user-1", actorLabel: "Filip" };
+    expect(
+      workScopeTrailRowSchema.safeParse(
+        row("AWP-176", "run-1", { kind: "entry_removed", entry: selectedEntry, removedBy }),
+      ).success,
+    ).toBe(true);
+    expect(
+      workScopeTrailRowSchema.safeParse(row("AWP-176", "run-1", { kind: "entry_removed", entry: selectedEntry }))
+        .success,
+    ).toBe(false);
+  });
+
+  it("round-trips each question_answered answer kind", () => {
+    const answeredBy = { kind: "person", actorId: "user-1", actorLabel: "Filip" };
+    const answered = (answer: unknown) => ({
+      kind: "question_answered",
+      clarificationId: "clarification-1",
+      answer,
+      answeredBy,
+    });
+    expect(
+      workScopeTrailRowSchema.safeParse(row("AWP-176", "run-1", answered({ kind: "none" }))).success,
+    ).toBe(true);
+    expect(
+      workScopeTrailRowSchema.safeParse(
+        row(
+          "AWP-176",
+          "run-1",
+          answered({ kind: "repositories", repositoryKeys: ["gitlab:group/sub/project"] }),
+        ),
+      ).success,
+    ).toBe(true);
+    expect(
+      workScopeTrailRowSchema.safeParse(row("AWP-176", "run-1", answered({ kind: "unrecognised" }))).success,
+    ).toBe(true);
+  });
+
+  it("holds a repositories answer to one to eight keys and requires answeredBy", () => {
+    const answeredBy = { kind: "person", actorId: "user-1", actorLabel: "Filip" };
+    const answered = (repositoryKeys: string[]) => ({
+      kind: "question_answered",
+      clarificationId: "clarification-1",
+      answer: { kind: "repositories", repositoryKeys },
+      answeredBy,
+    });
+    const keys = (count: number) =>
+      Array.from({ length: count }, (_, index) => `github:blazity/repository-${index}`);
+    expect(workScopeTrailRowSchema.safeParse(row("AWP-176", "run-1", answered([]))).success).toBe(false);
+    expect(workScopeTrailRowSchema.safeParse(row("AWP-176", "run-1", answered(keys(8)))).success).toBe(
+      true,
+    );
+    expect(workScopeTrailRowSchema.safeParse(row("AWP-176", "run-1", answered(keys(9)))).success).toBe(
+      false,
+    );
+    expect(
+      workScopeTrailRowSchema.safeParse(
+        row("AWP-176", "run-1", {
+          kind: "question_answered",
+          clarificationId: "clarification-1",
+          answer: { kind: "none" },
+        }),
+      ).success,
+    ).toBe(false);
   });
 });
 
@@ -336,6 +472,35 @@ describe("work scope write plan", () => {
     expect(plan([], keys(17).map((key) => remove(key)), [])).toBe(false);
     expect(plan([], [], Array.from({ length: 32 }, () => mapShown))).toBe(true);
     expect(plan([], [], Array.from({ length: 33 }, () => mapShown))).toBe(false);
+  });
+
+  it("accepts a trail carrying an entry_removed event", () => {
+    const removedBy = { kind: "person", actorId: "user-1", actorLabel: "Filip" };
+    expect(
+      plan(
+        [],
+        [],
+        [{ kind: "entry_removed", entry: entryFor("github:blazity/ai-workflow-demo"), removedBy }],
+      ),
+    ).toBe(true);
+  });
+
+  it("accepts a trail carrying a question_answered event", () => {
+    const answeredBy = { kind: "person", actorId: "user-1", actorLabel: "Filip" };
+    expect(
+      plan(
+        [],
+        [],
+        [
+          {
+            kind: "question_answered",
+            clarificationId: "clarification-1",
+            answer: { kind: "none" },
+            answeredBy,
+          },
+        ],
+      ),
+    ).toBe(true);
   });
 });
 
