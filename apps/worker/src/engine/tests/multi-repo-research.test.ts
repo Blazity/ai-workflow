@@ -59,6 +59,7 @@ import {
 } from "../../engine/repository-discovery/protocol.js";
 import {
   EXPANSION_LIMIT_CLARIFICATION_PREFIX,
+  decideRepositoryExpansion,
   validateHumanRepositoryExpansion,
   validateRepositoryExpansionRequests,
 } from "../../engine/repository-discovery/runner.js";
@@ -68,6 +69,7 @@ import type { WorkspaceManifest } from "../../sandbox/repo-workspace.js";
 import { workspaceRepositoryAccess } from "../../sandbox/repo-workspace.js";
 import { publishTrustedWorkspaceFromSandbox } from "../steps/trusted-workspace-publisher.js";
 import { applyHumanRepositoryExpansion } from "../steps/phase.js";
+import { researchPhaseIdentity } from "../blocks/support/types.js";
 import { makeCtx } from "../blocks/support/test-support.js";
 import {
   openPullRequestsForPublication,
@@ -450,6 +452,11 @@ describe("human repository expansion beyond the model round limit", () => {
     ]);
     expect(ctx.selectedRepositories).toHaveLength(2);
     expect(ctx.workspaceManifest).toBe(attachedManifest);
+    // The attach is recorded on the run state: the streak that closes expansion
+    // starts over, and the clarification round it consumed is marked.
+    expect(ctx.repositoryExpansion.allAttachedRequests).toBe(0);
+    expect(ctx.repositoryExpansion.humanAttachRound).toBe(1);
+    expect(ctx.repositoryExpansion.expansionClosed).toBeUndefined();
   });
 
   it("returns a clarification without attaching when the human names an off-catalog repository", async () => {
@@ -466,6 +473,269 @@ describe("human repository expansion beyond the model round limit", () => {
     expect(result.kind).toBe("clarification");
     expect(attach).not.toHaveBeenCalled();
   });
+
+  it.each(["", "none", "no more repositories", "github:acme/service"])(
+    "reads %o as no further repositories and resumes without a second question",
+    async (answer) => {
+      // AIW-377: an answer naming nothing new is an explicit "no further
+      // repositories". The run must resume into planning with what is attached,
+      // and the expansion question must never be raised again.
+      const ctx = ctxWithLimitAnswer(answer);
+      const attach = vi.fn();
+
+      const result = await applyHumanRepositoryExpansion(ctx, {
+        resolve: async (answerText, attached) =>
+          validateHumanRepositoryExpansion({ answer: answerText, catalog, attached }),
+        attach,
+        fetchContexts: async () => [],
+      });
+
+      expect(result).toEqual({ kind: "noop" });
+      expect(attach).not.toHaveBeenCalled();
+      expect(ctx.selectedRepositories).toHaveLength(1);
+      // Recorded on the run, which is what keeps the question from coming back.
+      expect(ctx.repositoryExpansion.expansionClosed).toBe("human");
+    },
+  );
+
+  it("asks once about an unreadable answer, then stops asking", async () => {
+    // Prose is not a refusal: the human meant something, so they get one
+    // targeted re-ask and the run keeps its ability to expand. The second
+    // unreadable answer is where it ends: a third question is the loop this
+    // whole fix exists to stop (AIW-377). Driven end to end through the resume
+    // path, because the re-ask is only actionable if the question it raises is
+    // one the resume path recognizes.
+    const ctx = ctxWithLimitAnswer("use the shared one");
+    const deps = {
+      resolve: async (
+        answer: string,
+        attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+      ) => validateHumanRepositoryExpansion({ answer, catalog, attached }),
+      attach: vi.fn(),
+      fetchContexts: async () => [],
+    };
+
+    const first = await applyHumanRepositoryExpansion(ctx, deps);
+    expect(first.kind).toBe("clarification");
+    expect(ctx.repositoryExpansion.expansionClosed).toBeUndefined();
+    expect(ctx.repositoryExpansion.unrecognisedAnswers).toBe(1);
+
+    // The run parks on that question and the human answers it, still without a
+    // path. The question carries the expansion prefix, so this answer is read
+    // at all instead of being dropped.
+    if (first.kind !== "clarification") throw new Error("expected a clarification");
+    ctx.clarifications = [
+      ...(ctx.clarifications ?? []),
+      { questions: first.questions, answer: "whatever you think is best" },
+    ];
+
+    const second = await applyHumanRepositoryExpansion(ctx, deps);
+    expect(second).toEqual({ kind: "noop" });
+    expect(ctx.repositoryExpansion.expansionClosed).toBe("human");
+
+    // And no third question: nothing is asked once expansion is closed.
+    ctx.clarifications = [
+      ...(ctx.clarifications ?? []),
+      { questions: first.questions, answer: "still nothing" },
+    ];
+    const third = await applyHumanRepositoryExpansion(ctx, deps);
+    expect(third).toEqual({ kind: "noop" });
+    expect(deps.attach).not.toHaveBeenCalled();
+  });
+
+  it("does not read a consumed answer as a refusal on the next loop pass", async () => {
+    // The answer that attached a repository stays the LATEST clarification, so
+    // the next pass of the planning loop re-reads it with everything it named
+    // already attached and reports "exhausted". Closing expansion on that would
+    // close it behind the human's back, right after they asked for more.
+    const ctx = ctxWithLimitAnswer("gitlab:acme/shared/contracts");
+    const deps = {
+      resolve: async (answer: string, attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>) =>
+        validateHumanRepositoryExpansion({ answer, catalog, attached }),
+      attach: async () => ({ manifest: attachedManifest, cloneDurationMs: 5 }),
+      fetchContexts: async () => [],
+    };
+
+    const first = await applyHumanRepositoryExpansion(ctx, deps);
+    expect(first.kind).toBe("attached");
+
+    const second = await applyHumanRepositoryExpansion(ctx, deps);
+    expect(second).toEqual({ kind: "noop" });
+    expect(ctx.repositoryExpansion.expansionClosed).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "an off-catalog repository",
+      answer: "github:acme/not-installed",
+      attachedCount: 1,
+      isAllowed: undefined as ((repoPath: string) => boolean) | undefined,
+      followUp: "gitlab:acme/shared/contracts",
+      consumed: "attached" as const,
+    },
+    {
+      name: "a bare path that exists on two providers",
+      answer: "acme/service",
+      attachedCount: 1,
+      isAllowed: undefined as ((repoPath: string) => boolean) | undefined,
+      followUp: "gitlab:acme/shared/contracts",
+      consumed: "attached" as const,
+    },
+    {
+      name: "a repository the allowlist refuses",
+      answer: "gitlab:acme/shared/contracts",
+      attachedCount: 1,
+      isAllowed: (() => false) as ((repoPath: string) => boolean) | undefined,
+      followUp: "none",
+      consumed: "closed" as const,
+    },
+    {
+      name: "an attach that would cross the workspace ceiling",
+      answer: "gitlab:acme/shared/contracts",
+      attachedCount: 8,
+      isAllowed: undefined as ((repoPath: string) => boolean) | undefined,
+      followUp: "none",
+      consumed: "closed" as const,
+    },
+    {
+      name: "an answer no repository path could be read from",
+      answer: "use the shared one",
+      attachedCount: 1,
+      isAllowed: undefined as ((repoPath: string) => boolean) | undefined,
+      followUp: "gitlab:acme/shared/contracts",
+      consumed: "attached" as const,
+    },
+  ])(
+    "reads the reply to the question it raised about $name",
+    async ({ answer, attachedCount, isAllowed, followUp, consumed }) => {
+      // Every question this path raises has to be one the resume path
+      // recognizes. A question without the expansion prefix is a question whose
+      // answer is dropped: the run would research on with what it had and the
+      // person would never learn their reply went nowhere (AIW-377).
+      const ctx = makeCtx({
+        sandboxId: "sbx-research",
+        workspaceManifest: v2Manifest,
+        selectedRepositories: Array.from({ length: attachedCount }, (_, index) => ({
+          provider: "github" as const,
+          repoPath: index === 0 ? "acme/service" : `acme/filler-${index}`,
+          defaultBranch: "main",
+          selectedRationale: "symptom",
+        })),
+        clarifications: [
+          {
+            questions: [`${EXPANSION_LIMIT_CLARIFICATION_PREFIX} Reply with repo paths.`],
+            answer,
+          },
+        ],
+      });
+      const deps = {
+        resolve: async (
+          answerText: string,
+          attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+        ) =>
+          validateHumanRepositoryExpansion({
+            answer: answerText,
+            catalog,
+            attached,
+            isAllowed,
+          }),
+        attach: vi.fn(async () => ({
+          manifest: attachedManifest,
+          cloneDurationMs: 5,
+        })),
+        fetchContexts: async () => [],
+      };
+
+      const first = await applyHumanRepositoryExpansion(ctx, deps);
+      expect(first.kind).toBe("clarification");
+      if (first.kind !== "clarification") throw new Error("expected a clarification");
+
+      // The run parks on that question and the person answers it.
+      ctx.clarifications = [
+        ...(ctx.clarifications ?? []),
+        { questions: first.questions, answer: followUp },
+      ];
+      const second = await applyHumanRepositoryExpansion(ctx, deps);
+
+      if (consumed === "attached") {
+        expect(second.kind).toBe("attached");
+        expect(deps.attach).toHaveBeenCalledTimes(1);
+      } else {
+        // Consumed the other way: the reply said there is nothing more, which
+        // closes expansion instead of asking again.
+        expect(second).toEqual({ kind: "noop" });
+        expect(ctx.repositoryExpansion.expansionClosed).toBe("human");
+        expect(deps.attach).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "attaches the repository the human names instead",
+      followUp: "gitlab:acme/shared/contracts",
+      consumed: "attached" as const,
+    },
+    {
+      name: "closes expansion when the human names no repository",
+      followUp: "none",
+      consumed: "closed" as const,
+    },
+  ])(
+    "reads the reply to a question the model path raised and $name",
+    async ({ followUp, consumed }) => {
+      // The model asked for a repository that is not on the catalog, so the run
+      // parked on the validator's own question, not the expansion-limit one.
+      // That question has to be recognized on resume as well: otherwise the
+      // human answer is dropped and research restarts ignoring it (AIW-377).
+      const parked = validateRepositoryExpansionRequests({
+        requests: [
+          { provider: "github", repoPath: "acme/not-installed", rationale: "guess" },
+        ],
+        catalog,
+        attached: [{ provider: "github", repoPath: "acme/service" }],
+        completedRounds: 0,
+      });
+      expect(parked.kind).toBe("clarification_needed");
+      if (parked.kind !== "clarification_needed") throw new Error("expected a clarification");
+
+      const ctx = makeCtx({
+        sandboxId: "sbx-research",
+        workspaceManifest: v2Manifest,
+        selectedRepositories: [
+          {
+            provider: "github" as const,
+            repoPath: "acme/service",
+            defaultBranch: "main",
+            selectedRationale: "symptom",
+          },
+        ],
+        clarifications: [{ questions: parked.questions, answer: followUp }],
+      });
+      const attach = vi.fn(async () => ({
+        manifest: attachedManifest,
+        cloneDurationMs: 5,
+      }));
+      const result = await applyHumanRepositoryExpansion(ctx, {
+        resolve: async (
+          answerText: string,
+          attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+        ) => validateHumanRepositoryExpansion({ answer: answerText, catalog, attached }),
+        attach,
+        fetchContexts: async () => [],
+      });
+
+      if (consumed === "attached") {
+        expect(result.kind).toBe("attached");
+        expect(attach).toHaveBeenCalledTimes(1);
+        expect(ctx.selectedRepositories).toHaveLength(2);
+      } else {
+        expect(result).toEqual({ kind: "noop" });
+        expect(ctx.repositoryExpansion.expansionClosed).toBe("human");
+        expect(attach).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("no-ops when the latest clarification is not the expansion-limit prompt", async () => {
     const ctx = makeCtx({
@@ -639,16 +909,41 @@ describe("scenario 6: a read-only repository mutation produces zero pushes", () 
   });
 });
 
-describe("expansion round counter survives a clarification round-trip", () => {
-  // The expansion loop in agent.ts reads ctx.repositoryExpansion.rounds as
-  // completedRounds (agent.ts around line 3489) and, after a completed round,
-  // rebuilds ctx.repositoryExpansion with rounds + 1 plus the appended requests
-  // (agent.ts around line 3518). That inline loop is not exported, so this test
-  // drives the same state transitions through makeCtx and asserts them at the
-  // exported validateRepositoryExpansionRequests seam. Limitation: it models the
-  // durable state that replay reconstructs (by re-running the memoized expansion
-  // step) rather than exercising the workflow replay machinery itself.
-  it("keeps rounds=1 and priorRequests across a clarification and validates the next request with completedRounds=1", () => {
+describe("expansion state survives a clarification round-trip", () => {
+  // The expansion loop in agent-workflow.ts is an inline closure, so these
+  // tests drive the two exported seams it is built from: the validator decides
+  // the verdict, decideRepositoryExpansion decides the action and the next
+  // state, and the closure only performs the action and stores the state.
+  // Limitation: this models the durable state that replay reconstructs (by
+  // re-running the memoized expansion step) rather than exercising the workflow
+  // replay machinery itself.
+  function advanceExpansion(
+    ctx: ReturnType<typeof makeCtx>,
+    requests: Array<{
+      provider: "github" | "gitlab";
+      repoPath: string;
+      rationale: string;
+    }>,
+    attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+  ) {
+    const verdict = validateRepositoryExpansionRequests({
+      requests,
+      catalog,
+      attached,
+      completedRounds: ctx.repositoryExpansion.rounds,
+      allAttachedRequests: ctx.repositoryExpansion.allAttachedRequests,
+    });
+    const { action, state } = decideRepositoryExpansion({
+      origin: "model",
+      verdict,
+      state: ctx.repositoryExpansion,
+      requests,
+    });
+    ctx.repositoryExpansion = state;
+    return { verdict, action };
+  }
+
+  it("keeps the round count and the recorded requests across a clarification", () => {
     const ctx = makeCtx({
       sandboxId: "sbx-research",
       workspaceManifest: { version: 2, repositories: [] },
@@ -670,19 +965,9 @@ describe("expansion round counter survives a clarification round-trip", () => {
         rationale: "imports",
       },
     ];
-    const first = validateRepositoryExpansionRequests({
-      requests: firstRequests,
-      catalog,
-      attached: ctx.selectedRepositories,
-      completedRounds: ctx.repositoryExpansion.rounds,
-    });
-    expect(first.kind).toBe("attach");
-
-    // Mirror the completed-round update in agent.ts: the durable counter advances.
-    ctx.repositoryExpansion = {
-      rounds: ctx.repositoryExpansion.rounds + 1,
-      priorRequests: [...ctx.repositoryExpansion.priorRequests, ...firstRequests],
-    };
+    expect(
+      advanceExpansion(ctx, firstRequests, ctx.selectedRepositories).action.kind,
+    ).toBe("attach");
     expect(ctx.repositoryExpansion.rounds).toBe(1);
 
     // A clarification suspend/resume does not touch ctx.repositoryExpansion.
@@ -695,29 +980,26 @@ describe("expansion round counter survives a clarification round-trip", () => {
     expect(ctx.repositoryExpansion.rounds).toBe(1);
     expect(ctx.repositoryExpansion.priorRequests).toEqual(firstRequests);
 
-    // The next request is validated with completedRounds=1 (still below the
-    // two-round limit), so a fresh repository attaches instead of tripping it.
-    const second = validateRepositoryExpansionRequests({
-      requests: [
-        { provider: "gitlab", repoPath: "acme/service", rationale: "mirror config" },
-      ],
-      catalog,
-      attached: [
-        ...ctx.selectedRepositories,
-        { provider: "gitlab", repoPath: "acme/shared/contracts" },
-      ],
-      completedRounds: ctx.repositoryExpansion.rounds,
-    });
-    expect(second.kind).toBe("attach");
+    // The next request is decided with rounds=1 (still below the two-round
+    // limit), so a fresh repository attaches instead of tripping it.
+    expect(
+      advanceExpansion(
+        ctx,
+        [{ provider: "gitlab", repoPath: "acme/service", rationale: "mirror config" }],
+        [
+          ...ctx.selectedRepositories,
+          { provider: "gitlab", repoPath: "acme/shared/contracts" },
+        ],
+      ).action.kind,
+    ).toBe("attach");
   });
 
   // AIW-284: research asking only for repositories the workspace already holds
   // used to park the whole run on "Which additional repository is required?",
-  // which no human can answer, because everything named was already there. Same
-  // limitation as the test above: expandResearchWorkspace is an inline closure in
-  // agent.ts, so this drives the exported validator and mirrors the call site's
-  // state transitions rather than executing the loop itself.
-  it("continues without a clarification and still burns a round when every requested repository is attached", () => {
+  // which no human can answer, because everything named was already there.
+  // AIW-377: the round limit no longer overtakes that no-op either, so the
+  // consecutive all-attached bound is what ends the loop.
+  it("keeps researching on an all-attached request and closes expansion on the third", () => {
     const ctx = makeCtx({
       sandboxId: "sbx-research",
       workspaceManifest: { version: 2, repositories: [] },
@@ -749,54 +1031,44 @@ describe("expansion round counter survives a clarification round-trip", () => {
         rationale: "need the caller",
       },
     ];
-    const decision = validateRepositoryExpansionRequests({
-      requests,
-      catalog,
-      attached: ctx.selectedRepositories,
-      completedRounds: ctx.repositoryExpansion.rounds,
-    });
 
+    const first = advanceExpansion(ctx, requests, ctx.selectedRepositories);
     // The run keeps going: no clarification, and nothing to clone.
-    expect(decision).toEqual({ kind: "already_attached" });
-
-    // The call site advances the durable counter exactly as the attach path
-    // does, so a model that keeps re-asking is bounded instead of looping.
-    ctx.repositoryExpansion = {
-      rounds: ctx.repositoryExpansion.rounds + 1,
-      priorRequests: [...ctx.repositoryExpansion.priorRequests, ...requests],
-    };
+    expect(first.verdict).toEqual({ kind: "already_attached" });
+    expect(first.action).toEqual({ kind: "proceed" });
     expect(ctx.repositoryExpansion.rounds).toBe(1);
     expect(ctx.repositoryExpansion.priorRequests).toEqual(requests);
 
-    // Round two repeats the no-op, and round three hits the expansion limit,
-    // which IS a question a human can act on.
-    expect(
-      validateRepositoryExpansionRequests({
-        requests,
-        catalog,
-        attached: ctx.selectedRepositories,
-        completedRounds: 1,
-      }),
-    ).toEqual({ kind: "already_attached" });
-    expect(
-      validateRepositoryExpansionRequests({
-        requests,
-        catalog,
-        attached: ctx.selectedRepositories,
-        completedRounds: 2,
-      }),
-    ).toMatchObject({
-      kind: "clarification_needed",
-      questions: [expect.stringContaining("maximum of 2")],
+    const second = advanceExpansion(ctx, requests, ctx.selectedRepositories);
+    expect(second.action).toEqual({ kind: "proceed" });
+    expect(ctx.repositoryExpansion.expansionClosed).toBeUndefined();
+
+    // Round three used to be the expansion-limit question a human had no new
+    // answer to. It closes expansion instead, and asks nothing.
+    const third = advanceExpansion(ctx, requests, ctx.selectedRepositories);
+    expect(third.action).toEqual({ kind: "proceed" });
+    expect(ctx.repositoryExpansion.expansionClosed).toBe("bound");
+
+    // And from here the run is on a countdown: one more request is absorbed
+    // without a round, on the pass that carries the "expansion closed" note,
+    // and the next one ends the run instead of buying another research pass.
+    expect(ctx.repositoryExpansion.rounds).toBe(3);
+    expect(advanceExpansion(ctx, requests, ctx.selectedRepositories).action).toEqual({
+      kind: "proceed",
     });
+    expect(ctx.repositoryExpansion.rounds).toBe(3);
+    expect(ctx.repositoryExpansion.closedRequests).toBe(1);
+
+    const last = advanceExpansion(ctx, requests, ctx.selectedRepositories);
+    expect(last.action.kind).toBe("fail");
+    if (last.action.kind === "fail") {
+      expect(last.action.message).toContain("Start a new run");
+    }
   });
 
   // Research asking for more context without naming any repository used to
   // park the whole run on "Which repository is required?", which no human can
-  // answer: the model itself could not name one. Same limitation as the tests
-  // above: expandResearchWorkspace is an inline closure in agent.ts, so this
-  // drives the exported validator and mirrors the call site's state
-  // transitions rather than executing the loop itself.
+  // answer: the model itself could not name one.
   it("continues without a clarification and still burns a round when no repository is named", () => {
     const ctx = makeCtx({
       sandboxId: "sbx-research",
@@ -811,44 +1083,201 @@ describe("expansion round counter survives a clarification round-trip", () => {
       ],
     });
 
-    const decision = validateRepositoryExpansionRequests({
-      requests: [],
-      catalog,
-      attached: ctx.selectedRepositories,
-      completedRounds: ctx.repositoryExpansion.rounds,
+    const first = advanceExpansion(ctx, [], ctx.selectedRepositories);
+    // The run keeps going: no clarification, and nothing to clone.
+    expect(first.verdict).toEqual({ kind: "unnamed_request" });
+    expect(first.action).toEqual({ kind: "proceed" });
+    expect(ctx.repositoryExpansion.rounds).toBe(1);
+    // Not an all-attached request, so the streak that closes expansion is
+    // untouched: the round limit is what bounds this one.
+    expect(ctx.repositoryExpansion.allAttachedRequests).toBeUndefined();
+
+    expect(advanceExpansion(ctx, [], ctx.selectedRepositories).action).toEqual({
+      kind: "proceed",
+    });
+    const third = advanceExpansion(ctx, [], ctx.selectedRepositories);
+    expect(third.action.kind).toBe("ask_limit");
+    if (third.action.kind === "ask_limit") {
+      expect(third.action.questions[0]).toContain("maximum of 2");
+    }
+  });
+});
+
+describe("research phase identity across re-runs", () => {
+  // Every pass that re-runs research inside one planning block has to be
+  // distinguishable, or the second pass writes over the first one's artifacts
+  // and its launch sentinel reads as already launched. The passes after
+  // expansion closes repeat without advancing the round count, which is exactly
+  // the collision this suffix removes (AIW-377).
+  const base = { nodeId: "plan", artifactPhase: "research", noChangeRetry: false };
+
+  it("names the first pass after the node alone", () => {
+    expect(
+      researchPhaseIdentity({ ...base, expansion: { rounds: 0 } }),
+    ).toEqual({ label: "Research plan", artifactPhase: "research" });
+  });
+
+  it("names an expansion round", () => {
+    expect(
+      researchPhaseIdentity({ ...base, expansion: { rounds: 2 } }),
+    ).toEqual({
+      label: "Research plan expansion 2",
+      artifactPhase: "research-expansion-2",
+    });
+  });
+
+  it("separates the passes that follow a closed expansion", () => {
+    const first = researchPhaseIdentity({
+      ...base,
+      expansion: { rounds: 3, expansionClosed: "bound" },
+    });
+    const second = researchPhaseIdentity({
+      ...base,
+      expansion: { rounds: 3, expansionClosed: "bound", closedRequests: 1 },
     });
 
-    // The run keeps going: no clarification, and nothing to clone.
-    expect(decision).toEqual({ kind: "unnamed_request" });
+    // A pass that absorbed nothing says "closed", not "closed 0": the count is
+    // engine bookkeeping and a person reads this label.
+    expect(first).toEqual({
+      label: "Research plan expansion 3 closed",
+      artifactPhase: "research-expansion-3-closed",
+    });
+    expect(second.label).not.toBe(first.label);
+    expect(second.artifactPhase).not.toBe(first.artifactPhase);
+  });
 
-    // The call site advances the durable counter exactly as the attach path
-    // does, so a model that keeps re-asking is bounded instead of looping.
-    ctx.repositoryExpansion = {
-      rounds: ctx.repositoryExpansion.rounds + 1,
-      priorRequests: ctx.repositoryExpansion.priorRequests,
-    };
-    expect(ctx.repositoryExpansion.rounds).toBe(1);
+  it("separates the pass after a human closes expansion from the pass before it", () => {
+    // A human answering "no further repositories" closes expansion without
+    // advancing the round count, so dropping the suffix entirely would give the
+    // re-run the identity of the pass that asked the question.
+    const before = researchPhaseIdentity({ ...base, expansion: { rounds: 0 } });
+    const after = researchPhaseIdentity({
+      ...base,
+      expansion: { rounds: 0, expansionClosed: "human" },
+    });
 
-    // Round two repeats the no-op, and round three hits the expansion limit,
-    // which IS a question a human can act on.
-    expect(
-      validateRepositoryExpansionRequests({
-        requests: [],
+    expect(after).toEqual({
+      label: "Research plan closed",
+      artifactPhase: "research-closed",
+    });
+    expect(after.label).not.toBe(before.label);
+    expect(after.artifactPhase).not.toBe(before.artifactPhase);
+  });
+
+  it("separates the pass after a human attach from the pass that asked for it", () => {
+    // The model hit the round limit and the run parked. A human answer that
+    // attaches a repository changes nothing the identity was built from: the
+    // round count stays put (this attach never counts a model round) and
+    // expansion stays open. Without a suffix of its own the resumed pass
+    // recomputes the identity of the pass that asked, whose artifacts it then
+    // writes over and whose launch sentinel reads as already launched. The
+    // attempt number cannot separate them: it is fixed per execution
+    // (AIW-400).
+    const asking = { rounds: 2, priorRequests: [] };
+    const attachedAlready = [{ provider: "github" as const, repoPath: "acme/service" }];
+    const parked = validateRepositoryExpansionRequests({
+      requests: [
+        { provider: "gitlab", repoPath: "acme/shared/contracts", rationale: "late" },
+      ],
+      catalog,
+      attached: attachedAlready,
+      completedRounds: asking.rounds,
+    });
+    expect(parked.kind).toBe("clarification_needed");
+
+    const { action, state: resumedState } = decideRepositoryExpansion({
+      origin: "human",
+      verdict: validateHumanRepositoryExpansion({
+        answer: "gitlab:acme/shared/contracts",
         catalog,
-        attached: ctx.selectedRepositories,
-        completedRounds: 1,
+        attached: attachedAlready,
       }),
-    ).toEqual({ kind: "unnamed_request" });
+      state: asking,
+      clarificationRounds: 1,
+    });
+    expect(action.kind).toBe("attach");
+    expect(resumedState.rounds).toBe(asking.rounds);
+    expect(resumedState.humanAttachRound).toBe(1);
+
+    const askingIdentity = researchPhaseIdentity({ ...base, expansion: asking });
+    const resumedIdentity = researchPhaseIdentity({ ...base, expansion: resumedState });
+
+    expect(askingIdentity).toEqual({
+      label: "Research plan expansion 2",
+      artifactPhase: "research-expansion-2",
+    });
+    expect(resumedIdentity).toEqual({
+      label: "Research plan expansion 2 human attach 1",
+      artifactPhase: "research-expansion-2-human-attach-1",
+    });
+  });
+
+  it("moves the human attach suffix on a second human attach in the same run", () => {
+    // Two attaches in one run are two more research passes, and the second one
+    // is reached through a later clarification round, so the suffix it carries
+    // has to be a different one.
+    const attachedAlready = [{ provider: "github" as const, repoPath: "acme/service" }];
+    const attach = (state: { rounds: number; priorRequests: [] }, clarificationRounds: number) =>
+      decideRepositoryExpansion({
+        origin: "human",
+        verdict: validateHumanRepositoryExpansion({
+          answer: "gitlab:acme/shared/contracts",
+          catalog,
+          attached: attachedAlready,
+        }),
+        state,
+        clarificationRounds,
+      }).state;
+
+    const first = attach({ rounds: 1, priorRequests: [] }, 1);
+    const second = attach({ rounds: 1, priorRequests: [] }, 3);
+
+    expect(first.humanAttachRound).toBe(1);
+    expect(second.humanAttachRound).toBe(3);
+    expect(researchPhaseIdentity({ ...base, expansion: second })).toEqual({
+      label: "Research plan expansion 1 human attach 3",
+      artifactPhase: "research-expansion-1-human-attach-3",
+    });
+    expect(researchPhaseIdentity({ ...base, expansion: first }).artifactPhase).not.toBe(
+      researchPhaseIdentity({ ...base, expansion: second }).artifactPhase,
+    );
+  });
+
+  it("adds nothing to a run where no human ever attached a repository", () => {
+    // The suffix is new, so every identity a run without a human attach can
+    // produce has to be exactly what it was before (AIW-400).
+    expect(researchPhaseIdentity({ ...base, expansion: { rounds: 0 } })).toEqual({
+      label: "Research plan",
+      artifactPhase: "research",
+    });
     expect(
-      validateRepositoryExpansionRequests({
-        requests: [],
-        catalog,
-        attached: ctx.selectedRepositories,
-        completedRounds: 2,
+      researchPhaseIdentity({ ...base, expansion: { rounds: 2, humanAttachRound: 0 } }),
+    ).toEqual({
+      label: "Research plan expansion 2",
+      artifactPhase: "research-expansion-2",
+    });
+    expect(
+      researchPhaseIdentity({
+        ...base,
+        expansion: { rounds: 3, expansionClosed: "bound", closedRequests: 1 },
       }),
-    ).toMatchObject({
-      kind: "clarification_needed",
-      questions: [expect.stringContaining("maximum of 2")],
+    ).toEqual({
+      label: "Research plan expansion 3 closed 1",
+      artifactPhase: "research-expansion-3-closed-1",
+    });
+  });
+
+  it("keeps the no-change retry suffix last", () => {
+    expect(
+      researchPhaseIdentity({
+        nodeId: "plan",
+        artifactPhase: "research-v2-a-a1",
+        expansion: { rounds: 1, expansionClosed: "human", closedRequests: 1 },
+        noChangeRetry: true,
+      }),
+    ).toEqual({
+      label: "Research plan expansion 1 closed 1 no-change retry",
+      artifactPhase: "research-v2-a-a1-expansion-1-closed-1-no-change-retry",
     });
   });
 });

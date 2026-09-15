@@ -37,7 +37,7 @@ import {
 import { resolveTicketMoveTarget } from "./helpers/ticket-move-target.js";
 import { runKindForAgentWorkflowInput, type AgentWorkflowInput } from "./agent-input.js";
 import { moveTicketStep } from "./steps/ticket-transition-step.js";
-import { agentArtifactPhase, agentProtocolExecutionError as agentProtocolBlockError, blockBudgetObserver, buildV2AgentArtifactKeys, recordBlockPhaseUsage, type BlockInvocationContext, type EngineCtx } from "./blocks/support/types.js";
+import { agentArtifactPhase, agentProtocolExecutionError as agentProtocolBlockError, blockBudgetObserver, buildV2AgentArtifactKeys, recordBlockPhaseUsage, researchPhaseIdentity, type BlockInvocationContext, type EngineCtx } from "./blocks/support/types.js";
 import { VARIABLE_PARAM_KEYS } from "@shared/prompts";
 import { compatibilityPromptSourceForV2Node, compileEffectivePrompt, effectivePromptProfileSource } from "./helpers/effective-prompt.js";
 import { loadInvocationRepositoryInstructionSources, shouldLoadRepositoryInstructionSources } from "./steps/repository-instructions.js";
@@ -1702,10 +1702,9 @@ async function agentWorkflowBody(
             { category: "sandbox", phase: "research" },
           );
         }
-        const { validateRepositoryExpansionRequests } = await import(
-          "./repository-discovery/runner.js"
-        );
-        const decision = validateRepositoryExpansionRequests({
+        const { decideRepositoryExpansion, validateRepositoryExpansionRequests } =
+          await import("./repository-discovery/runner.js");
+        const verdict = validateRepositoryExpansionRequests({
           requests,
           catalog: await listFreshRepositoryCatalogStep(
             ctx.repositories,
@@ -1713,46 +1712,52 @@ async function agentWorkflowBody(
           ),
           attached: ctx.selectedRepositories,
           completedRounds: ctx.repositoryExpansion.rounds,
+          allAttachedRequests: ctx.repositoryExpansion.allAttachedRequests ?? 0,
         });
-        if (decision.kind === "clarification_needed") {
-          return planningClarificationResult(decision.questions);
+        // The policy is the pure decideRepositoryExpansion; this closure only
+        // performs the action it names and stores the state it returns
+        // (AIW-377).
+        const { action, state } = decideRepositoryExpansion({
+          origin: "model",
+          verdict,
+          state: ctx.repositoryExpansion,
+          requests,
+        });
+        if (action.kind === "ask_limit" || action.kind === "ask_unrecognised") {
+          return planningClarificationResult(action.questions);
         }
-        if (
-          decision.kind === "already_attached" ||
-          decision.kind === "unnamed_request"
-        ) {
+        if (action.kind === "fail") {
+          return executionError(action.message, {
+            category: "engine",
+            phase: "research",
+          });
+        }
+        // A round that advanced is a round worth reporting; a request absorbed
+        // after expansion closed changes nothing, so it emits nothing.
+        const advanced = state.rounds > ctx.repositoryExpansion.rounds;
+        if (action.kind === "proceed") {
           // Research either asked only for repositories the workspace already
           // holds, or asked for more context without naming a repository at
           // all: nothing to clone, and no question a human could usefully
           // answer, so continue with what is attached instead of parking the
-          // run (AIW-284).
-          // The round still counts and the requests are still recorded. That is
-          // deliberate: it bounds a model that keeps re-requesting the same
-          // repositories (the third round trips the expansion limit, which IS a
-          // legitimate human question), and it puts the requests into the
-          // "Repository expansion history" note the next research prompt carries,
-          // which tells the model those repositories are attached and that it
-          // should continue the same research.
-          ctx.repositoryExpansion = {
-            rounds: ctx.repositoryExpansion.rounds + 1,
-            priorRequests: [
-              ...ctx.repositoryExpansion.priorRequests,
-              ...requests,
-            ],
-          };
-          await emitRepositoryWorkflowObservation(execution?.observations, {
-            event: "expansion",
-            round: ctx.repositoryExpansion.rounds,
-            attachedCount: 0,
-            totalCount: ctx.selectedRepositories.length,
-            cloneDurationMs: 0,
-          });
+          // run (AIW-284). The recorded requests are what the next research
+          // prompt reports back as attached.
+          ctx.repositoryExpansion = state;
+          if (advanced) {
+            await emitRepositoryWorkflowObservation(execution?.observations, {
+              event: "expansion",
+              round: state.rounds,
+              attachedCount: 0,
+              totalCount: ctx.selectedRepositories.length,
+              cloneDurationMs: 0,
+            });
+          }
           return null;
         }
         const attached = await attachResearchRepositoriesStep(
           ctx.sandboxId,
           ctx.workspaceManifest,
-          decision.repositories,
+          action.repositories,
           {
             subjectKey: ctx.entry.subjectKey,
             ownerToken: ctx.entry.ownerToken,
@@ -1763,7 +1768,7 @@ async function agentWorkflowBody(
         );
         const repositories = [
           ...ctx.selectedRepositories,
-          ...decision.repositories,
+          ...action.repositories,
         ];
         const { blockFetchPrContextsStep } = await import(
           "./blocks/fetch-pr-context/execute.js"
@@ -1774,17 +1779,11 @@ async function agentWorkflowBody(
           repositories,
           ctx.repositories,
         );
-        ctx.repositoryExpansion = {
-          rounds: ctx.repositoryExpansion.rounds + 1,
-          priorRequests: [
-            ...ctx.repositoryExpansion.priorRequests,
-            ...requests,
-          ],
-        };
+        ctx.repositoryExpansion = state;
         await emitRepositoryWorkflowObservation(execution?.observations, {
           event: "expansion",
-          round: ctx.repositoryExpansion.rounds,
-          attachedCount: decision.repositories.length,
+          round: state.rounds,
+          attachedCount: action.repositories.length,
           totalCount: repositories.length,
           cloneDurationMs: attached.cloneDurationMs,
         });
@@ -2029,6 +2028,12 @@ async function agentWorkflowBody(
             if (humanExpansion.kind === "clarification") {
               return planningClarificationResult(humanExpansion.questions);
             }
+            if (humanExpansion.kind === "failed") {
+              return executionError(humanExpansion.message, {
+                category: "engine",
+                phase: "research",
+              });
+            }
             if (humanExpansion.kind === "attached") {
               await emitRepositoryWorkflowObservation(execution?.observations, {
                 event: "expansion",
@@ -2039,20 +2044,16 @@ async function agentWorkflowBody(
               });
               continue;
             }
-            const expansionRound = ctx.repositoryExpansion.rounds;
-            // The retry re-runs the research phase, so both the label and the
-            // artifact phase must stay distinct from the first pass (same
-            // freshness trick as the -expansion-N suffix).
-            const noChangeRetrySuffix = noChangeRetryUsed ? " no-change retry" : "";
-            const researchLabel = `Research ${node.id}${expansionRound > 0 ? ` expansion ${expansionRound}` : ""}${noChangeRetrySuffix}`;
-            const baseResearchArtifactPhase = agentArtifactPhase("research", execution);
-            const expandedResearchArtifactPhase =
-              expansionRound > 0
-                ? `${baseResearchArtifactPhase}-expansion-${expansionRound}`
-                : baseResearchArtifactPhase;
-            const researchArtifactPhase = noChangeRetryUsed
-              ? `${expandedResearchArtifactPhase}-no-change-retry`
-              : expandedResearchArtifactPhase;
+            // Every re-run of research needs its own label and artifact phase,
+            // or it writes over the previous pass. The rules live in
+            // researchPhaseIdentity so they can be pinned without a run.
+            const { label: researchLabel, artifactPhase: researchArtifactPhase } =
+              researchPhaseIdentity({
+                nodeId: node.id,
+                artifactPhase: agentArtifactPhase("research", execution),
+                expansion: ctx.repositoryExpansion,
+                noChangeRetry: noChangeRetryUsed,
+              });
             const researchPhase = phaseKey(researchLabel, invocationAttempt);
             const { kind, model, runtime } = resolveAgentForNode(node);
             const workspace = await ensureCodeWorkspace(execution);
@@ -2115,6 +2116,21 @@ async function agentWorkflowBody(
                   "The following repositories were requested and are now attached.",
                   "Continue the same research; do not restart from assumptions.",
                   JSON.stringify(ctx.repositoryExpansion.priorRequests),
+                ].join("\n"),
+              });
+            }
+            if (ctx.repositoryExpansion.expansionClosed) {
+              // Expansion is closed, so the model needs to know that asking
+              // again changes nothing. It is told what it can do instead, and
+              // not told what to conclude: a repository that really is missing
+              // has to stay reportable (AIW-377).
+              researchAdditions.push({
+                target: ["research" as const],
+                title: "Repository expansion closed",
+                content: [
+                  "No further repository will be attached to this workspace: requesting one again changes nothing, and repeating the request ends the run.",
+                  "A repository checked out read-only is checked out again with write access when implementation starts, so needing to write to one is never a reason to request it.",
+                  "Plan with the repositories already attached. If a repository is genuinely required and is not attached, say so in the result, naming it and what it is needed for, instead of requesting it.",
                 ].join("\n"),
               });
             }

@@ -42,6 +42,7 @@ import type {
   PreSandboxRepositoryScopeNarrowing,
 } from "../../pre-sandbox/types.js";
 import type { ResearchRepository } from "../../../sandbox/agents/types.js";
+import type { RepositoryExpansionState } from "../../repository-discovery/runner.js";
 import type { ReviewLedgerState } from "../../../adapters/vcs/types.js";
 import type { SettledThread } from "../../steps/review-ledger-settle.js";
 import type { PrePrCheckFailure } from "../../steps/pre-pr-checks-runner.js";
@@ -195,11 +196,11 @@ export interface EngineCtx {
   /** Catalog sizes observed when the pin narrowed selection; absent without a
    *  pin. Telemetry only, never a selection input. */
   repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
-  /** Bounded expansion state retained across planner reruns and clarification replay. */
-  repositoryExpansion: {
-    rounds: number;
-    priorRequests: ResearchRepository[];
-  };
+  /** Bounded expansion state retained across planner reruns and clarification
+   *  replay. Owned by decideRepositoryExpansion, which is the only thing that
+   *  produces a new one; the fields past the first two are optional so a run
+   *  that started before they existed replays unchanged. */
+  repositoryExpansion: RepositoryExpansionState;
   /** Exact planner-declared repositories authorized for implementation. */
   researchWriteRepositories: ResearchRepository[];
   /**
@@ -357,6 +358,60 @@ export function agentArtifactPhase(
 ): string {
   if (execution?.agentArtifactKey === undefined) return legacyPhase;
   return `${legacyPhase}-v2-${execution.agentArtifactKey}-a${execution.attempt ?? 1}`;
+}
+
+/**
+ * The identity of one research pass inside a planning block: the label the run
+ * timeline shows and the artifact phase its files live under. Every pass that
+ * re-runs research has to differ from the one before it, or the second pass
+ * writes over the first one's artifacts and its launch sentinel reads as
+ * already launched. Four things re-run it, and each one adds a suffix: an
+ * expansion round, a human answer that attached a repository (AIW-400), a pass
+ * after expansion closed (both of which repeat without advancing the round
+ * count, AIW-377), and the no-change retry. The block attempt number separates
+ * none of them: it is fixed for the whole execution.
+ */
+export function researchPhaseIdentity(input: {
+  nodeId: string;
+  artifactPhase: string;
+  expansion: Pick<
+    RepositoryExpansionState,
+    "rounds" | "expansionClosed" | "closedRequests" | "humanAttachRound"
+  >;
+  noChangeRetry: boolean;
+}): { label: string; artifactPhase: string } {
+  let label = `Research ${input.nodeId}`;
+  let artifactPhase = input.artifactPhase;
+  if (input.expansion.rounds > 0) {
+    label += ` expansion ${input.expansion.rounds}`;
+    artifactPhase += `-expansion-${input.expansion.rounds}`;
+  }
+  // A human answer that attaches a repository never counts a model round and
+  // leaves expansion open, so nothing else in this identity moves: without this
+  // the resumed pass is the asking pass, writing over its artifacts and reading
+  // as already launched. The attempt number cannot separate them, being fixed
+  // for the whole execution (AIW-400). The value is the clarification round the
+  // attach was answered on, which is different for every attach in a run.
+  const humanAttach = input.expansion.humanAttachRound ?? 0;
+  if (humanAttach > 0) {
+    label += ` human attach ${humanAttach}`;
+    artifactPhase += `-human-attach-${humanAttach}`;
+  }
+  if (input.expansion.expansionClosed) {
+    // The count is engine bookkeeping, so it is named only when there is
+    // something to count. The bare "closed" still has to be there: a human who
+    // answers "no further repositories" closes expansion without advancing the
+    // round count, and then this suffix is the only thing that tells the pass
+    // after the answer apart from the pass before it.
+    const absorbed = input.expansion.closedRequests ?? 0;
+    label += absorbed > 0 ? ` closed ${absorbed}` : " closed";
+    artifactPhase += absorbed > 0 ? `-closed-${absorbed}` : "-closed";
+  }
+  if (input.noChangeRetry) {
+    label += " no-change retry";
+    artifactPhase += "-no-change-retry";
+  }
+  return { label, artifactPhase };
 }
 
 export function markBlockPhaseLaunched(

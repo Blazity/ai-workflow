@@ -96,9 +96,11 @@ export async function ensurePlanningAgentSandboxForBlock(
  * expansion-limit prompt; validation and attachment run through injected steps
  * so the whole path stays WDK-replay-safe and every ctx mutation derives from a
  * step output. It never counts a model expansion round (human authority sits
- * above the model round limit). Returns "noop" when there is nothing to do (no
- * such answer, workspace not yet trusted, or every named repository is already
- * attached) so the caller falls through to running research.
+ * above the model round limit). The policy itself lives in the pure
+ * decideRepositoryExpansion; this applies its action and the state it returns,
+ * so "the human said no further repositories" is recorded on the run context
+ * here rather than re-derived by the caller (AIW-377). Returns "noop" when
+ * there is nothing left to do, so the caller falls through to running research.
  */
 export async function applyHumanRepositoryExpansion(
   ctx: Pick<
@@ -108,6 +110,7 @@ export async function applyHumanRepositoryExpansion(
     | "workspaceManifest"
     | "selectedRepositories"
     | "repositoryContexts"
+    | "repositoryExpansion"
   >,
   deps: {
     resolve: (
@@ -130,43 +133,55 @@ export async function applyHumanRepositoryExpansion(
       cloneDurationMs: number;
     }
   | { kind: "clarification"; questions: string[] }
+  | { kind: "failed"; message: string }
 > {
   const rounds = ctx.clarifications ?? [];
   const latest = rounds.at(-1);
   if (!latest || ctx.workspaceManifest?.version !== 2 || !ctx.sandboxId) {
     return { kind: "noop" };
   }
-  const { isExpansionLimitClarification } = await import(
-    "../repository-discovery/runner.js"
-  );
-  if (!isExpansionLimitClarification(latest.questions)) {
+  const { decideRepositoryExpansion, isRepositoryExpansionClarification } =
+    await import("../repository-discovery/runner.js");
+  // Every question the expansion path raises, not only the round-limit one: a
+  // question this check does not recognize is one whose answer is dropped, and
+  // research restarts as if the person had never replied (AIW-377).
+  if (!isRepositoryExpansionClarification(latest.questions)) {
     return { kind: "noop" };
   }
-  const decision = await deps.resolve(
+  const verdict = await deps.resolve(
     latest.answer,
     ctx.selectedRepositories.map((repository) => ({
       provider: repository.provider,
       repoPath: repository.repoPath,
     })),
   );
-  if (decision.kind === "clarification_needed") {
-    return { kind: "clarification", questions: decision.questions };
+  const { action, state } = decideRepositoryExpansion({
+    origin: "human",
+    verdict,
+    state: ctx.repositoryExpansion,
+    clarificationRounds: rounds.length,
+  });
+  ctx.repositoryExpansion = state;
+  if (action.kind === "ask_limit" || action.kind === "ask_unrecognised") {
+    return { kind: "clarification", questions: action.questions };
   }
-  if (decision.kind !== "attach" || decision.repositories.length === 0) {
-    // Every named repository is already attached: nothing new to clone, so let
-    // the caller run research instead of re-raising the clarification. The human
-    // validator reports this as an empty attach rather than already_attached, so
-    // both no-op shapes land here (an unnamed_request would be the same no-op).
+  if (action.kind === "fail") {
+    return { kind: "failed", message: action.message };
+  }
+  if (action.kind !== "attach") {
+    // Nothing new to clone, so run research with what is attached instead of
+    // re-raising the clarification. Whether that means the human refused is
+    // already recorded in the state above.
     return { kind: "noop" };
   }
-  const attached = await deps.attach(decision.repositories);
-  const repositories = [...ctx.selectedRepositories, ...decision.repositories];
+  const attached = await deps.attach(action.repositories);
+  const repositories = [...ctx.selectedRepositories, ...action.repositories];
   ctx.workspaceManifest = attached.manifest;
   ctx.selectedRepositories = repositories;
   ctx.repositoryContexts = await deps.fetchContexts(repositories);
   return {
     kind: "attached",
-    repositories: decision.repositories,
+    repositories: action.repositories,
     cloneDurationMs: attached.cloneDurationMs,
   };
 }
