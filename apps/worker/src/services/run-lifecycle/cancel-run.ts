@@ -206,7 +206,12 @@ export async function cancelSubjectRunDetailed(
  *     cannot be un-cancelled, and that case reports "cancelled" instead. It is
  *     also the answer, with `reason: "retiring"`, for a run that finished within
  *     RETIRING_RUN_GRACE_MS while Workflow is still retiring it: nothing is
- *     touched, and a retry converges, normally to "already_terminal".
+ *     touched, and a retry converges, normally to "already_terminal". And it is
+ *     the answer, with `reason: "cleanup_unconfirmed"`, for a run Workflow
+ *     reports finished whose claim this call could not release because a barrier
+ *     declined (steps not drained, sandboxes not confirmed stopped, ticket not
+ *     confirmed out of the Ai column, release refused): nothing was touched and
+ *     the claim is retained.
  *   - "not_found": neither a live claim nor a workflow_runs row carries the id.
  * `subjectKey` is set whenever a live claim was located.
  */
@@ -216,8 +221,10 @@ export interface CancelRunByIdResult {
   subjectKey?: string;
   /** Only on "unconfirmed": "retiring" when the run has already finished and
    * Workflow is still retiring it, so a surface can say that instead of calling
-   * the run live. Absent for a live run whose cancel never began. */
-  reason?: "retiring";
+   * the run live; "cleanup_unconfirmed" when Workflow reports the run finished
+   * but releasing its claim declined on a barrier, so nothing was touched and
+   * the claim is retained. Absent for a live run whose cancel never began. */
+  reason?: "retiring" | "cleanup_unconfirmed";
 }
 
 /**
@@ -530,7 +537,7 @@ async function answerForFinishedRun(
       },
       "cancel_terminal_run_release_declined",
     );
-    return { outcome: "unconfirmed", subjectKey: claim.subjectKey };
+    return { outcome: "unconfirmed", reason: "cleanup_unconfirmed", subjectKey: claim.subjectKey };
   }
   const completedAtMs = recorded.completedAt?.getTime();
   const nowMs = (opts.now ?? Date.now)();

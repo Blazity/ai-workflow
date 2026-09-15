@@ -641,6 +641,29 @@ describe("runs.cancel", () => {
     expect(hooks.cancelWorkflowRun).toHaveBeenCalledTimes(1);
   });
 
+  it("tells a caller a finished run's cleanup could not be confirmed, and gives the key back", async () => {
+    // Workflow reports the run retired, but the ticket cannot be confirmed out of
+    // the Ai column (the gap SETUP.md now names): the shortcut declines and the
+    // core touches nothing, so this must not read as "still live".
+    hooks.workflowRunStatus = "completed";
+    fetchTicket.mockResolvedValue({ identifier: TICKET, trackerStatus: "Ai" });
+    moveTicket.mockRejectedValue(new Error("jira 503"));
+    await db
+      .update(workflowRuns)
+      .set({ status: "success", completedAt: new Date() })
+      .where(eq(workflowRuns.runId, RUN_ID));
+    const client = await connectedClient();
+
+    const result = await cancel(client);
+
+    const error = errorPayload(result);
+    expect(error).toMatchObject({ code: "CONFLICT", retryable: true });
+    expect(error.message).toContain("has finished");
+    expect(error.message).not.toContain("still live");
+    expect(hooks.cancelWorkflowRun).not.toHaveBeenCalled();
+    expect(runRegistry.releaseCancellation).not.toHaveBeenCalled();
+  });
+
   it("refuses a member and admits an unattended automation", async () => {
     const asMember = await connectedClient({ role: "member", scopes: DISPATCH_ONLY });
 

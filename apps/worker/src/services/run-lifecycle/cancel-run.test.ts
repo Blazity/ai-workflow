@@ -832,7 +832,7 @@ describe("cancelRunById", () => {
         runRegistry,
         settings: cancelSettings,
       }),
-    ).resolves.toEqual({ outcome: "unconfirmed", subjectKey: "sched:demo:hourly" });
+    ).resolves.toEqual({ outcome: "unconfirmed", reason: "cleanup_unconfirmed", subjectKey: "sched:demo:hourly" });
 
     expectDeclinedUntouched(runRegistry, cancelWorkflow, "drain_pending");
   });
@@ -883,7 +883,7 @@ describe("cancelRunById", () => {
         runRegistry,
         settings: cancelSettings,
       }),
-    ).resolves.toEqual({ outcome: "unconfirmed", subjectKey: "sched:demo:hourly" });
+    ).resolves.toEqual({ outcome: "unconfirmed", reason: "cleanup_unconfirmed", subjectKey: "sched:demo:hourly" });
 
     expectDeclinedUntouched(runRegistry, cancelWorkflow, "sandbox_stop_unconfirmed");
   });
@@ -1001,7 +1001,7 @@ describe("cancelRunById", () => {
         runRegistry,
         settings: cancelSettings,
       }),
-    ).resolves.toEqual({ outcome: "unconfirmed", subjectKey: "sched:demo:hourly" });
+    ).resolves.toEqual({ outcome: "unconfirmed", reason: "cleanup_unconfirmed", subjectKey: "sched:demo:hourly" });
 
     expect(state.stopSandboxes).not.toHaveBeenCalled();
     expectDeclinedUntouched(runRegistry, cancelWorkflow, "sandbox_lookup_unconfirmed");
@@ -1056,7 +1056,7 @@ describe("cancelRunById", () => {
         runRegistry,
         settings: cancelSettings,
       }),
-    ).resolves.toEqual({ outcome: "unconfirmed", subjectKey: "sched:demo:hourly" });
+    ).resolves.toEqual({ outcome: "unconfirmed", reason: "cleanup_unconfirmed", subjectKey: "sched:demo:hourly" });
 
     // The release itself was attempted and refused; nothing else ran after it.
     expect(cancelWorkflow).not.toHaveBeenCalled();
@@ -1089,7 +1089,7 @@ describe("cancelRunById", () => {
         issueTracker: {} as IssueTrackerAdapter,
         settings: cancelSettings,
       }),
-    ).resolves.toEqual({ outcome: "unconfirmed", subjectKey: "ticket:jira:PROJ-1" });
+    ).resolves.toEqual({ outcome: "unconfirmed", reason: "cleanup_unconfirmed", subjectKey: "ticket:jira:PROJ-1" });
 
     expectDeclinedUntouched(runRegistry, cancelWorkflow, "ticket_withdrawal_unconfirmed");
   });
@@ -1117,7 +1117,7 @@ describe("cancelRunById", () => {
         issueTracker: {} as IssueTrackerAdapter,
         settings: cancelSettings,
       }),
-    ).resolves.toEqual({ outcome: "unconfirmed", subjectKey: "ticket:jira:PROJ-1" });
+    ).resolves.toEqual({ outcome: "unconfirmed", reason: "cleanup_unconfirmed", subjectKey: "ticket:jira:PROJ-1" });
 
     expectDeclinedUntouched(runRegistry, cancelWorkflow, "ticket_withdrawal_unconfirmed");
     expect(state.stopSandboxes).not.toHaveBeenCalled();
@@ -1145,7 +1145,7 @@ describe("cancelRunById", () => {
         runRegistry,
         settings: cancelSettings,
       }),
-    ).resolves.toEqual({ outcome: "unconfirmed", subjectKey: "ticket:jira:PROJ-1" });
+    ).resolves.toEqual({ outcome: "unconfirmed", reason: "cleanup_unconfirmed", subjectKey: "ticket:jira:PROJ-1" });
 
     expectDeclinedUntouched(runRegistry, cancelWorkflow, "ticket_withdrawal_unavailable");
   });
@@ -1248,7 +1248,7 @@ describe("cancelRunById", () => {
         runRegistry,
         settings: cancelSettings,
       }),
-    ).resolves.toEqual({ outcome: "unconfirmed", subjectKey: "sched:demo:hourly" });
+    ).resolves.toEqual({ outcome: "unconfirmed", reason: "cleanup_unconfirmed", subjectKey: "sched:demo:hourly" });
 
     expect(runRegistry.release).not.toHaveBeenCalled();
     expect(runRegistry.releaseCancellation).not.toHaveBeenCalled();

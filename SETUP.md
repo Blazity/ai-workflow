@@ -580,6 +580,12 @@ production connection string as a manual entry and set
 Every retired settings variable listed in section 14 must also be absent from
 that environment because the build refuses those variables.
 
+The canary target environment must also carry `JIRA_BACKLOG_TRANSITION_ID` and
+`JIRA_AI_REVIEW_TRANSITION_ID` with the production values, because the bot's
+Jira account sees localized transition names and the name fallback finds no
+transition, which leaves the fixture ticket in the Ai column and its claim
+held.
+
 The current alias is
 `https://ai-workflow-app-env-ai-workflow-demo-blazity.vercel.app`. Read the
 fingerprint from that target's `/health` response and update the repository
