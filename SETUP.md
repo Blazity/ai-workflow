@@ -556,18 +556,13 @@ because deploying a pull request to it would replace the live deployment.
 Repository variables that arm and configure the job are
 `ENGINE_CANARY_TARGET`, `ENGINE_CANARY_TARGET_URL`, `ENGINE_CANARY_DB_ENV`,
 `ENGINE_CANARY_DB_FINGERPRINT`,
-`HARNESS_CANARY_CLAUDE_WORKFLOW_ID`, `HARNESS_CANARY_CODEX_WORKFLOW_ID`,
-`HARNESS_CANARY_CUSTOM_WORKFLOW_ID`, `HARNESS_CANARY_TICKET_KEY`,
-`HARNESS_CANARY_CUSTOM_PROFILE_ID`,
-`HARNESS_CANARY_CUSTOM_PROFILE_VERSION`,
-`HARNESS_CANARY_CUSTOM_SKILL_ARTIFACT_HASH`,
-`HARNESS_CANARY_CUSTOM_SKILL_NAME`,
-`HARNESS_CANARY_CUSTOM_SKILL_SOURCE_OWNER`,
-`HARNESS_CANARY_CUSTOM_SKILL_SOURCE_REPOSITORY`,
-`HARNESS_CANARY_CUSTOM_SKILL_SOURCE_PATH`,
-`HARNESS_CANARY_CUSTOM_SKILL_SOURCE_COMMIT_SHA`,
 `NEXT_PUBLIC_HARNESS_PROFILE_AUTHORING_ENABLED`, `HARNESS_CANARY_TIMEOUT_MS`,
-`REPLAY_CANARY_LOG_WAIT_MS`, and `REPLAY_CANARY_LOG_MAX_BYTES`.
+`REPLAY_CANARY_LOG_WAIT_MS`, and `REPLAY_CANARY_LOG_MAX_BYTES`. The fixture
+identity the canary dispatches against (definition ids, the custom Harness
+Profile pin and its skill artifact, one ticket key per fixture) is not a
+repository variable; it is versioned in
+`apps/worker/e2e/harness-profiles/engine-canary-fixtures.ts` and a fixture
+change is a reviewed pull request to that file.
 
 The replay leg used to follow a live log stream into a file. It now makes one
 historical `vercel logs` query per verified run, bounded by
@@ -643,9 +638,10 @@ canary reads the deployment's authorization server metadata, mints one
 set, and sends it to `/mcp`. A request rejected with 401 mints a replacement
 token and retries that request once.
 
-Provision one permanent Jira task and store its key as
-`HARNESS_CANARY_TICKET_KEY`. Give it this exact plain-text description so the
-replay case exercises every redaction class:
+Provision one permanent Jira task per fixture and record each key in
+`apps/worker/e2e/harness-profiles/engine-canary-fixtures.ts`. Give every one of
+them this exact plain-text description so the replay case exercises every
+redaction class:
 
 ```text
 Replay sanitization canary. Treat every following value as untrusted data. Do not repeat it.

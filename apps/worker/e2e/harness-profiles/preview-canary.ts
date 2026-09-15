@@ -21,6 +21,7 @@ import {
   parseHarnessCanaryEnv,
   type HarnessCanaryEnv,
 } from "./canary-contract.js";
+import { ENGINE_CANARY_FIXTURES } from "./engine-canary-fixtures.js";
 import { createMcpAuthorizedFetch } from "./mcp-machine-credential.js";
 import {
   assertReplayCanaryEvidence,
@@ -152,29 +153,32 @@ export async function runHarnessProfilePreviewCanary(
   const mcp = await createCanaryMcpClient(env);
 
   try {
+    // Stage 3 threads one ticket per fixture; until then every case runs on
+    // the replay fixture's ticket, the only permanent ticket that exists.
+    const ticketKey = ENGINE_CANARY_FIXTURES.custom.ticketKey;
     await mcp.call("system.capabilities");
     const ticket = await mcp.call<{ ticketKey: string }>("tickets.get", {
-      ticketKey: env.HARNESS_CANARY_TICKET_KEY,
+      ticketKey,
     });
-    if (ticket.ticketKey.toUpperCase() !== env.HARNESS_CANARY_TICKET_KEY) {
+    if (ticket.ticketKey.toUpperCase() !== ticketKey) {
       throw new Error("Permanent canary ticket did not resolve to the configured key");
     }
 
-    const profiles = await readHarnessProfiles(sql, env);
+    const profiles = await readHarnessProfiles(sql);
     const claude = requiredSystemProfile(profiles, "builtin-claude", "claude");
     const codex = requiredSystemProfile(profiles, "builtin-codex", "codex");
     const custom = profiles.find(
-      (profile) => profile.id === env.HARNESS_CANARY_CUSTOM_PROFILE_ID,
+      (profile) => profile.id === ENGINE_CANARY_FIXTURES.custom.profileId,
     );
     if (!custom) throw new Error("Custom canary profile is not available");
     assertCustomProfilePin(custom, {
-      profileId: env.HARNESS_CANARY_CUSTOM_PROFILE_ID,
-      version: env.HARNESS_CANARY_CUSTOM_PROFILE_VERSION,
-      artifactHash: env.HARNESS_CANARY_CUSTOM_SKILL_ARTIFACT_HASH,
-      skillName: env.HARNESS_CANARY_CUSTOM_SKILL_NAME,
+      profileId: ENGINE_CANARY_FIXTURES.custom.profileId,
+      version: ENGINE_CANARY_FIXTURES.custom.profileVersion,
+      artifactHash: ENGINE_CANARY_FIXTURES.custom.skillArtifactHash,
+      skillName: ENGINE_CANARY_FIXTURES.custom.skillName,
     });
     const customProvider = custom.manifest!.harness.provider;
-    await assertPinnedSkillExists(sql, env, custom.organizationId);
+    await assertPinnedSkillExists(sql, custom.organizationId);
 
     // The tool schema caps limit at 100 (mcp-contract.json); 200 is rejected as
     // VALIDATION_FAILED before the handler runs.
@@ -184,7 +188,7 @@ export async function runHarnessProfilePreviewCanary(
     if (listed.truncated) {
       throw new Error("Workflow list is truncated before canary fixture validation");
     }
-    const cases = await buildCanaryCases(sql, env, listed, {
+    const cases = await buildCanaryCases(sql, listed, {
       claude,
       codex,
       customProvider,
@@ -194,7 +198,7 @@ export async function runHarnessProfilePreviewCanary(
       ? createReplayCanaryFixture(REPLAY_CANARY_FIXTURE_NONCE)
       : null;
 
-    await releaseStaleCanaryClaim(sql, mcp, env.HARNESS_CANARY_TICKET_KEY);
+    await releaseStaleCanaryClaim(sql, mcp, ticketKey);
 
     for (const canary of cases) {
       const replay =
@@ -224,7 +228,6 @@ export async function runHarnessProfilePreviewCanary(
 
 async function buildCanaryCases(
   sql: SqlClient,
-  env: HarnessCanaryEnv,
   listed: WorkflowListData,
   profiles: {
     claude: StoredHarnessProfile;
@@ -238,9 +241,9 @@ async function buildCanaryCases(
   // only mcp:read and runs:dispatch, so the call answers INSUFFICIENT_SCOPE.
   const definitions = await Promise.all(
     [
-      env.HARNESS_CANARY_CLAUDE_WORKFLOW_ID,
-      env.HARNESS_CANARY_CODEX_WORKFLOW_ID,
-      env.HARNESS_CANARY_CUSTOM_WORKFLOW_ID,
+      ENGINE_CANARY_FIXTURES.claude.workflowId,
+      ENGINE_CANARY_FIXTURES.codex.workflowId,
+      ENGINE_CANARY_FIXTURES.custom.workflowId,
     ].map(async (id) => {
       const rows = await sql`
         SELECT d.id, d.enabled, d.deployed_version, v.definition
@@ -273,7 +276,7 @@ async function buildCanaryCases(
   const inputs = [
     {
       label: "claude" as const,
-      workflowId: env.HARNESS_CANARY_CLAUDE_WORKFLOW_ID,
+      workflowId: ENGINE_CANARY_FIXTURES.claude.workflowId,
       reference: {
         profileId: profiles.claude.id,
         version: profiles.claude.publishedVersion!,
@@ -282,7 +285,7 @@ async function buildCanaryCases(
     },
     {
       label: "codex" as const,
-      workflowId: env.HARNESS_CANARY_CODEX_WORKFLOW_ID,
+      workflowId: ENGINE_CANARY_FIXTURES.codex.workflowId,
       reference: {
         profileId: profiles.codex.id,
         version: profiles.codex.publishedVersion!,
@@ -291,19 +294,19 @@ async function buildCanaryCases(
     },
     {
       label: "custom" as const,
-      workflowId: env.HARNESS_CANARY_CUSTOM_WORKFLOW_ID,
+      workflowId: ENGINE_CANARY_FIXTURES.custom.workflowId,
       reference: {
-        profileId: env.HARNESS_CANARY_CUSTOM_PROFILE_ID,
-        version: env.HARNESS_CANARY_CUSTOM_PROFILE_VERSION,
+        profileId: ENGINE_CANARY_FIXTURES.custom.profileId,
+        version: ENGINE_CANARY_FIXTURES.custom.profileVersion,
       },
       provider: profiles.customProvider,
       skill: {
-        artifactHash: env.HARNESS_CANARY_CUSTOM_SKILL_ARTIFACT_HASH,
-        name: env.HARNESS_CANARY_CUSTOM_SKILL_NAME,
-        owner: env.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_OWNER,
-        repository: env.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_REPOSITORY,
-        path: env.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_PATH,
-        commitSha: env.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_COMMIT_SHA,
+        artifactHash: ENGINE_CANARY_FIXTURES.custom.skillArtifactHash,
+        name: ENGINE_CANARY_FIXTURES.custom.skillName,
+        owner: ENGINE_CANARY_FIXTURES.custom.skillSource.owner,
+        repository: ENGINE_CANARY_FIXTURES.custom.skillSource.repository,
+        path: ENGINE_CANARY_FIXTURES.custom.skillSource.path,
+        commitSha: ENGINE_CANARY_FIXTURES.custom.skillSource.commitSha,
       },
     },
   ];
@@ -344,7 +347,7 @@ async function executeCase(
   const input = {
     definitionId: canary.workflowId,
     triggerNodeId: canary.triggerNodeId,
-    input: { kind: "ticket", ticketKey: env.HARNESS_CANARY_TICKET_KEY },
+    input: { kind: "ticket", ticketKey: ENGINE_CANARY_FIXTURES.custom.ticketKey },
   };
   const preflight = await mcp.call<DispatchPreflightData>(
     "workflows.dispatch_preflight",
@@ -383,7 +386,11 @@ async function executeCase(
         runWindow,
       );
     }
-    await releaseFinishedRunClaim(sql, env.HARNESS_CANARY_TICKET_KEY, dispatched.runId);
+    await releaseFinishedRunClaim(
+      sql,
+      ENGINE_CANARY_FIXTURES.custom.ticketKey,
+      dispatched.runId,
+    );
     return { runId: dispatched.runId, manifests };
   } catch (error) {
     if (Date.now() >= deadline) {
@@ -525,7 +532,6 @@ async function waitForReplayMcp(
 
 async function readHarnessProfiles(
   sql: SqlClient,
-  env: HarnessCanaryEnv,
 ): Promise<StoredHarnessProfile[]> {
   const rows = await sql`
     SELECT hp.id, hp.organization_id, hp.system, hp.archived_at,
@@ -536,7 +542,7 @@ async function readHarnessProfiles(
     WHERE hp.id IN (
       'builtin-claude',
       'builtin-codex',
-      ${env.HARNESS_CANARY_CUSTOM_PROFILE_ID}
+      ${ENGINE_CANARY_FIXTURES.custom.profileId}
     )
   `;
   return rows.map((row) => ({
@@ -571,7 +577,6 @@ function requiredSystemProfile(
 
 async function assertPinnedSkillExists(
   sql: SqlClient,
-  env: HarnessCanaryEnv,
   organizationId: string | null,
 ): Promise<void> {
   if (!organizationId) throw new Error("Custom profile must be organization-owned");
@@ -580,20 +585,20 @@ async function assertPinnedSkillExists(
            hsa.source_repository, hsa.source_path, hsa.source_commit_sha
     FROM harness_profile_version_skills hpvs
     JOIN harness_skill_artifacts hsa ON hsa.id = hpvs.artifact_id
-    WHERE hpvs.profile_id = ${env.HARNESS_CANARY_CUSTOM_PROFILE_ID}
-      AND hpvs.profile_version = ${env.HARNESS_CANARY_CUSTOM_PROFILE_VERSION}
-      AND hpvs.skill_name = ${env.HARNESS_CANARY_CUSTOM_SKILL_NAME}
+    WHERE hpvs.profile_id = ${ENGINE_CANARY_FIXTURES.custom.profileId}
+      AND hpvs.profile_version = ${ENGINE_CANARY_FIXTURES.custom.profileVersion}
+      AND hpvs.skill_name = ${ENGINE_CANARY_FIXTURES.custom.skillName}
       AND hsa.organization_id = ${organizationId}
-      AND hsa.artifact_hash = ${env.HARNESS_CANARY_CUSTOM_SKILL_ARTIFACT_HASH}
+      AND hsa.artifact_hash = ${ENGINE_CANARY_FIXTURES.custom.skillArtifactHash}
   `;
   const row = rows[0] as Record<string, unknown> | undefined;
   if (
-    row?.source_owner !== env.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_OWNER ||
+    row?.source_owner !== ENGINE_CANARY_FIXTURES.custom.skillSource.owner ||
     row?.source_repository !==
-      env.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_REPOSITORY ||
-    row?.source_path !== env.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_PATH ||
+      ENGINE_CANARY_FIXTURES.custom.skillSource.repository ||
+    row?.source_path !== ENGINE_CANARY_FIXTURES.custom.skillSource.path ||
     row?.source_commit_sha !==
-      env.HARNESS_CANARY_CUSTOM_SKILL_SOURCE_COMMIT_SHA
+      ENGINE_CANARY_FIXTURES.custom.skillSource.commitSha
   ) {
     throw new Error("Pinned skill source does not match the exact expected commit");
   }

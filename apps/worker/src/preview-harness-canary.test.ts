@@ -11,25 +11,18 @@ import {
   cancelTimedOutCanaryRun,
   parseHarnessCanaryEnv,
 } from "../e2e/harness-profiles/canary-contract.js";
+import { ENGINE_CANARY_FIXTURES } from "../e2e/harness-profiles/engine-canary-fixtures.js";
 
+// Fixture identity (definition ids, the custom profile pin, its skill, one
+// ticket per fixture) no longer travels through this schema; it lives in
+// engine-canary-fixtures.ts and is asserted by the "engine canary fixtures"
+// suite below.
 const completeEnv = {
   HARNESS_CANARY_BASE_URL: "https://preview.example.test",
   HARNESS_CANARY_EXPECTED_HOST: "preview.example.test",
   ENGINE_CANARY_MCP_CLIENT_ID: "engine-canary-client",
   ENGINE_CANARY_MCP_CLIENT_SECRET: "machine-secret-with-enough-length",
   HARNESS_CANARY_CONFIRM_PREVIEW_MUTATIONS: "run-preview-harness-canary",
-  HARNESS_CANARY_CLAUDE_WORKFLOW_ID: "2",
-  HARNESS_CANARY_CODEX_WORKFLOW_ID: "3",
-  HARNESS_CANARY_CUSTOM_WORKFLOW_ID: "4",
-  HARNESS_CANARY_TICKET_KEY: "AIW-999",
-  HARNESS_CANARY_CUSTOM_PROFILE_ID: "custom-profile",
-  HARNESS_CANARY_CUSTOM_PROFILE_VERSION: "7",
-  HARNESS_CANARY_CUSTOM_SKILL_ARTIFACT_HASH: "a".repeat(64),
-  HARNESS_CANARY_CUSTOM_SKILL_NAME: "canary-skill",
-  HARNESS_CANARY_CUSTOM_SKILL_SOURCE_OWNER: "acme",
-  HARNESS_CANARY_CUSTOM_SKILL_SOURCE_REPOSITORY: "skills",
-  HARNESS_CANARY_CUSTOM_SKILL_SOURCE_PATH: "canary",
-  HARNESS_CANARY_CUSTOM_SKILL_SOURCE_COMMIT_SHA: "b".repeat(40),
   DATABASE_URL: "postgresql://test:test@example.test/test",
   VERCEL_ENV: "preview",
   VERCEL_AUTOMATION_BYPASS_SECRET: "preview-bypass",
@@ -84,7 +77,6 @@ describe("Harness Profile preview canary dry checks", () => {
   it("fails closed on missing confirmation, wrong host, or enabled authoring", () => {
     expect(parseHarnessCanaryEnv(completeEnv)).toMatchObject({
       ENGINE_CANARY_MCP_CLIENT_ID: "engine-canary-client",
-      HARNESS_CANARY_TICKET_KEY: "AIW-999",
       HARNESS_CANARY_TIMEOUT_MS: 900_000,
     });
     expect(() =>
@@ -111,12 +103,24 @@ describe("Harness Profile preview canary dry checks", () => {
         ENGINE_CANARY_MCP_CLIENT_ID: undefined,
       }),
     ).toThrow();
+  });
+
+  it("no longer requires fixture pins and ignores unknown keys rather than rejecting them", () => {
+    // parseHarnessCanaryEnv parses process.env, which always carries names
+    // this contract never declared (PATH, CI, GITHUB_*), and, now that fixture
+    // identity lives in engine-canary-fixtures.ts, ci.yml no longer forwards
+    // the old pin names either. zod's default object mode strips unknown keys
+    // instead of rejecting them, so a stale CI mapping that still sets one of
+    // the retired pin names cannot break the job.
     expect(() =>
       parseHarnessCanaryEnv({
         ...completeEnv,
         HARNESS_CANARY_TICKET_KEY: "not-a-ticket",
+        HARNESS_CANARY_CLAUDE_WORKFLOW_ID: "not-a-number",
+        HARNESS_CANARY_CUSTOM_PROFILE_ID: undefined,
+        PATH: "/usr/bin",
       }),
-    ).toThrow();
+    ).not.toThrow();
   });
 
   it("accepts only a disabled deployed trigger-to-agent workspace-free workflow", () => {
@@ -228,5 +232,47 @@ describe("Harness Profile preview canary dry checks", () => {
       runId: "wrun_timeout",
       idempotencyKey: expect.any(String),
     });
+  });
+});
+
+describe("engine canary fixtures", () => {
+  const TICKET_KEY_PATTERN = /^AWP-\d+$/;
+  const SKILL_ARTIFACT_HASH_PATTERN = /^[a-f0-9]{64}$/;
+  const COMMIT_SHA_PATTERN = /^[a-f0-9]{40}$/;
+
+  it("declares exactly the three fixtures the canary dispatches", () => {
+    expect(Object.keys(ENGINE_CANARY_FIXTURES).sort()).toEqual([
+      "claude",
+      "codex",
+      "custom",
+    ]);
+  });
+
+  it("pins a distinct definition id per fixture", () => {
+    const definitionIds = [
+      ENGINE_CANARY_FIXTURES.claude.workflowId,
+      ENGINE_CANARY_FIXTURES.codex.workflowId,
+      ENGINE_CANARY_FIXTURES.custom.workflowId,
+    ];
+    expect(new Set(definitionIds).size).toBe(definitionIds.length);
+  });
+
+  it("pins a ticket key per fixture", () => {
+    for (const fixture of [
+      ENGINE_CANARY_FIXTURES.claude,
+      ENGINE_CANARY_FIXTURES.codex,
+      ENGINE_CANARY_FIXTURES.custom,
+    ]) {
+      expect(fixture.ticketKey).toMatch(TICKET_KEY_PATTERN);
+    }
+  });
+
+  it("pins the custom profile's skill artifact hash and commit sha in the exact hash formats", () => {
+    expect(ENGINE_CANARY_FIXTURES.custom.skillArtifactHash).toMatch(
+      SKILL_ARTIFACT_HASH_PATTERN,
+    );
+    expect(ENGINE_CANARY_FIXTURES.custom.skillSource.commitSha).toMatch(
+      COMMIT_SHA_PATTERN,
+    );
   });
 });

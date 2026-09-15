@@ -12,10 +12,12 @@ import {
 import { CANARY_FIXTURE_MODELS } from "@shared/harness";
 import { z } from "zod";
 
-const positiveInteger = z.coerce.number().int().positive();
-const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
-const gitSha = z.string().regex(/^[a-f0-9]{40}$/);
-
+// Fixture identity (definition ids, the custom profile pin, its skill, one
+// ticket per fixture) lives in engine-canary-fixtures.ts, not here. This
+// schema is intentionally permissive about unknown keys: it parses
+// process.env, which carries names this contract never claimed (PATH, CI,
+// GITHUB_*, and, now, the fixture pin names ci.yml no longer forwards), and
+// zod's default object mode strips those rather than rejecting them.
 const schema = z
   .object({
     HARNESS_CANARY_BASE_URL: z.string().url(),
@@ -25,18 +27,6 @@ const schema = z
     HARNESS_CANARY_CONFIRM_PREVIEW_MUTATIONS: z.literal(
       "run-preview-harness-canary",
     ),
-    HARNESS_CANARY_CLAUDE_WORKFLOW_ID: positiveInteger,
-    HARNESS_CANARY_CODEX_WORKFLOW_ID: positiveInteger,
-    HARNESS_CANARY_CUSTOM_WORKFLOW_ID: positiveInteger,
-    HARNESS_CANARY_TICKET_KEY: z.string().regex(/^[A-Z][A-Z0-9_]*-\d+$/),
-    HARNESS_CANARY_CUSTOM_PROFILE_ID: z.string().trim().min(1),
-    HARNESS_CANARY_CUSTOM_PROFILE_VERSION: positiveInteger,
-    HARNESS_CANARY_CUSTOM_SKILL_ARTIFACT_HASH: sha256,
-    HARNESS_CANARY_CUSTOM_SKILL_NAME: z.string().trim().min(1),
-    HARNESS_CANARY_CUSTOM_SKILL_SOURCE_OWNER: z.string().trim().min(1),
-    HARNESS_CANARY_CUSTOM_SKILL_SOURCE_REPOSITORY: z.string().trim().min(1),
-    HARNESS_CANARY_CUSTOM_SKILL_SOURCE_PATH: z.string().trim().min(1),
-    HARNESS_CANARY_CUSTOM_SKILL_SOURCE_COMMIT_SHA: gitSha,
     DATABASE_URL: z.string().url(),
     VERCEL_ENV: z.literal("preview"),
     VERCEL_AUTOMATION_BYPASS_SECRET: z.string().min(1),
@@ -65,18 +55,6 @@ const schema = z
         code: "custom",
         path: ["HARNESS_CANARY_EXPECTED_HOST"],
         message: `Expected ${value.HARNESS_CANARY_EXPECTED_HOST}, received ${base.host}`,
-      });
-    }
-    const workflowIds = [
-      value.HARNESS_CANARY_CLAUDE_WORKFLOW_ID,
-      value.HARNESS_CANARY_CODEX_WORKFLOW_ID,
-      value.HARNESS_CANARY_CUSTOM_WORKFLOW_ID,
-    ];
-    if (new Set(workflowIds).size !== workflowIds.length) {
-      context.addIssue({
-        code: "custom",
-        path: ["HARNESS_CANARY_CLAUDE_WORKFLOW_ID"],
-        message: "Canary workflow IDs must all be distinct",
       });
     }
   });
