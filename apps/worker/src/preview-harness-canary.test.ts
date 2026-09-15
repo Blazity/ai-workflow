@@ -71,20 +71,33 @@ function unconfirmedCancel(): CanaryMcpToolError {
   );
 }
 
-// Retries without waiting: the budget is counted in attempts, and the sleeps
-// the canary asks for are recorded instead of taken.
-function instantRetry(attempts: number) {
+// A clock the canary's waits advance instead of taking: a budget is spent in
+// the time the canary asked to sleep, and every sleep is recorded.
+function fakeClock() {
+  let now = 0;
   const sleeps: number[] = [];
   return {
-    policy: {
-      attempts,
-      delayMs: 5_000,
+    clock: {
+      now: () => now,
       sleep: async (ms: number) => {
         sleeps.push(ms);
+        now += ms;
       },
     },
     sleeps,
   };
+}
+
+// The run level runs.logs reply as far as the sweep reads it: the definition
+// the run's capture was taken from, null when there is no capture.
+function capturedDefinition(definitionId: number | null) {
+  return { replay: { definitionId } };
+}
+
+function cancelKeys(calls: ReturnType<typeof fakeMcp>["calls"]): unknown[] {
+  return calls.mock.calls
+    .filter(([name]) => name === "runs.cancel")
+    .map(([, args]) => (args as { idempotencyKey?: unknown }).idempotencyKey);
 }
 
 function listedFixtures() {
@@ -599,8 +612,8 @@ describe("canary observations: claims and ticket hygiene", () => {
     const mcp = fakeMcp({
       "runs.cancel": () => ({ runId: "wrun_live", outcome: "cancelled" }),
     });
-    const { policy } = instantRetry(19);
-    await expect(releaseCanaryRun(mcp, "wrun_live", policy)).rejects.toThrow(
+    const { clock } = fakeClock();
+    await expect(releaseCanaryRun(mcp, "wrun_live", clock)).rejects.toThrow(
       /wrun_live was still live/,
     );
     expect(mcp.calls).toHaveBeenCalledOnce();
@@ -615,19 +628,32 @@ describe("canary observations: claims and ticket hygiene", () => {
         return { runId: args.runId, outcome: "already_terminal" };
       },
     });
-    const { policy, sleeps } = instantRetry(19);
+    const { clock, sleeps } = fakeClock();
 
     await expect(
-      releaseCanaryRun(mcp, "wrun_retiring", policy),
+      releaseCanaryRun(mcp, "wrun_retiring", clock),
     ).resolves.toBeUndefined();
 
     expect(mcp.calls).toHaveBeenCalledTimes(3);
     expect(sleeps).toEqual([5_000, 5_000]);
-    const keys = mcp.calls.mock.calls.map(
-      ([, args]) => (args as { idempotencyKey: string }).idempotencyKey,
-    );
+    const keys = cancelKeys(mcp.calls);
     expect(new Set(keys).size).toBe(1);
     expect(keys[0]).toMatch(UUID_PATTERN);
+  });
+
+  it("keeps releasing through 140 s of unconfirmed answers, longer than the two minute retiring window", async () => {
+    const { clock } = fakeClock();
+    const mcp = fakeMcp({
+      "runs.cancel": (args) => {
+        if (clock.now() < 140_000) throw unconfirmedCancel();
+        return { runId: args.runId, outcome: "already_terminal" };
+      },
+    });
+
+    await expect(
+      releaseCanaryRun(mcp, "wrun_retiring", clock),
+    ).resolves.toBeUndefined();
+    expect(clock.now()).toBeGreaterThanOrEqual(140_000);
   });
 
   it("fails the release when runs.cancel stays unconfirmed past the budget, printing the last reply", async () => {
@@ -636,13 +662,37 @@ describe("canary observations: claims and ticket hygiene", () => {
         throw unconfirmedCancel();
       },
     });
-    const { policy, sleeps } = instantRetry(4);
+    const { clock } = fakeClock();
 
-    await expect(releaseCanaryRun(mcp, "wrun_stuck", policy)).rejects.toThrow(
-      /wrun_stuck after 4 attempts.*CONFLICT.*could not be confirmed on this attempt/,
+    await expect(releaseCanaryRun(mcp, "wrun_stuck", clock)).rejects.toThrow(
+      /wrun_stuck within \d+ s.*CONFLICT.*could not be confirmed on this attempt/,
     );
-    expect(mcp.calls).toHaveBeenCalledTimes(4);
-    expect(sleeps).toHaveLength(3);
+    // The budget outlasts the retiring window with room to spare.
+    expect(clock.now()).toBeGreaterThanOrEqual(150_000);
+  });
+
+  it("says the cancel overwrote a finished run's outcome when the release gets cancelled after unconfirmed answers", async () => {
+    let answered = 0;
+    const mcp = fakeMcp({
+      "runs.cancel": (args) => {
+        answered += 1;
+        if (answered <= 2) throw unconfirmedCancel();
+        return { runId: args.runId, outcome: "cancelled" };
+      },
+    });
+    const { clock } = fakeClock();
+
+    let message = "";
+    try {
+      await releaseCanaryRun(mcp, "wrun_unretired", clock);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toMatch(/wrun_unretired/);
+    expect(message).toMatch(/did not retire the run within the two minute window/);
+    expect(message).toMatch(/the cancel overwrote its outcome/);
+    expect(message).not.toMatch(/was still live/);
   });
 
   it("does not retry a refusal that is not an unconfirmed cancel", async () => {
@@ -654,8 +704,8 @@ describe("canary observations: claims and ticket hygiene", () => {
         );
       },
     });
-    const { policy } = instantRetry(19);
-    await expect(releaseCanaryRun(mcp, "wrun_ghost", policy)).rejects.toThrow(
+    const { clock } = fakeClock();
+    await expect(releaseCanaryRun(mcp, "wrun_ghost", clock)).rejects.toThrow(
       /wrun_ghost.*NOT_FOUND/,
     );
     expect(mcp.calls).toHaveBeenCalledOnce();
@@ -761,12 +811,19 @@ describe("canary observations: claims and ticket hygiene", () => {
   });
 
   it("still leaves the target clean when the release itself fails, printing the ticket status", async () => {
+    let cancels = 0;
     const mcp = fakeMcp({
-      "runs.cancel": (args) => ({ runId: args.runId, outcome: "cancelled" }),
+      "runs.cancel": (args) => {
+        cancels += 1;
+        return {
+          runId: args.runId,
+          outcome: cancels === 1 ? "cancelled" : "already_terminal",
+        };
+      },
       "tickets.get": () => ({ ticketKey: "AWP-180", status: "Ai" }),
     });
     const observe = vi.fn(async () => {});
-    const { policy } = instantRetry(19);
+    const { clock } = fakeClock();
 
     let message = "";
     try {
@@ -774,7 +831,7 @@ describe("canary observations: claims and ticket hygiene", () => {
         mcp,
         { runId: "wrun_release", ticketKey: "AWP-180", aiColumn: "Ai" },
         observe,
-        policy,
+        clock,
       );
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
@@ -810,10 +867,11 @@ describe("canary observations: claims and ticket hygiene", () => {
     ]);
   });
 
-  it("sweeps the newest run and every live run on the fixture ticket, then checks hygiene", async () => {
+  it("settles the newest run and every live run of the fixture definition on the ticket, then checks hygiene", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const cancelled: string[] = [];
-    const keys: unknown[] = [];
+    const read: string[] = [];
+    let strayAnswers = 0;
     const mcp = fakeMcp({
       "tickets.list_runs": (args) => {
         expect(args).toMatchObject({ ticketKey: "AWP-179" });
@@ -826,26 +884,235 @@ describe("canary observations: claims and ticket hygiene", () => {
           truncated: false,
         };
       },
+      "runs.logs": (args) => {
+        expect(Object.keys(args)).toEqual(["runId"]);
+        read.push(String(args.runId));
+        return capturedDefinition(ENGINE_CANARY_FIXTURES.codex.workflowId);
+      },
       "runs.cancel": (args) => {
         cancelled.push(String(args.runId));
-        keys.push(args.idempotencyKey);
+        if (args.runId !== "wrun_stray") {
+          return { runId: args.runId, outcome: "already_terminal" };
+        }
+        strayAnswers += 1;
         return {
           runId: args.runId,
-          outcome: args.runId === "wrun_stray" ? "cancelled" : "already_terminal",
+          outcome: strayAnswers === 1 ? "cancelled" : "already_terminal",
         };
       },
       "tickets.get": () => ({ ticketKey: "AWP-179", status: "Do zrobienia" }),
     });
+    const { clock, sleeps } = fakeClock();
 
-    await sweepFixtureTicket(mcp, "AWP-179", "Ai");
+    await sweepFixtureTicket(mcp, ENGINE_CANARY_FIXTURES.codex, "Ai", clock);
 
-    expect(cancelled).toEqual(["wrun_newest", "wrun_stray"]);
-    expect(new Set(keys).size).toBe(2);
+    expect(read).toEqual(["wrun_newest", "wrun_stray"]);
+    expect(cancelled).toEqual(["wrun_newest", "wrun_stray", "wrun_stray"]);
+    const keys = cancelKeys(mcp.calls);
+    expect(new Set(keys).size).toBe(3);
     for (const key of keys) expect(key).toMatch(UUID_PATTERN);
+    expect(sleeps).toEqual([10_000]);
     expect(warn).toHaveBeenCalledWith(
       expect.stringMatching(/cancelled live run wrun_stray on AWP-179/),
     );
     expect(mcp.calls.mock.calls.at(-1)?.[0]).toBe("tickets.get");
+  });
+
+  it("converges a predecessor's live run that answers cancelled while it drains, asking again under a fresh key", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let answers = 0;
+    const mcp = fakeMcp({
+      "tickets.list_runs": () => ({
+        runs: [{ runId: "wrun_killed", status: "running", terminal: false }],
+        truncated: false,
+      }),
+      "runs.logs": () =>
+        capturedDefinition(ENGINE_CANARY_FIXTURES.custom.workflowId),
+      "runs.cancel": (args) => {
+        answers += 1;
+        return {
+          runId: args.runId,
+          outcome: answers < 3 ? "cancelled" : "already_terminal",
+        };
+      },
+      "tickets.get": () => ({ ticketKey: "AWP-180", status: "Do zrobienia" }),
+    });
+    const { clock, sleeps } = fakeClock();
+
+    await expect(
+      sweepFixtureTicket(mcp, ENGINE_CANARY_FIXTURES.custom, "Ai", clock),
+    ).resolves.toBeUndefined();
+
+    expect(answers).toBe(3);
+    expect(new Set(cancelKeys(mcp.calls)).size).toBe(3);
+    expect(sleeps).toEqual([10_000, 10_000]);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/cancelled live run wrun_killed on AWP-180/),
+    );
+  });
+
+  it("converges a run that is still being retired instead of failing on the first unconfirmed answer", async () => {
+    let answers = 0;
+    const mcp = fakeMcp({
+      "tickets.list_runs": () => ({
+        runs: [{ runId: "wrun_held", status: "success", terminal: true }],
+        truncated: false,
+      }),
+      "runs.logs": () =>
+        capturedDefinition(ENGINE_CANARY_FIXTURES.claude.workflowId),
+      "runs.cancel": (args) => {
+        answers += 1;
+        if (answers === 1) throw unconfirmedCancel();
+        return { runId: args.runId, outcome: "already_terminal" };
+      },
+      "tickets.get": () => ({ ticketKey: "AWP-176", status: "Do zrobienia" }),
+    });
+    const { clock, sleeps } = fakeClock();
+
+    await expect(
+      sweepFixtureTicket(mcp, ENGINE_CANARY_FIXTURES.claude, "Ai", clock),
+    ).resolves.toBeUndefined();
+
+    expect(mcp.calls.mock.calls.map(([name]) => name)).toEqual([
+      "tickets.list_runs",
+      "runs.logs",
+      "runs.cancel",
+      "runs.cancel",
+      "tickets.get",
+    ]);
+    expect(new Set(cancelKeys(mcp.calls)).size).toBe(2);
+    expect(sleeps).toEqual([10_000]);
+  });
+
+  it.each([
+    ["cancelled", () => ({ runId: "wrun_stuck", outcome: "cancelled" }), /cancelled/],
+    [
+      "unconfirmed",
+      () => {
+        throw unconfirmedCancel();
+      },
+      /CONFLICT/,
+    ],
+  ])("fails once the settle budget is spent on %s answers, naming the run, the last answer and the ticket that may still be in Ai", async (_case, answer, lastAnswer) => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const mcp = fakeMcp({
+      "tickets.list_runs": () => ({
+        runs: [{ runId: "wrun_stuck", status: "running", terminal: false }],
+        truncated: false,
+      }),
+      "runs.logs": () =>
+        capturedDefinition(ENGINE_CANARY_FIXTURES.claude.workflowId),
+      "runs.cancel": answer,
+    });
+    const { clock, sleeps } = fakeClock();
+
+    let message = "";
+    try {
+      await sweepFixtureTicket(mcp, ENGINE_CANARY_FIXTURES.claude, "Ai", clock);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toMatch(/wrun_stuck/);
+    expect(message).toMatch(lastAnswer);
+    expect(message).toMatch(/AWP-176 may still be in the Ai column/);
+    // About five minutes, one attempt every ten seconds, every one a new key.
+    expect(clock.now()).toBeGreaterThanOrEqual(290_000);
+    expect(clock.now()).toBeLessThanOrEqual(310_000);
+    expect(new Set(sleeps)).toEqual(new Set([10_000]));
+    const keys = cancelKeys(mcp.calls);
+    expect(keys.length).toBeGreaterThan(20);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it("leaves a live run of another definition untouched and fails the precondition, naming who must settle it", async () => {
+    const mcp = fakeMcp({
+      "tickets.list_runs": () => ({
+        runs: [{ runId: "wrun_prod", status: "running", terminal: false }],
+        truncated: false,
+      }),
+      "runs.logs": () => capturedDefinition(12),
+    });
+    const { clock } = fakeClock();
+
+    let message = "";
+    try {
+      await sweepFixtureTicket(mcp, ENGINE_CANARY_FIXTURES.claude, "Ai", clock);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toMatch(/AWP-176/);
+    expect(message).toMatch(/wrun_prod/);
+    expect(message).toMatch(/definition 12\b/);
+    expect(message).toMatch(/production owns it and must settle it first/i);
+    expect(mcp.calls.mock.calls.map(([name]) => name)).toEqual([
+      "tickets.list_runs",
+      "runs.logs",
+    ]);
+  });
+
+  it.each([
+    ["no captured definition", () => capturedDefinition(null), /no captured definition/],
+    ["no replay section", () => ({}), /no captured definition/],
+    [
+      "a refused read",
+      () => {
+        throw new CanaryMcpToolError(
+          "runs.logs",
+          JSON.stringify({ error: { code: "NOT_FOUND", message: "no capture" } }),
+        );
+      },
+      /NOT_FOUND.*no capture/,
+    ],
+  ])("leaves a live run untouched when runs.logs shows %s, without claiming production owns it", async (_case, logs, reason) => {
+    const mcp = fakeMcp({
+      "tickets.list_runs": () => ({
+        runs: [{ runId: "wrun_unknown", status: "running", terminal: false }],
+        truncated: false,
+      }),
+      "runs.logs": logs,
+    });
+    const { clock } = fakeClock();
+
+    let message = "";
+    try {
+      await sweepFixtureTicket(mcp, ENGINE_CANARY_FIXTURES.claude, "Ai", clock);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toMatch(
+      /AWP-176.*wrun_unknown.*could not be read from runs\.logs/s,
+    );
+    expect(message).toMatch(reason);
+    expect(message).toMatch(/unknown whose run it is.*nothing was touched/s);
+    expect(message).not.toMatch(/production owns it/i);
+    expect(mcp.calls.mock.calls.map(([name]) => name)).not.toContain(
+      "runs.cancel",
+    );
+  });
+
+  it("leaves a finished run of another definition untouched and carries on", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const mcp = fakeMcp({
+      "tickets.list_runs": () => ({
+        runs: [{ runId: "wrun_prod_done", status: "success", terminal: true }],
+        truncated: false,
+      }),
+      "runs.logs": () => capturedDefinition(12),
+      "tickets.get": () => ({ ticketKey: "AWP-176", status: "Do zrobienia" }),
+    });
+    const { clock } = fakeClock();
+
+    await expect(
+      sweepFixtureTicket(mcp, ENGINE_CANARY_FIXTURES.claude, "Ai", clock),
+    ).resolves.toBeUndefined();
+    expect(mcp.calls.mock.calls.map(([name]) => name)).toEqual([
+      "tickets.list_runs",
+      "runs.logs",
+      "tickets.get",
+    ]);
   });
 
   it.each([
@@ -857,12 +1124,15 @@ describe("canary observations: claims and ticket hygiene", () => {
   ])("blames a move outside the canary when the ticket sits in Ai with %s", async (_case, runs) => {
     const mcp = fakeMcp({
       "tickets.list_runs": () => ({ runs, truncated: false }),
+      "runs.logs": () =>
+        capturedDefinition(ENGINE_CANARY_FIXTURES.claude.workflowId),
       "runs.cancel": (args) => ({ runId: args.runId, outcome: "already_terminal" }),
       "tickets.get": () => ({ ticketKey: "AWP-176", status: "Ai" }),
     });
+    const { clock } = fakeClock();
     let message = "";
     try {
-      await sweepFixtureTicket(mcp, "AWP-176", "Ai");
+      await sweepFixtureTicket(mcp, ENGINE_CANARY_FIXTURES.claude, "Ai", clock);
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
     }
@@ -875,48 +1145,52 @@ describe("canary observations: claims and ticket hygiene", () => {
 
   it("blames runs.cancel when the ticket stays in Ai after the sweep cancelled a live run", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
+    let answers = 0;
     const mcp = fakeMcp({
       "tickets.list_runs": () => ({
         runs: [{ runId: "wrun_stray", status: "running", terminal: false }],
         truncated: false,
       }),
-      "runs.cancel": (args) => ({ runId: args.runId, outcome: "cancelled" }),
+      "runs.logs": () =>
+        capturedDefinition(ENGINE_CANARY_FIXTURES.claude.workflowId),
+      "runs.cancel": (args) => {
+        answers += 1;
+        return {
+          runId: args.runId,
+          outcome: answers === 1 ? "cancelled" : "already_terminal",
+        };
+      },
       "tickets.get": () => ({ ticketKey: "AWP-176", status: "Ai" }),
     });
-    await expect(sweepFixtureTicket(mcp, "AWP-176", "Ai")).rejects.toThrow(
+    const { clock } = fakeClock();
+    await expect(
+      sweepFixtureTicket(mcp, ENGINE_CANARY_FIXTURES.claude, "Ai", clock),
+    ).rejects.toThrow(
       /AWP-176 is still in the Ai column \(status "Ai"\) after runs\.cancel/,
     );
   });
 
-  it("fails the sweep on unconfirmed without retrying, printing the reply", async () => {
+  it("cancels a failed or timed out run, waits for it to settle, and checks hygiene before reporting the failure", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let answers = 0;
     const mcp = fakeMcp({
-      "tickets.list_runs": () => ({
-        runs: [{ runId: "wrun_held", status: "success", terminal: true }],
-        truncated: false,
-      }),
-      "runs.cancel": () => {
-        throw unconfirmedCancel();
+      "runs.cancel": (args) => {
+        answers += 1;
+        return {
+          runId: args.runId,
+          outcome: answers === 1 ? "cancelled" : "already_terminal",
+        };
       },
-      "tickets.get": () => ({ ticketKey: "AWP-176", status: "Do zrobienia" }),
-    });
-    await expect(sweepFixtureTicket(mcp, "AWP-176", "Ai")).rejects.toThrow(
-      /wrun_held.*CONFLICT.*could not be confirmed/,
-    );
-    expect(mcp.calls.mock.calls.map(([name]) => name)).toEqual([
-      "tickets.list_runs",
-      "runs.cancel",
-    ]);
-  });
-
-  it("cancels a failed or timed out run and checks hygiene before reporting the failure", async () => {
-    const mcp = fakeMcp({
-      "runs.cancel": (args) => ({ runId: args.runId, outcome: "cancelled" }),
       "tickets.get": () => ({ ticketKey: "AWP-180", status: "Do zrobienia" }),
     });
+    const { clock, sleeps } = fakeClock();
+
     await expect(
-      leaveTargetAfterFailedRun(mcp, "wrun_timeout", "AWP-180", "Ai"),
+      leaveTargetAfterFailedRun(mcp, "wrun_timeout", "AWP-180", "Ai", clock),
     ).resolves.toBeNull();
+
     expect(mcp.calls.mock.calls.map(([name]) => name)).toEqual([
+      "runs.cancel",
       "runs.cancel",
       "tickets.get",
     ]);
@@ -924,6 +1198,39 @@ describe("canary observations: claims and ticket hygiene", () => {
       runId: "wrun_timeout",
       idempotencyKey: expect.stringMatching(UUID_PATTERN),
     });
+    expect(new Set(cancelKeys(mcp.calls)).size).toBe(2);
+    expect(sleeps).toEqual([10_000]);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/cancelled live run wrun_timeout on AWP-180/),
+    );
+  });
+
+  it("warns that the cancel overwrote a finished run's outcome when cleanup gets cancelled after unconfirmed answers", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let answers = 0;
+    const mcp = fakeMcp({
+      "runs.cancel": (args) => {
+        answers += 1;
+        if (answers === 1) throw unconfirmedCancel();
+        return {
+          runId: args.runId,
+          outcome: answers === 2 ? "cancelled" : "already_terminal",
+        };
+      },
+      "tickets.get": () => ({ ticketKey: "AWP-180", status: "Do zrobienia" }),
+    });
+    const { clock } = fakeClock();
+
+    await expect(
+      leaveTargetAfterFailedRun(mcp, "wrun_failed_alone", "AWP-180", "Ai", clock),
+    ).resolves.toBeNull();
+
+    expect(warn).toHaveBeenCalledOnce();
+    const [line] = warn.mock.calls[0] as [string];
+    expect(line).toMatch(/wrun_failed_alone on AWP-180/);
+    expect(line).toMatch(/Workflow did not retire it within the two minute window/);
+    expect(line).toMatch(/the cancel overwrote its outcome/);
+    expect(line).not.toMatch(/was still live/);
   });
 
   it("names why the cleanup after a failed run did not leave the target clean", async () => {
@@ -932,10 +1239,10 @@ describe("canary observations: claims and ticket hygiene", () => {
         throw unconfirmedCancel();
       },
     });
-    const { policy } = instantRetry(2);
+    const { clock } = fakeClock();
     await expect(
-      leaveTargetAfterFailedRun(unconfirmed, "wrun_failed", "AWP-180", "Ai", policy),
-    ).resolves.toMatch(/wrun_failed after 2 attempts.*CONFLICT/);
+      leaveTargetAfterFailedRun(unconfirmed, "wrun_failed", "AWP-180", "Ai", clock),
+    ).resolves.toMatch(/wrun_failed.*CONFLICT.*AWP-180 may still be in the Ai column/s);
 
     const stillInAi = fakeMcp({
       "runs.cancel": (args) => ({ runId: args.runId, outcome: "already_terminal" }),

@@ -161,9 +161,9 @@ test("only the guarded engine canary carries secrets or an environment in CI", a
     assert.doesNotMatch(jobName, /e2e/, `${CI} must not define ${jobName}`);
     if (jobName === "engine-canary") {
       assert.equal(job.environment, "e2e");
-      assert.equal(
-        job.if,
-        "github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository",
+      assert.match(
+        job.if ?? "",
+        /^github\.event_name == 'pull_request' && github\.event\.pull_request\.head\.repo\.full_name == github\.repository && /u,
       );
       const secretNames = Array.from(
         JSON.stringify(job).matchAll(/secrets\.([A-Z0-9_]+)/gu),

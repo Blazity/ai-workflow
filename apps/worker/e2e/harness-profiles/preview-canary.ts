@@ -69,19 +69,22 @@ const FIXTURE_TICKET_HOME_STATUS = "Do zrobienia";
 // it calls the completion stuck.
 const COMPLETION_PENDING_SLACK_MS = 30_000;
 
-export interface CancelRetryPolicy {
-  attempts: number;
+interface CancelBudget {
+  budgetMs: number;
   delayMs: number;
-  sleep?: (ms: number) => Promise<void>;
 }
 
 // runs.cancel answers unconfirmed (CONFLICT, nothing changed) on a run whose
-// stored outcome is final but whose Workflow run has not retired yet, and a
-// retry converges to already_terminal within seconds. About 90 s in total.
-const RELEASE_RETRY: CancelRetryPolicy = { attempts: 19, delayMs: 5_000 };
+// stored outcome is final but whose Workflow run has not retired yet, for up to
+// two minutes after its completion (RETIRING_RUN_GRACE_MS in cancel-run.ts). The
+// release outlasts that window with room for the calls themselves.
+const RELEASE_BUDGET: CancelBudget = { budgetMs: 160_000, delayMs: 5_000 };
 
-// The start sweep asks once: an unconfirmed cancel there fails the canary.
-const SWEEP_CANCEL: CancelRetryPolicy = { attempts: 1, delayMs: 0 };
+// Settling a run nobody watched finish: a live run answers cancelled while its
+// steps drain and only a later ask converges it to already_terminal, and the
+// demo target runs no cron that would converge it instead. The run first has to
+// finish draining, then retire, so this budget is longer than the release's.
+const SETTLE_BUDGET: CancelBudget = { budgetMs: 300_000, delayMs: 10_000 };
 
 export interface CanaryCase {
   label: FixtureLabel;
@@ -195,20 +198,28 @@ const SYSTEM_CLOCK: CanaryClock = { now: () => Date.now(), sleep: delay };
 export class CanaryMcpToolError extends Error {
   readonly tool: string;
   readonly code: string | null;
+  /** The envelope's retryable flag, null when the reply does not carry one. */
+  readonly retryable: boolean | null;
 
   constructor(tool: string, reply: string) {
     super(`MCP tool ${tool} failed${reply ? `: ${reply.slice(0, 300)}` : ""}`);
     this.name = "CanaryMcpToolError";
     this.tool = tool;
-    this.code = readErrorCode(reply);
+    const error = readErrorEnvelope(reply);
+    this.code = typeof error?.code === "string" ? error.code : null;
+    this.retryable =
+      typeof error?.retryable === "boolean" ? error.retryable : null;
   }
 }
 
-function readErrorCode(reply: string): string | null {
+function readErrorEnvelope(
+  reply: string,
+): { code?: unknown; retryable?: unknown } | null {
   try {
-    const parsed = JSON.parse(reply) as { error?: { code?: unknown } } | null;
-    const code = parsed?.error?.code;
-    return typeof code === "string" ? code : null;
+    const parsed = JSON.parse(reply) as {
+      error?: { code?: unknown; retryable?: unknown };
+    } | null;
+    return parsed?.error ?? null;
   } catch {
     return null;
   }
@@ -241,7 +252,7 @@ export async function runHarnessProfilePreviewCanary(
     // a cancelled job) leaves a claim the next preflight refuses as active_run,
     // and a ticket left in Ai is dispatched again by the poll.
     for (const canary of cases) {
-      await sweepFixtureTicket(mcp, canary.ticketKey, aiColumn);
+      await sweepFixtureTicket(mcp, canary, aiColumn);
     }
 
     const replayFixture = replayEnv
@@ -503,26 +514,54 @@ async function readFixtureTicketAiStatus(
 export async function releaseCanaryRun(
   mcp: CanaryMcpCaller,
   runId: string,
-  retry: CancelRetryPolicy = RELEASE_RETRY,
+  clock: CanaryClock = SYSTEM_CLOCK,
 ): Promise<void> {
-  const outcome = await cancelCanaryRun(mcp, runId, retry);
-  if (outcome !== "already_terminal") {
-    throw new Error(
-      `Canary run ${runId} was still live when the canary released it: runs.cancel answered ${outcome}`,
-    );
+  // One idempotency key for the whole release: an unconfirmed cancel hands the
+  // key back, so its retries ask the same question again.
+  const idempotencyKey = randomUUID();
+  const deadline = clock.now() + RELEASE_BUDGET.budgetMs;
+  let attempts = 0;
+  for (;;) {
+    attempts += 1;
+    const answer = await askRunsCancel(mcp, runId, idempotencyKey);
+    if (answer.outcome === "cancelled" && attempts > 1) {
+      // The canary saw this run succeed, so the unconfirmed answers were the
+      // retiring window, and a cancel after it is the full path on a finished run.
+      throw new Error(
+        `Canary run ${runId} finished, but Workflow did not retire the run within the two minute window: runs.cancel answered unconfirmed ${attempts - 1} time${attempts === 2 ? "" : "s"}, then cancelled, so the cancel overwrote its outcome`,
+      );
+    }
+    if (answer.outcome === "cancelled") {
+      throw new Error(
+        `Canary run ${runId} was still live when the canary released it: runs.cancel answered cancelled`,
+      );
+    }
+    if (answer.outcome === "already_terminal") return;
+    if (clock.now() + RELEASE_BUDGET.delayMs > deadline) {
+      throw new Error(
+        `runs.cancel did not confirm run ${runId} within ${RELEASE_BUDGET.budgetMs / 1_000} s (${attempts} attempts): ${answer.reply}`,
+      );
+    }
+    await clock.sleep(RELEASE_BUDGET.delayMs);
   }
 }
 
 /**
  * Before the first dispatch on a fixture ticket: settle whatever could still
- * hold its claim. A live run found here was dispatched outside the canary (the
- * poll, a person), so it is cancelled and reported loudly rather than raced.
+ * hold its claim. Only a run of the fixture's own definition is the canary's to
+ * settle; one of those still live was most likely left by a canary job stopped
+ * mid run (the per pull request cancel, the job timeout). Any other run belongs
+ * to production (its poll dispatching on a ticket left in Ai), which this
+ * target cannot reach: a live one fails the precondition untouched, a finished
+ * one is left for production's reconciler.
  */
 export async function sweepFixtureTicket(
   mcp: CanaryMcpCaller,
-  ticketKey: string,
+  fixture: { ticketKey: string; workflowId: number },
   aiColumn: string,
+  clock: CanaryClock = SYSTEM_CLOCK,
 ): Promise<void> {
+  const { ticketKey, workflowId } = fixture;
   const page = await mcp.call<TicketRunsData>("tickets.list_runs", {
     ticketKey,
     limit: SWEEP_RUN_PAGE_LIMIT,
@@ -532,15 +571,41 @@ export async function sweepFixtureTicket(
   const candidates = page.runs.filter(
     (run, index) => index === 0 || !run.terminal,
   );
-  let cancelledLiveRun = false;
+  const owned: string[] = [];
   for (const run of candidates) {
-    const outcome = await cancelCanaryRun(mcp, run.runId, SWEEP_CANCEL);
-    if (outcome === "cancelled") {
-      cancelledLiveRun = true;
-      console.warn(
-        `[harness-canary] WARNING: cancelled live run ${run.runId} on ${ticketKey}; something dispatched on the fixture ticket outside the canary`,
+    const captured = await readCapturedDefinitionId(mcp, run.runId);
+    if (captured.definitionId === workflowId) {
+      owned.push(run.runId);
+      continue;
+    }
+    if (run.terminal) {
+      const definition =
+        captured.definitionId === null
+          ? `a definition that could not be read from runs.logs (${captured.unreadable})`
+          : `definition ${captured.definitionId}`;
+      console.log(
+        `[harness-canary] ${ticketKey}: leaving finished run ${run.runId} of ${definition} untouched; it is not a run of fixture definition ${workflowId}`,
+      );
+      continue;
+    }
+    if (captured.definitionId === null) {
+      throw new Error(
+        `Fixture ticket ${ticketKey} has live run ${run.runId} whose definition could not be read from runs.logs (${captured.unreadable}): it is unknown whose run it is, so nothing was touched. Settle it where it was dispatched, then run the canary again`,
       );
     }
+    throw new Error(
+      `Fixture ticket ${ticketKey} has live run ${run.runId} of definition ${captured.definitionId}, not fixture definition ${workflowId}: the canary did not dispatch it and leaves it untouched. Production owns it and must settle it first (let it finish or cancel it on production), then run the canary again`,
+    );
+  }
+  let cancelledLiveRun = false;
+  for (const runId of owned) {
+    const settled = await settleCanaryRun(
+      mcp,
+      { runId, ticketKey },
+      "a run of the fixture definition was still live on the fixture ticket, most likely left by a canary job stopped mid run",
+      clock,
+    );
+    cancelledLiveRun ||= settled.cancelledLiveRun;
   }
   const status = await readFixtureTicketAiStatus(mcp, ticketKey, aiColumn);
   if (status === null) return;
@@ -557,6 +622,31 @@ export async function sweepFixtureTicket(
 }
 
 /**
+ * The definition a run's capture was taken from. When runs.logs does not show
+ * one, definitionId is null and unreadable says why (the caught error, or no
+ * captured definition in the reply).
+ */
+async function readCapturedDefinitionId(
+  mcp: CanaryMcpCaller,
+  runId: string,
+): Promise<
+  { definitionId: number } | { definitionId: null; unreadable: string }
+> {
+  try {
+    const overview = await mcp.call<Partial<CanaryRunLogsOverview> | null>(
+      "runs.logs",
+      { runId },
+    );
+    const definitionId = overview?.replay?.definitionId;
+    return typeof definitionId === "number"
+      ? { definitionId }
+      : { definitionId: null, unreadable: "the reply carries no captured definition" };
+  } catch (error) {
+    return { definitionId: null, unreadable: errorMessage(error) };
+  }
+}
+
+/**
  * Everything after a dispatch: the observations, then the release and the Ai
  * check. Any failure among them, the release included, still leaves the target
  * the way the canary found it before the failure is reported.
@@ -565,11 +655,11 @@ export async function finishCanaryRun(
   mcp: CanaryMcpCaller,
   target: { runId: string; ticketKey: string; aiColumn: string },
   observe: () => Promise<void>,
-  retry: CancelRetryPolicy = RELEASE_RETRY,
+  clock: CanaryClock = SYSTEM_CLOCK,
 ): Promise<void> {
   try {
     await observe();
-    await releaseCanaryRun(mcp, target.runId, retry);
+    await releaseCanaryRun(mcp, target.runId, clock);
     await assertFixtureTicketOutsideAiColumn(
       mcp,
       target.ticketKey,
@@ -581,7 +671,7 @@ export async function finishCanaryRun(
       target.runId,
       target.ticketKey,
       target.aiColumn,
-      retry,
+      clock,
     );
     if (cleanupFailure) {
       throw new Error(
@@ -596,18 +686,23 @@ export async function finishCanaryRun(
 /**
  * A failed case still leaves the target the way it found it. The run may be
  * finished (it failed, or an assertion about it did) or live (a timeout, a read
- * that failed mid-poll), so either confirmed outcome of runs.cancel is accepted
- * here. Returns why the cleanup failed, or null.
+ * that failed mid-poll), so it is settled until runs.cancel answers
+ * already_terminal. Returns why the cleanup failed, or null.
  */
 export async function leaveTargetAfterFailedRun(
   mcp: CanaryMcpCaller,
   runId: string,
   ticketKey: string,
   aiColumn: string,
-  retry: CancelRetryPolicy = RELEASE_RETRY,
+  clock: CanaryClock = SYSTEM_CLOCK,
 ): Promise<string | null> {
   try {
-    await cancelCanaryRun(mcp, runId, retry);
+    await settleCanaryRun(
+      mcp,
+      { runId, ticketKey },
+      "the case failed while its run was still live",
+      clock,
+    );
     await assertFixtureTicketOutsideAiColumn(mcp, ticketKey, aiColumn);
     return null;
   } catch (error) {
@@ -615,45 +710,93 @@ export async function leaveTargetAfterFailedRun(
   }
 }
 
-// One idempotency key per logical release, reused by its retries: an
-// unconfirmed cancel hands the key back and the tool asks for the retry under
-// the same key. The next release or sweep is a new question and gets a new key.
-async function cancelCanaryRun(
+/**
+ * Ask runs.cancel until it answers already_terminal, the only answer that
+ * releases the claim and withdraws the ticket. "cancelled" is not final: the
+ * run's steps may still be draining, its claim stays "cancelling" and its
+ * ticket stays in Ai until a later ask converges it. An unconfirmed answer (the
+ * run is still being retired) is asked again too.
+ *
+ * Every ask carries a fresh idempotency key: a key whose call answered
+ * cancelled is stored and would replay cancelled forever.
+ */
+async function settleCanaryRun(
   mcp: CanaryMcpCaller,
-  runId: string,
-  retry: CancelRetryPolicy,
-): Promise<"cancelled" | "already_terminal"> {
-  const idempotencyKey = randomUUID();
-  const sleep = retry.sleep ?? delay;
-  let lastReply = "";
-  for (let attempt = 1; attempt <= retry.attempts; attempt += 1) {
-    let reply: CancelRunData;
-    try {
-      reply = await mcp.call<CancelRunData>("runs.cancel", {
-        runId,
-        idempotencyKey,
-      });
-    } catch (error) {
-      if (!(error instanceof CanaryMcpToolError && error.code === "CONFLICT")) {
-        throw new Error(
-          `runs.cancel did not confirm run ${runId}: ${errorMessage(error)}`,
-          { cause: error },
-        );
-      }
-      lastReply = error.message;
-      if (attempt < retry.attempts) await sleep(retry.delayMs);
-      continue;
-    }
-    if (reply.outcome !== "already_terminal" && reply.outcome !== "cancelled") {
-      throw new Error(
-        `runs.cancel answered an unexpected outcome for run ${runId}: ${JSON.stringify(reply)}`,
+  target: { runId: string; ticketKey: string },
+  whyLive: string,
+  clock: CanaryClock,
+): Promise<{ cancelledLiveRun: boolean }> {
+  const { runId, ticketKey } = target;
+  const deadline = clock.now() + SETTLE_BUDGET.budgetMs;
+  let cancelledLiveRun = false;
+  let unconfirmedBefore = 0;
+  let attempts = 0;
+  for (;;) {
+    attempts += 1;
+    const answer = await askRunsCancel(mcp, runId, randomUUID());
+    if (answer.outcome === "already_terminal") return { cancelledLiveRun };
+    if (answer.outcome === "cancelled" && !cancelledLiveRun) {
+      cancelledLiveRun = true;
+      console.warn(
+        unconfirmedBefore === 0
+          ? `[harness-canary] WARNING: cancelled live run ${runId} on ${ticketKey}; ${whyLive}`
+          : `[harness-canary] WARNING: cancelled run ${runId} on ${ticketKey} after ${unconfirmedBefore} unconfirmed answer${unconfirmedBefore === 1 ? "" : "s"}; if the run had already finished on its own, Workflow did not retire it within the two minute window and the cancel overwrote its outcome`,
       );
     }
-    return reply.outcome;
+    if (answer.outcome === "unconfirmed" && !cancelledLiveRun) {
+      unconfirmedBefore += 1;
+    }
+    if (clock.now() + SETTLE_BUDGET.delayMs > deadline) {
+      const last =
+        answer.outcome === "cancelled"
+          ? "cancelled (the run was still draining)"
+          : answer.reply;
+      throw new Error(
+        `Run ${runId} did not settle to already_terminal within ${SETTLE_BUDGET.budgetMs / 1_000} s (${attempts} runs.cancel attempts); the last answer was ${last}. Its claim may still be held and fixture ticket ${ticketKey} may still be in the Ai column`,
+      );
+    }
+    await clock.sleep(SETTLE_BUDGET.delayMs);
   }
-  throw new Error(
-    `runs.cancel did not confirm run ${runId} after ${retry.attempts} attempt${retry.attempts === 1 ? "" : "s"}: ${lastReply}`,
-  );
+}
+
+type CancelAnswer =
+  | { outcome: "cancelled" }
+  | { outcome: "already_terminal" }
+  | { outcome: "unconfirmed"; reply: string };
+
+/** One runs.cancel call. Only a retryable CONFLICT comes back unconfirmed; any other refusal throws. */
+async function askRunsCancel(
+  mcp: CanaryMcpCaller,
+  runId: string,
+  idempotencyKey: string,
+): Promise<CancelAnswer> {
+  let reply: CancelRunData;
+  try {
+    reply = await mcp.call<CancelRunData>("runs.cancel", {
+      runId,
+      idempotencyKey,
+    });
+  } catch (error) {
+    if (
+      error instanceof CanaryMcpToolError &&
+      error.code === "CONFLICT" &&
+      error.retryable !== false
+    ) {
+      return { outcome: "unconfirmed", reply: error.message };
+    }
+    throw new Error(
+      `runs.cancel did not confirm run ${runId}: ${errorMessage(error)}`,
+      { cause: error },
+    );
+  }
+  if (reply.outcome !== "already_terminal" && reply.outcome !== "cancelled") {
+    throw new Error(
+      `runs.cancel answered an unexpected outcome for run ${runId}: ${JSON.stringify(reply)}`,
+    );
+  }
+  return reply.outcome === "cancelled"
+    ? { outcome: "cancelled" }
+    : { outcome: "already_terminal" };
 }
 
 async function executeCase(
