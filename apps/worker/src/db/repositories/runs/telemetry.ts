@@ -310,8 +310,8 @@ export function recordConnectedRunUsage(usage: RunUsage): Promise<void> {
 
 /**
  * Block-status fields the agent workflow streams mid-run, keyed by the
- * definition node id. Identity is written here too (INSERT only) so a run is
- * attributable to its workflow even when no cron snapshot ever observes it.
+ * definition node id. Identity is written here too so a run is attributable to
+ * its workflow even when no cron snapshot ever observes it.
  */
 export interface RunBlockStatusWrite {
   runId: string;
@@ -333,9 +333,9 @@ export interface RunBlockStatusWrite {
 /**
  * Block-status writer. Upserts per-block progress for one run, owning exactly
  * block_statuses, definition_version and definition_id (plus updated_at).
- * Identity and a "running" status land only on INSERT (same rationale as
- * recordRunUsage); on conflict it touches nothing the cron snapshot or
- * recordRunUsage own.
+ * Identity is written on INSERT and repaired on conflict; a "running" status
+ * lands only on INSERT (same rationale as recordRunUsage), and on conflict
+ * nothing else the cron snapshot or recordRunUsage own is touched.
  */
 export async function recordBlockStatuses(
   db: Db,
@@ -365,6 +365,15 @@ export async function recordBlockStatuses(
         blockStatuses: sql`excluded.block_statuses`,
         definitionVersion: sql`excluded.definition_version`,
         definitionId: sql`excluded.definition_id`,
+        // The repair for a row born without an identity - one created before
+        // the claim insert stamped it, or by any other writer that does not.
+        // Only the agent workflow ever writes block statuses, so both values
+        // here are the same two constants the INSERT above carries and a row
+        // that already has them is rewritten with what it already holds.
+        // Without this a run whose identity was missing stayed "wf_unknown"
+        // with no workflow name until its very last statement.
+        workflowId: sql`excluded.workflow_id`,
+        workflowName: sql`excluded.workflow_name`,
         promptManifest: keepIfNull(workflowRuns.promptManifest, workflowRuns.promptManifest),
         harnessManifests: keepIfNull(
           workflowRuns.harnessManifests,

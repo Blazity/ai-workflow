@@ -1,5 +1,6 @@
 import { and, eq, isNull, or, sql } from "drizzle-orm";
 import {
+  AGENT_WORKFLOW_ID,
   RESERVATION_BIND_GRACE_MS,
   type ActiveRunEntry,
   type FailedTicketMeta,
@@ -18,6 +19,14 @@ import {
   threadParents,
 } from "../schema.js";
 export const STARTUP_DEADLINE_MS = 10 * 60 * 1000;
+
+/**
+ * Display name for the agent workflow, the same literal the block-status
+ * writer, the run-analysis writer and the end-of-run usage write already put in
+ * `workflow_name` (there is no shared constant for it: `@shared/contracts`
+ * exports only the id).
+ */
+const AGENT_WORKFLOW_NAME = "Agent";
 
 export interface ActiveRunOwner {
   subjectKey: string;
@@ -136,6 +145,8 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
       ), started_run as (
         insert into workflow_runs (
           run_id,
+          workflow_id,
+          workflow_name,
           status,
           subject_key,
           ticket_key,
@@ -146,6 +157,8 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
         )
         select
           ${started.runId},
+          ${AGENT_WORKFLOW_ID},
+          ${AGENT_WORKFLOW_NAME},
           'running',
           ${started.subjectKey},
           ${started.ticketKey},
@@ -155,6 +168,18 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
           case when ${markEntryStarted} then now() else null end
         from exact_owner
         on conflict (run_id) do update set
+          -- Identity belongs on the row from its first statement, not from the
+          -- end-of-run usage write. Every run claimed here is an agent run (the
+          -- Post-PR gate never claims a subject; its rows come from the cron
+          -- snapshot), and until this was stamped at the claim a run shorter
+          -- than the 15 minute cron period had a null workflow_id for its whole
+          -- life: it read as "wf_unknown" with no workflow name while running,
+          -- and the completion-pending window closed the instant it opened,
+          -- because the identity and cost_known arrived in the same statement.
+          -- Coalesced, not overwritten: a row another writer created first
+          -- already carries an identity that is at least as good as this one.
+          workflow_id = coalesce(workflow_runs.workflow_id, excluded.workflow_id),
+          workflow_name = coalesce(workflow_runs.workflow_name, excluded.workflow_name),
           subject_key = coalesce(workflow_runs.subject_key, excluded.subject_key),
           ticket_key = coalesce(workflow_runs.ticket_key, excluded.ticket_key),
           status = coalesce(workflow_runs.status, 'running'),
