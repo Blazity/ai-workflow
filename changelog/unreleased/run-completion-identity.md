@@ -1,0 +1,2 @@
+- A run carries its workflow identity from the moment it is claimed, so the dashboard runs list, the trace header and `runs.get` name the workflow while the run is still in progress.
+- `completionPending` on `runs.get`, `runs.result` and `tickets.list_runs` now covers the whole window between a run reaching success and its cost, phases and pull requests being recorded, so an integration polling through MCP waits for the pull request data instead of reading a finished run that reports none.
