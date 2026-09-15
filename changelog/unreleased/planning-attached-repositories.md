@@ -1,1 +1,0 @@
-- Planning moves on with the repositories already in the workspace instead of asking for them again: when every repository the planner names is already attached the run goes straight to planning, a reply of "none" or "no more repositories" to a repository question settles it for the rest of the run, and every repository question a run asks accepts the same answer format.
