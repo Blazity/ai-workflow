@@ -1,5 +1,6 @@
 import type {
   ReplayRedactionClass,
+  ReplaySanitizedEnvelope,
   WorkflowReplayAttemptDetail,
   WorkflowRunReplayResponse,
 } from "@shared/contracts";
@@ -207,13 +208,19 @@ export function createReplayCanaryFixture(nonce: string): ReplayCanaryFixture {
   };
 }
 
-interface ReplayCanaryDatabaseRows {
-  observation: unknown;
-  attempts: unknown[];
+// The run level `runs.logs` reply, the part of it the replay check reads. It is
+// the second surface next to `runs.trace`: the captured runtime manifest the
+// observation row holds and the index of the attempt rows, both served by the
+// product rather than read out of the database.
+export interface ReplayCanaryRunLogs {
+  availability: string;
+  manifest: ReplaySanitizedEnvelope | null;
+  manifestTruncated: boolean;
+  attempts: Array<{ id: number }>;
 }
 
 export interface ReplayCanaryEvidence {
-  databaseRows: ReplayCanaryDatabaseRows;
+  runLogs: ReplayCanaryRunLogs;
   apiSummary: WorkflowRunReplayResponse;
   apiDetails: WorkflowReplayAttemptDetail[];
   // The runtime log text of the rows the log query proved to be inside the run
@@ -273,38 +280,14 @@ function describeType(value: unknown): string {
   return typeof value;
 }
 
-// Both halves of the log-envelope proof are checked upstream as well, so when
-// one fails here the interesting question is what the surface actually held.
-// These render shapes and key names only, never values.
+// The canary waits for these surfaces upstream as well, so when one fails here
+// the interesting question is what the surface actually held. These render
+// shapes only, never values.
 function describeApiLogs(details: WorkflowReplayAttemptDetail[]): string {
   if (details.length === 0) return "no attempt details";
   return details
     .map((detail) => `attempt ${detail.id}: logs ${describeType(detail.logs)}`)
     .join("; ");
-}
-
-function describeDatabaseAttempts(rows: ReplayCanaryDatabaseRows): string {
-  if (rows.attempts.length === 0) return "no attempt rows";
-  return rows.attempts
-    .map((attempt, index) => {
-      const shape = describeType(attempt);
-      if (shape !== "object") {
-        return `row ${index}: payload ${shape}`;
-      }
-      const record = attempt as Record<string, unknown>;
-      const keys = Object.keys(record).slice(0, 12).join(",");
-      return `row ${index}: payload object, isArray false, keys [${keys}], log_envelope ${describeType(record.log_envelope)}`;
-    })
-    .join("; ");
-}
-
-function hasDatabaseLogEnvelope(rows: ReplayCanaryDatabaseRows): boolean {
-  return rows.attempts.some((attempt) => {
-    if (!attempt || typeof attempt !== "object" || Array.isArray(attempt)) {
-      return false;
-    }
-    return (attempt as Record<string, unknown>).log_envelope != null;
-  });
 }
 
 export function assertReplayCanaryEvidence(
@@ -334,9 +317,24 @@ export function assertReplayCanaryEvidence(
       `Replay canary did not capture a log envelope over the replay API: ${describeApiLogs(evidence.apiDetails)}`,
     );
   }
-  if (!hasDatabaseLogEnvelope(evidence.databaseRows)) {
+  if (evidence.runLogs.availability !== "available") {
     throw new Error(
-      `Replay canary did not capture a log envelope in the database: ${evidence.databaseRows.attempts.length} attempts; ${describeDatabaseAttempts(evidence.databaseRows)}`,
+      `Replay run logs did not report an available capture: ${evidence.runLogs.availability}`,
+    );
+  }
+  if (evidence.runLogs.manifest === null || evidence.runLogs.manifestTruncated) {
+    throw new Error(
+      `Replay run logs did not return the runtime manifest: manifest ${describeType(evidence.runLogs.manifest)}, truncated ${evidence.runLogs.manifestTruncated}`,
+    );
+  }
+  const indexed = evidence.runLogs.attempts.map((attempt) => attempt.id).sort((a, b) => a - b);
+  const traced = evidence.apiSummary.attempts.map((attempt) => attempt.id).sort((a, b) => a - b);
+  if (
+    indexed.length !== traced.length ||
+    indexed.some((id, index) => id !== traced[index])
+  ) {
+    throw new Error(
+      `Replay run logs attempt index [${indexed.join(",")}] does not match the trace [${traced.join(",")}]`,
     );
   }
 
@@ -350,8 +348,8 @@ export function assertReplayCanaryEvidence(
   }
 
   assertSurfaceDoesNotContainFixture(
-    "Replay database rows",
-    evidence.databaseRows,
+    "Replay run logs",
+    evidence.runLogs,
     fixture,
   );
   assertSurfaceDoesNotContainFixture(

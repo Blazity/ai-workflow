@@ -1,25 +1,36 @@
-// Engine canary fixture identity: definition ids, the custom Harness Profile
-// pin, its skill artifact, and one ticket per fixture. A fixture change is now
-// a reviewed pull request that edits this file, not a rewrite of unversioned
-// repository variables invisible to the pull request that breaks them.
+// Engine canary fixture identity: definition ids and the deployed version of
+// each, the custom Harness Profile pin, its skill artifact, and one permanent
+// ticket per fixture. A fixture change is a reviewed pull request that edits
+// this file, not a rewrite of unversioned repository variables invisible to the
+// pull request that breaks them.
 //
-// Stage 3 of lanes/plan-engine-canary-gate-refactor.md pins one permanent
-// ticket per fixture in the QA project; only AWP-176 exists today, so all
-// three fixtures share it until the owner opens the other two.
+// The deployed version stands in for the graph the canary can no longer read:
+// workflows.get_graph rides workflows:write, which the machine credential does
+// not hold, so republishing a fixture definition fails the gate until this file
+// names the new version. Before bumping a deployedVersion, review the
+// republished graph: two nodes (trigger_ticket_ai, generic_agent), one edge
+// between them, workspaceMode "none", no update_ticket_status node (the run must
+// not move its own ticket), and the profile pin this file expects.
+//
+// Every ticket lives in the QA project, stays in "Do zrobienia", and carries
+// the replay sanitization fixture text in its description
+// (replay/canary-contract.ts, createReplayCanaryFixture), so any of them can
+// host the replay leg, which rides on the custom fixture's run.
 
-export interface EngineCanarySkillSource {
+interface EngineCanarySkillSource {
   readonly owner: string;
   readonly repository: string;
   readonly path: string;
   readonly commitSha: string;
 }
 
-export interface EngineCanaryFixture {
+interface EngineCanaryFixture {
   readonly workflowId: number;
+  readonly deployedVersion: number;
   readonly ticketKey: string;
 }
 
-export interface EngineCanaryCustomProfileFixture extends EngineCanaryFixture {
+interface EngineCanaryCustomProfileFixture extends EngineCanaryFixture {
   readonly profileId: string;
   readonly profileVersion: number;
   readonly skillName: string;
@@ -36,15 +47,18 @@ export interface EngineCanaryFixtures {
 export const ENGINE_CANARY_FIXTURES: EngineCanaryFixtures = Object.freeze({
   claude: Object.freeze({
     workflowId: 36,
+    deployedVersion: 1,
     ticketKey: "AWP-176",
   }),
   codex: Object.freeze({
     workflowId: 37,
-    ticketKey: "AWP-176",
+    deployedVersion: 1,
+    ticketKey: "AWP-179",
   }),
   custom: Object.freeze({
     workflowId: 38,
-    ticketKey: "AWP-176",
+    deployedVersion: 2,
+    ticketKey: "AWP-180",
     profileId: "d92b9c8b-245d-4725-aa6a-d68b9ddd751f",
     profileVersion: 2,
     skillName: "gate-ladder",
