@@ -510,7 +510,9 @@ vars exposed as GitHub Actions secrets in the `e2e` environment (Repo Settings
 The `engine-canary-scope` job runs on every same-repository pull request, holds
 no secrets, and decides whether the `engine-canary` job runs at all: it does for
 pull requests that change `apps/worker/src/engine/**`, `apps/worker/src/db/**`,
-or `packages/**`. `ci` requires the scope job to succeed and accepts a skipped
+`packages/**`, the run lifecycle (`apps/worker/src/services/run-lifecycle/**`),
+or the canary itself (its runners under `apps/worker/e2e/`, the
+`scripts/ci/engine-canary*` scripts, `.github/workflows/ci.yml`). `ci` requires the scope job to succeed and accepts a skipped
 `engine-canary` only when that job succeeded and said the canary is not needed;
 a failed or cancelled scope job turns `ci` red. With no
 `ENGINE_CANARY_TARGET`, the canary job exits green and emits a warning that the
