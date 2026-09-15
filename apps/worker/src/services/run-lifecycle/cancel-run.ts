@@ -477,7 +477,15 @@ interface LiveRunClaim {
  * or null to let the full cancel path answer.
  *
  * - Workflow has retired the run: release the claim it left behind
- *   (releaseLingeringTerminalClaim) and answer "already_terminal".
+ *   (releaseLingeringTerminalClaim) and answer "already_terminal". When the
+ *   release declines, answer "unconfirmed" and touch nothing, unless the claim is
+ *   already "cancelling": that cancel began earlier and has to converge through
+ *   the full path. The full path is wrong for any other retired run: its
+ *   beginCancellation clears the failed_tickets mark, its cancel reason lands on
+ *   a failed row that has none, a teardown with an unconfirmed drain reports a run
+ *   that ended on its own as cancelled (and settles a schedule occurrence as
+ *   run_cancelled), and for a ticket run it releases the claim with the ticket
+ *   still in Ai and the failed mark gone, so the next poll dispatches it again.
  * - Workflow has not retired it yet (or its status is unreadable) and the stored
  *   completion is within RETIRING_RUN_GRACE_MS: answer "unconfirmed" with
  *   `reason: "retiring"` and touch nothing. The run has committed its outcome
@@ -491,12 +499,14 @@ interface LiveRunClaim {
  *   evidence the run just finished. Either way an operator keeps the power to
  *   kill it.
  *
- * Why the completion time and not cost_known: every terminal writer keeps a
- * completedAt that is already set (terminalCompletionFields and its inline
- * copies use coalesce), and markRunResumed does not clear it. A run that parked,
- * resumed and then hangs after committing "success" therefore still carries the
- * old park time and falls outside the window, while cost_known, set by the park's
- * usage write, would have kept it "retiring" for as long as it hangs.
+ * Why the completion time and not cost_known: completedAt is written only by a
+ * terminal write, and every terminal writer keeps a value that is already set
+ * (terminalCompletionFields and its inline copies use coalesce). A live park does
+ * not touch it (markRunAwaiting sets only the status) and neither does
+ * markRunResumed, so a resumed run carries the completion time of an earlier
+ * terminal write or none, and takes the full path; cost_known says only that a
+ * usage write happened, which a run can make before it is done (a clarification
+ * exit records "awaiting" through it).
  */
 async function answerForFinishedRun(
   claim: LiveRunClaim,
@@ -505,9 +515,22 @@ async function answerForFinishedRun(
   opts: CancelRunByIdDeps,
 ): Promise<CancelRunByIdResult | null> {
   if (await isWorkflowRunRetired(claim.subjectKey, runId)) {
-    return (await releaseLingeringTerminalClaim(claim, runId, opts))
-      ? { outcome: "already_terminal", subjectKey: claim.subjectKey, status: recorded.status }
-      : null;
+    const release = await releaseLingeringTerminalClaim(claim, runId, opts);
+    if (release.released) {
+      return { outcome: "already_terminal", subjectKey: claim.subjectKey, status: recorded.status };
+    }
+    if (release.barrier === "claim_cancelling") return null;
+    logger.warn(
+      {
+        subjectKey: claim.subjectKey,
+        runId,
+        status: recorded.status,
+        barrier: release.barrier,
+        ...(release.error ? { error: release.error } : {}),
+      },
+      "cancel_terminal_run_release_declined",
+    );
+    return { outcome: "unconfirmed", subjectKey: claim.subjectKey };
   }
   const completedAtMs = recorded.completedAt?.getTime();
   const nowMs = (opts.now ?? Date.now)();
@@ -530,8 +553,9 @@ async function answerForFinishedRun(
  * the reconciler does for a terminal run and nothing more. Called only once
  * Workflow reports the run retired (answerForFinishedRun).
  *
- * Four barriers, each of which declines to the full cancel path rather than
- * guessing, so no answer this shortcut refuses to give gets weaker:
+ * Four barriers, each of which declines rather than guessing and names itself in
+ * the result, so the caller can log which one held. The caller answers
+ * "unconfirmed" for every decline except "claim_cancelling":
  *
  * 1. Workflow itself reports the run terminal, checked by the caller. A terminal
  *    STORE status is not enough: markRunSucceededOnSelfMove commits "success"
@@ -541,10 +565,10 @@ async function answerForFinishedRun(
  *    reconciler's readRunOutcomeFromStore has one) because that grace exists to
  *    cover exactly this window, which asking Workflow closes directly, and the
  *    canary needs its claim back seconds after the run ends, not minutes.
- * 2. The claim is still the exact bound owner of this run. "cancelling" is left
- *    alone: it belongs to a cancel that began and did not finish, and converging it
- *    needs the clarification tombstone and the cancelling fence the full path
- *    carries. "parking" and "parked" are a live park.
+ * 2. The claim is still the exact bound owner of this run. "cancelling" goes to
+ *    the full path: it belongs to a cancel that began and did not finish, and
+ *    converging it needs the clarification tombstone and the cancelling fence that
+ *    path carries. "parking" and "parked" are a live park and are not released.
  * 3. Every step has drained (the barrier cleanStoreTerminalRun runs before its
  *    release): a terminal run can still have a handler that started before it went
  *    terminal executing, and releasing under one would let a second run start.
@@ -558,8 +582,8 @@ async function answerForFinishedRun(
  * closed, no clarification is retired and no run status is written. The run keeps
  * the outcome it reached on its own.
  *
- * True also when the claim is already gone, including when the release itself is
- * refused because it went away underneath: the subject is free, which is the whole
+ * Released also when the claim is already gone, including when the release itself
+ * is refused because it went away underneath: the subject is free, which is the whole
  * promise, and the full cancel path would only report an unconfirmed cancellation
  * of a run nobody owns.
  *
@@ -571,40 +595,39 @@ async function releaseLingeringTerminalClaim(
   claim: LiveRunClaim,
   runId: string,
   opts: CancelRunByIdDeps,
-): Promise<boolean> {
+): Promise<TerminalClaimRelease> {
   const { runRegistry } = opts;
 
   let entry: ActiveRunEntry | null;
   try {
     entry = await runRegistry.get(claim.subjectKey);
-  } catch {
-    return false;
+  } catch (error) {
+    return declined("registry_unreadable", error);
   }
-  if (entry === null) return true;
-  if (
-    entry.state !== "bound" ||
-    entry.ownerToken !== claim.ownerToken ||
-    entry.runId !== runId
-  ) {
-    return false;
+  if (entry === null) return { released: true };
+  if (entry.ownerToken !== claim.ownerToken || entry.runId !== runId) {
+    return declined("claim_moved");
+  }
+  if (entry.state === "cancelling") return declined("claim_cancelling");
+  if (entry.state !== "bound") return declined("claim_not_bound");
+
+  if (!(await confirmWorkflowStepsDrained(claim.subjectKey, runId))) {
+    return declined("drain_pending");
   }
 
-  if (!(await confirmWorkflowStepsDrained(claim.subjectKey, runId))) return false;
+  const withdrawal = await withdrawTerminalTicketFromAi(claim, entry, runId, opts);
+  if (withdrawal) return withdrawal;
 
-  if (!(await withdrawTerminalTicketFromAi(claim, entry, runId, opts))) return false;
-
-  const sandboxIds = await runRegistry
-    .listSandboxes(claim.subjectKey, entry.ownerToken)
-    .catch(() => null);
-  if (sandboxIds === null) return false;
+  let sandboxIds: string[];
+  try {
+    sandboxIds = await runRegistry.listSandboxes(claim.subjectKey, entry.ownerToken);
+  } catch (error) {
+    return declined("sandbox_lookup_unconfirmed", error);
+  }
   try {
     await stopSandboxesByIds(sandboxIds);
   } catch (error) {
-    logger.warn(
-      { subjectKey: claim.subjectKey, runId, error: (error as Error).message },
-      "cancel_terminal_run_sandbox_cleanup_unconfirmed",
-    );
-    return false;
+    return declined("sandbox_stop_unconfirmed", error);
   }
 
   const released = await runRegistry
@@ -618,16 +641,44 @@ async function releaseLingeringTerminalClaim(
     let refreshed: ActiveRunEntry | null;
     try {
       refreshed = await runRegistry.get(claim.subjectKey);
-    } catch {
-      return false;
+    } catch (error) {
+      return declined("release_refused", error);
     }
-    if (refreshed !== null) return false;
+    if (refreshed !== null) return declined("release_refused");
   }
   logger.info(
     { subjectKey: claim.subjectKey, runId },
     "cancel_released_already_terminal_run",
   );
-  return true;
+  return { released: true };
+}
+
+/** Which barrier kept a retired run's leftover claim in place. */
+type TerminalClaimDecline = {
+  released: false;
+  barrier:
+    | "registry_unreadable"
+    | "claim_moved"
+    | "claim_cancelling"
+    | "claim_not_bound"
+    | "drain_pending"
+    | "ticket_withdrawal_unavailable"
+    | "ticket_withdrawal_unconfirmed"
+    | "sandbox_lookup_unconfirmed"
+    | "sandbox_stop_unconfirmed"
+    | "release_refused";
+  error?: string;
+};
+
+type TerminalClaimRelease = { released: true } | TerminalClaimDecline;
+
+function declined(
+  barrier: TerminalClaimDecline["barrier"],
+  error?: unknown,
+): TerminalClaimDecline {
+  return error === undefined
+    ? { released: false, barrier }
+    : { released: false, barrier, error: (error as Error).message };
 }
 
 /** Workflow's verdict that the run will not advance again. Unreachable counts as
@@ -655,21 +706,18 @@ async function isWorkflowRunRetired(subjectKey: string, runId: string): Promise<
  * write when it no longer matches the Ai column, under the same owner fence.
  *
  * A ticketless subject (schedule, webhook, PR trigger) has nothing to withdraw and
- * passes straight through.
+ * passes straight through. Returns null when the ticket is out of Ai, else the
+ * decline naming why it could not be proven out.
  */
 async function withdrawTerminalTicketFromAi(
   claim: LiveRunClaim,
   entry: ActiveRunEntry,
   runId: string,
   opts: CancelRunByIdDeps,
-): Promise<boolean> {
-  if (claim.kind !== "ticket" && claim.kind !== "manual_ticket") return true;
+): Promise<TerminalClaimDecline | null> {
+  if (claim.kind !== "ticket" && claim.kind !== "manual_ticket") return null;
   if (!claim.ticketKey || !opts.issueTracker) {
-    logger.warn(
-      { subjectKey: claim.subjectKey, runId, kind: claim.kind },
-      "cancel_terminal_run_ticket_withdrawal_unavailable",
-    );
-    return false;
+    return declined("ticket_withdrawal_unavailable");
   }
   try {
     const [{ env }, { withdrawConnectedTicketFromAiForRun }] = await Promise.all([
@@ -694,13 +742,9 @@ async function withdrawTerminalTicketFromAi(
       // The claim was never closed by this path, so the fence is the bound owner.
       requiredOwnerState: "bound",
     });
-    return true;
+    return null;
   } catch (error) {
-    logger.warn(
-      { subjectKey: claim.subjectKey, runId, error: (error as Error).message },
-      "cancel_terminal_run_ticket_withdrawal_unconfirmed",
-    );
-    return false;
+    return declined("ticket_withdrawal_unconfirmed", error);
   }
 }
 
