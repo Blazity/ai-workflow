@@ -582,15 +582,11 @@ the status reason, so nothing is dropped without saying so.
   route, the Jira comment webhook and the MCP tool all reach it). That function
   reads the answer with the same pure reader the protocol uses, loads the
   catalog snapshot the services tier already exposes, applies the plan in ONE
-  statement that also inserts the `question_answered` row, and passes the
-  answer as read (plus the entries it wrote) in the hook payload it already
-  sends (`answer-core.ts:283`). Two reasons. A person's answer must survive the
-  run that asked it: runs fail after an answer often, and a run that dies
-  between the answer and its next step would otherwise lose the answer, so the
-  next run asks again, which is the defect this plan exists to end. And the
-  resumed run then works from the answer as read, journalled in the hook
-  payload, never from re-reading the text, so there is exactly one reader and a
-  replay sees the same answer.
+  statement that also inserts the `question_answered` row, and then resumes the
+  run exactly as it does today (`answer-core.ts:283`). The reason: a person's
+  answer must survive the run that asked it. Runs fail after an answer often,
+  and a run that dies between the answer and its next step would otherwise lose
+  it, so the next run asks again, which is the defect this plan exists to end.
 - Exactly once: `question_answered` is unique per clarification id, and the
   statement applies the entries only when that row was inserted. A retried
   resume of the same answer (`answer-core.ts:205-209`) writes nothing twice.
@@ -622,20 +618,27 @@ the status reason, so nothing is dropped without saying so.
   already written. The subject may therefore be asked once more by a later run,
   which is the right failure direction: nobody said no, and the trail shows both
   unreadable answers to whoever wonders why the question came back.
-- On `already_applied` the hook payload is rebuilt from the stored
-  `question_answered` row and the current entries, never from a second read of
-  the text, so a retry hours later cannot tell the run something the record
-  does not hold. If the record write fails after the answer was accepted, the
-  answer function reports an error, and the channel's retry of the same answer
-  applies it once and resumes.
-- After a resume the run's context is its frozen scope with the payload's
-  entries merged in, and `selectionAnswered` is true when the answered question
-  was a selection question answered `none` or with repositories; an
-  `unrecognised` answer leaves it false, so the follow-up is asked in the same
-  run and nowhere else.
+- **The resumed run reads the RECORD, never the answer text and never a copy of
+  it in the resume payload.** In one step that cannot retry it reads the
+  subject's scope, its `selectionAnswered` flag, and the verdict of the
+  repository question this run had answered (the trail row for its own run id).
+  That is everything the answer meant: the entries it wrote, whether the
+  selection question is now settled, and whether the answer was unreadable, so
+  the run asks its follow-up. Carrying the answer through the resume payload
+  instead would mean threading a new shape through the workflow graph package's
+  scheduler, invocation context and interpreter, which buys nothing the record
+  does not already hold and adds a cross package change to a stage that must
+  not move a step. A re-read also sees a panel edit made between the answer and
+  the wake, which is the fresher truth rather than a staler one.
+- On `already_applied` nothing more is written, and the resumed run reads the
+  record anyway, so a retry hours later cannot tell the run something the
+  record does not hold. If the record write fails after the answer was
+  accepted, the answer function reports an error, and the channel's retry of
+  the same answer applies it once and resumes.
 - A clarification whose row carries no asked repositories (any question that is
   not about repositories, and a question asked before this ships) writes
-  nothing to the record, and its hook payload carries no read answer.
+  nothing to the record, and the run that resumes on it behaves exactly as it
+  does today.
 - A person's answer and a person's edit ignore the trigger policy on purpose
   (A10). The three per request bound is in the table. The round limit stays in
   the protocol, and it refuses the model (`rounds_exhausted`) instead of asking
@@ -657,9 +660,10 @@ the status reason, so nothing is dropped without saying so.
   (`apps/worker/src/engine/blocks/prepare-workspace/execute.ts:830-836`) and
   `latestClarificationAnswer` finds that one
   (`apps/worker/src/engine/pre-sandbox/steps/repo-selection.ts:1016-1024`), since
-  no Jira comment carries that author. It is replaced anyway, by the answer as
-  read that the hook payload carries, so the selection and the record read the
-  answer once and identically.
+  no Jira comment carries that author. It stops being testimony about
+  repositories anyway: the answer was read and recorded when it arrived, and
+  the resumed run takes its repositories from the record. The synthetic comment
+  stays only because the model's context reads it.
 - The in-run expansion validator consults the work scope before the catalog:
   an `unavailable` or `excluded` entry answers the request without a question.
 - An approved plan stays frozen. The approval row keeps the immutable
@@ -674,8 +678,8 @@ the status reason, so nothing is dropped without saying so.
 - A previous run's clarification answers stay in the agent's context and in
   the trigger output as history; they no longer steer repository decisions.
   The only place that re-applied them, the human expansion re-read at the top
-  of the research loop, takes the current run's answer from the hook payload
-  and everything earlier from the work scope.
+  of the research loop, takes everything from the work scope, which holds the
+  current run's answer because the answer path wrote it on arrival.
 
 ### The repository map
 
@@ -833,7 +837,7 @@ nobody reads it.
 | Repository map rendering (pure) | ranked, capped index text from a catalog snapshot, attached keys, ticket terms and the scope | `apps/worker/src/sandbox/context.ts:129-161` (research prompt), `assembleRepositoryDiscoveryPrompt`, `runner.ts:56-97` |
 | Trigger policy validation | a trigger node with a policy validates; unknown keys and an expansion rule the kind does not allow are refused | the per-kind `.strict()` config schemas at `apps/worker/src/engine/definition/block-params-schemas.ts:66,131,199,294` and their tests in `block-params-schemas.test.ts:10` |
 | Decision trail append, run side | an attach, a refusal or an automatic choice appends one line naming the repository, the origin and the reason, inside the step that already attaches and already writes | `attachResearchRepositoriesStep`, `apps/worker/src/engine/steps/phase.ts:527` with its existing write at `:581`; the actor and reason columns of `repository_profile_versions`, `apps/worker/src/db/repositories/repository-catalog.ts:556` |
-| Answer recorded on arrival | an answer to a repository question writes its entries and its `question_answered` row once, in one statement, from the shared answer function, and a retried resume of the same answer writes nothing; the hook payload carries the answer as read | `answerClarificationAndResumeWithPersistence`, `apps/worker/src/services/clarifications/answer-core.ts:194`, its status guard at `:205-209` and its resume at `:283` |
+| Answer recorded on arrival | an answer to a repository question writes its entries and its `question_answered` row once, in one statement, from the shared answer function, and a retried resume of the same answer writes nothing; the resumed run reads the record rather than any copy of the answer | `answerClarificationAndResumeWithPersistence`, `apps/worker/src/services/clarifications/answer-core.ts:194`, its status guard at `:205-209` and its resume at `:283` |
 | Run repository report (read) | one read returns what a run used and why, its rounds, its requests with verdicts, and the map it was shown | `workflow_runs.analysis_report`, `apps/worker/src/db/schema/runs.ts:93` and `apps/worker/src/engine/support/run-analysis-report.ts:44-81`, unread by any MCP tool today |
 | MCP parity | `work_scope.get` and `work_scope.set` answer exactly what the API routes answer | `apps/worker/src/mcp/tools/repositories.ts:363` and `pnpm run mcp:contract:generate` |
 | Cross-run behaviour (engine test) | a second run on a subject inherits the first run's entries and asks nothing about them | `apps/worker/src/engine/tests/multi-repo-research.test.ts:406-860`, `makeCtx` in `apps/worker/src/engine/blocks/support/test-support.ts:154` |
@@ -997,10 +1001,10 @@ nobody reads it.
 - A28. The second skeptic pre-mortem (2026-09-15) raised ten majors and no
   blocker; every one was verified and fixed rather than deferred, because each
   broke the ask-once promise or the evidence. Refusals now ride steps that
-  cannot retry them; a second unreadable answer closes as `none`; the run's
-  context after a resume is defined; `unusable` expires once usable; an answer
-  is read against the asked keys too, a retry rebuilds its payload from the
-  record, and a failed record write is retried by the channel; a repository
+  cannot retry them; the run's context after a resume is defined and read from
+  the record; `unusable` expires once usable; an answer is read against the
+  asked keys too, a retry writes nothing because the record already holds the
+  answer, and a failed record write is retried by the channel; a repository
   outside the policy under `ask_once` is asked about once, whatever its
   availability, and a provider outside the pin never; the edit cap is gone; pull
   request runs read the scope (stage 4 owns their selection step); the evidence
