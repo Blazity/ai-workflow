@@ -27,12 +27,15 @@ import type { RepositoryCatalogEntry } from "../repository-discovery/catalog.js"
 import {
   decideRepositoryExpansion,
   offerableRepositoryCatalog,
+  repositoryExpansionPlans,
   repositoryExpansionRefusalPlan,
   repositoryExpansionRefusalSentence,
   validateRepositoryExpansionRequests,
 } from "../repository-discovery/runner.js";
+import { appendRunClarificationRound, createRepositoryQuestions } from "../agent-workflow.js";
 import { applyHumanRepositoryExpansion } from "../steps/phase.js";
-import { createRunWorkScopeRecorder } from "../work-scope/context.js";
+import { consumeWorkScopeAsk, createRunWorkScopeRecorder } from "../work-scope/context.js";
+import type { EngineCtx } from "../blocks/support/types.js";
 import { makeCtx } from "../blocks/support/test-support.js";
 
 const SUBJECT = "ticket:jira:AWT-1";
@@ -236,7 +239,12 @@ describe("the record answers an expansion request before the catalog does", () =
     });
     expect(sentence).toContain("github:acme/api");
     expect(sentence).toContain("Ada Lovelace");
-    expect(sentence).toContain("2026-09-10");
+    // The DAY, not the instant. This sentence is read by the model and by a
+    // person in a ticket comment; a timestamp to the millisecond is precision
+    // neither can act on, and it invites a reader to reason about an hour
+    // nobody told them the timezone of.
+    expect(sentence).toContain("on 2026-09-10,");
+    expect(sentence).not.toContain("T08:30:00");
   });
 });
 
@@ -405,6 +413,61 @@ describe("every guard rail of the expansion protocol refuses the model", () => {
     ]);
   });
 
+  it("plans no entry for a repository it drops to ask about another", () => {
+    // The model asked for one repository it can have and one nobody knows. The
+    // record decides the whole request in one call, so it counted the first as
+    // attached before the question about the second dropped it: the run parks,
+    // clones nothing, and the entry would say this work touches a repository
+    // the run never took (A44).
+    const attached = [{ provider: "github" as const, repoPath: "acme/web" }];
+    const record = recorderFor({ scope: null, catalog, attached });
+
+    const verdict = validateAgainstRecord({
+      requests: [requestFor("github", "acme/api"), requestFor("github", "acme/unknown")],
+      catalog,
+      attached,
+      record,
+    });
+
+    expect(verdict.kind).toBe("clarification_needed");
+    if (verdict.kind !== "clarification_needed") return;
+    expect(verdict.workScopeAsk).toEqual([
+      { repositoryKey: "github:acme/unknown", askedBecause: "not_enabled" },
+    ]);
+    // The decision did plan the attach it then dropped, which is why the caller
+    // may not write what the record planned without asking the verdict first.
+    expect(record.plans.flatMap((plan) => plan.upserts)).toHaveLength(1);
+    const written = repositoryExpansionPlans(verdict, record.plans);
+    expect(written.flatMap((plan) => plan.upserts)).toEqual([]);
+    expect(written.flatMap((plan) => plan.trail)).toEqual([]);
+  });
+
+  it("keeps the entries of a request it honoured beside the refusals", () => {
+    // The other half of the same rule: a verdict that DOES carry repositories
+    // writes their entries, so dropping the plan wholesale would lose an attach
+    // the run really made.
+    const record = recorderFor({
+      scope: scopeOf(entry("github:acme/jobs", "excluded")),
+      catalog,
+      attached: [{ provider: "github", repoPath: "acme/web" }],
+    });
+
+    const verdict = validateAgainstRecord({
+      requests: [requestFor("github", "acme/api"), requestFor("github", "acme/jobs")],
+      catalog,
+      attached: [{ provider: "github", repoPath: "acme/web" }],
+      record,
+    });
+
+    expect(verdict.kind).toBe("refused");
+    if (verdict.kind !== "refused") return;
+    expect(verdict.repositories.map((repo) => repo.repoPath)).toEqual(["acme/api"]);
+    const written = repositoryExpansionPlans(verdict, record.plans);
+    expect(written.flatMap((plan) => plan.upserts).map((upsert) => upsert.entry.repositoryKey)).toEqual([
+      "github:acme/api",
+    ]);
+  });
+
   it("carries a refusal on to research rather than parking the run, and closes the rounds it used up", () => {
     const record = recorderFor({ scope: null, catalog });
     const requests = [requestFor("github", "acme/api")];
@@ -441,28 +504,83 @@ describe("an expansion question carries the repositories it asked about", () => 
   ];
   const attached = [{ provider: "github" as const, repoPath: "acme/web" }];
 
-  it("gives a second question in the same run its own repositories, never the first one's", () => {
+  /** One expansion pass, as the run makes it: a recorder of its own, the
+   *  verdict, and the question raised through the one door. What comes back is
+   *  what the clarification row would carry. */
+  function askThrough(
+    questions: ReturnType<typeof createRepositoryQuestions>,
+    ctx: EngineCtx,
+    request: ReturnType<typeof requestFor>,
+  ) {
     const record = recorderFor({ scope: null, catalog, attached, policy: listed });
-
-    const first = validateAgainstRecord({
-      requests: [requestFor("github", "acme/api")],
+    const verdict = validateAgainstRecord({
+      requests: [request],
       catalog,
       attached,
       record,
     });
-    const second = validateAgainstRecord({
-      requests: [requestFor("github", "acme/jobs")],
-      catalog,
-      attached,
-      record,
-    });
+    expect(verdict.kind).toBe("clarification_needed");
+    questions.raise(
+      verdict.kind === "clarification_needed" ? verdict.questions : [],
+      verdict.kind === "clarification_needed" && verdict.workScopeAsk
+        ? { subjectKey: record.subjectKey, askedRepositories: verdict.workScopeAsk }
+        : null,
+    );
+    // The park chain TAKES the field, which is how a later question cannot
+    // inherit this one's repositories.
+    return consumeWorkScopeAsk(ctx);
+  }
 
-    expect(first.kind === "clarification_needed" && first.workScopeAsk).toEqual([
-      { repositoryKey: "github:acme/api", askedBecause: "outside_policy" },
+  it("gives a second question in the same run its own repositories, never the first one's", () => {
+    // A fresh recorder per pass is how the run works, so the cumulative ask of
+    // one recorder proves nothing; what the second clarification row carries
+    // does.
+    const ctx = makeCtx();
+    const questions = createRepositoryQuestions(ctx);
+
+    const first = askThrough(questions, ctx, requestFor("github", "acme/api"));
+    const second = askThrough(questions, ctx, requestFor("github", "acme/jobs"));
+
+    expect(first).toEqual({
+      subjectKey: SUBJECT,
+      askedRepositories: [
+        { repositoryKey: "github:acme/api", askedBecause: "outside_policy" },
+      ],
+    });
+    expect(second).toEqual({
+      subjectKey: SUBJECT,
+      askedRepositories: [
+        { repositoryKey: "github:acme/jobs", askedBecause: "outside_policy" },
+      ],
+    });
+  });
+
+  it("repeats a question this run could not read an answer to with the repositories it asked about", () => {
+    // The second answer must be able to settle what the first one did not: a
+    // follow-up naming no repository has its answer dropped as well, and the
+    // next run asks the same person the same thing a third time (A41).
+    const ctx = makeCtx();
+    const questions = createRepositoryQuestions(ctx);
+    const asked = askThrough(questions, ctx, requestFor("github", "acme/api"));
+
+    const followUp = questions.repeat([
+      "Repository expansion: that answer named no repository this run can use.",
     ]);
-    expect(second.kind === "clarification_needed" && second.workScopeAsk).toEqual([
-      { repositoryKey: "github:acme/jobs", askedBecause: "outside_policy" },
-    ]);
+
+    expect(followUp.kind).toBe("needs_human_input");
+    expect(ctx.workScopeAsk).toEqual(asked);
+  });
+
+  it("carries nothing on a question raised by a run that froze no record", () => {
+    const ctx = makeCtx();
+    const questions = createRepositoryQuestions(ctx);
+
+    questions.raise(["Repository expansion: which repository should this run add?"], null);
+    expect(ctx.workScopeAsk).toBeUndefined();
+    // And the follow-up invents nothing either: there is no record to write an
+    // answer to, which is what every run did before the record existed.
+    questions.repeat(["Repository expansion: say it again"]);
+    expect(ctx.workScopeAsk).toBeUndefined();
   });
 });
 
@@ -508,17 +626,27 @@ describe("discovery offers the model only what the record allows", () => {
 describe("a resumed run reads the record, never the answer text", () => {
   const v2Manifest = { version: 2 as const, repositories: [] };
 
-  function resumedCtx(answer: string) {
+  /** `makeCtx` runs as `run-1`, so a round carrying that id is this run's own
+   *  question and anything else is a round some earlier run asked. */
+  function resumedCtx(
+    answer: string,
+    options: { askedBy?: string | null; workScope?: EngineCtx["workScope"] } = {},
+  ) {
+    const askedBy = options.askedBy === undefined ? "run-1" : options.askedBy;
     return makeCtx({
       sandboxId: "sbx-research",
       workspaceManifest: v2Manifest,
       selectedRepositories: [repository("github", "acme/web")],
       clarifications: [
-        {
-          questions: ["Repository expansion: which repository should this run add?"],
-          answer,
-        },
+        Object.assign(
+          {
+            questions: ["Repository expansion: which repository should this run add?"],
+            answer,
+          },
+          askedBy === null ? {} : { runId: askedBy },
+        ),
       ],
+      ...(options.workScope ? { workScope: options.workScope } : {}),
     });
   }
 
@@ -552,6 +680,84 @@ describe("a resumed run reads the record, never the answer text", () => {
     });
   });
 
+  /** The contexts the resumed pass hands back once the answer has been used:
+   *  the record has nothing left to offer, because what it held is attached. */
+  const nothingLeftToAttach = {
+    unreadable: {
+      decision: { kind: "unrecognised_answer" as const, questions: ["say it again"] },
+      workScope: { repositories: [] },
+    },
+    unusable: {
+      decision: {
+        kind: "clarification_needed" as const,
+        questions: ["Repository expansion: github:acme/db has no default branch."],
+        unavailable: [{ provider: "github" as const, repoPath: "acme/db" }],
+      },
+      workScope: { repositories: [] },
+    },
+  };
+
+  async function attachThenPassAgain(second: { decision: unknown; workScope: unknown }) {
+    const ctx = resumedCtx("yes please");
+    const attach = vi.fn(async () => ({ manifest: v2Manifest, cloneDurationMs: 3 }));
+    const resolve = vi
+      .fn()
+      .mockResolvedValueOnce({
+        decision: { kind: "unrecognised_answer", questions: ["say it again"] },
+        workScope: { repositories: [repository("github", "acme/api")] },
+      })
+      .mockResolvedValue(second);
+    const deps = {
+      resolve,
+      attach,
+      fetchContexts: async (repositories: ReturnType<typeof repository>[]) =>
+        repositories.map((repo) => ({
+          repository: repo,
+          prComments: [],
+          checkResults: [],
+          hasConflicts: false,
+        })),
+    };
+    const first = await applyHumanRepositoryExpansion(ctx, deps);
+    // What the planning block does after an attach: `continue`, which runs this
+    // same pass again on the same latest round.
+    const again = await applyHumanRepositoryExpansion(ctx, deps);
+    return { ctx, first, again, attach };
+  }
+
+  it("asks nothing further of the person whose answer it just attached", async () => {
+    // The record answered "yes please" when it arrived and this pass attached
+    // what it chose. By the next pass the record has nothing left to hand back,
+    // so all that remains is the sentence, which the text parser cannot read.
+    // Asking about it would put a question to somebody seconds after they
+    // approved, about a repository already cloned, and their reply to THAT
+    // question would be recorded against the repositories the first one asked
+    // about, overwriting the decision they had just made.
+    const { first, again, attach, ctx } = await attachThenPassAgain(
+      nothingLeftToAttach.unreadable,
+    );
+
+    expect(first.kind).toBe("attached");
+    expect(again.kind).toBe("noop");
+    expect(attach).toHaveBeenCalledOnce();
+    // Nor is the consumed answer allowed to spend one of the two unreadable
+    // answers that close expansion: the person answered perfectly well.
+    expect(ctx.repositoryExpansion.unrecognisedAnswers).toBeUndefined();
+    expect(ctx.repositoryExpansion.expansionClosed).toBeUndefined();
+  });
+
+  it("asks nothing further about a repository the same answer named and the run cannot use", async () => {
+    // The other question the pass after an attach can raise: the answer named a
+    // second repository that cannot be attached. That was recorded when the
+    // answer arrived too, so re-asking is the same repeated question with the
+    // same overwriting reply behind it.
+    const { first, again, ctx } = await attachThenPassAgain(nothingLeftToAttach.unusable);
+
+    expect(first.kind).toBe("attached");
+    expect(again.kind).toBe("noop");
+    expect(ctx.repositoryExpansion.unrecognisedAnswers).toBeUndefined();
+  });
+
   it("falls back to the protocol reader when the record recorded no new selection", async () => {
     // "none" writes an unavailable entry and selects nothing, so there is
     // nothing to attach and the run closes expansion exactly as it does today.
@@ -568,6 +774,77 @@ describe("a resumed run reads the record, never the answer text", () => {
 
     expect(result.kind).toBe("noop");
     expect(ctx.repositoryExpansion.expansionClosed).toBe("human");
+  });
+
+  it("leaves a previous run's answer to the previous run, and keeps expansion open", async () => {
+    // Run 1 asked about a repository and a person answered "none". Every run on
+    // the ticket reads the whole answered history, so that round is run 2's
+    // latest one: applying it here closed run 2's expansion before its model had
+    // said a word, and the first repository run 2 genuinely needed then failed
+    // the run on a decision nobody had made about it (A42).
+    const ctx = resumedCtx("none", { askedBy: "run-0" });
+    const resolve = vi.fn();
+
+    const result = await applyHumanRepositoryExpansion(ctx, {
+      resolve,
+      attach: vi.fn(),
+      fetchContexts: vi.fn(),
+    });
+
+    expect(result.kind).toBe("noop");
+    expect(resolve).not.toHaveBeenCalled();
+    expect(ctx.repositoryExpansion.expansionClosed).toBeUndefined();
+    // What run 2 does next with a repository the record decided nothing about:
+    // it attaches it, where the re-applied answer used to fail the run.
+    const requests = [requestFor("github", "acme/api")];
+    const { action } = decideRepositoryExpansion({
+      origin: "model",
+      verdict: { kind: "attach", repositories: [repository("github", "acme/api")] },
+      state: ctx.repositoryExpansion,
+      requests,
+    });
+    expect(action.kind).toBe("attach");
+  });
+
+  it("gives the answer reader the question that was asked, not only the reply", async () => {
+    // Our own words are not testimony: every channel a person answers through
+    // quotes the question back, so the reader has to be able to tell the two
+    // apart. It can only do that if the caller hands it the question.
+    const ctx = resumedCtx("yes please");
+    const resolve = vi.fn(async () => ({
+      decision: { kind: "exhausted" as const },
+      workScope: { repositories: [] },
+    }));
+
+    await applyHumanRepositoryExpansion(ctx, {
+      resolve,
+      attach: vi.fn(),
+      fetchContexts: vi.fn(),
+    });
+
+    expect(resolve).toHaveBeenCalledWith(
+      "yes please",
+      expect.anything(),
+      ctx.clarifications?.at(-1)?.questions,
+    );
+  });
+
+  it("re-applies nothing for a round that names no run at all", async () => {
+    // Only a journal written before the round carried a run id can produce one,
+    // and an answer from a run nobody can name is not worth the risk of closing
+    // this run's expansion with it: the question is asked again instead.
+    const ctx = resumedCtx("none", { askedBy: null });
+    const resolve = vi.fn();
+
+    const result = await applyHumanRepositoryExpansion(ctx, {
+      resolve,
+      attach: vi.fn(),
+      fetchContexts: vi.fn(),
+    });
+
+    expect(result.kind).toBe("noop");
+    expect(resolve).not.toHaveBeenCalled();
+    expect(ctx.repositoryExpansion.expansionClosed).toBeUndefined();
   });
 
   it("takes the old path when the run froze no work scope", async () => {
@@ -593,16 +870,179 @@ describe("a resumed run reads the record, never the answer text", () => {
   });
 });
 
+describe("this run's own answered round stays identifiable as this run's", () => {
+  const asked = ["Repository expansion: research requested github:acme/api"];
+
+  it("keeps a round whose question and answer an earlier run already saw", () => {
+    // The prompt's dedupe is on the text alone, which is right for the prompt
+    // and fatal here: it would drop this run's live answer, the re-apply would
+    // see only the round an earlier run asked, and this run would park on the
+    // same question again with nothing left able to end it.
+    const earlier = { questions: asked, answer: "none", runId: "run-0" };
+    const mine = { questions: asked, answer: "none", runId: "run-1" };
+
+    const history = appendRunClarificationRound([earlier], mine);
+
+    expect(history).toEqual([earlier, mine]);
+  });
+
+  it("still drops a retry of the same run's own answer", () => {
+    const mine = { questions: asked, answer: "none", runId: "run-1" };
+
+    expect(
+      appendRunClarificationRound([mine], { questions: [...asked], answer: "none", runId: "run-1" }),
+    ).toEqual([mine]);
+  });
+});
+
+describe("what this run's own question settled decides the rounds after it", () => {
+  const v2Manifest = { version: 2 as const, repositories: [] };
+  const listed: TriggerRepositoryPolicy = {
+    candidates: { kind: "listed", repositoryKeys: ["github:acme/web"] },
+    expansion: "ask_once",
+  };
+  const catalog = [catalogEntry("github", "acme/web"), catalogEntry("github", "acme/api")];
+  const attached = [{ provider: "github" as const, repoPath: "acme/web" }];
+
+  /** The run as it wakes on the answer to its own question: it froze a record
+   *  that said nothing, and the answer path has since written the exclusion. */
+  async function resumeAfterAnswer() {
+    const ctx = makeCtx({
+      sandboxId: "sbx-research",
+      workspaceManifest: v2Manifest,
+      selectedRepositories: [repository("github", "acme/web")],
+      clarifications: [
+        {
+          questions: ["Repository expansion: research requested github:acme/api"],
+          answer: "none",
+          runId: "run-1",
+        },
+      ],
+      workScope: { subjectKey: SUBJECT, scope: null, selectionAnswered: false },
+    });
+    const answered = scopeOf(entry("github:acme/api", "excluded"));
+    const result = await applyHumanRepositoryExpansion(ctx, {
+      // What the resumed step read back: the record the answer left, and
+      // nothing new to attach because the person declined it.
+      resolve: async () => ({
+        decision: { kind: "exhausted" },
+        // What the step read back: the record as the answer left it, and the
+        // flag from the same read saying a person has now chosen.
+        workScope: { repositories: [], scope: answered, selectionAnswered: true },
+      }),
+      attach: vi.fn(),
+      fetchContexts: vi.fn(),
+    });
+    return { ctx, result, answered };
+  }
+
+  it("installs the record as the answer left it, the selection flag with it", async () => {
+    const { ctx, answered } = await resumeAfterAnswer();
+
+    expect(ctx.workScope?.scope).toEqual(answered);
+    // The flag rides with the entries because it comes from the same read of
+    // the same record and answers the same question: has a person chosen for
+    // this subject. Left frozen, the run asks the selection question again
+    // after its own answer settled it.
+    expect(ctx.workScope?.selectionAnswered).toBe(true);
+    // And the policy does NOT move, because a policy that changed mid-run would
+    // give one run two different filters (A17, A10).
+    expect(ctx.workScope?.subjectKey).toBe(SUBJECT);
+  });
+
+  it("refuses a repository the person just excluded instead of asking them again", async () => {
+    const { ctx } = await resumeAfterAnswer();
+
+    // The pass after the answer builds its recorder from the run context, so
+    // the model asking again is refused with the decision the person just made
+    // instead of parking them on the question they have answered.
+    const record = recorderFor({
+      scope: ctx.workScope?.scope ?? null,
+      catalog,
+      attached,
+      policy: listed,
+    });
+    const verdict = validateAgainstRecord({
+      requests: [requestFor("github", "acme/api")],
+      catalog,
+      attached,
+      record,
+    });
+
+    expect(verdict.kind).toBe("refused");
+    expect(record.ask).toEqual([]);
+  });
+
+  it("names who excluded the repository in the refusal, for an exclusion made in this run", async () => {
+    const { ctx } = await resumeAfterAnswer();
+    const record = recorderFor({
+      scope: ctx.workScope?.scope ?? null,
+      catalog,
+      attached,
+      policy: listed,
+    });
+    const verdict = validateAgainstRecord({
+      requests: [requestFor("github", "acme/api")],
+      catalog,
+      attached,
+      record,
+    });
+    expect(verdict.kind).toBe("refused");
+    if (verdict.kind !== "refused") return;
+
+    // The lookup the expansion closure makes, against the same run context.
+    const recorded = new Map(
+      (ctx.workScope?.scope?.entries ?? []).map((row) => [row.repositoryKey, row] as const),
+    );
+    const decided = recorded.get("github:acme/api");
+    expect(decided).toBeDefined();
+    const sentence = repositoryExpansionRefusalSentence(
+      verdict.refusals[0]!,
+      decided ? { decidedBy: decided.decidedBy, decidedAt: decided.decidedAt } : undefined,
+    );
+
+    expect(sentence).toContain("Ada Lovelace");
+    expect(sentence).toContain("2026-09-10");
+  });
+
+  it("leaves the run on its frozen record when the step returned none", async () => {
+    // The shape a run suspended before this shipped replays: repositories and
+    // no record beside them. Moving nothing is what that run did.
+    const frozen = { subjectKey: SUBJECT, scope: scopeOf(), selectionAnswered: false };
+    const ctx = makeCtx({
+      sandboxId: "sbx-research",
+      workspaceManifest: v2Manifest,
+      selectedRepositories: [repository("github", "acme/web")],
+      clarifications: [
+        {
+          questions: ["Repository expansion: research requested github:acme/api"],
+          answer: "none",
+          runId: "run-1",
+        },
+      ],
+      workScope: frozen,
+    });
+
+    await applyHumanRepositoryExpansion(ctx, {
+      resolve: async () => ({
+        decision: { kind: "exhausted" },
+        workScope: { repositories: [] },
+      }),
+      attach: vi.fn(),
+      fetchContexts: vi.fn(),
+    });
+
+    expect(ctx.workScope).toBe(frozen);
+  });
+});
+
 /**
- * A source tripwire, in the style of the one above `prepareClarificationHookStep`
+ * Source tripwires, in the style of the one above `prepareClarificationHookStep`
  * in `work-scope-run-paths.test.ts`.
  *
  * The expansion loop is a closure inside `agentWorkflowBody` that no test can
- * invoke. What `consumeWorkScopeAsk` does is proved in `work-scope/context.test.ts`;
- * this asserts the one thing left: that the expansion still puts its asked
- * repositories on the run context before it parks on the question. A question
- * that reaches a person without them settles nothing, because the answer path
- * drops an answer whose clarification names no repository.
+ * invoke, so the two things a test can still hold are shapes: which functions
+ * apply a write plan, and how a question about repositories is raised.
  */
 const workflowLines = readFileSync(
   fileURLToPath(new URL("../agent-workflow.ts", import.meta.url)),
@@ -614,27 +1054,58 @@ const phaseSource = readFileSync(
   "utf8",
 );
 
+/**
+ * Every function in `source` that CALLS `name`, its own declaration excepted.
+ *
+ * Top-level declarations only, which is how every step and helper in `phase.ts`
+ * is written; a call from anywhere else answers `<file scope>` and fails the
+ * enumeration below rather than passing unnoticed.
+ */
+function callersOf(source: string, name: string): string[] {
+  const callers: string[] = [];
+  let enclosing = "<file scope>";
+  for (const line of source.split("\n")) {
+    const declared = /^(?:export )?(?:async )?function (\w+)[(<]/u.exec(line);
+    if (declared?.[1]) enclosing = declared[1];
+    if (!line.includes(`${name}(`) || declared) continue;
+    if (!callers.includes(enclosing)) callers.push(enclosing);
+  }
+  return callers;
+}
+
 describe("nothing the expansion decides is written in workflow scope", () => {
   it("applies a plan only from a step the file gives maxRetries = 0", () => {
     // Workflow scope replays on every wake of a parked run, so a write there
-    // would append the trail a second time. The carriers are named here so a
-    // plan moved onto a retrying step is caught by a test rather than by a
-    // duplicated line in production.
-    const carriers = phaseSource
-      .split("\n")
-      .filter((line) => line.includes("applyRunWorkScopePlans("))
-      .filter((line) => !line.startsWith("async function"));
-    expect(carriers.length, "the plan appliers moved out of phase.ts").toBeGreaterThan(0);
+    // would append the trail a second time. EVERY caller is enumerated, not a
+    // sample of three: a plan applied from a new place inside a retrying step
+    // would otherwise keep this green while every retry appended the trail
+    // again.
+    const carriers: Record<string, string> = {
+      // what calls the applier: the step whose maxRetries = 0 covers that call
+      writeAndStartPhase: "writeAndStartPhase",
+      attachResearchRepositoriesStep: "attachResearchRepositoriesStep",
+      resumeFromWorkScope: "resolveHumanRepositoryExpansionStep",
+    };
+    const callers = callersOf(phaseSource, "applyRunWorkScopePlans");
 
-    for (const step of [
-      "writeAndStartPhase",
-      "attachResearchRepositoriesStep",
-      "resolveHumanRepositoryExpansionStep",
-    ]) {
+    expect(callers.length, "the plan appliers moved out of phase.ts").toBeGreaterThan(0);
+    expect(
+      [...callers].sort(),
+      "a function applies a work scope plan that this enumeration does not recognise",
+    ).toEqual(Object.keys(carriers).sort());
+
+    for (const [caller, step] of Object.entries(carriers)) {
       expect(
         phaseSource.includes(`${step}.maxRetries = 0;`),
         `${step} carries a work scope plan and may not retry`,
       ).toBe(true);
+      // A helper is only as safe as the steps that reach it, so the helpers get
+      // their own callers checked too.
+      if (caller === step) continue;
+      expect(
+        callersOf(phaseSource, caller),
+        `${caller} applies a work scope plan and is now reached from somewhere else`,
+      ).toEqual([step]);
     }
     expect(
       workflowLines.some((line) => line.includes("applyRunWorkScopePlans(")),
@@ -643,17 +1114,89 @@ describe("nothing the expansion decides is written in workflow scope", () => {
   });
 });
 
-describe("the expansion ask reaches the question it was raised for", () => {
-  it("sets the asked repositories on the run context beside the expansion clarification", () => {
-    const index = workflowLines.findIndex((line) =>
-      line.includes("decideRepositoryExpansion({"),
-    );
-    expect(index, "the expansion decision is no longer made in agent-workflow.ts").toBeGreaterThan(-1);
+/**
+ * Every place in `agent-workflow.ts` that hands a run back PARKED ON A
+ * QUESTION, with the top-level function it sits in.
+ *
+ * Two shapes park a run, and a scan that knew only the first would promise more
+ * than it holds: a call to the `planningClarificationResult` envelope, and the
+ * same object written out by hand. The envelope's own body is not a site.
+ */
+function parkingSitesIn(lines: string[]): string[] {
+  const sites: string[] = [];
+  let enclosing = "<file scope>";
+  for (const raw of lines) {
+    const declared = /^(?:export )?(?:async )?function (\w+)[(<]/u.exec(raw);
+    if (declared?.[1]) enclosing = declared[1];
+    const line = raw.trim();
+    const parks =
+      (line.includes("planningClarificationResult(") && !declared) ||
+      line === `kind: "needs_human_input",`;
+    if (!parks || enclosing === "planningClarificationResult") continue;
+    sites.push(`${enclosing}: ${line}`);
+  }
+  return sites;
+}
 
-    const below = workflowLines.slice(index, index + 30);
+describe("every repository question goes through the one door that names its repositories", () => {
+  it("parks a run on a question in agent-workflow.ts only from a place that is known to carry its ask", () => {
+    // The expansion region parks only through `createRepositoryQuestions`,
+    // which takes the asked repositories as an argument; a repository question
+    // written straight against the envelope, or built by hand, would carry
+    // none, its answer would be dropped, and the next run would ask the same
+    // person the same thing (A41).
+    expect(parkingSitesIn(workflowLines)).toEqual([
+      // The door itself, and the only place the expansion region reaches it.
+      "createRepositoryQuestions: return planningClarificationResult(questions);",
+      // The in-run repository DISCOVERY question. It names no repositories the
+      // record could write an answer against, and giving it one needs a
+      // contract change the wave that owns it makes.
+      "agentWorkflowBody: return planningClarificationResult(decision.questions);",
+      // The research agent's own questions, which are not about repositories.
+      "agentWorkflowBody: return planningClarificationResult(questions, suggestedAnswers);",
+      // The implementation agent's own questions, built by hand because that
+      // branch carries the agent's suggested answers through unchanged. Not
+      // about repositories either, and the only hand-built one there is.
+      `agentWorkflowBody: kind: "needs_human_input",`,
+    ]);
     expect(
-      below.some((line) => line.includes("ctx.workScopeAsk =")),
-      "the expansion no longer puts its asked repositories on the run context, so an answer to its question settles nothing",
-    ).toBe(true);
+      workflowLines.filter((line) => line.includes("repositoryQuestions.")).length,
+      "the expansion region no longer raises its questions through the door",
+    ).toBe(2);
+  });
+
+  it("puts the asked repositories on the run context as the question is raised", () => {
+    const ctx = makeCtx();
+    const asked = {
+      subjectKey: SUBJECT,
+      askedRepositories: [
+        { repositoryKey: "github:acme/api", askedBecause: "outside_policy" as const },
+      ],
+    };
+
+    const raised = createRepositoryQuestions(ctx).raise(["Repository expansion: ..."], asked);
+
+    expect(raised.kind).toBe("needs_human_input");
+    expect(raised.questions).toEqual(["Repository expansion: ..."]);
+    expect(ctx.workScopeAsk).toEqual(asked);
+  });
+
+  it("leaves nothing on the run context for a question that names no repository", () => {
+    // The door assigns every time, including to nothing. A question that names
+    // no repository must leave the field empty: inheriting the repositories an
+    // earlier question put would record this answer against a repository nobody
+    // asked this person about.
+    const ctx = makeCtx();
+    const door = createRepositoryQuestions(ctx);
+    door.raise(["Repository expansion: the first question"], {
+      subjectKey: SUBJECT,
+      askedRepositories: [
+        { repositoryKey: "github:acme/api", askedBecause: "outside_policy" as const },
+      ],
+    });
+
+    door.raise(["Repository expansion: a question about nothing in particular"], null);
+
+    expect(ctx.workScopeAsk).toBeUndefined();
   });
 });

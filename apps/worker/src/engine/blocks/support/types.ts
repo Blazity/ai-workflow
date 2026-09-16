@@ -172,6 +172,11 @@ export interface EngineCtx {
     answer: string;
     answeredBy?: string;
     answeredAt?: string;
+    /** The run that ASKED this round. Every run on the ticket reads the whole
+     *  history, so a repository answer may only be re-applied by the run that
+     *  asked for it (A42). Absent on a round replayed from a journal written
+     *  before this field existed, which re-applies to nobody. */
+    runId?: string;
   }>;
   branchName: string;
   /** Null until prepare_workspace provisions a sandbox. */

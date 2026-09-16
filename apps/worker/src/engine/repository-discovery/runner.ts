@@ -8,6 +8,9 @@ import {
   type RepositoryCatalogEntry,
 } from "./catalog.js";
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
+// The transformation the ticket comment applies to a question on its way out,
+// so the drop below compares against what a person was actually shown.
+import { scrubForPublication } from "../support/publication-scrub.js";
 import {
   workScopeWritePlanSchema,
   type RepositoryKey,
@@ -267,6 +270,85 @@ function unavailableRepositoryClarification(
     ),
     unavailable: [{ provider: request.provider, repoPath: request.repoPath }],
   };
+}
+
+/** `${author}: ` in front of a comment's first line, the shape
+ *  `services/clarifications/resume-from-comments.ts` composes a ticket answer
+ *  in. Bounded, and the name may hold no colon, so `github:acme/api` is never
+ *  mistaken for one. */
+const COMPOSED_AUTHOR_PREFIX = /^\s*[^:\n]{1,60}:[ \t]+/u;
+
+/** `${i + 1}. ` in front of a question, the shape
+ *  `engine/support/clarification-comment-format.ts` posts it in. */
+const POSTED_QUESTION_NUMBER = /^\s*\d{1,3}\.[ \t]+/u;
+
+/**
+ * The answer with every line that repeats a question we asked taken out.
+ *
+ * BOTH READERS OF ONE ANSWER USE THIS ONE HELPER (`work-scope/answer.ts` is the
+ * other): two readers that disagreed about which words were ours would record
+ * one decision and attach another.
+ *
+ * THE COMPARISON IS AGAINST THE QUESTION AS THE PERSON RECEIVED IT, not as we
+ * stored it, which is where the first version of this was empty. The ticket
+ * comment posts each question as `${i + 1}. ${scrubForPublication(question)}`,
+ * and an answer composed from ticket comments prefixes each one with
+ * `${author}: `, so the line a person quotes, copies or forwards never equals
+ * the string in the journal, and a drop that compared against the journal fired
+ * on no real channel at all.
+ *
+ * Both decorations are peeled off the answer line as ALTERNATIVE forms rather
+ * than unconditionally: our own questions begin "Repository expansion:", which
+ * an author-prefix rule would eat, and a verbatim quote has to keep matching.
+ * The question side carries the stored form and the published one, because the
+ * dashboard shows a person the first and the ticket the second.
+ *
+ * Compared trimmed, lower cased and with runs of whitespace collapsed. A quote
+ * a client re-wrapped onto several lines survives the drop; that is the known
+ * bound of comparing whole lines, and it fails towards asking again rather than
+ * towards attaching.
+ */
+export function withoutQuotedQuestions(answer: string, askedQuestions: string[]): string {
+  const asked = askedQuestionLines(askedQuestions);
+  if (asked.size === 0) return answer;
+  return answer
+    .split("\n")
+    .filter((line) => !formsOfAnswerLine(line).some((form) => asked.has(form)))
+    .join("\n");
+}
+
+/** Every comparable line of every form a question we asked reached a person in. */
+function askedQuestionLines(askedQuestions: string[]): Set<string> {
+  const lines = new Set<string>();
+  for (const question of askedQuestions) {
+    for (const published of [question, scrubForPublication(question)]) {
+      for (const line of published.split("\n")) {
+        const comparable = comparableAnswerLine(line);
+        if (comparable.length > 0) lines.add(comparable);
+      }
+    }
+  }
+  return lines;
+}
+
+/** The forms one answer line could be a quoted question in: as it arrived, and
+ *  with each decoration a channel adds taken off. */
+function formsOfAnswerLine(line: string): string[] {
+  return withAndWithout(line, COMPOSED_AUTHOR_PREFIX)
+    .flatMap((form) => withAndWithout(form, POSTED_QUESTION_NUMBER))
+    .map(comparableAnswerLine);
+}
+
+/** The text as it is, and the text with that prefix taken off when it carries
+ *  one. Both, never only the stripped one: the question itself can begin with a
+ *  word and a colon, and a verbatim quote has to keep matching. */
+function withAndWithout(text: string, prefix: RegExp): string[] {
+  const stripped = text.replace(prefix, "");
+  return stripped === text ? [text] : [text, stripped];
+}
+
+function comparableAnswerLine(line: string): string {
+  return line.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
 /** The one shape of an expansion question: the marker, the reason it is being
@@ -614,7 +696,7 @@ export function repositoryExpansionRefusalSentence(
   switch (refusal.reason) {
     case "excluded":
       return entry
-        ? `${repositoryKey} was excluded on this work by ${actorLabel(entry.decidedBy)} on ${entry.decidedAt}, so it is not attached.`
+        ? `${repositoryKey} was excluded on this work by ${actorLabel(entry.decidedBy)} on ${plainDate(entry.decidedAt)}, so it is not attached.`
         : `${repositoryKey} was excluded on this work, so it is not attached.`;
     case "unavailable":
       return `${repositoryKey} is recorded as unavailable on this work, so it is not attached. Enable it on the Repositories page and start a new run.`;
@@ -634,6 +716,14 @@ export function repositoryExpansionRefusalSentence(
 /** Who decided, as a sentence names them. */
 function actorLabel(actor: WorkScopeActor): string {
   return actor.kind === "person" ? actor.actorLabel : `run ${actor.runId}`;
+}
+
+/** The day, as a sentence says it. The record stores an instant, and a model
+ *  reading "2026-09-10T08:30:00.000Z" in a sentence about a person's decision
+ *  gets precision nobody needs and nothing it can act on. Anything that is not
+ *  an ISO instant is left exactly as it is rather than guessed at. */
+function plainDate(decidedAt: string): string {
+  return /^\d{4}-\d{2}-\d{2}T/u.test(decidedAt) ? decidedAt.slice(0, 10) : decidedAt;
 }
 
 /**
@@ -666,6 +756,35 @@ export function repositoryExpansionRefusalPlan(
     );
   }
   return parsed.data;
+}
+
+/**
+ * The plans a verdict actually stands behind.
+ *
+ * The record decides a whole request in one call, and a question about one
+ * repository drops the attach of another: a request naming a repository the run
+ * can have beside one nobody knows returns the question and nothing else, so the
+ * repository it would have attached is never cloned and the model is never told
+ * it got it. The entry planned for it would then say this work touches a
+ * repository the run never took, which is the one thing the record may never say
+ * (A44).
+ *
+ * The entry is dropped rather than the verdict widened, and nothing stands in
+ * for it: the run parks on the question, and the pass after the answer decides
+ * the request again against whatever that answer left behind. What the request
+ * REFUSED still reaches the trail, because those repositories really were
+ * refused.
+ */
+export function repositoryExpansionPlans(
+  verdict: RepositoryExpansionDecision,
+  planned: WorkScopeWritePlan[],
+): WorkScopeWritePlan[] {
+  if (verdict.kind !== "clarification_needed") return planned;
+  return planned.map((plan) => ({
+    ...plan,
+    upserts: [],
+    trail: plan.trail.filter((event) => event.kind !== "entry_written"),
+  }));
 }
 
 export interface ParsedRepositoryIdentity {
@@ -725,9 +844,28 @@ export function validateHumanRepositoryExpansion(input: {
   catalog: RepositoryCatalogEntry[];
   attached: Array<Pick<SelectedRepository, "provider" | "repoPath">>;
   isAllowed?: (repoPath: string) => boolean;
+  /** The questions the clarification actually asked, so our own words coming
+   *  back are not read as the person's. The run's own resume path always has
+   *  them; optional for a caller reading an answer with no question at hand,
+   *  which reads it exactly as this did before. */
+  askedQuestions?: string[];
 }): RepositoryExpansionDecision {
   const isAllowed = input.isAllowed ?? (() => true);
-  const identities = parseRepositoryExpansionAnswer(input.answer);
+  // OUR OWN WORDS ARE NOT TESTIMONY. Jira's quote button flattens to text with
+  // no quote marker left on it, so a person who quotes the question and writes
+  // "no, we do not need it" underneath sends OUR repository key back to us, and
+  // parsing it attaches the repository they just declined. The record's reader
+  // drops those lines already (`work-scope/answer.ts`, `whatThePersonNamed`);
+  // this is that drop, on that comparison, so the two readers of one answer
+  // cannot disagree about which lines were ours. The other half of that reader,
+  // dropping a link that names no repository of ours, is its own defence and is
+  // deliberately not copied here.
+  //
+  // Only what the answer NAMES is read from this. Whether it is a refusal is
+  // still read from the whole answer below, exactly as the record's reader
+  // reads it, because a refusal is only itself when it is all the person sent.
+  const named = withoutQuotedQuestions(input.answer, input.askedQuestions ?? []);
+  const identities = parseRepositoryExpansionAnswer(named);
   // A repository the answer names outranks a refusal word in it: "no, use
   // github:acme/web" is an answer with a repository in it.
   if (identities.length === 0 && isRefusalAnswer(input.answer)) {
@@ -909,10 +1047,28 @@ export function decideRepositoryExpansion(input: {
         ? verdict.unavailable
         : undefined,
     );
+    // A ROUND THIS RUN ALREADY ATTACHED FROM IS SPENT. The planning block runs
+    // this pass again immediately after an attach, on the same latest round, and
+    // by then the record has nothing left to hand back: the repository is in the
+    // workspace. All that is left to read is the sentence the person wrote, and
+    // the text parser may well not recognise it ("yes please"). Asking about it
+    // would put a question to somebody seconds after they approved, about a
+    // repository already cloned, and their reply to THAT would be recorded
+    // against the repositories the first question asked about, overwriting the
+    // decision they had just made. `humanAttachRound` is what the `exhausted`
+    // branch below has read all along for the same reason; the ask branches did
+    // not read it, which is the hole.
+    const answerAlreadyAttached =
+      (input.clarificationRounds ?? 0) <= (state.humanAttachRound ?? 0);
     if (verdict.kind === "clarification_needed" && !verdict.unattachableAnswer) {
+      if (answerAlreadyAttached) return { action: { kind: "proceed" }, state };
       return { action: { kind: "ask_unrecognised", questions: verdict.questions }, state };
     }
     if (verdict.kind === "unrecognised_answer" || verdict.kind === "clarification_needed") {
+      // Before the count: an answer already consumed by an attach is not one of
+      // the two unreadable answers that close expansion either. Spending one
+      // here would close expansion on a person who answered perfectly well.
+      if (answerAlreadyAttached) return { action: { kind: "proceed" }, state };
       if (state.expansionClosed === "human") {
         // A person already said there are no further repositories: nothing is
         // left to ask about. Closed by the already-attached bound, nobody has

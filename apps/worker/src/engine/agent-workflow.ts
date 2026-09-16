@@ -76,7 +76,7 @@ import { isRunControlError } from "./helpers/run-control-error.js";
 import { BLOCK_EXECUTORS } from "./blocks/executors.generated.js";
 import { createWorkflowExecutionErrorState, isTriggerBlockType, RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import { defaultBuiltinHarnessProfile } from "@shared/harness";
-import type { BlockOutput, BlockRunState, RunPullRequest, RunAnalysisReport, TransformConfiguration, WorkflowBlockType, WorkflowDefinitionNode, WorkflowDefinitionV2, WorkflowExecutionErrorState, WorkflowParamValue, HarnessRunManifestRecord, WorkScopeActor, WorkScopeWritePlan } from "@shared/contracts";
+import type { BlockOutput, BlockRunState, RunPullRequest, RunAnalysisReport, TransformConfiguration, WorkflowBlockType, WorkflowDefinitionNode, WorkflowDefinitionV2, WorkflowExecutionErrorState, WorkflowParamValue, HarnessRunManifestRecord, WorkScopeActor, WorkScopeAskedRepository, WorkScopeWritePlan } from "@shared/contracts";
 import type { RepositoryCatalogEntry } from "./repository-discovery/catalog.js";
 import type { CostProvider, CostProviderKind, TokenPrice } from "@shared/costs";
 import type { ResolvedHarnessRuntime } from "../sandbox/harness-runtime.js";
@@ -150,6 +150,82 @@ export function planningClarificationResult(
     },
     questions,
     ...(suggestions ? { suggestedAnswers: suggestions } : {}),
+  };
+}
+
+/**
+ * This run's own answered round, appended so it stays identifiable as this
+ * run's.
+ *
+ * `appendClarificationRound` dedupes on the question and answer text alone,
+ * which is what the prompt wants and the wrong rule for the run context: an
+ * earlier run that asked the same question and got the same word back would
+ * swallow this round, and the re-apply reading the history would then find no
+ * round this run asked and drop a live answer. A retry of the SAME run's answer
+ * still dedupes, which is what that helper exists for.
+ */
+export function appendRunClarificationRound<
+  Round extends { questions: string[]; answer: string; runId?: string },
+>(history: Round[] | undefined, round: Round): Round[] {
+  if (
+    history?.some(
+      (existing) =>
+        existing.runId === round.runId &&
+        existing.answer === round.answer &&
+        existing.questions.join("\n") === round.questions.join("\n"),
+    )
+  ) {
+    return history;
+  }
+  return [...(history ?? []), round];
+}
+
+/** What a question about repositories names: whose record it belongs to, and
+ *  every repository it asks about with the reason it was asked. */
+export interface RepositoryQuestionAsk {
+  subjectKey: string;
+  askedRepositories: WorkScopeAskedRepository[];
+}
+
+/**
+ * The one door every repository question in the expansion region goes through.
+ *
+ * A question about repositories that reaches a person without naming them
+ * settles nothing: the answer path writes nothing when the clarification row
+ * carries no asked repositories, so the answer is dropped and the next run asks
+ * the same person the same thing. Until now the asked list was an assignment to
+ * remember beside each question, and the third skeptic round found it remembered
+ * at the model's ask and forgotten at the follow-up raised after an answer this
+ * run could not read (A41). Here it is an argument instead, so a question that
+ * cannot name what it asks about cannot be raised by accident.
+ *
+ * `repeat` exists for exactly that follow-up: the second question is the first
+ * one again, so it carries the first one's repositories rather than nothing.
+ */
+export function createRepositoryQuestions(carrier: { workScopeAsk?: RepositoryQuestionAsk }): {
+  raise(questions: string[], about: RepositoryQuestionAsk | null): Extract<BlockExecutionResult, { kind: "needs_human_input" }>;
+  repeat(questions: string[]): Extract<BlockExecutionResult, { kind: "needs_human_input" }>;
+} {
+  let asked: RepositoryQuestionAsk | null = null;
+  const raise = (questions: string[], about: RepositoryQuestionAsk | null) => {
+    // ASSIGNED EVERY TIME, including to nothing. Set immediately before the
+    // question is raised, because the park chain TAKES the field as it reads
+    // it: a question that names no repository must leave the field empty, or
+    // it inherits the repositories an earlier question put and a person's
+    // answer is recorded against a repository nobody asked them about. That
+    // makes the contract of this door unconditional, which is the only kind a
+    // later reader can rely on.
+    asked = about;
+    carrier.workScopeAsk = about ?? undefined;
+    return planningClarificationResult(questions);
+  };
+  return {
+    raise,
+    /** Ask again after an answer nobody could read, carrying what the question
+     *  it repeats asked about: the second answer has to be able to settle what
+     *  the first one did not. Null only where the first question carried
+     *  nothing either, which is a run that froze no record. */
+    repeat: (questions: string[]) => raise(questions, asked),
   };
 }
 
@@ -989,7 +1065,7 @@ async function agentWorkflowBody(
     // Ticket-backed history is reloaded from the DB. Same-run clarification
     // answers are appended to this local context when their hook resumes.
     let clarificationHistory:
-      | Array<{ questions: string[]; answer: string; answeredBy?: string; answeredAt?: string }>
+      | Array<{ questions: string[]; answer: string; answeredBy?: string; answeredAt?: string; runId?: string }>
       | undefined;
     if (entry.ticketKey) {
       try {
@@ -1440,9 +1516,12 @@ async function agentWorkflowBody(
             answer: answered.answer,
             answeredBy: answered.answeredByLabel,
             answeredAt: answered.answeredAt,
+            // Which run asked. The re-apply of a repository answer reads it and
+            // takes no round but this run's own (A42).
+            runId: workflowRunId,
           };
           clarificationHistory = appendClarificationRound(clarificationHistory, round);
-          ctx.clarifications = appendClarificationRound(ctx.clarifications, round);
+          ctx.clarifications = appendRunClarificationRound(ctx.clarifications, round);
 
           if (snapshot) {
             const { deleteClarificationSnapshotStep } = await import(
@@ -1697,6 +1776,9 @@ async function agentWorkflowBody(
       /** What the run refused the model, in the model's next research prompt.
        *  A model told only "no" asks again, and the run pays another pass. */
       const expansionRefusals: string[] = [];
+      /** Every question this run puts about repositories goes through here, so
+       *  none of them can reach a person without naming what it asks about. */
+      const repositoryQuestions = createRepositoryQuestions(ctx);
       const discoverRepositories = async (
         discovery: NonNullable<EngineCtx["repositoryDiscovery"]>,
         execution?: BlockInvocationContext,
@@ -1844,6 +1926,7 @@ async function agentWorkflowBody(
         }
         const {
           decideRepositoryExpansion,
+          repositoryExpansionPlans,
           repositoryExpansionRefusalPlan,
           repositoryExpansionRefusalSentence,
           validateRepositoryExpansionRequests,
@@ -1884,7 +1967,11 @@ async function agentWorkflowBody(
           // identical lines in a trail whose vocabulary has no reason for a
           // repeat.
           const plans = [
-            ...record.plans,
+            // What the verdict actually carries, which is not everything the
+            // record planned: a question drops the attach beside it, and an
+            // entry for a repository the run never took would make the record
+            // lie about this work.
+            ...repositoryExpansionPlans(verdict, record.plans),
             ...(verdict.kind === "refused"
               ? [
                   repositoryExpansionRefusalPlan(
@@ -1939,20 +2026,20 @@ async function agentWorkflowBody(
           // about is recorded there, so the same question is never raised
           // twice in one run.
           ctx.repositoryExpansion = expansionState;
-          // What this question is about, set immediately before it is raised
-          // and never once at the top: the park chain TAKES the field as it
-          // reads it, so a later question in the same run cannot inherit these
-          // repositories. A repository question that reaches a person without
-          // it settles nothing, because the answer path drops an answer whose
-          // clarification names no repository, and the next run asks the same
-          // person the same thing.
-          if (record && verdict.kind === "clarification_needed" && verdict.workScopeAsk) {
-            ctx.workScopeAsk = {
-              subjectKey: record.subjectKey,
-              askedRepositories: verdict.workScopeAsk,
-            };
-          }
-          return planningClarificationResult(action.questions);
+          // Through the one door, which takes what the question asks about
+          // rather than trusting this call site to remember it. Null is a run
+          // that froze no record: there is nothing to name the question against
+          // and nothing an answer could be written to, which is what every run
+          // did before the record existed.
+          return repositoryQuestions.raise(
+            action.questions,
+            record && verdict.kind === "clarification_needed" && verdict.workScopeAsk
+              ? {
+                  subjectKey: record.subjectKey,
+                  askedRepositories: verdict.workScopeAsk,
+                }
+              : null,
+          );
         }
         if (action.kind === "fail") {
           return executionError(action.message, {
@@ -2223,10 +2310,11 @@ async function agentWorkflowBody(
             // research phase key fresh (this attach never counts a model round),
             // so the re-run reflects the newly attached repositories.
             const humanExpansion = await applyHumanRepositoryExpansion(ctx, {
-              resolve: (answer, attached) =>
+              resolve: (answer, attached, askedQuestions) =>
                 resolveHumanRepositoryExpansionStep(
                   answer,
                   attached,
+                  askedQuestions,
                   ctx.repositories,
                   ctx.repositoryScope,
                   // The resumed run takes its repositories from the RECORD, so
@@ -2269,7 +2357,12 @@ async function agentWorkflowBody(
               },
             });
             if (humanExpansion.kind === "clarification") {
-              return planningClarificationResult(humanExpansion.questions);
+              // The answer could not be read, so the question is put again. It
+              // repeats a question this run already asked, so it carries the
+              // same repositories: a follow-up that named none would have its
+              // answer dropped too, and the next run would ask the same person
+              // the same thing a third time (A41).
+              return repositoryQuestions.repeat(humanExpansion.questions);
             }
             if (humanExpansion.kind === "failed") {
               return executionError(humanExpansion.message, {

@@ -64,6 +64,9 @@ import {
   validateRepositoryExpansionRequests,
 } from "../../engine/repository-discovery/runner.js";
 import type { RepositoryCatalogEntry } from "../../engine/repository-discovery/catalog.js";
+// The real comment builder, so a test feeds the question in the form a person
+// was actually sent rather than the form we stored.
+import { formatClarificationQuestionsComment } from "../support/clarification-comment-format.js";
 import { filterPinnedRepositories } from "../../adapters/vcs/repository-directory.js";
 import type { WorkspaceManifest } from "../../sandbox/repo-workspace.js";
 import { workspaceRepositoryAccess } from "../../sandbox/repo-workspace.js";
@@ -419,10 +422,14 @@ describe("human repository expansion beyond the model round limit", () => {
           selectedRationale: "symptom",
         },
       ],
+      // Asked by this run, which is `makeCtx`'s `run-1`: a repository answer is
+      // re-applied only by the run that asked for it, so a round from any other
+      // run is one this run leaves alone (A42).
       clarifications: [
         {
           questions: [`${EXPANSION_LIMIT_CLARIFICATION_PREFIX} Reply with repo paths.`],
           answer,
+          runId: "run-1",
         },
       ],
     });
@@ -528,7 +535,7 @@ describe("human repository expansion beyond the model round limit", () => {
     if (first.kind !== "clarification") throw new Error("expected a clarification");
     ctx.clarifications = [
       ...(ctx.clarifications ?? []),
-      { questions: first.questions, answer: "whatever you think is best" },
+      { questions: first.questions, answer: "whatever you think is best", runId: "run-1" },
     ];
 
     const second = await applyHumanRepositoryExpansion(ctx, deps);
@@ -538,7 +545,7 @@ describe("human repository expansion beyond the model round limit", () => {
     // And no third question: nothing is asked once expansion is closed.
     ctx.clarifications = [
       ...(ctx.clarifications ?? []),
-      { questions: first.questions, answer: "still nothing" },
+      { questions: first.questions, answer: "still nothing", runId: "run-1" },
     ];
     const third = await applyHumanRepositoryExpansion(ctx, deps);
     expect(third).toEqual({ kind: "noop" });
@@ -608,7 +615,7 @@ describe("human repository expansion beyond the model round limit", () => {
 
     // The person answers with a link to another repository, which is attached.
     ctx.clarifications = [
-      { questions: raised[0], answer: "https://gitlab.com/acme/shared/contracts" },
+      { questions: raised[0], answer: "https://gitlab.com/acme/shared/contracts", runId: "run-1" },
     ];
     const attached = await applyHumanRepositoryExpansion(ctx, deps);
     expect(attached.kind).toBe("attached");
@@ -722,6 +729,7 @@ describe("human repository expansion beyond the model round limit", () => {
           {
             questions: [`${EXPANSION_LIMIT_CLARIFICATION_PREFIX} Reply with repo paths.`],
             answer,
+            runId: "run-1",
           },
         ],
       });
@@ -750,7 +758,7 @@ describe("human repository expansion beyond the model round limit", () => {
       // The run parks on that question and the person answers it.
       ctx.clarifications = [
         ...(ctx.clarifications ?? []),
-        { questions: first.questions, answer: followUp },
+        { questions: first.questions, answer: followUp, runId: "run-1" },
       ];
       const second = await applyHumanRepositoryExpansion(ctx, deps);
 
@@ -807,7 +815,7 @@ describe("human repository expansion beyond the model round limit", () => {
             selectedRationale: "symptom",
           },
         ],
-        clarifications: [{ questions: parked.questions, answer: followUp }],
+        clarifications: [{ questions: parked.questions, answer: followUp, runId: "run-1" }],
       });
       const attach = vi.fn(async () => ({
         manifest: attachedManifest,
@@ -842,6 +850,7 @@ describe("human repository expansion beyond the model round limit", () => {
         {
           questions: ["Which repository should this ticket modify?"],
           answer: "github:acme/service",
+          runId: "run-1",
         },
       ],
     });
@@ -857,6 +866,153 @@ describe("human repository expansion beyond the model round limit", () => {
 
     expect(result).toEqual({ kind: "noop" });
     expect(attach).not.toHaveBeenCalled();
+  });
+});
+
+describe("an answer that quotes our question back is read as the person's words only", () => {
+  const v2Manifest = { version: 2 as const, repositories: [] };
+  const attached = [{ provider: "github" as const, repoPath: "acme/service" }];
+
+  /** The question the expansion path actually raises, taken from the validator
+   *  rather than written out here: what this guards is what OUR OWN sentence
+   *  does to the parser, which a fixture could not prove. */
+  const REAL_QUESTION = (() => {
+    const asked = validateHumanRepositoryExpansion({
+      answer: "use the shared one",
+      catalog,
+      attached,
+    });
+    if (asked.kind !== "unrecognised_answer") throw new Error("expected a re-ask");
+    return asked.questions[0] as string;
+  })();
+
+  /** THE LINE A PERSON ACTUALLY SEES, built by the real comment formatter: the
+   *  ticket never shows the stored string, it shows `${i + 1}. ` in front of the
+   *  published question. A hand-written fixture here is what let a drop that
+   *  fired on no real channel look green. */
+  const POSTED_QUESTION = (() => {
+    const comment = formatClarificationQuestionsComment({
+      questions: [REAL_QUESTION],
+      suggestedAnswers: null,
+      dashboardUrl: "https://dashboard.example/tickets/AWT-1",
+      aiColumnName: "Ai",
+      expiresAtIso: null,
+    });
+    const numbered = comment.split("\n").find((line) => line.startsWith("1. "));
+    if (!numbered) throw new Error("the questions comment no longer numbers its questions");
+    return numbered;
+  })();
+
+  /** And what the ticket channel composes when it turns comments into one
+   *  answer: every comment's first line carries its author. */
+  const COMPOSED_QUESTION = `Filip Maszota: ${POSTED_QUESTION}`;
+
+  function ctxAnswering(answer: string) {
+    return makeCtx({
+      sandboxId: "sbx-research",
+      workspaceManifest: v2Manifest,
+      selectedRepositories: [
+        {
+          provider: "github",
+          repoPath: "acme/service",
+          defaultBranch: "main",
+          selectedRationale: "symptom",
+        },
+      ],
+      clarifications: [{ questions: [REAL_QUESTION], answer, runId: "run-1" }],
+    });
+  }
+
+  async function resume(answer: string) {
+    const ctx = ctxAnswering(answer);
+    const attach = vi.fn(async () => ({ manifest: v2Manifest, cloneDurationMs: 5 }));
+    const result = await applyHumanRepositoryExpansion(ctx, {
+      resolve: async (answerText, alreadyAttached, askedQuestions) =>
+        validateHumanRepositoryExpansion({
+          answer: answerText,
+          catalog,
+          attached: alreadyAttached,
+          askedQuestions,
+        }),
+      attach,
+      fetchContexts: async () => [],
+    });
+    return { ctx, result, attach };
+  }
+
+  it.each([
+    ["as the ticket posted it", () => POSTED_QUESTION],
+    ["as the ticket composed it, with the author in front", () => COMPOSED_QUESTION],
+    ["as the dashboard shows it, word for word", () => REAL_QUESTION],
+  ])("attaches nothing when the answer is the question quoted back %s", async (_form, quoted) => {
+    // Our answer-format sentence names "github:owner/repo" and
+    // "gitlab:group/repo" as the shape to reply in, so a quoted question
+    // carries parseable paths nobody typed. A person refusing in plain words
+    // must not have a repository cloned on the strength of our own example.
+    const { ctx, result, attach } = await resume(`${quoted()}\nno, we do not need it`);
+
+    expect(result.kind).toBe("clarification");
+    expect(attach).not.toHaveBeenCalled();
+    // And our own placeholders were not recorded as repositories this person
+    // was asked about: that list is what stops the run asking again, so a
+    // phantom in it silences a question somebody should have been asked.
+    expect(ctx.repositoryExpansion.askedUnavailable).toBeUndefined();
+  });
+
+  it("still reads the repository typed underneath the quoted question", async () => {
+    const { result, attach } = await resume(
+      `${POSTED_QUESTION}\ngitlab:acme/shared/contracts`,
+    );
+
+    expect(result.kind).toBe("attached");
+    expect(attach).toHaveBeenCalledWith([
+      {
+        provider: "gitlab",
+        repoPath: "acme/shared/contracts",
+        defaultBranch: "main",
+        selectedRationale: "requested by human clarification answer",
+      },
+    ]);
+  });
+
+  it("compares against the question as the ticket published it, scrub and all", () => {
+    // A question the publication scrub rewrites reaches a person in a form that
+    // does not equal what we stored, so the comparison has to carry the
+    // published form too, or the drop misses the only line they ever saw.
+    const question =
+      "Repository expansion: should this work also touch gitlab:acme/shared/contracts?" +
+      " Session memory has been updated for this task.";
+    const postedLine = formatClarificationQuestionsComment({
+      questions: [question],
+      suggestedAnswers: null,
+      dashboardUrl: "https://dashboard.example/tickets/AWT-1",
+      aiColumnName: "Ai",
+      expiresAtIso: null,
+    })
+      .split("\n")
+      .find((line) => line.startsWith("1. "));
+    expect(postedLine).toBeDefined();
+    expect(postedLine).not.toContain("Session memory");
+
+    const verdict = validateHumanRepositoryExpansion({
+      answer: `${postedLine}\nno, we do not need it`,
+      catalog,
+      attached,
+      askedQuestions: [question],
+    });
+
+    expect(verdict.kind).toBe("unrecognised_answer");
+  });
+
+  it("drops the quoted line whatever case and spacing it comes back in", async () => {
+    // A mail client rewraps and an editor changes case; the comparison is the
+    // record reader's, trimmed and case insensitive, so the two readers of one
+    // answer cannot disagree about what the person named.
+    const reflowed = `   ${POSTED_QUESTION.toUpperCase().replace(/ /gu, "  ")}   `;
+    const { ctx, result } = await resume(`${reflowed}\nyes`);
+
+    expect(result.kind).toBe("clarification");
+    expect(ctx.repositoryExpansion.askedUnavailable).toBeUndefined();
   });
 });
 

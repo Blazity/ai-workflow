@@ -18,6 +18,7 @@ import type {
   RunRepositoryAccess,
   TriggerRepositoryPolicy,
   VcsProviderKind,
+  WorkScope,
   WorkScopeActor,
   WorkScopeWritePlan,
   WorkflowRepositoryScope,
@@ -109,7 +110,19 @@ export type ResolvedHumanRepositoryExpansion =
       /** Absent when the run froze no record. `repositories` is what the record
        *  selected and the workspace does not hold yet, decided exactly as a run
        *  start would decide it. */
-      workScope?: { repositories: SelectedRepository[] };
+      workScope?: {
+        repositories: SelectedRepository[];
+        /** The record as this run's own question left it, for the rounds that
+         *  follow. Null is a subject with no record at all. Absent on a result
+         *  stored before this field existed: that run moves nothing and goes on
+         *  reading the copy it froze at run start, exactly as it did. */
+        scope?: WorkScope | null;
+        /** Travels with the entries because it is read from the same record in
+         *  the same breath and answers the same question: has a person already
+         *  chosen for this subject. Leaving it behind would let the run ask the
+         *  selection question again after its own answer set it. */
+        selectionAnswered?: boolean;
+      };
     };
 
 /**
@@ -129,16 +142,21 @@ export async function applyHumanRepositoryExpansion(
   ctx: Pick<
     EngineCtx,
     | "clarifications"
+    | "runId"
     | "sandboxId"
     | "workspaceManifest"
     | "selectedRepositories"
     | "repositoryContexts"
     | "repositoryExpansion"
+    | "workScope"
   >,
   deps: {
     resolve: (
       answer: string,
       attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+      /** The questions this round asked, so the parser can tell our own words
+       *  back from the person's. */
+      askedQuestions: string[],
     ) => Promise<ResolvedHumanRepositoryExpansion>;
     attach: (repositories: SelectedRepository[]) => Promise<{
       manifest: Extract<WorkspaceManifest, { version: 2 }>;
@@ -163,6 +181,23 @@ export async function applyHumanRepositoryExpansion(
   if (!latest || ctx.workspaceManifest?.version !== 2 || !ctx.sandboxId) {
     return { kind: "noop" };
   }
+  // ONLY A ROUND THIS RUN ASKED. `ctx.clarifications` is every answered
+  // clarification of the TICKET, so the latest round is often one an earlier
+  // run asked and an earlier person already answered. Applying that here closes
+  // this run's expansion before the model has said a word, and the first
+  // repository this run genuinely needs then fails it: the original defect,
+  // reached through the clarification history instead of through the ticket
+  // text (A42). What earlier runs decided reaches this one through the record;
+  // the whole history still reaches the prompt, which is where cross-run memory
+  // belongs.
+  //
+  // A round carrying no run id is not re-applied either. It can only come from
+  // a journal written before the field existed, this ships under a production
+  // drain, and a question that cannot happen is cheaper than an answer from a
+  // run nobody can name.
+  if (latest.runId !== ctx.runId) {
+    return { kind: "noop" };
+  }
   const { decideRepositoryExpansion, isRepositoryExpansionClarification } =
     await import("../repository-discovery/runner.js");
   // Every question the expansion path raises, not only the round-limit one: a
@@ -177,11 +212,39 @@ export async function applyHumanRepositoryExpansion(
       provider: repository.provider,
       repoPath: repository.repoPath,
     })),
+    // OUR OWN QUESTION IS NOT TESTIMONY. Every channel a person answers
+    // through quotes the question back at some width (a Jira reply, a mail
+    // client), so the question's own example lines would otherwise be parsed
+    // as the repositories they named.
+    latest.questions,
   );
   // A run suspended before the step returned the record replays the verdict on
   // its own, which is what every run did until now.
   const resumed = "kind" in resolved ? undefined : resolved.workScope;
   const resolvedVerdict = "kind" in resolved ? resolved : resolved.decision;
+  // THE RECORD AS IT IS NOW REPLACES THE COPY FROZEN AT RUN START. What the
+  // step read is the whole record at answer time, so this installs every entry
+  // written since the run began: this run's own question is the reason to look,
+  // and a panel edit or another run's decision arrives in the same read. That
+  // is deliberate and matches `readRunWorkScope` on the selection path, where
+  // a waking run also reads the record rather than a copy of it. The rounds
+  // after the answer then decide against what is true, instead of asking the
+  // same person about the same repository twice in one run and refusing later
+  // the repository they just excluded with nobody's name on it (A43).
+  //
+  // Only what the RECORD says moves: its entries and whether a person has
+  // already chosen. The trigger policy stays as this run resolved it, because
+  // a policy that changed mid-run would give one run two different filters
+  // (A17, A10).
+  if (ctx.workScope && resumed && resumed.scope !== undefined) {
+    ctx.workScope = {
+      ...ctx.workScope,
+      scope: resumed.scope,
+      ...(resumed.selectionAnswered === undefined
+        ? {}
+        : { selectionAnswered: resumed.selectionAnswered }),
+    };
+  }
   // THE RECORD OUTRANKS THE ANSWER TEXT. The answer was read and recorded when
   // it arrived, by the one reader that knows what the question asked about, so
   // a reply this in-run parser cannot read ("yes please" to a question about
@@ -670,6 +733,9 @@ attachResearchRepositoriesStep.maxRetries = 0;
 async function resolveHumanRepositoryExpansionStep(
   answer: string,
   attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+  /** The questions this round put, so a quoted question is not read back as the
+   *  person's own words. */
+  askedQuestions: string[],
   access: RunRepositoryAccess,
   repositoryScope?: WorkflowRepositoryScope,
   /** Absent on a run that froze no record, which is the whole old path. */
@@ -707,6 +773,7 @@ async function resolveHumanRepositoryExpansionStep(
     answer,
     catalog,
     attached,
+    askedQuestions,
   });
   if (!workScope) return decision;
   return {
@@ -735,6 +802,11 @@ interface RunWorkScopeResume {
  * event decides those keys exactly as a run start would, so nothing the policy,
  * the pin or the workspace cap refuses can arrive through a person's answer by
  * a different door.
+ *
+ * The record it read travels back beside the repositories, entries and
+ * `selectionAnswered` together, because the caller has no other way to see what
+ * this run's own question settled: it is what the rounds after the answer
+ * decide against (A43).
  */
 async function resumeFromWorkScope(
   resume: RunWorkScopeResume,
@@ -744,7 +816,11 @@ async function resumeFromWorkScope(
     attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>;
   },
   repositoryScope?: WorkflowRepositoryScope,
-): Promise<{ repositories: SelectedRepository[] }> {
+): Promise<{
+  repositories: SelectedRepository[];
+  scope: WorkScope | null;
+  selectionAnswered: boolean;
+}> {
   const { catalog, attached } = run;
   const { createRunWorkScopeRecorder, workScopeRepositoryKey } = await import(
     "../work-scope/context.js"
@@ -806,7 +882,7 @@ async function resumeFromWorkScope(
       selectedRationale: "recorded on this work",
     });
   }
-  return { repositories };
+  return { repositories, scope, selectionAnswered };
 }
 
 /**

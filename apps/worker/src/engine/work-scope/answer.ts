@@ -8,6 +8,7 @@ import {
   foldPolishDiacritics,
   isRefusalAnswer,
   parseRepositoryExpansionAnswer,
+  withoutQuotedQuestions,
   type ParsedRepositoryIdentity,
 } from "../repository-discovery/runner.js";
 
@@ -125,10 +126,14 @@ export function readRepositoryAnswer(
  * button produces a blockquote, the adapter flattens the document with no quote
  * marker left on it (`extractAdfText`), so a person who quotes the question and
  * types "no" underneath sends our own repository key back as if they had
- * written it. And a link that is not a repository of ours at all: today it
- * parses as a path that resolves to nothing and takes the whole answer down
- * with it, which loses the repositories named beside it, and attaching a ticket
- * link is the most ordinary thing an engineer does.
+ * written it. That drop is `withoutQuotedQuestions`, shared with the in-run
+ * parser rather than written twice: it knows the numbering and the author
+ * prefix the channels add, which the copy that used to live here did not, and a
+ * defence standing on the negation rule behind it is not a defence. And a link
+ * that is not a repository of ours at all: today it parses as a path that
+ * resolves to nothing and takes the whole answer down with it, which loses the
+ * repositories named beside it, and attaching a ticket link is the most
+ * ordinary thing an engineer does.
  *
  * Only what the answer NAMES is read from this. Whether it says no, and whether
  * it is a plain yes, are read from the whole answer, because either is only
@@ -139,21 +144,10 @@ function whatThePersonNamed(
   askedQuestions: string[],
   catalogKeys: RepositoryKey[],
 ): string {
-  const asked = new Set(
-    askedQuestions
-      .flatMap((question) => question.split("\n"))
-      .map(comparableLine)
-      .filter((line) => line.length > 0),
-  );
-  return answer
+  return withoutQuotedQuestions(answer, askedQuestions)
     .split("\n")
-    .filter((line) => !asked.has(comparableLine(line)))
     .map((line) => withoutForeignLinks(line, catalogKeys))
     .join("\n");
-}
-
-function comparableLine(line: string): string {
-  return line.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
 /** The line with every link that names no repository taken out. A link to a
