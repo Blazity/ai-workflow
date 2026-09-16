@@ -3,6 +3,7 @@ import {
   workScopeOriginRank,
   type WorkScope,
   type WorkScopeActor,
+  type WorkScopeAskedRepository,
   type WorkScopeEntry,
   type WorkScopeTrailEvent,
   type WorkScopeTrailRow,
@@ -111,6 +112,80 @@ export async function readWorkScopeSelectionAnswered(
   const row = (result as { rows?: Array<{ answered: boolean }> }).rows?.[0];
   if (!row) throw new Error("work scope selection read returned no row");
   return row.answered;
+}
+
+/**
+ * Record that a question about repositories was asked, once per clarification.
+ *
+ * Written where the clarification is created, because by answer time the
+ * clarification row is all that is left of the question and only the ask knows
+ * which repositories it named. The step that creates the clarification retries,
+ * so the append is keyed on the clarification id rather than trusting an
+ * attempt count: `true` means this call wrote the row, `false` that an earlier
+ * attempt already had.
+ *
+ * It touches no entry and does not move the version. Asking is not a decision,
+ * and a subject with no record yet keeps none: the trail carries the question
+ * either way, which is what lets the answer be recorded against the repository
+ * it was about.
+ */
+export async function appendWorkScopeQuestionAsked(
+  db: Db,
+  input: {
+    subjectKey: string;
+    runId: string;
+    clarificationId: string;
+    asked: WorkScopeAskedRepository[];
+  },
+): Promise<boolean> {
+  const event: WorkScopeTrailEvent = {
+    kind: "question_asked",
+    clarificationId: input.clarificationId,
+    repositories: input.asked,
+  };
+  const result = await db.execute(sql`
+    INSERT INTO ${workScopeTrail} (subject_key, run_id, kind, repository_key, event)
+    VALUES (
+      ${input.subjectKey}::text, ${input.runId}::text, 'question_asked', NULL,
+      ${JSON.stringify(event)}::jsonb
+    )
+    ON CONFLICT ((event ->> 'clarificationId')) WHERE kind = 'question_asked'
+    DO NOTHING
+    RETURNING id
+  `);
+  return ((result as { rows?: unknown[] }).rows ?? []).length > 0;
+}
+
+/**
+ * The answer recorded for one clarification, or null while nobody answered it
+ * readably.
+ *
+ * The resumed run reads the verdict of its own question here rather than out of
+ * the answer text, so a replay and the record can never disagree about what a
+ * person said. At most one row can exist, which is the answer-once index.
+ */
+export async function readWorkScopeAnsweredQuestion(
+  db: Db,
+  clarificationId: string,
+): Promise<WorkScopeTrailRow | null> {
+  const [row] = await db
+    .select()
+    .from(workScopeTrail)
+    .where(
+      and(
+        eq(workScopeTrail.kind, "question_answered"),
+        sql`${workScopeTrail.event} ->> 'clarificationId' = ${clarificationId}::text`,
+      ),
+    )
+    .limit(1);
+  if (!row) return null;
+  return {
+    id: row.id,
+    subjectKey: row.subjectKey,
+    runId: row.runId,
+    at: row.at.toISOString(),
+    event: row.event,
+  };
 }
 
 /**
@@ -628,4 +703,24 @@ export function readConnectedWorkScope(subjectKey: string) {
 
 export function readConnectedWorkScopeSelectionAnswered(subjectKey: string) {
   return readWorkScopeSelectionAnswered(getDb(), subjectKey);
+}
+
+/**
+ * The write the asking step makes and the write the answer makes, against the
+ * process-wide connection.
+ *
+ * Neither caller holds a database handle: the ask is a `"use step"` body and
+ * the answer arrives on an HTTP request, and both reach their store the way
+ * every other step and service does.
+ */
+export function appendConnectedWorkScopeQuestionAsked(
+  input: Parameters<typeof appendWorkScopeQuestionAsked>[1],
+) {
+  return appendWorkScopeQuestionAsked(getDb(), input);
+}
+
+export function applyConnectedAnswerWorkScopePlan(
+  input: Parameters<typeof applyAnswerWorkScopePlan>[1],
+) {
+  return applyAnswerWorkScopePlan(getDb(), input);
 }

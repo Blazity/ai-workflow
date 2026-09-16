@@ -1,3 +1,4 @@
+import type { WorkScopeAskedRepository } from "@shared/contracts";
 import type { SerializableClarificationSnapshot } from "./clarification-snapshot-steps.js";
 import type { WorkspaceManifest } from "../../sandbox/repo-workspace.js";
 
@@ -28,12 +29,54 @@ export async function prepareClarificationHookStep(input: {
   definitionVersion: number | null;
   questions: string[];
   suggestedAnswers?: string[] | null;
+  /** Present only when the question is about repositories, and then it carries
+   *  the subject whose work scope records the answer. The repository a question
+   *  is about is written down when it is ASKED: by answer time the clarification
+   *  row is all that is left of the question, so without this the answer would
+   *  name no repository and the next run would ask again. */
+  workScopeAsk?: { subjectKey: string; askedRepositories: WorkScopeAskedRepository[] };
 }) {
   "use step";
+  const { workScopeAsk, ...clarification } = input;
   const { prepareConnectedHookClarification } = await import(
     "../../db/repositories/clarification-hooks.js"
   );
-  const row = await prepareConnectedHookClarification(input);
+  const row = await prepareConnectedHookClarification({
+    ...clarification,
+    ...(workScopeAsk ? { askedRepositories: workScopeAsk.askedRepositories } : {}),
+  });
+  if (workScopeAsk) {
+    const { appendConnectedWorkScopeQuestionAsked } = await import(
+      "../../db/repositories/work-scope.js"
+    );
+    // Keyed on the id this attempt produced, because the insert above is not
+    // idempotent (`db/repositories/clarification-hooks.ts:76` draws a fresh id
+    // per attempt): a retried attempt asks a second question, and its own row
+    // is as true as the first one's.
+    //
+    // Logged and never thrown, and it has to stay that way. WHICH repositories
+    // the question named is the clarification row's own column, written by the
+    // insert above, so a lost trail row costs a line in the debug view and no
+    // decision. Thrown, it would cost the question itself: this step would
+    // fail, the SDK would retry it three times, every attempt would leave
+    // another preparing clarification behind, and the run would die without
+    // ever having asked the person anything. console.error, like the rest of
+    // the run's best-effort telemetry (`engine/steps/telemetry.ts:154-173`), so
+    // a failing append is visible the day it starts rather than silent.
+    await appendConnectedWorkScopeQuestionAsked({
+      subjectKey: workScopeAsk.subjectKey,
+      runId: input.runId,
+      clarificationId: row.id,
+      asked: workScopeAsk.askedRepositories,
+    }).catch((error: unknown) => {
+      console.error(
+        "work_scope_question_asked_append_failed",
+        row.id,
+        input.runId,
+        (error as Error).message,
+      );
+    });
+  }
   return {
     id: row.id,
     hookToken: row.hookToken,

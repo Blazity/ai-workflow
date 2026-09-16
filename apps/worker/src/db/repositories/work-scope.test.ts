@@ -1,15 +1,22 @@
 import { asc } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
-import type { WorkScopeActor, WorkScopeEntry, WorkScopeWritePlan } from "@shared/contracts";
+import type {
+  WorkScopeActor,
+  WorkScopeAskedRepository,
+  WorkScopeEntry,
+  WorkScopeWritePlan,
+} from "@shared/contracts";
 import type { Db } from "../client.js";
 import { workScopeEntries, workScopes, workScopeTrail } from "../schema.js";
 import { createTestDb } from "../test-db.js";
 import {
+  appendWorkScopeQuestionAsked,
   applyAnswerWorkScopePlan,
   applyPersonWorkScopeEdit,
   applyRunWorkScopePlan,
   listWorkScopeTrail,
   readWorkScope,
+  readWorkScopeAnsweredQuestion,
   readWorkScopeSelectionAnswered,
 } from "./work-scope.js";
 
@@ -1308,5 +1315,141 @@ describe("readWorkScopeSelectionAnswered", () => {
     await answer(subjectKey, "clarification-1", { kind: "none" });
 
     await expect(readWorkScopeSelectionAnswered(db, "ticket:jira:AWT-2")).resolves.toBe(false);
+  });
+});
+
+describe("appendWorkScopeQuestionAsked", () => {
+  const asked: WorkScopeAskedRepository[] = [
+    { repositoryKey: "github:acme/web", askedBecause: "not_enabled" },
+    { repositoryKey: "github:acme/api", askedBecause: "outside_policy" },
+  ];
+
+  function ask(clarificationId: string) {
+    return appendWorkScopeQuestionAsked(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId,
+      asked,
+    });
+  }
+
+  it("writes the question once however often the asking step is retried", async () => {
+    await expect(ask("clarification-1")).resolves.toBe(true);
+    await expect(ask("clarification-1")).resolves.toBe(false);
+
+    await expect(listWorkScopeTrail(db, { subjectKey }, { limit: 10 })).resolves.toEqual({
+      rows: [
+        {
+          id: 1,
+          subjectKey: "ticket:jira:AWT-1",
+          runId: "run-1",
+          at: expect.any(String),
+          event: {
+            kind: "question_asked",
+            clarificationId: "clarification-1",
+            repositories: [
+              { repositoryKey: "github:acme/web", askedBecause: "not_enabled" },
+              { repositoryKey: "github:acme/api", askedBecause: "outside_policy" },
+            ],
+          },
+        },
+      ],
+      nextBeforeId: null,
+    });
+  });
+
+  it("writes one row per clarification", async () => {
+    await expect(ask("clarification-1")).resolves.toBe(true);
+    await expect(ask("clarification-2")).resolves.toBe(true);
+
+    const rows = await db.select().from(workScopeTrail).orderBy(asc(workScopeTrail.id));
+    expect(rows.map((row) => row.event)).toEqual([
+      { kind: "question_asked", clarificationId: "clarification-1", repositories: asked },
+      { kind: "question_asked", clarificationId: "clarification-2", repositories: asked },
+    ]);
+  });
+
+  it("touches no entry and leaves the version where it was, because asking decides nothing", async () => {
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      plan: upsertsOnly(entry("github:acme/api")),
+    });
+
+    await ask("clarification-1");
+
+    await expect(readWorkScope(db, subjectKey)).resolves.toEqual({
+      subjectKey,
+      version: 1,
+      entries: [
+        {
+          repositoryKey: "github:acme/api",
+          state: "selected",
+          origin: "ticket_text",
+          rationale: "The ticket names it.",
+          decidedBy: runActor,
+          decidedAt: "2026-09-15T10:00:00.000Z",
+        },
+      ],
+    });
+  });
+
+  it("records a question on a subject that has no record yet", async () => {
+    await expect(ask("clarification-1")).resolves.toBe(true);
+
+    await expect(readWorkScope(db, subjectKey)).resolves.toBeNull();
+  });
+});
+
+describe("readWorkScopeAnsweredQuestion", () => {
+  const ada: WorkScopeActor = { kind: "person", actorId: "user-1", actorLabel: "Ada" };
+
+  async function record(clarificationId: string) {
+    await applyAnswerWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId,
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [
+          {
+            kind: "question_answered",
+            clarificationId,
+            answer: { kind: "none" },
+            answeredBy: ada,
+          },
+        ],
+      },
+    });
+  }
+
+  it("is null while the question is unanswered", async () => {
+    await appendWorkScopeQuestionAsked(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId: "clarification-1",
+      asked: [{ repositoryKey: "github:acme/web", askedBecause: "selection" }],
+    });
+
+    await expect(readWorkScopeAnsweredQuestion(db, "clarification-1")).resolves.toBeNull();
+  });
+
+  it("returns the answer as it was read, for that clarification only", async () => {
+    await record("clarification-1");
+
+    await expect(readWorkScopeAnsweredQuestion(db, "clarification-1")).resolves.toEqual({
+      id: 1,
+      subjectKey: "ticket:jira:AWT-1",
+      runId: "run-1",
+      at: expect.any(String),
+      event: {
+        kind: "question_answered",
+        clarificationId: "clarification-1",
+        answer: { kind: "none" },
+        answeredBy: ada,
+      },
+    });
+    await expect(readWorkScopeAnsweredQuestion(db, "clarification-2")).resolves.toBeNull();
   });
 });

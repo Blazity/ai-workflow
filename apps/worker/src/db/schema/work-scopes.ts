@@ -120,5 +120,14 @@ export const workScopeTrail = pgTable(
     uniqueIndex("work_scope_trail_answer_once")
       .on(sql`(${t.event} ->> 'clarificationId')`)
       .where(sql`${t.kind} = 'question_answered'`),
+    // A question is recorded once per clarification, for the same reason and by
+    // the same means. The step that creates the clarification retries, and the
+    // append that meets this index is what keeps a retried attempt from saying
+    // the question was asked twice. It does not make the ASK idempotent: a
+    // retried attempt writes a second clarification with an id of its own, and
+    // its own, equally truthful, row.
+    uniqueIndex("work_scope_trail_asked_once")
+      .on(sql`(${t.event} ->> 'clarificationId')`)
+      .where(sql`${t.kind} = 'question_asked'`),
   ],
 );

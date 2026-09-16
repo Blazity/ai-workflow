@@ -2,12 +2,29 @@
 // would bypass the module mock and hit the real Workflow runtime.
 import {
   MAX_CLARIFICATION_ANSWER_LENGTH,
+  repositoryCatalogKey,
+  type RepositoryKey,
   type SettingsSnapshot,
+  type WorkScope,
+  type WorkScopeWritePlan,
 } from "@shared/contracts";
 import { getHookByToken, resumeHook } from "workflow/api";
 import { env } from "../../infra/vcs-config.js";
 import { HookNotFoundError } from "workflow/errors";
 import type { Db } from "../../db/types.js";
+import { readRepositoryAnswer } from "../../engine/work-scope/answer.js";
+import { decideWorkScope } from "../../engine/work-scope/decide.js";
+import { loadRepositoryCatalogEntries } from "../repository-catalog/index.js";
+import {
+  getRepositoryCatalogStateRow,
+  listRepositoryCatalogRows,
+} from "../../db/repositories/repository-catalog.js";
+import {
+  applyAnswerWorkScopePlan,
+  applyConnectedAnswerWorkScopePlan,
+  readConnectedWorkScope,
+  readWorkScope,
+} from "../../db/repositories/work-scope.js";
 import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
@@ -95,6 +112,51 @@ interface AnswerPersistence {
   }): Promise<"retryable" | "exhausted" | "lost">;
   retireGoneTicket(row: HookClarificationRow): Promise<void>;
   markResumed(runId: string): Promise<void>;
+  /** Every catalog key and the enabled half of it. An answer is read against
+   *  every key, enabled or not, because a person naming back the repository
+   *  they were asked about must be understood even while the catalog refuses
+   *  it. */
+  repositoryCatalog(): Promise<{
+    activated: boolean;
+    keys: RepositoryKey[];
+    enabledKeys: RepositoryKey[];
+  }>;
+  readWorkScope(subjectKey: string): Promise<WorkScope | null>;
+  applyAnswerWorkScope(input: {
+    subjectKey: string;
+    runId: string;
+    clarificationId: string;
+    plan: WorkScopeWritePlan;
+  }): Promise<{ outcome: "applied"; version: number } | { outcome: "already_applied" }>;
+}
+
+/** The catalog as the answer reader and the decision want it, from whichever
+ *  tier owns it on this path. */
+function catalogKeysOf(
+  activated: boolean,
+  rows: Array<{ provider: string; path: string; enabled: boolean }>,
+) {
+  const keys: RepositoryKey[] = [];
+  const enabledKeys: RepositoryKey[] = [];
+  for (const row of rows) {
+    const key = repositoryCatalogKey({ provider: row.provider, path: row.path });
+    keys.push(key);
+    if (row.enabled) enabledKeys.push(key);
+  }
+  return { activated, keys, enabledKeys };
+}
+
+async function readRepositoryCatalogKeys(db: Db) {
+  const [state, rows] = await Promise.all([
+    getRepositoryCatalogStateRow(db),
+    listRepositoryCatalogRows(db),
+  ]);
+  return catalogKeysOf(state.activated, rows);
+}
+
+async function loadConnectedRepositoryCatalogKeys() {
+  const { state, entries } = await loadRepositoryCatalogEntries();
+  return catalogKeysOf(state.activated, entries);
 }
 
 async function moveTicketToAiColumn(input: {
@@ -171,6 +233,9 @@ export function answerClarificationAndResume(
       finishFailedResume({ db, settings: input.cancelSettings, ...failed }),
     retireGoneTicket: (row) => retireClarificationForGoneTicket(db, row),
     markResumed: (runId) => markRunResumed(db, runId),
+    repositoryCatalog: () => readRepositoryCatalogKeys(db),
+    readWorkScope: (subjectKey) => readWorkScope(db, subjectKey),
+    applyAnswerWorkScope: (plan) => applyAnswerWorkScopePlan(db, plan),
   });
 }
 
@@ -188,6 +253,9 @@ export function answerConnectedClarificationAndResume(
       finishConnectedFailedResume({ settings: input.cancelSettings, ...failed }),
     retireGoneTicket: retireConnectedClarificationForGoneTicket,
     markResumed: markConnectedRunResumed,
+    repositoryCatalog: loadConnectedRepositoryCatalogKeys,
+    readWorkScope: readConnectedWorkScope,
+    applyAnswerWorkScope: applyConnectedAnswerWorkScopePlan,
   });
 }
 
@@ -251,8 +319,9 @@ async function answerClarificationAndResumeWithPersistence(
     return { kind: "conflict" };
   }
 
-  if (!answered.answeredAt) return { kind: "conflict" };
-  const reservation = await persistence.reserve(answered.id, answered.answeredAt);
+  const answeredAt = answered.answeredAt;
+  if (!answeredAt) return { kind: "conflict" };
+  const reservation = await persistence.reserve(answered.id, answeredAt);
   if (!reservation) return { kind: "conflict" };
 
   // Mirror the answer into the ticket. The question was posted there publicly,
@@ -279,12 +348,17 @@ async function answerClarificationAndResumeWithPersistence(
       });
   }
 
+  // Before the resume, because the resumed run reads the RECORD and never the
+  // answer text: a run that died between the two would otherwise lose what a
+  // person said, and the next run would ask them again.
+  await recordRepositoryAnswer(persistence, { row, answer, answeredAt, answerer });
+
   try {
     await resumeHook(answered.hookToken, {
       answer,
       answeredById: answerer.id,
       answeredByLabel: answerer.label,
-      answeredAt: answered.answeredAt?.toISOString() ?? new Date().toISOString(),
+      answeredAt: answeredAt.toISOString(),
     });
   } catch (error) {
     // If the hook still exists, the resume definitely did not commit and the
@@ -314,6 +388,121 @@ async function answerClarificationAndResumeWithPersistence(
   await persistence.markResumed(row.runId).catch(() => {});
 
   return { kind: "answered", row: answered };
+}
+
+/** How the Jira comment path composes an answer: each qualifying comment as
+ *  "<author>: <body>", joined with a blank line
+ *  (`services/clarifications/resume-from-comments.ts:269-271`). The separator
+ *  and the pattern are the ones the expansion protocol's refusal reader applies
+ *  to the same text (`engine/repository-discovery/runner.ts:903-904`), so one
+ *  answer is never cut two ways. The space after the colon is what keeps
+ *  "github:acme/web" from reading as an author. */
+const COMPOSED_COMMENT_SEPARATOR = "\n\n";
+const COMPOSED_AUTHOR_PREFIX = /^[^:\n]+: /;
+
+/**
+ * The answer with each comment's composed author taken off the front of it, and
+ * every other byte kept: what the person wrote is the answer. Without this a
+ * bare reply of "api, web" arrives as "Filip Maszota: api, web" and names
+ * nobody the reader knows.
+ *
+ * Per comment, never per line. The author is written once, in front of the
+ * FIRST line of a comment, and every line under it is the person's own: someone
+ * answering "api: the backend" on the second line means that repository, and
+ * taking the name off there would hand the reader prose and get them asked the
+ * same question again. The pattern cannot cross a newline, so applying it to
+ * the whole comment already reaches only its first line.
+ */
+function withoutComposedAuthors(answer: string): string {
+  return answer
+    .split(COMPOSED_COMMENT_SEPARATOR)
+    .map((comment) => comment.replace(COMPOSED_AUTHOR_PREFIX, ""))
+    .join(COMPOSED_COMMENT_SEPARATOR);
+}
+
+/**
+ * Decide and record a person's answer to a repository question, once, here,
+ * where it arrives.
+ *
+ * The three answer channels all reach this function, and a run dies seconds
+ * after an answer often enough that reading it later loses it: the next run
+ * then asks the same question, which is the defect the work scope record exists
+ * to end. So the answer becomes entries before the run wakes up, and the
+ * resumed run reads those entries rather than the sentence.
+ *
+ * An `answered` decision reads neither the catalog's usability nor the trigger
+ * policy, which is why this tier, which knows neither, may make it.
+ *
+ * A clarification that asked about no repository takes none of this: every
+ * question that is not about repositories, and every question asked before this
+ * shipped, behaves exactly as it did.
+ */
+async function recordRepositoryAnswer(
+  persistence: AnswerPersistence,
+  input: {
+    row: HookClarificationRow;
+    answer: string;
+    answeredAt: Date;
+    answerer: { id: string; label: string };
+  },
+): Promise<void> {
+  const askedRepositories = input.row.askedRepositories;
+  if (!askedRepositories || askedRepositories.length === 0) return;
+  const catalog = await persistence.repositoryCatalog();
+  const askedKeys = askedRepositories.map((repository) => repository.repositoryKey);
+  const answer = readRepositoryAnswer(withoutComposedAuthors(input.answer), {
+    catalogKeys: [...new Set([...catalog.keys, ...askedKeys])],
+    askedKeys,
+  });
+  // There is no branch here for a subject that could not be found, and none is
+  // missing. The clarification row names the subject the question was asked
+  // under, and a row without one cannot be read at all
+  // (`db/repositories/clarification-hooks.ts:33` refuses it), so the key below
+  // always exists. A subject with no row in `work_scopes` is not a subject
+  // nobody can name either: it is one nobody has decided anything about yet,
+  // and this answer is the first decision, which is what creates the record. A
+  // gate on that emptiness would drop exactly the first answer on a ticket,
+  // which is the answer this function exists to keep.
+  const scope = await persistence.readWorkScope(input.row.subjectKey);
+  const decision = decideWorkScope(
+    {
+      scope,
+      carriesRecord: true,
+      // Enabled is all this path can see: it holds no provider listing, so it
+      // cannot tell enabled from usable and says so by passing no unusable
+      // keys (A26).
+      catalog: {
+        activated: catalog.activated,
+        enabledKeys: catalog.enabledKeys,
+        unusableKeys: null,
+      },
+      // The definition pin, the trigger policy, the workspace and the selection
+      // flag each bound what a RUN may do with repositories. A person's answer
+      // is bounded by none of them, and an `answered` event reads none of them.
+      pinnedProviders: null,
+      pinnedKeys: null,
+      policy: null,
+      eventRelatedKeys: [],
+      attachedKeys: null,
+      selectionAnswered: false,
+      actor: {
+        kind: "person",
+        actorId: input.answerer.id,
+        actorLabel: input.answerer.label,
+      },
+      now: input.answeredAt.toISOString(),
+    },
+    { kind: "answered", clarificationId: input.row.id, asked: askedRepositories, answer },
+  );
+  // Not caught. A swallowed write is the lost answer this record exists to
+  // prevent, wearing a smile: the caller reports the failure, the channel
+  // delivers the same answer again, and the answer-once index applies it once.
+  await persistence.applyAnswerWorkScope({
+    subjectKey: input.row.subjectKey,
+    runId: input.row.runId,
+    clarificationId: input.row.id,
+    plan: decision.plan,
+  });
 }
 
 /** Finish a failed reserved delivery and report whether anything is left. */
