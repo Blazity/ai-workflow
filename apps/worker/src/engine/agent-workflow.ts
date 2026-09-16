@@ -14,6 +14,7 @@ import {
   resolveRunTriggerRepositoryPolicy,
   runWorkScopeSubjectKey,
 } from "./work-scope/policy.js";
+import { consumeWorkScopeAsk } from "./work-scope/context.js";
 import { computeUsageTotals } from "../sandbox/usage.js";
 import type { AgentOutput, PhaseUsage, ResearchResult, ReviewOutput } from "../sandbox/agents/types.js";
 import type { AgentKind } from "../sandbox/agents/index.js";
@@ -1097,6 +1098,10 @@ async function agentWorkflowBody(
       ...(runWorkScope === null ? {} : { workScope: runWorkScope }),
       ...(runTriggerPolicy.policy === null ? {} : { workScopePolicy: runTriggerPolicy.policy }),
       workScopePolicySource: runTriggerPolicy.source,
+      // Absent when the tracker did not say, and a replayed run started before
+      // this shipped has no such field in its stored ticket either: both read as
+      // "nobody knows who the bot is", which is what every run did until now.
+      ...(ticket.botAccountId ? { botAccountId: ticket.botAccountId } : {}),
       definitionId: plan.definitionId,
       definitionVersion: plan.version,
       definitionNodes: plan.nodes,
@@ -1228,6 +1233,12 @@ async function agentWorkflowBody(
           throw new Error("trusted workspace manifest exists without a code sandbox");
         }
 
+        // What the question was about, when it was about repositories. It has to
+        // travel WITH the question: by answer time the clarification row is all
+        // that is left of it, so an answer with no repositories behind it
+        // settles nothing and the next run asks the same thing again. Consuming
+        // rather than reading is the helper's job, and its reason.
+        const workScopeAsk = consumeWorkScopeAsk(ctx);
         const clarification = await prepareClarificationHookStep({
           ticketKey: entry.ticketKey ?? null,
           subjectKey: entry.subjectKey,
@@ -1237,6 +1248,7 @@ async function agentWorkflowBody(
           definitionVersion: plan.version,
           questions,
           suggestedAnswers: suggestedAnswers ?? null,
+          ...(workScopeAsk ? { workScopeAsk } : {}),
         });
         const hook = createHook<
           | {

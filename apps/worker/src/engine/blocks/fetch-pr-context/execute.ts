@@ -1,4 +1,9 @@
-import type { RunRepositoryAccess } from "@shared/contracts";
+import {
+  repositoryCatalogKey,
+  type RunRepositoryAccess,
+  type WorkflowRepositoryScope,
+} from "@shared/contracts";
+import type { RunStartWorkScope } from "../../steps/run-start-settings.js";
 import type { SelectedRepository } from "../../../adapters/vcs/repository-directory.js";
 import type { ReviewThreadFeed } from "../../../adapters/vcs/types.js";
 import type { SelectedRepositoryPromptContext } from "../../../sandbox/context.js";
@@ -31,17 +36,37 @@ export async function blockPrTriggerRepositoriesStep(
   ];
 }
 
-/** Attach up to three PR siblings as read-only repositories. Optional provider
- * failures degrade to the primary PR review. */
+/** The eight repository workspace, restated here because `decide.ts` keeps its
+ *  own copy private. Both bound the same thing: what one run may check out. */
+const WORKSPACE_REPOSITORIES_MAX = 8;
+
+/** Attach up to three PR siblings as read-only repositories, then whatever else
+ * the subject's work scope already records as selected. Optional provider
+ * failures degrade to the primary PR review.
+ *
+ * READ ONLY where the record is concerned: this step keeps the retries it has
+ * always had, and a step that may run twice must not append to an append-only
+ * decision trail. What a pull request run derives about its own repository is
+ * written by the ticket path the next time that subject runs. */
 export async function blockPrTriggerRepositoriesWithSiblingsStep(
   runId: string,
   pr: PrTriggerPayload,
   repositoryAccess: RunRepositoryAccess,
+  /** The record frozen at run start and the definition's pin. An absent record,
+   *  a null one, or one holding no scope all mean the same thing here: this run
+   *  selects exactly what it selected before the record existed. */
+  options?: {
+    workScope?: RunStartWorkScope | null;
+    repositoryScope?: WorkflowRepositoryScope;
+  },
 ): Promise<SelectedRepository[]> {
   "use step";
   const primary = await blockPrTriggerRepositoriesStep(pr.prUrl, pr);
+  const recordedKeys = (options?.workScope?.scope?.entries ?? [])
+    .filter((entry) => entry.state === "selected")
+    .map((entry) => entry.repositoryKey);
   const { findConnectedRunPrSiblings } = await import("../../../db/repositories/runs.js");
-  const { createRepositoryDirectoryForProviders } = await import(
+  const { createRepositoryDirectoryForProviders, filterPinnedRepositories } = await import(
     "../../../adapters/vcs/repository-directory.js",
   );
   const { getConfiguredVcsProviders } = await import("../../../infra/vcs-config.js");
@@ -56,7 +81,11 @@ export async function blockPrTriggerRepositoriesWithSiblingsStep(
     repoPath: pr.repoPath,
     prNumber: pr.prNumber,
   });
-  if (lookup.status !== "siblings") return primary;
+  const siblings = lookup.status === "siblings" ? lookup.siblings : [];
+  // The listing is the only way to turn a recorded key back into a checkout, so
+  // it is fetched when either source has something to materialise. A run with
+  // neither returns here exactly as it always did, without the request.
+  if (siblings.length === 0 && recordedKeys.length === 0) return primary;
 
   let catalog;
   try {
@@ -72,7 +101,7 @@ export async function blockPrTriggerRepositoriesWithSiblingsStep(
   }
 
   const selectedSiblings: SelectedRepository[] = [];
-  for (const sibling of lookup.siblings.slice(0, 3)) {
+  for (const sibling of siblings.slice(0, 3)) {
     if (!mayRunTouchRepository(repositoryAccess, sibling)) {
       logger.warn(
         { runId, provider: sibling.provider, repoPath: sibling.repoPath },
@@ -132,13 +161,60 @@ export async function blockPrTriggerRepositoriesWithSiblingsStep(
       );
     }
   }
-  if (lookup.siblings.length > 3) {
+  if (siblings.length > 3) {
     logger.warn(
-      { runId, omitted: lookup.siblings.length - 3 },
+      { runId, omitted: siblings.length - 3 },
       "review_sibling_repository_limit_reached",
     );
   }
-  return [...primary, ...selectedSiblings];
+
+  // What this subject's work is already recorded to touch, after the pull
+  // request's own repository and its siblings have taken their places. The
+  // record is read, never written: no plan is applied here and no trail row is
+  // appended, so this step keeps the retries it has always had.
+  const selectedFromRecord: SelectedRepository[] = [];
+  const taken = new Set(
+    [...primary, ...selectedSiblings].map((repository) =>
+      repositoryCatalogKey({ provider: repository.provider, path: repository.repoPath }),
+    ),
+  );
+  // The definition's pin bounds the record like it bounds every other source.
+  // It is a capability, not a preference: a repository a person recorded on the
+  // ticket is still outside what this definition may check out.
+  const withinPin = new Set(
+    filterPinnedRepositories(catalog, options?.repositoryScope).map((repository) =>
+      repositoryCatalogKey({ provider: repository.provider, path: repository.repoPath }),
+    ),
+  );
+  for (const key of recordedKeys) {
+    if (taken.size >= WORKSPACE_REPOSITORIES_MAX) break;
+    if (taken.has(key)) continue;
+    const metadata = catalog.find(
+      (repository) =>
+        repositoryCatalogKey({ provider: repository.provider, path: repository.repoPath }) === key,
+    );
+    if (!metadata || metadata.archived || !metadata.defaultBranch) {
+      logger.warn({ runId, repositoryKey: key }, "work_scope_repository_not_materialisable");
+      continue;
+    }
+    if (!withinPin.has(key)) {
+      logger.warn({ runId, repositoryKey: key }, "work_scope_repository_outside_pin");
+      continue;
+    }
+    if (!mayRunTouchRepository(repositoryAccess, metadata)) {
+      logger.warn({ runId, repositoryKey: key }, "work_scope_repository_not_allowed");
+      continue;
+    }
+    taken.add(key);
+    selectedFromRecord.push({
+      provider: metadata.provider,
+      repoPath: metadata.repoPath,
+      defaultBranch: metadata.defaultBranch,
+      selectedRationale: "recorded on this work",
+    });
+  }
+
+  return [...primary, ...selectedSiblings, ...selectedFromRecord];
 }
 
 /** Repository whose PR threads the review ledger tracks: the one the run was

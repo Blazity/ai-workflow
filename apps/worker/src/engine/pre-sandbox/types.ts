@@ -1,6 +1,9 @@
 import type {
   RunRepositoryAccess,
   SettingsSnapshot,
+  TriggerRepositoryPolicy,
+  WorkScopeActor,
+  WorkScopeAskedRepository,
   WorkflowRepositoryScope,
 } from "@shared/contracts";
 import type {
@@ -8,6 +11,21 @@ import type {
   VcsProvider,
 } from "../../adapters/vcs/repository-directory.js";
 import type { RepositoryCatalogEntry } from "../repository-discovery/catalog.js";
+import type { RunStartWorkScope } from "../steps/run-start-settings.js";
+
+/**
+ * The repositories a question a pre-sandbox step raised named, and why each one
+ * was asked.
+ *
+ * It travels out of the step because the reason is recorded when the question
+ * is ASKED, never when it is answered: by answer time the clarification row
+ * carries prose and nothing else, and a person's "continue without it" would
+ * append a line naming no repository.
+ */
+export interface PreSandboxWorkScopeAsk {
+  subjectKey: string;
+  askedRepositories: WorkScopeAskedRepository[];
+}
 
 export interface PreSandboxRepositoryDiscovery {
   catalog: RepositoryCatalogEntry[];
@@ -53,6 +71,7 @@ export type PreSandboxStepResult =
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
       repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
+      workScopeAsk?: PreSandboxWorkScopeAsk;
     }
   | {
       status: "halt";
@@ -76,6 +95,7 @@ export type PreSandboxStepResult =
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
       repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
+      workScopeAsk?: PreSandboxWorkScopeAsk;
     };
 
 export const preSandboxTicketInputFields = [
@@ -93,7 +113,16 @@ export interface PreSandboxStepContext {
     title?: string;
     description?: string;
     acceptanceCriteria?: string;
-    comments?: Array<{ author: string; body: string; createdAt?: string }>;
+    /** `accountId` is the tracker's stable identity for the author, and it is
+     *  here for one reason: it is the only way a step can tell a comment this
+     *  installation's bot wrote from one a person wrote. Optional, because a
+     *  tracker that does not report it leaves it absent. */
+    comments?: Array<{
+      author: string;
+      accountId?: string;
+      body: string;
+      createdAt?: string;
+    }>;
     labels?: string[];
   };
   run: {
@@ -114,6 +143,36 @@ export interface PreSandboxStepContext {
    *  reason: a step that reads a setting from the environment instead would
    *  answer differently on a replay. */
   settings: SettingsSnapshot;
+  /**
+   * Which repositories this subject's work touches and why, frozen at run
+   * start, together with whether a person has already answered the
+   * which-of-these question on it.
+   *
+   * ABSENT IS THE WHOLE OLD PATH. A run replaying a run-start result stored
+   * before the record existed, a schedule occurrence, a delivery that resolved
+   * no subject and an approved plan all arrive without it, and every decision
+   * below then behaves exactly as it did before the record shipped. There is no
+   * empty record standing in for one that was never read.
+   */
+  workScope?: RunStartWorkScope;
+  /** The repository policy this run's trigger stands under. Read beside
+   *  `workScope`: without it nothing may be decided, because treating a missing
+   *  policy as "no candidates" would start a run with no repositories and look
+   *  like a decision somebody made. */
+  workScopePolicy?: TriggerRepositoryPolicy;
+  /** Who a decision of this run is recorded as. Absent on a run whose
+   *  definition is not identified, where no entry could name its author. */
+  workScopeActor?: WorkScopeActor;
+  /**
+   * The account this installation's bot posts as on the tracker, when the run
+   * could read it.
+   *
+   * ABSENT MEANS UNKNOWN, never "there is no bot", and a step that cannot tell
+   * the two apart counts every comment exactly as it did before: a fail-closed
+   * reading here would drop a person's comments too, and a repository named
+   * only in one would stop being matched.
+   */
+  botAccountId?: string;
   /**
    * The human reply this attempt is resuming from, present only when the block
    * that raised the clarification is the one that owns repository selection.
@@ -180,6 +239,12 @@ export interface RunPreSandboxPhaseInput {
   settings: PreSandboxStepContext["settings"];
   repositoryScope?: PreSandboxStepContext["repositoryScope"];
   clarification?: PreSandboxStepContext["clarification"];
+  /** Forwarded onto every step's context by the runner. Optional, and absent
+   *  means the whole old path: see `PreSandboxStepContext`. */
+  workScope?: PreSandboxStepContext["workScope"];
+  workScopePolicy?: PreSandboxStepContext["workScopePolicy"];
+  workScopeActor?: PreSandboxStepContext["workScopeActor"];
+  botAccountId?: PreSandboxStepContext["botAccountId"];
 }
 
 export type RunPreSandboxPhaseResult =
@@ -190,6 +255,7 @@ export type RunPreSandboxPhaseResult =
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
       repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
+      workScopeAsk?: PreSandboxWorkScopeAsk;
     }
   | {
       status: "halt";
@@ -204,4 +270,5 @@ export type RunPreSandboxPhaseResult =
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
       repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
+      workScopeAsk?: PreSandboxWorkScopeAsk;
     };

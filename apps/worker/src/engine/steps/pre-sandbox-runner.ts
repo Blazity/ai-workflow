@@ -38,6 +38,7 @@ export async function executePreSandboxPhase(
   let repositoryDiscovery: RunPreSandboxPhaseResult["repositoryDiscovery"];
   let repositoryScopeNarrowing: RunPreSandboxPhaseResult["repositoryScopeNarrowing"];
   let repositoryCatalogDegradation: RunPreSandboxPhaseResult["repositoryCatalogDegradation"];
+  let workScopeAsk: RunPreSandboxPhaseResult["workScopeAsk"];
 
   for (const step of config.preSandbox.steps) {
     const handler = registry[step.uses];
@@ -62,6 +63,14 @@ export async function executePreSandboxPhase(
             settings: input.settings,
             ...(input.repositoryScope ? { repositoryScope: input.repositoryScope } : {}),
             ...(input.clarification ? { clarification: input.clarification } : {}),
+            // Forwarded one by one rather than spread, so a field the caller
+            // never read stays absent here: absent is the old path, and an
+            // `undefined` that a spread turned into a present key would be a
+            // record nobody read standing in for one that was never there.
+            ...(input.workScope ? { workScope: input.workScope } : {}),
+            ...(input.workScopePolicy ? { workScopePolicy: input.workScopePolicy } : {}),
+            ...(input.workScopeActor ? { workScopeActor: input.workScopeActor } : {}),
+            ...(input.botAccountId ? { botAccountId: input.botAccountId } : {}),
           },
           config: step.with,
           step,
@@ -85,6 +94,9 @@ export async function executePreSandboxPhase(
       if (result.repositoryCatalogDegradation) {
         repositoryCatalogDegradation = result.repositoryCatalogDegradation;
       }
+      if (result.workScopeAsk) {
+        workScopeAsk = result.workScopeAsk;
+      }
 
       if (result.status === "halt") {
         return {
@@ -98,6 +110,7 @@ export async function executePreSandboxPhase(
           repositoryDiscovery,
           repositoryScopeNarrowing,
           repositoryCatalogDegradation,
+          workScopeAsk,
         };
       }
     } catch (err) {
@@ -127,6 +140,7 @@ export async function executePreSandboxPhase(
     repositoryDiscovery,
     repositoryScopeNarrowing,
     repositoryCatalogDegradation,
+    workScopeAsk,
   };
 }
 

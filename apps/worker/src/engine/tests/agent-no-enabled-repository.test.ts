@@ -65,6 +65,13 @@ vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
 vi.mock("../../db/repositories/settings.js", () => ({
   readAllConnectedSettings: async () => [],
 }));
+// The run start reads the subject's work scope beside the settings, and this
+// file's db client is a bare object. No record: what a subject that has never
+// been decided on looks like, which is every subject in these cases.
+vi.mock("../../db/repositories/work-scope.js", () => ({
+  readConnectedWorkScope: async () => null,
+  readConnectedWorkScopeSelectionAnswered: async () => false,
+}));
 // The catalog decides access and enables nothing: the state every test here is
 // about.
 vi.mock("../../db/repositories/repository-catalog.js", () => ({

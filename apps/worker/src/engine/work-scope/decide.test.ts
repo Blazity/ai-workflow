@@ -126,7 +126,7 @@ describe("decideWorkScope decision table", () => {
         context({
           policy: { candidates: { kind: "listed", repositoryKeys: [API] }, expansion: "never" },
           scope: scopeOf(
-            entry({ repositoryKey: API, origin: "inferred" }),
+            entry({ repositoryKey: API, origin: "trigger_policy" }),
             entry({ repositoryKey: WEB, origin: "person", decidedBy: person }),
             entry({ repositoryKey: DOCS, origin: "workflow_owned_branch" }),
           ),
@@ -149,7 +149,7 @@ describe("decideWorkScope decision table", () => {
         context({
           attachedKeys: HELD.slice(0, 7),
           scope: scopeOf(
-            entry({ repositoryKey: WEB, origin: "inferred" }),
+            entry({ repositoryKey: WEB, origin: "trigger_policy" }),
             entry({ repositoryKey: API, origin: "person", decidedBy: person }),
           ),
         }),
@@ -174,7 +174,7 @@ describe("decideWorkScope decision table", () => {
       const decision = decide(
         context({
           scope: scopeOf(
-            entry({ repositoryKey: BROKEN, origin: "inferred" }),
+            entry({ repositoryKey: BROKEN, origin: "trigger_policy" }),
             entry({ repositoryKey: LEGACY, origin: "person", decidedBy: person }),
           ),
         }),
@@ -196,6 +196,58 @@ describe("decideWorkScope decision table", () => {
           { repositoryKey: LEGACY, reason: "outside_catalog" },
           { repositoryKey: BROKEN, reason: "outside_catalog" },
         ],
+        editRejected: [],
+        trailTruncated: 0,
+      });
+    });
+
+    it("selected, origin inferred: passed over in silence, while a person's entry on the same record is attached", () => {
+      const inherited = decide(
+        context({ scope: scopeOf(entry({ repositoryKey: API, origin: "inferred" })) }),
+        { kind: "run_started" },
+      );
+
+      // No trail row either: the record already says who inferred it and when,
+      // and a refusal reason for "we do not inherit a guess" would repeat in
+      // every run of every subject.
+      expect(inherited).toEqual({
+        plan: emptyPlan,
+        attach: [],
+        ask: [],
+        refused: [],
+        editRejected: [],
+        trailTruncated: 0,
+      });
+
+      const chosen = decide(
+        context({ scope: scopeOf(entry({ repositoryKey: API, origin: "person", decidedBy: person })) }),
+        { kind: "run_started" },
+      );
+
+      expect(chosen).toEqual({
+        plan: emptyPlan,
+        attach: [API],
+        ask: [],
+        refused: [],
+        editRejected: [],
+        trailTruncated: 0,
+      });
+    });
+
+    it("selected, origin a workflow owned branch, outside the pin: attached with no refusal", () => {
+      const decision = decide(
+        context({
+          pinnedKeys: [WEB],
+          scope: scopeOf(entry({ repositoryKey: API, origin: "workflow_owned_branch" })),
+        }),
+        { kind: "run_started" },
+      );
+
+      expect(decision).toEqual({
+        plan: emptyPlan,
+        attach: [API],
+        ask: [],
+        refused: [],
         editRejected: [],
         trailTruncated: 0,
       });
@@ -458,12 +510,12 @@ describe("decideWorkScope decision table", () => {
       });
     });
 
-    it("key usable, not reachable: refused outside_policy", () => {
+    it("key usable, outside the pin, origin the pin binds: refused outside_policy", () => {
       const decision = decide(context({ pinnedProviders: ["gitlab"] }), {
         kind: "derived",
-        origin: "workflow_owned_branch",
+        origin: "ticket_text",
         repositoryKeys: [API],
-        rationale: "Branch ai/AWP-211.",
+        rationale: "Ticket text names api.",
       });
 
       expect(decision).toEqual({
@@ -475,6 +527,36 @@ describe("decideWorkScope decision table", () => {
         attach: [],
         ask: [],
         refused: [{ repositoryKey: API, reason: "outside_policy" }],
+        editRejected: [],
+        trailTruncated: 0,
+      });
+    });
+
+    it("key usable, outside the pin, origin a workflow owned branch: attached and recorded, with no refusal", () => {
+      const decision = decide(context({ pinnedProviders: ["gitlab"] }), {
+        kind: "derived",
+        origin: "workflow_owned_branch",
+        repositoryKeys: [API],
+        rationale: "Branch ai/AWP-211.",
+      });
+      const branchEntry = {
+        repositoryKey: API,
+        state: "selected",
+        origin: "workflow_owned_branch",
+        rationale: "Branch ai/AWP-211.",
+        decidedBy: run,
+        decidedAt: now,
+      };
+
+      expect(decision).toEqual({
+        plan: {
+          upserts: [{ entry: branchEntry, replacesExpired: false }],
+          deletes: [],
+          trail: [{ kind: "entry_written", entry: branchEntry, previousState: null }],
+        },
+        attach: [API],
+        ask: [],
+        refused: [],
         editRejected: [],
         trailTruncated: 0,
       });
@@ -1764,14 +1846,23 @@ describe("decideWorkScope sequences", () => {
     });
   });
 
-  it("f) a listed policy filters an inherited inferred entry but not a person's or a workflow owned branch's", () => {
+  it("f) an inherited inferred entry is attached under no policy, while a person's and a workflow owned branch's survive a narrow one", () => {
     const listedWeb = { candidates: { kind: "listed" as const, repositoryKeys: [WEB] }, expansion: "attach" as const };
+    const everything = {
+      candidates: { kind: "enabled_catalog" as const },
+      expansion: "attach" as const,
+    };
 
-    expect(
-      decide(context({ policy: listedWeb, scope: scopeOf(entry({ repositoryKey: API, origin: "inferred" })) }), {
-        kind: "run_started",
-      }),
-    ).toMatchObject({ attach: [], refused: [{ repositoryKey: API, reason: "outside_policy" }] });
+    // An inference is not inherited, so the policy never gets to speak about
+    // it: no attach under the narrow policy, and none under the widest one
+    // either, where a candidate of any other origin would have been taken.
+    for (const policy of [listedWeb, everything]) {
+      expect(
+        decide(context({ policy, scope: scopeOf(entry({ repositoryKey: API, origin: "inferred" })) }), {
+          kind: "run_started",
+        }),
+      ).toMatchObject({ attach: [], refused: [] });
+    }
     expect(
       decide(
         context({ policy: listedWeb, scope: scopeOf(entry({ repositoryKey: API, origin: "person", decidedBy: person })) }),
@@ -1790,12 +1881,12 @@ describe("decideWorkScope sequences", () => {
     const scope = scopeOf(
       entry({ repositoryKey: API, origin: "person", decidedBy: person }),
       entry({ repositoryKey: WEB, origin: "ticket_text" }),
-      entry({ repositoryKey: DOCS, origin: "inferred" }),
+      entry({ repositoryKey: DOCS, origin: "trigger_policy" }),
       entry({ repositoryKey: LEGACY, origin: "person", decidedBy: person }),
-      entry({ repositoryKey: BROKEN, origin: "inferred" }),
-      entry({ repositoryKey: "github:acme/old-1", origin: "inferred" }),
-      entry({ repositoryKey: "github:acme/old-2", origin: "inferred" }),
-      entry({ repositoryKey: "github:acme/old-3", origin: "inferred" }),
+      entry({ repositoryKey: BROKEN, origin: "trigger_policy" }),
+      entry({ repositoryKey: "github:acme/old-1", origin: "trigger_policy" }),
+      entry({ repositoryKey: "github:acme/old-2", origin: "trigger_policy" }),
+      entry({ repositoryKey: "github:acme/old-3", origin: "trigger_policy" }),
     );
     const policy = { candidates: { kind: "listed" as const, repositoryKeys: [WEB, TOOLS] }, expansion: "never" as const };
 
@@ -2077,7 +2168,7 @@ describe("decideWorkScope sequences", () => {
       context({
         catalog: { activated: true, enabledKeys: [API, ...forty], unusableKeys: [] },
         policy: { candidates: { kind: "listed", repositoryKeys: [API] }, expansion: "never" },
-        scope: scopeOf(...forty.map((repositoryKey) => entry({ repositoryKey, origin: "inferred" }))),
+        scope: scopeOf(...forty.map((repositoryKey) => entry({ repositoryKey, origin: "ticket_text" }))),
       }),
       { kind: "run_started" },
     );
@@ -2094,7 +2185,7 @@ describe("decideWorkScope sequences", () => {
   });
 
   it("m2) run_started over one key recorded twice refuses it once", () => {
-    const twice = entry({ repositoryKey: DOCS, origin: "inferred" });
+    const twice = entry({ repositoryKey: DOCS, origin: "ticket_text" });
     const decision = decide(
       context({
         policy: { candidates: { kind: "listed", repositoryKeys: [API] }, expansion: "never" },

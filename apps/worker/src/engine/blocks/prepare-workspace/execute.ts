@@ -53,11 +53,15 @@ import type {
   PreSandboxRepositoryCatalogDegradation,
   PreSandboxRepositoryDiscovery,
   PreSandboxRepositoryScopeNarrowing,
+  PreSandboxWorkScopeAsk,
 } from "../../pre-sandbox/types.js";
 import type {
   ApprovedRepositoryScope,
+  TriggerRepositoryPolicy,
+  WorkScopeActor,
   WorkflowRepositoryScope,
 } from "@shared/contracts";
+import type { RunStartWorkScope } from "../../steps/run-start-settings.js";
 
 interface PreSandboxTicketContext {
   ticket: {
@@ -65,13 +69,29 @@ interface PreSandboxTicketContext {
     title: string;
     description: string;
     acceptanceCriteria: string;
-    comments: Array<{ author: string; body: string; createdAt?: string }>;
+    /** `accountId` rides along so the selection can tell a comment this
+     *  installation's bot wrote from one a person wrote. */
+    comments: Array<{
+      author: string;
+      accountId?: string;
+      body: string;
+      createdAt?: string;
+    }>;
     labels: string[];
   };
   run: { branchName: string };
   repositoryScope?: WorkflowRepositoryScope;
   repositoryAccess: RunRepositoryAccess;
   settings: SettingsSnapshot;
+  /** The record, the policy and the actor this run decides its repositories
+   *  with. All three or none: absent puts the whole selection on the path it
+   *  took before the record existed. */
+  workScope?: RunStartWorkScope;
+  workScopePolicy?: TriggerRepositoryPolicy;
+  workScopeActor?: WorkScopeActor;
+  /** Absent means the run could not read who the bot is, which counts every
+   *  ticket comment exactly as it did before. */
+  botAccountId?: string;
 }
 
 interface WorkspaceAgentRuntime {
@@ -88,6 +108,7 @@ type PreSandboxOutcome =
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
       repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
+      workScopeAsk?: PreSandboxWorkScopeAsk;
     }
   | {
       status: "halt";
@@ -102,6 +123,7 @@ type PreSandboxOutcome =
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
       repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
+      workScopeAsk?: PreSandboxWorkScopeAsk;
     };
 
 async function blockPrepareWorkspacePreSandboxStep(
@@ -820,8 +842,28 @@ export async function ensureWorkspace(
         ctx.runId,
         ctx.entry.pr,
         ctx.repositories,
+        // Read only. A pull request run starts from the record like the ticket
+        // path does, but writes nothing back to it: this step keeps its retries,
+        // and a retried step must not append to an append-only trail.
+        {
+          workScope: ctx.workScope ?? null,
+          ...(ctx.repositoryScope ? { repositoryScope: ctx.repositoryScope } : {}),
+        },
       );
     } else {
+      // Who the record will name as the author of every entry this run writes.
+      // A run without a deployed definition behind it cannot be named that way,
+      // and an entry attributed to nobody is worse than no entry: the origin
+      // ranking is how a later run decides whether it may overwrite this one.
+      const workScopeActor: WorkScopeActor | null =
+        ctx.definitionId !== null && ctx.definitionVersion !== null
+          ? {
+              kind: "run",
+              runId: ctx.runId,
+              definitionId: ctx.definitionId,
+              definitionVersion: ctx.definitionVersion,
+            }
+          : null;
       const preSandbox = await blockPrepareWorkspacePreSandboxStep({
         ticket: {
           identifier: ctx.ticket.identifier,
@@ -840,6 +882,17 @@ export async function ensureWorkspace(
         repositoryAccess: ctx.repositories,
         settings: ctx.settings,
         ...(ctx.repositoryScope ? { repositoryScope: ctx.repositoryScope } : {}),
+        // The record, its policy and this run's identity travel together. All
+        // three or none: the selection decides nothing without a policy to
+        // decide against and no actor to name as the author of an entry.
+        ...(ctx.workScope && ctx.workScopePolicy && workScopeActor
+          ? {
+              workScope: ctx.workScope,
+              workScopePolicy: ctx.workScopePolicy,
+              workScopeActor,
+            }
+          : {}),
+        ...(ctx.botAccountId ? { botAccountId: ctx.botAccountId } : {}),
         // Structurally an answer to a which-repository question, not merely a
         // reply that happens to be in hand: the interpreter only ever returns a
         // clarification answer to the block that asked for it, and every
@@ -857,6 +910,13 @@ export async function ensureWorkspace(
       });
       if (preSandbox.repositoryScopeNarrowing) {
         ctx.repositoryScopeNarrowing = preSandbox.repositoryScopeNarrowing;
+      }
+      // Read before the halt below, because a selection question is exactly the
+      // case that halts: the clarification the run raises next has to name the
+      // repositories it asked about and why, or the answer comes back as prose
+      // nobody can attribute to a repository.
+      if (preSandbox.workScopeAsk) {
+        ctx.workScopeAsk = preSandbox.workScopeAsk;
       }
       // Emitted before the halt below returns, so a run that failed closed on an
       // incomplete catalog still tells an operator which provider was missing.

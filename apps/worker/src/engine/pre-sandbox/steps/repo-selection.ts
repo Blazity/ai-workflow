@@ -1,4 +1,10 @@
-import type { WorkflowRepositoryScope } from "@shared/contracts";
+import type {
+  RepositoryKey,
+  TriggerRepositoryPolicy,
+  WorkScope,
+  WorkScopeActor,
+  WorkflowRepositoryScope,
+} from "@shared/contracts";
 import {
   filterPinnedRepositories,
   pinnedScopeExcludesProvider,
@@ -9,12 +15,18 @@ import {
 } from "../../../adapters/vcs/repository-directory.js";
 import type {
   PreSandboxConfigStep,
+  PreSandboxPromptAddition,
   PreSandboxRepositoryCatalogDegradation,
   PreSandboxRepositoryScopeNarrowing,
   PreSandboxStepContext,
   PreSandboxStepHandler,
   PreSandboxStepResult,
 } from "../types.js";
+import {
+  createRunWorkScopeRecorder,
+  workScopeRepositoryKey,
+  type RunWorkScopeRecorder,
+} from "../../work-scope/context.js";
 import {
   addRepositoryDiscoveryRelationships,
   buildRepositoryCatalog,
@@ -52,7 +64,189 @@ export interface WorkflowOwnedBranchSelectionInput {
   branch: WorkflowOwnedBranch;
 }
 
-export const repoSelectionStep: PreSandboxStepHandler = async ({ context, step }) => {
+/**
+ * The selection, and the work scope decisions it made on the way.
+ *
+ * The recorder travels in a box rather than in the return value because the
+ * selection below returns from eight places and the caller needs the recorder
+ * from every one of them, including the ones that halt. Absent means this run
+ * read no record, which is the whole path this file took before the record
+ * existed.
+ */
+interface WorkScopeCarrier {
+  recorder: RunWorkScopeRecorder | null;
+}
+
+/**
+ * Repository selection, and the one place the work scope of this subject is
+ * written.
+ *
+ * The write rides THIS step, `blockPrepareWorkspacePreSandboxStep`
+ * (`engine/blocks/prepare-workspace/execute.ts`, `maxRetries = 0`), through the
+ * equally retry-free `runPreSandboxPhase`. It may not ride workflow scope:
+ * a replay of a parked run re-runs workflow scope and would append the trail a
+ * second time.
+ */
+export const repoSelectionStep: PreSandboxStepHandler = async (stepInput) => {
+  const carrier: WorkScopeCarrier = { recorder: null };
+  const result = await selectRepositoriesForRun(stepInput, carrier);
+  return recordWorkScopeDecisions(result, carrier.recorder);
+};
+
+/**
+ * Apply what the selection decided, then say what it left out.
+ *
+ * The write goes through the connected wrapper, never through the database
+ * client: the engine holds no handle, and it reaches a store exactly as the run
+ * start reaches settings and the catalog.
+ *
+ * A FAILED WRITE IS LOGGED AND THE RUN CONTINUES, and that is deliberately the
+ * opposite of the answer path, which must not swallow one. The difference is
+ * what the write is a copy of. Here it summarises what this run computed from
+ * inputs that all still exist: the same ticket, the same policy, the same
+ * catalog. The next run computes the same thing again, so a lost write costs a
+ * debugging line and at worst one recomputation. There, the write was the ONLY
+ * copy of a living person's decision, which nobody will enter a second time
+ * because the question is closed; swallowing that is precisely the failure the
+ * record exists to end. The log line carries the subject and the run so it can
+ * be found rather than merely counted.
+ */
+async function recordWorkScopeDecisions(
+  result: PreSandboxStepResult,
+  recorder: RunWorkScopeRecorder | null,
+): Promise<PreSandboxStepResult> {
+  if (!recorder) return result;
+  const runId = recorder.runId;
+  if (runId !== null && recorder.plans.length > 0) {
+    try {
+      const { applyConnectedRunWorkScopePlan } = await import(
+        "../../../db/repositories/work-scope.js"
+      );
+      for (const plan of recorder.plans) {
+        await applyConnectedRunWorkScopePlan({
+          subjectKey: recorder.subjectKey,
+          runId,
+          plan,
+        });
+      }
+    } catch (error) {
+      const { logger } = await import("../../../infra/logger.js");
+      logger.warn(
+        {
+          subjectKey: recorder.subjectKey,
+          runId,
+          err: error instanceof Error ? error.message : String(error),
+        },
+        "work_scope_write_failed",
+      );
+    }
+  }
+  return withWorkScopeOutcome(result, recorder);
+}
+
+/** The ask a question carried, and the sentences saying what the run left out,
+ *  folded into whatever text this result already shows a person. */
+function withWorkScopeOutcome(
+  result: PreSandboxStepResult,
+  recorder: RunWorkScopeRecorder,
+): PreSandboxStepResult {
+  const ask =
+    recorder.ask.length > 0
+      ? {
+          workScopeAsk: {
+            subjectKey: recorder.subjectKey,
+            askedRepositories: recorder.ask,
+          },
+        }
+      : {};
+  const notes = recorder.notes.join(" ");
+  if (notes.length === 0) return { ...result, ...ask };
+  if (result.status === "halt") {
+    // The halt message is the run's status reason and the ticket comment, so a
+    // repository the run refused is named exactly where a person is already
+    // reading about the run stopping.
+    //
+    // Unless the halt is a QUESTION, and then the message is not what anyone
+    // sees: the block renders the questions and falls back to the message only
+    // when there are none. So the sentences ride the first question as well,
+    // ahead of it, because "which of these should this ticket work on" reads as
+    // a complete list to someone who was never told what the run had to leave
+    // out. This is the same text in both fields on purpose; only one of them is
+    // ever shown.
+    const asked = result.outcome === "needs_clarification" ? (result.questions ?? []) : [];
+    return {
+      ...result,
+      ...ask,
+      ...(asked.length > 0
+        ? {
+            questions: asked.map((question, index) =>
+              index === 0 ? `${notes} ${question}` : question,
+            ),
+          }
+        : {}),
+      message: `${result.message} ${notes}`,
+      ...(result.cause ? { cause: `${result.cause} ${notes}` } : {}),
+    };
+  }
+  const addition: PreSandboxPromptAddition = {
+    target: ["research", "implementation", "review"],
+    title: "Repositories left out",
+    content: recorder.notes.map((note) => `- ${note}`).join("\n"),
+  };
+  return {
+    ...result,
+    ...ask,
+    promptAdditions: [...(result.promptAdditions ?? []), addition],
+  };
+}
+
+/**
+ * The record as this run must read it, or null when it read none.
+ *
+ * A resumed run re-reads. Its frozen copy predates the answer that woke it, and
+ * the answer was decided and recorded the moment it ARRIVED, so the record is
+ * the whole of what it meant: the entries it wrote and whether the selection
+ * question is now settled. The re-read also sees a panel edit made in between,
+ * which is the fresher truth rather than a staler one.
+ */
+async function readRunWorkScope(
+  context: PreSandboxStepContext,
+): Promise<RunWorkScopeSelectionInput | null> {
+  const frozen = context.workScope;
+  const policy = context.workScopePolicy;
+  const actor = context.workScopeActor;
+  // All three or none. A record with no policy would have to be decided against
+  // "no candidates", which starts a run with no repositories and reads like a
+  // decision somebody made; an entry with no actor could not name its author.
+  if (!frozen || !policy || !actor) return null;
+  let scope: WorkScope | null = frozen.scope;
+  let selectionAnswered = frozen.selectionAnswered;
+  if (context.clarification) {
+    const { readConnectedWorkScope, readConnectedWorkScopeSelectionAnswered } = await import(
+      "../../../db/repositories/work-scope.js"
+    );
+    [scope, selectionAnswered] = await Promise.all([
+      readConnectedWorkScope(frozen.subjectKey),
+      readConnectedWorkScopeSelectionAnswered(frozen.subjectKey),
+    ]);
+  }
+  return {
+    subjectKey: frozen.subjectKey,
+    scope,
+    selectionAnswered,
+    catalogActivated: context.repositoryAccess.activated,
+    policy,
+    actor,
+    // Read here, in a step, so the decision itself never touches a clock: a
+    // replay replays this step's stored result and never reads the time again.
+    now: new Date().toISOString(),
+  };
+}
+
+const selectRepositoriesForRun = async (
+  { context, step }: Parameters<PreSandboxStepHandler>[0],
+  carrier: WorkScopeCarrier,
+): Promise<PreSandboxStepResult> => {
   // A repository named by the definition is a repository this run is ASKED to
   // touch, so a pin the catalog withholds is refused here, by name, before the
   // provider listing and long before a sandbox. What happened instead was worse
@@ -137,14 +331,17 @@ export const repoSelectionStep: PreSandboxStepHandler = async ({ context, step }
     .map((failure) => failure.provider);
 
   const directAnswer = latestClarificationAnswer(context.ticket.comments);
+  const workScope = await readRunWorkScope(context);
   const selected = selectRepositoriesFromMetadata({
-    ticketText: ticketText(context.ticket),
+    ticketText: ticketText(context.ticket, context.botAccountId),
     repositories,
     workflowOwnedBranches,
     ...(repositoryScope ? { repositoryScope } : {}),
     ...(incompleteCatalogProviders.length > 0 ? { incompleteCatalogProviders } : {}),
     ...(directAnswer ? { directAnswer } : {}),
+    ...(workScope ? { workScope } : {}),
   });
+  carrier.recorder = selected.workScope ?? null;
   const narrowing = scopeNarrowing(repositories, repositoryScope);
   const degradation = catalogDegradation(
     listing.failures,
@@ -210,7 +407,23 @@ export const repoSelectionStep: PreSandboxStepHandler = async ({ context, step }
     const remembered = routingMemoryEnabled(context.settings)
       ? await rememberedRoutingSelection(context.ticket.labels ?? [], selected.catalog)
       : null;
-    if (remembered) return selectionResult([remembered]);
+    if (remembered) {
+      // A remembered routing answer is a guess learned across tickets, so it is
+      // recorded as `inferred`, the lowest origin: anything the ticket, a
+      // branch or a person says overwrites it on the next run. A record that
+      // refuses it leaves the run on the discovery path below rather than
+      // attaching a repository the record already decided against.
+      const recorder = carrier.recorder;
+      const attached =
+        recorder === null ||
+        recorder.decide({
+          kind: "derived",
+          origin: "inferred",
+          repositoryKeys: [workScopeRepositoryKey(remembered)],
+          rationale: ROUTING_MEMORY_RATIONALE,
+        }).attach.length > 0;
+      if (attached) return selectionResult([remembered]);
+    }
     let relationshipSources: RepositoryRelationshipSource[] = [];
     try {
       const { listConnectedRepositoryRules } = await import(
@@ -742,6 +955,57 @@ function scopeNarrowing(
   };
 }
 
+/** What the selection reads of the work scope. The catalog is not here because
+ *  this function builds it from the listing it already has: `usable` is known
+ *  only where the repositories were LISTED. */
+export interface RunWorkScopeSelectionInput {
+  subjectKey: string;
+  scope: WorkScope | null;
+  selectionAnswered: boolean;
+  /** Whether the catalog decides access at all. On a bridge it does not, and a
+   *  `not_enabled` entry may not expire, because every repository answers
+   *  enabled there and the expiry would ask the person a second time. */
+  catalogActivated: boolean;
+  policy: TriggerRepositoryPolicy;
+  actor: WorkScopeActor;
+  now: string;
+}
+
+/**
+ * The selection, plus the recorder holding every decision it made.
+ *
+ * The recorder is absent exactly when the caller passed no record, which keeps
+ * the old path's result byte for byte what it was: no extra key, nothing to
+ * apply, nothing to say.
+ */
+type SelectionOutcome = (
+  | { status: "selected"; repositories: SelectedRepository[] }
+  | {
+      status: "discovery_needed";
+      catalog: RepositoryCatalogEntry[];
+      mandatoryRepositories: SelectedRepository[];
+    }
+  | { status: "clarification_needed"; questions: string[] }
+  | {
+      status: "catalog_incomplete";
+      providers: RepositoryMetadata["provider"][];
+    }
+) & { workScope?: RunWorkScopeRecorder };
+
+/** More than this many decidable text matches is the ambiguity a person is
+ *  asked about. Counted AFTER the undecidable ones are dropped, so a ticket
+ *  naming five repositories of which two are open is not an ambiguity. */
+const TEXT_MATCH_AMBIGUITY_LIMIT = 3;
+
+/** Entry rationales. Evidence only, never a run id or a time: an upsert whose
+ *  every field equals the stored entry is not planned, so re-deriving the same
+ *  ticket on every run writes nothing and appends nothing. */
+const RECORD_RATIONALE = "recorded for this ticket";
+const WORKFLOW_OWNED_RATIONALE = "A workflow owned branch for this ticket lives here.";
+const TICKET_TEXT_ENTRY_RATIONALE = "The ticket text names this repository path.";
+const ONLY_ACCESSIBLE_RATIONALE = "The only repository this run could reach.";
+const ROUTING_MEMORY_RATIONALE = "A remembered routing answer for this ticket's labels.";
+
 export function selectRepositoriesFromMetadata(input: {
   ticketText: string;
   repositories: RepositoryMetadata[];
@@ -756,18 +1020,11 @@ export function selectRepositoriesFromMetadata(input: {
    *  typo tolerance) against every scoped repository, separately from the
    *  strict full-path scan over free-form ticket text below. */
   directAnswer?: string | null;
-}):
-  | { status: "selected"; repositories: SelectedRepository[] }
-  | {
-      status: "discovery_needed";
-      catalog: RepositoryCatalogEntry[];
-      mandatoryRepositories: SelectedRepository[];
-    }
-  | { status: "clarification_needed"; questions: string[] }
-  | {
-      status: "catalog_incomplete";
-      providers: RepositoryMetadata["provider"][];
-    } {
+  /** The record this run starts from, and the policy and pin that bound it.
+   *  ABSENT IS THE WHOLE OLD PATH: with no record every signal below decides
+   *  exactly what it decided before the record existed, and nothing is written. */
+  workScope?: RunWorkScopeSelectionInput;
+}): SelectionOutcome {
   const incompleteCatalogProviders = input.incompleteCatalogProviders ?? [];
   const catalog = buildRepositoryCatalogEntries(input.repositories);
   const usableKeys = new Set(
@@ -780,6 +1037,45 @@ export function selectRepositoriesFromMetadata(input: {
     usableRepositories.map((repo) => [repositoryKey(repo), repo]),
   );
   const selected = new Map<string, SelectedRepository>();
+  // The listing IS the catalog here, because it is already filtered by what this
+  // run may touch: on a bridge that is everything the providers offered, and on
+  // an activated catalog it is the enabled intersection. Usability is the one
+  // fact only a listing carries, which is why the decision happens here and not
+  // at run start.
+  const record = input.workScope
+    ? createRunWorkScopeRecorder({
+        ...input.workScope,
+        ...(input.repositoryScope ? { repositoryScope: input.repositoryScope } : {}),
+        catalog: {
+          activated: input.workScope.catalogActivated,
+          enabledKeys: input.repositories.map((repo) => repositoryKey(repo)),
+          unusableKeys: input.repositories
+            .map((repo) => repositoryKey(repo))
+            .filter((key) => !usableKeys.has(key)),
+        },
+      })
+    : null;
+  /** Every exit carries the recorder, so the caller can apply what was decided
+   *  from the eight places this function returns from. */
+  const done = <T extends SelectionOutcome>(result: T): SelectionOutcome =>
+    record ? { ...result, workScope: record } : result;
+
+  // The record comes first, and nothing below replaces what it seeds: every
+  // signal sets a key only when the map does not already hold it. The one
+  // exception is the workflow-owned branch just below, which overwrites in
+  // order to ADD its branch to a repository already chosen, never to choose a
+  // different one.
+  if (record) {
+    for (const key of record.decide({ kind: "run_started" }).attach) {
+      const repo = repositoriesByKey.get(key);
+      // The decision reads the catalog this function just built from the
+      // listing, so an attached key is always in it. Guarded anyway rather than
+      // asserted, because inventing a default branch for a repository the
+      // providers did not offer is the one failure mode worth being dull about.
+      if (!repo) continue;
+      selected.set(key, selectedRepository(repo, RECORD_RATIONALE));
+    }
+  }
 
   // Signal 0 is the definition pin below, but a repository carrying a
   // workflow-owned branch for this ticket enters first and is never subject to
@@ -796,6 +1092,19 @@ export function selectRepositoriesFromMetadata(input: {
       workflowOwnedBranch: owned.branch,
     });
   }
+  // A fact about the branch, re-derived on every run: when the ledger no longer
+  // names a repository, the entry the last run wrote for this origin goes with
+  // it. The keys are every branch the ledger holds, not only the ones the
+  // listing offered, so a branch whose repository the catalog withdrew is
+  // refused by name rather than silently dropped from the record.
+  record?.decide({
+    kind: "derived",
+    origin: "workflow_owned_branch",
+    repositoryKeys: record.boundEventKeys(
+      input.workflowOwnedBranches.map((owned) => workScopeRepositoryKey(owned)),
+    ),
+    rationale: WORKFLOW_OWNED_RATIONALE,
+  });
 
   // Pure intersection over what the server already offered, so the pin can only
   // ever remove candidates. Without a pin this is the input list untouched.
@@ -818,14 +1127,14 @@ export function selectRepositoriesFromMetadata(input: {
       // A pinned repository that is missing only because its provider never
       // answered is not an access problem the operator can fix in the pin.
       if (incompleteCatalogProviders.length > 0) {
-        return incompleteCatalog(incompleteCatalogProviders);
+        return done(incompleteCatalog(incompleteCatalogProviders));
       }
-      return {
+      return done({
         status: "clarification_needed",
         questions: [
           `Repositories pinned to this workflow are unavailable: ${unavailable.join(", ")}. Restore access to them or update the workflow's pinned repositories.`,
         ],
-      };
+      });
     }
     for (const repo of scopedByKey.values()) {
       const key = repositoryKey(repo);
@@ -833,20 +1142,89 @@ export function selectRepositoriesFromMetadata(input: {
         selected.set(key, selectedRepository(repo, "pinned to this workflow"));
       }
     }
+    // The pin short circuits the signals below, never the record: the run start
+    // above already seeded what the record holds, bounded by the pin, which is
+    // a capability bound rather than a policy. `filterPinnedRepositories` would
+    // strip anything outside it from the run anyway.
     // The initial-match limit below exists for ambiguity between competing
     // signals. An explicit operator pin is not ambiguous, so it does not apply.
-    return { status: "selected", repositories: [...selected.values()] };
+    return done({ status: "selected", repositories: [...selected.values()] });
   }
 
   const normalizedTicketText = input.ticketText.toLowerCase();
   const exactMatches = scopedRepositories.filter((repo) =>
     mentionsRepositoryPath(normalizedTicketText, repo.repoPath),
   );
-  for (const repo of exactMatches) {
-    const key = repositoryKey(repo);
-    if (!selected.has(key)) {
-      selected.set(key, selectedRepository(repo, "ticket mentions repository path"));
+  if (record) {
+    const matchedKeys = record.boundEventKeys(exactMatches.map((repo) => repositoryKey(repo)));
+    // Filtered BEFORE it is counted: what is unreachable and what the record
+    // already decided is not an open choice, so five matches of which two are
+    // still open is an ordinary derivation, not an ambiguity.
+    const decidable = record.decidableKeys(matchedKeys);
+    if (decidable.length > TEXT_MATCH_AMBIGUITY_LIMIT) {
+      const ambiguous = record.decide({ kind: "text_ambiguous", matchedKeys });
+      if (ambiguous.ask.length === 0) {
+        // The question was silenced, because this subject already carries an
+        // answer or a person's own selection. Staying silent about it is worse
+        // than deciding wrongly: the ticket visibly names repositories the run
+        // did not open, and with nothing said the person is left to conclude
+        // the run simply missed them. Say which ones, and why they were not
+        // taken, so a person who has changed their mind knows there is
+        // something to change.
+        const untaken = decidable.filter((key) => !selected.has(key));
+        if (untaken.length > 0) {
+          record.note(
+            `The ticket also names ${untaken.join(", ")}, and this run kept to the repositories already chosen on this work rather than asking again.`,
+          );
+        }
+      }
+    } else if (decidable.length > 0) {
+      for (const key of record.decide({
+        kind: "derived",
+        origin: "ticket_text",
+        repositoryKeys: decidable,
+        rationale: TICKET_TEXT_ENTRY_RATIONALE,
+      }).attach) {
+        const repo = repositoriesByKey.get(key);
+        if (repo && !selected.has(key)) {
+          selected.set(key, selectedRepository(repo, "ticket mentions repository path"));
+        }
+      }
+    } else if (matchedKeys.length === 0) {
+      // The evidence is gone, so what the old text matched goes with it. ONLY
+      // when the matcher found nothing at all: an empty event deletes this
+      // origin's entries, and a corrected ticket must never empty its own scope
+      // with nobody asked.
+      record.decide({
+        kind: "derived",
+        origin: "ticket_text",
+        repositoryKeys: [],
+        rationale: TICKET_TEXT_ENTRY_RATIONALE,
+      });
+    } else {
+      // Matches the run cannot take: nothing derived, nothing deleted, and the
+      // reason said out loud instead of a silently empty scope.
+      record.note(
+        `The ticket names ${matchedKeys.join(", ")}, and this run could take none of them, so nothing was derived from its text.`,
+      );
     }
+  } else {
+    for (const repo of exactMatches) {
+      const key = repositoryKey(repo);
+      if (!selected.has(key)) {
+        selected.set(key, selectedRepository(repo, "ticket mentions repository path"));
+      }
+    }
+  }
+
+  // A question about which of several repositories to start from wins over
+  // everything below: it is asked at most once per subject, and the decision
+  // module has already refused to raise it a second time.
+  if (record && record.ask.length > 0) {
+    return done({
+      status: "clarification_needed",
+      questions: [selectionQuestion(record.ask.map((asked) => asked.repositoryKey))],
+    });
   }
 
   // A direct reply to a prior which-repo clarification is a much higher-
@@ -855,7 +1233,12 @@ export function selectRepositoriesFromMetadata(input: {
   // owner/repo path the exact-mention scan above requires. Only added when it
   // resolves to exactly one repository. An ambiguous or unmatched reply is
   // left for the fallbacks below (discovery, or asking again).
-  if (input.directAnswer) {
+  // Skipped when a record is live: a person's answer was read and recorded the
+  // moment it arrived, so the run start above already attached what it named.
+  // Reading the text again here would decide the same repositories a second
+  // time, from prose, which is exactly the path that let one run's answer steer
+  // a later run.
+  if (input.directAnswer && !record) {
     const normalizedAnswer = normalizeRepoAnswer(input.directAnswer);
     const answerExactMatches = scopedRepositories.filter(
       (repo) =>
@@ -876,18 +1259,61 @@ export function selectRepositoriesFromMetadata(input: {
   }
 
   if (selected.size > 0) {
-    if (selected.size > 3) {
-      if (incompleteCatalogProviders.length > 0) {
-        return incompleteCatalog(incompleteCatalogProviders);
+    // Without a record the count over every signal is the only ambiguity gate
+    // there is, and it stays exactly what it was: nothing here may change a run
+    // that never had a record.
+    if (!record) {
+      if (selected.size > 3) {
+        if (incompleteCatalogProviders.length > 0) {
+          return incompleteCatalog(incompleteCatalogProviders);
+        }
+        return {
+          status: "clarification_needed",
+          questions: [
+            "More than 3 repositories match this ticket. Which repositories are essential for the initial research?",
+          ],
+        };
       }
-      return {
-        status: "clarification_needed",
-        questions: [
-          "More than 3 repositories match this ticket. Which repositories are essential for the initial research?",
-        ],
-      };
+      return done({ status: "selected", repositories: [...selected.values()] });
     }
-    return { status: "selected", repositories: [...selected.values()] };
+
+    // With a record the same gate counts only what a PERSON did not decide.
+    // Asking someone to narrow down their own answer is both rude and useless:
+    // their answer is exactly what closes this question on this subject.
+    const personDecided = new Set(
+      (input.workScope?.scope?.entries ?? [])
+        .filter((entry) => entry.origin === "person")
+        .map((entry) => entry.repositoryKey),
+    );
+    const undecided = [...selected.keys()].filter((key) => !personDecided.has(key));
+    if (undecided.length > TEXT_MATCH_AMBIGUITY_LIMIT) {
+      if (incompleteCatalogProviders.length > 0) {
+        return done(incompleteCatalog(incompleteCatalogProviders));
+      }
+      // Asked THROUGH the decision, never as loose prose. A question raised
+      // outside the record carries no repositories, and an answer to a question
+      // that carries none is dropped on arrival, so the next run counts the same
+      // repositories and asks again forever. This is the same loop the ask on
+      // the clarification closed, one gate further down.
+      const ambiguous = record.decide({
+        kind: "text_ambiguous",
+        matchedKeys: record.boundEventKeys(undecided),
+      });
+      if (ambiguous.ask.length > 0) {
+        return done({
+          status: "clarification_needed",
+          questions: [selectionQuestion(ambiguous.ask.map((asked) => asked.repositoryKey))],
+        });
+      }
+      // Silenced, so the run does NOT stop. This subject already carries an
+      // answer or a person's own selection, and stopping on a question nobody
+      // may be asked twice is the loop itself. Take the work and say what was
+      // decided without asking, which is the whole defence.
+      record.note(
+        `This run also took ${undecided.join(", ")} without asking which repositories to start from, because the repositories on this work were already decided.`,
+      );
+    }
+    return done({ status: "selected", repositories: [...selected.values()] });
   }
 
   // Degradation stops here on purpose. Every path above resolves the selection
@@ -903,7 +1329,7 @@ export function selectRepositoriesFromMetadata(input: {
   // down; the wrong repository is found much later, by a human, after the branch
   // and pull request already exist.
   if (incompleteCatalogProviders.length > 0) {
-    return incompleteCatalog(incompleteCatalogProviders);
+    return done(incompleteCatalog(incompleteCatalogProviders));
   }
 
   // A human answer that names repository paths none of which exist here gets the
@@ -926,7 +1352,12 @@ export function selectRepositoriesFromMetadata(input: {
   // genuinely do not resolve are named. Announcing that a repository sitting in
   // the catalog is unavailable is a confident, wrong statement to a human, worse
   // than the loop this fallback exists to end.
-  if (input.directAnswer) {
+  // Gated on the record for the same reason as the whole-reply scan above, and
+  // it is the LAST place where prose still decided a repository. Left open it
+  // would resolve an answer a second time, at random depending on how the
+  // sentence was written, and a loop caused by a question nobody recorded would
+  // look like one that "sometimes works".
+  if (input.directAnswer && !record) {
     const unresolved: string[] = [];
     const resolved = new Map<string, RepositoryMetadata>();
     for (const identity of parseRepositoryExpansionAnswer(input.directAnswer)) {
@@ -938,13 +1369,13 @@ export function selectRepositoriesFromMetadata(input: {
       for (const repo of matches) resolved.set(repositoryKey(repo), repo);
     }
     if (unresolved.length > 0) {
-      return {
+      return done({
         status: "clarification_needed",
         questions: [
           `These repositories named in the previous answer are not available to this workflow: ${unresolved.join(", ")}. ` +
             `Name a repository from the accessible catalog as "owner/repo", or as "github:owner/repo" to pin the provider.`,
         ],
-      };
+      });
     }
     // Everything named resolved, and to a single repository: an explicit choice
     // the whole-reply scan could not read. Honour it rather than asking again.
@@ -956,28 +1387,48 @@ export function selectRepositoriesFromMetadata(input: {
         repositoryKey(repo),
         selectedRepository(repo, "human clarification answer"),
       );
-      return { status: "selected", repositories: [...selected.values()] };
+      return done({ status: "selected", repositories: [...selected.values()] });
     }
   }
 
   if (scopedRepositories.length === 1) {
-    return {
-      status: "selected",
-      repositories: [
-        selectedRepository(scopedRepositories[0]!, "only accessible repository"),
-      ],
-    };
+    const only = scopedRepositories[0]!;
+    const attached =
+      record === null ||
+      record.decide({
+        kind: "derived",
+        origin: "inferred",
+        repositoryKeys: [repositoryKey(only)],
+        rationale: ONLY_ACCESSIBLE_RATIONALE,
+      }).attach.length > 0;
+    // A record that refuses the only repository this run can see leaves the run
+    // on the discovery path below rather than attaching one somebody excluded.
+    if (attached) {
+      selected.set(repositoryKey(only), selectedRepository(only, "only accessible repository"));
+      return done({ status: "selected", repositories: [...selected.values()] });
+    }
   }
 
   // Discovery hands the catalog to the model, so enforce the bounded limit here.
   // Deterministic selection above never fails on catalog size.
-  return {
+  return done({
     status: "discovery_needed",
     catalog: buildRepositoryCatalog(
       filterPinnedRepositories(input.repositories, input.repositoryScope),
     ),
     mandatoryRepositories: [...selected.values()],
-  };
+  });
+}
+
+/** The which-of-these question, naming every repository it asks about by its
+ *  full key. The answer is read back against those keys, so a question that
+ *  listed none of them could not be answered in a way anything could record. */
+function selectionQuestion(repositoryKeys: RepositoryKey[]): string {
+  return (
+    `More than ${TEXT_MATCH_AMBIGUITY_LIMIT} repositories match this ticket. ` +
+    "Which repositories are essential for the initial research? " +
+    `Reply with one or more of: ${repositoryKeys.join(", ")}.`
+  );
 }
 
 function incompleteCatalog(
@@ -1120,20 +1571,41 @@ function editDistance(a: string, b: string): number {
   return dp[rows - 1]![cols - 1]!;
 }
 
-function ticketText(ticket: {
-  identifier?: string;
-  title?: string;
-  description?: string;
-  acceptanceCriteria?: string;
-  comments?: Array<{ author: string; body: string; createdAt?: string }>;
-  labels?: string[];
-}): string {
+/**
+ * Everything on the ticket the path matcher reads, with this installation's own
+ * comments left out.
+ *
+ * The bot's question about repositories lists repository keys, so joining every
+ * comment made the workflow's own question read as if a person had written it:
+ * the ticket "mentioned" exactly the repositories the run had just asked about,
+ * and the next run matched them.
+ *
+ * `botAccountId` absent means the run could not read who the bot is, and then
+ * every comment counts exactly as it did before. Dropping them all instead
+ * would drop a person's comments too, and a repository named only in one would
+ * stop being matched, which trades a question too many for a repository too
+ * few.
+ */
+function ticketText(
+  ticket: {
+    identifier?: string;
+    title?: string;
+    description?: string;
+    acceptanceCriteria?: string;
+    comments?: Array<{ author: string; accountId?: string; body: string; createdAt?: string }>;
+    labels?: string[];
+  },
+  botAccountId?: string,
+): string {
+  const comments = (ticket.comments ?? []).filter(
+    (comment) => botAccountId === undefined || comment.accountId !== botAccountId,
+  );
   return [
     ticket.identifier,
     ticket.title,
     ticket.description,
     ticket.acceptanceCriteria,
-    ...(ticket.comments ?? []).map((comment) => comment.body),
+    ...comments.map((comment) => comment.body),
     ...(ticket.labels ?? []),
   ]
     .filter(Boolean)

@@ -43,6 +43,7 @@ import type { ResolvedHarnessRuntime } from "../../../sandbox/harness-runtime.js
 import type {
   PreSandboxRepositoryDiscovery,
   PreSandboxRepositoryScopeNarrowing,
+  PreSandboxWorkScopeAsk,
 } from "../../pre-sandbox/types.js";
 import type { ResearchRepository } from "../../../sandbox/agents/types.js";
 import type { RepositoryExpansionState } from "../../repository-discovery/runner.js";
@@ -108,6 +109,27 @@ export interface EngineCtx {
   /** Which rung of the A35 ladder answered, so a status reason can say why the
    *  run is bounded the way it is. */
   workScopePolicySource?: RunTriggerRepositoryPolicySource;
+  /**
+   * The repositories the last selection put to a person, with the reason each
+   * one was asked about, written by prepare_workspace when it raised a
+   * which-of-these question.
+   *
+   * It exists because the answer has to land on repository keys rather than on
+   * prose: the step that records the answer reads these keys, so a person
+   * writing "the first two" still resolves to the two repositories the question
+   * named. Absent means the run asked nothing about repositories.
+   */
+  workScopeAsk?: PreSandboxWorkScopeAsk;
+  /**
+   * The account the workflow's own ticket comments are posted under, resolved
+   * once at run start.
+   *
+   * Absent means the provider did not say, which is the behaviour every run had
+   * before this shipped: the bot's own questions are then read as evidence like
+   * anyone else's. Never a display name, because a person can be called that
+   * too.
+   */
+  botAccountId?: string;
   /**
    * The setup failures that stopped workspace creation, when one did.
    *

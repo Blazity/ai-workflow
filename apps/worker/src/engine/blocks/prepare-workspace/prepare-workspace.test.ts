@@ -1184,6 +1184,7 @@ describe("prepare_workspace execute", () => {
       "run-1",
       pr,
       ctx.repositories,
+      { workScope: null },
     );
     expect(mocks.runPreSandboxPhase).not.toHaveBeenCalled();
     expect(result.kind).toBe("next");
@@ -1736,6 +1737,7 @@ describe("prepare_workspace execute", () => {
       "run-1",
       pr,
       ctx.repositories,
+      { workScope: null },
     );
     expect(result.kind).toBe("next");
   });

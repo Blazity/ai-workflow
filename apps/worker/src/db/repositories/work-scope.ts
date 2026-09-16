@@ -724,3 +724,9 @@ export function applyConnectedAnswerWorkScopePlan(
 ) {
   return applyAnswerWorkScopePlan(getDb(), input);
 }
+
+export function applyConnectedRunWorkScopePlan(
+  input: Parameters<typeof applyRunWorkScopePlan>[1],
+) {
+  return applyRunWorkScopePlan(getDb(), input);
+}

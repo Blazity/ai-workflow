@@ -197,14 +197,24 @@ function readFacts(context: WorkScopeDecisionContext) {
   const isUsable = (key: RepositoryKey) =>
     enabled.has(key) && (unusable === null || !unusable.has(key));
   // The definition pin is a capability bound, like the catalog: the run strips
-  // anything outside it anyway, so nothing is exempt from it and nothing
-  // outside it is ever asked. It names repositories as well as providers, which
-  // is why both halves bind.
+  // anything outside it anyway, and nothing outside it is ever asked about. It
+  // names repositories as well as providers, which is why both halves bind.
   const isInPin = (key: RepositoryKey) =>
     (context.pinnedProviders === null ||
       context.pinnedProviders.some((provider) => key.startsWith(`${provider}:`))) &&
     (context.pinnedKeys === null || context.pinnedKeys.includes(key));
-  const isReachable = (key: RepositoryKey) => isUsable(key) && isInPin(key);
+  /**
+   * Reachable, for a repository arriving under a known origin.
+   *
+   * ONE ORIGIN IS EXEMPT FROM THE PIN: a workflow owned branch. The run already
+   * attaches that repository whatever the pin says, because dropping it strands
+   * the open pull request on that branch, so refusing it here would not remove
+   * it from the workspace. It would only make the run tell a person that a
+   * repository it is standing in is outside what this trigger may take.
+   * Everything else, a person's own selection included, stays inside the pin.
+   */
+  const isReachable = (key: RepositoryKey, origin?: WorkScopeOrigin) =>
+    isUsable(key) && (isInPin(key) || origin === "workflow_owned_branch");
   const isCandidate = (key: RepositoryKey): boolean => {
     const candidates = context.policy?.candidates;
     if (!candidates) return false;
@@ -480,9 +490,24 @@ function decideRunStart(
     // Already in the workspace: attaching it again would count it twice.
     if (decision.isAttached(key)) continue;
     if (entry.state === "selected") {
+      // An inference is true about the run that made it, never about the
+      // subject: "the only repository this run could reach" was a fact on the
+      // day one repository was enabled, and it becomes a lie the moment twenty
+      // are. The entry stays in the record as history, visible in the panel and
+      // over MCP, but it does not furnish a later run's workspace. Nothing is
+      // lost: both signals that write it, the only-accessible shortcut and the
+      // remembered routing answer, are recomputed on every run.
+      //
+      // DELIBERATELY SILENT: no refusal row. The reason dictionary has no
+      // reason meaning "we do not inherit a guess", and minting one for a line
+      // that would repeat in every run of every subject is noise, not debug.
+      // The entry is already visible in the record with its origin, its author
+      // and its date, which is all anyone needs to see where it came from. Do
+      // not "improve" this into a refusal later.
+      if (entry.origin === "inferred") continue;
       if (!facts.isUsable(key)) {
         decision.refuse(key, "outside_catalog");
-      } else if (!facts.isReachable(key)) {
+      } else if (!facts.isReachable(key, entry.origin)) {
         decision.refuse(key, "outside_policy");
       } else if (facts.isCandidate(key) || isExemptOrigin(entry.origin)) {
         if (decision.hasRoom()) decision.attach(key);
@@ -544,7 +569,7 @@ function decideDerived(
     } else if (!facts.isUsable(key)) {
       // A derived key never asks: nobody requested it.
       decision.refuse(key, "outside_catalog");
-    } else if (!facts.isReachable(key)) {
+    } else if (!facts.isReachable(key, event.origin)) {
       decision.refuse(key, "outside_policy");
     } else if (isAllowed(facts, entry, key) || isExemptOrigin(event.origin)) {
       if (decision.hasRoom()) {

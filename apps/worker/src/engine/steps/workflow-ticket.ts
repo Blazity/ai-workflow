@@ -1,10 +1,21 @@
 import type { TicketContent } from "../../adapters/issue-tracker/types.js";
 import type { AgentWorkflowInput } from "../agent-input.js";
 
+/**
+ * The ticket as this run reads it, plus who the workflow itself posts as.
+ *
+ * The identity rides here because this is the only step that already holds an
+ * issue tracker adapter before the workspace is prepared, and because it costs
+ * one request per run rather than one per read. The field is optional on
+ * purpose: a stored result from before this shipped is still a valid
+ * `TicketContent`, and a tracker that exposes no current user answers nothing.
+ */
+type WorkflowTicket = TicketContent & { botAccountId?: string };
+
 export async function resolveWorkflowTicketStep(
   entry: AgentWorkflowInput,
   columnAi: string,
-): Promise<TicketContent | null> {
+): Promise<WorkflowTicket | null> {
   "use step";
   if (entry.kind === "pr_trigger" && !entry.ticketKey) {
     return {
@@ -88,11 +99,26 @@ export async function resolveWorkflowTicketStep(
   const ticketKey = entry.ticketKey;
   if (!ticketKey) throw new Error("ticket-correlated workflow input is missing ticketKey");
   const { createAdapters } = await import("../support/adapters.js");
-  const ticket = await createAdapters().issueTracker.fetchTicket(ticketKey);
+  const issueTracker = createAdapters().issueTracker;
+  const ticket = await issueTracker.fetchTicket(ticketKey);
   if (entry.kind === "ticket" && ticket.trackerStatus.toLowerCase() !== columnAi.toLowerCase()) {
     return null;
   }
-  return ticket;
+  // Fail open. Knowing the bot's account id only lets later steps stop reading
+  // the workflow's own questions as somebody's testimony; not knowing it is how
+  // every run behaved until now, and it is not worth killing a run over. The
+  // account id, never the display name: a person can be called "AI Workflow"
+  // too, and an identity match that a rename can break is not an identity.
+  let botAccountId: string | undefined;
+  try {
+    botAccountId = await issueTracker.getCurrentUserAccountId?.();
+  } catch (err) {
+    // Said out loud rather than swallowed: a tracker that stopped answering
+    // "who am I" degrades the selection silently, and the log line is the only
+    // way anyone would find out.
+    console.error("bot_account_id_unresolved", err);
+  }
+  return botAccountId ? { ...ticket, botAccountId } : ticket;
 }
 resolveWorkflowTicketStep.maxRetries = 0;
 
