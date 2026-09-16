@@ -557,9 +557,27 @@ the status reason, so nothing is dropped without saying so.
   start FREEZES the scope, a pure read, and decides nothing; `run_started` is
   decided where the listing exists, which is the pre-sandbox step for every kind
   that has one (`blockPrepareWorkspacePreSandboxStep`, `maxRetries = 0` at
-  `apps/worker/src/engine/blocks/prepare-workspace/execute.ts:114`) and the pull
-  request branch beside it (`:818-823`), which lists no repositories and
-  therefore passes `unusableKeys` null.
+  `apps/worker/src/engine/blocks/prepare-workspace/execute.ts:114`).
+- The pull request branch beside it (`:818-823`) READS the record and writes
+  nothing, and stage 4 leaves it that way. The branch calls exactly one step,
+  `blockPrTriggerRepositoriesWithSiblingsStep`
+  (`apps/worker/src/engine/blocks/fetch-pr-context/execute.ts:36`), which
+  assigns no `maxRetries` and therefore retries three times, and a retry
+  duplicates trail lines: an upsert of an identical row passes
+  `overwriteAllowed` on equal origin ranks
+  (`apps/worker/src/db/repositories/work-scope.ts:300-308`) and so returns a row
+  and appends `entry_written` a second time (`:487-503`). The two ways out are
+  both refused. Giving that step `maxRetries = 0` would fail every pull request
+  run on one transient read of `findConnectedRunPrSiblings`, a reliability
+  regression bought with a debug line. Deduplicating refusals by a unique index
+  would erase real ones: the refusal vocabulary has no reason for a repeat
+  (`packages/contracts/work-scope.ts:68-78`), so a second request for the same
+  repository carries the reason of the first, and an index would collapse a
+  looping agent into one line, which is one of the signals this trail exists to
+  show. A pull request subject's record can only be non-empty through a panel
+  edit (stage 7) or a person's answer, and pull request runs ask about no
+  repository, so the read is a no-op today and correct once either exists.
+  Writing it belongs to the stage that gives that path a carrier.
 - The trigger policy is resolved after the deployed graph is loaded
   (`loadWorkflowDefinitionFor`, `apps/worker/src/engine/steps/definition-step.ts:65`,
   `maxRetries = 0` at `:238`, called at `apps/worker/src/engine/agent-workflow.ts:579`),
@@ -1048,6 +1066,15 @@ nobody reads it.
   definition holding two triggers of one kind with different policies falls back
   to its kind default until then, which is today's behaviour rather than a new
   narrowing.
+- A37. A carrier with `maxRetries = 0` makes a trail line at most once per
+  step FAILURE, not once per run. An invocation killed after the write but
+  before its result reaches the journal is replayed, and the step runs again:
+  the entries converge, because an upsert of the same values is idempotent, and
+  the trail can carry the line twice. Accepted for stage 4 rather than paid for
+  with a read before every write, which would cost a round trip on every run to
+  make a debug line exact. What the zero-retry carrier buys is the common case,
+  a step that throws; the rare case is a duplicated line in an artifact nobody
+  decides from.
 - A30. Two readings of an answer that both names a repository and says no
   ("none, use github:acme/api"). We take the named repository, matching the
   expansion reader already in production, and accept that a person who meant
