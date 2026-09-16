@@ -1044,13 +1044,23 @@ nobody reads it.
   and in the run's status reason, and the ticket panel removes it in one click.
   Accepted: a widened policy does not reach back into tickets somebody already
   answered about, and the way back is visible rather than automatic.
-- A33. "None of these" to the which-of-these question silences that question on
+- A33. Answering "none" to the which-of-these question silences that question on
   the subject forever, on every workflow. Accepted, with the run's status reason
   naming that answer as the reason its scope is empty, because the ordinary way
   out is the one people already take: name the repository in the ticket, where
   the text match picks it up, or select it in the panel. Rejected alternative:
   expiring the answer when the ticket text changes, which means storing a hash
-  of the text and re-asking people who fixed a typo.
+  of the text and re-asking people who fixed a typo. One correction to this
+  assumption as first written: the phrase the reader actually understands is
+  "none", alone or followed by punctuation and prose
+  (`NONE_WITH_PROSE`, `apps/worker/src/engine/repository-discovery/runner.ts:906`),
+  and the set of whole phrases beside it
+  (`REFUSAL_ANSWERS`, `:888-897`) does not hold "none of these". So the phrase
+  this plan used for the answer is one the reader files as unrecognised, which
+  by A34 records nothing and asks the person a second time. Two things follow,
+  both owned by later stages: the question copy says "none" and never offers a
+  phrase the reader cannot read, and the reader learns "none of these" and
+  "none of them", because people type them whatever the copy says.
 - A34. An answer nobody could read leaves no entry, so a later run may ask
   once more. Accepted deliberately over the alternative this plan started with
   (closing the second unreadable answer as "none"), because that wrote a
