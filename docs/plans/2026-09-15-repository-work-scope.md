@@ -1154,6 +1154,151 @@ nobody reads it.
   reader hardening wave exists: a repeated question costs a person a minute, a
   fabricated permanent decision costs them a repository they said no to, in
   every run from now on.
+- A47. A subject is ASKED once and TOLD afterwards. The fourth skeptic round
+  proved that a person who answers "none" to a discovery question about a
+  repository they excluded is asked the same question again after every answer:
+  `selection` writes no entry by design, the direct answer text is ignored while
+  a record is live (`apps/worker/src/engine/pre-sandbox/steps/repo-selection.ts`,
+  both `input.directAnswer && !record` branches), so nothing the run can read
+  changes, the selection comes out empty, discovery runs again, the model names
+  the same repository out of the ticket text again, and the same sentence is
+  posted again. Each turn costs a planning agent, a ticket comment and two
+  transitions, and only the person giving up ends it.
+  The record already knows this happened: `selectionAnswered` is true once a
+  selection question on the subject has been answered, and `readRunWorkScope`
+  reads it. So the discovery path asks only while that flag is false. Once it is
+  true, a proposal naming a repository the record decided is DROPPED and said
+  out loud instead, through the same note that already reaches a person when the
+  which-of-these question is silenced ("The ticket also names X, and this run
+  kept to the repositories already chosen on this work"). Telling beats asking
+  the second time, because the first answer already settled it and the model is
+  the only party still insisting.
+  When dropping leaves the proposal empty the run has nothing to work on, and
+  then it fails transparently with a sentence naming the repository and who
+  excluded it, rather than raising a question whose only answers are one that
+  destroys the person's own decision and one that changes nothing. A45 says why
+  the second answer cannot be read here at all.
+- A48. A duplicate in the model's proposal is the model's protocol error, and a
+  person cannot usefully answer it. Today it raises a clarification, which both
+  hides anything else wrong with that proposal behind a generic question and
+  produces an answer the record drops, because such a clarification names no
+  repository. The run de-duplicates and carries on. Nothing is lost: the second
+  mention adds no repository, and the refusals that matter are then reached and
+  said in the proposal's own order.
+- A49. Our own words come out of a person's reply before every rule that can
+  ATTACH or ask, and before none of the two rules that can REFUSE. That
+  asymmetry is deliberate, and this records why, because it reads like an
+  oversight and the next person to find it will want to close it.
+  `saysNothingToAttach` and the whole-answer half of `saysNo`
+  (`apps/worker/src/engine/work-scope/answer.ts`) keep reading the raw reply, so
+  a person who quotes our question and writes "no" underneath is asked once
+  more, while a bare "no" settles it.
+  What tips it is what a refusal actually writes. Leaving an asked repository
+  out of an answer is itself a decision, and `decideAnswered`
+  (`apps/worker/src/engine/work-scope/decide.ts`) writes it against that
+  person's name: `unavailable` for `not_enabled` and `unusable`, `excluded` for
+  `outside_policy`, and nothing for `selection`. A wrong yes hands the run a
+  repository it can use and somebody notices. A wrong no writes an entry that
+  refuses the repository to every later run, with that person's name on the
+  refusal, and nothing can undo it until the panel ships.
+  The case that decides it is not the tidy one. A channel numbers several
+  questions into one comment, a person quotes the whole comment and writes one
+  "no" under it, and a reader working from the remainder would write a refusal
+  for every repository in the ask off a word that may have been aimed at one.
+  The same exposure exists for a bare "no" to a multi-repository ask, which is
+  an argument for tightening that form later, never for widening this one now.
+  The cost is bounded and is the cheap kind: one more round, and the person's
+  next reply settles it. It is bounded twice over, by `rounds_exhausted` and by
+  A47, which turns the second encounter into a statement rather than a question.
+  What is genuinely missing is a signal: today the re-ask repeats the first
+  question word for word, so a person who quotes gets the same question back and
+  has no way to learn that the quote is what made it unreadable. The re-ask has
+  to say what we could not read. That is copy, not semantics, and it belongs
+  with the per-reason question copy in stage 5.
+- A50. A person's answer on the ticket channel is not one person's answer. The
+  resume path takes EVERY non-bot comment posted after the question was asked,
+  with no filter for intent, composes them as `Author: body` and attributes the
+  result to whoever commented last
+  (`apps/worker/src/services/clarifications/resume-from-comments.ts`, the
+  `qualifying` filter and the composition below it). A colleague's unrelated
+  remark on the ticket therefore reaches the reader as part of the answer, and
+  `withoutComposedAuthors` strips the author prefixes before the reader sees it,
+  so nothing downstream can tell the two apart.
+  This is not new and it is not a defect of this feature. What this feature
+  changes is the consequence. Before the record, a misread composed comment
+  spent one run. Now it writes entries that outlive every run, in the name of a
+  person who answered nothing, and it writes two of them at once: the repository
+  the stray comment happened to name is recorded `selected`, and the repository
+  we actually asked about is recorded `unavailable` or `excluded` for not having
+  been named.
+  So the record amplifies it, and the record has to carry the guard. The guard
+  is not in the composition and not in the reader: it is at the write. When the
+  raw answer carries more than one author, the run resumes exactly as it does
+  today and NOTHING is written to the record, so the next run asks again. That
+  is a cost in the one case where the alternative is a fabricated decision
+  attributed to the wrong person. It lands in `services/clarifications`, which is
+  its own slice, and it is a precondition of the stage 4 merge, not of any wave
+  inside it.
+- Deferred with reasons, each a repeated question rather than a fabricated
+  decision, and each its own issue rather than a widening of the slice that
+  found it. A link to a github.com or gitlab.com repository the catalog does not
+  hold takes the WHOLE answer down with it, against the stated intent of the
+  comment above `isForeignLink`, so one pasted link makes an otherwise readable
+  answer unreadable. A reply of bare names tolerates no prose at all, in either
+  language, so "api, web" is read and "api and web", "only web" and "tylko web"
+  are not, while a full path survives any amount of prose around it. A question
+  asking about two repositories has no readable affirmative, which is correct,
+  but nothing takes its place. The ticket channel resolves an answer to the
+  NEWEST question on the ticket rather than the one it replied to, which is
+  reachable only if a pull request subject run and a ticket subject run are both
+  parked on one ticket, and that was not proved. The record write runs before the
+  hook resumes and is deliberately not caught, so a transient failure there shows
+  the dashboard a 500 on an answer that did commit; the cron's retry heals it.
+  All five funnel into the same missing signal A49 names: the re-ask is the
+  question, verbatim, so a person repeats the reply that failed until the rounds
+  run out.
+- A51. The refusal vocabulary reads contrastive CONSTRUCTIONS, and it cannot read
+  semantic negation. "use acme/web instead of acme/api" is now correct, and so
+  are the other seven phrasings the skeptic found, because each carries an
+  explicit operator: instead, rather, drop, ignore, forget, except, out of
+  scope, and their Polish kin. "acme/api belongs to another team, acme/web
+  please" is still read as selecting BOTH, because after the keys are taken out
+  the prose is "belongs to another team please" and there is no operator in it.
+  That one is not closed and is not going to be closed by another word. Every
+  word added past this point is a guess about phrasing, the list grows without a
+  bound anyone can state, and a list long enough to catch semantic negation
+  would start reading ordinary sentences as refusals. What closes the class is
+  the stage 5 copy telling a person the two forms their answer may take, and the
+  panel that makes any wrongly recorded entry undoable. Until then it is a
+  recorded residual with its own issue, not a wave's unfinished business.
+  This is also where the brief was at fault rather than the executor: it
+  demanded that all eight phrasings land correctly AND that nothing beyond the
+  listed words be added, which cannot both hold. The executor implemented what
+  was prescribed and deliberately wrote no test for the row it could not fix,
+  rather than encoding a fabricated decision as expected behaviour. That is the
+  behaviour to keep asking for.
+- A46. The question asked when the planning agent proposes repositories it is
+  not confident about carries those proposals as a `selection` ask, and carries
+  only the ones that resolve to a key in the catalog the model was offered.
+  It names them in its text today and carries none of them as data, so the
+  answer is dropped and the next run asks again: the same defect A41 describes,
+  on the last question of the discovery path that still had it. `selection` is
+  right in both directions, which is why it is chosen over any other reason:
+  "none" writes no entry, so a person who says none silences nothing
+  permanently, and naming one or more writes `selected` `person`, which is
+  their decision and survives every later run. A proposal the catalog does not
+  hold, or that does not parse as a key, is not carried, because the contract
+  requires every asked repository to be a real key and a key invented from a
+  model's typo would record a decision about a repository nobody has.
+  When NOTHING in a proposal resolves, the question carries nothing and its
+  answer is still dropped. That residual stays: `workScopeAskedRepositoriesSchema`
+  requires at least one repository, so "a repository question about no named
+  repository" is not expressible, and the alternatives are a contract change or
+  a marker column. Both belong to the stage that also ships the panel where a
+  person can undo a decision, because that is the stage where a wrongly
+  recorded answer stops being permanent. Until then the cost is bounded to a
+  proposal in which the model named nothing real, and it is a repeated
+  question, not a fabricated decision.
 - A45. On a run that carries a record, the record reader is the ONLY reader of
   a repository answer. Today the in-run parser is a fallback: the resumed
   expansion takes the record's repositories when there are any and otherwise
