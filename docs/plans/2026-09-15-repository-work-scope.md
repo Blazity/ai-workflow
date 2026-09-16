@@ -1154,6 +1154,31 @@ nobody reads it.
   reader hardening wave exists: a repeated question costs a person a minute, a
   fabricated permanent decision costs them a repository they said no to, in
   every run from now on.
+- A45. On a run that carries a record, the record reader is the ONLY reader of
+  a repository answer. Today the in-run parser is a fallback: the resumed
+  expansion takes the record's repositories when there are any and otherwise
+  re-parses the answer text itself
+  (`apps/worker/src/engine/steps/phase.ts:254`). The comment there says the
+  record outranks the answer text, and it does, but only when the record has
+  something to hand back. Every ambiguity the record reader resolves to
+  `unrecognised` on purpose (A34) arrives at that line with nothing, and falls
+  through to the older, weaker parser, which is the reader the record exists to
+  overrule. The third skeptic round proved the cost: a person refuses a
+  repository in words the record reader correctly declines to read, the in-run
+  parser reads our own quoted question back as their choice, and the run clones
+  it. The record meanwhile holds nothing, because the human attach path calls
+  `attachResearchRepositoriesStep` without the optional `workScopeWrite`
+  (`apps/worker/src/engine/agent-workflow.ts:2339-2350`), so the workspace and
+  the record disagree permanently and nobody can see it.
+  Two repairs were available and only one of them is honest. Recording what the
+  fallback attached would make the record agree with the workspace by writing
+  down a reading its own reader refused to make. Deferring to the reader
+  removes the disagreement instead: when the record read the answer and
+  recorded nothing, the run does not attach, it asks again, bounded by the two
+  unreadable answers that already close expansion. A dumber parser succeeding
+  where the careful one refused is not a rescue, it is the careful one being
+  overruled by the thing it was built to replace. A run that froze no record
+  keeps the fallback unchanged, because there no better reader exists.
 - A41. Every question about repositories is raised through ONE place that
   carries what it asks about. The third skeptic round (2026-09-16) found the
   rule held where the brief named it, the model's expansion ask
@@ -1189,17 +1214,28 @@ nobody reads it.
   twice in one run, and a repository they excluded a minute earlier is refused
   later with nobody's name on it, precisely where the who and the when are most
   knowable.
-- A44. A repository the record excluded is refused to the MODEL, never turned
-  into a question to a person. Removing it from the catalog the model is
-  offered (`offerableRepositoryCatalog`) does not stop the model naming it out
-  of the ticket text, and the discovery validator then parks a person on
-  "Enable it on the Repositories page"
+- A44. A repository the record excluded is refused to the MODEL wherever a
+  refusal can reach the model, and told truthfully to a person where it cannot.
+  In the EXPANSION the model gets a sentence and another turn, so the refusal
+  goes there and no person is troubled. DISCOVERY has no such turn: the agent
+  runs once and its proposal is final
+  (`apps/worker/src/engine/agent-workflow.ts:1782-1803`), so the only audiences
+  left are a person or nobody. Removing the repository from the catalog the
+  model is offered (`offerableRepositoryCatalog`) keeps it from being selected
+  silently, which is the half that works: the validator receives the filtered
+  list, so an excluded key resolves to nothing and cannot be attached. What
+  fails is the sentence. The model names it out of the ticket text anyway, and
+  the validator parks a person on "Enable it on the Repositories page"
   (`apps/worker/src/engine/repository-discovery/protocol.ts:116-121`), which is
   false: the repository is enabled and usable, and a person excluded it. The
   person is told to do something that changes nothing, and the only recovery
-  the sentence offers, naming it again, overwrites their own earlier decision.
-  The model is the right audience because the sentence is true for it and it
-  can act on it. For the same reason the recorder plans an entry only for what
+  the sentence offers, naming it again, overwrites their own earlier decision
+  without saying so. So that question stays, and it tells the truth: who
+  excluded it, that the agent asked for it anyway, and that naming it again
+  means taking it back. A question a person can act on beats a silence that
+  leaves the model insisting on something nobody will explain, and carrying the
+  repository on the question is what makes the answer settle it for good. For
+  the same reason the recorder plans an entry only for what
   the verdict actually carries: a request mixing an attachable repository with
   an unknown one returns a question and drops the attachable one
   (`repository-discovery/runner.ts:521-530`), and recording that dropped
