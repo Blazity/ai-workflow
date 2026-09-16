@@ -546,6 +546,14 @@ record is `run_started`: its refusals enter the plan's trail in walk order up to
 the bound, `refused` still lists them all, and the caller puts the full count in
 the status reason, so nothing is dropped without saying so.
 
+**What a change to run start must run before it is believed.** Every engine
+test boots a run, and the run start step now reads the record, so a test that
+mocks the database handle without mocking `db/repositories/work-scope.js` fails
+on the read rather than on anything it meant to prove
+(`apps/worker/src/engine/tests/agent-no-enabled-repository.test.ts` and
+`agent-retired-replay.test.ts` did). A change to run start is gated on the whole
+of `src/engine/tests`, never on a chosen file.
+
 **Where each event is decided, and why `answered` is not decided in a run.**
 
 - `run_started`, `derived`, `text_ambiguous`, `requested` and `resumed` are
@@ -1085,6 +1093,16 @@ nobody reads it.
   make a debug line exact. What the zero-retry carrier buys is the common case,
   a step that throws; the rare case is a duplicated line in an artifact nobody
   decides from.
+- A39. A failed record write is swallowed in a run and reported by the answer
+  path, and the difference is the point. In a run the write is a summary of what
+  the run computed from inputs that are all still there (the same ticket, the
+  same policy, the same catalog), so the next run start computes it again and a
+  lost write costs a line in the debug view; failing the run instead would trade
+  a working run for an audit line. On the answer path the write is the only copy
+  of a decision a living person made, which nobody will type again because the
+  question is closed, so a swallowed write there is the defect this feature
+  exists to end. Both log with the subject key and the run id, so the quiet one
+  is still findable.
 - A38. A decision the record takes from a misread answer cannot be undone by
   the person who wrote it until the panel ships in stage 7: the question that
   produced it is answered and will not be asked again, and
