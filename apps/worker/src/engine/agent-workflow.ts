@@ -1823,14 +1823,14 @@ async function agentWorkflowBody(
           REPOSITORY_DISCOVERY_SCHEMA,
         );
         // The record binds what the model may pick: a repository somebody
-        // excluded on this work is not offered, and nothing is said about it.
+        // excluded on this work is not offered, so it can never be selected
+        // silently. The model names it out of the ticket text all the same, and
+        // what the person is then asked is decided below.
         const { offerableRepositoryCatalog } = await import(
           "./repository-discovery/runner.js"
         );
-        const offered = offerableRepositoryCatalog(
-          discovery.catalog,
-          runWorkScopeRecorder(discovery.catalog, []),
-        );
+        const record = runWorkScopeRecorder(discovery.catalog, []);
+        const offered = offerableRepositoryCatalog(discovery.catalog, record);
         const prompt = assembleRepositoryDiscoveryPrompt({
           ticket: ctx.ticket,
           discovery: { ...discovery, catalog: offered },
@@ -1875,7 +1875,7 @@ async function agentWorkflowBody(
         );
         if (!parsed.result.ok) return agentProtocolBlockError(parsed.result);
 
-        const { validateRepositoryDiscoveryResult } = await import(
+        const { repositoryDiscoveryQuestion, validateRepositoryDiscoveryResult } = await import(
           "./repository-discovery/protocol.js"
         );
         const decision = validateRepositoryDiscoveryResult(
@@ -1898,7 +1898,24 @@ async function agentWorkflowBody(
           };
         }
         if (decision.kind === "clarification_needed") {
-          return planningClarificationResult(decision.questions);
+          // Discovery runs the agent once and its proposal is final, so this
+          // question reaches a person or nobody. It goes through the one door,
+          // which takes what it asks about rather than trusting this call site
+          // to remember it: a repository question that named nothing would have
+          // its answer dropped, and the next run would ask the same person the
+          // same thing (A41).
+          //
+          // Nothing is decided here. This closure cannot be reached by a test,
+          // so it reads three things off the run and hands them to the function
+          // beside the validator that decides all of it: what the person is
+          // told, and what the question records itself against.
+          const { questions, ask } = repositoryDiscoveryQuestion({
+            decision,
+            subjectKey: record?.subjectKey ?? null,
+            recorded: ctx.workScope?.scope?.entries ?? [],
+            catalog: discovery.catalog,
+          });
+          return repositoryQuestions.raise(questions, ask);
         }
         return executionError(decision.error, {
           category: "provider",

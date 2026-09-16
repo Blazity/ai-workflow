@@ -1191,18 +1191,15 @@ function parkingSitesIn(lines: string[]): string[] {
 
 describe("every repository question goes through the one door that names its repositories", () => {
   it("parks a run on a question in agent-workflow.ts only from a place that is known to carry its ask", () => {
-    // The expansion region parks only through `createRepositoryQuestions`,
+    // Both repository regions park only through `createRepositoryQuestions`,
     // which takes the asked repositories as an argument; a repository question
     // written straight against the envelope, or built by hand, would carry
     // none, its answer would be dropped, and the next run would ask the same
-    // person the same thing (A41).
+    // person the same thing (A41). The in-run DISCOVERY question used to be the
+    // exception on this list and no longer is.
     expect(parkingSitesIn(workflowLines)).toEqual([
-      // The door itself, and the only place the expansion region reaches it.
+      // The door itself, and the only place either region reaches it.
       "createRepositoryQuestions: return planningClarificationResult(questions);",
-      // The in-run repository DISCOVERY question. It names no repositories the
-      // record could write an answer against, and giving it one needs a
-      // contract change the wave that owns it makes.
-      "agentWorkflowBody: return planningClarificationResult(decision.questions);",
       // The research agent's own questions, which are not about repositories.
       "agentWorkflowBody: return planningClarificationResult(questions, suggestedAnswers);",
       // The implementation agent's own questions, built by hand because that
@@ -1212,8 +1209,8 @@ describe("every repository question goes through the one door that names its rep
     ]);
     expect(
       workflowLines.filter((line) => line.includes("repositoryQuestions.")).length,
-      "the expansion region no longer raises its questions through the door",
-    ).toBe(2);
+      "a repository region no longer raises its questions through the door",
+    ).toBe(3);
   });
 
   it("puts the asked repositories on the run context as the question is raised", () => {

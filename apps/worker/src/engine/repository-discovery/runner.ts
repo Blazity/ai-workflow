@@ -272,18 +272,8 @@ function unavailableRepositoryClarification(
   };
 }
 
-/** `${author}: ` in front of a comment's first line, the shape
- *  `services/clarifications/resume-from-comments.ts` composes a ticket answer
- *  in. Bounded, and the name may hold no colon, so `github:acme/api` is never
- *  mistaken for one. */
-const COMPOSED_AUTHOR_PREFIX = /^\s*[^:\n]{1,60}:[ \t]+/u;
-
-/** `${i + 1}. ` in front of a question, the shape
- *  `engine/support/clarification-comment-format.ts` posts it in. */
-const POSTED_QUESTION_NUMBER = /^\s*\d{1,3}\.[ \t]+/u;
-
 /**
- * The answer with every line that repeats a question we asked taken out.
+ * The answer with our own words taken out of it, wherever they appear.
  *
  * BOTH READERS OF ONE ANSWER USE THIS ONE HELPER (`work-scope/answer.ts` is the
  * other): two readers that disagreed about which words were ours would record
@@ -293,62 +283,114 @@ const POSTED_QUESTION_NUMBER = /^\s*\d{1,3}\.[ \t]+/u;
  * stored it, which is where the first version of this was empty. The ticket
  * comment posts each question as `${i + 1}. ${scrubForPublication(question)}`,
  * and an answer composed from ticket comments prefixes each one with
- * `${author}: `, so the line a person quotes, copies or forwards never equals
+ * `${author}: `, so the text a person quotes, copies or forwards never equals
  * the string in the journal, and a drop that compared against the journal fired
- * on no real channel at all.
+ * on no real channel at all. The question side carries the stored form and the
+ * published one, because the dashboard shows a person the first and the ticket
+ * the second.
  *
- * Both decorations are peeled off the answer line as ALTERNATIVE forms rather
- * than unconditionally: our own questions begin "Repository expansion:", which
- * an author-prefix rule would eat, and a verbatim quote has to keep matching.
- * The question side carries the stored form and the published one, because the
- * dashboard shows a person the first and the ticket the second.
+ * TAKEN OUT WHEREVER THEY APPEAR, not only where a whole line is nothing but
+ * ours, and this is the correction that matters. The line version failed
+ * towards ATTACHING on a question that names a repository: `> ` in front of a
+ * quote, a client re-wrap, or "…please confirm" typed after a pasted question
+ * all left our own repository key in the answer, and the reader then recorded
+ * it as the person naming it, over that same person's exclusion. So a run of
+ * whitespace in our question matches whatever the channel put there, quote
+ * markers included, and the decorations a channel adds in front stay behind as
+ * the leftovers they are: what remains after this decides the answer, and an
+ * answer made of nothing but our own words carries no letter and no digit.
  *
- * Compared trimmed, lower cased and with runs of whitespace collapsed. A quote
- * a client re-wrapped onto several lines survives the drop; that is the known
- * bound of comparing whole lines, and it fails towards asking again rather than
- * towards attaching.
+ * Case insensitive, and longest form first, so a whole question is taken out
+ * before one of its own lines is.
  */
 export function withoutQuotedQuestions(answer: string, askedQuestions: string[]): string {
-  const asked = askedQuestionLines(askedQuestions);
-  if (asked.size === 0) return answer;
-  return answer
-    .split("\n")
-    .filter((line) => !formsOfAnswerLine(line).some((form) => asked.has(form)))
-    .join("\n");
+  let remaining = withPlainTypography(answer);
+  for (const pattern of askedQuestionPatterns(askedQuestions)) {
+    remaining = remaining.replace(pattern, " ");
+  }
+  return remaining;
 }
 
-/** Every comparable line of every form a question we asked reached a person in. */
-function askedQuestionLines(askedQuestions: string[]): Set<string> {
-  const lines = new Set<string>();
+/** Every form of every question we asked, as a pattern that finds it inside a
+ *  line as well as on its own. A question is matched whole and line by line:
+ *  whole because a person quotes the whole thing, line by line because they
+ *  quote one line of it. */
+function askedQuestionPatterns(askedQuestions: string[]): RegExp[] {
+  const forms = new Set<string>();
   for (const question of askedQuestions) {
-    for (const published of [question, scrubForPublication(question)]) {
-      for (const line of published.split("\n")) {
-        const comparable = comparableAnswerLine(line);
-        if (comparable.length > 0) lines.add(comparable);
-      }
+    for (const asked of [question, scrubForPublication(question)]) {
+      const published = withPlainTypography(asked);
+      forms.add(published.trim());
+      for (const line of published.split("\n")) forms.add(line.trim());
     }
   }
-  return lines;
+  return [...forms]
+    // A form with no letter in it is punctuation or a number, and taking that
+    // out of an answer wherever it appears would eat the person's own.
+    .filter((form) => /[a-z]/iu.test(form))
+    .sort((left, right) => right.length - left.length)
+    .map((form) => new RegExp(quotedQuestionPattern(form), "giu"));
 }
 
-/** The forms one answer line could be a quoted question in: as it arrived, and
- *  with each decoration a channel adds taken off. */
-function formsOfAnswerLine(line: string): string[] {
-  return withAndWithout(line, COMPOSED_AUTHOR_PREFIX)
-    .flatMap((form) => withAndWithout(form, POSTED_QUESTION_NUMBER))
-    .map(comparableAnswerLine);
+/**
+ * The typography a channel puts on our sentence, taken back off so the copy
+ * that returns is the sentence we sent. BOTH sides pass through this, because
+ * either side can be the one carrying it: the model's rationale inside our
+ * question can arrive with typographic quotes, and a channel that flattens
+ * markdown hands back a quote of a question we asked in bold with the bold
+ * gone.
+ *
+ * Quotes: matched literally, our own sentence stopped being ours the moment a
+ * phone keyboard curled them, and the repository key inside it was then read
+ * as the person naming it, over that same person's exclusion.
+ *
+ * Emphasis: ASTERISKS ONLY, and that is a decision about repository names
+ * rather than a style choice. An underscore is legal in a repository path and
+ * `acme/my_repo` is an ordinary name, so folding underscores away would
+ * corrupt the very names this reader exists to read; an asterisk cannot appear
+ * in a repository key, so dropping it from both sides costs nothing. A person
+ * who bolds one word inside the quote ("was **excluded** on") otherwise sends
+ * a sentence that is no longer ours by one character, and the in-run reader,
+ * which has no refusal word standing between a quote and an attach, attaches
+ * the repository our own question named.
+ *
+ * Nothing else a channel substitutes is touched here: the gaps between our
+ * words already match whatever was put there, non-breaking spaces and quote
+ * markers included.
+ */
+const CURLY_DOUBLE_QUOTES = /[“”„‟]/gu;
+const CURLY_SINGLE_QUOTES = /[‘’‚‛]/gu;
+const MARKDOWN_EMPHASIS = /\*+/gu;
+
+function withPlainTypography(text: string): string {
+  return text
+    .replace(CURLY_DOUBLE_QUOTES, '"')
+    .replace(CURLY_SINGLE_QUOTES, "'")
+    .replace(MARKDOWN_EMPHASIS, "");
 }
 
-/** The text as it is, and the text with that prefix taken off when it carries
- *  one. Both, never only the stripped one: the question itself can begin with a
- *  word and a colon, and a verbatim quote has to keep matching. */
-function withAndWithout(text: string, prefix: RegExp): string[] {
-  const stripped = text.replace(prefix, "");
-  return stripped === text ? [text] : [text, stripped];
-}
+/**
+ * What a channel puts in FRONT of our words, taken out together with them: the
+ * `${i + 1}. ` the ticket comment numbers a question with, and the `>` a mail
+ * client or a markdown editor quotes with. Optional as a whole, so a question
+ * pasted into the middle of a line still matches.
+ *
+ * Together, because the leftovers decide the answer. A `1.` left behind carries
+ * a digit, and a person who quotes the question and writes "yes" underneath,
+ * the most natural reply there is, would have their yes read as "1. yes" and be
+ * asked all over again.
+ */
+const QUOTED_QUESTION_DECORATION = "(?:(?:^|\\n)[ \\t]*(?:>[ \\t]*)*(?:\\d{1,3}\\.[ \\t]*)?)?";
 
-function comparableAnswerLine(line: string): string {
-  return line.trim().toLowerCase().replace(/\s+/g, " ");
+/** One form as a pattern: the words are literal, and every gap between them
+ *  matches whatever the channel put there, including the `>` a mail client
+ *  puts at the front of each line it wrapped our sentence onto. */
+function quotedQuestionPattern(form: string): string {
+  const words = form
+    .split(/\s+/u)
+    .map((word) => word.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"))
+    .join("[\\s>]+");
+  return `${QUOTED_QUESTION_DECORATION}${words}`;
 }
 
 /** The one shape of an expansion question: the marker, the reason it is being

@@ -49,13 +49,24 @@ const AFFIRMATIVE_ANSWERS = new Set([
 // The words a person says no with, compared on word boundaries against what
 // they wrote AROUND the repositories they named. Polish is folded to ASCII
 // first, so "nie" covers both spellings of its kin. "no need" needs no entry:
-// "no" already carries it.
+// "no" already carries it, and "none" needs its own because "no" does not
+// reach inside it.
+//
+// The contrastive half ("instead", "rather", "zamiast") is here because our
+// own copy teaches it: the excluded question ends with "or with the
+// repositories this ticket should use instead", and an answer that took us up
+// on that named the rejected repository beside the chosen one, which was then
+// recorded as selected in the name of the person rejecting it.
 const NEGATION_WORDS =
-  /\b(?:no|not|dont|doesnt|wont|cant|without|never|skip|exclude|remove|nie|bez|zaden|zadne)\b/;
+  /\b(?:no|none|not|dont|doesnt|wont|cant|without|never|skip|exclude|remove|drop|ignore|forget|except|instead|rather|nie|bez|zaden|zadne|zamiast|pomin|usun)\b/;
 
 // "leave acme/api out" puts the repository between the two words, so the pair
 // is matched across the line rather than as one phrase.
 const LEAVE_OUT = /\bleave\b[^\n]*\bout\b/;
+
+// "out of scope" is three words that only mean no together: "out" alone is
+// half of "leave out" and "scope" alone is this feature's own noun.
+const OUT_OF_SCOPE = /\bout of scope\b/;
 
 /**
  * The one reader of a person's answer to a repository question. Where the
@@ -85,7 +96,25 @@ export function readRepositoryAnswer(
     askedQuestions: string[];
   },
 ): WorkScopeQuestionAnswer {
-  const testimony = whatThePersonNamed(answer, input.askedQuestions, input.catalogKeys);
+  // Our own words come out FIRST, and every rule that can only attach or ask
+  // reads what is left rather than the raw answer. They used to come out only
+  // before the naming rule, which cost the most natural reply in a ticket: a
+  // person who quotes the question and writes "yes" underneath got another
+  // round, because the plain-yes rule was looking at the quote too.
+  //
+  // The two REFUSAL rules below deliberately still read the whole reply. What
+  // they decide outlives the run, an entry in that person's name saying this
+  // work does not touch a repository, and a reply that carries our question as
+  // well as their word is not wholly a refusal. A wrong yes costs one run; a
+  // wrong no is a decision nobody can undo until the panel ships, so that one
+  // keeps failing towards asking again (A34).
+  const theirWords = withoutQuotedQuestions(answer, input.askedQuestions);
+  // An answer made of nothing but our own words is not an answer. It is the
+  // quote button, or a mail client's `>`, and reading a repository out of it
+  // would record OUR key as the person naming it, over the very decision they
+  // are being asked about.
+  if (!/[a-z0-9]/iu.test(theirWords)) return UNRECOGNISED;
+  const testimony = whatThePersonNamed(theirWords, input.catalogKeys);
   const identities = parseRepositoryExpansionAnswer(testimony);
   if (identities.length > 0) {
     const resolved: RepositoryKey[] = [];
@@ -112,39 +141,27 @@ export function readRepositoryAnswer(
   // that happens to contain one is not read as a choice.
   const named = readBareNames(testimony, input.catalogKeys);
   if (named !== null) return readRepositories(named);
-  if (input.askedKeys.length === 1 && isAffirmative(answer)) {
+  if (input.askedKeys.length === 1 && isAffirmative(theirWords)) {
     return { kind: "repositories", repositoryKeys: [input.askedKeys[0]] };
   }
   return UNRECOGNISED;
 }
 
 /**
- * The answer with the parts that are not the person's testimony taken out, so
- * only the repositories THEY named are read from it.
+ * What the person's own words NAME, with the links that name no repository of
+ * ours taken out.
  *
- * Two parts come out. A line that repeats a question we asked: Jira's quote
- * button produces a blockquote, the adapter flattens the document with no quote
- * marker left on it (`extractAdfText`), so a person who quotes the question and
- * types "no" underneath sends our own repository key back as if they had
- * written it. That drop is `withoutQuotedQuestions`, shared with the in-run
- * parser rather than written twice: it knows the numbering and the author
- * prefix the channels add, which the copy that used to live here did not, and a
- * defence standing on the negation rule behind it is not a defence. And a link
- * that is not a repository of ours at all: today it parses as a path that
- * resolves to nothing and takes the whole answer down with it, which loses the
- * repositories named beside it, and attaching a ticket link is the most
- * ordinary thing an engineer does.
- *
- * Only what the answer NAMES is read from this. Whether it says no, and whether
- * it is a plain yes, are read from the whole answer, because either is only
- * itself when it is all the person sent.
+ * Their own words are what reaches this: `withoutQuotedQuestions` has already
+ * taken our question out of the answer, above, before any rule read it. What
+ * comes out here is only for the naming rules, because a link is still the
+ * person's own writing: today it parses as a path that resolves to nothing and
+ * takes the whole answer down with it, which loses the repositories named
+ * beside it, and attaching a ticket link is the most ordinary thing an engineer
+ * does. Whether they said no, and whether they said a plain yes, are read from
+ * their whole reply rather than from this.
  */
-function whatThePersonNamed(
-  answer: string,
-  askedQuestions: string[],
-  catalogKeys: RepositoryKey[],
-): string {
-  return withoutQuotedQuestions(answer, askedQuestions)
+function whatThePersonNamed(theirWords: string, catalogKeys: RepositoryKey[]): string {
+  return theirWords
     .split("\n")
     .map((line) => withoutForeignLinks(line, catalogKeys))
     .join("\n");
@@ -180,7 +197,9 @@ function isForeignLink(token: string, catalogKeys: RepositoryKey[]): boolean {
 
 /** True when the answer says no to the repositories it names: one of the
  *  phrases that is a refusal whole, or any of the words a person says no with
- *  written beside them. */
+ *  written beside them. Read from the WHOLE answer, quoted question and all,
+ *  because a refusal is only itself when it is all the person sent and what it
+ *  decides outlives the run. */
 function saysNo(answer: string, testimony: string): boolean {
   if (saysNothingToAttach(answer)) return true;
   // A repository key is not a sentence: "acme/no-code" carries the letters of a
@@ -193,7 +212,7 @@ function saysNo(answer: string, testimony: string): boolean {
   )
     .toLowerCase()
     .replace(/['’]/g, "");
-  return NEGATION_WORDS.test(prose) || LEAVE_OUT.test(prose);
+  return NEGATION_WORDS.test(prose) || LEAVE_OUT.test(prose) || OUT_OF_SCOPE.test(prose);
 }
 
 /** True for an answer that says there is nothing to attach.
