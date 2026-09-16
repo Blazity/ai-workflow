@@ -1085,6 +1085,16 @@ nobody reads it.
   make a debug line exact. What the zero-retry carrier buys is the common case,
   a step that throws; the rare case is a duplicated line in an artifact nobody
   decides from.
+- A38. A decision the record takes from a misread answer cannot be undone by
+  the person who wrote it until the panel ships in stage 7: the question that
+  produced it is answered and will not be asked again, and
+  `applyEditWorkScopePlan` has no caller outside the store. A28 and A30 both
+  justified an accepted misreading by "their next answer or one panel click
+  undoes it", and until stage 7 neither exists. So the reader is the only guard
+  there is, which is why every ambiguity resolves to `unrecognised` and why the
+  reader hardening wave exists: a repeated question costs a person a minute, a
+  fabricated permanent decision costs them a repository they said no to, in
+  every run from now on.
 - A30. Two readings of an answer that both names a repository and says no
   ("none, use github:acme/api"). We take the named repository, matching the
   expansion reader already in production, and accept that a person who meant
@@ -1096,7 +1106,10 @@ nobody reads it.
   when the trigger policy would also have kept it out, as long as the policy
   would have taken it once the catalog did ("allowed if usable"). A person who
   answers "continue without it" there gets `unavailable`, not `excluded`, so
-  enabling the repository later attaches it with no second question. Accepted
+  enabling the repository later attaches it with no second question. That
+  sentence is the one from the incident, and the reader did not understand it
+  until the reader hardening wave taught it the phrase: A33 records the same
+  class of error for "none of these". Accepted
   cost: under `ask_once` the person may be asked about a repository that turns
   out to be unusable anyway, which is one question, not a permanent record.
 - A29. A repository asked about because the trigger policy did not include it
