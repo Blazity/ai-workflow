@@ -1,6 +1,9 @@
 import { workScopeQuestionAnswerSchema } from "@shared/contracts";
 import { describe, expect, it } from "vitest";
 import { readRepositoryAnswer } from "./answer.js";
+// The real comment builder, so a test can send the question back in the form a
+// person was actually shown rather than the form we stored.
+import { formatClarificationQuestionsComment } from "../support/clarification-comment-format.js";
 
 const catalogKeys = [
   "github:acme/api",
@@ -17,6 +20,30 @@ const QUESTION = [
   "This ticket may also touch github:acme/api, which this deployment does not hold.",
   "Reply with the repositories to attach, or none.",
 ].join("\n");
+
+// The same question with every word of negation taken out of it. QUESTION says
+// "does not hold" and "or none", so a copy of it quoted back reads as a refusal
+// whatever the drop does, and a test built on it proves the redirect rule
+// rather than the drop.
+const PLAIN_QUESTION = [
+  "This ticket may also touch github:acme/api, which this deployment holds.",
+  "Reply with every repository this work should attach.",
+].join("\n");
+
+/** The question as the ticket comment actually posts it: numbered, published. */
+function postedQuestion(question: string = QUESTION): string {
+  const block = formatClarificationQuestionsComment({
+    questions: [question],
+    suggestedAnswers: null,
+    dashboardUrl: "https://dashboard.example/tickets/AWT-1",
+    aiColumnName: "Ai",
+    expiresAtIso: null,
+  })
+    .split("\n\n")
+    .find((section) => section.startsWith("1. "));
+  if (!block) throw new Error("the questions comment no longer numbers its questions");
+  return block;
+}
 
 function read(
   answer: string,
@@ -190,11 +217,29 @@ describe("readRepositoryAnswer", () => {
     },
   );
 
-  it("reads only the repository a person typed under the question they quoted", () => {
-    expect(
-      read(`${QUESTION}\n\nuse gitlab:acme/web`, catalogKeys, ["github:acme/api"], [QUESTION]),
-    ).toEqual({ kind: "repositories", repositoryKeys: ["gitlab:acme/web"] });
-  });
+  it.each([
+    ["the dashboard shows it, word for word", () => PLAIN_QUESTION],
+    ["the ticket posted it, numbered", () => postedQuestion(PLAIN_QUESTION)],
+    [
+      "the ticket composed it from comments, author in front",
+      () => `Filip Maszota: ${postedQuestion(PLAIN_QUESTION)}`,
+    ],
+  ])(
+    "reads only the repository a person typed under the question, quoted as %s",
+    (_form, quoted) => {
+      // The stored question is not what anybody sees, and this question carries
+      // no negation, so nothing behind the drop can rescue it: whether our own
+      // key is recorded as this person's choice is decided by the drop alone.
+      expect(
+        read(
+          `${quoted()}\n\nuse gitlab:acme/web`,
+          catalogKeys,
+          ["github:acme/api"],
+          [PLAIN_QUESTION],
+        ),
+      ).toEqual({ kind: "repositories", repositoryKeys: ["gitlab:acme/web"] });
+    },
+  );
 
   it("reads a question a person retyped in their own words as their answer", () => {
     expect(
