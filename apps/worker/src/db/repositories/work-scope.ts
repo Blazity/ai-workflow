@@ -1,18 +1,18 @@
 import { and, asc, desc, eq, inArray, lt, sql, type SQL } from "drizzle-orm";
 import {
+  WORK_SCOPE_TRAIL_PAGE_MAX,
   workScopeOriginRank,
   type WorkScope,
   type WorkScopeActor,
   type WorkScopeAskedRepository,
   type WorkScopeEntry,
+  type WorkScopeQuestionPurpose,
   type WorkScopeTrailEvent,
   type WorkScopeTrailRow,
   type WorkScopeWritePlan,
 } from "@shared/contracts";
 import { getDb, type Db } from "../client.js";
 import { workScopeEntries, workScopes, workScopeTrail } from "../schema.js";
-
-const TRAIL_PAGE_LIMIT_MAX = 200;
 
 interface StoredEntry {
   repositoryKey: string;
@@ -115,6 +115,79 @@ export async function readWorkScopeSelectionAnswered(
 }
 
 /**
+ * The repositories this subject was asked about and got an answer for.
+ *
+ * `readWorkScopeSelectionAnswered` answers a subject-wide question, "has a
+ * person chosen for this work at all", and that is the right shape for the one
+ * decision it guards: whether to put the which-of-these question a second time.
+ * It is the WRONG shape for the rule A44 and A47 make together, ask about a
+ * given repository once and tell afterwards, because a question about one
+ * repository would silence the first question about a different one. This read
+ * is that rule's fact: a repository is in the set when some question named it
+ * and somebody answered that question.
+ *
+ * Read from the trail rather than the entries for the same reason the flag is:
+ * an answer can record nothing. A "none" to a selection question writes no
+ * entry by design, so the entries alone cannot tell a repository that was asked
+ * about from one nobody ever raised.
+ *
+ * ABSENCE MEANS NOT ASKED, WHICH MEANS ASK. Every reason narrowing is
+ * deliberately left out: what the caller needs to know is that a person saw
+ * this repository in a question and replied, not why it was put to them. An
+ * `unrecognised` answer is not one, and neither is an `unattributed` one, so a
+ * later run may ask again.
+ *
+ * SEEN IS THE WHOLE POINT, so the question has to have NAMED it. An ask records
+ * the key whatever the question said, because the trail should still show that
+ * somebody was asked something; only a question whose own words put the key in
+ * front of a person makes their answer a decision about that repository. A key
+ * the question never named is left out of this set, which is what keeps a
+ * generic question from silencing a later one or killing a run on a decision
+ * nobody made. An ask written before that fact existed carries no `named` and
+ * is left out for the same reason: being asked once more is the acceptable
+ * direction of that cost.
+ *
+ * One statement, and the answer must sit on the SAME subject as the question:
+ * the record is per subject, and a clarification id is the only thing the two
+ * rows share.
+ */
+export async function readWorkScopeAnsweredRepositories(
+  db: Db,
+  subjectKey: string,
+): Promise<string[]> {
+  const result = await db.execute(sql`
+    -- Byte order, so the order does not depend on the database's collation. It
+    -- sits on the selected expression rather than on the ORDER BY, because a
+    -- collated ORDER BY is an expression and the trail table this joins to
+    -- itself carries a repository_key of its own for it to be ambiguous with.
+    SELECT DISTINCT (asked_repository ->> 'repositoryKey') COLLATE "C" AS repository_key
+    FROM ${workScopeTrail} AS asked
+    JOIN ${workScopeTrail} AS given
+      ON given.subject_key = asked.subject_key
+      AND given.kind = 'question_answered'
+      AND given.event ->> 'clarificationId' = asked.event ->> 'clarificationId'
+    -- Only a 'question_asked' event carries a top-level 'repositories', and the
+    -- contract makes it an array, so the expansion sees an array or NULL.
+    CROSS JOIN LATERAL jsonb_array_elements(asked.event -> 'repositories') AS asked_repository
+    WHERE asked.subject_key = ${subjectKey}::text
+      AND asked.kind = 'question_asked'
+      AND given.event -> 'answer' ->> 'kind' IN ('none', 'repositories')
+      -- The question's own words named it. Compared as text rather than cast,
+      -- so an ask written before this fact existed, or one carrying anything
+      -- but a boolean, reads as not named instead of raising.
+      AND (asked_repository ->> 'named') = 'true'
+    ORDER BY repository_key
+  `);
+  const rows = (result as { rows?: Array<{ repository_key: string | null }> }).rows ?? [];
+  const keys: string[] = [];
+  for (const row of rows) {
+    if (row.repository_key === null) continue;
+    keys.push(row.repository_key);
+  }
+  return keys;
+}
+
+/**
  * Record that a question about repositories was asked, once per clarification.
  *
  * Written where the clarification is created, because by answer time the
@@ -136,12 +209,17 @@ export async function appendWorkScopeQuestionAsked(
     runId: string;
     clarificationId: string;
     asked: WorkScopeAskedRepository[];
+    /** Why the question was put, where that is a fact about the subject rather
+     *  than about any one key. Absent on every question whose purpose the keys
+     *  themselves carry. */
+    purpose?: WorkScopeQuestionPurpose;
   },
 ): Promise<boolean> {
   const event: WorkScopeTrailEvent = {
     kind: "question_asked",
     clarificationId: input.clarificationId,
     repositories: input.asked,
+    ...(input.purpose === undefined ? {} : { purpose: input.purpose }),
   };
   const result = await db.execute(sql`
     INSERT INTO ${workScopeTrail} (subject_key, run_id, kind, repository_key, event)
@@ -154,6 +232,52 @@ export async function appendWorkScopeQuestionAsked(
     RETURNING id
   `);
   return ((result as { rows?: unknown[] }).rows ?? []).length > 0;
+}
+
+/**
+ * Whether a person has already answered the "which of these are essential"
+ * question on this subject.
+ *
+ * ITS OWN READ, DELIBERATELY NOT FOLDED INTO `readWorkScopeSelectionAnswered`.
+ * That flag is subject-wide and silences the which-of-these question; folding
+ * this into it would silence a question this answer has no business silencing,
+ * and a person who narrowed a large set would stop being asked about a
+ * repository nobody ever showed them. One fact, one read, one thing silenced.
+ *
+ * Read from the trail and keyed on the question's PURPOSE rather than on the
+ * repositories it named, because a narrowing question names none: the set is
+ * larger than an ask may carry, so the person is told how many there are and
+ * asked which matter. `purpose` on the `question_asked` event is the only
+ * record that the question was that one, and a row written before that field
+ * existed simply reads as false, which is the behaviour every run had before
+ * this existed.
+ *
+ * The same two answer kinds count as the selection read counts: an answer that
+ * named repositories, and "none". An `unrecognised` or `unattributed` answer
+ * leaves it false, because neither is anybody's decision and the contract says
+ * so where those kinds are defined.
+ */
+export async function readWorkScopeNarrowingAnswered(
+  db: Db,
+  subjectKey: string,
+): Promise<boolean> {
+  const result = await db.execute(sql`
+    SELECT EXISTS (
+      SELECT 1
+      FROM ${workScopeTrail} AS asked
+      JOIN ${workScopeTrail} AS given
+        ON given.subject_key = asked.subject_key
+        AND given.kind = 'question_answered'
+        AND given.event ->> 'clarificationId' = asked.event ->> 'clarificationId'
+      WHERE asked.subject_key = ${subjectKey}::text
+        AND asked.kind = 'question_asked'
+        AND asked.event ->> 'purpose' = 'narrowing'
+        AND given.event -> 'answer' ->> 'kind' IN ('none', 'repositories')
+    ) AS answered
+  `);
+  const row = (result as { rows?: Array<{ answered: boolean }> }).rows?.[0];
+  if (!row) throw new Error("work scope narrowing read returned no row");
+  return row.answered;
 }
 
 /**
@@ -201,8 +325,8 @@ export async function listWorkScopeTrail(
   filter: ({ subjectKey: string } | { runId: string }) & { kinds?: WorkScopeTrailEvent["kind"][] },
   page: { limit: number; beforeId?: number },
 ): Promise<{ rows: WorkScopeTrailRow[]; nextBeforeId: number | null }> {
-  if (!Number.isInteger(page.limit) || page.limit < 1 || page.limit > TRAIL_PAGE_LIMIT_MAX) {
-    throw new RangeError(`trail page limit must be an integer from 1 to ${TRAIL_PAGE_LIMIT_MAX}`);
+  if (!Number.isInteger(page.limit) || page.limit < 1 || page.limit > WORK_SCOPE_TRAIL_PAGE_MAX) {
+    throw new RangeError(`trail page limit must be an integer from 1 to ${WORK_SCOPE_TRAIL_PAGE_MAX}`);
   }
   const owner =
     "subjectKey" in filter
@@ -690,7 +814,7 @@ export async function applyAnswerWorkScopePlan(
 }
 
 /**
- * The two reads the run start makes, against the process-wide connection.
+ * The three reads the run start makes, against the process-wide connection.
  *
  * The run-start step takes no database handle: it is the engine's one read of a
  * store, and it reaches it exactly as it reaches settings and the catalog. The
@@ -703,6 +827,21 @@ export function readConnectedWorkScope(subjectKey: string) {
 
 export function readConnectedWorkScopeSelectionAnswered(subjectKey: string) {
   return readWorkScopeSelectionAnswered(getDb(), subjectKey);
+}
+
+export function readConnectedWorkScopeAnsweredRepositories(subjectKey: string) {
+  return readWorkScopeAnsweredRepositories(getDb(), subjectKey);
+}
+
+export function readConnectedWorkScopeNarrowingAnswered(subjectKey: string) {
+  return readWorkScopeNarrowingAnswered(getDb(), subjectKey);
+}
+
+/** The fourth, made on the same connection by the same step when a run wakes on
+ *  an answer: what the record did with THIS question's answer, which nothing in
+ *  the entries records. */
+export function readConnectedWorkScopeAnsweredQuestion(clarificationId: string) {
+  return readWorkScopeAnsweredQuestion(getDb(), clarificationId);
 }
 
 /**
@@ -729,4 +868,25 @@ export function applyConnectedRunWorkScopePlan(
   input: Parameters<typeof applyRunWorkScopePlan>[1],
 ) {
   return applyRunWorkScopePlan(getDb(), input);
+}
+
+/**
+ * The read and the write a person's own edit makes, against the process-wide
+ * connection.
+ *
+ * Both arrive on a request (an HTTP route or an MCP tool call) rather than
+ * inside a run, so neither caller holds a database handle, exactly like the
+ * answer path above.
+ */
+export function listConnectedWorkScopeTrail(
+  filter: Parameters<typeof listWorkScopeTrail>[1],
+  page: Parameters<typeof listWorkScopeTrail>[2],
+) {
+  return listWorkScopeTrail(getDb(), filter, page);
+}
+
+export function applyConnectedPersonWorkScopeEdit(
+  input: Parameters<typeof applyPersonWorkScopeEdit>[1],
+) {
+  return applyPersonWorkScopeEdit(getDb(), input);
 }

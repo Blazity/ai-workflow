@@ -372,6 +372,43 @@ const SETTINGS_RESET_POLICY = {
   roles: ["owner"],
 } as const satisfies McpToolPolicy;
 
+/**
+ * Changing the record of which repositories a subject's work may touch.
+ *
+ * The role list is copied from CLARIFICATION_ANSWER_POLICY above, deliberately and
+ * not by resemblance: the entries a person edits here are, in the common case, the
+ * very entries their answer to a repository question wrote, and an exclusion a member
+ * could make but never take back is the trap this tool exists to remove. So it admits
+ * "member" for the reason that one does, and refuses "service" for the reason that one
+ * does -- a token with nobody behind it must not settle a repository decision that is
+ * a person's to make. Nothing else protects that invariant: `withoutAuthoringScopes`
+ * never strips runs:dispatch, which smoke and dogfood automation legitimately hold.
+ *
+ * Rides runs:dispatch rather than repositories:write. What is decided here is what ONE
+ * subject's runs work on, which is the dispatch authority; repositories:write is the
+ * deployment's catalog, which decides what the platform may enter at all and which
+ * this tool cannot change (a select naming a repository the catalog does not enable is
+ * refused outright).
+ */
+const WORK_SCOPE_EDIT_POLICY = {
+  scope: "runs:dispatch",
+  roles: ["member", "admin", "owner"],
+  mutation: "direct",
+  annotations: {
+    readOnlyHint: false,
+    // An edit replaces what a person or a run decided before it, and an exclusion
+    // takes a repository away from every later run on the subject. A client must
+    // not treat it as a safe append it may probe with.
+    destructiveHint: true,
+    // A repeat under the same idempotency key replays the first answer, and the
+    // expected version refuses a second edit written against a stale read.
+    idempotentHint: true,
+    // Nothing outside this deployment's own tables is touched: no run is started,
+    // no ticket moved. What changes is what the next run may work on.
+    openWorldHint: false,
+  },
+} as const satisfies McpToolPolicy;
+
 const TOOL_POLICY = {
   "system.capabilities": READ_POLICY,
   "tickets.get": READ_POLICY,
@@ -443,6 +480,13 @@ const TOOL_POLICY = {
   "settings.get": READ_POLICY,
   "settings.set": SETTINGS_CONFIG_POLICY,
   "settings.reset": SETTINGS_RESET_POLICY,
+  // A plain read, for the reason runs.get_clarification is one: seeing WHICH
+  // repositories a ticket's work is recorded against, and who decided that, is
+  // what a read-only client needs to report a stuck run to a person. Gating it
+  // behind the edit's scope would hide the record from the client most likely to
+  // be watching, and it exposes nothing repositories.list does not already.
+  "work_scope.get": READ_POLICY,
+  "work_scope.edit": WORK_SCOPE_EDIT_POLICY,
 } satisfies Record<McpToolName, McpToolPolicy>;
 
 export function policyFor(tool: McpToolName): McpToolPolicy {

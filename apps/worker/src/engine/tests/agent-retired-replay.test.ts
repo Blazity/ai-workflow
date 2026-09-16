@@ -68,6 +68,8 @@ vi.mock("../../db/repositories/settings.js", () => ({
 vi.mock("../../db/repositories/work-scope.js", () => ({
   readConnectedWorkScope: async () => null,
   readConnectedWorkScopeSelectionAnswered: async () => false,
+  readConnectedWorkScopeAnsweredRepositories: async () => [],
+  readConnectedWorkScopeNarrowingAnswered: async () => false,
 }));
 vi.mock("../../db/repositories/repository-catalog.js", () => ({
   getConnectedRepositoryCatalogStateRow: async () => ({

@@ -6,6 +6,7 @@ import {
   repositoryCatalogKey,
   type RepositoryCatalogEntry,
 } from "./catalog.js";
+import { exclusionRecoveryNotes } from "../work-scope/context.js";
 import {
   repositoryKeySchema,
   type RepositoryKey,
@@ -39,19 +40,19 @@ const discoveryResultSchema = z
   .strict();
 
 /**
- * A repository a discovery clarification is ABOUT, and why the catalog refused
- * it.
+ * A repository a discovery clarification is ABOUT, and why it is asking.
  *
  * The reason is the work scope ask vocabulary rather than a second one of this
  * module's own: the caller writes it straight onto the question, and a reason
- * nothing else speaks could not be answered into the record. The two values are
- * the two worlds the lookup already tells apart, and they mean different things
- * to a person: a repository this deployment does not hold is one they can
- * enable, and one the catalog holds and cannot use is not.
+ * nothing else speaks could not be answered into the record. The three values
+ * are the three ways a discovery question comes to be about a repository, and
+ * they mean different things to a person: one this deployment does not hold is
+ * one they can enable, one the catalog holds and cannot use is not, and one the
+ * model proposed without confidence is a choice they are being offered.
  */
-interface RepositoryDiscoveryRefusal {
+interface RepositoryDiscoveryAsk {
   repositoryKey: RepositoryKey;
-  reason: Extract<WorkScopeAskReason, "not_enabled" | "unusable">;
+  reason: Extract<WorkScopeAskReason, "not_enabled" | "unusable" | "selection">;
   /** Why the model said it needed the repository, in its own words. A person
    *  deciding whether to take an exclusion back needs the argument. */
   rationale: string;
@@ -62,6 +63,28 @@ export type RepositoryDiscoveryDecision =
       kind: "selected";
       repositories: SelectedRepository[];
       confidence: "high";
+      /**
+       * What the run left out of this selection without asking: the repository,
+       * and the sentence saying why. Empty on every run that left nothing out.
+       *
+       * A repository dropped in silence is the worse half of A47: the ticket
+       * visibly names it, the run did not open it, and with nothing said a
+       * person is left to conclude the run simply missed it. So the sentence
+       * reaches both readers there are, the agent's prompt and the ticket
+       * comment, and the key travels beside it because the comment's repository
+       * section is keyed and prose is not.
+       */
+      leftOut: RepositoryLeftOut[];
+      /**
+       * The repositories the sentences above say were left out, as keys.
+       *
+       * Beside the prose rather than parsed back out of it, because the two
+       * reach different readers and only one of them reads prose: the notes go
+       * into the agent's prompt, and these go onto the run as an observation,
+       * which is where a person asking why a run touched less than the ticket
+       * names can actually find it and where a query can count it.
+       */
+      droppedRepositoryKeys: RepositoryKey[];
     }
   | {
       kind: "clarification_needed";
@@ -72,21 +95,38 @@ export type RepositoryDiscoveryDecision =
        * carries it to a person can name them and their answer can be recorded
        * against them.
        *
-       * At most one today, because the loop below refuses at the FIRST
-       * repository it cannot use, and a list because that is what a question
-       * records itself against. EMPTY, deliberately, on every clarification
-       * that is about no repository: a duplicate proposal, a response that did
-       * not parse, confidence too low to select, and a model that asked for
-       * clarification itself are all the model's behaviour rather than a
-       * question about a repository, and there is nothing an answer to them
-       * could be recorded against.
+       * One, when the catalog refused it, because the loop below refuses at the
+       * FIRST repository it cannot use. Several, when the model proposed them
+       * and was not confident enough to be believed. EMPTY, deliberately, on
+       * every clarification that is about no repository: a response that did
+       * not parse, a proposal in which nothing the model named is a key we hold,
+       * and a model that asked for clarification itself are all the model's
+       * behaviour rather than a question about a repository, and there is
+       * nothing an answer to them could be recorded against.
        */
-      refused: RepositoryDiscoveryRefusal[];
+      about: RepositoryDiscoveryAsk[];
     }
   | {
       kind: "failed";
       error: string;
+      /**
+       * Whose failure it is. The model's own is the provider's; a run left with
+       * nothing because a person excluded what the model proposed is somebody's
+       * configuration, and sending an operator to read provider logs for it
+       * sends them to the wrong place.
+       */
+      blame: "provider" | "work_scope";
     };
+
+/** A repository the run was asked to work on and did not, as both readers need
+ *  it: the sentence for a person, the key for the line it is rendered on.
+ *
+ *  Not exported: it is the element type of `leftOut` on the decision above, and
+ *  every caller reaches it through that field rather than by name. */
+interface RepositoryLeftOut {
+  repositoryKey: string;
+  reason: string;
+}
 
 type ProposedRepository = {
   provider: "github" | "gitlab";
@@ -98,6 +138,29 @@ export function validateRepositoryDiscoveryResult(
   raw: unknown,
   catalog: RepositoryCatalogEntry[],
   mandatoryRepositories: SelectedRepository[],
+  /**
+   * What this subject has already settled, on a run that froze a record.
+   *
+   * Neither half is derivable from the catalog above, and that is why it is
+   * passed: the record has already filtered the offered list, so a repository
+   * somebody excluded is missing from it in exactly the way one nobody ever
+   * enabled is. Absent on every run that froze no record, which is the whole
+   * old path.
+   */
+  settled?: {
+    /** The repositories a question on this subject named and somebody answered
+     *  for. It is the ONLY fact this file decides on, and it is per repository
+     *  rather than per subject on purpose: an answer about one repository says
+     *  nothing about another, so a subject-wide flag would both silence a
+     *  question nobody was asked and read a refusal as consent.
+     *
+     *  Empty means nothing was asked yet, so ask. A run resuming from a context
+     *  frozen before this fact existed has no set, and being asked once more is
+     *  the only acceptable cost direction. */
+    answeredRepositoryKeys: readonly string[];
+    /** The record's entries as the run holds them. */
+    recorded: readonly WorkScopeEntry[];
+  },
 ): RepositoryDiscoveryDecision {
   const parsed = discoveryResultSchema.safeParse(raw);
   if (!parsed.success) {
@@ -108,6 +171,7 @@ export function validateRepositoryDiscoveryResult(
     return {
       kind: "failed",
       error: result.error ?? "Repository discovery failed.",
+      blame: "provider",
     };
   }
   if (result.status === "clarification_needed") {
@@ -118,29 +182,68 @@ export function validateRepositoryDiscoveryResult(
           ? result.questions
           : [whichRepositoryQuestion()],
       reason: "model_requested_clarification",
-      refused: [],
+      about: [],
     };
   }
-  // AIW-147 IM-7: only "high" confidence auto-selects. "medium" and "low" now
+  const proposals = result.repositories ?? [];
+  if (proposals.length === 0) {
+    return clarification("Repository discovery confidence was too low.");
+  }
+  // AIW-147 IM-7: only "high" confidence auto-selects. "medium" and "low"
   // become a clarification. When the model proposed candidates, list them (with
   // provider-scoped paths and rationales) so the human can pick one quickly,
   // mirroring the pre-AIW-147 ranked-candidate question that repo-selection
   // asked before this branch.
-  const proposals = result.repositories ?? [];
-  if (result.confidence !== "high" || proposals.length === 0) {
-    if (proposals.length > 0) {
-      return {
-        kind: "clarification_needed",
-        questions: [candidateClarificationQuestion(proposals)],
-        reason:
-          result.confidence === "medium"
-            ? "discovery_confidence_medium"
-            : "discovery_confidence_low",
-        refused: [],
-      };
-    }
-    return clarification("Repository discovery confidence was too low.");
+  //
+  // ASKED AT MOST ONCE PER REPOSITORY. Without a stop this question never
+  // terminates: a "none" to it writes no entry by design, so the next run reads
+  // exactly what this one read, the model repeats its proposal, and the
+  // identical question is posted again for as long as the person keeps
+  // answering (A47). The stop is per repository and not per subject, because a
+  // question about the dashboard settles nothing about the API schema.
+  //
+  // SILENCE IS NOT SELECTION, and this is the rule the whole branch turns on.
+  // Suppressing the question is NOT permission to act on what it would have
+  // offered. A person who was asked "which of these should I start from" and
+  // answered "none" REFUSED these repositories; attaching them on the strength
+  // of their having answered at all executes the refusal as consent, and does it
+  // silently. So the suppressed branch proceeds WITHOUT the candidates, never
+  // with them. A candidate they DID name is not lost by this: naming it wrote a
+  // `selected` entry, and the record carries it into the run on its own.
+  //
+  // WHAT THE QUESTION NAMES IS WHAT IT RECORDS, and they were two different
+  // lists: the question listed every proposal while the ask carried only the
+  // ones the record can hold, so a proposal outside the catalog was named to a
+  // person, recorded against nobody, and asked again on every run for as long as
+  // the model kept proposing it. One list now. A candidate this file cannot
+  // record is not offered as a choice either: the loop below meets it and asks
+  // about it BY NAME, which is a question whose answer lands somewhere.
+  const unsure = result.confidence !== "high";
+  const candidates = unsure ? candidateAsks(proposals, catalog) : [];
+  const candidateKeys = candidates.map((candidate) => candidate.repositoryKey as string);
+  if (unsure && candidateKeys.some((key) => !alreadyAsked(key, settled))) {
+    return {
+      kind: "clarification_needed",
+      questions: [candidateClarificationQuestion(candidates)],
+      reason:
+        result.confidence === "medium"
+          ? "discovery_confidence_medium"
+          : "discovery_confidence_low",
+      // A selection among named candidates, exactly like the "which of these"
+      // question the pre-sandbox asks, so the answer settles this subject for
+      // good instead of being dropped for naming no repository (A46).
+      about: candidates,
+    };
   }
+  /** True when the question above was suppressed because every candidate it
+   *  would have NAMED had already been put to somebody who answered. Past this
+   *  line an unsure proposal contributes nothing.
+   *
+   *  False when it would have named none, and that is not a detail: a refusal
+   *  nobody was ever offered is not a refusal, so an unsure proposal the record
+   *  cannot hold goes to the loop below and is asked about there rather than
+   *  dropped in silence against an answer nobody gave. */
+  const declined = unsure && candidateKeys.length > 0;
 
   const catalogByKey = new Map(
     catalog.map((repository) => [repositoryCatalogKey(repository), repository]),
@@ -150,24 +253,37 @@ export function validateRepositoryDiscoveryResult(
     selected.set(repositoryCatalogKey(repository), repository);
   }
   const discoveredKeys = new Set<string>();
-  for (const requested of proposals) {
+  const dropped: DroppedRepository[] = [];
+  // SILENCE IS NOT SELECTION: an unsure proposal every candidate of which was
+  // already put to somebody contributes nothing at all.
+  for (const requested of declined ? [] : proposals) {
     const key = repositoryCatalogKey(requested);
-    if (discoveredKeys.has(key)) {
-      // Names no repository, on purpose, and must keep naming none. The model
-      // proposing one repository twice is a protocol error by the model, not a
-      // question about a repository: there is no answer a person could give
-      // that says anything about the repository itself, so recording one
-      // against their name would write a decision they never made.
-      return clarification("Repository discovery returned duplicate repositories.");
-    }
+    // The model proposing one repository twice is a protocol error by the
+    // model, and a person cannot usefully answer it: there is no answer that
+    // says anything about the repository itself. The clarification it used to
+    // raise named no repository, so its answer was dropped on arrival, and it
+    // hid whatever else was wrong with the proposal behind a generic question.
+    // The second mention adds no repository, so nothing is lost by carrying on
+    // and the refusals that matter are reached in the proposal's own order
+    // (A48).
+    if (discoveredKeys.has(key)) continue;
     discoveredKeys.add(key);
     const repository = catalogByKey.get(key);
     if (!repository || !repository.usable) {
-      return unavailableClarification(
-        key,
-        repository ? "unusable" : "not_enabled",
-        requested.rationale,
-      );
+      // ASKED ONCE, TOLD AFTERWARDS. A person who already answered a question
+      // about THIS repository settled it; asking them again offers one answer
+      // that destroys their own decision and one that changes nothing, and the
+      // run that follows the second answer reads exactly what it read before,
+      // so the same question comes back for as long as they keep answering
+      // (A47). A repository nobody has been shown is still asked about, which
+      // is wave 8's question and the first half of the same rule (A44).
+      const reason = repository ? "unusable" : "not_enabled";
+      const decided = alreadyDecided(key, settled);
+      if (decided) {
+        dropped.push({ decided, reason, rationale: requested.rationale });
+        continue;
+      }
+      return unavailableClarification(key, reason, requested.rationale);
     }
     if (!selected.has(key)) {
       selected.set(key, {
@@ -181,12 +297,286 @@ export function validateRepositoryDiscoveryResult(
   if (selected.size > MAX_DISCOVERED_REPOSITORIES) {
     return clarification("Repository discovery exceeded the initial repository limit.");
   }
+  if (selected.size === 0) {
+    // NOBODY IS ASKED TWICE, AND THE EMPTY CASE IS NOT AN EXCEPTION TO IT.
+    //
+    // The empty case has three outcomes and this branch is only ever the last
+    // two of them, by the shape of the loop above rather than by a condition
+    // here. A repository nobody has been shown is ASKED ABOUT WHERE IT IS MET,
+    // inside the loop, and that return happens long before this line. A
+    // repository reaches `dropped` only when `alreadyExcluded` found it in the
+    // answered set, which is to say the question naming it was already put and
+    // somebody answered it; a candidate reaches `declined` on the same footing.
+    // So everything arriving here has been asked about and answered, and asking
+    // again would put the same question to the same person and get the same
+    // answer. That is not a door either, so the run says what happened and
+    // stops.
+    //
+    // The sentence is the record: it names each repository and who took it off
+    // this work, because the next move is a person's and they need to know
+    // whose decision it is they would be revisiting.
+    return {
+      kind: "failed",
+      error:
+        dropped.length > 0
+          ? nothingLeftToWorkOn(dropped)
+          : nothingLeftToStartFrom(candidateKeys),
+      blame: "work_scope",
+    };
+  }
 
   return {
     kind: "selected",
     repositories: [...selected.values()],
     confidence: "high",
+    leftOut: [
+      ...dropped.map((left) => ({
+        repositoryKey: left.decided.repositoryKey as string,
+        reason: leftOutNote(left.decided),
+      })),
+      // Left out rather than taken, and said out loud either way: a repository
+      // the ticket names and the run never opened reads as a run that missed it.
+      // One entry per repository rather than one sentence naming several,
+      // because the comment renders these as a line against a repository each.
+      ...(declined
+        ? candidateKeys.map((key) => ({ repositoryKey: key, reason: leftUnnamedNote([key]) }))
+        : []),
+    ],
+    droppedRepositoryKeys: dropped.map((left) => left.decided.repositoryKey),
   };
+}
+
+/** A repository this run took out of the proposal because the record already
+ *  decided it, with what the question about it WOULD have said. The question
+ *  inputs are kept because dropping every proposal leaves the run with nothing,
+ *  and the run then has to ask after all. */
+interface DroppedRepository {
+  decided: WorkScopeEntry;
+  reason: Extract<RepositoryDiscoveryAsk["reason"], "not_enabled" | "unusable">;
+  rationale: string;
+}
+
+/**
+ * Was a question naming THIS repository put to somebody on this subject, and did
+ * they answer it?
+ *
+ * The one fact this file decides on. It says a person has seen this repository
+ * in a question and replied, which is what makes a second question about it a
+ * repeat. It says NOTHING about what they replied, so nothing may be attached on
+ * the strength of it.
+ *
+ * NAMING IS PART OF THE FACT, not a property of the question that happened to
+ * carry it. The set is built from the asks whose question put the key in front
+ * of a person (`db/repositories/work-scope.ts`), so a generic question recorded
+ * against a key is not in it: being asked something is not deciding about a
+ * repository whose name was never on the screen.
+ */
+function alreadyAsked(
+  key: string,
+  settled: { answeredRepositoryKeys: readonly string[] } | undefined,
+): boolean {
+  return settled?.answeredRepositoryKeys.includes(key) ?? false;
+}
+
+/**
+ * The record's entry for a repository a proposal names that this work already
+ * decided, which is the entry that says who decided it and when.
+ *
+ * Two conditions, and each one alone would be wrong. THIS repository must have
+ * been NAMED to somebody in a question they answered, because that is the ask
+ * A44 promises and A47 spends: a person who was never shown this repository is
+ * owed the question, whatever else they have answered on this work. And this
+ * work must already hold an entry about it.
+ *
+ * BOTH STATES THAT SAY SO COUNT, and the second one is the fix for a real loop.
+ * An `excluded` entry is a person's decision to leave the repository out. An
+ * `unavailable` one is the ANSWER TO THE VERY QUESTION this branch is about to
+ * ask again: a person was told the repository is not available and did not name
+ * it, and the entry records that. Honouring only the first asked them the same
+ * question on every later run, forever, while the same answer already counted
+ * as decided everywhere else. Honouring it here is safe precisely because this
+ * branch is reached only while the repository is STILL unusable: the entry
+ * expires by itself the moment the catalog can use it, and then the loop takes
+ * the repository instead of ever reaching this line.
+ *
+ * The subject-wide flag is deliberately not consulted here. It cannot tell this
+ * repository's question from another repository's, so gating on it drops the
+ * very first question about a repository the moment any other one was answered.
+ */
+function alreadyDecided(
+  key: string,
+  settled:
+    | { answeredRepositoryKeys: readonly string[]; recorded: readonly WorkScopeEntry[] }
+    | undefined,
+): WorkScopeEntry | undefined {
+  if (!settled || !alreadyAsked(key, settled)) return undefined;
+  return settled.recorded.find(
+    (recorded) =>
+      recorded.repositoryKey === key &&
+      (recorded.state === "excluded" || recorded.state === "unavailable"),
+  );
+}
+
+/** Who took a repository off this work, and when, as a sentence about it
+ *  starts. Every sentence this module writes about an exclusion opens with it,
+ *  because the fact a person needs first is whose decision this was. */
+function excludedBy(
+  repositoryKey: RepositoryKey,
+  excluded: Pick<WorkScopeEntry, "decidedBy" | "decidedAt">,
+): string {
+  return `${repositoryKey} was excluded on this work by ${actorLabel(excluded.decidedBy)} on ${plainDate(excluded.decidedAt)}`;
+}
+
+/** What a run says about a repository it left out rather than asking about a
+ *  second time. Two sentences, because the two entries are two different facts:
+ *  somebody took this repository off the work, or somebody was told this
+ *  deployment cannot give it to the run and left it at that. A person reading
+ *  the second one can act on it today, so it says how. */
+function leftOutNote(decided: WorkScopeEntry): string {
+  return decided.state === "unavailable"
+    ? `${decided.repositoryKey} is not available to this run, ${actorLabel(decided.decidedBy)} was asked about it on ${plainDate(decided.decidedAt)} and did not name it, and this run left it out rather than asking again. ${enableThemNext(1)}`
+    : `${excludedBy(decided.repositoryKey, decided)}, and this run left it out rather than asking about it again.`;
+}
+
+/** The move a person has when a repository is merely unavailable. It is a real
+ *  one: the entry expires by itself the moment the catalog can use the
+ *  repository, so enabling it is all that is needed and no decision has to be
+ *  taken back. */
+function enableThemNext(count: number): string {
+  const them = count > 1 ? "them" : "it";
+  return `Enable ${them} on the Repositories page and start a new run to use ${them}.`;
+}
+
+/**
+ * The move a person has when the record holds somebody's EXCLUSION, which is
+ * the sentence a failing run ends on.
+ *
+ * NOT THIS FILE'S OWN WORDS, and that is the point. This sentence used to say
+ * the way forward was a new ticket, which was honest when it was written
+ * (nothing constructed an `edited` event, so no route, no tool and no screen
+ * reached the record) and is false now that the edit path exists. A sentence
+ * that has to be revisited every time the product grows a door is a sentence
+ * that will be wrong again, so there is one source for what a person is told
+ * about taking an exclusion back and every surface reads it.
+ *
+ * It is called with no catalog, and that is not laziness. The catalog this
+ * module is handed is the OFFERED one, which the record has already filtered,
+ * so a repository somebody excluded is missing from it in exactly the way one
+ * nobody enabled is: its absence here says nothing about the deployment. The
+ * promise the sentence makes is about the LIST, which this run can see is
+ * changeable, and not about the repository working afterwards.
+ */
+function exclusionNext(dropped: DroppedRepository[]): string {
+  return exclusionRecoveryNotes(
+    dropped
+      .filter((left) => left.decided.state === "excluded")
+      .map((left) => left.decided.repositoryKey),
+    { enabledKeys: null, unusableKeys: null },
+  ).join(" ");
+}
+
+/** What a run says about an unsure proposal it left out because the candidates
+ *  had already been put to somebody who named none of them. */
+function leftUnnamedNote(repositoryKeys: string[]): string {
+  const them = repositoryKeys.length > 1 ? "them" : "it";
+  return `Repository discovery was not confident about ${repositoryKeys.join(", ")}, and somebody on this work was already asked which repositories to start from and did not name ${them}, so this run left ${them} out rather than acting on a question nobody answered with ${them}.`;
+}
+
+/** What a run says when leaving the repositories the record decided out left it
+ *  with nothing. Each one names who took it off this work, because the only
+ *  move left is a person's and it is their own decision they would revisit. */
+function nothingLeftToWorkOn(dropped: DroppedRepository[]): string {
+  return [
+    ...dropped.map((left) =>
+      left.decided.state === "unavailable"
+        ? `${left.decided.repositoryKey} is not available to this run, and ${actorLabel(left.decided.decidedBy)} was asked about it on ${plainDate(left.decided.decidedAt)} and did not name it.`
+        : `${excludedBy(left.decided.repositoryKey, left.decided)}.`,
+    ),
+    "Repository discovery proposed nothing else this run can use,",
+    "so it has no repository to work on.",
+    // The sentence is the only thing a person has here, so it ends on what they
+    // can do rather than on whose decision it was.
+    dropped.some((left) => left.decided.state === "excluded")
+      ? exclusionNext(dropped)
+      : enableThemNext(dropped.length),
+  ].join(" ");
+}
+
+/** What a run says when leaving those candidates out left it with nothing.
+ *
+ *  It ends on a door that is really open. A "none" to the which-of-these
+ *  question writes NO entry by design, so nothing on this work refuses these
+ *  repositories: naming one in the ticket itself is matched by the pre-sandbox
+ *  before any question is asked, and it attaches. That is the cheap move, and it
+ *  is the one to say first. */
+function nothingLeftToStartFrom(repositoryKeys: string[]): string {
+  const them = repositoryKeys.length > 1 ? "them" : "it";
+  return [
+    `Repository discovery was not confident about ${repositoryKeys.join(", ")},`,
+    `and somebody on this work was already asked which repositories to start from and did not name ${them}.`,
+    "Not naming a repository is not choosing it,",
+    "so this run has no repository to work on.",
+    `Name the repositories this ticket should work on in the ticket itself, as ${repositoryKeys[0] ?? "github:owner/repo"}, and start a new run.`,
+  ].join(" ");
+}
+
+/**
+ * The proposals a low confidence question may record itself against: the ones
+ * the offered catalog holds AND can use.
+ *
+ * A proposal the catalog does not hold, or that does not parse as a repository
+ * key, is not carried. The contract requires every asked repository to be a
+ * real key, and a key invented from a model's typo would record a decision
+ * about a repository nobody has.
+ *
+ * An UNUSABLE one is not carried either, and that is the narrower half. The
+ * offered catalog deliberately keeps unusable entries, so membership alone
+ * would put a repository nothing can clone in front of a person as a choice;
+ * naming it writes a permanent `selected` `person` entry that every later run
+ * then refuses to attach, and until the panel ships there is no screen on which
+ * anyone can take it back.
+ *
+ * Deduplicated because the contract refuses a repeated key, and a question the
+ * contract refuses is one whose ask is dropped.
+ */
+function candidateAsks(
+  proposals: ProposedRepository[],
+  catalog: RepositoryCatalogEntry[],
+): RepositoryDiscoveryAsk[] {
+  const offerable = new Set(
+    catalog
+      .filter((repository) => repository.usable)
+      .map((repository) => repositoryCatalogKey(repository)),
+  );
+  const asks: RepositoryDiscoveryAsk[] = [];
+  for (const proposal of proposals) {
+    const key = repositoryCatalogKey(proposal);
+    if (!offerable.has(key)) continue;
+    const repositoryKey = repositoryKeySchema.safeParse(key);
+    if (!repositoryKey.success) continue;
+    if (asks.some((ask) => ask.repositoryKey === repositoryKey.data)) continue;
+    asks.push({
+      repositoryKey: repositoryKey.data,
+      // `selection` is the meaning rather than a compromise, and what each
+      // answer does is worth stating exactly, because this reads like the
+      // reason that decides nothing and it is not.
+      //
+      // Naming one writes `selected` `person`, which is that person's own
+      // decision and survives every later run. A "none" writes NO ENTRY, so the
+      // repositories recorded on this work are left exactly as they were: that
+      // is the half this reason is chosen for. It is not the same as deciding
+      // nothing. A "none" is still an answer to a `selection` question, and an
+      // answered `selection` question raises this subject's
+      // selection-answered flag PERMANENTLY, which silences two questions for
+      // good: this one, above, and the pre-sandbox "which of these"
+      // (`decideTextAmbiguous`, `engine/work-scope/decide.ts`). That is the
+      // point rather than a side effect, because a question nothing silences is
+      // a question every later run asks again.
+      reason: "selection",
+      rationale: proposal.rationale,
+    });
+  }
+  return asks;
 }
 
 /**
@@ -205,7 +595,7 @@ function clarification(reason: string): RepositoryDiscoveryDecision {
     kind: "clarification_needed",
     questions: [whichRepositoryQuestion()],
     reason,
-    refused: [],
+    about: [],
   };
 }
 
@@ -225,18 +615,52 @@ function clarification(reason: string): RepositoryDiscoveryDecision {
  */
 function unavailableClarification(
   key: string,
-  reason: RepositoryDiscoveryRefusal["reason"],
+  reason: Extract<RepositoryDiscoveryAsk["reason"], "not_enabled" | "unusable">,
   rationale: string,
 ): RepositoryDiscoveryDecision {
   const repositoryKey = repositoryKeySchema.safeParse(key);
   return {
     kind: "clarification_needed",
-    questions: [whichRepositoryQuestion(UNAVAILABLE_REPOSITORY_HINT)],
+    // NAMED WHEREVER IT IS RECORDED. This question used to say only "which
+    // repository should this ticket use", while the ask beside it was written
+    // against the key the model asked for: a person answering "none" to a
+    // question that named nothing was recorded as having decided about a
+    // repository they never saw, and a later run then silenced the question and
+    // failed the ticket telling them they had been asked. So the two say the
+    // same thing, and the fallback below is the arm that records nothing.
+    questions: [
+      repositoryKey.success
+        ? unavailableRepositoryQuestion(repositoryKey.data, reason)
+        : whichRepositoryQuestion(UNAVAILABLE_REPOSITORY_HINT),
+    ],
     reason: "Repository discovery requested an unavailable repository.",
-    refused: repositoryKey.success
+    about: repositoryKey.success
       ? [{ repositoryKey: repositoryKey.data, reason, rationale }]
       : [],
   };
+}
+
+/**
+ * The one sentence for a repository the catalog cannot give this run, naming it.
+ *
+ * The name is not decoration: it is what makes the answer a decision about this
+ * repository rather than about nothing, and it is the difference between a
+ * person being told what is missing and being asked to guess. What to do next
+ * differs by arm, so the sentence does too: a repository this deployment does
+ * not hold can be enabled, and one it holds and cannot clone cannot be fixed
+ * from the Repositories page at all.
+ */
+function unavailableRepositoryQuestion(
+  repositoryKey: RepositoryKey,
+  reason: Extract<RepositoryDiscoveryAsk["reason"], "not_enabled" | "unusable">,
+): string {
+  return [
+    `Repository discovery asked for ${repositoryKey}, which this run cannot use:`,
+    reason === "not_enabled"
+      ? `it is not enabled on this deployment. ${enableThemNext(1)}`
+      : "this deployment holds it but cannot clone it.",
+    "Or answer with the repositories this ticket should use instead.",
+  ].join(" ");
 }
 
 /**
@@ -270,12 +694,30 @@ export function repositoryDiscoveryQuestion(input: {
   questions: string[];
   ask: { subjectKey: string; askedRepositories: WorkScopeAskedRepository[] } | null;
 } {
-  // The validator refuses at the first repository it cannot use, so a
-  // clarification is about one repository or about none.
-  const [refused] = input.decision.refused;
+  const [refused] = input.decision.about;
   if (!refused || input.subjectKey === null) {
     return { questions: input.decision.questions, ask: null };
   }
+  if (refused.reason === "selection") {
+    // The model proposed these and was not confident enough to be believed, so
+    // the question is a choice among them rather than a refusal of one. Its
+    // words are the ones it has said since AIW-147; what is new is that it
+    // carries what it named, so the answer settles this subject instead of
+    // being dropped for naming no repository (A46).
+    return {
+      questions: input.decision.questions,
+      ask: {
+        subjectKey: input.subjectKey,
+        askedRepositories: input.decision.about.map((candidate) => ({
+          repositoryKey: candidate.repositoryKey,
+          askedBecause: candidate.reason,
+        })),
+      },
+    };
+  }
+  // The validator refuses at the first repository it cannot use, so a refusal
+  // is about one repository.
+  //
   // The exclusion sentence PROMISES the repository back, so it is said only
   // where the record can keep that promise. A repository that has since been
   // disabled or deleted is gone from the catalog whatever the record says: the
@@ -334,11 +776,11 @@ export function repositoryDiscoveryQuestion(input: {
  * line and cut short before it is quoted.
  */
 function excludedRepositoryQuestion(
-  refused: RepositoryDiscoveryRefusal,
+  refused: RepositoryDiscoveryAsk,
   excluded: Pick<WorkScopeEntry, "decidedBy" | "decidedAt">,
 ): string {
   return [
-    `${refused.repositoryKey} was excluded on this work by ${actorLabel(excluded.decidedBy)} on ${plainDate(excluded.decidedAt)}.`,
+    `${excludedBy(refused.repositoryKey, excluded)}.`,
     `Repository discovery asked for it anyway, because "${theModelsWords(refused.rationale)}".`,
     `Answer with ${refused.repositoryKey} to take that exclusion back and let this run use it,`,
     "or with the repositories this ticket should use instead.",
@@ -382,9 +824,15 @@ function whichRepositoryQuestion(hint?: string): string {
 // Ranked list of the repositories the model proposed, each with its
 // provider-scoped path and rationale, so a human can confirm the selection in
 // one reply.
-function candidateClarificationQuestion(proposals: ProposedRepository[]): string {
-  const candidates = proposals
-    .map((proposal) => `${proposal.provider}:${proposal.repoPath} (${proposal.rationale})`)
+//
+// THE CANDIDATES IT NAMES ARE THE ONES THE ANSWER CAN BE RECORDED AGAINST, so
+// it takes the asks rather than the proposals. A candidate named here and
+// recorded nowhere is a question that comes back every run however it is
+// answered, and one recorded here and named nowhere is a decision taken from
+// somebody who never saw it.
+function candidateClarificationQuestion(asks: RepositoryDiscoveryAsk[]): string {
+  const candidates = asks
+    .map((ask) => `${ask.repositoryKey} (${ask.rationale})`)
     .join(", ");
   return [
     "Repository discovery was not confident enough to select automatically.",

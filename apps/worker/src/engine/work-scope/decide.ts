@@ -24,7 +24,7 @@ import {
 const WORKSPACE_REPOSITORIES_MAX = 8;
 // Requests beyond this many at once are refused back to the model, never
 // turned into a question nobody could record an answer to.
-const REQUEST_REPOSITORIES_MAX = 3;
+export const REQUEST_REPOSITORIES_MAX = 3;
 // What the caller may pass per event. Together these keep every plan inside
 // the contract's 16 upserts, 16 deletes and 32 trail events.
 const EVENT_KEYS_MAX = 8;
@@ -594,8 +594,35 @@ function decideDerived(
   }
 }
 
-/** The "which of these" question is asked at most once per subject: never
- *  after a person selected a repository on it, never after it was answered. */
+/**
+ * The "which of these" question is asked at most once per subject: never after
+ * a person selected a repository the run can reach, never after it was
+ * answered. A selection the run cannot act on decides nothing, so it must not
+ * silence the only question a person ever hears about this.
+ *
+ * KNOWN LIMIT, accepted rather than fixed: the two suppressions are scoped
+ * differently. Reachability here is pin-scoped, so a narrowly pinned definition
+ * can raise the question, while `selectionAnswered` is a subject-wide EXISTS
+ * over the trail (`db/repositories/work-scope.ts`), so the answer latches the
+ * subject for every workflow, including a broader one that would have offered
+ * more repositories. The asymmetry can only cost a question that was answered
+ * against a narrower list, which is a cost paid once per subject, and the
+ * alternative is asking a person again on a subject they already settled.
+ *
+ * SECOND KNOWN LIMIT, recorded rather than fixed: an AGENT's edit through the
+ * `work_scope.edit` MCP tool silences this question exactly as a person's does.
+ * The suppression reads `origin === "person"`, every consumer filters on origin
+ * alone, and the client label the tool writes into `decidedBy` is display text
+ * that nothing decides on. So an agent that selects a repository takes away the
+ * one which-of-these question a person ever hears on that subject. Fixing it
+ * honestly needs a durable marker on the entry saying which surface wrote it,
+ * which is a contract and a storage change; the same is already true of
+ * answering a clarification through MCP. The mitigation in place is that the
+ * agent is not told the lever exists: the recovery sentence naming
+ * `work_scope.edit` is kept out of the prompt additions and out of the
+ * clarification questions that become the agent's durable memory
+ * (`engine/pre-sandbox/steps/repo-selection.ts`).
+ */
 function decideTextAmbiguous(
   context: WorkScopeDecisionContext,
   facts: Facts,
@@ -604,7 +631,10 @@ function decideTextAmbiguous(
 ): void {
   if (!context.carriesRecord || context.selectionAnswered) return;
   const personSelected = (context.scope?.entries ?? []).some(
-    (entry) => entry.state === "selected" && entry.origin === "person",
+    (entry) =>
+      entry.state === "selected" &&
+      entry.origin === "person" &&
+      facts.isReachable(entry.repositoryKey),
   );
   if (personSelected) return;
   // A repository behind the provider pin may never be offered to a person, and
@@ -701,7 +731,14 @@ function decideAnswered(
 ): void {
   const { clarificationId, answer } = event;
   decision.answered({ kind: "question_answered", clarificationId, answer, answeredBy: context.actor });
-  if (answer.kind === "unrecognised") return;
+  // Both kinds record that an answer arrived and write nothing else. This is a
+  // guard rather than an exhaustive switch, so a kind that falls past it reaches
+  // the loop below naming no repository, and every repository the question asked
+  // about is then written as this person's own decision to leave it out. For
+  // "unattributed", whose whole meaning is that the answer is NOT this person's
+  // decision, that is the exact inversion of what it says, and no typecheck
+  // catches it. Add a kind here, or return it above.
+  if (answer.kind === "unrecognised" || answer.kind === "unattributed") return;
   const named = answer.kind === "repositories" ? answer.repositoryKeys : [];
   const askedKeys = new Set<RepositoryKey>();
   for (const asked of event.asked) {
@@ -715,6 +752,20 @@ function decideAnswered(
       );
       continue;
     }
+    // ABSENT MEANS NO, ENFORCED AT THE WRITE.
+    //
+    // A person has decided about a repository only if they were shown its name
+    // or named it themselves. Naming it is the branch above, so everything past
+    // this line is silence, and silence in answer to a question that never put
+    // this key in front of anybody says nothing about it. The rule was written
+    // down in `workScopeAskedRepositorySchema` and enforced only where a later
+    // run READS the suppression, in SQL: every producer of an ask happens to
+    // spell the key in full today, so the rule held by coincidence. A fourth
+    // producer, or somebody editing a key out of one of those sentences,
+    // fabricates a person's decision here in silence, and the fabrication is
+    // durable and attributed to them by name. So the writer refuses it too, and
+    // the cost of the refusal in the honest case is one question asked again.
+    if (asked.named !== true) continue;
     switch (asked.askedBecause) {
       // The person could not give it: not a refusal, and it may expire.
       case "not_enabled":

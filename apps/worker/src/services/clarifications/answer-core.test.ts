@@ -2,7 +2,11 @@ import { asc, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultSettingsSnapshot, type WorkScopeAskedRepository } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
-import type { IssueTrackerAdapter, TicketContent } from "../../adapters/issue-tracker/types.js";
+import type {
+  IssueTrackerAdapter,
+  TicketComment,
+  TicketContent,
+} from "../../adapters/issue-tracker/types.js";
 import {
   activeRuns,
   clarificationRequests,
@@ -13,8 +17,13 @@ import {
 import { createTestDb } from "../../db/test-db.js";
 import { logger } from "../../infra/logger.js";
 import { answerClarificationAndResume } from "./answer-core.js";
-import { readWorkScope } from "../../db/repositories/work-scope.js";
 import {
+  appendWorkScopeQuestionAsked,
+  readWorkScope,
+  readWorkScopeAnsweredRepositories,
+} from "../../db/repositories/work-scope.js";
+import {
+  answerHookClarification,
   getHookClarification,
   prepareHookClarification,
   publishHookClarification,
@@ -54,6 +63,16 @@ const TICKET = "AWT-9";
 const SUBJECT = "ticket:jira:AWT-9";
 const RUN = "run-asked";
 const ACTOR = { id: "user_1", label: "Ada" };
+const BOT = "bot-account";
+// The two moments a recount of a stored answer is bounded by, and two comments
+// inside that window. Relative to now rather than pinned to a date, because a
+// delivery that cannot count the authors is held for a window measured from the
+// moment the answer was stored: a fixture answered in some fixed past would be
+// outside every such window before the test began.
+const ANSWERED_AT = new Date(Date.now() - 60_000);
+const ASKED_AT = new Date(ANSWERED_AT.getTime() - 2 * 60 * 60 * 1000);
+const DURING = new Date(ANSWERED_AT.getTime() - 60 * 60 * 1000).toISOString();
+const DURING_LATER = new Date(ANSWERED_AT.getTime() - 30 * 60 * 1000).toISOString();
 
 let db: Db;
 
@@ -89,7 +108,14 @@ async function seedPending(
   return published;
 }
 
-function makeTracker() {
+function makeTracker(
+  opts: {
+    comments?: TicketComment[];
+    botId?: string;
+    commentsComplete?: boolean;
+    commentsCompleteFrom?: string;
+  } = {},
+) {
   const ticket: TicketContent = {
     id: "1",
     identifier: TICKET,
@@ -97,7 +123,16 @@ function makeTracker() {
     title: "Title",
     description: "Description",
     acceptanceCriteria: "",
-    comments: [],
+    comments: opts.comments ?? [],
+    // What a real read reports once it has paged to the end of the ticket. A
+    // test that asks what happens when it could not passes false.
+    commentsComplete: opts.commentsComplete ?? true,
+    // The narrower fact a read of a very long ticket still establishes: from
+    // this instant on, the list is whole. Absent on the ordinary ticket above,
+    // which has no need of it.
+    ...(opts.commentsCompleteFrom === undefined
+      ? {}
+      : { commentsCompleteFrom: opts.commentsCompleteFrom }),
     labels: [],
     trackerStatus: "AI",
     attachments: [],
@@ -106,21 +141,35 @@ function makeTracker() {
     fetchTicket: vi.fn(() => Promise.resolve(ticket)),
     moveTicket: vi.fn(() => Promise.resolve()),
     postComment: vi.fn((_id: string, _comment: string) => Promise.resolve(null as string | null)),
+    // An empty id is how a provider that will not say who we are reads here,
+    // and it is the one thing that makes a ticket's comments uncountable
+    // without making the ticket itself unreadable.
+    getCurrentUserAccountId: vi.fn(() => Promise.resolve(opts.botId ?? BOT)),
   };
 }
 
-/** One delivery attempt of `answer`, always against the row as it stands now. */
-async function answer(tracker: ReturnType<typeof makeTracker>, id: string, text: string) {
+/** One delivery attempt of `answer`, always against the row as it stands now.
+ *  `extra` is how a channel differs from the dashboard: who is answering, and
+ *  how many people the channel composed the words from. */
+async function answer(
+  tracker: ReturnType<typeof makeTracker>,
+  id: string,
+  text: string,
+  extra: { actor?: { id: string; label: string }; answerAuthorCount?: number } = {},
+) {
   const row = await getHookClarification(db, id);
   if (!row) throw new Error("clarification vanished");
   return answerClarificationAndResume({
     db,
     row,
     rawAnswer: text,
-    actor: ACTOR,
+    actor: extra.actor ?? ACTOR,
+    ...(extra.answerAuthorCount === undefined
+      ? {}
+      : { answerAuthorCount: extra.answerAuthorCount }),
     issueTracker: tracker as unknown as Pick<
       IssueTrackerAdapter,
-      "fetchTicket" | "moveTicket" | "postComment"
+      "fetchTicket" | "moveTicket" | "postComment" | "getCurrentUserAccountId"
     >,
     cancelSettings: defaultSettingsSnapshot(),
   });
@@ -260,11 +309,41 @@ describe("answerClarificationAndResume records the repository answer on arrival"
     return rows.map((row) => row.event);
   }
 
+  // Every question in these tests spells the repository out in its own words, so
+  // every ask carries `named`. Without it the record refuses to write anything a
+  // person did not name (`engine/work-scope/decide.ts`, ABSENT MEANS NO), which
+  // is a different rule being tested elsewhere.
   function asked(
     repositoryKey: string,
     askedBecause: WorkScopeAskedRepository["askedBecause"],
   ): WorkScopeAskedRepository[] {
-    return [{ repositoryKey, askedBecause }];
+    return [{ repositoryKey, askedBecause, named: true }];
+  }
+
+  function comment(
+    accountId: string,
+    author: string,
+    body: string,
+    createdAt: string,
+  ): TicketComment {
+    return { author, accountId, body, createdAt };
+  }
+
+  /** An answer the ticket composed, already on the row, with the two moments a
+   *  recount is bounded by pinned: this is what any channel redelivering a
+   *  stored answer finds, however long after the answer it arrives. */
+  async function storedTicketAnswer(
+    id: string,
+    text: string,
+    actorId: string,
+    label: string,
+    answeredAt: Date = ANSWERED_AT,
+  ) {
+    await answerHookClarification(db, id, text, { id: actorId, label });
+    await db
+      .update(clarificationRequests)
+      .set({ askedAt: ASKED_AT, answeredAt })
+      .where(eq(clarificationRequests.id, id));
   }
 
   beforeEach(async () => {
@@ -375,7 +454,7 @@ describe("answerClarificationAndResume records the repository answer on arrival"
     ]);
   });
 
-  it("records an unreadable answer as answered and decides nothing", async () => {
+  it("records an answer whose words nobody could read as answered, and decides nothing", async () => {
     const row = await seedPending(asked("github:acme/api", "outside_policy"));
 
     await answer(makeTracker(), row.id, "whichever one the team prefers");
@@ -389,6 +468,109 @@ describe("answerClarificationAndResume records the repository answer on arrival"
         answeredBy: PERSON,
       },
     ]);
+  });
+
+  it("tells the person when words nobody could read left the question open, offering the list back", async () => {
+    // The same hole in the neighbouring direction. An answer the reader cannot
+    // make out records nothing AND suppresses nothing: the trail read that
+    // silences a repository question counts only a `none` or a list of names
+    // (`db/repositories/work-scope.ts`), so this question returns on the next
+    // run. Here the question did list repositories, so the words offered back
+    // are the ones the person was shown.
+    const row = await seedPending(asked("github:acme/api", "outside_policy"));
+    const tracker = makeTracker();
+
+    await answer(tracker, row.id, "whichever one the team prefers");
+
+    await expect(entriesOfSubject()).resolves.toEqual([]);
+    const posted = tracker.postComment.mock.calls.map(([, body]) => body).join("\n\n");
+    expect(posted).toContain("Nothing in that answer named a repository");
+    // The one keyword, the one the question itself teaches, and the truth about
+    // where it works: the next asking, never a reply under this closed one.
+    expect(posted).toContain('answer "none" the next time the question is asked');
+  });
+
+  it("tells the person nothing was recorded when they named a repository this deployment does not hold", async () => {
+    // The two halves of this row were proved on two different inputs: that an
+    // unresolvable name records nothing (`engine/work-scope/answer.ts`, where
+    // an identity that resolves against nothing makes the whole answer
+    // unrecognised), and that a person is told, on an answer of pure prose.
+    // This is the row's own input through both halves at once.
+    const row = await seedPending(asked("github:acme/api", "outside_policy"));
+    const tracker = makeTracker();
+
+    await answer(tracker, row.id, "github:acme/unknown-service");
+
+    await expect(entriesOfSubject()).resolves.toEqual([]);
+    await expect(trailEvents()).resolves.toEqual([
+      {
+        kind: "question_answered",
+        clarificationId: row.id,
+        answer: { kind: "unrecognised" },
+        answeredBy: PERSON,
+      },
+    ]);
+    const posted = tracker.postComment.mock.calls.map(([, body]) => body).join("\n\n");
+    expect(posted).toContain("named a repository this deployment does not have");
+    // The remedy that is true for a bare name is a dead end for this person:
+    // they already wrote the path, and the next run would read the same words
+    // and resolve them to the same nothing.
+    expect(posted).not.toContain("write its full path in a comment here");
+    expect(posted).not.toContain("Write the full path");
+    expect(posted).toContain("somebody with access to the repositories screen can add or enable it");
+  });
+
+  it("keeps the remedy that works for an answer that spelled no path out, because writing one out does resolve", async () => {
+    // The other half of the same fork, and the reason the fork exists. Nothing
+    // here was written as a path, so nothing about it is a dead end: the words
+    // this person needs are the ones we have always sent, and a change that
+    // gave everybody the "we do not have that" sentence would be a lie told to
+    // them.
+    const row = await seedPending(asked("github:acme/api", "outside_policy"));
+    const tracker = makeTracker();
+
+    await answer(tracker, row.id, "the billing service");
+
+    await expect(entriesOfSubject()).resolves.toEqual([]);
+    const posted = tracker.postComment.mock.calls.map(([, body]) => body).join("\n\n");
+    expect(posted).toContain("Nothing in that answer named a repository this work should use");
+    expect(posted).toContain("write its full path in a comment here");
+    expect(posted).not.toContain("does not have");
+  });
+
+  it("gives the fuller explanation when one answer carries both a bare name and a path we do not hold", async () => {
+    // Both sentences are true for this person, and the longer one is the one
+    // they cannot work out for themselves: that a name they spelled out in full
+    // is not here at all. The shorter one would leave them writing that path
+    // again and waiting for a run that reads it to nothing.
+    const row = await seedPending(asked("github:acme/api", "outside_policy"));
+    const tracker = makeTracker();
+
+    await answer(tracker, row.id, "billing, or github:acme/unknown-service");
+
+    await expect(entriesOfSubject()).resolves.toEqual([]);
+    const posted = tracker.postComment.mock.calls.map(([, body]) => body).join("\n\n");
+    expect(posted).toContain("named a repository this deployment does not have");
+    expect(posted).not.toContain("write its full path in a comment here");
+  });
+
+  it("tells the person that a thumbs up dropped the repository the run asked about", async () => {
+    // A thumbs up reads as approval and does the opposite of approving: the
+    // run's own reader takes the wordless branch, ends its asking and carries
+    // on WITHOUT the repository, while the record writes nothing because a
+    // permanent refusal is not a thing to read out of an emoji. Both halves are
+    // deliberate; the silence between them was not.
+    const row = await seedPending(asked("github:acme/web", "not_enabled"));
+    const tracker = makeTracker();
+
+    const outcome = await answer(tracker, row.id, "\u{1F44D}");
+
+    expect(outcome.kind).toBe("answered");
+    await expect(entriesOfSubject()).resolves.toEqual([]);
+    const posted = tracker.postComment.mock.calls.map(([, body]) => body).join("\n\n");
+    expect(posted).toContain("continuing without the repositories the question asked about");
+    expect(posted).toContain("has no words in it");
+    expect(posted).toContain("write its full path in a comment here");
   });
 
   it("decides nothing when the person quoted our question and said no under it", async () => {
@@ -408,6 +590,26 @@ describe("answerClarificationAndResume records the repository answer on arrival"
         answer: { kind: "unrecognised" },
         answeredBy: PERSON,
       },
+    ]);
+  });
+
+  it("records a plain no typed into this question's own box, which is nobody else's comment", async () => {
+    // The dashboard and the MCP client open a box belonging to this question,
+    // so a no in it is an answer to it and is recorded exactly as it always
+    // was. Only the ticket, where a comment is threaded to nothing, has to ask
+    // more of a refusal than the word.
+    const row = await seedPending(asked("github:acme/api", "outside_policy"));
+
+    const outcome = await answer(makeTracker(), row.id, "no");
+
+    expect(outcome.kind).toBe("answered");
+    await expect(entriesOfSubject()).resolves.toEqual([
+      expect.objectContaining({
+        repositoryKey: "github:acme/api",
+        state: "excluded",
+        origin: "person",
+        decidedBy: PERSON,
+      }),
     ]);
   });
 
@@ -450,6 +652,52 @@ describe("answerClarificationAndResume records the repository answer on arrival"
     );
   });
 
+  it("records every repository in a list of several as that one person's own decision", async () => {
+    // The row is about ALL of them: each key the answer names is selected, each
+    // carries the person who typed it, and the trail says so for each. Until
+    // this test, origin and author for an answer naming more than one rested
+    // entirely on the single-name test above, and a loop that wrote the second
+    // key some other way would have kept both green.
+    const row = await seedPending(asked("github:acme/api", "selection"));
+
+    await answer(makeTracker(), row.id, "Ada: github:acme/api and github:acme/web");
+
+    const person = {
+      state: "selected",
+      origin: "person",
+      rationale: NAMED,
+      decidedBy: PERSON,
+      decidedAt: expect.any(String),
+    };
+    await expect(entriesOfSubject()).resolves.toEqual([
+      { repositoryKey: "github:acme/api", ...person },
+      { repositoryKey: "github:acme/web", ...person },
+    ]);
+    await expect(trailEvents()).resolves.toEqual([
+      {
+        kind: "question_answered",
+        clarificationId: row.id,
+        answer: {
+          kind: "repositories",
+          repositoryKeys: ["github:acme/api", "github:acme/web"],
+        },
+        answeredBy: PERSON,
+      },
+      {
+        kind: "entry_written",
+        clarificationId: row.id,
+        previousState: null,
+        entry: { repositoryKey: "github:acme/api", ...person },
+      },
+      {
+        kind: "entry_written",
+        clarificationId: row.id,
+        previousState: null,
+        entry: { repositoryKey: "github:acme/web", ...person },
+      },
+    ]);
+  });
+
   it("writes once when the same answer is delivered twice, and still resumes the run", async () => {
     const row = await seedPending(asked("github:acme/web", "not_enabled"));
     const tracker = makeTracker();
@@ -490,17 +738,42 @@ describe("answerClarificationAndResume records the repository answer on arrival"
     ]);
   });
 
-  it("reads the union of a two comment answer", async () => {
+  it("reads the union of one person's two comments", async () => {
+    // The only two comment answer that is ever read: an answer two people wrote
+    // is declined below, so every comment reaching the reader carries the same
+    // name in front of it.
     const row = await seedPending([
       { repositoryKey: "github:acme/api", askedBecause: "selection" },
       { repositoryKey: "github:acme/web", askedBecause: "selection" },
     ]);
 
-    await answer(makeTracker(), row.id, "Filip Maszota: api\n\nAda Lovelace: web");
+    await answer(makeTracker(), row.id, "Filip Maszota: api\n\nFilip Maszota: web", {
+      answerAuthorCount: 1,
+    });
 
     await expect(entriesOfSubject()).resolves.toEqual([
       expect.objectContaining({ repositoryKey: "github:acme/api" }),
       expect.objectContaining({ repositoryKey: "github:acme/web" }),
+    ]);
+  });
+
+  it("keeps a repository named at the start of a person's own second paragraph", async () => {
+    // A blank line inside one Jira comment is a paragraph break, not the join
+    // between two comments. Cut there, the author strip eats whatever opens the
+    // paragraph, and here that is the only repository the person named: they
+    // would be asked again about a repository they had just answered with.
+    const row = await seedPending(asked("github:acme/api", "not_enabled"));
+
+    await answer(makeTracker(), row.id, "Ada: Sure.\n\nacme/api: that is the backend", {
+      answerAuthorCount: 1,
+    });
+
+    await expect(entriesOfSubject()).resolves.toEqual([
+      expect.objectContaining({
+        repositoryKey: "github:acme/api",
+        state: "selected",
+        origin: "person",
+      }),
     ]);
   });
 
@@ -581,14 +854,419 @@ describe("answerClarificationAndResume records the repository answer on arrival"
     await expect(readWorkScope(db, SUBJECT)).resolves.toBeNull();
   });
 
-  it("records nothing at all for a question that asked about no repository", async () => {
-    const row = await seedPending();
+  it("keeps a decision the person made when the run it was meant for dies, so a later run does not ask again", async () => {
+    const row = await seedPending(asked("github:acme/web", "not_enabled"));
+    // The question is on the trail, written where the run asked it
+    // (`engine/steps/clarification.ts`), because what silences the next run's
+    // asking is a join of the asking and the answer.
+    await appendWorkScopeQuestionAsked(db, {
+      subjectKey: SUBJECT,
+      runId: RUN,
+      clarificationId: row.id,
+      asked: asked("github:acme/web", "not_enabled"),
+    });
+    // The run the answer was meant for never wakes: every delivery fails, the
+    // budget is spent and the run is stopped. This is where the story used to
+    // end, with the person's decision dying beside the run.
+    mocks.resumeHook.mockRejectedValue(new Error("transport failed"));
+    const tracker = makeTracker();
 
-    const outcome = await answer(makeTracker(), row.id, "Use Next.js");
+    const kinds = [
+      (await answer(tracker, row.id, "github:acme/web")).kind,
+      (await answer(tracker, row.id, "github:acme/web")).kind,
+      (await answer(tracker, row.id, "github:acme/web")).kind,
+    ];
+
+    expect(kinds).toEqual([
+      "resume_failed_retryable",
+      "resume_failed_retryable",
+      "resume_exhausted",
+    ]);
+    const [runRow] = await db.select().from(workflowRuns).where(eq(workflowRuns.runId, RUN));
+    expect(runRow?.status).toBe("failed");
+
+    // What a NEW run on this subject reads at its start, before anything
+    // decides what to ask: the decision, and the fact that this repository has
+    // been answered about. Both are frozen onto the run context by
+    // `engine/steps/run-start-settings.ts`.
+    await expect(entriesOfSubject()).resolves.toMatchObject([
+      { repositoryKey: "github:acme/web", state: "selected", origin: "person", decidedBy: PERSON },
+    ]);
+    await expect(readWorkScopeAnsweredRepositories(db, SUBJECT)).resolves.toEqual([
+      "github:acme/web",
+    ]);
+  });
+
+  it("writes no entry when the channel says two people wrote the answer, and still resumes the run", async () => {
+    const row = await seedPending(asked("github:acme/web", "not_enabled"));
+
+    const outcome = await answer(makeTracker(), row.id, "github:acme/web", {
+      answerAuthorCount: 2,
+    });
+
+    // The run wakes on the same words; only the entries are declined.
+    expect(outcome.kind).toBe("answered");
+    expect(mocks.resumeHook).toHaveBeenCalledTimes(1);
+    await expect(readWorkScope(db, SUBJECT)).resolves.toBeNull();
+    // The answer is perfectly readable and is still nobody's decision, and the
+    // trail says which of the two happened: "unattributed", not the kind that
+    // means we could not read the words.
+    await expect(trailEvents()).resolves.toEqual([
+      {
+        kind: "question_answered",
+        clarificationId: row.id,
+        answer: { kind: "unattributed" },
+        answeredBy: PERSON,
+      },
+    ]);
+  });
+
+  it("warns when it declines to attribute an answer, because the only other symptom is a repeated question", async () => {
+    const row = await seedPending(asked("github:acme/web", "not_enabled"));
+    const warn = vi.spyOn(logger, "warn");
+
+    await answer(makeTracker(), row.id, "github:acme/web", { answerAuthorCount: 2 });
+
+    // One Jira automation rule commenting on the move into the AI column is a
+    // second author on every ticket, and nothing else would say so.
+    expect(warn).toHaveBeenCalledWith(
+      { runId: RUN, clarificationId: row.id, authorCount: 2 },
+      "work_scope_answer_not_attributed_multiple_authors",
+    );
+  });
+
+  it("counts the people behind a stored ticket answer from the ticket, whichever channel hands it back", async () => {
+    // A byte-exact resubmission of the stored text through MCP or the dashboard
+    // takes the resume retry path and composed nothing, so it carries no count.
+    // What the answer was made of is still on the ticket, so it is counted from
+    // there and judged on the same evidence as the first delivery: one person,
+    // one recorded decision. Deciding by which channel delivered instead loses
+    // this answer for good, because the resume spends the hook and the row
+    // leaves the resumable set with it.
+    const row = await seedPending(asked("github:acme/web", "not_enabled"));
+    await storedTicketAnswer(row.id, "Jane: github:acme/web", "jira:human-1", "Jane (via Jira)");
+    const tracker = makeTracker({
+      comments: [comment("human-1", "Jane", "github:acme/web", DURING)],
+    });
+
+    const outcome = await answer(tracker, row.id, "Jane: github:acme/web", {
+      actor: { id: "user_9", label: "MCP claude-code" },
+    });
 
     expect(outcome.kind).toBe("answered");
-    expect(outcome.kind === "answered" && outcome.row.answer).toBe("Use Next.js");
+    // The recount reads the ticket WITH the window it is counting over, so the
+    // pages are paid for here and on no other ticket read in the deployment.
+    expect(tracker.fetchTicket).toHaveBeenCalledWith(TICKET, {
+      commentsSince: ASKED_AT.toISOString(),
+    });
+    await expect(entriesOfSubject()).resolves.toEqual([
+      expect.objectContaining({
+        repositoryKey: "github:acme/web",
+        state: "selected",
+        origin: "person",
+        decidedBy: { kind: "person", actorId: "jira:human-1", actorLabel: "Jane (via Jira)" },
+      }),
+    ]);
+  });
+
+  it("writes no entry when the ticket says two people wrote the stored answer handed back", async () => {
+    const row = await seedPending(asked("github:acme/web", "not_enabled"));
+    const composed = "Jane: github:acme/web\n\nBob: sounds right";
+    await storedTicketAnswer(row.id, composed, "jira:human-2", "Jane, Bob (via Jira)");
+    const tracker = makeTracker({
+      comments: [
+        comment("human-1", "Jane", "github:acme/web", DURING),
+        comment("human-2", "Bob", "sounds right", DURING_LATER),
+      ],
+    });
+
+    const outcome = await answer(tracker, row.id, composed, {
+      actor: { id: "user_9", label: "MCP claude-code" },
+    });
+
+    expect(outcome.kind).toBe("answered");
+    await expect(readWorkScope(db, SUBJECT)).resolves.toBeNull();
+    await expect(trailEvents()).resolves.toEqual([
+      {
+        kind: "question_answered",
+        clarificationId: row.id,
+        answer: { kind: "unattributed" },
+        answeredBy: {
+          kind: "person",
+          actorId: "jira:human-2",
+          actorLabel: "Jane, Bob (via Jira)",
+        },
+      },
+    ]);
+  });
+
+  it("fails the delivery, and spends nothing, when the people behind a stored answer cannot be counted", async () => {
+    const row = await seedPending(asked("github:acme/web", "not_enabled"));
+    await storedTicketAnswer(row.id, "Jane: github:acme/web", "jira:human-1", "Jane (via Jira)");
+    const mute = makeTracker({
+      botId: "",
+      comments: [comment("human-1", "Jane", "github:acme/web", DURING)],
+    });
+
+    const outcome = await answer(mute, row.id, "Jane: github:acme/web", {
+      actor: { id: "user_9", label: "MCP claude-code" },
+    });
+
+    // Retryable, and before the hook: the answer is intact, the row is still
+    // resumable, and the write nobody spent is still there for the next
+    // delivery. Resuming on an answer nothing can attribute would end both.
+    expect(outcome.kind).toBe("resume_failed_retryable");
+    expect(mocks.resumeHook).not.toHaveBeenCalled();
     await expect(trailEvents()).resolves.toEqual([]);
     await expect(readWorkScope(db, SUBJECT)).resolves.toBeNull();
+  });
+
+  it("holds a stored answer rather than calling its evidence gone when the ticket could not be read to the end", async () => {
+    const row = await seedPending(asked("github:acme/web", "not_enabled"));
+    await storedTicketAnswer(row.id, "Jane: github:acme/web", "jira:human-1", "Jane (via Jira)");
+    // The answer is on page two, and this read never got there. Absence here is
+    // ignorance, and ignorance must not read as "those words were deleted".
+    const truncated = makeTracker({ comments: [], commentsComplete: false });
+
+    const outcome = await answer(truncated, row.id, "Jane: github:acme/web", {
+      actor: { id: "user_9", label: "MCP claude-code" },
+    });
+
+    expect(outcome.kind).toBe("resume_failed_retryable");
+    expect(mocks.resumeHook).not.toHaveBeenCalled();
+    await expect(trailEvents()).resolves.toEqual([]);
+    await expect(readWorkScope(db, SUBJECT)).resolves.toBeNull();
+  });
+
+  it("counts from a ticket too long to read whole when the read covers the question's window", async () => {
+    const row = await seedPending(asked("github:acme/web", "not_enabled"));
+    await storedTicketAnswer(row.id, "Jane: github:acme/web", "jira:human-1", "Jane (via Jira)");
+    // Longer than one read may page through, so the list is not the whole list.
+    // It is read from the newest end though, and it reaches back past the
+    // question, so every comment the count is taken over is here. Holding this
+    // delivery would be an outage of our own making, on the tickets people
+    // argue on most.
+    const long = makeTracker({
+      comments: [comment("human-1", "Jane", "github:acme/web", DURING)],
+      commentsComplete: false,
+      commentsCompleteFrom: new Date(ASKED_AT.getTime() - 60 * 60 * 1000).toISOString(),
+    });
+
+    const outcome = await answer(long, row.id, "Jane: github:acme/web", {
+      actor: { id: "user_9", label: "MCP claude-code" },
+    });
+
+    expect(outcome.kind).toBe("answered");
+    await expect(entriesOfSubject()).resolves.toEqual([
+      expect.objectContaining({
+        repositoryKey: "github:acme/web",
+        state: "selected",
+        origin: "person",
+      }),
+    ]);
+  });
+
+  it("spends none of the delivery attempts on deliveries our own counting held back", async () => {
+    const row = await seedPending(asked("github:acme/web", "not_enabled"));
+    const composed = "Jane: github:acme/web";
+    await storedTicketAnswer(row.id, composed, "jira:human-1", "Jane (via Jira)");
+    const mute = makeTracker({
+      botId: "",
+      comments: [comment("human-1", "Jane", "github:acme/web", DURING)],
+    });
+
+    const held = [
+      await answer(mute, row.id, composed),
+      await answer(mute, row.id, composed),
+      await answer(mute, row.id, composed),
+    ];
+
+    expect(held.map((outcome) => outcome.kind)).toEqual([
+      "resume_failed_retryable",
+      "resume_failed_retryable",
+      "resume_failed_retryable",
+    ]);
+
+    // The three attempts are the person's budget for getting their answer
+    // delivered, and none of the three above was an attempt to deliver it: they
+    // were us, unable to count. A delivery that can count still finds a full
+    // budget, and this answer is still recorded.
+    const counted = makeTracker({
+      comments: [comment("human-1", "Jane", "github:acme/web", DURING)],
+    });
+    const outcome = await answer(counted, row.id, composed);
+
+    expect(outcome.kind).toBe("answered");
+    await expect(entriesOfSubject()).resolves.toEqual([
+      expect.objectContaining({ repositoryKey: "github:acme/web", state: "selected" }),
+    ]);
+  });
+
+  it("gives up counting after its own window, says on the ticket that the failure was ours, and lets the answer through", async () => {
+    const row = await seedPending(asked("github:acme/web", "not_enabled"));
+    const composed = "Jane: github:acme/web";
+    // Stored an hour ago: whatever is stopping us counting is not a moment of
+    // Jira being unhelpful any more, and the run is still parked on it.
+    await storedTicketAnswer(
+      row.id,
+      composed,
+      "jira:human-1",
+      "Jane (via Jira)",
+      new Date(Date.now() - 60 * 60 * 1000),
+    );
+    const mute = makeTracker({
+      botId: "",
+      comments: [comment("human-1", "Jane", "github:acme/web", DURING)],
+    });
+
+    const outcome = await answer(mute, row.id, composed);
+
+    expect(outcome.kind).toBe("answered");
+    await expect(trailEvents()).resolves.toEqual([]);
+    await expect(readWorkScope(db, SUBJECT)).resolves.toBeNull();
+    // The person answered correctly and something they cannot see decided not
+    // to keep it, so the ticket says what failed and whose fault it was.
+    const told = mute.postComment.mock.calls.filter(([, body]) =>
+      body.includes("could not establish from this ticket how many people wrote"),
+    );
+    expect(told).toHaveLength(1);
+    expect(told[0]?.[1]).toContain("a limitation on our side");
+  });
+
+  it("says on the ticket that the words an answer was composed from are gone", async () => {
+    const row = await seedPending(asked("github:acme/web", "not_enabled"));
+    const composed = "Jane: github:acme/web";
+    await storedTicketAnswer(row.id, composed, "jira:human-1", "Jane (via Jira)");
+    // The ticket reads clean and Jane's comment is not on it: deleted, or
+    // edited past recognition. No later delivery counts it, so the answer goes
+    // through and decides nothing.
+    const wiped = makeTracker({ comments: [] });
+
+    const outcome = await answer(wiped, row.id, composed);
+
+    expect(outcome.kind).toBe("answered");
+    await expect(readWorkScope(db, SUBJECT)).resolves.toBeNull();
+    // Told, because the next run asks Jane the same question and she is owed
+    // the reason. Silence here is how a person learns the system ignores them.
+    const told = wiped.postComment.mock.calls.filter(([, body]) =>
+      body.includes("no longer on the ticket"),
+    );
+    expect(told).toHaveLength(1);
+    expect(told[0]?.[1]).toContain("Your answer reached the run, which is continuing.");
+    expect(told[0]?.[1]).toContain("one person in a single comment is the one that gets recorded");
+    // And never an instruction to answer this question again: it is answered,
+    // and the comment path only ever reads a pending one. What it offers is the
+    // route that works without a question, the ticket text the next run reads.
+    expect(told[0]?.[1]).toContain("write its full path in a comment here");
+    expect(told[0]?.[1]).not.toContain("reply");
+  });
+
+  it("counts the people the answer was composed from, not whoever commented while it was being stored", async () => {
+    const row = await seedPending(asked("github:acme/web", "not_enabled"));
+    // Jane's words are the whole answer: the delivery read the ticket, composed
+    // them, and Bob's comment landed in the moment between that read and the
+    // answer being stored. Counting him makes the same answer two people's
+    // through a channel that hands it back and one person's through the channel
+    // that composed it.
+    const composed = "Jane: github:acme/web";
+    await storedTicketAnswer(row.id, composed, "jira:human-1", "Jane (via Jira)");
+    const tracker = makeTracker({
+      comments: [
+        comment("human-1", "Jane", "github:acme/web", DURING),
+        comment("human-2", "Bob", "what is this about?", DURING_LATER),
+      ],
+    });
+
+    const outcome = await answer(tracker, row.id, composed, {
+      actor: { id: "user_9", label: "MCP claude-code" },
+    });
+
+    expect(outcome.kind).toBe("answered");
+    await expect(entriesOfSubject()).resolves.toEqual([
+      expect.objectContaining({ repositoryKey: "github:acme/web", state: "selected" }),
+    ]);
+  });
+
+  it("records an answer the channel says one person wrote", async () => {
+    const row = await seedPending(asked("github:acme/web", "not_enabled"));
+
+    await answer(makeTracker(), row.id, "github:acme/web", { answerAuthorCount: 1 });
+
+    await expect(entriesOfSubject()).resolves.toEqual([
+      expect.objectContaining({ repositoryKey: "github:acme/web", state: "selected" }),
+    ]);
+  });
+
+  it("records a dashboard answer, which is one person's own words and counts no authors", async () => {
+    const row = await seedPending(asked("github:acme/web", "not_enabled"));
+
+    await answer(makeTracker(), row.id, "github:acme/web");
+
+    await expect(entriesOfSubject()).resolves.toEqual([
+      expect.objectContaining({
+        repositoryKey: "github:acme/web",
+        state: "selected",
+        decidedBy: PERSON,
+      }),
+    ]);
+  });
+
+  it("records an MCP answer, which is one client's words and counts no authors", async () => {
+    const row = await seedPending(asked("github:acme/web", "not_enabled"));
+
+    await answer(makeTracker(), row.id, "github:acme/web", {
+      actor: { id: "user_1", label: "MCP claude-code" },
+    });
+
+    await expect(entriesOfSubject()).resolves.toEqual([
+      expect.objectContaining({
+        repositoryKey: "github:acme/web",
+        state: "selected",
+        decidedBy: { kind: "person", actorId: "user_1", actorLabel: "MCP claude-code" },
+      }),
+    ]);
+  });
+
+  it("records nothing for a clarification that carried no repository question, whatever its answer names", async () => {
+    // No asked list at all means the question was about something else, so the
+    // repository key in this answer is a person pointing at an example, not a
+    // decision. Reading it would write an entry nobody was asked for, and
+    // nobody can undo.
+    const row = await seedPending();
+
+    const outcome = await answer(
+      makeTracker(),
+      row.id,
+      "Use Next.js, the pattern is in github:acme/api",
+    );
+
+    expect(outcome.kind).toBe("answered");
+    expect(outcome.kind === "answered" && outcome.row.answer).toBe(
+      "Use Next.js, the pattern is in github:acme/api",
+    );
+    await expect(trailEvents()).resolves.toEqual([]);
+    await expect(readWorkScope(db, SUBJECT)).resolves.toBeNull();
+  });
+
+  it("records the repository a person named to a question that listed none", async () => {
+    // The bare "which repository should this ticket modify?" lists nothing, and
+    // that empty list is what makes its answer readable at all. Without it the
+    // question comes back on the next run with the answer already given, which
+    // is the loop this closes.
+    const row = await seedPending([], ["Which repository should this ticket modify?"]);
+
+    const outcome = await answer(makeTracker(), row.id, "github:acme/api");
+
+    expect(outcome.kind).toBe("answered");
+    await expect(entriesOfSubject()).resolves.toEqual([
+      {
+        repositoryKey: "github:acme/api",
+        state: "selected",
+        origin: "person",
+        rationale: NAMED,
+        decidedBy: PERSON,
+        decidedAt: expect.any(String),
+      },
+    ]);
   });
 });

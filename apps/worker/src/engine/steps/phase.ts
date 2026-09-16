@@ -20,9 +20,9 @@ import type {
   VcsProviderKind,
   WorkScope,
   WorkScopeActor,
-  WorkScopeWritePlan,
   WorkflowRepositoryScope,
 } from "@shared/contracts";
+import type { RunWorkScopeWrite } from "../work-scope/apply-plans.js";
 import type { RepositoryCatalogEntry } from "../repository-discovery/catalog.js";
 import type { CostProvider, TokenPrice } from "@shared/costs";
 import { combineHarnessRuntimeLimits } from "../../sandbox/harness-runtime-limits.js";
@@ -122,6 +122,12 @@ export type ResolvedHumanRepositoryExpansion =
          *  chosen for this subject. Leaving it behind would let the run ask the
          *  selection question again after its own answer set it. */
         selectionAnswered?: boolean;
+        /** The repositories a question on this subject named and somebody
+         *  answered for, re-read with the entries for the same reason: the
+         *  answer this run just took is what the rounds after it must not ask
+         *  about again. Absent on a result stored before this field existed,
+         *  which leaves the run reading the set it froze at start. */
+        answeredRepositoryKeys?: string[];
       };
     };
 
@@ -243,6 +249,9 @@ export async function applyHumanRepositoryExpansion(
       ...(resumed.selectionAnswered === undefined
         ? {}
         : { selectionAnswered: resumed.selectionAnswered }),
+      ...(resumed.answeredRepositoryKeys === undefined
+        ? {}
+        : { answeredRepositoryKeys: resumed.answeredRepositoryKeys }),
     };
   }
   // THE RECORD OUTRANKS THE ANSWER TEXT. The answer was read and recorded when
@@ -417,13 +426,16 @@ async function writeAndStartPhase(
    *  ride a step that cannot retry: it changes no entry, so losing the line to
    *  a dead invocation costs nothing, while a second copy of it reads as an
    *  agent that asked twice. Absent on every run that froze no record. */
-  workScopeWrite?: { subjectKey: string; runId: string; plans: WorkScopeWritePlan[] },
+  workScopeWrite?: RunWorkScopeWrite,
 ): Promise<
   | { ok: true; commandId: string }
   | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
 > {
   "use step";
-  if (workScopeWrite) await applyRunWorkScopePlans(workScopeWrite);
+  if (workScopeWrite) {
+    const { applyRunWorkScopePlans } = await import("../work-scope/apply-plans.js");
+    await applyRunWorkScopePlans(workScopeWrite);
+  }
   const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
   const { commandProtocolFailure, protocolFailure } = await import(
     "../../sandbox/agents/protocol.js"
@@ -662,7 +674,7 @@ async function attachResearchRepositoriesStep(
    *  work scope. It rides this step because the step cannot retry, and because
    *  an attach is exactly the outcome that changes an entry. Absent on a run
    *  that froze no record. */
-  workScopeWrite?: { subjectKey: string; runId: string; plans: WorkScopeWritePlan[] },
+  workScopeWrite?: RunWorkScopeWrite,
 ): Promise<{
   manifest: Extract<WorkspaceManifest, { version: 2 }>;
   cloneDurationMs: number;
@@ -729,7 +741,10 @@ async function attachResearchRepositoriesStep(
     });
     // After the clone, so a run that could not attach the repository does not
     // record that it did.
-    if (workScopeWrite) await applyRunWorkScopePlans(workScopeWrite);
+    if (workScopeWrite) {
+      const { applyRunWorkScopePlans } = await import("../work-scope/apply-plans.js");
+      await applyRunWorkScopePlans(workScopeWrite);
+    }
     return {
       manifest: attached,
       cloneDurationMs: Math.max(0, Date.now() - startedAt),
@@ -814,18 +829,20 @@ interface RunWorkScopeResume {
 /**
  * The record as the answer left it, turned into what this run should attach.
  *
- * It reads the subject's scope and its `selectionAnswered` flag, never the
- * answer text and never a copy of it in the resume payload: the answer was
- * decided when it arrived, so the entries ARE what the person said, and a re-read
- * also sees a panel edit made between the answer and the wake. The `resumed`
- * event decides those keys exactly as a run start would, so nothing the policy,
- * the pin or the workspace cap refuses can arrive through a person's answer by
- * a different door.
+ * It reads the subject's scope, its `selectionAnswered` flag and the
+ * repositories a question already settled, never the answer text and never a
+ * copy of it in the resume payload: the answer was decided when it arrived, so
+ * the entries ARE what the person said, and a re-read also sees a panel edit
+ * made between the answer and the wake. The `resumed` event decides those keys
+ * exactly as a run start would, so nothing the policy, the pin or the workspace
+ * cap refuses can arrive through a person's answer by a different door.
  *
- * The record it read travels back beside the repositories, entries and
- * `selectionAnswered` together, because the caller has no other way to see what
- * this run's own question settled: it is what the rounds after the answer
- * decide against (A43).
+ * The record it read travels back beside the repositories: entries,
+ * `selectionAnswered` and the settled repositories together, because the caller
+ * has no other way to see what this run's own question settled. It is what the
+ * rounds after the answer decide against (A43), and the settled set is what
+ * keeps the round after this one from putting the same repository to the same
+ * person twice in one run (A47).
  */
 async function resumeFromWorkScope(
   resume: RunWorkScopeResume,
@@ -839,16 +856,21 @@ async function resumeFromWorkScope(
   repositories: SelectedRepository[];
   scope: WorkScope | null;
   selectionAnswered: boolean;
+  answeredRepositoryKeys: string[];
 }> {
   const { catalog, attached } = run;
   const { createRunWorkScopeRecorder, workScopeRepositoryKey } = await import(
     "../work-scope/context.js"
   );
-  const { readConnectedWorkScope, readConnectedWorkScopeSelectionAnswered } =
-    await import("../../db/repositories/work-scope.js");
-  const [scope, selectionAnswered] = await Promise.all([
+  const {
+    readConnectedWorkScope,
+    readConnectedWorkScopeAnsweredRepositories,
+    readConnectedWorkScopeSelectionAnswered,
+  } = await import("../../db/repositories/work-scope.js");
+  const [scope, selectionAnswered, answeredRepositoryKeys] = await Promise.all([
     readConnectedWorkScope(resume.subjectKey),
     readConnectedWorkScopeSelectionAnswered(resume.subjectKey),
+    readConnectedWorkScopeAnsweredRepositories(resume.subjectKey),
   ]);
   const byKey = new Map(
     catalog.map((entry) => [workScopeRepositoryKey(entry), entry] as const),
@@ -882,6 +904,7 @@ async function resumeFromWorkScope(
     kind: "resumed",
     repositoryKeys: record.boundEventKeys(selected),
   });
+  const { applyRunWorkScopePlans } = await import("../work-scope/apply-plans.js");
   await applyRunWorkScopePlans({
     subjectKey: resume.subjectKey,
     runId: resume.runId,
@@ -901,52 +924,7 @@ async function resumeFromWorkScope(
       selectedRationale: "recorded on this work",
     });
   }
-  return { repositories, scope, selectionAnswered };
-}
-
-/**
- * Apply what a run decided about its subject's work scope, from inside the step
- * that carries it.
- *
- * Only ever called from a step with `maxRetries = 0`. A refusal line lost when
- * an invocation dies is acceptable, because a refusal changes no entry; a
- * DUPLICATED one is not, because the refusal vocabulary has no reason for a
- * repeat and two identical lines read as an agent that asked twice.
- *
- * A FAILED WRITE IS LOGGED AND THE RUN CONTINUES, exactly as the selection's
- * write is and for the same reason: this summarises what the run computed from
- * inputs that all still exist, so a lost write costs a debugging line rather
- * than a person's decision. The line carries the subject and the run so it can
- * be found rather than merely counted.
- */
-async function applyRunWorkScopePlans(write: {
-  subjectKey: string;
-  runId: string;
-  plans: WorkScopeWritePlan[];
-}): Promise<void> {
-  if (write.plans.length === 0) return;
-  try {
-    const { applyConnectedRunWorkScopePlan } = await import(
-      "../../db/repositories/work-scope.js"
-    );
-    for (const plan of write.plans) {
-      await applyConnectedRunWorkScopePlan({
-        subjectKey: write.subjectKey,
-        runId: write.runId,
-        plan,
-      });
-    }
-  } catch (error) {
-    const { logger } = await import("../../infra/logger.js");
-    logger.warn(
-      {
-        subjectKey: write.subjectKey,
-        runId: write.runId,
-        err: error instanceof Error ? error.message : String(error),
-      },
-      "work_scope_write_failed",
-    );
-  }
+  return { repositories, scope, selectionAnswered, answeredRepositoryKeys };
 }
 
 async function parseAgentOutputStep(

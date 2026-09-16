@@ -54,11 +54,13 @@ import type {
   PreSandboxRepositoryDiscovery,
   PreSandboxRepositoryScopeNarrowing,
   PreSandboxWorkScopeAsk,
+  PreSandboxWorkScopeLeftOut,
 } from "../../pre-sandbox/types.js";
 import type {
   ApprovedRepositoryScope,
   TriggerRepositoryPolicy,
   WorkScopeActor,
+  WorkScopeQuestionPurpose,
   WorkflowRepositoryScope,
 } from "@shared/contracts";
 import type { RunStartWorkScope } from "../../steps/run-start-settings.js";
@@ -109,6 +111,8 @@ type PreSandboxOutcome =
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
       repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
       workScopeAsk?: PreSandboxWorkScopeAsk;
+      workScopeLeftOut?: PreSandboxWorkScopeLeftOut[];
+      workScopeRecoveryNotes?: string[];
     }
   | {
       status: "halt";
@@ -124,6 +128,8 @@ type PreSandboxOutcome =
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
       repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
       workScopeAsk?: PreSandboxWorkScopeAsk;
+      workScopeLeftOut?: PreSandboxWorkScopeLeftOut[];
+      workScopeRecoveryNotes?: string[];
     };
 
 async function blockPrepareWorkspacePreSandboxStep(
@@ -738,6 +744,43 @@ async function verifyRepositorySetup(
   });
 }
 
+/** The repositories a PERSON has selected in the record as it stands. Empty for
+ *  a run that carries no record, so a caller comparing two of these never sees
+ *  a change where there was no record to change. */
+function personSelectedKeys(workScope: RunStartWorkScope | undefined): string[] {
+  return (workScope?.scope?.entries ?? [])
+    .filter((entry) => entry.state === "selected" && entry.origin === "person")
+    .map((entry) => entry.repositoryKey);
+}
+
+/** At most this many repository keys are spelled in the sentence below; the
+ *  rest are counted. A question is read by a person, and a list of twenty keys
+ *  is a wall they skip. */
+const NARROWED_KEYS_NAMED_MAX = 5;
+
+/**
+ * What happened to the repositories a person narrowed this work down to, when
+ * this run can reach none of them.
+ *
+ * WITHOUT THIS THE QUESTION IS THE FOUNDING COMPLAINT AGAIN. Somebody cut twelve
+ * repositories to three, and the next run hands them a bare "which repository
+ * should this ticket modify?" with no sign that their three were read, accepted,
+ * and have since gone out of reach. From where they sit that is being asked
+ * something they already answered. The difference is entirely whether the
+ * question says what became of their answer.
+ *
+ * It is composed here because nothing else can: no repository was refused, so
+ * the record decided nothing and produced no refusal note. What emptied the list
+ * is this run's own filter, comparing what a person chose against what it can
+ * see, and that comparison exists nowhere else.
+ */
+function narrowedOutOfReachNote(keys: string[]): string {
+  const named = keys.slice(0, NARROWED_KEYS_NAMED_MAX);
+  const rest = keys.length - named.length;
+  const list = rest > 0 ? `${named.join(", ")}, and ${rest} more` : named.join(", ");
+  return `The repositories chosen for this work are not available to this run: ${list}.`;
+}
+
 export async function ensureWorkspace(
   ctx: Parameters<BlockExecuteFn>[2],
   execution?: BlockInvocationContext,
@@ -767,6 +810,101 @@ export async function ensureWorkspace(
       : await resolveChecksProvisioningStep(runChecksScopeKeys(ctx));
   ctx.checksCeilingMs ??= provisioning.ceilingMs;
   const checksCeilingMs = ctx.checksCeilingMs;
+  // Every question below is about repositories, and they divide in two: the
+  // ones raised with an ask behind them, which the record reads and rules on,
+  // and the ones raised with none, which the record never sees at all. Which
+  // kind this run is waiting on is remembered here because it cannot be
+  // recovered later: the ask is consumed when the question is raised, and by
+  // the time the answer comes back the only thing left of the question is its
+  // text. Written at the door every one of them leaves through, so a question
+  // added later cannot forget to say which kind it is.
+  const askHuman = (questions: string[]): BlockExecutionResult => {
+    // AN ASK THAT LISTS NOTHING GIVES THE RECORD NO KEY TO READ SILENCE ON. The
+    // bare questions below record an ask with an empty list, which is the right
+    // thing for the record (somebody WAS asked about repositories) and the wrong
+    // thing to arm the fence with. The answer path still adjudicates such an
+    // answer and writes every repository it NAMES, but it can write nothing
+    // about a repository the question did not list, so an unchanged record
+    // afterwards is what an unreadable answer, a "none", and an answer naming
+    // something this deployment cannot reach all leave behind, and it is a
+    // refusal in none of those cases. Only the verdict on the answer tells them
+    // apart, and where there is no verdict this is the older reading's
+    // precondition.
+    //
+    // The count, not `named`: that flag is stamped later, in
+    // `engine/steps/clarification-hook-steps.ts`, where the question's text is
+    // in hand, so it is absent on every ask reaching this line. It answers a
+    // different question anyway (was this key on the person's screen, which
+    // decides whether their "none" binds it); what this fence needs is whether
+    // the answer path had anything to adjudicate at all.
+    const askListedARepository =
+      ctx.workScopeAsk !== undefined && ctx.workScopeAsk.askedRepositories.length > 0;
+    ctx.workScopeQuestionRecorded = askListedARepository
+      ? { personSelectedKeys: personSelectedKeys(ctx.workScope) }
+      : undefined;
+    return {
+      kind: "needs_human_input",
+      output: { status: "needs_human_input", questions },
+      questions,
+    };
+  };
+  /**
+   * The bare repository questions this block asks on its own, where the
+   * selection came back with nothing to put in front of anybody.
+   *
+   * They go on the record as an ask that lists NO repository, which is a
+   * different fact from no ask at all and must stay different: an ask naming
+   * nothing still says a person was asked which repositories this work touches,
+   * so the answer is read as an answer to that. Without it the commonest
+   * question in the feature, "which repository should this ticket modify?", is
+   * answered into a record that never sees the answer, and a person who types a
+   * full repository path has decided nothing as far as the next run is
+   * concerned. Naming a repository yourself is the strongest form of deciding,
+   * not the weakest.
+   *
+   * Only on a run that carries a record, and never over an ask pre-sandbox
+   * already made: that ask names repositories and this one names none, and the
+   * one that named them is the more informative of the two.
+   *
+   * AND THEY CARRY WHAT THE SELECTION REFUSED. This is the founding complaint of
+   * the whole feature: somebody excluded a repository weeks ago, selection
+   * refuses it and does NOT halt, so the halt text that would have named it is
+   * never composed, and the run arrives here and asks "which repository should
+   * this ticket modify?" as if nothing had happened. The person answering is
+   * looking at a question whose answer they already gave, with no way to see
+   * that their own earlier decision is what emptied the list. The refusals are
+   * facts about this run's workspace, so the agent may read them too and the
+   * prompt additions already carry them; what does NOT ride a question is the
+   * sentence about taking the exclusion back, which travels to the ticket
+   * comment instead (`engine/agent-workflow.ts`, at the clarification comment).
+   */
+  const askWhichRepositories = (
+    questions: string[],
+    purpose?: WorkScopeQuestionPurpose,
+  ): BlockExecutionResult => {
+    if (ctx.workScope !== undefined) {
+      ctx.workScopeAsk ??= {
+        subjectKey: ctx.workScope.subjectKey,
+        askedRepositories: [],
+        // The ONE thing that tells this question from the other one raised
+        // here. Both record an ask listing no repository, so without the
+        // purpose a later run cannot tell "which repository should this ticket
+        // modify?" from "which of these many are essential?", and the only
+        // honest thing it could do with the pair is ask both again.
+        ...(purpose === undefined ? {} : { purpose }),
+      };
+    }
+    // Ahead of the question, the way the pre-sandbox halt does it
+    // (`withWorkScopeOutcome`): "which of these" reads as a complete list to
+    // someone who was never told what the run had to leave out.
+    const refusals = (ctx.workScopeLeftOut ?? []).map((left) => left.reason).join(" ");
+    if (refusals.length === 0) return askHuman(questions);
+    return askHuman(
+      questions.map((question, index) =>
+        index === 0 ? `${refusals} ${question}` : question,
+      ),
+    );
+  };
   if (ctx.sandboxId) {
     try {
       // Re-assert the durable child record when an existing code workspace is reused.
@@ -864,16 +1002,100 @@ export async function ensureWorkspace(
               definitionVersion: ctx.definitionVersion,
             }
           : null;
+      // TEXT THE RECORD REFUSED TO TURN INTO A DECISION MUST NOT BECOME A
+      // DECISION BY ANOTHER ROUTE.
+      //
+      // A clarification answer on this path has already been read by the
+      // careful reader: the work-scope record took every word of it, against
+      // the catalog, the policy and the question actually asked, and wrote no
+      // repository that a person selected. Below this line sits the looser
+      // reader, a scan of the ticket's text plus the routing memory beside it,
+      // and handing it the same words is the dumber reader succeeding where the
+      // careful one refused. `engine/steps/phase.ts` makes the same call about
+      // attaching a repository, for the same reason: asking once more is the
+      // cheaper mistake than attaching a repository nobody chose.
+      //
+      // The commonest case is an answer several people wrote together. Nobody
+      // can be credited with those words, so the record refuses them; a scan
+      // that reads a repository key out of them would credit whoever the run
+      // happens to name, which is the fabricated decision this whole wave
+      // exists to prevent.
+      //
+      // THE FENCE, AND IT MATTERS MORE THAN THE RULE. The question is asked OF
+      // THE RECORD, so it can only ever mean "a record exists and it did not
+      // accept this answer", never the vacuous truth on a run that carries no
+      // record. A run with no record, which is every schedule and every
+      // subject-less delivery, behaves exactly as it does today.
+      //
+      // WHAT IS BEING TESTED IS A DECLINING, NOT AN EMPTY RESULT. The record
+      // leaves the entries untouched for three different answers, and only one
+      // of them is anybody refusing anything:
+      //
+      //  - it declined to attribute the words, because more than one person
+      //    wrote them. Nobody's decision, and handing the same words to the
+      //    looser reader below would credit whoever this run happens to name.
+      //    THIS is what the fence is for.
+      //  - it read the words and could not parse them. "use acme/web, same
+      //    shape as facebook/react" comes back unrecognised because one of the
+      //    two identities does not resolve, and a person who typed a repository
+      //    path plainly decided something. The exact-mention scan below WOULD
+      //    have found `acme/web`.
+      //  - it read them and they named a repository already selected, which
+      //    writes no new key and refuses nothing at all.
+      //
+      // The last two must reach the scan. Withholding them is how this gate
+      // turned the commonest ticket of all, a fresh one whose first question is
+      // the bare "which repository", into a run that asks, is answered,
+      // withholds the answer from itself, and asks the identical question again
+      // until the budget kills it, with nobody told why: `ctx.ticket` is frozen
+      // at run start, so that synthetic comment is the only carrier those words
+      // have.
+      //
+      // So the verdict is read from the record itself. It is a fact about ONE
+      // question and nothing in the entries records it, which is why it rides
+      // `readWorkScopeAfterAnswerStep` (`engine/steps/clarification-hook-steps.ts`).
+      //
+      // Consumed rather than read, for the reason the field says: it belongs to
+      // the one answer in hand.
+      const questionPutToTheRecord = ctx.workScopeQuestionRecorded;
+      ctx.workScopeQuestionRecorded = undefined;
+      // ABSENT IS NOT A VERDICT, so it gets a rule instead of a guess: fall back
+      // to what this gate could see before the verdict existed, and only where
+      // that older reading was ever defensible, which is a question the record
+      // was shown a repository for. A run replaying a result written before the
+      // field existed lands here, and so does one whose trail row could not be
+      // read.
+      //
+      // The older reading, kept for that case only: a person's selection already
+      // in the record speaks for some other decision, an earlier run's answer or
+      // somebody selecting on the Repositories page while this question sat
+      // unanswered, so only a key this answer ADDED counts as acceptance. Its
+      // real limit is a person editing the record during the question's window,
+      // whose edit is then indistinguishable from the answer being accepted; it
+      // fails towards scanning, and an edit is itself a person deciding about
+      // repositories.
+      const recordRefusedTheAnswer =
+        ctx.workScope?.answerAttributed !== undefined
+          ? ctx.workScope.answerAttributed === false
+          : questionPutToTheRecord !== undefined &&
+            ctx.workScope !== undefined &&
+            !personSelectedKeys(ctx.workScope).some(
+              (key) => !questionPutToTheRecord.personSelectedKeys.includes(key),
+            );
+      const scannableClarificationAnswer =
+        execution?.clarificationAnswer && !recordRefusedTheAnswer
+          ? execution.clarificationAnswer
+          : undefined;
       const preSandbox = await blockPrepareWorkspacePreSandboxStep({
         ticket: {
           identifier: ctx.ticket.identifier,
           title: ctx.ticket.title,
           description: ctx.ticket.description,
           acceptanceCriteria: ctx.ticket.acceptanceCriteria,
-          comments: execution?.clarificationAnswer
+          comments: scannableClarificationAnswer
             ? [
                 ...ctx.ticket.comments,
-                { author: "Human clarification", body: execution.clarificationAnswer },
+                { author: "Human clarification", body: scannableClarificationAnswer },
               ]
             : ctx.ticket.comments,
           labels: ctx.ticket.labels,
@@ -896,13 +1118,14 @@ export async function ensureWorkspace(
         // Structurally an answer to a which-repository question, not merely a
         // reply that happens to be in hand: the interpreter only ever returns a
         // clarification answer to the block that asked for it, and every
-        // clarification this block raises is a repository question. The synthetic
-        // comment above stays, because it is what the selection scan reads; this
-        // is what tells a step it may be trusted as testimony.
-        ...(execution?.clarificationAnswer
+        // clarification this block raises is a repository question. The
+        // synthetic comment above carries the same words to the selection scan;
+        // this is what tells a step they may be trusted as testimony, and it is
+        // why the two travel together or not at all.
+        ...(scannableClarificationAnswer
           ? {
               clarification: {
-                answer: execution.clarificationAnswer,
+                answer: scannableClarificationAnswer,
                 resolves: "repository_selection" as const,
               },
             }
@@ -918,6 +1141,18 @@ export async function ensureWorkspace(
       if (preSandbox.workScopeAsk) {
         ctx.workScopeAsk = preSandbox.workScopeAsk;
       }
+      // Read here too, and before the halt below for the same reason the ask is:
+      // a run that halts to ask and is answered resumes THIS block, and what the
+      // selection refused before the question has to survive to the report the
+      // finished run builds. The two fields part company downstream, the
+      // refusals reaching the agent and the recovery sentence reaching only the
+      // ticket comment; see `agent-workflow.ts`.
+      if (preSandbox.workScopeLeftOut) {
+        ctx.workScopeLeftOut = preSandbox.workScopeLeftOut;
+      }
+      if (preSandbox.workScopeRecoveryNotes) {
+        ctx.workScopeRecoveryNotes = preSandbox.workScopeRecoveryNotes;
+      }
       // Emitted before the halt below returns, so a run that failed closed on an
       // incomplete catalog still tells an operator which provider was missing.
       if (preSandbox.repositoryCatalogDegradation) {
@@ -931,11 +1166,7 @@ export async function ensureWorkspace(
         if (preSandbox.outcome === "needs_clarification") {
           const parsed = (preSandbox.questions ?? []).filter((q) => q.trim().length > 0);
           const questions = parsed.length > 0 ? parsed : [preSandbox.message];
-          return {
-            kind: "needs_human_input",
-            output: { status: "needs_human_input", questions },
-            questions,
-          };
+          return askHuman(questions);
         }
         return executionError(`pre-sandbox: ${preSandbox.message}`, {
           // A repository the catalog withholds is not a sandbox fault, and
@@ -959,11 +1190,7 @@ export async function ensureWorkspace(
           const questions = [
             "Which repository or repositories should this ticket inspect or modify? Reply with full repository paths.",
           ];
-          return {
-            kind: "needs_human_input",
-            output: { status: "needs_human_input", questions },
-            questions,
-          };
+          return askWhichRepositories(questions);
         }
         const discovered = await options.discoverRepositories(
           preSandbox.repositoryDiscovery,
@@ -983,21 +1210,64 @@ export async function ensureWorkspace(
 
     if (selected.length === 0) {
       const questions = ["Which repository should this ticket modify?"];
-      return {
-        kind: "needs_human_input",
-        output: { status: "needs_human_input", questions },
-        questions,
-      };
+      return askWhichRepositories(questions);
     }
     if (selected.length > 8) {
-      const questions = [
-        "More than 8 repositories are in scope. Which repositories are essential for this ticket?",
-      ];
-      return {
-        kind: "needs_human_input",
-        output: { status: "needs_human_input", questions },
-        questions,
-      };
+      // NOBODY IS ASKED A QUESTION THEY HAVE ALREADY ANSWERED.
+      //
+      // Discovery rebuilds this list from the ticket on every run and on every
+      // resume, so it comes back the same size however carefully a person
+      // narrowed it. Until the record could say the subject had been narrowed,
+      // the identical question went out again, and a person who cut twelve down
+      // to three had been ignored.
+      //
+      // It is applied on the READ side and writes nothing. The three the person
+      // named are already their own decision in the record, written by the
+      // answer path from the names in the answer; the nine they did not name get
+      // NO entry, because their names were never in front of anybody and silence
+      // about a repository nobody was shown decides nothing about it. So what
+      // changes here is what this run WORKS ON, and nothing about what is
+      // recorded.
+      //
+      // Exactly what the person named, with no size check on the way out: a
+      // second question with the same words is the thing being fixed, and the
+      // list is theirs rather than this threshold's.
+      const narrowedTo =
+        ctx.workScope?.narrowingAnswered === true
+          ? selected.filter((repository) =>
+              personSelectedKeys(ctx.workScope).includes(
+                `${repository.provider}:${repository.repoPath.toLowerCase()}`,
+              ),
+            )
+          : null;
+      if (narrowedTo === null) {
+        return askWhichRepositories(
+          [
+            "More than 8 repositories are in scope. Which repositories are essential for this ticket?",
+          ],
+          "narrowing",
+        );
+      }
+      // They narrowed, and this run can reach none of what they named: a
+      // repository renamed away, or one this workflow's pin does not cover. A
+      // DIFFERENT question, which is what makes asking it honest, and it says
+      // so: what became of their answer leads the question, exactly as the
+      // selection's refusals lead the one below.
+      //
+      // Failing instead would kill a run over a repository renamed yesterday,
+      // and proceeding would send an agent to work in a workspace holding
+      // nothing and report confidently on a checkout that does not exist.
+      if (narrowedTo.length === 0) {
+        const chosen = personSelectedKeys(ctx.workScope);
+        const bare = "Which repository should this ticket modify?";
+        // Nothing was chosen, so there is nothing to say became unreachable:
+        // this is a person who answered the narrowing question with "none of
+        // these", and a sentence about their repositories would name none.
+        return askWhichRepositories(
+          chosen.length === 0 ? [bare] : [`${narrowedOutOfReachNote(chosen)} ${bare}`],
+        );
+      }
+      selected = narrowedTo;
     }
 
     const repositoryContexts = await blockFetchPrContextsStep(

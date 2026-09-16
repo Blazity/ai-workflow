@@ -39,6 +39,8 @@ export async function executePreSandboxPhase(
   let repositoryScopeNarrowing: RunPreSandboxPhaseResult["repositoryScopeNarrowing"];
   let repositoryCatalogDegradation: RunPreSandboxPhaseResult["repositoryCatalogDegradation"];
   let workScopeAsk: RunPreSandboxPhaseResult["workScopeAsk"];
+  let workScopeLeftOut: RunPreSandboxPhaseResult["workScopeLeftOut"];
+  let workScopeRecoveryNotes: RunPreSandboxPhaseResult["workScopeRecoveryNotes"];
 
   for (const step of config.preSandbox.steps) {
     const handler = registry[step.uses];
@@ -97,6 +99,15 @@ export async function executePreSandboxPhase(
       if (result.workScopeAsk) {
         workScopeAsk = result.workScopeAsk;
       }
+      // Carried whatever the step's status, because the surface they are for is
+      // the comment a run posts when it FINISHES, and a run that finishes came
+      // through the continue branch of a step that refused something.
+      if (result.workScopeLeftOut) {
+        workScopeLeftOut = result.workScopeLeftOut;
+      }
+      if (result.workScopeRecoveryNotes) {
+        workScopeRecoveryNotes = result.workScopeRecoveryNotes;
+      }
 
       if (result.status === "halt") {
         return {
@@ -111,6 +122,8 @@ export async function executePreSandboxPhase(
           repositoryScopeNarrowing,
           repositoryCatalogDegradation,
           workScopeAsk,
+          workScopeLeftOut,
+          workScopeRecoveryNotes,
         };
       }
     } catch (err) {
@@ -129,6 +142,13 @@ export async function executePreSandboxPhase(
         cause: errorMessage(err),
         promptAdditions,
         selectedRepositories,
+        // A step that threw does not erase what an earlier step decided. Without
+        // these, a run whose selection refused a repository and whose next step
+        // then failed reports the failure and says nothing about the repository,
+        // and the ask that a pending question needs to land on is lost with it.
+        workScopeAsk,
+        workScopeLeftOut,
+        workScopeRecoveryNotes,
       };
     }
   }
@@ -141,6 +161,8 @@ export async function executePreSandboxPhase(
     repositoryScopeNarrowing,
     repositoryCatalogDegradation,
     workScopeAsk,
+    workScopeLeftOut,
+    workScopeRecoveryNotes,
   };
 }
 

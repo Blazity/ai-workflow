@@ -38,6 +38,11 @@ function validRepositoryRequest(value: unknown): boolean {
   );
 }
 
+function validLeftOutRepository(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return typeof value.repositoryKey === "string" && typeof value.reason === "string";
+}
+
 function validPhaseUsage(value: unknown): boolean {
   if (!isRecord(value)) return false;
   const tokens = value.tokens;
@@ -131,6 +136,18 @@ export function parseStoredRunAnalysisReport(value: unknown): RunAnalysisReport 
     !value.repositoryRequests.every(validRepositoryRequest) ||
     !Array.isArray(value.writeRepositories) ||
     !value.writeRepositories.every(validRepositoryRequest) ||
+    // Optional, so absent is valid: a report stored before the field existed
+    // still parses. Present and misshapen is not, because these end up rendered
+    // as lines in a comment on somebody's ticket.
+    (value.leftOutRepositories !== undefined &&
+      (!Array.isArray(value.leftOutRepositories) ||
+        !value.leftOutRepositories.every(validLeftOutRepository))) ||
+    (value.repositoryRecoveryNotes !== undefined &&
+      !isStringArray(value.repositoryRecoveryNotes)) ||
+    (value.leftOutRepositoriesOmitted !== undefined &&
+      (!isFiniteNumber(value.leftOutRepositoriesOmitted) ||
+        !Number.isInteger(value.leftOutRepositoriesOmitted) ||
+        value.leftOutRepositoriesOmitted < 1)) ||
     !["captured", "not_retained"].includes(String(value.evidenceStatus)) ||
     !isStringArray(value.evidence) ||
     typeof value.planMarkdown !== "string" ||

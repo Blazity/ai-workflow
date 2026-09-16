@@ -168,6 +168,8 @@ const PUBLISHED = [
   "settings.get",
   "settings.set",
   "settings.reset",
+  "work_scope.get",
+  "work_scope.edit",
 ];
 
 const READ_ANNOTATIONS = {
@@ -323,6 +325,12 @@ const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
     destructiveHint: false,
     openWorldHint: true,
   },
+  // Reading one subject's repository record changes nothing.
+  "work_scope.get": READ_ANNOTATIONS,
+  // An edit replaces what a person or a run decided before it, and an exclusion
+  // takes a repository away from every later run on the subject: destructive,
+  // and closed world because no run is started and no ticket moved.
+  "work_scope.edit": DEPLOYMENT_CONFIG_ANNOTATIONS,
 };
 
 const DOMAINS = [
@@ -334,6 +342,7 @@ const DOMAINS = [
   "blocks",
   "repositories",
   "settings",
+  "work_scope",
 ];
 
 // The committed artifact, read as a file. This is the independent source for the

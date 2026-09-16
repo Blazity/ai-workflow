@@ -1,10 +1,16 @@
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { SCRUB_PLACEHOLDER } from "../publication/publication-scrub.js";
 import {
+  ANSWER_NOT_RECORDED_REASONS,
   CLARIFICATION_NUDGE_MARKER,
   formatAlreadyAnsweredComment,
+  formatAnswerNotRecordedComment,
   formatClarificationNudgeComment,
   formatClarificationQuestionsComment,
+  formatClarificationResumeFailedComment,
+  formatClarificationUnreadableNudgeComment,
 } from "./comment-format.js";
 
 const DASHBOARD = "https://app/ticket/AWT-42?run=wrun_9";
@@ -72,6 +78,59 @@ describe("formatClarificationQuestionsComment", () => {
       "The paused run is resumable until 2026-07-29 14:03 UTC.",
     );
     expect(body).toContain("the ticket starts over from scratch.");
+  });
+
+  // The ticket comment is the only channel the sentence about taking an
+  // exclusion back travels on: it must never ride the questions, which become
+  // the agent's prompts and its "Human decisions" memory. The ruling is at the
+  // call site in `engine/agent-workflow.ts`.
+  it("puts what a person can do about a left-out repository under the questions", () => {
+    const body = formatClarificationQuestionsComment({
+      questions: [
+        "github:acme/api was excluded on this work, so the run started without it." +
+          " Which repository should this ticket modify?",
+      ],
+      suggestedAnswers: null,
+      dashboardUrl: DASHBOARD,
+      aiColumnName: "AI",
+      expiresAtIso: null,
+      repositoryRecoveryNotes: [
+        "Excluding a repository is not final: this work's repository list can be changed," +
+          " and the next run starts from the changed list.",
+      ],
+    });
+
+    expect(body).toContain(
+      "Excluding a repository is not final: this work's repository list can be changed,",
+    );
+    // Under the question it is about, and above the instructions, because it
+    // widens what an answer could be rather than explaining how to send one.
+    expect(body.indexOf("1. github:acme/api was excluded")).toBeLessThan(
+      body.indexOf("Excluding a repository is not final"),
+    );
+    expect(body.indexOf("Excluding a repository is not final")).toBeLessThan(
+      body.indexOf("How to answer:"),
+    );
+  });
+
+  it("is byte-identical to the comment it was when nothing was left out", () => {
+    // Every clarification that is not about repositories reads exactly as
+    // before: an orphaned sentence about exclusions answers a question the
+    // reader was never asked.
+    // Typed off the function rather than frozen with `as const`: the parameter
+    // asks for a mutable `string[]`, and a readonly literal is not one.
+    const base: Parameters<typeof formatClarificationQuestionsComment>[0] = {
+      questions: ["Which repository?"],
+      suggestedAnswers: null,
+      dashboardUrl: DASHBOARD,
+      aiColumnName: "AI",
+      expiresAtIso: null,
+    };
+
+    expect(formatClarificationQuestionsComment({ ...base, repositoryRecoveryNotes: [] })).toBe(
+      formatClarificationQuestionsComment(base),
+    );
+    expect(formatClarificationQuestionsComment(base)).not.toContain("not final");
   });
 
   it("omits the expiry paragraph when expiresAtIso is null", () => {
@@ -240,5 +299,130 @@ describe("formatAlreadyAnsweredComment", () => {
     expect(formatAlreadyAnsweredComment({ answeredByLabel: "Jane Doe" })).toContain(
       "Jane Doe",
     );
+  });
+});
+
+/**
+ * Rule 6: a remedy we offer has to work when the person does it.
+ *
+ * The rule is a property of every sentence we write, not a habit kept up one
+ * sentence at a time, so this walks every comment we post AFTER a clarification
+ * is answered and holds each of them to it. By then the comment channel reads
+ * nothing: `answerHookClarification` writes only while the row is `pending`
+ * (`db/repositories/clarification-hooks.ts`), so a person told to reply under a
+ * closed question writes the word and watches nothing happen.
+ *
+ * The reasons come from the reason map itself, so a seventh reason is covered on
+ * the day it is added rather than on the day somebody remembers this test.
+ *
+ * WHAT IS NOT HERE, AND WHY IT IS NOT ONE TEST WITH THIS. The nudge is posted
+ * while the question is OPEN, where replying is exactly what works, so the same
+ * rule reaches the opposite sentence there; the second test below pins that
+ * direction. The exclusion recovery sentence names a route rather than an act,
+ * so its risk is that the route stops existing, not that it closes: that is
+ * guarded where the route is walked
+ * (`services/work-scope/exclusion-reversal.test.ts`). And the answer echo
+ * comment is a transcript of a person's own words, which are theirs and not
+ * ours to hold to a rule about our sentences.
+ */
+describe("rule 6: every sentence we write after the question is answered", () => {
+  /** An instruction to the person, as opposed to a report about what happened.
+   *  The lookbehind is the whole difference: "Your answer reached the run" is a
+   *  noun and a report, `answer "none" the next time` is a verb and an act. */
+  const INSTRUCTION =
+    /(?<!\b(?:the|that|this|a|an|your|their|its|one|no|every|each|same|first)\s)\b(?:reply|respond|answer|write|post|send|start|check)\b/i;
+  /** The readers an instruction may name, every one of them later than this
+   *  closed question. A sentence telling somebody to do something that this
+   *  question would have to read names none of them, because nothing is left
+   *  reading it. */
+  const LATER_READER =
+    /(?:the next run|the next time the question is asked|a later run|a new run)/i;
+
+  function sentencesOf(comment: string): string[] {
+    return comment
+      .split(/(?<=[.!?])\s+/)
+      .map((sentence) => sentence.trim())
+      .filter((sentence) => sentence.length > 0);
+  }
+
+  function closedQuestionComments(): Array<{ where: string; body: string }> {
+    const comments: Array<{ where: string; body: string }> = [];
+    for (const reason of ANSWER_NOT_RECORDED_REASONS) {
+      // Both shapes of question, because what a person was shown decides which
+      // words are offered back to them.
+      for (const listedRepositories of [true, false]) {
+        comments.push({
+          where: `answer not recorded, ${reason}, question listed repositories: ${listedRepositories}`,
+          body: formatAnswerNotRecordedComment(reason, { listedRepositories }),
+        });
+      }
+    }
+    comments.push(
+      {
+        where: "resume failed",
+        body: formatClarificationResumeFailedComment({ attempts: 3, error: "transport failed" }),
+      },
+      {
+        where: "already answered",
+        body: formatAlreadyAnsweredComment({ answeredByLabel: "Ada Lovelace" }),
+      },
+    );
+    return comments;
+  }
+
+  it("never sends a person back into a question that is already answered, whatever left the record empty", () => {
+    // A vacuous walk would pass this test in silence.
+    expect(ANSWER_NOT_RECORDED_REASONS).toContain("no_words");
+    expect(ANSWER_NOT_RECORDED_REASONS.length).toBeGreaterThan(5);
+
+    for (const { where, body } of closedQuestionComments()) {
+      for (const sentence of sentencesOf(body)) {
+        if (!INSTRUCTION.test(sentence)) continue;
+        expect(`${where} :: ${sentence}`).toMatch(LATER_READER);
+      }
+    }
+  });
+
+  it("tells a person what does work, rather than paying for the closed route with silence", () => {
+    for (const reason of ANSWER_NOT_RECORDED_REASONS) {
+      for (const listedRepositories of [true, false]) {
+        const body = formatAnswerNotRecordedComment(reason, { listedRepositories });
+        expect(`${reason} :: ${body}`).toMatch(LATER_READER);
+      }
+    }
+  });
+
+  it("sends a person to a screen that exists, where a repository can be added or enabled", () => {
+    // The other remedies name a later reader, which this file can hold them to
+    // on its own. This one names a place, so holding it to the same rule means
+    // going and looking: a sentence telling somebody a screen can fix this is
+    // worth nothing if the screen is not there.
+    const screen = (file: string) =>
+      fileURLToPath(new URL(`../../../../dashboard/app/(cockpit)/repositories/${file}`, import.meta.url));
+    const comment = formatAnswerNotRecordedComment("no_such_repository", {
+      listedRepositories: false,
+    });
+
+    expect(comment).toContain("the repositories screen can add or enable it");
+    expect(existsSync(screen("page.tsx"))).toBe(true);
+    // The two acts the sentence promises, on that screen: one dialog that adds
+    // a repository the deployment does not hold, and an entry that carries
+    // whether it is enabled.
+    expect(existsSync(screen("import-dialog.tsx"))).toBe(true);
+    expect(readFileSync(screen("repositories-screen.tsx"), "utf8")).toContain("enabled");
+  });
+
+  it("does tell a person to reply while the question is still open, which is the same rule reaching the other answer", () => {
+    // Not a contradiction of the test above, and the reason the two cannot be
+    // one test: a nudge is posted while the clarification is `pending`, the one
+    // state the comment path writes into. Replying works there, so saying so is
+    // the honest sentence and the guard is that it keeps saying so.
+    for (const body of [
+      formatClarificationNudgeComment({ dashboardUrl: DASHBOARD, aiColumnName: "AI" }),
+      formatClarificationUnreadableNudgeComment({ dashboardUrl: DASHBOARD, aiColumnName: "AI" }),
+    ]) {
+      expect(body).toContain("reply in a comment here");
+      expect(body).toContain(DASHBOARD);
+    }
   });
 });

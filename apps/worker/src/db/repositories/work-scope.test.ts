@@ -17,6 +17,8 @@ import {
   listWorkScopeTrail,
   readWorkScope,
   readWorkScopeAnsweredQuestion,
+  readWorkScopeAnsweredRepositories,
+  readWorkScopeNarrowingAnswered,
   readWorkScopeSelectionAnswered,
 } from "./work-scope.js";
 
@@ -1318,6 +1320,205 @@ describe("readWorkScopeSelectionAnswered", () => {
   });
 });
 
+/**
+ * Which repositories this subject was asked about and got an answer for.
+ *
+ * The flag above answers "has a person chosen for this work at all", which is
+ * the right shape for deciding whether to put the which-of-these question
+ * again, and the wrong shape for "was THIS repository already put to somebody":
+ * a question about one repository must not silence the first question about
+ * another. This is that second fact, and the reason narrowing is deliberately
+ * gone from it.
+ */
+describe("readWorkScopeAnsweredRepositories", () => {
+  const ada: WorkScopeActor = { kind: "person", actorId: "user-1", actorLabel: "Ada" };
+
+  async function ask(
+    key: string,
+    clarificationId: string,
+    repositories: WorkScopeAskedRepository[],
+  ) {
+    await applyRunWorkScopePlan(db, {
+      subjectKey: key,
+      runId: "run-1",
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [{ kind: "question_asked", clarificationId, repositories }],
+      },
+    });
+  }
+
+  async function answer(
+    key: string,
+    clarificationId: string,
+    given: { kind: "none" } | { kind: "unrecognised" } | { kind: "repositories"; repositoryKeys: string[] },
+  ) {
+    await applyAnswerWorkScopePlan(db, {
+      subjectKey: key,
+      runId: "run-1",
+      clarificationId,
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [{ kind: "question_answered", clarificationId, answer: given, answeredBy: ada }],
+      },
+    });
+  }
+
+  it("is empty for a subject with no trail at all", async () => {
+    await expect(readWorkScopeAnsweredRepositories(db, subjectKey)).resolves.toEqual([]);
+  });
+
+  it("is empty while the question is asked and unanswered", async () => {
+    await ask(subjectKey, "clarification-1", [
+      { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+    ]);
+
+    await expect(readWorkScopeAnsweredRepositories(db, subjectKey)).resolves.toEqual([]);
+  });
+
+  it("is empty when nobody could read the answer", async () => {
+    await ask(subjectKey, "clarification-1", [
+      { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+    ]);
+    await answer(subjectKey, "clarification-1", { kind: "unrecognised" });
+
+    // Nobody decided anything, so this repository may be put to a person again.
+    await expect(readWorkScopeAnsweredRepositories(db, subjectKey)).resolves.toEqual([]);
+  });
+
+  it('names the repository once a person answered "none of these"', async () => {
+    await ask(subjectKey, "clarification-1", [
+      { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+    ]);
+    await answer(subjectKey, "clarification-1", { kind: "none" });
+
+    await expect(readWorkScopeAnsweredRepositories(db, subjectKey)).resolves.toEqual([
+      "github:acme/api",
+    ]);
+  });
+
+  it("names every repository the answered question put, not only the ones named back", async () => {
+    await ask(subjectKey, "clarification-1", [
+      { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+      { repositoryKey: "github:acme/web", askedBecause: "selection", named: true },
+    ]);
+    await answer(subjectKey, "clarification-1", {
+      kind: "repositories",
+      repositoryKeys: ["github:acme/web"],
+    });
+
+    // Both were put to a person and a person replied, which is the fact the
+    // caller needs: neither is worth asking about a second time.
+    await expect(readWorkScopeAnsweredRepositories(db, subjectKey)).resolves.toEqual([
+      "github:acme/api",
+      "github:acme/web",
+    ]);
+  });
+
+  it("names a repository asked about for any reason, not only selection", async () => {
+    await ask(subjectKey, "clarification-1", [
+      { repositoryKey: "github:acme/api", askedBecause: "outside_policy", named: true },
+    ]);
+    await answer(subjectKey, "clarification-1", { kind: "none" });
+
+    await expect(readWorkScopeAnsweredRepositories(db, subjectKey)).resolves.toEqual([
+      "github:acme/api",
+    ]);
+  });
+
+  it("leaves out a repository whose own question is still unanswered", async () => {
+    await ask(subjectKey, "clarification-1", [
+      { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+    ]);
+    await answer(subjectKey, "clarification-1", { kind: "none" });
+    await ask(subjectKey, "clarification-2", [
+      { repositoryKey: "github:acme/web", askedBecause: "outside_policy", named: true },
+    ]);
+
+    await expect(readWorkScopeAnsweredRepositories(db, subjectKey)).resolves.toEqual([
+      "github:acme/api",
+    ]);
+  });
+
+  it("names a repository once however many answered questions put it", async () => {
+    await ask(subjectKey, "clarification-1", [
+      { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+    ]);
+    await answer(subjectKey, "clarification-1", { kind: "none" });
+    await ask(subjectKey, "clarification-2", [
+      { repositoryKey: "github:acme/api", askedBecause: "outside_policy", named: true },
+    ]);
+    await answer(subjectKey, "clarification-2", { kind: "none" });
+
+    await expect(readWorkScopeAnsweredRepositories(db, subjectKey)).resolves.toEqual([
+      "github:acme/api",
+    ]);
+  });
+
+  it("leaves out a repository the question never named, however it was answered", async () => {
+    // The ask still carries the key, because the trail should show that
+    // somebody was asked something. It is not a decision about this repository:
+    // its name was never in front of the person, so their "none" says nothing
+    // about it and a later run still owes them the question.
+    await ask(subjectKey, "clarification-1", [
+      { repositoryKey: "github:acme/api", askedBecause: "not_enabled", named: false },
+    ]);
+    await answer(subjectKey, "clarification-1", { kind: "none" });
+
+    await expect(readWorkScopeAnsweredRepositories(db, subjectKey)).resolves.toEqual([]);
+  });
+
+  it("leaves out an ask written before the question recorded what it named", async () => {
+    // Absent is not "named": the safe reading of a fact nobody recorded is the
+    // one that costs a question asked again rather than a decision invented.
+    await ask(subjectKey, "clarification-1", [
+      { repositoryKey: "github:acme/api", askedBecause: "selection" },
+    ]);
+    await answer(subjectKey, "clarification-1", { kind: "none" });
+
+    await expect(readWorkScopeAnsweredRepositories(db, subjectKey)).resolves.toEqual([]);
+  });
+
+  it("names only the repositories the question named, when one ask carries both", async () => {
+    await ask(subjectKey, "clarification-1", [
+      { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+      { repositoryKey: "github:acme/web", askedBecause: "selection", named: false },
+    ]);
+    await answer(subjectKey, "clarification-1", { kind: "none" });
+
+    await expect(readWorkScopeAnsweredRepositories(db, subjectKey)).resolves.toEqual([
+      "github:acme/api",
+    ]);
+  });
+
+  it("does not let one subject read another subject's answer", async () => {
+    await ask(subjectKey, "clarification-1", [
+      { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+    ]);
+    await answer(subjectKey, "clarification-1", { kind: "none" });
+
+    await expect(
+      readWorkScopeAnsweredRepositories(db, "ticket:jira:AWT-2"),
+    ).resolves.toEqual([]);
+  });
+
+  it("does not let another subject's reply answer this subject's question", async () => {
+    // The record is per subject, and a clarification id is the only thing the
+    // question row and the answer row share, so the two must be joined on the
+    // subject as well. The database makes a `question_asked` id unique on its
+    // own, and nothing does that for the answer, so this is the direction a
+    // reused id can actually arrive from.
+    await ask(subjectKey, "clarification-1", [
+      { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+    ]);
+    await answer("ticket:jira:AWT-2", "clarification-1", { kind: "none" });
+
+    await expect(readWorkScopeAnsweredRepositories(db, subjectKey)).resolves.toEqual([]);
+  });
+});
+
 describe("appendWorkScopeQuestionAsked", () => {
   const asked: WorkScopeAskedRepository[] = [
     { repositoryKey: "github:acme/web", askedBecause: "not_enabled" },
@@ -1398,6 +1599,110 @@ describe("appendWorkScopeQuestionAsked", () => {
     await expect(ask("clarification-1")).resolves.toBe(true);
 
     await expect(readWorkScope(db, subjectKey)).resolves.toBeNull();
+  });
+
+  it("records why a question that could name no repository was asked", async () => {
+    // The set is larger than an ask may carry, so the question names none of
+    // them and this row is otherwise indistinguishable from the plain "which
+    // repository should this ticket modify?".
+    await expect(
+      appendWorkScopeQuestionAsked(db, {
+        subjectKey,
+        runId: "run-1",
+        clarificationId: "clarification-narrow",
+        asked: [],
+        purpose: "narrowing",
+      }),
+    ).resolves.toBe(true);
+
+    const rows = await db.select().from(workScopeTrail).orderBy(asc(workScopeTrail.id));
+    expect(rows.map((row) => row.event)).toEqual([
+      {
+        kind: "question_asked",
+        clarificationId: "clarification-narrow",
+        repositories: [],
+        purpose: "narrowing",
+      },
+    ]);
+  });
+});
+
+describe("readWorkScopeNarrowingAnswered", () => {
+  const ada: WorkScopeActor = { kind: "person", actorId: "user-1", actorLabel: "Ada" };
+
+  async function answer(
+    clarificationId: string,
+    given: { kind: "none" } | { kind: "unrecognised" } | { kind: "repositories"; repositoryKeys: string[] },
+  ) {
+    await applyAnswerWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId,
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [{ kind: "question_answered", clarificationId, answer: given, answeredBy: ada }],
+      },
+    });
+  }
+
+  it("is true once a person named the repositories that matter", async () => {
+    await appendWorkScopeQuestionAsked(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId: "clarification-narrow",
+      asked: [],
+      purpose: "narrowing",
+    });
+    await answer("clarification-narrow", {
+      kind: "repositories",
+      repositoryKeys: ["github:acme/api"],
+    });
+
+    await expect(readWorkScopeNarrowingAnswered(db, subjectKey)).resolves.toBe(true);
+  });
+
+  it("is false while the question is asked and unanswered", async () => {
+    await appendWorkScopeQuestionAsked(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId: "clarification-narrow",
+      asked: [],
+      purpose: "narrowing",
+    });
+
+    await expect(readWorkScopeNarrowingAnswered(db, subjectKey)).resolves.toBe(false);
+  });
+
+  it("is false when nobody could read the answer", async () => {
+    await appendWorkScopeQuestionAsked(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId: "clarification-narrow",
+      asked: [],
+      purpose: "narrowing",
+    });
+    await answer("clarification-narrow", { kind: "unrecognised" });
+
+    // Nobody decided anything, so the question may be asked once more.
+    await expect(readWorkScopeNarrowingAnswered(db, subjectKey)).resolves.toBe(false);
+  });
+
+  it("is false for an answered question that was some other question", async () => {
+    // ONE FACT, ONE READ, ONE THING SILENCED. A person who answered the
+    // which-of-these question has said nothing about a set they were never
+    // shown, and reading their answer as a narrowing would silence the only
+    // question that would ever have shown it to them.
+    await appendWorkScopeQuestionAsked(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId: "clarification-1",
+      asked: [{ repositoryKey: "github:acme/api", askedBecause: "selection", named: true }],
+    });
+    await answer("clarification-1", { kind: "repositories", repositoryKeys: ["github:acme/api"] });
+
+    await expect(readWorkScopeNarrowingAnswered(db, subjectKey)).resolves.toBe(false);
+    await expect(readWorkScopeSelectionAnswered(db, subjectKey)).resolves.toBe(true);
   });
 });
 

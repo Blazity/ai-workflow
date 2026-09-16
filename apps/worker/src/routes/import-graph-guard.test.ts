@@ -29,7 +29,9 @@ import { describe, expect, it } from "vitest";
  *
  * A module written after that base joins the list when it is engine free on the
  * day it lands: `mcp/tools/repositories.ts` and `mcp/tools/settings.ts` reach
- * the repository catalog and settings clusters and stop there.
+ * the repository catalog and settings clusters and stop there, and
+ * `mcp/tools/work-scope.ts` and the two `api/v1/work-scope` routes reach the
+ * work scope cluster, whose one engine import is the pure decision table.
  *
  * `import type` and dynamic `import()` are ignored: neither survives into the
  * runtime graph. Package specifiers are ignored too, since no workspace package
@@ -62,6 +64,7 @@ const ENTRIES = [
   "mcp/tools/settings.ts",
   "mcp/tools/ticket-write.ts",
   "mcp/tools/tickets.ts",
+  "mcp/tools/work-scope.ts",
   "middleware/api-auth.ts",
   "plugins/workflow-world.ts",
   "routes/.well-known/oauth-authorization-server/api/auth.get.ts",
@@ -127,6 +130,8 @@ const ENTRIES = [
   "routes/api/v1/tickets/[ticketKey].get.ts",
   "routes/api/v1/users.get.ts",
   "routes/api/v1/users/[userId]/role.patch.ts",
+  "routes/api/v1/work-scope.get.ts",
+  "routes/api/v1/work-scope.patch.ts",
   "routes/api/v1/workflows.get.ts",
   "routes/cron/harness-capabilities.get.ts",
   "routes/health.get.ts",

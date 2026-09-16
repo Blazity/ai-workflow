@@ -1,5 +1,5 @@
 {
-  "contractHash": "4aab72698a90b9a8586ca4a49c1959e3e8e3fadf9dd201cddd696d5409935882",
+  "contractHash": "026babc515e43e28505e23d1fec034f4d9780b1fe8efba4ddac3419d63fd2b52",
   "errorCodes": [
     "UNAUTHENTICATED",
     "INSUFFICIENT_SCOPE",
@@ -1525,6 +1525,110 @@
         "required": [
           "key",
           "reason",
+          "idempotencyKey"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "work_scope.get",
+      "description": "The durable record of which repositories one subject's work may touch, and the trail of how that was decided. `subjectKey` is the key a run is claimed under: `ticket:<provider>:<KEY>` for a ticket, `pr:<provider>:<owner/name>#<number>` for a pull request, `webhook:<endpointId>:<subjectId>` for a webhook delivery that resolved a subject. Every entry says its `state` (`selected`, `excluded`, or `unavailable` with the reason), the `origin` that decided it, and `decidedBy`/`decidedAt`. `version` is the concurrency token work_scope.edit expects: a subject nothing was ever recorded for answers version 0 with no entries, which is not an error and is exactly the version an edit of it must send. The trail is paged newest first, so the decision somebody is about to undo is the first line: `trailLimit` defaults to 50 and caps at 200, `nextTrailBeforeId` is the `trailBefore` of the next page and null at the end of it. `carriesRecord` is false for a key of any other shape, a schedule occurrence for instance: that subject kind keeps no record and never will, because every tick is a new key, so the empty answer beside it is final rather than a record waiting to be written, and work_scope.edit refuses it.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "subjectKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400
+          },
+          "trailLimit": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 200
+          },
+          "trailBefore": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 2147483647
+          }
+        },
+        "required": [
+          "subjectKey"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "work_scope.edit",
+      "description": "Change which repositories one subject's work may touch, as a person: `select` records the repository as chosen, `exclude` records it as kept out, and `remove` drops the entry so the next run decides again. This is how an exclusion is taken back. A repository excluded on a ticket is excluded for every later run on it, and until this existed nothing could undo that, so a ticket whose every repository had been excluded could only be replaced by a new one. `remove` and `select` are both recoveries; `exclude` is the sticky one. The whole call is one change set: if any `select` names a repository the repository catalog does not enable, NOTHING is written and the refusal names every offending key, because a catalog the deployment refuses is not something an edit may override (change the catalog with repositories.set_enabled first). `expectedVersion` is the `version` from work_scope.get: a run or another person writing in between is refused as CONFLICT naming the version now in force, and nothing is written; there is no force. Read work_scope.get again and decide against what it now says, rather than resending. Every selection is recorded without checking that a run can reach the repository, and a later run may still refuse it: this path lists no repositories, so it knows the catalog enables the key and not whether the provider can serve it. Idempotent per idempotencyKey.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "subjectKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400
+          },
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "repositoryKey": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300
+                },
+                "action": {
+                  "type": "string",
+                  "enum": [
+                    "select",
+                    "exclude",
+                    "remove"
+                  ]
+                },
+                "rationale": {
+                  "type": "string",
+                  "maxLength": 500
+                }
+              },
+              "required": [
+                "repositoryKey",
+                "action"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1,
+            "maxItems": 16
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "subjectKey",
+          "expectedVersion",
+          "changes",
           "idempotencyKey"
         ],
         "additionalProperties": false,

@@ -152,6 +152,11 @@ export async function postClarificationQuestionsCommentStep(
      *  before this field existed still replays; absent falls back to the
      *  registry default for the key. */
     aiColumnName?: string;
+    /** What a person can do about a repository this run left out. Optional for
+     *  the same reason as the field above, and absent on every clarification
+     *  that is not about repositories. It reaches the ticket and nothing else:
+     *  the ruling is at the call site in `agent-workflow.ts`. */
+    repositoryRecoveryNotes?: string[];
   },
   owner: ActiveRunOwner,
 ): Promise<string | null> {
@@ -179,6 +184,9 @@ export async function postClarificationQuestionsCommentStep(
         dashboardUrl: input.dashboardUrl,
         aiColumnName: input.aiColumnName ?? defaultSettingsSnapshot().COLUMN_AI,
         expiresAtIso: input.expiresAtIso,
+        ...(input.repositoryRecoveryNotes && input.repositoryRecoveryNotes.length > 0
+          ? { repositoryRecoveryNotes: input.repositoryRecoveryNotes }
+          : {}),
       }),
     );
   } catch (err) {

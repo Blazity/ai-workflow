@@ -1,4 +1,8 @@
-import type { WorkScopeAskedRepository } from "@shared/contracts";
+import type {
+  WorkScope,
+  WorkScopeAskedRepository,
+  WorkScopeQuestionPurpose,
+} from "@shared/contracts";
 import type { SerializableClarificationSnapshot } from "./clarification-snapshot-steps.js";
 import type { WorkspaceManifest } from "../../sandbox/repo-workspace.js";
 
@@ -20,6 +24,33 @@ export async function verifyWorkspaceManifestStep(
 }
 verifyWorkspaceManifestStep.maxRetries = 0;
 
+/**
+ * The ask, with the one fact only this place knows: which of the repositories
+ * the question is recorded against its words actually NAMED.
+ *
+ * Every repository question in the run goes through the step below, and it is
+ * the only point where the question's text and the repositories it will be
+ * recorded against are both in hand. Computed here rather than declared by each
+ * caller for exactly that reason: a caller that forgets would record a decision
+ * nobody made, silently, and there is no later reader that could tell.
+ *
+ * A key is named when it appears in the question as the answer reader spells it
+ * back, `provider:owner/repo`, which is how every question that means to name
+ * one writes it (`repositoryDiscoveryQuestion`, `workScopeExpansionQuestion`,
+ * the pre-sandbox selection question). A question that names a repository some
+ * other way reads as not naming it, which costs one question asked again rather
+ * than a decision fabricated from silence.
+ */
+function askedRepositoriesNamedIn(
+  questions: string[],
+  asked: WorkScopeAskedRepository[],
+): WorkScopeAskedRepository[] {
+  return asked.map((repository) => ({
+    ...repository,
+    named: questions.some((question) => question.includes(repository.repositoryKey)),
+  }));
+}
+
 export async function prepareClarificationHookStep(input: {
   ticketKey: string | null;
   subjectKey: string;
@@ -34,16 +65,31 @@ export async function prepareClarificationHookStep(input: {
    *  is about is written down when it is ASKED: by answer time the clarification
    *  row is all that is left of the question, so without this the answer would
    *  name no repository and the next run would ask again. */
-  workScopeAsk?: { subjectKey: string; askedRepositories: WorkScopeAskedRepository[] };
+  workScopeAsk?: {
+    subjectKey: string;
+    askedRepositories: WorkScopeAskedRepository[];
+    /** Why the question was put, where no repository key can carry that fact:
+     *  a question asking somebody to narrow a set too large to list names none
+     *  of them, so the ask below is empty and this is the only record that the
+     *  question was that one. */
+    purpose?: WorkScopeQuestionPurpose;
+  };
 }) {
   "use step";
   const { workScopeAsk, ...clarification } = input;
   const { prepareConnectedHookClarification } = await import(
     "../../db/repositories/clarification-hooks.js"
   );
+  // Stamped once, and both writes below take the stamped list: the clarification
+  // row is what the answer reader decides from, and the trail row is what a
+  // later run reads the answered repositories out of, so a fact on one of them
+  // and not the other would be two records of the same question disagreeing.
+  const askedRepositories = workScopeAsk
+    ? askedRepositoriesNamedIn(input.questions, workScopeAsk.askedRepositories)
+    : [];
   const row = await prepareConnectedHookClarification({
     ...clarification,
-    ...(workScopeAsk ? { askedRepositories: workScopeAsk.askedRepositories } : {}),
+    ...(workScopeAsk ? { askedRepositories } : {}),
   });
   if (workScopeAsk) {
     const { appendConnectedWorkScopeQuestionAsked } = await import(
@@ -67,7 +113,8 @@ export async function prepareClarificationHookStep(input: {
       subjectKey: workScopeAsk.subjectKey,
       runId: input.runId,
       clarificationId: row.id,
-      asked: workScopeAsk.askedRepositories,
+      asked: askedRepositories,
+      ...(workScopeAsk.purpose === undefined ? {} : { purpose: workScopeAsk.purpose }),
     }).catch((error: unknown) => {
       console.error(
         "work_scope_question_asked_append_failed",
@@ -82,6 +129,76 @@ export async function prepareClarificationHookStep(input: {
     hookToken: row.hookToken,
     snapshotRequestedAt: row.askedAt.toISOString(),
     expiresAt: row.expiresAt?.toISOString() ?? null,
+  };
+}
+
+/**
+ * The record as the answer to a repository question left it.
+ *
+ * THE BLOCK THAT ASKED IS RE-EXECUTED FROM THE TOP after the answer, and it
+ * decides against the copy of the record the run froze at start. Without this
+ * read that copy still says nobody has been asked, so the block reaches the same
+ * line, raises the identical question, and the person answers into a loop that
+ * ends only when the run budget kills it. A repeated question is a cost and a
+ * fabricated decision is a defect; a run that hangs is worse than both.
+ *
+ * The same read the expansion path already does when it resumes
+ * (`engine/steps/phase.ts`, `resumeFromWorkScope`), for the same reason and with
+ * the same reach: every entry written since the run began arrives, this run's
+ * own answer and a panel edit alike, because the record is the truth and the
+ * frozen copy is only a copy.
+ */
+export async function readWorkScopeAfterAnswerStep(
+  subjectKey: string,
+  clarificationId?: string,
+): Promise<{
+  scope: WorkScope | null;
+  selectionAnswered: boolean;
+  answeredRepositoryKeys: string[];
+  answerAttributed?: boolean;
+  narrowingAnswered?: boolean;
+}> {
+  "use step";
+  const {
+    readConnectedWorkScope,
+    readConnectedWorkScopeAnsweredQuestion,
+    readConnectedWorkScopeAnsweredRepositories,
+    readConnectedWorkScopeNarrowingAnswered,
+    readConnectedWorkScopeSelectionAnswered,
+  } = await import("../../db/repositories/work-scope.js");
+  const [scope, selectionAnswered, answeredRepositoryKeys, narrowingAnswered, answered] =
+    await Promise.all([
+      readConnectedWorkScope(subjectKey),
+      readConnectedWorkScopeSelectionAnswered(subjectKey),
+      readConnectedWorkScopeAnsweredRepositories(subjectKey),
+      // THE SAME RUN ASKS AGAIN WITHOUT THIS. A narrowing answer resumes the
+      // run that asked, and the block re-executes from the top against a
+      // selection discovery rebuilds unchanged, so without this read it raises
+      // the identical question the person has just answered.
+      readConnectedWorkScopeNarrowingAnswered(subjectKey),
+      // Keyed on the clarification, not the subject: "what the record made of
+      // the answer" is a fact about one question, and the newest row on a
+      // subject is only probably this one.
+      clarificationId === undefined
+        ? Promise.resolve(null)
+        : readConnectedWorkScopeAnsweredQuestion(clarificationId),
+    ]);
+  const event = answered?.event;
+  return {
+    scope,
+    selectionAnswered,
+    answeredRepositoryKeys,
+    narrowingAnswered,
+    // WHAT THE RECORD DID WITH THE WORDS, which nothing in the entries says: an
+    // answer it declined and an answer it read and found nothing in both leave
+    // the entries untouched, and only one of them is anybody's refusal. False
+    // ONLY for "unattributed", the answer more than one person wrote, because
+    // that is the only kind whose meaning is "these words are not one person's
+    // decision". Absent when no row could be read, and the reader owes that
+    // case a rule of its own rather than a guess.
+    ...(event !== undefined && event.kind === "question_answered"
+      ? { answerAttributed: event.answer.kind !== "unattributed" }
+      : {}),
   };
 }
 

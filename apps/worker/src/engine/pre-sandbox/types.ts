@@ -4,6 +4,7 @@ import type {
   TriggerRepositoryPolicy,
   WorkScopeActor,
   WorkScopeAskedRepository,
+  WorkScopeQuestionPurpose,
   WorkflowRepositoryScope,
 } from "@shared/contracts";
 import type {
@@ -25,6 +26,38 @@ import type { RunStartWorkScope } from "../steps/run-start-settings.js";
 export interface PreSandboxWorkScopeAsk {
   subjectKey: string;
   askedRepositories: WorkScopeAskedRepository[];
+  /**
+   * Why the question was put, where the list above cannot say.
+   *
+   * A question asking somebody to narrow a set larger than an ask may carry
+   * names none of the repositories, so its ask is empty and reads exactly like
+   * the plain "which repository should this ticket modify?". This is the only
+   * thing that tells the two apart, and telling them apart is what stops the
+   * narrowing question being asked again on every later run.
+   */
+  purpose?: WorkScopeQuestionPurpose;
+}
+
+/**
+ * What the selection refused, keyed, on its way to the comment a finished run
+ * posts.
+ *
+ * The prompt additions already carry these sentences to the agent, and until
+ * this existed they carried them nowhere else: a ticket covering two
+ * repositories, one of them excluded weeks ago, produced a green run and a pull
+ * request covering half the work with nothing on the ticket saying so. Silent
+ * partial work is the failure this record exists to end, and a person does not
+ * go looking for a problem a green run did not report.
+ *
+ * Keyed rather than the flat sentences the prompt uses, because the report
+ * renders one line per repository and a sentence with no key attached cannot be
+ * lined up with the repositories the run did open.
+ */
+export interface PreSandboxWorkScopeLeftOut {
+  /** `provider:owner/name`, the key the work scope record uses. */
+  repositoryKey: string;
+  /** Why the run left it out, as a person reads it. */
+  reason: string;
 }
 
 export interface PreSandboxRepositoryDiscovery {
@@ -72,6 +105,12 @@ export type PreSandboxStepResult =
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
       repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
       workScopeAsk?: PreSandboxWorkScopeAsk;
+      /** Keyed refusals for the comment a finished run posts. The agent may
+       *  see these: they are facts about this run's workspace. */
+      workScopeLeftOut?: PreSandboxWorkScopeLeftOut[];
+      /** What a person can do about those refusals. NEVER placed in the
+       *  agent's instruction channel: see `withWorkScopeOutcome`. */
+      workScopeRecoveryNotes?: string[];
     }
   | {
       status: "halt";
@@ -96,6 +135,12 @@ export type PreSandboxStepResult =
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
       repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
       workScopeAsk?: PreSandboxWorkScopeAsk;
+      /** Keyed refusals for the comment a finished run posts. The agent may
+       *  see these: they are facts about this run's workspace. */
+      workScopeLeftOut?: PreSandboxWorkScopeLeftOut[];
+      /** What a person can do about those refusals. NEVER placed in the
+       *  agent's instruction channel: see `withWorkScopeOutcome`. */
+      workScopeRecoveryNotes?: string[];
     };
 
 export const preSandboxTicketInputFields = [
@@ -256,6 +301,12 @@ export type RunPreSandboxPhaseResult =
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
       repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
       workScopeAsk?: PreSandboxWorkScopeAsk;
+      /** Keyed refusals for the comment a finished run posts. The agent may
+       *  see these: they are facts about this run's workspace. */
+      workScopeLeftOut?: PreSandboxWorkScopeLeftOut[];
+      /** What a person can do about those refusals. NEVER placed in the
+       *  agent's instruction channel: see `withWorkScopeOutcome`. */
+      workScopeRecoveryNotes?: string[];
     }
   | {
       status: "halt";
@@ -271,4 +322,10 @@ export type RunPreSandboxPhaseResult =
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
       repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
       workScopeAsk?: PreSandboxWorkScopeAsk;
+      /** Keyed refusals for the comment a finished run posts. The agent may
+       *  see these: they are facts about this run's workspace. */
+      workScopeLeftOut?: PreSandboxWorkScopeLeftOut[];
+      /** What a person can do about those refusals. NEVER placed in the
+       *  agent's instruction channel: see `withWorkScopeOutcome`. */
+      workScopeRecoveryNotes?: string[];
     };

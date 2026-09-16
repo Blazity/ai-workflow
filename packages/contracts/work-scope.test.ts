@@ -92,7 +92,16 @@ describe("asked repositories", () => {
     ).toBe(false);
   });
 
-  it("holds asked repositories to one to eight, unique", () => {
+  it("accepts an ask that listed no repository, which is not the same as no ask at all", () => {
+    // The plain "which repository should this ticket modify?" lists none, and a
+    // person who answers it with a path has decided about that path all the
+    // same. A clarification that was not about repositories carries no list at
+    // all, and its answer decides nothing. Two different facts, and the schema
+    // has to be able to say the first one.
+    expect(workScopeAskedRepositoriesSchema.safeParse([]).success).toBe(true);
+  });
+
+  it("holds asked repositories to eight at most, unique", () => {
     expect(
       workScopeAskedRepositoriesSchema.safeParse(
         Array.from({ length: 8 }, (_, index) => askedRepository(index)),
@@ -108,6 +117,24 @@ describe("asked repositories", () => {
   it("refuses duplicate repository keys", () => {
     expect(
       workScopeAskedRepositoriesSchema.safeParse([askedRepository(1), askedRepository(1)]).success,
+    ).toBe(false);
+  });
+
+  it("carries whether the question named the repository, and accepts an ask written without it", () => {
+    // A person has decided about a repository only if the question put its name
+    // in front of them, so the ask records that fact rather than leaving a
+    // reader to assume it. Optional because an ask written before the field
+    // existed is still a valid ask; it reads as NOT named, which costs a
+    // question asked again rather than a decision nobody made.
+    expect(
+      workScopeAskedRepositoriesSchema.safeParse([{ ...askedRepository(1), named: true }]).success,
+    ).toBe(true);
+    expect(
+      workScopeAskedRepositoriesSchema.safeParse([{ ...askedRepository(1), named: false }]).success,
+    ).toBe(true);
+    expect(workScopeAskedRepositoriesSchema.safeParse([askedRepository(1)]).success).toBe(true);
+    expect(
+      workScopeAskedRepositoriesSchema.safeParse([{ ...askedRepository(1), named: "yes" }]).success,
     ).toBe(false);
   });
 });
@@ -257,7 +284,7 @@ describe("work scope trail row", () => {
     ).toBe(true);
   });
 
-  it("accepts a question naming asked repositories and refuses an empty list", () => {
+  it("accepts a question naming asked repositories and one that named none, and still requires the list", () => {
     expect(
       workScopeTrailRowSchema.safeParse(
         row("AWP-176", "run-1", {
@@ -267,12 +294,63 @@ describe("work scope trail row", () => {
         }),
       ).success,
     ).toBe(true);
+    // The bare "which repository should this ticket modify?" is a repository
+    // question that named none of them, and the trail has to be able to say so:
+    // it is what the answer to that question is later read against. The list
+    // itself stays required, so a question that named none and an event that
+    // forgot to say what it asked never look alike.
     expect(
       workScopeTrailRowSchema.safeParse(
         row("AWP-176", "run-1", {
           kind: "question_asked",
           clarificationId: "clarification-1",
           repositories: [],
+        }),
+      ).success,
+    ).toBe(true);
+    expect(
+      workScopeTrailRowSchema.safeParse(
+        row("AWP-176", "run-1", { kind: "question_asked", clarificationId: "clarification-1" }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("carries why a question that could name no repository was asked", () => {
+    // A question asking somebody to narrow a set larger than an ask may hold
+    // names none of them, so its list is empty and the row is otherwise
+    // identical to the bare "which repository should this ticket modify?".
+    // The purpose is the only thing that tells them apart, and telling them
+    // apart is what stops the narrowing question being asked again.
+    expect(
+      workScopeTrailRowSchema.safeParse(
+        row("AWP-176", "run-1", {
+          kind: "question_asked",
+          clarificationId: "clarification-1",
+          repositories: [],
+          purpose: "narrowing",
+        }),
+      ).success,
+    ).toBe(true);
+    // Absent is the only reading a row written before this field existed can
+    // have, and it has to stay parseable.
+    expect(
+      workScopeTrailRowSchema.safeParse(
+        row("AWP-176", "run-1", {
+          kind: "question_asked",
+          clarificationId: "clarification-1",
+          repositories: [],
+        }),
+      ).success,
+    ).toBe(true);
+    // A purpose nothing reads is worse than none: it would be written, stored
+    // and silently never matched.
+    expect(
+      workScopeTrailRowSchema.safeParse(
+        row("AWP-176", "run-1", {
+          kind: "question_asked",
+          clarificationId: "clarification-1",
+          repositories: [],
+          purpose: "whichever",
         }),
       ).success,
     ).toBe(false);
@@ -313,6 +391,12 @@ describe("work scope trail row", () => {
     ).toBe(true);
     expect(
       workScopeTrailRowSchema.safeParse(row("AWP-176", "run-1", answered({ kind: "unrecognised" }))).success,
+    ).toBe(true);
+    // An answer more than one person wrote is its own answer kind, not a
+    // failure to read one: the trail has to be able to say which of the two
+    // happened, because only one of them is about the words.
+    expect(
+      workScopeTrailRowSchema.safeParse(row("AWP-176", "run-1", answered({ kind: "unattributed" }))).success,
     ).toBe(true);
   });
 

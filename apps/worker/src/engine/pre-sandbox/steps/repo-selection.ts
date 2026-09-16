@@ -118,28 +118,8 @@ async function recordWorkScopeDecisions(
   if (!recorder) return result;
   const runId = recorder.runId;
   if (runId !== null && recorder.plans.length > 0) {
-    try {
-      const { applyConnectedRunWorkScopePlan } = await import(
-        "../../../db/repositories/work-scope.js"
-      );
-      for (const plan of recorder.plans) {
-        await applyConnectedRunWorkScopePlan({
-          subjectKey: recorder.subjectKey,
-          runId,
-          plan,
-        });
-      }
-    } catch (error) {
-      const { logger } = await import("../../../infra/logger.js");
-      logger.warn(
-        {
-          subjectKey: recorder.subjectKey,
-          runId,
-          err: error instanceof Error ? error.message : String(error),
-        },
-        "work_scope_write_failed",
-      );
-    }
+    const { applyRunWorkScopePlans } = await import("../../work-scope/apply-plans.js");
+    await applyRunWorkScopePlans({ subjectKey: recorder.subjectKey, runId, plans: recorder.plans });
   }
   return withWorkScopeOutcome(result, recorder);
 }
@@ -159,8 +139,63 @@ function withWorkScopeOutcome(
           },
         }
       : {};
-  const notes = recorder.notes.join(" ");
-  if (notes.length === 0) return { ...result, ...ask };
+  /**
+   * The same refusals a third time, keyed, on their way to the comment a
+   * finished run posts.
+   *
+   * Everything below reaches a person only when the run STOPS, and the case
+   * this exists for is the run that does not: a ticket covering two
+   * repositories, one of them excluded weeks ago, the other attached, a green
+   * run and a pull request covering half the work. The agent was told; the
+   * person was not, and nobody goes looking for a problem a green run did not
+   * report.
+   *
+   * Two fields rather than one, because they have different readers. The
+   * refusals are facts about this run's workspace, so the agent may see them and
+   * does, in the prompt addition below. The recovery sentence tells a human they
+   * can change their mind, and it rides this field to the ticket comment and
+   * nowhere else. Carried on every exit, exactly as the ask above is: the halt
+   * paths simply never reach a report.
+   */
+  const carried = {
+    ...(recorder.leftOut.length > 0 ? { workScopeLeftOut: [...recorder.leftOut] } : {}),
+    ...(recorder.recoveryNotes.length > 0
+      ? { workScopeRecoveryNotes: [...recorder.recoveryNotes] }
+      : {}),
+  };
+  /*
+   * TWO STRINGS, AND A QUESTION MAY ONLY EVER CARRY THE FIRST.
+   *
+   * `refusals` is what the run left out. It is a fact about this run's
+   * workspace, the agent needs it, and it goes everywhere: the halt message,
+   * the questions, the prompt addition.
+   *
+   * `recovery` names a lever only a person holds, editing this work's
+   * repository list through the dashboard or the `work_scope.edit` tool. It
+   * rides `message` and `cause`, which reach the run's status reason and the
+   * ticket comment, and it must never reach a QUESTION, because a question is
+   * not a message to a person that the agent happens not to read. A question
+   * becomes a clarification round, and a clarification round is rendered
+   * verbatim into the research, implementation and review prompts
+   * (`sandbox/context.ts`) AND written into `ai-workflow/memory/<TICKET>.md`
+   * under a heading reading "Human decisions (from the dashboard)" and "Do not
+   * edit or remove" (`engine/support/human-decisions-memory.ts`). So a sentence
+   * put in front of a person here arrives in the agent's durable memory
+   * attributed to a human, which is worse than handing it to the prompt: the
+   * prompt is this run's instructions, and the memory is every later run's
+   * evidence about what people decided.
+   *
+   * What we do NOT claim: the sentence still reaches a later run as ordinary
+   * ticket history, because this run posts it to the ticket and a later run
+   * reads the ticket. That cannot be prevented without hiding the ticket, and a
+   * comment a person could have typed by hand is not ours to retract. Read as
+   * history it arrives attributed and dated, one comment among many. It is the
+   * two channels we control, instructions and human-decision memory, that stay
+   * clear of it.
+   */
+  const refusals = recorder.notes.join(" ");
+  const recovery = [...recorder.notes, ...recorder.recoveryNotes].join(" ");
+  if (recovery.length === 0) return { ...result, ...ask, ...carried };
   if (result.status === "halt") {
     // The halt message is the run's status reason and the ticket comment, so a
     // repository the run refused is named exactly where a person is already
@@ -168,24 +203,29 @@ function withWorkScopeOutcome(
     //
     // Unless the halt is a QUESTION, and then the message is not what anyone
     // sees: the block renders the questions and falls back to the message only
-    // when there are none. So the sentences ride the first question as well,
+    // when there are none. So the REFUSALS ride the first question as well,
     // ahead of it, because "which of these should this ticket work on" reads as
     // a complete list to someone who was never told what the run had to leave
-    // out. This is the same text in both fields on purpose; only one of them is
-    // ever shown.
+    // out.
+    //
+    // The refusals only. The two fields carry different text on purpose, and the
+    // difference is the whole of the paragraph above: a message is read by a
+    // person, and a question is read by a person and then kept forever as the
+    // agent's record of what people decided.
     const asked = result.outcome === "needs_clarification" ? (result.questions ?? []) : [];
     return {
       ...result,
       ...ask,
-      ...(asked.length > 0
+      ...carried,
+      ...(asked.length > 0 && refusals.length > 0
         ? {
             questions: asked.map((question, index) =>
-              index === 0 ? `${notes} ${question}` : question,
+              index === 0 ? `${refusals} ${question}` : question,
             ),
           }
         : {}),
-      message: `${result.message} ${notes}`,
-      ...(result.cause ? { cause: `${result.cause} ${notes}` } : {}),
+      message: `${result.message} ${recovery}`,
+      ...(result.cause ? { cause: `${result.cause} ${recovery}` } : {}),
     };
   }
   const addition: PreSandboxPromptAddition = {
@@ -196,6 +236,7 @@ function withWorkScopeOutcome(
   return {
     ...result,
     ...ask,
+    ...carried,
     promptAdditions: [...(result.promptAdditions ?? []), addition],
   };
 }

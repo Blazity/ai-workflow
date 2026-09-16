@@ -44,6 +44,7 @@ import type {
   PreSandboxRepositoryDiscovery,
   PreSandboxRepositoryScopeNarrowing,
   PreSandboxWorkScopeAsk,
+  PreSandboxWorkScopeLeftOut,
 } from "../../pre-sandbox/types.js";
 import type { ResearchRepository } from "../../../sandbox/agents/types.js";
 import type { RepositoryExpansionState } from "../../repository-discovery/runner.js";
@@ -120,6 +121,60 @@ export interface EngineCtx {
    * named. Absent means the run asked nothing about repositories.
    */
   workScopeAsk?: PreSandboxWorkScopeAsk;
+  /**
+   * What the pre-sandbox selection refused, keyed, for the comment a finished
+   * run posts.
+   *
+   * On a run that HALTS the refusal is already in the halt text a person reads.
+   * On a run that does not halt it reached the agent's prompt and stopped
+   * there, which is how a ticket covering two repositories shipped a pull
+   * request covering one with nothing on the ticket saying why. Absent means
+   * the selection refused nothing.
+   */
+  workScopeLeftOut?: PreSandboxWorkScopeLeftOut[];
+  /**
+   * What a person can do about those refusals, in whole sentences.
+   *
+   * Beside the field above rather than inside it, because it has a different
+   * reader: the refusals are facts about this run's workspace and the agent
+   * sees them, while this tells a human they can change their mind. It reaches
+   * the ticket comment and is never placed in the agent's instruction channel.
+   */
+  workScopeRecoveryNotes?: string[];
+  /**
+   * Did the repository question this run is waiting on give the record a
+   * repository to rule on, so that what it wrote afterwards says anything at
+   * all?
+   *
+   * The FALLBACK fact, and only that. What the record made of an answer is the
+   * record's own verdict and travels on `RunStartWorkScope.answerAttributed`;
+   * this is what the gate has to go on when that verdict is absent, which is a
+   * run replaying a result written before the field existed and a run whose
+   * trail row could not be read.
+   *
+   * The same block raises repository questions whose ask lists repositories and
+   * questions whose ask lists none (the bare "which repository should this
+   * ticket modify?" among them). An answer to either is adjudicated and writes
+   * every repository it NAMES, but only the first kind gives the record a key
+   * it can decide silence on, so only after the first kind can an unchanged
+   * record mean the record looked and refused. After the second it is equally
+   * what an unreadable answer leaves behind, which is not a refusal and must
+   * bind nothing.
+   *
+   * ABSENT MEANS NO, and it is CONSUMED where it is read, not left standing:
+   * the fact belongs to the one answer now in hand, and a flag left behind
+   * would let a question the record never saw inherit the judgement of an
+   * earlier one.
+   *
+   * It carries the repositories a PERSON had already selected when the question
+   * went out, because the fact worth having afterwards is not what the record
+   * contains, it is what this answer changed. The record can hold a person's
+   * selection that has nothing to do with the question: an earlier run's
+   * answer, or somebody editing the record on the Repositories page while the
+   * question sits unanswered. Read as "an answer was accepted", either of those
+   * speaks for an answer nobody read.
+   */
+  workScopeQuestionRecorded?: { personSelectedKeys: string[] };
   /**
    * The account the workflow's own ticket comments are posted under, resolved
    * once at run start.

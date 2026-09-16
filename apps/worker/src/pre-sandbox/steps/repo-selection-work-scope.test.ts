@@ -61,6 +61,10 @@ vi.mock("../../infra/logger.js", () => ({ logger: mocks.logger }));
 import { repoSelectionStep } from "./repo-selection.js";
 import { testSettingsSnapshot } from "../../test-support/settings.js";
 import type { PreSandboxStepContext, PreSandboxStepResult } from "../../engine/pre-sandbox/types.js";
+// The two places a clarification question ends up once a person answers it:
+// verbatim in every agent prompt, and verbatim in the ticket's memory file.
+import { assembleResearchPlanContext } from "../../sandbox/context.js";
+import { renderHumanDecisionsSection } from "../../engine/support/human-decisions-memory.js";
 
 const SUBJECT = "ticket:jira:AWT-402";
 const ACTOR: WorkScopeActor = {
@@ -297,6 +301,38 @@ describe("the workspace starts from the record", () => {
     expect(result.status).toBe("continue");
     expect(result.selectedRepositories ?? []).not.toContainEqual(
       expect.objectContaining({ repoPath: "acme/api" }),
+    );
+  });
+});
+
+describe("a work scope write that fails", () => {
+  it("logs work_scope_write_failed and lets the run continue rather than failing the step", async () => {
+    mocks.applyRunWorkScopePlan.mockRejectedValueOnce(new Error("neon: connection reset"));
+
+    const result = await runStep({
+      workScope: {
+        subjectKey: SUBJECT,
+        scope: scope([
+          entry({
+            repositoryKey: "github:acme/api",
+            state: "unavailable",
+            unavailableReason: "not_enabled",
+            origin: "person",
+            rationale: "continue without it",
+          }),
+        ]),
+        selectionAnswered: false,
+      },
+    });
+
+    expect(result.status).toBe("continue");
+    expect(mocks.logger.warn).toHaveBeenCalledWith(
+      {
+        subjectKey: SUBJECT,
+        runId: "run-2",
+        err: "neon: connection reset",
+      },
+      "work_scope_write_failed",
     );
   });
 });
@@ -725,9 +761,163 @@ describe("what a person reads when the run stops to ask", () => {
     if (result.status !== "halt") throw new Error("expected a halt");
     expect(result.outcome).toBe("needs_clarification");
     expect(result.questions?.[0]).toContain(
-      "github:acme/legacy is recorded on this work, but the repository catalog did not offer it to this run",
+      "github:acme/legacy is not on the repository catalog this run may use",
     );
     expect(result.questions?.[0]).toContain("acme/web");
+  });
+
+  // The two channels, pinned from both sides. The recovery sentence goes where a
+  // person reads and is never PLACED in the agent's instruction channel; the
+  // refusal itself goes to both, because it is a fact about this run's
+  // workspace and the agent needs it.
+  it("tells a person the exclusion can be taken back when the run stops, in the text a person reads", async () => {
+    // A workflow-owned branch on a repository the person excluded: the ledger
+    // names it, the record refuses it, and the ticket text leaves four other
+    // repositories open, so the run stops to ask.
+    mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValue([
+      {
+        ticketKey: "AWT-402",
+        provider: "github",
+        repoPath: "acme/ops",
+        branchName: "blazebot/awt-402",
+        pr: null,
+      },
+    ]);
+    const result = await runStep({
+      ticket: {
+        identifier: "AWT-402",
+        title: "Rename the client",
+        description:
+          "Touches acme/web, acme/api, acme/docs, acme/infra and acme/ops in one go.",
+        acceptanceCriteria: "",
+        comments: [],
+        labels: [],
+      },
+      workScope: {
+        subjectKey: SUBJECT,
+        scope: scope([
+          entry({ repositoryKey: "github:acme/ops", state: "excluded", origin: "person" }),
+        ]),
+        selectionAnswered: false,
+      },
+    });
+
+    expect(result.status).toBe("halt");
+    if (result.status !== "halt") throw new Error("expected a halt");
+    expect(result.message).toContain(
+      "github:acme/ops was excluded on this work by Ada on 2026-09-15," +
+        " so the run started without it.",
+    );
+    expect(result.message).toContain(
+      "Excluding a repository is not final: this work's repository list can be changed, " +
+        "and the next run starts from the changed list.",
+    );
+  });
+
+  it("keeps the recovery sentence out of the instructions when the run carries on", async () => {
+    // The one repository this run can see is the one a person excluded, so the
+    // refusal is real and the run carries on to discovery without it.
+    const result = await runStep({
+      repositories: [repo("acme/api")],
+      enabledKeys: ["github:acme/api"],
+      workScope: {
+        subjectKey: SUBJECT,
+        scope: scope([
+          entry({ repositoryKey: "github:acme/api", state: "excluded", origin: "person" }),
+        ]),
+        selectionAnswered: false,
+      },
+    });
+
+    expect(result.status).toBe("continue");
+    const addition = result.promptAdditions?.find(
+      (each) => each.title === "Repositories left out",
+    );
+    expect(addition?.content).toContain(
+      "github:acme/api was excluded on this work by Ada on 2026-09-15," +
+        " so the run started without it.",
+    );
+    expect(JSON.stringify(result.promptAdditions ?? [])).not.toContain("not final");
+  });
+
+  // A question is not a private note to the person. Once answered it becomes a
+  // clarification round, and a clarification round is copied verbatim into the
+  // research, implementation and review prompts AND into the ticket's memory
+  // file under a heading that tells the agent not to edit it. So the two
+  // downstream renderers are the real guard on what may ride a question, not
+  // the promptAdditions the other tests check.
+  it("keeps the recovery sentence out of the question, so no prompt and no memory file repeats it", async () => {
+    mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValue([
+      {
+        ticketKey: "AWT-402",
+        provider: "github",
+        repoPath: "acme/ops",
+        branchName: "blazebot/awt-402",
+        pr: null,
+      },
+    ]);
+    const result = await runStep({
+      ticket: {
+        identifier: "AWT-402",
+        title: "Rename the client",
+        description:
+          "Touches acme/web, acme/api, acme/docs, acme/infra and acme/ops in one go.",
+        acceptanceCriteria: "",
+        comments: [],
+        labels: [],
+      },
+      workScope: {
+        subjectKey: SUBJECT,
+        scope: scope([
+          entry({ repositoryKey: "github:acme/ops", state: "excluded", origin: "person" }),
+        ]),
+        selectionAnswered: false,
+      },
+    });
+
+    expect(result.status).toBe("halt");
+    if (result.status !== "halt") throw new Error("expected a halt");
+    const questions = result.questions ?? [];
+    expect(questions.length).toBeGreaterThan(0);
+    // The refusal itself does ride the question: it is a fact about the
+    // workspace the answer is about, and the person needs it to answer.
+    expect(questions[0]).toContain(
+      "github:acme/ops was excluded on this work by Ada on 2026-09-15," +
+        " so the run started without it.",
+    );
+    expect(questions.join(" ")).not.toContain("not final");
+
+    // Answered, the round reaches the agent's research prompt.
+    const prompt = assembleResearchPlanContext({
+      ticket: {
+        identifier: "AWT-402",
+        title: "Rename the client",
+        description: "Touches acme/web, acme/api, acme/docs, acme/infra and acme/ops in one go.",
+        acceptanceCriteria: "",
+        comments: [],
+        clarifications: [{ questions, answer: "Use acme/web." }],
+      },
+      prompt: "Plan the work.",
+      branchName: "blazebot/awt-402",
+    });
+    expect(prompt).toContain("## Clarifications (Q&A)");
+    expect(prompt).toContain(
+      "github:acme/ops was excluded on this work by Ada on 2026-09-15," +
+        " so the run started without it.",
+    );
+    expect(prompt).not.toContain("not final");
+
+    // And the same round is written to ai-workflow/memory/AWT-402.md.
+    const memory = renderHumanDecisionsSection([{ questions, answer: "Use acme/web." }]);
+    expect(memory).toContain("## Human decisions (from the dashboard)");
+    expect(memory).toContain(
+      "github:acme/ops was excluded on this work by Ada on 2026-09-15," +
+        " so the run started without it.",
+    );
+    expect(memory).not.toContain("not final");
+
+    // The person's own channel still carries it.
+    expect(result.message).toContain("not final");
   });
 });
 
@@ -841,5 +1031,106 @@ describe("the count gate with a record behind it", () => {
       "More than 3 repositories match this ticket. Which repositories are essential for the initial research?",
     ]);
     expect(result.workScopeAsk).toBeUndefined();
+  });
+});
+
+/**
+ * THE SILENT CASE, end to end over every hop that can be executed.
+ *
+ * A ticket covers two repositories, a person excluded one of them weeks ago,
+ * the run attaches the other, does NOT halt, finishes and ships a pull request
+ * covering half the work. Every surface that reaches a person on this feature
+ * reaches them when the run STOPS; this is the path where it does not, and
+ * nobody goes looking for a problem a green run did not report.
+ *
+ * So the chain is walked with the real code at each hop: the selection step
+ * decides and returns, the pre-sandbox runner carries, and the report builder
+ * renders the comment the finished run posts. The two hops a test cannot
+ * invoke, the assignment inside the prepare-workspace block body and the
+ * seeding inside the workflow body, are pinned in their own suites.
+ */
+describe("what the person reads when the run leaves a repository out and carries on", () => {
+  it("names the repository in the comment a finished run posts, and says the exclusion can be taken back", async () => {
+    const { executePreSandboxPhase } = await import("../../engine/steps/pre-sandbox-runner.js");
+    const { buildResearchAnalysisReport, formatResearchAnalysisComment } = await import(
+      "../../engine/support/run-analysis-report.js"
+    );
+
+    const selection = await runStep({
+      // The only repository this run can see is the one a person excluded, so
+      // the refusal is real and the run carries on without it.
+      repositories: [repo("acme/api")],
+      enabledKeys: ["github:acme/api"],
+      workScope: {
+        subjectKey: SUBJECT,
+        scope: scope([
+          entry({ repositoryKey: "github:acme/api", state: "excluded", origin: "person" }),
+        ]),
+        selectionAnswered: false,
+      },
+    });
+    expect(selection.status).toBe("continue");
+
+    const phase = await executePreSandboxPhase(
+      {
+        ticket: { identifier: "AWT-402" },
+        run: { branchName: "blazebot/awt-402" },
+        repositoryAccess: { activated: true, enabledKeys: ["github:acme/api"] },
+        settings: testSettingsSnapshot(),
+      },
+      { preSandbox: { steps: [{ uses: "repo-selection", onFailure: "fail" }] } },
+      { "repo-selection": async () => selection },
+    );
+
+    expect(phase.status).toBe("continue");
+    expect(phase.workScopeLeftOut).toEqual([
+      {
+        repositoryKey: "github:acme/api",
+        reason:
+          "github:acme/api was excluded on this work by Ada on 2026-09-15," +
+          " so the run started without it.",
+      },
+    ]);
+
+    const report = buildResearchAnalysisReport({
+      runId: "run-silent",
+      workspaceManifest: {
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/web",
+            defaultBranch: "main",
+            branchName: "arthur/AWT-402",
+            researchBaseSha: "abcdef123456",
+            access: "write",
+          },
+        ],
+      },
+      ...(phase.workScopeLeftOut ? { leftOutRepositories: phase.workScopeLeftOut } : {}),
+      ...(phase.workScopeRecoveryNotes
+        ? { repositoryRecoveryNotes: phase.workScopeRecoveryNotes }
+        : {}),
+      researchResult: { body: "Plan" },
+    });
+    const comment = formatResearchAnalysisComment(
+      report,
+      "https://dashboard.example/runs/run-silent",
+    );
+    const repositories = comment
+      .split("\n\n")
+      .find((section) => section.startsWith("Repositories"));
+
+    expect(repositories).toContain(
+      "- github:acme/api · left out · github:acme/api was excluded on this work" +
+        " by Ada on 2026-09-15," +
+        " so the run started without it.",
+    );
+    expect(repositories).toContain(
+      "Excluding a repository is not final: this work's repository list can be changed," +
+        " and the next run starts from the changed list.",
+    );
+    // And still not in the agent's instruction channel, on the same run.
+    expect(JSON.stringify(phase.promptAdditions)).toContain("was excluded on this work");
+    expect(JSON.stringify(phase.promptAdditions)).not.toContain("not final");
   });
 });

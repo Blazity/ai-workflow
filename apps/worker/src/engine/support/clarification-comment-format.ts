@@ -46,11 +46,26 @@ export function formatClarificationQuestionsComment(input: {
   dashboardUrl: string;
   aiColumnName: string;
   expiresAtIso: string | null;
+  /** What a person can do about a repository this run left out, when the
+   *  questions above are about repositories and something was refused. Ours,
+   *  and the ticket comment is the only channel it travels on: see the ruling
+   *  at the call site in `engine/agent-workflow.ts`. Optional, so every other
+   *  clarification comment is byte-identical to what it was. */
+  repositoryRecoveryNotes?: string[];
 }): string {
   const sections: string[] = [
     "The AI workflow needs clarification before it can continue with this ticket:",
     input.questions.map((q, i) => `${i + 1}. ${scrubForPublication(q)}`).join("\n"),
   ];
+
+  // Straight under the questions, because it is about the repository named in
+  // one of them, and above "How to answer" because it widens what an answer
+  // could be: a person who thinks the repository is gone for good answers a
+  // narrower question than the one actually in front of them. Unscrubbed for
+  // the reason the paragraph above gives: this text is ours.
+  if (input.repositoryRecoveryNotes && input.repositoryRecoveryNotes.length > 0) {
+    sections.push(input.repositoryRecoveryNotes.join(" "));
+  }
 
   if (input.suggestedAnswers && input.suggestedAnswers.length > 0) {
     sections.push(
@@ -132,4 +147,184 @@ export function formatClarificationResumeFailedComment(input: {
 /** One-liner acknowledging that a clarification was answered and the run resumes. */
 export function formatAlreadyAnsweredComment(input: { answeredByLabel: string }): string {
   return `This clarification was already answered by ${input.answeredByLabel}; the run is resuming.`;
+}
+
+/**
+ * Every way an answer that reached the run can leave no repository decision
+ * behind it, each with the sentence that explains it to the person who wrote it.
+ *
+ * THE MAP IS THE LIST. `AnswerNotRecordedReason` is its keys, so a seventh
+ * reason cannot be declared without the sentence that explains it, and the rule
+ * 6 test walks this object instead of a literal list beside it that somebody has
+ * to remember to extend. A type cannot be enumerated at runtime; this is the
+ * narrowest thing that can, and it is the thing every reason must have.
+ */
+const ANSWER_NOT_RECORDED_WHY = {
+  /** Several people wrote into the one answer, so no single person can be
+   *  credited with the decision it adds up to. */
+  several_authors:
+    "More than one person wrote into this answer, so the AI workflow could not tell whose decision it is and recorded no repository decision from it.",
+  /** The comments the answer was composed from are no longer on the ticket. */
+  evidence_gone:
+    "The comments this answer was composed from are no longer on the ticket, so the AI workflow could not tell how many people wrote it and recorded no repository decision from it.",
+  /** We could not establish how many people wrote it, and gave up waiting. */
+  uncounted:
+    "The AI workflow could not establish from this ticket how many people wrote that answer, so it recorded no repository decision from it. That is a limitation on our side, not a problem with the answer.",
+  /** It arrived as a comment on the ticket and reads as a plain no, which says
+   *  nothing about what it is refusing. */
+  unaddressed_refusal:
+    "This answer arrived as a comment on the ticket and reads as a plain no. Comments here are written for all sorts of reasons, and a no on its own does not say which repositories it is about, so the AI workflow recorded no repository decision from it rather than leaving repositories out in your name.",
+  /** It was read, and nothing in it named a repository the record could keep,
+   *  so the question it answered is still open. Nothing it named was spelled
+   *  out as a path, so writing one out is the remedy that works. */
+  no_repository_named:
+    "Nothing in that answer named a repository this work should use, so the AI workflow recorded no repository decision from it.",
+  /** It spelled a repository path out in full, and this deployment holds no
+   *  repository by that name. The difference from the reason above is the whole
+   *  reason this one exists: writing that path out again reaches the next run
+   *  and still resolves to nothing. */
+  no_such_repository:
+    "That answer named a repository this deployment does not have, so the AI workflow recorded no repository decision from it.",
+  /** It had no word in it at all, a thumbs up or a full stop, which the run
+   *  takes as nothing left to attach and the record takes as nothing said. */
+  no_words:
+    "That answer has no words in it, so there was nothing in it to read and the AI workflow recorded no repository decision from it. A thumbs up reads as agreement to a person and as nothing at all here.",
+};
+
+/** Why an answer that reached the run left no repository decision behind it. */
+export type AnswerNotRecordedReason = keyof typeof ANSWER_NOT_RECORDED_WHY;
+
+/** Every reason there is, for a caller that has to hold all of them to one
+ *  rule rather than to the ones it happened to think of. */
+export const ANSWER_NOT_RECORDED_REASONS = Object.keys(
+  ANSWER_NOT_RECORDED_WHY,
+) as AnswerNotRecordedReason[];
+
+/**
+ * Posted when the answer reached the run and left no repository decision behind
+ * it, which is a thing the person who answered cannot see and would otherwise
+ * only learn by being asked the same question again.
+ *
+ * The rule it serves: nobody is asked something they have already answered
+ * without being told why. Three things, in this order: what happens to this run
+ * now, what became of their words and why, and what to write so the next run
+ * picks it up.
+ *
+ * NEVER AN INSTRUCTION TO REPLY INTO THIS QUESTION. By the time this is posted
+ * the clarification is answered, and the comment path only ever reads a pending
+ * one (`db/repositories/clarification-hooks.ts`, which answers a row only while
+ * its status is `pending`). A person who did as such a sentence said would
+ * write "none" underneath it and watch nothing happen at all, which teaches
+ * them the system is broken more thoroughly than silence would.
+ *
+ * What does work is two routes, and both are named from what the code actually
+ * does. A full repository path written in any comment here is read by the NEXT
+ * run, because the path matcher takes the whole ticket including people's
+ * comments (`ticketText` in `engine/pre-sandbox/steps/repo-selection.ts`, which
+ * leaves out only our own). And a refusal has no such route at all: nothing
+ * written on a ticket records "none", so the only honest thing to say about
+ * declining is that the question comes back and answering it then records it.
+ *
+ * THE ONE PERSON THE PATH ROUTE IS FALSE FOR. "We could not read a repository
+ * out of that" is two cases, and the remedy is only true for one of them. A
+ * person who wrote a bare or partial name is told to write the path in full,
+ * and writing it in full may well resolve. A person who already wrote the path
+ * in full, for a repository this deployment does not hold, would write the same
+ * words again for the next run to resolve to the same nothing. They get
+ * `no_such_repository` instead, which says what is actually wrong and names the
+ * screen where a repository is added or enabled. Where one answer carries both
+ * shapes, this is the fuller explanation and it is still true for them, so it
+ * is the one they get.
+ *
+ * ONE KEYWORD, AND IT IS THE ONE THE QUESTION TEACHES. The expansion question
+ * says `Reply "none"` (`engine/repository-discovery/runner.ts`), so this says
+ * "none" too. A second phrase for the same act would teach that the exact words
+ * matter and then hand the person two of them.
+ *
+ * `question.listedRepositories` is what they had in front of them, and it
+ * decides which words are offered back. A question that listed none never
+ * offered "none" to anybody, and answering it that way would record nothing, so
+ * that case is told to name a path instead.
+ */
+export function formatAnswerNotRecordedComment(
+  reason: AnswerNotRecordedReason,
+  question: { listedRepositories: boolean },
+): string {
+  // What happens to this run. The same for every reason but one: a wordless
+  // answer to a question that named repositories ends the run's own asking, and
+  // it carries on WITHOUT them. That is the fact the person most needs and the
+  // one they can least see, because a thumbs up reads as approval.
+  const nowThisRun =
+    reason === "no_words" && question.listedRepositories
+      ? "Your answer reached the run, which is continuing without the repositories the question asked about."
+      : "Your answer reached the run, which is continuing.";
+
+  // The route that works, written from what the next run actually reads.
+  const namingWorks = question.listedRepositories
+    ? "To use one of them after all, write its full path in a comment here: the next run reads this ticket, comments and all, and picks it up."
+    : "Write the full path of the repository this work should use in a comment here, for example github:acme/app, and the next run reads this ticket and picks it up.";
+  // The route that does not exist, said plainly instead of implied. Only worth
+  // saying where the question offered repositories to decline.
+  const decliningHasNoShortcut =
+    'Nothing written on this ticket can record a refusal, so to leave them out, answer "none" the next time the question is asked.';
+  const next: Record<AnswerNotRecordedReason, string> = {
+    several_authors: `${ASKED_AGAIN_ON_A_LATER_RUN} ${ONE_PERSON_ANSWERING_IT} ${namingWorks}`,
+    evidence_gone: `${ASKED_AGAIN_ON_A_LATER_RUN} ${ONE_PERSON_ANSWERING_IT} ${namingWorks}`,
+    uncounted: `${ASKED_AGAIN_ON_A_LATER_RUN} ${ONE_PERSON_ANSWERING_IT} ${namingWorks}`,
+    unaddressed_refusal: `${ASKED_AGAIN_ON_A_LATER_RUN} ${decliningHasNoShortcut} ${namingWorks}`,
+    no_repository_named: question.listedRepositories
+      ? `${ASKED_AGAIN_ON_A_LATER_RUN} ${decliningHasNoShortcut} ${namingWorks}`
+      : `${ASKED_AGAIN_ON_A_LATER_RUN} ${namingWorks}`,
+    // NOT `namingWorks`, and that is the point of the reason. They already
+    // wrote the path; the next run would read the same words and resolve them
+    // to the same nothing, so sending them back to write it again is the dead
+    // end rule 6 is about. What is true instead is that the name may be wrong
+    // and that the deployment's own repository list is a thing a person can
+    // add to.
+    no_such_repository: `${ASKED_AGAIN_ON_A_LATER_RUN} ${checkTheNameOrAddIt}`,
+    // Nothing about declining here: the run has already carried on without
+    // them, which is what a refusal would have done.
+    no_words: `${ASKED_AGAIN_ON_A_LATER_RUN} ${namingWorks}`,
+  };
+  return [nowThisRun, ANSWER_NOT_RECORDED_WHY[reason], next[reason]].join("\n\n");
+}
+
+/** The half of the sentence that is true of every answer the record kept
+ *  nothing from, whatever the question asked for. */
+const ASKED_AGAIN_ON_A_LATER_RUN =
+  "It means the same question may be asked again on a later run.";
+
+/** The way out for a name this deployment does not hold, which is the one case
+ *  where writing the path out is not one. Both halves are routes that exist:
+ *  the repositories screen (`apps/dashboard/app/(cockpit)/repositories`) is
+ *  where a repository is added or enabled, and the question comes back on a
+ *  later run, which is where naming it records it. */
+const checkTheNameOrAddIt =
+  "Check the name: if that repository should be here, somebody with access to the repositories screen can add or enable it, and naming it the next time the question is asked records it then.";
+
+/** What to do differently when it is asked again, for the reasons that are
+ *  about HOW the answer arrived rather than what it said. */
+const ONE_PERSON_ANSWERING_IT =
+  "An answer written by one person in a single comment is the one that gets recorded.";
+
+/**
+ * The nudge for a ticket whose comments we could not read all the way back to
+ * the question.
+ *
+ * Silence is the one answer that must not be given here. The run is waiting, we
+ * cannot prove nobody has answered, and saying nothing teaches the person that
+ * the system is broken; nudging with the ordinary sentence would instead tell
+ * somebody who HAS answered that they have not. So it says what is true: the
+ * question is open, this ticket is hard for us to read, and the dashboard is
+ * the way through that does not depend on reading it.
+ */
+export function formatClarificationUnreadableNudgeComment(input: {
+  dashboardUrl: string;
+  aiColumnName: string;
+}): string {
+  return [
+    `The AI workflow is ${CLARIFICATION_NUDGE_MARKER} on this ticket.`,
+    "This ticket has more comments than the AI workflow can read back through, so an answer posted here may not be seen.",
+    `Answer in the dashboard (${input.dashboardUrl}), or reply in a comment here and move the ticket back to the "${input.aiColumnName}" column.`,
+  ].join("\n");
 }

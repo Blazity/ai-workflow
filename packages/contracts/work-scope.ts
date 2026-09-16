@@ -24,10 +24,37 @@ import {
 } from "./repository-catalog";
 import type { PrTriggerType } from "./trigger-events";
 
-const WORK_SCOPE_RATIONALE_MAX_LENGTH = 500;
+export const WORK_SCOPE_RATIONALE_MAX_LENGTH = 500;
 const WORK_SCOPE_MAP_TEXT_MAX_LENGTH = 1600;
 const TRIGGER_POLICY_LISTED_KEYS_MAX = 50;
-const WORK_SCOPE_EDIT_CHANGES_MAX = 16;
+export const WORK_SCOPE_EDIT_CHANGES_MAX = 16;
+/** One page of the trail, and the ceiling the store itself enforces on a page.
+ *  Published because both surfaces that read the record bound their own page
+ *  parameter before the store is asked. */
+export const WORK_SCOPE_TRAIL_PAGE_DEFAULT = 50;
+export const WORK_SCOPE_TRAIL_PAGE_MAX = 200;
+/**
+ * The ceiling on a version and on a trail id.
+ *
+ * `work_scopes.version` is an `integer` and `work_scope_trail.id` a `serial`, so
+ * both are int4: a larger number names nothing the store could ever hold, and
+ * sending it reaches the driver as a numeric overflow rather than as the
+ * conflict or the empty page it deserves. On HTTP that is a 500 where a 409
+ * belongs, and on MCP it burns an idempotency key on input alone, so both
+ * surfaces refuse it here instead.
+ */
+export const WORK_SCOPE_INT4_MAX = 2_147_483_647;
+/** A subject key is generated from a ticket key, a pull request path, or a
+ *  webhook endpoint and subject id (`engine/support/subject-key.ts`); the
+ *  longest of those is a nested GitLab path with a number on it. */
+export const WORK_SCOPE_SUBJECT_KEY_MAX_LENGTH = 400;
+/** One spelling of a subject key for every surface that takes one, so the read
+ *  and the write cannot accept different keys for the same record. */
+export const workScopeSubjectKeySchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(WORK_SCOPE_SUBJECT_KEY_MAX_LENGTH);
 const WORK_SCOPE_WRITE_PLAN_KEYS_MAX = 16;
 const WORK_SCOPE_WRITE_PLAN_TRAIL_MAX = 32;
 const WORK_SCOPE_ASKED_REPOSITORIES_MAX = 8;
@@ -166,18 +193,83 @@ export const workScopeAskedRepositorySchema = z
   .object({
     repositoryKey: repositoryKeySchema,
     askedBecause: workScopeAskReasonSchema,
+    /**
+     * Did the question's own words put THIS repository's key in front of the
+     * person?
+     *
+     * A person has decided about a repository only if they were shown it.
+     * Being asked a question that happened to be recorded against a key is not
+     * deciding about it: silence in answer to a question that never named
+     * something says nothing about that thing, exactly as silence about a
+     * named one is not selection. Without this fact a generic question ("which
+     * repository should this ticket use?") recorded against a key turns a
+     * person's "none" into a decision about a repository whose name was never
+     * on their screen, and a later run silences the question on that key and
+     * tells them they were asked and did not name it.
+     *
+     * ABSENT MEANS NO, and that is the safe direction: the cost of forgetting
+     * to set it is one question asked again, and the cost of assuming it is a
+     * decision nobody made. It is stamped once, where the question's text and
+     * the repositories it is recorded against are both in hand
+     * (`engine/steps/clarification-hook-steps.ts`), so no producer of an ask
+     * can forget it and no reader has to guess.
+     */
+    named: z.boolean().optional(),
   })
   .strict();
 export type WorkScopeAskedRepository = z.infer<typeof workScopeAskedRepositorySchema>;
 
+/**
+ * The repositories one question put to a person, which may be NONE of them.
+ *
+ * AN EMPTY LIST AND NO LIST AT ALL ARE DIFFERENT FACTS, AND THEY MUST NEVER
+ * COLLAPSE. An empty list says a question about repositories was asked and
+ * named none of them, which is what the plain "which repository should this
+ * ticket modify?" is. No list at all says the question was not about
+ * repositories, which is every other clarification the platform raises: an
+ * agent asking which API shape to build, a plan waiting for approval.
+ *
+ * The difference is load-bearing in three places. The answer path adjudicates
+ * the first and refuses to read the second, so that a repository key mentioned
+ * in passing while answering "Redis or Postgres?" never becomes somebody's
+ * recorded decision. The decision reader writes a repository the person NAMED
+ * whether or not the question listed it, which is what makes an empty list
+ * worth recording at all. And the selection scan downstream trusts a refusal
+ * only where the record was actually shown the answer.
+ *
+ * A person who writes a repository path has decided about that repository
+ * whether or not we put the name in front of them; `named` above governs the
+ * opposite direction, which is claiming somebody declined a repository they
+ * were never shown.
+ */
 export const workScopeAskedRepositoriesSchema = z
   .array(workScopeAskedRepositorySchema)
-  .min(1)
   .max(WORK_SCOPE_ASKED_REPOSITORIES_MAX)
   .refine(
     (repositories) => hasUniqueValues(repositories.map((repository) => repository.repositoryKey)),
     { message: "Asked repositories must be unique." },
   );
+
+/**
+ * What a question was FOR, when the purpose is a fact about the SUBJECT and not
+ * about any one repository.
+ *
+ * `askedBecause` on an asked repository answers a different question, namely
+ * why THAT key was in front of the person, and it can only exist where a key
+ * does. A question that asks somebody to narrow a set too large to list names
+ * none of them, so its purpose has nowhere else to live, and without it the
+ * only record of the question is a `question_asked` row that is
+ * indistinguishable from the plain "which repository should this ticket
+ * modify?".
+ *
+ * "narrowing": the run holds more repositories than it may work on, told the
+ * person how many there were, and asked which are essential. What comes back is
+ * the whole answer for the subject, because what the person did NOT name they
+ * were never shown.
+ */
+export const WORK_SCOPE_QUESTION_PURPOSES = ["narrowing"] as const;
+export const workScopeQuestionPurposeSchema = z.enum(WORK_SCOPE_QUESTION_PURPOSES);
+export type WorkScopeQuestionPurpose = z.infer<typeof workScopeQuestionPurposeSchema>;
 
 export const workScopeQuestionAnswerSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("none") }).strict(),
@@ -192,6 +284,13 @@ export const workScopeQuestionAnswerSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
   z.object({ kind: z.literal("unrecognised") }).strict(),
+  // An answer that arrived and was deliberately not read: more than one person's
+  // words reached the record as one answer, so it is nobody's decision to
+  // record. Distinct from "unrecognised", which is an answer we did read and
+  // could not understand: the words here may be perfectly clear, and what is
+  // missing is whose they are. Both leave the question unanswered, so it may be
+  // asked again; neither writes an entry.
+  z.object({ kind: z.literal("unattributed") }).strict(),
 ]);
 export type WorkScopeQuestionAnswer = z.infer<typeof workScopeQuestionAnswerSchema>;
 
@@ -217,6 +316,12 @@ export const workScopeTrailEventSchema = z.discriminatedUnion("kind", [
       kind: z.literal("question_asked"),
       clarificationId: z.string().min(1),
       repositories: workScopeAskedRepositoriesSchema,
+      /** Why the question was put, where that is a fact about the subject. It
+       *  is absent on every row written before this field existed and on every
+       *  question whose purpose is already readable from the repositories it
+       *  named, and absent means exactly that: nothing is known about the
+       *  question beyond the keys it carried. */
+      purpose: workScopeQuestionPurposeSchema.optional(),
     })
     .strict(),
   // A person's answer as the run read it. With `question_asked` under the
@@ -358,9 +463,9 @@ export type TriggerRepositoryPolicy = z.infer<typeof triggerRepositoryPolicySche
 /** A person's edit. One write, whole change set, one version. */
 export const workScopeEditRequestSchema = z
   .object({
-    subjectKey: z.string().min(1),
+    subjectKey: workScopeSubjectKeySchema,
     /** 0 when the subject has no record yet. */
-    expectedVersion: z.number().int().min(0),
+    expectedVersion: z.number().int().min(0).max(WORK_SCOPE_INT4_MAX),
     changes: z
       .array(
         z
@@ -380,6 +485,60 @@ export const workScopeEditRequestSchema = z
   })
   .strict();
 export type WorkScopeEditRequest = z.infer<typeof workScopeEditRequestSchema>;
+
+/**
+ * The record as a person reads it before deciding to change it: what is decided
+ * now, and how it came to be decided.
+ *
+ * `version` is 0 for a subject that carries no record yet, which is exactly the
+ * version an edit of it must expect, so a reader never has to tell "no record"
+ * apart from "an empty one" to be able to write.
+ */
+export interface WorkScopeRecordResponse {
+  subjectKey: string;
+  /**
+   * False for a subject kind that keeps no record, a schedule occurrence being
+   * the one that exists: every tick is a new key, so a record written for it
+   * would be read by nobody. The read answers this plainly instead of refusing,
+   * because asking whether a subject carries a record is a fair question and a
+   * read cannot cause a bad write; the edit is what refuses.
+   */
+  carriesRecord: boolean;
+  version: number;
+  entries: WorkScopeEntry[];
+  /** Newest first, so the decision a person is about to undo is the first line
+   *  they read. */
+  trail: WorkScopeTrailRow[];
+  /** The `trailBefore` of the following page, or null at the end of the trail. */
+  nextTrailBeforeId: number | null;
+}
+
+/**
+ * An applied edit: the record as it stands after it, and nothing else.
+ *
+ * No field says what went unchecked, because nothing about that varies per
+ * edit. The edit path lists no repositories, so EVERY selection it records is
+ * recorded without checking that a run can reach the repository, and a field
+ * repeating that on every reply is a constant wearing the clothes of news. The
+ * sentence belongs in the route and tool documentation, where a reader meets it
+ * once and keeps it.
+ */
+export interface WorkScopeEditResponse {
+  scope: WorkScope;
+}
+
+/**
+ * The 409 body a stale `expectedVersion` is refused with.
+ *
+ * `latestVersion` is what the editor saw at the moment of refusal, and is named
+ * the way every other conflicting write on this API names it. Under a race it
+ * can equal the version that was expected, so the answer it carries is always
+ * "read the record again", never "retry with this number".
+ */
+export interface WorkScopeEditConflict {
+  error: "version_conflict";
+  latestVersion: number;
+}
 
 const PULL_REQUEST_TRIGGER_TYPES: readonly WorkflowBlockType[] = [
   "trigger_pr_created",

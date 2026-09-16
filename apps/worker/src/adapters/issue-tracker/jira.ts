@@ -32,6 +32,46 @@ type JiraTransition = {
 
 const STATUS_DISCOVERY_TIMEOUT_MS = 5000;
 const COMMENT_PAGE_SIZE = 100;
+/** How many comment pages one ticket read may cost. Twenty pages is two
+ *  thousand comments, which no ticket a person answers a question on reaches;
+ *  the bound is here so a provider that keeps reporting a larger total than it
+ *  hands over cannot turn one read into an unbounded loop. Hitting it is not
+ *  "that is all of them": the read says so, and every reader of the answer
+ *  window treats a bounded read as ignorance rather than absence. */
+const MAX_COMMENT_PAGES = 20;
+
+/** One Jira comment as the rest of this codebase reads it. Shared by the
+ *  embedded envelope on the issue and the paged comment endpoint, so a comment
+ *  cannot arrive differently shaped depending on which read found it. */
+function toTicketComment(c: any): TicketComment {
+  return {
+    author: c.author?.displayName ?? "unknown",
+    accountId: c.author?.accountId,
+    // Carried, not interpreted: Jira already says whether an author is a
+    // person or an app on every comment, and dropping it here is what
+    // left the readers above unable to tell them apart.
+    accountType: c.author?.accountType,
+    body: extractAdfText(c.body),
+    createdAt: c.created,
+  };
+}
+
+/** The earliest instant any of these comments was written at, or undefined when
+ *  one of them carries a timestamp nobody can read: a boundary derived from a
+ *  date we could not parse would claim coverage we cannot prove. */
+function oldestCreatedAt(comments: TicketComment[]): string | undefined {
+  let oldest: string | undefined;
+  let oldestMs = Number.POSITIVE_INFINITY;
+  for (const comment of comments) {
+    const ms = Date.parse(comment.createdAt);
+    if (!Number.isFinite(ms)) return undefined;
+    if (ms < oldestMs) {
+      oldestMs = ms;
+      oldest = comment.createdAt;
+    }
+  }
+  return oldest;
+}
 
 export class JiraAdapter implements IssueTrackerAdapter {
   private tenantOrigin: string;
@@ -101,10 +141,22 @@ export class JiraAdapter implements IssueTrackerAdapter {
     }
   }
 
-  async fetchTicket(id: string): Promise<TicketContent> {
+  async fetchTicket(
+    id: string,
+    options?: { commentsSince?: string },
+  ): Promise<TicketContent> {
     const data = await this.request(
       `/rest/api/3/issue/${id}?fields=summary,description,comment,labels,status,project,attachment`,
     );
+    const { raw, complete, reachedLatest } = await this.readComments(
+      id,
+      data.fields.comment,
+      options?.commentsSince,
+    );
+    const comments = raw.map(toTicketComment);
+    // The oldest comment we can vouch for, and only when the read ran to the
+    // end of the list: from that instant onwards, nothing is missing.
+    const completeFrom = reachedLatest ? oldestCreatedAt(comments) : undefined;
     return {
       id: data.id,
       identifier: data.key,
@@ -112,14 +164,9 @@ export class JiraAdapter implements IssueTrackerAdapter {
       title: data.fields.summary ?? "",
       description: extractAdfText(data.fields.description),
       acceptanceCriteria: extractAcceptanceCriteria(data.fields.description),
-      comments: (data.fields.comment?.comments ?? []).map(
-        (c: any): TicketComment => ({
-          author: c.author?.displayName ?? "unknown",
-          accountId: c.author?.accountId,
-          body: extractAdfText(c.body),
-          createdAt: c.created,
-        }),
-      ),
+      comments,
+      commentsComplete: complete,
+      ...(completeFrom === undefined ? {} : { commentsCompleteFrom: completeFrom }),
       labels: data.fields.labels ?? [],
       trackerStatus: data.fields.status?.name ?? "",
       trackerStatusId:
@@ -136,6 +183,119 @@ export class JiraAdapter implements IssueTrackerAdapter {
         };
       }),
     };
+  }
+
+  /**
+   * The comments this read is allowed to claim, and what can be proven about
+   * them.
+   *
+   * WITHOUT A WINDOW, and that is every ordinary ticket read, this is one
+   * request and no more: the comments the issue response already carried. The
+   * issue read embeds a PAGE of comments rather than the comments, so that page
+   * is only the whole list when the provider's own count says so, and when it
+   * does not the list travels as unproven rather than being chased. Chasing it
+   * here would put up to `MAX_COMMENT_PAGES` extra calls behind every ticket
+   * read in the deployment, on every poll tick, for a window almost none of
+   * them wants. A provider rate limit reached that way takes down every run.
+   *
+   * WITH A WINDOW, which is the clarification path asking "hold every comment
+   * written since this instant", the pages are read, and only as far back as
+   * the window reaches. Jira returns comments oldest first, and the request
+   * below says so explicitly rather than hoping: the walk starts at the newest
+   * end (`total` minus one page) and steps BACKWARDS, because the window opens
+   * at a question asked recently. It stops as soon as a page reaches back past
+   * the instant asked about, so a ticket with thousands of comments normally
+   * costs one extra request rather than twenty.
+   *
+   * `complete` is the fact that has to travel with the list. False means the
+   * list may be missing comments, whether because the walk stopped once the
+   * window was covered, because the bound was hit, or because the provider said
+   * there were more and then handed over a page with room on it. It is never a
+   * claim that a comment is absent.
+   *
+   * `reachedLatest` is the narrower fact, and the useful one: the read holds
+   * the newest end of the list, so whatever is missing is OLDER than what came
+   * back. That is what lets a reader decide a bounded read still holds every
+   * comment written after some moment. It is false when the provider claimed
+   * comments it then did not hand over, because that says nothing about which
+   * end the missing ones are on.
+   */
+  private async readComments(
+    id: string,
+    envelope: any,
+    since?: string,
+  ): Promise<{ raw: any[]; complete: boolean; reachedLatest: boolean }> {
+    const embedded: any[] = Array.isArray(envelope?.comments) ? envelope.comments : [];
+    const total = Number(envelope?.total);
+    const embeddedIsAll = Number.isFinite(total) && embedded.length >= total;
+    // The common ticket: the issue read carried every comment it has, and said
+    // so. No second request, and no doubt about the list.
+    if (embeddedIsAll) return { raw: embedded, complete: true, reachedLatest: true };
+    // No window asked for, so nothing is chased and nothing is claimed.
+    if (since === undefined) return { raw: embedded, complete: false, reachedLatest: false };
+
+    const sinceMs = Date.parse(since);
+    // A window nobody can read is not a window. Falling back to the embedded
+    // page keeps the request count where it was and leaves the claim unmade.
+    if (!Number.isFinite(sinceMs)) {
+      return { raw: embedded, complete: false, reachedLatest: false };
+    }
+    // Without a count there is no newest end to start from, so the walk runs
+    // forward from the beginning and a short page is what proves the list
+    // whole. That is the small ticket, which is the only kind a provider that
+    // reports no total is likely to be handing over.
+    let startAt = Number.isFinite(total) && total > COMMENT_PAGE_SIZE ? total - COMMENT_PAGE_SIZE : 0;
+    const backwards = startAt > 0;
+    const pages: any[][] = [];
+    let complete = false;
+    // Nothing is proven yet in either direction. The forward walk earns it by
+    // reaching the end of the list; the backward walk by starting at it.
+    let reachedLatest = false;
+    for (let page = 0; page < MAX_COMMENT_PAGES; page += 1) {
+      const data = await this.request(
+        `/rest/api/3/issue/${encodeURIComponent(id)}/comment?startAt=${startAt}&maxResults=${COMMENT_PAGE_SIZE}&orderBy=created`,
+      );
+      const batch = Array.isArray(data?.comments) ? data.comments : [];
+      const reported = Number(data?.total);
+      if (backwards) {
+        pages.unshift(batch);
+        if (page === 0) {
+          // Did this page reach the end of the list? A ticket that grew between
+          // the issue read and this one has its newest comments past where we
+          // started, and nothing here says how many.
+          reachedLatest = Number.isFinite(reported)
+            ? startAt + batch.length >= reported
+            : batch.length < COMMENT_PAGE_SIZE;
+        }
+        if (startAt === 0) {
+          complete = true;
+          break;
+        }
+        // Covered: this page reaches back past the instant asked about, so
+        // every comment after it is already in hand.
+        const oldest = oldestCreatedAt(batch.map(toTicketComment));
+        if (oldest !== undefined && Date.parse(oldest) <= sinceMs) break;
+        startAt = Math.max(0, startAt - COMMENT_PAGE_SIZE);
+        continue;
+      }
+      pages.push(batch);
+      startAt += batch.length;
+      // A page with room to spare is the end of the list, which is how a count
+      // nobody reported can still be proven whole. When there is a count, it
+      // decides.
+      const shortPage = batch.length < COMMENT_PAGE_SIZE;
+      const moreToRead = Number.isFinite(reported) ? startAt < reported : !shortPage;
+      if (!moreToRead) {
+        complete = true;
+        reachedLatest = true;
+        break;
+      }
+      // It says there are more and hands over a page with room on it, so it has
+      // contradicted itself: nothing here proves what is on the rest, or which
+      // end of the list they are on.
+      if (shortPage) break;
+    }
+    return { raw: pages.flat(), complete, reachedLatest };
   }
 
   async moveTicket(id: string, target: IssueTrackerMoveTarget): Promise<void> {

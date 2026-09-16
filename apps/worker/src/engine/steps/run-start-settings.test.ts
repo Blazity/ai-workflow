@@ -309,6 +309,8 @@ describe("the frozen work scope", () => {
         ],
       },
       selectionAnswered: false,
+      answeredRepositoryKeys: [],
+      narrowingAnswered: false,
     });
   });
 
@@ -321,11 +323,15 @@ describe("the frozen work scope", () => {
       subjectKey: "ticket:jira:AWT-1",
       scope: null,
       selectionAnswered: false,
+      answeredRepositoryKeys: [],
+      narrowingAnswered: false,
     });
     expect(runStartWorkScope(result)).toEqual({
       subjectKey: "ticket:jira:AWT-1",
       scope: null,
       selectionAnswered: false,
+      answeredRepositoryKeys: [],
+      narrowingAnswered: false,
     });
   });
 
@@ -340,7 +346,12 @@ describe("the frozen work scope", () => {
           {
             kind: "question_asked",
             clarificationId: "clarification-1",
-            repositories: [{ repositoryKey: "github:acme/api", askedBecause: "selection" }],
+            // Named, because the question this stands for put the key in front
+            // of a person: an ask whose question named nothing is not a
+            // decision about the repository and never reaches this set.
+            repositories: [
+              { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+            ],
           },
         ],
       },
@@ -371,6 +382,66 @@ describe("the frozen work scope", () => {
       subjectKey: "ticket:jira:AWT-1",
       scope: null,
       selectionAnswered: true,
+      // And beside the flag, WHICH repository that answer was about. The flag
+      // alone cannot tell this repository's question from another's, so a run
+      // holding only the flag would stop asking about every repository on this
+      // subject the moment one of them was answered (A47).
+      answeredRepositoryKeys: ["github:acme/api"],
+      // And the narrowing question is a different question, untouched by this
+      // answer. One fact, one read, one thing silenced.
+      narrowingAnswered: false,
+    });
+  });
+
+  it("says a narrowing question was already answered, without silencing anything else", async () => {
+    // The question that asks somebody to cut a set down names none of the
+    // repositories, so its ask is empty and nothing in the repositories it
+    // carries can say which question it was. The purpose on the event is the
+    // only record, and it must not reach `selectionAnswered`: that flag is
+    // subject-wide, and folding this into it would stop the run asking about a
+    // repository nobody ever showed this person.
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [
+          {
+            kind: "question_asked",
+            clarificationId: "clarification-narrow",
+            repositories: [],
+            purpose: "narrowing",
+          },
+        ],
+      },
+    });
+    await applyAnswerWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId: "clarification-narrow",
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [
+          {
+            kind: "question_answered",
+            clarificationId: "clarification-narrow",
+            answer: { kind: "repositories", repositoryKeys: ["github:acme/api"] },
+            answeredBy: { kind: "person", actorId: "user-1", actorLabel: "Ada" },
+          },
+        ],
+      },
+    });
+
+    const result = await loadRunStartSettingsStep({ workScopeSubjectKey: subjectKey });
+
+    expect(result.workScope).toEqual({
+      subjectKey: "ticket:jira:AWT-1",
+      scope: null,
+      selectionAnswered: false,
+      answeredRepositoryKeys: [],
+      narrowingAnswered: true,
     });
   });
 

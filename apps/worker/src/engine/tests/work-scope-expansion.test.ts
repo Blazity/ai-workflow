@@ -969,7 +969,12 @@ describe("what this run's own question settled decides the rounds after it", () 
           runId: "run-1",
         },
       ],
-      workScope: { subjectKey: SUBJECT, scope: null, selectionAnswered: false },
+      workScope: {
+        subjectKey: SUBJECT,
+        scope: null,
+        selectionAnswered: false,
+        answeredRepositoryKeys: [],
+      },
     });
     const answered = scopeOf(entry("github:acme/api", "excluded"));
     const result = await applyHumanRepositoryExpansion(ctx, {
@@ -977,9 +982,15 @@ describe("what this run's own question settled decides the rounds after it", () 
       // nothing new to attach because the person declined it.
       resolve: async () => ({
         decision: { kind: "exhausted" },
-        // What the step read back: the record as the answer left it, and the
-        // flag from the same read saying a person has now chosen.
-        workScope: { repositories: [], scope: answered, selectionAnswered: true },
+        // What the step read back: the record as the answer left it, the flag
+        // from the same read saying a person has now chosen, and which
+        // repository that answer was actually about.
+        workScope: {
+          repositories: [],
+          scope: answered,
+          selectionAnswered: true,
+          answeredRepositoryKeys: ["github:acme/api"],
+        },
       }),
       attach: vi.fn(),
       fetchContexts: vi.fn(),
@@ -996,6 +1007,11 @@ describe("what this run's own question settled decides the rounds after it", () 
     // this subject. Left frozen, the run asks the selection question again
     // after its own answer settled it.
     expect(ctx.workScope?.selectionAnswered).toBe(true);
+    // And WHICH repository that answer was about, for the same reason and from
+    // the same read: the round after this one must tell rather than ask about
+    // github:acme/api, and must still ask about a repository nobody has been
+    // shown (A47).
+    expect(ctx.workScope?.answeredRepositoryKeys).toEqual(["github:acme/api"]);
     // And the policy does NOT move, because a policy that changed mid-run would
     // give one run two different filters (A17, A10).
     expect(ctx.workScope?.subjectKey).toBe(SUBJECT);
@@ -1059,7 +1075,12 @@ describe("what this run's own question settled decides the rounds after it", () 
   it("leaves the run on its frozen record when the step returned none", async () => {
     // The shape a run suspended before this shipped replays: repositories and
     // no record beside them. Moving nothing is what that run did.
-    const frozen = { subjectKey: SUBJECT, scope: scopeOf(), selectionAnswered: false };
+    const frozen = {
+      subjectKey: SUBJECT,
+      scope: scopeOf(),
+      selectionAnswered: false,
+      answeredRepositoryKeys: [],
+    };
     const ctx = makeCtx({
       sandboxId: "sbx-research",
       workspaceManifest: v2Manifest,
@@ -1162,6 +1183,31 @@ describe("nothing the expansion decides is written in workflow scope", () => {
       workflowLines.some((line) => line.includes("applyRunWorkScopePlans(")),
       "the workflow body applies a plan itself, which a replay would apply twice",
     ).toBe(false);
+  });
+});
+
+/**
+ * The resume reads the record AND what a question on it already settled.
+ *
+ * A source tripwire because the read is a deferred import inside a step body,
+ * and the behaviour it feeds is asserted above: what a test cannot reach is
+ * whether the step still asks the store for the second fact at all. Dropping it
+ * would leave a woken run holding the empty set it froze at start, so the round
+ * after its own answer would put the same repository to the same person twice
+ * in one run (A47).
+ */
+describe("a resumed run re-reads what its own question settled", () => {
+  it("reads the answered repositories beside the record, not only the flag", () => {
+    expect(
+      phaseSource.includes("readConnectedWorkScopeAnsweredRepositories(resume.subjectKey)"),
+      "the resume no longer re-reads which repositories this subject has answered about",
+    ).toBe(true);
+    expect(
+      phaseSource.includes(
+        "return { repositories, scope, selectionAnswered, answeredRepositoryKeys };",
+      ),
+      "the resume reads the answered repositories and does not hand them back",
+    ).toBe(true);
   });
 });
 

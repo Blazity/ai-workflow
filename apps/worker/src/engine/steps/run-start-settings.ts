@@ -49,6 +49,36 @@ export interface RunStartWorkScope {
   subjectKey: string;
   scope: WorkScope | null;
   selectionAnswered: boolean;
+  /** The repositories a question on this subject named and somebody answered
+   *  for, which is what "ask about a given repository once, then tell" is
+   *  decided on. It is a second fact rather than a narrowing of
+   *  `selectionAnswered`, because that flag is subject-wide: an answer about
+   *  one repository must not silence the first question about another.
+   *
+   *  ABSENT MEANS NOTHING WAS ASKED YET, SO ASK. A run suspended across the
+   *  deploy that added this field replays a result written without it, and the
+   *  only safe reading of a missing set is the empty one: a person is asked
+   *  once more, rather than told about a decision this run cannot see. */
+  answeredRepositoryKeys?: string[];
+  /** What the record made of the answer this run woke on: false only when it
+   *  declined to attribute the words, which today means more than one person
+   *  wrote them. Set by `readWorkScopeAfterAnswerStep`, so it is absent on every
+   *  run that has not been answered yet and on one replaying a result written
+   *  before the field existed.
+   *
+   *  ABSENT MEANS THE VERDICT IS UNKNOWN, NOT THAT THERE WAS NO REFUSAL. The one
+   *  reader (`blocks/prepare-workspace/execute.ts`) says what it does with that,
+   *  and it is not the same as either value. */
+  answerAttributed?: boolean;
+  /** Has a person already answered the narrowing question on this subject, the
+   *  one that tells them how many repositories are in scope and asks which are
+   *  essential? Its own fact rather than part of `selectionAnswered`, which is
+   *  subject-wide and silences a different question.
+   *
+   *  ABSENT MEANS NOBODY HAS, SO ASK. A run replaying a result written before
+   *  this field existed reads the same as a subject nobody narrowed, which is
+   *  exactly the behaviour that run already had. */
+  narrowingAnswered?: boolean;
 }
 
 /**
@@ -101,13 +131,23 @@ export async function loadRunStartSettingsStep(input: {
   } = await import("../../db/repositories/repository-catalog.js");
   const {
     readConnectedWorkScope,
+    readConnectedWorkScopeAnsweredRepositories,
+    readConnectedWorkScopeNarrowingAnswered,
     readConnectedWorkScopeSelectionAnswered,
   } = await import("../../db/repositories/work-scope.js");
   const { settingsEnvironment } = await import("../../infra/settings-environment.js");
   const { logger } = await import("../../infra/logger.js");
 
   const subjectKey = input.workScopeSubjectKey;
-  const [rows, stateRow, keys, scope, selectionAnswered] = await Promise.all([
+  const [
+    rows,
+    stateRow,
+    keys,
+    scope,
+    selectionAnswered,
+    answeredRepositoryKeys,
+    narrowingAnswered,
+  ] = await Promise.all([
     readAllConnectedSettings(),
     getConnectedRepositoryCatalogStateRow(),
     listConnectedRepositoryCatalogKeys(),
@@ -117,6 +157,12 @@ export async function loadRunStartSettingsStep(input: {
     subjectKey === null
       ? Promise.resolve(false)
       : readConnectedWorkScopeSelectionAnswered(subjectKey),
+    subjectKey === null
+      ? Promise.resolve<string[]>([])
+      : readConnectedWorkScopeAnsweredRepositories(subjectKey),
+    subjectKey === null
+      ? Promise.resolve(false)
+      : readConnectedWorkScopeNarrowingAnswered(subjectKey),
   ]);
   const { snapshot } = resolveSettingsSnapshot(
     new Map(rows.map((row) => [row.key, row.value])),
@@ -144,7 +190,17 @@ export async function loadRunStartSettingsStep(input: {
     version: 1,
     settings: snapshot,
     repositories,
-    ...(subjectKey === null ? {} : { workScope: { subjectKey, scope, selectionAnswered } }),
+    ...(subjectKey === null
+      ? {}
+      : {
+          workScope: {
+            subjectKey,
+            scope,
+            selectionAnswered,
+            answeredRepositoryKeys,
+            narrowingAnswered,
+          },
+        }),
   };
 }
 // A pure read with no write to undo, so a transient database error is worth

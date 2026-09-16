@@ -17,6 +17,7 @@ import {
 import {
   consumeWorkScopeAsk,
   createRunWorkScopeRecorder,
+  exclusionRecoveryNotes,
   workScopeRepositoryKey,
   type RunWorkScopeRecorder,
 } from "./work-scope/context.js";
@@ -76,7 +77,8 @@ import { isRunControlError } from "./helpers/run-control-error.js";
 import { BLOCK_EXECUTORS } from "./blocks/executors.generated.js";
 import { createWorkflowExecutionErrorState, isTriggerBlockType, RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import { defaultBuiltinHarnessProfile } from "@shared/harness";
-import type { BlockOutput, BlockRunState, RunPullRequest, RunAnalysisReport, TransformConfiguration, WorkflowBlockType, WorkflowDefinitionNode, WorkflowDefinitionV2, WorkflowExecutionErrorState, WorkflowParamValue, HarnessRunManifestRecord, WorkScopeActor, WorkScopeAskedRepository, WorkScopeWritePlan } from "@shared/contracts";
+import type { BlockOutput, BlockRunState, RunPullRequest, RunAnalysisLeftOutRepository, RunAnalysisReport, TransformConfiguration, WorkflowBlockType, WorkflowDefinitionNode, WorkflowDefinitionV2, WorkflowExecutionErrorState, WorkflowParamValue, HarnessRunManifestRecord, WorkScopeActor, WorkScopeAskedRepository } from "@shared/contracts";
+import type { RunWorkScopeWrite } from "./work-scope/apply-plans.js";
 import type { RepositoryCatalogEntry } from "./repository-discovery/catalog.js";
 import type { CostProvider, CostProviderKind, TokenPrice } from "@shared/costs";
 import type { ResolvedHarnessRuntime } from "../sandbox/harness-runtime.js";
@@ -1301,6 +1303,7 @@ async function agentWorkflowBody(
           markRunResumedStep,
           prepareClarificationHookStep,
           publishClarificationHookStep,
+          readWorkScopeAfterAnswerStep,
           recordClarificationHookSnapshotStep,
           supersedeClarificationHookStep,
           verifyWorkspaceManifestStep,
@@ -1399,6 +1402,51 @@ async function agentWorkflowBody(
               );
               return false;
             });
+            /**
+             * The one channel the sentence about taking an exclusion back
+             * travels on, and the line that decides it.
+             *
+             * The line is NOT "does a person read this and an agent not". An
+             * agent reads the ticket, our own past comments included, so no
+             * comment is private. The line is between text this system PLACES
+             * in the agent's instruction channel and text the agent READS as
+             * ticket history. The `questions` array is the first kind: it is
+             * rendered into the research, implementation and review prompts as
+             * the question the system asked, and written to
+             * `ai-workflow/memory/<TICKET>.md` under a heading reading "Human
+             * decisions (from the dashboard)" and "Do not edit or remove", so a
+             * sentence put there arrives later as an instruction signed by a
+             * person. A ticket comment is the second kind: it arrives in the
+             * research prompt's "## Comments" as something somebody said on the
+             * ticket, which is what it is.
+             *
+             * Three things put the sentence on this side of that line, and each
+             * alone would be enough. One: the failure path already posts it as a
+             * ticket comment (`repository-discovery/protocol.ts` composes it
+             * into the reason, and every failure reason is posted by
+             * `steps/ticket-analysis.ts`), so withholding it here protects no
+             * boundary and only guarantees that the person who meets the bare
+             * question is told less than the person whose run died. Two: the
+             * memory file is fed from the clarification rounds and never from
+             * comment bodies, so keeping the sentence out of `questions` keeps
+             * it out of both the prompts and that file, which is the whole of
+             * the protection. Three: the sentence is not the lever. An agent
+             * holding the record's edit tool can change the record whether or
+             * not a sentence mentions it, and one without the tool cannot act
+             * on the sentence however plainly it is written; the real exposure
+             * is the deferred per-surface marker that would tell a person's
+             * edit from an agent's, and one withheld sentence buys nothing
+             * against that while costing a person the one thing they need.
+             *
+             * Bound to the ask, not to the run: `workScopeAsk` is present
+             * exactly when this question is about repositories, so an ordinary
+             * question later in the same run does not inherit a sentence about
+             * repositories nobody asked it about.
+             */
+            const repositoryRecoveryNotes =
+              workScopeAsk && ctx.workScopeRecoveryNotes && ctx.workScopeRecoveryNotes.length > 0
+                ? ctx.workScopeRecoveryNotes
+                : undefined;
             const questionsCommentUrl = await postClarificationQuestionsCommentStep(
               ticket.identifier,
               {
@@ -1407,6 +1455,7 @@ async function agentWorkflowBody(
                 dashboardUrl: ticketRunUrl(env.DASHBOARD_ORIGIN, ticket.identifier, workflowRunId),
                 expiresAtIso: clarification.expiresAt,
                 aiColumnName: runSettings.COLUMN_AI,
+                ...(repositoryRecoveryNotes ? { repositoryRecoveryNotes } : {}),
               },
               transitionOwner,
             );
@@ -1509,6 +1558,31 @@ async function agentWorkflowBody(
                 ctx.repositories,
               );
             }
+          }
+
+          // THE RECORD AS THE ANSWER LEFT IT, before the block that asked runs
+          // again. That block is re-executed from the top on this resume and
+          // decides against `ctx.workScope`: left as the run froze it at start,
+          // it still says nobody has been asked, so discovery reaches the same
+          // line, asks the identical question, and the person answers into a
+          // loop that ends only when the run budget kills it. The expansion path
+          // re-reads for the same reason inside its own resume step
+          // (`engine/steps/phase.ts`, `resumeFromWorkScope`); this is that read
+          // on the one door every other repository question goes through.
+          //
+          // Only a question that was ABOUT repositories, because only such a
+          // question can have changed the record, and only on a run that carries
+          // one: a run that froze no record has nothing to re-read.
+          if (workScopeAsk && ctx.workScope) {
+            // The clarification id as well, because the block below needs one
+            // fact the entries cannot carry: whether the record DECLINED this
+            // answer or simply found nothing in it. Those look identical in the
+            // record and mean opposite things.
+            const resumed = await readWorkScopeAfterAnswerStep(
+              workScopeAsk.subjectKey,
+              clarification.id,
+            );
+            ctx.workScope = { ...ctx.workScope, ...resumed };
           }
 
           const round = {
@@ -1705,6 +1779,39 @@ async function agentWorkflowBody(
         materializedClarificationSignatures.set(ctx.sandboxId, signature);
       };
       let repositorySelectionObserved = false;
+      /**
+       * What this run was asked to work on and did not, from every decision
+       * that could refuse: the pre-sandbox selection, repository discovery and
+       * the expansion protocol.
+       *
+       * Seeded from the context rather than empty, because the pre-sandbox
+       * decides first and on a run that does NOT halt its refusals reached the
+       * agent's prompt and stopped there. That is the silent case: a ticket
+       * covering two repositories, one of them excluded weeks ago, a green run
+       * and a pull request covering half the work with nothing on the ticket
+       * saying why. The other two paths add to this list rather than replacing
+       * it, because a run can reach all three.
+       */
+      let leftOutRepositories: RunAnalysisLeftOutRepository[] = [
+        ...(ctx.workScopeLeftOut ?? []),
+      ];
+      /**
+       * What a person can do about the repositories above, carried the same way
+       * and for the same reason.
+       *
+       * The analysis comment is the ONLY surface that reaches a person on a run
+       * that finished: the pre-sandbox halt text reaches nobody when the run
+       * does not halt, and the prompt additions reach the agent. So a person who
+       * excluded a repository in March, and reads a success comment in May
+       * listing it as left out, learns here and nowhere else that the exclusion
+       * is theirs to take back.
+       *
+       * Said once for the whole run, whichever decision said it first. The
+       * pre-sandbox seeds it here; discovery and expansion fill it only if it is
+       * still empty, because the sentence is about the person's own exclusion
+       * and repeating it under each refusal drowns the sentences naming them.
+       */
+      let repositoryRecoveryNotes: string[] = [...(ctx.workScopeRecoveryNotes ?? [])];
       // Who the record names as the author of every entry this run writes. A run
       // without a deployed definition behind it cannot be named that way, and an
       // entry attributed to nobody is worse than no entry: the origin ranking is
@@ -1765,9 +1872,7 @@ async function agentWorkflowBody(
        * the same path, which is the `writeAndStartPhase` of the research pass
        * that follows.
        */
-      let pendingWorkScopeWrite:
-        | { subjectKey: string; runId: string; plans: WorkScopeWritePlan[] }
-        | null = null;
+      let pendingWorkScopeWrite: RunWorkScopeWrite | null = null;
       const takePendingWorkScopeWrite = () => {
         const write = pendingWorkScopeWrite;
         pendingWorkScopeWrite = null;
@@ -1882,8 +1987,83 @@ async function agentWorkflowBody(
           parsed.result.value,
           offered,
           discovery.mandatoryRepositories,
+          // What this subject already settled. The offered catalog above cannot
+          // carry it: the record filtered a repository somebody excluded out of
+          // that list exactly as it leaves out one nobody enabled, so the
+          // validator would have to ask about a decision that is already made.
+          record && ctx.workScope
+            ? {
+                // A run whose context was frozen before this fact existed has
+                // no set, and the empty one is the only honest reading of that:
+                // nothing is known to have been asked, so a person is asked
+                // once more rather than told about a decision this run cannot
+                // see.
+                answeredRepositoryKeys: ctx.workScope.answeredRepositoryKeys ?? [],
+                recorded: ctx.workScope.scope?.entries ?? [],
+              }
+            : undefined,
         );
         if (decision.kind === "selected") {
+          // What the run left out without asking, in the same place the
+          // pre-sandbox puts the repositories it kept back: unsaid, a person
+          // reads a ticket that names a repository and a run that never opened
+          // it, and concludes we simply missed it.
+          if (decision.leftOut.length > 0) {
+            const targets = ["research", "implementation", "review"] as const;
+            const leftOut = {
+              target: [...targets],
+              title: "Repositories left out",
+              content: decision.leftOut.map((left) => `- ${left.reason}`).join("\n"),
+            };
+            for (const target of targets) ctx.preSandboxAdditions[target].push(leftOut);
+            // And to the person, in the one comment a finished run posts. The
+            // prompt above reaches the agent and nobody else, so without this
+            // the person who excluded the repository in March reads an ordinary
+            // success comment in May and finds a pull request short one
+            // repository with nothing anywhere saying why.
+            leftOutRepositories = leftOutRepositories.concat(
+              decision.leftOut.filter(
+                (left) =>
+                  !leftOutRepositories.some(
+                    (seen) => seen.repositoryKey === left.repositoryKey,
+                  ),
+              ),
+            );
+            // The recovery sentence rides with them, composed from the same
+            // helper the pre-sandbox uses so a person reads one wording on
+            // both paths. Only for the keys a PERSON excluded: the validator
+            // leaves repositories out for several reasons, and the only one
+            // anybody can take back is their own.
+            const excludedKeys = new Set(
+              (ctx.workScope?.scope?.entries ?? [])
+                .filter((entry_) => entry_.state === "excluded")
+                .map((entry_) => entry_.repositoryKey),
+            );
+            if (repositoryRecoveryNotes.length === 0) {
+              repositoryRecoveryNotes = exclusionRecoveryNotes(
+                decision.leftOut
+                  .map((left) => left.repositoryKey)
+                  .filter((key) => excludedKeys.has(key)),
+                {
+                  enabledKeys: discovery.catalog.map(workScopeRepositoryKey),
+                  unusableKeys: discovery.catalog
+                    .filter((repository) => !repository.usable)
+                    .map(workScopeRepositoryKey),
+                },
+              );
+            }
+          }
+          // And on the RUN, because the prompt reaches the agent and nobody
+          // else. The person who excluded the repository reads a success
+          // comment on a run that opened less than the ticket names, and
+          // without this there is nothing on the run that says why, and no
+          // query that could count how often it happens.
+          if (decision.droppedRepositoryKeys.length > 0) {
+            await emitRepositoryWorkflowObservation(execution?.observations, {
+              event: "work_scope_drop",
+              repositoryKeys: decision.droppedRepositoryKeys,
+            });
+          }
           await emitRepositoryWorkflowObservation(execution?.observations, {
             event: "selection",
             source: "harness",
@@ -1918,7 +2098,10 @@ async function agentWorkflowBody(
           return repositoryQuestions.raise(questions, ask);
         }
         return executionError(decision.error, {
-          category: "provider",
+          // A run left with nothing because somebody excluded what the model
+          // proposed is not a provider fault, and calling it one sends an
+          // operator to read platform logs instead of this ticket's own scope.
+          category: decision.blame === "work_scope" ? "configuration" : "provider",
           phase,
         });
       };
@@ -2026,6 +2209,30 @@ async function agentWorkflowBody(
                   : undefined,
               );
               if (!expansionRefusals.includes(sentence)) expansionRefusals.push(sentence);
+              // The same refusal, on its way to a person. The addition above
+              // reaches the model and the model alone, and until this line the
+              // sentence stopped there: a run that refused half of what it was
+              // asked for finished green with nothing anywhere a person reads.
+              if (
+                !leftOutRepositories.some(
+                  (left) => left.repositoryKey === refusal.repositoryKey,
+                )
+              ) {
+                // Concatenated rather than pushed: on a run that discovered
+                // first, this list IS the discovery decision's own array, and
+                // appending to it would edit a decision already taken.
+                leftOutRepositories = leftOutRepositories.concat({
+                  repositoryKey: refusal.repositoryKey,
+                  reason: sentence,
+                });
+              }
+            }
+            // Composed by the decision that refused, not here: the recorder
+            // already knows which of these a person excluded and whether the
+            // catalog can serve it. Kept only when the discovery pass said
+            // nothing, so the sentence is said once for the run.
+            if (repositoryRecoveryNotes.length === 0) {
+              repositoryRecoveryNotes = [...record.recoveryNotes];
             }
           }
         }
@@ -2746,6 +2953,8 @@ async function agentWorkflowBody(
                 researchRevision: ctx.analysisRevision,
                 workspaceManifest: ctx.workspaceManifest,
                 selectedRepositories: ctx.selectedRepositories,
+                leftOutRepositories,
+                repositoryRecoveryNotes,
                 repositoryExpansion: ctx.repositoryExpansion,
                 researchResult: research,
                 usage: researchTotals,
@@ -2884,6 +3093,8 @@ async function agentWorkflowBody(
               researchRevision: ctx.analysisRevision,
               workspaceManifest: researchWorkspaceManifest,
               selectedRepositories: ctx.selectedRepositories,
+              leftOutRepositories,
+              repositoryRecoveryNotes,
               repositoryExpansion: ctx.repositoryExpansion,
               researchResult: research,
               usage: researchTotals,

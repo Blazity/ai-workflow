@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   EXPANSION_CLARIFICATION_MARKER,
+  REFUSAL_ANSWERS,
   EXPANSION_LIMIT_CLARIFICATION_PREFIX,
   REPOSITORY_DISCOVERY_SCHEMA,
   assembleRepositoryDiscoveryPrompt,
   decideRepositoryExpansion,
   isExpansionLimitClarification,
+  isRefusalAnswer,
   isRepositoryExpansionClarification,
+  refusalNamesRepositories,
   parseRepositoryExpansionAnswer,
   validateHumanRepositoryExpansion,
   validateRepositoryExpansionRequests,
@@ -802,6 +805,40 @@ describe("validateHumanRepositoryExpansion", () => {
         attached: [],
       }),
     ).toEqual({ kind: "exhausted" });
+  });
+
+  it("reads a thumbs up from the dashboard as nothing left to attach, and the same thumbs up from the ticket, where it carries its author's name, as an answer to ask about again", () => {
+    // ONE AUTHOR PREFIX IS THE WHOLE DIFFERENCE, and both halves of it are
+    // behaviour somebody depends on.
+    //
+    // A ticket comment reaches this reader composed as "<author>: <body>", even
+    // when one person wrote one comment
+    // (`services/clarifications/resume-from-comments.ts`), so a reaction left on
+    // the ticket still carries a word. It is not a refusal, the expansion is not
+    // ended on it, and the person is asked again: nothing is dropped in the name
+    // of somebody who pressed a button.
+    //
+    // The same reaction typed into the dashboard, or sent through MCP, carries
+    // no author and no word at all. `isRefusalAnswer` calls that a refusal
+    // (`engine/repository-discovery/runner.ts`), the run stops asking and
+    // carries on WITHOUT the repositories the question named. That is the run
+    // side of what the answer channel tells the person, and until this test
+    // nothing asserted either half.
+    expect(
+      validateHumanRepositoryExpansion({
+        answer: "\u{1F44D}",
+        catalog: humanCatalog,
+        attached: [],
+      }),
+    ).toEqual({ kind: "exhausted" });
+
+    expect(
+      validateHumanRepositoryExpansion({
+        answer: "Filip Maszota: \u{1F44D}",
+        catalog: humanCatalog,
+        attached: [],
+      }).kind,
+    ).toBe("unrecognised_answer");
   });
 
   it.each(["no, use github:acme/app", "Filip Maszota: no, use github:acme/app"])(
@@ -1915,5 +1952,89 @@ describe("decideRepositoryExpansion", () => {
     // The rounds stopped moving when expansion closed; only the absorbed
     // request counted after that, and the next one ended the run.
     expect(current.closedRequests).toBe(1);
+  });
+});
+
+describe("how far a refusal reaches", () => {
+  // The partition, written out so it can be read rather than worked out. Each
+  // phrase on the left may permanently exclude every repository a question
+  // named, in the name of whoever wrote it; each phrase on the right is what
+  // people write to each other on a ticket about anything at all, so it decides
+  // nothing and the question comes again.
+  const NAMES_REPOSITORIES = [
+    "none",
+    "no more repositories",
+    "no additional repositories",
+    "none of these",
+    "none of them",
+    "continue without it",
+    "zaden",
+    "zaden z nich",
+    "zadne z nich",
+  ];
+  const ORDINARY_TICKET_SPEECH = [
+    "no",
+    "no more",
+    "nothing",
+    "that is all",
+    "thats all",
+    "not needed",
+    "no need",
+    "skip it",
+    "nope",
+    "nie",
+    "bez tego",
+  ];
+
+  it("covers every phrase the refusal list holds, and no other", () => {
+    // The point of the map: a twenty-first phrase cannot join the list without
+    // somebody deciding whether it may exclude repositories in a person's name.
+    // The type asks at the declaration, and this asks again here, out loud.
+    expect([...REFUSAL_ANSWERS.keys()].sort()).toEqual(
+      [...NAMES_REPOSITORIES, ...ORDINARY_TICKET_SPEECH].sort(),
+    );
+  });
+
+  it.each(NAMES_REPOSITORIES)("%o says what it refuses", (phrase) => {
+    expect(REFUSAL_ANSWERS.get(phrase)).toBe("names_repositories");
+    expect(refusalNamesRepositories(phrase)).toBe(true);
+  });
+
+  it.each(ORDINARY_TICKET_SPEECH)("%o is ordinary ticket speech", (phrase) => {
+    expect(REFUSAL_ANSWERS.get(phrase)).toBe("ordinary_ticket_speech");
+    expect(refusalNamesRepositories(phrase)).toBe(false);
+  });
+
+  it("reads the keyword with prose after it as naming its subject", () => {
+    // "None. Thanks" is not a map entry and never will be. It begins with the
+    // word the question asks for, so it is about the repositories by
+    // construction, whatever the person went on to write.
+    expect(refusalNamesRepositories("None. Thanks")).toBe(true);
+    expect(refusalNamesRepositories("none, continue without it")).toBe(true);
+  });
+
+  it("reads one part naming the subject as enough for the whole answer", () => {
+    // Comments arrive joined, so a refusal written by two people can disagree
+    // with itself. The words that name the subject are the strongest evidence
+    // in the text and are not weakened by a bare no sitting beside them.
+    expect(refusalNamesRepositories("Jane: no\n\nBob: none of these")).toBe(true);
+    expect(refusalNamesRepositories("Jane: none of these\n\nBob: no")).toBe(true);
+    expect(refusalNamesRepositories("Jane: no\n\nBob: nope")).toBe(false);
+  });
+
+  it("reads an answer with no word in it as naming nothing, though it is still a refusal", () => {
+    // A check mark or a full stop ends the in-run expansion loop, which is what
+    // `isRefusalAnswer` is for. It decides nothing about anybody's repositories,
+    // so the person is asked again rather than having them excluded in their
+    // name.
+    for (const wordless of ["", "...", "\u2705"]) {
+      expect(isRefusalAnswer(wordless)).toBe(true);
+      expect(refusalNamesRepositories(wordless)).toBe(false);
+    }
+  });
+
+  it("reads the author line off a part before judging it", () => {
+    expect(refusalNamesRepositories("Jane Doe: none of these")).toBe(true);
+    expect(refusalNamesRepositories("Jane Doe: no")).toBe(false);
   });
 });

@@ -39,6 +39,17 @@ function scopeWith(entries: WorkScope["entries"]): WorkScope {
   return { subjectKey: "ticket:jira:AWT-1", version: 3, entries };
 }
 
+function excluded(repositoryKey: string): WorkScope["entries"][number] {
+  return {
+    repositoryKey,
+    state: "excluded",
+    origin: "person",
+    rationale: "not this one",
+    decidedBy: { kind: "person", actorId: "p1", actorLabel: "Ada" },
+    decidedAt: NOW,
+  };
+}
+
 describe("workScopeRepositoryKey", () => {
   it("normalises a provider and path into the catalog key the record stores", () => {
     expect(workScopeRepositoryKey({ provider: "github", repoPath: "Acme/API" })).toBe(
@@ -125,6 +136,227 @@ describe("createRunWorkScopeRecorder", () => {
     expect(recorder.notes).toHaveLength(1);
     expect(recorder.notes[0]).toContain("github:acme/gone");
     expect(recorder.notes[0]).toContain("catalog");
+  });
+
+  it("keeps the repository each refusal is about, for the surface that renders a line per repository", () => {
+    const recorder = createRunWorkScopeRecorder(
+      input({ scope: scopeWith([excluded("github:acme/api")]) }),
+    );
+
+    recorder.decide({
+      kind: "derived",
+      origin: "ticket_text",
+      repositoryKeys: ["github:acme/api"],
+      rationale: "ticket mentions repository path",
+    });
+    // A caller's own sentence names no repository, so it stays out of the keyed
+    // list and in the flat one.
+    recorder.note("The ticket names github:acme/web, and this run could take none of them.");
+
+    // Who excluded it and when, because the mid run expansion refusal says that
+    // about the same repository and the two may not disagree on facts. What a
+    // person can do about it is not here: it travels `recoveryNotes`, which the
+    // model never reads.
+    expect(recorder.leftOut).toEqual([
+      {
+        repositoryKey: "github:acme/api",
+        reason:
+          "github:acme/api was excluded on this work by Ada on 2026-09-16," +
+          " so the run started without it.",
+      },
+    ]);
+    expect(recorder.notes).toHaveLength(2);
+  });
+
+  it("tells a person an exclusion can be taken back, once however many it refused, and never through the notes the model may read", () => {
+    const recorder = createRunWorkScopeRecorder(
+      input({ scope: scopeWith([excluded("github:acme/api"), excluded("github:acme/web")]) }),
+    );
+
+    recorder.decide({
+      kind: "derived",
+      origin: "ticket_text",
+      repositoryKeys: ["github:acme/api"],
+      rationale: "ticket mentions repository path",
+    });
+    recorder.decide({
+      kind: "derived",
+      origin: "inferred",
+      repositoryKeys: ["github:acme/web"],
+      rationale: "only accessible repository",
+    });
+
+    expect(recorder.recoveryNotes).toEqual([
+      "Excluding a repository is not final: this work's repository list can be changed, and the next run starts from the changed list.",
+    ]);
+    // Two refusals, and the sentence for a person is not among them.
+    expect(recorder.notes).toHaveLength(2);
+    expect(recorder.notes.join(" ")).not.toContain("not final");
+  });
+
+  it("adds the second fact when the listing says the repository cannot be used, rather than dropping the first", () => {
+    const recorder = createRunWorkScopeRecorder(
+      input({
+        catalog: {
+          activated: true,
+          enabledKeys: ["github:acme/api", "github:acme/web"],
+          // Enabled, and the catalog holds no default branch for it.
+          unusableKeys: ["github:acme/api"],
+        },
+        scope: scopeWith([excluded("github:acme/api")]),
+      }),
+    );
+
+    recorder.decide({
+      kind: "derived",
+      origin: "ticket_text",
+      repositoryKeys: ["github:acme/api"],
+      rationale: "ticket mentions repository path",
+    });
+
+    expect(recorder.notes).toHaveLength(1);
+    expect(recorder.recoveryNotes).toHaveLength(2);
+    expect(recorder.recoveryNotes[0]).toContain("not final");
+    expect(recorder.recoveryNotes[1]).toContain("github:acme/api");
+    expect(recorder.recoveryNotes[1]).toContain("cannot serve");
+  });
+
+  // The pin is the OTHER thing that outlives an edit to the list. Changing the
+  // list is within reach of the person reading the sentence; changing what the
+  // workflow definition is pinned to is not, and a run whose pin excludes the
+  // repository will refuse it again on the next run however the list reads. So
+  // the promise is made the same way the usability one is: made, and then bounded
+  // by naming what else stands in the way.
+  it("names the pin as well when the workflow this run belongs to is not allowed the repository", () => {
+    const recorder = createRunWorkScopeRecorder(
+      input({
+        repositoryScope: { providers: [], repositories: [{ provider: "github", repoPath: "acme/web" }] },
+        scope: scopeWith([excluded("github:acme/api")]),
+      }),
+    );
+
+    recorder.decide({
+      kind: "derived",
+      origin: "ticket_text",
+      repositoryKeys: ["github:acme/api"],
+      rationale: "ticket mentions repository path",
+    });
+
+    expect(recorder.notes).toHaveLength(1);
+    expect(recorder.recoveryNotes).toHaveLength(2);
+    expect(recorder.recoveryNotes[0]).toContain("not final");
+    expect(recorder.recoveryNotes[1]).toBe(
+      "The workflow that runs this work is limited to a fixed set of repositories," +
+        " which does not include github:acme/api, so changing the list brings that repository" +
+        " back only once that limit changes.",
+    );
+  });
+
+  it("names the pin when it is the provider that is not allowed, not only the repository", () => {
+    const recorder = createRunWorkScopeRecorder(
+      input({
+        catalog: {
+          activated: true,
+          enabledKeys: ["github:acme/api", "gitlab:group/api"],
+          unusableKeys: [],
+        },
+        repositoryScope: { providers: ["github"], repositories: [] },
+        scope: scopeWith([excluded("gitlab:group/api")]),
+      }),
+    );
+
+    recorder.decide({
+      kind: "derived",
+      origin: "ticket_text",
+      repositoryKeys: ["gitlab:group/api"],
+      rationale: "ticket mentions repository path",
+    });
+
+    expect(recorder.recoveryNotes).toHaveLength(2);
+    expect(recorder.recoveryNotes[1]).toContain("gitlab:group/api");
+    expect(recorder.recoveryNotes[1]).toContain("limited to a fixed set of repositories");
+  });
+
+  it("says nothing about a pin that already allows the repository, because nothing else stands in the way", () => {
+    const recorder = createRunWorkScopeRecorder(
+      input({
+        repositoryScope: {
+          providers: ["github"],
+          repositories: [{ provider: "github", repoPath: "acme/api" }],
+        },
+        scope: scopeWith([excluded("github:acme/api")]),
+      }),
+    );
+
+    recorder.decide({
+      kind: "derived",
+      origin: "ticket_text",
+      repositoryKeys: ["github:acme/api"],
+      rationale: "ticket mentions repository path",
+    });
+
+    expect(recorder.recoveryNotes).toEqual([
+      "Excluding a repository is not final: this work's repository list can be changed, and the next run starts from the changed list.",
+    ]);
+  });
+
+  // No production path builds a recorder without a listing: all three callers
+  // (`pre-sandbox/steps/repo-selection.ts`, `engine/agent-workflow.ts`,
+  // `engine/steps/phase.ts`) hand it a real catalog listing, and the two places
+  // that pass `unusableKeys: null` (`services/work-scope/record.ts`,
+  // `services/clarifications/answer-core.ts`) call `decideWorkScope` directly
+  // and build no sentences at all. The combination is reachable through the
+  // type, so this pins the intent for the day a fourth caller appears: the
+  // recovery sentence promises only that the LIST can be changed and that the
+  // next run starts from the changed list, which is true whether or not anybody
+  // listed the repositories. What a listing buys is the SECOND sentence, and a
+  // caller holding no listing owes silence on that one alone.
+  it("says only the recovery sentence on a path that listed no repositories at all", () => {
+    const recorder = createRunWorkScopeRecorder(
+      input({
+        catalog: {
+          activated: true,
+          enabledKeys: ["github:acme/api", "github:acme/web"],
+          unusableKeys: null,
+        },
+        scope: scopeWith([excluded("github:acme/api")]),
+      }),
+    );
+
+    recorder.decide({
+      kind: "derived",
+      origin: "ticket_text",
+      repositoryKeys: ["github:acme/api"],
+      rationale: "ticket mentions repository path",
+    });
+
+    expect(recorder.notes).toHaveLength(1);
+    expect(recorder.recoveryNotes).toEqual([
+      "Excluding a repository is not final: this work's repository list can be changed, and the next run starts from the changed list.",
+    ]);
+  });
+
+  it("says nothing about a repository the catalog no longer holds, because changing the list cannot bring it back", () => {
+    const recorder = createRunWorkScopeRecorder(
+      input({
+        catalog: {
+          activated: true,
+          enabledKeys: ["github:acme/web"],
+          unusableKeys: [],
+        },
+        scope: scopeWith([excluded("github:acme/api")]),
+      }),
+    );
+
+    recorder.decide({
+      kind: "derived",
+      origin: "ticket_text",
+      repositoryKeys: ["github:acme/api"],
+      rationale: "ticket mentions repository path",
+    });
+
+    expect(recorder.notes).toHaveLength(1);
+    expect(recorder.recoveryNotes).toEqual([]);
   });
 
   it("records what a question asked, so the ask list survives the selection", () => {

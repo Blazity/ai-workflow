@@ -787,6 +787,41 @@ describe("decideWorkScope decision table", () => {
       expect(decide(context({ carriesRecord: false }), event)).toEqual(nothing);
     });
 
+    it("a person selected a repository the run cannot reach: the question is still asked", () => {
+      const event: WorkScopeDecisionEvent = { kind: "text_ambiguous", matchedKeys: [WEB, API] };
+      const asked = {
+        plan: emptyPlan,
+        attach: [],
+        ask: [
+          { repositoryKey: WEB, askedBecause: "selection" },
+          { repositoryKey: API, askedBecause: "selection" },
+        ],
+        refused: [],
+        editRejected: [],
+        trailTruncated: 0,
+      };
+
+      // The catalog holds no default branch for the repository the person picked.
+      expect(
+        decide(
+          context({
+            scope: scopeOf(entry({ repositoryKey: BROKEN, origin: "person", decidedBy: person })),
+          }),
+          event,
+        ),
+      ).toEqual(asked);
+      // The trigger pins another provider, so the run may never touch the pick.
+      expect(
+        decide(
+          context({
+            pinnedProviders: ["github"],
+            scope: scopeOf(entry({ repositoryKey: DOCS, origin: "person", decidedBy: person })),
+          }),
+          event,
+        ),
+      ).toEqual(asked);
+    });
+
     it("asks only about matched keys that are reachable and not already decided", () => {
       const decision = decide(
         context({
@@ -1147,7 +1182,7 @@ describe("decideWorkScope decision table", () => {
         decideWorkScope(context({ carriesRecord: false, actor: person, policy: null }), {
           kind: "answered",
           clarificationId: "clar-7",
-          asked: [{ repositoryKey: LEGACY, askedBecause: "not_enabled" }],
+          asked: [{ repositoryKey: LEGACY, askedBecause: "not_enabled", named: true }],
           answer: { kind: "none" },
         }),
       ).toThrow();
@@ -1157,7 +1192,7 @@ describe("decideWorkScope decision table", () => {
       const decision = decide(context({ actor: person, policy: null }), {
         kind: "answered",
         clarificationId: "clar-7",
-        asked: [{ repositoryKey: LEGACY, askedBecause: "not_enabled" }],
+        asked: [{ repositoryKey: LEGACY, askedBecause: "not_enabled", named: true }],
         answer: { kind: "unrecognised" },
       });
 
@@ -1182,14 +1217,89 @@ describe("decideWorkScope decision table", () => {
       });
     });
 
+    it("answer unattributed: no entries, question_answered only", () => {
+      // The one kind that must never reach the loop below. It says the answer is
+      // nobody's decision, and an asked key the loop reads as unnamed is written
+      // as a refusal in the name of the person it was just refused to. The guard
+      // above is not an exhaustive switch, so nothing but this test fails when a
+      // kind falls through it.
+      const decision = decide(context({ actor: person, policy: null }), {
+        kind: "answered",
+        clarificationId: "clar-7",
+        asked: [{ repositoryKey: LEGACY, askedBecause: "outside_policy", named: true }],
+        answer: { kind: "unattributed" },
+      });
+
+      expect(decision).toEqual({
+        plan: {
+          upserts: [],
+          deletes: [],
+          trail: [
+            {
+              kind: "question_answered",
+              clarificationId: "clar-7",
+              answer: { kind: "unattributed" },
+              answeredBy: person,
+            },
+          ],
+        },
+        attach: [],
+        ask: [],
+        refused: [],
+        editRejected: [],
+        trailTruncated: 0,
+      });
+    });
+
+    /**
+     * ABSENT MEANS NO, at the WRITE and not only at the read a later run does.
+     *
+     * The rule that a person decided about a repository only if they were shown
+     * its name held by coincidence: every producer of an ask happens to spell
+     * the key in full. A producer that stops doing so, or somebody editing the
+     * key out of one of those sentences, would fabricate a durable decision
+     * attributed to that person by name, and nothing would say so.
+     */
+    it("writes nothing for an asked key the question never put in front of anybody", () => {
+      const decision = decide(context({ actor: person, policy: null }), {
+        kind: "answered",
+        clarificationId: "clar-unnamed",
+        asked: [
+          { repositoryKey: LEGACY, askedBecause: "not_enabled" },
+          { repositoryKey: API, askedBecause: "outside_policy" },
+        ],
+        answer: { kind: "none" },
+      });
+
+      expect(decision.plan.upserts).toEqual([]);
+      // The answer itself is still recorded, so nothing re-asks on a reply that
+      // did arrive; it is the DECISION about an unnamed repository that is not
+      // invented.
+      expect(decision.plan.trail).toHaveLength(1);
+      expect(decision.plan.trail[0]?.kind).toBe("question_answered");
+    });
+
+    // Naming it yourself is the strongest form of deciding, and it does not
+    // depend on the question's words at all.
+    it("still records a repository the person named, whether or not the question did", () => {
+      const decision = decide(context({ actor: person, policy: null }), {
+        kind: "answered",
+        clarificationId: "clar-self-named",
+        asked: [{ repositoryKey: API, askedBecause: "outside_policy" }],
+        answer: { kind: "repositories", repositoryKeys: [API] },
+      });
+
+      expect(decision.plan.upserts.map((upsert) => upsert.entry.state)).toEqual(["selected"]);
+    });
+
     it("answer none or repositories, an asked key the answer does not name: recorded by the reason it was asked", () => {
       const decision = decide(context({ actor: person, policy: null }), {
         kind: "answered",
         clarificationId: "clar-7",
         asked: [
-          { repositoryKey: LEGACY, askedBecause: "not_enabled" },
-          { repositoryKey: BROKEN, askedBecause: "unusable" },
-          { repositoryKey: API, askedBecause: "outside_policy" },
+          { repositoryKey: LEGACY, askedBecause: "not_enabled", named: true },
+          { repositoryKey: BROKEN, askedBecause: "unusable", named: true },
+          { repositoryKey: API, askedBecause: "outside_policy", named: true },
           { repositoryKey: WEB, askedBecause: "selection" },
         ],
         answer: { kind: "none" },
@@ -1248,7 +1358,7 @@ describe("decideWorkScope decision table", () => {
       const decision = decide(context({ actor: person, policy: null }), {
         kind: "answered",
         clarificationId: "clar-8",
-        asked: [{ repositoryKey: LEGACY, askedBecause: "not_enabled" }],
+        asked: [{ repositoryKey: LEGACY, askedBecause: "not_enabled", named: true }],
         answer: { kind: "repositories", repositoryKeys: [LEGACY, DOCS] },
       });
 
@@ -1645,7 +1755,7 @@ describe("decideWorkScope sequences", () => {
     const answered = decide(context({ actor: person, policy: null }), {
       kind: "answered",
       clarificationId: "clar-1",
-      asked: [{ repositoryKey: LEGACY, askedBecause: "not_enabled" }],
+      asked: [{ repositoryKey: LEGACY, askedBecause: "not_enabled", named: true }],
       answer: { kind: "none" },
     });
     expect(answered.plan.upserts).toEqual([
@@ -1713,7 +1823,7 @@ describe("decideWorkScope sequences", () => {
     const answered = decide(context({ actor: person, policy: null }), {
       kind: "answered",
       clarificationId: "clar-5",
-      asked: [{ repositoryKey: LEGACY, askedBecause: "outside_policy" }],
+      asked: [{ repositoryKey: LEGACY, askedBecause: "outside_policy", named: true }],
       answer: { kind: "none" },
     });
     const declined = {
@@ -1920,7 +2030,7 @@ describe("decideWorkScope sequences", () => {
     const answered = decide(context({ actor: person, policy: null }), {
       kind: "answered",
       clarificationId: "clar-2",
-      asked: [{ repositoryKey: API, askedBecause: "outside_policy" }],
+      asked: [{ repositoryKey: API, askedBecause: "outside_policy", named: true }],
       answer: { kind: "none" },
     });
     expect(answered.plan.upserts).toEqual([
@@ -1976,7 +2086,7 @@ describe("decideWorkScope sequences", () => {
     const answered = decide(context({ actor: person, policy: null }), {
       kind: "answered",
       clarificationId: "clar-4",
-      asked: [{ repositoryKey: LEGACY, askedBecause: "not_enabled" }],
+      asked: [{ repositoryKey: LEGACY, askedBecause: "not_enabled", named: true }],
       answer: { kind: "repositories", repositoryKeys: [LEGACY] },
     });
     expect(answered.plan.upserts).toEqual([
@@ -2290,7 +2400,11 @@ describe("decideWorkScope bounds", () => {
     const decision = decide(context({ actor: person, policy: null }), {
       kind: "answered",
       clarificationId: "clar-9",
-      asked: asked.map((repositoryKey) => ({ repositoryKey, askedBecause: "outside_policy" as const })),
+      asked: asked.map((repositoryKey) => ({
+        repositoryKey,
+        askedBecause: "outside_policy" as const,
+        named: true,
+      })),
       answer: { kind: "repositories", repositoryKeys: named },
     });
 

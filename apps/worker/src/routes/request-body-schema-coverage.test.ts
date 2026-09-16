@@ -53,6 +53,7 @@ const JSON_BODY_SCHEMAS: Record<string, string[]> = {
   "api/v1/repository-catalog/suggest.post.ts": ["repositoryCatalogSuggestRequestSchema"],
   "api/v1/settings.patch.ts": ["settingsPatchRequestSchema"],
   "api/v1/users/[userId]/role.patch.ts": ["dashboardUserRoleUpdateRequestSchema"],
+  "api/v1/work-scope.patch.ts": ["workScopeEditRequestSchema"],
   "api/v1/workflow-definitions.post.ts": ["workflowDefinitionCreateRequestSchema"],
   "api/v1/workflow-definitions/[id].patch.ts": ["workflowDefinitionMetaPatchRequestSchema"],
   "api/v1/workflow-definitions/[id].put.ts": ["workflowDefinitionDraftSaveRequestSchema"],

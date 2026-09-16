@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   applyRunWorkScopePlan: vi.fn(),
   readConnectedWorkScope: vi.fn(),
   readConnectedWorkScopeSelectionAnswered: vi.fn(),
+  readConnectedWorkScopeAnsweredRepositories: vi.fn(),
   findRunPrSiblings: vi.fn(),
   listWorkflowOwnedBranchesForTicket: vi.fn(),
   listRepositories: vi.fn(),
@@ -63,6 +64,7 @@ vi.mock("../../db/repositories/work-scope.js", () => ({
   applyConnectedRunWorkScopePlan: mocks.applyRunWorkScopePlan,
   readConnectedWorkScope: mocks.readConnectedWorkScope,
   readConnectedWorkScopeSelectionAnswered: mocks.readConnectedWorkScopeSelectionAnswered,
+  readConnectedWorkScopeAnsweredRepositories: mocks.readConnectedWorkScopeAnsweredRepositories,
 }));
 vi.mock("../../db/repositories/runs.js", () => ({
   listWorkflowOwnedBranchesForTicket: mocks.listWorkflowOwnedBranchesForTicket,
@@ -475,6 +477,40 @@ describe("the repository ask reaches the clarification it was raised for", () =>
     expect(
       args.some((line) => line.includes("workScopeAsk")),
       "the asked repositories no longer travel with the question, so the answer settles nothing",
+    ).toBe(true);
+  });
+
+  /**
+   * The sibling claim, on the same closure and for the same reason.
+   *
+   * What a person can do about a repository this run left out ships on the
+   * ticket comment and on nothing else. The rendering is proved for real in
+   * `services/clarifications/comment-format.test.ts`, and the absence from the
+   * prompts and the memory file in
+   * `engine/blocks/prepare-workspace/prepare-workspace.test.ts`. This asserts
+   * the wire between them, and that it is bound to the ask rather than to the
+   * run: a question about an API shape later in the same run must not inherit a
+   * sentence about repositories nobody asked it about.
+   */
+  it("hands the reversal sentence to the ticket comment, and binds it to a question about repositories", () => {
+    const index = workflowLines.findIndex((line) =>
+      line.includes("postClarificationQuestionsCommentStep("),
+    );
+    expect(
+      index,
+      "postClarificationQuestionsCommentStep is no longer called in agent-workflow.ts",
+    ).toBeGreaterThan(-1);
+
+    const above = workflowLines.slice(Math.max(0, index - 6), index);
+    expect(
+      above.some((line) => line.includes("workScopeAsk && ctx.workScopeRecoveryNotes")),
+      "the reversal sentence is no longer bound to the ask, so an ordinary later question in the same run inherits a sentence about repositories it never asked about",
+    ).toBe(true);
+
+    const args = workflowLines.slice(index, index + 12);
+    expect(
+      args.some((line) => line.includes("repositoryRecoveryNotes")),
+      "the reversal sentence no longer reaches the ticket comment, so the person who meets the bare question is never told the exclusion can be taken back",
     ).toBe(true);
   });
 });
