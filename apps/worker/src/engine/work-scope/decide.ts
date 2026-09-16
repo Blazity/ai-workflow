@@ -1,0 +1,763 @@
+import {
+  workScopeOriginRank,
+  type RepositoryKey,
+  type TriggerRepositoryPolicy,
+  type VcsProviderKind,
+  type WorkScope,
+  type WorkScopeActor,
+  type WorkScopeAskReason,
+  type WorkScopeAskedRepository,
+  type WorkScopeEditRequest,
+  type WorkScopeEntry,
+  type WorkScopeEntryState,
+  type WorkScopeOrigin,
+  type WorkScopeQuestionAnswer,
+  type WorkScopeRefusalReason,
+  type WorkScopeTrailEvent,
+  type WorkScopeUnavailableReason,
+  type WorkScopeWritePlan,
+} from "@shared/contracts";
+
+// The same workspace bound the expansion protocol enforces
+// (repository-discovery/runner.ts). It bounds one run's workspace, never the
+// record: a subject may hold more selections than one workspace takes.
+const WORKSPACE_REPOSITORIES_MAX = 8;
+// Requests beyond this many at once are refused back to the model, never
+// turned into a question nobody could record an answer to.
+const REQUEST_REPOSITORIES_MAX = 3;
+// What the caller may pass per event. Together these keep every plan inside
+// the contract's 16 upserts, 16 deletes and 32 trail events.
+const EVENT_KEYS_MAX = 8;
+const PLAN_TRAIL_MAX = 32;
+const RATIONALE_MAX_LENGTH = 500;
+
+const REQUESTED_RATIONALE = "Requested by the agent.";
+const NAMED_RATIONALE = "Named in the answer to a repository question.";
+const LEFT_OUT_RATIONALE: Record<Exclude<WorkScopeAskReason, "selection">, string> = {
+  not_enabled: "Left out of the answer to a question asked because it was not enabled.",
+  unusable: "Left out of the answer to a question asked because it could not be used.",
+  outside_policy:
+    "Declined in the answer to a question asked because the trigger policy did not include it.",
+};
+
+export interface WorkScopeDecisionContext {
+  /** null: no record yet, or a subject that carries none. */
+  scope: WorkScope | null;
+  /** A ticket, a pull request, or a webhook delivery with a resolved subject id. */
+  carriesRecord: boolean;
+  /** `unusableKeys` null: this path never listed the repositories, so enabled
+   *  counts as usable and an `unavailable` `unusable` entry does not expire
+   *  here, because nothing observed that it became usable. */
+  catalog: { activated: boolean; enabledKeys: RepositoryKey[]; unusableKeys: RepositoryKey[] | null };
+  /** The definition pin's providers, null when it names none. */
+  pinnedProviders: VcsProviderKind[] | null;
+  /** The definition pin's repositories, null when it names none. */
+  pinnedKeys: RepositoryKey[] | null;
+  /** Resolved. null only for `answered`, `edited` and a subject that carries no
+   *  record. */
+  policy: TriggerRepositoryPolicy | null;
+  /** The candidates of `event_repository_and_related`, empty otherwise. The
+   *  relationship graph is a fact about repositories, not about what the
+   *  catalog enables, so the caller passes related keys that are not usable
+   *  too: a request for one of them is then asked about as `not_enabled` or
+   *  `unusable`, whose answer expires, rather than as `outside_policy`. */
+  eventRelatedKeys: RepositoryKey[];
+  /** What the workspace holds now; null outside a run. */
+  attachedKeys: RepositoryKey[] | null;
+  /** The subject's trail holds an answer to a selection question. */
+  selectionAnswered: boolean;
+  actor: WorkScopeActor;
+  now: string;
+}
+
+export type WorkScopeDecisionEvent =
+  | { kind: "run_started" }
+  | { kind: "resumed"; repositoryKeys: RepositoryKey[] }
+  /** An EMPTY `repositoryKeys` is the caller saying the evidence is gone, which
+   *  is why it deletes that origin's entries. Stage 4 emits it only when the
+   *  matcher found nothing at all, never when it found matches it could not
+   *  decide between: those raise `text_ambiguous`. */
+  | {
+      kind: "derived";
+      origin: "workflow_owned_branch" | "ticket_text" | "trigger_policy" | "inferred";
+      repositoryKeys: RepositoryKey[];
+      rationale: string;
+    }
+  | { kind: "text_ambiguous"; matchedKeys: RepositoryKey[] }
+  | { kind: "requested"; repositoryKeys: RepositoryKey[] }
+  | {
+      kind: "answered";
+      clarificationId: string;
+      asked: WorkScopeAskedRepository[];
+      /** As read by readRepositoryAnswer. */
+      answer: WorkScopeQuestionAnswer;
+    }
+  | { kind: "edited"; changes: WorkScopeEditRequest["changes"] };
+
+export interface WorkScopeDecision {
+  plan: WorkScopeWritePlan;
+  attach: RepositoryKey[];
+  ask: WorkScopeAskedRepository[];
+  refused: Array<{ repositoryKey: RepositoryKey; reason: WorkScopeRefusalReason }>;
+  editRejected: Array<{ repositoryKey: RepositoryKey; reason: "not_enabled" }>;
+  /** Refusals `refused` lists that the plan's trail bound left out, so the
+   *  caller can say how many more there were instead of dropping them in
+   *  silence. */
+  trailTruncated: number;
+}
+
+/**
+ * The whole work scope decision in one pure function: given the record, the
+ * catalog snapshot the run froze, the trigger policy and one event, it returns
+ * the write plan the store applies and what the caller attaches, asks or
+ * refuses. Nothing here reads a database, a clock or the network, and every
+ * output keeps input order, so a replayed run computes the identical plan.
+ *
+ * Throws only on a programming error: an answer or an edit on a subject that
+ * carries no record, or more keys than the caller may pass.
+ */
+export function decideWorkScope(
+  context: WorkScopeDecisionContext,
+  event: WorkScopeDecisionEvent,
+): WorkScopeDecision {
+  assertDecidable(context, event);
+  const facts = readFacts(context);
+  const decision = recordDecision(context, facts);
+  switch (event.kind) {
+    case "run_started":
+      decideRunStart(context, facts, decision, null);
+      break;
+    case "resumed":
+      decideRunStart(context, facts, decision, new Set(event.repositoryKeys));
+      break;
+    case "derived":
+      decideDerived(context, facts, decision, event);
+      break;
+    case "text_ambiguous":
+      decideTextAmbiguous(context, facts, decision, event.matchedKeys);
+      break;
+    case "requested":
+      decideRequested(context, facts, decision, event.repositoryKeys);
+      break;
+    case "answered":
+      decideAnswered(context, decision, event);
+      break;
+    case "edited":
+      decideEdited(facts, decision, event.changes);
+      break;
+  }
+  return decision.finish();
+}
+
+function assertDecidable(context: WorkScopeDecisionContext, event: WorkScopeDecisionEvent): void {
+  if (event.kind === "answered" || event.kind === "edited") {
+    if (!context.carriesRecord) {
+      throw new Error(
+        `decideWorkScope: an ${event.kind} event needs a subject that carries a work scope record.`,
+      );
+    }
+  } else if (context.policy === null && context.carriesRecord) {
+    // The caller always has one, the trigger kind default when the node
+    // configures none. Treating a missing policy as "no candidates" would
+    // start a run with no repositories and look like a product decision. A
+    // subject that carries no record is the exception: an approved plan runs
+    // from its frozen snapshot, and its trigger may not hold a policy at all.
+    throw new Error(`decideWorkScope: a ${event.kind} event needs a resolved trigger policy.`);
+  }
+  const counts: Array<[string, number]> =
+    event.kind === "derived"
+      ? [["derived", event.repositoryKeys.length]]
+      : event.kind === "text_ambiguous"
+        ? [["matched", event.matchedKeys.length]]
+        : event.kind === "answered"
+          ? [
+              ["asked", event.asked.length],
+              ["named", event.answer.kind === "repositories" ? event.answer.repositoryKeys.length : 0],
+            ]
+          : [];
+  for (const [what, count] of counts) {
+    if (count > EVENT_KEYS_MAX) {
+      throw new Error(
+        `decideWorkScope: at most ${EVENT_KEYS_MAX} ${what} keys may be decided at once, got ${count}.`,
+      );
+    }
+  }
+}
+
+type Facts = ReturnType<typeof readFacts>;
+
+function readFacts(context: WorkScopeDecisionContext) {
+  const enabled = new Set(context.catalog.enabledKeys);
+  const unusable =
+    context.catalog.unusableKeys === null ? null : new Set(context.catalog.unusableKeys);
+  const entries = new Map(
+    (context.scope?.entries ?? []).map((entry) => [entry.repositoryKey, entry] as const),
+  );
+  const isEnabled = (key: RepositoryKey) => enabled.has(key);
+  const isUsable = (key: RepositoryKey) =>
+    enabled.has(key) && (unusable === null || !unusable.has(key));
+  // The definition pin is a capability bound, like the catalog: the run strips
+  // anything outside it anyway, so nothing is exempt from it and nothing
+  // outside it is ever asked. It names repositories as well as providers, which
+  // is why both halves bind.
+  const isInPin = (key: RepositoryKey) =>
+    (context.pinnedProviders === null ||
+      context.pinnedProviders.some((provider) => key.startsWith(`${provider}:`))) &&
+    (context.pinnedKeys === null || context.pinnedKeys.includes(key));
+  const isReachable = (key: RepositoryKey) => isUsable(key) && isInPin(key);
+  const isCandidate = (key: RepositoryKey): boolean => {
+    const candidates = context.policy?.candidates;
+    if (!candidates) return false;
+    switch (candidates.kind) {
+      case "enabled_catalog":
+        return isUsable(key);
+      case "event_repository_and_related":
+        return context.eventRelatedKeys.includes(key);
+      case "listed":
+        return candidates.repositoryKeys.includes(key);
+    }
+  };
+  /** What the policy would attach if the catalog held the repository: the
+   *  candidate set read WITHOUT usability, plus the attach rule. It decides why
+   *  a repository that is not usable is asked about or refused, and the two
+   *  reasons record different things forever: `not_enabled` records an
+   *  `unavailable` entry that expires on the enable, `outside_policy` records
+   *  an exclusion that never expires. A key outside the candidate set ONLY
+   *  because the catalog does not hold it must therefore never be asked about
+   *  as outside the policy. */
+  const wouldAttachIfUsable = (key: RepositoryKey): boolean => {
+    const candidates = context.policy?.candidates;
+    if (!candidates) return false;
+    if (context.policy?.expansion === "attach") return true;
+    switch (candidates.kind) {
+      case "enabled_catalog":
+        return true;
+      case "event_repository_and_related":
+        return context.eventRelatedKeys.includes(key);
+      case "listed":
+        return candidates.repositoryKeys.includes(key);
+    }
+  };
+  // Only `answered` and `edited` reach this without a policy, and they ignore it.
+  const expansion = context.policy?.expansion ?? "never";
+  // Only a key that has since become usable expires. Nothing not_enabled
+  // expires on a bridge catalog, where every repository answers enabled and an
+  // expiry would ask the person a second time; and nothing unusable expires
+  // where the path listed no repositories, because there "usable" is an
+  // assumption rather than something observed.
+  const isExpired = (entry: WorkScopeEntry) =>
+    entry.state === "unavailable" &&
+    isUsable(entry.repositoryKey) &&
+    (entry.unavailableReason === "not_enabled" ? context.catalog.activated : unusable !== null);
+  /** The entry a decision reads: an expired entry behaves as if there were none. */
+  const liveEntryOf = (key: RepositoryKey): WorkScopeEntry | undefined => {
+    const entry = entries.get(key);
+    return entry && !isExpired(entry) ? entry : undefined;
+  };
+  return {
+    entries,
+    isEnabled,
+    isUsable,
+    isInPin,
+    isReachable,
+    isCandidate,
+    wouldAttachIfUsable,
+    expansion,
+    isExpired,
+    liveEntryOf,
+  };
+}
+
+/** A person outranks a default made for machines, and a workflow owned branch
+ *  must never strand its open pull request. */
+function isExemptOrigin(origin: WorkScopeOrigin): boolean {
+  return origin === "person" || origin === "workflow_owned_branch";
+}
+
+/** Allowed: the key is a candidate, or the expansion rule attaches, or the
+ *  record already holds it as a selection a policy may not filter. */
+function isAllowed(facts: Facts, entry: WorkScopeEntry | undefined, key: RepositoryKey): boolean {
+  return facts.isCandidate(key) || facts.expansion === "attach" || isExemptSelection(entry);
+}
+
+/** What "allowed" would say if the catalog held the repository. It separates
+ *  the two reasons a key sits outside the candidate set, and the separation is
+ *  permanent: declined after a `not_enabled` question a key is recorded
+ *  `unavailable` and expires on the enable, declined after an `outside_policy`
+ *  question it is recorded `excluded` and never does. */
+function isAllowedIfUsable(
+  facts: Facts,
+  entry: WorkScopeEntry | undefined,
+  key: RepositoryKey,
+): boolean {
+  return facts.wouldAttachIfUsable(key) || isExemptSelection(entry);
+}
+
+function isExemptSelection(entry: WorkScopeEntry | undefined): boolean {
+  return entry?.state === "selected" && isExemptOrigin(entry.origin);
+}
+
+/** Why a live entry answers a request without asking anyone, or null when it
+ *  does not. */
+function blockingReason(entry: WorkScopeEntry | undefined): WorkScopeRefusalReason | null {
+  if (entry?.state === "excluded") return "excluded";
+  if (entry?.state === "unavailable") return "unavailable";
+  return null;
+}
+
+type Recorded =
+  | { kind: "upsert"; upsert: WorkScopeWritePlan["upserts"][number]; event: WorkScopeTrailEvent }
+  | { kind: "delete"; deletion: WorkScopeWritePlan["deletes"][number]; event: WorkScopeTrailEvent }
+  | { kind: "refusal"; event: WorkScopeTrailEvent }
+  | { kind: "answer"; event: WorkScopeTrailEvent };
+
+type DecisionRecorder = ReturnType<typeof recordDecision>;
+
+function recordDecision(context: WorkScopeDecisionContext, facts: Facts) {
+  const recorded: Recorded[] = [];
+  const attach: RepositoryKey[] = [];
+  const ask: WorkScopeAskedRepository[] = [];
+  const refused: WorkScopeDecision["refused"] = [];
+  const editRejected: WorkScopeDecision["editRejected"] = [];
+  const refusedOnce = new Set<string>();
+  const attached = new Set(context.attachedKeys ?? []);
+
+  return {
+    isAttached: (key: RepositoryKey) => attached.has(key),
+    // Counted on the workspace, including what this event already attached.
+    hasRoom: () => attached.size < WORKSPACE_REPOSITORIES_MAX,
+    attach(key: RepositoryKey) {
+      attached.add(key);
+      attach.push(key);
+    },
+    ask(repositoryKey: RepositoryKey, askedBecause: WorkScopeAskReason) {
+      ask.push({ repositoryKey, askedBecause });
+    },
+    refuse(repositoryKey: RepositoryKey, reason: WorkScopeRefusalReason) {
+      // One event refuses a repository for a reason once; the same line twice
+      // says nothing more and costs a trail row that a refusal elsewhere needs.
+      if (refusedOnce.has(`${repositoryKey} ${reason}`)) return;
+      refusedOnce.add(`${repositoryKey} ${reason}`);
+      refused.push({ repositoryKey, reason });
+      recorded.push({ kind: "refusal", event: { kind: "request_refused", repositoryKey, reason } });
+    },
+    rejectEdit(repositoryKey: RepositoryKey) {
+      editRejected.push({ repositoryKey, reason: "not_enabled" });
+    },
+    answered(event: WorkScopeTrailEvent) {
+      recorded.push({ kind: "answer", event });
+    },
+    /** Plans an upsert unless it would change nothing. Precedence is the
+     *  store's: a lower origin is planned and the statement keeps the higher
+     *  one. */
+    write(
+      repositoryKey: RepositoryKey,
+      fields: {
+        state: WorkScopeEntryState;
+        unavailableReason?: WorkScopeUnavailableReason;
+        origin: WorkScopeOrigin;
+        rationale: string;
+      },
+      clarificationId?: string,
+    ) {
+      if (!context.carriesRecord) return;
+      const rationale = fields.rationale.slice(0, RATIONALE_MAX_LENGTH);
+      const existing = facts.entries.get(repositoryKey);
+      if (
+        existing &&
+        existing.state === fields.state &&
+        existing.unavailableReason === fields.unavailableReason &&
+        existing.origin === fields.origin &&
+        existing.rationale === rationale
+      ) {
+        return;
+      }
+      const entry: WorkScopeEntry = {
+        repositoryKey,
+        state: fields.state,
+        ...(fields.unavailableReason ? { unavailableReason: fields.unavailableReason } : {}),
+        origin: fields.origin,
+        rationale,
+        decidedBy: context.actor,
+        decidedAt: context.now,
+      };
+      recorded.push({
+        kind: "upsert",
+        upsert: {
+          entry,
+          replacesExpired:
+            fields.state === "selected" && existing !== undefined && facts.isExpired(existing),
+        },
+        event: {
+          kind: "entry_written",
+          entry,
+          previousState: existing?.state ?? null,
+          ...(clarificationId ? { clarificationId } : {}),
+        },
+      });
+    },
+    remove(entry: WorkScopeEntry) {
+      if (!context.carriesRecord) return;
+      recorded.push({
+        kind: "delete",
+        deletion: { repositoryKey: entry.repositoryKey, origin: entry.origin },
+        event: { kind: "entry_removed", entry, removedBy: context.actor },
+      });
+    },
+    finish(): WorkScopeDecision {
+      if (editRejected.length > 0) {
+        // One rejected change rejects the whole edit: nothing is written.
+        return {
+          plan: { upserts: [], deletes: [], trail: [] },
+          attach: [],
+          ask: [],
+          refused: [],
+          editRejected,
+          trailTruncated: 0,
+        };
+      }
+      // Only refusals can outgrow the trail bound (a run start over a large
+      // record). Every write keeps its trail event; refusals fill what is left
+      // in order, and `refused` still lists them all.
+      let refusalRoom =
+        PLAN_TRAIL_MAX - recorded.filter((item) => item.kind !== "refusal").length;
+      let trailTruncated = 0;
+      const trail: WorkScopeTrailEvent[] = [];
+      for (const item of recorded) {
+        if (item.kind === "refusal") {
+          if (refusalRoom <= 0) {
+            trailTruncated += 1;
+            continue;
+          }
+          refusalRoom -= 1;
+        }
+        trail.push(item.event);
+      }
+      return {
+        plan: {
+          upserts: recorded.flatMap((item) => (item.kind === "upsert" ? [item.upsert] : [])),
+          deletes: recorded.flatMap((item) => (item.kind === "delete" ? [item.deletion] : [])),
+          trail,
+        },
+        attach,
+        ask,
+        refused,
+        editRejected,
+        trailTruncated,
+      };
+    },
+  };
+}
+
+function unique(keys: RepositoryKey[]): RepositoryKey[] {
+  return [...new Set(keys)];
+}
+
+// Plain code unit order, so the walk never depends on the runtime's locale.
+function compareKeys(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/**
+ * Run start, and a resume after an answer for the keys it names. Walks by
+ * origin rank, then key, so a person's entries take the room first.
+ */
+function decideRunStart(
+  context: WorkScopeDecisionContext,
+  facts: Facts,
+  decision: DecisionRecorder,
+  onlyKeys: Set<RepositoryKey> | null,
+): void {
+  const walk = (context.scope?.entries ?? [])
+    .filter((entry) => onlyKeys === null || onlyKeys.has(entry.repositoryKey))
+    .sort(
+      (left, right) =>
+        workScopeOriginRank(left.origin) - workScopeOriginRank(right.origin) ||
+        compareKeys(left.repositoryKey, right.repositoryKey),
+    );
+  for (const entry of walk) {
+    const key = entry.repositoryKey;
+    // Already in the workspace: attaching it again would count it twice.
+    if (decision.isAttached(key)) continue;
+    if (entry.state === "selected") {
+      if (!facts.isUsable(key)) {
+        decision.refuse(key, "outside_catalog");
+      } else if (!facts.isReachable(key)) {
+        decision.refuse(key, "outside_policy");
+      } else if (facts.isCandidate(key) || isExemptOrigin(entry.origin)) {
+        if (decision.hasRoom()) decision.attach(key);
+        else decision.refuse(key, "workspace_cap");
+      } else {
+        // A narrow trigger is never widened by what a broader workflow once
+        // recorded on the same subject.
+        decision.refuse(key, "outside_policy");
+      }
+      continue;
+    }
+    // An expired entry does not wait for the model to ask again: it replays
+    // the request that raised the question, inside this trigger's policy.
+    if (
+      facts.isExpired(entry) &&
+      facts.isReachable(key) &&
+      (facts.isCandidate(key) || facts.expansion === "attach") &&
+      decision.hasRoom()
+    ) {
+      decision.attach(key);
+      decision.write(key, {
+        state: "selected",
+        origin: "inferred",
+        rationale: expiredReplacementRationale(entry),
+      });
+    }
+  }
+}
+
+function expiredReplacementRationale(previous: WorkScopeEntry): string {
+  const who =
+    previous.decidedBy.kind === "person"
+      ? previous.decidedBy.actorLabel
+      : `run ${previous.decidedBy.runId}`;
+  const [since, recordedAs] =
+    previous.unavailableReason === "unusable"
+      ? ["Usable in the catalog since", "unusable"]
+      : ["Enabled in the catalog since", "not enabled"];
+  const quoted = previous.rationale.length > 0 ? ` ("${previous.rationale}")` : "";
+  return `${since} ${who} recorded it as ${recordedAs}${quoted}.`;
+}
+
+function decideDerived(
+  context: WorkScopeDecisionContext,
+  facts: Facts,
+  decision: DecisionRecorder,
+  event: Extract<WorkScopeDecisionEvent, { kind: "derived" }>,
+): void {
+  const keys = unique(event.repositoryKeys);
+  for (const key of keys) {
+    // Already in the workspace: the run is using it, so no policy test may
+    // refuse it here. It still counts as named by this event below, so its own
+    // entry of this origin is not deleted for being absent.
+    if (decision.isAttached(key)) continue;
+    const entry = facts.liveEntryOf(key);
+    const blocked = blockingReason(entry);
+    if (blocked) {
+      decision.refuse(key, blocked);
+    } else if (!facts.isUsable(key)) {
+      // A derived key never asks: nobody requested it.
+      decision.refuse(key, "outside_catalog");
+    } else if (!facts.isReachable(key)) {
+      decision.refuse(key, "outside_policy");
+    } else if (isAllowed(facts, entry, key) || isExemptOrigin(event.origin)) {
+      if (decision.hasRoom()) {
+        decision.attach(key);
+        decision.write(key, { state: "selected", origin: event.origin, rationale: event.rationale });
+      } else {
+        decision.refuse(key, "workspace_cap");
+      }
+    } else {
+      decision.refuse(key, "outside_policy");
+    }
+  }
+  // The text match and the branch are re-derived on every run, so what they
+  // no longer name is dropped; a person who took the key over meanwhile keeps
+  // it, because the store deletes only a row still carrying this origin.
+  if (event.origin !== "ticket_text" && event.origin !== "workflow_owned_branch") return;
+  const derived = new Set(keys);
+  for (const entry of context.scope?.entries ?? []) {
+    if (entry.origin === event.origin && !derived.has(entry.repositoryKey)) {
+      decision.remove(entry);
+    }
+  }
+}
+
+/** The "which of these" question is asked at most once per subject: never
+ *  after a person selected a repository on it, never after it was answered. */
+function decideTextAmbiguous(
+  context: WorkScopeDecisionContext,
+  facts: Facts,
+  decision: DecisionRecorder,
+  matchedKeys: RepositoryKey[],
+): void {
+  if (!context.carriesRecord || context.selectionAnswered) return;
+  const personSelected = (context.scope?.entries ?? []).some(
+    (entry) => entry.state === "selected" && entry.origin === "person",
+  );
+  if (personSelected) return;
+  // A repository behind the provider pin may never be offered to a person, and
+  // one the record already decided must not be offered as if it were open.
+  // Stage 4 applies the same filter BEFORE it counts the matches, so a set that
+  // collapses to one to three decidable keys becomes an ordinary `derived`
+  // `ticket_text` event rather than a repository nobody ever hears about.
+  const choices = unique(matchedKeys).filter(
+    (key) => facts.isReachable(key) && blockingReason(facts.liveEntryOf(key)) === null,
+  );
+  // One choice left is no ambiguity.
+  if (choices.length < 2) return;
+  for (const key of choices) decision.ask(key, "selection");
+}
+
+/** First match wins, in this order, for each of the first three keys. */
+function decideRequested(
+  context: WorkScopeDecisionContext,
+  facts: Facts,
+  decision: DecisionRecorder,
+  repositoryKeys: RepositoryKey[],
+): void {
+  const keys = unique(repositoryKeys);
+  for (const key of keys.slice(0, REQUEST_REPOSITORIES_MAX)) {
+    decideRequestedKey(context, facts, decision, key);
+  }
+  for (const key of keys.slice(REQUEST_REPOSITORIES_MAX)) {
+    decision.refuse(key, "request_limit");
+  }
+}
+
+function decideRequestedKey(
+  context: WorkScopeDecisionContext,
+  facts: Facts,
+  decision: DecisionRecorder,
+  key: RepositoryKey,
+): void {
+  if (decision.isAttached(key)) return;
+  if (!facts.isInPin(key)) {
+    decision.refuse(key, "outside_policy");
+    return;
+  }
+  const entry = facts.liveEntryOf(key);
+  const blocked = blockingReason(entry);
+  if (blocked) {
+    decision.refuse(key, blocked);
+    return;
+  }
+  // An answer can only change a key nothing has decided, or one another
+  // workflow merely inferred.
+  const askableEntry = entry === undefined || (entry.state === "selected" && !isExemptSelection(entry));
+  const askOnce = facts.expansion === "ask_once" && context.carriesRecord && askableEntry;
+  if (!facts.isUsable(key)) {
+    if (isAllowedIfUsable(facts, entry, key)) {
+      // The catalog alone keeps it out, so the question asked is the one whose
+      // answer expires when the catalog changes.
+      if (entry === undefined && context.carriesRecord && facts.expansion !== "never") {
+        decision.ask(key, facts.isEnabled(key) ? "unusable" : "not_enabled");
+      } else {
+        decision.refuse(key, "outside_catalog");
+      }
+    } else if (askOnce && decision.hasRoom()) {
+      // This key stays outside the policy whether the catalog holds it or not,
+      // so declining it is a decision that may last.
+      decision.ask(key, "outside_policy");
+    } else {
+      decision.refuse(key, "outside_policy");
+    }
+    return;
+  }
+  if (!isAllowed(facts, entry, key)) {
+    // Asked about once; an answer naming it records a person's selection.
+    if (askOnce && decision.hasRoom()) decision.ask(key, "outside_policy");
+    else decision.refuse(key, askOnce ? "workspace_cap" : "outside_policy");
+    return;
+  }
+  if (!decision.hasRoom()) {
+    decision.refuse(key, "workspace_cap");
+    return;
+  }
+  decision.attach(key);
+  decision.write(key, { state: "selected", origin: "inferred", rationale: REQUESTED_RATIONALE });
+}
+
+/**
+ * Decided once, where the answer arrives, and never against the trigger
+ * policy: a person outranks it. What leaving a key out means depends on why it
+ * was asked. Asked keys are decided before named ones.
+ */
+function decideAnswered(
+  context: WorkScopeDecisionContext,
+  decision: DecisionRecorder,
+  event: Extract<WorkScopeDecisionEvent, { kind: "answered" }>,
+): void {
+  const { clarificationId, answer } = event;
+  decision.answered({ kind: "question_answered", clarificationId, answer, answeredBy: context.actor });
+  if (answer.kind === "unrecognised") return;
+  const named = answer.kind === "repositories" ? answer.repositoryKeys : [];
+  const askedKeys = new Set<RepositoryKey>();
+  for (const asked of event.asked) {
+    if (askedKeys.has(asked.repositoryKey)) continue;
+    askedKeys.add(asked.repositoryKey);
+    if (named.includes(asked.repositoryKey)) {
+      decision.write(
+        asked.repositoryKey,
+        { state: "selected", origin: "person", rationale: NAMED_RATIONALE },
+        clarificationId,
+      );
+      continue;
+    }
+    switch (asked.askedBecause) {
+      // The person could not give it: not a refusal, and it may expire.
+      case "not_enabled":
+      case "unusable":
+        decision.write(
+          asked.repositoryKey,
+          {
+            state: "unavailable",
+            unavailableReason: asked.askedBecause,
+            origin: "person",
+            rationale: LEFT_OUT_RATIONALE[asked.askedBecause],
+          },
+          clarificationId,
+        );
+        break;
+      // The person could have given it and declined.
+      case "outside_policy":
+        decision.write(
+          asked.repositoryKey,
+          { state: "excluded", origin: "person", rationale: LEFT_OUT_RATIONALE.outside_policy },
+          clarificationId,
+        );
+        break;
+      // The question never listed the matches as a choice to decline.
+      case "selection":
+        break;
+    }
+  }
+  for (const key of unique(named)) {
+    if (askedKeys.has(key)) continue;
+    decision.write(key, { state: "selected", origin: "person", rationale: NAMED_RATIONALE }, clarificationId);
+  }
+}
+
+/** A person's edit: any enabled catalog repository regardless of the policy,
+ *  decided as one change set. */
+function decideEdited(
+  facts: Facts,
+  decision: DecisionRecorder,
+  requested: WorkScopeEditRequest["changes"],
+): void {
+  // One change per repository, the last one the edit names. A remove and a
+  // select of one key in one plan would reach the store as a delete and an
+  // upsert of the same row in the same statement, where the row's fate is
+  // undefined.
+  const folded = new Map<RepositoryKey, WorkScopeEditRequest["changes"][number]>();
+  for (const change of requested) folded.set(change.repositoryKey, change);
+  const changes = [...folded.values()];
+  for (const change of changes) {
+    if (change.action === "select" && !facts.isEnabled(change.repositoryKey)) {
+      decision.rejectEdit(change.repositoryKey);
+    }
+  }
+  for (const change of changes) {
+    const rationale = change.rationale ?? "";
+    switch (change.action) {
+      case "select":
+        decision.write(change.repositoryKey, { state: "selected", origin: "person", rationale });
+        break;
+      case "exclude":
+        decision.write(change.repositoryKey, { state: "excluded", origin: "person", rationale });
+        break;
+      case "remove": {
+        // Remove lets the next run decide again; exclude is the sticky one.
+        const entry = facts.entries.get(change.repositoryKey);
+        if (entry) decision.remove(entry);
+        break;
+      }
+    }
+  }
+}

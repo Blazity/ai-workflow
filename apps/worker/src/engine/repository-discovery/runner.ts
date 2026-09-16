@@ -925,7 +925,7 @@ function isRefusalPart(text: string): boolean {
  *  to say there is nothing left to attach, read with or without the Jira
  *  author in front of it. The caller checks first that the answer names no
  *  repository. Anything else is left to the parser. */
-function isRefusalAnswer(answer: string): boolean {
+export function isRefusalAnswer(answer: string): boolean {
   // No letter or digit at all ("", "...") says nothing but "nothing to add".
   if (!/[a-z0-9]/i.test(answer)) return true;
   return answer
