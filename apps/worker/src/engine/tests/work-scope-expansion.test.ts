@@ -695,6 +695,16 @@ describe("a resumed run reads the record, never the answer text", () => {
       },
       workScope: { repositories: [] },
     },
+    /** The text parser reading a repository out of the same sentence the record
+     *  already used. A45 turns this into an unreadable answer; the guard that
+     *  keeps a consumed answer silent has to run on THAT, not on the attach. */
+    wouldAttach: {
+      decision: {
+        kind: "attach" as const,
+        repositories: [repository("github", "acme/db")],
+      },
+      workScope: { repositories: [] },
+    },
   };
 
   async function attachThenPassAgain(second: { decision: unknown; workScope: unknown }) {
@@ -758,9 +768,49 @@ describe("a resumed run reads the record, never the answer text", () => {
     expect(ctx.repositoryExpansion.unrecognisedAnswers).toBeUndefined();
   });
 
-  it("falls back to the protocol reader when the record recorded no new selection", async () => {
-    // "none" writes an unavailable entry and selects nothing, so there is
-    // nothing to attach and the run closes expansion exactly as it does today.
+  it("stays silent after an attach even when the text parser would attach again", async () => {
+    // The substitution A45 makes turns that reading into an unreadable answer,
+    // and the already-attached guard runs on the decision AFTER it, so the
+    // person who approved seconds ago is still asked nothing and still burns
+    // none of the two unreadable answers.
+    const { first, again, ctx } = await attachThenPassAgain(nothingLeftToAttach.wouldAttach);
+
+    expect(first.kind).toBe("attached");
+    expect(again.kind).toBe("noop");
+    expect(ctx.repositoryExpansion.unrecognisedAnswers).toBeUndefined();
+    expect(ctx.repositoryExpansion.expansionClosed).toBeUndefined();
+  });
+
+  it("attaches nothing that only the text parser could read, and asks again", async () => {
+    // The record's reader refused this answer on purpose: it is ambiguous by
+    // its own rules, which are the careful ones. Letting the older parser
+    // attach on the same sentence is the dumber reader overruling the one the
+    // record exists to install (A45). The person is asked once more instead,
+    // which is the cheaper mistake than a repository nobody chose.
+    const ctx = resumedCtx("maybe the api one");
+    const attach = vi.fn();
+
+    const result = await applyHumanRepositoryExpansion(ctx, {
+      resolve: async () => ({
+        decision: { kind: "attach", repositories: [repository("github", "acme/api")] },
+        workScope: { repositories: [] },
+      }),
+      attach,
+      fetchContexts: vi.fn(),
+    });
+
+    expect(result).toEqual({ kind: "clarification", questions: ctx.clarifications?.at(-1)?.questions });
+    expect(attach).not.toHaveBeenCalled();
+    // Bounded by the same two unreadable answers, so this cannot loop.
+    expect(ctx.repositoryExpansion.unrecognisedAnswers).toBe(1);
+    expect(ctx.repositoryExpansion.expansionClosed).toBeUndefined();
+  });
+
+  it("honours a refusal the record wrote no entry for", async () => {
+    // "none" to a question asked with reason selection legitimately writes no
+    // entry, so the empty record beside `exhausted` is the answer rather than a
+    // silence: the run closes expansion and asks nothing. Only an ATTACH the
+    // record did not make is refused.
     const ctx = resumedCtx("none");
 
     const result = await applyHumanRepositoryExpansion(ctx, {
@@ -774,6 +824,7 @@ describe("a resumed run reads the record, never the answer text", () => {
 
     expect(result.kind).toBe("noop");
     expect(ctx.repositoryExpansion.expansionClosed).toBe("human");
+    expect(ctx.repositoryExpansion.unrecognisedAnswers).toBeUndefined();
   });
 
   it("leaves a previous run's answer to the previous run, and keeps expansion open", async () => {

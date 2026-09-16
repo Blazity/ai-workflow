@@ -251,10 +251,29 @@ export async function applyHumanRepositoryExpansion(
   // one repository) is still a decision. Re-reading the sentence here would
   // ask the same person the same thing again, which is the loop the record
   // exists to end.
-  const verdict: RepositoryExpansionDecision =
-    resumed && resumed.repositories.length > 0
-      ? { kind: "attach", repositories: resumed.repositories }
-      : resolvedVerdict;
+  //
+  // ON A RUN THAT CARRIES A RECORD, THAT READER IS THE ONLY ONE (A45). When the
+  // record hands back nothing, an ATTACH from the text parser is refused rather
+  // than used: every ambiguity the record's reader resolves to unrecognised on
+  // purpose arrives here with nothing, and letting the older, weaker parser
+  // attach is the dumber reader succeeding where the careful one refused. The
+  // answer counts as unreadable instead, so the person is asked again, bounded
+  // by the two unreadable answers that already close expansion. Asking once
+  // more is the cheaper mistake than attaching a repository nobody chose.
+  //
+  // Only an attach is refused. `exhausted` still means the person refused, and
+  // a refusal to a selection question legitimately writes no entry, so an empty
+  // record there is the answer rather than a silence. A run that froze NO
+  // record keeps the old path whole, because there no better reader exists.
+  let verdict: RepositoryExpansionDecision = resolvedVerdict;
+  if (resumed && resumed.repositories.length > 0) {
+    verdict = { kind: "attach", repositories: resumed.repositories };
+  } else if (resumed && resolvedVerdict.kind === "attach") {
+    // The same question again, so the next answer is still read as repositories
+    // to attach: a question without the expansion marker is one whose answer is
+    // thrown away (AIW-377).
+    verdict = { kind: "unrecognised_answer", questions: latest.questions };
+  }
   const { action, state } = decideRepositoryExpansion({
     origin: "human",
     verdict,
