@@ -16,9 +16,13 @@ import { addElapsed, checksElapsedOf, createRunBudgetState, observeRunBudget, re
 import { isRunControlError } from "../helpers/run-control-error.js";
 import type {
   RunRepositoryAccess,
+  TriggerRepositoryPolicy,
   VcsProviderKind,
+  WorkScopeActor,
+  WorkScopeWritePlan,
   WorkflowRepositoryScope,
 } from "@shared/contracts";
+import type { RepositoryCatalogEntry } from "../repository-discovery/catalog.js";
 import type { CostProvider, TokenPrice } from "@shared/costs";
 import { combineHarnessRuntimeLimits } from "../../sandbox/harness-runtime-limits.js";
 import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
@@ -90,6 +94,25 @@ export async function ensurePlanningAgentSandboxForBlock(
 }
 
 /**
+ * What the resume step hands back: the protocol's own verdict, and what the
+ * subject's record says this run should now be holding.
+ *
+ * Two shapes, because a run suspended before the record existed replays the
+ * bare verdict this step used to return, and that run must resume exactly as it
+ * would have. The same tolerance the workspace gate gives `repositoryVersions`,
+ * for the same reason.
+ */
+export type ResolvedHumanRepositoryExpansion =
+  | RepositoryExpansionDecision
+  | {
+      decision: RepositoryExpansionDecision;
+      /** Absent when the run froze no record. `repositories` is what the record
+       *  selected and the workspace does not hold yet, decided exactly as a run
+       *  start would decide it. */
+      workScope?: { repositories: SelectedRepository[] };
+    };
+
+/**
  * AIW-147 IM-11: when a human answered the expansion-limit clarification, attach
  * the repositories they named beyond the model round limit and let research
  * continue. Detection keys on the LATEST clarification round matching the
@@ -116,7 +139,7 @@ export async function applyHumanRepositoryExpansion(
     resolve: (
       answer: string,
       attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
-    ) => Promise<RepositoryExpansionDecision>;
+    ) => Promise<ResolvedHumanRepositoryExpansion>;
     attach: (repositories: SelectedRepository[]) => Promise<{
       manifest: Extract<WorkspaceManifest, { version: 2 }>;
       cloneDurationMs: number;
@@ -148,13 +171,27 @@ export async function applyHumanRepositoryExpansion(
   if (!isRepositoryExpansionClarification(latest.questions)) {
     return { kind: "noop" };
   }
-  const verdict = await deps.resolve(
+  const resolved = await deps.resolve(
     latest.answer,
     ctx.selectedRepositories.map((repository) => ({
       provider: repository.provider,
       repoPath: repository.repoPath,
     })),
   );
+  // A run suspended before the step returned the record replays the verdict on
+  // its own, which is what every run did until now.
+  const resumed = "kind" in resolved ? undefined : resolved.workScope;
+  const resolvedVerdict = "kind" in resolved ? resolved : resolved.decision;
+  // THE RECORD OUTRANKS THE ANSWER TEXT. The answer was read and recorded when
+  // it arrived, by the one reader that knows what the question asked about, so
+  // a reply this in-run parser cannot read ("yes please" to a question about
+  // one repository) is still a decision. Re-reading the sentence here would
+  // ask the same person the same thing again, which is the loop the record
+  // exists to end.
+  const verdict: RepositoryExpansionDecision =
+    resumed && resumed.repositories.length > 0
+      ? { kind: "attach", repositories: resumed.repositories }
+      : resolvedVerdict;
   const { action, state } = decideRepositoryExpansion({
     origin: "human",
     verdict,
@@ -293,11 +330,18 @@ async function writeAndStartPhase(
   scriptPath: string,
   scriptContent: string,
   runtime?: ResolvedHarnessRuntime,
+  /** What the expansion before this pass refused, when it attached nothing.
+   *  The next zero-retry step on that path is this one, and a refusal has to
+   *  ride a step that cannot retry: it changes no entry, so losing the line to
+   *  a dead invocation costs nothing, while a second copy of it reads as an
+   *  agent that asked twice. Absent on every run that froze no record. */
+  workScopeWrite?: { subjectKey: string; runId: string; plans: WorkScopeWritePlan[] },
 ): Promise<
   | { ok: true; commandId: string }
   | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
 > {
   "use step";
+  if (workScopeWrite) await applyRunWorkScopePlans(workScopeWrite);
   const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
   const { commandProtocolFailure, protocolFailure } = await import(
     "../../sandbox/agents/protocol.js"
@@ -532,6 +576,11 @@ async function attachResearchRepositoriesStep(
   access: RunRepositoryAccess,
   /** The run's job timeout, from the settings it started with. */
   jobTimeoutMs: number,
+  /** What the decision that produced this attach wrote down about the subject's
+   *  work scope. It rides this step because the step cannot retry, and because
+   *  an attach is exactly the outcome that changes an entry. Absent on a run
+   *  that froze no record. */
+  workScopeWrite?: { subjectKey: string; runId: string; plans: WorkScopeWritePlan[] },
 ): Promise<{
   manifest: Extract<WorkspaceManifest, { version: 2 }>;
   cloneDurationMs: number;
@@ -596,6 +645,9 @@ async function attachResearchRepositoriesStep(
       manifest,
       artifacts,
     });
+    // After the clone, so a run that could not attach the repository does not
+    // record that it did.
+    if (workScopeWrite) await applyRunWorkScopePlans(workScopeWrite);
     return {
       manifest: attached,
       cloneDurationMs: Math.max(0, Date.now() - startedAt),
@@ -611,12 +663,18 @@ attachResearchRepositoriesStep.maxRetries = 0;
 // directory/env/allowlist imports stay out of the workflow bundle and the
 // decision is journaled for replay. The parsing/validation itself is pure and
 // lives in repository-discovery/runner.ts.
+// It is also where a resumed run reads its subject's record. The read, the
+// `resumed` decision and the write all happen here because this step cannot
+// retry: a retried trail line is a second identical line in a history whose
+// vocabulary has no reason for a repeat.
 async function resolveHumanRepositoryExpansionStep(
   answer: string,
   attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
   access: RunRepositoryAccess,
   repositoryScope?: WorkflowRepositoryScope,
-): Promise<RepositoryExpansionDecision> {
+  /** Absent on a run that froze no record, which is the whole old path. */
+  workScope?: RunWorkScopeResume,
+): Promise<ResolvedHumanRepositoryExpansion> {
   "use step";
   const {
     loadEnvironmentPort,
@@ -645,13 +703,156 @@ async function resolveHumanRepositoryExpansionStep(
       ).listRepositories(),
     ),
   );
-  return validateHumanRepositoryExpansion({
+  const decision = validateHumanRepositoryExpansion({
     answer,
     catalog,
     attached,
   });
+  if (!workScope) return decision;
+  return {
+    decision,
+    workScope: await resumeFromWorkScope(workScope, { catalog, access, attached }, repositoryScope),
+  };
 }
 resolveHumanRepositoryExpansionStep.maxRetries = 0;
+
+/** What a resumed run needs to read its own record: whose record, under which
+ *  policy, and in whose name the decision is written. */
+interface RunWorkScopeResume {
+  subjectKey: string;
+  runId: string;
+  policy: TriggerRepositoryPolicy;
+  actor: WorkScopeActor;
+}
+
+/**
+ * The record as the answer left it, turned into what this run should attach.
+ *
+ * It reads the subject's scope and its `selectionAnswered` flag, never the
+ * answer text and never a copy of it in the resume payload: the answer was
+ * decided when it arrived, so the entries ARE what the person said, and a re-read
+ * also sees a panel edit made between the answer and the wake. The `resumed`
+ * event decides those keys exactly as a run start would, so nothing the policy,
+ * the pin or the workspace cap refuses can arrive through a person's answer by
+ * a different door.
+ */
+async function resumeFromWorkScope(
+  resume: RunWorkScopeResume,
+  run: {
+    catalog: RepositoryCatalogEntry[];
+    access: RunRepositoryAccess;
+    attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>;
+  },
+  repositoryScope?: WorkflowRepositoryScope,
+): Promise<{ repositories: SelectedRepository[] }> {
+  const { catalog, attached } = run;
+  const { createRunWorkScopeRecorder, workScopeRepositoryKey } = await import(
+    "../work-scope/context.js"
+  );
+  const { readConnectedWorkScope, readConnectedWorkScopeSelectionAnswered } =
+    await import("../../db/repositories/work-scope.js");
+  const [scope, selectionAnswered] = await Promise.all([
+    readConnectedWorkScope(resume.subjectKey),
+    readConnectedWorkScopeSelectionAnswered(resume.subjectKey),
+  ]);
+  const byKey = new Map(
+    catalog.map((entry) => [workScopeRepositoryKey(entry), entry] as const),
+  );
+  const record = createRunWorkScopeRecorder({
+    subjectKey: resume.subjectKey,
+    scope,
+    selectionAnswered,
+    catalog: {
+      // The run's own answer, not this listing's: on a bridge nobody activated
+      // the catalog, so every repository reads as enabled and an entry recorded
+      // `not_enabled` may not expire here, or the person would be asked a
+      // second time about a repository nothing has enabled.
+      activated: run.access.activated,
+      enabledKeys: [...byKey.keys()],
+      unusableKeys: catalog.filter((entry) => !entry.usable).map(workScopeRepositoryKey),
+    },
+    ...(repositoryScope ? { repositoryScope } : {}),
+    policy: resume.policy,
+    actor: resume.actor,
+    // Read here, in the step, so the decision itself never touches a clock and
+    // a replay replays this step's stored result rather than reading the time
+    // again.
+    now: new Date().toISOString(),
+    attachedKeys: attached.map(workScopeRepositoryKey),
+  });
+  const selected = (scope?.entries ?? [])
+    .filter((entry) => entry.state === "selected")
+    .map((entry) => entry.repositoryKey);
+  const decision = record.decide({
+    kind: "resumed",
+    repositoryKeys: record.boundEventKeys(selected),
+  });
+  await applyRunWorkScopePlans({
+    subjectKey: resume.subjectKey,
+    runId: resume.runId,
+    plans: record.plans,
+  });
+  const repositories: SelectedRepository[] = [];
+  for (const key of decision.attach) {
+    const entry = byKey.get(key);
+    // Guarded rather than asserted: the decision reads the catalog built just
+    // above, and inventing a default branch for a repository nobody listed is
+    // how a clone fails inside a sandbox instead of here.
+    if (!entry) continue;
+    repositories.push({
+      provider: entry.provider,
+      repoPath: entry.repoPath,
+      defaultBranch: entry.defaultBranch,
+      selectedRationale: "recorded on this work",
+    });
+  }
+  return { repositories };
+}
+
+/**
+ * Apply what a run decided about its subject's work scope, from inside the step
+ * that carries it.
+ *
+ * Only ever called from a step with `maxRetries = 0`. A refusal line lost when
+ * an invocation dies is acceptable, because a refusal changes no entry; a
+ * DUPLICATED one is not, because the refusal vocabulary has no reason for a
+ * repeat and two identical lines read as an agent that asked twice.
+ *
+ * A FAILED WRITE IS LOGGED AND THE RUN CONTINUES, exactly as the selection's
+ * write is and for the same reason: this summarises what the run computed from
+ * inputs that all still exist, so a lost write costs a debugging line rather
+ * than a person's decision. The line carries the subject and the run so it can
+ * be found rather than merely counted.
+ */
+async function applyRunWorkScopePlans(write: {
+  subjectKey: string;
+  runId: string;
+  plans: WorkScopeWritePlan[];
+}): Promise<void> {
+  if (write.plans.length === 0) return;
+  try {
+    const { applyConnectedRunWorkScopePlan } = await import(
+      "../../db/repositories/work-scope.js"
+    );
+    for (const plan of write.plans) {
+      await applyConnectedRunWorkScopePlan({
+        subjectKey: write.subjectKey,
+        runId: write.runId,
+        plan,
+      });
+    }
+  } catch (error) {
+    const { logger } = await import("../../infra/logger.js");
+    logger.warn(
+      {
+        subjectKey: write.subjectKey,
+        runId: write.runId,
+        err: error instanceof Error ? error.message : String(error),
+      },
+      "work_scope_write_failed",
+    );
+  }
+}
 
 async function parseAgentOutputStep(
   agentKind: AgentKind,

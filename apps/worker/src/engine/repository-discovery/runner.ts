@@ -8,6 +8,14 @@ import {
   type RepositoryCatalogEntry,
 } from "./catalog.js";
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
+import {
+  workScopeWritePlanSchema,
+  type RepositoryKey,
+  type WorkScopeActor,
+  type WorkScopeAskedRepository,
+  type WorkScopeRefusalReason,
+  type WorkScopeWritePlan,
+} from "@shared/contracts";
 
 export const REPOSITORY_DISCOVERY_SCHEMA = JSON.stringify({
   type: "object",
@@ -127,6 +135,16 @@ export type RepositoryExpansionDecision =
   // it: the second unusable answer in a row is read as "no further
   // repositories" rather than asked about again (AIW-377).
   | { kind: "unrecognised_answer"; questions: string[] }
+  // The record, or a guard rail of the protocol, answered the request. Nobody
+  // is asked: no answer could be recorded against these repositories, so the
+  // same question would come back on the next run that behaves the same way
+  // (A22). The refusals ride the next research prompt and the decision trail;
+  // whatever the record still allows attaches beside them.
+  | {
+      kind: "refused";
+      refusals: Array<{ repositoryKey: RepositoryKey; reason: WorkScopeRefusalReason }>;
+      repositories: SelectedRepository[];
+    }
   | {
       kind: "clarification_needed";
       questions: string[];
@@ -135,6 +153,12 @@ export type RepositoryExpansionDecision =
        *  decision recognise the same request later and not put the same
        *  question to a person twice. */
       unavailable?: RepositoryIdentity[];
+      /** The repositories the record raised this question about, and why each
+       *  one was asked. Recorded when the question is ASKED, because by answer
+       *  time the clarification row is all that is left of it: an answer whose
+       *  clarification names no repository is dropped, and the next run asks
+       *  the same person the same thing. */
+      workScopeAsk?: WorkScopeAskedRepository[];
       /** Set only on a human answer every repository of which cannot be
        *  attached. The question still says why, but the answer counts toward
        *  the same bound as an unreadable one: a person who answers with the
@@ -286,6 +310,29 @@ export function validateRepositoryExpansionRequests(input: {
   /** The run's `askedUnavailable`: repositories a person was already asked
    *  about because the run cannot use them. Absent means none. */
   askedUnavailable?: string[];
+  /**
+   * The subject's work scope record, consulted BEFORE the catalog.
+   *
+   * It is what ends the loop this record exists for: a repository somebody
+   * already excluded or could not give on this ticket is refused here, with
+   * that reason and no question, instead of being put to them a second time.
+   * With it, the guard rails below refuse the MODEL rather than asking, because
+   * no answer to "which three are essential" can be recorded against a
+   * repository, so the same question would return on the next run that behaves
+   * the same way (A22).
+   *
+   * A callback rather than a decision already taken: a request the round limit
+   * refuses must plan nothing, so the record is consulted only once the rails
+   * above have let the request through. Absent on a run that froze no record,
+   * and every rule here is then exactly what it was.
+   */
+  workScope?: {
+    decideRequested(repositoryKeys: RepositoryKey[]): {
+      attach: RepositoryKey[];
+      ask: WorkScopeAskedRepository[];
+      refused: Array<{ repositoryKey: RepositoryKey; reason: WorkScopeRefusalReason }>;
+    };
+  };
 }): RepositoryExpansionDecision {
   const attachedKeys = new Set(input.attached.map(repositoryCatalogKey));
   // A repository a person was already asked about has had its answer, so it is
@@ -327,6 +374,20 @@ export function validateRepositoryExpansionRequests(input: {
     ]),
   );
   if (input.completedRounds >= 2) {
+    if (input.workScope) {
+      // The round limit refuses the model and asks nobody. The question it used
+      // to raise had no answer anything could keep: the record has no reason for
+      // "we ran out of rounds", so the person's answer would be spent on this
+      // run alone and the next run would ask it again (A22).
+      return {
+        kind: "refused",
+        refusals: freshRequestKeys(requests, attachedKeys).map((repositoryKey) => ({
+          repositoryKey,
+          reason: "rounds_exhausted" as const,
+        })),
+        repositories: [],
+      };
+    }
     // The round limit is what a person is asked about, and its text stays the
     // one the resume path recognises. Every repository in the request that the
     // run cannot use is carried on it all the same, so the decision records
@@ -348,6 +409,9 @@ export function validateRepositoryExpansionRequests(input: {
     // research itself could not name one. Report the no-op so the caller keeps
     // researching with what is attached (mirrors the already_attached rule).
     return { kind: "unnamed_request" };
+  }
+  if (input.workScope) {
+    return decideAgainstWorkScope(input.workScope, requests, catalog);
   }
   if (requests.length > 3) {
     return expansionClarification(
@@ -389,6 +453,219 @@ export function validateRepositoryExpansionRequests(input: {
     );
   }
   return { kind: "attach", repositories };
+}
+
+/** Every key a request names, in request order and once each. A repository
+ *  named twice in one round is one request: the refusal vocabulary has no
+ *  reason for a repeat, so two identical lines would read as an agent that
+ *  asked twice. */
+function requestedKeys(requests: ResearchRepository[]): RepositoryKey[] {
+  return [...new Set(requests.map((request) => repositoryCatalogKey(request)))];
+}
+
+/** The keys of a request the workspace does not already hold. What a rail
+ *  refuses: a repository the run is already working in is not a request
+ *  anybody has to be told "no" about. */
+function freshRequestKeys(
+  requests: ResearchRepository[],
+  attachedKeys: Set<string>,
+): RepositoryKey[] {
+  return requestedKeys(requests).filter((key) => !attachedKeys.has(key));
+}
+
+/**
+ * The request as the record decides it: what attaches, what is refused with the
+ * reason the model is told, and what a person is asked about.
+ *
+ * The decision itself belongs to the one pure work scope module, which the
+ * caller runs in workflow scope; this only turns its answer back into the
+ * verdict the expansion loop speaks. A second copy of "excluded" or "no room"
+ * here is how two paths start disagreeing about one ticket.
+ */
+function decideAgainstWorkScope(
+  workScope: NonNullable<
+    Parameters<typeof validateRepositoryExpansionRequests>[0]["workScope"]
+  >,
+  requests: ResearchRepository[],
+  catalog: Map<string, RepositoryCatalogEntry>,
+): RepositoryExpansionDecision {
+  const rationales = new Map(
+    requests.map((request) => [repositoryCatalogKey(request), request.rationale] as const),
+  );
+  // Every key, attached ones included: the three per request bound counts what
+  // the model asked for, and the decision answers an attached key with nothing
+  // of its own accord.
+  const decision = workScope.decideRequested(requestedKeys(requests));
+  const repositories: SelectedRepository[] = [];
+  for (const key of decision.attach) {
+    const repository = catalog.get(key);
+    // The decision reads the very catalog this validator was handed, so an
+    // attached key is always in it. Guarded rather than asserted, because
+    // inventing a default branch for a repository nobody listed is how a clone
+    // fails inside a sandbox instead of here.
+    if (!repository) continue;
+    repositories.push({
+      provider: repository.provider,
+      repoPath: repository.repoPath,
+      defaultBranch: repository.defaultBranch,
+      selectedRationale: rationales.get(key) ?? "requested by research",
+    });
+  }
+  if (decision.ask.length > 0) {
+    return {
+      kind: "clarification_needed",
+      questions: [workScopeExpansionQuestion(decision.ask)],
+      workScopeAsk: decision.ask,
+    };
+  }
+  if (decision.refused.length > 0) {
+    return { kind: "refused", refusals: decision.refused, repositories };
+  }
+  return repositories.length > 0
+    ? { kind: "attach", repositories }
+    : { kind: "already_attached" };
+}
+
+/**
+ * The one question the record raises about repositories research asked for.
+ *
+ * Every repository is named by its full catalog key, because the answer is read
+ * back against those keys and a question that listed none of them could not be
+ * answered in a way anything could record. A repository the trigger policy does
+ * not hold says what declining it means: it keeps the repository off THIS
+ * ticket, never off the workflow, because the record carries no definition and
+ * a decline recorded silently per ticket would surprise the next workflow on it
+ * (A29).
+ */
+function workScopeExpansionQuestion(asked: WorkScopeAskedRepository[]): string {
+  const outsidePolicy = asked.filter((one) => one.askedBecause === "outside_policy");
+  const unavailable = asked.filter((one) => one.askedBecause !== "outside_policy");
+  const reasons: string[] = [];
+  if (unavailable.length > 0) {
+    reasons.push(
+      `Research requested ${namedInFull(unavailable)}, which this run cannot use.` +
+        ` To use ${unavailable.length > 1 ? "them" : "it"}, enable ${unavailable.length > 1 ? "them" : "it"}` +
+        ` on the Repositories page and start a new run.`,
+    );
+  }
+  if (outsidePolicy.length > 0) {
+    reasons.push(
+      `Research requested ${namedInFull(outsidePolicy)}, which this trigger does not normally work on.`,
+    );
+  }
+  const refusal =
+    outsidePolicy.length > 0
+      ? `Reply "none" to continue without ${outsidePolicy.length > 1 ? "them" : "it"};` +
+        ` that keeps ${outsidePolicy.length > 1 ? "them" : "it"} out of this ticket, not out of the workflow.`
+      : `Reply "none" to continue without ${unavailable.length > 1 ? "them" : "it"};` +
+        ` the run stops if the agent cannot plan without ${unavailable.length > 1 ? "them" : "it"}.`;
+  return expansionQuestion(reasons.join(" "), refusal);
+}
+
+/** Repository keys as a person reads them, in full. */
+function namedInFull(asked: WorkScopeAskedRepository[]): string {
+  return asked.map((one) => one.repositoryKey).join(", ");
+}
+
+/**
+ * The catalog discovery offers the model, with the repositories this work has
+ * already decided against left out.
+ *
+ * Offering one would spend a round on a decision that is already made: the
+ * model picks it, the expansion refuses it without a question, and the run is
+ * exactly where it was. Between the selection wave and this one an exclusion
+ * was advisory, because this list is filtered by the definition pin and by
+ * nothing else; here it starts to bind.
+ *
+ * Nothing is marked and nothing is said about what was left out, because a list
+ * the model may not ask for is only noise. An UNUSABLE repository stays: the
+ * catalog already says it cannot be used, and removing it would hide a
+ * repository the record has decided nothing about.
+ */
+export function offerableRepositoryCatalog(
+  catalog: RepositoryCatalogEntry[],
+  record: { decidableKeys(keys: readonly RepositoryKey[]): RepositoryKey[] } | null,
+): RepositoryCatalogEntry[] {
+  if (!record) return catalog;
+  const open = new Set(
+    record.decidableKeys(
+      catalog.filter((entry) => entry.usable).map((entry) => repositoryCatalogKey(entry)),
+    ),
+  );
+  return catalog.filter(
+    (entry) => !entry.usable || open.has(repositoryCatalogKey(entry)),
+  );
+}
+
+/**
+ * What the model is told about one repository the run refused.
+ *
+ * An exclusion names who decided it and when. A model told only "no" asks
+ * again, and the person reading the run's status reason has to know whose
+ * decision to revisit: a widened trigger policy does not reach back into a
+ * ticket somebody already answered about, so the way back has to be visible
+ * rather than automatic (A32).
+ */
+export function repositoryExpansionRefusalSentence(
+  refusal: { repositoryKey: RepositoryKey; reason: WorkScopeRefusalReason },
+  entry?: { decidedBy: WorkScopeActor; decidedAt: string },
+): string {
+  const { repositoryKey } = refusal;
+  switch (refusal.reason) {
+    case "excluded":
+      return entry
+        ? `${repositoryKey} was excluded on this work by ${actorLabel(entry.decidedBy)} on ${entry.decidedAt}, so it is not attached.`
+        : `${repositoryKey} was excluded on this work, so it is not attached.`;
+    case "unavailable":
+      return `${repositoryKey} is recorded as unavailable on this work, so it is not attached. Enable it on the Repositories page and start a new run.`;
+    case "outside_catalog":
+      return `${repositoryKey} is not on the repository catalog this run may use, so it is not attached.`;
+    case "outside_policy":
+      return `${repositoryKey} is outside the repositories this trigger may take, so it is not attached.`;
+    case "workspace_cap":
+      return `${repositoryKey} does not fit this run's ${MAX_WORKSPACE_REPOSITORIES}-repository workspace, so it is not attached.`;
+    case "request_limit":
+      return `${repositoryKey} was refused because more than three repositories were requested at once.`;
+    case "rounds_exhausted":
+      return `${repositoryKey} was refused because this run has used up its repository expansion rounds.`;
+  }
+}
+
+/** Who decided, as a sentence names them. */
+function actorLabel(actor: WorkScopeActor): string {
+  return actor.kind === "person" ? actor.actorLabel : `run ${actor.runId}`;
+}
+
+/**
+ * The write plan for refusals the record itself could not make.
+ *
+ * The round limit is the one rail the record knows nothing about, so its lines
+ * are the caller's to append; every other refusal was planned by the decision
+ * that made it, and planning it twice would put two identical lines in a trail
+ * whose vocabulary has no reason for a repeat.
+ */
+export function repositoryExpansionRefusalPlan(
+  refusals: Array<{ repositoryKey: RepositoryKey; reason: WorkScopeRefusalReason }>,
+): WorkScopeWritePlan {
+  // Parsed, not trusted, exactly as a decided plan is: this is about to be
+  // spelled into one SQL statement as jsonb, where a shape the contract refuses
+  // would land as a row nothing can read back rather than as an error anyone
+  // sees.
+  const parsed = workScopeWritePlanSchema.safeParse({
+    upserts: [],
+    deletes: [],
+    trail: refusals.map(({ repositoryKey, reason }) => ({
+      kind: "request_refused",
+      repositoryKey,
+      reason,
+    })),
+  });
+  if (!parsed.success) {
+    throw new Error(
+      `repository expansion refusal plan does not match the contract: ${parsed.error.message}`,
+    );
+  }
+  return parsed.data;
 }
 
 export interface ParsedRepositoryIdentity {
@@ -697,6 +974,44 @@ export function decideRepositoryExpansion(input: {
     // over the verdict union, because the alternative is falling through to the
     // round-counting path below, which would record a round that never ran.
     return { action: { kind: "ask_unrecognised", questions: verdict.questions }, state };
+  }
+  if (verdict.kind === "refused") {
+    // Nobody is asked, so nothing can answer this. The first refusal passes
+    // through and rides the next research prompt, which is how the model is
+    // told before a repeat ends the run: that is the same bound a closed
+    // expansion uses, and for the same reason.
+    if (state.expansionClosed) {
+      const closedRequests = (state.closedRequests ?? 0) + 1;
+      if (closedRequests >= MAX_CLOSED_REQUESTS) {
+        return {
+          action: {
+            kind: "fail",
+            message: closedExpansionFailure(requests, state.askedUnavailable ?? []),
+          },
+          state,
+        };
+      }
+      return { action: { kind: "proceed" }, state: { ...state, closedRequests } };
+    }
+    const advanced: RepositoryExpansionState = {
+      ...state,
+      rounds: state.rounds + 1,
+      priorRequests: [...state.priorRequests, ...requests],
+    };
+    if (verdict.repositories.length > 0) {
+      // Some of the request was honoured, so expansion is open: the refusals
+      // beside it are about those repositories, not about the run.
+      return {
+        action: { kind: "attach", repositories: verdict.repositories },
+        state: { ...advanced, allAttachedRequests: 0 },
+      };
+    }
+    return {
+      action: { kind: "proceed" },
+      state: verdict.refusals.every((refusal) => refusal.reason === "rounds_exhausted")
+        ? { ...advanced, expansionClosed: "bound" as const }
+        : advanced,
+    };
   }
   const unavailable =
     verdict.kind === "clarification_needed" ? (verdict.unavailable ?? []) : [];

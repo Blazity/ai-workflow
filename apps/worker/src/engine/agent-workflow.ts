@@ -14,7 +14,12 @@ import {
   resolveRunTriggerRepositoryPolicy,
   runWorkScopeSubjectKey,
 } from "./work-scope/policy.js";
-import { consumeWorkScopeAsk } from "./work-scope/context.js";
+import {
+  consumeWorkScopeAsk,
+  createRunWorkScopeRecorder,
+  workScopeRepositoryKey,
+  type RunWorkScopeRecorder,
+} from "./work-scope/context.js";
 import { computeUsageTotals } from "../sandbox/usage.js";
 import type { AgentOutput, PhaseUsage, ResearchResult, ReviewOutput } from "../sandbox/agents/types.js";
 import type { AgentKind } from "../sandbox/agents/index.js";
@@ -71,7 +76,8 @@ import { isRunControlError } from "./helpers/run-control-error.js";
 import { BLOCK_EXECUTORS } from "./blocks/executors.generated.js";
 import { createWorkflowExecutionErrorState, isTriggerBlockType, RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import { defaultBuiltinHarnessProfile } from "@shared/harness";
-import type { BlockOutput, BlockRunState, RunPullRequest, RunAnalysisReport, TransformConfiguration, WorkflowBlockType, WorkflowDefinitionNode, WorkflowDefinitionV2, WorkflowExecutionErrorState, WorkflowParamValue, HarnessRunManifestRecord } from "@shared/contracts";
+import type { BlockOutput, BlockRunState, RunPullRequest, RunAnalysisReport, TransformConfiguration, WorkflowBlockType, WorkflowDefinitionNode, WorkflowDefinitionV2, WorkflowExecutionErrorState, WorkflowParamValue, HarnessRunManifestRecord, WorkScopeActor, WorkScopeWritePlan } from "@shared/contracts";
+import type { RepositoryCatalogEntry } from "./repository-discovery/catalog.js";
 import type { CostProvider, CostProviderKind, TokenPrice } from "@shared/costs";
 import type { ResolvedHarnessRuntime } from "../sandbox/harness-runtime.js";
 import { buildResearchAnalysisReportBestEffort, loadApprovedPlanAnalysisReportBestEffort, logPhaseFailure, logWorkflowExecutionErrorStep, markRunFailedOnSelfMoveStep, markRunSucceededOnSelfMoveStep, markTicketFailed, notifyTicket, notifyTicketBestEffort, postFailureReasonCommentStep, postPrLinksComment, postRunAnalysisCommentStep, postTicketComment, recordRunAnalysisCommentFailureBestEffort, recordRunAnalysisReportBestEffort, recordRunFailureReasonStep, safeRunAnalysisDeliveryError, safeRunAnalysisReportError } from "./steps/ticket-analysis.js";
@@ -1620,6 +1626,77 @@ async function agentWorkflowBody(
         materializedClarificationSignatures.set(ctx.sandboxId, signature);
       };
       let repositorySelectionObserved = false;
+      // Who the record names as the author of every entry this run writes. A run
+      // without a deployed definition behind it cannot be named that way, and an
+      // entry attributed to nobody is worse than no entry: the origin ranking is
+      // how a later run decides whether it may overwrite this one. The selection
+      // path reads it exactly this way.
+      const runWorkScopeActor: WorkScopeActor | null =
+        ctx.definitionId !== null && ctx.definitionVersion !== null
+          ? {
+              kind: "run",
+              runId: workflowRunId,
+              definitionId: ctx.definitionId,
+              definitionVersion: ctx.definitionVersion,
+            }
+          : null;
+      /**
+       * The subject's record, as this run's own repository decisions read it.
+       * Null on a run that froze none, which is the whole old path: nothing
+       * decided, nothing written, nothing said.
+       *
+       * The instant is the run's own journalled clock rather than a fresh read.
+       * This runs in WORKFLOW scope, which replays on every wake of a parked
+       * run, so reading the time here would give two executions of one run two
+       * different plans. A trail row carries the database's own instant; an
+       * entry records the moment the run that wrote it began.
+       */
+      const runWorkScopeRecorder = (
+        catalog: RepositoryCatalogEntry[],
+        attachedKeys: string[],
+      ): RunWorkScopeRecorder | null => {
+        const frozen = ctx.workScope;
+        const policy = ctx.workScopePolicy;
+        if (!frozen || !policy || !runWorkScopeActor) return null;
+        return createRunWorkScopeRecorder({
+          subjectKey: frozen.subjectKey,
+          scope: frozen.scope,
+          selectionAnswered: frozen.selectionAnswered,
+          catalog: {
+            activated: ctx.repositories.activated,
+            enabledKeys: catalog.map(workScopeRepositoryKey),
+            unusableKeys: catalog
+              .filter((repository) => !repository.usable)
+              .map(workScopeRepositoryKey),
+          },
+          ...(ctx.repositoryScope ? { repositoryScope: ctx.repositoryScope } : {}),
+          policy,
+          actor: runWorkScopeActor,
+          now: new Date(budgetStartedAtMs).toISOString(),
+          attachedKeys,
+        });
+      };
+      /**
+       * What a decision wrote down, waiting for a step that cannot retry.
+       *
+       * The decisions themselves run in workflow scope and may not write: a
+       * replay would append the trail a second time. An attach carries its own
+       * plan into `attachResearchRepositoriesStep`; a request that only refused
+       * has no attach to ride, so it waits here for the next zero-retry step on
+       * the same path, which is the `writeAndStartPhase` of the research pass
+       * that follows.
+       */
+      let pendingWorkScopeWrite:
+        | { subjectKey: string; runId: string; plans: WorkScopeWritePlan[] }
+        | null = null;
+      const takePendingWorkScopeWrite = () => {
+        const write = pendingWorkScopeWrite;
+        pendingWorkScopeWrite = null;
+        return write ?? undefined;
+      };
+      /** What the run refused the model, in the model's next research prompt.
+       *  A model told only "no" asks again, and the run pays another pass. */
+      const expansionRefusals: string[] = [];
       const discoverRepositories = async (
         discovery: NonNullable<EngineCtx["repositoryDiscovery"]>,
         execution?: BlockInvocationContext,
@@ -1663,9 +1740,18 @@ async function agentWorkflowBody(
           defaultModel,
           REPOSITORY_DISCOVERY_SCHEMA,
         );
+        // The record binds what the model may pick: a repository somebody
+        // excluded on this work is not offered, and nothing is said about it.
+        const { offerableRepositoryCatalog } = await import(
+          "./repository-discovery/runner.js"
+        );
+        const offered = offerableRepositoryCatalog(
+          discovery.catalog,
+          runWorkScopeRecorder(discovery.catalog, []),
+        );
         const prompt = assembleRepositoryDiscoveryPrompt({
           ticket: ctx.ticket,
-          discovery,
+          discovery: { ...discovery, catalog: offered },
         });
         const launched = await writeAndStartPhase(
           sandboxId,
@@ -1712,14 +1798,14 @@ async function agentWorkflowBody(
         );
         const decision = validateRepositoryDiscoveryResult(
           parsed.result.value,
-          discovery.catalog,
+          offered,
           discovery.mandatoryRepositories,
         );
         if (decision.kind === "selected") {
           await emitRepositoryWorkflowObservation(execution?.observations, {
             event: "selection",
             source: "harness",
-            catalogSize: discovery.catalog.length,
+            catalogSize: offered.length,
             selectedCount: decision.repositories.length,
             confidence: decision.confidence,
           });
@@ -1756,19 +1842,89 @@ async function agentWorkflowBody(
             { category: "sandbox", phase: "research" },
           );
         }
-        const { decideRepositoryExpansion, validateRepositoryExpansionRequests } =
-          await import("./repository-discovery/runner.js");
+        const {
+          decideRepositoryExpansion,
+          repositoryExpansionRefusalPlan,
+          repositoryExpansionRefusalSentence,
+          validateRepositoryExpansionRequests,
+        } = await import("./repository-discovery/runner.js");
+        const freshCatalog = await listFreshRepositoryCatalogStep(
+          ctx.repositories,
+          ctx.repositoryScope,
+        );
+        // The record answers before the catalog. A repository this work already
+        // holds as excluded or unavailable is refused with that reason and no
+        // question, which is the line that ends the loop the record exists for:
+        // the model asks, the run asks a person, and the person answers a
+        // question they already answered on this ticket.
+        const record = runWorkScopeRecorder(
+          freshCatalog,
+          ctx.selectedRepositories.map(workScopeRepositoryKey),
+        );
         const verdict = validateRepositoryExpansionRequests({
           requests,
-          catalog: await listFreshRepositoryCatalogStep(
-            ctx.repositories,
-            ctx.repositoryScope,
-          ),
+          catalog: freshCatalog,
           attached: ctx.selectedRepositories,
           completedRounds: ctx.repositoryExpansion.rounds,
           allAttachedRequests: ctx.repositoryExpansion.allAttachedRequests ?? 0,
           askedUnavailable: ctx.repositoryExpansion.askedUnavailable,
+          ...(record
+            ? {
+                workScope: {
+                  decideRequested: (repositoryKeys) =>
+                    record.decide({ kind: "requested", repositoryKeys }),
+                },
+              }
+            : {}),
         });
+        if (record) {
+          // The round limit is the one rail the record knows nothing about, so
+          // its lines are planned here; every other refusal was planned by the
+          // decision that made it, and planning it twice would put two
+          // identical lines in a trail whose vocabulary has no reason for a
+          // repeat.
+          const plans = [
+            ...record.plans,
+            ...(verdict.kind === "refused"
+              ? [
+                  repositoryExpansionRefusalPlan(
+                    verdict.refusals.filter(
+                      (refusal) => refusal.reason === "rounds_exhausted",
+                    ),
+                  ),
+                ]
+              : []),
+          ].filter(
+            (written) =>
+              written.upserts.length > 0 ||
+              written.deletes.length > 0 ||
+              written.trail.length > 0,
+          );
+          if (plans.length > 0) {
+            pendingWorkScopeWrite = {
+              subjectKey: record.subjectKey,
+              runId: workflowRunId,
+              plans,
+            };
+          }
+          if (verdict.kind === "refused") {
+            const recorded = new Map(
+              (ctx.workScope?.scope?.entries ?? []).map(
+                (row) => [row.repositoryKey, row] as const,
+              ),
+            );
+            for (const refusal of verdict.refusals) {
+              const decided = recorded.get(refusal.repositoryKey);
+              const sentence = repositoryExpansionRefusalSentence(
+                refusal,
+                decided
+                  ? { decidedBy: decided.decidedBy, decidedAt: decided.decidedAt }
+                  : undefined,
+              );
+              if (!expansionRefusals.includes(sentence)) expansionRefusals.push(sentence);
+            }
+          }
+        }
         // The policy is the pure decideRepositoryExpansion; this closure only
         // performs the action it names and stores the state it returns
         // (AIW-377).
@@ -1783,6 +1939,19 @@ async function agentWorkflowBody(
           // about is recorded there, so the same question is never raised
           // twice in one run.
           ctx.repositoryExpansion = expansionState;
+          // What this question is about, set immediately before it is raised
+          // and never once at the top: the park chain TAKES the field as it
+          // reads it, so a later question in the same run cannot inherit these
+          // repositories. A repository question that reaches a person without
+          // it settles nothing, because the answer path drops an answer whose
+          // clarification names no repository, and the next run asks the same
+          // person the same thing.
+          if (record && verdict.kind === "clarification_needed" && verdict.workScopeAsk) {
+            ctx.workScopeAsk = {
+              subjectKey: record.subjectKey,
+              askedRepositories: verdict.workScopeAsk,
+            };
+          }
           return planningClarificationResult(action.questions);
         }
         if (action.kind === "fail") {
@@ -1824,6 +1993,9 @@ async function agentWorkflowBody(
           },
           ctx.repositories,
           ctx.settings.JOB_TIMEOUT_MS,
+          // An attach is the outcome that changes an entry, and this step
+          // cannot retry, so the whole decision rides it.
+          takePendingWorkScopeWrite(),
         );
         const repositories = [
           ...ctx.selectedRepositories,
@@ -2057,6 +2229,18 @@ async function agentWorkflowBody(
                   attached,
                   ctx.repositories,
                   ctx.repositoryScope,
+                  // The resumed run takes its repositories from the RECORD, so
+                  // the step reads it rather than the sentence a person wrote:
+                  // the answer was read and recorded when it arrived, by the
+                  // one reader that knew what the question asked about.
+                  ctx.workScope && ctx.workScopePolicy && runWorkScopeActor
+                    ? {
+                        subjectKey: ctx.workScope.subjectKey,
+                        runId: workflowRunId,
+                        policy: ctx.workScopePolicy,
+                        actor: runWorkScopeActor,
+                      }
+                    : undefined,
                 ),
               attach: (repositories) => {
                 if (!ctx.sandboxId || ctx.workspaceManifest?.version !== 2) {
@@ -2178,6 +2362,20 @@ async function agentWorkflowBody(
                 ].join("\n"),
               });
             }
+            if (expansionRefusals.length > 0) {
+              // The refusals of this run, said to the model rather than to a
+              // person: no answer to them could be recorded against a
+              // repository, so a question would come back on the next run that
+              // behaved the same way.
+              researchAdditions.push({
+                target: ["research" as const],
+                title: "Repository requests this run refused",
+                content: [
+                  ...expansionRefusals,
+                  "Requesting these again changes nothing. Plan with the repositories already attached, and if one of them is genuinely required, say so in the result, naming it and what it is needed for, instead of requesting it.",
+                ].join("\n"),
+              });
+            }
             if (ctx.repositoryExpansion.expansionClosed) {
               // Expansion is closed, so the model needs to know that asking
               // again changes nothing. It is told what it can do instead, and
@@ -2241,6 +2439,11 @@ async function agentWorkflowBody(
               researchPaths.input, researchInput,
               researchPaths.wrapper, researchScript,
               runtime,
+              // The next step that cannot retry after an expansion that only
+              // refused. A refusal changes no entry, so losing the line to a
+              // dead invocation costs nothing; a retried one would read as an
+              // agent that asked twice.
+              takePendingWorkScopeWrite(),
             );
             if (!researchLaunch.ok) return agentProtocolBlockError(researchLaunch.failure);
             const researchCommandId = researchLaunch.commandId;
