@@ -5,6 +5,7 @@ import type {
   WorkflowDefinitionV2Node,
   WorkflowRepositoryScope,
   RunAnalysisReport,
+  TriggerRepositoryPolicy,
 } from "@shared/contracts";
 import type { CostProviderKind } from "@shared/costs";
 import type {
@@ -28,6 +29,8 @@ import type {
   WorkspaceRepositoryInput,
 } from "../../../sandbox/repo-workspace.js";
 import type { WorkspacePublicationResult } from "../../steps/workspace-publication.js";
+import type { RunStartWorkScope } from "../../steps/run-start-settings.js";
+import type { RunTriggerRepositoryPolicySource } from "../../work-scope/policy.js";
 import type { LoadedPrompts } from "../../steps/prompts-step.js";
 import type { AgentWorkflowInput } from "../../agent-input.js";
 import type {
@@ -84,6 +87,27 @@ export interface EngineCtx {
    * stops the next run, not this one.
    */
   repositories: RunRepositoryAccess;
+  /**
+   * Which repositories this subject's work touches and why, frozen by the same
+   * step, and whether a person has already answered the which-of-these
+   * question on the subject.
+   *
+   * Absent means no record was read: a schedule occurrence or a delivery that
+   * resolved no subject, an approved plan working from the snapshot a person
+   * approved, or a run replaying a run-start result stored before the field
+   * existed. Absent is therefore the behaviour of every run before this
+   * shipped, never an empty record standing in for one.
+   */
+  workScope?: RunStartWorkScope;
+  /**
+   * The repository policy this run's trigger stands under, resolved once from
+   * the deployed graph after it loaded. Absent for a block type that carries
+   * none, which is `trigger_plan_approved` today.
+   */
+  workScopePolicy?: TriggerRepositoryPolicy;
+  /** Which rung of the A35 ladder answered, so a status reason can say why the
+   *  run is bounded the way it is. */
+  workScopePolicySource?: RunTriggerRepositoryPolicySource;
   /**
    * The setup failures that stopped workspace creation, when one did.
    *

@@ -8,6 +8,12 @@ import {
   isRepositoryCatalogRefusal,
   workflowNeedsRepositoryAccess,
 } from "./support/repository-access.js";
+// Pure too: which subject this run freezes a record for, and the policy ladder
+// its trigger stands on.
+import {
+  resolveRunTriggerRepositoryPolicy,
+  runWorkScopeSubjectKey,
+} from "./work-scope/policy.js";
 import { computeUsageTotals } from "../sandbox/usage.js";
 import type { AgentOutput, PhaseUsage, ResearchResult, ReviewOutput } from "../sandbox/agents/types.js";
 import type { AgentKind } from "../sandbox/agents/index.js";
@@ -384,14 +390,24 @@ async function agentWorkflowBody(
     runStartHasNoEnabledRepository,
     runStartRepositoryAccess,
     runStartSettings,
+    runStartWorkScope,
   } = await import("./steps/run-start-settings.js");
-  const runStart = await loadRunStartSettingsStep();
+  // Which subject's work scope this run freezes, decided by the CALLER rather
+  // than by the step: a schedule occurrence and a delivery that resolved no
+  // subject get a new subject key every time, so a record would be written once
+  // and never read, and only the entry can tell the two webhook cases apart.
+  const workScopeSubjectKey = runWorkScopeSubjectKey(entry);
+  const runStart = await loadRunStartSettingsStep({ workScopeSubjectKey });
   // Through the accessors, never off the stored result: a run suspended across
   // a deploy that adds a registry key replays a snapshot written without it,
   // and these two fill the gap with what the deployment would have defaulted to
   // rather than handing the run `undefined`.
   const runSettings = runStartSettings(runStart);
   const runRepositories = runStartRepositoryAccess(runStart);
+  // Through the accessor for the same reason, and null here is the whole old
+  // path: a run replaying a result stored before the field existed decides
+  // repositories exactly as it did before this shipped.
+  const runWorkScope = runStartWorkScope(runStart);
 
   // After the settings read, deliberately. The budget clock starts when the run
   // starts doing work, and the step above is the run reading its own
@@ -592,6 +608,26 @@ async function agentWorkflowBody(
     );
     return;
   }
+  // The repository policy this run stands under, resolved ONCE from the graph
+  // it just loaded. It cannot be read at run start: nothing the run start reads
+  // carries a trigger node's configuration, and only a webhook and a schedule
+  // even know which node they entered through. A35 is the ladder below, and
+  // `source` records which rung answered so a status reason can say why the run
+  // is bounded the way it is.
+  const runTriggerPolicy = resolveRunTriggerRepositoryPolicy({
+    entryKind: entry.kind,
+    triggerType: entryTriggerType,
+    ...(entry.kind === "webhook_trigger" || entry.kind === "schedule"
+      ? { nodeId: entry.nodeId }
+      : {}),
+    plan,
+    ...(plan.repositoryScope ? { definitionPin: plan.repositoryScope } : {}),
+    // A delivery that resolved no subject of its own can never be asked twice
+    // about one repository, which is the whole condition the webhook kind
+    // default turns "ask once" on for.
+    webhookHasSubjectPath: entry.kind === "webhook_trigger" && workScopeSubjectKey !== null,
+  });
+
   if (entry.kind === "pr_trigger" && entry.scope === "any") {
     const issues = await validateReviewSafePlanStep(plan.nodes, plan.edges);
     if (issues.length > 0) {
@@ -1055,6 +1091,12 @@ async function agentWorkflowBody(
       runId: workflowRunId,
       settings: runSettings,
       repositories: runRepositories,
+      // Beside the frozen settings and the frozen repository list because they
+      // are the same promise: read once at run start, then handed down. The
+      // three travel together, and an absent scope is a run that read none.
+      ...(runWorkScope === null ? {} : { workScope: runWorkScope }),
+      ...(runTriggerPolicy.policy === null ? {} : { workScopePolicy: runTriggerPolicy.policy }),
+      workScopePolicySource: runTriggerPolicy.source,
       definitionId: plan.definitionId,
       definitionVersion: plan.version,
       definitionNodes: plan.nodes,

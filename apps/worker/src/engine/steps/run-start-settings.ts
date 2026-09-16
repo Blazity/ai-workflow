@@ -32,7 +32,24 @@ import {
   runRepositoryEnabledKeys,
   type RunRepositoryAccess,
   type SettingsSnapshot,
+  type WorkScope,
 } from "@shared/contracts";
+
+/**
+ * The record of which repositories this subject's work touches, as the run
+ * froze it.
+ *
+ * `scope` is null when nothing was ever written for the subject, which is a
+ * different fact from the field being absent: absent means no record was read
+ * at all. `selectionAnswered` travels beside the entries because the answer it
+ * reports records none: "none of these" to the which-of-these question writes
+ * no entry by design, so without this flag the next run asks it again.
+ */
+export interface RunStartWorkScope {
+  subjectKey: string;
+  scope: WorkScope | null;
+  selectionAnswered: boolean;
+}
 
 /**
  * The run-start result, as the journal stores it.
@@ -53,6 +70,12 @@ export interface RunStartSettings {
    *  bridge, where every repository the installation exposes is reachable,
    *  which is exactly what a deployment without a catalog did. */
   repositories?: RunRepositoryAccess;
+  /** Absent on a result stored before this field existed, and on a run whose
+   *  subject carries no record at all (a schedule occurrence, a delivery that
+   *  resolved no subject). Absent means no record was read, which puts the run
+   *  on the whole path it took before this field existed; there is no default
+   *  that pretends one was. */
+  workScope?: RunStartWorkScope;
 }
 
 /**
@@ -63,20 +86,37 @@ export interface RunStartSettings {
  * operator's save returns the later value, which is the same window every
  * entry point has and is why the read happens once rather than per block.
  */
-export async function loadRunStartSettingsStep(): Promise<RunStartSettings> {
+export async function loadRunStartSettingsStep(input: {
+  /** The subject whose work scope this run freezes, or null for a run that
+   *  carries none. The CALLER decides with `carriesWorkScope`
+   *  (`engine/work-scope/subject.ts`), because whether a webhook delivery
+   *  resolved a subject of its own is read off the entry, not off this step. */
+  workScopeSubjectKey: string | null;
+}): Promise<RunStartSettings> {
   "use step";
   const { readAllConnectedSettings } = await import("../../db/repositories/settings.js");
   const {
     getConnectedRepositoryCatalogStateRow,
     listConnectedRepositoryCatalogKeys,
   } = await import("../../db/repositories/repository-catalog.js");
+  const {
+    readConnectedWorkScope,
+    readConnectedWorkScopeSelectionAnswered,
+  } = await import("../../db/repositories/work-scope.js");
   const { settingsEnvironment } = await import("../../infra/settings-environment.js");
   const { logger } = await import("../../infra/logger.js");
 
-  const [rows, stateRow, keys] = await Promise.all([
+  const subjectKey = input.workScopeSubjectKey;
+  const [rows, stateRow, keys, scope, selectionAnswered] = await Promise.all([
     readAllConnectedSettings(),
     getConnectedRepositoryCatalogStateRow(),
     listConnectedRepositoryCatalogKeys(),
+    // Beside the other two rather than after them: they are all pure reads of
+    // this deployment's state, and a run start pays one round trip for them.
+    subjectKey === null ? Promise.resolve(null) : readConnectedWorkScope(subjectKey),
+    subjectKey === null
+      ? Promise.resolve(false)
+      : readConnectedWorkScopeSelectionAnswered(subjectKey),
   ]);
   const { snapshot } = resolveSettingsSnapshot(
     new Map(rows.map((row) => [row.key, row.value])),
@@ -100,7 +140,12 @@ export async function loadRunStartSettingsStep(): Promise<RunStartSettings> {
     },
     "run_start_settings",
   );
-  return { version: 1, settings: snapshot, repositories };
+  return {
+    version: 1,
+    settings: snapshot,
+    repositories,
+    ...(subjectKey === null ? {} : { workScope: { subjectKey, scope, selectionAnswered } }),
+  };
 }
 // A pure read with no write to undo, so a transient database error is worth
 // retrying rather than failing a run that has not started yet.
@@ -135,6 +180,22 @@ export function runStartRepositoryAccess(
   stored: RunStartSettings,
 ): RunRepositoryAccess {
   return stored.repositories ?? { activated: false, enabledKeys: [] };
+}
+
+/**
+ * The work scope a stored run-start result means, or null when it read none.
+ *
+ * Null is the whole old path: a run suspended across the deploy that added the
+ * field replays a result written without it, and every decision below must go
+ * on behaving exactly as it did, clarification re-read included. There is no
+ * half-new path and no empty record standing in for one that was never read,
+ * which is why this returns null rather than an empty scope.
+ *
+ * Pure, so the workflow body may call it, and it is the one way a caller takes
+ * the value: nothing below reads `stored.workScope` directly.
+ */
+export function runStartWorkScope(stored: RunStartSettings): RunStartWorkScope | null {
+  return stored.workScope ?? null;
 }
 
 /**

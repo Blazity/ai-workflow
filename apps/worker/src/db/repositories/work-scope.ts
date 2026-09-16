@@ -8,7 +8,7 @@ import {
   type WorkScopeTrailRow,
   type WorkScopeWritePlan,
 } from "@shared/contracts";
-import type { Db } from "../client.js";
+import { getDb, type Db } from "../client.js";
 import { workScopeEntries, workScopes, workScopeTrail } from "../schema.js";
 
 const TRAIL_PAGE_LIMIT_MAX = 200;
@@ -68,6 +68,49 @@ export async function readWorkScope(db: Db, subjectKey: string): Promise<WorkSco
     entries.push(toEntry(row as StoredEntry));
   }
   return { subjectKey, version: first.version, entries };
+}
+
+/**
+ * Whether a person has already answered the "which of these repositories"
+ * question on this subject.
+ *
+ * It is read from the trail rather than from the entries because that answer
+ * can record nothing: "none of these" writes no entry by design, so a run
+ * looking at the entries alone could not tell the question from one nobody ever
+ * asked, and would ask it again on its next start. An `unrecognised` answer
+ * leaves this false: nobody decided anything, so a later run may ask once more.
+ *
+ * One statement, and the answer must sit on the SAME subject as the question:
+ * the record is per subject, and a clarification id is the only thing the two
+ * rows share.
+ */
+export async function readWorkScopeSelectionAnswered(
+  db: Db,
+  subjectKey: string,
+): Promise<boolean> {
+  const result = await db.execute(sql`
+    SELECT EXISTS (
+      SELECT 1
+      FROM ${workScopeTrail} AS asked
+      JOIN ${workScopeTrail} AS given
+        ON given.subject_key = asked.subject_key
+        AND given.kind = 'question_answered'
+        AND given.event ->> 'clarificationId' = asked.event ->> 'clarificationId'
+      WHERE asked.subject_key = ${subjectKey}::text
+        AND asked.kind = 'question_asked'
+        AND given.event -> 'answer' ->> 'kind' IN ('none', 'repositories')
+        -- The question is the selection one when ANY repository it named was
+        -- asked about for that reason; a question mixing reasons still asked it.
+        AND EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(asked.event -> 'repositories') AS repository
+          WHERE repository ->> 'askedBecause' = 'selection'
+        )
+    ) AS answered
+  `);
+  const row = (result as { rows?: Array<{ answered: boolean }> }).rows?.[0];
+  if (!row) throw new Error("work scope selection read returned no row");
+  return row.answered;
 }
 
 /**
@@ -569,4 +612,20 @@ export async function applyAnswerWorkScopePlan(
   if (!row) throw new Error("work scope answer returned no outcome");
   if (!row.answered) return { outcome: "already_applied" };
   return { outcome: "applied", version: Number(row.version) };
+}
+
+/**
+ * The two reads the run start makes, against the process-wide connection.
+ *
+ * The run-start step takes no database handle: it is the engine's one read of a
+ * store, and it reaches it exactly as it reaches settings and the catalog. The
+ * precedent is `listConnectedRepositoryCatalogKeys`
+ * (`db/repositories/repository-catalog.ts:1119-1126`).
+ */
+export function readConnectedWorkScope(subjectKey: string) {
+  return readWorkScope(getDb(), subjectKey);
+}
+
+export function readConnectedWorkScopeSelectionAnswered(subjectKey: string) {
+  return readWorkScopeSelectionAnswered(getDb(), subjectKey);
 }

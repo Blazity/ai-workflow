@@ -10,6 +10,7 @@ import {
   applyRunWorkScopePlan,
   listWorkScopeTrail,
   readWorkScope,
+  readWorkScopeSelectionAnswered,
 } from "./work-scope.js";
 
 let db: Db;
@@ -1199,5 +1200,113 @@ describe("a subject with no record", () => {
       },
     });
     expect((await readWorkScope(db, subjectKey))?.version).toBe(1);
+  });
+});
+
+/**
+ * Whether a person has already answered the "which of these repositories"
+ * question on this subject.
+ *
+ * It lives in the trail rather than in the entries because that answer can
+ * record nothing: "none of these" writes no entry by design, so the entries
+ * alone cannot say the question was ever asked, and a run that could not tell
+ * would ask it again on the next start.
+ */
+describe("readWorkScopeSelectionAnswered", () => {
+  const ada: WorkScopeActor = { kind: "person", actorId: "user-1", actorLabel: "Ada" };
+
+  async function askSelection(
+    key: string,
+    clarificationId: string,
+    askedBecause: "selection" | "not_enabled" = "selection",
+  ) {
+    await applyRunWorkScopePlan(db, {
+      subjectKey: key,
+      runId: "run-1",
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [
+          {
+            kind: "question_asked",
+            clarificationId,
+            repositories: [{ repositoryKey: "github:acme/api", askedBecause }],
+          },
+        ],
+      },
+    });
+  }
+
+  async function answer(
+    key: string,
+    clarificationId: string,
+    given: { kind: "none" } | { kind: "unrecognised" } | { kind: "repositories"; repositoryKeys: string[] },
+  ) {
+    await applyAnswerWorkScopePlan(db, {
+      subjectKey: key,
+      runId: "run-1",
+      clarificationId,
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [
+          {
+            kind: "question_answered",
+            clarificationId,
+            answer: given,
+            answeredBy: ada,
+          },
+        ],
+      },
+    });
+  }
+
+  it("is false for a subject with no trail at all", async () => {
+    await expect(readWorkScopeSelectionAnswered(db, subjectKey)).resolves.toBe(false);
+  });
+
+  it("is false while the selection question is asked and unanswered", async () => {
+    await askSelection(subjectKey, "clarification-1");
+
+    await expect(readWorkScopeSelectionAnswered(db, subjectKey)).resolves.toBe(false);
+  });
+
+  it("is false when nobody could read the answer", async () => {
+    await askSelection(subjectKey, "clarification-1");
+    await answer(subjectKey, "clarification-1", { kind: "unrecognised" });
+
+    // Nobody decided anything, so the question may be asked once more.
+    await expect(readWorkScopeSelectionAnswered(db, subjectKey)).resolves.toBe(false);
+  });
+
+  it('is true once a person answered "none of these"', async () => {
+    await askSelection(subjectKey, "clarification-1");
+    await answer(subjectKey, "clarification-1", { kind: "none" });
+
+    await expect(readWorkScopeSelectionAnswered(db, subjectKey)).resolves.toBe(true);
+  });
+
+  it("is true once a person named repositories", async () => {
+    await askSelection(subjectKey, "clarification-1");
+    await answer(subjectKey, "clarification-1", {
+      kind: "repositories",
+      repositoryKeys: ["github:acme/web"],
+    });
+
+    await expect(readWorkScopeSelectionAnswered(db, subjectKey)).resolves.toBe(true);
+  });
+
+  it("ignores a question asked for another reason, however it was answered", async () => {
+    await askSelection(subjectKey, "clarification-1", "not_enabled");
+    await answer(subjectKey, "clarification-1", { kind: "none" });
+
+    await expect(readWorkScopeSelectionAnswered(db, subjectKey)).resolves.toBe(false);
+  });
+
+  it("does not let one subject read another subject's answer", async () => {
+    await askSelection(subjectKey, "clarification-1");
+    await answer(subjectKey, "clarification-1", { kind: "none" });
+
+    await expect(readWorkScopeSelectionAnswered(db, "ticket:jira:AWT-2")).resolves.toBe(false);
   });
 });
