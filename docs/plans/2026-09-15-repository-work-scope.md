@@ -67,7 +67,10 @@ person's decision kept in the layer that outlives a run:
    record of which repositories this work touches and how each entry was
    decided. Every run on the subject inherits it, every decision made during a
    run writes into it, and a person can read and edit it on the ticket screen
-   and through MCP. A repository is asked about at most once per subject, ever.
+   and through MCP. A repository is asked about at most once per subject, ever,
+   with one exception the record cannot remove: two runs already in flight on
+   one subject each froze the record before the other's answer existed, so each
+   may ask, and whichever person answers last decides (A24).
    A schedule and an unnameable webhook delivery carry no record at all,
    because every firing is a new subject: for them layer 2 is the whole answer.
 4. **Decision trail** (per subject and per run): every repository decision as
@@ -599,6 +602,19 @@ of `src/engine/tests`, never on a chosen file.
   the workspace cap, beside the one in `engine/work-scope/context.ts`. Two
   copies of a rule is a cost worth paying while the path only READS, and a
   defect to keep once it decides.
+- What the model may be offered is narrowed in ONE place, where the catalog is
+  assembled into the discovery prompt (`offerableRepositoryCatalog`, applied in
+  `discoverRepositories`, `apps/worker/src/engine/agent-workflow.ts:1748`), not
+  where the catalog is first built in the pre-sandbox. Both the ordinary path
+  and the pre-sandbox fallback reach the model through that one function
+  (`apps/worker/src/engine/blocks/prepare-workspace/execute.ts` calls
+  `options.discoverRepositories`, wired at `agent-workflow.ts:2049` and
+  `:2198`), so one filter covers both, and it runs before the prompt exists,
+  which is the difference between a repository the model is never offered and
+  one it is offered and then refused for. A repository somebody excluded on this
+  work is therefore absent rather than declined, and nothing is said about it: a
+  refusal sentence naming it would invite the model to argue with a person's
+  decision it cannot see.
 - The trigger policy is resolved after the deployed graph is loaded
   (`loadWorkflowDefinitionFor`, `apps/worker/src/engine/steps/definition-step.ts:65`,
   `maxRetries = 0` at `:238`, called at `apps/worker/src/engine/agent-workflow.ts:579`),
@@ -975,7 +991,10 @@ nobody reads it.
   `loadClarificationHistoryStep`, `apps/worker/src/engine/steps/clarification.ts:196-210`,
   which filters by ticket and never by run). Stage 4 restricts that re-apply to
   clarifications asked by the current run; what earlier runs decided reaches a
-  later run only through the work scope.
+  later run only through the work scope. Wave 4 rewrote that function without
+  closing this, which the third skeptic round proved by walking a second run
+  into a failure on a repository nobody had decided anything about; A42 records
+  how the correction wave closes it.
 - A15. Clarification rows keep their prose. The repository a question is about
   is written at ask time, not parsed out of the question afterwards, and
   nothing in the product ever turns a sentence back into a repository key.
@@ -1135,6 +1154,57 @@ nobody reads it.
   reader hardening wave exists: a repeated question costs a person a minute, a
   fabricated permanent decision costs them a repository they said no to, in
   every run from now on.
+- A41. Every question about repositories is raised through ONE place that
+  carries what it asks about. The third skeptic round (2026-09-16) found the
+  rule held where the brief named it, the model's expansion ask
+  (`apps/worker/src/engine/agent-workflow.ts:1949`), and failed at the two
+  places it did not: the follow-up raised after an answer this run's parser
+  could not read (`:2271`) and the in-run discovery question (`:1818`). Both
+  park a person on a clarification whose `askedRepositories` is null, and the
+  answer path returns without writing anything when that field is empty
+  (`apps/worker/src/services/clarifications/answer-core.ts:449-450`), so the
+  person's second answer is dropped and the next run asks them the same thing.
+  A rule that has to be remembered at each call site is a rule that will be
+  missed at the next one, so the fix is structural: a repository question that
+  cannot name what it asks about may not be raised at all.
+- A42. The human expansion re-apply is restricted to a clarification THIS run
+  asked, which is what A20 assigned to this stage and what wave 4 did not do.
+  `ctx.clarifications` comes from `loadClarificationHistoryStep`, which reads
+  every answered clarification of the ticket
+  (`apps/worker/src/db/repositories/clarifications.ts:105-120`), and
+  `applyHumanRepositoryExpansion` applies `rounds.at(-1)`
+  (`apps/worker/src/engine/steps/phase.ts:161-162`), so a previous run's "none"
+  closes expansion in a later run before the model has said a word, and the
+  first repository that run genuinely needs fails it. That is the production
+  defect this feature exists to end, reached through the history instead of
+  through the ticket text. The full history still reaches the PROMPT, where it
+  belongs; only the re-apply narrows. A round carrying no run id is not
+  re-applied: it can only come from a journal written before this change, and
+  the stage merges under a drain, so the conservative choice costs a question
+  that cannot happen rather than applying an answer from a run nobody can name.
+- A43. The record a resumed step re-read replaces the run's frozen copy for the
+  rounds that follow. Freezing at run start is right for what OTHER people and
+  runs do, and wrong for what this run's own question just produced: with the
+  frozen copy standing, the same person is asked about the same repository
+  twice in one run, and a repository they excluded a minute earlier is refused
+  later with nobody's name on it, precisely where the who and the when are most
+  knowable.
+- A44. A repository the record excluded is refused to the MODEL, never turned
+  into a question to a person. Removing it from the catalog the model is
+  offered (`offerableRepositoryCatalog`) does not stop the model naming it out
+  of the ticket text, and the discovery validator then parks a person on
+  "Enable it on the Repositories page"
+  (`apps/worker/src/engine/repository-discovery/protocol.ts:116-121`), which is
+  false: the repository is enabled and usable, and a person excluded it. The
+  person is told to do something that changes nothing, and the only recovery
+  the sentence offers, naming it again, overwrites their own earlier decision.
+  The model is the right audience because the sentence is true for it and it
+  can act on it. For the same reason the recorder plans an entry only for what
+  the verdict actually carries: a request mixing an attachable repository with
+  an unknown one returns a question and drops the attachable one
+  (`repository-discovery/runner.ts:521-530`), and recording that dropped
+  repository as `selected` would make the record say this work touches
+  something the run never cloned.
 - A30. Two readings of an answer that both names a repository and says no
   ("none, use github:acme/api"). We take the named repository, matching the
   expansion reader already in production, and accept that a person who meant
