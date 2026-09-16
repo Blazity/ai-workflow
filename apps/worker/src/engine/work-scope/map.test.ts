@@ -264,10 +264,10 @@ describe("renderRepositoryMap", () => {
   it("keeps the ranking and the 1600 character bound when every line is marked", () => {
     const map = renderRepositoryMap({
       ...noSignals,
-      repositories: numbered(20, () => "A".repeat(120)).map((entry) => ({
-        ...entry,
-        asksFirst: true,
-      })),
+      repositories: numbered(20, () => "A".repeat(120)).map((entry) => {
+        entry.asksFirst = true;
+        return entry;
+      }),
     });
 
     const lines = map.text.split("\n");
