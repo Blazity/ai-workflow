@@ -565,7 +565,7 @@ the status reason, so nothing is dropped without saying so.
   `maxRetries = 0` at `:238`, called at `apps/worker/src/engine/agent-workflow.ts:579`),
   not at run start: nothing the run start reads carries the trigger node's
   configuration (`apps/worker/src/engine/agent-input.ts:42-116` holds the
-  definition id and, for webhooks only, the node id). A35 says what happens when
+  definition id, and the node id for webhooks and schedules only). A35 says what happens when
   the node cannot be identified.
 - `question_asked` is appended where the clarification row is created
   (`prepareClarificationHookStep`, `apps/worker/src/engine/steps/clarification-hook-steps.ts:22`).
@@ -1009,6 +1009,12 @@ nobody reads it.
   exclusion made between an answer and the resumed run's wake still attaches in
   that run; eight `person` entries can take the whole room before a
   workflow-owned branch; a pull request and its ticket are two subjects (A1).
+- A36. A webhook delivery carries a resolved subject exactly when its subject
+  key is not the delivery-id fallback, which a run tests itself from
+  `entry.endpointId` and `entry.deliveryId`
+  (`apps/worker/src/services/webhook-trigger/dispatch-webhook-trigger.ts:155-158`
+  builds one or the other). Accepted rather than adding a flag to the run input,
+  which would be absent on every run serialized before it existed.
 - A32. A repository a person declined because the trigger policy did not hold
   it stays `excluded` after an admin widens that policy. The decision was a
   person's and outranks a machine default, so it is not expired; instead every
@@ -1028,8 +1034,9 @@ nobody reads it.
   (closing the second unreadable answer as "none"), because that wrote a
   permanent refusal in the name of a person who may well have been saying yes.
   A repeated question is a cost; a fabricated decision is a defect.
-- A35. Which trigger node started a run is only carried for webhooks
-  (`apps/worker/src/engine/agent-input.ts:93`). Stage 4 resolves the policy from
+- A35. Which trigger node started a run is carried for webhooks and schedules
+  (`apps/worker/src/engine/agent-input.ts:91-93` and `:112-115`), and for
+  neither ticket nor pull request runs. Stage 4 resolves the policy from
   the node id when it has one, otherwise from the only trigger node of that kind
   in the deployed graph, otherwise from the shared policy when every node of
   that kind carries the same one, and otherwise from the kind default. Stage 6
