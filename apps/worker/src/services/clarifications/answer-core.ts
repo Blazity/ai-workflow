@@ -453,6 +453,11 @@ async function recordRepositoryAnswer(
   const answer = readRepositoryAnswer(withoutComposedAuthors(input.answer), {
     catalogKeys: [...new Set([...catalog.keys, ...askedKeys])],
     askedKeys,
+    // What we asked is the only part of this exchange we know for certain, and
+    // the reader needs it: Jira's quote button sends our own question back
+    // inside the answer with no marker on it, and the repository key in it is
+    // ours, not the person's.
+    askedQuestions: input.row.questions,
   });
   // There is no branch here for a subject that could not be found, and none is
   // missing. The clarification row names the subject the question was asked

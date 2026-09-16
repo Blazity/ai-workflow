@@ -765,6 +765,34 @@ describe("validateHumanRepositoryExpansion", () => {
     ).toEqual({ kind: "exhausted" });
   });
 
+  it.each(
+    [
+      "continue without it",
+      "none of these",
+      "none of them",
+      "not needed",
+      "no need",
+      "skip it",
+      "nope",
+      "nie",
+      "żaden",
+      "zaden z nich",
+      "żadne z nich",
+      "bez tego",
+    ].flatMap((answer) => [answer, `Filip Maszota: ${answer}`]),
+  )("reads %o, a sentence people actually send, as no further repositories", (answer) => {
+    // "continue without it" is the sentence from the incident this question
+    // exists to end, and the Polish answers arrive from the same board with or
+    // without diacritics. Asking again for any of them is the loop itself.
+    expect(
+      validateHumanRepositoryExpansion({
+        answer,
+        catalog: humanCatalog,
+        attached: [{ provider: "github", repoPath: "acme/api" }],
+      }),
+    ).toEqual({ kind: "exhausted" });
+  });
+
   it("reads several Jira comments that each say none as no further repositories", () => {
     // Several comments are joined with a blank line, each with its author.
     expect(

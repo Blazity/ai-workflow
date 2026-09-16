@@ -57,7 +57,10 @@ const ACTOR = { id: "user_1", label: "Ada" };
 
 let db: Db;
 
-async function seedPending(askedRepositories?: WorkScopeAskedRepository[]) {
+async function seedPending(
+  askedRepositories?: WorkScopeAskedRepository[],
+  questions: string[] = ["What framework?"],
+) {
   const prepared = await prepareHookClarification(db, {
     ticketKey: TICKET,
     subjectKey: SUBJECT,
@@ -65,7 +68,7 @@ async function seedPending(askedRepositories?: WorkScopeAskedRepository[]) {
     blockId: "question",
     definitionId: 1,
     definitionVersion: 1,
-    questions: ["What framework?"],
+    questions,
     ...(askedRepositories ? { askedRepositories } : {}),
   });
   const published = await publishHookClarification(db, prepared.id);
@@ -386,6 +389,65 @@ describe("answerClarificationAndResume records the repository answer on arrival"
         answeredBy: PERSON,
       },
     ]);
+  });
+
+  it("decides nothing when the person quoted our question and said no under it", async () => {
+    // Jira's quote button flattens to text with no marker on it, so without the
+    // questions the row carries, our own repository key comes back looking like
+    // the person's selection and is recorded against their name forever.
+    const question = "Does this ticket also touch github:acme/web? Reply with none if not.";
+    const row = await seedPending(asked("github:acme/web", "not_enabled"), [question]);
+
+    await answer(makeTracker(), row.id, `${question}\n\nno`);
+
+    await expect(entriesOfSubject()).resolves.toEqual([]);
+    await expect(trailEvents()).resolves.toEqual([
+      {
+        kind: "question_answered",
+        clarificationId: row.id,
+        answer: { kind: "unrecognised" },
+        answeredBy: PERSON,
+      },
+    ]);
+  });
+
+  it("records the repository a person redirected to and excludes the one they declined", async () => {
+    const row = await seedPending(asked("github:acme/api", "outside_policy"));
+
+    await answer(makeTracker(), row.id, "not acme/api, use github:acme/web");
+
+    const entries = await entriesOfSubject();
+    expect(entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          repositoryKey: "github:acme/web",
+          state: "selected",
+          origin: "person",
+          rationale: NAMED,
+          decidedBy: PERSON,
+        }),
+        expect.objectContaining({
+          repositoryKey: "github:acme/api",
+          state: "excluded",
+          origin: "person",
+          decidedBy: PERSON,
+        }),
+      ]),
+    );
+    expect(entries).toHaveLength(2);
+  });
+
+  it("reads a bare list of names sent as a Jira comment, author line and all", async () => {
+    const row = await seedPending(asked("github:acme/api", "selection"));
+
+    await answer(makeTracker(), row.id, "Ada: api, web");
+
+    await expect(entriesOfSubject()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ repositoryKey: "github:acme/api", state: "selected" }),
+        expect.objectContaining({ repositoryKey: "github:acme/web", state: "selected" }),
+      ]),
+    );
   });
 
   it("writes once when the same answer is delivered twice, and still resumes the run", async () => {

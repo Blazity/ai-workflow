@@ -885,6 +885,10 @@ function resolveIdentity(
 // punctuation around it, so "No.", "no more repositories!" and "that's all" all
 // land here, while "No, the code lives in the web repo" does not: after any of
 // these but "none" the words that follow are usually the actual answer.
+// The second group is the sentences people send instead of the keyword the
+// question asks for. "continue without it" is the one from the incident this
+// question exists to end, and the Polish answers come from the same board, with
+// or without diacritics, so they are compared folded to ASCII.
 const REFUSAL_ANSWERS = new Set([
   "no",
   "none",
@@ -894,7 +898,34 @@ const REFUSAL_ANSWERS = new Set([
   "nothing",
   "that is all",
   "thats all",
+  "continue without it",
+  "none of these",
+  "none of them",
+  "not needed",
+  "no need",
+  "skip it",
+  "nope",
+  "nie",
+  "zaden",
+  "zaden z nich",
+  "zadne z nich",
+  "bez tego",
 ]);
+
+// Polish arrives with and without diacritics, depending on the keyboard
+// somebody was at, and both spellings say the same thing. Folded to ASCII once,
+// so one list of phrases and one list of words answer both. Exported because
+// the work scope reader compares the same answers against the same words.
+const POLISH_LETTERS = "ąćęłńóśźż";
+const FOLDED_LETTERS = "acelnoszz";
+
+export function foldPolishDiacritics(text: string): string {
+  return text.replace(/[ąćęłńóśźż]/gi, (letter) => {
+    const lower = letter.toLowerCase();
+    const folded = FOLDED_LETTERS[POLISH_LETTERS.indexOf(lower)];
+    return letter === lower ? folded : folded.toUpperCase();
+  });
+}
 
 // How an answer made of Jira comments is put together
 // (services/clarifications/resume-from-comments.ts): each comment as
@@ -911,7 +942,9 @@ const NONE_WITH_PROSE = /^none(?:$|\s*[^\sa-z0-9-])/i;
 /** True when the text is "none", alone or followed by punctuation and prose, or
  *  is exactly one of the other refusal phrases. */
 function isRefusalPart(text: string): boolean {
-  const bare = text.replace(/^[^a-z0-9]+/i, "");
+  // Folded before anything else: the trim below keeps only [a-z0-9], so
+  // "zaden" would lose its first letter when it was typed as "żaden".
+  const bare = foldPolishDiacritics(text).replace(/^[^a-z0-9]+/i, "");
   if (NONE_WITH_PROSE.test(bare)) return true;
   const whole = bare
     .toLowerCase()
@@ -954,8 +987,9 @@ const URL_PATH_AFTER_REPOSITORY = new Set([
 
 // The public hosts whose name says which provider a link points at. Any other
 // host (a self-hosted GitLab, an enterprise GitHub) could be either, so a link
-// there stays a bare path and the catalog resolves it.
-const PROVIDER_BY_HOST = new Map<string, "github" | "gitlab">([
+// there stays a bare path and the catalog resolves it. Exported because the
+// work scope reader asks the same list which links are repositories at all.
+export const PROVIDER_BY_HOST = new Map<string, "github" | "gitlab">([
   ["github.com", "github"],
   ["gitlab.com", "gitlab"],
 ]);
