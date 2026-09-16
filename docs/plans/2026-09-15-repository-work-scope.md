@@ -1083,6 +1083,16 @@ nobody reads it.
 | 7 | Surfaces: API, MCP, ticket screen, run report | MCP parity; run repository report | `apps/worker/src/routes/api/v1/work-scope/**` (new), `apps/worker/src/mcp/tools/work-scope.ts` (new), `apps/worker/src/mcp/tools/runs.ts` (one tool added), `apps/worker/src/mcp/tool-catalog.ts`, `apps/worker/src/mcp/server.ts`, generated contract, `apps/dashboard/app/(cockpit)/ticket/**`, the run detail screen, `apps/dashboard/app/api/work-scope/**` (new) | sonnet | yes | no | yes | `mcp:contract:check` green with the three tools; route tests for read, update, conflict; `runs.repositories` returns the repositories used with their rationale, the rounds, the requests with a verdict each and the map shown, and answers clearly rather than emptily for a run that recorded none; dashboard test: panel lists entries and an edit sends the version |
 | 8 | Evidence, docs, roadmap | none (verification) | `changelog/unreleased/*.md`, `docs/product/roadmap-2026-08-27.md`, `docs/index.md`, `docs/qa/**` | sonnet | no | no | no | six production runs per A9 recorded with run ids, each judged on its trail rows; AIW-402, AIW-377 and the roadmap P1 item commented; changelog entries present |
 
+Stage 4 runs as five waves, because one executor holding every integration at
+once is how a stage this wide gets a guessed decision in it. Wave 1 freezes the
+record and resolves the trigger policy at run start and touches nothing else.
+Waves 2 and 3 then run in parallel on disjoint files: wave 2 decides and records
+a person's answer where it arrives, wave 3 makes the workspace start from the
+record on both the ticket and the pull request path. Wave 4 is the in-run
+expansion. Wave 5 is the cross-run audit and the production reproduction, and it
+writes no production code. Each wave carries its own gate; the branch merges once,
+under the drain.
+
 Order: 1, then 2 and 3 in parallel, then 4, then 5 (it edits files stage 4
 owns, so it cannot run beside it), then 6 and 7 in parallel (7 needs 2 and 4,
 6 needs 1), then 8. Stage 4 merges
