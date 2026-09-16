@@ -440,10 +440,18 @@ Words used below.
   AND `pinnedKeys` is null or holds the key. The definition pin is a capability
   bound, like the catalog: `filterPinnedRepositories` strips anything outside it
   from the run anyway (`apps/worker/src/adapters/vcs/repository-directory.ts:177-190`),
-  so an entry outside it could never be honoured. Nothing is exempt from it, a
-  person's selection included, and nothing outside it is ever asked. The pin
-  names repositories as well as providers
-  (`packages/contracts/domain.ts:649-652`), which is why both halves bind.
+  so an entry outside it could never be honoured. A person's selection is not
+  exempt from it and nothing outside it is ever asked. The one exemption is
+  `workflow_owned_branch`, and it exists because the selection already makes it:
+  a run attaches the repository of a branch this workflow owns whether the pin
+  names it or not, so that a pull request opened by an earlier run is not
+  stranded (`apps/worker/src/engine/pre-sandbox/steps/repo-selection.ts:1068-1078`).
+  Without the exemption the decision refuses the very repository the agent is
+  working in and the prompt tells it the repository was left out. An abandoned
+  pull request costs more than the pin's tightness; this plan said otherwise
+  until a skeptic round found the contradiction. The pin names repositories as
+  well as providers (`packages/contracts/domain.ts:649-652`), which is why both
+  halves bind.
 - **Reachable**: usable and in the pin.
 - **Candidate**: allowed by the policy's candidate set (`enabled_catalog`: every
   usable key; `event_repository_and_related`: `eventRelatedKeys`; `listed`: the
@@ -585,7 +593,12 @@ of `src/engine/tests`, never on a chosen file.
   show. A pull request subject's record can only be non-empty through a panel
   edit (stage 7) or a person's answer, and pull request runs ask about no
   repository, so the read is a no-op today and correct once either exists.
-  Writing it belongs to the stage that gives that path a carrier.
+  Writing it belongs to the stage that gives that path a carrier. That stage
+  also folds in a duplication this one accepts: the pull request path answers
+  "reachable" with its own hand written copy of the pin, the usability test and
+  the workspace cap, beside the one in `engine/work-scope/context.ts`. Two
+  copies of a rule is a cost worth paying while the path only READS, and a
+  defect to keep once it decides.
 - The trigger policy is resolved after the deployed graph is loaded
   (`loadWorkflowDefinitionFor`, `apps/worker/src/engine/steps/definition-step.ts:65`,
   `maxRetries = 0` at `:238`, called at `apps/worker/src/engine/agent-workflow.ts:579`),
@@ -1093,6 +1106,15 @@ nobody reads it.
   make a debug line exact. What the zero-retry carrier buys is the common case,
   a step that throws; the rare case is a duplicated line in an artifact nobody
   decides from.
+- A40. `run_started` does not attach an entry whose origin is `inferred`. Such
+  an entry is recorded and shown, because a person asking why a run took a
+  repository deserves the answer, but it never seeds a later run's workspace. An
+  inference is true of the run that drew it, not of the subject: "the only
+  repository this run could reach" was recorded when the catalog held one
+  repository, and it would otherwise be attached first on every run after twenty
+  were imported, carrying a rationale that is no longer true. Nothing is lost by
+  this, because both signals that produce it, the only-accessible shortcut and
+  the label routing memory, are re-derived on every run.
 - A39. A failed record write is swallowed in a run and reported by the answer
   path, and the difference is the point. In a run the write is a summary of what
   the run computed from inputs that are all still there (the same ticket, the
