@@ -1415,6 +1415,356 @@ nobody reads it.
   failure direction is safe, since a scope is lost rather than applied to the
   wrong work.
 
+### Residuals carried out of stage 4, decided rather than discovered
+
+Each of these was found by a skeptic pass or disclosed by an executor, verified
+by the advisor, and left open on purpose. None is a regression of stage 4; each
+is written here so the next wave inherits the reasoning instead of rediscovering
+the symptom.
+
+- A52. A run left with nothing to work on because the record excluded what the
+  model proposed reports `category: "configuration"`. That category promises an
+  operator a setting to edit, and here the repository is enabled and usable:
+  one person excluded it on one ticket, and the screen that would let anybody
+  reverse that ships in stage 7. `provider` was plainly false, so the category
+  is the least wrong member of a vocabulary with no right one. Widening
+  `ExecutionErrorCategory` is a contract change and belongs to the stage that
+  opens the contract anyway. Until then the sentence carries the truth: it names
+  the repository and who excluded it.
+- A53. The decision table writes `excluded` `person` for every `outside_policy`
+  key an answer failed to name, so silence is read as a refusal. Stage 4 closed
+  the worst amplifier of this (an answer composed from several authors now
+  writes nothing at all), but a single author who answers about one repository
+  and says nothing about a second still excludes the second by omission. The
+  closure is the question copy of stage 5, which has to name what silence means,
+  plus the panel of stage 7.
+- A54. The retry that re-delivers a stored composed answer recounts its authors
+  from the comments as they stand at retry time, not as they stood at commit
+  time. A comment added in between raises the count and declines, which is the
+  safe direction. A comment DELETED in between can lower two to one and record
+  an answer the guard exists to stop. Closing that needs the count stored beside
+  the answered row, which is a column and a migration, so it rides with the
+  stage that migrates for the panel.
+- A55. A guarded answer writes its `question_answered` trail row with
+  `answer.kind = "unrecognised"`, which is untrue: the answer was readable and
+  we declined to attribute it. The row stays, because an empty trail would leave
+  nobody able to explain a repeated question, and that explanation is the whole
+  point of the trail. The vocabulary now carries `unattributed` for exactly that
+  (`packages/contracts/work-scope.ts:293`), and the decision table takes no
+  decision from either kind (`apps/worker/src/engine/work-scope/decide.ts:741`).
+  Rows written before that shipped still say `unrecognised`, and nothing
+  rewrites them, so a reader of an old trail still has to know it covered both.
+- A56. The gesture that commits an answer on the ticket channel is not carried
+  with the answer. `resumeClarificationFromComments` receives the ticket and
+  re-reads its comments; it cannot tell "somebody moved the ticket back into the
+  column" from "somebody commented", and cannot tell who performed the move from
+  who wrote the text. The Jira webhook one level up holds all three facts, the
+  event kind, the status change and the actor's account id
+  (`apps/worker/src/services/triggers/jira/handle-jira-webhook.ts:110-114`), and
+  uses the actor only to suppress our own moves before dropping it. Until those
+  travel, a colleague's lone comment plus an owner's column move is one author
+  and records in the colleague's name. Threading them is the next wave, and the
+  rule it implements is that an answer committed by somebody who wrote none of
+  its words records nothing.
+
+## Architecture findings and their disposition
+
+A depth audit on 2026-09-16 traced one fact end to end: a person names a
+repository and the run works on it. It passes through about eleven modules and
+SEVEN of them decide its meaning rather than carry it. That is the structural
+reason this stage produced a blocker in every gate round: a guard stood in one
+place and the run reached the same conclusion by another. Each duplication below
+has a disposition, per merge condition 7.
+
+- **The facts about a key are read in three places.** `decide.ts:189-279`
+  (authoritative), `context.ts:154-163` (a hand copy, admitted in its own
+  comment), `protocol.ts:412-416` (partial, with an extra condition). DISPOSITION:
+  consolidate the `decide.ts` and `context.ts` half into one pure module before
+  merge. It is pure to pure, moves no `"use step"`, needs no migration and carries
+  no drain implication, and it is covered by two existing test files. The
+  `protocol.ts` and `repo-selection.ts` half waits until after merge, because
+  `protocol.ts` renders every user-facing sentence about somebody's exclusion and
+  is the worst file to resolve a conflict in days before a merge.
+- **Origin precedence is declared once and then persisted, which is the real
+  hazard.** An earlier revision of this section claimed the ladder was encoded
+  twice, in TypeScript and again in SQL. That was wrong, and the correction
+  matters. `packages/contracts/work-scope.ts:57` declares the order once;
+  `db/schema/work-scopes.ts:57` stores the rank it produces as an `origin_rank`
+  column, written at insert time (`db/repositories/work-scope.ts:329`); and the
+  whole SQL rule (`overwriteAllowed`, `work-scope.ts:373`) is a numeric
+  comparison of that stored column. So SQL never re-derives the order and the
+  two copies cannot disagree. Two other things can, and neither is typechecked:
+  reordering the array, or inserting an origin anywhere but the end, leaves every
+  row already written carrying a rank from the old order, and `overwriteAllowed`
+  then compares old ranks against new ones and silently inverts precedence for
+  existing subjects; and `db/schema/work-scopes.ts:82` caps the rank `between 0
+  and 4`, so a sixth origin compiles, passes every test, and fails at the first
+  production write. DISPOSITION: a guard on both. Pin the array's exact contents
+  and order with a failure message naming the migration such a change needs, tie
+  the constraint's upper bound to the array length, and prove against the test
+  database that the constraint actually refuses an out-of-range rank.
+- **"Has this been answered" is computed in five places.** Two SQL reads, which
+  cannot move; `protocol.ts:405-417`, whose blocking half collapses and whose
+  trail half does not; and `decide.ts:605-609` plus `repo-selection.ts:1283-1288`,
+  which are the same question in two shapes and do merge. DISPOSITION: two merge
+  into the facts module, one moves halfway, two stay. Recorded so the next reader
+  does not expect a clean sweep.
+- **Two readers of a person's answer with different ambiguity semantics.**
+  `work-scope/answer.ts:264` collapses ambiguous and unknown; `runner.ts:1376`
+  distinguishes them and raises a scoping question. DISPOSITION: after merge,
+  drop the second reader for record-carrying runs. It touches the one
+  `maxRetries = 0` step whose journal shape gates the drain, so it is the right
+  change at the wrong time.
+- **Two refusal renderers.** `context.ts:266-283` and `runner.ts:733-756`.
+  DISPOSITION: REVISED by the owner on 2026-09-16, and the revision is right. The
+  first reading was that the two wordings differ on purpose, one addressing the
+  model and one addressing a person, so merging them would trade a real
+  distinction for a thin saving. That defends the wrong thing. Both sites compose
+  prose from scratch, so they can drift on FACTS, not merely on phrasing: the
+  model can be told a repository was excluded while the person is told it was
+  unavailable, and nothing catches it, because there is no shared value to
+  compare. A model reading one story and a person reading another is exactly how
+  an agent ends up acting on something nobody said.
+  So: the refusal becomes ONE typed, validated structure carrying the reason, the
+  repository, and who decided and when, and both texts are RENDERED from it. Two
+  renderers stay, because the audiences differ; what stops is two independent
+  authorings of the same fact. The structure is the source of truth, the prose is
+  a view of it, and the type system is what keeps them in step.
+- **A convention read two ways.** `unusableKeys: null` means "this path never
+  listed repositories", and `answer-core.ts:786-790` and `phase.ts:877-883`
+  answer it differently. DISPOSITION: verify before merge whether the difference
+  is deliberate, and if it is, say so in the type's own comment.
+- **The record is write-mostly.** `applyPersonWorkScopeEdit`, `listWorkScopeTrail`,
+  `readWorkScopeAnsweredQuestion`, `decideEdited` and `renderRepositoryMap` have
+  no production caller. DISPOSITION: the edit and read surface is now merge
+  condition 3, which wires the first four. `renderRepositoryMap` waits for stage 5.
+
+## Merge conditions for stage 4
+
+The owner set the standard on 2026-09-16: this feature is judged on quality, it
+has to work in reality, and it has to be clean. That is not checkable as
+written, so it is written here as conditions that are. Stage 4 merges when ALL
+of them hold, and none of them is waived by a deadline.
+
+1. **No decision is recorded that a person did not make.** Every write of an
+   entry traces to something a person was shown. A question that never put a
+   repository's name in front of somebody can neither suppress a later question
+   nor end a run.
+2. **No run dies or hangs for our reasons.** Our own bookkeeping failing, a
+   ticket read failing, an identity lookup failing: none of these may consume a
+   person's answer, cancel their run, or park it forever.
+3. **A person can undo what a person decided.** The record is editable through a
+   real surface (an authenticated route and an MCP tool, per the parity rule),
+   and a person naming a repository outranks their own earlier exclusion. Until
+   both hold, the feature can brick a ticket, and "open a new ticket" is not a
+   recovery path.
+4. **A skeptic pass finds zero blockers.** Every gate round of this stage so far
+   has produced at least one, including two that a reviewer had already
+   approved. The first clean skeptic pass is the signal, and a round with
+   findings is not closed by arguing them away.
+5. **The full gate is green on a frozen tree, run by the advisor.** Not reported
+   by an executor, not run while another lane is writing. `pnpm -w run
+   verify:changed -- --base origin/main --worktree`, exit 0.
+6. **A branch-wide two-axis review**, fixed point at the merge base with main.
+   This is the only pass that can see what a per-stage gate cannot: one logical
+   change scattered across files, and one module changed for several unrelated
+   reasons.
+7. **One decision is made in one place.** Where the same fact is decided in two
+   modules, either it is consolidated or the duplication is recorded with the
+   reason it is deliberate.
+8. **The document and the code agree.** Every claim in the feature write-up is
+   either true of the code or explicitly marked as a later stage.
+9. **A drain measured from the database, for runs in flight only.** An earlier
+   revision of this condition also required draining runs parked in a
+   clarification, because stage 4 adds a step call (`readWorkScopeAfterAnswerStep`)
+   inside the parked clarification path. That is no longer required, and the
+   reason is worth keeping because it is the pattern to reuse. The new call is
+   guarded by `if (workScopeAsk && ctx.workScope)` (`agent-workflow.ts:1528`);
+   `ctx.workScope` is set from `runStartWorkScope`, which returns null for a
+   run-start result stored before the field existed (`run-start-settings.ts:215`),
+   and the call site omits the key when null. So a run suspended before this
+   ships replays its old run-start result, reads no record, and skips the new
+   step entirely: its journal never diverges. The branch was swept for
+   step-bearing modules and adds no other new one. **The general rule: a new step
+   call needs no drain when it sits behind a condition that is false for every
+   run started before the deploy, and the cheapest way to get that condition is
+   an optional field on an existing journalled result whose absence means the old
+   path.** Runs in flight still drain, for the ordinary reasons.
+10. **A production campaign on real tickets**, covering at minimum: an
+    automation rule commenting on the ticket, two people answering at once, an
+    answer split by a blank line, a resubmitted answer, a ticket whose only
+    candidate was excluded, a ticket with more than one page of comments, and a
+    Jira read failing mid answer.
+
+### Where each condition stands, 2026-09-16 evening
+
+Written so the next person reads the state rather than reconstructing it. A
+condition is only marked held when something was observed, never when it was
+reported.
+
+1. **Written, not yet gated.** The suppression chain is closed: a person's
+   selection only ends the question when the run can actually reach that
+   repository, and the ask recorded against a key no longer stands in for a name
+   somebody saw. The outstanding piece is now written: the three repository
+   questions raised directly in `prepare-workspace/execute.ts` go through the ask
+   recorder, and `.min(1)` is off `workScopeAskedRepositoriesSchema`, so a
+   question that listed no repository is a recordable fact and is read as a
+   different fact from no question at all. Nothing here has been through a
+   skeptic.
+2. **Held for the cases found.** The loop that this stage's own gate introduced,
+   where a fresh ticket asked the same question every round until the run budget
+   killed it, was caught by a skeptic and fixed. Counting authors is split from
+   writing, so a hold costs none of the three resume attempts, and it is bounded
+   by a window with a give-up comment.
+
+   A second way to fabricate a decision was found and closed the same day, and
+   it is worth writing down because the first guess about it was wrong. The fear
+   was that any comment containing a negation word became a permanent decline,
+   which would have made an automation rule commenting in a person's name enough
+   to exclude every repository a run asked about. Measured through the real
+   reader, it is not: the words only decide when the whole comment is one of
+   twenty refusal phrases, so "I'm not sure, let me check with the team" and
+   "no action needed, moving to review" decide nothing. What is real is smaller
+   and wider at once. Nothing threads a ticket comment to our question, so a
+   colleague answering the comment ABOVE ours with "no" wrote the same permanent
+   exclusion of everything asked, and no attribution check can help, because that
+   person really did type it. A refusal that arrives as a ticket comment and does
+   not say what it refuses now records nothing and asks again with instructions;
+   "none", "none of these" and their kin record exactly as before. The dashboard
+   and MCP channels are untouched: there the question is on the screen, so a bare
+   "no" means what it says.
+3. **Written, not yet gated, with one case still open and the screen deferred on
+   purpose.** The record is editable through an authenticated route and an MCP
+   tool, both over one service. Two defects in the telling half were found and
+   closed today, and both are worth keeping in writing, because each was believed
+   done before it was looked at.
+
+   The first: the halt text on the founding case still told a person that no
+   screen takes the exclusion back and that the way forward is a new ticket. That
+   was true when it was written and false once the edit surface existed. It now
+   composes from one source with every other sentence of its kind, two tests that
+   carried the retired wording went red on their own, and a sweep over the module
+   fails if any sentence it composes sends a person to a new ticket again.
+
+   The second: the recovery sentence was routed on the belief that the halt text
+   is the person's channel. It is not. The same joined string is prefixed onto
+   the first question, and questions are rendered into the agent's research,
+   implementation and review prompts and written into the run's memory file under
+   "Human decisions". So a sentence telling an agent that somebody else's
+   exclusion can be reversed was reaching the agent's instructions, signed as a
+   person's decision. The channels are now split and guarded by a test that runs
+   the real step and asserts the sentence reaches the person's text and neither
+   prompt context nor memory.
+
+   Closed: the founding case no longer reaches `prepare-workspace` as a bare
+   "Which repository should this ticket modify?". The reasons already on the
+   context are carried onto the first question the way the pre-sandbox halt
+   does it (`apps/worker/src/engine/blocks/prepare-workspace/execute.ts:900`),
+   so a person who was never told what the run had to leave out no longer reads
+   "which of these" as a complete list. The channel question was established
+   rather than assumed, and the answer was no: a ticket comment is NOT a channel
+   the agent never reads, because comments are rendered verbatim into the next
+   run's research prompt. The reversibility sentence rides it only because the
+   failure path already does, and the lever a person actually has is the work
+   scope edit, not the sentence.
+
+   The dashboard panel stays stage 7; the owner was told this is a deliberate
+   call and can overrule it.
+4. **Still not zero, and the pattern has not broken once.** Every skeptic pass on
+   this stage has found at least one blocker, including two that a reviewer had
+   already approved in the same round. The pass run on 2026-09-16 evening found
+   one more, and it was a regression created by this stage's own fix earlier the
+   same day: raising the three bare questions through the ask recorder armed a
+   fence that then withheld a person's own answer from the only reader that could
+   have used it, and re-asked the identical question with nothing said. It is
+   fixed, on the honest condition rather than the symptom (the answer is withheld
+   only when the record DECLINED TO ATTRIBUTE it, never merely because no new
+   entry was written).
+
+   Two things are worth carrying out of that round beyond the fix. The reviewer
+   filed the surrounding defect as a minor and asked whether it was intended,
+   while the skeptic traced the same code to a person being asked the same
+   question forever; the difference was not diligence but framing, which is why
+   both lanes run. And the executor caught an error in the ADVISOR's instruction:
+   arming the fence on the ask's `named` flag would have been permanently false
+   in production, because that flag is stamped after the block returns, and only
+   the executor's own hand-stamped fixtures made it look right.
+
+   A zero-blocker pass has still never happened on this stage.
+5. **Not yet.** The tree is not frozen while a lane is still writing.
+6. **Not yet.**
+7. **Partly.** Duplications are recorded with their dispositions in the section
+   below. The facts-module consolidation is deliberately after the merge.
+8. **In progress.** Two claims in this document were false and were corrected
+   today: that origin precedence is encoded twice in TypeScript and SQL, and that
+   this stage forces a drain of parked runs. The feature write-up still diverges
+   from the code and is corrected once the code freezes.
+9. **Held.** See the condition itself for why it narrowed.
+10. **Not yet.**
+
+### One deepening found while building, for the design pass
+
+Not done, and deliberately not done at freeze time. Recorded here because it was
+found by the person it cost, which is the only reliable source for this kind of
+finding.
+
+`loadRunStartSettingsStep` destructures four named reads from
+`db/repositories/work-scope.ts` and runs them together, never skipping any. The
+fifth fact added during this stage broke two test files that mock that module and
+have nothing to do with the work scope, and it broke them at ACCESS time inside a
+workflow body, so the symptom was "the run threw before it did anything" a long
+way from the change.
+
+The shape that would have made the addition free is one read returning the whole
+frozen view, `{ scope, selectionAnswered, answeredRepositoryKeys,
+narrowingAnswered }`, rather than four named reads the step composes. One import
+at the step, one export at every mock, and a sixth fact changes the returned
+object instead of the import list. The absence discipline already exists per
+field, so a mock returning a partial object degrades to each field's documented
+meaning instead of throwing.
+
+The cost is that a caller could no longer take two of the four facts without the
+others. Nothing does that today and both callers want all of them, which is the
+definition of an interface that is wider than it needs to be.
+
+### The production campaign, recipe by recipe
+
+Condition 10 named seven cases without saying how any of them is produced, which
+is how a campaign turns into a demo. Each recipe below says what to set up, what
+to type verbatim, what must be observed, and which row of
+[the behaviour map](../product/repository-record-behaviour.md) it proves. A
+recipe that cannot be produced is a finding, not a skip.
+
+Rules that bind the whole campaign, all learned the expensive way:
+
+- Jira is driven only through the Atlassian Rovo MCP, never through a browser.
+- A fixture ticket parked in the AI column is picked up by the poll, so fixtures
+  wait in the backlog column and are moved deliberately.
+- The planning QA harness definition is the cheap vehicle: it runs the decision
+  path without an implementation, so a campaign of ten runs costs almost nothing.
+- Nothing is written to the production database by hand. Every fact is produced
+  by the product and read back through MCP or the API.
+- A failure is evidence. A recipe that produces the wrong behaviour is recorded
+  with what was typed and what came back, and it blocks the merge until the
+  behaviour changes or the row changes.
+
+| # | Case | Set up | Type verbatim | Must be observed | Proves |
+|---|---|---|---|---|---|
+| P1 | A person answers with a bare refusal on the ticket | A ticket with a repository question open | `no` | Nothing recorded, the clarification stays answered, the ticket does not move, a comment arrives telling them what to write, and the words offered are the ones this question actually used | A8, A15 |
+| P2 | A person answers naming the subject | Same, a second ticket | `none of these` | Every repository the question listed recorded as their own decision to leave it out, and the question does not return on the next run | A7 |
+| P3 | An automation rule comments under a person's name | A rule that comments on transition, pointed at the fixture ticket | Whatever the rule posts | Read the record and the trail: whatever was recorded is attributed to the named account, which is the known limit, and it must be visible rather than silent | A13 |
+| P4 | Two people answer at once | Two accounts, both commenting before the next delivery | One writes `github:acme/api`, the other writes `none` | No entry written, the trail records that an answer arrived, both people told, and the run does not spend one of its three attempts | A12 |
+| P5 | One person splits an answer across a blank line | One account, one comment | `no` then a blank line then `none of these` | Read as one answer, and the half that names the subject settles it | A17 |
+| P6 | A resubmitted answer | Answer once, then edit the Jira comment | Any repository path, then a different one | Establish which one the system read, and whether editing a comment can change a decision after it was recorded. This one has no predicted answer on purpose | new row, to be written from what is observed |
+| P7 | A ticket whose only candidate was excluded | Exclude the single candidate through the record's edit surface, then start a run | Nothing | The person is told what was left out and why, and is told the exclusion can be taken back and how. No sentence anywhere sends them to a new ticket | C4, C5, rule 4 |
+| P8 | A ticket with more than one page of comments | A fixture with enough comments to page the Jira read | A repository path in the LAST comment | The answer is found, not lost behind the page boundary | A1 |
+| P9 | A Jira read failing mid answer | Answer, then make the read fail for one delivery | Any repository path | The delivery holds rather than deciding, the hold costs none of the three attempts, and it is bounded by its window with a give-up comment | A12, rule 1 |
+| P10 | The agent's channels | Any run that reaches research after a repository question | Nothing | Read the run's prompt and its memory file: the question and what was left out are present, and no sentence about reversing an exclusion is in either | D1, D2, D4 |
+| P11 | The reversal actually works | After P7, edit the record to take the exclusion back, then start a new run | Nothing | The run uses the repository. A promise that a decision is reversible is worth nothing until a run proves it | rule 4, B5, B6 |
+
+P11 is the one that matters most, because everything else in condition 3 is a
+sentence and that is the only step that turns the sentence into a fact.
+
 ## Stages
 
 | # | Stage | Seam | File scope | Tier | Skeptic | TDD | Delegation | DoD |
@@ -1427,6 +1777,69 @@ nobody reads it.
 | 6 | Trigger policy in dispatch and the flow editor | trigger policy validation (runtime) | `apps/worker/src/services/dispatch/**`, `apps/worker/src/services/manual-dispatch/resolve.ts`, `apps/worker/src/services/repository-catalog/pins.ts`, `apps/dashboard/components/cockpit/flow-editor/blocks/index.ts:75-86` and the TEN `blocks/trigger_*.tsx` field components (copying the shared group pattern of `blocks/pr-trigger-fields.tsx` and `blocks/shared.tsx`), `apps/dashboard/components/cockpit/flow-editor/repository-scope-bar.tsx` (its copy becomes "the default a trigger inherits unless it sets its own"), `docs/architecture/workflow-definition.md` | sonnet | yes | yes | no | dispatch tests: each kind default per A2, including a webhook with and without a subject path and a schedule under both overlap policies writing no record at all, and a pull request whose catalog carries no relationships falling back to the enabled catalog; explicit policy overrides the pin; the pin still applies with no policy; dashboard test renders and saves the field group |
 | 7 | Surfaces: API, MCP, ticket screen, run report | MCP parity; run repository report | `apps/worker/src/routes/api/v1/work-scope/**` (new), `apps/worker/src/mcp/tools/work-scope.ts` (new), `apps/worker/src/mcp/tools/runs.ts` (one tool added), `apps/worker/src/mcp/tool-catalog.ts`, `apps/worker/src/mcp/server.ts`, generated contract, `apps/dashboard/app/(cockpit)/ticket/**`, the run detail screen, `apps/dashboard/app/api/work-scope/**` (new) | sonnet | yes | no | yes | `mcp:contract:check` green with the three tools; route tests for read, update, conflict; `runs.repositories` returns the repositories used with their rationale, the rounds, the requests with a verdict each and the map shown, and answers clearly rather than emptily for a run that recorded none; dashboard test: panel lists entries and an edit sends the version |
 | 8 | Evidence, docs, roadmap | none (verification) | `changelog/unreleased/*.md`, `docs/product/roadmap-2026-08-27.md`, `docs/index.md`, `docs/qa/**` | sonnet | no | no | no | six production runs per A9 recorded with run ids, each judged on its trail rows; AIW-402, AIW-377 and the roadmap P1 item commented; changelog entries present |
+
+### The one step this stage adds, and why it needs no drain
+
+Stage 4's own DoD says "no step added, removed or reordered". One was added, so
+this says which, and why the runs in flight are safe from it. A step's identity
+is its module path plus its function name, and the Workflow DevKit resumes by
+consuming a run's journal in order, so the only thing that strands a suspended
+run is a step call it reaches that its journal does not hold.
+
+`readWorkScopeAfterAnswerStep` (`apps/worker/src/engine/steps/clarification-hook-steps.ts:151`)
+is new. It has exactly one call site, `apps/worker/src/engine/agent-workflow.ts:1580`,
+and it sits behind `if (workScopeAsk && ctx.workScope)`. A run that started
+before this ships cannot satisfy that condition:
+
+- `ctx.workScope` is set only from `runStartWorkScope(runStart)`
+  (`agent-workflow.ts:1181`), and that function is `stored.workScope ?? null`
+  (`engine/steps/run-start-settings.ts:254`).
+- `runStart` is the REPLAYED journal entry of `loadRunStartSettingsStep`, whose
+  result was written by the old code and carries no `workScope` field, so the
+  read gives null and the key is absent from the context.
+- `loadRunStartSettingsStep` keeps its module path and its function name, so its
+  identity is unchanged. Its input and its result shape changed, and both sides
+  are read defensively.
+
+Two neighbours that look like additions are not. `listFreshRepositoryCatalogStep`
+already existed at the same call site before this branch (checked against the
+merge base); only the binding of its result changed. `resumeFromWorkScope`
+(`engine/steps/phase.ts`) is a plain async function inside
+`resolveHumanRepositoryExpansionStep`, which is already a journaled step, so it
+re-executes for nobody.
+
+No journal ordinal moves for a run in flight. The drain query stays as a
+deploy-time measurement rather than a merge blocker, and the number it returns
+goes in the evidence either way.
+
+### What moved out of its stage, and why
+
+Three things shipped in stage 4 that this table books elsewhere. They are
+recorded here because a stage planned against a table that is already wrong is
+how the same work gets done twice.
+
+1. **The sentences saying why a repository was left out, on a run that
+   SUCCEEDS** (stage 5's DoD). Stage 4 put them in front of the questions on a
+   halt, and that is the only screen a person reads there, so a run that
+   finished short-handed still told nobody. It is the founding complaint wearing
+   a new name, it rides the same `ctx.workScopeLeftOut` stage 4 already carried,
+   and waiting a stage for it would have shipped the defect deliberately. It
+   lands in the run's comment on the ticket, which is the only surface that
+   reaches a person on a run that did not halt (case C10).
+
+2. **The read and edit surface**: `GET` and `PATCH /api/v1/work-scope`, and the
+   MCP tools `work_scope.get` and `work_scope.edit` (stage 7). The owner's
+   requirement was that a recorded decision be reversible in the delivery that
+   records it, not in the next stage, and P11 of the production campaign exists
+   to prove the reversal with a real run. The dashboard panel and
+   `runs.repositories` stay in stage 7.
+
+3. **`RunAnalysisReport` gained three optional fields** (`leftOutRepositories`,
+   `repositoryRecoveryNotes`, `leftOutRepositoriesOmitted`) against the rule
+   above, that a stage needing a different shape returns a question rather than
+   widening the contract. The question was returned and the advisor widened it,
+   because item 1 has no other surface. All three are optional and absent rather
+   than empty, so a report written before they existed still parses.
 
 Stage 4 runs as five waves, because one executor holding every integration at
 once is how a stage this wide gets a guessed decision in it. Wave 1 freezes the

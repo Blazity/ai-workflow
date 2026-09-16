@@ -1,0 +1,2 @@
+- Every ticket, pull request and webhook now keeps a record of the repositories its work uses: which ones were chosen, which were left out and why, and who decided. The MCP tools `work_scope.get` and `work_scope.edit` read it and change it, and the agent starting the next run reads the same record.
+- A repository question a person has already answered is not put to them again on a later run, and putting an excluded repository back into the record is enough for the next run to use it.

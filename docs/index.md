@@ -55,6 +55,7 @@ each `apps/*/AGENTS.md`, `packages/AGENTS.md`, and `README.md`, `AGENTS.md`,
 |---|---|
 | [product/SPEC.md](./product/SPEC.md) | What the system does: behaviour, states, ticket lifecycle, delivery rules |
 | [product/user-stories.md](./product/user-stories.md) | The user stories the behaviour is measured against |
+| [product/repository-record-behaviour.md](./product/repository-record-behaviour.md) | What a person may do about which repositories a piece of work touches, and what the system must do in every case, including the ones nobody wants to think about |
 | [product/roadmap-2026-08-27.md](./product/roadmap-2026-08-27.md) | Priorities and milestones. It beats the README wherever the two disagree |
 
 ## Runbooks
