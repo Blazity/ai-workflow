@@ -400,10 +400,13 @@ a database, a clock or the network; the caller passes all of it in.
 decideWorkScope(context: {
   scope: WorkScope | null;            // null: no record yet, or a subject that carries none
   carriesRecord: boolean;             // ticket, pull request, webhook delivery with a resolved subject id
-  catalog: { activated: boolean; enabledKeys: RepositoryKey[]; unusableKeys: RepositoryKey[] };
+  catalog: { activated: boolean; enabledKeys: RepositoryKey[]; unusableKeys: RepositoryKey[] | null };
+  // unusableKeys null: this path never listed the repositories, so enabled counts
+  // as usable and an unavailable/unusable entry does not expire here
   pinnedProviders: VcsProviderKind[] | null; // the definition pin's providers, null when it names none
-  policy: TriggerRepositoryPolicy | null;    // resolved; null only for "answered" and "edited", which ignore it
-  eventRelatedKeys: RepositoryKey[];  // candidates of event_repository_and_related, empty otherwise
+  pinnedKeys: RepositoryKey[] | null;        // the definition pin's repositories, null when it names none
+  policy: TriggerRepositoryPolicy | null;    // resolved; null only for "answered", "edited" and a subject with no record
+  eventRelatedKeys: RepositoryKey[];  // related keys of event_repository_and_related, NOT filtered by the catalog
   attachedKeys: RepositoryKey[] | null; // what the workspace holds now; null outside a run
   selectionAnswered: boolean;         // a selection question on the subject was answered none or with repositories
   actor: WorkScopeActor;
@@ -422,16 +425,26 @@ decideWorkScope(context: {
   ask: WorkScopeAskedRepository[];
   refused: Array<{ repositoryKey: RepositoryKey; reason: WorkScopeRefusalReason }>;
   editRejected: Array<{ repositoryKey: RepositoryKey; reason: "not_enabled" }>;
+  trailTruncated: number;             // refusals that did not fit the plan's trail, counted so the status reason can say so
 }
 ```
 
 Words used below.
 
-- **Usable**: in `enabledKeys` and not in `unusableKeys`.
-- **In providers**: `pinnedProviders` is null, or the key's provider prefix is
-  in it. The provider pin is a capability bound of the definition, like the
-  catalog, so nothing is exempt from it and nothing outside it is ever asked.
-- **Reachable**: usable and in providers.
+- **Usable**: in `enabledKeys` and not in `unusableKeys`. Where `unusableKeys`
+  is null the path never listed the repositories (a pull request run decides
+  from the enabled list alone), so every enabled key counts as usable and an
+  `unavailable` `unusable` entry does not expire there, since nothing observed
+  that it became usable.
+- **In the pin**: `pinnedProviders` is null or holds the key's provider prefix,
+  AND `pinnedKeys` is null or holds the key. The definition pin is a capability
+  bound, like the catalog: `filterPinnedRepositories` strips anything outside it
+  from the run anyway (`apps/worker/src/adapters/vcs/repository-directory.ts:177-190`),
+  so an entry outside it could never be honoured. Nothing is exempt from it, a
+  person's selection included, and nothing outside it is ever asked. The pin
+  names repositories as well as providers
+  (`packages/contracts/domain.ts:649-652`), which is why both halves bind.
+- **Reachable**: usable and in the pin.
 - **Candidate**: allowed by the policy's candidate set (`enabled_catalog`: every
   usable key; `event_repository_and_related`: `eventRelatedKeys`; `listed`: the
   listed keys).
@@ -502,6 +515,7 @@ the `ask` list and its reasons.
 | `derived` | origin `ticket_text` or `workflow_owned_branch`, an entry of THAT origin exists for a key not in this event | delete it, comparing on that origin |
 | `text_ambiguous` | `carriesRecord`, no `selected` entry of origin `person`, `selectionAnswered` false | drop from the matched keys everything not reachable and everything carrying a blocking entry, then ask the survivors (at most 8, the caller's ranking) with reason `selection`, and only when at least two survive: a repository behind the provider pin may never be offered, one already decided may not be offered as if it were open, and one survivor is not an ambiguity. The caller applies the same filter BEFORE it counts matches, so a set collapsing to one to three decidable keys becomes an ordinary `derived` `ticket_text` event instead of a repository nobody derives and nobody asks about |
 | `text_ambiguous` | otherwise | nothing asked; the run starts from what the record holds |
+| `derived` | an EMPTY `repositoryKeys` list | the caller saying the evidence is gone, so that origin's entries are deleted. The caller emits it ONLY when the matcher found nothing at all: matches it found but could not decide (ambiguous, behind the pin, already refused) leave the previous entries alone and go in the status reason, or correcting a ticket would empty its scope with nobody asked and nothing said |
 | `requested` | more than 3 keys | the first 3 are decided below, first matching row wins; the rest refused `request_limit`, never a question |
 | `requested` | key already attached | nothing |
 | `requested` | key not in providers | refused `outside_policy`, never a question |
@@ -519,7 +533,7 @@ the `ask` list and its reasons.
 | `answered` | answer `none` or `repositories`: an asked key the answer does not name | reason `not_enabled`: upsert `unavailable` `not_enabled` `person`; reason `unusable`: upsert `unavailable` `unusable` `person`; reason `outside_policy`: upsert `excluded` `person` (the person could have given it and declined); reason `selection`: nothing (the question never listed the matches, so an omission is not a decision) |
 | `answered` | a named key, enabled or not | upsert `selected` `person`. Naming a repository is asking for it, so the entry says selected even while the repository cannot be used: `run_started` keeps refusing it `outside_catalog` without a question, and attaches it, past the candidate set, on the first run after it is enabled |
 | `edited` | `carriesRecord` false | programming error, thrown |
-| `edited` | the whole edit | decided on the set after EVERY change; one rejected change rejects the edit and the plan is empty |
+| `edited` | the whole edit | the changes are folded per repository first, last change wins, so `remove A` then `select A` plans one upsert and no delete and the reverse plans one delete and no upsert; the result is then decided on the set after EVERY change, and one rejected change rejects the edit and leaves the plan empty. Planning both an upsert and a delete for one key would leave the row's fate to two CTEs reading one snapshot |
 | `edited` | `select` | enabled: upsert `selected` `person`; not enabled: rejected `not_enabled` |
 | `edited` | `exclude` | upsert `excluded` `person` |
 | `edited` | `remove` | delete comparing on the current entry's origin; no entry: nothing |
@@ -536,6 +550,32 @@ the status reason, so nothing is dropped without saying so.
 
 - `run_started`, `derived`, `text_ambiguous`, `requested` and `resumed` are
   decided in the run and ride the carriers named in "The decision trail".
+- Where they are decided follows one fact: `usable` is computed from a provider
+  LISTING, not from a table (`apps/worker/src/engine/repository-discovery/catalog.ts:191-193`),
+  and the rows a run start can read carry provider, path and enabled only
+  (`apps/worker/src/db/repositories/repository-catalog.ts:190-198`). So the run
+  start FREEZES the scope, a pure read, and decides nothing; `run_started` is
+  decided where the listing exists, which is the pre-sandbox step for every kind
+  that has one (`blockPrepareWorkspacePreSandboxStep`, `maxRetries = 0` at
+  `apps/worker/src/engine/blocks/prepare-workspace/execute.ts:114`) and the pull
+  request branch beside it (`:818-823`), which lists no repositories and
+  therefore passes `unusableKeys` null.
+- The trigger policy is resolved after the deployed graph is loaded
+  (`loadWorkflowDefinitionFor`, `apps/worker/src/engine/steps/definition-step.ts:65`,
+  `maxRetries = 0` at `:238`, called at `apps/worker/src/engine/agent-workflow.ts:579`),
+  not at run start: nothing the run start reads carries the trigger node's
+  configuration (`apps/worker/src/engine/agent-input.ts:42-116` holds the
+  definition id and, for webhooks only, the node id). A35 says what happens when
+  the node cannot be identified.
+- `question_asked` is appended where the clarification row is created
+  (`prepareClarificationHookStep`, `apps/worker/src/engine/steps/clarification-hook-steps.ts:22`).
+  That step retries, so the append is made idempotent by a partial unique index
+  on the clarification id, the same shape as the answer index, and it is written
+  with ON CONFLICT DO NOTHING. Retry safety by key beats retry safety by luck,
+  and it is needed here: the clarification insert itself is not idempotent
+  (`apps/worker/src/db/repositories/clarification-hooks.ts:76` generates a new
+  id per attempt), so a retried attempt writes a second clarification and a
+  second, equally truthful, asked row.
 - `answered` is decided ONCE, when the answer ARRIVES, in the one function all
   three answer channels share (`answerClarificationAndResumeWithPersistence`,
   `apps/worker/src/services/clarifications/answer-core.ts:194`; the dashboard
@@ -561,18 +601,27 @@ the status reason, so nothing is dropped without saying so.
   named. The `unrecognised` verdict carries no name, so the follow-up says the
   answer matched no repository it can use and re-lists the asked ones with their
   full keys.
-- The reader takes a named repository over a refusal word, in this order: any
-  identity token the answer holds (a provider-scoped key or an `owner/repo`
-  path) decides it, a refusal reader runs only when the answer holds none, and
-  the bare last-segment list runs last. So "none, use github:acme/api" attaches
-  that repository, which is both what the expansion reader does today
-  (`apps/worker/src/engine/repository-discovery/runner.ts`) and the cheap
-  direction to be wrong in: reading it as a refusal would write `unavailable` or
-  `excluded` entries for every asked key, and those outlive the run.
-- A second unreadable answer to the follow-up of a question in the same run
-  (same asked keys, an earlier `question_answered` of kind `unrecognised` in
-  the run's trail) is decided as `none`, which is how the protocol already
-  closes expansion; that is what records it.
+- The reader is given the asked keys as well as the catalog keys, and reads in
+  this order. An identity token the answer holds (a provider-scoped key or an
+  `owner/repo` path) decides it: one that does not resolve makes the answer
+  unreadable, and one that resolves inside a sentence that ALSO reads as a
+  refusal makes it unreadable too when every key it names was asked about, since
+  "none, we don't need acme/api" about the repository we asked about is a
+  contradiction rather than a selection. A refusal naming a DIFFERENT repository
+  ("not that one, use github:acme/web") selects that one. With no identity token
+  the refusal reader decides, then the bare last-segment list, and last: when the
+  question asked about exactly ONE repository and the whole answer is an
+  affirmative from a short exact-match list (yes, sure, ok, go ahead, do it and
+  their kin), the answer is that repository. That last rule exists because the
+  common question is about one repository and "yes please" is how a person says
+  yes to it; without it the answer is unreadable, and an unreadable answer used
+  to end as a permanent refusal in their name.
+- An answer nobody can read never becomes a durable decision. A second
+  unreadable answer closes the request back to the model, exactly as a refusal
+  of the protocol does, and records nothing but the `question_answered` rows
+  already written. The subject may therefore be asked once more by a later run,
+  which is the right failure direction: nobody said no, and the trail shows both
+  unreadable answers to whoever wonders why the question came back.
 - On `already_applied` the hook payload is rebuilt from the stored
   `question_answered` row and the current entries, never from a second read of
   the text, so a retry hours later cannot tell the run something the record
@@ -647,6 +696,16 @@ the status reason, so nothing is dropped without saying so.
   merely for a key the map did not show, and the agent may ask for the rest of
   the map in one further request. Discovery hands the model the whole catalog
   today, so a map that gated requests would be a regression.
+- **The map is filtered by the catalog and the definition pin, NEVER by the
+  trigger policy's candidate set.** It is the only list of repositories the
+  model ever sees, so filtering it by the candidate set would mean the model
+  never requests a repository outside the policy, nobody is ever asked about
+  one, and `ask_once` becomes a setting that can never fire while the run
+  quietly works in the wrong place. A repository outside the candidate set is
+  listed with ` (asks first)` at the end of its line, so the model knows the
+  request costs a person's attention. Repositories carrying a blocking entry
+  are not listed at all, because a request for them is refused without a
+  question and listing them only burns a round.
 - Each line is the catalog key, the first sentence of the description cut at
   about 120 characters, and the relationship kinds to attached repositories. The
   full profile (description, rules, relationships) is rendered only for attached
@@ -950,6 +1009,34 @@ nobody reads it.
   exclusion made between an answer and the resumed run's wake still attaches in
   that run; eight `person` entries can take the whole room before a
   workflow-owned branch; a pull request and its ticket are two subjects (A1).
+- A32. A repository a person declined because the trigger policy did not hold
+  it stays `excluded` after an admin widens that policy. The decision was a
+  person's and outranks a machine default, so it is not expired; instead every
+  refusal `excluded` names who declined it and when, in the refusal to the model
+  and in the run's status reason, and the ticket panel removes it in one click.
+  Accepted: a widened policy does not reach back into tickets somebody already
+  answered about, and the way back is visible rather than automatic.
+- A33. "None of these" to the which-of-these question silences that question on
+  the subject forever, on every workflow. Accepted, with the run's status reason
+  naming that answer as the reason its scope is empty, because the ordinary way
+  out is the one people already take: name the repository in the ticket, where
+  the text match picks it up, or select it in the panel. Rejected alternative:
+  expiring the answer when the ticket text changes, which means storing a hash
+  of the text and re-asking people who fixed a typo.
+- A34. An answer nobody could read leaves no entry, so a later run may ask
+  once more. Accepted deliberately over the alternative this plan started with
+  (closing the second unreadable answer as "none"), because that wrote a
+  permanent refusal in the name of a person who may well have been saying yes.
+  A repeated question is a cost; a fabricated decision is a defect.
+- A35. Which trigger node started a run is only carried for webhooks
+  (`apps/worker/src/engine/agent-input.ts:93`). Stage 4 resolves the policy from
+  the node id when it has one, otherwise from the only trigger node of that kind
+  in the deployed graph, otherwise from the shared policy when every node of
+  that kind carries the same one, and otherwise from the kind default. Stage 6
+  narrows the gap by recording the matched node on dispatch. Accepted: a
+  definition holding two triggers of one kind with different policies falls back
+  to its kind default until then, which is today's behaviour rather than a new
+  narrowing.
 - A30. Two readings of an answer that both names a repository and says no
   ("none, use github:acme/api"). We take the named repository, matching the
   expansion reader already in production, and accept that a person who meant
