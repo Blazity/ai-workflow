@@ -449,6 +449,17 @@ Words used below.
 - **Blocking entry**: `excluded`, or `unavailable` that is not expired.
 - **Allowed**: the key is a candidate, or the expansion is `attach`, or its
   entry is a `selected` entry of exempt origin.
+- **Allowed if usable**: what "allowed" would say about the key if the catalog
+  held it, that is the candidate set computed IGNORING usability (every key
+  under `enabled_catalog`, membership under `listed`, membership in
+  `eventRelatedKeys` under `event_repository_and_related`), or the expansion is
+  `attach`, or its entry is a `selected` entry of exempt origin. It separates
+  the two reasons a key can sit outside the candidate set, and the separation is
+  permanent: asked `not_enabled` a declined key is recorded `unavailable` and
+  expires the moment the catalog enables it, asked `outside_policy` it is
+  recorded `excluded` and never expires. A key the catalog alone keeps out is
+  therefore never asked `outside_policy`, or "enable it later and the next run
+  takes it" would be a promise this feature cannot keep.
 - **Room**: 8 minus `attachedKeys`, minus what this event already attached. The
   cap bounds the WORKSPACE of one run, never the record: a subject may hold more
   `selected` entries than one workspace takes (two workflows on one ticket, a
@@ -471,6 +482,8 @@ the `ask` list and its reasons.
 | Event | Situation | Result |
 |---|---|---|
 | any run event | `carriesRecord` false | the attach and refusal columns as below, no upserts, no deletes, nothing asked |
+| any run event | `policy` null | programming error, thrown: the caller resolves the kind default when the trigger node carries no policy, so a null there is a bug that would otherwise start a run with no candidates and look like a decision |
+| `run_started` | key already attached | nothing |
 | `run_started` | `selected`, reachable, candidate or exempt origin, room | attach |
 | `run_started` | `selected`, reachable, candidate or exempt origin, no room | refused `workspace_cap`, entry kept |
 | `run_started` | `selected`, not usable | refused `outside_catalog`, entry kept, no question |
@@ -479,25 +492,28 @@ the `ask` list and its reasons.
 | `run_started` | expired (either reason), reachable, candidate or expansion `attach`, room | attach; upsert `selected` origin `inferred` with `replacesExpired`, the rationale naming the answer it replaces. The person said "continue without it" because it could not be had; this replays the request that raised the question, which makes "enable it later and the next run takes it" deterministic rather than a hope that the model asks again, and it stays inside this trigger's policy because the person selected nothing |
 | `run_started` | any other entry | nothing |
 | `resumed` | the listed keys, read against the scope after an answer arrived | exactly the `run_started` rows, for those keys only |
+| `derived` | key already attached | nothing, and the key still counts as named by this event for the delete row below, so its own entry is not dropped for being absent. Without this a person's entry attached at run start would collect a `request_refused` `outside_policy` from the text match of the same run, and the trail would refuse a repository the run is using |
 | `derived` | key has a blocking entry | refused with `excluded` or `unavailable` |
 | `derived` | key not usable | refused `outside_catalog`; a derived key never asks |
 | `derived` | key usable, not reachable | refused `outside_policy` |
-| `derived` | key reachable, and candidate or exempt origin or expansion `attach`, room (or already attached) | attach unless already attached; upsert `selected` with the event's origin, which the store keeps only if precedence allows |
+| `derived` | key reachable and allowed (the event's origin exempt counts, and so does an existing `selected` entry of exempt origin), room | attach; upsert `selected` with the event's origin, which the store keeps only if precedence allows |
 | `derived` | as above, no room | refused `workspace_cap`, no entry |
-| `derived` | key reachable, not candidate, origin not exempt, expansion `ask_once` or `never` | refused `outside_policy`; a derived key never asks |
+| `derived` | key reachable, not allowed | refused `outside_policy`; a derived key never asks |
 | `derived` | origin `ticket_text` or `workflow_owned_branch`, an entry of THAT origin exists for a key not in this event | delete it, comparing on that origin |
-| `text_ambiguous` | `carriesRecord`, no `selected` entry of origin `person`, `selectionAnswered` false | ask every matched key (at most 8, the caller's ranking) with reason `selection` |
+| `text_ambiguous` | `carriesRecord`, no `selected` entry of origin `person`, `selectionAnswered` false | drop from the matched keys everything not reachable and everything carrying a blocking entry, then ask the survivors (at most 8, the caller's ranking) with reason `selection`, and only when at least two survive: a repository behind the provider pin may never be offered, one already decided may not be offered as if it were open, and one survivor is not an ambiguity. The caller applies the same filter BEFORE it counts matches, so a set collapsing to one to three decidable keys becomes an ordinary `derived` `ticket_text` event instead of a repository nobody derives and nobody asks about |
 | `text_ambiguous` | otherwise | nothing asked; the run starts from what the record holds |
 | `requested` | more than 3 keys | the first 3 are decided below, first matching row wins; the rest refused `request_limit`, never a question |
 | `requested` | key already attached | nothing |
 | `requested` | key not in providers | refused `outside_policy`, never a question |
 | `requested` | key has a blocking entry | refused with `excluded` or `unavailable`, never a question |
-| `requested` | key not allowed, expansion `ask_once`, `carriesRecord`, room, and no entry or a `selected` entry of non-exempt origin | ask with reason `outside_policy`, usable or not: a repository outside the policy is asked about ONCE, and an answer naming it records `selected` `person`, which attaches once it is usable |
-| `requested` | key not allowed, otherwise | refused `workspace_cap` when room is the only obstacle, otherwise `outside_policy` |
-| `requested` | key allowed, not usable, no entry, `carriesRecord`, expansion not `never` | ask with reason `unusable` when enabled, otherwise `not_enabled` |
-| `requested` | key allowed, not usable, otherwise (a `selected` entry included) | refused `outside_catalog` |
-| `requested` | key allowed, usable, room | attach; upsert `selected` `inferred`, `replacesExpired` over an expired entry |
-| `requested` | key allowed, usable, no room | refused `workspace_cap`, no entry, never a question |
+| `requested` | key not usable, allowed if usable, no entry, `carriesRecord`, expansion not `never` | ask with reason `unusable` when enabled, otherwise `not_enabled`: the catalog is the only thing keeping it out, so the answer must be recorded as something that expires when the catalog changes |
+| `requested` | key not usable, allowed if usable, otherwise (a `selected` entry included, `never`, or no record) | refused `outside_catalog` |
+| `requested` | key not usable, not allowed if usable, expansion `ask_once`, `carriesRecord`, room, and no entry or a `selected` entry of non-exempt origin | ask with reason `outside_policy`: this repository stays outside the policy whether the catalog holds it or not, so declining it is a decision that may last |
+| `requested` | key not usable, not allowed if usable, otherwise | refused `outside_policy` |
+| `requested` | key usable, not allowed, expansion `ask_once`, `carriesRecord`, room, and no entry or a `selected` entry of non-exempt origin | ask with reason `outside_policy`: a repository outside the policy is asked about ONCE, and an answer naming it records `selected` `person`, which attaches |
+| `requested` | key usable, not allowed, otherwise | refused `workspace_cap` when room is the only obstacle, otherwise `outside_policy` |
+| `requested` | key usable, allowed, room | attach; upsert `selected` `inferred`, `replacesExpired` over an expired entry |
+| `requested` | key usable, allowed, no room | refused `workspace_cap`, no entry, never a question |
 | `answered` | `carriesRecord` false | programming error, thrown |
 | `answered` | answer `unrecognised` | no entries; `question_answered` only; the protocol asks its follow-up, which carries the same `asked` list |
 | `answered` | answer `none` or `repositories`: an asked key the answer does not name | reason `not_enabled`: upsert `unavailable` `not_enabled` `person`; reason `unusable`: upsert `unavailable` `unusable` `person`; reason `outside_policy`: upsert `excluded` `person` (the person could have given it and declined); reason `selection`: nothing (the question never listed the matches, so an omission is not a decision) |
@@ -542,7 +558,17 @@ the status reason, so nothing is dropped without saying so.
   asked keys, so a person naming back the repository they were asked about is
   always understood, even when the catalog table does not hold it. On a bridge
   catalog a repository that is neither in the table nor asked about cannot be
-  named, and the follow-up says which name did not resolve.
+  named. The `unrecognised` verdict carries no name, so the follow-up says the
+  answer matched no repository it can use and re-lists the asked ones with their
+  full keys.
+- The reader takes a named repository over a refusal word, in this order: any
+  identity token the answer holds (a provider-scoped key or an `owner/repo`
+  path) decides it, a refusal reader runs only when the answer holds none, and
+  the bare last-segment list runs last. So "none, use github:acme/api" attaches
+  that repository, which is both what the expansion reader does today
+  (`apps/worker/src/engine/repository-discovery/runner.ts`) and the cheap
+  direction to be wrong in: reading it as a refusal would write `unavailable` or
+  `excluded` entries for every asked key, and those outlive the run.
 - A second unreadable answer to the follow-up of a question in the same run
   (same asked keys, an earlier `question_answered` of kind `unrecognised` in
   the run's trail) is decided as `none`, which is how the protocol already
@@ -924,6 +950,20 @@ nobody reads it.
   exclusion made between an answer and the resumed run's wake still attaches in
   that run; eight `person` entries can take the whole room before a
   workflow-owned branch; a pull request and its ticket are two subjects (A1).
+- A30. Two readings of an answer that both names a repository and says no
+  ("none, use github:acme/api"). We take the named repository, matching the
+  expansion reader already in production, and accept that a person who meant
+  "none" gets a repository attached for this run, which their next answer or one
+  panel click undoes. The other reading writes `unavailable` or `excluded`
+  entries for every asked key, and those outlive the run and silence the
+  question forever, so the two mistakes do not cost the same.
+- A31. Asking about a repository the catalog does not hold is worth it even
+  when the trigger policy would also have kept it out, as long as the policy
+  would have taken it once the catalog did ("allowed if usable"). A person who
+  answers "continue without it" there gets `unavailable`, not `excluded`, so
+  enabling the repository later attaches it with no second question. Accepted
+  cost: under `ask_once` the person may be asked about a repository that turns
+  out to be unusable anyway, which is one question, not a permanent record.
 - A29. A repository asked about because the trigger policy did not include it
   is asked for the ticket, not for the workflow: the question says that
   declining keeps it out of this ticket, because the record carries no

@@ -278,9 +278,10 @@ export const workScopeWritePlanSchema = z
           })
           .strict()
           // Replacing an expired entry means a repository recorded as
-          // unavailable, not_enabled, has since been enabled and is now
-          // selected. It is the one case a lower origin may overwrite a higher
-          // one, so it may not ride along on any other state.
+          // unavailable has since lost the reason it was unavailable, enabled
+          // in the catalog after not_enabled or carrying a default branch after
+          // unusable, and is now selected. It is the one case a lower origin may
+          // overwrite a higher one, so it may not ride along on any other state.
           .refine((upsert) => !upsert.replacesExpired || upsert.entry.state === "selected", {
             message: "replacesExpired is valid only on a selected entry.",
             path: ["replacesExpired"],
