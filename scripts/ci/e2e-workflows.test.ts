@@ -282,6 +282,28 @@ test("a nightly failure opens one issue and keeps using it", async () => {
   assert.match(script, /gh issue create/, "the first failure opens the issue");
 });
 
+test("the nightly failure report refuses to guess when its issue search fills a page", async () => {
+  const [, workflow] = (await loadE2e())[0]!;
+  const report = workflow.jobs?.["report-nightly-failure"];
+  assert.ok(report, "e2e.yml must report a nightly failure somewhere");
+  const script = report.steps?.map((step) => step.run ?? "").join("\n") ?? "";
+
+  // `gh issue list` reads one page and never reports that it stopped, and
+  // inheriting the default of 30 hides that bound from the person reading it.
+  assert.match(script, /limit=\d+/);
+  assert.match(script, /gh issue list[\s\S]*?--limit "\$limit"/);
+  // A miss on a page that came back full is a read that ran out, not an
+  // absence, and opening a second nightly issue on it is the wrong answer.
+  assert.match(script, /jq 'length'[\s\S]*?-ge "\$limit"/);
+  const truncation = script.indexOf('-ge "$limit"');
+  assert.ok(truncation > -1, "a full page has to be recognised");
+  assert.ok(
+    truncation < script.indexOf("gh issue create"),
+    "the full-page check has to run before the duplicate it would file",
+  );
+  assert.match(script, /exit 1/, "an unreadable search has to fail rather than answer");
+});
+
 test("every e2e job carries the commenter token its agent tier fails without", async () => {
   const [, workflow] = (await loadE2e())[0]!;
 
