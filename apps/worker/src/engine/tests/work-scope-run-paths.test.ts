@@ -25,9 +25,7 @@ const mocks = vi.hoisted(() => ({
   runPreSandboxPhase: vi.fn(),
   blockFetchPrContextsStep: vi.fn(),
   applyRunWorkScopePlan: vi.fn(),
-  readConnectedWorkScope: vi.fn(),
-  readConnectedWorkScopeSelectionAnswered: vi.fn(),
-  readConnectedWorkScopeAnsweredRepositories: vi.fn(),
+  readConnectedWorkScopeFacts: vi.fn(),
   findRunPrSiblings: vi.fn(),
   listWorkflowOwnedBranchesForTicket: vi.fn(),
   listRepositories: vi.fn(),
@@ -62,9 +60,7 @@ vi.mock("../blocks/fetch-pr-context/execute.js", async (importOriginal) => ({
 }));
 vi.mock("../../db/repositories/work-scope.js", () => ({
   applyConnectedRunWorkScopePlan: mocks.applyRunWorkScopePlan,
-  readConnectedWorkScope: mocks.readConnectedWorkScope,
-  readConnectedWorkScopeSelectionAnswered: mocks.readConnectedWorkScopeSelectionAnswered,
-  readConnectedWorkScopeAnsweredRepositories: mocks.readConnectedWorkScopeAnsweredRepositories,
+  readConnectedWorkScopeFacts: mocks.readConnectedWorkScopeFacts,
 }));
 vi.mock("../../db/repositories/runs.js", () => ({
   listWorkflowOwnedBranchesForTicket: mocks.listWorkflowOwnedBranchesForTicket,

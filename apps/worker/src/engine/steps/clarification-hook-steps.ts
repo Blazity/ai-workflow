@@ -159,31 +159,23 @@ export async function readWorkScopeAfterAnswerStep(
   narrowingAnswered?: boolean;
 }> {
   "use step";
+  const { readConnectedWorkScopeFacts } = await import("../../db/repositories/work-scope.js");
+  // One read, still one round trip's worth of waiting: it runs the facts in
+  // parallel on one connection (`db/repositories/work-scope.ts`,
+  // `readWorkScopeFacts`). Among them is the narrowing answer, and THE SAME RUN
+  // ASKS AGAIN WITHOUT IT: a narrowing answer resumes the run that asked, and
+  // the block re-executes from the top against a selection discovery rebuilds
+  // unchanged. The per-question fact is keyed on the clarification rather than
+  // on the subject, which is why the id is passed rather than looked up: the
+  // newest answered question on a subject is only probably this one.
   const {
-    readConnectedWorkScope,
-    readConnectedWorkScopeAnsweredQuestion,
-    readConnectedWorkScopeAnsweredRepositories,
-    readConnectedWorkScopeNarrowingAnswered,
-    readConnectedWorkScopeSelectionAnswered,
-  } = await import("../../db/repositories/work-scope.js");
-  const [scope, selectionAnswered, answeredRepositoryKeys, narrowingAnswered, answered] =
-    await Promise.all([
-      readConnectedWorkScope(subjectKey),
-      readConnectedWorkScopeSelectionAnswered(subjectKey),
-      readConnectedWorkScopeAnsweredRepositories(subjectKey),
-      // THE SAME RUN ASKS AGAIN WITHOUT THIS. A narrowing answer resumes the
-      // run that asked, and the block re-executes from the top against a
-      // selection discovery rebuilds unchanged, so without this read it raises
-      // the identical question the person has just answered.
-      readConnectedWorkScopeNarrowingAnswered(subjectKey),
-      // Keyed on the clarification, not the subject: "what the record made of
-      // the answer" is a fact about one question, and the newest row on a
-      // subject is only probably this one.
-      clarificationId === undefined
-        ? Promise.resolve(null)
-        : readConnectedWorkScopeAnsweredQuestion(clarificationId),
-    ]);
-  const event = answered?.event;
+    scope,
+    selectionAnswered,
+    answeredRepositoryKeys,
+    narrowingAnswered,
+    answeredQuestion,
+  } = await readConnectedWorkScopeFacts(subjectKey, clarificationId);
+  const event = answeredQuestion?.event;
   return {
     scope,
     selectionAnswered,

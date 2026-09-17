@@ -1,14 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkScopeAskedRepository, WorkScopeTrailRow } from "@shared/contracts";
+// A type, so it is erased before the mock below replaces the module.
+import type { WorkScopeFacts } from "../../db/repositories/work-scope.js";
+
+/** What the one read answers, reset per test. */
+let facts: WorkScopeFacts;
 
 const mocks = vi.hoisted(() => ({
   prepare: vi.fn(),
   appendQuestionAsked: vi.fn(),
-  readScope: vi.fn(),
-  readSelectionAnswered: vi.fn(),
-  readAnsweredRepositories: vi.fn(),
-  readAnsweredQuestion: vi.fn(),
-  readNarrowingAnswered: vi.fn(),
+  readFacts: vi.fn(),
 }));
 
 vi.mock("../../db/repositories/clarification-hooks.js", () => ({
@@ -17,15 +18,7 @@ vi.mock("../../db/repositories/clarification-hooks.js", () => ({
 vi.mock("../../db/repositories/work-scope.js", () => ({
   appendConnectedWorkScopeQuestionAsked: (...args: unknown[]) =>
     mocks.appendQuestionAsked(...args),
-  readConnectedWorkScope: (...args: unknown[]) => mocks.readScope(...args),
-  readConnectedWorkScopeSelectionAnswered: (...args: unknown[]) =>
-    mocks.readSelectionAnswered(...args),
-  readConnectedWorkScopeAnsweredRepositories: (...args: unknown[]) =>
-    mocks.readAnsweredRepositories(...args),
-  readConnectedWorkScopeAnsweredQuestion: (...args: unknown[]) =>
-    mocks.readAnsweredQuestion(...args),
-  readConnectedWorkScopeNarrowingAnswered: (...args: unknown[]) =>
-    mocks.readNarrowingAnswered(...args),
+  readConnectedWorkScopeFacts: (...args: unknown[]) => mocks.readFacts(...args),
 }));
 
 const { prepareClarificationHookStep, readWorkScopeAfterAnswerStep } = await import(
@@ -56,11 +49,14 @@ beforeEach(() => {
     expiresAt: null,
   });
   mocks.appendQuestionAsked.mockResolvedValue(true);
-  mocks.readScope.mockResolvedValue(null);
-  mocks.readSelectionAnswered.mockResolvedValue(false);
-  mocks.readAnsweredRepositories.mockResolvedValue([]);
-  mocks.readAnsweredQuestion.mockResolvedValue(null);
-  mocks.readNarrowingAnswered.mockResolvedValue(false);
+  facts = {
+    scope: null,
+    selectionAnswered: false,
+    answeredRepositoryKeys: [],
+    narrowingAnswered: false,
+    answeredQuestion: null,
+  };
+  mocks.readFacts.mockImplementation(async () => facts);
 });
 
 /** A `question_answered` trail row for the question below, carrying the answer
@@ -238,14 +234,16 @@ describe("prepareClarificationHookStep", () => {
  */
 describe("readWorkScopeAfterAnswerStep", () => {
   it("reports the one answer nobody can be credited with as unattributed", async () => {
-    mocks.readAnsweredQuestion.mockResolvedValue(answeredRow("unattributed"));
+    facts.answeredQuestion = answeredRow("unattributed");
 
     const resumed = await readWorkScopeAfterAnswerStep(
       "ticket:jira:AWT-9",
       "clarification-1",
     );
 
-    expect(mocks.readAnsweredQuestion).toHaveBeenCalledWith("clarification-1");
+    // The per-question fact is asked for by id: the newest answered question on
+    // a subject is only probably this run's own.
+    expect(mocks.readFacts).toHaveBeenCalledWith("ticket:jira:AWT-9", "clarification-1");
     expect(resumed.answerAttributed).toBe(false);
   });
 
@@ -254,7 +252,7 @@ describe("readWorkScopeAfterAnswerStep", () => {
     // words and could not make a repository out of them, which refuses nothing:
     // reported as a refusal, the run hides those words from the only other
     // reader that might understand them and asks the same question again.
-    mocks.readAnsweredQuestion.mockResolvedValue(answeredRow("unrecognised"));
+    facts.answeredQuestion = answeredRow("unrecognised");
 
     const resumed = await readWorkScopeAfterAnswerStep(
       "ticket:jira:AWT-9",
@@ -265,7 +263,7 @@ describe("readWorkScopeAfterAnswerStep", () => {
   });
 
   it("reports an answer that named a repository as attributed", async () => {
-    mocks.readAnsweredQuestion.mockResolvedValue(answeredRow("repositories"));
+    facts.answeredQuestion = answeredRow("repositories");
 
     const resumed = await readWorkScopeAfterAnswerStep(
       "ticket:jira:AWT-9",
@@ -280,14 +278,13 @@ describe("readWorkScopeAfterAnswerStep", () => {
     // discovery rebuilds unchanged. Without this fact on the way back, the block
     // counts the same twelve repositories and asks the identical question the
     // person has just answered, inside one run.
-    mocks.readNarrowingAnswered.mockResolvedValue(true);
+    facts.narrowingAnswered = true;
 
     const resumed = await readWorkScopeAfterAnswerStep(
       "ticket:jira:AWT-9",
       "clarification-1",
     );
 
-    expect(mocks.readNarrowingAnswered).toHaveBeenCalledWith("ticket:jira:AWT-9");
     expect(resumed.narrowingAnswered).toBe(true);
   });
 
@@ -307,9 +304,10 @@ describe("readWorkScopeAfterAnswerStep", () => {
   it("asks for no verdict when the run does not say which question it woke on", async () => {
     const resumed = await readWorkScopeAfterAnswerStep("ticket:jira:AWT-9");
 
-    // Keyed on the clarification and never on the subject: the newest answered
-    // question on a subject is only probably this run's own.
-    expect(mocks.readAnsweredQuestion).not.toHaveBeenCalled();
+    // No id, so the read is told to look for no verdict. Keyed on the
+    // clarification and never on the subject: the newest answered question on a
+    // subject is only probably this run's own.
+    expect(mocks.readFacts).toHaveBeenCalledWith("ticket:jira:AWT-9", undefined);
     expect("answerAttributed" in resumed).toBe(false);
   });
 });

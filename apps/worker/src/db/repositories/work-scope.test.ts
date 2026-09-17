@@ -18,6 +18,7 @@ import {
   readWorkScope,
   readWorkScopeAnsweredQuestion,
   readWorkScopeAnsweredRepositories,
+  readWorkScopeFacts,
   readWorkScopeNarrowingAnswered,
   readWorkScopeSelectionAnswered,
 } from "./work-scope.js";
@@ -1756,5 +1757,117 @@ describe("readWorkScopeAnsweredQuestion", () => {
       },
     });
     await expect(readWorkScopeAnsweredQuestion(db, "clarification-2")).resolves.toBeNull();
+  });
+});
+
+/**
+ * The one read against the five it stands for.
+ *
+ * The combined read exists so no caller has to know the five names and combine
+ * them in the right order, and the five stay exported because the run start and
+ * the pre-sandbox selection read subsets of the picture and the tests above sit
+ * on them one at a time. That is two descriptions of the same facts, and this is
+ * the guard that keeps them one: whatever the five answer for a subject, the
+ * combined read answers the same, field by field. A later rewrite of the
+ * combined read into a single statement stays honest here or it fails here.
+ */
+describe("readWorkScopeFacts", () => {
+  const ada: WorkScopeActor = { kind: "person", actorId: "user-1", actorLabel: "Ada" };
+
+  async function ask(
+    clarificationId: string,
+    asked: WorkScopeAskedRepository[],
+    purpose?: "narrowing",
+  ) {
+    await appendWorkScopeQuestionAsked(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId,
+      asked,
+      ...(purpose === undefined ? {} : { purpose }),
+    });
+  }
+
+  async function answer(
+    clarificationId: string,
+    given: { kind: "none" } | { kind: "repositories"; repositoryKeys: string[] },
+  ) {
+    await applyAnswerWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      clarificationId,
+      plan: {
+        upserts: [],
+        deletes: [],
+        trail: [
+          { kind: "question_answered", clarificationId, answer: given, answeredBy: ada },
+        ],
+      },
+    });
+  }
+
+  /** A subject every one of the five reads has something to say about, so a
+   *  combined read that dropped a fact could not pass by answering the default
+   *  everywhere. */
+  async function subjectWithEveryFact() {
+    await applyRunWorkScopePlan(db, {
+      subjectKey,
+      runId: "run-1",
+      plan: upsertsOnly(entry("github:acme/web")),
+    });
+    await ask("clarification-1", [
+      { repositoryKey: "github:acme/api", askedBecause: "selection", named: true },
+    ]);
+    await answer("clarification-1", {
+      kind: "repositories",
+      repositoryKeys: ["github:acme/api"],
+    });
+    await ask("clarification-2", [], "narrowing");
+    await answer("clarification-2", { kind: "none" });
+  }
+
+  it("answers exactly what the five reads answer for the same subject", async () => {
+    await subjectWithEveryFact();
+
+    const facts = await readWorkScopeFacts(db, subjectKey, "clarification-1");
+
+    expect(facts).toEqual({
+      scope: await readWorkScope(db, subjectKey),
+      selectionAnswered: await readWorkScopeSelectionAnswered(db, subjectKey),
+      answeredRepositoryKeys: await readWorkScopeAnsweredRepositories(db, subjectKey),
+      narrowingAnswered: await readWorkScopeNarrowingAnswered(db, subjectKey),
+      answeredQuestion: await readWorkScopeAnsweredQuestion(db, "clarification-1"),
+    });
+    // And not by agreeing on nothing: every field carries the non-default
+    // answer, so dropping any one of them fails the comparison above.
+    expect(facts.scope?.entries).toHaveLength(1);
+    expect(facts.selectionAnswered).toBe(true);
+    expect(facts.answeredRepositoryKeys).toEqual(["github:acme/api"]);
+    expect(facts.narrowingAnswered).toBe(true);
+    expect(facts.answeredQuestion?.event.kind).toBe("question_answered");
+  });
+
+  it("reads no verdict when the caller names no question", async () => {
+    await subjectWithEveryFact();
+
+    const facts = await readWorkScopeFacts(db, subjectKey);
+
+    // The per-question fact is the only one keyed on a clarification rather
+    // than on the subject, so a caller that woke on nothing gets null rather
+    // than whichever answered question happens to be newest.
+    expect(facts.answeredQuestion).toBeNull();
+    expect(facts.selectionAnswered).toBe(true);
+  });
+
+  it("answers the five defaults for a subject nobody ever decided on", async () => {
+    const facts = await readWorkScopeFacts(db, "ticket:jira:AWT-404", "clarification-1");
+
+    expect(facts).toEqual({
+      scope: null,
+      selectionAnswered: false,
+      answeredRepositoryKeys: [],
+      narrowingAnswered: false,
+      answeredQuestion: null,
+    });
   });
 });

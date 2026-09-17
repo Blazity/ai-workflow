@@ -63,13 +63,18 @@ vi.mock("../../db/repositories/settings.js", () => ({
   readAllConnectedSettings: async () => [],
 }));
 // The run start reads the subject's work scope beside the settings, and this
-// file's db client is a bare object. No record: what a subject that has never
-// been decided on looks like, which is every subject in these cases.
+// file's db client is a bare object. One read for the whole record, so a fact
+// added to that picture never reaches this file again. No record: what a
+// subject that has never been decided on looks like, which is every subject in
+// these cases.
 vi.mock("../../db/repositories/work-scope.js", () => ({
-  readConnectedWorkScope: async () => null,
-  readConnectedWorkScopeSelectionAnswered: async () => false,
-  readConnectedWorkScopeAnsweredRepositories: async () => [],
-  readConnectedWorkScopeNarrowingAnswered: async () => false,
+  readConnectedWorkScopeFacts: async () => ({
+    scope: null,
+    selectionAnswered: false,
+    answeredRepositoryKeys: [],
+    narrowingAnswered: false,
+    answeredQuestion: null,
+  }),
 }));
 vi.mock("../../db/repositories/repository-catalog.js", () => ({
   getConnectedRepositoryCatalogStateRow: async () => ({

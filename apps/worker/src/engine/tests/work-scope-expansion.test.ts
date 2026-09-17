@@ -1195,12 +1195,23 @@ describe("nothing the expansion decides is written in workflow scope", () => {
  * would leave a woken run holding the empty set it froze at start, so the round
  * after its own answer would put the same repository to the same person twice
  * in one run (A47).
+ *
+ * The store is asked through the one read that answers the whole record
+ * (`db/repositories/work-scope.ts`, `readWorkScopeFacts`), so the question this
+ * scan puts is no longer whether a named read is still called but whether the
+ * fact is still TAKEN off the picture and handed back.
  */
 describe("a resumed run re-reads what its own question settled", () => {
   it("reads the answered repositories beside the record, not only the flag", () => {
     expect(
-      phaseSource.includes("readConnectedWorkScopeAnsweredRepositories(resume.subjectKey)"),
-      "the resume no longer re-reads which repositories this subject has answered about",
+      phaseSource.includes("readConnectedWorkScopeFacts(resume.subjectKey)"),
+      "the resume no longer re-reads the record its own question settled",
+    ).toBe(true);
+    expect(
+      phaseSource.includes(
+        "const { scope, selectionAnswered, answeredRepositoryKeys } =",
+      ),
+      "the resume no longer takes which repositories this subject has answered about",
     ).toBe(true);
     expect(
       phaseSource.includes(

@@ -862,16 +862,14 @@ async function resumeFromWorkScope(
   const { createRunWorkScopeRecorder, workScopeRepositoryKey } = await import(
     "../work-scope/context.js"
   );
-  const {
-    readConnectedWorkScope,
-    readConnectedWorkScopeAnsweredRepositories,
-    readConnectedWorkScopeSelectionAnswered,
-  } = await import("../../db/repositories/work-scope.js");
-  const [scope, selectionAnswered, answeredRepositoryKeys] = await Promise.all([
-    readConnectedWorkScope(resume.subjectKey),
-    readConnectedWorkScopeSelectionAnswered(resume.subjectKey),
-    readConnectedWorkScopeAnsweredRepositories(resume.subjectKey),
-  ]);
+  const { readConnectedWorkScopeFacts } = await import("../../db/repositories/work-scope.js");
+  // The whole picture, of which this path uses three facts. One read in
+  // parallel rather than three named ones, so a fact added to the picture
+  // reaches every reader of it at once (`db/repositories/work-scope.ts`,
+  // `readWorkScopeFacts`). No clarification id: this resume is the expansion
+  // path, which decides from the entries and never from one question's verdict.
+  const { scope, selectionAnswered, answeredRepositoryKeys } =
+    await readConnectedWorkScopeFacts(resume.subjectKey);
   const byKey = new Map(
     catalog.map((entry) => [workScopeRepositoryKey(entry), entry] as const),
   );

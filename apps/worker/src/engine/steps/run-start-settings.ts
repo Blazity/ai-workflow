@@ -129,41 +129,27 @@ export async function loadRunStartSettingsStep(input: {
     getConnectedRepositoryCatalogStateRow,
     listConnectedRepositoryCatalogKeys,
   } = await import("../../db/repositories/repository-catalog.js");
-  const {
-    readConnectedWorkScope,
-    readConnectedWorkScopeAnsweredRepositories,
-    readConnectedWorkScopeNarrowingAnswered,
-    readConnectedWorkScopeSelectionAnswered,
-  } = await import("../../db/repositories/work-scope.js");
+  const { readConnectedWorkScopeFacts } = await import("../../db/repositories/work-scope.js");
   const { settingsEnvironment } = await import("../../infra/settings-environment.js");
   const { logger } = await import("../../infra/logger.js");
 
   const subjectKey = input.workScopeSubjectKey;
-  const [
-    rows,
-    stateRow,
-    keys,
-    scope,
-    selectionAnswered,
-    answeredRepositoryKeys,
-    narrowingAnswered,
-  ] = await Promise.all([
+  const [rows, stateRow, keys, workScopeFacts] = await Promise.all([
     readAllConnectedSettings(),
     getConnectedRepositoryCatalogStateRow(),
     listConnectedRepositoryCatalogKeys(),
     // Beside the other two rather than after them: they are all pure reads of
     // this deployment's state, and a run start pays one round trip for them.
-    subjectKey === null ? Promise.resolve(null) : readConnectedWorkScope(subjectKey),
-    subjectKey === null
-      ? Promise.resolve(false)
-      : readConnectedWorkScopeSelectionAnswered(subjectKey),
-    subjectKey === null
-      ? Promise.resolve<string[]>([])
-      : readConnectedWorkScopeAnsweredRepositories(subjectKey),
-    subjectKey === null
-      ? Promise.resolve(false)
-      : readConnectedWorkScopeNarrowingAnswered(subjectKey),
+    // One read for the whole record, itself parallel inside
+    // (`db/repositories/work-scope.ts`, `readWorkScopeFacts`).
+    subjectKey === null ? Promise.resolve(null) : readConnectedWorkScopeFacts(subjectKey),
   ]);
+  // A run that carries no subject reads no record, and the frozen fields below
+  // are the ones it would have had: the return omits them either way.
+  const scope = workScopeFacts?.scope ?? null;
+  const selectionAnswered = workScopeFacts?.selectionAnswered ?? false;
+  const answeredRepositoryKeys = workScopeFacts?.answeredRepositoryKeys ?? [];
+  const narrowingAnswered = workScopeFacts?.narrowingAnswered ?? false;
   const { snapshot } = resolveSettingsSnapshot(
     new Map(rows.map((row) => [row.key, row.value])),
     settingsEnvironment,

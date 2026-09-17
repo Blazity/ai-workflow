@@ -313,6 +313,66 @@ export async function readWorkScopeAnsweredQuestion(
 }
 
 /**
+ * Everything a run has to know about a subject's record, read once.
+ *
+ * `scope` is the record itself and the other four are facts the entries cannot
+ * carry: an answer can decide something and write no entry, and only the trail
+ * remembers that anybody was ever asked. A caller that wants the picture wants
+ * all of them, which is why they travel together rather than as five reads a
+ * caller has to know the names of and combine in the right order.
+ *
+ * `answeredQuestion` is the one fact keyed on a QUESTION rather than on the
+ * subject, so it is read only when the caller names one: "what the record made
+ * of the answer" is a fact about one clarification, and the newest answered
+ * question on a subject is only probably the one the caller woke on.
+ */
+export interface WorkScopeFacts {
+  scope: WorkScope | null;
+  selectionAnswered: boolean;
+  answeredRepositoryKeys: string[];
+  narrowingAnswered: boolean;
+  answeredQuestion: WorkScopeTrailRow | null;
+}
+
+/**
+ * The five reads above as one, in parallel on one connection.
+ *
+ * Composed from the per-fact reads rather than written as a single statement.
+ * Each of those reads carries a rule that took a defect to get right (which
+ * answer kinds count as a decision, that a question has to have NAMED a
+ * repository, that a narrowing question is recognised only by its purpose), and
+ * every one of them is still reached on its own: the run start and the
+ * pre-sandbox selection read subsets of this picture, and the pure database
+ * tests sit on them one at a time. One hand-merged statement would be a second
+ * copy of those rules, and the copy is what drifts. `Promise.all` keeps the
+ * round trips concurrent, which is what the cost of five reads was ever about,
+ * and it opens no transaction, which production could not do anyway.
+ */
+export async function readWorkScopeFacts(
+  db: Db,
+  subjectKey: string,
+  clarificationId?: string,
+): Promise<WorkScopeFacts> {
+  const [scope, selectionAnswered, answeredRepositoryKeys, narrowingAnswered, answeredQuestion] =
+    await Promise.all([
+      readWorkScope(db, subjectKey),
+      readWorkScopeSelectionAnswered(db, subjectKey),
+      readWorkScopeAnsweredRepositories(db, subjectKey),
+      readWorkScopeNarrowingAnswered(db, subjectKey),
+      clarificationId === undefined
+        ? Promise.resolve(null)
+        : readWorkScopeAnsweredQuestion(db, clarificationId),
+    ]);
+  return {
+    scope,
+    selectionAnswered,
+    answeredRepositoryKeys,
+    narrowingAnswered,
+    answeredQuestion,
+  };
+}
+
+/**
  * Newest first. `nextBeforeId` is the `beforeId` of the following page.
  *
  * `kinds` narrows to those event kinds; empty or absent means every kind. It
@@ -814,12 +874,19 @@ export async function applyAnswerWorkScopePlan(
 }
 
 /**
- * The three reads the run start makes, against the process-wide connection.
+ * The reads made against the process-wide connection rather than a handed-in
+ * handle.
  *
- * The run-start step takes no database handle: it is the engine's one read of a
- * store, and it reaches it exactly as it reaches settings and the catalog. The
- * precedent is `listConnectedRepositoryCatalogKeys`
+ * A step takes no database handle: it is the engine's one read of a store, and
+ * it reaches it exactly as it reaches settings and the catalog. The precedent is
+ * `listConnectedRepositoryCatalogKeys`
  * (`db/repositories/repository-catalog.ts:1119-1126`).
+ *
+ * The record alone and the selection flag alone have a caller each: the
+ * pre-sandbox selection reads those two and nothing else, and the answer path
+ * reads the record. Every other consumer wants the whole picture and takes
+ * `readConnectedWorkScopeFacts` below, which is why the per-fact twins for the
+ * other three reads are gone: nothing reached them.
  */
 export function readConnectedWorkScope(subjectKey: string) {
   return readWorkScope(getDb(), subjectKey);
@@ -829,19 +896,15 @@ export function readConnectedWorkScopeSelectionAnswered(subjectKey: string) {
   return readWorkScopeSelectionAnswered(getDb(), subjectKey);
 }
 
-export function readConnectedWorkScopeAnsweredRepositories(subjectKey: string) {
-  return readWorkScopeAnsweredRepositories(getDb(), subjectKey);
-}
-
-export function readConnectedWorkScopeNarrowingAnswered(subjectKey: string) {
-  return readWorkScopeNarrowingAnswered(getDb(), subjectKey);
-}
-
-/** The fourth, made on the same connection by the same step when a run wakes on
- *  an answer: what the record did with THIS question's answer, which nothing in
- *  the entries records. */
-export function readConnectedWorkScopeAnsweredQuestion(clarificationId: string) {
-  return readWorkScopeAnsweredQuestion(getDb(), clarificationId);
+/**
+ * The whole picture on the process-wide connection, for the steps that want all
+ * of it: the run start, the resume after an answer, and the expansion resume.
+ *
+ * One `getDb()`, so all five reads share the connection the way five separate
+ * connected twins did.
+ */
+export function readConnectedWorkScopeFacts(subjectKey: string, clarificationId?: string) {
+  return readWorkScopeFacts(getDb(), subjectKey, clarificationId);
 }
 
 /**
