@@ -151,10 +151,11 @@ export const account = pgTable(
 );
 
 /**
- * Key store for Better Auth's jwt() plugin, mirroring
- * better-auth@1.6.20 plugins/jwt/schema.ts field for field: publicKey,
- * privateKey and createdAt are required, expiresAt is only written when key
- * rotation is configured.
+ * Key store for Better Auth's jwt() plugin, mirroring its
+ * plugins/jwt/schema.ts field for field: publicKey, privateKey and createdAt
+ * are required, expiresAt is only written when key rotation is configured.
+ * Written against better-auth@1.6.20; the version it was last compared with is
+ * pinned in auth-schema.test.ts, which turns red when an upgrade moves it.
  *
  * Watch out: createAuth in src/auth.ts mounts jwt() ONLY when MCP is
  * configured, so this table is dead weight with MCP off and load-bearing the
@@ -182,7 +183,8 @@ export const verification = pgTable("verification", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-// Generated schema contract from @better-auth/oauth-provider@1.6.20. Keep
+// Schema contract generated from @better-auth/oauth-provider (first at 1.6.20;
+// the version it was last compared with is pinned in auth-schema.test.ts). Keep
 // Better Auth's camelCase property keys even though SQL identifiers are
 // snake_case: the Drizzle adapter resolves fields by the property key.
 export const oauthClient = pgTable(
