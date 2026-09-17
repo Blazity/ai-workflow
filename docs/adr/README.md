@@ -82,6 +82,7 @@ ADR, never edited in place: the old file keeps its number, gains
 | [ADR-004](./ADR-004-gates-and-required-ci.md) | Gates and required CI | Accepted | Written |
 | [ADR-005](./ADR-005-documentation-taxonomy.md) | Documentation taxonomy | Accepted | Written |
 | [ADR-006](./ADR-006-model-catalog.md) | Model catalog | Accepted | Written |
+| [ADR-009](./ADR-009-agent-instruction-layers.md) | Agent instruction layers and their ceilings | Accepted | Written |
 
 Stage numbers refer to the stage table in
 [docs/plans/2026-09-09-architecture-restructure.md](../plans/2026-09-09-architecture-restructure.md).

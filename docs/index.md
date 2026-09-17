@@ -48,6 +48,7 @@ each `apps/*/AGENTS.md`, `packages/AGENTS.md`, and `README.md`, `AGENTS.md`,
 | [adr/ADR-004-gates-and-required-ci.md](./adr/ADR-004-gates-and-required-ci.md) | The gate ladder, one shape per gate, and what has to be true before a check can be required |
 | [adr/ADR-005-documentation-taxonomy.md](./adr/ADR-005-documentation-taxonomy.md) | This taxonomy: the status header, the currency rule, the reachability rule, per-app agent files |
 | [adr/ADR-006-model-catalog.md](./adr/ADR-006-model-catalog.md) | The recognised model policy, live-advertisement intersection, stored-ID compatibility, and catalog ownership |
+| [adr/ADR-009-agent-instruction-layers.md](./adr/ADR-009-agent-instruction-layers.md) | Where agent instructions live (router, per-area files, path-scoped rules, archive) and the byte ceilings a hook warns about |
 
 ## Product
 
